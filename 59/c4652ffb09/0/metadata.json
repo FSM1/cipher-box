@@ -1,0 +1,76 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "59c4652ffb09",
+  "session_id": "3379b299-016b-4d40-aaf2-317ab0c08665",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-24T01:59:03.716138Z",
+  "branch": "feat/ipns-verification-cross-layer-closeout-desktop-and-api",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "f2967dbe082c",
+  "token_usage": {
+    "input_tokens": 14236,
+    "cache_creation_tokens": 179518,
+    "cache_read_tokens": 4685998,
+    "output_tokens": 66686,
+    "api_call_count": 36
+  },
+  "summary": {
+    "intent": "Execute Phase 60 (IPNS Verification Cross-Layer Closeout) of CipherBox using the GSD wave-based execution workflow, hardening IPNS verification fail-closed across Rust (api-client, fuse, sdk, desktop), TypeScript (sdk-core), and the API layer.",
+    "outcome": "7 of 8 plans completed successfully across 3 waves with all local cross-layer gates green (351 Rust tests, 251 sdk-core tests, 171 API ipns tests, scripts typecheck). Plan 60-08 completed its automated Task 1 but paused at a blocking human-action checkpoint (staging DB wipe + redeploy + smoke-test), leaving phase completion pending.",
+    "learnings": {
+      "repo": [
+        "GSD worktree isolation mode can't reliably surface the branch/path manifest back to the orchestrator, making merge-back unreliable for complex phases — sequential execution on the feature branch is the safe fallback.",
+        "Cargo.lock must be explicitly committed after any Cargo.toml dep addition; Wave 1 executor added ciborium+cipherbox-core to api-client's Cargo.toml but never committed the lockfile, creating a latent --locked CI break.",
+        "60-01 was forced to fold all 9 VerifyError::Legacy caller arms in fuse/metadata.rs as a compile necessity, pulling scope that was formally declared in 60-04 — cross-wave scope bleed is possible when compile errors force it.",
+        "docs/CAPACITY.md §1.5 was already occupied by a prior-phase re-baseline; D-11 verify-cache measurement landed correctly as §1.6 rather than overwriting.",
+        "tsconfig.scripts.json registers bench scripts; new scripts must be added there to pass the scripts typecheck gate.",
+        "ROADMAP checkbox for 60-06 was not ticked by its executor despite full completion — executor STATE/ROADMAP updates are not guaranteed; orchestrator must reconcile."
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/metadata.rs",
+          "line": 619,
+          "end_line": 619,
+          "finding": "Final VerifyError::Legacy call site; confirmed zero remaining after 60-01 folded all 9 arms — the stale E0599 diagnostic was a mid-edit snapshot, not a real compile error."
+        },
+        {
+          "path": "crates/fuse/src/verify.rs",
+          "finding": "File deleted by 60-04 after 60-01 relocated the verified-IPNS-resolve chokepoint to crates/api-client/src/ipns.rs; 'not included in module tree' warning after deletion was a stale diagnostic."
+        },
+        {
+          "path": "tsconfig.scripts.json",
+          "line": 25,
+          "end_line": 25,
+          "finding": "60-06 bench script registered here; missing registration causes scripts typecheck failures."
+        },
+        {
+          "path": "docs/CAPACITY.md",
+          "finding": "§1.6 added for D-11 per-op IPNS signature verification cost measurement (2026-06); §1.5 was already occupied."
+        }
+      ],
+      "workflow": [
+        "GSD commit helper reports false-negative 'No staged files match any configured task' even when the commit lands — always verify with git log rather than treating this message as a failure.",
+        "Jest output from the API ipns specs routes negative-path assertion errors to stderr, burying the pass/fail summary line; a second targeted extraction command is needed to confirm test results.",
+        "Executor subagents sometimes append stray content to SUMMARY.md files after the main commit (e.g. a 'verify.rs FOUND' footer that became factually wrong after 60-04); orchestrator should revert stray mutations.",
+        "Running cargo test --workspace as an authoritative cross-layer gate before a non-autonomous human-action plan provides a clean, controlled baseline that the executor's self-check cannot guarantee."
+      ]
+    },
+    "friction": [
+      "Worktree isolation mode unsupported for merge-back in this harness, forcing a switch to sequential subagent execution and sacrificing parallelism for correctness.",
+      "Wave 1 executor left two uncommitted artifacts (Cargo.lock lockfile catch-up and stray SUMMARY.md footer), requiring orchestrator detection and manual cleanup commits.",
+      "GSD commit helper false-negatives ('No staged files match any configured task') required a confirmatory git log after every commit, adding overhead across 8 plans.",
+      "Stale mid-edit E0599 diagnostic (VerifyError::Legacy in metadata.rs:619) from 60-01 prompted an unnecessary grep+compile verification round before Wave 1 could continue.",
+      "Jest log noise from negative-path assertion errors buried the pass/fail summary, requiring a second extraction bash command.",
+      "60-06 ROADMAP checkbox inconsistency discovered late (after Wave 3 completion), requiring a separate reconciliation step at the end of the session."
+    ],
+    "open_items": [
+      "60-08 Task 2: Staging DB wipe + redeploy + strict-verify smoke-test — requires human with staging VPS access; phase cannot be marked complete until this runs.",
+      "Phase 60 completion and GSD phase verify-work have not run; gating on 60-08 Task 2 human checkpoint.",
+      "Windows winfsp site smoke-test for 60-02 first-publish seq=1 changes is CI-gated and not testable locally — must pass in CI before the phase is fully validated on Windows.",
+      "ROADMAP checkbox reconciliation for 60-06 was in progress at the end of the transcript — confirm it committed cleanly."
+    ]
+  }
+}
