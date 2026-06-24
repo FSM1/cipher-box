@@ -2,10 +2,151 @@
 //!
 //! Resolves IPNS names to their current CID and sequence number,
 //! and publishes signed IPNS records.
+//!
+//! This module also hosts the verified-resolve chokepoint (`resolve_ipns_verified`)
+//! relocated from `crates/fuse/src/verify.rs` so all Rust consumers (sdk, fuse, desktop)
+//! share one implementation (D-08). The `crates/fuse/src/verify.rs` file is reduced to
+//! a thin re-export of the public symbols here.
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use crate::client::ApiClient;
 use crate::error::ApiError;
 use crate::types::{IpnsPublishRequest, IpnsResolveResponse, PublishResult};
+
+// ---------------------------------------------------------------------------
+// Verified-resolve chokepoint — relocated from crates/fuse/src/verify.rs
+// Applies D-04 (no Legacy variant, strict seq equality) and D-08 (shared wrapper).
+// ---------------------------------------------------------------------------
+
+/// Error returned by `resolve_ipns_verified`.
+#[derive(Debug)]
+pub enum VerifyError {
+    /// API-level error (network failure, 404, etc.).
+    Api(ApiError),
+    /// Invalid/partial signature, CBOR cid/sequence binding mismatch, or all signature
+    /// fields absent (fail-closed, D-04 — Legacy variant removed).
+    Invalid(String),
+}
+
+impl std::fmt::Display for VerifyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Api(e) => write!(f, "API error: {}", e),
+            Self::Invalid(msg) => write!(f, "verification failed: {}", msg),
+        }
+    }
+}
+
+/// A fully-verified IPNS resolve result with authoritative signed values (D-08).
+#[derive(Debug, Clone)]
+pub struct VerifiedResolve {
+    /// CID from the signed CBOR data (authoritative; D-08 — embedded value is the source of truth).
+    pub cid: String,
+    /// Sequence number from the signed CBOR data (authoritative; D-08).
+    pub sequence_number: u64,
+}
+
+/// Pure helper that classifies a resolve response given the signature verdict.
+///
+/// Separated from `resolve_ipns_verified` so that unit tests can drive it
+/// with constructed `IpnsResolveResponse` values without hitting the network.
+///
+/// # Arguments
+///
+/// * `resp`         — the raw resolve response from the API
+/// * `sig_verdict`  — the output of `verify_ipns_resolve_signature`
+///   - `None`       → D-04 fail-closed: all fields absent → `Err(VerifyError::Invalid(...))`
+///   - `Some(true)` → signature valid; proceed to CBOR binding + expiry
+///   - `Some(false)` → invalid/partial → `Err(VerifyError::Invalid(...))`
+pub(crate) fn bind_verified(
+    resp: &IpnsResolveResponse,
+    sig_verdict: Option<bool>,
+) -> Result<VerifiedResolve, VerifyError> {
+    match sig_verdict {
+        // D-04: Legacy variant removed — all signature fields absent now fails closed.
+        None => Err(VerifyError::Invalid("all signature fields absent — fail closed".to_string())),
+        Some(false) => Err(VerifyError::Invalid("signature verification failed".to_string())),
+        Some(true) => {
+            // Signature is valid. Now decode the CBOR `data` and bind the embedded
+            // cid/sequence back to the response fields (D-07/D-08).
+            let data_b64 = resp
+                .data
+                .as_deref()
+                .ok_or_else(|| VerifyError::Invalid(
+                    "sig_verdict=Some(true) but resp.data is None — contract violation".to_string(),
+                ))?;
+            let data_bytes = STANDARD
+                .decode(data_b64)
+                .map_err(|e| VerifyError::Invalid(format!("base64 decode of CBOR data failed: {}", e)))?;
+
+            let (embedded_value, embedded_seq) =
+                cipherbox_core::ipns::decode_ipns_cbor_data(&data_bytes)
+                    .map_err(|e| VerifyError::Invalid(format!("CBOR decode failed: {}", e)))?;
+
+            // D-08: embedded value is "/ipfs/<cid>" — compare to response cid.
+            let expected_value = format!("/ipfs/{}", resp.cid);
+            if embedded_value != expected_value {
+                return Err(VerifyError::Invalid(format!(
+                    "IPNS cid binding mismatch: embedded={}, response cid={}",
+                    embedded_value, resp.cid
+                )));
+            }
+
+            // D-04: strict sequence equality — skew disjunct removed.
+            // Previously allowed (resp_seq == 1 && embedded_seq == 0) as a first-publish skew.
+            // Phase 60 removes all embedded-0 producers (D-02) and wipes staging so no such
+            // records exist when strict verify goes live (D-12 lockstep invariant).
+            let resp_seq = resp
+                .sequence_number
+                .parse::<u64>()
+                .map_err(|e| VerifyError::Invalid(format!("parse response sequence_number: {}", e)))?;
+            let seq_ok = embedded_seq == resp_seq;
+            if !seq_ok {
+                return Err(VerifyError::Invalid(format!(
+                    "IPNS sequence binding mismatch: embedded={}, response seq={}",
+                    embedded_seq, resp_seq
+                )));
+            }
+
+            // D-08: use the signed/embedded cid (strip "/ipfs/" prefix).
+            let cid = embedded_value
+                .strip_prefix("/ipfs/")
+                .unwrap_or(&embedded_value)
+                .to_string();
+
+            Ok(VerifiedResolve {
+                cid,
+                sequence_number: resp_seq,
+            })
+        }
+    }
+}
+
+/// Resolve an IPNS name, verify the signature, and bind the embedded cid/sequence.
+///
+/// This is the single verified chokepoint for all Rust consumers (D-08, D-01).
+///
+/// # Returns
+///
+/// - `Ok(VerifiedResolve)` — signature valid, CBOR binding succeeded; `.cid` and
+///   `.sequence_number` are from the signed CBOR data (D-08 authoritative).
+/// - `Err(VerifyError::Invalid(_))` — any verification failure (invalid/partial signature,
+///   binding mismatch, or all fields absent — D-04 fail-closed, no Legacy tolerance).
+/// - `Err(VerifyError::Api(_))` — API-level error; caller propagates.
+pub async fn resolve_ipns_verified(
+    api: &ApiClient,
+    ipns_name: &str,
+) -> Result<VerifiedResolve, VerifyError> {
+    let resp = resolve_ipns(api, ipns_name)
+        .await
+        .map_err(VerifyError::Api)?;
+
+    let verdict = verify_ipns_resolve_signature(&resp, ipns_name)
+        .map_err(|e| VerifyError::Invalid(format!("signature verification error: {}", e)))?;
+
+    bind_verified(&resp, verdict)
+}
 
 /// Resolve an IPNS name to its current CID via the backend.
 ///
@@ -52,35 +193,31 @@ pub async fn resolve_ipns(
 
 /// Verify an IPNS resolve response signature.
 ///
-/// Implements D-03 (all fields absent → None, allow+warn), D-02 (invalid → Some(false)),
-/// and D-04 (valid + name binding → Some(true)).
+/// Implements D-04 strict path: all-absent fields → `Ok(Some(false))` (fail-closed, no legacy
+/// tolerance). The old `Ok(None)` all-absent branch has been removed per Phase 60 D-04.
 ///
 /// Returns:
-/// - `Ok(None)` ONLY when ALL THREE signature fields (signatureV2, data, pubKey) are
-///   absent — a true legacy record (backward-compat allow path).
-/// - `Ok(Some(false))` when SOME but not all three fields are present (partial/downgrade
+/// - `Ok(Some(false))` when ALL THREE signature fields are absent (D-04 — was `Ok(None)` before
+///   Phase 60 strict cutover), when SOME but not all three fields are present (partial/downgrade
 ///   record — fail closed), when signature verification fails, or when the derived IPNS
 ///   name does not match `ipns_name`.
 /// - `Ok(Some(true))` when the signature is valid and the public key derives to `ipns_name`.
 /// - `Err` when base64 decoding or IPNS name derivation fails on present fields.
+///
+/// Note: `None` is no longer produced. The return type `Option<bool>` is kept for API compatibility
+/// with `bind_verified`'s match on `sig_verdict`; callers that previously matched `None` (Legacy)
+/// should now see `Some(false)` (Invalid) per D-04.
 pub fn verify_ipns_resolve_signature(
     resp: &crate::types::IpnsResolveResponse,
     ipns_name: &str,
 ) -> Result<Option<bool>, crate::error::ApiError> {
-    use base64::engine::general_purpose::STANDARD;
-    use base64::Engine as _;
-
-    let sig_present = resp.signature_v2.is_some();
-    let data_present = resp.data.is_some();
-    let pub_key_present = resp.pub_key.is_some();
-
-    // D-03: ALL fields absent → true legacy record, allow + flag (caller warns and continues).
-    if !sig_present && !data_present && !pub_key_present {
-        return Ok(None);
-    }
+    // D-04: ALL fields absent no longer produces Ok(None) (legacy allow).
+    // The missing-fields case falls through to the partial-field pattern below,
+    // returning Ok(Some(false)) — fail closed.
+    // (The old `if !sig && !data && !pub_key { return Ok(None); }` has been deleted.)
 
     // Partial fields (some but not all present) → fail closed. A record carrying 1 or 2
-    // of the 3 fields is a downgrade vector, not a legacy record.
+    // of the 3 fields is a downgrade vector, not a legacy record. All-absent also falls here.
     let (Some(sig_b64), Some(data_b64), Some(pub_key_b64)) = (
         resp.signature_v2.as_ref(),
         resp.data.as_ref(),
@@ -331,11 +468,9 @@ mod tests {
         assert_eq!(result.unwrap(), Some(false));
     }
 
-    // ---- Phase 60 Plan 01: bind_verified tests (Task 1 RED) ----
-    // These tests reference `bind_verified` and `VerifyError` / `VerifiedResolve`
-    // which will be relocated from crates/fuse/src/verify.rs in the GREEN step.
+    // ---- Phase 60 Plan 01: bind_verified tests ----
 
-    use super::{VerifyError, VerifiedResolve, bind_verified};
+    use super::{VerifyError, bind_verified};
     use ciborium::Value as CborValue;
 
     /// Helper: build CBOR bytes for value and sequence, matching the build_cbor_data layout.

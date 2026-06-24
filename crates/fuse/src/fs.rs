@@ -493,16 +493,7 @@ impl CipherBoxFS {
                                 // D-01: route through the verified chokepoint.
                                 let cid = match crate::verify::resolve_ipns_verified(&api, &fp_ipns).await {
                                     Ok(v) => v.cid,
-                                    Err(crate::verify::VerifyError::Legacy { cid, .. }) => {
-                                        // D-04: use the carried cid (no second resolve_ipns).
-                                        // T-59-04: eliminates the TOCTOU race window.
-                                        log::warn!(
-                                            "FilePointer resolve: IPNS {} without signature fields \
-                                             — using DB CID (D-04)",
-                                            fp_ipns
-                                        );
-                                        cid
-                                    }
+                                    // D-04: Legacy variant removed — all-absent sig fields fail closed.
                                     Err(crate::verify::VerifyError::Invalid(msg)) => {
                                         return Err(format!(
                                             "FilePointer IPNS {} verify failed: {}",

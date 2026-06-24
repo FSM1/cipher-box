@@ -335,19 +335,9 @@ async fn resolve_folder_key(
         let resolved_cid =
             match crate::verify::resolve_ipns_verified(api, &current_ipns).await {
                 Ok(verified) => verified.cid,
-                Err(crate::verify::VerifyError::Legacy { cid, .. }) => {
-                    // D-03: all-absent legacy record — use the carried cid (no second resolve_ipns).
-                    // T-59-04: eliminates the TOCTOU race window.
-                    // DB CID authoritative; backward-compatible with pre-signing records.
-                    log::warn!(
-                        "resolve_folder_key: IPNS {} resolved without signature fields — \
-                         proceeding (D-03, DB CID authoritative)",
-                        current_ipns
-                    );
-                    cid
-                }
+                // D-04: Legacy variant removed — all-absent sig fields fail closed (strict cutover).
                 Err(crate::verify::VerifyError::Invalid(msg)) => {
-                    // D-03 hard fail-closed: invalid/partial signature → refuse CID.
+                    // Fail-closed: invalid/partial signature or absent fields → refuse CID.
                     return Err(format!(
                         "IPNS {} signature verification failed — refusing to use CID (D-02): {}",
                         current_ipns, msg
@@ -464,16 +454,7 @@ async fn fetch_merge_publish_parent(
     // D-01: route through the verified chokepoint.
     let parent_cid = match crate::verify::resolve_ipns_verified(api, parent_ipns_name).await {
         Ok(verified) => verified.cid,
-        Err(crate::verify::VerifyError::Legacy { cid, .. }) => {
-            // D-04: legacy record — use the carried cid (no second resolve_ipns).
-            // T-59-04: eliminates the TOCTOU race window.
-            log::warn!(
-                "fetch_merge_publish_parent: IPNS {} resolved without signature fields \
-                 — using DB CID (D-04)",
-                parent_ipns_name
-            );
-            cid
-        }
+        // D-04: Legacy variant removed — all-absent sig fields fail closed (strict cutover).
         Err(crate::verify::VerifyError::Invalid(msg)) => {
             // Journal entry retained — return Err so the replay loop keeps the entry.
             return Err(format!(
