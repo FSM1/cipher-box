@@ -1,0 +1,66 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "3824158cb0f4",
+  "session_id": "3379b299-016b-4d40-aaf2-317ab0c08665",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-24T01:15:03.522079Z",
+  "branch": "feat/ipns-verification-cross-layer-closeout-desktop-and-api",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "f2967dbe082c",
+  "token_usage": {
+    "input_tokens": 13821,
+    "cache_creation_tokens": 133811,
+    "cache_read_tokens": 2330129,
+    "output_tokens": 40227,
+    "api_call_count": 22
+  },
+  "summary": {
+    "intent": "Execute phase 60 (IPNS Verification Cross-Layer Closeout) of the cipher-box GSD workflow using wave-based sequential subagent execution, hardening Rust and TypeScript IPNS record verification to be strictly fail-closed across all layers.",
+    "outcome": "Completed Wave 1 in full (plans 60-01, 60-02, 60-03) and Wave 2 plan 60-04, reaching 4/8 plans done. Wave 1 gate passed with 251/251 sdk-core tests. Transcript ends with 60-05 spawned but incomplete.",
+    "learnings": {
+      "repo": [
+        "Phase 60 satisfies requirement HARD-11; 8 plans across 4 waves; Wave 4 (60-08) is non-autonomous (staging wipe + redeploy + smoke-test — human checkpoint).",
+        "The IPNS verify chokepoint was relocated from crates/fuse/src/verify.rs into crates/api-client/src/ipns.rs so sdk/fuse/desktop share one implementation.",
+        "All 9 first-publish producers (FUSE, desktop Tauri, sdk-core, web) previously wrote sequence 0; 60-02 unified them to sequence 1.",
+        "crates/fuse/src/verify.rs became an empty re-export shell after 60-01 and was fully deleted by 60-04.",
+        "sdk-core has 251 tests including 34 ipns-specific tests; this is the Wave 1 integration gate."
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/metadata.rs",
+          "line": 619,
+          "end_line": 619,
+          "finding": "Was the last VerifyError::Legacy reference; 60-01's executor folded it to Invalid (E0599 in the executor diagnostic was a stale mid-edit snapshot — tree was actually clean)."
+        },
+        {
+          "path": "packages/sdk-core/src/vault.test.ts",
+          "finding": "Had a stale expectation of 0n for first-publish sequence; 60-02's scope change (seq=1) required updating this to 1n."
+        },
+        {
+          "path": ".gsd/phases/60/plans/60-01-SUMMARY.md",
+          "finding": "Executor appended a stray self-check footer after the commit boundary, making it factually wrong after 60-04 deleted verify.rs. Had to be reverted manually."
+        }
+      ],
+      "workflow": [
+        "GSD worktree isolation (Agent isolation='worktree') cannot reliably expose the resulting branch/path for merge-back — sequential mode on the feature branch is safer for delicate crypto phases.",
+        "The GSD commit helper false-negatives with 'No staged files match any configured task' even when the commit lands; always verify with git log rather than trusting the helper status.",
+        "Sequential executor subagents must commit Cargo.lock alongside Cargo.toml edits; if a subagent adds crate deps without committing the lockfile, the next wave will have a latent --locked CI break.",
+        "Wave scope bleed is a real risk: 60-01 had to fold all VerifyError::Legacy FUSE caller arms as a compile necessity, encroaching on 60-04's declared scope — but the end state was correct."
+      ]
+    },
+    "friction": [
+      "60-01 executor removed VerifyError::Legacy and folded all 9 FUSE caller arms (nominally 60-04 scope) as a compile necessity — blurred wave boundary required manual audit.",
+      "E0599 compile error in executor output was a stale mid-edit diagnostic, requiring an extra cargo check round-trip to confirm the tree was actually green.",
+      "60-01 executor added ciborium + cipherbox-core deps to Cargo.toml but never committed Cargo.lock, creating a latent --locked CI break discovered only mid-Wave-2.",
+      "GSD commit helper reported commit_failed for the Cargo.lock cleanup commit but the commit had actually landed — required git log verification to disambiguate."
+    ],
+    "open_items": [
+      "Plans 60-05 (API strict regime tightening), 60-06 (publish-path verify cache), 60-07 (cross-lang test vector regen) remain unexecuted.",
+      "Plan 60-08 (Wave 4) is a non-autonomous human checkpoint: staging environment wipe, redeploy, and smoke-test — requires manual operator action when reached.",
+      "Phase verification and STATE/ROADMAP completion steps have not yet run (only triggered after all 8 plans are done)."
+    ]
+  }
+}
