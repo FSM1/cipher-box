@@ -1,0 +1,66 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "406637b3cf1e",
+  "session_id": "3379b299-016b-4d40-aaf2-317ab0c08665",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-24T00:54:12.885966Z",
+  "branch": "feat/ipns-verification-cross-layer-closeout-desktop-and-api",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "f2967dbe082c",
+  "token_usage": {
+    "input_tokens": 12953,
+    "cache_creation_tokens": 121228,
+    "cache_read_tokens": 1608236,
+    "output_tokens": 32430,
+    "api_call_count": 17
+  },
+  "summary": {
+    "intent": "Execute Phase 60 (IPNS Verification Cross-Layer Closeout) using wave-based parallel execution across 8 plans in 4 waves, hardening IPNS record verification to be strictly fail-closed across Rust and TypeScript layers.",
+    "outcome": "Wave 1 (plans 60-01, 60-02, 60-03) completed successfully with all 251 sdk-core tests passing. Wave 2 began with plan 60-04 dispatched but not yet returned in the transcript.",
+    "learnings": {
+      "repo": [
+        "Phase 60 has 8 plans across 4 waves; Wave 4 (60-08) is non-autonomous (staging wipe + redeploy + smoke-test) and requires a human-action checkpoint.",
+        "IPNS verify logic was split across crates: fuse/src/verify.rs had the canonical impl but sdk/fuse/desktop needed to share one impl via api-client/src/ipns.rs.",
+        "All 9 first-publish IPNS producers (FUSE, desktop Tauri, sdk-core, web) were using seq=0 instead of seq=1; the strict resolver requires seq=1 as a precondition.",
+        "VerifyError::Legacy variant was removed as part of D-04; all 9 FUSE caller arms were folded to use Invalid instead.",
+        "Windows winfsp site is CI-gated and not testable locally — expected gap in local test coverage.",
+        "vendored `fuser` crate has pre-existing dead-code warnings that appear in cargo check output but are not regressions.",
+        "crates/fuse/src/verify.rs was a re-export shim to be deleted after 60-04 re-points all imports."
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/metadata.rs",
+          "line": 619,
+          "end_line": 619,
+          "finding": "Was referencing VerifyError::Legacy which was removed in 60-01; executor folded to Invalid as part of compile necessity, not Wave 2 scope."
+        },
+        {
+          "path": "packages/sdk-core/src/vault.test.ts",
+          "finding": "Had stale expectation of seq=0n that needed updating to 1n after 60-02 unified first-publish producers to seq=1."
+        }
+      ],
+      "workflow": [
+        "Sequential gsd-executor subagents on the main working tree were chosen over worktree isolation because the worktree merge-back path is unreliable for a strict fail-closed crypto-cutover phase — correctness over wall-clock.",
+        "Executor agent mid-edit diagnostic snapshots can report stale compile errors (e.g. E0599 on VerifyError::Legacy) that are already resolved by the time the agent finishes; always re-run cargo check authoritatively before flagging as a failure.",
+        "Wave-level build/test gates (cargo check + full unit tests) are run after each wave completes to catch cross-plan integration issues before proceeding.",
+        "When a plan's compile necessity forces it to absorb work from a later plan's declared scope (60-01 folding FUSE Legacy arms instead of 60-04), the later plan's scope must be re-evaluated to avoid duplicating work."
+      ]
+    },
+    "friction": [
+      "Worktree isolation mode (isolation='worktree') is not reliably supported for merge-back in this harness, forcing fallback to sequential main-tree execution and losing parallelism benefits.",
+      "Executor agent reported a stale E0599 compile error mid-edit that required a manual cargo check to disprove, adding diagnostic overhead.",
+      "60-01 was forced to fold 9 FUSE caller arms (originally 60-04's scope) as a compile necessity, creating scope bleed between waves that requires careful accounting.",
+      "Agent executor skills payload was empty — no project-specific executor skills registered, so executor prompts had no project-tailored guidance."
+    ],
+    "open_items": [
+      "Wave 2 plan 60-04 (route remaining Rust resolve paths fail-closed, delete fuse/src/verify.rs re-export) was dispatched but not yet complete in the transcript.",
+      "Wave 2 plans 60-05 and 60-07 (API regime tightening and cross-lang vector regen) not yet started.",
+      "Wave 3 plan 60-06 (API publish-path verify cache for CPU cost recovery) not yet started.",
+      "Wave 4 plan 60-08 is a non-autonomous human checkpoint requiring staging wipe + redeploy + smoke-test; must be surfaced explicitly when reached.",
+      "Windows winfsp integration tests are CI-only and cannot be verified locally — coverage gap acknowledged but not resolved."
+    ]
+  }
+}
