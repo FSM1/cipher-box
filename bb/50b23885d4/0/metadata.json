@@ -1,0 +1,82 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "bb50b23885d4",
+  "session_id": "3379b299-016b-4d40-aaf2-317ab0c08665",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-24T00:58:17.432268Z",
+  "branch": "feat/ipns-verification-cross-layer-closeout-desktop-and-api",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "Cargo.lock"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "f2967dbe082c",
+  "token_usage": {
+    "input_tokens": 13817,
+    "cache_creation_tokens": 130145,
+    "cache_read_tokens": 2034449,
+    "output_tokens": 36345,
+    "api_call_count": 20
+  },
+  "summary": {
+    "intent": "Execute phase 60 (IPNS Verification Cross-Layer Closeout) of the CipherBox GSD workflow — hardening IPNS record verification to be strictly fail-closed across Rust (fuse, api-client, sdk) and TypeScript (sdk-core, web) layers, unifying first-publish seq numbers, and routing all resolve paths through a single chokepoint.",
+    "outcome": "Wave 1 fully complete (plans 60-01, 60-02, 60-03 — 251/251 sdk-core tests passing, fuse check green). Wave 2 plan 60-04 complete. Stray artifacts from Wave 1 executors (uncommitted Cargo.lock and incorrect SUMMARY footer) were caught and cleaned up before Wave 2 continued.",
+    "learnings": {
+      "repo": [
+        "IPNS verification was previously split across crates/fuse/src/verify.rs and crates/api-client/src/ipns.rs; 60-01 centralized it in api-client, and 60-04 deleted the fuse re-export entirely.",
+        "VerifyError::Legacy variant was removed as part of the strict fail-closed hardening; all 9 FUSE caller arms migrated to Invalid — this was a compile necessity that 60-01 handled ahead of 60-04's declared scope.",
+        "First-publish IPNS records previously embedded sequence=0; unified to sequence=1 across 9 producers (FUSE, desktop Tauri, sdk-core, web) in 60-02.",
+        "sdk-core has 251 tests, 34 of which are IPNS-specific — used as the primary integration gate between waves.",
+        "Windows winfsp site is CI-gated and not locally testable; expected to show as skipped during local checks.",
+        "No git submodules in the repo, so all plans were eligible for worktree isolation — but the orchestrator chose sequential execution due to worktree merge-back complexity."
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/metadata.rs",
+          "line": 619,
+          "end_line": 619,
+          "finding": "Was using VerifyError::Legacy; migrated to VerifyError::Invalid by 60-01 as part of folding all Legacy caller arms."
+        },
+        {
+          "path": "sdk/src/vault.test.ts",
+          "finding": "Had a stale expectation of 0n for IPNS sequence; updated to 1n as a consequence of 60-02's seq=1 unification."
+        },
+        {
+          "path": "Cargo.lock",
+          "finding": "60-01 added ciborium and cipherbox-core as deps to crates/api-client/Cargo.toml (for CBOR Validity parsing) but the executor never committed the corresponding Cargo.lock update — a latent --locked CI break discovered only in Wave 2."
+        }
+      ],
+      "workflow": [
+        "GSD executor subagents can emit stale mid-edit diagnostics (e.g., reporting a compile error that was already fixed in the same session) — always re-run cargo check/test authoritatively before marking a plan failed.",
+        "Worktree isolation mode for Agent tool is not reliably usable when branches need to be merged back into the feature branch; sequential execution on the shared working tree is safer for complex phases.",
+        "Executors don't always commit Cargo.lock alongside Cargo.toml changes — the orchestrator must inspect `git status` between plans to catch uncommitted lockfile drift.",
+        "Stray content (summary footers, diagnostic artifacts) can be appended to plan SUMMARY files after the plan's own commit, leaving stale information in the tree that subsequent plans may contradict."
+      ]
+    },
+    "friction": [
+      "60-01 executor reported a compile error (VerifyError::Legacy at metadata.rs:619) that was already resolved within the same edit session — required a manual grep and cargo check to confirm the tree was actually green.",
+      "Worktree-based parallel execution (the preferred mode) is not reliably supported because there is no exposed worktree path/branch manifest for merge-back, forcing sequential execution and losing wave parallelism.",
+      "Cargo.lock was left uncommitted after 60-01's Cargo.toml edits, discovered only mid-Wave 2 via `git status` — would have caused a --locked CI failure.",
+      "60-01-SUMMARY.md had a stale footer appended post-commit (saying 'verify.rs FOUND') that contradicted 60-04's deletion — required manual revert."
+    ],
+    "open_items": [
+      "Wave 2 plans 60-05 (tighten API regime) and 60-07 (regen cross-lang test vectors) not yet executed — transcript ends after 60-04 cleanup.",
+      "Wave 3 plan 60-06 (API publish-path verify cache for CPU cost recovery) not started.",
+      "Wave 4 plan 60-08 (D-01/D-12 operational cutover: staging wipe + redeploy + smoke-test) is non-autonomous and requires a human-action checkpoint — not yet reached.",
+      "Windows winfsp CI path for 60-02 seq=1 changes untested locally — depends on CI run to confirm."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-24T00:57:34.736752Z",
+    "agent_lines": 2,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 2,
+    "total_lines_changed": 2,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
