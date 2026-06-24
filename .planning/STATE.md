@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
-status: Phase 59 executed — human_needed (winfsp / SDK-E2E / desktop-E2E gates); Finding F partial, deferred to Phase 60
-last_updated: "2026-06-23T23:42:50.508Z"
-last_activity: 2026-06-23
+status: Ready to execute
+last_updated: "2026-06-24T00:22:59.943Z"
+last_activity: 2026-06-24
 progress:
   total_phases: 45
   completed_phases: 44
-  total_plans: 190
-  completed_plans: 190
-  percent: 99
+  total_plans: 198
+  completed_plans: 191
+  percent: 96
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 59 — fuse-ipns-verify-publish-hardening-and-cleanup
+**Current focus:** Phase 60 — ipns-verification-cross-layer-closeout-desktop-and-api
 
 ## Current Position
 
-Phase: 59 (fuse-ipns-verify-publish-hardening-and-cleanup) — EXECUTED, NOT yet complete (human_needed)
-Plan: 4 of 4 executed. Deep code review found a Finding F blocker (CR-01: resolve-side strict-equality removed while the live mkdir paths still embed 0 → would fail-close resolution of freshly-created folders). Fixed by reverting the strict-equality tightening and restoring the skew allowance (commit 0256ea486); forward embed-1 changes kept; full first-publish unification + strict cutover deferred to Phase 60. Remaining to close Phase 59: winfsp Windows CI, SDK-E2E (redis 6380), desktop-E2E — see 59-UAT.md, then run /gsd:verify-work 59.
+Phase: 60 (ipns-verification-cross-layer-closeout-desktop-and-api) — EXECUTING
+Plan: 2 of 8
 Milestone v1.1 hardening block extended 2026-06-21 with deferred-findings Phases 56–58 (HARD-07..09), sourced from the Phase 50–55 / PR #529 + #538 review backlog. Next: run /gsd:plan-phase 58 (recommended order was 56 FUSE/IPNS durability → 57 API CID/provider hardening → 58 IPNS signature-verify coverage; 58 last as it is the most regression-prone and full-SDK-E2E-gated). Note: STATE frontmatter progress counts are approximate and were periodically unreconciled (see todo `2026-06-18-gsd-phase-complete-regresses-state-final-phase.md`).
 
 ## Performance Metrics
@@ -163,6 +163,7 @@ Milestone v1.1 hardening block extended 2026-06-21 with deferred-findings Phases
 | Phase 59 P02 | 4min | 2 tasks | 6 files |
 | Phase 59 P03 | 12min | 2 tasks | 6 files |
 | Phase 59 P04 | 15min | 2 tasks | 7 files |
+| Phase Phase 60 P01 P01 | 35min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -308,9 +309,9 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last activity: 2026-06-23
+Last activity: 2026-06-24
 
-Last session: 2026-06-23T21:00:00Z — Completed 59-04-PLAN.md (Phase 59 COMPLETE)
+Last session: 2026-06-24T00:22:59.933Z
 
 ## Decisions
 
@@ -349,3 +350,4 @@ Last session: 2026-06-23T21:00:00Z — Completed 59-04-PLAN.md (Phase 59 COMPLET
 - [Phase 51-03]: verify_ipns_resolve_signature absent-fields path returns Ok(None) + warn (D-03), not error; verify gate in resolve_folder_key BFS only (not fetch_merge_publish_parent replay path)
 - [Phase 51-04]: updateFolderMetadataAndPublish SKIP zeroing — all client.ts call sites pass live session keys from folderTree state reused across session lifetime; caller retains ownership (T-47-01 documented skip with guard test)
 - [Phase ?]: CBOR import: cborg decode used in sdk-core; parseCborData from ipns unavailable
+- [Phase 60-01]: decode_ipns_cbor_validity companion fn chosen over 3-tuple return; all 9 FUSE Legacy arms folded to Invalid; manual RFC3339 parse with 5-min skew buffer (D-04/D-07)
