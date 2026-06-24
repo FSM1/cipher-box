@@ -106,7 +106,7 @@ pub(crate) async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Res
         .try_into()
         .map_err(|_| "Invalid vault key IPNS private key length".to_string())?;
     let key_value = format!("/ipfs/{}", key_blob_cid);
-    let key_record = cipherbox_core::ipns::create_ipns_record(&vault_key_ipns_arr, &key_value, 0, 86_400_000)
+    let key_record = cipherbox_core::ipns::create_ipns_record(&vault_key_ipns_arr, &key_value, 1, 86_400_000)
         .map_err(|e| format!("IPNS record creation failed: {}", e))?;
     let key_marshaled = cipherbox_core::ipns::marshal_ipns_record(&key_record)
         .map_err(|e| format!("IPNS record marshaling failed: {}", e))?;
@@ -123,7 +123,7 @@ pub(crate) async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Res
     match cipherbox_api_client::ipns::publish_ipns(&state.sdk.api, &key_publish_req).await.map_err(|e| e.to_string())? {
         cipherbox_api_client::PublishResult::Success => {}
         cipherbox_api_client::PublishResult::Conflict { .. } => {
-            log::warn!("Unexpected conflict on vault key blob publish (sequence 0); aborting vault initialization to avoid mismatched root_folder_key");
+            log::warn!("Unexpected conflict on vault key blob publish (sequence 1); aborting vault initialization to avoid mismatched root_folder_key");
             return Err("Vault initialization aborted due to existing vault key IPNS record".to_string());
         }
     }
@@ -151,7 +151,7 @@ pub(crate) async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Res
         .try_into()
         .map_err(|_| "Invalid root IPNS private key length".to_string())?;
     let folder_value = format!("/ipfs/{}", folder_cid);
-    let folder_record = cipherbox_core::ipns::create_ipns_record(&root_ipns_arr, &folder_value, 0, 86_400_000)
+    let folder_record = cipherbox_core::ipns::create_ipns_record(&root_ipns_arr, &folder_value, 1, 86_400_000)
         .map_err(|e| format!("IPNS record creation failed: {}", e))?;
     let folder_marshaled = cipherbox_core::ipns::marshal_ipns_record(&folder_record)
         .map_err(|e| format!("IPNS record marshaling failed: {}", e))?;
@@ -168,7 +168,7 @@ pub(crate) async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Res
     match cipherbox_api_client::ipns::publish_ipns(&state.sdk.api, &folder_publish_req).await.map_err(|e| e.to_string())? {
         cipherbox_api_client::PublishResult::Success => {}
         cipherbox_api_client::PublishResult::Conflict { .. } => {
-            log::warn!("Unexpected conflict on root folder publish (sequence 0)");
+            log::warn!("Unexpected conflict on root folder publish (sequence 1)");
         }
     }
 

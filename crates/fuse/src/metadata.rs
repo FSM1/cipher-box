@@ -527,8 +527,8 @@ pub fn spawn_bin_entry_publish(
             };
 
             if is_first_bin_publish {
-                // First publish: no prior record, so no CAS. Publish at seq 0.
-                let (record_b64, _cid) = make_bin_record(0)?;
+                // First publish: no prior record, so no CAS. Publish at seq 1 (D-02).
+                let (record_b64, _cid) = make_bin_record(1)?;
                 let req = cipherbox_api_client::IpnsPublishRequest {
                     ipns_name: bin_ipns_name.clone(),
                     record: record_b64,
@@ -542,7 +542,7 @@ pub fn spawn_bin_entry_publish(
                     .map_err(|e| format!("{}", e))?
                 {
                     cipherbox_api_client::PublishResult::Success => {
-                        coordinator.record_publish(&bin_ipns_name, 0);
+                        coordinator.record_publish(&bin_ipns_name, 1);
                         log::info!("Bin entry published (first publish)");
                     }
                     cipherbox_api_client::PublishResult::Conflict { .. } => {
