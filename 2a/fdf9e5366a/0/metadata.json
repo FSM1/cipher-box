@@ -1,0 +1,64 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "2afdf9e5366a",
+  "session_id": "3379b299-016b-4d40-aaf2-317ab0c08665",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-24T01:47:39.954253Z",
+  "branch": "feat/ipns-verification-cross-layer-closeout-desktop-and-api",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "f2967dbe082c",
+  "token_usage": {
+    "input_tokens": 14091,
+    "cache_creation_tokens": 147400,
+    "cache_read_tokens": 3269044,
+    "output_tokens": 48951,
+    "api_call_count": 28
+  },
+  "summary": {
+    "intent": "Execute all 8 plans in Phase 60 (IPNS Verification Cross-Layer Closeout, req HARD-11) using the GSD wave-based orchestrator, making the IPNS verify pipeline strictly fail-closed across Rust, TypeScript, and the API layer.",
+    "outcome": "Completed Waves 1–2 (6/8 plans: 60-01 through 60-05, 60-07) with all build/test gates green; Wave 3 (60-06, API verify cache) was spawned but the transcript ends mid-execution. Wave 4 (60-08, operational cutover) remains as a non-autonomous human checkpoint.",
+    "learnings": {
+      "repo": [
+        "Worktree isolation mode cannot reliably merge agent branches back; the safe fallback for delicate crypto-cutover phases is sequential execution on the main working tree.",
+        "60-01 was forced to fold all 9 FUSE VerifyError::Legacy caller arms as a compile necessity, bleeding into 60-04's declared scope — plan boundaries in this phase were not strictly independent.",
+        "Cargo.lock is not automatically committed by gsd-executor subagents after Cargo.toml dependency additions; this creates a latent --locked CI break discovered only mid-next-plan.",
+        "sdk-core has 34 ipns-specific tests within its 251-test suite; API ipns specs total 159 tests, with ERROR lines representing negative-path assertions (not failures).",
+        "ciborium and cipherbox-core were added as new dependencies of crates/api-client in 60-01 (CBOR Validity parsing for resolve-side expiry enforcement)."
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/verify.rs",
+          "finding": "File deleted in 60-04 — implementation relocated to crates/api-client/src/ipns.rs; a post-deletion unlinked-file diagnostic was a stale snapshot, not a real error."
+        },
+        {
+          "path": "crates/fuse/src/metadata.rs",
+          "line": 619,
+          "finding": "Last remaining VerifyError::Legacy reference; folded to VerifyError::Invalid by 60-01 as a compile necessity (not 60-04 as planned)."
+        }
+      ],
+      "workflow": [
+        "The gsd-executor commit helper has a known false-negative: it reports 'No staged files match any configured task' (commit_failed) even when the commit actually lands — always verify with git log after seeing this error.",
+        "Stale mid-edit diagnostics from subagents are unreliable; always run an authoritative cargo check / jest run on the main tree to confirm green status.",
+        "Jest log noise can bury the pass/fail summary; pipe through grep for the PASS/FAIL/Tests: line rather than reading raw output.",
+        "SUMMARY.md files written by executors can accumulate stale footers from post-commit self-checks; review and revert them before continuing to the next wave."
+      ]
+    },
+    "friction": [
+      "gsd-executor commit helper false-negative ('commit_failed' when commit actually landed) required manual git log verification after every commit, adding overhead across multiple plans.",
+      "60-01 scope bleed: executor was forced to fold 9 FUSE VerifyError::Legacy arms (60-04's declared scope) as a compile necessity, making the plan boundary fiction and creating ambiguity about what 60-04 still owed.",
+      "Cargo.lock left uncommitted after 60-01 — discovered only during 60-04 cleanup as a latent --locked CI break; required an out-of-band fixup commit.",
+      "60-01-SUMMARY.md accrued a stale footer (said 'verify.rs FOUND' after 60-04 deleted it) that had to be reverted manually.",
+      "Jest ERROR lines in negative-path tests buried the actual pass/fail count, requiring a second extraction command to confirm the wave gate result.",
+      "Worktree isolation was the intended execution mode but couldn't be used — no exposed worktree path/branch manifest in the harness means no reliable merge-back, forcing slower sequential execution."
+    ],
+    "open_items": [
+      "60-06 (API publish-path verify cache, Wave 3) — spawned but transcript ends; completion status unknown.",
+      "60-08 (Wave 4) — staging wipe + redeploy + smoke-test is non-autonomous; requires a human-action checkpoint to proceed.",
+      "gsd-executor commit helper false-negative is a known recurring issue with no fix in place.",
+      "Worktree isolation limitation for multi-plan phases (no merge-back path) should be documented or resolved in the harness so future phases can use parallel execution safely."
+    ]
+  }
+}
