@@ -1,0 +1,182 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "e3fe33ca21ed",
+  "session_id": "3379b299-016b-4d40-aaf2-317ab0c08665",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-24T13:10:55.592757Z",
+  "branch": "feat/ipns-verification-cross-layer-closeout-desktop-and-api",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "packages/sdk-core/src/__tests__/ipns.test.ts",
+    "packages/sdk-core/src/ipns/index.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "bf25a3a92650",
+  "token_usage": {
+    "input_tokens": 19614,
+    "cache_creation_tokens": 542530,
+    "cache_read_tokens": 21243624,
+    "output_tokens": 189878,
+    "api_call_count": 92
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_015unJFE1uKnKxuJBsXrnXCJ",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "bf25a3a92650",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 220,
+        "end": 221,
+        "entry_ids": [
+          "0010ab68-b02f-458f-9cb1-9ba8e5708e8f"
+        ],
+        "tool_use_id": "toolu_015unJFE1uKnKxuJBsXrnXCJ"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015unJFE1uKnKxuJBsXrnXCJ"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ship-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Execute phase 60 (IPNS Verification Cross-Layer Closeout) using the GSD wave-based parallel execution workflow, then run the full ship-phase loop to get the PR up and through CI.",
+    "outcome": "All 7 code plans (waves 1–3) executed and gated green locally; the SDK E2E gate caught a ship-blocking regression from 60-05 (Ed25519 pubKey stripped from resolve response) that 343 unit tests missed — fixed and confirmed 89/89 E2E pass. Phase 60-08 (staging cutover) remains at a human-action checkpoint; committing and shipping are blocked on a wedged 1Password SSH signer.",
+    "learnings": {
+      "repo": [
+        "Ed25519 IPNS records do NOT embed the public key in the record protobuf bytes — `parseIpnsRecordBytes` yields no `pubKey` for these records. The API must supply it from the validated `publicKey` DB column (enforced at publish via `deriveIpnsName(publicKey) === ipnsName`).",
+        "60-05's `D-06 enrich removal` was based on a false assumption ('pubKey is already embedded in the signed record'). The deleted `withCachedPublicKey` and equal-seq enrich were load-bearing for the strict publish→resolve round-trip.",
+        "The 60-05 unit test mocking `parseIpnsRecord` WITH `pubKey` masked the Ed25519 real-world case where it's absent — the SDK E2E gate (real client→API round-trip) is the only suite that catches this class of boundary regression.",
+        "The TS resolve path did not fail-closed on an absent `Validity` field (only enforced EOL when `Validity` was a `Uint8Array`) while Rust fail-closes on absent Validity — a D-07 cross-layer parity gap.",
+        "CAPACITY.md §1.5 was already occupied by a prior-phase re-baseline; the D-11 verify-cache measurement landed as §1.6.",
+        "GSD executors do not always commit `Cargo.lock` when `Cargo.toml` dependencies change — 60-01 added `ciborium`+`cipherbox-core` to `api-client` without committing the lockfile, creating a latent `--locked` CI break.",
+        "GSD executors can leave stale SUMMARY footers and un-ticked ROADMAP checkboxes; the orchestrator must reconcile these after each wave.",
+        "The `subject-no-parens` commitlint rule rejects trailing `(D-XX)` in commit subjects — one 60-01 commit had `(D-07)` and needed rewording before the PR.",
+        "Wave-based worktree-isolated subagent execution was dropped in favor of sequential executors on the main branch because there is no reliable way to merge back `isolation=\"worktree\"` agent branches from the harness."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/ipns/index.ts",
+          "line": 214,
+          "end_line": 237,
+          "finding": "Strict resolve requires `pubKey`, `signatureV2`, and `data` all present in the response and verifies `deriveIpnsName(pubKey) === ipnsName`. Any resolve path that strips sig fields triggers the fail-closed throw."
+        },
+        {
+          "path": "packages/sdk-core/src/ipns/index.ts",
+          "line": 290,
+          "end_line": 301,
+          "finding": "EOL/expiry enforcement was gated on `Validity instanceof Uint8Array`, silently accepting records with no Validity field at all. Fixed to throw when Validity is absent (mirroring Rust `ipns.rs:114-117`)."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 528,
+          "end_line": 530,
+          "finding": "On equal-sequence path, `resolveRecord` was returning the bare network `result` from `parseIpnsRecordBytes` — which lacks `pubKey` for Ed25519. Fix: serve the full DB `cachedResult` on equal-or-higher sequence so the strict client receives all sig fields."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.spec.ts",
+          "line": 2135,
+          "end_line": 2141,
+          "finding": "The D-06 unit test mocked `parseIpnsRecord` to include `pubKey` (unrealistic for Ed25519) and then asserted `signatureV2`/`data` are `undefined` on equal-seq — effectively codifying the regression. Test was updated to reflect the corrected strict-verifiable behavior."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns-record.codec.ts",
+          "finding": "`parseCachedRecord` needed a `pubKey` field populated from the DB `publicKey` column; the network record bytes alone are insufficient to reconstruct a verifiable Ed25519 IPNS record."
+        }
+      ],
+      "workflow": [
+        "The SDK E2E gate (`tests/sdk-e2e`) is the only suite that exercises the real client→API IPNS publish/resolve round-trip. Unit suites mock the boundary and miss integration regressions — this gate caught a 28/89 break (phase 60) and a 48/89 break (phase 51) that all other gates missed.",
+        "The GSD commit helper has a known false-negative: it reports `commit_failed` while the commit actually lands. Always verify with `git log --oneline -1` before retrying.",
+        "1Password SSH signer can wedge after many rapid commits (`op-ssh-sign: failed to fill whole buffer`). Recovery: quit and reopen the 1Password desktop app or toggle Settings → Developer → SSH agent off/on.",
+        "`gh pr edit` fails on this repo (Projects-classic GraphQL). Patch PR body via `env -u GITHUB_TOKEN gh api -X PATCH repos/FSM1/cipher-box/pulls/<N> -F body=@file` instead.",
+        "Run SDK E2E before pushing IPNS-touching phases — the prereqs (postgres 5432, kubo 5001, redis 6380, mock-ipns-routing 3001) must all be up and the full client+API chain must be rebuilt from source."
+      ]
+    },
+    "friction": [
+      "1Password SSH signer wedged after ~28 rapid phase commits (`op-ssh-sign: failed to fill whole buffer`), blocking all subsequent commits and the push. Requires user to restart the desktop app.",
+      "GSD commit helper false-negatives (reports `commit_failed` when the commit lands) required repeated `git log` verification and caused uncertainty throughout.",
+      "60-01's executor committed Cargo.toml dependency additions but not the resulting Cargo.lock update, leaving a latent `--locked` CI break that had to be caught and committed by the orchestrator mid-wave-2.",
+      "60-01's executor appended a stale footer to `60-01-SUMMARY.md` after the SUMMARY commit; the footer became factually wrong after 60-04 deleted `verify.rs` and had to be manually reverted.",
+      "60-06's executor did not tick its ROADMAP checkbox; the orchestrator had to detect and reconcile this after wave 3.",
+      "The worktree-isolation execution path (parallel subagents, each in their own worktree) was evaluated and discarded mid-session because there is no reliable branch-manifest/merge-back from `isolation=\"worktree\"` agents in the harness — traded wall-clock for correctness."
+    ],
+    "open_items": [
+      "60-08 Task 2 (D-01/D-12 staging cutover): staging DB wipe + redeploy + strict-verify smoke-test still pending — requires user to push the branch, pass CI, SSH to `root@76.13.151.200`, wipe DB per DATABASE_EVOLUTION_PROTOCOL.md §reset, and run three smoke checks.",
+      "Three CI gates must pass before the staging wipe: `Cargo Check & Test (Windows)` (authoritative for winfsp embed-1), Desktop E2E (`gh workflow run CI E2E Tests`), and the SDK E2E client→API round-trip.",
+      "Commit the staged sdk-core Validity fix (`fix: strict TS resolve fail-closed on absent Validity field`) — staged but not yet committed due to wedged 1Password signer.",
+      "Reword the `feat(60-01): add resolve-side EOL/expiry enforcement with 5-minute skew buffer (D-07)` commit subject to strip the trailing `(D-07)` before pushing (violates `subject-no-parens` commitlint rule).",
+      "Run CodeRabbit CLI review (`coderabbit review --agent --base main --type committed`) — deferred pending SDK E2E gate confirmation.",
+      "Open the PR with a conventional paren-free title and escaped `#NN` refs; resolve CodeRabbit's PR-level review threads after it lands.",
+      "Run `/extract-learnings` after the phase ships — the Ed25519 pubKey boundary assumption and the unit-test mock gap are non-obvious and worth capturing."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-24T13:09:27.19871Z",
+    "agent_lines": 45,
+    "agent_removed": 11,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 45,
+    "total_lines_changed": 56,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 205,
+      "agent_lines_removed": 11,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 292,
+      "agent_lines_removed": 31,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
