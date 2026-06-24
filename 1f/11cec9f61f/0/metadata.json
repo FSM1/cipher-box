@@ -1,0 +1,196 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "1f11cec9f61f",
+  "session_id": "3379b299-016b-4d40-aaf2-317ab0c08665",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-24T13:42:57.286184Z",
+  "branch": "feat/ipns-verification-cross-layer-closeout-desktop-and-api",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/src/ipns/ipns-record.codec.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "eb92e353cdc5",
+  "token_usage": {
+    "input_tokens": 24153,
+    "cache_creation_tokens": 1073799,
+    "cache_read_tokens": 43963449,
+    "output_tokens": 253876,
+    "api_call_count": 144
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_015unJFE1uKnKxuJBsXrnXCJ",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "eb92e353cdc5",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 220,
+        "end": 221,
+        "entry_ids": [
+          "0010ab68-b02f-458f-9cb1-9ba8e5708e8f"
+        ],
+        "tool_use_id": "toolu_015unJFE1uKnKxuJBsXrnXCJ"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015unJFE1uKnKxuJBsXrnXCJ"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ship-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01SeiB2Zz3z176peAgQ6T56C",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:secure-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "eb92e353cdc5",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 538,
+        "end": 539,
+        "entry_ids": [
+          "de9411c8-2fe0-415b-b7f9-c988f0e25450"
+        ],
+        "tool_use_id": "toolu_01SeiB2Zz3z176peAgQ6T56C"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01SeiB2Zz3z176peAgQ6T56C"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:secure-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Execute all 8 plans in Phase 60 (IPNS Verification Cross-Layer Closeout) using the GSD wave-based parallel execution workflow, then run the full ship-phase loop (verify → secure → simplify → SDK E2E → CodeRabbit → ship → CI).",
+    "outcome": "All 8 plans executed (7 code-complete, 60-08 paused at human-action staging cutover checkpoint); a ship-blocking regression introduced by 60-05 was caught by the SDK E2E gate and fixed; security audit returned 27/27 threats closed; 7 additional CodeRabbit findings fixed; 3 final TS commits were still being written when the transcript ended.",
+    "learnings": {
+      "repo": [
+        "Ed25519 IPNS records do NOT embed pubKey in the record protobuf — it lives in the name (k51…). The DB `publicKey` column was the authoritative source; 60-05 deleted the enrich that supplied it, causing the strict client to throw `fail closed` on every resolve.",
+        "The `gsd-tools` commit helper reports `commit_failed` (lint-staged stderr) even when the commit actually lands — always verify with `git log --oneline -1`, never blindly retry.",
+        "`cargo fmt --check` reports drift across the whole workspace due to a local rustfmt version mismatch vs repo; never run blanket `cargo fmt` — executor commits pass CI as-is.",
+        "lint-staged does not process `.rs` files, only TS/JSON/MD — Rust commits land without fmt hooks.",
+        "`gh pr edit` fails on this repo (Projects-classic GraphQL) — patch PR bodies via `gh api -X PATCH repos/FSM1/cipher-box/pulls/<N> -F body=@file`.",
+        "`git push` / `git fetch` are blocked in the sandbox environment — must run with sandbox disabled.",
+        "The 1Password SSH signing agent wedges after many rapid commits (`op-ssh-sign: failed to fill whole buffer`) — requires quit-and-reopen of the 1Password desktop app; keys still listed by the agent but signing requests fail.",
+        "CodeRabbit bundles nitpick findings in the review body AND as inline review threads — both must be fetched and resolved separately.",
+        "IPNS unit tests in `ipns.service.spec.ts` mocked `parseIpnsRecord` to include `pubKey` (unrealistic for Ed25519), which is why the 60-05 regression passed all 343 unit tests but failed 28/89 SDK E2E tests."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 528,
+          "end_line": 537,
+          "finding": "resolveRecord on equal-sequence returned the bare network result (no sig fields) instead of the DB cached record. The removed `withCachedPublicKey` and equal-seq enrich were load-bearing — they supplied pubKey from the DB `publicKey` column, which parseIpnsRecordBytes does not extract for Ed25519 records."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns-record.codec.ts",
+          "finding": "parseCachedRecord must supply pubKey from the validated DB `publicKey` column and fail-closed when that column is absent — publish already enforces deriveIpnsName(publicKey) === ipnsName, and the client re-checks the binding."
+        },
+        {
+          "path": "packages/sdk-core/src/ipns/index.ts",
+          "line": 290,
+          "end_line": 301,
+          "finding": "TS resolve path skipped the EOL block entirely when Validity was not a Uint8Array (absent field), while Rust fail-closes via .ok_or_else(). Fixed to throw on absent Validity, matching D-07 cross-layer contract."
+        },
+        {
+          "path": "crates/core/src/ipns.rs",
+          "line": 142,
+          "end_line": 153,
+          "finding": "decode_ipns_cbor_validity returned on first-wins for duplicate 'Validity' keys (early return), while its sibling decode_ipns_cbor_data rejects duplicates with an explicit guard. A maliciously crafted record with two Validity entries decoded ambiguously across parsers — now hardened to reject duplicates."
+        },
+        {
+          "path": "crates/sdk/src/registry.rs",
+          "line": 63,
+          "end_line": 66,
+          "finding": "register_device swallowed ALL errors from fetch_and_decrypt_registry with `Err(_) => None`, treating verification failures (VerifyError::Invalid) as legitimate first-device bootstrap. Fixed to only bootstrap on ApiError::IpnsNotFound (HTTP 404); all other errors propagate."
+        },
+        {
+          "path": "crates/api-client/src/ipns.rs",
+          "line": 184,
+          "end_line": 221,
+          "finding": "parse_rfc3339_to_unix_secs was lenient: trailing components accepted silently, and impossible dates (2026-02-31) were not rejected — the Hinnant civil_from_days algorithm rolls them into the following month, extending expiry. Fixed with trailing-component check and leap-aware day-of-month validation."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns-verify-cache.ts",
+          "finding": "The short-TTL verify cache was unbounded — fixed with MAX_CACHE_SIZE eviction to prevent unbounded memory growth."
+        },
+        {
+          "path": "apps/web/src/services/vault-settings.service.ts",
+          "finding": "Web vault-settings sequence-fallback swallowed verification failures; resolveIpnsRecord returns null only for true not-found — other errors (verification failure) must propagate fail-closed."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.spec.ts",
+          "line": 2135,
+          "end_line": 2141,
+          "finding": "The 60-05 D-06 unit test codified the buggy behavior by asserting signatureV2/data are undefined on equal-seq, and mocked parseIpnsRecord to include pubKey (unrealistic for Ed25519 records). Both issues masked the regression — test updated to assert corrected strict-verifiable behavior."
+        }
+      ],
+      "workflow": [
+        "The SDK E2E gate (`pnpm --filter @cipherbox/sdk-e2e test`) is the only suite that exercises the real client→API IPNS publish/resolve round-trip; unit suites mock the resolve boundary and miss integration regressions — this gate caught the 60-05 regression that 343 unit tests missed.",
+        "Sequential gsd-executor subagents on the feature branch (not worktree isolation) is the safer approach for security-critical phases with tight cross-plan dependencies — avoids worktree merge conflicts at the cost of wall-clock time.",
+        "Adversarial triage workflows for CodeRabbit findings (parallel subagents with distinct skeptic prompts) are effective at separating real in-scope fixes from false positives — 4/15 findings were false positives including the pre-increment-sequence findings.",
+        "The short-circuit rule in secure-phase (`threats_open: 0 AND register_authored_at_plan_time: true`) skips the auditor and goes directly to SECURITY.md write — only valid when all threats were planned upfront and all plans have summaries.",
+        "When a background Bash command is cut off before all chained commands complete, the partial state must be explicitly checked rather than assumed (the 3 TS commits were still pending when the transcript ended).",
+        "Grouping fix commits by owning plan (e.g., `fix(60-05): restore ...`) rather than one mega-commit makes the security audit trail and git blame more useful for future investigators."
+      ]
+    },
+    "friction": [
+      "1Password SSH signing agent wedged mid-session after ~28 rapid commits, requiring user intervention to restart the app before any further commits could land.",
+      "The `gsd-tools` commit helper emits `commit_failed` (lint-staged normal output) even on success — created repeated false alarms and verification loops across the session.",
+      "`git push`/`git fetch` blocked in sandbox requires a context switch to unsandboxed execution for every push.",
+      "Background Bash process was cut off before completing all 5 chained commit commands, leaving 3 TS fix commits unwritten.",
+      "The `cargo fmt --check` workspace-wide drift created confusion about whether edits introduced formatting violations — needed explicit investigation to confirm it was a version mismatch, not real drift.",
+      "CodeRabbit CLI returned 15 findings requiring a full adversarial triage workflow (15 subagents) to classify — significant overhead before ship.",
+      "The worktree merge protocol is unsupported for worktree-isolated agents in the GSD harness, forcing fallback to sequential execution and higher wall-clock time."
+    ],
+    "open_items": [
+      "Plan 60-08 incomplete — staging DB wipe + strict-API redeploy + smoke-test (real Web3Auth login on staging VPS at 76.13.151.200) is a blocking human-action checkpoint; phase verification stays at 16/17 until done.",
+      "3 TS fix commits (ipns-record.codec.ts F15, ipns-verify-cache.ts F7/F6, vault-settings.service.ts F8) were still being committed when transcript ended — need verification they landed.",
+      "PR not yet opened — conventional commit reword of the one `(D-07)` subject (commitlint `subject-no-parens` violation) and push+PR creation are next steps.",
+      "3 CI gates still pending after PR opens: `Cargo Check & Test (Windows)` (winfsp embed-1 write_ops.rs can't build on macOS), Desktop E2E, and SDK round-trip in CI.",
+      "4 deferred CodeRabbit findings captured as todos (exact todo file paths not shown in transcript) — need verification they were written.",
+      "Nyquist validation (`/gsd:validate-phase 60`) was only briefly checked (planning-time draft doc) and not formally completed.",
+      "CodeRabbit PR-level review not yet processed — will arrive after PR is opened and needs thread resolution.",
+      "The `60-01-SUMMARY.md` stale footer (said `verify.rs FOUND` after 60-04 deleted it) was reverted but the root cause (executor appending self-check footers after SUMMARY commits) is a recurring pattern worth flagging."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-24T13:41:27.501056Z",
+    "agent_lines": 10,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 10,
+    "total_lines_changed": 10,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
