@@ -1,0 +1,65 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "124977a3e9c1",
+  "session_id": "3379b299-016b-4d40-aaf2-317ab0c08665",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-24T01:36:21.317976Z",
+  "branch": "feat/ipns-verification-cross-layer-closeout-desktop-and-api",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "f2967dbe082c",
+  "token_usage": {
+    "input_tokens": 14091,
+    "cache_creation_tokens": 147400,
+    "cache_read_tokens": 3269044,
+    "output_tokens": 48951,
+    "api_call_count": 28
+  },
+  "summary": {
+    "intent": "Execute Phase 60 of the CipherBox GSD workflow — 'IPNS Verification Cross-Layer Closeout' — implementing strict fail-closed IPNS verification across Rust (api-client, fuse, desktop) and TypeScript (sdk-core, API service) layers, organized into 4 dependency-ordered waves.",
+    "outcome": "Waves 1–2 completed cleanly (6/8 plans done): Rust verify chokepoint relocated and hardened, all 9 first-publish producers unified to seq=1, TS resolve path made strict, Rust consumers routed fail-closed, API strict regime enforced, and cross-language verify vectors regenerated. Wave 3 (60-06, verify cache) was in progress when the transcript ended; Wave 4 (60-08, staging cutover) awaits human action.",
+    "learnings": {
+      "repo": [
+        "crates/fuse/src/verify.rs was a re-export shim; 60-04 deleted it after 60-01 moved the real implementation into crates/api-client/src/ipns.rs — the module tree unlinked-file diagnostic is a stale snapshot artifact, not a real error.",
+        "IPNS first-publish producers (9 total across FUSE, desktop Tauri, sdk-core, web) were incorrectly embedding sequence 0; strict verifier requires sequence 1.",
+        "60-01 adding CBOR Validity parsing to api-client pulled in ciborium + cipherbox-core as new Cargo.toml deps, requiring a Cargo.lock update that the executor did not commit — a latent --locked CI break.",
+        "sdk-core has 251 tests with 34 ipns-specific tests; API ipns jest suite has 159 tests where ERROR lines are negative-path assertions (expected behavior, not failures).",
+        "Executor subagents can leave uncommitted artifacts (Cargo.lock updates, stray SUMMARY.md footer edits) that the orchestrator must detect and clean up between waves.",
+        "Wave 4 plan 60-08 is flagged non-autonomous (operational cutover: staging wipe + redeploy + smoke-test) and requires a human-action checkpoint."
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/metadata.rs",
+          "line": 619,
+          "end_line": 619,
+          "finding": "Had a VerifyError::Legacy reference that 60-01 folded to VerifyError::Invalid as a compile necessity; mid-executor diagnostic showed E0599 but grep confirmed zero Legacy refs remained in final state."
+        },
+        {
+          "path": "crates/api-client/Cargo.toml",
+          "finding": "60-01 added ciborium and cipherbox-core as dependencies for CBOR Validity parsing; the executor committed Cargo.toml but not Cargo.lock — orchestrator committed the lockfile separately at 9fb576365."
+        }
+      ],
+      "workflow": [
+        "Worktree isolation mode (Agent isolation='worktree') cannot reliably merge branches back to the feature branch in this harness — for safety-critical crypto phases, sequential gsd-executor subagents on the main working tree are the correct fallback.",
+        "The gsd commit helper has a documented false-negative: it returns 'No staged files match any configured task' even when the commit lands successfully — always verify with git log rather than treating the error as a real failure.",
+        "Post-wave build/test gates (cargo check across all touched crates + relevant jest/unit suites) are essential for catching cross-plan integration failures that per-plan scoped checks miss.",
+        "Executor subagents can legitimately deviate from their declared scope when compile necessity requires it (60-01 folded 9 FUSE Legacy arms that were nominally 60-04's scope); orchestrator must validate actual state rather than trusting declared scope boundaries."
+      ]
+    },
+    "friction": [
+      "gsd commit helper false-negative caused unnecessary verification work — had to run git log to confirm 60-01 Cargo.lock commit actually landed at 9fb576365.",
+      "60-01 executor left Cargo.lock uncommitted, creating a latent --locked CI break that the orchestrator had to detect and remediate manually between waves.",
+      "60-01 executor appended a stray footer to 60-01-SUMMARY.md after its final commit, with factually wrong state (said 'verify.rs FOUND' after 60-04 deleted it) — required a manual revert.",
+      "Initial compile error diagnostic from 60-01 (E0599 VerifyError::Legacy in metadata.rs:619) was a stale mid-edit snapshot, requiring an extra grep + cargo check round-trip to confirm the tree was actually green.",
+      "Jest output for API ipns specs buried the pass/fail summary in log noise, requiring a second extraction command."
+    ],
+    "open_items": [
+      "60-06 (API publish-path verify cache, Wave 3) — in progress at transcript end; delivers measured Ed25519 verify cost recovery keyed by (ipnsName, sequenceNumber, signatureV2-bytes) triple.",
+      "60-08 (Wave 4) — non-autonomous operational cutover: staging wipe, redeploy, and smoke-test against D-01/D-12; requires human execution and a manual checkpoint approval before phase can complete.",
+      "Phase 60 verification and STATE/ROADMAP completion not yet run — depends on 60-06 and 60-08 finishing.",
+      "Windows winfsp site for sdk-core was CI-gated and not locally verifiable — 60-02 changes to that path are untested locally."
+    ]
+  }
+}
