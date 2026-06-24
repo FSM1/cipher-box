@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "628152972d0b",
+  "strategy": "manual-commit",
+  "branch": "feat/ipns-verification-cross-layer-closeout-desktop-and-api",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/todos/pending/2026-06-24-scrub-staging-ssh-host-from-planning-docs.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/62/8152972d0b/0/metadata.json",
+      "transcript": "/62/8152972d0b/0/full.jsonl",
+      "content_hash": "/62/8152972d0b/0/content_hash.txt",
+      "prompt": "/62/8152972d0b/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  }
+}
