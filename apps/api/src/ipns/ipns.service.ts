@@ -22,7 +22,8 @@ import { RepublishService } from '../republish/republish.service';
 import { DelegatedRoutingClient } from './delegated-routing.client';
 import { MetricsService } from '../metrics/metrics.service';
 import { deriveIpnsName, parseIpnsRecord, verifyIpnsRecordSignature } from '@cipherbox/crypto';
-import { parseIpnsRecordBytes, parseCachedRecord, withCachedPublicKey } from './ipns-record.codec';
+import { parseIpnsRecordBytes, parseCachedRecord } from './ipns-record.codec';
+import { ipnsVerifyCache } from './ipns-verify-cache';
 
 @Injectable()
 export class IpnsService {
@@ -84,8 +85,23 @@ export class IpnsService {
       // encodes. A validly-signed record proves possession of the private key,
       // which IS the authority to update this name — the cache is keyed by
       // ipnsName, not by user, so any holder of the key may publish.
-      if (!(await verifyIpnsRecordSignature(dto.ipnsName, recordBytes))) {
-        throw new BadRequestException('IPNS record signature verification failed');
+      //
+      // D-11 short-circuit: if this exact (ipnsName, recordBytes) combination was
+      // already verified by THIS server within the cache TTL, skip the redundant
+      // Ed25519 call. The cache key is `ipnsName:base64(recordBytes)` — the record
+      // bytes uniquely identify the (ipnsName, sequenceNumber, signatureV2) triple
+      // since any change to signatureV2, seq, or CID produces different bytes.
+      // The cache is ONLY populated from successful in-process verifications — never
+      // from the resolve path or DHT records (T-60-20/T-60-21/D-11 invariant).
+      const recordBytesBase64 = Buffer.from(recordBytes).toString('base64');
+      const cacheHit = ipnsVerifyCache.isVerified(dto.ipnsName, '', recordBytesBase64);
+
+      if (!cacheHit) {
+        if (!(await verifyIpnsRecordSignature(dto.ipnsName, recordBytes))) {
+          throw new BadRequestException('IPNS record signature verification failed');
+        }
+        // Record in cache only after a successful in-process verify.
+        ipnsVerifyCache.recordVerified(dto.ipnsName, '', recordBytesBase64);
       }
 
       // Save to DB first so resolve always has a fallback, even if delegated
@@ -277,10 +293,11 @@ export class IpnsService {
     const embeddedSeq = incomingParsed.sequence; // bigint
     let isIdempotentRepublish = false;
     if (!existing) {
-      // First publish: allow embedded ∈ {0n, 1n} only (wedge-poison prevention — T-58-08).
-      if (embeddedSeq !== 0n && embeddedSeq !== 1n) {
+      // First publish: only embedded 1 accepted (D-03 strict — T-58-08, Plan 60-05).
+      // Embedded 0 is no longer tolerated; all first-publish producers unified to 1 in Plan 60-02.
+      if (embeddedSeq !== 1n) {
         throw new BadRequestException(
-          `First publish: embedded sequence must be 0 or 1, got ${embeddedSeq}`
+          `First publish: embedded sequence must be 1, got ${embeddedSeq}`
         );
       }
     } else {
@@ -491,31 +508,30 @@ export class IpnsService {
       });
       const cachedResult = await parseCachedRecord(cached, this.logger);
 
-      if (result && cached?.publicKey) {
-        result = withCachedPublicKey(result, cached.publicKey);
-      }
-
       if (result && cachedResult) {
-        // Both sources available — prefer the one with the higher sequence number
+        // Both sources available. The DB-cached record is the authoritative, fully-signed
+        // record the owner published — parseCachedRecord returns it complete, including the
+        // pubKey (supplied from the validated publicKey column). The network record parsed
+        // from delegated routing does NOT carry the signature fields a strict client needs
+        // to verify, so prefer the DB record whenever it is at the same or a higher
+        // sequence; only defer to the network record when it is strictly ahead (a newer
+        // publish not yet in this DB). This restores the resolve-verifiability that Plan
+        // 60-05's enrich removal dropped — the strict client re-checks pubKey→name binding
+        // and the Ed25519 signature regardless.
         const networkSeq = BigInt(result.sequenceNumber);
         const dbSeq = BigInt(cachedResult.sequenceNumber);
-        if (dbSeq > networkSeq) {
-          this.logger.log(
-            `DB cache has newer sequence (${dbSeq} > ${networkSeq}) for ${ipnsName}, using DB: ${cachedResult.cid}`
-          );
+        if (dbSeq >= networkSeq) {
+          if (dbSeq > networkSeq) {
+            this.logger.log(
+              `DB cache has newer sequence (${dbSeq} > ${networkSeq}) for ${ipnsName}, using DB: ${cachedResult.cid}`
+            );
+            source = 'network_stale';
+          } else {
+            source = 'db_cache';
+          }
           timerSource = 'db';
-          source = 'network_stale';
           resolveFound = true;
           return cachedResult;
-        }
-        // Equal sequence: enrich network result with cached signature fields if missing
-        if (dbSeq === networkSeq && !result.signatureV2 && cachedResult.signatureV2) {
-          result = {
-            ...result,
-            signatureV2: cachedResult.signatureV2,
-            data: cachedResult.data,
-            pubKey: result.pubKey ?? cachedResult.pubKey,
-          };
         }
         timerSource = 'network';
         resolveFound = true;

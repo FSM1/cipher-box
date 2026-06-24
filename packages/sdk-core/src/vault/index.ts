@@ -41,7 +41,7 @@ export async function publishVaultKeyBlob(params: {
       ipnsPublicKey: vaultKeyKeypair.publicKey,
       ipnsName: vaultKeyKeypair.ipnsName,
       metadataCid: cid,
-      sequenceNumber: 0n,
+      sequenceNumber: 1n,
       ctx: params.ctx,
     });
 

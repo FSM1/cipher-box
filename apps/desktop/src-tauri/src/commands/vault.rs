@@ -18,9 +18,23 @@ pub(crate) async fn load_vault_settings(
                 cipherbox_crypto::hkdf::derive_vault_settings_ipns_keypair(private_key)
                     .map_err(|e| format!("HKDF derivation failed: {:?}", e))?;
 
-            let resolved = cipherbox_api_client::ipns::resolve_ipns(api, &ipns_name)
+            // D-09: route through verified chokepoint — fail-closed on tampered settings.
+            let resolved = match cipherbox_api_client::ipns::resolve_ipns_verified(api, &ipns_name)
                 .await
-                .map_err(|e| format!("IPNS resolve failed: {}", e))?;
+            {
+                Ok(v) => v,
+                Err(cipherbox_api_client::ipns::VerifyError::Api(e)) => {
+                    return Err(format!("IPNS resolve failed: {}", e));
+                }
+                Err(cipherbox_api_client::ipns::VerifyError::Invalid(msg)) => {
+                    log::error!(
+                        "Vault settings IPNS {} verify failed (D-09): {}",
+                        ipns_name,
+                        msg
+                    );
+                    return Err(format!("IPNS verification failed: {}", msg));
+                }
+            };
 
             let encrypted = cipherbox_api_client::ipfs::fetch_content(api, &resolved.cid)
                 .await
@@ -106,7 +120,7 @@ pub(crate) async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Res
         .try_into()
         .map_err(|_| "Invalid vault key IPNS private key length".to_string())?;
     let key_value = format!("/ipfs/{}", key_blob_cid);
-    let key_record = cipherbox_core::ipns::create_ipns_record(&vault_key_ipns_arr, &key_value, 0, 86_400_000)
+    let key_record = cipherbox_core::ipns::create_ipns_record(&vault_key_ipns_arr, &key_value, 1, 86_400_000)
         .map_err(|e| format!("IPNS record creation failed: {}", e))?;
     let key_marshaled = cipherbox_core::ipns::marshal_ipns_record(&key_record)
         .map_err(|e| format!("IPNS record marshaling failed: {}", e))?;
@@ -123,7 +137,7 @@ pub(crate) async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Res
     match cipherbox_api_client::ipns::publish_ipns(&state.sdk.api, &key_publish_req).await.map_err(|e| e.to_string())? {
         cipherbox_api_client::PublishResult::Success => {}
         cipherbox_api_client::PublishResult::Conflict { .. } => {
-            log::warn!("Unexpected conflict on vault key blob publish (sequence 0); aborting vault initialization to avoid mismatched root_folder_key");
+            log::warn!("Unexpected conflict on vault key blob publish (sequence 1); aborting vault initialization to avoid mismatched root_folder_key");
             return Err("Vault initialization aborted due to existing vault key IPNS record".to_string());
         }
     }
@@ -151,7 +165,7 @@ pub(crate) async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Res
         .try_into()
         .map_err(|_| "Invalid root IPNS private key length".to_string())?;
     let folder_value = format!("/ipfs/{}", folder_cid);
-    let folder_record = cipherbox_core::ipns::create_ipns_record(&root_ipns_arr, &folder_value, 0, 86_400_000)
+    let folder_record = cipherbox_core::ipns::create_ipns_record(&root_ipns_arr, &folder_value, 1, 86_400_000)
         .map_err(|e| format!("IPNS record creation failed: {}", e))?;
     let folder_marshaled = cipherbox_core::ipns::marshal_ipns_record(&folder_record)
         .map_err(|e| format!("IPNS record marshaling failed: {}", e))?;
@@ -168,7 +182,7 @@ pub(crate) async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Res
     match cipherbox_api_client::ipns::publish_ipns(&state.sdk.api, &folder_publish_req).await.map_err(|e| e.to_string())? {
         cipherbox_api_client::PublishResult::Success => {}
         cipherbox_api_client::PublishResult::Conflict { .. } => {
-            log::warn!("Unexpected conflict on root folder publish (sequence 0)");
+            log::warn!("Unexpected conflict on root folder publish (sequence 1)");
         }
     }
 
@@ -246,10 +260,26 @@ pub(crate) async fn fetch_and_decrypt_vault(state: &AppState) -> Result<(), Stri
         cipherbox_crypto::hkdf::derive_vault_key_ipns_keypair(&private_key_arr)
             .map_err(|e| format!("Vault key HKDF derivation failed: {:?}", e))?;
 
-    // Resolve vault key IPNS, fetch v2 blob, extract rootFolderKey
-    let resolved = cipherbox_api_client::ipns::resolve_ipns(&state.sdk.api, &vault_key_ipns_name)
-        .await
-        .map_err(|e| format!("Vault key IPNS resolve failed: {}", e))?;
+    // D-09: route vault key IPNS through verified chokepoint — tampered blob rejected.
+    let resolved = match cipherbox_api_client::ipns::resolve_ipns_verified(
+        &state.sdk.api,
+        &vault_key_ipns_name,
+    )
+    .await
+    {
+        Ok(v) => v,
+        Err(cipherbox_api_client::ipns::VerifyError::Api(e)) => {
+            return Err(format!("Vault key IPNS resolve failed: {}", e));
+        }
+        Err(cipherbox_api_client::ipns::VerifyError::Invalid(msg)) => {
+            log::error!(
+                "Vault key IPNS {} verify failed (D-09): {}",
+                vault_key_ipns_name,
+                msg
+            );
+            return Err(format!("Vault key IPNS verification failed: {}", msg));
+        }
+    };
     let blob_bytes = cipherbox_api_client::ipfs::fetch_content(&state.sdk.api, &resolved.cid)
         .await
         .map_err(|e| format!("IPFS fetch failed for vault key blob: {}", e))?;

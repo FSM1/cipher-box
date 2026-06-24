@@ -62,7 +62,13 @@ pub async fn register_device(
     let existing_registry =
         match fetch_and_decrypt_registry(api, &reg_ipns_name, private_key).await {
             Ok(reg) => Some(reg),
-            Err(_) => None, // No registry exists yet (first device)
+            // Only a concrete IPNS-not-found (404) is the legitimate first-device
+            // bootstrap path. Any other error — verification failure (VerifyError::Invalid
+            // → RegistryError), parse failure, transient API/network error, or decrypt
+            // failure — must propagate so a tampered/invalid registry record cannot trigger
+            // first-device auto-authorization (D-08 fail-closed).
+            Err(SdkError::Api(cipherbox_api_client::ApiError::IpnsNotFound(_))) => None,
+            Err(e) => return Err(e),
         };
 
     // 3. Build device entry
@@ -167,10 +173,17 @@ async fn fetch_and_decrypt_registry(
     ipns_name: &str,
     private_key: &[u8; 32],
 ) -> Result<DeviceRegistry, SdkError> {
-    let resolve = cipherbox_api_client::ipns::resolve_ipns(api, ipns_name)
+    // D-08: route through verified chokepoint — tampered CIDs are rejected.
+    let verified = cipherbox_api_client::ipns::resolve_ipns_verified(api, ipns_name)
         .await
-        .map_err(SdkError::Api)?;
-    let encrypted = cipherbox_api_client::ipfs::fetch_content(api, &resolve.cid)
+        .map_err(|e| match e {
+            cipherbox_api_client::ipns::VerifyError::Api(api_err) => SdkError::Api(api_err),
+            cipherbox_api_client::ipns::VerifyError::Invalid(msg) => {
+                log::error!("Registry IPNS {} verify failed (D-08): {}", ipns_name, msg);
+                SdkError::RegistryError(format!("IPNS verification failed: {}", msg))
+            }
+        })?;
+    let encrypted = cipherbox_api_client::ipfs::fetch_content(api, &verified.cid)
         .await
         .map_err(SdkError::Api)?;
     let decrypted = cipherbox_crypto::ecies::unwrap_key(&encrypted, private_key)?;

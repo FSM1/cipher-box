@@ -641,6 +641,8 @@ name = "cipherbox-api-client"
 version = "0.35.0"
 dependencies = [
  "base64 0.22.1",
+ "ciborium",
+ "cipherbox-core",
  "cipherbox-crypto",
  "log",
  "reqwest 0.12.28",

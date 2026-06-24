@@ -54,7 +54,7 @@ struct IpnsVerifyVector {
     signature_v2: Option<String>,
     data: Option<String>,
     pub_key: Option<String>,
-    expected_result: String, // "valid" | "invalid" | "legacy"
+    expected_result: String, // "valid" | "invalid"
 }
 
 /// Run the same two-step binding logic as `crates/fuse/src/verify.rs` `bind_verified`:
@@ -62,7 +62,7 @@ struct IpnsVerifyVector {
 /// 1. Call `verify_ipns_resolve_signature` → `Option<bool>`.
 /// 2. For `Some(true)`: base64-decode `data`, call `decode_ipns_cbor_data`, compare
 ///    embedded value to `/ipfs/{resp.cid}` and embedded seq to `resp.sequence_number`.
-/// 3. Map to "valid" | "invalid" | "legacy".
+/// 3. Map to "valid" | "invalid" (under the strict regime, absent fields → "invalid").
 ///
 /// This is equivalent to `bind_verified(&resp, verdict)` but spelled out explicitly so
 /// the test pins both the api-client signature check and the core CBOR decode path.
@@ -86,7 +86,7 @@ fn classify_vector(v: &IpnsVerifyVector) -> String {
         };
 
     match verdict {
-        None => "legacy".to_string(),
+        None => "invalid".to_string(),
         Some(false) => "invalid".to_string(),
         Some(true) => {
             // Signature is valid. Perform the CBOR binding check (D-07/D-08).
@@ -122,8 +122,9 @@ fn classify_vector(v: &IpnsVerifyVector) -> String {
                 return "invalid".to_string();
             }
 
-            // D-07: embedded seq must match response sequence_number, with the documented
-            // first-publish skew allowance (resp_seq==1 && embedded==0) — mirrors bind_verified.
+            // D-07/D-05: embedded seq must strictly equal response sequence_number.
+            // The first-publish skew allowance (resp_seq==1 && embedded==0) was removed
+            // under the strict regime (D-04/D-05) — mirrors bind_verified in api-client.
             let resp_seq = match resp.sequence_number.parse::<u64>() {
                 Ok(s) => s,
                 Err(e) => {
@@ -131,7 +132,7 @@ fn classify_vector(v: &IpnsVerifyVector) -> String {
                     return "invalid".to_string();
                 }
             };
-            let seq_ok = embedded_seq == resp_seq || (resp_seq == 1 && embedded_seq == 0);
+            let seq_ok = embedded_seq == resp_seq;
             if !seq_ok {
                 eprintln!(
                     "[{}] seq binding mismatch: embedded={}, response={}",

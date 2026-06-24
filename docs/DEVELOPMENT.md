@@ -30,6 +30,7 @@ Notes:
 - The IPFS node runs with the `server,pebbleds` datastore profile. If you have an `ipfs_data` volume created before the pebbleds switch, recreate it first: `docker compose -f docker/docker-compose.yml down -v --remove-orphans`.
 - The `ipfs` container is capped at 3 GB memory / 1.5 CPU; the `someguy` container is capped at 2 GB memory / 1 CPU.
 - The staging stack runs a different set of containers (adds `api`, `tee-worker`, `caddy`, `alloy`; drops `mock-ipns-routing`) — see [DEPLOYMENT.md](DEPLOYMENT.md).
+- **Strict IPNS verification cutover (Phase 60):** If your local database was created before the strict-verify cutover landed, it contains `folder_ipns` records with `sequence_number = 0` (embedded-0 records) that the API now rejects. These records cause fail-closed errors on any IPNS publish or resolve. Wipe your local database and let the API recreate it via migrations before running the strict build: `dropdb cipherbox && createdb cipherbox && pnpm --filter @cipherbox/api dev`. See [docs/DATABASE_EVOLUTION_PROTOCOL.md](DATABASE_EVOLUTION_PROTOCOL.md) §7 (Environment Behavior Matrix) for the full reset procedure.
 
 ## Environment
 

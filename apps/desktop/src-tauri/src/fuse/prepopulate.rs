@@ -39,23 +39,28 @@ pub async fn prepopulate_filesystem(
 
     log::info!("Pre-populating root folder from IPNS...");
     let fetch_result: Result<(Vec<u8>, String, u64), String> = async {
-        let resolve_resp =
-            cipherbox_api_client::ipns::resolve_ipns(api, root_ipns_name)
-                .await
-                .map_err(|e| e.to_string())?;
+        // D-09: route through verified chokepoint — fail-closed on tampered/unsigned root.
+        let verified = match cipherbox_api_client::ipns::resolve_ipns_verified(api, root_ipns_name)
+            .await
+        {
+            Ok(v) => v,
+            Err(cipherbox_api_client::ipns::VerifyError::Api(e)) => {
+                return Err(e.to_string());
+            }
+            Err(cipherbox_api_client::ipns::VerifyError::Invalid(msg)) => {
+                log::error!(
+                    "Root IPNS {} verify failed (D-09): {} — mount will show empty",
+                    root_ipns_name,
+                    msg
+                );
+                return Err(format!("Root IPNS verify failed: {}", msg));
+            }
+        };
         let encrypted_bytes =
-            cipherbox_api_client::ipfs::fetch_content(api, &resolve_resp.cid)
+            cipherbox_api_client::ipfs::fetch_content(api, &verified.cid)
                 .await
                 .map_err(|e| e.to_string())?;
-        let seq = resolve_resp.sequence_number.parse::<u64>().unwrap_or_else(|e| {
-            log::warn!(
-                "Failed to parse root IPNS sequence '{}': {}",
-                resolve_resp.sequence_number,
-                e
-            );
-            0
-        });
-        Ok((encrypted_bytes, resolve_resp.cid, seq))
+        Ok((encrypted_bytes, verified.cid, verified.sequence_number))
     }
     .await;
 
@@ -106,11 +111,26 @@ pub async fn prepopulate_filesystem(
                     let fk = Zeroizing::new(fk);
                     for (fp_ino, fp_ipns) in &root_unresolved {
                         let fp_result: Result<Vec<u8>, String> = async {
-                            let resp =
-                                cipherbox_api_client::ipns::resolve_ipns(api, fp_ipns)
-                                    .await
-                                    .map_err(|e| e.to_string())?;
-                            cipherbox_api_client::ipfs::fetch_content(api, &resp.cid)
+                            // D-09: route through verified chokepoint for root FilePointer.
+                            let verified = match cipherbox_api_client::ipns::resolve_ipns_verified(
+                                api, fp_ipns,
+                            )
+                            .await
+                            {
+                                Ok(v) => v,
+                                Err(cipherbox_api_client::ipns::VerifyError::Api(e)) => {
+                                    return Err(e.to_string());
+                                }
+                                Err(cipherbox_api_client::ipns::VerifyError::Invalid(msg)) => {
+                                    log::error!(
+                                        "Root FilePointer IPNS {} verify failed (D-09): {}",
+                                        fp_ipns,
+                                        msg
+                                    );
+                                    return Err(format!("FilePointer IPNS verify failed: {}", msg));
+                                }
+                            };
+                            cipherbox_api_client::ipfs::fetch_content(api, &verified.cid)
                                 .await
                                 .map_err(|e| e.to_string())
                         }
@@ -173,24 +193,30 @@ pub async fn prepopulate_filesystem(
             for (sub_ino, sub_ipns, sub_key) in &subfolder_infos {
                 log::info!("Pre-populating subfolder ino={} ipns={}", sub_ino, sub_ipns);
                 let sub_result: Result<(Vec<u8>, String, u64), String> = async {
-                    let resp =
-                        cipherbox_api_client::ipns::resolve_ipns(api, sub_ipns)
-                            .await
-                            .map_err(|e| e.to_string())?;
+                    // D-09: route through verified chokepoint for subfolder.
+                    let verified = match cipherbox_api_client::ipns::resolve_ipns_verified(
+                        api, sub_ipns,
+                    )
+                    .await
+                    {
+                        Ok(v) => v,
+                        Err(cipherbox_api_client::ipns::VerifyError::Api(e)) => {
+                            return Err(e.to_string());
+                        }
+                        Err(cipherbox_api_client::ipns::VerifyError::Invalid(msg)) => {
+                            log::error!(
+                                "Subfolder IPNS {} verify failed (D-09): {}",
+                                sub_ipns,
+                                msg
+                            );
+                            return Err(format!("Subfolder IPNS verify failed: {}", msg));
+                        }
+                    };
                     let bytes =
-                        cipherbox_api_client::ipfs::fetch_content(api, &resp.cid)
+                        cipherbox_api_client::ipfs::fetch_content(api, &verified.cid)
                             .await
                             .map_err(|e| e.to_string())?;
-                    let seq = resp.sequence_number.parse::<u64>().unwrap_or_else(|e| {
-                        log::warn!(
-                            "Failed to parse subfolder IPNS sequence '{}' for {}: {}",
-                            resp.sequence_number,
-                            sub_ipns,
-                            e
-                        );
-                        0
-                    });
-                    Ok((bytes, resp.cid, seq))
+                    Ok((bytes, verified.cid, verified.sequence_number))
                 }
                 .await;
 
@@ -232,14 +258,30 @@ pub async fn prepopulate_filesystem(
                                                 for (fp_ino, fp_ipns) in &sub_unresolved {
                                                     let fp_result: Result<Vec<u8>, String> =
                                                         async {
-                                                            let resp =
-                                                                cipherbox_api_client::ipns::resolve_ipns(
-                                                                    api, fp_ipns,
-                                                                )
-                                                                .await
-                                                                .map_err(|e| e.to_string())?;
+                                                            // D-09: route through verified chokepoint for subfolder FilePointer.
+                                                            let verified = match cipherbox_api_client::ipns::resolve_ipns_verified(
+                                                                api, fp_ipns,
+                                                            )
+                                                            .await
+                                                            {
+                                                                Ok(v) => v,
+                                                                Err(cipherbox_api_client::ipns::VerifyError::Api(e)) => {
+                                                                    return Err(e.to_string());
+                                                                }
+                                                                Err(cipherbox_api_client::ipns::VerifyError::Invalid(msg)) => {
+                                                                    log::error!(
+                                                                        "Sub FilePointer IPNS {} verify failed (D-09): {}",
+                                                                        fp_ipns,
+                                                                        msg
+                                                                    );
+                                                                    return Err(format!(
+                                                                        "FilePointer IPNS verify failed: {}",
+                                                                        msg
+                                                                    ));
+                                                                }
+                                                            };
                                                             cipherbox_api_client::ipfs::fetch_content(
-                                                                api, &resp.cid,
+                                                                api, &verified.cid,
                                                             )
                                                             .await
                                                             .map_err(|e| e.to_string())

@@ -87,27 +87,15 @@ pub fn spawn_metadata_refresh(
                 crate::runtime::NETWORK_TIMEOUT,
                 async {
                     // D-01: route through the verified chokepoint.
-                    let verified = match crate::verify::resolve_ipns_verified(&api, &ipns_name).await {
+                    let verified = match cipherbox_api_client::ipns::resolve_ipns_verified(&api, &ipns_name).await {
                         Ok(v) => v,
-                        Err(crate::verify::VerifyError::Legacy { cid, sequence_number }) => {
-                            // D-04: all-absent legacy record — use the carried cid/sequence_number
-                            // (no second resolve_ipns). T-59-04: eliminates the TOCTOU race window.
-                            // 30s poll self-heals; D-02 scoped.
-                            log::warn!(
-                                "spawn_metadata_refresh: IPNS {} resolved without signature fields \
-                                 — proceeding with DB CID (D-04)",
-                                ipns_name
-                            );
-                            crate::verify::VerifiedResolve {
-                                cid,
-                                sequence_number: sequence_number.parse().unwrap_or(0),
-                            }
-                        }
-                        Err(crate::verify::VerifyError::Invalid(msg)) => {
+                        // D-04: Legacy variant removed — all-absent sig fields fail closed.
+                        // The Invalid arm below handles this case.
+                        Err(cipherbox_api_client::ipns::VerifyError::Invalid(msg)) => {
                             // D-02: fail only this operation; poll loop self-heals.
                             return Err(format!("IPNS {} verify failed: {}", ipns_name, msg));
                         }
-                        Err(crate::verify::VerifyError::Api(e)) => {
+                        Err(cipherbox_api_client::ipns::VerifyError::Api(e)) => {
                             return Err(format!("resolve: {}", e));
                         }
                     };

@@ -93,7 +93,7 @@ impl PublishCoordinator {
         ipns_name: &str,
     ) -> Result<u64, String> {
         // D-01: route through the verified chokepoint.
-        match crate::verify::resolve_ipns_verified(api, ipns_name).await {
+        match cipherbox_api_client::ipns::resolve_ipns_verified(api, ipns_name).await {
             Ok(verified) => {
                 // D-08: use sequence from signed CBOR data.
                 let resolved = verified.sequence_number;
@@ -102,28 +102,9 @@ impl PublishCoordinator {
                 self.update_cache(ipns_name, seq);
                 Ok(seq)
             }
-            Err(crate::verify::VerifyError::Legacy { sequence_number, .. }) => {
-                // D-04: legacy record — use the carried sequence_number (no second resolve_ipns).
-                // T-59-04: carrying the already-classified response eliminates the TOCTOU race
-                // window where a concurrent publish could change the record in the ~1ms gap.
-                log::warn!(
-                    "resolve_sequence: IPNS {} resolved without signature fields \
-                     — using DB sequence (D-04)",
-                    ipns_name
-                );
-                let resolved = sequence_number.parse::<u64>().unwrap_or_else(|e| {
-                    log::warn!(
-                        "Failed to parse carried IPNS sequence '{}' for {}: {}",
-                        sequence_number, ipns_name, e
-                    );
-                    0
-                });
-                let cached = self.get_cached(ipns_name).unwrap_or(0);
-                let seq = std::cmp::max(resolved, cached);
-                self.update_cache(ipns_name, seq);
-                Ok(seq)
-            }
-            Err(crate::verify::VerifyError::Invalid(msg)) => {
+            // D-04: Legacy variant removed — all-absent sig fields fail closed (strict cutover).
+            // Callers fall through to the Invalid arm.
+            Err(cipherbox_api_client::ipns::VerifyError::Invalid(msg)) => {
                 // D-02: verify failure on soft resolve — fall back to cache (never wedge).
                 log::warn!(
                     "resolve_sequence: IPNS {} verify failed: {} — falling back to cache (D-02)",
@@ -137,7 +118,7 @@ impl PublishCoordinator {
                     )),
                 }
             }
-            Err(crate::verify::VerifyError::Api(e)) => match self.get_cached(ipns_name) {
+            Err(cipherbox_api_client::ipns::VerifyError::Api(e)) => match self.get_cached(ipns_name) {
                 Some(cached) => {
                     log::warn!(
                         "IPNS resolve failed for {}, using cached seq {}: {}",
@@ -162,7 +143,7 @@ impl PublishCoordinator {
         ipns_name: &str,
     ) -> Result<u64, String> {
         // D-01: route through the verified chokepoint.
-        match crate::verify::resolve_ipns_verified(api, ipns_name).await {
+        match cipherbox_api_client::ipns::resolve_ipns_verified(api, ipns_name).await {
             Ok(verified) => {
                 // D-08: use sequence from signed CBOR data.
                 let cached = self.get_cached(ipns_name).unwrap_or(0);
@@ -170,28 +151,12 @@ impl PublishCoordinator {
                 self.update_cache(ipns_name, seq);
                 Ok(seq)
             }
-            Err(crate::verify::VerifyError::Legacy { sequence_number, .. }) => {
-                // D-04: legacy record — use the carried sequence_number (no second resolve_ipns).
-                // T-59-04: carrying the already-classified response eliminates the TOCTOU race
-                // window (strict contract: only fails on resolve failure, not legacy).
-                log::warn!(
-                    "resolve_sequence_strict: IPNS {} resolved without signature fields \
-                     — proceeding with DB sequence (D-04)",
-                    ipns_name
-                );
-                let resolved = sequence_number.parse::<u64>().map_err(|e| {
-                    format!("Invalid IPNS sequence '{}' for {}: {}", sequence_number, ipns_name, e)
-                })?;
-                let cached = self.get_cached(ipns_name).unwrap_or(0);
-                let seq = std::cmp::max(resolved, cached);
-                self.update_cache(ipns_name, seq);
-                Ok(seq)
-            }
-            Err(crate::verify::VerifyError::Invalid(msg)) => {
+            // D-04: Legacy variant removed — all-absent sig fields fail closed (strict cutover).
+            Err(cipherbox_api_client::ipns::VerifyError::Invalid(msg)) => {
                 // Strict: verify failure → Err.
                 Err(format!("IPNS {} verify failed: {}", ipns_name, msg))
             }
-            Err(crate::verify::VerifyError::Api(e)) => {
+            Err(cipherbox_api_client::ipns::VerifyError::Api(e)) => {
                 Err(format!("IPNS resolve failed for {}: {}", ipns_name, e))
             }
         }

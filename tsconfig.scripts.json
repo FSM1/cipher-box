@@ -21,6 +21,7 @@
     "tests/web-e2e/staging-perf-wallet.ts",
     "apps/desktop/src-tauri/generate-test-vectors.ts",
     "tests/e2e-helpers/**/*.ts",
-    "scripts/gen-ipns-verify-vectors.ts"
+    "scripts/gen-ipns-verify-vectors.ts",
+    "scripts/bench-ipns-verify.ts"
   ]
 }

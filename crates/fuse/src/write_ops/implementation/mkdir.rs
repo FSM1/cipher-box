@@ -171,7 +171,7 @@ pub fn handle_mkdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Repl
                     .map_err(|_| "Invalid IPNS key length".to_string())?;
                 let value = format!("/ipfs/{}", initial_cid);
                 let record = cipherbox_core::ipns::create_ipns_record(
-                    &ipns_key_arr, &value, 0, 86_400_000,
+                    &ipns_key_arr, &value, 1, 86_400_000,
                 ).map_err(|e| format!("IPNS record creation failed: {}", e))?;
                 let marshaled = cipherbox_core::ipns::marshal_ipns_record(&record)
                     .map_err(|e| format!("IPNS marshal failed: {}", e))?;
@@ -180,7 +180,7 @@ pub fn handle_mkdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Repl
                 let record_b64 = base64::engine::general_purpose::STANDARD
                     .encode(&marshaled);
 
-                // New folder initial publish: sequence 0, no conflict check needed
+                // New folder initial publish: sequence 1 (D-02), no conflict check needed
                 let req = cipherbox_api_client::IpnsPublishRequest {
                     ipns_name: ipns_name_clone.clone(),
                     record: record_b64,
@@ -191,7 +191,7 @@ pub fn handle_mkdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Repl
                 };
                 match cipherbox_api_client::ipns::publish_ipns(&api, &req).await.map_err(|e| format!("{}", e))? {
                     cipherbox_api_client::PublishResult::Success => {
-                        coordinator.record_publish(&ipns_name_clone, 0);
+                        coordinator.record_publish(&ipns_name_clone, 1);
                         log::info!("New folder IPNS published: {}", ipns_name_clone);
                     }
                     cipherbox_api_client::PublishResult::Conflict { .. } => {

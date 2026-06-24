@@ -9,6 +9,7 @@ import { RepublishService } from '../republish/republish.service';
 import { DelegatedRoutingClient } from './delegated-routing.client';
 import { MetricsService } from '../metrics/metrics.service';
 import { parseIpnsRecord, verifyIpnsRecordSignature } from '@cipherbox/crypto';
+import { ipnsVerifyCache } from './ipns-verify-cache';
 
 // Mock only the record parse + signature verification; keep deriveIpnsName real
 // (the test IPNS name is derived from testPublicKeyBytes via the real function).
@@ -120,14 +121,17 @@ describe('IpnsService', () => {
 
     service = module.get<IpnsService>(IpnsService);
 
-    // Defaults: records verify, and parse yields a benign sequence (0n) so the
-    // anti-rollback check in upsertFolderIpns is a no-op unless a test overrides.
+    // Defaults: records verify, and parse yields sequence 1n (D-03: first-publish requires 1).
+    // Tests exercising existing-row paths override this with higher sequences as needed.
     mockVerifyIpnsRecordSignature.mockResolvedValue(true);
-    mockParseIpnsRecord.mockResolvedValue({ value: `/ipfs/${testMetadataCid}`, sequence: 0n });
+    mockParseIpnsRecord.mockResolvedValue({ value: `/ipfs/${testMetadataCid}`, sequence: 1n });
   });
 
   afterEach(() => {
     jest.clearAllMocks();
+    // Clear the module-level verify cache so cross-test cache hits don't produce
+    // false negatives on mockVerifyIpnsRecordSignature call-count assertions.
+    ipnsVerifyCache.clear();
   });
 
   describe('publishRecord', () => {
@@ -553,12 +557,10 @@ describe('IpnsService', () => {
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
-    // S1: first-publish tolerance — embedded seq 0n accepted when expectedSequenceNumber='0'
-    it('should accept embedded sequence 0n on first publish (tolerance for pre-increment)', async () => {
+    // D-03: first publish with embedded seq 0n is now rejected (strict: only 1 allowed)
+    it('should reject embedded sequence 0n on first publish (D-03: strict, pre-increment no longer tolerated)', async () => {
       mockFolderIpnsRepo.findOne.mockResolvedValue(null);
-      mockFolderIpnsRepo.create.mockReturnValue({ ...mockFolderEntity, sequenceNumber: '1' });
-      mockFolderIpnsRepo.save.mockResolvedValue({ ...mockFolderEntity, sequenceNumber: '1' });
-      // embedded seq 0n with expectedSequenceNumber '0' → diff is 0n → accepted
+      // embedded seq 0n → D-03 gate fires → BadRequestException
       mockParseIpnsRecord.mockResolvedValue({
         value: `/ipfs/${testMetadataCid}`,
         sequence: 0n,
@@ -571,7 +573,16 @@ describe('IpnsService', () => {
           metadataCid: testMetadataCid,
           expectedSequenceNumber: '0',
         })
-      ).resolves.toBeDefined();
+      ).rejects.toThrow(BadRequestException);
+
+      await expect(
+        service.publishRecord(testUserId, {
+          ipnsName: testIpnsName,
+          record: testRecord,
+          metadataCid: testMetadataCid,
+          expectedSequenceNumber: '0',
+        })
+      ).rejects.toThrow(/embedded sequence must be 1, got 0/);
     });
 
     // S1: first-publish tolerance — embedded seq 1n also accepted
@@ -853,12 +864,19 @@ describe('IpnsService', () => {
       mockDelegatedRoutingClient.resolve.mockRejectedValue(
         new HttpException('Failed to resolve after retries', HttpStatus.BAD_GATEWAY)
       );
+      const signedRecordBytes = new Uint8Array([4, 5, 6]);
       const cachedFolder = {
         ...mockFolderEntity,
         latestCid: 'bafyCACHED2',
         sequenceNumber: '10',
+        signedRecord: signedRecordBytes,
       };
       mockFolderIpnsRepo.findOne.mockResolvedValue(cachedFolder);
+      // parseCachedRecord will call parseIpnsRecordBytes on the signedRecord
+      mockParseIpnsRecord.mockReturnValueOnce({
+        value: '/ipfs/bafyCACHED2',
+        sequence: 10n,
+      });
 
       const result = await service.resolveRecord(testIpnsName);
 
@@ -890,7 +908,9 @@ describe('IpnsService', () => {
       expect(result).toBeNull();
     });
 
-    it('should fall back to DB on parse errors (BAD_GATEWAY)', async () => {
+    it('should return null when network parse errors and DB row has null signedRecord', async () => {
+      // D-06: parseCachedRecord returns null for null-signedRecord rows.
+      // Network parse throws BAD_GATEWAY; DB row has no signedRecord → both sources null → 404.
       const mockRecordBytes = new Uint8Array([1, 2, 3]);
       mockDelegatedRoutingClient.resolve.mockResolvedValue(mockRecordBytes);
       mockParseIpnsRecord.mockImplementation(() => {
@@ -900,13 +920,49 @@ describe('IpnsService', () => {
         ...mockFolderEntity,
         latestCid: 'bafyCACHED_PARSE',
         sequenceNumber: '7',
+        signedRecord: null,
       };
       mockFolderIpnsRepo.findOne.mockResolvedValue(cachedFolder);
 
-      // Parse error -> BAD_GATEWAY -> falls through to DB cache
+      // Network parse throws BAD_GATEWAY; DB has null signedRecord → null → 404
+      const result = await service.resolveRecord(testIpnsName);
+      expect(result).toBeNull();
+      expect(mockFolderIpnsRepo.findOne).toHaveBeenCalled();
+    });
+
+    it('should fall back to DB on network errors when DB row has valid signedRecord', async () => {
+      // D-06 success path: delegated routing throws BAD_GATEWAY; DB row has signedRecord.
+      // parseCachedRecord succeeds → non-null result returned.
+      // NOTE: test CIDs must use only [a-zA-Z0-9] chars (no underscores) to pass
+      // the CID extraction regex in parseIpnsRecordBytes.
+      const signedRecordBytes = new Uint8Array([4, 5, 6]);
+      const sigBytes = new Uint8Array(64).fill(0xcc);
+      const dataBytes = new Uint8Array(48).fill(0xdd);
+      const testCid = 'bafyCAcHeDPaRsE7777777777777777777777777777777777777777777777777';
+      // Simulate delegated routing network failure (BAD_GATEWAY thrown directly from client)
+      mockDelegatedRoutingClient.resolve.mockRejectedValue(
+        new HttpException('Failed to resolve', HttpStatus.BAD_GATEWAY)
+      );
+      // DB signedRecord parse via parseCachedRecord — first (and only) parseIpnsRecord call
+      mockParseIpnsRecord.mockResolvedValueOnce({
+        value: `/ipfs/${testCid}`,
+        sequence: 7n,
+        signatureV2: sigBytes,
+        data: dataBytes,
+        pubKey: testPublicKeyBytes,
+      });
+      const cachedFolder = {
+        ...mockFolderEntity,
+        latestCid: testCid,
+        sequenceNumber: '7',
+        signedRecord: signedRecordBytes,
+      };
+      mockFolderIpnsRepo.findOne.mockResolvedValue(cachedFolder);
+
       const result = await service.resolveRecord(testIpnsName);
       expect(result).not.toBeNull();
-      expect(result!.cid).toBe('bafyCACHED_PARSE');
+      expect(result!.cid).toBe(testCid);
+      expect(result!.sequenceNumber).toBe('7');
       expect(mockFolderIpnsRepo.findOne).toHaveBeenCalled();
     });
 
@@ -943,6 +999,44 @@ describe('IpnsService', () => {
       expect(result!.signatureV2).toBeDefined();
     });
 
+    it('should derive pubKey from the IPNS name when the DB publicKey column is null', async () => {
+      // Regression (web-e2e writable-shares 3.4): Phase 60 D-06 discarded an authoritative
+      // DB record whose nullable publicKey column was never populated — true for
+      // writable-shared-folder rows — so strict resolve returned nothing and read-after-edit
+      // broke. The Ed25519 name encodes the public key, so it must be recovered from the name.
+      const mockRecordBytes = new Uint8Array([1, 2, 3]);
+      mockDelegatedRoutingClient.resolve.mockResolvedValue(mockRecordBytes);
+      const sigBytes = new Uint8Array(64).fill(0x11);
+      const dataBytes = new Uint8Array(48).fill(0x22);
+      mockParseIpnsRecord
+        // network parse: stale (seq 3)
+        .mockReturnValueOnce({ value: '/ipfs/bafySTALE', sequence: 3n })
+        // cached parse: fresher (seq 10); an Ed25519 record carries NO embedded pubKey
+        .mockReturnValueOnce({
+          value: '/ipfs/bafyFRESH',
+          sequence: 10n,
+          signatureV2: sigBytes,
+          data: dataBytes,
+          // pubKey intentionally absent
+        });
+
+      mockFolderIpnsRepo.findOne.mockResolvedValue({
+        ...mockFolderEntity,
+        latestCid: 'bafyFRESH',
+        sequenceNumber: '10',
+        signedRecord: Buffer.from([4, 5, 6]),
+        publicKey: null, // shared-folder row: column never populated
+      });
+
+      const result = await service.resolveRecord(testIpnsName);
+
+      expect(result).not.toBeNull();
+      expect(result!.cid).toBe('bafyFRESH');
+      // testIpnsName derives from testPublicKeyBytes ([1..32]); recovered pubKey must match.
+      expect(result!.pubKey).toBe(testPublicKey);
+      expect(result!.signatureV2).toBe(Buffer.from(sigBytes).toString('base64'));
+    });
+
     it('should prefer network result when it has equal or higher sequence than DB', async () => {
       const mockRecordBytes = new Uint8Array([1, 2, 3]);
       mockDelegatedRoutingClient.resolve.mockResolvedValue(mockRecordBytes);
@@ -965,7 +1059,9 @@ describe('IpnsService', () => {
       expect(result!.sequenceNumber).toBe('10');
     });
 
-    it('should enrich network signature data with cached publicKey when field 7 is absent', async () => {
+    it('should return network result without pubKey enrichment when DB signedRecord is null (D-06)', async () => {
+      // D-06: withCachedPublicKey enrich removed. Network result with sig fields but no pubKey
+      // is returned as-is; DB row with null signedRecord yields null from parseCachedRecord.
       const mockRecordBytes = new Uint8Array([1, 2, 3]);
       const sigBytes = new Uint8Array(64).fill(0x12);
       const dataBytes = new Uint8Array(48).fill(0x34);
@@ -989,25 +1085,28 @@ describe('IpnsService', () => {
 
       expect(result).not.toBeNull();
       expect(result!.cid).toBe('bafyNETWORK');
-      expect(result!.pubKey).toBe(testPublicKey);
+      // No pubKey enrichment from DB — network result returned as-is
+      expect(result!.pubKey).toBeUndefined();
       expect(result!.signatureV2).toBe(Buffer.from(sigBytes).toString('base64'));
       expect(result!.data).toBe(Buffer.from(dataBytes).toString('base64'));
     });
 
-    it('should enrich network result with cached signature fields when sequences are equal', async () => {
+    it('should serve the authoritative DB record with full signature fields when sequences are equal (strict resolve verifiability)', async () => {
+      // On equal sequence the DB-cached record is the authoritative, fully-signed record.
+      // resolveRecord must serve it — with signatureV2/data from the signed bytes and pubKey
+      // supplied from the validated publicKey column — so a strict client can verify. The
+      // network record parsed from delegated routing lacks those fields. (Corrects Plan
+      // 60-05's enrich removal, which returned the bare network result and broke the strict
+      // publish→resolve round-trip; the client re-checks the pubKey→name binding.)
       const mockRecordBytes = new Uint8Array([1, 2, 3]);
-      const cachedSigBytes = new Uint8Array(64).fill(0xaa);
-      const cachedDataBytes = new Uint8Array(48).fill(0xbb);
 
       // Network returns record WITHOUT signature fields
       mockDelegatedRoutingClient.resolve.mockResolvedValue(mockRecordBytes);
-      mockParseIpnsRecord.mockReturnValue({
-        value: '/ipfs/bafyNETWORK',
-        sequence: 10n,
-      });
 
       // DB cache has same sequence WITH signedRecord containing signature data
       const signedRecordBytes = new Uint8Array([4, 5, 6]);
+      const sigBytes = new Uint8Array(64).fill(0xaa);
+      const dataBytes = new Uint8Array(48).fill(0xbb);
       mockFolderIpnsRepo.findOne.mockResolvedValue({
         ...mockFolderEntity,
         latestCid: 'bafyNETWORK',
@@ -1016,8 +1115,8 @@ describe('IpnsService', () => {
         publicKey: testPublicKeyBytes,
       });
 
-      // parseCachedRecord will call parseIpnsRecordBytes on the signedRecord
-      // Second call to mockParseIpnsRecord is for the cached signedRecord
+      // First call: network parse (no sig fields); second call: DB signedRecord parse
+      // (sig + data, but NO pubKey — realistic Ed25519).
       mockParseIpnsRecord
         .mockReturnValueOnce({
           value: '/ipfs/bafyNETWORK',
@@ -1026,8 +1125,8 @@ describe('IpnsService', () => {
         .mockReturnValueOnce({
           value: '/ipfs/bafyNETWORK',
           sequence: 10n,
-          signatureV2: cachedSigBytes,
-          data: cachedDataBytes,
+          signatureV2: sigBytes,
+          data: dataBytes,
         });
 
       const result = await service.resolveRecord(testIpnsName);
@@ -1035,20 +1134,19 @@ describe('IpnsService', () => {
       expect(result).not.toBeNull();
       expect(result!.cid).toBe('bafyNETWORK');
       expect(result!.sequenceNumber).toBe('10');
-      expect(result!.signatureV2).toBe(Buffer.from(cachedSigBytes).toString('base64'));
-      expect(result!.data).toBe(Buffer.from(cachedDataBytes).toString('base64'));
+      // The authoritative DB record is served with complete, verifiable signature fields.
+      expect(result!.signatureV2).toBe(Buffer.from(sigBytes).toString('base64'));
+      expect(result!.data).toBe(Buffer.from(dataBytes).toString('base64'));
       expect(result!.pubKey).toBe(testPublicKey);
     });
 
-    it('should use DB sequenceNumber and CID when signed record contains stale values', async () => {
-      // Network fails, so we fall back to DB cache with signedRecord
+    it('should return null when DB signedRecord CID mismatches latestCid (D-06: mismatch discarded)', async () => {
+      // D-06: CID mismatch between signedRecord embedded CID and DB latestCid →
+      // parseCachedRecord returns null (inconsistent row discarded, not overridden).
       mockDelegatedRoutingClient.resolve.mockResolvedValue(null);
 
       const signedRecordBytes = new Uint8Array([4, 5, 6]);
-      const cachedSigBytes = new Uint8Array(64).fill(0xcc);
-      const cachedDataBytes = new Uint8Array(48).fill(0xdd);
-
-      // DB has sequence 5 and a newer CID, but signedRecord bytes contain stale seq 0 and old CID
+      // DB latestCid='bafyNEWER' but signedRecord embeds 'bafyOLDER' — inconsistent
       mockFolderIpnsRepo.findOne.mockResolvedValue({
         ...mockFolderEntity,
         latestCid: 'bafyNEWER',
@@ -1057,24 +1155,52 @@ describe('IpnsService', () => {
         publicKey: testPublicKeyBytes,
       });
 
-      // parseCachedRecord will parse the signedRecord bytes — they embed the stale values
       mockParseIpnsRecord.mockReturnValueOnce({
         value: '/ipfs/bafyOLDER',
         sequence: 0n,
+        signatureV2: new Uint8Array(64).fill(0xcc),
+        data: new Uint8Array(48).fill(0xdd),
+      });
+
+      // Mismatch → parseCachedRecord discards → null → 404
+      const result = await service.resolveRecord(testIpnsName);
+      expect(result).toBeNull();
+    });
+
+    it('should use DB sequenceNumber when signedRecord CID matches latestCid', async () => {
+      // D-06 success path: CID matches → DB seq is authoritative, sig fields from record.
+      mockDelegatedRoutingClient.resolve.mockResolvedValue(null);
+
+      const signedRecordBytes = new Uint8Array([4, 5, 6]);
+      const cachedSigBytes = new Uint8Array(64).fill(0xcc);
+      const cachedDataBytes = new Uint8Array(48).fill(0xdd);
+
+      mockFolderIpnsRepo.findOne.mockResolvedValue({
+        ...mockFolderEntity,
+        latestCid: 'bafyCONSISTENT',
+        sequenceNumber: '5',
+        signedRecord: signedRecordBytes,
+        publicKey: testPublicKeyBytes,
+      });
+
+      // signedRecord embeds same CID as latestCid → consistent → parseCachedRecord succeeds
+      mockParseIpnsRecord.mockReturnValueOnce({
+        value: '/ipfs/bafyCONSISTENT',
+        sequence: 4n, // stale seq in bytes — DB seq '5' is authoritative
         signatureV2: cachedSigBytes,
         data: cachedDataBytes,
+        pubKey: testPublicKeyBytes,
       });
 
       const result = await service.resolveRecord(testIpnsName);
 
       expect(result).not.toBeNull();
-      // DB columns are authoritative, not the parsed signed record
-      expect(result!.cid).toBe('bafyNEWER');
+      // DB sequenceNumber is authoritative
+      expect(result!.cid).toBe('bafyCONSISTENT');
       expect(result!.sequenceNumber).toBe('5');
-      // Signature fields still come from the parsed record
+      // Signature fields from parsed signed record
       expect(result!.signatureV2).toBe(Buffer.from(cachedSigBytes).toString('base64'));
       expect(result!.data).toBe(Buffer.from(cachedDataBytes).toString('base64'));
-      expect(result!.pubKey).toBe(testPublicKey);
     });
 
     describe('resolve latency metrics', () => {
@@ -1095,7 +1221,9 @@ describe('IpnsService', () => {
         );
       });
 
-      it('should observe ipnsResolveDuration with source=db_cache on DB fallback', async () => {
+      it('should observe ipnsResolveDuration with source=db_cache on DB fallback (with valid signedRecord)', async () => {
+        // D-06: DB fallback only fires when signedRecord is present; null-signedRecord → null → no metrics.
+        const signedRecordBytes = new Uint8Array([4, 5, 6]);
         mockDelegatedRoutingClient.resolve.mockRejectedValue(
           new HttpException('Failed to resolve', HttpStatus.BAD_GATEWAY)
         );
@@ -1103,6 +1231,11 @@ describe('IpnsService', () => {
           ...mockFolderEntity,
           latestCid: 'bafyCACHED',
           sequenceNumber: '42',
+          signedRecord: signedRecordBytes,
+        });
+        mockParseIpnsRecord.mockReturnValueOnce({
+          value: '/ipfs/bafyCACHED',
+          sequence: 42n,
         });
 
         await service.resolveRecord(testIpnsName);
@@ -1114,18 +1247,27 @@ describe('IpnsService', () => {
       });
 
       it('should observe ipnsResolveDuration with source=network_stale when DB has newer sequence', async () => {
+        // D-06: DB must have a valid signedRecord for parseCachedRecord to return non-null.
         const mockRecordBytes = new Uint8Array([1, 2, 3]);
+        const signedRecordBytes = new Uint8Array([7, 8, 9]);
         mockDelegatedRoutingClient.resolve.mockResolvedValue(mockRecordBytes);
-        mockParseIpnsRecord.mockReturnValue({
-          value: '/ipfs/bafySTALE',
-          sequence: 3n,
-        });
         mockFolderIpnsRepo.findOne.mockResolvedValue({
           ...mockFolderEntity,
           latestCid: 'bafyFRESH',
           sequenceNumber: '10',
-          signedRecord: null,
+          signedRecord: signedRecordBytes,
         });
+        mockParseIpnsRecord
+          .mockReturnValueOnce({
+            // Network parse: stale record
+            value: '/ipfs/bafySTALE',
+            sequence: 3n,
+          })
+          .mockReturnValueOnce({
+            // DB signedRecord parse via parseCachedRecord
+            value: '/ipfs/bafyFRESH',
+            sequence: 10n,
+          });
 
         await service.resolveRecord(testIpnsName);
 
@@ -1145,12 +1287,22 @@ describe('IpnsService', () => {
         expect(mockMetricsService.ipnsResolveDuration.observe).not.toHaveBeenCalled();
       });
 
-      it('should observe ipnsResolveDuration with source=db_cache when network returns null but DB has data', async () => {
+      it('should observe ipnsResolveDuration with source=db_cache when network returns null but DB has valid signedRecord', async () => {
+        // D-06: DB must have a valid signedRecord for parseCachedRecord to return non-null.
+        // NOTE: test CIDs must use only [a-zA-Z0-9] chars to pass CID regex extraction.
+        const signedRecordBytes = new Uint8Array([4, 5, 6]);
+        const testCid = 'bafyCAcHeDnULLNeT7777777777777777777777777777777777777777777777777';
         mockDelegatedRoutingClient.resolve.mockResolvedValue(null);
         mockFolderIpnsRepo.findOne.mockResolvedValue({
           ...mockFolderEntity,
-          latestCid: 'bafyCACHED_NULL_NET',
+          latestCid: testCid,
           sequenceNumber: '7',
+          signedRecord: signedRecordBytes,
+        });
+        // Use mockResolvedValue (permanent) since this is the only parseIpnsRecord call
+        mockParseIpnsRecord.mockResolvedValue({
+          value: `/ipfs/${testCid}`,
+          sequence: 7n,
         });
 
         await service.resolveRecord(testIpnsName);
@@ -1229,19 +1381,28 @@ describe('IpnsService', () => {
       );
     });
 
-    it('should observe resolve duration with db source when DB has higher seq', async () => {
+    it('should observe resolve duration with db source when DB has higher seq (valid signedRecord)', async () => {
+      // D-06: DB must have a valid signedRecord for parseCachedRecord to return non-null.
       const mockRecordBytes = new Uint8Array([1, 2, 3]);
+      const signedRecordBytes = new Uint8Array([7, 8, 9]);
       mockDelegatedRoutingClient.resolve.mockResolvedValue(mockRecordBytes);
-      mockParseIpnsRecord.mockReturnValue({
-        value: '/ipfs/bafySTALE',
-        sequence: 3n,
-      });
       mockFolderIpnsRepo.findOne.mockResolvedValue({
         ...mockFolderEntity,
         latestCid: 'bafyFRESH',
         sequenceNumber: '10',
-        signedRecord: null,
+        signedRecord: signedRecordBytes,
       });
+      mockParseIpnsRecord
+        .mockReturnValueOnce({
+          // Network parse: stale record
+          value: '/ipfs/bafySTALE',
+          sequence: 3n,
+        })
+        .mockReturnValueOnce({
+          // DB signedRecord parse
+          value: '/ipfs/bafyFRESH',
+          sequence: 10n,
+        });
 
       await service.resolveRecord(testIpnsName);
 
@@ -1252,7 +1413,9 @@ describe('IpnsService', () => {
       );
     });
 
-    it('should observe resolve duration with error label on delegated routing failure', async () => {
+    it('should observe resolve duration with error label on delegated routing failure (valid signedRecord)', async () => {
+      // D-06: DB must have a valid signedRecord for parseCachedRecord to return non-null.
+      const signedRecordBytes = new Uint8Array([4, 5, 6]);
       mockDelegatedRoutingClient.resolve.mockRejectedValue(
         new HttpException('Failed to resolve', HttpStatus.BAD_GATEWAY)
       );
@@ -1260,8 +1423,13 @@ describe('IpnsService', () => {
         ...mockFolderEntity,
         latestCid: 'bafyCACHED',
         sequenceNumber: '42',
+        signedRecord: signedRecordBytes,
       };
       mockFolderIpnsRepo.findOne.mockResolvedValue(cachedFolder);
+      mockParseIpnsRecord.mockReturnValueOnce({
+        value: '/ipfs/bafyCACHED',
+        sequence: 42n,
+      });
 
       await service.resolveRecord(testIpnsName);
 
@@ -1757,16 +1925,15 @@ describe('IpnsService', () => {
       await expect(publishNoCas()).rejects.toThrow(/first publish.*embedded sequence/i);
     });
 
-    it('allows first publish with embedded sequence 0n', async () => {
+    it('rejects first publish with embedded sequence 0n (D-03: strict, only 1 allowed)', async () => {
       mockFolderIpnsRepo.findOne.mockResolvedValue(null);
-      mockFolderIpnsRepo.create.mockReturnValue({ ...mockFolderEntity, sequenceNumber: '1' });
-      mockFolderIpnsRepo.save.mockResolvedValue({ ...mockFolderEntity, sequenceNumber: '1' });
       mockParseIpnsRecord.mockResolvedValue({
         value: `/ipfs/${testMetadataCid}`,
         sequence: 0n,
       });
 
-      await expect(publishNoCas()).resolves.toBeDefined();
+      await expect(publishNoCas()).rejects.toThrow(BadRequestException);
+      await expect(publishNoCas()).rejects.toThrow(/embedded sequence must be 1, got 0/);
     });
 
     it('allows first publish with embedded sequence 1n', async () => {
@@ -1884,6 +2051,189 @@ describe('IpnsService', () => {
           expectedSequenceNumber: '3', // stale → CAS 409
         })
       ).rejects.toThrow(ConflictException);
+    });
+  });
+
+  // =========================================================================
+  // D-03: Strict first-publish gate — only embedded 1 accepted (Plan 60-05)
+  // =========================================================================
+
+  describe('upsertFolderIpns D-03 strict first-publish gate', () => {
+    it('rejects first publish with embedded sequence 0n (D-03: only 1 allowed)', async () => {
+      mockFolderIpnsRepo.findOne.mockResolvedValue(null);
+      mockParseIpnsRecord.mockResolvedValue({
+        value: `/ipfs/${testMetadataCid}`,
+        sequence: 0n,
+      });
+
+      await expect(
+        service.publishRecord(testUserId, {
+          ipnsName: testIpnsName,
+          record: testRecord,
+          metadataCid: testMetadataCid,
+        })
+      ).rejects.toThrow(BadRequestException);
+
+      await expect(
+        service.publishRecord(testUserId, {
+          ipnsName: testIpnsName,
+          record: testRecord,
+          metadataCid: testMetadataCid,
+        })
+      ).rejects.toThrow(/embedded sequence must be 1, got 0/);
+    });
+
+    it('accepts first publish with embedded sequence 1n (D-03: strict)', async () => {
+      mockFolderIpnsRepo.findOne.mockResolvedValue(null);
+      mockFolderIpnsRepo.create.mockReturnValue({ ...mockFolderEntity, sequenceNumber: '1' });
+      mockFolderIpnsRepo.save.mockResolvedValue({ ...mockFolderEntity, sequenceNumber: '1' });
+      mockParseIpnsRecord.mockResolvedValue({
+        value: `/ipfs/${testMetadataCid}`,
+        sequence: 1n,
+      });
+
+      await expect(
+        service.publishRecord(testUserId, {
+          ipnsName: testIpnsName,
+          record: testRecord,
+          metadataCid: testMetadataCid,
+        })
+      ).resolves.toBeDefined();
+    });
+
+    it('forward publish (existing row, embedded = dbSeq + 1) still accepted after D-03', async () => {
+      const existingRow = { ...mockFolderEntity, sequenceNumber: '3', signedRecord: null };
+      mockFolderIpnsRepo.findOne.mockResolvedValue(existingRow);
+      mockFolderIpnsRepo.save.mockImplementation((entity) => Promise.resolve(entity));
+      mockParseIpnsRecord.mockResolvedValue({
+        value: `/ipfs/${testMetadataCid}`,
+        sequence: 4n,
+      });
+
+      await expect(
+        service.publishRecord(testUserId, {
+          ipnsName: testIpnsName,
+          record: testRecord,
+          metadataCid: testMetadataCid,
+        })
+      ).resolves.toBeDefined();
+    });
+
+    it('idempotent republish (existing row, embedded = dbSeq) still accepted after D-03', async () => {
+      const existingRow = { ...mockFolderEntity, sequenceNumber: '5', signedRecord: null };
+      mockFolderIpnsRepo.findOne.mockResolvedValue(existingRow);
+      mockFolderIpnsRepo.save.mockImplementation((entity) => Promise.resolve(entity));
+      mockParseIpnsRecord.mockResolvedValue({
+        value: `/ipfs/${testMetadataCid}`,
+        sequence: 5n,
+      });
+
+      const result = await service.publishRecord(testUserId, {
+        ipnsName: testIpnsName,
+        record: testRecord,
+        metadataCid: testMetadataCid,
+      });
+
+      expect(result.success).toBe(true);
+      const savedEntity = mockFolderIpnsRepo.save.mock.calls[0][0];
+      expect(savedEntity.sequenceNumber).toBe('5');
+    });
+  });
+
+  // =========================================================================
+  // D-06: null signed_record → 404; resolve enrich removal (Plan 60-05)
+  // =========================================================================
+
+  describe('resolveRecord D-06 null-signed-record and enrich removal', () => {
+    beforeEach(() => {
+      mockParseIpnsRecord.mockReset();
+    });
+
+    it('resolveRecord with null-signed-record DB row and no network → returns null (404)', async () => {
+      // Network finds nothing
+      mockDelegatedRoutingClient.resolve.mockResolvedValue(null);
+      // DB has a row but signedRecord is NULL
+      mockFolderIpnsRepo.findOne.mockResolvedValue({
+        ...mockFolderEntity,
+        latestCid: testMetadataCid,
+        sequenceNumber: '5',
+        signedRecord: null,
+        publicKey: testPublicKeyBytes,
+      });
+
+      const result = await service.resolveRecord(testIpnsName);
+
+      expect(result).toBeNull();
+    });
+
+    it('resolveRecord with valid signedRecord DB row → returns parsed result (success path unchanged)', async () => {
+      const sigBytes = new Uint8Array(64).fill(0xab);
+      const dataBytes = new Uint8Array(48).fill(0xcd);
+      const signedRecordBytes = new Uint8Array([4, 5, 6]);
+      mockDelegatedRoutingClient.resolve.mockResolvedValue(null);
+      mockFolderIpnsRepo.findOne.mockResolvedValue({
+        ...mockFolderEntity,
+        latestCid: testMetadataCid,
+        sequenceNumber: '5',
+        signedRecord: signedRecordBytes,
+        publicKey: testPublicKeyBytes,
+      });
+      mockParseIpnsRecord.mockReturnValueOnce({
+        value: `/ipfs/${testMetadataCid}`,
+        sequence: 4n,
+        signatureV2: sigBytes,
+        data: dataBytes,
+        pubKey: testPublicKeyBytes,
+      });
+
+      const result = await service.resolveRecord(testIpnsName);
+
+      expect(result).not.toBeNull();
+      expect(result!.cid).toBe(testMetadataCid);
+      expect(result!.sequenceNumber).toBe('5');
+    });
+
+    it('returns a complete record with pubKey from the publicKey column when the network record lacks signature fields at equal sequence (regression: 60-05 enrich removal)', async () => {
+      // Realistic Ed25519 case the prior unit test masked: the network record parsed
+      // from delegated routing carries NO signature fields, and the parsed signed bytes
+      // carry sig + data but NO pubKey. A strict client requires all three, so resolve
+      // must serve the authoritative DB record and supply pubKey from the validated
+      // publicKey column. Reproduces the SDK-E2E "IPNS resolve returned without signature
+      // fields — fail closed" break that mocked-boundary unit tests missed.
+      const sigBytes = new Uint8Array(64).fill(0xab);
+      const dataBytes = new Uint8Array(48).fill(0xcd);
+      const networkBytes = new Uint8Array([7, 8, 9]);
+      const signedRecordBytes = new Uint8Array([4, 5, 6]);
+
+      mockDelegatedRoutingClient.resolve.mockResolvedValue(networkBytes);
+      mockFolderIpnsRepo.findOne.mockResolvedValue({
+        ...mockFolderEntity,
+        latestCid: testMetadataCid,
+        sequenceNumber: '5',
+        signedRecord: signedRecordBytes,
+        publicKey: testPublicKeyBytes,
+      });
+
+      // 1st parse = network record (no signature fields, equal sequence).
+      // 2nd parse = cached signed record (sig + data, but NO pubKey — Ed25519).
+      mockParseIpnsRecord
+        .mockReturnValueOnce({ value: `/ipfs/${testMetadataCid}`, sequence: 5n })
+        .mockReturnValueOnce({
+          value: `/ipfs/${testMetadataCid}`,
+          sequence: 4n,
+          signatureV2: sigBytes,
+          data: dataBytes,
+        });
+
+      const result = await service.resolveRecord(testIpnsName);
+
+      expect(result).not.toBeNull();
+      expect(result!.cid).toBe(testMetadataCid);
+      expect(result!.sequenceNumber).toBe('5');
+      // The fix: pubKey is supplied from the DB publicKey column so the client can verify.
+      expect(result!.pubKey).toBe(testPublicKey);
+      expect(result!.signatureV2).toBe(Buffer.from(sigBytes).toString('base64'));
+      expect(result!.data).toBe(Buffer.from(dataBytes).toString('base64'));
     });
   });
 });

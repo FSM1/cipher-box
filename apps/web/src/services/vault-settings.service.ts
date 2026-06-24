@@ -106,15 +106,14 @@ export async function saveVaultSettings(params: {
   // 3. Derive IPNS keypair
   const keypair = await deriveVaultSettingsIpnsKeypair(userPrivateKey);
 
-  // 4. Resolve current sequence number for monotonic increment
-  let sequenceNumber = 0n;
-  try {
-    const resolved = await resolveIpnsRecord(keypair.ipnsName);
-    if (resolved) {
-      sequenceNumber = BigInt(resolved.sequenceNumber ?? 0) + 1n;
-    }
-  } catch {
-    // First publish -- start from 0
+  // 4. Resolve current sequence number for monotonic increment.
+  // resolveIpnsRecord returns null for a true not-found (first publish) and THROWS for
+  // verification/transient failures — let those propagate so a tampered or unverifiable
+  // existing record fails closed instead of being silently masked as a first publish (seq 1).
+  let sequenceNumber = 1n;
+  const resolved = await resolveIpnsRecord(keypair.ipnsName);
+  if (resolved) {
+    sequenceNumber = BigInt(resolved.sequenceNumber ?? 0) + 1n;
   }
 
   // 5. Wrap IPNS private key for TEE republishing (if available)

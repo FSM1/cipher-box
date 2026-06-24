@@ -333,27 +333,17 @@ async fn resolve_folder_key(
         // D-01: route through the verified chokepoint.
         // D-03 (security boundary): hard fail-closed on Invalid/Api; Legacy is warn+continue.
         let resolved_cid =
-            match crate::verify::resolve_ipns_verified(api, &current_ipns).await {
+            match cipherbox_api_client::ipns::resolve_ipns_verified(api, &current_ipns).await {
                 Ok(verified) => verified.cid,
-                Err(crate::verify::VerifyError::Legacy { cid, .. }) => {
-                    // D-03: all-absent legacy record — use the carried cid (no second resolve_ipns).
-                    // T-59-04: eliminates the TOCTOU race window.
-                    // DB CID authoritative; backward-compatible with pre-signing records.
-                    log::warn!(
-                        "resolve_folder_key: IPNS {} resolved without signature fields — \
-                         proceeding (D-03, DB CID authoritative)",
-                        current_ipns
-                    );
-                    cid
-                }
-                Err(crate::verify::VerifyError::Invalid(msg)) => {
-                    // D-03 hard fail-closed: invalid/partial signature → refuse CID.
+                // D-04: Legacy variant removed — all-absent sig fields fail closed (strict cutover).
+                Err(cipherbox_api_client::ipns::VerifyError::Invalid(msg)) => {
+                    // Fail-closed: invalid/partial signature or absent fields → refuse CID.
                     return Err(format!(
                         "IPNS {} signature verification failed — refusing to use CID (D-02): {}",
                         current_ipns, msg
                     ));
                 }
-                Err(crate::verify::VerifyError::Api(e)) => {
+                Err(cipherbox_api_client::ipns::VerifyError::Api(e)) => {
                     return Err(format!("resolve IPNS {}: {}", current_ipns, e));
                 }
             };
@@ -462,26 +452,17 @@ async fn fetch_merge_publish_parent(
 
     // D-06: fetch CURRENT remote metadata (not the stale journaled snapshot).
     // D-01: route through the verified chokepoint.
-    let parent_cid = match crate::verify::resolve_ipns_verified(api, parent_ipns_name).await {
+    let parent_cid = match cipherbox_api_client::ipns::resolve_ipns_verified(api, parent_ipns_name).await {
         Ok(verified) => verified.cid,
-        Err(crate::verify::VerifyError::Legacy { cid, .. }) => {
-            // D-04: legacy record — use the carried cid (no second resolve_ipns).
-            // T-59-04: eliminates the TOCTOU race window.
-            log::warn!(
-                "fetch_merge_publish_parent: IPNS {} resolved without signature fields \
-                 — using DB CID (D-04)",
-                parent_ipns_name
-            );
-            cid
-        }
-        Err(crate::verify::VerifyError::Invalid(msg)) => {
+        // D-04: Legacy variant removed — all-absent sig fields fail closed (strict cutover).
+        Err(cipherbox_api_client::ipns::VerifyError::Invalid(msg)) => {
             // Journal entry retained — return Err so the replay loop keeps the entry.
             return Err(format!(
                 "parent IPNS {} verify failed — retaining journal entry: {}",
                 parent_ipns_name, msg
             ));
         }
-        Err(crate::verify::VerifyError::Api(e)) => {
+        Err(cipherbox_api_client::ipns::VerifyError::Api(e)) => {
             return Err(format!("resolve parent IPNS {}: {}", parent_ipns_name, e));
         }
     };

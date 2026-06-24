@@ -120,6 +120,47 @@ pub fn decode_ipns_cbor_data(data: &[u8]) -> Result<(String, u64), IpnsError> {
     Ok((value, seq))
 }
 
+/// Decode the `"Validity"` bytes from a signed IPNS CBOR data field.
+///
+/// Companion to `decode_ipns_cbor_data` that extracts only the `Validity` field (the RFC3339
+/// expiry timestamp stored as UTF-8 bytes) from the CBOR map. Used by `bind_verified` in
+/// `cipherbox-api-client` for resolve-side EOL/expiry enforcement (D-07, Plan 60-01).
+///
+/// Returns `Some(validity_bytes)` if the "Validity" key is present and contains bytes,
+/// `None` if the key is absent (caller must treat absent Validity as fail-closed invalid).
+///
+/// # Errors
+///
+/// Returns `Err(IpnsError::CborEncodingFailed)` if the buffer is not valid CBOR,
+/// the top-level value is not a map, or the "Validity" entry is not bytes.
+pub fn decode_ipns_cbor_validity(data: &[u8]) -> Result<Option<Vec<u8>>, IpnsError> {
+    let map: CborValue = ciborium::from_reader(data).map_err(|_| IpnsError::CborEncodingFailed)?;
+    let entries = match map {
+        CborValue::Map(m) => m,
+        _ => return Err(IpnsError::CborEncodingFailed),
+    };
+    // Reject duplicate "Validity" keys (parser-differential / first-wins-vs-last-wins
+    // hardening), mirroring decode_ipns_cbor_data's duplicate-key rejection.
+    let mut validity_bytes: Option<Vec<u8>> = None;
+    for (k, v) in entries {
+        let key = match k {
+            CborValue::Text(s) => s,
+            _ => continue,
+        };
+        if key == "Validity" {
+            if validity_bytes.is_some() {
+                return Err(IpnsError::CborEncodingFailed);
+            }
+            validity_bytes = match v {
+                CborValue::Bytes(b) => Some(b),
+                _ => return Err(IpnsError::CborEncodingFailed),
+            };
+        }
+    }
+    // "Validity" key absent — caller treats as fail-closed.
+    Ok(validity_bytes)
+}
+
 /// Build the CBOR-encoded data field for an IPNS record.
 ///
 /// The field order matches the ipns npm package: TTL, Value, Sequence, Validity, ValidityType.
@@ -536,6 +577,27 @@ mod tests {
         let mut buf = Vec::new();
         ciborium::into_writer(&cbor_map, &mut buf).unwrap();
         let err = decode_ipns_cbor_data(&buf).unwrap_err();
+        assert!(matches!(err, IpnsError::CborEncodingFailed));
+    }
+
+    #[test]
+    fn decode_ipns_cbor_validity_rejects_duplicate_validity_key() {
+        // Mirror of the Value/Sequence duplicate-key guard for the resolve-side EOL field:
+        // two "Validity" (Bytes) entries must return Err(CborEncodingFailed) so a
+        // parser-differential record cannot decode ambiguously across languages.
+        let cbor_map = CborValue::Map(vec![
+            (
+                CborValue::Text("Validity".to_string()),
+                CborValue::Bytes(b"2099-01-01T00:00:00.000000000Z".to_vec()),
+            ),
+            (
+                CborValue::Text("Validity".to_string()),
+                CborValue::Bytes(b"2000-01-01T00:00:00.000000000Z".to_vec()),
+            ),
+        ]);
+        let mut buf = Vec::new();
+        ciborium::into_writer(&cbor_map, &mut buf).unwrap();
+        let err = decode_ipns_cbor_validity(&buf).unwrap_err();
         assert!(matches!(err, IpnsError::CborEncodingFailed));
     }
 

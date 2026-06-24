@@ -196,16 +196,29 @@ impl SyncDaemon {
             .clone()
             .ok_or_else(|| "Root IPNS name not available".to_string())?;
 
-        // Resolve root folder IPNS
-        let resolve_result =
-            cipherbox_api_client::ipns::resolve_ipns(&self.state.api, &root_ipns_name)
-                .await
-                .map_err(|e| e.to_string())?;
+        // D-08: route through verified chokepoint — tampered CIDs are rejected.
+        let verified = match cipherbox_api_client::ipns::resolve_ipns_verified(
+            &self.state.api,
+            &root_ipns_name,
+        )
+        .await
+        {
+            Ok(v) => v,
+            Err(cipherbox_api_client::ipns::VerifyError::Api(e)) => {
+                return Err(e.to_string());
+            }
+            Err(cipherbox_api_client::ipns::VerifyError::Invalid(msg)) => {
+                // D-08: fail-closed — do not act on an unverified/tampered record.
+                log::error!(
+                    "Sync: root IPNS {} verify failed (D-08): {} — skipping poll cycle",
+                    root_ipns_name,
+                    msg
+                );
+                return Err(format!("IPNS verification failed: {}", msg));
+            }
+        };
 
-        let new_seq = resolve_result
-            .sequence_number
-            .parse::<u64>()
-            .unwrap_or(0);
+        let new_seq = verified.sequence_number;
 
         let cached_seq = self
             .cached_sequence_numbers
@@ -226,7 +239,7 @@ impl SyncDaemon {
             // will fetch and decrypt fresh metadata automatically.
             log::info!(
                 "Root folder metadata changed (CID: {}). Cache will refresh on next access.",
-                resolve_result.cid
+                verified.cid
             );
         }
 
