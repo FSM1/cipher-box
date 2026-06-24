@@ -90,6 +90,20 @@ describe('IpnsVerifyCache', () => {
     expect(cache.isVerified(ipnsName, seq, sigV2Alt)).toBe(false);
   });
 
+  it('keys on exact bytes: same (ipnsName, seq) but different raw record bytes do NOT share a cache entry', () => {
+    // D-11 byte-exact keying regression. Production passes base64(full recordBytes) as the
+    // third arg (with seq=''). Two records that happen to share parsed seq+signature but
+    // differ in any other byte (CID, validity, pubKey) produce different raw bytes →
+    // different keys → MISS, forcing a full Ed25519 verify.
+    const recordBytesA = Buffer.from('ipns-record-A-cid-X-validity-Y').toString('base64');
+    const recordBytesB = Buffer.from('ipns-record-B-cid-Z-validity-W').toString('base64');
+    cache.recordVerified(ipnsName, '', recordBytesA);
+    // Same ipnsName + same seq arg, different raw bytes → MISS.
+    expect(cache.isVerified(ipnsName, '', recordBytesB)).toBe(false);
+    // The exact recorded bytes → HIT.
+    expect(cache.isVerified(ipnsName, '', recordBytesA)).toBe(true);
+  });
+
   it('returns false for a different sequenceNumber with the same (ipnsName, sig)', () => {
     // Additional: different seq → cache MISS
     cache.recordVerified(ipnsName, seq, sigV2);

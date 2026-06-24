@@ -25,6 +25,14 @@
 /** Cache TTL in milliseconds */
 export const CACHE_TTL_MS = 60_000;
 
+/**
+ * Maximum number of cached entries before oldest-first eviction. Because the key
+ * includes the full record bytes (unique per publish), entries are essentially never
+ * re-read after their TTL, so the lazy TTL eviction alone would let the Map grow
+ * unbounded under a stream of one-off publishes. This hard cap bounds memory.
+ */
+export const CACHE_MAX_ENTRIES = 10_000;
+
 export class IpnsVerifyCache {
   /** Internal store: key → insertion timestamp (ms) */
   private readonly store = new Map<string, number>();
@@ -43,6 +51,14 @@ export class IpnsVerifyCache {
    */
   recordVerified(ipnsName: string, sequenceNumber: string, recordBytesOrSigBase64: string): void {
     const key = `${ipnsName}:${sequenceNumber}:${recordBytesOrSigBase64}`;
+    // Refresh insertion order on re-set so this entry counts as most-recent.
+    this.store.delete(key);
+    // Bound memory: evict oldest entries (Map preserves insertion order) until under cap.
+    while (this.store.size >= CACHE_MAX_ENTRIES) {
+      const oldest = this.store.keys().next().value;
+      if (oldest === undefined) break;
+      this.store.delete(oldest);
+    }
     this.store.set(key, Date.now());
   }
 
