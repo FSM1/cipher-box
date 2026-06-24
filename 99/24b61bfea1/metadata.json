@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "9924b61bfea1",
+  "strategy": "manual-commit",
+  "branch": "feat/ipns-verification-cross-layer-closeout-desktop-and-api",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/99/24b61bfea1/0/metadata.json",
+      "transcript": "/99/24b61bfea1/0/full.jsonl",
+      "content_hash": "/99/24b61bfea1/0/content_hash.txt",
+      "prompt": "/99/24b61bfea1/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 45897,
+    "cache_creation_tokens": 1750135,
+    "cache_read_tokens": 91656150,
+    "output_tokens": 525294,
+    "api_call_count": 335
+  }
+}
