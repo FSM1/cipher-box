@@ -1,0 +1,193 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "7f458caf1dbd",
+  "session_id": "3379b299-016b-4d40-aaf2-317ab0c08665",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-24T13:39:46.777957Z",
+  "branch": "feat/ipns-verification-cross-layer-closeout-desktop-and-api",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "eb92e353cdc5",
+  "token_usage": {
+    "input_tokens": 24147,
+    "cache_creation_tokens": 1070585,
+    "cache_read_tokens": 42484408,
+    "output_tokens": 251725,
+    "api_call_count": 141
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_015unJFE1uKnKxuJBsXrnXCJ",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "eb92e353cdc5",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 220,
+        "end": 221,
+        "entry_ids": [
+          "0010ab68-b02f-458f-9cb1-9ba8e5708e8f"
+        ],
+        "tool_use_id": "toolu_015unJFE1uKnKxuJBsXrnXCJ"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015unJFE1uKnKxuJBsXrnXCJ"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ship-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01SeiB2Zz3z176peAgQ6T56C",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:secure-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "eb92e353cdc5",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 538,
+        "end": 539,
+        "entry_ids": [
+          "de9411c8-2fe0-415b-b7f9-c988f0e25450"
+        ],
+        "tool_use_id": "toolu_01SeiB2Zz3z176peAgQ6T56C"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01SeiB2Zz3z176peAgQ6T56C"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:secure-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Execute all 8 plans in phase 60 (IPNS Verification Cross-Layer Closeout) using wave-based sequential subagents, then run the full ship-phase workflow: verify → secure → validate → simplify → SDK E2E gate → CodeRabbit CLI review → ship.",
+    "outcome": "Phase 60 executed (7/8 plans code-complete; 60-08 paused at staging-cutover human-action checkpoint). Ship-phase caught a ship-blocking regression via the SDK E2E gate, applied 7 additional security/correctness fixes from adversarial CodeRabbit triage, ran the verify and secure gates (27/27 threats closed), and committed all fixes — but the PR was not yet pushed when the transcript ended.",
+    "learnings": {
+      "repo": [
+        "The gsd-tools commit helper reliably reports `commit_failed` as a false-negative (lint-staged output confuses it) — always verify with `git log --oneline -1` before retrying or assuming failure.",
+        "1Password SSH signing agent can wedge after many rapid commits, returning `op-ssh-sign: failed to fill whole buffer`. Recovery requires quitting and reopening the 1Password desktop app.",
+        "`gh pr edit` fails on this repo (Projects-classic GraphQL) — patch PR body via `gh api -X PATCH repos/FSM1/cipher-box/pulls/<N> -F body=@file` instead.",
+        "commitlint's `subject-no-parens` rule blocks any commit subject containing parentheses; trailing `(D-XX)` tags in executor commits must be stripped before pushing.",
+        "`cargo fmt --check` reports drift across the entire workspace due to a local rustfmt version mismatch vs the repo — never run blanket `cargo fmt`; lint-staged does not run rustfmt on `.rs` files.",
+        "GSD executors sometimes strand uncommitted Cargo.lock changes after editing Cargo.toml (adding new deps); these create latent `--locked` CI breaks and must be committed separately before wave gates.",
+        "ROADMAP checkbox reconciliation may be needed after sequential subagent execution — at least one executor (60-06) wrote a complete SUMMARY and tests but never ticked its own checkbox.",
+        "The API log suppresses handled 4xx responses — to diagnose real 400 reasons, temporarily add an axios response interceptor in `packages/api-client/src/instance.ts`, rebuild the chain, then revert."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 528,
+          "end_line": 537,
+          "finding": "60-05 removed the equal-sequence enrich that supplied `pubKey` and `signatureV2`/`data` from the DB cached record. For Ed25519 IPNS records, `pubKey` is NOT embedded in the protobuf — it lives in the name. Removing the enrich caused `resolveRecord` to return sig-field-less network results, triggering the strict client's fail-closed throw on every publish→resolve round-trip. Fix: serve the authoritative DB signed record on equal-or-higher sequence."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns-record.codec.ts",
+          "finding": "`parseCachedRecord` must supply `pubKey` from the `FolderIpns.publicKey` DB column (validated at publish to satisfy `deriveIpnsName(publicKey) === ipnsName`). Without this, the strict client has no pubKey to verify the name binding. Codec must also throw on missing pubKey (fail-closed) rather than returning undefined."
+        },
+        {
+          "path": "crates/core/src/ipns.rs",
+          "line": 142,
+          "end_line": 153,
+          "finding": "`decode_ipns_cbor_validity` used early-return first-wins for the \"Validity\" key, unlike `decode_ipns_cbor_data` (lines 87-116) which explicitly rejects duplicate \"Value\"/\"Sequence\" keys to guard against cross-language parser-differential attacks. Fixed to accumulate and reject duplicates, mirroring the sibling function."
+        },
+        {
+          "path": "crates/sdk/src/registry.rs",
+          "line": 63,
+          "end_line": 66,
+          "finding": "`register_device` used `Err(_) => None` to treat ALL errors as \"first device\" bootstrap, including `VerifyError::Invalid` (bad signature, expired record). Only `ApiError::IpnsNotFound` (HTTP 404) is the legitimate first-device signal; any other error must propagate fail-closed to prevent a tampered IPNS registry record from triggering auto-authorization."
+        },
+        {
+          "path": "packages/sdk-core/src/ipns/index.ts",
+          "line": 290,
+          "end_line": 301,
+          "finding": "TS resolve path skipped the entire EOL block when `Validity` was not a `Uint8Array`, silently accepting records with no Validity field. Rust (`ipns.rs:114-117`) fail-closes on absent Validity via `.ok_or_else(...)`. Fixed to mirror Rust: absent Validity now throws, closing the D-07 cross-layer parity gap."
+        },
+        {
+          "path": "crates/api-client/src/ipns.rs",
+          "line": 184,
+          "end_line": 221,
+          "finding": "`parse_rfc3339_to_unix_secs` had two leniencies: (1) trailing date/time components (e.g. `2026-01-01-99`) were silently accepted because iterator exhaustion wasn't checked; (2) day validation was only `< 1 || > 31`, so impossible dates like 2026-02-31 passed and rolled forward via Hinnant's algorithm into a *later* expiry — exactly wrong for a fail-closed expiry gate."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns-verify-cache.ts",
+          "finding": "The verify cache had no size bound. Under sustained load, a unique `ipnsName:base64(recordBytes)` key per request would grow unbounded. Fixed with a MAX_CACHE_SIZE eviction policy."
+        },
+        {
+          "path": "apps/web/src/services/vault-settings.service.ts",
+          "finding": "Web vault-settings sequence fallback swallowed verification errors (fail-open). Fixed to only bootstrap on true IPNS-not-found; verification failures propagate."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.spec.ts",
+          "line": 2135,
+          "end_line": 2141,
+          "finding": "The 60-05 D-06 unit test mocked `parseIpnsRecord` to INCLUDE `pubKey` — masking the regression because real Ed25519 records don't carry it. This false-passing unit test codified the bug. The E2E gate caught what the unit suite missed."
+        }
+      ],
+      "workflow": [
+        "The SDK E2E gate is the ONLY suite that exercises the real client→API IPNS publish/resolve round-trip; all unit suites mock the boundary and will miss integration regressions like the 60-05 enrich removal. This gate caught 28/89 failures that all 343 unit tests missed.",
+        "worktree-isolation subagents cannot expose their branch for orchestrator merge-back in this harness; a security-critical Rust crypto phase should use sequential subagents on the feature branch instead to ensure clean per-plan verification.",
+        "Adversarial triage of reviewer findings (spawn N independent skeptics per finding) reliably separates real gaps from false positives — 4/15 CodeRabbit findings were false positives (pre-increment sequence design, already-fail-closed paths).",
+        "A unit test that mocks a boundary with idealized data (e.g. always including `pubKey`) can actively hide the regression it was meant to catch. Regression tests should use realistic inputs (Ed25519 records without embedded pubKey) to match production behavior.",
+        "When a post-wave build gate flags a compile error, grep for the specific symbol before assuming the executor failed — the error may be a stale mid-edit snapshot; the compiler output at save time is not the final tree state."
+      ]
+    },
+    "friction": [
+      "1Password SSH signer wedged mid-session (`op-ssh-sign: failed to fill whole buffer`) after ~28 rapid commits, blocking all subsequent commits until the user restarted the app.",
+      "gsd-tools commit helper's false-negative `commit_failed` reports required defensive `git log` verification after every commit to avoid blind retries.",
+      "SDK E2E gate revealed a ship-blocking regression (60-05 enrich removal) that 343 unit tests completely missed — the regression would have shipped without the gate.",
+      "Stale uncommitted Cargo.lock from 60-01's executor (ciborium/cipherbox-core deps added to api-client) was discovered only during 60-04 and required a manual catch-up commit.",
+      "60-01-SUMMARY.md had a stale self-check footer appended after the SUMMARY commit, falsely claiming `verify.rs FOUND` after 60-04 deleted it — required revert.",
+      "Workflow tool's `run_in_background` parameter was not accepted, requiring a retry without it.",
+      "Web app has no `typecheck` npm script — had to invoke `tsc --noEmit` directly to verify F8.",
+      "API log suppresses 4xx, making it impossible to diagnose resolve failures from logs alone without temporarily patching the HTTP client."
+    ],
+    "open_items": [
+      "60-08 Task 2 — staging cutover (human action required): push branch to CI, run Windows Cargo Check + Desktop E2E + SDK E2E CI gates (all must be green first), then `ssh root@76.13.151.200` DB wipe per DATABASE_EVOLUTION_PROTOCOL.md §reset, redeploy strict API, run smoke tests (fresh login self-bootstraps, embedded-0 publish rejected 400, tampered/expired rejected). Resume session with 'cutover complete' to write 60-08 SUMMARY and mark phase complete.",
+      "PR not yet pushed — one commit subject needs reword (`feat(60-01): ... (D-07)` → strip parens) via `git filter-branch --msg-filter` before push to satisfy `subject-no-parens` commitlint rule.",
+      "Nyquist validation gate (`/gsd:validate-phase 60`) was started but not completed — `60-VALIDATION.md` is still in draft/planning state.",
+      "CodeRabbit PR-level review resolution pending — will need GraphQL `reviewThreads` fetch + reply/resolve loop after PR is opened.",
+      "4 CodeRabbit findings deferred as todos (not captured in transcript before it ended) — need to verify todos were written to `.planning/todos/pending/`.",
+      "60-VERIFICATION.md is `human_needed` (16/17 must-haves) until the staging smoke-test confirms end-to-end strict-verify in production.",
+      "`/gsd:validate-phase 60` (Nyquist coverage check) not run — deferred until after PR gates settle.",
+      "release-please will bump Cargo.toml versions but not regenerate Cargo.lock (known gap from existing memory) — monitor for this after merge."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
