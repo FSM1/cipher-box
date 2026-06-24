@@ -1086,7 +1086,7 @@ Plans:
 **Wave 1**
 
 - [x] 60-01-PLAN.md — Relocate verified-resolve wrapper to api-client + strict Rust verify (D-08/D-04) + Rust EOL (D-07) [wave 1]
-- [ ] 60-02-PLAN.md — Unify all 9 first-publish producers to embed sequence 1 (D-02) [wave 1]
+- [x] 60-02-PLAN.md — Unify all 9 first-publish producers to embed sequence 1 (D-02) [wave 1]
 - [ ] 60-03-PLAN.md — Strict TS resolve throw-path + EOL (D-05/D-07) + blast-radius audit [wave 1]
 
 **Wave 2** *(blocked on Wave 1 completion)*
