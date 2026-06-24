@@ -87,15 +87,15 @@ pub fn spawn_metadata_refresh(
                 crate::runtime::NETWORK_TIMEOUT,
                 async {
                     // D-01: route through the verified chokepoint.
-                    let verified = match crate::verify::resolve_ipns_verified(&api, &ipns_name).await {
+                    let verified = match cipherbox_api_client::ipns::resolve_ipns_verified(&api, &ipns_name).await {
                         Ok(v) => v,
                         // D-04: Legacy variant removed — all-absent sig fields fail closed.
                         // The Invalid arm below handles this case.
-                        Err(crate::verify::VerifyError::Invalid(msg)) => {
+                        Err(cipherbox_api_client::ipns::VerifyError::Invalid(msg)) => {
                             // D-02: fail only this operation; poll loop self-heals.
                             return Err(format!("IPNS {} verify failed: {}", ipns_name, msg));
                         }
-                        Err(crate::verify::VerifyError::Api(e)) => {
+                        Err(cipherbox_api_client::ipns::VerifyError::Api(e)) => {
                             return Err(format!("resolve: {}", e));
                         }
                     };

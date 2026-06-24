@@ -66,10 +66,6 @@ pub use metadata::{
 pub use fs::{CipherBoxFS, mount_point};
 
 
-// Verified IPNS resolve chokepoint (D-01/D-02/D-03/D-04).
-#[cfg(any(feature = "fuse", feature = "winfsp"))]
-pub mod verify;
-
 // Replay module (extracted in Task 3).
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub mod replay;

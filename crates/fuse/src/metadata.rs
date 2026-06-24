@@ -321,13 +321,13 @@ pub fn spawn_metadata_publish(
 
                     let fresh_seq = coordinator.resolve_sequence(&api, &ipns_name).await?;
                     // D-01/D-02: route through verified chokepoint; fail only this merge operation.
-                    let remote_cid = match crate::verify::resolve_ipns_verified(&api, &ipns_name).await {
+                    let remote_cid = match cipherbox_api_client::ipns::resolve_ipns_verified(&api, &ipns_name).await {
                         Ok(v) => v.cid,
                         // D-04: Legacy variant removed — all-absent sig fields fail closed.
-                        Err(crate::verify::VerifyError::Invalid(msg)) => {
+                        Err(cipherbox_api_client::ipns::VerifyError::Invalid(msg)) => {
                             return Err(format!("IPNS {} verify failed on merge: {}", ipns_name, msg));
                         }
-                        Err(crate::verify::VerifyError::Api(e)) => {
+                        Err(cipherbox_api_client::ipns::VerifyError::Api(e)) => {
                             return Err(format!("{}", e));
                         }
                     };
@@ -444,7 +444,7 @@ pub fn spawn_bin_entry_publish(
 
             // D-01: route bin IPNS resolve through the verified chokepoint.
             let (mut bin_metadata, existing_cid) =
-                match crate::verify::resolve_ipns_verified(&api, &bin_ipns_name).await {
+                match cipherbox_api_client::ipns::resolve_ipns_verified(&api, &bin_ipns_name).await {
                     Ok(verified) => {
                         match cipherbox_api_client::ipfs::fetch_content(&api, &verified.cid).await {
                             Ok(bytes) => {
@@ -466,12 +466,12 @@ pub fn spawn_bin_entry_publish(
                         }
                     }
                     // D-04: Legacy variant removed — all-absent sig fields fail closed.
-                    Err(crate::verify::VerifyError::Invalid(msg)) => {
+                    Err(cipherbox_api_client::ipns::VerifyError::Invalid(msg)) => {
                         // D-02: fail only this operation.
                         log::warn!("spawn_bin_entry_publish: IPNS {} verify failed: {}", bin_ipns_name, msg);
                         return Err(format!("Bin IPNS verify failed: {}", msg));
                     }
-                    Err(crate::verify::VerifyError::Api(e)) => {
+                    Err(cipherbox_api_client::ipns::VerifyError::Api(e)) => {
                         let e_str = format!("{}", e);
                         if is_ipns_not_found(&e_str) {
                             (cipherbox_core::empty_bin_metadata(), None)
@@ -614,17 +614,17 @@ async fn resolve_and_fetch_file_meta(
     file_meta_ipns_name: &str,
 ) -> Result<Vec<u8>, String> {
     // D-01: route through the verified chokepoint.
-    let cid = match crate::verify::resolve_ipns_verified(api, file_meta_ipns_name).await {
+    let cid = match cipherbox_api_client::ipns::resolve_ipns_verified(api, file_meta_ipns_name).await {
         Ok(v) => v.cid,
         // D-04: Legacy variant removed — all-absent sig fields fail closed.
-        Err(crate::verify::VerifyError::Invalid(msg)) => {
+        Err(cipherbox_api_client::ipns::VerifyError::Invalid(msg)) => {
             // D-02: fail only this operation.
             return Err(format!(
                 "file IPNS {} verify failed: {}",
                 file_meta_ipns_name, msg
             ));
         }
-        Err(crate::verify::VerifyError::Api(e)) => {
+        Err(cipherbox_api_client::ipns::VerifyError::Api(e)) => {
             return Err(format!("resolve file IPNS: {}", e));
         }
     };

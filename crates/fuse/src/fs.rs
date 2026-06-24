@@ -491,16 +491,16 @@ impl CipherBoxFS {
                         self.rt.spawn(async move {
                             let result = tokio::time::timeout(NETWORK_TIMEOUT, async {
                                 // D-01: route through the verified chokepoint.
-                                let cid = match crate::verify::resolve_ipns_verified(&api, &fp_ipns).await {
+                                let cid = match cipherbox_api_client::ipns::resolve_ipns_verified(&api, &fp_ipns).await {
                                     Ok(v) => v.cid,
                                     // D-04: Legacy variant removed — all-absent sig fields fail closed.
-                                    Err(crate::verify::VerifyError::Invalid(msg)) => {
+                                    Err(cipherbox_api_client::ipns::VerifyError::Invalid(msg)) => {
                                         return Err(format!(
                                             "FilePointer IPNS {} verify failed: {}",
                                             fp_ipns, msg
                                         ));
                                     }
-                                    Err(crate::verify::VerifyError::Api(e)) => {
+                                    Err(cipherbox_api_client::ipns::VerifyError::Api(e)) => {
                                         return Err(format!("{}", e));
                                     }
                                 };

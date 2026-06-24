@@ -333,17 +333,17 @@ async fn resolve_folder_key(
         // D-01: route through the verified chokepoint.
         // D-03 (security boundary): hard fail-closed on Invalid/Api; Legacy is warn+continue.
         let resolved_cid =
-            match crate::verify::resolve_ipns_verified(api, &current_ipns).await {
+            match cipherbox_api_client::ipns::resolve_ipns_verified(api, &current_ipns).await {
                 Ok(verified) => verified.cid,
                 // D-04: Legacy variant removed — all-absent sig fields fail closed (strict cutover).
-                Err(crate::verify::VerifyError::Invalid(msg)) => {
+                Err(cipherbox_api_client::ipns::VerifyError::Invalid(msg)) => {
                     // Fail-closed: invalid/partial signature or absent fields → refuse CID.
                     return Err(format!(
                         "IPNS {} signature verification failed — refusing to use CID (D-02): {}",
                         current_ipns, msg
                     ));
                 }
-                Err(crate::verify::VerifyError::Api(e)) => {
+                Err(cipherbox_api_client::ipns::VerifyError::Api(e)) => {
                     return Err(format!("resolve IPNS {}: {}", current_ipns, e));
                 }
             };
@@ -452,17 +452,17 @@ async fn fetch_merge_publish_parent(
 
     // D-06: fetch CURRENT remote metadata (not the stale journaled snapshot).
     // D-01: route through the verified chokepoint.
-    let parent_cid = match crate::verify::resolve_ipns_verified(api, parent_ipns_name).await {
+    let parent_cid = match cipherbox_api_client::ipns::resolve_ipns_verified(api, parent_ipns_name).await {
         Ok(verified) => verified.cid,
         // D-04: Legacy variant removed — all-absent sig fields fail closed (strict cutover).
-        Err(crate::verify::VerifyError::Invalid(msg)) => {
+        Err(cipherbox_api_client::ipns::VerifyError::Invalid(msg)) => {
             // Journal entry retained — return Err so the replay loop keeps the entry.
             return Err(format!(
                 "parent IPNS {} verify failed — retaining journal entry: {}",
                 parent_ipns_name, msg
             ));
         }
-        Err(crate::verify::VerifyError::Api(e)) => {
+        Err(cipherbox_api_client::ipns::VerifyError::Api(e)) => {
             return Err(format!("resolve parent IPNS {}: {}", parent_ipns_name, e));
         }
     };
