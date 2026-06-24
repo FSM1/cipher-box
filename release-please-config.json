@@ -65,13 +65,15 @@
       "release-type": "node",
       "component": "@cipherbox/api",
       "include-component-in-tag": true,
-      "bump-minor-pre-major": true
+      "bump-minor-pre-major": true,
+      "release-as": "0.44.0"
     },
     "apps/web": {
       "release-type": "node",
       "component": "@cipherbox/web",
       "include-component-in-tag": true,
-      "bump-minor-pre-major": true
+      "bump-minor-pre-major": true,
+      "release-as": "0.47.0"
     },
     "apps/desktop": {
       "release-type": "node",
@@ -107,13 +109,15 @@
       "release-type": "node",
       "component": "@cipherbox/api-client",
       "include-component-in-tag": true,
-      "bump-minor-pre-major": true
+      "bump-minor-pre-major": true,
+      "release-as": "0.44.0"
     },
     "packages/sdk-core": {
       "release-type": "node",
       "component": "@cipherbox/sdk-core",
       "include-component-in-tag": true,
-      "bump-minor-pre-major": true
+      "bump-minor-pre-major": true,
+      "release-as": "0.39.0"
     },
     "packages/sdk": {
       "release-type": "node",
@@ -133,7 +137,8 @@
       "release-type": "rust",
       "component": "cipherbox-core",
       "include-component-in-tag": true,
-      "bump-minor-pre-major": true
+      "bump-minor-pre-major": true,
+      "release-as": "0.7.0"
     },
     "crates/api-client": {
       "release-type": "rust",
@@ -154,7 +159,7 @@
       "component": "cipherbox-sdk",
       "include-component-in-tag": true,
       "bump-minor-pre-major": true,
-      "release-as": "0.7.1"
+      "release-as": "0.8.0"
     }
   }
 }
