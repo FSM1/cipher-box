@@ -69,29 +69,48 @@ prior full dispatch (run 28105996601, commit 88f096505), and `git diff
 desktop binary exercises. macOS desktop also shows intermittent failures on `main`
 history independent of this branch.
 
-PROVEN pre-existing (not a Phase 60 regression): the IDENTICAL failure
-(`Test 5: Wait for FUSE mount to detect edit` → `FUSE mount still shows original
-content after 120s`) occurred on **main**, commit 541e4c6, run 28043695361
-(2026-06-23) — BEFORE Phase 60 existed. On the PR branch (commit 1f8f8d85d) the
-same macOS job is 1-fail/1-pass across two dispatches; Linux + Windows always pass.
+PROVEN pre-existing, NOT a Phase 60 regression (4-agent root-cause, high confidence):
 
-Failure mode (from desktop logs, run 28112732258): the desktop DOES detect the
-remote edit (`File 'sync-test-NNNNN.txt': modified_at changed (remote edit
-detected), marking for re-resolution`) but the re-resolution then never completes
-— no new-CID fetch is logged for the remaining ~90s. When it passes, it completes
-fast (`Sync detected on attempt 7 (35s)`). So it is a STALL, not a too-short
-timeout (a longer timeout would not help a re-resolution that never lands). Likely
-root cause: on macOS FUSE-T's SMB backend the test's `ls`/`stat`/`cat` poll does
-not reliably fire the FUSE callback that drives `drain_refresh_completions()` ->
-`populate_folder()`, so the marked re-resolution is never drained/applied (SMB
-caches readdir/getattr). The `baseChildren not provided ... union fallback` warning
-seen near here is unrelated benign noise — it appears in passing runs too.
+Base rate (macOS desktop job, where it actually ran — dispatch-gated skips excluded):
+- **main: ~15% fail on THIS test** — runs 28043695361 (job 83016343633) AND 27905000292
+  (job 82572035159) both fail with the exact `Test 5 ... still shows original content
+  after 120s` signature, BEFORE Phase 60. (2 other main macOS fails were a different
+  ESM-loader infra break, not this test.) The rest pass (e.g. 28063779741 ALL PASSED).
+- branch (1f8f8d85d): 1 fail / 3 pass across dispatches (28112732258 fail; 28105996601,
+  28117194839, 28119647095 pass). Overlaps main's rate — no clear worsening.
 
-Options: (a) make the macOS content-sync leg optional/warn like the sibling
-folder-rename leg already is (consistent, but loses macOS content-sync coverage);
-(b) force a FUSE-T SMB cache/dir invalidation between write and read in the harness
-so the drain fires deterministically; (c) root-cause the desktop-side drain trigger
-on macOS so re-resolution completions are applied without depending on a FUSE
-callback the SMB backend may swallow. Prefer (c) (real fix) or (b); (a) is the
-quick test-hygiene stopgap. A blanket timeout bump is NOT a fix (the failure is a
-stall, not slowness).
+Real root cause (`crates/fuse/src/fs.rs:392`, `drain_refresh_completions`):
+```
+if self.mutated_folders.contains_key(&ino) || self.publish_queue.contains_key(&ino) {
+    self.metadata_cache.set(&ipns_name, metadata.clone(), cid);
+    continue;  // caches remote edit but SKIPS populate_folder + the unresolved-
+               // FilePointer resolve spawn that would fetch the new content
+}
+```
+When the desktop is concurrently publishing its OWN changes (root ino sits in
+`mutated_folders`/`publish_queue`, 30s retention), a refresh carrying the remote edit
+takes this cache-only branch, so the per-file re-resolution is never spawned. The FUSE
+read path only *polls* (`poll.rs:40` → NotInFlight unless a prior spawn inserted the ino;
+`read_ops.rs:532` never spawns), so the file never re-resolves → original content for
+120s → FAIL. It is timing-dependent (does the desktop's own publish window overlap the
+remote-edit refresh?), hence flaky, and macOS runner timing makes the overlap likelier.
+
+Decisively NOT Phase 60: `git diff origin/main...HEAD -- crates/fuse/src/fs.rs` = 4 ins /
+13 del (ONLY re-pointing the resolve call to `cipherbox_api_client::ipns::resolve_ipns_verified`);
+`inode.rs`/`read_ops.rs`/`poll.rs` are untouched. In the failing log `resolve_ipns_verified`
+is NEVER called for the stuck file (no resolve / verify / 404 / success line for it — the
+only 404 is an unrelated freshly-mkdir'd folder), so the strict-verify cutover cannot have
+caused it. And the per-file record IS strict-verifiable (the SDK harness reports
+`contentVerified:true` pre- and post-edit), ruling out a Phase 60 publish-side defect.
+The `baseChildren ... union fallback` warning nearby is unrelated benign noise (present in
+passing runs too).
+
+Fix (separate desktop/FUSE PR — touches the delicate mutated_folders / folder-state-desync
+logic, so NOT bundled into the IPNS verify cutover): in the cache-only `continue` branch,
+still enqueue the parent's unresolved FilePointers for resolution (or defer a re-drain)
+instead of dropping the remote-edit re-resolution, WITHOUT clobbering pending local
+mutations with stale remote state (the reason the gate exists — see
+[[project-web-sdk-folder-state-desync]]). Must pass SDK E2E + desktop E2E (all platforms).
+A timeout bump is NOT a fix (the failure is a suppressed spawn, not slowness). The sibling
+folder-rename leg is already "optional/warn on macOS"; making the content-sync leg the same
+is only a test-hygiene stopgap, not the real fix.
