@@ -139,20 +139,26 @@ pub fn decode_ipns_cbor_validity(data: &[u8]) -> Result<Option<Vec<u8>>, IpnsErr
         CborValue::Map(m) => m,
         _ => return Err(IpnsError::CborEncodingFailed),
     };
+    // Reject duplicate "Validity" keys (parser-differential / first-wins-vs-last-wins
+    // hardening), mirroring decode_ipns_cbor_data's duplicate-key rejection.
+    let mut validity_bytes: Option<Vec<u8>> = None;
     for (k, v) in entries {
         let key = match k {
             CborValue::Text(s) => s,
             _ => continue,
         };
         if key == "Validity" {
-            return match v {
-                CborValue::Bytes(b) => Ok(Some(b)),
-                _ => Err(IpnsError::CborEncodingFailed),
+            if validity_bytes.is_some() {
+                return Err(IpnsError::CborEncodingFailed);
+            }
+            validity_bytes = match v {
+                CborValue::Bytes(b) => Some(b),
+                _ => return Err(IpnsError::CborEncodingFailed),
             };
         }
     }
-    // "Validity" key not present — caller treats as fail-closed.
-    Ok(None)
+    // "Validity" key absent — caller treats as fail-closed.
+    Ok(validity_bytes)
 }
 
 /// Build the CBOR-encoded data field for an IPNS record.
@@ -571,6 +577,27 @@ mod tests {
         let mut buf = Vec::new();
         ciborium::into_writer(&cbor_map, &mut buf).unwrap();
         let err = decode_ipns_cbor_data(&buf).unwrap_err();
+        assert!(matches!(err, IpnsError::CborEncodingFailed));
+    }
+
+    #[test]
+    fn decode_ipns_cbor_validity_rejects_duplicate_validity_key() {
+        // Mirror of the Value/Sequence duplicate-key guard for the resolve-side EOL field:
+        // two "Validity" (Bytes) entries must return Err(CborEncodingFailed) so a
+        // parser-differential record cannot decode ambiguously across languages.
+        let cbor_map = CborValue::Map(vec![
+            (
+                CborValue::Text("Validity".to_string()),
+                CborValue::Bytes(b"2099-01-01T00:00:00.000000000Z".to_vec()),
+            ),
+            (
+                CborValue::Text("Validity".to_string()),
+                CborValue::Bytes(b"2000-01-01T00:00:00.000000000Z".to_vec()),
+            ),
+        ]);
+        let mut buf = Vec::new();
+        ciborium::into_writer(&cbor_map, &mut buf).unwrap();
+        let err = decode_ipns_cbor_validity(&buf).unwrap_err();
         assert!(matches!(err, IpnsError::CborEncodingFailed));
     }
 

@@ -191,15 +191,49 @@ fn parse_rfc3339_to_unix_secs(s: &str) -> Option<u64> {
     let year: i64 = date_parts.next()?.parse().ok()?;
     let month: u32 = date_parts.next()?.parse().ok()?;
     let day: u32 = date_parts.next()?.parse().ok()?;
+    // Reject trailing date components (e.g. "2026-01-01-99").
+    if date_parts.next().is_some() {
+        return None;
+    }
 
-    // Split off nanoseconds if present.
-    let time_no_nanos = time_part.split('.').next().unwrap_or(time_part);
+    // Split off nanoseconds if present; a present fractional part must be non-empty and
+    // all ASCII digits (reject junk like "00:00:00." or extra separators).
+    let mut dot = time_part.splitn(2, '.');
+    let time_no_nanos = dot.next()?;
+    if let Some(frac) = dot.next() {
+        if frac.is_empty() || !frac.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+    }
     let mut time_parts = time_no_nanos.split(':');
     let hour: u64 = time_parts.next()?.parse().ok()?;
     let minute: u64 = time_parts.next()?.parse().ok()?;
     let second: u64 = time_parts.next()?.parse().ok()?;
+    // Reject trailing time components (e.g. "00:00:00:99").
+    if time_parts.next().is_some() {
+        return None;
+    }
 
-    if month < 1 || month > 12 || day < 1 || day > 31 {
+    // Range + leap-aware day-of-month validation. The Hinnant civil_from_days algorithm
+    // silently rolls an impossible date (e.g. 2026-02-31) into the following month, which
+    // would EXTEND the record's validity — the opposite of fail-closed — so reject it here.
+    if month < 1 || month > 12 || day < 1 || hour > 23 || minute > 59 || second > 59 {
+        return None;
+    }
+    let is_leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    let days_in_month = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if is_leap {
+                29
+            } else {
+                28
+            }
+        }
+        _ => return None,
+    };
+    if day > days_in_month {
         return None;
     }
 
@@ -542,7 +576,7 @@ mod tests {
 
     // ---- Phase 60 Plan 01: bind_verified tests ----
 
-    use super::{VerifyError, bind_verified};
+    use super::{VerifyError, bind_verified, parse_rfc3339_to_unix_secs};
     use ciborium::Value as CborValue;
 
     /// Helper: build CBOR bytes for value and sequence, matching the build_cbor_data layout.
@@ -731,5 +765,27 @@ mod tests {
         let resp = make_resp_with_validity("bafySKEW", 3, "2099-01-01T00:00:00.000000000Z");
         let result = bind_verified(&resp, Some(true)).unwrap();
         assert_eq!(result.cid, "bafySKEW");
+    }
+
+    /// D-07: the RFC3339 parser must fail closed (None) on malformed timestamps. Impossible
+    /// calendar dates must NOT silently roll into a later month (which would EXTEND validity).
+    #[test]
+    fn parse_rfc3339_rejects_malformed_timestamps() {
+        // Well-formed cases parse.
+        assert!(parse_rfc3339_to_unix_secs("2026-01-01T00:00:00.000000000Z").is_some());
+        assert!(parse_rfc3339_to_unix_secs("2026-01-01T00:00:00Z").is_some());
+        assert!(parse_rfc3339_to_unix_secs("2024-02-29T00:00:00.000000000Z").is_some()); // leap day
+
+        // Impossible / out-of-range dates fail closed.
+        assert!(parse_rfc3339_to_unix_secs("2026-02-31T00:00:00.000000000Z").is_none());
+        assert!(parse_rfc3339_to_unix_secs("2025-02-29T00:00:00.000000000Z").is_none()); // not leap
+        assert!(parse_rfc3339_to_unix_secs("2026-04-31T00:00:00.000000000Z").is_none());
+        assert!(parse_rfc3339_to_unix_secs("2026-13-01T00:00:00.000000000Z").is_none());
+        assert!(parse_rfc3339_to_unix_secs("2026-01-01T24:00:00.000000000Z").is_none());
+
+        // Trailing / junk components fail closed.
+        assert!(parse_rfc3339_to_unix_secs("2026-01-01-99T00:00:00.000000000Z").is_none());
+        assert!(parse_rfc3339_to_unix_secs("2026-01-01T00:00:00:99.000000000Z").is_none());
+        assert!(parse_rfc3339_to_unix_secs("2026-01-01T00:00:00.abcZ").is_none());
     }
 }
