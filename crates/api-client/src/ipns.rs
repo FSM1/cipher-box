@@ -56,15 +56,21 @@ pub struct VerifiedResolve {
 ///
 /// * `resp`         — the raw resolve response from the API
 /// * `sig_verdict`  — the output of `verify_ipns_resolve_signature`
-///   - `None`       → D-04 fail-closed: all fields absent → `Err(VerifyError::Invalid(...))`
 ///   - `Some(true)` → signature valid; proceed to CBOR binding + expiry
-///   - `Some(false)` → invalid/partial → `Err(VerifyError::Invalid(...))`
+///   - `Some(false)` → invalid / partial / all-absent → `Err(VerifyError::Invalid(...))`
+///   - `None`       → defensive arm: post-D-04 `verify_ipns_resolve_signature` never
+///     returns `None` (all-absent now arrives as `Some(false)`, logged at the detection
+///     site), so this arm is unreachable from the production resolve path. It is retained
+///     for exhaustive `Option<bool>` matching, is exercised directly by unit tests, and
+///     also fails closed.
 pub(crate) fn bind_verified(
     resp: &IpnsResolveResponse,
     sig_verdict: Option<bool>,
 ) -> Result<VerifiedResolve, VerifyError> {
     match sig_verdict {
-        // D-04: Legacy variant removed — all signature fields absent now fails closed.
+        // Defensive arm (see doc above): unreachable from the production resolve path
+        // post-D-04 since all-absent arrives as Some(false); kept for total matching and
+        // fails closed.
         None => Err(VerifyError::Invalid("all signature fields absent — fail closed".to_string())),
         Some(false) => Err(VerifyError::Invalid("signature verification failed".to_string())),
         Some(true) => {
@@ -329,6 +335,23 @@ pub fn verify_ipns_resolve_signature(
         resp.data.as_ref(),
         resp.pub_key.as_ref(),
     ) else {
+        // Both all-absent and partial records fail closed (D-04), but log the distinct
+        // root cause so an operator debugging (e.g. a pre-cutover row on a non-wiped
+        // environment) can tell "all three fields absent" apart from a partial downgrade.
+        // bind_verified only sees Some(false) and cannot make this distinction, so the
+        // signal belongs here at the detection site.
+        match (
+            resp.signature_v2.is_some(),
+            resp.data.is_some(),
+            resp.pub_key.is_some(),
+        ) {
+            (false, false, false) => log::warn!(
+                "IPNS resolve verify: all three signature fields absent (signatureV2/data/pubKey) — failing closed (D-04)"
+            ),
+            (sig, data, pk) => log::warn!(
+                "IPNS resolve verify: partial signature fields (signatureV2={sig}, data={data}, pubKey={pk}) — downgrade, failing closed (D-04)"
+            ),
+        }
         return Ok(Some(false));
     };
 
