@@ -135,6 +135,27 @@ Findings:
 
 Applied remediation (PR): Kubo upgraded v0.40.0 -> v0.42.0, ipfs limits raised to `cpus: 1.5` / `memory: 3G`, `Provide.Strategy=roots` made reproducible via a `/container-init.d` script. Recommended next: defer the per-file IPNS publish off the upload critical path (§3.2, a same-hardware win), and/or upgrade to the next Hostinger tier (4 vCPU / 16 GB) to lift the two-core ceiling.
 
+### 1.6 Per-op IPNS signature verification cost (2026-06, D-11)
+
+Measured via `scripts/bench-ipns-verify.ts` (`npx tsx scripts/bench-ipns-verify.ts`) on a macOS developer machine (Apple M-series, Node.js v22). The benchmark constructs a real marshalled IPNS record using `ipns@10 createIPNSRecord + marshalIPNSRecord`, then times `verifyIpnsRecordSignature` (Ed25519 verify + protobuf parse via the `ipns` validator) over N=200 iterations after a warm-up pass. Cache-hit cost is measured as a plain `Map.get()` over N=10,000 iterations.
+
+| Measurement                               | mean (ms) | p50 (ms) | p99 (ms) |
+| ----------------------------------------- | --------- | -------- | -------- |
+| verifyIpnsRecordSignature (Ed25519+proto) | 0.105     | 0.095    | 0.337    |
+| Map.get() cache-hit lookup                | ~0.000    | ~0.000   | ~0.001   |
+| Recovery per skipped verify               | ~0.105    | --       | --       |
+
+**Findings:**
+
+- The per-op verify cost is 0.105 ms mean / 0.095 ms p50. This is non-trivial: for a user submitting 10 rapid re-publishes of the same signed record within the TTL window, the redundant verify cost is ~1 ms total. At 50 concurrent clients each resubmitting an identical record, the server pays ~5.25 ms of pure-crypto overhead per batch.
+- A Map.get() cache-hit is effectively free (sub-microsecond), so the full verify cost is recoverable on every cache hit.
+- The cache is justified (go decision): a short-TTL verified-record cache keyed by the full `(ipnsName, sequenceNumber, signatureV2-bytes)` triple recovers the redundant Ed25519 verify cost while maintaining the D-11 security invariant that untrusted/DHT inputs are always fully verified.
+
+**Paths that do NOT pay the verify cost:**
+
+- `resolveRecord` does not verify the record server-side (the client verifies separately).
+- The TEE re-sign path (`republish.service.ts processRepublishBatch`) calls `publishSignedRecord` + `syncFolderIpnsSequence` and never calls `verifyIpnsRecordSignature` — confirmed by reading `republish.service.ts:133-178`. The cache recovery applies exclusively to the client `publishRecord` path.
+
 ---
 
 ## 2. Infrastructure Bottlenecks
