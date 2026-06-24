@@ -790,6 +790,37 @@ describe('D-05/D-07: strict throw-path (Plan 60-03)', () => {
     expect(result!.cid).toBe('bafyVALID');
     expect(result!.sequenceNumber).toBe(7n);
   });
+
+  // (e) D-07: absent Validity field → throws (fail closed), mirroring the Rust verifier
+  // (crates/api-client/src/ipns.rs treats a missing Validity field as expired/Invalid).
+  // Cross-layer parity: both verifiers must reject a Validity-less record identically.
+  it('D-07-e: throws when CBOR data has no Validity field (fail closed, Rust/TS parity)', async () => {
+    const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
+    const { verifyEd25519, deriveIpnsName } = await import('@cipherbox/crypto');
+    vi.mocked(verifyEd25519).mockResolvedValue(true);
+    vi.mocked(deriveIpnsName).mockResolvedValue('k51no-validity');
+    // Encode CBOR with NO Validity field — the implementation must fail closed, not skip EOL.
+    const { encode } = await import('cborg');
+    const cbor = encode({
+      TTL: 300000000000,
+      Value: new TextEncoder().encode('/ipfs/bafyNOVAL'),
+      Sequence: 5,
+      ValidityType: 0,
+    });
+    const data = Buffer.from(cbor).toString('base64');
+    vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
+      success: true,
+      cid: 'bafyNOVAL',
+      sequenceNumber: '5',
+      signatureV2: btoa('sig'),
+      data,
+      pubKey: btoa('pubkey'),
+    });
+
+    await expect(resolveIpnsRecord('k51no-validity')).rejects.toThrow(
+      /no Validity field|fail closed/i
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------

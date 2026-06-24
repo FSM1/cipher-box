@@ -286,18 +286,21 @@ export async function resolveIpnsRecord(
         // D-07 (Plan 60-03): parse CBOR Validity field and enforce EOL/expiry.
         // Validity is a Uint8Array containing an RFC3339 timestamp string (nanosecond precision).
         // Apply a 5-minute clock skew buffer (matching the Rust side): reject when
-        // expiry < now - 5min. A present-but-unparseable Validity is fail-closed.
+        // expiry < now - 5min. Fail-closed: an absent, non-bytes, or unparseable Validity is
+        // rejected — mirrors the Rust verifier (crates/api-client/src/ipns.rs: missing Validity
+        // is treated as expired) so both layers reach an identical verdict for every input.
         const validityBytes = cborFields['Validity'];
-        if (validityBytes instanceof Uint8Array) {
-          const validityStr = new TextDecoder().decode(validityBytes);
-          const expiryMs = new Date(validityStr).getTime();
-          if (isNaN(expiryMs)) {
-            throw new Error(`IPNS record has unparseable Validity field: ${validityStr}`);
-          }
-          const skewBufferMs = 5 * 60 * 1000; // 5 minutes
-          if (expiryMs < Date.now() - skewBufferMs) {
-            throw new Error(`IPNS record expired: validity=${validityStr}`);
-          }
+        if (!(validityBytes instanceof Uint8Array)) {
+          throw new Error('IPNS record has no Validity field — fail closed');
+        }
+        const validityStr = new TextDecoder().decode(validityBytes);
+        const expiryMs = new Date(validityStr).getTime();
+        if (isNaN(expiryMs)) {
+          throw new Error(`IPNS record has unparseable Validity field: ${validityStr}`);
+        }
+        const skewBufferMs = 5 * 60 * 1000; // 5 minutes
+        if (expiryMs < Date.now() - skewBufferMs) {
+          throw new Error(`IPNS record expired: validity=${validityStr}`);
         }
       } else {
         // D-05 (Plan 60-03): fail closed when all three signature fields are absent.
