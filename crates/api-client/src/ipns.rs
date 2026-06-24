@@ -229,12 +229,21 @@ mod tests {
         assert_eq!(resp.pub_key, None);
     }
 
-    /// Test 2: all sig fields absent → Ok(None) — D-03 allow+flag (true legacy record).
+    /// Test 2: all sig fields absent → Ok(Some(false)) — D-04 fail closed (was Ok(None) / legacy allow).
+    /// After the Phase 60 strict cutover the all-absent branch falls through to Some(false).
     #[test]
-    fn absent_fields_returns_none() {
+    fn absent_fields_returns_some_false() {
         let resp = make_resolve_response_no_sig();
         let result = verify_ipns_resolve_signature(&resp, "k51anyname");
-        assert_eq!(result.unwrap(), None);
+        assert_eq!(result.unwrap(), Some(false));
+    }
+
+    /// Test 2 (legacy name kept for grep-ability): same assertion as absent_fields_returns_some_false.
+    #[test]
+    fn absent_fields_returns_none_is_now_some_false() {
+        // Confirms the D-04 semantic: the old None path is gone; all-absent → Some(false).
+        let resp = make_resolve_response_no_sig();
+        assert_eq!(verify_ipns_resolve_signature(&resp, "k51anyname").unwrap(), Some(false));
     }
 
     /// Test 2b: only signatureV2 present (1 of 3) → Ok(Some(false)) — fail closed on partial.
@@ -320,5 +329,121 @@ mod tests {
         // Pass a deliberately wrong IPNS name.
         let result = verify_ipns_resolve_signature(&resp, "k51wrongname123");
         assert_eq!(result.unwrap(), Some(false));
+    }
+
+    // ---- Phase 60 Plan 01: bind_verified tests (Task 1 RED) ----
+    // These tests reference `bind_verified` and `VerifyError` / `VerifiedResolve`
+    // which will be relocated from crates/fuse/src/verify.rs in the GREEN step.
+
+    use super::{VerifyError, VerifiedResolve, bind_verified};
+    use ciborium::Value as CborValue;
+
+    /// Helper: build CBOR bytes for value and sequence, matching the build_cbor_data layout.
+    fn make_cbor_data(value: &str, seq: u64) -> Vec<u8> {
+        let cbor_map = CborValue::Map(vec![
+            (CborValue::Text("TTL".to_string()), CborValue::Integer((300_000_000_000u64).into())),
+            (CborValue::Text("Value".to_string()), CborValue::Bytes(value.as_bytes().to_vec())),
+            (CborValue::Text("Sequence".to_string()), CborValue::Integer(seq.into())),
+            (CborValue::Text("Validity".to_string()), CborValue::Bytes(b"2099-01-01T00:00:00.000000000Z".to_vec())),
+            (CborValue::Text("ValidityType".to_string()), CborValue::Integer(0u64.into())),
+        ]);
+        let mut buf = Vec::new();
+        ciborium::into_writer(&cbor_map, &mut buf).unwrap();
+        buf
+    }
+
+    /// Helper: construct IpnsResolveResponse with CBOR data encoding /ipfs/<cid> + seq.
+    fn make_resp_with_cbor(cid: &str, seq: u64, resp_cid: &str, resp_seq: u64) -> IpnsResolveResponse {
+        let cbor = make_cbor_data(&format!("/ipfs/{}", cid), seq);
+        let data_b64 = STANDARD.encode(&cbor);
+        IpnsResolveResponse {
+            success: true,
+            cid: resp_cid.to_string(),
+            sequence_number: resp_seq.to_string(),
+            signature_v2: Some("fakesig".to_string()),
+            data: Some(data_b64),
+            pub_key: Some("fakepubkey".to_string()),
+        }
+    }
+
+    #[test]
+    fn bind_verified_valid_returns_ok_with_embedded_cid() {
+        // Valid signature verdict, cid and seq match — returns VerifiedResolve.
+        // The cid in VerifiedResolve must be the embedded value with "/ipfs/" stripped (D-08).
+        let resp = make_resp_with_cbor("bafyREAL", 5, "bafyREAL", 5);
+        let result = bind_verified(&resp, Some(true)).unwrap();
+        assert_eq!(result.cid, "bafyREAL");
+        assert_eq!(result.sequence_number, 5);
+    }
+
+    #[test]
+    fn bind_verified_cid_swap_returns_invalid() {
+        // Valid signature verdict but embedded cid differs from response cid — Invalid.
+        let resp = make_resp_with_cbor("bafyREAL", 5, "bafyDIFFERENT", 5);
+        let err = bind_verified(&resp, Some(true)).unwrap_err();
+        assert!(
+            matches!(err, VerifyError::Invalid(ref msg) if msg.contains("cid binding mismatch")),
+            "expected cid binding mismatch, got: {:?}", err
+        );
+    }
+
+    #[test]
+    fn bind_verified_seq_mismatch_returns_invalid() {
+        // Valid signature verdict, cid matches, but embedded seq != response seq — Invalid.
+        let resp = make_resp_with_cbor("bafyCID", 99, "bafyCID", 5);
+        let err = bind_verified(&resp, Some(true)).unwrap_err();
+        assert!(
+            matches!(err, VerifyError::Invalid(ref msg) if msg.contains("sequence binding mismatch")),
+            "expected sequence binding mismatch, got: {:?}", err
+        );
+    }
+
+    /// D-04: first-publish skew (embedded=0, resp_seq=1) is now REJECTED under strict equality.
+    /// The skew disjunct `(resp_seq == 1 && embedded_seq == 0)` has been removed.
+    #[test]
+    fn bind_verified_first_publish_seq_skew_now_invalid() {
+        let resp = make_resp_with_cbor("bafyFIRST", 0, "bafyFIRST", 1);
+        let err = bind_verified(&resp, Some(true)).unwrap_err();
+        assert!(
+            matches!(err, VerifyError::Invalid(_)),
+            "expected VerifyError::Invalid for seq skew, got: {:?}", err
+        );
+    }
+
+    /// D-04: None verdict (all signature fields absent) → VerifyError::Invalid.
+    /// The Legacy variant has been removed; absent fields fail closed.
+    #[test]
+    fn bind_verified_absent_fields_returns_invalid() {
+        let resp = IpnsResolveResponse {
+            success: true,
+            cid: "bafyABSENT".to_string(),
+            sequence_number: "1".to_string(),
+            signature_v2: None,
+            data: None,
+            pub_key: None,
+        };
+        let err = bind_verified(&resp, None).unwrap_err();
+        assert!(
+            matches!(err, VerifyError::Invalid(_)),
+            "expected VerifyError::Invalid for absent fields, got: {:?}", err
+        );
+    }
+
+    #[test]
+    fn bind_verified_invalid_sig_returns_invalid() {
+        // Some(false) verdict → Invalid.
+        let resp = IpnsResolveResponse {
+            success: true,
+            cid: "bafyINVALID".to_string(),
+            sequence_number: "1".to_string(),
+            signature_v2: Some("badsig".to_string()),
+            data: Some(STANDARD.encode(b"garbage")),
+            pub_key: Some("key".to_string()),
+        };
+        let err = bind_verified(&resp, Some(false)).unwrap_err();
+        assert!(
+            matches!(err, VerifyError::Invalid(ref msg) if msg.contains("signature verification failed")),
+            "expected signature verification failed, got: {:?}", err
+        );
     }
 }
