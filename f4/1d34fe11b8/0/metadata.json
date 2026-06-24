@@ -1,0 +1,71 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "f41d34fe11b8",
+  "session_id": "3379b299-016b-4d40-aaf2-317ab0c08665",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-24T01:26:12.065212Z",
+  "branch": "feat/ipns-verification-cross-layer-closeout-desktop-and-api",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "f2967dbe082c",
+  "token_usage": {
+    "input_tokens": 13954,
+    "cache_creation_tokens": 138292,
+    "cache_read_tokens": 2634117,
+    "output_tokens": 43508,
+    "api_call_count": 24
+  },
+  "summary": {
+    "intent": "Execute Phase 60 ('IPNS Verification Cross-Layer Closeout') of the CipherBox GSD workflow, hardening IPNS verification across Rust and TypeScript layers using wave-based sequential subagent execution.",
+    "outcome": "Completed 6 of 8 plans (Waves 1 and 2 partially): relocated and hardened the Rust verify chokepoint, unified first-publish seq=1 across 9 producers, enforced strict fail-closed TS resolve, routed all Rust consumers fail-closed, tightened the API regime, and started cross-language vector regeneration (60-07 in flight at transcript end).",
+    "learnings": {
+      "repo": [
+        "crates/api-client/src/ipns.rs is the canonical IPNS verify chokepoint shared by sdk/fuse/desktop after 60-01 relocation; crates/fuse/src/verify.rs was deleted in 60-04 as it became an empty re-export.",
+        "All 9 first-publish IPNS producers (FUSE, desktop Tauri, sdk-core, web) were previously emitting sequence=0; the strict verifier requires sequence=1.",
+        "VerifyError::Legacy variant (D-04) was fully removed; all 9 FUSE caller arms were folded to Invalid during 60-01 compile necessity, pre-empting 60-04's declared scope.",
+        "sdk-core has 251 tests including 34 ipns-specific tests that serve as the cross-plan integration gate between waves.",
+        "Pre-existing dead-code warnings from vendored fuser crate appear on all fuse cargo checks — not regressions.",
+        "Windows WinFSP site verification is CI-gated and cannot be confirmed locally."
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/metadata.rs",
+          "line": 619,
+          "end_line": 619,
+          "finding": "Had a VerifyError::Legacy reference that was converted to VerifyError::Invalid during 60-01; grep confirmed zero remaining Legacy references post-execution."
+        },
+        {
+          "path": "packages/sdk-core/src/vault.test.ts",
+          "finding": "Had a stale expectation of 0n for IPNS sequence that needed updating to 1n after 60-02 unified all producers to seq=1."
+        },
+        {
+          "path": ".claude/gsd-core/plans/phase-60/60-01-SUMMARY.md",
+          "finding": "A stray self-check footer was appended after the SUMMARY commit, falsely reporting 'verify.rs FOUND' — became incorrect after 60-04 deleted verify.rs; required manual revert."
+        }
+      ],
+      "workflow": [
+        "Worktree-isolated parallel subagents are not viable when agents must merge back to a shared branch; sequential execution on the feature branch is the safe fallback for crypto-critical phases.",
+        "The GSD commit helper emits a false-negative 'commit_failed / No staged files match any configured task' even when the commit lands — always verify with git log before treating as a real failure.",
+        "Subagent executors can leave uncommitted Cargo.lock drift after editing Cargo.toml; must be caught and committed manually between waves to avoid latent --locked CI breaks.",
+        "Mid-edit compiler diagnostics captured in executor output can be stale snapshots — always re-run cargo check/grep authoritatively before acting on reported errors.",
+        "Wave post-merge build/test gates should cover both cargo check on touched crates AND full unit tests for cross-plan integration (e.g., sdk-core tests catching 60-01 ↔ 60-02 interactions)."
+      ]
+    },
+    "friction": [
+      "GSD commit helper false-negative ('commit_failed') on a successful commit required an extra git log verification step — known issue but adds noise and uncertainty.",
+      "60-01 executor was forced to fold FUSE VerifyError::Legacy caller arms (declared scope of 60-04) as a compile necessity, blurring plan boundaries and creating confusion about who owned those changes.",
+      "Wave 1 executors left two uncommitted artifacts (Cargo.lock with new ciborium/cipherbox-core deps, stale SUMMARY footer) that required manual orchestrator intervention before Wave 2 could proceed cleanly.",
+      "Stale mid-edit E0599 diagnostic for VerifyError::Legacy caused an unnecessary verification detour (grep + cargo check) before continuing.",
+      "Worktree-isolated parallel execution had to be abandoned in favor of sequential execution, increasing wall-clock time for an 8-plan phase."
+    ],
+    "open_items": [
+      "60-07 (regenerate cross-language IPNS verify vectors via npx tsx, reclassify legacy-absent and first-publish-skew to invalid) — in flight at transcript end, Wave 2 not yet gated.",
+      "60-06 (API publish-path verify cache for CPU cost recovery) — Wave 3, not yet started.",
+      "60-08 (D-01/D-12 operational cutover: staging wipe + redeploy + smoke-test) — Wave 4, non-autonomous, requires human checkpoint action.",
+      "Phase-level verification and completion (STATE/ROADMAP updates, verify-work gate) — deferred until all 8 plans finish.",
+      "Cargo.lock regeneration gap noted in existing memory (release-please bumps Cargo.toml but never regenerates Cargo.lock) — this phase manually committed a Cargo.lock update but the systemic CI gap remains."
+    ]
+  }
+}
