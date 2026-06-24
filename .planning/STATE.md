@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 ## Current Position
 
 Phase: 60 (ipns-verification-cross-layer-closeout-desktop-and-api) — EXECUTING
-Plan: 4 of 8
+Plan: 5 of 8
 Milestone v1.1 hardening block extended 2026-06-21 with deferred-findings Phases 56–58 (HARD-07..09), sourced from the Phase 50–55 / PR #529 + #538 review backlog. Next: run /gsd:plan-phase 58 (recommended order was 56 FUSE/IPNS durability → 57 API CID/provider hardening → 58 IPNS signature-verify coverage; 58 last as it is the most regression-prone and full-SDK-E2E-gated). Note: STATE frontmatter progress counts are approximate and were periodically unreconciled (see todo `2026-06-18-gsd-phase-complete-regresses-state-final-phase.md`).
 
 ## Performance Metrics
@@ -166,6 +166,7 @@ Milestone v1.1 hardening block extended 2026-06-21 with deferred-findings Phases
 | Phase Phase 60 P01 P01 | 35min | 2 tasks | 9 files |
 | Phase 60 P02 | 4min | 2 tasks | 7 files |
 | Phase 60 P03 | 9min | 2 tasks | 3 files |
+| Phase 60 P04 | 15min | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -313,7 +314,7 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 Last activity: 2026-06-24
 
-Last session: 2026-06-24T00:44:03.547Z
+Last session: 2026-06-24T00:54:26Z
 
 ## Decisions
 
@@ -354,3 +355,7 @@ Last session: 2026-06-24T00:44:03.547Z
 - [Phase ?]: CBOR import: cborg decode used in sdk-core; parseCborData from ipns unavailable
 - [Phase 60-01]: decode_ipns_cbor_validity companion fn chosen over 3-tuple return; all 9 FUSE Legacy arms folded to Invalid; manual RFC3339 parse with 5-min skew buffer (D-04/D-07)
 - [Phase 60-02]: D-02 all 9 first-publish producers unified to embed sequence 1; coordinator.record_publish updated to match; vault-settings.service.ts forward-publish increment path unchanged
+- [Phase 60-04]: All 9 FUSE Legacy arms were pre-folded by 60-01 (compiler-forced); Task 1 re-pointed imports and deleted verify.rs only
+- [Phase 60-04]: sync.rs poll(): Invalid verify returns Err to skip poll cycle (not warn-and-proceed)
+- [Phase 60-04]: registry.rs VerifyError::Invalid maps to SdkError::RegistryError (fail-closed)
+- [Phase 60-04]: prepopulate.rs and vault.rs: scoped per-operation fail-closed (D-09)
