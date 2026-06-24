@@ -1,0 +1,70 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "c4bbfda5bd4d",
+  "session_id": "3379b299-016b-4d40-aaf2-317ab0c08665",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-24T01:28:34.434765Z",
+  "branch": "feat/ipns-verification-cross-layer-closeout-desktop-and-api",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "f2967dbe082c",
+  "token_usage": {
+    "input_tokens": 13954,
+    "cache_creation_tokens": 138292,
+    "cache_read_tokens": 2634117,
+    "output_tokens": 43508,
+    "api_call_count": 24
+  },
+  "summary": {
+    "intent": "Execute Phase 60 ('IPNS Verification Cross-Layer Closeout') of the CipherBox GSD workflow, implementing strict fail-closed IPNS verification across Rust and TypeScript layers via wave-based sequential subagent execution.",
+    "outcome": "Wave 1 (60-01, 60-02, 60-03) completed fully with 251/251 sdk-core tests passing. Wave 2 completed 60-04 and 60-05; 60-07 was being dispatched when the transcript ends. Wave 3 (60-06) and Wave 4 (60-08) not yet reached.",
+    "learnings": {
+      "repo": [
+        "The GSD harness cannot reliably merge back isolation='worktree' agent branches (no exposed worktree path/branch manifest), so sequential mode on the feature branch is the safe default for complex crypto phases.",
+        "sdk-core has 251 tests including 34 IPNS-specific tests that serve as the Wave 1 integration gate.",
+        "crates/fuse/src/verify.rs was a pure re-export shim; 60-01 moved the real impl to crates/api-client/src/ipns.rs, and 60-04 deleted the now-empty shim.",
+        "cipherbox-api-client gained ciborium + cipherbox-core dependencies for CBOR Validity parsing (added by 60-01 but Cargo.lock not committed until manually caught between 60-04 and 60-05).",
+        "Windows winfsp site is CI-gated and cannot be exercised locally; flagged as expected in 60-02.",
+        "60-01 executor folded all 9 FUSE VerifyError::Legacy caller arms as a compile necessity, absorbing work declared in 60-04's scope."
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/metadata.rs",
+          "line": 619,
+          "end_line": 619,
+          "finding": "Was referencing VerifyError::Legacy; mid-executor diagnostic showed E0599 but the arm was already folded to Invalid before the executor's final commit — stale snapshot diagnostic, not a real error."
+        },
+        {
+          "path": "crates/fuse/src/verify.rs",
+          "finding": "Deleted in 60-04 after 60-01 moved the implementation to crates/api-client/src/ipns.rs. File should no longer exist."
+        },
+        {
+          "path": "packages/sdk-core/src/vault.test.ts",
+          "finding": "Had stale expectation of sequence 0n that 60-03's executor updated to 1n to match the 60-02 producer unification."
+        }
+      ],
+      "workflow": [
+        "The gsd-helper commit tool has a confirmed false-negative: it reports 'commit_failed' (No staged files match any configured task) even when the commit lands successfully. Always verify with git log after a reported failure.",
+        "Subagent executors that edit Cargo.toml do not reliably commit the resulting Cargo.lock changes; the orchestrator must audit for uncommitted lockfile drift between plans or risk --locked CI breaks.",
+        "Stray content (e.g. self-check footers) can be appended to SUMMARY files after an executor's closing commit, leaving factually incorrect artifacts in the tree; the orchestrator should inspect and revert these between waves.",
+        "A Wave N build/test gate catching cross-plan integration regressions is essential before dispatching Wave N+1 — the 60-01↔60-02 fuse/metadata and 60-02↔60-03 sdk-core integration was caught cleanly at the Wave 1 gate."
+      ]
+    },
+    "friction": [
+      "Worktree isolation mode is not usable for this phase: the harness exposes no worktree path/branch manifest, making merge-back unreliable. Forced sequential mode adds wall-clock cost.",
+      "60-01 executor emitted a false E0599 compile error diagnostic (stale mid-edit snapshot), requiring the orchestrator to re-verify compilation manually before proceeding.",
+      "gsd-helper commit false-negative caused unnecessary ambiguity after the Cargo.lock commit; required manual git log verification.",
+      "60-01 executor committed Cargo.toml edits but left Cargo.lock uncommitted, creating a latent --locked CI break that had to be caught and fixed manually between Wave 2 plans.",
+      "Stray SUMMARY footer appended post-commit by 60-01 executor contained stale facts (claimed verify.rs FOUND after 60-04 deleted it); required manual revert."
+    ],
+    "open_items": [
+      "60-07 (Regenerate cross-language verify vectors) — dispatch confirmed but result not yet returned in transcript.",
+      "Wave 3: 60-06 (API publish-path verify cache / CPU cost recovery) — not yet executed.",
+      "Wave 4: 60-08 (D-01/D-12 operational cutover — staging wipe + redeploy + smoke-test) — non-autonomous, requires human action checkpoint.",
+      "Phase 60 verification and completion steps not yet run.",
+      "Windows winfsp integration site for 60-02's seq=1 producer changes is CI-gated only; local validation not possible."
+    ]
+  }
+}
