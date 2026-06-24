@@ -191,12 +191,13 @@ console.log(`  p99  = ${fmt(verifyStats.p99)} ms`);
 const N_CACHE = 10000;
 console.log(`\nBenchmark B: Map.get() cache-hit (N=${N_CACHE})`);
 
-// Simulate the cache key used by ipns-verify-cache.ts
-// Key = `${ipnsName}:${sequenceNumber}:${base64(signatureV2Bytes)}`
-// Extract signatureV2 from the unmarshalled record
-const unmarshalled = ipnsPkg.unmarshalIPNSRecord(marshalledRecord);
-const sigV2 = Buffer.from(unmarshalled.signatureV2).toString('base64');
-const cacheKey = `${ipnsName}:${TEST_SEQ}:${sigV2}`;
+// Simulate the cache key used by ipns-verify-cache.ts (D-11).
+// The real publish-path identity is `${ipnsName}:${''}:${base64(recordBytes)}` — an
+// EMPTY sequence slot with the FULL marshalled record bytes as the discriminator (NOT a
+// signatureV2-based key). See apps/api/src/ipns/ipns.service.ts (the `isVerified(ipnsName,
+// '', recordBytesBase64)` call) and apps/api/src/ipns/ipns-verify-cache.ts.
+const recordBytesBase64 = Buffer.from(marshalledRecord).toString('base64');
+const cacheKey = `${ipnsName}:${''}:${recordBytesBase64}`;
 const cache = new Map<string, number>();
 cache.set(cacheKey, Date.now());
 

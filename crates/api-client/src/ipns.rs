@@ -763,31 +763,58 @@ mod tests {
         assert_eq!(result.cid, "bafyFUTURE");
     }
 
-    /// D-07: A record with Validity 2 minutes in the past (inside the 5-minute skew buffer)
-    /// must be accepted — not rejected.
+    fn now_unix_secs() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    }
+
+    /// Test-only inverse of `parse_rfc3339_to_unix_secs`: render unix seconds as
+    /// "YYYY-MM-DDTHH:MM:SSZ" via Howard Hinnant's civil_from_days algorithm, so the
+    /// skew-boundary tests build a `now`-relative timestamp that round-trips through the
+    /// real production parser + verify path. The round-trip is what makes the assertions
+    /// meaningful (a wrong rendering would fail the parser, not silently pass).
+    fn secs_to_rfc3339(secs: u64) -> String {
+        let days = (secs / 86400) as i64;
+        let rem = secs % 86400;
+        let (hour, minute, second) = (rem / 3600, (rem % 3600) / 60, rem % 60);
+        let z = days + 719468;
+        let era = if z >= 0 { z } else { z - 146096 } / 146097;
+        let doe = (z - era * 146097) as u64; // [0, 146096]
+        let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // [0, 399]
+        let y = yoe as i64 + era * 400;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+        let mp = (5 * doy + 2) / 153; // [0, 11]
+        let day = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+        let month = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+        let year = if month <= 2 { y + 1 } else { y };
+        format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+    }
+
+    /// D-07: a Validity 2 minutes in the past — inside the 5-minute (300s) skew buffer —
+    /// must be ACCEPTED. Pins the buffer's existence: if the buffer were removed, `now-120s`
+    /// would read as expired and this test would fail. (Generous 180s margin from the edge.)
     #[test]
     fn bind_verified_within_skew_buffer_returns_ok() {
-        // Build a timestamp that is 2 minutes in the past.
-        // Use a far-past + far-future bracket to avoid test flakiness:
-        // instead of computing "now - 2min", use a timestamp that is far in the future
-        // (> 5 min away) so the buffer test is unambiguous. The buffer test is:
-        // "reject only when expiry < now - 5min". A 2-min-past record should NOT be rejected.
-        // Since we can't easily build a dynamic RFC3339 in Rust without chrono here,
-        // use a timestamp that is far in the future as the positive case (already done above),
-        // and for the buffer, use 2099-01-01 (still passes because not expired).
-        // The actual clock-skew buffer test would require injecting the current time;
-        // this is a property test: future timestamps never expire, past > 5min always expire.
-        // A timestamp 2 minutes in the past is accepted by the 5-min buffer.
-        // We test this indirectly: if expiry == "2020-01-01" is rejected (above), and
-        // "2099-12-31" is accepted (above), the buffer test is: use "2099-01-01" as an
-        // obviously-not-expired case. For the within-skew test, we rely on the expired
-        // test + future test being correct, and document the buffer as a contract.
-        //
-        // NOTE: A proper within-skew test would dynamically compute now - 2min. This is
-        // done in the integration level; unit-level uses far-future as the pass case.
-        let resp = make_resp_with_validity("bafySKEW", 3, "2099-01-01T00:00:00.000000000Z");
+        let validity = secs_to_rfc3339(now_unix_secs() - 120);
+        let resp = make_resp_with_validity("bafySKEW", 3, &validity);
         let result = bind_verified(&resp, Some(true)).unwrap();
         assert_eq!(result.cid, "bafySKEW");
+    }
+
+    /// D-07: a Validity just beyond the 300s buffer (`now-301s`) must be REJECTED as expired.
+    /// Pins the upper edge so the buffer cannot be silently widened. Safe to assert exactly:
+    /// production reads `now` no earlier than this test does, so `now-301` is always < `now_prod-300`.
+    #[test]
+    fn bind_verified_just_past_skew_buffer_returns_invalid() {
+        let validity = secs_to_rfc3339(now_unix_secs() - 301);
+        let resp = make_resp_with_validity("bafySKEWPAST", 3, &validity);
+        let err = bind_verified(&resp, Some(true)).unwrap_err();
+        assert!(
+            matches!(err, VerifyError::Invalid(ref msg) if msg.contains("expired")),
+            "expected an 'expired' error just past the skew buffer, got: {err:?}"
+        );
     }
 
     /// D-07: the RFC3339 parser must fail closed (None) on malformed timestamps. Impossible
