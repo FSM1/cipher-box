@@ -509,19 +509,27 @@ export class IpnsService {
       const cachedResult = await parseCachedRecord(cached, this.logger);
 
       if (result && cachedResult) {
-        // Both sources available — prefer the one with the higher sequence number.
-        // D-06 (Plan 60-05): removed withCachedPublicKey enrich and equal-seq
-        // signatureV2 enrich; parseCachedRecord now returns null for null-signedRecord
-        // rows, so these branches were unreachable for legacy rows and unnecessary
-        // for fresh rows (pubKey is already embedded in the signed record).
+        // Both sources available. The DB-cached record is the authoritative, fully-signed
+        // record the owner published — parseCachedRecord returns it complete, including the
+        // pubKey (supplied from the validated publicKey column). The network record parsed
+        // from delegated routing does NOT carry the signature fields a strict client needs
+        // to verify, so prefer the DB record whenever it is at the same or a higher
+        // sequence; only defer to the network record when it is strictly ahead (a newer
+        // publish not yet in this DB). This restores the resolve-verifiability that Plan
+        // 60-05's enrich removal dropped — the strict client re-checks pubKey→name binding
+        // and the Ed25519 signature regardless.
         const networkSeq = BigInt(result.sequenceNumber);
         const dbSeq = BigInt(cachedResult.sequenceNumber);
-        if (dbSeq > networkSeq) {
-          this.logger.log(
-            `DB cache has newer sequence (${dbSeq} > ${networkSeq}) for ${ipnsName}, using DB: ${cachedResult.cid}`
-          );
+        if (dbSeq >= networkSeq) {
+          if (dbSeq > networkSeq) {
+            this.logger.log(
+              `DB cache has newer sequence (${dbSeq} > ${networkSeq}) for ${ipnsName}, using DB: ${cachedResult.cid}`
+            );
+            source = 'network_stale';
+          } else {
+            source = 'db_cache';
+          }
           timerSource = 'db';
-          source = 'network_stale';
           resolveFound = true;
           return cachedResult;
         }

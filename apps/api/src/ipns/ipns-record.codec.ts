@@ -78,7 +78,15 @@ export async function parseCachedRecord(
     }
     // DB columns are authoritative for sequenceNumber (upsertFolderIpns always
     // increments it, while the embedded bytes reflect the client's pre-increment value).
-    return { ...parsed, cid: cached.latestCid, sequenceNumber: cached.sequenceNumber };
+    //
+    // The Ed25519 IPNS record's pubKey is not re-extractable from the signed bytes by
+    // parseIpnsRecordBytes, so supply it from the validated publicKey column to keep the
+    // cached record complete and client-verifiable. Publish enforced
+    // deriveIpnsName(publicKey) === ipnsName (ipns.service.ts), and the strict client
+    // re-checks that pubKey→name binding, so trusting this column is safe.
+    const pubKey =
+      parsed.pubKey ?? (cached.publicKey ? cached.publicKey.toString('base64') : undefined);
+    return { ...parsed, cid: cached.latestCid, sequenceNumber: cached.sequenceNumber, pubKey };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logger.warn(`Failed to parse cached signed record for ${cached.ipnsName}: ${message}`);

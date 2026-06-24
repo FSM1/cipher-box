@@ -1053,9 +1053,13 @@ describe('IpnsService', () => {
       expect(result!.data).toBe(Buffer.from(dataBytes).toString('base64'));
     });
 
-    it('should return network result without DB enrich when sequences are equal (D-06: enrich removed)', async () => {
-      // D-06: equal-seq signatureV2 enrich block removed. When both sources have equal
-      // sequences, the network result is returned as-is without borrowing fields from DB.
+    it('should serve the authoritative DB record with full signature fields when sequences are equal (strict resolve verifiability)', async () => {
+      // On equal sequence the DB-cached record is the authoritative, fully-signed record.
+      // resolveRecord must serve it — with signatureV2/data from the signed bytes and pubKey
+      // supplied from the validated publicKey column — so a strict client can verify. The
+      // network record parsed from delegated routing lacks those fields. (Corrects Plan
+      // 60-05's enrich removal, which returned the bare network result and broke the strict
+      // publish→resolve round-trip; the client re-checks the pubKey→name binding.)
       const mockRecordBytes = new Uint8Array([1, 2, 3]);
 
       // Network returns record WITHOUT signature fields
@@ -1063,6 +1067,8 @@ describe('IpnsService', () => {
 
       // DB cache has same sequence WITH signedRecord containing signature data
       const signedRecordBytes = new Uint8Array([4, 5, 6]);
+      const sigBytes = new Uint8Array(64).fill(0xaa);
+      const dataBytes = new Uint8Array(48).fill(0xbb);
       mockFolderIpnsRepo.findOne.mockResolvedValue({
         ...mockFolderEntity,
         latestCid: 'bafyNETWORK',
@@ -1071,7 +1077,8 @@ describe('IpnsService', () => {
         publicKey: testPublicKeyBytes,
       });
 
-      // First call: network parse; second call: DB signedRecord parse (parseCachedRecord)
+      // First call: network parse (no sig fields); second call: DB signedRecord parse
+      // (sig + data, but NO pubKey — realistic Ed25519).
       mockParseIpnsRecord
         .mockReturnValueOnce({
           value: '/ipfs/bafyNETWORK',
@@ -1080,8 +1087,8 @@ describe('IpnsService', () => {
         .mockReturnValueOnce({
           value: '/ipfs/bafyNETWORK',
           sequence: 10n,
-          signatureV2: new Uint8Array(64).fill(0xaa),
-          data: new Uint8Array(48).fill(0xbb),
+          signatureV2: sigBytes,
+          data: dataBytes,
         });
 
       const result = await service.resolveRecord(testIpnsName);
@@ -1089,9 +1096,10 @@ describe('IpnsService', () => {
       expect(result).not.toBeNull();
       expect(result!.cid).toBe('bafyNETWORK');
       expect(result!.sequenceNumber).toBe('10');
-      // No enrich — network result returned without DB signature fields
-      expect(result!.signatureV2).toBeUndefined();
-      expect(result!.data).toBeUndefined();
+      // The authoritative DB record is served with complete, verifiable signature fields.
+      expect(result!.signatureV2).toBe(Buffer.from(sigBytes).toString('base64'));
+      expect(result!.data).toBe(Buffer.from(dataBytes).toString('base64'));
+      expect(result!.pubKey).toBe(testPublicKey);
     });
 
     it('should return null when DB signedRecord CID mismatches latestCid (D-06: mismatch discarded)', async () => {
@@ -2145,6 +2153,49 @@ describe('IpnsService', () => {
       expect(result).not.toBeNull();
       expect(result!.cid).toBe(testMetadataCid);
       expect(result!.sequenceNumber).toBe('5');
+    });
+
+    it('returns a complete record with pubKey from the publicKey column when the network record lacks signature fields at equal sequence (regression: 60-05 enrich removal)', async () => {
+      // Realistic Ed25519 case the prior unit test masked: the network record parsed
+      // from delegated routing carries NO signature fields, and the parsed signed bytes
+      // carry sig + data but NO pubKey. A strict client requires all three, so resolve
+      // must serve the authoritative DB record and supply pubKey from the validated
+      // publicKey column. Reproduces the SDK-E2E "IPNS resolve returned without signature
+      // fields — fail closed" break that mocked-boundary unit tests missed.
+      const sigBytes = new Uint8Array(64).fill(0xab);
+      const dataBytes = new Uint8Array(48).fill(0xcd);
+      const networkBytes = new Uint8Array([7, 8, 9]);
+      const signedRecordBytes = new Uint8Array([4, 5, 6]);
+
+      mockDelegatedRoutingClient.resolve.mockResolvedValue(networkBytes);
+      mockFolderIpnsRepo.findOne.mockResolvedValue({
+        ...mockFolderEntity,
+        latestCid: testMetadataCid,
+        sequenceNumber: '5',
+        signedRecord: signedRecordBytes,
+        publicKey: testPublicKeyBytes,
+      });
+
+      // 1st parse = network record (no signature fields, equal sequence).
+      // 2nd parse = cached signed record (sig + data, but NO pubKey — Ed25519).
+      mockParseIpnsRecord
+        .mockReturnValueOnce({ value: `/ipfs/${testMetadataCid}`, sequence: 5n })
+        .mockReturnValueOnce({
+          value: `/ipfs/${testMetadataCid}`,
+          sequence: 4n,
+          signatureV2: sigBytes,
+          data: dataBytes,
+        });
+
+      const result = await service.resolveRecord(testIpnsName);
+
+      expect(result).not.toBeNull();
+      expect(result!.cid).toBe(testMetadataCid);
+      expect(result!.sequenceNumber).toBe('5');
+      // The fix: pubKey is supplied from the DB publicKey column so the client can verify.
+      expect(result!.pubKey).toBe(testPublicKey);
+      expect(result!.signatureV2).toBe(Buffer.from(sigBytes).toString('base64'));
+      expect(result!.data).toBe(Buffer.from(dataBytes).toString('base64'));
     });
   });
 });
