@@ -1,0 +1,72 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "962c268b326f",
+  "session_id": "3379b299-016b-4d40-aaf2-317ab0c08665",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-24T00:56:17.457997Z",
+  "branch": "feat/ipns-verification-cross-layer-closeout-desktop-and-api",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "f2967dbe082c",
+  "token_usage": {
+    "input_tokens": 12953,
+    "cache_creation_tokens": 121228,
+    "cache_read_tokens": 1608236,
+    "output_tokens": 32430,
+    "api_call_count": 17
+  },
+  "summary": {
+    "intent": "Execute Phase 60 ('IPNS Verification Cross-Layer Closeout') of the CipherBox project using the GSD wave-based parallel execution workflow, implementing strict fail-closed IPNS verification across Rust and TypeScript layers.",
+    "outcome": "Wave 1 (plans 60-01, 60-02, 60-03) completed successfully with all 251 sdk-core tests passing. Wave 2 began with plan 60-04 dispatched to a subagent; transcript ends mid-execution.",
+    "learnings": {
+      "repo": [
+        "Phase 60 has 8 plans across 4 waves; Wave 4 (60-08) is non-autonomous and requires a human-action checkpoint for staging wipe + redeploy + smoke-test.",
+        "The GSD worktree isolation mode ('isolation=worktree') is unreliable for merge-back in this harness — sequential subagents on the feature branch is the safer execution model for crypto-critical phases.",
+        "60-01 removed VerifyError::Legacy variant (D-04) and folded all 9 FUSE caller arms as a compile necessity, pulling work that was nominally scoped to 60-04.",
+        "60-02 unified all 9 first-publish IPNS producers to seq=1 (D-02); Windows WinFSP site is CI-gated and cannot be locally verified.",
+        "60-03 deleted the legacy else fall-through in resolveIpnsRecord (D-05), added resolve-side EOL/expiry enforcement via CBOR Validity parsing (D-07 TS path), and was forced to fix a stale vault.test.ts expectation (0n→1n) left by 60-02.",
+        "No project-specific executor skills payload exists for this project (gsd-tools query returned empty).",
+        "No submodules present — all plans use worktree isolation config but sequential mode was chosen instead.",
+        "sdk-core has 251 tests total, 34 of which are ipns-specific; these are the primary integration gate between Wave 1 plans."
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/metadata.rs",
+          "line": 619,
+          "end_line": 619,
+          "finding": "Previously referenced VerifyError::Legacy; executor folded this arm to VerifyError::Invalid as part of 60-01. The mid-edit compiler snapshot showing E0599 was stale — final state is clean."
+        },
+        {
+          "path": "crates/fuse/src/verify.rs",
+          "finding": "Slated for deletion in 60-04 (now-empty re-export file after 60-01 relocated the verify chokepoint to crates/api-client/src/ipns.rs)."
+        },
+        {
+          "path": "crates/api-client/src/ipns.rs",
+          "finding": "New home for the verified-IPNS-resolve implementation after 60-01 relocation; shared by sdk, fuse, and desktop."
+        }
+      ],
+      "workflow": [
+        "Mid-execution compiler errors from subagent diagnostics can be stale snapshots taken mid-edit; always run an authoritative cargo check on the final tree before treating them as real failures.",
+        "When a subagent is forced to fold caller arms as a compile necessity (not just as declared scope), it can pull work from a later plan — requires cross-wave scope accounting.",
+        "The GSD sequential executor model (no worktree isolation) is preferred over parallel worktree agents when plans have tight compile-time coupling or when the phase is high-risk (crypto correctness).",
+        "Post-wave build/test gates should cover cross-plan integration points explicitly (e.g., 60-01↔60-02 in fuse/metadata.rs, 60-02↔60-03 in sdk-core) rather than only per-plan checks."
+      ]
+    },
+    "friction": [
+      "Worktree isolation merge-back is not reliably supported by the harness, forcing a fallback to sequential execution and sacrificing parallelism for correctness.",
+      "Subagent diagnostic output included a stale E0599 compile error (VerifyError::Legacy) that required manual verification via grep and cargo check before continuing — false alarm cost investigation time.",
+      "60-02 left a stale vault.test.ts expectation (0n→1n) that 60-03 had to discover and fix, indicating cross-plan test coupling that wasn't captured in the dependency graph.",
+      "Executor skills payload is empty — no project-specific context is available to subagents beyond what the orchestrator embeds in the prompt."
+    ],
+    "open_items": [
+      "60-04 (Wave 2): Close 2 crates/sdk raw-resolve bypasses and 6 desktop Tauri resolve_ipns sites fail-closed; delete empty crates/fuse/src/verify.rs re-export.",
+      "60-05 (Wave 2): Tighten API regime (scope undefined in transcript).",
+      "60-07 (Wave 2): Regenerate cross-language test vectors.",
+      "60-06 (Wave 3): API publish-path verify cache for CPU cost recovery.",
+      "60-08 (Wave 4): Non-autonomous operational cutover — staging environment wipe, redeploy, and smoke-test; requires human action checkpoint before execution.",
+      "Windows WinFSP site changes from 60-02 are unverified locally and must be confirmed in CI."
+    ]
+  }
+}
