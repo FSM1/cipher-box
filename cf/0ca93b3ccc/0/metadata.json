@@ -1,0 +1,183 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "cf0ca93b3ccc",
+  "session_id": "3379b299-016b-4d40-aaf2-317ab0c08665",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-24T13:48:12.975074Z",
+  "branch": "feat/ipns-verification-cross-layer-closeout-desktop-and-api",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "eb92e353cdc5",
+  "token_usage": {
+    "input_tokens": 24720,
+    "cache_creation_tokens": 1082151,
+    "cache_read_tokens": 46950650,
+    "output_tokens": 259235,
+    "api_call_count": 150
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_015unJFE1uKnKxuJBsXrnXCJ",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "eb92e353cdc5",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 220,
+        "end": 221,
+        "entry_ids": [
+          "0010ab68-b02f-458f-9cb1-9ba8e5708e8f"
+        ],
+        "tool_use_id": "toolu_015unJFE1uKnKxuJBsXrnXCJ"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015unJFE1uKnKxuJBsXrnXCJ"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ship-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01SeiB2Zz3z176peAgQ6T56C",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:secure-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "eb92e353cdc5",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 538,
+        "end": 539,
+        "entry_ids": [
+          "de9411c8-2fe0-415b-b7f9-c988f0e25450"
+        ],
+        "tool_use_id": "toolu_01SeiB2Zz3z176peAgQ6T56C"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01SeiB2Zz3z176peAgQ6T56C"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:secure-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Execute all 8 plans in phase 60 (IPNS Verification Cross-Layer Closeout) and ship the phase through CI via the ship-phase workflow, including verify/secure/validate gates, SDK E2E gate, CodeRabbit review, and PR creation.",
+    "outcome": "Phase 60 code execution completed (7/8 plans, 60-08 pending human staging cutover). Ship-phase progressed through verify, secure (27/27 threats closed), SDK E2E gate (caught and fixed a real regression), and CodeRabbit review (7 in-scope fixes applied, 4 todos deferred). PR not yet pushed — session ended before the push step.",
+    "learnings": {
+      "repo": [
+        "Ed25519 IPNS record protobufs do NOT embed the pubKey field — the key lives in the IPNS name (k51…). `parseIpnsRecordBytes` never yields `pubKey`; it must be supplied separately from the DB `publicKey` column, which is validated at publish time via `deriveIpnsName(publicKey) === ipnsName`.",
+        "`decode_ipns_cbor_data` rejects duplicate Value/Sequence CBOR keys (documented guard against parser-differential attacks), but `decode_ipns_cbor_validity` previously used first-wins early-return semantics — an asymmetry that exposed a cross-parser ambiguity vector.",
+        "`register_device` in `crates/sdk` used `Err(_) => None` catch-all for the 'no existing registry' case, silently treating VerifyError::Invalid (bad sig, tampered record) as legitimate first-device bootstrap. The only correct not-found signal is `ApiError::IpnsNotFound` (HTTP 404).",
+        "`parse_rfc3339_to_unix_secs` in api-client had two leniency gaps: no iterator exhaustion check (trailing components like '2026-01-01-99' accepted), and day validation only checked 1–31, allowing impossible dates (2026-02-31) that the Hinnant civil_from_days algorithm silently rolls forward into a later expiry — the opposite of fail-closed.",
+        "The `(D-XX)` notation in commit subject lines (e.g. `feat(60-01): ... (D-07)`) violates the repo's `subject-no-parens` commitlint rule and breaks the Release Please `pr-release-preview` CI gate on versioned packages.",
+        "`lint-staged` only processes TS/JSON/MD files — Rust files are committed as-is without formatting enforcement. `cargo fmt --check` reports workspace-wide drift due to local rustfmt version mismatch vs the repo style; never run `cargo fmt` blindly.",
+        "The GSD commit helper (`gsd_run query commit`) can return `commit_failed` while the commit actually lands — always verify with `git log --oneline -1`, never blindly retry.",
+        "`gh pr edit` is blocked on this repo due to Projects-classic GraphQL; patch PR body via `gh api -X PATCH repos/FSM1/cipher-box/pulls/<N> -F body=@file` instead."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 528,
+          "end_line": 530,
+          "finding": "60-05's D-06 enrich removal left resolveRecord returning the bare network result (from parseIpnsRecordBytes) on equal-seq, which lacks pubKey and signatureV2 fields. The strict client correctly threw fail-closed on every publish→resolve round-trip. Fix: serve the authoritative DB cachedResult (which carries the full signed record + pubKey column) instead of the network result."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns-record.codec.ts",
+          "finding": "parseCachedRecord must supply pubKey from the DB `publicKey` column — Ed25519 record protobufs don't carry it. Missing pubKey caused the strict client to throw on every resolve. Added fail-closed guard: throw if publicKey column is absent rather than returning an incomplete record."
+        },
+        {
+          "path": "packages/sdk-core/src/ipns/index.ts",
+          "line": 290,
+          "end_line": 301,
+          "finding": "TS resolve path skipped the entire EOL block when Validity was not a Uint8Array (i.e. absent), silently accepting records with no Validity. Rust fail-closed on absent Validity via .ok_or_else(). Fixed: mirror Rust — throw when Validity field is absent."
+        },
+        {
+          "path": "crates/core/src/ipns.rs",
+          "line": 142,
+          "end_line": 153,
+          "finding": "decode_ipns_cbor_validity used early-return first-wins semantics for duplicate CBOR Validity keys. Its sibling decode_ipns_cbor_data explicitly rejects duplicates (documented cross-parser attack guard). Fixed to accumulate and reject duplicates, mirroring the sibling's pattern."
+        },
+        {
+          "path": "crates/sdk/src/registry.rs",
+          "line": 63,
+          "end_line": 66,
+          "finding": "register_device's broad `Err(_) => None` treated ALL errors including verification failures as 'no registry yet', triggering first-device auto-authorization on tampered/invalid records. Fixed to only bootstrap on `SdkError::Api(ApiError::IpnsNotFound)`; all other errors propagate."
+        },
+        {
+          "path": "crates/api-client/src/ipns.rs",
+          "line": 184,
+          "end_line": 221,
+          "finding": "parse_rfc3339_to_unix_secs had two leniencies: (1) date/time component iterators not checked for exhaustion, accepting trailing junk; (2) day validated only as 1–31, allowing month-overflow dates (2026-02-31) that Hinnant algorithm rolls forward into later expiry — violating fail-closed EOL enforcement."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns-verify-cache.ts",
+          "finding": "Verify cache had no size bound, risking unbounded memory growth under high publish volume. Added LRU-style eviction at a configured maximum entry count."
+        },
+        {
+          "path": "apps/web/src/services/vault-settings.service.ts",
+          "finding": "Web vault-settings sequence fallback swallowed verification errors (broad catch treated them as not-found). Fixed to propagate non-404 errors fail-closed."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.spec.ts",
+          "line": 2101,
+          "finding": "60-05's own unit test (`D-06: enrich removed`) codified the bug by asserting signatureV2/data are undefined on equal-seq. The test mocked parseIpnsRecord to include pubKey (which real Ed25519 records don't carry), masking the round-trip break. Updated to assert the corrected strict-verifiable behavior."
+        }
+      ],
+      "workflow": [
+        "The SDK E2E gate is the only suite exercising the real client→API IPNS publish/resolve round-trip. Unit suites (Rust 351, sdk-core 252, API jest 173) all mock the resolve boundary and missed the 60-05 regression entirely — SDK E2E caught 28/89 failures that would have shipped broken.",
+        "Adversarial triage workflows are effective for high-finding-count reviewer outputs: 15 CodeRabbit findings → 7 fix-now, 4 defer-todo, 4 skip-false-positive, each verified against current code rather than accepted at face value.",
+        "Sequential gsd-executor subagents on the feature branch (vs worktree-isolated parallel agents) is the correct mode for security-critical phases with cross-plan compile dependencies — parallel isolation requires a merge protocol the harness doesn't reliably support.",
+        "Stale mid-edit diagnostic snapshots from subagents can report false compile errors. Always run authoritative `cargo check` after subagent completion before concluding there is a build failure.",
+        "When a background Bash chain is backgrounded, later commands in the chain may not complete before the process is read — verify each commit group individually rather than chaining all in one background invocation.",
+        "The 1Password SSH agent wedges after rapid-fire signing sessions (`op-ssh-sign: failed to fill whole buffer`). Recovery: quit and reopen 1Password desktop app, or toggle Settings → Developer → SSH agent off/on. Agent key listing still works even when signing is broken."
+      ]
+    },
+    "friction": [
+      "1Password SSH signer wedged mid-session blocking all commits; required user intervention to restart the app before work could continue.",
+      "GSD commit helper emits false-negative `commit_failed` on nearly every commit, requiring `git log --oneline -1` verification after every commit attempt.",
+      "Background Bash chains get cut off when backgrounded — TS commits in a single backgrounded chain had to be retried individually.",
+      "`cargo fmt --check` reports workspace-wide formatting drift due to local rustfmt version mismatch, making it impossible to use as a pre-commit check without spuriously reformatting the entire repo.",
+      "No worktree manifest exposed to the harness — parallel worktree subagents cannot reliably merge back, forcing sequential execution and losing the wall-clock benefit of wave parallelism.",
+      "The Cargo.lock from 60-01 was not committed by the executor (Wave 1), discovered only at Wave 2's Rust gate check — a latent `--locked` CI break that had to be committed manually.",
+      "60-01-SUMMARY.md got a stale self-check footer appended after its commit (in a separate executor pass), requiring manual revert.",
+      "`gh pr edit` is blocked on this repo — all PR body patches require a raw `gh api -X PATCH` workaround."
+    ],
+    "open_items": [
+      "PR not yet pushed or opened — session ended before the push step. Need to reword the one `(D-07)` commit subject, push, and create the PR with a conventional paren-free title.",
+      "60-08 Task 2 (staging cutover): staging DB wipe + redeploy + strict-verify smoke-test requires human VPS access (`ssh root@76.13.151.200`). Phase stays pending until completed.",
+      "3 CI gates pending after PR push: Windows `Cargo Check & Test` (winfsp embed-1 path, can't build on macOS), Desktop E2E, and the remote SDK E2E.",
+      "After `gh pr create`, the `github-actions[bot]` pushes a `chore(release)` commit to the branch — must `git fetch` + rebase before any subsequent push.",
+      "Deferred todo: Replay/reuse of a verified parent sequence number in publish path — sequence pre-increment creates a window where an in-flight duplicate could be accepted.",
+      "Deferred todo: Desktop root-folder publish conflict fail-fast — concurrent publishes on the same IPNS name from desktop have no conflict detection.",
+      "Deferred todo: FUSE metadata unpin orphaned CID on verify fail — if verify fails post-pin, the CID is pinned but unreferenced.",
+      "Deferred todo: TS resolve strict RFC3339 Validity parity — full port of the Rust RFC3339 strictness fix (F4) to TypeScript; current TS path still uses lenient date parsing.",
+      "Nyquist validation gate (`60-VALIDATION.md`) checked but not formally completed — planning-time strategy doc still at `status: draft`.",
+      "60-VERIFICATION.md is at 16/17 must-haves; the 17th (staging smoke-test) unblocks only after the 60-08 cutover is complete."
+    ]
+  }
+}
