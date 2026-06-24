@@ -1886,4 +1886,144 @@ describe('IpnsService', () => {
       ).rejects.toThrow(ConflictException);
     });
   });
+
+  // =========================================================================
+  // D-03: Strict first-publish gate — only embedded 1 accepted (Plan 60-05)
+  // =========================================================================
+
+  describe('upsertFolderIpns D-03 strict first-publish gate', () => {
+    it('rejects first publish with embedded sequence 0n (D-03: only 1 allowed)', async () => {
+      mockFolderIpnsRepo.findOne.mockResolvedValue(null);
+      mockParseIpnsRecord.mockResolvedValue({
+        value: `/ipfs/${testMetadataCid}`,
+        sequence: 0n,
+      });
+
+      await expect(
+        service.publishRecord(testUserId, {
+          ipnsName: testIpnsName,
+          record: testRecord,
+          metadataCid: testMetadataCid,
+        })
+      ).rejects.toThrow(BadRequestException);
+
+      await expect(
+        service.publishRecord(testUserId, {
+          ipnsName: testIpnsName,
+          record: testRecord,
+          metadataCid: testMetadataCid,
+        })
+      ).rejects.toThrow(/embedded sequence must be 1, got 0/);
+    });
+
+    it('accepts first publish with embedded sequence 1n (D-03: strict)', async () => {
+      mockFolderIpnsRepo.findOne.mockResolvedValue(null);
+      mockFolderIpnsRepo.create.mockReturnValue({ ...mockFolderEntity, sequenceNumber: '1' });
+      mockFolderIpnsRepo.save.mockResolvedValue({ ...mockFolderEntity, sequenceNumber: '1' });
+      mockParseIpnsRecord.mockResolvedValue({
+        value: `/ipfs/${testMetadataCid}`,
+        sequence: 1n,
+      });
+
+      await expect(
+        service.publishRecord(testUserId, {
+          ipnsName: testIpnsName,
+          record: testRecord,
+          metadataCid: testMetadataCid,
+        })
+      ).resolves.toBeDefined();
+    });
+
+    it('forward publish (existing row, embedded = dbSeq + 1) still accepted after D-03', async () => {
+      const existingRow = { ...mockFolderEntity, sequenceNumber: '3', signedRecord: null };
+      mockFolderIpnsRepo.findOne.mockResolvedValue(existingRow);
+      mockFolderIpnsRepo.save.mockImplementation((entity) => Promise.resolve(entity));
+      mockParseIpnsRecord.mockResolvedValue({
+        value: `/ipfs/${testMetadataCid}`,
+        sequence: 4n,
+      });
+
+      await expect(
+        service.publishRecord(testUserId, {
+          ipnsName: testIpnsName,
+          record: testRecord,
+          metadataCid: testMetadataCid,
+        })
+      ).resolves.toBeDefined();
+    });
+
+    it('idempotent republish (existing row, embedded = dbSeq) still accepted after D-03', async () => {
+      const existingRow = { ...mockFolderEntity, sequenceNumber: '5', signedRecord: null };
+      mockFolderIpnsRepo.findOne.mockResolvedValue(existingRow);
+      mockFolderIpnsRepo.save.mockImplementation((entity) => Promise.resolve(entity));
+      mockParseIpnsRecord.mockResolvedValue({
+        value: `/ipfs/${testMetadataCid}`,
+        sequence: 5n,
+      });
+
+      const result = await service.publishRecord(testUserId, {
+        ipnsName: testIpnsName,
+        record: testRecord,
+        metadataCid: testMetadataCid,
+      });
+
+      expect(result.success).toBe(true);
+      const savedEntity = mockFolderIpnsRepo.save.mock.calls[0][0];
+      expect(savedEntity.sequenceNumber).toBe('5');
+    });
+  });
+
+  // =========================================================================
+  // D-06: null signed_record → 404; resolve enrich removal (Plan 60-05)
+  // =========================================================================
+
+  describe('resolveRecord D-06 null-signed-record and enrich removal', () => {
+    beforeEach(() => {
+      mockParseIpnsRecord.mockReset();
+    });
+
+    it('resolveRecord with null-signed-record DB row and no network → returns null (404)', async () => {
+      // Network finds nothing
+      mockDelegatedRoutingClient.resolve.mockResolvedValue(null);
+      // DB has a row but signedRecord is NULL
+      mockFolderIpnsRepo.findOne.mockResolvedValue({
+        ...mockFolderEntity,
+        latestCid: testMetadataCid,
+        sequenceNumber: '5',
+        signedRecord: null,
+        publicKey: testPublicKeyBytes,
+      });
+
+      const result = await service.resolveRecord(testIpnsName);
+
+      expect(result).toBeNull();
+    });
+
+    it('resolveRecord with valid signedRecord DB row → returns parsed result (success path unchanged)', async () => {
+      const sigBytes = new Uint8Array(64).fill(0xab);
+      const dataBytes = new Uint8Array(48).fill(0xcd);
+      const signedRecordBytes = new Uint8Array([4, 5, 6]);
+      mockDelegatedRoutingClient.resolve.mockResolvedValue(null);
+      mockFolderIpnsRepo.findOne.mockResolvedValue({
+        ...mockFolderEntity,
+        latestCid: testMetadataCid,
+        sequenceNumber: '5',
+        signedRecord: signedRecordBytes,
+        publicKey: testPublicKeyBytes,
+      });
+      mockParseIpnsRecord.mockReturnValueOnce({
+        value: `/ipfs/${testMetadataCid}`,
+        sequence: 4n,
+        signatureV2: sigBytes,
+        data: dataBytes,
+        pubKey: testPublicKeyBytes,
+      });
+
+      const result = await service.resolveRecord(testIpnsName);
+
+      expect(result).not.toBeNull();
+      expect(result!.cid).toBe(testMetadataCid);
+      expect(result!.sequenceNumber).toBe('5');
+    });
+  });
 });
