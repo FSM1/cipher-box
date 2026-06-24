@@ -1,0 +1,56 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "1c743c03ab70",
+  "session_id": "3379b299-016b-4d40-aaf2-317ab0c08665",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-24T00:27:36.236165Z",
+  "branch": "feat/ipns-verification-cross-layer-closeout-desktop-and-api",
+  "checkpoints_count": 0,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "f2967dbe082c",
+  "checkpoint_transcript_start": 72,
+  "transcript_lines_at_start": 72,
+  "token_usage": {
+    "input_tokens": 935,
+    "cache_creation_tokens": 8270,
+    "cache_read_tokens": 369261,
+    "output_tokens": 5691,
+    "api_call_count": 3
+  },
+  "summary": {
+    "intent": "Execute phase 60 wave 1 plans for a FUSE/IPNS codebase, specifically completing plan 60-01 (removing VerifyError::Legacy variant and folding caller arms) and starting plan 60-02 (unifying first-publish IPNS sequence numbers to seq=1).",
+    "outcome": "Plan 60-01 was verified complete and green — all VerifyError::Legacy references eliminated and three crates compile cleanly. Plan 60-02 was handed off to a subagent.",
+    "learnings": {
+      "repo": [
+        "VerifyError enum had a Legacy variant that was removed in 60-01; all 9 FUSE caller arms were folded to use Invalid instead.",
+        "The codebase spans at least three crates: FUSE, desktop Tauri (sdk-core), and web — all touched by the VerifyError refactor.",
+        "First-publish IPNS producers previously embedded sequence 0; the target invariant is sequence 1 as a precondition for the strict resolve verifier and API gate.",
+        "Vendored fuser crate emits pre-existing dead-code warnings that are expected and not regressions."
+      ],
+      "code": [
+        {
+          "path": "metadata.rs",
+          "line": 619,
+          "end_line": 619,
+          "finding": "Was the last reference to VerifyError::Legacy; confirmed removed (now uses Invalid). The E0599 compile error referencing this line was a stale mid-edit snapshot, not a real build failure."
+        }
+      ],
+      "workflow": [
+        "Diagnostic errors from mid-edit snapshots can be misleading — always re-run cargo check after edits before concluding a compile error is real.",
+        "Grep for remaining references is a reliable way to confirm a symbol has been fully eliminated before trusting a compile check.",
+        "Wave/plan structure is used to decompose work: 60-01 removes the variant, 60-04 (wave 2) was originally scoped for folding caller arms, but the executor folded them early in 60-01 — scope boundaries can shift during execution."
+      ]
+    },
+    "friction": [
+      "A stale mid-edit diagnostic (E0599 at metadata.rs:619) created false ambiguity about whether 60-01 was complete, requiring an extra verification round.",
+      "Scope overlap between 60-01 and 60-04 (folding FUSE caller arms) caused confusion about what was actually done vs. deferred."
+    ],
+    "open_items": [
+      "Plan 60-02 in progress (subagent running): unify all 9 first-publish IPNS producers (FUSE, Tauri, sdk-core, web) to embed sequence 1 instead of 0.",
+      "Plans 60-03 through 60-08 (wave 1 and remaining waves) not yet started.",
+      "60-04 (wave 2) — originally scoped to fold FUSE caller arms — may need scope reassessment since 60-01 already performed that work."
+    ]
+  }
+}
