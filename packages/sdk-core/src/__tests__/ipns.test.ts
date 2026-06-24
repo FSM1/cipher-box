@@ -94,12 +94,28 @@ describe('IPNS operations', () => {
   });
 
   describe('resolveIpnsRecord', () => {
-    it('resolves IPNS name and returns CID with sequence number', async () => {
+    it('resolves IPNS name and returns CID with sequence number (with valid sig)', async () => {
       const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
+      const { verifyEd25519, deriveIpnsName } = await import('@cipherbox/crypto');
+      const { encode } = await import('cborg');
+      vi.mocked(verifyEd25519).mockResolvedValue(true);
+      vi.mocked(deriveIpnsName).mockResolvedValue('k51resolve');
+      // Provide a properly signed response with matching CBOR data (D-05: unsigned throws)
+      const cbor = encode({
+        TTL: 300000000000,
+        Value: new TextEncoder().encode('/ipfs/QmResolvedCid'),
+        Sequence: 5,
+        Validity: new TextEncoder().encode('2099-01-01T00:00:00.000000000Z'),
+        ValidityType: 0,
+      });
+      const data = Buffer.from(cbor).toString('base64');
       vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
         success: true,
         cid: 'QmResolvedCid',
         sequenceNumber: '5',
+        signatureV2: btoa('sig'),
+        data,
+        pubKey: btoa('pubkey'),
       });
 
       const result = await resolveIpnsRecord('k51resolve');
@@ -107,6 +123,7 @@ describe('IPNS operations', () => {
       expect(result).not.toBeNull();
       expect(result!.cid).toBe('QmResolvedCid');
       expect(result!.sequenceNumber).toBe(5n);
+      expect(result!.signatureVerified).toBe(true);
     });
 
     it('returns null when IPNS name not found', async () => {
@@ -307,11 +324,15 @@ describe('IPNS operations', () => {
         );
       });
 
-      it('accepts first-publish skew: embedded seq=0 with response sequenceNumber=1 (D-09)', async () => {
+      // D-05 (Plan 60-03): first-publish skew disjunct removed — embedded seq=0 with resp=1 now throws.
+      // Previously this was accepted as a "first-publish exception" (D-09). After Plan 60-02 unified
+      // all producers to embed 1, the skew window no longer exists. Any embedded=0 is now invalid.
+      it('D-05: throws on first-publish skew: embedded seq=0 with response sequenceNumber=1 (skew disjunct removed)', async () => {
         const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
         const { verifyEd25519, deriveIpnsName } = await import('@cipherbox/crypto');
         vi.mocked(verifyEd25519).mockResolvedValue(true);
-        // CBOR embeds seq=0 (IPNS-native first publish), response.sequenceNumber = "1" (DB).
+        // CBOR embeds seq=0 (old IPNS-native first publish), response.sequenceNumber = "1" (DB).
+        // After D-05, the skew disjunct is removed — this is now a sequence binding mismatch.
         const data = await makeCborData('bafyFIRST', 0);
         vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
           success: true,
@@ -323,19 +344,16 @@ describe('IPNS operations', () => {
         });
         vi.mocked(deriveIpnsName).mockResolvedValue('k51first-publish');
 
-        const result = await resolveIpnsRecord('k51first-publish');
-        expect(result).not.toBeNull();
-        expect(result!.signatureVerified).toBe(true);
-        // Returns the DB-authoritative sequenceNumber (1), not the embedded 0.
-        expect(result!.sequenceNumber).toBe(1n);
+        await expect(resolveIpnsRecord('k51first-publish')).rejects.toThrow(
+          /sequence binding mismatch/i
+        );
       });
 
-      it('skew allowance is scoped to first publish: embedded seq=0 with response=2 still throws', async () => {
+      it('embedded seq=0 with response=2 throws (sequence binding mismatch)', async () => {
         const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
         const { verifyEd25519, deriveIpnsName } = await import('@cipherbox/crypto');
         vi.mocked(verifyEd25519).mockResolvedValue(true);
-        // embedded seq=0 but response.sequenceNumber = "2" — a rollback/tamper, not a first
-        // publish (DB==2 means the record has already advanced past its first generation).
+        // embedded seq=0 but response.sequenceNumber = "2" — rollback/tamper
         const data = await makeCborData('bafyCID', 0);
         vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
           success: true,
@@ -405,9 +423,11 @@ describe('IPNS operations', () => {
         expect(result!.signatureVerified).toBe(true);
       });
 
-      it('legacy record is NOT subjected to CBOR binding (D-04)', async () => {
+      // D-05 (Plan 60-03): all-absent signature fields now throw (fail closed).
+      // Previously returned { signatureVerified: false } as a legacy path — that is removed.
+      it('D-05: throws when all signature fields absent (legacy path removed, fail closed)', async () => {
         const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
-        // All three signature fields absent → legacy, no binding check
+        // All three signature fields absent — no longer tolerated as a legacy record
         vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
           success: true,
           cid: 'bafyLEGACY',
@@ -415,11 +435,10 @@ describe('IPNS operations', () => {
           // signatureV2, data, pubKey all absent
         });
 
-        const result = await resolveIpnsRecord('k51legacy');
-
-        expect(result).not.toBeNull();
-        expect(result!.signatureVerified).toBe(false);
-        expect(result!.cid).toBe('bafyLEGACY');
+        // Must throw, not return { signatureVerified: false }
+        await expect(resolveIpnsRecord('k51legacy')).rejects.toThrow(
+          /fail closed|signature fields/i
+        );
       });
 
       it('binding mismatch error is NOT swallowed as 404 — propagates', async () => {
@@ -586,10 +605,9 @@ describe('D-11/D-12 cross-language IPNS verify vectors', () => {
     );
   });
 
-  it('first-publish-skew — resolves with embedded seq=0 vs response sequenceNumber=1', async () => {
-    // D-09 first-publish skew: the fixture data field embeds Sequence=0 but
-    // response.sequenceNumber is "1" (FUSE/Rust paths embed IPNS-native 0; the API
-    // stores DB sequenceNumber=1). The binding must ACCEPT this — it is not a tamper.
+  // D-05 (Plan 60-03): first-publish-skew vector now expected_result="invalid".
+  // The skew disjunct (embedded=0, resp=1 accepted) is removed. All producers now embed 1 (Plan 60-02).
+  it('first-publish-skew — throws on embedded seq=0 vs response sequenceNumber=1 (D-05 strict)', async () => {
     const v = vectors.find((x) => x.description.startsWith('first-publish-skew'));
     if (!v) throw new Error('first-publish-skew vector not found');
     const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
@@ -605,12 +623,10 @@ describe('D-11/D-12 cross-language IPNS verify vectors', () => {
       pubKey: v.pub_key ?? undefined,
     });
 
-    const result = await resolveIpnsRecord(v.ipns_name);
-
-    expect(result, `${v.description}`).not.toBeNull();
-    expect(result!.signatureVerified, `${v.description}`).toBe(true);
-    // Returns the DB-authoritative sequenceNumber (1), not the embedded 0.
-    expect(result!.sequenceNumber, `${v.description}`).toBe(BigInt(v.sequence_number));
+    // After D-05: embedded=0 vs resp=1 is a sequence binding mismatch → throw
+    await expect(resolveIpnsRecord(v.ipns_name), `${v.description}`).rejects.toThrow(
+      /sequence binding mismatch/i
+    );
   });
 
   it('partial-fields — throws on incomplete signature data (downgrade vector)', async () => {
@@ -636,7 +652,10 @@ describe('D-11/D-12 cross-language IPNS verify vectors', () => {
     expect(deriveIpnsName).not.toHaveBeenCalled();
   });
 
-  it('legacy-absent — resolves with signatureVerified=false (D-04)', async () => {
+  // D-05 (Plan 60-03): legacy-absent vector now expected_result="invalid".
+  // All-absent signature fields previously returned { signatureVerified: false } (D-04 legacy path).
+  // After D-05, absent fields throw (fail closed). The vector.json will be reclassified in Plan 60-10.
+  it('legacy-absent — throws when all signature fields absent (D-05 fail closed)', async () => {
     const v = vectors.find((x) => x.description.startsWith('legacy-absent'));
     if (!v) throw new Error('legacy-absent vector not found');
     const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
@@ -647,11 +666,10 @@ describe('D-11/D-12 cross-language IPNS verify vectors', () => {
       // All three signature fields absent
     });
 
-    const result = await resolveIpnsRecord(v.ipns_name);
-
-    expect(result, `${v.description}`).not.toBeNull();
-    expect(result!.signatureVerified, `${v.description}`).toBe(false);
-    expect(result!.cid, `${v.description}`).toBe(v.cid);
+    // After D-05: absent fields → throw (fail closed), not { signatureVerified: false }
+    await expect(resolveIpnsRecord(v.ipns_name), `${v.description}`).rejects.toThrow(
+      /fail closed|signature fields/i
+    );
   });
 });
 

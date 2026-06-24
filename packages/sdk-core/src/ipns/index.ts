@@ -258,7 +258,9 @@ export async function resolveIpnsRecord(
           );
         }
 
-        // D-07: embedded sequence must equal response sequenceNumber
+        // D-07 (Plan 60-03): embedded sequence must equal response sequenceNumber — strict equality.
+        // The first-publish skew disjunct (embedded=0, resp=1) is removed per D-05: all first-publish
+        // producers now embed sequence 1 (Plan 60-02), so the old skew window no longer exists.
         const embeddedSeq = cborFields['Sequence'];
         if (embeddedSeq === undefined || embeddedSeq === null) {
           throw new Error(
@@ -273,25 +275,35 @@ export async function resolveIpnsRecord(
         const embeddedSeqBigInt =
           typeof embeddedSeq === 'bigint' ? embeddedSeq : BigInt(embeddedSeq as number);
         const responseSeqBigInt = BigInt(response.sequenceNumber);
-        // First-publish exception (mirrors the API's publish-side D-09 gate in
-        // ipns.service.ts::upsertFolderIpns): on a brand-new IPNS name the API accepts an
-        // embedded sequence of 0 OR 1 and unconditionally stores DB sequenceNumber=1. The
-        // Rust/FUSE publish paths embed the IPNS-native 0 while the TS SDK embeds 1 — both
-        // legitimate per D-09. So a resolved first-generation record (sequenceNumber==1) may
-        // legitimately carry an embedded 0. Accept that single documented skew; require strict
-        // equality otherwise. The cid binding above stays strict and DB CID remains the
-        // authoritative trust root, so this does not widen the attack surface (embedded 0 can
-        // only reach the network while DB==1, the first-publish window).
-        const seqOk =
-          embeddedSeqBigInt === responseSeqBigInt ||
-          (responseSeqBigInt === 1n && embeddedSeqBigInt === 0n);
+        // D-05 strict equality (Plan 60-03): no skew disjunct.
+        const seqOk = embeddedSeqBigInt === responseSeqBigInt;
         if (!seqOk) {
           throw new Error(
             `IPNS sequence binding mismatch: embedded=${embeddedSeq}, response sequenceNumber=${response.sequenceNumber}`
           );
         }
+
+        // D-07 (Plan 60-03): parse CBOR Validity field and enforce EOL/expiry.
+        // Validity is a Uint8Array containing an RFC3339 timestamp string (nanosecond precision).
+        // Apply a 5-minute clock skew buffer (matching the Rust side): reject when
+        // expiry < now - 5min. A present-but-unparseable Validity is fail-closed.
+        const validityBytes = cborFields['Validity'];
+        if (validityBytes instanceof Uint8Array) {
+          const validityStr = new TextDecoder().decode(validityBytes);
+          const expiryMs = new Date(validityStr).getTime();
+          if (isNaN(expiryMs)) {
+            throw new Error(`IPNS record has unparseable Validity field: ${validityStr}`);
+          }
+          const skewBufferMs = 5 * 60 * 1000; // 5 minutes
+          if (expiryMs < Date.now() - skewBufferMs) {
+            throw new Error(`IPNS record expired: validity=${validityStr}`);
+          }
+        }
       } else {
-        console.warn('IPNS resolve returned without signature data, skipping verification');
+        // D-05 (Plan 60-03): fail closed when all three signature fields are absent.
+        // The legacy console.warn + soft-return path is removed. A record without signature
+        // fields cannot be verified and must never be trusted as a non-error state.
+        throw new Error('IPNS resolve returned without signature fields — fail closed');
       }
 
       return {
