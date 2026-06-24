@@ -1,5 +1,5 @@
 import { HttpException, HttpStatus, Logger } from '@nestjs/common';
-import { parseIpnsRecord } from '@cipherbox/crypto';
+import { parseIpnsRecord, publicKeyFromIpnsName } from '@cipherbox/crypto';
 import type { FolderIpns } from './entities/folder-ipns.entity';
 
 export interface IpnsRecordFields {
@@ -80,21 +80,29 @@ export async function parseCachedRecord(
     // increments it, while the embedded bytes reflect the client's pre-increment value).
     //
     // The Ed25519 IPNS record's pubKey is not re-extractable from the signed bytes by
-    // parseIpnsRecordBytes, so supply it from the validated publicKey column to keep the
-    // cached record complete and client-verifiable. Publish enforced
-    // deriveIpnsName(publicKey) === ipnsName (ipns.service.ts), and the strict client
-    // re-checks that pubKey→name binding, so trusting this column is safe.
-    const pubKey =
+    // parseIpnsRecordBytes, so supply it for the strict client. Precedence:
+    //   1. the validated publicKey column — fast path, populated at publish time
+    //      (publish enforced deriveIpnsName(publicKey) === ipnsName), then
+    //   2. recover it from the ipnsName itself. For Ed25519 the k51... name encodes the
+    //      public key, so it is the AUTHORITATIVE source and is always available even when
+    //      the nullable publicKey column was never populated for this row — e.g.
+    //      shared-folder records, whose column is null but whose signed record is valid.
+    // The strict client re-checks deriveIpnsName(pubKey) === ipnsName, so deriving from the
+    // name stays fail-closed.
+    let pubKey =
       parsed.pubKey ?? (cached.publicKey ? cached.publicKey.toString('base64') : undefined);
-    // Fail closed when no pubKey can be supplied. Ed25519 records don't embed the key
-    // (parsed.pubKey undefined) and the publicKey column is nullable, so a row missing
-    // publicKey yields an unverifiable record; serving it would hand a strict client a CID
-    // it cannot verify. Return null → the caller 404s.
     if (!pubKey) {
-      logger.warn(
-        `Cached signed record for ${cached.ipnsName} has no pubKey (publicKey column null) — discarding cached result`
-      );
-      return null;
+      try {
+        pubKey = Buffer.from(publicKeyFromIpnsName(cached.ipnsName)).toString('base64');
+      } catch (error) {
+        // A malformed / non-Ed25519 name yields no recoverable key → unverifiable record.
+        // Return null → the caller 404s (fail closed).
+        const message = error instanceof Error ? error.message : String(error);
+        logger.warn(
+          `Cached signed record for ${cached.ipnsName}: cannot recover pubKey from name (${message}) — discarding cached result`
+        );
+        return null;
+      }
     }
     return { ...parsed, cid: cached.latestCid, sequenceNumber: cached.sequenceNumber, pubKey };
   } catch (error) {

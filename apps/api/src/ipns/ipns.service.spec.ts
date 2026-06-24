@@ -999,6 +999,44 @@ describe('IpnsService', () => {
       expect(result!.signatureV2).toBeDefined();
     });
 
+    it('should derive pubKey from the IPNS name when the DB publicKey column is null', async () => {
+      // Regression (web-e2e writable-shares 3.4): Phase 60 D-06 discarded an authoritative
+      // DB record whose nullable publicKey column was never populated — true for
+      // writable-shared-folder rows — so strict resolve returned nothing and read-after-edit
+      // broke. The Ed25519 name encodes the public key, so it must be recovered from the name.
+      const mockRecordBytes = new Uint8Array([1, 2, 3]);
+      mockDelegatedRoutingClient.resolve.mockResolvedValue(mockRecordBytes);
+      const sigBytes = new Uint8Array(64).fill(0x11);
+      const dataBytes = new Uint8Array(48).fill(0x22);
+      mockParseIpnsRecord
+        // network parse: stale (seq 3)
+        .mockReturnValueOnce({ value: '/ipfs/bafySTALE', sequence: 3n })
+        // cached parse: fresher (seq 10); an Ed25519 record carries NO embedded pubKey
+        .mockReturnValueOnce({
+          value: '/ipfs/bafyFRESH',
+          sequence: 10n,
+          signatureV2: sigBytes,
+          data: dataBytes,
+          // pubKey intentionally absent
+        });
+
+      mockFolderIpnsRepo.findOne.mockResolvedValue({
+        ...mockFolderEntity,
+        latestCid: 'bafyFRESH',
+        sequenceNumber: '10',
+        signedRecord: Buffer.from([4, 5, 6]),
+        publicKey: null, // shared-folder row: column never populated
+      });
+
+      const result = await service.resolveRecord(testIpnsName);
+
+      expect(result).not.toBeNull();
+      expect(result!.cid).toBe('bafyFRESH');
+      // testIpnsName derives from testPublicKeyBytes ([1..32]); recovered pubKey must match.
+      expect(result!.pubKey).toBe(testPublicKey);
+      expect(result!.signatureV2).toBe(Buffer.from(sigBytes).toString('base64'));
+    });
+
     it('should prefer network result when it has equal or higher sequence than DB', async () => {
       const mockRecordBytes = new Uint8Array([1, 2, 3]);
       mockDelegatedRoutingClient.resolve.mockResolvedValue(mockRecordBytes);

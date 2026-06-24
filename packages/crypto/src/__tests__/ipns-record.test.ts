@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createIPNSRecord, marshalIPNSRecord } from 'ipns';
 import { privateKeyFromRaw } from '@libp2p/crypto/keys';
 import { generateEd25519Keypair } from '../ed25519';
-import { deriveIpnsName } from '../ipns/derive-name';
+import { deriveIpnsName, publicKeyFromIpnsName } from '../ipns/derive-name';
 import { verifyIpnsRecordSignature } from '../ipns/verify-record';
 import { parseIpnsRecord } from '../ipns/parse-record';
 
@@ -62,6 +62,33 @@ describe('verifyIpnsRecordSignature', () => {
 
   it('returns false for a malformed name or record instead of throwing', async () => {
     expect(await verifyIpnsRecordSignature('not-a-name', new Uint8Array([1, 2, 3]))).toBe(false);
+  });
+});
+
+describe('publicKeyFromIpnsName', () => {
+  it('round-trips: recovers the exact raw public key deriveIpnsName encoded', async () => {
+    const keypair = generateEd25519Keypair();
+    const ipnsName = await deriveIpnsName(keypair.publicKey);
+
+    const recovered = publicKeyFromIpnsName(ipnsName);
+
+    expect(recovered).toBeInstanceOf(Uint8Array);
+    expect(recovered.length).toBe(32);
+    expect(Array.from(recovered)).toEqual(Array.from(keypair.publicKey));
+  });
+
+  it('recovers the key that verifies a record signed by the matching private key', async () => {
+    // Closes the loop end-to-end: name -> pubKey must be the key the record was signed with.
+    const keypair = generateEd25519Keypair();
+    const ipnsName = await deriveIpnsName(keypair.publicKey);
+    const recovered = publicKeyFromIpnsName(ipnsName);
+    const reDerivedName = await deriveIpnsName(recovered);
+
+    expect(reDerivedName).toBe(ipnsName);
+  });
+
+  it('throws CryptoError on a malformed / non-Ed25519 name', () => {
+    expect(() => publicKeyFromIpnsName('not-a-name')).toThrow();
   });
 });
 
