@@ -167,10 +167,17 @@ async fn fetch_and_decrypt_registry(
     ipns_name: &str,
     private_key: &[u8; 32],
 ) -> Result<DeviceRegistry, SdkError> {
-    let resolve = cipherbox_api_client::ipns::resolve_ipns(api, ipns_name)
+    // D-08: route through verified chokepoint — tampered CIDs are rejected.
+    let verified = cipherbox_api_client::ipns::resolve_ipns_verified(api, ipns_name)
         .await
-        .map_err(SdkError::Api)?;
-    let encrypted = cipherbox_api_client::ipfs::fetch_content(api, &resolve.cid)
+        .map_err(|e| match e {
+            cipherbox_api_client::ipns::VerifyError::Api(api_err) => SdkError::Api(api_err),
+            cipherbox_api_client::ipns::VerifyError::Invalid(msg) => {
+                log::error!("Registry IPNS {} verify failed (D-08): {}", ipns_name, msg);
+                SdkError::RegistryError(format!("IPNS verification failed: {}", msg))
+            }
+        })?;
+    let encrypted = cipherbox_api_client::ipfs::fetch_content(api, &verified.cid)
         .await
         .map_err(SdkError::Api)?;
     let decrypted = cipherbox_crypto::ecies::unwrap_key(&encrypted, private_key)?;

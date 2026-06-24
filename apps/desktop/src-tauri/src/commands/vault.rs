@@ -18,9 +18,23 @@ pub(crate) async fn load_vault_settings(
                 cipherbox_crypto::hkdf::derive_vault_settings_ipns_keypair(private_key)
                     .map_err(|e| format!("HKDF derivation failed: {:?}", e))?;
 
-            let resolved = cipherbox_api_client::ipns::resolve_ipns(api, &ipns_name)
+            // D-09: route through verified chokepoint — fail-closed on tampered settings.
+            let resolved = match cipherbox_api_client::ipns::resolve_ipns_verified(api, &ipns_name)
                 .await
-                .map_err(|e| format!("IPNS resolve failed: {}", e))?;
+            {
+                Ok(v) => v,
+                Err(cipherbox_api_client::ipns::VerifyError::Api(e)) => {
+                    return Err(format!("IPNS resolve failed: {}", e));
+                }
+                Err(cipherbox_api_client::ipns::VerifyError::Invalid(msg)) => {
+                    log::error!(
+                        "Vault settings IPNS {} verify failed (D-09): {}",
+                        ipns_name,
+                        msg
+                    );
+                    return Err(format!("IPNS verification failed: {}", msg));
+                }
+            };
 
             let encrypted = cipherbox_api_client::ipfs::fetch_content(api, &resolved.cid)
                 .await
@@ -246,10 +260,26 @@ pub(crate) async fn fetch_and_decrypt_vault(state: &AppState) -> Result<(), Stri
         cipherbox_crypto::hkdf::derive_vault_key_ipns_keypair(&private_key_arr)
             .map_err(|e| format!("Vault key HKDF derivation failed: {:?}", e))?;
 
-    // Resolve vault key IPNS, fetch v2 blob, extract rootFolderKey
-    let resolved = cipherbox_api_client::ipns::resolve_ipns(&state.sdk.api, &vault_key_ipns_name)
-        .await
-        .map_err(|e| format!("Vault key IPNS resolve failed: {}", e))?;
+    // D-09: route vault key IPNS through verified chokepoint — tampered blob rejected.
+    let resolved = match cipherbox_api_client::ipns::resolve_ipns_verified(
+        &state.sdk.api,
+        &vault_key_ipns_name,
+    )
+    .await
+    {
+        Ok(v) => v,
+        Err(cipherbox_api_client::ipns::VerifyError::Api(e)) => {
+            return Err(format!("Vault key IPNS resolve failed: {}", e));
+        }
+        Err(cipherbox_api_client::ipns::VerifyError::Invalid(msg)) => {
+            log::error!(
+                "Vault key IPNS {} verify failed (D-09): {}",
+                vault_key_ipns_name,
+                msg
+            );
+            return Err(format!("Vault key IPNS verification failed: {}", msg));
+        }
+    };
     let blob_bytes = cipherbox_api_client::ipfs::fetch_content(&state.sdk.api, &resolved.cid)
         .await
         .map_err(|e| format!("IPFS fetch failed for vault key blob: {}", e))?;
