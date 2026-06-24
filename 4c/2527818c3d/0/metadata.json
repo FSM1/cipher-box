@@ -1,0 +1,64 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "4c2527818c3d",
+  "session_id": "3379b299-016b-4d40-aaf2-317ab0c08665",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-24T00:44:45.807356Z",
+  "branch": "feat/ipns-verification-cross-layer-closeout-desktop-and-api",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "f2967dbe082c",
+  "token_usage": {
+    "input_tokens": 12949,
+    "cache_creation_tokens": 115772,
+    "cache_read_tokens": 1340439,
+    "output_tokens": 26592,
+    "api_call_count": 15
+  },
+  "summary": {
+    "intent": "Execute all plans in Phase 60 (IPNS Verification Cross-Layer Closeout) using wave-based sequential subagent execution, hardening IPNS verification to be strict fail-closed across Rust and TypeScript layers.",
+    "outcome": "Wave 1 plans 60-01 and 60-02 completed successfully (Rust verify chokepoint relocated/hardened, all 9 first-publish producers unified to seq=1); 60-03 was in-flight at transcript end. The phase was ~2/8 plans complete.",
+    "learnings": {
+      "repo": [
+        "Phase 60 has 8 plans across 4 waves; Wave 4 (60-08) is non-autonomous (staging wipe + redeploy) requiring a human checkpoint.",
+        "The project uses worktree isolation per plan but the GSD harness cannot reliably merge back isolation=worktree agent branches, so sequential execution on the main feature branch was chosen instead.",
+        "No project-specific executor skills payload exists (gsd-tools query returns empty).",
+        "All 9 first-publish IPNS producers span FUSE, desktop Tauri, sdk-core, and web — a cross-layer dependency that Wave 1 (60-02) unified to seq=1.",
+        "Pre-existing dead-code warnings exist in vendored `fuser` crate and a test mock; these are noise, not regressions.",
+        "The VerifyError::Legacy variant was fully removed by 60-01 — all 9 FUSE caller arms were folded to Invalid, despite 60-04 being declared the consumer migration wave."
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/metadata.rs",
+          "line": 619,
+          "end_line": 619,
+          "finding": "Previously referenced VerifyError::Legacy; after 60-01 this arm was folded to VerifyError::Invalid. The E0599 compile error seen mid-run was a stale mid-edit snapshot, not a real failure."
+        },
+        {
+          "path": "crates/api-client/src/ipns.rs",
+          "finding": "Destination for the relocated verified-IPNS-resolve implementation moved from crates/fuse/src/verify.rs so sdk/fuse/desktop share one implementation."
+        }
+      ],
+      "workflow": [
+        "When worktree merge-back is unreliable, sequential subagent execution on the main branch is the correct fallback — trades wall-clock for correctness.",
+        "Mid-execution compile error diagnostics can be stale snapshots from mid-edit state; always run cargo check authoritatively before marking a plan failed.",
+        "Wave-based execution requires a build gate between waves to catch cross-plan breakage before proceeding."
+      ]
+    },
+    "friction": [
+      "60-01 executor reported a compile error (metadata.rs:619 VerifyError::Legacy E0599) that turned out to be a stale mid-edit snapshot, requiring an extra manual cargo check round-trip to confirm the tree was actually green.",
+      "60-04 was declared the wave-2 FUSE consumer migration plan, but 60-01 already folded all 9 arms — scope boundary between plans was blurry, requiring post-hoc grep verification to confirm no double-work or missed sites.",
+      "The GSD worktree merge-back limitation forced sequential execution, eliminating the parallelism benefit of wave-based dispatch for this phase."
+    ],
+    "open_items": [
+      "60-03 (strict fail-closed TS resolve path) was in-flight at transcript end — status unknown.",
+      "60-04, 60-05, 60-07 (Wave 2: route Rust consumers fail-closed, tighten API regime, regen cross-lang vectors) not yet started.",
+      "60-06 (Wave 3: API publish-path verify cache for CPU cost recovery) not yet started.",
+      "60-08 (Wave 4: D-01/D-12 operational staging wipe + redeploy) requires explicit human checkpoint — non-autonomous.",
+      "Windows winfsp site test for 60-02 is CI-gated only — not verified locally.",
+      "Phase verification and HARD-11 requirement sign-off pending full wave completion."
+    ]
+  }
+}
