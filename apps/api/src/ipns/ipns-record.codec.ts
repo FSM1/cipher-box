@@ -86,6 +86,16 @@ export async function parseCachedRecord(
     // re-checks that pubKey→name binding, so trusting this column is safe.
     const pubKey =
       parsed.pubKey ?? (cached.publicKey ? cached.publicKey.toString('base64') : undefined);
+    // Fail closed when no pubKey can be supplied. Ed25519 records don't embed the key
+    // (parsed.pubKey undefined) and the publicKey column is nullable, so a row missing
+    // publicKey yields an unverifiable record; serving it would hand a strict client a CID
+    // it cannot verify. Return null → the caller 404s.
+    if (!pubKey) {
+      logger.warn(
+        `Cached signed record for ${cached.ipnsName} has no pubKey (publicKey column null) — discarding cached result`
+      );
+      return null;
+    }
     return { ...parsed, cid: cached.latestCid, sequenceNumber: cached.sequenceNumber, pubKey };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
