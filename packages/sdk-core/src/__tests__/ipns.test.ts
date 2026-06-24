@@ -656,6 +656,125 @@ describe('D-11/D-12 cross-language IPNS verify vectors', () => {
 });
 
 // ---------------------------------------------------------------------------
+// D-05 / D-07: Strict throw-path tests (Plan 60-03)
+//
+// These 4 tests express the NEW strict contract for resolveIpnsRecord:
+//   (a) absent-signature-fields → throws (no legacy soft return)
+//   (b) first-publish skew (embedded seq=0, resp seq=1) → throws (skew disjunct removed)
+//   (c) expired Validity → throws (EOL enforcement, D-07)
+//   (d) valid in-window record → still returns verified result
+//
+// RED: all 4 fail before the implementation is updated.
+// GREEN: after implementation update, all 4 pass.
+// ---------------------------------------------------------------------------
+
+describe('D-05/D-07: strict throw-path (Plan 60-03)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // Helper: encode CBOR data with controllable Validity bytes
+  async function makeCborDataWithValidity(
+    cid: string,
+    seq: number,
+    validityStr: string
+  ): Promise<string> {
+    const { encode } = await import('cborg');
+    const cbor = encode({
+      TTL: 300000000000,
+      Value: new TextEncoder().encode(`/ipfs/${cid}`),
+      Sequence: seq,
+      Validity: new TextEncoder().encode(validityStr),
+      ValidityType: 0,
+    });
+    return Buffer.from(cbor).toString('base64');
+  }
+
+  // (a) D-05: absent signature fields → throws (fail closed), does NOT return { signatureVerified: false }
+  it('D-05-a: throws when all signature fields absent (fail closed, not legacy soft return)', async () => {
+    const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
+    vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
+      success: true,
+      cid: 'bafyLEGACY',
+      sequenceNumber: '3',
+      // signatureV2, data, pubKey all absent — triggers the old console.warn path
+    });
+
+    // Must throw, not return { signatureVerified: false }
+    await expect(resolveIpnsRecord('k51absent-fields')).rejects.toThrow(
+      /fail closed|signature fields/i
+    );
+  });
+
+  // (b) D-05: first-publish skew (embedded=0, resp=1) → throws (skew disjunct removed)
+  it('D-05-b: throws on first-publish skew (embedded seq=0 with response sequenceNumber=1)', async () => {
+    const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
+    const { verifyEd25519, deriveIpnsName } = await import('@cipherbox/crypto');
+    vi.mocked(verifyEd25519).mockResolvedValue(true);
+    vi.mocked(deriveIpnsName).mockResolvedValue('k51first-skew-strict');
+    // CBOR embeds seq=0 but response.sequenceNumber=1 — the old skew disjunct accepted this
+    const data = await makeCborDataWithValidity('bafyFIRST', 0, '2099-01-01T00:00:00.000000000Z');
+    vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
+      success: true,
+      cid: 'bafyFIRST',
+      sequenceNumber: '1',
+      signatureV2: btoa('sig'),
+      data,
+      pubKey: btoa('pubkey'),
+    });
+
+    // After D-05 skew disjunct removed: embedded=0 vs resp=1 is a sequence mismatch → throw
+    await expect(resolveIpnsRecord('k51first-skew-strict')).rejects.toThrow(
+      /sequence binding mismatch/i
+    );
+  });
+
+  // (c) D-07: expired Validity timestamp → throws with expiry message
+  it('D-07-c: throws when CBOR Validity timestamp is in the past', async () => {
+    const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
+    const { verifyEd25519, deriveIpnsName } = await import('@cipherbox/crypto');
+    vi.mocked(verifyEd25519).mockResolvedValue(true);
+    vi.mocked(deriveIpnsName).mockResolvedValue('k51expired');
+    // Validity is in the past (2020)
+    const data = await makeCborDataWithValidity('bafyEXP', 5, '2020-01-01T00:00:00.000000000Z');
+    vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
+      success: true,
+      cid: 'bafyEXP',
+      sequenceNumber: '5',
+      signatureV2: btoa('sig'),
+      data,
+      pubKey: btoa('pubkey'),
+    });
+
+    await expect(resolveIpnsRecord('k51expired')).rejects.toThrow(/expired|validity/i);
+  });
+
+  // (d) D-07: valid in-window record → still resolves with signatureVerified=true
+  it('D-07-d: returns verified result for valid signature with future Validity', async () => {
+    const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
+    const { verifyEd25519, deriveIpnsName } = await import('@cipherbox/crypto');
+    vi.mocked(verifyEd25519).mockResolvedValue(true);
+    vi.mocked(deriveIpnsName).mockResolvedValue('k51valid-expiry');
+    // Validity is in the far future (2099)
+    const data = await makeCborDataWithValidity('bafyVALID', 7, '2099-01-01T00:00:00.000000000Z');
+    vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
+      success: true,
+      cid: 'bafyVALID',
+      sequenceNumber: '7',
+      signatureV2: btoa('sig'),
+      data,
+      pubKey: btoa('pubkey'),
+    });
+
+    const result = await resolveIpnsRecord('k51valid-expiry');
+    expect(result).not.toBeNull();
+    expect(result!.signatureVerified).toBe(true);
+    expect(result!.cid).toBe('bafyVALID');
+    expect(result!.sequenceNumber).toBe(7n);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // S3 caller-owns-key guard tests (D-05 / T-47-01)
 // createAndPublishIpnsRecord is a CALLEE: it must NOT zero the caller-passed
 // ipnsPrivateKey buffer. Callers reuse the same buffer across operations (the SDK

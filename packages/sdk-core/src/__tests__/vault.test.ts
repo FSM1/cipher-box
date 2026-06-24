@@ -136,7 +136,7 @@ describe('vault key blob operations', () => {
         expect.objectContaining({
           ipnsName: 'k51vaultkey',
           metadataCid: 'bafyvaultblob',
-          sequenceNumber: 0n,
+          sequenceNumber: 1n,
         })
       );
     });
