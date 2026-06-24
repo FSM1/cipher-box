@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.1
-milestone_name: milestone
+milestone_name: IPFS Infrastructure
 status: Ready to execute
-last_updated: "2026-06-24T00:22:59.943Z"
+last_updated: "2026-06-24T00:44:03.555Z"
 last_activity: 2026-06-24
 progress:
   total_phases: 45
   completed_phases: 44
   total_plans: 198
-  completed_plans: 191
-  percent: 96
+  completed_plans: 193
+  percent: 97
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 ## Current Position
 
 Phase: 60 (ipns-verification-cross-layer-closeout-desktop-and-api) — EXECUTING
-Plan: 3 of 8
+Plan: 4 of 8
 Milestone v1.1 hardening block extended 2026-06-21 with deferred-findings Phases 56–58 (HARD-07..09), sourced from the Phase 50–55 / PR #529 + #538 review backlog. Next: run /gsd:plan-phase 58 (recommended order was 56 FUSE/IPNS durability → 57 API CID/provider hardening → 58 IPNS signature-verify coverage; 58 last as it is the most regression-prone and full-SDK-E2E-gated). Note: STATE frontmatter progress counts are approximate and were periodically unreconciled (see todo `2026-06-18-gsd-phase-complete-regresses-state-final-phase.md`).
 
 ## Performance Metrics
@@ -165,6 +165,7 @@ Milestone v1.1 hardening block extended 2026-06-21 with deferred-findings Phases
 | Phase 59 P04 | 15min | 2 tasks | 7 files |
 | Phase Phase 60 P01 P01 | 35min | 2 tasks | 9 files |
 | Phase 60 P02 | 4min | 2 tasks | 7 files |
+| Phase 60 P03 | 9min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -312,7 +313,7 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 Last activity: 2026-06-24
 
-Last session: 2026-06-24T00:29:34Z
+Last session: 2026-06-24T00:44:03.547Z
 
 ## Decisions
 

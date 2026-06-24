@@ -1075,7 +1075,7 @@ Verification gate: `cargo test` (fuse + winfsp feature sets), winfsp Windows CI,
 **Goal:** Extend verified IPNS resolution beyond the FUSE crate to the remaining desktop Tauri resolve sites, and recover the per-operation IPNS signature-verification CPU cost on the API publish/resolve hot path — without weakening the zero-knowledge integrity model (untrusted / DHT-sourced records must still be fully verified).
 **Requirements**: HARD-11
 **Depends on:** Phase 58 (resolve_ipns_verified chokepoint), Phase 59 (unified first-publish sequence convention)
-**Plans:** 1/8 plans executed
+**Plans:** 3/8 plans executed
 
 Scope (captured todos):
 
@@ -1087,7 +1087,7 @@ Plans:
 
 - [x] 60-01-PLAN.md — Relocate verified-resolve wrapper to api-client + strict Rust verify (D-08/D-04) + Rust EOL (D-07) [wave 1]
 - [x] 60-02-PLAN.md — Unify all 9 first-publish producers to embed sequence 1 (D-02) [wave 1]
-- [ ] 60-03-PLAN.md — Strict TS resolve throw-path + EOL (D-05/D-07) + blast-radius audit [wave 1]
+- [x] 60-03-PLAN.md — Strict TS resolve throw-path + EOL (D-05/D-07) + blast-radius audit [wave 1]
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
