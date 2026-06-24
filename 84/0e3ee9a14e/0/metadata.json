@@ -1,0 +1,63 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "840e3ee9a14e",
+  "session_id": "3379b299-016b-4d40-aaf2-317ab0c08665",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-24T01:13:40.48344Z",
+  "branch": "feat/ipns-verification-cross-layer-closeout-desktop-and-api",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "f2967dbe082c",
+  "token_usage": {
+    "input_tokens": 13821,
+    "cache_creation_tokens": 133811,
+    "cache_read_tokens": 2330129,
+    "output_tokens": 40227,
+    "api_call_count": 22
+  },
+  "summary": {
+    "intent": "Execute Phase 60 ('IPNS Verification Cross-Layer Closeout') of CipherBox using the GSD wave-based execution workflow, closing out IPNS verification gaps (seq=0→1 unification, fail-closed verify paths, EOL/expiry enforcement) across Rust and TypeScript layers in 4 dependency-ordered waves.",
+    "outcome": "Wave 1 (60-01, 60-02, 60-03) completed fully — 251/251 sdk-core tests green. Wave 2 reached 60-04 complete and 60-05 in-flight when the transcript ends; the session is mid-phase with 4/8 plans done.",
+    "learnings": {
+      "repo": [
+        "crates/fuse/src/verify.rs was a re-export shim that 60-04 deleted after 60-01 moved the canonical impl to crates/api-client/src/ipns.rs — sdk/fuse/desktop now share one verify chokepoint",
+        "First-publish IPNS sequence was 0 across 9 producers (FUSE, desktop Tauri, sdk-core, web); unified to 1 in 60-02 as a precondition for the strict resolve verifier",
+        "cipherbox-api-client gained ciborium + cipherbox-core as new deps after 60-01 added CBOR Validity/expiry parsing — Cargo.lock must be committed alongside Cargo.toml edits",
+        "sdk-core has 251 tests total, 34 of which are ipns-specific; these serve as the Wave 1 integration gate",
+        "60-01 folded all 9 FUSE VerifyError::Legacy caller arms as a compile necessity, preempting scope nominally assigned to 60-04"
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/metadata.rs",
+          "line": 619,
+          "end_line": 619,
+          "finding": "Had a VerifyError::Legacy arm that 60-01 folded to VerifyError::Invalid when removing the Legacy variant; a mid-edit compiler snapshot made this look like a lingering error but it was already fixed"
+        },
+        {
+          "path": "packages/sdk-core/src/vault.test.ts",
+          "finding": "Had a stale expectation of 0n for first-publish sequence; updated to 1n by 60-03 executor after 60-02 changed all producers"
+        }
+      ],
+      "workflow": [
+        "Worktree isolation mode was dropped in favor of sequential subagents on the feature branch because the GSD harness has no reliable merge-back protocol for worktree agent branches — critical for a security/crypto phase",
+        "The gsd commit helper reports commit_failed as a false negative — commits may have actually landed; always verify with git log before taking recovery action",
+        "Executor subagents can commit Cargo.toml edits without committing the resulting Cargo.lock delta, creating a latent --locked CI break that must be caught between waves",
+        "Stray SUMMARY.md footer content can be appended after an executor's main commit, leaving the file in a factually incorrect state that needs manual revert"
+      ]
+    },
+    "friction": [
+      "gsd commit helper false-negative: reported commit_failed for the Cargo.lock fixup commit but the commit had actually landed (9fb576365) — required an extra git log verification step",
+      "60-01 executor left Cargo.lock uncommitted after editing Cargo.toml, discovered only during 60-04's post-merge cleanup rather than at plan boundary",
+      "60-01 executor appended a stale self-check footer to 60-01-SUMMARY.md after its main commit, requiring a manual revert before wave 2 could continue",
+      "Spurious mid-edit compile diagnostic (VerifyError::Legacy in metadata.rs:619) triggered an extra grep + cargo check round-trip to confirm the tree was actually clean"
+    ],
+    "open_items": [
+      "Wave 2 plan 60-05 (tighten API to strict regime: seq=1 enforce on publish, parseCachedRecord null on missing signed_record, remove legacy DB-sequence override) was in-flight at transcript end",
+      "Wave 3 plan 60-06 (API publish-path verify cache for CPU cost recovery) not yet started",
+      "Wave 4 plan 60-08 (D-01/D-12 operational cutover: staging wipe + redeploy + smoke-test) is non-autonomous and requires a human-action checkpoint",
+      "Windows winfsp integration site for 60-02 is CI-gated only — not locally testable, so first-publish seq=1 on Windows path is unverified locally"
+    ]
+  }
+}
