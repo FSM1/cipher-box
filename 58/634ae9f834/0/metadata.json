@@ -1,0 +1,142 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "58634ae9f834",
+  "session_id": "3379b299-016b-4d40-aaf2-317ab0c08665",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-24T15:36:31.841847Z",
+  "branch": "feat/ipns-verification-cross-layer-closeout-desktop-and-api",
+  "checkpoints_count": 0,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "824d09179bd6",
+  "checkpoint_transcript_start": 1489,
+  "transcript_lines_at_start": 1489,
+  "token_usage": {
+    "input_tokens": 705,
+    "cache_creation_tokens": 31525,
+    "cache_read_tokens": 4463139,
+    "output_tokens": 23857,
+    "api_call_count": 15
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_015unJFE1uKnKxuJBsXrnXCJ",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "824d09179bd6",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 220,
+        "end": 221,
+        "entry_ids": [
+          "0010ab68-b02f-458f-9cb1-9ba8e5708e8f"
+        ],
+        "tool_use_id": "toolu_015unJFE1uKnKxuJBsXrnXCJ"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015unJFE1uKnKxuJBsXrnXCJ"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ship-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01SeiB2Zz3z176peAgQ6T56C",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:secure-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "824d09179bd6",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 538,
+        "end": 539,
+        "entry_ids": [
+          "de9411c8-2fe0-415b-b7f9-c988f0e25450"
+        ],
+        "tool_use_id": "toolu_01SeiB2Zz3z176peAgQ6T56C"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01SeiB2Zz3z176peAgQ6T56C"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:secure-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 12
+  },
+  "summary": {
+    "intent": "Fix a regression in writable-shares functionality (test 3.4) that was caught by a proactively dispatched web-e2e run, and confirm the fix is solid before merging.",
+    "outcome": "Fix committed as 23c915214: added `publicKeyFromIpnsName` fallback in `parseCachedRecord` so writable-shared-folder rows with null `public_key` columns no longer get discarded. All 29 writable-shares tests pass locally, main CI is fully green, and SDK-E2E is 89/89.",
+    "learnings": {
+      "repo": [
+        "CipherBox IPNS names (k51…) encode the Ed25519 public key, making pubKey always recoverable via `peerIdFromCID` — `publicKeyFromIpnsName` is the exact inverse of `deriveIpnsName`.",
+        "Writable-shared-folder DB rows have a null `public_key` column; any code that treats a missing pubKey as discard-worthy will silently break writable shares.",
+        "web-e2e runs with `workers: 1`, `fullyParallel: false`, alphabetical file order, and aborts on early failures — `writable-shares` sorts last and will never run if `invite-link` or `journey-timing` fail first.",
+        "web-e2e is not a required PR check; main CI (Lint, cargo×3, SDK-E2E, jest, typecheck) is what gates merge.",
+        "Documented pre-existing flaky tests in web-e2e: `media-preview`, `invite-link 1.1` (account-creation), `journey-timing` (login-to-vault).",
+        "`UQ_folder_ipns_ipns_name` dup-key noise appears 48 times in the green baseline — not a regression signal."
+      ],
+      "code": [
+        {
+          "path": "packages/crypto/src/index.ts",
+          "finding": "Added `publicKeyFromIpnsName` as the inverse of `deriveIpnsName` via `peerIdFromCID`; used as pubKey fallback in `parseCachedRecord`."
+        },
+        {
+          "path": "apps/api/src/parseCachedRecord.ts",
+          "finding": "Phase 60 D-06 fail-closed branch discarded any DB record whose nullable `public_key` column was null; fix derives pubKey from the IPNS name instead. Still fail-closed: malformed/non-Ed25519 names are discarded and the strict client re-checks `deriveIpnsName(pubKey) === ipnsName`."
+        }
+      ],
+      "workflow": [
+        "Proactively dispatching web-e2e (it doesn't auto-run on PRs) caught a regression that unit tests and SDK-E2E both missed — ship-phase rigor.",
+        "When CI only prints failed tests and a suite has cascade-abort behavior, absence of a test in the failure list does NOT confirm it passed — it may not have run at all.",
+        "Running the specific failing spec in isolation locally (`playwright test writable-shares.spec.ts`) is the decisive confirmation when CI cascade-aborts before reaching it.",
+        "Re-running the old commit 2×/2 to confirm consistent failure (not flaky) before attributing a regression is good practice.",
+        "The regression's exact log signature (`discarding cached result` for the folder) made root-cause confirmation fast."
+      ]
+    },
+    "friction": [
+      "web-e2e's single-worker sequential-alphabetical cascade-abort meant the fix CI run never exercised the regression test — confirmation required a local targeted run.",
+      "CI reporter only prints failed tests, so passing tests are invisible; combined with cascade-abort, it's impossible to distinguish 'passed' from 'never ran'.",
+      "web-e2e has no test-filter dispatch input, making it impossible to run just the relevant spec in CI."
+    ],
+    "open_items": [
+      "Pre-existing web-e2e flakiness (account-creation, journey-timing, media-preview) causes cascade-aborts that hide other test results — captured as todo in `.planning/todos/pending/2026-06-24-web-e2e-flaky-cascade-abort.md`.",
+      "Consider adding a test-filter dispatch input to the web-e2e workflow to allow targeted CI runs of specific specs."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
