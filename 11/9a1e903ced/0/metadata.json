@@ -1,0 +1,137 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "119a1e903ced",
+  "session_id": "3379b299-016b-4d40-aaf2-317ab0c08665",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-24T13:13:52.609537Z",
+  "branch": "feat/ipns-verification-cross-layer-closeout-desktop-and-api",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/60-ipns-verification-cross-layer-closeout-desktop-and-api/60-VERIFICATION.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "bf25a3a92650",
+  "token_usage": {
+    "input_tokens": 19616,
+    "cache_creation_tokens": 543665,
+    "cache_read_tokens": 21620246,
+    "output_tokens": 190673,
+    "api_call_count": 93
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_015unJFE1uKnKxuJBsXrnXCJ",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "bf25a3a92650",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 220,
+        "end": 221,
+        "entry_ids": [
+          "0010ab68-b02f-458f-9cb1-9ba8e5708e8f"
+        ],
+        "tool_use_id": "toolu_015unJFE1uKnKxuJBsXrnXCJ"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015unJFE1uKnKxuJBsXrnXCJ"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ship-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Execute phase 60 (IPNS Verification Cross-Layer Closeout) via wave-based parallel execution across 8 plans, then run the ship-phase workflow (verify, secure, simplify, SDK E2E gate, CodeRabbit, ship) to get the PR up and through CI.",
+    "outcome": "All 7 code plans completed and committed with a full local gate (351 Rust + 252 sdk-core + 172 API jest + 89 SDK E2E all green); the SDK E2E gate caught a real ship-blocking regression from 60-05 which was diagnosed and fixed; phase 60-08 (staging cutover) is paused pending human-action; session ended before the PR was opened due to the 1Password signing wedge.",
+    "learnings": {
+      "repo": [
+        "Ed25519 IPNS records do NOT embed pubKey in the protobuf bytes — `parseIpnsRecordBytes` does not yield `pubKey` for these records; it must be supplied from the separate `FolderIpns.publicKey` DB column (which publish validates via `deriveIpnsName(publicKey) === ipnsName`).",
+        "The `subject-no-parens` commitlint rule rejects parens anywhere in the commit description subject — trailing `(D-XX)` references in executor commits break the `pr-release-preview` CI gate.",
+        "Wave executors commit `Cargo.toml` changes but not the resulting `Cargo.lock` updates, creating a latent `--locked` CI break that must be caught and committed by the orchestrator.",
+        "CAPACITY.md §1.5 was already occupied by a prior phase; executors should discover existing section numbering and use §1.6 rather than overwrite.",
+        "GSD executor commit subjects use a non-conventional `feat 60-01:` style that needs filter-branch rewording before the PR or `pr-release-preview` fails.",
+        "GSD ROADMAP checkboxes are not always updated by sequential plan executors — the orchestrator must reconcile after all waves complete.",
+        "The `gsd:phase uat-passed` CLI exists in help output but has no handler — use `edit VERIFICATION.md` + `phase complete` as the workaround."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/ipns/index.ts",
+          "line": 290,
+          "end_line": 301,
+          "finding": "TS resolve path conditionally skipped EOL enforcement when the Validity field was absent (only enforced when Validity was a Uint8Array); Rust fail-closes on absent Validity via `.ok_or_else()`. Fixed to fail-closed parity (D-07-e) — a genuine cross-layer divergence the phase's strict-cutover intent required."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 528,
+          "end_line": 530,
+          "finding": "60-05's D-06 removal of the `withCachedPublicKey` enrich caused `resolveRecord` to return the bare network result on equal-sequence, which carries no `pubKey` for Ed25519 records. The fix: return the authoritative DB `cachedResult` (which has `pubKey`, `signatureV2`, and `data`) on equal-or-higher sequence."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.spec.ts",
+          "line": 2135,
+          "end_line": 2141,
+          "finding": "The D-06 unit test mocked `parseIpnsRecord` to include `pubKey` (masking realistic Ed25519 behavior) and asserted that `signatureV2`/`data` would be `undefined` on equal-sequence — it codified the bug rather than the correct behavior. Test was updated to match the fixed contract."
+        },
+        {
+          "path": "crates/api-client/src/ipns.rs",
+          "line": 114,
+          "end_line": 117,
+          "finding": "Rust reference implementation: fail-closes on absent Validity via `.ok_or_else(...)` — the behavioral contract the TS D-07-e fix mirrors."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns-record.codec.ts",
+          "finding": "`parseCachedRecord` was updated to carry `pubKey` from the validated `publicKey` column so callers get a fully verifiable record (the strict client re-checks `deriveIpnsName(pubKey) === ipnsName`)."
+        }
+      ],
+      "workflow": [
+        "The SDK E2E gate is the only suite exercising the real client→API IPNS publish/resolve round-trip; all unit suites mock the boundary and miss integration regressions — it caught a 28/89 break here that 343 unit tests (Rust + sdk-core + API jest) all missed.",
+        "SDK E2E accounts use `Date.now()`-seeded emails → unique keys per run → stale-data collision is ruled out as a failure hypothesis without needing a DB wipe.",
+        "Sequential gsd-executor subagents on the main working tree is the correct mode for crypto-cutover phases where correctness and per-plan verification gates outweigh wall-clock parallelism.",
+        "The GSD commit helper can report `commit_failed` while the commit actually landed (lint-staged output triggers a false-negative); always verify with `git log --oneline -1`, never blindly retry.",
+        "1Password SSH signing agent wedges after a burst of rapid commits (`op-ssh-sign: failed to fill whole buffer`); recovery requires quitting and reopening the 1Password desktop app or toggling Settings → Developer → SSH agent off/on."
+      ]
+    },
+    "friction": [
+      "1Password SSH signer wedged after ~28 rapid commits, blocking all further commits for the duration of the SDK E2E gate run and requiring a manual app restart from the user.",
+      "The GSD commit helper's false-negative `commit_failed` pattern required manual `git log` verification after every commit, adding noise throughout the session.",
+      "Wave 1 executors left two uncommitted artifacts (stale Cargo.lock and a factually-wrong SUMMARY.md footer) that the orchestrator had to detect and clean up between waves.",
+      "60-06's ROADMAP checkbox was not ticked by its executor, requiring a reconciliation commit discovered only during the Wave 4 state inspection.",
+      "The SDK E2E gate failure (28/89) required a multi-step root-cause investigation (checking build cleanliness, harness key generation, API resolve code path, codec behavior, and DB column semantics) before a fix could be written."
+    ],
+    "open_items": [
+      "60-08 staging cutover still pending: push branch → green CI (Windows cargo check, Desktop E2E via `gh workflow run`, SDK E2E) must all pass first, then `ssh root@76.13.151.200` DB wipe + redeploy + smoke-test (fresh login self-bootstraps strict root, embedded-0 publish rejected 400, tampered/expired rejected).",
+      "PR not yet opened — ship-phase was interrupted at step 5 (SDK E2E gate); steps 6–10 (CodeRabbit CLI, conventional reword of the `(D-07)` subject, `gh pr create`, resolve PR reviews) remain.",
+      "The one commit subject with a paren violation (`feat(60-01): ... (D-07)`) still needs filter-branch reword before push.",
+      "Phase verification cannot advance beyond `human_needed` (16/17 must-haves) until the staging smoke-test passes and 60-08 SUMMARY is written.",
+      "Consider adding a jest fixture for Ed25519-realistic `parseIpnsRecord` output (without `pubKey`) in the resolveRecord test suite to prevent future regressions of the D-06 enrich pattern."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-24T13:12:38.602674Z",
+    "agent_lines": 160,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 160,
+    "total_lines_changed": 160,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
