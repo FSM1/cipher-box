@@ -85,17 +85,3 @@ export async function parseCachedRecord(
     return null;
   }
 }
-
-export function withCachedPublicKey(
-  result: IpnsRecordFields,
-  publicKey?: Buffer
-): IpnsRecordFields {
-  if (result.pubKey || !result.signatureV2 || !result.data || !publicKey) {
-    return result;
-  }
-
-  return {
-    ...result,
-    pubKey: publicKey.toString('base64'),
-  };
-}
