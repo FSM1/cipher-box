@@ -1,12 +1,13 @@
 ---
 created: 2026-06-24
-title: Stabilize flaky web-e2e suite (single-worker cascade-abort)
-area: tests/web-e2e
+title: Stabilize flaky e2e suites (web cascade-abort + desktop macOS FUSE-T sync)
+area: tests/web-e2e, tests/desktop-e2e
 files:
   - tests/web-e2e/playwright.config.ts
   - tests/web-e2e/tests/invite-link-workflow.spec.ts
   - tests/web-e2e/tests/journey-timing.spec.ts
   - tests/web-e2e/tests/media-preview.spec.ts
+  - tests/desktop-e2e/scripts/test-cross-client-sync.sh
 ---
 
 ## Problem
@@ -48,3 +49,27 @@ TBD — options, smallest-first:
 
 Keep `retries: 0` philosophy in spirit (fix flakiness at the source) but stop a
 single flake from masking unrelated coverage.
+
+## Also: desktop-e2e macOS cross-client sync (FUSE-T timing)
+
+`tests/desktop-e2e/scripts/test-cross-client-sync.sh:194` —
+`FUSE mount still shows original content after 120s` — flakes on **macOS only**
+(Linux + Windows pass). Root cause is FUSE-T's SMB backend caching (noted in
+`test-round-trip.sh:125`) stacked on the 30s IPNS poll: the test allows 120s
+("two full polling cycles", line 172) for a cross-client write to surface in the
+other client's FUSE mount, and on macOS the SMB cache occasionally exceeds that
+window. The folder-rename leg is already marked "optional on macOS" for the same
+reason (it warns instead of failing); the content-sync leg is not.
+
+Evidence it is a flake, not a regression (PR #555 full CI E2E dispatch, run
+28112732258 on commit 1f8f8d85d): the same macOS job PASSED on the immediately
+prior full dispatch (run 28105996601, commit 88f096505), and `git diff
+88f096505..1f8f8d85d` shows the ONLY Rust change is inside `crates/api-client/src/ipns.rs`
+`mod tests` (skew boundary tests) — zero production-code delta in any path the
+desktop binary exercises. macOS desktop also shows intermittent failures on `main`
+history independent of this branch.
+
+Options: raise the content-sync timeout for macOS (e.g. 180s) to match the SMB
+cache reality, or mark the macOS content-sync leg "optional/warn" like the rename
+leg already is, or invalidate the FUSE-T SMB cache between write and read in the
+test harness. Prefer a real cache-invalidation fix over a blanket timeout bump.
