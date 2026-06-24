@@ -22,7 +22,7 @@ import { RepublishService } from '../republish/republish.service';
 import { DelegatedRoutingClient } from './delegated-routing.client';
 import { MetricsService } from '../metrics/metrics.service';
 import { deriveIpnsName, parseIpnsRecord, verifyIpnsRecordSignature } from '@cipherbox/crypto';
-import { parseIpnsRecordBytes, parseCachedRecord, withCachedPublicKey } from './ipns-record.codec';
+import { parseIpnsRecordBytes, parseCachedRecord } from './ipns-record.codec';
 
 @Injectable()
 export class IpnsService {
@@ -277,10 +277,11 @@ export class IpnsService {
     const embeddedSeq = incomingParsed.sequence; // bigint
     let isIdempotentRepublish = false;
     if (!existing) {
-      // First publish: allow embedded ∈ {0n, 1n} only (wedge-poison prevention — T-58-08).
-      if (embeddedSeq !== 0n && embeddedSeq !== 1n) {
+      // First publish: only embedded 1 accepted (D-03 strict — T-58-08, Plan 60-05).
+      // Embedded 0 is no longer tolerated; all first-publish producers unified to 1 in Plan 60-02.
+      if (embeddedSeq !== 1n) {
         throw new BadRequestException(
-          `First publish: embedded sequence must be 0 or 1, got ${embeddedSeq}`
+          `First publish: embedded sequence must be 1, got ${embeddedSeq}`
         );
       }
     } else {
@@ -491,12 +492,12 @@ export class IpnsService {
       });
       const cachedResult = await parseCachedRecord(cached, this.logger);
 
-      if (result && cached?.publicKey) {
-        result = withCachedPublicKey(result, cached.publicKey);
-      }
-
       if (result && cachedResult) {
-        // Both sources available — prefer the one with the higher sequence number
+        // Both sources available — prefer the one with the higher sequence number.
+        // D-06 (Plan 60-05): removed withCachedPublicKey enrich and equal-seq
+        // signatureV2 enrich; parseCachedRecord now returns null for null-signedRecord
+        // rows, so these branches were unreachable for legacy rows and unnecessary
+        // for fresh rows (pubKey is already embedded in the signed record).
         const networkSeq = BigInt(result.sequenceNumber);
         const dbSeq = BigInt(cachedResult.sequenceNumber);
         if (dbSeq > networkSeq) {
@@ -507,15 +508,6 @@ export class IpnsService {
           source = 'network_stale';
           resolveFound = true;
           return cachedResult;
-        }
-        // Equal sequence: enrich network result with cached signature fields if missing
-        if (dbSeq === networkSeq && !result.signatureV2 && cachedResult.signatureV2) {
-          result = {
-            ...result,
-            signatureV2: cachedResult.signatureV2,
-            data: cachedResult.data,
-            pubKey: result.pubKey ?? cachedResult.pubKey,
-          };
         }
         timerSource = 'network';
         resolveFound = true;
