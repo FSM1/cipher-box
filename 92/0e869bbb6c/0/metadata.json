@@ -1,0 +1,66 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "920e869bbb6c",
+  "session_id": "3379b299-016b-4d40-aaf2-317ab0c08665",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-24T00:51:23.764765Z",
+  "branch": "feat/ipns-verification-cross-layer-closeout-desktop-and-api",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "f2967dbe082c",
+  "token_usage": {
+    "input_tokens": 12953,
+    "cache_creation_tokens": 121228,
+    "cache_read_tokens": 1608236,
+    "output_tokens": 32430,
+    "api_call_count": 17
+  },
+  "summary": {
+    "intent": "Execute Phase 60 (IPNS Verification Cross-Layer Closeout) using wave-based parallel execution to harden IPNS verification across Rust and TypeScript layers, making all resolve paths strictly fail-closed.",
+    "outcome": "Wave 1 completed successfully (plans 60-01, 60-02, 60-03) and Wave 2 started (60-04 in progress). All three Wave 1 crates compile clean with 251/251 sdk-core tests passing. Wave 2 was cut off mid-execution in the transcript.",
+    "learnings": {
+      "repo": [
+        "Phase 60 has 8 plans across 4 waves; Wave 4 (60-08) is non-autonomous and requires a human-action checkpoint for staging wipe + redeploy + smoke-test.",
+        "The IPNS verify chokepoint was originally split across crates (crates/fuse/src/verify.rs) but was consolidated into crates/api-client/src/ipns.rs in 60-01 so sdk/fuse/desktop share one implementation.",
+        "All 9 first-publish IPNS producers previously used seq=0; 60-02 unified them to seq=1 as a precondition for the strict resolve verifier.",
+        "The VerifyError::Legacy variant was fully removed in 60-01 — all 9 FUSE caller arms folded to use Invalid instead, despite 60-04 being the declared scope for that work (compile necessity forced it early).",
+        "Pre-existing vendored fuser dead-code warnings are expected and benign; do not treat them as regressions.",
+        "No project-specific executor skills (gsd-tools query init.execute-phase returned empty payload).",
+        "No submodules in this repo — all plans use worktree isolation per config."
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/metadata.rs",
+          "line": 619,
+          "end_line": 619,
+          "finding": "Was the last remaining VerifyError::Legacy reference; folded to Invalid by 60-01 executor as a compile necessity, not 60-04 as planned."
+        },
+        {
+          "path": "packages/sdk-core/src/vault.test.ts",
+          "finding": "Had a stale seq expectation of 0n that needed updating to 1n after 60-02 unified first-publish producers to seq=1."
+        }
+      ],
+      "workflow": [
+        "The GSD harness worktree isolation mode (isolation='worktree') is unreliable for merge-back in this setup — the orchestrator cannot access the worktree path/branch manifest, so sequential subagents on the feature branch were used instead.",
+        "Mid-edit compiler diagnostics captured by an executor can be stale snapshots; always re-run cargo check authoritatively before marking a plan blocked.",
+        "Wave-level build/test gates (cargo check + full test suite) are essential for catching cross-plan integration issues before proceeding to the next wave.",
+        "60-03 executor proactively fixed a downstream test regression caused by 60-02 (vault.test.ts 0n→1n), which is a valid Rule 1 deviation when the fix is in scope and unambiguous."
+      ]
+    },
+    "friction": [
+      "The execute-phase workflow required multiple sequential file reads (3 separate reads of execute-phase.md plus the worktree-gate and post-merge-gate step files) before any dispatch could happen, adding latency to phase startup.",
+      "The 60-01 executor reported a false compile error (metadata.rs:619 VerifyError::Legacy) mid-execution — it was a stale snapshot, not a real failure, but required an extra verification round-trip with grep + cargo check.",
+      "The worktree-based parallel execution mode (the workflow's primary performance path) was abandoned because the harness cannot reliably retrieve worktree branch names for merge-back, forcing sequential execution and higher wall-clock time.",
+      "Plan scope boundaries were crossed: 60-01 folded all FUSE Legacy caller arms (declared scope of 60-04) because the compiler forced it — creates ambiguity about what 60-04 still needs to do."
+    ],
+    "open_items": [
+      "Wave 2 was in-flight (60-04 executing) when the transcript ended — 5 plans remain: 60-04, 60-05, 60-07 (Wave 2), 60-06 (Wave 3), 60-08 (Wave 4).",
+      "60-08 is a non-autonomous human checkpoint (staging wipe + redeploy + smoke-test for D-01/D-12 operational cutover) — requires manual action when reached.",
+      "60-04 scope needs re-evaluation since 60-01 already folded the 9 FUSE Legacy arms; the remaining work is 2 crates/sdk raw-resolve bypasses and 6 desktop Tauri resolve_ipns sites.",
+      "Windows WinFSP site coverage for seq=1 changes (60-02) is CI-gated only — no local verification possible.",
+      "The worktree merge-back limitation in the GSD harness should be investigated as a longer-term improvement to enable true parallel wave execution."
+    ]
+  }
+}
