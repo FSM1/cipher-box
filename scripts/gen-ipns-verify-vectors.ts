@@ -321,8 +321,8 @@ async function main(): Promise<void> {
 
   // ------------------------------------------------------------------
   // Case 7: legacy-absent — all three of signatureV2, data, pub_key null.
-  // Only all-absent records are treated as legacy (D-04).
-  // Expected result: "legacy" (allowed, signatureVerified=false).
+  // Under the strict regime (D-04), absent fields are fail-closed: Invalid.
+  // Expected result: "invalid".
   // ------------------------------------------------------------------
   {
     vectors.push({
@@ -333,7 +333,7 @@ async function main(): Promise<void> {
       signature_v2: null,
       data: null,
       pub_key: null,
-      expected_result: 'legacy',
+      expected_result: 'invalid',
     });
     console.log('Case 7 (legacy-absent): done');
   }
@@ -342,12 +342,10 @@ async function main(): Promise<void> {
   // Case 8: first-publish-skew — sig valid over CBOR data with embedded
   // Sequence=0, but response `sequence_number` is 1.
   //
-  // This is the documented first-publish skew (D-09): the API accepts an
-  // embedded sequence ∈ {0,1} on first publish and unconditionally stores
-  // DB sequenceNumber=1. The Rust/FUSE publish paths embed the IPNS-native 0
-  // while the TS SDK embeds 1 — both legitimate. The resolve-side binding must
-  // accept embedded=0 when response sequenceNumber==1 (it is NOT a tamper).
-  // Expected result: "valid".
+  // Under the strict regime (D-04/D-05), the skew allowance
+  // (resp_seq==1 && embedded_seq==0) is removed. Strict equality:
+  // embedded_seq must equal resp_seq. embedded=0 != resp=1 → Invalid.
+  // Expected result: "invalid".
   // ------------------------------------------------------------------
   {
     const cborData = buildCborData(CID_A, 0);
@@ -363,7 +361,7 @@ async function main(): Promise<void> {
       signature_v2: bytesToBase64(sig),
       data: bytesToBase64(cborData),
       pub_key: bytesToBase64(primaryPub),
-      expected_result: 'valid',
+      expected_result: 'invalid',
     });
     console.log('Case 8 (first-publish-skew): done — sig covers CBOR with seq=0, response.seq=1');
   }
@@ -382,8 +380,8 @@ async function main(): Promise<void> {
     'invalid',
     'invalid',
     'invalid',
-    'legacy',
-    'valid',
+    'invalid',
+    'invalid',
   ];
   const expectedDescriptions = [
     'valid',
