@@ -1075,7 +1075,7 @@ Verification gate: `cargo test` (fuse + winfsp feature sets), winfsp Windows CI,
 **Goal:** Extend verified IPNS resolution beyond the FUSE crate to the remaining desktop Tauri resolve sites, and recover the per-operation IPNS signature-verification CPU cost on the API publish/resolve hot path — without weakening the zero-knowledge integrity model (untrusted / DHT-sourced records must still be fully verified).
 **Requirements**: HARD-11
 **Depends on:** Phase 58 (resolve_ipns_verified chokepoint), Phase 59 (unified first-publish sequence convention)
-**Plans:** 6/8 plans executed
+**Plans:** 7/8 plans executed
 
 Scope (captured todos):
 
@@ -1096,7 +1096,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 60-06-PLAN.md — D-11 hot-path verify-cost benchmark + safe short-TTL verified-record cache (D-11) [wave 3]
+- [x] 60-06-PLAN.md — D-11 hot-path verify-cost benchmark + safe short-TTL verified-record cache (D-11) [wave 3]
 - [x] 60-07-PLAN.md — Regenerate cross-language verify vector + strict Rust classifier (D-10) [wave 3]
 
 **Wave 4** *(blocked on Wave 3 completion)*
