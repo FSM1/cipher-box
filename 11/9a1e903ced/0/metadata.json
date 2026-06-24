@@ -51,6 +51,37 @@
         "label": "Skill: ship-phase",
         "default_collapsed": true
       }
+    },
+    {
+      "id": "claude-skill-toolu_01SeiB2Zz3z176peAgQ6T56C",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:secure-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "bf25a3a92650",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 538,
+        "end": 539,
+        "entry_ids": [
+          "de9411c8-2fe0-415b-b7f9-c988f0e25450"
+        ],
+        "tool_use_id": "toolu_01SeiB2Zz3z176peAgQ6T56C"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01SeiB2Zz3z176peAgQ6T56C"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:secure-phase",
+        "default_collapsed": true
+      }
     }
   ],
   "session_metrics": {
