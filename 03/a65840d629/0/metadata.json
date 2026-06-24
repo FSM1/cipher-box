@@ -1,0 +1,62 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "03a65840d629",
+  "session_id": "3379b299-016b-4d40-aaf2-317ab0c08665",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-24T01:44:49.89472Z",
+  "branch": "feat/ipns-verification-cross-layer-closeout-desktop-and-api",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "f2967dbe082c",
+  "token_usage": {
+    "input_tokens": 14091,
+    "cache_creation_tokens": 147400,
+    "cache_read_tokens": 3269044,
+    "output_tokens": 48951,
+    "api_call_count": 28
+  },
+  "summary": {
+    "intent": "Execute Phase 60 ('IPNS Verification Cross-Layer Closeout') of the CipherBox GSD workflow — 8 plans across 4 waves that harden IPNS verification fail-closed across Rust, TypeScript, and API layers, enforcing strict seq=1 first-publish, removing legacy acceptance paths, and adding CPU-cost recovery via a verify cache.",
+    "outcome": "Waves 1–3 completed (7/8 plans done, 251/251 Rust sdk-core tests and 159/159 API ipns specs passing). Wave 3 plan 60-06 was spawned but its result is not captured in the transcript. Wave 4 (60-08, non-autonomous operational cutover) remains pending human action.",
+    "learnings": {
+      "repo": [
+        "The canonical IPNS verify chokepoint was moved from crates/fuse/src/verify.rs into crates/api-client/src/ipns.rs so sdk/fuse/desktop share one implementation.",
+        "First-publish IPNS sequence was standardized from 0 to 1 across all 9 producers (FUSE, desktop Tauri, sdk-core, web); vault.test.ts had a stale 0n expectation that required updating.",
+        "crates/fuse/src/verify.rs was fully deleted in 60-04 once 60-01 moved the chokepoint and 60-04 re-pointed all imports.",
+        "60-01 added ciborium + cipherbox-core as dependencies to crates/api-client (CBOR Validity parsing for EOL/expiry enforcement) but the executor committed Cargo.toml without committing Cargo.lock, creating a latent --locked CI break.",
+        "The cross-language verify vectors at tests/vectors/ipns/verify.json are regenerated via npx tsx from a generator; legacy-absent and first-publish-skew cases were reclassified to expected_result: invalid.",
+        "Windows winfsp smoke site for 60-02 (first-publish seq=1) is CI-gated and not verifiable locally.",
+        "60-01 had to fold all 9 FUSE VerifyError::Legacy caller arms as a compile necessity even though that was scoped to 60-04, because removing the Legacy enum variant made the crate uncompilable."
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/metadata.rs",
+          "line": 619,
+          "end_line": 619,
+          "finding": "Was using VerifyError::Legacy which 60-01 removed; replaced with VerifyError::Invalid. Mid-run diagnostic falsely reported E0599 compile error from a stale snapshot — final build was clean."
+        }
+      ],
+      "workflow": [
+        "Sequential gsd-executor subagents on the main working tree were chosen over worktree isolation because the harness has no reliable merge-back mechanism for isolation=worktree agents; this trades wall-clock time for correctness on a crypto-sensitive phase.",
+        "The gsd-helper commit tool has a known false-negative: it reports 'No staged files match any configured task' / commit_failed even when the commit actually lands. Always verify with git log rather than trusting the helper's return value.",
+        "Executors can append stray content to SUMMARY.md after their final commit (a footer self-check block), leaving uncommitted and factually stale content in the working tree — requires manual inspection and cleanup before the next wave.",
+        "Wave-level build/test gates between waves are critical for catching cross-plan integration issues (e.g., 60-01↔60-02 in fuse/metadata.rs, 60-02↔60-03 in sdk-core).",
+        "Jest output is noisy enough that a summary grep is needed to extract pass/fail counts when running as part of a gate check."
+      ]
+    },
+    "friction": [
+      "gsd-helper commit tool false-negative: reports commit_failed even on success, requiring an extra git log verification step after every commit attempt.",
+      "60-01 executor left Cargo.lock uncommitted after adding ciborium + cipherbox-core deps to Cargo.toml, creating a latent --locked CI break that had to be caught and fixed manually between waves.",
+      "60-01 executor appended a stray, factually-wrong footer to 60-01-SUMMARY.md after its final commit (stated 'verify.rs FOUND' but 60-04 later deleted it); required manual revert.",
+      "False E0599 compile error diagnostic (VerifyError::Legacy in metadata.rs:619) from a mid-edit snapshot required manual cargo check to confirm the tree was actually green.",
+      "Jest output for API ipns specs buried the pass/fail summary in log noise, requiring a second extraction command."
+    ],
+    "open_items": [
+      "Wave 3 plan 60-06 (API publish-path verify cache keyed by ipnsName+sequenceNumber+signatureV2-bytes, with measured cost recovery in docs/CAPACITY.md §1.5) was spawned but its outcome is not confirmed in the transcript.",
+      "Wave 4 plan 60-08 (D-01/D-12 operational cutover: staging wipe + redeploy + smoke-test) is non-autonomous and requires human action before phase 60 can be marked complete.",
+      "Windows winfsp CI gate for 60-02 (first-publish seq=1 across all producers) was not locally verifiable and depends on CI to confirm."
+    ]
+  }
+}
