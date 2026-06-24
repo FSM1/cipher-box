@@ -1,0 +1,73 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "9fd10bb22bf8",
+  "session_id": "3379b299-016b-4d40-aaf2-317ab0c08665",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-24T01:38:49.122815Z",
+  "branch": "feat/ipns-verification-cross-layer-closeout-desktop-and-api",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "f2967dbe082c",
+  "token_usage": {
+    "input_tokens": 14091,
+    "cache_creation_tokens": 147400,
+    "cache_read_tokens": 3269044,
+    "output_tokens": 48951,
+    "api_call_count": 28
+  },
+  "summary": {
+    "intent": "Execute phase 60 ('IPNS Verification Cross-Layer Closeout') of the GSD workflow: 8 plans across 4 waves hardening IPNS verification fail-closed across Rust (api-client, fuse, sdk, desktop) and TypeScript (sdk-core, API service) layers.",
+    "outcome": "Waves 1–2 fully complete (6/8 plans, all gates green); Wave 3 plan 60-06 spawned but transcript ends before result. Wave 4 (60-08) is deferred as non-autonomous — requires human staging wipe + redeploy + smoke-test.",
+    "learnings": {
+      "repo": [
+        "Plan 60-01 was forced to fold all 9 FUSE VerifyError::Legacy caller arms as a compile necessity, bleeding into 60-04's declared scope — cross-plan scope bleed can occur when removing enum variants compels immediate upstream fixups.",
+        "crates/fuse/src/verify.rs was fully deleted by 60-04 after its re-export became empty; the implementation now lives solely in crates/api-client/src/ipns.rs.",
+        "crates/api-client gained ciborium + cipherbox-core deps (60-01 CBOR Validity parsing) — Cargo.toml was edited but Cargo.lock was never committed by the executor, a latent --locked CI break caught by the orchestrator.",
+        "sdk-core runs 251 tests (34 ipns-specific); API ipns jest suite runs 159 specs where ERROR-level log lines are negative-path assertions, not failures — the summary line is required to confirm pass/fail.",
+        "vault.test.ts held a stale 0n sequence expectation that 60-03's executor fixed proactively after 60-02 changed all first-publish producers to seq=1.",
+        "Wave 4 (60-08) is flagged non-autonomous in the plan frontmatter: staging wipe + redeploy + smoke-test is a human-action checkpoint, not executable by a subagent.",
+        "Windows winfsp site compilation for 60-02 changes is CI-gated only — no local cross-compilation path available."
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/metadata.rs",
+          "line": 619,
+          "end_line": 619,
+          "finding": "Was the last VerifyError::Legacy reference — executor had already replaced it with ::Invalid before the stale E0599 diagnostic was emitted; zero Legacy refs remain post-60-01."
+        },
+        {
+          "path": "crates/fuse/src/verify.rs",
+          "finding": "Deleted entirely by 60-04; was a now-empty re-export shim after 60-01 moved the canonical verify implementation to crates/api-client/src/ipns.rs."
+        },
+        {
+          "path": ".gsd/phases/60/plans/60-01-SUMMARY.md",
+          "finding": "Executor appended a stray self-check footer after the SUMMARY commit; footer claimed 'verify.rs FOUND' which became factually wrong after 60-04 deleted the file. Required manual revert."
+        }
+      ],
+      "workflow": [
+        "Sequential subagent execution on the main feature branch was chosen over worktree isolation because the harness cannot reliably expose worktree branch/path manifests for merge-back — critical for a strict fail-closed crypto phase.",
+        "The gsd commit helper has a confirmed false-negative: it reports 'commit_failed / No staged files match any configured task' even when the commit lands successfully. Always verify with git log rather than trusting the helper's exit message.",
+        "Mid-edit compile error diagnostics from executors (E0599 etc.) can be stale snapshots taken before the editor flushed — always run cargo check authoritatively before treating a build failure as real.",
+        "Cargo.lock must be committed immediately after any Cargo.toml dep addition; executors that edit manifests don't reliably stage the lockfile, leaving a silent --locked CI break.",
+        "Between-wave cleanup pass is necessary: stray uncommitted artifacts (Cargo.lock drift, SUMMARY footers) from one executor can corrupt the next executor's baseline state."
+      ]
+    },
+    "friction": [
+      "gsd commit helper false-negative forced an extra git log verification step after every executor commit — can't trust the helper's success/failure signal.",
+      "60-01 executor emitted a stale E0599 (VerifyError::Legacy) diagnostic after completing, requiring an orchestrator-driven cargo check round-trip to confirm the build was actually green.",
+      "60-01 executor edited Cargo.toml but did not stage/commit Cargo.lock — discovered only during 60-04 cleanup, requiring an out-of-band commit by the orchestrator.",
+      "60-01-SUMMARY.md received a stray post-commit footer that was factually incorrect by the time 60-04 ran; required manual revert before proceeding.",
+      "Jest ERROR log lines in negative-path API tests buried the pass/fail summary, requiring a second targeted extraction command to confirm 159/159 pass.",
+      "Worktree isolation mode is documented in the workflow but the harness lacks a reliable merge-back path, forcing the orchestrator to fall back to sequential main-branch execution."
+    ],
+    "open_items": [
+      "Wave 3 plan 60-06 (API publish-path verify cache, D-11) — spawned at transcript end, result unknown; must confirm completion and run Wave 3 gate before proceeding.",
+      "Wave 4 plan 60-08 — non-autonomous operational cutover: staging environment wipe, redeploy, and smoke-test require human action before phase can be marked complete.",
+      "Windows winfsp compilation coverage for 60-02 seq=1 producer changes is CI-only — no local verification path; a CI failure on that path would be the first signal of a problem.",
+      "docs/CAPACITY.md §1.5 measured cost-recovery write-up (60-06 deliverable) — not yet confirmed written given the transcript ends mid-plan.",
+      "Phase verification and completion steps (phase uat + phase complete) not yet reached — blocked on 60-06 result and 60-08 human action."
+    ]
+  }
+}
