@@ -62,7 +62,13 @@ pub async fn register_device(
     let existing_registry =
         match fetch_and_decrypt_registry(api, &reg_ipns_name, private_key).await {
             Ok(reg) => Some(reg),
-            Err(_) => None, // No registry exists yet (first device)
+            // Only a concrete IPNS-not-found (404) is the legitimate first-device
+            // bootstrap path. Any other error — verification failure (VerifyError::Invalid
+            // → RegistryError), parse failure, transient API/network error, or decrypt
+            // failure — must propagate so a tampered/invalid registry record cannot trigger
+            // first-device auto-authorization (D-08 fail-closed).
+            Err(SdkError::Api(cipherbox_api_client::ApiError::IpnsNotFound(_))) => None,
+            Err(e) => return Err(e),
         };
 
     // 3. Build device entry
