@@ -390,21 +390,33 @@ impl CipherBoxFS {
             };
             self.refreshing_metadata.remove(&ipns_name);
             if self.mutated_folders.contains_key(&ino) || self.publish_queue.contains_key(&ino) {
+                // This folder has pending local mutations/publishes. Do NOT rebuild
+                // its structure from remote metadata -- that would clobber the local
+                // change with stale remote state before our own publish propagates
+                // (folder-state desync). But a *remote* file edit (newer modified_at)
+                // arriving in this same window must still surface, so mark only those
+                // genuine remote edits for re-resolution -- local mutations (local
+                // mtime >= remote) are left untouched -- then fall through to the
+                // shared resolution-spawn block below.
                 self.metadata_cache.set(&ipns_name, metadata.clone(), cid);
-                continue;
+                self.inodes
+                    .mark_remotely_edited_files_unresolved(ino, &metadata);
+            } else {
+                self.metadata_cache
+                    .set(&ipns_name, metadata.clone(), cid.clone());
+                if let Err(e) = self.inodes.populate_folder(
+                    ino,
+                    &metadata,
+                    &self.private_key,
+                    &self.public_key,
+                    true,
+                ) {
+                    log::warn!("Drain refresh apply failed for ino {}: {}", ino, e);
+                }
             }
-            self.metadata_cache
-                .set(&ipns_name, metadata.clone(), cid.clone());
-            if let Err(e) = self.inodes.populate_folder(
-                ino,
-                &metadata,
-                &self.private_key,
-                &self.public_key,
-                true,
-            ) {
-                log::warn!("Drain refresh apply failed for ino {}: {}", ino, e);
-            }
-            // Spawn async resolution for unresolved FilePointers in this folder
+            // Spawn async resolution for unresolved FilePointers in this folder.
+            // Covers both the freshly-populated path and the locally-mutating
+            // remote-edit path (marked just above).
             let unresolved = self.inodes.get_unresolved_file_pointers_for_parent(ino);
             if !unresolved.is_empty() {
                 let folder_key = self.inodes.get(ino).and_then(|i| match &i.kind {
