@@ -193,7 +193,7 @@ The `pr-release-preview.yml` workflow computes per-PR release targets and the bo
 
 - **Never force-push over the bot `chore(release)` commit.** When updating an open PR branch, always `git fetch && git rebase origin/<branch>` (or `git pull --rebase`) to preserve the bot commit — a `git push --force` clobbers it and silently drops the computed release targets.
 - The preview workflow uses `concurrency.cancel-in-progress: false` as a safety-net: a queued recompute is allowed to finish, so the targets self-heal even if a push raced the bot. This is a backstop, not a license to force-push.
-- Never leave a `release-as` pin in `release-please-config.json` equal to its `.release-please-manifest.json` version — that makes release-please re-release an already-shipped version (a self-comparing changelog loop). The `check-stale-release-as.js` guard fails CI when this happens; remove the stale `release-as` key (the version already shipped).
+- Never leave a `release-as` pin in `release-please-config.json` equal to its `.release-please-manifest.json` version — that makes release-please re-release an already-shipped version (a self-comparing changelog loop). Remove the stale `release-as` key (the version already shipped) when this happens. This is no longer CI-enforced, so check it manually.
 
 <!-- GSD:profile-start -->
 

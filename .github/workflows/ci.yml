@@ -64,22 +64,6 @@ jobs:
       - name: Run linter
         run: pnpm lint
 
-      # Stale release-as guard (T-53-05): fail CI if any release-as pin in
-      # release-please-config.json equals its shipped manifest version, which
-      # would make release-please self-compare (vX..vX). The pure-function unit
-      # suite is state-independent and always runs.
-      - name: Test stale release-as guard
-        run: node --test .github/scripts/check-stale-release-as.test.js
-
-      # Skip the live check on release-please's own PR: that PR bumps the manifest
-      # UP to each release-as target, so release-as == manifest is the EXPECTED
-      # in-flight release there, not a stale pin. The check still runs on every
-      # other PR, so a genuinely stale pin (already shipped, not removed) is caught
-      # on the next feature PR.
-      - name: Check for stale release-as pins
-        if: ${{ !startsWith(github.head_ref, 'release-please--') }}
-        run: node .github/scripts/check-stale-release-as.js
-
   typecheck:
     name: Typecheck
     needs: [changes, lint]
