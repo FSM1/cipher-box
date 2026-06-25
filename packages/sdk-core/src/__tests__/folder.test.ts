@@ -681,7 +681,11 @@ describe('addFileToFolder', () => {
     // The folder record carries expectedSequenceNumber (CAS); file records do not.
     const published = mockFns.batchPublishIpnsRecords.mock.calls[0][0];
     expect(published).toHaveLength(2);
+    // Positive identity: the file record is published under the file IPNS name
+    // (no CAS), the folder record under the parent name (carries CAS).
+    expect(published[0].ipnsName).toBe('k51-file-aaa');
     expect(published[0].expectedSequenceNumber).toBeUndefined();
+    expect(published[1].ipnsName).toBe('k51-parent');
     expect(published[1].expectedSequenceNumber).toBe('4');
   });
 

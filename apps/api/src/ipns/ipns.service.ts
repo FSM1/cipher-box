@@ -357,7 +357,9 @@ export class IpnsService {
             saved.sequenceNumber
           )
           .catch((err) =>
-            this.logger.warn(`Failed to enroll ${ipnsName} for republishing: ${err.message}`)
+            this.logger.warn(
+              `Failed to enroll ${ipnsName} for republishing: ${err instanceof Error ? err.message : String(err)}`
+            )
           );
       }
 
@@ -394,7 +396,9 @@ export class IpnsService {
           saved.sequenceNumber
         )
         .catch((err) =>
-          this.logger.warn(`Failed to enroll ${ipnsName} for republishing: ${err.message}`)
+          this.logger.warn(
+            `Failed to enroll ${ipnsName} for republishing: ${err instanceof Error ? err.message : String(err)}`
+          )
         );
     }
 

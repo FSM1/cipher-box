@@ -149,7 +149,13 @@ describe('MetricsService', () => {
       const metric = await service.registry.getSingleMetricAsString('cipherbox_ipns_entries_total');
       // Without an explicit set, an empty table emits no series and Grafana
       // sticks at the last non-zero sample — assert the single gauge reports 0.
-      expect(metric).toMatch(/cipherbox_ipns_entries_total(\{[^}]*\})?\s+0\b/);
+      const samples = metric
+        .split('\n')
+        .filter((line) => /^cipherbox_ipns_entries_total(?:\{[^}]*\})?\s+\d+\b/.test(line));
+      expect(samples).toHaveLength(1);
+      expect(samples[0]).toMatch(/\s+0\b/);
+      // record_type was removed from the gauge; guard against the label returning.
+      expect(metric).not.toContain('record_type=');
     });
 
     it('reports the total row count from folder_ipns', async () => {
@@ -158,7 +164,13 @@ describe('MetricsService', () => {
       await collectGauges();
 
       const metric = await service.registry.getSingleMetricAsString('cipherbox_ipns_entries_total');
-      expect(metric).toMatch(/cipherbox_ipns_entries_total(\{[^}]*\})?\s+5\b/);
+      const samples = metric
+        .split('\n')
+        .filter((line) => /^cipherbox_ipns_entries_total(?:\{[^}]*\})?\s+\d+\b/.test(line));
+      expect(samples).toHaveLength(1);
+      expect(samples[0]).toMatch(/\s+5\b/);
+      // record_type was removed from the gauge; guard against the label returning.
+      expect(metric).not.toContain('record_type=');
     });
   });
 });
