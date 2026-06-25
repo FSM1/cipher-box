@@ -65,7 +65,7 @@ The API exposes a `/metrics` endpoint (unauthenticated, excluded from Swagger) w
 | `cipherbox_users_total`              |                                  | Total registered users               |
 | `cipherbox_files_total`              |                                  | Total pinned files across all users  |
 | `cipherbox_storage_bytes_total`      |                                  | Total storage used (bytes)           |
-| `cipherbox_ipns_entries_total`       | `record_type` (folder/file)      | Total IPNS entries by type           |
+| `cipherbox_ipns_entries_total`       |                                  | Total IPNS entries                   |
 | `cipherbox_republish_schedule_total` | `status` (active/retrying/stale) | Republish schedule entries by status |
 
 ### Counters (event-driven)

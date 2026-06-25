@@ -12,11 +12,7 @@ describe('MetricsService', () => {
   };
 
   const mockFolderIpnsRepo = {
-    createQueryBuilder: jest.fn().mockReturnThis(),
-    select: jest.fn().mockReturnThis(),
-    addSelect: jest.fn().mockReturnThis(),
-    groupBy: jest.fn().mockReturnThis(),
-    getRawMany: jest.fn().mockResolvedValue([]),
+    count: jest.fn().mockResolvedValue(0),
   };
 
   const mockUserRepo = {
@@ -145,30 +141,36 @@ describe('MetricsService', () => {
     const collectGauges = () =>
       (service as unknown as { collectGauges: () => Promise<void> }).collectGauges();
 
-    it('emits explicit 0 for every known record type when folder_ipns is empty', async () => {
-      mockFolderIpnsRepo.getRawMany.mockResolvedValueOnce([]);
+    it('emits an explicit 0 when folder_ipns is empty', async () => {
+      mockFolderIpnsRepo.count.mockResolvedValueOnce(0);
 
       await collectGauges();
 
       const metric = await service.registry.getSingleMetricAsString('cipherbox_ipns_entries_total');
-      // Without explicit zeroing, an empty table emits no series and Grafana
-      // sticks at the last non-zero sample — assert both known types report 0.
-      expect(metric).toMatch(
-        /cipherbox_ipns_entries_total\{[^}]*record_type="folder"[^}]*\}\s+0\b/
-      );
-      expect(metric).toMatch(/cipherbox_ipns_entries_total\{[^}]*record_type="file"[^}]*\}\s+0\b/);
+      // Without an explicit set, an empty table emits no series and Grafana
+      // sticks at the last non-zero sample — assert the single gauge reports 0.
+      const samples = metric
+        .split('\n')
+        .filter((line) => /^cipherbox_ipns_entries_total(?:\{[^}]*\})?\s+\d+\b/.test(line));
+      expect(samples).toHaveLength(1);
+      expect(samples[0]).toMatch(/\s+0\b/);
+      // record_type was removed from the gauge; guard against the label returning.
+      expect(metric).not.toContain('record_type=');
     });
 
-    it('overlays real counts while still zeroing absent record types', async () => {
-      mockFolderIpnsRepo.getRawMany.mockResolvedValueOnce([{ recordType: 'folder', count: '5' }]);
+    it('reports the total row count from folder_ipns', async () => {
+      mockFolderIpnsRepo.count.mockResolvedValueOnce(5);
 
       await collectGauges();
 
       const metric = await service.registry.getSingleMetricAsString('cipherbox_ipns_entries_total');
-      expect(metric).toMatch(
-        /cipherbox_ipns_entries_total\{[^}]*record_type="folder"[^}]*\}\s+5\b/
-      );
-      expect(metric).toMatch(/cipherbox_ipns_entries_total\{[^}]*record_type="file"[^}]*\}\s+0\b/);
+      const samples = metric
+        .split('\n')
+        .filter((line) => /^cipherbox_ipns_entries_total(?:\{[^}]*\})?\s+\d+\b/.test(line));
+      expect(samples).toHaveLength(1);
+      expect(samples[0]).toMatch(/\s+5\b/);
+      // record_type was removed from the gauge; guard against the label returning.
+      expect(metric).not.toContain('record_type=');
     });
   });
 });

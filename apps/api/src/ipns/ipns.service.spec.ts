@@ -67,7 +67,6 @@ describe('IpnsService', () => {
     encryptedIpnsPrivateKey: Buffer.from(testEncryptedIpnsPrivateKey, 'hex'),
     keyEpoch: testKeyEpoch,
     isRoot: false,
-    recordType: 'folder',
     createdAt: new Date('2026-01-20T12:00:00.000Z'),
     updatedAt: new Date('2026-01-20T12:00:00.000Z'),
     user: {} as User,
@@ -429,7 +428,6 @@ describe('IpnsService', () => {
           encryptedIpnsPrivateKey: Buffer.from(testEncryptedIpnsPrivateKey, 'hex'),
           keyEpoch: testKeyEpoch,
           isRoot: false,
-          recordType: 'folder',
         })
       );
     });
@@ -1644,19 +1642,16 @@ describe('IpnsService', () => {
             ipnsName: 'k51qzi5uqu5dg12345abcdef00001',
             record: testRecord,
             metadataCid: testMetadataCid, // S1: matches embedded CID from default mock
-            recordType: 'file',
           },
           {
             ipnsName: 'k51qzi5uqu5dg12345abcdef00002',
             record: testRecord,
             metadataCid: testMetadataCid, // S1: matches embedded CID from default mock
-            recordType: 'file',
           },
           {
             ipnsName: testIpnsName,
             record: testRecord,
             metadataCid: testMetadataCid,
-            recordType: 'folder',
             expectedSequenceNumber: '3', // Stale: DB has '5' → CAS 409 fires first
           },
         ],
@@ -1696,13 +1691,11 @@ describe('IpnsService', () => {
             ipnsName: 'k51qzi5uqu5dg12345abcdef00001',
             record: testRecord,
             metadataCid: testMetadataCid, // S1: matches embedded CID
-            recordType: 'file',
           },
           {
             ipnsName: testIpnsName,
             record: testRecord,
             metadataCid: testMetadataCid,
-            recordType: 'folder',
             expectedSequenceNumber: '5', // Matches DB; embedded seq must be 6n
           },
         ],

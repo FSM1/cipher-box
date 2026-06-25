@@ -228,7 +228,7 @@ async function buildFolderIpnsRecord(params: {
   keyEpoch?: number;
 }): Promise<{
   cid: string;
-  record: FileIpnsRecordPayload & { recordType: 'folder'; expectedSequenceNumber: string };
+  record: FileIpnsRecordPayload & { expectedSequenceNumber: string };
   newSequenceNumber: bigint;
 }> {
   const metadata: FolderMetadata = {
@@ -263,7 +263,6 @@ async function buildFolderIpnsRecord(params: {
       metadataCid: cid,
       encryptedIpnsPrivateKey: params.encryptedIpnsPrivateKey,
       keyEpoch: params.keyEpoch,
-      recordType: 'folder',
       expectedSequenceNumber: params.sequenceNumber.toString(),
     },
     newSequenceNumber: newSeq,
@@ -326,7 +325,7 @@ export async function addFileToFolder(params: {
 
   // 5. Batch publish: file IPNS record + folder IPNS record
   const publishResult = await batchPublishIpnsRecords(
-    [{ ...params.fileIpnsRecord, recordType: 'file' as const }, folderResult.record],
+    [params.fileIpnsRecord, folderResult.record],
     params.ctx
   );
 
@@ -401,10 +400,7 @@ export async function addFilesToFolder(params: {
   });
 
   // 5. Batch publish: all N file IPNS records + 1 folder IPNS record
-  const allRecords = [
-    ...params.files.map((f) => ({ ...f.fileIpnsRecord, recordType: 'file' as const })),
-    folderResult.record,
-  ];
+  const allRecords = [...params.files.map((f) => f.fileIpnsRecord), folderResult.record];
   const publishResult = await batchPublishIpnsRecords(allRecords, params.ctx);
 
   if (publishResult.totalFailed > 0) {
@@ -434,10 +430,7 @@ export async function replaceFileInFolder(params: {
   if (!fileExists) throw new Error('File not found');
 
   // 2. Publish ONLY the file IPNS record (folder metadata untouched!)
-  const publishResult = await batchPublishIpnsRecords(
-    [{ ...params.fileIpnsRecord, recordType: 'file' as const }],
-    params.ctx
-  );
+  const publishResult = await batchPublishIpnsRecords([params.fileIpnsRecord], params.ctx);
 
   if (publishResult.totalFailed > 0) {
     throw new Error('Failed to publish file IPNS record');

@@ -677,11 +677,15 @@ describe('addFileToFolder', () => {
     // buildFolderIpnsRecord increments the sequence number by one
     expect(result.newSequenceNumber).toBe(5n);
 
-    // Batch publish must include both the file record (recordType file) and a folder record
+    // Batch publish must include both the file record and the folder record.
+    // The folder record carries expectedSequenceNumber (CAS); file records do not.
     const published = mockFns.batchPublishIpnsRecords.mock.calls[0][0];
     expect(published).toHaveLength(2);
-    expect(published[0].recordType).toBe('file');
-    expect(published[1].recordType).toBe('folder');
+    // Positive identity: the file record is published under the file IPNS name
+    // (no CAS), the folder record under the parent name (carries CAS).
+    expect(published[0].ipnsName).toBe('k51-file-aaa');
+    expect(published[0].expectedSequenceNumber).toBeUndefined();
+    expect(published[1].ipnsName).toBe('k51-parent');
     expect(published[1].expectedSequenceNumber).toBe('4');
   });
 
@@ -767,10 +771,11 @@ describe('addFilesToFolder', () => {
 
     const published = mockFns.batchPublishIpnsRecords.mock.calls[0][0];
     expect(published).toHaveLength(3); // 2 files + 1 folder
-    expect(published.filter((r: { recordType: string }) => r.recordType === 'file')).toHaveLength(
-      2
-    );
-    expect(published[2].recordType).toBe('folder');
+    // File records come first (no CAS sequence), the folder record is last.
+    expect(
+      published.filter((r: { expectedSequenceNumber?: string }) => r.expectedSequenceNumber)
+    ).toHaveLength(1);
+    expect(published[2].expectedSequenceNumber).toBe('10');
   });
 
   it('throws when two of the incoming files share a name', async () => {
@@ -868,7 +873,6 @@ describe('replaceFileInFolder', () => {
 
     const published = mockFns.batchPublishIpnsRecords.mock.calls[0][0];
     expect(published).toHaveLength(1);
-    expect(published[0].recordType).toBe('file');
     expect(published[0].ipnsName).toBe('k51-file-existing');
     // Folder metadata must NOT be encrypted/uploaded for a content replace
     expect(mockFns.encryptFolderMetadata).not.toHaveBeenCalled();

@@ -2208,7 +2208,7 @@
   "info": {
     "title": "CipherBox API",
     "description": "Zero-knowledge encrypted cloud storage API",
-    "version": "0.42.0",
+    "version": "0.44.0",
     "contact": {}
   },
   "tags": [
@@ -2939,13 +2939,6 @@
             "type": "number",
             "description": "TEE key epoch (required with encryptedIpnsPrivateKey)",
             "example": 1
-          },
-          "recordType": {
-            "type": "string",
-            "description": "Record type: 'folder' for folder metadata, 'file' for per-file metadata",
-            "enum": ["folder", "file"],
-            "default": "folder",
-            "example": "file"
           },
           "expectedSequenceNumber": {
             "type": "string",

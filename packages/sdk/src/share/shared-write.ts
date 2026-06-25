@@ -182,7 +182,6 @@ export async function uploadToSharedFolder(
             ipnsName: ipnsKeypair.ipnsName,
             recordBase64,
             metadataCid,
-            recordType: 'file' as const,
           },
         ],
         swCtx.ctx

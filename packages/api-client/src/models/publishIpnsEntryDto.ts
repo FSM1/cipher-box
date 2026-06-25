@@ -3,9 +3,8 @@
  * Do not edit manually.
  * CipherBox API
  * Zero-knowledge encrypted cloud storage API
- * OpenAPI spec version: 0.42.0
+ * OpenAPI spec version: 0.44.0
  */
-import type { PublishIpnsEntryDtoRecordType } from './publishIpnsEntryDtoRecordType';
 
 export interface PublishIpnsEntryDto {
   /** IPNS name (k51... CIDv1 format) */
@@ -20,8 +19,6 @@ export interface PublishIpnsEntryDto {
   encryptedIpnsPrivateKey?: string;
   /** TEE key epoch (required with encryptedIpnsPrivateKey) */
   keyEpoch?: number;
-  /** Record type: 'folder' for folder metadata, 'file' for per-file metadata */
-  recordType?: PublishIpnsEntryDtoRecordType;
   /** Expected sequence number for conflict detection. When present, the API validates against the stored value and rejects with 409 if mismatched. Omit for backward-compatible unconditional publish. */
   expectedSequenceNumber?: string;
 }

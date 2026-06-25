@@ -161,7 +161,6 @@ describe('IpnsService with IpnsVerifyCache', () => {
     encryptedIpnsPrivateKey: null,
     keyEpoch: null,
     isRoot: false,
-    recordType: 'folder',
     createdAt: new Date('2026-01-20T12:00:00.000Z'),
     updatedAt: new Date('2026-01-20T12:00:00.000Z'),
     user: {} as import('../auth/entities/user.entity').User,

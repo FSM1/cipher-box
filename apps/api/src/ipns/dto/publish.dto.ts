@@ -6,7 +6,6 @@ import {
   IsNumber,
   IsBase64,
   IsArray,
-  IsIn,
   ArrayMaxSize,
   ArrayMinSize,
   ValidateNested,
@@ -129,7 +128,7 @@ export class PublishIpnsResponseDto {
 
 /**
  * Single entry within a batch publish request.
- * Same fields as PublishIpnsDto plus optional recordType.
+ * Same fields as PublishIpnsDto.
  */
 export class PublishIpnsEntryDto {
   @ApiProperty({
@@ -203,18 +202,6 @@ export class PublishIpnsEntryDto {
   @IsNumber()
   @IsOptional()
   keyEpoch?: number;
-
-  @ApiProperty({
-    description: "Record type: 'folder' for folder metadata, 'file' for per-file metadata",
-    required: false,
-    enum: ['folder', 'file'],
-    default: 'folder',
-    example: 'file',
-  })
-  @IsString()
-  @IsOptional()
-  @IsIn(['folder', 'file'])
-  recordType?: 'folder' | 'file';
 
   @ApiProperty({
     description:

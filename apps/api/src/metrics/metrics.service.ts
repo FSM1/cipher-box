@@ -8,14 +8,6 @@ import { User } from '../auth/entities/user.entity';
 import { IpnsRepublishSchedule } from '../republish/republish-schedule.entity';
 
 /**
- * All `folder_ipns.record_type` values. Seeded to 0 each collection so an empty
- * table reports an explicit `0` per type instead of emitting no series at all —
- * which would otherwise leave Grafana stuck on the last non-zero sample through
- * the Prometheus staleness window (an empty system mis-reporting as N entries).
- */
-const IPNS_RECORD_TYPES = ['folder', 'file'] as const;
-
-/**
  * Central Prometheus metrics registry and collector.
  * Exposes both event-driven counters (incremented by controllers/services)
  * and gauge metrics polled from the database every 30 seconds.
@@ -96,8 +88,7 @@ export class MetricsService implements OnModuleInit {
 
     this.ipnsEntriesTotal = new client.Gauge({
       name: 'cipherbox_ipns_entries_total',
-      help: 'Total IPNS entries by record type',
-      labelNames: ['record_type'],
+      help: 'Total IPNS entries',
       registers: [this.registry],
     });
 
@@ -276,19 +267,14 @@ export class MetricsService implements OnModuleInit {
   }
 
   private async collectGauges(): Promise<void> {
-    const [userCount, fileStats, ipnsByType, republishByStatus] = await Promise.all([
+    const [userCount, fileStats, ipnsCount, republishByStatus] = await Promise.all([
       this.userRepository.count(),
       this.pinnedCidRepository
         .createQueryBuilder('pin')
         .select('COUNT(*)', 'count')
         .addSelect('COALESCE(SUM(pin.size_bytes), 0)', 'totalBytes')
         .getRawOne<{ count: string; totalBytes: string }>(),
-      this.folderIpnsRepository
-        .createQueryBuilder('ipns')
-        .select('ipns.record_type', 'recordType')
-        .addSelect('COUNT(*)', 'count')
-        .groupBy('ipns.record_type')
-        .getRawMany<{ recordType: string; count: string }>(),
+      this.folderIpnsRepository.count(),
       this.republishScheduleRepository
         .createQueryBuilder('sched')
         .select('sched.status', 'status')
@@ -301,16 +287,9 @@ export class MetricsService implements OnModuleInit {
     this.filesTotal.set(parseInt(fileStats?.count ?? '0', 10));
     this.storageBytesTotal.set(parseInt(fileStats?.totalBytes ?? '0', 10));
 
-    // Reset IPNS gauges before setting to avoid stale labels, then seed every
-    // known record type to 0 so an empty table reports 0 rather than emitting no
-    // series (which makes Grafana "stick" at the last non-zero sample).
-    this.ipnsEntriesTotal.reset();
-    for (const recordType of IPNS_RECORD_TYPES) {
-      this.ipnsEntriesTotal.labels(recordType).set(0);
-    }
-    for (const row of ipnsByType) {
-      this.ipnsEntriesTotal.labels(row.recordType).set(parseInt(row.count, 10));
-    }
+    // Single untyped count — an empty table reports an explicit 0 rather than
+    // leaving Grafana stuck on the last non-zero sample.
+    this.ipnsEntriesTotal.set(ipnsCount);
 
     // Reset republish gauges before setting
     this.republishScheduleTotal.reset();

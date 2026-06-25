@@ -19,7 +19,6 @@ import {
   ipnsControllerPublishBatch,
   ipnsControllerResolveRecord,
 } from '@cipherbox/api-client';
-import type { PublishIpnsEntryDtoRecordType } from '@cipherbox/api-client';
 import type { SdkContext } from '../types';
 import { withPerf } from '../perf';
 
@@ -129,7 +128,6 @@ export async function batchPublishIpnsRecords(
     metadataCid: string;
     encryptedIpnsPrivateKey?: string;
     keyEpoch?: number;
-    recordType?: 'folder' | 'file';
     /** Pre-increment sequence number for conflict detection (folder records only) */
     expectedSequenceNumber?: string;
   }>,
@@ -146,7 +144,6 @@ export async function batchPublishIpnsRecords(
           metadataCid: r.metadataCid,
           encryptedIpnsPrivateKey: r.encryptedIpnsPrivateKey,
           keyEpoch: r.keyEpoch,
-          recordType: r.recordType as PublishIpnsEntryDtoRecordType | undefined,
           expectedSequenceNumber: r.expectedSequenceNumber,
         })),
       },

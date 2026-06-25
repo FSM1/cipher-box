@@ -13,7 +13,6 @@
 import { createIpnsRecord, marshalIpnsRecord } from '@cipherbox/core';
 import { deriveEd25519PublicKey } from '@cipherbox/crypto';
 import { ipnsControllerPublishRecord, ipnsControllerPublishBatch } from '@cipherbox/api-client';
-import type { PublishIpnsEntryDtoRecordType } from '@cipherbox/api-client';
 import { resolveIpnsRecord as resolveIpnsRecordCore } from '@cipherbox/sdk-core';
 import { apiAxios, apiUrl } from '../lib/api-config';
 import { useAuthStore } from '../stores/auth.store';
@@ -101,7 +100,6 @@ export async function batchPublishIpnsRecords(
     metadataCid: string;
     encryptedIpnsPrivateKey?: string;
     keyEpoch?: number;
-    recordType?: 'folder' | 'file';
     /** Pre-increment sequence number for conflict detection (folder records only) */
     expectedSequenceNumber?: string;
   }>
@@ -114,7 +112,6 @@ export async function batchPublishIpnsRecords(
       metadataCid: r.metadataCid,
       encryptedIpnsPrivateKey: r.encryptedIpnsPrivateKey,
       keyEpoch: r.keyEpoch,
-      recordType: r.recordType as PublishIpnsEntryDtoRecordType | undefined,
       expectedSequenceNumber: r.expectedSequenceNumber,
     })),
   });
