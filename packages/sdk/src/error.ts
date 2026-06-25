@@ -37,6 +37,39 @@ export function isConflictError(error: unknown): boolean {
 }
 
 /**
+ * Extract an HTTP status code from an unknown caught error, if present.
+ *
+ * Handles both a flat `{ status }` shape and the axios `{ response: { status } }`
+ * shape used across the api-client.
+ *
+ * @param error - The caught error object
+ * @returns The numeric status code, or undefined if none can be determined
+ */
+export function getErrorStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== 'object') return undefined;
+  const e = error as Record<string, unknown>;
+  if (typeof e.status === 'number') return e.status;
+  if (typeof e.response === 'object' && e.response !== null) {
+    const status = (e.response as Record<string, unknown>).status;
+    if (typeof status === 'number') return status;
+  }
+  return undefined;
+}
+
+/**
+ * Whether an error represents a deterministic client failure (4xx) that will
+ * never succeed on retry — e.g. a 400 validation rejection or a 401/403 auth
+ * failure. Transient errors (5xx, network errors with no status) remain retryable.
+ *
+ * @param error - The caught error object
+ * @returns true if the error is a non-retryable 4xx response
+ */
+export function isNonRetryableError(error: unknown): boolean {
+  const status = getErrorStatus(error);
+  return status !== undefined && status >= 400 && status < 500;
+}
+
+/**
  * Wrap an operation with 403 revocation detection.
  * If the operation throws a 403, calls onRevoked() and re-throws a descriptive error.
  *

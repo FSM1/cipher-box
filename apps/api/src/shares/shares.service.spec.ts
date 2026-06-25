@@ -1025,6 +1025,10 @@ describe('SharesService', () => {
       expect(mockManager.createQueryBuilder).toHaveBeenCalled();
       expect(mockQb.update).toHaveBeenCalledWith(ShareInvite);
       expect(mockQb.set).toHaveBeenCalledWith({ status: 'revoked' });
+      // The sharer_id scope is what stops a caller from revoking another user's
+      // invites — assert it explicitly so a refactor of the QueryBuilder chain
+      // can't silently drop it.
+      expect(mockQb.where).toHaveBeenCalledWith('sharer_id = :sharerId', { sharerId });
       expect(mockQb.andWhere).toHaveBeenCalledWith('status = :status', { status: 'active' });
 
       expect(result).toEqual({ revokedShares: 2, revokedInvites: 3 });

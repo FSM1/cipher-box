@@ -1,5 +1,12 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsArray, ArrayNotEmpty, ArrayMaxSize, IsString, MaxLength } from 'class-validator';
+import {
+  IsArray,
+  ArrayNotEmpty,
+  ArrayMaxSize,
+  IsString,
+  MaxLength,
+  Matches,
+} from 'class-validator';
 
 /**
  * Bulk hard-revoke request: revoke every share/invite the authenticated user
@@ -27,5 +34,12 @@ export class RevokeForItemsDto {
   @ArrayMaxSize(5000)
   @IsString({ each: true })
   @MaxLength(255, { each: true })
+  // Defense-in-depth: reject malformed IPNS names early. Same CIDv1 libp2p-key
+  // contract as the resolve/publish/unenroll DTOs — accepts k51 (base36) or
+  // bafzaa (base32) forms.
+  @Matches(/^(k51qzi5uqu5[a-z0-9]{40,60}|bafzaa[a-z2-7]{50,70})$/, {
+    each: true,
+    message: 'each ipnsName must be a valid CIDv1 libp2p-key (k51qzi5uqu5... or bafzaa...)',
+  })
   ipnsNames!: string[];
 }

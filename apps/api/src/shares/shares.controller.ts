@@ -83,6 +83,7 @@ export class SharesController {
   }
 
   @Post('revoke-for-items')
+  @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Bulk hard-revoke shares for deleted items',
     description:
@@ -93,7 +94,7 @@ export class SharesController {
       'IPNS names that were never shared are ignored.',
   })
   @ApiResponse({
-    status: 201,
+    status: 200,
     description: 'Revocation summary',
     type: RevokeForItemsResponseDto,
   })

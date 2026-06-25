@@ -1339,7 +1339,7 @@
           }
         },
         "responses": {
-          "201": {
+          "200": {
             "description": "Revocation summary",
             "content": {
               "application/json": {
