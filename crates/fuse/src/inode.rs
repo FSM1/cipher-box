@@ -1076,6 +1076,12 @@ impl InodeTable {
                 file_ipns_key_encrypted_hex: prev_key_hex,
                 versions: None,
             };
+            // Clear the stale resolved size/blocks as well (mirrors populate_folder's
+            // unresolved rebuild, which derives attr from the size:0 kind) so
+            // GETATTR/READDIR do not expose the old size during the re-resolution
+            // window. resolve_file_pointer restores the real size on completion.
+            inode.attr.size = 0;
+            inode.attr.blocks = 0;
             // Adopt the remote timestamp so the next refresh cycle sees mtime ==
             // remote modified_at and does not re-mark (resolve_file_pointer leaves
             // mtime untouched, so this stays stable after resolution completes).
@@ -1602,6 +1608,8 @@ mod tests {
         let child = table.get(child_ino).unwrap();
         let expected_mtime = UNIX_EPOCH + Duration::from_millis(1700001000000);
         assert_eq!(child.attr.mtime, expected_mtime, "mtime adopts remote value");
+        assert_eq!(child.attr.size, 0, "stale resolved size cleared");
+        assert_eq!(child.attr.blocks, 0, "stale resolved blocks cleared");
         match &child.kind {
             InodeKind::File {
                 file_meta_resolved,
