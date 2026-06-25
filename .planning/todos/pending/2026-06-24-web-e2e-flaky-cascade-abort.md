@@ -1,14 +1,17 @@
 ---
 created: 2026-06-24
-title: Stabilize flaky e2e suites (web cascade-abort + desktop macOS FUSE-T sync)
-area: tests/web-e2e, tests/desktop-e2e
+title: Stabilize flaky web-e2e suite (cascade-abort ordering)
+area: tests/web-e2e
 files:
   - tests/web-e2e/playwright.config.ts
   - tests/web-e2e/tests/invite-link-workflow.spec.ts
   - tests/web-e2e/tests/journey-timing.spec.ts
   - tests/web-e2e/tests/media-preview.spec.ts
-  - tests/desktop-e2e/scripts/test-cross-client-sync.sh
 ---
+
+> NOTE: The desktop-e2e macOS cross-client-**content**-sync leg of this todo
+> (Test 5) is RESOLVED in PR #558 — see the "DONE" section at the bottom. The
+> remaining actionable work here is the web-e2e cascade-abort below.
 
 ## Problem
 
@@ -50,7 +53,31 @@ TBD — options, smallest-first:
 Keep `retries: 0` philosophy in spirit (fix flakiness at the source) but stop a
 single flake from masking unrelated coverage.
 
-## Also: desktop-e2e macOS cross-client sync (FUSE-T timing)
+## DONE (PR #558): desktop-e2e macOS cross-client sync (FUSE-T timing)
+
+RESOLVED 2026-06-25. Root cause confirmed and fixed exactly as the analysis below
+predicted: `drain_refresh_completions` (`crates/fuse/src/fs.rs`) skipped
+`populate_folder` while the folder sat in `mutated_folders`/`publish_queue`,
+suppressing the remote-edit re-resolution spawn. Fix added
+`InodeTable::mark_remotely_edited_files_unresolved` — re-resolves genuine remote
+**file content** edits (same pointer identity, remote `modified_at` strictly newer
+than local mtime) without clobbering pending local mutations or folder structure;
+the gated branch now calls it then falls through to the existing resolution-spawn
+block. Verified: Test 5 synced in 35s across two independent all-platform-green
+`CI E2E Tests` runs (28172426013, 28172492917); 3 new unit tests + full
+`cipherbox-fuse` suite (92) green.
+
+NOT covered by #558 (left as an OPTIONAL follow-up, not blocking): **Test 7 folder
+RENAME** sync still falls through to the macOS `optional/warn` fallback — confirmed
+empirically in run 28172426013 (`WARN: FUSE mount did not detect folder rename after
+300s on macOS`). The fix is deliberately scoped to file content; rename detection
+needs full `populate_folder` (it rewrites the `name_to_ino` index), which is still
+gated. A real Test-7 fix is a riskier structural change (reconciling renames under a
+pending publish — see [[project-web-sdk-folder-state-desync]]) and may not clear
+FUSE-T's SMB *directory* cache regardless, so it could stay optional-on-macOS even if
+implemented. Open it as its own todo only if the rename gap becomes load-bearing.
+
+Original analysis (kept for history):
 
 `tests/desktop-e2e/scripts/test-cross-client-sync.sh:194` —
 `FUSE mount still shows original content after 120s` — flakes on **macOS only**
