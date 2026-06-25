@@ -1,0 +1,31 @@
+ok, interesting to see if this also fixes the skipped test 7 on macos
+
+---
+
+ok, this is intersting - could you dig through the M1 docs, specifically the macos desktop implementation phases to find out why fuse-t+smb was used. I do remember it being caused by a macos bog of sorts, but dont remember the details.
+
+Maybe the underlying macos bug has been resolved and the macos implementation can be unified to use fuser rather than fuse-t?
+
+---
+
+<task-notification>
+<task-id>bphnyyl8b</task-id>
+<tool-use-id>toolu_01AgENeubxZLBQNxmAt2cBHH</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2c9cca7a-f210-45f4-b940-4f091be387a8/tasks/bphnyyl8b.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll until macOS desktop job completes" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>boel7jpes</task-id>
+<tool-use-id>toolu_01139VV969bdTp7ogvW54MfX</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2c9cca7a-f210-45f4-b940-4f091be387a8/tasks/boel7jpes.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll until run 2 macOS job completes" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+yeah this part of the todo can be marked as completed.

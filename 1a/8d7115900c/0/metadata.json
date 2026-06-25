@@ -1,0 +1,67 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "1a8d7115900c",
+  "session_id": "802baabc-abec-4574-b1d7-fa147465c88a",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-25T13:33:22.178183Z",
+  "branch": "docs/mark-desktop-macos-sync-flake-resolved",
+  "checkpoints_count": 0,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "83e3e47057ac",
+  "checkpoint_transcript_start": 272,
+  "transcript_lines_at_start": 272,
+  "token_usage": {
+    "input_tokens": 4093,
+    "cache_creation_tokens": 36992,
+    "cache_read_tokens": 3647924,
+    "output_tokens": 29592,
+    "api_call_count": 22
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "summary": {
+    "intent": "Fix a macOS desktop CI flake (Test 5 cross-client sync failure after file edits) and investigate whether the FUSE-T+SMB architecture could be simplified or unified with Linux.",
+    "outcome": "PR #558 confirmed green across two independent macOS runs and all platforms; Test 5 now syncs in 35s (was timing out). FUSE-T+SMB architecture research concluded it cannot be replaced with macFUSE due to Apple Silicon kext constraints. Todo for the desktop CI flake was marked completed on a new docs branch.",
+    "learnings": {
+      "repo": [
+        "macFUSE requires a kernel extension (kext) on Apple Silicon, which demands recovery mode to load third-party kexts — not viable for consumer installs; FUSE-T was chosen for this reason, not a bug.",
+        "FUSE-T's backend was switched from NFS to SMB due to a macOS Sequoia 15.3 kernel bug where the NFS client never sends WRITE RPCs to FUSE-T's NFS server for newly created files (process hangs permanently); FUSE-T author confirmed and reported to Apple.",
+        "FSKit (the Apple-sanctioned kext-less FUSE alternative) is restricted to /Volumes mount points and macOS 15.4+, ruling it out for ~/CipherBox mounts.",
+        "drain_refresh_completions gated branch skips populate_folder during local publishes, which suppresses remote-edit re-resolution — this was the root cause of the Test 5 flake and is a pre-existing issue unrelated to Phase 60.",
+        "Test 7 (folder rename sync) on macOS uses an optional-warn escape hatch ('FUSE folder rename sync (optional on macOS -- timed out)') so it always 'passes' — the actual rename detection failure is masked in CI results.",
+        "The fix mark_remotely_edited_files_unresolved re-resolves genuine remote file edits using strict newer-mtime + same-pointer checks without touching folder structure or local mutations."
+      ],
+      "code": [],
+      "workflow": [
+        "macOS CI job logs must be grepped for 'Sync detected on attempt N' vs 'WARN: FUSE mount did not detect' to distinguish real detection from the optional fallback — job pass/fail alone is insufficient for Test 7.",
+        "Todo bookkeeping changes (marking resolved sections) should go on a separate docs branch from the code-fix PR to avoid mixing concerns.",
+        "When a fix is deliberately scoped, empirical CI log verification is the reliable way to confirm the fix boundary and rule out side effects on adjacent test cases."
+      ]
+    },
+    "friction": [
+      "gh API job-id fetch returned a transient empty response, requiring a manual retry before log grepping could proceed.",
+      "Test 7 folder rename detection still silently degrades to an optional pass on macOS — the pass/fail signal in CI is misleading without log inspection."
+    ],
+    "open_items": [
+      "Test 7 (folder rename sync on macOS): requires a separate, riskier change — structural rename reconciliation while a local publish is pending, which risks clobbering the name_to_ino index; may also be blocked by SMB directory cache TTL regardless.",
+      "PR #558 is clean and mergeable but awaiting explicit user approval to merge.",
+      "Phase 60 staging wipe + redeploy is unblocked by #558 but not yet initiated.",
+      "Worth verifying whether the macOS Sequoia NFS WRITE-RPC bug is fixed on current CI runner macOS versions — would only restore the NFS backend option (likely a lateral move, not an improvement)."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
