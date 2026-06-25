@@ -1,17 +1,17 @@
 {
-  ".": "0.44.1",
-  "apps/api": "0.43.0",
-  "apps/web": "0.46.0",
-  "apps/desktop": "0.44.0",
+  ".": "0.45.0",
+  "apps/api": "0.44.0",
+  "apps/web": "0.47.0",
+  "apps/desktop": "0.45.0",
   "apps/tee-worker": "0.31.1",
   "packages/core": "0.31.0",
-  "packages/crypto": "0.33.0",
+  "packages/crypto": "0.33.1",
   "packages/api-client": "0.43.0",
-  "packages/sdk-core": "0.38.0",
+  "packages/sdk-core": "0.39.0",
   "packages/sdk": "0.37.1",
   "crates/crypto": "0.5.0",
-  "crates/core": "0.6.0",
-  "crates/api-client": "0.35.0",
-  "crates/fuse": "0.9.0",
-  "crates/sdk": "0.7.0"
+  "crates/core": "0.7.0",
+  "crates/api-client": "0.36.0",
+  "crates/fuse": "0.10.0",
+  "crates/sdk": "0.8.0"
 }
