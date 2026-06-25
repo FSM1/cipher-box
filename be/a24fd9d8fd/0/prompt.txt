@@ -1,0 +1,1 @@
+ok so completing phase 60 requires wiping staging and redeploying but to do that I need CI-e2e to be passing. currently the macos desktop code is failing. @.planning/todos/pending/ contains a todo with some preliminary exploration details.

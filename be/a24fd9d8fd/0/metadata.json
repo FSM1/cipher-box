@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "bea24fd9d8fd",
+  "session_id": "802baabc-abec-4574-b1d7-fa147465c88a",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-25T13:08:36.026624Z",
+  "branch": "fix/fuse-resolve-remote-edit-while-publishing",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "crates/fuse/src/inode.rs",
+    "crates/fuse/src/fs.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "f25e20637bb2",
+  "token_usage": {
+    "input_tokens": 12269,
+    "cache_creation_tokens": 116617,
+    "cache_read_tokens": 3235001,
+    "output_tokens": 44903,
+    "api_call_count": 37
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-25T13:08:06.6323Z",
+    "agent_lines": 312,
+    "agent_removed": 13,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 312,
+    "total_lines_changed": 325,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
