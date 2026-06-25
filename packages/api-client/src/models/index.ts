@@ -94,6 +94,8 @@ export * from './republishHealthControllerGetHealth200';
 export * from './resolveIpnsResponseDto';
 export * from './respondApprovalDto';
 export * from './respondApprovalDtoAction';
+export * from './revokeForItemsDto';
+export * from './revokeForItemsResponseDto';
 export * from './sendOtpDto';
 export * from './sendOtpResponseDto';
 export * from './sentShareResponseDto';

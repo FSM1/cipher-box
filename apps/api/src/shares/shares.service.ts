@@ -6,9 +6,10 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull, Not, In } from 'typeorm';
+import { Repository, DataSource, IsNull, Not, In } from 'typeorm';
 import { Share } from './entities/share.entity';
 import { ShareKey } from './entities/share-key.entity';
+import { ShareInvite } from './entities/share-invite.entity';
 import { User } from '../auth/entities/user.entity';
 import { CreateShareDto } from './dto/create-share.dto';
 import { AddShareKeysDto } from './dto/share-key.dto';
@@ -21,7 +22,8 @@ export class SharesService {
     @InjectRepository(ShareKey)
     private readonly shareKeyRepo: Repository<ShareKey>,
     @InjectRepository(User)
-    private readonly userRepo: Repository<User>
+    private readonly userRepo: Repository<User>,
+    private readonly dataSource: DataSource
   ) {}
 
   /**
@@ -266,6 +268,66 @@ export class SharesService {
 
     share.revokedAt = new Date();
     await this.shareRepo.save(share);
+  }
+
+  /**
+   * Hard-revoke every share/invite the caller created for ANY of the given IPNS
+   * names, in a single transaction. Used when an owner deletes an item (file or
+   * folder subtree) to the recycle bin: the eventual empty-bin unpin is a
+   * deliberate access cutoff, so all shares of the deleted subtree must be gone
+   * by then or a sharee would be orphaned when the content is unpinned.
+   *
+   * - Shares: HARD-deleted (shareRepo.remove → ShareKey rows CASCADE away).
+   *   A deleted item has no remaining recipients to lazily rotate for, so a soft
+   *   `revokedAt` would only strand rows in permanent lazy-rotation limbo. Matching
+   *   by ipnsName also catches Shares that originated from claimed invites (they are
+   *   independent Share rows keyed by the same ipnsName).
+   * - Invites: active ShareInvite rows are marked 'revoked' (the existing invite
+   *   revoke semantics — already-claimed invites became Share rows and are handled
+   *   above).
+   *
+   * Scoped to `sharerId = caller` so a user can only revoke their own shares.
+   * IPNS names that were never shared are simply not matched (no-op).
+   *
+   * @returns Counts of hard-deleted shares and revoked invites.
+   */
+  async revokeForItems(
+    sharerId: string,
+    ipnsNames: string[]
+  ): Promise<{ revokedShares: number; revokedInvites: number }> {
+    // De-duplicate so the IN(...) clause is minimal and stable.
+    const uniqueNames = [...new Set(ipnsNames)];
+    if (uniqueNames.length === 0) {
+      return { revokedShares: 0, revokedInvites: 0 };
+    }
+
+    return this.dataSource.transaction(async (manager) => {
+      // Hard-delete matching shares via the entity remove path so the
+      // ShareKey CASCADE (cascade: true on the relation + onDelete CASCADE)
+      // fires. A bulk DELETE query would bypass the in-memory cascade, so we
+      // load then remove.
+      const shares = await manager.find(Share, {
+        where: { sharerId, ipnsName: In(uniqueNames) },
+      });
+      if (shares.length > 0) {
+        await manager.remove(shares);
+      }
+
+      // Mark active invites for these items as revoked.
+      const inviteResult = await manager
+        .createQueryBuilder()
+        .update(ShareInvite)
+        .set({ status: 'revoked' })
+        .where('sharer_id = :sharerId', { sharerId })
+        .andWhere('ipns_name IN (:...names)', { names: uniqueNames })
+        .andWhere('status = :status', { status: 'active' })
+        .execute();
+
+      return {
+        revokedShares: shares.length,
+        revokedInvites: inviteResult.affected ?? 0,
+      };
+    });
   }
 
   /**

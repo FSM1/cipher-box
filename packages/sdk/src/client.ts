@@ -18,7 +18,11 @@ import type { PinningProvider, ExternalEncryptFn } from '@cipherbox/sdk-core';
 import type { UploadResult } from '@cipherbox/sdk-core';
 import * as sdkCore from '@cipherbox/sdk-core';
 import { selectEncryptionMode } from '@cipherbox/sdk-core';
-import { createAxiosInstance, ipnsControllerUnenrollBatch } from '@cipherbox/api-client';
+import {
+  createAxiosInstance,
+  ipnsControllerUnenrollBatch,
+  sharesControllerRevokeForItems,
+} from '@cipherbox/api-client';
 import { clearBytes, unwrapKey, hexToBytes } from '@cipherbox/crypto';
 import pLimit from 'p-limit';
 import type {
@@ -206,6 +210,20 @@ export class CipherBoxClient {
         );
       });
     }
+  }
+
+  /**
+   * Issue an authed POST /shares/revoke-for-items for the deleted subtree's IPNS
+   * names. Unlike unenroll, this is AWAITED and fail-closed by addToBin: if it
+   * throws, the delete aborts before the destructive folder mutation, so a
+   * still-shared content CID can never be orphaned by the eventual empty-bin unpin.
+   */
+  private async revokeSharesForItems(ipnsNames: string[]): Promise<void> {
+    if (ipnsNames.length === 0) return;
+    const apiOptions = this.ctx.axiosInstance
+      ? { _axiosInstance: this.ctx.axiosInstance }
+      : undefined;
+    await sharesControllerRevokeForItems({ ipnsNames }, apiOptions);
   }
 
   /**
@@ -1909,6 +1927,7 @@ export class CipherBoxClient {
         folderTree: this.folderTree,
         binState: this.binState,
         binCtx: this.getBinContext(),
+        revokeSharesForItemsFn: (ipnsNames) => this.revokeSharesForItems(ipnsNames),
       });
 
       this.binState = updatedBinState;

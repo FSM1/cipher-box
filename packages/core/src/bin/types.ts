@@ -39,6 +39,16 @@ export type BinEntry = {
   contentSize?: number;
   /** Version CIDs and sizes (captured at soft-delete time for unpin on permanent delete) */
   versionCids?: Array<{ cid: string; size: number }>;
+  /**
+   * For folder entries: every content + version CID of the WHOLE deleted subtree,
+   * flattened (each descendant file's current content CID plus all of its version
+   * CIDs). Captured at soft-delete time by walking the subtree so that emptying the
+   * bin / permanently deleting a folder unpins all descendant content, not just the
+   * folder's own (non-existent) content. Undefined for file entries (their CIDs live
+   * in contentCid / versionCids). Per-file capture is best-effort: a file whose
+   * metadata cannot be read is skipped here (its shares are still revoked).
+   */
+  descendantCids?: Array<{ cid: string; size: number }>;
 
   // --- Item reference data (needed for restore and permanent delete) ---
 

@@ -23,6 +23,7 @@ import { AddShareKeysDto } from './dto/share-key.dto';
 import { UpdateEncryptedKeyDto } from './dto/update-encrypted-key.dto';
 import { UpdateItemNameDto } from './dto/update-item-name.dto';
 import { UpdatePermissionDto } from './dto/update-permission.dto';
+import { RevokeForItemsDto } from './dto/revoke-for-items.dto';
 import {
   PaginationQueryDto,
   PaginatedReceivedSharesDto,
@@ -32,6 +33,7 @@ import {
   CreateShareResponseDto,
   PendingRotationResponseDto,
   ShareKeyResponseDto,
+  RevokeForItemsResponseDto,
 } from './dto/share-response.dto';
 import { LookupUserResponseDto } from './dto/lookup-user-response.dto';
 import { RequestWithUser } from '../common/types';
@@ -78,6 +80,30 @@ export class SharesController {
       permission: share.permission,
       createdAt: share.createdAt,
     };
+  }
+
+  @Post('revoke-for-items')
+  @ApiOperation({
+    summary: 'Bulk hard-revoke shares for deleted items',
+    description:
+      'Hard-revoke every share/invite the authenticated user created for any of ' +
+      'the given IPNS names, atomically. Called when an owner deletes a file or ' +
+      'folder subtree to the recycle bin so the access cutoff precedes the unpin. ' +
+      'Shares are hard-deleted (keys cascade); active invites are marked revoked. ' +
+      'IPNS names that were never shared are ignored.',
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Revocation summary',
+    type: RevokeForItemsResponseDto,
+  })
+  @ApiResponse({ status: 400, description: 'Invalid request body' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async revokeForItems(
+    @Request() req: RequestWithUser,
+    @Body() dto: RevokeForItemsDto
+  ): Promise<RevokeForItemsResponseDto> {
+    return this.sharesService.revokeForItems(req.user.id, dto.ipnsNames);
   }
 
   @Get('received')

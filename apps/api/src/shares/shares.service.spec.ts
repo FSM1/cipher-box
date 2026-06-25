@@ -9,10 +9,11 @@ import {
 import { SharesService } from './shares.service';
 import { Share } from './entities/share.entity';
 import { ShareKey } from './entities/share-key.entity';
+import { ShareInvite } from './entities/share-invite.entity';
 import { User } from '../auth/entities/user.entity';
 import { CreateShareDto } from './dto/create-share.dto';
 import { AddShareKeysDto } from './dto/share-key.dto';
-import { In } from 'typeorm';
+import { DataSource, In } from 'typeorm';
 
 describe('SharesService', () => {
   let service: SharesService;
@@ -34,6 +35,7 @@ describe('SharesService', () => {
   let mockUserRepo: {
     findOne: jest.Mock;
   };
+  let mockDataSource: { transaction: jest.Mock };
 
   // Test data
   const sharerId = '550e8400-e29b-41d4-a716-446655440000';
@@ -92,6 +94,9 @@ describe('SharesService', () => {
     mockUserRepo = {
       findOne: jest.fn(),
     };
+    mockDataSource = {
+      transaction: jest.fn(),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -99,6 +104,7 @@ describe('SharesService', () => {
         { provide: getRepositoryToken(Share), useValue: mockShareRepo },
         { provide: getRepositoryToken(ShareKey), useValue: mockShareKeyRepo },
         { provide: getRepositoryToken(User), useValue: mockUserRepo },
+        { provide: DataSource, useValue: mockDataSource },
       ],
     }).compile();
 
@@ -965,6 +971,88 @@ describe('SharesService', () => {
       const result = await service.findActiveWriteShare(recipientId, testIpnsName);
 
       expect(result).toBeNull();
+    });
+  });
+
+  describe('revokeForItems', () => {
+    let mockManager: {
+      find: jest.Mock;
+      remove: jest.Mock;
+      createQueryBuilder: jest.Mock;
+    };
+    let mockQb: {
+      update: jest.Mock;
+      set: jest.Mock;
+      where: jest.Mock;
+      andWhere: jest.Mock;
+      execute: jest.Mock;
+    };
+
+    beforeEach(() => {
+      mockQb = {
+        update: jest.fn().mockReturnThis(),
+        set: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        execute: jest.fn().mockResolvedValue({ affected: 0 }),
+      };
+      mockManager = {
+        find: jest.fn().mockResolvedValue([]),
+        remove: jest.fn().mockResolvedValue(undefined),
+        createQueryBuilder: jest.fn().mockReturnValue(mockQb),
+      };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      mockDataSource.transaction.mockImplementation((cb: any) => cb(mockManager));
+    });
+
+    it('hard-deletes matching shares and revokes active invites for the caller', async () => {
+      const matched = [
+        { ...mockShare, id: 's1', ipnsName: 'k51a' },
+        { ...mockShare, id: 's2', ipnsName: 'k51b' },
+      ];
+      mockManager.find.mockResolvedValue(matched);
+      mockQb.execute.mockResolvedValue({ affected: 3 });
+
+      const result = await service.revokeForItems(sharerId, ['k51a', 'k51b', 'k51c']);
+
+      // Shares loaded scoped to the caller + IN(names), then removed (CASCADE drops keys).
+      expect(mockManager.find).toHaveBeenCalledWith(Share, {
+        where: { sharerId, ipnsName: In(['k51a', 'k51b', 'k51c']) },
+      });
+      expect(mockManager.remove).toHaveBeenCalledWith(matched);
+
+      // Invites updated to 'revoked' for the caller, the names, and status='active'.
+      expect(mockManager.createQueryBuilder).toHaveBeenCalled();
+      expect(mockQb.update).toHaveBeenCalledWith(ShareInvite);
+      expect(mockQb.set).toHaveBeenCalledWith({ status: 'revoked' });
+      expect(mockQb.andWhere).toHaveBeenCalledWith('status = :status', { status: 'active' });
+
+      expect(result).toEqual({ revokedShares: 2, revokedInvites: 3 });
+    });
+
+    it('de-duplicates ipnsNames before the IN clause', async () => {
+      await service.revokeForItems(sharerId, ['k51a', 'k51a', 'k51b']);
+
+      expect(mockManager.find).toHaveBeenCalledWith(Share, {
+        where: { sharerId, ipnsName: In(['k51a', 'k51b']) },
+      });
+    });
+
+    it('no-ops (no transaction) on an empty list', async () => {
+      const result = await service.revokeForItems(sharerId, []);
+
+      expect(result).toEqual({ revokedShares: 0, revokedInvites: 0 });
+      expect(mockDataSource.transaction).not.toHaveBeenCalled();
+    });
+
+    it('skips the share remove when nothing matches but still revokes invites', async () => {
+      mockManager.find.mockResolvedValue([]);
+      mockQb.execute.mockResolvedValue({ affected: 1 });
+
+      const result = await service.revokeForItems(sharerId, ['k51x']);
+
+      expect(mockManager.remove).not.toHaveBeenCalled();
+      expect(result).toEqual({ revokedShares: 0, revokedInvites: 1 });
     });
   });
 });

@@ -141,6 +141,46 @@ export async function revokeShare(params: {
   await params.revokeShareFn(params.shareId);
 }
 
+/**
+ * Bulk hard-revoke every share/invite the caller created for ANY of the given
+ * IPNS names, with a couple of retries.
+ *
+ * Used when deleting a file/folder subtree to the recycle bin: the access cutoff
+ * MUST land before the eventual empty-bin unpin, or a still-shared content CID
+ * would orphan the sharee. This is therefore a fail-closed step — the caller
+ * (addToBin) aborts the delete if it ultimately fails.
+ *
+ * The actual API call (POST /shares/revoke-for-items) is injected so this stays
+ * mockable at the boundary and free of api-client coupling.
+ *
+ * @param params.ipnsNames - Every node ipnsName in the deleted subtree.
+ * @param params.revokeFn - Issues the authed backend call; resolves on success.
+ * @param params.maxAttempts - Total attempts (default 3: 1 + 2 retries).
+ */
+export async function revokeSharesForItems(params: {
+  ipnsNames: string[];
+  revokeFn: (ipnsNames: string[]) => Promise<void>;
+  maxAttempts?: number;
+}): Promise<void> {
+  if (params.ipnsNames.length === 0) return;
+  const maxAttempts = params.maxAttempts ?? 3;
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      await params.revokeFn(params.ipnsNames);
+      return;
+    } catch (err) {
+      lastErr = err;
+      if (attempt < maxAttempts - 1) {
+        await new Promise((r) => setTimeout(r, 300 * Math.pow(2, attempt)));
+      }
+    }
+  }
+  throw lastErr instanceof Error
+    ? lastErr
+    : new Error('Failed to revoke shares for deleted items', { cause: lastErr });
+}
+
 // Shared-write operations (stateless functions for write-share recipients)
 export {
   uploadToSharedFolder,

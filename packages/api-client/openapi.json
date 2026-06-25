@@ -1323,6 +1323,48 @@
         "tags": ["shares"]
       }
     },
+    "/shares/revoke-for-items": {
+      "post": {
+        "description": "Hard-revoke every share/invite the authenticated user created for any of the given IPNS names, atomically. Called when an owner deletes a file or folder subtree to the recycle bin so the access cutoff precedes the unpin. Shares are hard-deleted (keys cascade); active invites are marked revoked. IPNS names that were never shared are ignored.",
+        "operationId": "SharesController_revokeForItems",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeForItemsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Revocation summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevokeForItemsResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Bulk hard-revoke shares for deleted items",
+        "tags": ["shares"]
+      }
+    },
     "/shares/received": {
       "get": {
         "description": "Get active, non-hidden shares received by the authenticated user (paginated).",
@@ -3207,6 +3249,34 @@
           "permission",
           "createdAt"
         ]
+      },
+      "RevokeForItemsDto": {
+        "type": "object",
+        "properties": {
+          "ipnsNames": {
+            "description": "IPNS names (k51...) of every node in the deleted subtree. Shares/invites the caller created for any of these are hard-revoked. Unshared names are ignored.",
+            "example": ["k51qzi5uqu5dg...", "k51qzi5uqu5dh..."],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": ["ipnsNames"]
+      },
+      "RevokeForItemsResponseDto": {
+        "type": "object",
+        "properties": {
+          "revokedShares": {
+            "type": "number",
+            "description": "Number of Share rows hard-deleted (their ShareKeys cascade-deleted)"
+          },
+          "revokedInvites": {
+            "type": "number",
+            "description": "Number of active ShareInvite rows marked 'revoked'"
+          }
+        },
+        "required": ["revokedShares", "revokedInvites"]
       },
       "ReceivedShareResponseDto": {
         "type": "object",

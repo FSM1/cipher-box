@@ -29,6 +29,7 @@ import {
 import { bytesToHex, clearBytes, hexToBytes, unwrapKey, wrapKey } from '@cipherbox/crypto';
 import type { FolderTree } from '../state/folder-tree';
 import { reencryptFileMetadataForFolderChange } from '../reencrypt';
+import * as shareOps from '../share';
 
 /** Current bin metadata version. */
 const BIN_METADATA_VERSION = 'v1' as const;
@@ -167,6 +168,163 @@ async function publishWithVerify(params: {
 }
 
 // ---------------------------------------------------------------------------
+// Internal helpers: subtree walk (IPNS names + content CIDs) and unpin
+// ---------------------------------------------------------------------------
+
+/** A captured content/version CID with its plaintext size, for unpin + quota. */
+type CapturedCid = { cid: string; size: number };
+
+/**
+ * Result of walking a deleted subtree: every node's IPNS name (for share
+ * revocation) and every descendant content + version CID (for unpin).
+ */
+type SubtreeWalkResult = {
+  /** Folder's own ipnsName + every descendant file fileMetaIpnsName + subfolder ipnsName. */
+  ipnsNames: string[];
+  /** Flattened content + version CIDs of every descendant file. */
+  descendantCids: CapturedCid[];
+};
+
+/**
+ * Capture a single file's content + version CIDs from its FileMetadata.
+ *
+ * Best-effort: a file whose metadata cannot be resolved/decrypted is skipped
+ * (returns empty) — its IPNS name is still revoked/unenrolled by the caller, but
+ * its content CID can't be captured for unpin. This matches the locked policy:
+ * within a successfully-enumerated walk, an individual file's CID-capture failure
+ * is non-fatal.
+ */
+async function captureFileCids(
+  fileMetaIpnsName: string,
+  folderKey: Uint8Array,
+  ctx: SdkContext
+): Promise<CapturedCid[]> {
+  try {
+    const { metadata } = await sdkCore.resolveFileMetadata(fileMetaIpnsName, folderKey, ctx);
+    const cids: CapturedCid[] = [];
+    if (metadata.cid) cids.push({ cid: metadata.cid, size: metadata.size ?? 0 });
+    for (const v of metadata.versions ?? []) {
+      if (v.cid) cids.push({ cid: v.cid, size: v.size ?? 0 });
+    }
+    return cids;
+  } catch (err) {
+    console.warn(
+      `[CipherBox] bin: could not capture content CIDs for file ${fileMetaIpnsName} (skipping):`,
+      err instanceof Error ? err.message : err
+    );
+    return [];
+  }
+}
+
+/**
+ * Recursively walk a deleted folder subtree, collecting every node's IPNS name
+ * and every descendant file's content + version CIDs.
+ *
+ * FAIL-CLOSED for structure (locked): if a folder's metadata cannot be resolved
+ * or decrypted, the whole walk THROWS — addToBin must then abort the delete
+ * rather than half-revoke / partially unpin. This is what guarantees the share
+ * set is complete before the destructive folder mutation. (An individual file's
+ * CID capture is best-effort via captureFileCids and never throws.)
+ *
+ * Any subfolder folderKey this function unwraps is zeroized in `finally` — it
+ * owns those buffers. The caller-owned `folderKey` passed in is never zeroed here.
+ *
+ * A `visited` set guards against cycles/diamonds in client-supplied (decryptable,
+ * corruption-influenceable) folder metadata.
+ */
+async function walkDeletedSubtree(params: {
+  folderIpnsName: string;
+  folderKey: Uint8Array;
+  userPrivateKey: Uint8Array;
+  ctx: SdkContext;
+  acc?: SubtreeWalkResult;
+  visited?: Set<string>;
+}): Promise<SubtreeWalkResult> {
+  const acc = params.acc ?? { ipnsNames: [], descendantCids: [] };
+  const visited = params.visited ?? new Set<string>();
+
+  if (visited.has(params.folderIpnsName)) return acc;
+  visited.add(params.folderIpnsName);
+  acc.ipnsNames.push(params.folderIpnsName);
+
+  // FAIL-CLOSED: a null/throwing resolve means we cannot enumerate this folder's
+  // structure, so we cannot guarantee a complete share set. Abort.
+  let children;
+  try {
+    const result = await sdkCore.loadFolderMetadata({
+      ipnsName: params.folderIpnsName,
+      folderKey: params.folderKey,
+      ctx: params.ctx,
+    });
+    if (!result) {
+      throw new Error(
+        `Cannot enumerate deleted subtree: folder ${params.folderIpnsName} did not resolve`
+      );
+    }
+    children = result.metadata.children;
+  } catch (err) {
+    throw err instanceof Error
+      ? err
+      : new Error(`Cannot enumerate deleted subtree for ${params.folderIpnsName}`, { cause: err });
+  }
+
+  for (const child of children) {
+    if (child.type === 'file') {
+      const fp = child as FilePointer;
+      acc.ipnsNames.push(fp.fileMetaIpnsName);
+      // Best-effort per-file CID capture (decrypt with THIS folder's key).
+      const cids = await captureFileCids(fp.fileMetaIpnsName, params.folderKey, params.ctx);
+      acc.descendantCids.push(...cids);
+    } else if (child.type === 'folder') {
+      const entry = child as FolderEntry;
+      if (visited.has(entry.ipnsName)) continue;
+      let childFolderKey: Uint8Array | undefined;
+      try {
+        childFolderKey = await unwrapKey(
+          hexToBytes(entry.folderKeyEncrypted),
+          params.userPrivateKey
+        );
+        await walkDeletedSubtree({
+          folderIpnsName: entry.ipnsName,
+          folderKey: childFolderKey,
+          userPrivateKey: params.userPrivateKey,
+          ctx: params.ctx,
+          acc,
+          visited,
+        });
+      } finally {
+        // Zero only the key buffer this frame unwrapped/owns.
+        if (childFolderKey) clearBytes(childFolderKey);
+      }
+    }
+  }
+
+  return acc;
+}
+
+/**
+ * Best-effort unpin of every content/version/descendant CID recorded on a bin
+ * entry. Each unpin is independently try/caught so one failure never blocks the
+ * rest. Shared by emptyBin, permanentDeleteFromBin and purgeExpiredEntries so all
+ * three paths unpin the SAME set (the prior bug: the first two only looked at
+ * entry.contentCid and never looped versionCids/descendantCids).
+ */
+async function unpinEntryCids(ctx: SdkContext, entry: BinEntry): Promise<void> {
+  const cids: string[] = [];
+  if (entry.contentCid) cids.push(entry.contentCid);
+  for (const vc of entry.versionCids ?? []) cids.push(vc.cid);
+  for (const dc of entry.descendantCids ?? []) cids.push(dc.cid);
+
+  for (const cid of cids) {
+    try {
+      await sdkCore.unpinFromIpfs(ctx, cid);
+    } catch {
+      // Best-effort: CID unpin failures are non-blocking.
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -236,6 +394,20 @@ export async function loadBin(params: { binCtx: BinOperationContext }): Promise<
  * Removes the item from the folder metadata (via deleteFromFolder),
  * creates a BinEntry, appends to bin metadata, and publishes both.
  *
+ * Ordering is fail-closed and CRITICAL (locked design):
+ *   walk subtree → revoke shares for every collected ipnsName → mutate folder +
+ *   publish → build bin entry (with captured CIDs) → publish bin.
+ * Revoke MUST precede the destructive folder mutation: the only acceptable
+ * residual bad state is "shares revoked but item still present" (recoverable);
+ * "item deleted but shares still active" would orphan sharees on the eventual
+ * empty-bin unpin and is NEVER allowed.
+ *
+ * The subtree walk (folder deletes) is fail-closed on structure: if a descendant
+ * folder's metadata can't be enumerated, the whole delete aborts BEFORE the
+ * folder mutation. Per-file content-CID capture is best-effort.
+ *
+ * @param params.revokeSharesForItemsFn - Issues POST /shares/revoke-for-items.
+ *   Injected so the API boundary stays mockable. Omitted only in legacy callers.
  * @returns The removed item from the folder
  */
 export async function addToBin(params: {
@@ -245,16 +417,75 @@ export async function addToBin(params: {
   folderTree: FolderTree;
   binState: BinState;
   binCtx: BinOperationContext;
+  revokeSharesForItemsFn?: (ipnsNames: string[]) => Promise<void>;
 }): Promise<{ removedItem: FolderChild; updatedBinState: BinState }> {
   const folder = params.folderTree.get(params.folderIpnsName);
   if (!folder) throw new Error('Folder not loaded');
 
-  // 1. Remove item from folder metadata
+  // 0. Pre-compute the removed item WITHOUT mutating folder state yet, so the
+  //    fail-closed walk + revoke can run before any destructive publish.
   const baseChildren = [...folder.children];
   const { updatedChildren, removedItem } = sdkCore.deleteFromFolder({
     children: folder.children,
     childId: params.childId,
   });
+
+  const isFile = removedItem.type === 'file';
+
+  // 1. Collect the deleted subtree: every node's ipnsName (for share revocation)
+  //    and every descendant content/version CID (for unpin on empty-bin). For a
+  //    single file this is just its own fileMetaIpnsName + its own CIDs; for a
+  //    folder we walk the whole subtree (FAIL-CLOSED on unreadable structure).
+  let collectedIpnsNames: string[];
+  let descendantCids: Array<{ cid: string; size: number }> | undefined;
+  let fileContentCid: string | undefined;
+  let fileContentSize: number | undefined;
+  let fileVersionCids: Array<{ cid: string; size: number }> | undefined;
+
+  if (isFile) {
+    const fp = removedItem as FilePointer;
+    collectedIpnsNames = [fp.fileMetaIpnsName];
+    // Best-effort capture of the file's own content + version CIDs.
+    const cids = await captureFileCids(fp.fileMetaIpnsName, folder.folderKey, params.binCtx.ctx);
+    if (cids.length > 0) {
+      fileContentCid = cids[0].cid;
+      fileContentSize = cids[0].size;
+      const versionCids = cids.slice(1);
+      if (versionCids.length > 0) fileVersionCids = versionCids;
+    }
+  } else {
+    const fe = removedItem as FolderEntry;
+    // Unwrap the deleted folder's own key, then walk. The walk THROWS if any
+    // descendant folder can't be enumerated — abort before the folder mutation.
+    let deletedFolderKey: Uint8Array | undefined;
+    try {
+      deletedFolderKey = await unwrapKey(
+        hexToBytes(fe.folderKeyEncrypted),
+        params.binCtx.userPrivateKey
+      );
+      const walk = await walkDeletedSubtree({
+        folderIpnsName: fe.ipnsName,
+        folderKey: deletedFolderKey,
+        userPrivateKey: params.binCtx.userPrivateKey,
+        ctx: params.binCtx.ctx,
+      });
+      collectedIpnsNames = walk.ipnsNames;
+      if (walk.descendantCids.length > 0) descendantCids = walk.descendantCids;
+    } finally {
+      if (deletedFolderKey) clearBytes(deletedFolderKey);
+    }
+  }
+
+  // 2. FAIL-CLOSED share revocation — MUST precede the destructive folder
+  //    mutation. If it ultimately fails (after its own retries), abort the whole
+  //    delete: the item stays in the folder and no shares are stranded-active on
+  //    deleted content.
+  if (params.revokeSharesForItemsFn) {
+    await shareOps.revokeSharesForItems({
+      ipnsNames: collectedIpnsNames,
+      revokeFn: params.revokeSharesForItemsFn,
+    });
+  }
 
   // Capture the source folder's folderKey (the key the file's FileMetadata is
   // encrypted under) wrapped for the vault, so restore can re-encrypt to any
@@ -263,12 +494,11 @@ export async function addToBin(params: {
   // BEFORE the publish so a wrapKey failure aborts before any folder/bin
   // mutation, avoiding a split state where the file is removed from the folder
   // but never recorded in the bin.
-  const isFile = removedItem.type === 'file';
   const originalFolderKeyEncrypted = isFile
     ? bytesToHex(await wrapKey(folder.folderKey, params.binCtx.userPublicKey))
     : undefined;
 
-  // 2. Publish updated folder metadata
+  // 3. Publish updated folder metadata (destructive — only after revoke succeeded)
   const { newSequenceNumber, publishedChildren } = await sdkCore.updateFolderMetadataAndPublish({
     children: updatedChildren,
     baseChildren,
@@ -279,14 +509,14 @@ export async function addToBin(params: {
     ctx: params.binCtx.ctx,
   });
 
-  // 3. Update folder state — adopt merged published set (CR-01)
+  // 4. Update folder state — adopt merged published set (CR-01)
   folder.children = publishedChildren;
   folder.sequenceNumber = newSequenceNumber;
   folder.lastLoadedAt = Date.now();
   params.folderTree.set(params.folderIpnsName, folder);
 
-  // 4. Build bin entry (isFile / originalFolderKeyEncrypted computed above,
-  //    before the publish).
+  // 5. Build bin entry with the captured CIDs (so empty-bin/permanent-delete can
+  //    unpin the content + versions + descendant subtree).
   const entry: BinEntry = {
     id: crypto.randomUUID(),
     itemType: isFile ? 'file' : 'folder',
@@ -296,12 +526,16 @@ export async function addToBin(params: {
     deletedAt: Date.now(),
     size: 0,
     mimeType: '',
+    contentCid: fileContentCid,
+    contentSize: fileContentSize,
+    versionCids: fileVersionCids,
+    descendantCids,
     filePointer: isFile ? (removedItem as FilePointer) : undefined,
     folderEntry: !isFile ? (removedItem as FolderEntry) : undefined,
     originalFolderKeyEncrypted,
   };
 
-  // 5. Update bin metadata and publish
+  // 6. Update bin metadata and publish
   const updatedEntries = [...params.binState.entries, entry];
   const newBinSeq = params.binState.sequenceNumber + 1;
 
@@ -519,14 +753,8 @@ export async function permanentDeleteFromBin(params: {
   const entry = params.binState.entries.find((e) => e.id === params.entryId);
   if (!entry) throw new Error('Bin entry not found');
 
-  // Unpin content CID if available (best-effort)
-  if (entry.contentCid) {
-    try {
-      await sdkCore.unpinFromIpfs(params.binCtx.ctx, entry.contentCid);
-    } catch {
-      // Best-effort CID cleanup
-    }
-  }
+  // Unpin content + version + descendant CIDs (best-effort, shared helper).
+  await unpinEntryCids(params.binCtx.ctx, entry);
 
   // Remove from bin metadata and publish
   const remainingEntries = params.binState.entries.filter((e) => e.id !== params.entryId);
@@ -558,15 +786,10 @@ export async function emptyBin(params: {
   binState: BinState;
   binCtx: BinOperationContext;
 }): Promise<{ updatedBinState: BinState }> {
-  // Best-effort CID cleanup for each entry
+  // Best-effort CID cleanup for each entry — content + versions + descendant
+  // subtree (shared helper; previously only entry.contentCid was unpinned).
   for (const entry of params.binState.entries) {
-    if (entry.contentCid) {
-      try {
-        await sdkCore.unpinFromIpfs(params.binCtx.ctx, entry.contentCid);
-      } catch {
-        // Non-blocking
-      }
-    }
+    await unpinEntryCids(params.binCtx.ctx, entry);
   }
 
   // Publish empty bin metadata
@@ -623,25 +846,10 @@ export async function purgeExpiredEntries(params: {
 
   await saveBinMetadata({ metadata, binCtx: params.binCtx });
 
-  // Best-effort CID cleanup for expired entries (after metadata is saved)
+  // Best-effort CID cleanup for expired entries (after metadata is saved):
+  // content + versions + descendant subtree via the shared helper.
   for (const entry of expired) {
-    if (entry.contentCid) {
-      try {
-        await sdkCore.unpinFromIpfs(params.binCtx.ctx, entry.contentCid);
-      } catch {
-        // Best-effort: CID cleanup failures are non-blocking
-      }
-    }
-    // Also clean up version CIDs to recover quota
-    if (entry.versionCids) {
-      for (const vc of entry.versionCids) {
-        try {
-          await sdkCore.unpinFromIpfs(params.binCtx.ctx, vc.cid);
-        } catch {
-          // Best-effort
-        }
-      }
-    }
+    await unpinEntryCids(params.binCtx.ctx, entry);
   }
 
   return {
