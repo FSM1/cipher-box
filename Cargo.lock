@@ -638,7 +638,7 @@ dependencies = [
 
 [[package]]
 name = "cipherbox-api-client"
-version = "0.35.0"
+version = "0.36.0"
 dependencies = [
  "base64 0.22.1",
  "ciborium",
@@ -655,7 +655,7 @@ dependencies = [
 
 [[package]]
 name = "cipherbox-core"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "base64 0.22.1",
  "ciborium",
@@ -739,7 +739,7 @@ dependencies = [
 
 [[package]]
 name = "cipherbox-fuse"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "base64 0.22.1",
  "ciborium",
@@ -769,7 +769,7 @@ dependencies = [
 
 [[package]]
 name = "cipherbox-sdk"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "base64 0.22.1",
  "cipherbox-api-client",
