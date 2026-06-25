@@ -53,31 +53,40 @@ TBD — options, smallest-first:
 Keep `retries: 0` philosophy in spirit (fix flakiness at the source) but stop a
 single flake from masking unrelated coverage.
 
-## DONE (PR #558): desktop-e2e macOS cross-client sync (FUSE-T timing)
+## RESOLVED 2026-06-25: macOS cross-client sync is a FUSE-T SMB-cache platform limit
 
-RESOLVED 2026-06-25. Root cause confirmed and fixed exactly as the analysis below
-predicted: `drain_refresh_completions` (`crates/fuse/src/fs.rs`) skipped
-`populate_folder` while the folder sat in `mutated_folders`/`publish_queue`,
-suppressing the remote-edit re-resolution spawn. Fix added
-`InodeTable::mark_remotely_edited_files_unresolved` — re-resolves genuine remote
-**file content** edits (same pointer identity, remote `modified_at` strictly newer
-than local mtime) without clobbering pending local mutations or folder structure;
-the gated branch now calls it then falls through to the existing resolution-spawn
-block. Verified: Test 5 synced in 35s across two independent all-platform-green
-`CI E2E Tests` runs (28172426013, 28172492917); 3 new unit tests + full
-`cipherbox-fuse` suite (92) green.
+CORRECTION: PR #558 (`mark_remotely_edited_files_unresolved`) was a real hardening
+of the gated re-resolution path and it DOES engage — but it does NOT fix this flake.
+The flake recurred on `main` AFTER #558 merged (run 28177924106, same Test 5
+signature). The original "fixed by #558" claim was wrong.
 
-NOT covered by #558 (left as an OPTIONAL follow-up, not blocking): **Test 7 folder
-RENAME** sync still falls through to the macOS `optional/warn` fallback — confirmed
-empirically in run 28172426013 (`WARN: FUSE mount did not detect folder rename after
-300s on macOS`). The fix is deliberately scoped to file content; rename detection
-needs full `populate_folder` (it rewrites the `name_to_ino` index), which is still
-gated. A real Test-7 fix is a riskier structural change (reconciling renames under a
-pending publish — see [[project-web-sdk-folder-state-desync]]) and may not clear
-FUSE-T's SMB *directory* cache regardless, so it could stay optional-on-macOS even if
-implemented. Open it as its own todo only if the rename gap becomes load-bearing.
+True root cause (definitively pinned via a live local FUSE-T mount under
+`RUST_LOG=debug` + a focused repro loop): the desktop's FUSE layer is CORRECT — on a
+remote edit it detects the `modified_at` change and re-resolves the FilePointer to
+the new CID within ~5s (logged: `DIAG: FilePointer ino N re-resolved to cid <newCid>
+(size ..)`), via EITHER the non-gated `populate_folder` path OR #558's gated
+`mark_remotely_edited_files_unresolved` path. The failure is entirely above FUSE: the
+**macOS SMB client caches the file content and never re-calls FUSE `open`** for the
+duration (~17 `cat`s, zero `open: ino=N`), serving the stale read. The mount is
+`nonotification` and FUSE-T's SMB backend does **not** honor a FUSE `inval_inode`
+reverse-notification — verified by an explicit experiment (refactored `mount2` →
+`Session` + `Notifier`, called `inval_inode(ino,0,0)` after every re-resolution; the
+log confirmed `inval_inode sent` immediately post-resolve, yet the SMB client STILL
+served stale for 95s). So there is no reliable FUSE-side fix; the SMB cache TTL is
+variable and intermittently exceeds the 120s budget (~15% on CI).
 
-Original analysis (kept for history):
+Resolution: **macOS-optional stopgap on Test 5** (`test-cross-client-sync.sh`),
+mirroring the Test 7 rename leg — warn+pass on Darwin, still fail on Linux; the
+`.ps1` (Windows) still enforces. #558 stays in as legitimate hardening (it correctly
+re-resolves during a local-publish window and is the only unit-testable part).
+
+Test 7 folder RENAME was already macOS-optional and fails for the SAME SMB cache
+reason (the directory variant). Not separately actionable. A genuine fix for either
+leg would require a FUSE-T/macOS-SMB change we don't control (e.g. SMB client cache
+TTL tuning via mount options or `/etc/nsmb.conf`), tracked here if it ever matters.
+
+Original analysis (kept for history — note its "gated branch" root-cause was only a
+partial/secondary factor; the dominant cause is the SMB client cache above):
 
 `tests/desktop-e2e/scripts/test-cross-client-sync.sh:194` —
 `FUSE mount still shows original content after 120s` — flakes on **macOS only**
