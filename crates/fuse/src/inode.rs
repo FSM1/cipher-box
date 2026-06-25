@@ -1004,15 +1004,19 @@ impl InodeTable {
     /// behind-clock skew; once the local publish settles and the folder leaves
     /// `mutated_folders`, the normal `populate_folder` path reconciles the rest.
     ///
-    /// Returns `(ino, file_meta_ipns_name)` for each file marked, so the caller can
-    /// drive the existing per-folder resolution spawn.
+    /// This only mutates matched inodes in place (flipping them to unresolved); it does
+    /// NOT spawn resolution itself and does NOT surface pre-existing unresolved files.
+    /// The caller MUST still call `get_unresolved_file_pointers_for_parent` afterwards --
+    /// that re-scans the whole folder (the files flipped here plus any already-unresolved
+    /// ones) and drives the actual resolution spawn. It returns `()` deliberately: the set
+    /// flipped here is intentionally not surfaced, so a future second call site can't be
+    /// tempted to drive the spawn from a return value and skip that re-scan.
     #[cfg(any(feature = "fuse", feature = "winfsp"))]
     pub fn mark_remotely_edited_files_unresolved(
         &mut self,
         parent_ino: u64,
         metadata: &FolderMetadata,
-    ) -> Vec<(u64, String)> {
-        let mut marked = Vec::new();
+    ) {
         for child in &metadata.children {
             let file_pointer = match child {
                 FolderChild::File(f) => f,
@@ -1031,6 +1035,15 @@ impl InodeTable {
             // whose remote timestamp is strictly newer than our local copy. Anything
             // else (unresolved already, different pointer, local mtime >= remote) is
             // skipped so pending local mutations are never overwritten.
+            //
+            // NOTE the deliberate `>` here vs `populate_folder`'s `!=`: populate_folder
+            // re-resolves on ANY mtime difference, so a behind-clock remote edit with a
+            // SMALLER modified_at than our local copy still re-resolves there. We are
+            // intentionally stricter inside the local-mutation window -- a behind-clock
+            // remote edit (remote mtime < local) is DEFERRED, not applied, so it cannot
+            // clobber a pending local mutation we haven't published yet. It is reconciled
+            // normally once the folder leaves `mutated_folders` and populate_folder runs
+            // (worst case ~30s, the retention window). "Local wins" is the intended rule.
             let (prev_key, prev_key_hex) = match &inode.kind {
                 InodeKind::File {
                     file_meta_resolved: true,
@@ -1069,9 +1082,7 @@ impl InodeTable {
             inode.attr.atime = modified;
             inode.attr.mtime = modified;
             inode.attr.ctime = modified;
-            marked.push((existing_ino, file_pointer.file_meta_ipns_name.clone()));
         }
-        marked
     }
 }
 
@@ -1584,12 +1595,9 @@ mod tests {
             })],
         };
 
-        let marked = table.mark_remotely_edited_files_unresolved(ROOT_INO, &metadata);
-        assert_eq!(
-            marked,
-            vec![(child_ino, ipns_name.to_string())],
-            "remote-newer same-pointer file should be marked for re-resolution"
-        );
+        // The remote-newer same-pointer file is flipped to unresolved in place (the
+        // function returns ()); the assertions below verify the flip.
+        table.mark_remotely_edited_files_unresolved(ROOT_INO, &metadata);
 
         let child = table.get(child_ino).unwrap();
         let expected_mtime = UNIX_EPOCH + Duration::from_millis(1700001000000);
@@ -1615,10 +1623,25 @@ mod tests {
             _ => panic!("Expected File"),
         }
 
-        // Idempotent: now that it is unresolved, a second pass marks nothing (and
-        // get_unresolved... drives the actual re-spawn instead).
-        let again = table.mark_remotely_edited_files_unresolved(ROOT_INO, &metadata);
-        assert!(again.is_empty(), "already-unresolved file is not re-marked");
+        // Idempotent: now that it is unresolved, a second pass is a no-op (the guard
+        // requires file_meta_resolved: true), leaving the inode untouched --
+        // get_unresolved... drives the actual re-spawn instead.
+        table.mark_remotely_edited_files_unresolved(ROOT_INO, &metadata);
+        let child = table.get(child_ino).unwrap();
+        assert_eq!(
+            child.attr.mtime, expected_mtime,
+            "second pass must not change the already-unresolved inode"
+        );
+        assert!(
+            matches!(
+                &child.kind,
+                InodeKind::File {
+                    file_meta_resolved: false,
+                    ..
+                }
+            ),
+            "still unresolved after second pass"
+        );
     }
 
     #[test]
@@ -1639,8 +1662,8 @@ mod tests {
                 modified_at: 1700000000000, // older than local
             })],
         };
-        let marked = table.mark_remotely_edited_files_unresolved(ROOT_INO, &stale_remote);
-        assert!(marked.is_empty(), "older remote must not mark local mutation");
+        // Older remote must NOT touch the local mutation -- the inode stays resolved.
+        table.mark_remotely_edited_files_unresolved(ROOT_INO, &stale_remote);
         match &table.get(child_ino).unwrap().kind {
             InodeKind::File {
                 file_meta_resolved,
@@ -1665,11 +1688,17 @@ mod tests {
                 modified_at: 1700001000000,
             })],
         };
+        // Equal modified_at is also a no-op (local wins on ties): inode stays resolved.
+        table.mark_remotely_edited_files_unresolved(ROOT_INO, &equal_remote);
         assert!(
-            table
-                .mark_remotely_edited_files_unresolved(ROOT_INO, &equal_remote)
-                .is_empty(),
-            "equal modified_at is a no-op"
+            matches!(
+                &table.get(child_ino).unwrap().kind,
+                InodeKind::File {
+                    file_meta_resolved: true,
+                    ..
+                }
+            ),
+            "equal modified_at is a no-op -- inode stays resolved"
         );
     }
 
@@ -1704,8 +1733,10 @@ mod tests {
                 }),
             ],
         };
-        let marked = table.mark_remotely_edited_files_unresolved(ROOT_INO, &metadata);
-        assert!(marked.is_empty(), "structural changes are not marked here");
+        // Structural changes (new file, folder) are not content edits of an existing
+        // resolved file, so nothing is flipped and -- the point of this path -- no
+        // structural inode is added while locally mutating.
+        table.mark_remotely_edited_files_unresolved(ROOT_INO, &metadata);
         assert_eq!(
             table.inodes.len(),
             inode_count_before,
