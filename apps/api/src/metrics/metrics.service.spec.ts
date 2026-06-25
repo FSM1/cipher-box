@@ -140,4 +140,35 @@ describe('MetricsService', () => {
       expect(metric).toContain('route="/test"');
     });
   });
+
+  describe('ipnsEntriesTotal gauge zero-state (regression)', () => {
+    const collectGauges = () =>
+      (service as unknown as { collectGauges: () => Promise<void> }).collectGauges();
+
+    it('emits explicit 0 for every known record type when folder_ipns is empty', async () => {
+      mockFolderIpnsRepo.getRawMany.mockResolvedValueOnce([]);
+
+      await collectGauges();
+
+      const metric = await service.registry.getSingleMetricAsString('cipherbox_ipns_entries_total');
+      // Without explicit zeroing, an empty table emits no series and Grafana
+      // sticks at the last non-zero sample — assert both known types report 0.
+      expect(metric).toMatch(
+        /cipherbox_ipns_entries_total\{[^}]*record_type="folder"[^}]*\}\s+0\b/
+      );
+      expect(metric).toMatch(/cipherbox_ipns_entries_total\{[^}]*record_type="file"[^}]*\}\s+0\b/);
+    });
+
+    it('overlays real counts while still zeroing absent record types', async () => {
+      mockFolderIpnsRepo.getRawMany.mockResolvedValueOnce([{ recordType: 'folder', count: '5' }]);
+
+      await collectGauges();
+
+      const metric = await service.registry.getSingleMetricAsString('cipherbox_ipns_entries_total');
+      expect(metric).toMatch(
+        /cipherbox_ipns_entries_total\{[^}]*record_type="folder"[^}]*\}\s+5\b/
+      );
+      expect(metric).toMatch(/cipherbox_ipns_entries_total\{[^}]*record_type="file"[^}]*\}\s+0\b/);
+    });
+  });
 });
