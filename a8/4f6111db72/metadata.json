@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "a84f6111db72",
+  "strategy": "manual-commit",
+  "branch": "fix/desktop-e2e-macos-cross-client-sync-optional",
+  "checkpoints_count": 0,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/a8/4f6111db72/0/metadata.json",
+      "transcript": "/a8/4f6111db72/0/full.jsonl",
+      "content_hash": "/a8/4f6111db72/0/content_hash.txt",
+      "prompt": "/a8/4f6111db72/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 17777,
+    "cache_creation_tokens": 145428,
+    "cache_read_tokens": 7091986,
+    "output_tokens": 46141,
+    "api_call_count": 28
+  }
+}
