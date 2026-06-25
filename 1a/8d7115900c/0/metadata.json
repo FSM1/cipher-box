@@ -19,6 +19,40 @@
     "output_tokens": 29592,
     "api_call_count": 22
   },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_015AcH4pmJzShd6MXD96dqsr",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "resolve-pr-reviews"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "83e3e47057ac",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 455,
+        "end": 456,
+        "entry_ids": [
+          "7dccc661-1415-48e4-a4f5-56e88c3373bb"
+        ],
+        "tool_use_id": "toolu_015AcH4pmJzShd6MXD96dqsr"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015AcH4pmJzShd6MXD96dqsr"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: resolve-pr-reviews",
+        "default_collapsed": true
+      }
+    }
+  ],
   "session_metrics": {
     "turn_count": 5
   },
