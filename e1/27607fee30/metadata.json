@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "e127607fee30",
+  "strategy": "manual-commit",
+  "branch": "fix/desktop-e2e-macos-cross-client-sync-optional",
+  "checkpoints_count": 3,
+  "files_touched": [
+    ".planning/todos/pending/2026-06-24-web-e2e-flaky-cascade-abort.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e1/27607fee30/0/metadata.json",
+      "transcript": "/e1/27607fee30/0/full.jsonl",
+      "content_hash": "/e1/27607fee30/0/content_hash.txt",
+      "prompt": "/e1/27607fee30/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 19476,
+    "cache_creation_tokens": 572989,
+    "cache_read_tokens": 39355066,
+    "output_tokens": 163092,
+    "api_call_count": 96
+  }
+}

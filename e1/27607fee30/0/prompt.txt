@@ -1,0 +1,64 @@
+https://github.com/FSM1/cipher-box/actions/runs/28177924106 seems like the macos desktop e2e test still failed the same test again
+
+---
+
+<task-notification>
+<task-id>bxnsa92hz</task-id>
+<tool-use-id>toolu_015kyG8LuoBXaGPaUKE4nUFJ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2c9cca7a-f210-45f4-b940-4f091be387a8/tasks/bxnsa92hz.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll until macOS desktop job completes" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>adbbfceaa4b40936c</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2c9cca7a-f210-45f4-b940-4f091be387a8/tasks/adbbfceaa4b40936c.output</output-file>
+<status>completed</status>
+<summary>Agent "Build FUSE-T desktop binary + frontend" came to rest</summary>
+<note>A task-notification fires each time this agent comes to rest with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Verified. The binary links `@rpath/libfuse-t.dylib` (FUSE-T), not macFUSE's `libfuse.2.dylib`, and the `/usr/local/lib` rpath is present so the loader will resolve `libfuse-t.dylib`. The intentional DIAG `log::info!` in `crates/fuse/src/fs.rs` was included in the build (the crate compiled fresh after `cargo clean`). No commits, no servers launched, no working-tree changes reverted.
+
+---
+
+## Report
+
+**SDK packages:** All 5 built OK (`@cipherbox/crypto`, `@cipherbox/core`, `@cipherbox/api-client`, `@cipherbox/sdk-core`, `@cipherbox/sdk`) — EXIT=0, no failures.
+
+**Frontend dist:** Built OK at `/Users/myankelev/Code/random/cipher-box/apps/desktop/dist` (assets + google-callback.html present, not served).
+
+**Desktop binary:** `/Users/myankelev/Code/random/cipher-box/target/debug/cipherbox-desktop` (freshly built 17:22, 66 MB, BUILD_EXIT=0). Note: the `src-tauri/target/debug/` path does NOT exist — the workspace target dir is the correct one.
+
+**otool fuse line (verbatim):**
+```
+@rpath/libfuse-t.dylib (compatibility version 0.0.0, current version 0.0.0)
+```
+**PASS** — links libfuse-t (FUSE-T), NOT macFUSE's `libfuse.2.dylib`. The `LC_RPATH path /usr/local/lib` is present so the loader resolves `libfuse-t.dylib`.
+
+**Exact reproduce/rebuild commands (from repo root):**
+```bash
+cargo clean -p fuser -p cipherbox-fuse -p cipherbox-desktop
+PKG_CONFIG_PATH="/Users/myankelev/Code/random/cipher-box/apps/desktop/src-tauri/pkg-config:/usr/local/lib/pkgconfig:/opt/homebrew/lib/pkgconfig" \
+  cargo build -p cipherbox-desktop --no-default-features --features fuse
+install_name_tool -add_rpath /usr/local/lib /Users/myankelev/Code/random/cipher-box/target/debug/cipherbox-desktop
+otool -L /Users/myankelev/Code/random/cipher-box/target/debug/cipherbox-desktop | grep -i fuse
+```
+The PKG_CONFIG_PATH (repo's `apps/desktop/src-tauri/pkg-config` FIRST) is the load-bearing part — verified `pkg-config --libs fuse` prints `-L/usr/local/lib -Wl,-rpath,/usr/local/lib -lfuse-t` with that path.
+
+**Blockers:** None. The PKG_CONFIG_PATH approach worked on the first build; no need for the sudo `/usr/local/lib/pkgconfig/fuse.pc` overwrite fallback, and the intentional uncommitted DIAG `log::info!` in `crates/fuse/src/fs.rs` was compiled into the binary.
+
+Build logs are at `/Users/myankelev/.claude/jobs/2c9cca7a/tmp/` (sdk-build.log, vite-build.log, cargo-build.log).</result>
+<usage><subagent_tokens>38416</subagent_tokens><tool_uses>9</tool_uses><duration_ms>85243</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bi35ux66a</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2c9cca7a-f210-45f4-b940-4f091be387a8/tasks/bi35ux66a.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch repro loop for a failure" completed (exit code 0)</summary>
+</task-notification>

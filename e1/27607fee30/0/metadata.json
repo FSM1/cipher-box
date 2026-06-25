@@ -1,0 +1,115 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "e127607fee30",
+  "session_id": "802baabc-abec-4574-b1d7-fa147465c88a",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-25T15:57:35.070807Z",
+  "branch": "fix/desktop-e2e-macos-cross-client-sync-optional",
+  "checkpoints_count": 3,
+  "files_touched": [
+    ".planning/todos/pending/2026-06-24-web-e2e-flaky-cascade-abort.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "7d2e692ee181",
+  "checkpoint_transcript_start": 755,
+  "transcript_lines_at_start": 755,
+  "token_usage": {
+    "input_tokens": 19476,
+    "cache_creation_tokens": 572989,
+    "cache_read_tokens": 39355066,
+    "output_tokens": 163092,
+    "api_call_count": 96
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_015AcH4pmJzShd6MXD96dqsr",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "resolve-pr-reviews"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "7d2e692ee181",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 455,
+        "end": 456,
+        "entry_ids": [
+          "7dccc661-1415-48e4-a4f5-56e88c3373bb"
+        ],
+        "tool_use_id": "toolu_015AcH4pmJzShd6MXD96dqsr"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015AcH4pmJzShd6MXD96dqsr"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: resolve-pr-reviews",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 12
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-25T15:56:54.804059Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 30,
+    "human_modified": 22,
+    "human_removed": 0,
+    "total_committed": 30,
+    "total_lines_changed": 53,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 10,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 10,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 53,
+      "agent_lines_removed": 1,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
