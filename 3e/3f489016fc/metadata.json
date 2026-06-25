@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "3e3f489016fc",
+  "strategy": "manual-commit",
+  "branch": "chore/ipns-entries-gauge-zero-state",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/3e/3f489016fc/0/metadata.json",
+      "transcript": "/3e/3f489016fc/0/full.jsonl",
+      "content_hash": "/3e/3f489016fc/0/content_hash.txt",
+      "prompt": "/3e/3f489016fc/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 81976,
+    "cache_creation_tokens": 1267649,
+    "cache_read_tokens": 76064782,
+    "output_tokens": 420418,
+    "api_call_count": 284
+  }
+}

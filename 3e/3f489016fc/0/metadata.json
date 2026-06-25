@@ -1,0 +1,100 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "3e3f489016fc",
+  "session_id": "802baabc-abec-4574-b1d7-fa147465c88a",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-25T20:48:35.874201Z",
+  "branch": "chore/ipns-entries-gauge-zero-state",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "4c8bc25b5134",
+  "token_usage": {
+    "input_tokens": 81976,
+    "cache_creation_tokens": 1267649,
+    "cache_read_tokens": 76064782,
+    "output_tokens": 420418,
+    "api_call_count": 284
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_015AcH4pmJzShd6MXD96dqsr",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "resolve-pr-reviews"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "4c8bc25b5134",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 455,
+        "end": 456,
+        "entry_ids": [
+          "7dccc661-1415-48e4-a4f5-56e88c3373bb"
+        ],
+        "tool_use_id": "toolu_015AcH4pmJzShd6MXD96dqsr"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015AcH4pmJzShd6MXD96dqsr"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: resolve-pr-reviews",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_019sKVD3NPyHgbXQwkS3R6Ka",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:capture"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "4c8bc25b5134",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 1523,
+        "end": 1524,
+        "entry_ids": [
+          "22e89503-48d4-45aa-b9af-57ef6f157db3"
+        ],
+        "tool_use_id": "toolu_019sKVD3NPyHgbXQwkS3R6Ka"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_019sKVD3NPyHgbXQwkS3R6Ka"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:capture",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 19
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
