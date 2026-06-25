@@ -44,8 +44,7 @@ export class IpnsService {
    */
   async publishRecord(
     userId: string,
-    dto: PublishIpnsDto | PublishIpnsEntryDto,
-    recordType: 'folder' | 'file' = 'folder'
+    dto: PublishIpnsDto | PublishIpnsEntryDto
   ): Promise<PublishIpnsResponseDto> {
     const endTimer = this.metricsService.ipfsIpnsDuration.startTimer({
       operation: 'publish',
@@ -114,7 +113,6 @@ export class IpnsService {
         publicKeyBytes,
         dto.encryptedIpnsPrivateKey,
         dto.keyEpoch,
-        recordType,
         dto.expectedSequenceNumber
       );
 
@@ -178,7 +176,7 @@ export class IpnsService {
       const batch = dto.records.slice(i, i + CONCURRENCY);
 
       const settled = await Promise.allSettled(
-        batch.map((entry) => this.publishRecord(userId, entry, entry.recordType ?? 'folder'))
+        batch.map((entry) => this.publishRecord(userId, entry))
       );
 
       for (let j = 0; j < settled.length; j++) {
@@ -221,7 +219,6 @@ export class IpnsService {
     publicKey?: Uint8Array,
     encryptedIpnsPrivateKey?: string,
     keyEpoch?: number,
-    recordType: 'folder' | 'file' = 'folder',
     expectedSequenceNumber?: string
   ): Promise<FolderIpns> {
     // The cache is keyed by ipnsName alone — there is one canonical row per name.
@@ -334,7 +331,6 @@ export class IpnsService {
       existing.latestCid = metadataCid;
       existing.signedRecord = Buffer.from(signedRecord);
       existing.publicKey = publicKey ? Buffer.from(publicKey) : existing.publicKey;
-      existing.recordType = recordType;
       existing.updatedAt = new Date();
 
       // Only update encrypted key if provided (e.g., on key rotation).
@@ -361,9 +357,7 @@ export class IpnsService {
             saved.sequenceNumber
           )
           .catch((err) =>
-            this.logger.warn(
-              `Failed to enroll ${recordType} ${ipnsName} for republishing: ${err.message}`
-            )
+            this.logger.warn(`Failed to enroll ${ipnsName} for republishing: ${err.message}`)
           );
       }
 
@@ -384,7 +378,6 @@ export class IpnsService {
         : null,
       keyEpoch: keyEpoch ?? null,
       isRoot: false, // Root folder is tracked in Vault entity
-      recordType,
     });
 
     const saved = await this.folderIpnsRepository.save(folder);
@@ -401,9 +394,7 @@ export class IpnsService {
           saved.sequenceNumber
         )
         .catch((err) =>
-          this.logger.warn(
-            `Failed to enroll ${recordType} ${ipnsName} for republishing: ${err.message}`
-          )
+          this.logger.warn(`Failed to enroll ${ipnsName} for republishing: ${err.message}`)
         );
     }
 

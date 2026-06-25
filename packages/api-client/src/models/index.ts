@@ -3,7 +3,7 @@
  * Do not edit manually.
  * CipherBox API
  * Zero-knowledge encrypted cloud storage API
- * OpenAPI spec version: 0.42.0
+ * OpenAPI spec version: 0.44.0
  */
 
 export * from './addShareKeysDto';
@@ -82,7 +82,6 @@ export * from './pendingRotationResponseDto';
 export * from './pendingRotationResponseDtoItemType';
 export * from './publishIpnsDto';
 export * from './publishIpnsEntryDto';
-export * from './publishIpnsEntryDtoRecordType';
 export * from './publishIpnsResponseDto';
 export * from './quotaResponseDto';
 export * from './receivedShareResponseDto';

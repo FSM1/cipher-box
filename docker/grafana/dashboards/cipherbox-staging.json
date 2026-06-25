@@ -247,48 +247,6 @@
       ]
     },
     {
-      "type": "piechart",
-      "title": "IPNS Entries by Type",
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 16,
-        "y": 1
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_GRAFANA_CLOUD_METRICS}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": ["lastNotNull"]
-        },
-        "pieType": "donut",
-        "legend": {
-          "displayMode": "list",
-          "placement": "right"
-        },
-        "tooltip": {
-          "mode": "single"
-        }
-      },
-      "targets": [
-        {
-          "expr": "cipherbox_ipns_entries_total",
-          "legendFormat": "{{ record_type }}",
-          "refId": "A"
-        }
-      ]
-    },
-    {
       "type": "stat",
       "title": "File Uploads (24h)",
       "gridPos": {
@@ -811,14 +769,9 @@
       },
       "targets": [
         {
-          "expr": "cipherbox_ipns_entries_total{record_type=\"folder\"}",
-          "legendFormat": "Folder entries",
+          "expr": "sum(cipherbox_ipns_entries_total)",
+          "legendFormat": "IPNS entries",
           "refId": "A"
-        },
-        {
-          "expr": "cipherbox_ipns_entries_total{record_type=\"file\"}",
-          "legendFormat": "File entries",
-          "refId": "B"
         }
       ]
     },
