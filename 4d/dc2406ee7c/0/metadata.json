@@ -1,0 +1,71 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "4ddc2406ee7c",
+  "session_id": "802baabc-abec-4574-b1d7-fa147465c88a",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-25T13:43:33.012761Z",
+  "branch": "fix/fuse-resolve-remote-edit-while-publishing",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/fuse/src/inode.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "83e3e47057ac",
+  "token_usage": {
+    "input_tokens": 22872,
+    "cache_creation_tokens": 207884,
+    "cache_read_tokens": 14921603,
+    "output_tokens": 110459,
+    "api_call_count": 100
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_015AcH4pmJzShd6MXD96dqsr",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "resolve-pr-reviews"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "83e3e47057ac",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 455,
+        "end": 456,
+        "entry_ids": [
+          "7dccc661-1415-48e4-a4f5-56e88c3373bb"
+        ],
+        "tool_use_id": "toolu_015AcH4pmJzShd6MXD96dqsr"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015AcH4pmJzShd6MXD96dqsr"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: resolve-pr-reviews",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-25T13:42:52.260494Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 318,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 318,
+    "total_lines_changed": 318,
+    "agent_percentage": 0,
+    "metric_version": 2
+  }
+}
