@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.33.1](https://github.com/FSM1/cipher-box/compare/@cipherbox/crypto-v0.33.0...@cipherbox/crypto-v0.33.1) (2026-06-25)
+
+
+### Features
+
+* strict fail-closed IPNS verification cutover across Rust, TS, and API ([#555](https://github.com/FSM1/cipher-box/issues/555)) ([03209e3](https://github.com/FSM1/cipher-box/commit/03209e3854e1309cde13c087a3f407568b17fcd7))
+
 ## [0.33.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/crypto-v0.32.0...@cipherbox/crypto-v0.33.0) (2026-06-18)
 
 

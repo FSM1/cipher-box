@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.45.0](https://github.com/FSM1/cipher-box/compare/cipherbox-desktop-v0.44.0...cipherbox-desktop-v0.45.0) (2026-06-25)
+
+
+### Features
+
+* strict fail-closed IPNS verification cutover across Rust, TS, and API ([#555](https://github.com/FSM1/cipher-box/issues/555)) ([03209e3](https://github.com/FSM1/cipher-box/commit/03209e3854e1309cde13c087a3f407568b17fcd7))
+
 ## [0.44.0](https://github.com/FSM1/cipher-box/compare/cipherbox-desktop-v0.43.0...cipherbox-desktop-v0.44.0) (2026-06-22)
 
 

@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.45.0](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.44.1...cipher-box-v0.45.0) (2026-06-25)
+
+
+### Features
+
+* strict fail-closed IPNS verification cutover across Rust, TS, and API ([#555](https://github.com/FSM1/cipher-box/issues/555)) ([03209e3](https://github.com/FSM1/cipher-box/commit/03209e3854e1309cde13c087a3f407568b17fcd7))
+
+
+### Bug Fixes
+
+* **fuse:** re-resolve remote file edits during local publish window ([#558](https://github.com/FSM1/cipher-box/issues/558)) ([d343c0f](https://github.com/FSM1/cipher-box/commit/d343c0f4e8a34aaac117fd397a92c233f7ab45f4))
+
 ## [0.44.1](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.44.0...cipher-box-v0.44.1) (2026-06-23)
 
 
