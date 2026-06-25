@@ -978,6 +978,118 @@ impl InodeTable {
             })
             .collect()
     }
+
+    /// Mark *genuine remote file edits* in a folder for re-resolution WITHOUT
+    /// rebuilding folder structure or clobbering pending local mutations.
+    ///
+    /// `drain_refresh_completions` skips the full `populate_folder` apply while a
+    /// folder has pending local mutations/publishes (`mutated_folders` /
+    /// `publish_queue`) -- otherwise a refresh carrying stale remote metadata would
+    /// overwrite the local change before its own publish propagates (folder-state
+    /// desync). The side effect was that a *remote* edit (e.g. a file edited via the
+    /// web/SDK on another client) arriving in that same window was dropped entirely:
+    /// `populate_folder`'s `modified_at`-change detection -- the only thing that marks
+    /// an already-resolved file unresolved so its new CID is re-fetched -- never ran.
+    ///
+    /// This is the narrow, structure-free counterpart: for each remote File child
+    /// that maps to an *already-resolved* local inode under the SAME pointer identity
+    /// (same `file_meta_ipns_name`, same display name) AND whose remote `modified_at`
+    /// is **strictly newer** than the local inode's mtime, rebuild it as unresolved
+    /// (preserving IPNS keys) so the caller's resolution spawn re-fetches the new CID.
+    ///
+    /// Crucially it touches NOTHING else: folders, freshly-added remote files,
+    /// removed files, pointer swaps, and -- the whole point -- any file whose local
+    /// mtime is >= the remote timestamp (i.e. a pending local mutation) are left
+    /// untouched. The strict `>` comparison makes "local wins" the rule on ties or
+    /// behind-clock skew; once the local publish settles and the folder leaves
+    /// `mutated_folders`, the normal `populate_folder` path reconciles the rest.
+    ///
+    /// This only mutates matched inodes in place (flipping them to unresolved); it does
+    /// NOT spawn resolution itself and does NOT surface pre-existing unresolved files.
+    /// The caller MUST still call `get_unresolved_file_pointers_for_parent` afterwards --
+    /// that re-scans the whole folder (the files flipped here plus any already-unresolved
+    /// ones) and drives the actual resolution spawn. It returns `()` deliberately: the set
+    /// flipped here is intentionally not surfaced, so a future second call site can't be
+    /// tempted to drive the spawn from a return value and skip that re-scan.
+    #[cfg(any(feature = "fuse", feature = "winfsp"))]
+    pub fn mark_remotely_edited_files_unresolved(
+        &mut self,
+        parent_ino: u64,
+        metadata: &FolderMetadata,
+    ) {
+        for child in &metadata.children {
+            let file_pointer = match child {
+                FolderChild::File(f) => f,
+                FolderChild::Folder(_) => continue,
+            };
+            // Match strictly by current display name: a rename is a structural
+            // change we deliberately leave to the full populate_folder path.
+            let Some(existing_ino) = self.find_child(parent_ino, &file_pointer.name) else {
+                continue;
+            };
+            let modified = UNIX_EPOCH + Duration::from_millis(file_pointer.modified_at);
+            let Some(inode) = self.inodes.get_mut(&existing_ino) else {
+                continue;
+            };
+            // Only act on an already-resolved file under the SAME pointer identity
+            // whose remote timestamp is strictly newer than our local copy. Anything
+            // else (unresolved already, different pointer, local mtime >= remote) is
+            // skipped so pending local mutations are never overwritten.
+            //
+            // NOTE the deliberate `>` here vs `populate_folder`'s `!=`: populate_folder
+            // re-resolves on ANY mtime difference, so a behind-clock remote edit with a
+            // SMALLER modified_at than our local copy still re-resolves there. We are
+            // intentionally stricter inside the local-mutation window -- a behind-clock
+            // remote edit (remote mtime < local) is DEFERRED, not applied, so it cannot
+            // clobber a pending local mutation we haven't published yet. It is reconciled
+            // normally once the folder leaves `mutated_folders` and populate_folder runs
+            // (worst case ~30s, the retention window). "Local wins" is the intended rule.
+            let (prev_key, prev_key_hex) = match &inode.kind {
+                InodeKind::File {
+                    file_meta_resolved: true,
+                    file_meta_ipns_name: Some(name),
+                    file_ipns_private_key,
+                    file_ipns_key_encrypted_hex,
+                    ..
+                } if name == &file_pointer.file_meta_ipns_name && modified > inode.attr.mtime => {
+                    (
+                        file_ipns_private_key.clone(),
+                        file_ipns_key_encrypted_hex.clone(),
+                    )
+                }
+                _ => continue,
+            };
+            log::info!(
+                "File '{}': remote edit detected while folder ino {} is locally publishing -- marking for re-resolution without clobbering local state",
+                file_pointer.name,
+                parent_ino
+            );
+            inode.kind = InodeKind::File {
+                cid: String::new(),
+                encrypted_file_key: String::new(),
+                iv: String::new(),
+                size: 0,
+                encryption_mode: "GCM".to_string(),
+                file_meta_ipns_name: Some(file_pointer.file_meta_ipns_name.clone()),
+                file_meta_resolved: false,
+                file_ipns_private_key: prev_key,
+                file_ipns_key_encrypted_hex: prev_key_hex,
+                versions: None,
+            };
+            // Clear the stale resolved size/blocks as well (mirrors populate_folder's
+            // unresolved rebuild, which derives attr from the size:0 kind) so
+            // GETATTR/READDIR do not expose the old size during the re-resolution
+            // window. resolve_file_pointer restores the real size on completion.
+            inode.attr.size = 0;
+            inode.attr.blocks = 0;
+            // Adopt the remote timestamp so the next refresh cycle sees mtime ==
+            // remote modified_at and does not re-mark (resolve_file_pointer leaves
+            // mtime untouched, so this stays stable after resolution completes).
+            inode.attr.atime = modified;
+            inode.attr.mtime = modified;
+            inode.attr.ctime = modified;
+        }
+    }
 }
 
 #[cfg(all(test, any(feature = "fuse", feature = "winfsp")))]
@@ -1424,6 +1536,220 @@ mod tests {
             "Old name should not exist"
         );
         assert_eq!(table.find_child(ROOT_INO, "Beta"), Some(original_ino));
+    }
+
+    /// Build a folder with one resolved file (cid="bafyOLDcid", keys set) at the
+    /// given `modified_at`, returning the table and the file's inode number.
+    #[cfg(test)]
+    fn table_with_resolved_file(ipns_name: &str, modified_at: u64) -> (InodeTable, u64) {
+        let mut table = InodeTable::new();
+        let metadata = FolderMetadata {
+            version: "v2".to_string(),
+            children: vec![FolderChild::File(cipherbox_core::folder::FilePointer {
+                id: "file-1".to_string(),
+                name: "hello.txt".to_string(),
+                file_meta_ipns_name: ipns_name.to_string(),
+                ipns_private_key_encrypted: None,
+                created_at: 1700000000000,
+                modified_at,
+            })],
+        };
+        let private_key = vec![0u8; 32];
+        let public_key = vec![0u8; 33];
+        table
+            .populate_folder(ROOT_INO, &metadata, &private_key, &public_key, false)
+            .unwrap();
+        let child_ino = table.get(ROOT_INO).unwrap().children.as_ref().unwrap()[0];
+        table.resolve_file_pointer(
+            child_ino,
+            "bafyOLDcid".to_string(),
+            "enckey".to_string(),
+            "iv123".to_string(),
+            42,
+            "GCM".to_string(),
+            None,
+        );
+        if let Some(inode) = table.inodes.get_mut(&child_ino) {
+            if let InodeKind::File {
+                ref mut file_ipns_private_key,
+                ref mut file_ipns_key_encrypted_hex,
+                ..
+            } = inode.kind
+            {
+                *file_ipns_private_key = Some(Zeroizing::new(vec![1u8; 32]));
+                *file_ipns_key_encrypted_hex = Some("abcdef1234".to_string());
+            }
+        }
+        (table, child_ino)
+    }
+
+    #[test]
+    fn test_mark_remotely_edited_marks_newer_same_pointer() {
+        let ipns_name = "k51qzi5uqu5dljtg5upm7x7ugan9lql3ewyknv4r4mhhkwzn8n7cnbd1unfwgx";
+        let (mut table, child_ino) = table_with_resolved_file(ipns_name, 1700000000000);
+
+        // Remote edit: same pointer + name, strictly newer modified_at.
+        let metadata = FolderMetadata {
+            version: "v2".to_string(),
+            children: vec![FolderChild::File(cipherbox_core::folder::FilePointer {
+                id: "file-1".to_string(),
+                name: "hello.txt".to_string(),
+                file_meta_ipns_name: ipns_name.to_string(),
+                ipns_private_key_encrypted: None,
+                created_at: 1700000000000,
+                modified_at: 1700001000000, // 1000s later
+            })],
+        };
+
+        // The remote-newer same-pointer file is flipped to unresolved in place (the
+        // function returns ()); the assertions below verify the flip.
+        table.mark_remotely_edited_files_unresolved(ROOT_INO, &metadata);
+
+        let child = table.get(child_ino).unwrap();
+        let expected_mtime = UNIX_EPOCH + Duration::from_millis(1700001000000);
+        assert_eq!(child.attr.mtime, expected_mtime, "mtime adopts remote value");
+        assert_eq!(child.attr.size, 0, "stale resolved size cleared");
+        assert_eq!(child.attr.blocks, 0, "stale resolved blocks cleared");
+        match &child.kind {
+            InodeKind::File {
+                file_meta_resolved,
+                cid,
+                file_meta_ipns_name,
+                file_ipns_private_key,
+                file_ipns_key_encrypted_hex,
+                ..
+            } => {
+                assert!(!file_meta_resolved, "should be unresolved");
+                assert!(cid.is_empty(), "cid cleared for re-resolution");
+                assert_eq!(file_meta_ipns_name.as_deref(), Some(ipns_name));
+                assert!(
+                    file_ipns_private_key.is_some(),
+                    "IPNS key preserved (same pointer)"
+                );
+                assert_eq!(file_ipns_key_encrypted_hex.as_deref(), Some("abcdef1234"));
+            }
+            _ => panic!("Expected File"),
+        }
+
+        // Idempotent: now that it is unresolved, a second pass is a no-op (the guard
+        // requires file_meta_resolved: true), leaving the inode untouched --
+        // get_unresolved... drives the actual re-spawn instead.
+        table.mark_remotely_edited_files_unresolved(ROOT_INO, &metadata);
+        let child = table.get(child_ino).unwrap();
+        assert_eq!(
+            child.attr.mtime, expected_mtime,
+            "second pass must not change the already-unresolved inode"
+        );
+        assert!(
+            matches!(
+                &child.kind,
+                InodeKind::File {
+                    file_meta_resolved: false,
+                    ..
+                }
+            ),
+            "still unresolved after second pass"
+        );
+    }
+
+    #[test]
+    fn test_mark_remotely_edited_preserves_local_mutations() {
+        let ipns_name = "k51qzi5uqu5dljtg5upm7x7ugan9lql3ewyknv4r4mhhkwzn8n7cnbd1unfwgx";
+
+        // Local inode sits at t=1700001000000 (a pending local mutation). Remote
+        // metadata is OLDER (1700000000000) -- it must NOT clobber local state.
+        let (mut table, child_ino) = table_with_resolved_file(ipns_name, 1700001000000);
+        let stale_remote = FolderMetadata {
+            version: "v2".to_string(),
+            children: vec![FolderChild::File(cipherbox_core::folder::FilePointer {
+                id: "file-1".to_string(),
+                name: "hello.txt".to_string(),
+                file_meta_ipns_name: ipns_name.to_string(),
+                ipns_private_key_encrypted: None,
+                created_at: 1700000000000,
+                modified_at: 1700000000000, // older than local
+            })],
+        };
+        // Older remote must NOT touch the local mutation -- the inode stays resolved.
+        table.mark_remotely_edited_files_unresolved(ROOT_INO, &stale_remote);
+        match &table.get(child_ino).unwrap().kind {
+            InodeKind::File {
+                file_meta_resolved,
+                cid,
+                ..
+            } => {
+                assert!(file_meta_resolved, "local state stays resolved");
+                assert_eq!(cid, "bafyOLDcid", "local cid untouched");
+            }
+            _ => panic!("Expected File"),
+        }
+
+        // Equal modified_at is also a no-op (local wins on ties).
+        let equal_remote = FolderMetadata {
+            version: "v2".to_string(),
+            children: vec![FolderChild::File(cipherbox_core::folder::FilePointer {
+                id: "file-1".to_string(),
+                name: "hello.txt".to_string(),
+                file_meta_ipns_name: ipns_name.to_string(),
+                ipns_private_key_encrypted: None,
+                created_at: 1700000000000,
+                modified_at: 1700001000000,
+            })],
+        };
+        // Equal modified_at is also a no-op (local wins on ties): inode stays resolved.
+        table.mark_remotely_edited_files_unresolved(ROOT_INO, &equal_remote);
+        assert!(
+            matches!(
+                &table.get(child_ino).unwrap().kind,
+                InodeKind::File {
+                    file_meta_resolved: true,
+                    ..
+                }
+            ),
+            "equal modified_at is a no-op -- inode stays resolved"
+        );
+    }
+
+    #[test]
+    fn test_mark_remotely_edited_ignores_structural_changes() {
+        let ipns_name = "k51qzi5uqu5dljtg5upm7x7ugan9lql3ewyknv4r4mhhkwzn8n7cnbd1unfwgx";
+        let (mut table, _child_ino) = table_with_resolved_file(ipns_name, 1700000000000);
+        let inode_count_before = table.inodes.len();
+
+        // A brand-new remote file (no local inode) plus a folder child: neither is a
+        // content edit of an existing resolved file, so nothing is marked and -- the
+        // point of this path -- no structural inode is added while locally mutating.
+        let metadata = FolderMetadata {
+            version: "v2".to_string(),
+            children: vec![
+                FolderChild::File(cipherbox_core::folder::FilePointer {
+                    id: "file-2".to_string(),
+                    name: "brand-new.txt".to_string(),
+                    file_meta_ipns_name: "k51qzi5uqu5dNEWfileADDEDremotelyABC123".to_string(),
+                    ipns_private_key_encrypted: None,
+                    created_at: 1700002000000,
+                    modified_at: 1700002000000,
+                }),
+                FolderChild::Folder(cipherbox_core::folder::FolderEntry {
+                    id: "folder-1".to_string(),
+                    name: "subfolder".to_string(),
+                    ipns_name: "k51qzi5uqu5dSUBFOLDERref456".to_string(),
+                    folder_key_encrypted: "00".to_string(),
+                    ipns_private_key_encrypted: "00".to_string(),
+                    created_at: 1700002000000,
+                    modified_at: 1700002000000,
+                }),
+            ],
+        };
+        // Structural changes (new file, folder) are not content edits of an existing
+        // resolved file, so nothing is flipped and -- the point of this path -- no
+        // structural inode is added while locally mutating.
+        table.mark_remotely_edited_files_unresolved(ROOT_INO, &metadata);
+        assert_eq!(
+            table.inodes.len(),
+            inode_count_before,
+            "no inodes added/removed by the content-only re-resolution path"
+        );
     }
 
     #[test]

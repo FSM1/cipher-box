@@ -390,21 +390,33 @@ impl CipherBoxFS {
             };
             self.refreshing_metadata.remove(&ipns_name);
             if self.mutated_folders.contains_key(&ino) || self.publish_queue.contains_key(&ino) {
+                // This folder has pending local mutations/publishes. Do NOT rebuild
+                // its structure from remote metadata -- that would clobber the local
+                // change with stale remote state before our own publish propagates
+                // (folder-state desync). But a *remote* file edit (newer modified_at)
+                // arriving in this same window must still surface, so mark only those
+                // genuine remote edits for re-resolution -- local mutations (local
+                // mtime >= remote) are left untouched -- then fall through to the
+                // shared resolution-spawn block below.
                 self.metadata_cache.set(&ipns_name, metadata.clone(), cid);
-                continue;
+                self.inodes
+                    .mark_remotely_edited_files_unresolved(ino, &metadata);
+            } else {
+                self.metadata_cache
+                    .set(&ipns_name, metadata.clone(), cid.clone());
+                if let Err(e) = self.inodes.populate_folder(
+                    ino,
+                    &metadata,
+                    &self.private_key,
+                    &self.public_key,
+                    true,
+                ) {
+                    log::warn!("Drain refresh apply failed for ino {}: {}", ino, e);
+                }
             }
-            self.metadata_cache
-                .set(&ipns_name, metadata.clone(), cid.clone());
-            if let Err(e) = self.inodes.populate_folder(
-                ino,
-                &metadata,
-                &self.private_key,
-                &self.public_key,
-                true,
-            ) {
-                log::warn!("Drain refresh apply failed for ino {}: {}", ino, e);
-            }
-            // Spawn async resolution for unresolved FilePointers in this folder
+            // Spawn async resolution for unresolved FilePointers in this folder.
+            // Covers both the freshly-populated path and the locally-mutating
+            // remote-edit path (marked just above).
             let unresolved = self.inodes.get_unresolved_file_pointers_for_parent(ino);
             if !unresolved.is_empty() {
                 let folder_key = self.inodes.get(ino).and_then(|i| match &i.kind {
@@ -790,6 +802,199 @@ mod build_folder_metadata_tests {
         assert!(
             file_child.unwrap().ipns_private_key_encrypted.is_none(),
             "ipns_private_key_encrypted must be None when no key is present"
+        );
+    }
+}
+
+/// Tests for `drain_refresh_completions` — the IPNS-refresh apply path and the
+/// cross-client re-resolution fix (PR #558).
+///
+/// These drive the synchronous bookkeeping directly: a `PendingRefresh` is pushed
+/// onto `refresh_tx`, `drain_refresh_completions()` is called, and the resulting
+/// inode/cache/queue state is asserted. The per-file resolution task the drain
+/// spawns is fire-and-forget and is never polled (the `#[tokio::test]` body does
+/// not await after the drain, and the API host is unroutable), so only the
+/// synchronous effects — which is exactly the patch under test — are observed.
+#[cfg(all(test, feature = "fuse"))]
+mod drain_refresh_completions_tests {
+    use crate::events::PendingRefresh;
+    use crate::inode::{FileAttrs, InodeData, InodeKind, ROOT_INO};
+    use crate::test_support::make_test_fs;
+    use std::time::{Duration, UNIX_EPOCH};
+    use zeroize::Zeroizing;
+
+    const FILE_IPNS: &str = "k51file-cross-client";
+    const ROOT_IPNS: &str = "k51test-root";
+
+    /// Insert a resolved `hello.txt` File child of root with mtime `mtime_ms`.
+    fn insert_resolved_file(fs: &mut crate::CipherBoxFS, mtime_ms: u64) -> u64 {
+        let ino = fs.inodes.allocate_ino();
+        let mtime = UNIX_EPOCH + Duration::from_millis(mtime_ms);
+        fs.inodes.insert(InodeData {
+            ino,
+            parent_ino: ROOT_INO,
+            name: "hello.txt".to_string(),
+            kind: InodeKind::File {
+                cid: "bafyOLDcid".to_string(),
+                encrypted_file_key: "deadbeef".to_string(),
+                iv: "aabbccdd".to_string(),
+                size: 42,
+                encryption_mode: "GCM".to_string(),
+                file_meta_ipns_name: Some(FILE_IPNS.to_string()),
+                file_meta_resolved: true,
+                file_ipns_private_key: Some(Zeroizing::new(vec![3u8; 32])),
+                file_ipns_key_encrypted_hex: Some("abcd".to_string()),
+                versions: None,
+            },
+            attr: FileAttrs {
+                ino,
+                size: 42,
+                blocks: 1,
+                atime: mtime,
+                mtime,
+                ctime: mtime,
+                crtime: mtime,
+                is_dir: false,
+                perm: 0o644,
+                nlink: 1,
+            },
+            children: None,
+            write_generation: 0,
+        });
+        if let Some(root) = fs.inodes.get_mut(ROOT_INO) {
+            root.children.get_or_insert_with(Vec::new).push(ino);
+        }
+        ino
+    }
+
+    /// Folder metadata listing `hello.txt` at the same IPNS identity with the
+    /// given `modified_at`.
+    fn refresh_metadata(file_mtime_ms: u64) -> cipherbox_core::FolderMetadata {
+        cipherbox_core::FolderMetadata {
+            version: "v2".to_string(),
+            children: vec![cipherbox_core::FolderChild::File(
+                cipherbox_core::FilePointer {
+                    id: "file-1".to_string(),
+                    name: "hello.txt".to_string(),
+                    file_meta_ipns_name: FILE_IPNS.to_string(),
+                    ipns_private_key_encrypted: None,
+                    created_at: 1700000000000,
+                    modified_at: file_mtime_ms,
+                },
+            )],
+        }
+    }
+
+    fn is_unresolved(fs: &crate::CipherBoxFS, ino: u64) -> bool {
+        matches!(
+            &fs.inodes.get(ino).unwrap().kind,
+            InodeKind::File {
+                file_meta_resolved: false,
+                cid,
+                ..
+            } if cid.is_empty()
+        )
+    }
+
+    fn send_refresh(fs: &crate::CipherBoxFS, metadata: cipherbox_core::FolderMetadata) {
+        fs.refresh_tx
+            .send(PendingRefresh::Success {
+                ino: ROOT_INO,
+                ipns_name: ROOT_IPNS.to_string(),
+                metadata,
+                cid: "bafyREFRESHcid".to_string(),
+            })
+            .unwrap();
+    }
+
+    /// Gated branch (folder mid local-publish): a strictly-newer remote edit is
+    /// flipped to unresolved WITHOUT a full populate_folder, and the fall-through
+    /// spawn block enqueues it for resolution. Remote metadata is still cached.
+    #[tokio::test]
+    async fn gated_marks_remote_edit_and_spawns_resolution() {
+        let mut fs = make_test_fs();
+        let file_ino = insert_resolved_file(&mut fs, 1700000000000);
+        fs.mutated_folders
+            .insert(ROOT_INO, std::time::Instant::now());
+
+        send_refresh(&fs, refresh_metadata(1700001000000));
+        fs.drain_refresh_completions();
+
+        assert!(is_unresolved(&fs, file_ino), "remote edit marked unresolved");
+        assert!(
+            fs.resolving_file_pointers.contains(&file_ino),
+            "fall-through spawn must enqueue the marked file for resolution"
+        );
+        assert!(
+            fs.metadata_cache.get(ROOT_IPNS).is_some(),
+            "remote metadata is cached even on the gated path"
+        );
+    }
+
+    /// Gated branch must NOT clobber a pending local mutation: the local inode is
+    /// newer than the (stale) remote refresh, so it stays resolved and is not
+    /// queued for re-resolution.
+    #[tokio::test]
+    async fn gated_preserves_pending_local_mutation() {
+        let mut fs = make_test_fs();
+        let file_ino = insert_resolved_file(&mut fs, 1700001000000); // local is newer
+        fs.mutated_folders
+            .insert(ROOT_INO, std::time::Instant::now());
+
+        send_refresh(&fs, refresh_metadata(1700000000000)); // older remote
+        fs.drain_refresh_completions();
+
+        assert!(
+            !is_unresolved(&fs, file_ino),
+            "local mutation must stay resolved (not clobbered by stale remote)"
+        );
+        assert!(
+            !fs.resolving_file_pointers.contains(&file_ino),
+            "older remote must not trigger re-resolution of a local mutation"
+        );
+    }
+
+    /// Non-gated branch (no pending local mutation): the full populate_folder path
+    /// runs, applying the remote modified_at change, then the shared spawn block
+    /// enqueues the file for resolution.
+    #[tokio::test]
+    async fn unmutated_populates_and_spawns_resolution() {
+        let mut fs = make_test_fs();
+        let file_ino = insert_resolved_file(&mut fs, 1700000000000);
+        // No mutated_folders / publish_queue entry -> non-gated populate_folder path.
+
+        send_refresh(&fs, refresh_metadata(1700001000000));
+        fs.drain_refresh_completions();
+
+        assert!(
+            is_unresolved(&fs, file_ino),
+            "populate_folder applies the remote edit and marks unresolved"
+        );
+        assert!(fs.resolving_file_pointers.contains(&file_ino));
+        assert!(fs.metadata_cache.get(ROOT_IPNS).is_some());
+    }
+
+    /// A `PendingRefresh::Failure` clears the in-flight `refreshing_metadata`
+    /// guard and applies no inode/cache changes.
+    #[tokio::test]
+    async fn failure_clears_refreshing_guard() {
+        let mut fs = make_test_fs();
+        fs.refreshing_metadata.insert(ROOT_IPNS.to_string());
+
+        fs.refresh_tx
+            .send(PendingRefresh::Failure {
+                ipns_name: ROOT_IPNS.to_string(),
+            })
+            .unwrap();
+        fs.drain_refresh_completions();
+
+        assert!(
+            !fs.refreshing_metadata.contains(ROOT_IPNS),
+            "Failure must clear the in-flight refresh guard"
+        );
+        assert!(
+            fs.metadata_cache.get(ROOT_IPNS).is_none(),
+            "Failure applies no cache write"
         );
     }
 }
