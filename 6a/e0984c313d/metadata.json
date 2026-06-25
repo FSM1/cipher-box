@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "6ae0984c313d",
+  "strategy": "manual-commit",
+  "branch": "fix/fuse-resolve-remote-edit-while-publishing",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "crates/fuse/src/inode.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/6a/e0984c313d/0/metadata.json",
+      "transcript": "/6a/e0984c313d/0/full.jsonl",
+      "content_hash": "/6a/e0984c313d/0/content_hash.txt",
+      "prompt": "/6a/e0984c313d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 138,
+    "cache_creation_tokens": 7074,
+    "cache_read_tokens": 1425457,
+    "output_tokens": 4521,
+    "api_call_count": 5
+  }
+}
