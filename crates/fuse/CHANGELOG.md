@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.1](https://github.com/FSM1/cipher-box/compare/cipherbox-fuse-v0.10.0...cipherbox-fuse-v0.10.1) (2026-06-26)
+
+
+### Bug Fixes
+
+* **fuse:** revoke shares when items are deleted via the desktop mount ([#568](https://github.com/FSM1/cipher-box/issues/568)) ([82ad5d7](https://github.com/FSM1/cipher-box/commit/82ad5d77b6d3b524da62888142400c3a2cd62380))
+* harden Phase 60 deferred safety patches in FUSE publish and desktop vault init ([#566](https://github.com/FSM1/cipher-box/issues/566)) ([0adcb04](https://github.com/FSM1/cipher-box/commit/0adcb0418198b3cc311da98551c9d0a4bef293c2))
+
 ## [0.10.0](https://github.com/FSM1/cipher-box/compare/cipherbox-fuse-v0.9.0...cipherbox-fuse-v0.10.0) (2026-06-25)
 
 
