@@ -15,6 +15,14 @@
 
 import { wrapKey, bytesToHex, hexToBytes } from '@cipherbox/crypto';
 import type { SdkContext } from '@cipherbox/sdk-core';
+import { isNonRetryableError } from '../error';
+
+/**
+ * Max IPNS names per revoke-for-items request. Mirrors the server-side
+ * `@ArrayMaxSize(5000)` guard on RevokeForItemsDto — a larger subtree is split
+ * into sequential batches so the request never trips that validation cap.
+ */
+const REVOKE_BATCH_SIZE = 5000;
 
 /** Re-export the canonical share key type for consumers */
 export type { ShareKeyType } from './shared-write';
@@ -139,6 +147,70 @@ export async function revokeShare(params: {
   revokeShareFn: (shareId: string) => Promise<void>;
 }): Promise<void> {
   await params.revokeShareFn(params.shareId);
+}
+
+/**
+ * Bulk hard-revoke every share/invite the caller created for ANY of the given
+ * IPNS names, with a couple of retries.
+ *
+ * Used when deleting a file/folder subtree to the recycle bin: the access cutoff
+ * MUST land before the eventual empty-bin unpin, or a still-shared content CID
+ * would orphan the sharee. This is therefore a fail-closed step — the caller
+ * (addToBin) aborts the delete if it ultimately fails.
+ *
+ * The actual API call (POST /shares/revoke-for-items) is injected so this stays
+ * mockable at the boundary and free of api-client coupling.
+ *
+ * The list is chunked into batches of {@link REVOKE_BATCH_SIZE} (matching the
+ * server's `@ArrayMaxSize` cap) and revoked sequentially — every batch must
+ * succeed before the next is attempted, preserving the fail-closed contract for
+ * subtrees larger than a single request can carry.
+ *
+ * @param params.ipnsNames - Every node ipnsName in the deleted subtree.
+ * @param params.revokeFn - Issues the authed backend call; resolves on success.
+ * @param params.maxAttempts - Total attempts per batch (default 3: 1 + 2 retries).
+ */
+export async function revokeSharesForItems(params: {
+  ipnsNames: string[];
+  revokeFn: (ipnsNames: string[]) => Promise<void>;
+  maxAttempts?: number;
+}): Promise<void> {
+  if (params.ipnsNames.length === 0) return;
+  const maxAttempts = params.maxAttempts ?? 3;
+  for (let start = 0; start < params.ipnsNames.length; start += REVOKE_BATCH_SIZE) {
+    const batch = params.ipnsNames.slice(start, start + REVOKE_BATCH_SIZE);
+    await revokeBatchWithRetry(batch, params.revokeFn, maxAttempts);
+  }
+}
+
+/**
+ * Revoke a single ≤REVOKE_BATCH_SIZE batch with bounded retries. A deterministic
+ * client failure (4xx — e.g. a validation 400 or an auth 401/403) is rethrown
+ * immediately since it will never succeed on retry; only transient errors
+ * (5xx/network) consume the backoff budget.
+ */
+async function revokeBatchWithRetry(
+  ipnsNames: string[],
+  revokeFn: (ipnsNames: string[]) => Promise<void>,
+  maxAttempts: number
+): Promise<void> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      await revokeFn(ipnsNames);
+      return;
+    } catch (err) {
+      lastErr = err;
+      // Non-retryable 4xx: surface immediately rather than burning backoff.
+      if (isNonRetryableError(err)) break;
+      if (attempt < maxAttempts - 1) {
+        await new Promise((r) => setTimeout(r, 300 * Math.pow(2, attempt)));
+      }
+    }
+  }
+  throw lastErr instanceof Error
+    ? lastErr
+    : new Error('Failed to revoke shares for deleted items', { cause: lastErr });
 }
 
 // Shared-write operations (stateless functions for write-share recipients)

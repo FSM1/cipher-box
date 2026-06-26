@@ -29,6 +29,7 @@ describe('SharesController', () => {
     completeRotation: jest.Mock;
     updateShareEncryptedKey: jest.Mock;
     updateShareItemName: jest.Mock;
+    revokeForItems: jest.Mock;
   };
 
   const userId = '550e8400-e29b-41d4-a716-446655440000';
@@ -72,6 +73,7 @@ describe('SharesController', () => {
       completeRotation: jest.fn(),
       updateShareEncryptedKey: jest.fn(),
       updateShareItemName: jest.fn(),
+      revokeForItems: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -508,6 +510,19 @@ describe('SharesController', () => {
       );
 
       await expect(controller.revokeShare(mockReq, shareId)).rejects.toThrow(ForbiddenException);
+    });
+  });
+
+  describe('revokeForItems', () => {
+    it('should call service with the caller id and the ipnsNames, returning the summary', async () => {
+      mockSharesService.revokeForItems.mockResolvedValue({ revokedShares: 2, revokedInvites: 1 });
+
+      const result = await controller.revokeForItems(mockReq, {
+        ipnsNames: ['k51a', 'k51b'],
+      });
+
+      expect(mockSharesService.revokeForItems).toHaveBeenCalledWith(userId, ['k51a', 'k51b']);
+      expect(result).toEqual({ revokedShares: 2, revokedInvites: 1 });
     });
   });
 

@@ -13,6 +13,8 @@ import type {
   PaginatedReceivedSharesDto,
   PaginatedSentSharesDto,
   PendingRotationResponseDto,
+  RevokeForItemsDto,
+  RevokeForItemsResponseDto,
   ShareKeyResponseDto,
   SharesControllerGetReceivedSharesParams,
   SharesControllerGetSentSharesParams,
@@ -41,6 +43,24 @@ export const sharesControllerCreateShare = (
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       data: createShareDto,
+    },
+    options
+  );
+};
+/**
+ * Hard-revoke every share/invite the authenticated user created for any of the given IPNS names, atomically. Called when an owner deletes a file or folder subtree to the recycle bin so the access cutoff precedes the unpin. Shares are hard-deleted (keys cascade); active invites are marked revoked. IPNS names that were never shared are ignored.
+ * @summary Bulk hard-revoke shares for deleted items
+ */
+export const sharesControllerRevokeForItems = (
+  revokeForItemsDto: BodyType<RevokeForItemsDto>,
+  options?: SecondParameter<typeof customInstance<RevokeForItemsResponseDto>>
+) => {
+  return customInstance<RevokeForItemsResponseDto>(
+    {
+      url: `/shares/revoke-for-items`,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      data: revokeForItemsDto,
     },
     options
   );
@@ -220,6 +240,9 @@ export const sharesControllerCompleteRotation = (
 };
 export type SharesControllerCreateShareResult = NonNullable<
   Awaited<ReturnType<typeof sharesControllerCreateShare>>
+>;
+export type SharesControllerRevokeForItemsResult = NonNullable<
+  Awaited<ReturnType<typeof sharesControllerRevokeForItems>>
 >;
 export type SharesControllerGetReceivedSharesResult = NonNullable<
   Awaited<ReturnType<typeof sharesControllerGetReceivedShares>>

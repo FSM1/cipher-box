@@ -130,3 +130,15 @@ export class ShareKeyResponseDto {
   @ApiProperty({ description: 'Hex-encoded ECIES-wrapped key for recipient' })
   encryptedKey!: string;
 }
+
+export class RevokeForItemsResponseDto {
+  @ApiProperty({
+    description: 'Number of Share rows hard-deleted (their ShareKeys cascade-deleted)',
+  })
+  revokedShares!: number;
+
+  @ApiProperty({
+    description: "Number of active ShareInvite rows marked 'revoked'",
+  })
+  revokedInvites!: number;
+}

@@ -6,11 +6,12 @@ severity: high
 source: Staging investigation 2026-06-23 — user with empty vault+bin shows 442 MB quota used
 files:
   - packages/sdk/src/bin/index.ts
+  - packages/sdk/src/share/index.ts
+  - packages/sdk/src/client.ts
   - packages/core/src/bin/types.ts
-  - packages/core/src/file/types.ts
-  - packages/sdk-core/src/folder/registration.ts
-  - apps/api/src/vault/vault.service.ts
-  - apps/api/src/vault/entities/pinned-cid.entity.ts
+  - apps/api/src/shares/shares.service.ts
+  - apps/api/src/shares/shares.controller.ts
+  - apps/api/src/shares/dto/revoke-for-items.dto.ts
 ---
 
 ## Problem
@@ -55,16 +56,48 @@ forever, while their vault/bin look empty.
 
 ## Solution
 
-1. `addToBin` must resolve and store the file's `contentCid` (`FileMetadata.cid`) and `versionCids`
-   (`FileMetadata.versions[].cid`) into the `BinEntry` at delete time.
-2. `emptyBin` / `permanentDeleteFromBin` / `purgeExpiredEntries` must unpin `contentCid` AND every
-   `versionCid` (not just the guarded `contentCid`).
-3. Consider unpinning the superseded metadata CID on CAS publish to stop metadata-blob accumulation.
-4. Add an SDK or E2E test that asserts quota drops after empty-bin (upload, delete-to-bin, empty,
-   re-read quota → released).
-5. Optional one-off staging remediation: reclaim this user's 442 MB by deleting the orphaned
-   `pinned_cids` rows + Kubo unpin, after confirming the 9 big CIDs are unreachable from the user's
-   current IPNS metadata (needs client keys, so the user must confirm the files are truly gone).
+Shipped as ONE PR (`fix(bin): unpin deleted content and revoke its shares`). Items 1, 2 and 4
+implemented; the share-revocation safety net was added because once empty-bin actually unpins, an
+unpin of a still-shared content CID would orphan the sharee (sharees never get their own
+`pinned_cids` row, so the only thing protecting shared content today is the unpin never firing).
+Items 3 and 5 are deferred to separate follow-up todos.
+
+### Implemented
+
+1. CID capture at delete time (`addToBin`, `packages/sdk/src/bin/index.ts`):
+   - File delete: resolve the file's own `FileMetadata` (via `FilePointer.fileMetaIpnsName`, decrypt
+     with the parent `folderKey`) and store `contentCid` + `contentSize` + `versionCids` on the
+     `BinEntry`.
+   - Folder delete: recursively walk the WHOLE deleted subtree (resolve+decrypt each folder, unwrap
+     each subfolder's `folderKey`, capture every descendant file's content + version CIDs) and store
+     the flattened list in the new `BinEntry.descendantCids` (`packages/core/src/bin/types.ts`).
+     RecycleBinMetadata stays `v1` — the new field is additive/optional.
+   - The walk is FAIL-CLOSED on structure: if a descendant folder's metadata won't resolve, the whole
+     delete aborts (the share set can't be guaranteed complete). Per-file CID capture inside a
+     successful walk is best-effort (log + skip the CID; the file's ipnsName is still revoked).
+2. Unified unpin: one shared `unpinEntryCids(ctx, entry)` helper unpins `contentCid` + every
+   `versionCids[].cid` + every `descendantCids[].cid`, each in its own try/catch. Called from
+   `emptyBin`, `permanentDeleteFromBin` AND `purgeExpiredEntries` (this also fixes the prior bug where
+   the first two never looped `versionCids`).
+3. Share revocation at delete time (the safety net): a NEW atomic bulk endpoint
+   `POST /shares/revoke-for-items` (`apps/api/src/shares`, body `{ ipnsNames: string[] }`) HARD-deletes
+   all `Share` rows (CASCADE drops `ShareKey`) and marks active `ShareInvite` rows `revoked`, for the
+   authed sharer, `WHERE ipnsName IN (list)` — in one transaction. The client collects EVERY node
+   ipnsName in the deleted subtree (folder's own + every descendant file `fileMetaIpnsName` + every
+   descendant subfolder ipnsName; single-file delete = `[fileMetaIpnsName]`) and `addToBin` calls the
+   endpoint (with a couple of retries) BEFORE the destructive folder mutation. Ordering is fail-closed:
+   walk → revoke → folder mutate + publish → build bin entry → publish bin. Revoke is ONE-WAY (restore
+   does NOT resurrect shares — owner re-shares manually).
+4. Tests: SDK unit tests (file delete captures content + version CIDs and revokes its ipnsName before
+   the folder publish; folder delete walks the subtree, stores `descendantCids`, revokes all node
+   ipnsNames, and is fail-closed when a subtree folder won't enumerate; emptyBin / permanentDelete
+   unpin content + versions + descendants). API service + controller specs for the new endpoint.
+
+### Deferred (separate follow-up todos)
+
+- (was item 3) CAS superseded-metadata-blob unpin on every publish — the under-10 KB pin tail.
+- (was item 5) One-off staging remediation of the existing 442 MB (`pinned_cids` cleanup + Kubo unpin)
+  for the affected user, after confirming the big CIDs are unreachable from current IPNS metadata.
 
 Related (distinct): `2026-06-22-periodic-kubo-ipfs-gc-on-staging.md` covers *unpinned* blocks not being
 garbage-collected (server/infra). This todo is the upstream cause for one class of that garbage —
