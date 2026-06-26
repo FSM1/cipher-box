@@ -1,0 +1,1585 @@
+---
+import Base from '../layouts/Base.astro';
+
+// ===========================================================================
+// Concrete (illustrative) values — short, realistic-looking, static.
+// These mirror real CipherBox formats; hex is truncated for readability.
+// ===========================================================================
+
+const V = {
+  userPub: '04a91f…c0d1',
+  rootRead: '9f8e7d6c…2a3b4c5d',
+  rootWrite: '7a1c0b2d…11ee22ff',
+  rootIpns: 'k51qzi5…vnlkd5e',
+  faId: '550e8400…0000',
+  faRead: '1a2b3c4d…d6e7f809',
+  faReadV2: 'c4d5e6f7…0a1b2c3d', // after read-revoke rotation
+  faWrite: '3c4d5e6f…aa00bb11',
+  faWriteV2: 'b8c7d6e5…44556677', // after write-revoke rotation
+  faIpns: 'k51qzi5…46bze3',
+  faIpnsV2: 'k51qzi5…NEW9f2c', // after Ed25519 rotation (write-revoke)
+  f3Id: '7c9e6679…0ae7',
+  f3Read: '8e7d6c5b…f0a9b8c7',
+  f3ReadV2: 'a0b1c2d3…e4f5a6b7',
+  f3File: 'deadbeef…0123456',
+  f3FileV2: 'feedface…7654321',
+  f3Ipns: 'k51qzi5…82jwe9',
+  f3IpnsV2: 'k51qzi5…NEWab27',
+  contentCid: 'bafy…content1',
+  contentCidV2: 'bafy…content2',
+  f3MetaCid: 'bafy…f3meta1',
+  bPub: '04b2c3…f3a4',
+  cPub: '04c3d4…a4b5',
+  eciesB: '04e3a1b2…b6c7',
+  eciesCr: '04f4b5c6…a4b5',
+  eciesCw: '04d2e3f4…c1d2',
+
+  // file3 content CID aliases used by the expansion flows
+  f3Cid: 'bafy…f3c0a', f3CidV2: 'bafy…f3c1b',
+  // file1 / file2 (in Folder A)
+  f1Id: '1f1a0001', f1Read: '11aa22bb…f1f1', f1ReadV2: '55cc66dd…f1f2',
+  f1File: 'f11edead…0001', f1FileV2: 'f11ebeef…0002', f1Cid: 'bafy…f1c0a', f1Ipns: 'k51qzi5…f1aa01',
+  f2Id: '2f2b0002', f2Read: '22bb33cc…f2f2', f2File: 'f22edead…0003', f2Cid: 'bafy…f2c0b', f2Ipns: 'k51qzi5…f2bb02',
+  // subfolder Sub (inside Folder A)
+  subId: '5ab0sub0', subRead: '5b1c2d3e…suba', subReadV2: '9f0a1b2c…subb', subIpns: 'k51qzi5…sub017',
+  // Folder P (private) + fileX
+  fpId: 'fp000009', fpRead: 'fa11fb22…fp00', fpIpns: 'k51qzi5…fp0a09',
+  fxId: 'fx00000a', fxRead: 'cd11ef22…fx00', fxReadV2: 'ab33cd44…fx01',
+  fxFile: 'fx1edead…000b', fxFileV2: 'fx1ebeef…000c', fxCid: 'bafy…fxc0d', fxIpns: 'k51qzi5…fx0b0a',
+  // Folder S2 (shared with D) + file9
+  fs2Id: 's200000d', fs2Read: 'e1d2c3b4…s200', fs2Ipns: 'k51qzi5…s2d00d',
+  f9Id: 'f900000e', f9Read: '99aa88bb…f900', f9File: 'f91edead…000f', f9Cid: 'bafy…f9c0e', f9Ipns: 'k51qzi5…f90e0e',
+  // a copied / write-recipient-created file node
+  cpId: 'cp000010', cpRead: 'c0d1e2f3…cp00', cpFile: 'cp1edead…0011', cpCid: 'bafy…cpc01', cpIpns: 'k51qzi5…cp1010',
+  // extra recipients + grants
+  dPub: '04d4e5…b5c6', ePub: '04e5f6…c6d7',
+  eciesD: '04a1d2d3…d4e5', eciesE: '04b2e3e4…e5f6',
+  eciesB2: '04c3f4f5…f6a7', eciesCr2: '04d4a5a6…a7b8',
+  binIpns: 'k51qzi5…bin099',
+};
+
+// helper: a line {t: text, k: kind}  kind ∈ '', 'add', 'mod', 'del', 'cmt'
+const L = (t = '', k = '') => ({ t, k });
+
+// ===========================================================================
+// Flows
+// ===========================================================================
+
+const anatomy = {
+  decrypted: [
+    L('Node  // decrypted, in client memory only', 'cmt'),
+    L('{'),
+    L('  schema: "node/v3",'),
+    L('  kind: "folder",'),
+    L(`  id: "${V.faId}",`),
+    L('  generation: 0,            // read-key epoch', 'cmt'),
+    L(''),
+    L('  // read-body  — sealed under readKey', 'cmt'),
+    L('  children: [ SealedChildRef, … ],'),
+    L(''),
+    L('  // write-body — sealed under a SEPARATE writeKey', 'cmt'),
+    L('  write: { ed25519PrivateKey, childLinks[] }'),
+    L('}'),
+  ],
+  published: [
+    L('PublishedNode  // on IPFS at a CID; the relay sees ONLY this', 'cmt'),
+    L('{'),
+    L('  schema: "node/v3",'),
+    L('  kind: "folder",          // plaintext — AAD input', 'cmt'),
+    L(`  id: "${V.faId}",       // plaintext — AAD input`, 'cmt'),
+    L('  generation: 0,           // plaintext — AAD input', 'cmt'),
+    L('  aeadVersion: 1,'),
+    L('  readSealed:  "b3a9…9f1c"   AES-256-GCM(read-body,  readKey)'),
+    L('  writeSealed: "a1c4…cc02"   AES-256-GCM(write-body, writeKey)'),
+    L('}'),
+  ],
+  childref: [
+    L('SealedChildRef  // lives INSIDE the parent read-body', 'cmt'),
+    L('{'),
+    L(`  childId: "${V.faId}", kind: "folder", name: "Folder A",`),
+    L(`  ipnsName: "${V.faIpns}",`),
+    L('  generation: 0,           // mirror of child; convergence witness', 'cmt'),
+    L('  readKeySealed:'),
+    L('    AES-GCM( child.readKey, PARENT.readKey,'),
+    L('            aad = "…|childId|folder|0|child-readkey" )'),
+    L('}'),
+  ],
+};
+
+const secrets = [
+  { k: 'readKey', t: '32B AES. Seals the read-body (children / file content). Chained: a parent ref seals each child.readKey under the parent.readKey. Hold a node’s readKey ⇒ unwrap the whole subtree with symmetric AES.' },
+  { k: 'writeKey', t: '32B AES. Seals the write-body (the Ed25519 signing key + write-chain links). A read-only grant never ships this — so the write-body is unreachable.' },
+  { k: 'ed25519', t: 'The IPNS identity: ipnsName = deriveIpnsName(pub). Signs the IPNS record that points the name at the latest CID.' },
+  { k: 'generation', t: 'Per-node u32. Bumps ONLY on a read-key rotation (revocation). It is the AAD epoch + the rotation convergence witness — distinct from the IPNS sequenceNumber, which bumps on every publish.' },
+];
+
+const foundationsFlows = [
+  {
+    n: '01', id: 'init', title: 'A initializes a vault', tag: 'genesis',
+    desc: 'The root Node is born. Nothing exists server-side until A publishes it.',
+    before: { label: 'before', lines: [ L('(no vault)', 'cmt') ] },
+    after: {
+      label: 'after — root Node', lines: [
+        L('{', ),
+        L('  kind: "root",', 'add'),
+        L('  generation: 0,', 'add'),
+        L('  children: [],            // empty', 'add'),
+        L(`  ipnsName: "${V.rootIpns}",`, 'add'),
+        L('  ed25519: derived(userPrivateKey)  // recoverable', 'add'),
+        L('}'),
+        L(''),
+        L('DB  vaults{ owner, rootIpnsName }', 'cmt'),
+        L('DB  folder_ipns{ rootIpnsName, seq:1, isRoot:true }', 'cmt'),
+        L('TEE enrolled to republish rootIpnsName every 6h', 'cmt'),
+      ],
+    },
+    steps: [
+      'generate rootReadKey + rootWriteKey (random 32B); derive root ed25519 → rootIpnsName',
+      'recovery blob = ECIES(rootReadKey → userPub) + ECIES(rootWriteKey → userPub)',
+      'seal root bodies → upload envelope → sign IPNS record (seq 1)',
+      'POST /ipns/publish (+ encryptedIpnsPrivateKey for TEE) → POST /vault/init',
+    ],
+  },
+  {
+    n: '02', id: 'mkdir', title: 'A creates "Folder A" in root', tag: 'add child',
+    desc: 'A new folder Node is created and linked into root. Root’s generation does NOT change — an add is not a rotation.',
+    before: {
+      label: 'before — root.children', lines: [
+        L('children: []'),
+      ],
+    },
+    after: {
+      label: 'after — root.children', lines: [
+        L('children: ['),
+        L('  SealedChildRef {', 'add'),
+        L(`    childId: "${V.faId}", kind:"folder", name:"Folder A",`, 'add'),
+        L(`    ipnsName: "${V.faIpns}", generation: 0,`, 'add'),
+        L('    readKeySealed: AES-GCM(fa.readKey, ROOT.readKey, aad)', 'add'),
+        L('  }', 'add'),
+        L(']'),
+        L(''),
+        L('+ new Folder A Node { generation:0, children:[],', 'cmt'),
+        L('    write: { ed25519: fa.ed25519.priv } }', 'cmt'),
+        L('root.generation: 0  // unchanged', 'mod'),
+      ],
+    },
+    steps: [
+      'generate fa.readKey / fa.writeKey / fa.ed25519 → fa.ipnsName',
+      'seal Folder A bodies → upload → publish (seq 1, TEE-enroll fa)',
+      'build SealedChildRef, re-seal root read-body under the SAME rootReadKey',
+      'publish Folder A then root (seq 2, CAS expected:1)',
+    ],
+  },
+  {
+    n: '03', id: 'upload', title: 'A uploads a file into Folder A', tag: 'add child',
+    desc: 'Content is encrypted under a per-file fileKey, which lives INSIDE the file node’s own read-body — this is what makes a single file shareable on its own.',
+    before: {
+      label: 'before — Folder A read-body', lines: [
+        L('children: []'),
+      ],
+    },
+    after: {
+      label: 'after — new file Node + link', lines: [
+        L('file Node {', 'add'),
+        L(`  kind:"file", id:"${V.f3Id}", generation:0,`, 'add'),
+        L('  content: {                  // sealed under file.readKey', 'add'),
+        L(`    cid: "${V.contentCid}",`, 'add'),
+        L(`    fileIv: "0a1b…0e1f", fileKey: "${V.f3File}",`, 'add'),
+        L('    size: 184, mimeType: "text/plain", versions: []', 'add'),
+        L('  } }', 'add'),
+        L(''),
+        L('Folder A.children += SealedChildRef → file', 'mod'),
+        L('Folder A.generation: 0  // unchanged; root untouched', 'cmt'),
+      ],
+    },
+    steps: [
+      'fileKey = random 32B; ciphertext = AES-GCM(plaintext, fileKey, iv)',
+      'POST /ipfs/upload ciphertext → contentCid (pinned)',
+      'seal file content under file.readKey; link into Folder A (readKeySealed under fa.readKey)',
+      'publish file (seq 1, TEE-enroll) then Folder A (seq 2). Root is NOT touched.',
+    ],
+  },
+  {
+    n: '04', id: 'share-r', title: 'A shares Folder A with B (read-only)', tag: 'one ECIES',
+    desc: 'The payoff: ONE wrapped key, one DB row, zero republishes. No share_keys fan-out. B chains the whole subtree from this single key.',
+    before: { label: 'before — shares', lines: [ L('[]') ] },
+    after: {
+      label: 'after — one grant row', lines: [
+        L('shares += {', 'add'),
+        L('  recipientPublicKey: B,', 'add'),
+        L(`  rootNodeId: "${V.faId}",`, 'add'),
+        L(`  rootIpnsName: "${V.faIpns}",`, 'add'),
+        L('  permission: "read",', 'add'),
+        L('  rootGeneration: 0,', 'add'),
+        L(`  readKeyEcies: "${V.eciesB}",  // ECIES(fa.readKey → B_pub)`, 'add'),
+        L('  writeDescriptorRef: null', 'add'),
+        L('}'),
+        L(''),
+        L('No IPFS / IPNS / TEE change. No node re-sealed.', 'cmt'),
+      ],
+    },
+    steps: [
+      'readKeyEcies = wrapKey(fa.readKey, B_pub)   // the single grant',
+      'POST /shares { recipient:B, rootNodeId, permission:"read", readKeyEcies }',
+      'B later: unwrapKey(readKeyEcies, B_priv) → fa.readKey → chain down (symmetric AES)',
+      'B never receives any writeKey, write-body, or ed25519 key.',
+    ],
+  },
+  {
+    n: '05', id: 'share-rw', title: 'A shares Folder A with C (read/write)', tag: 'one ECIES + write',
+    desc: 'Same read grant as B, plus the write-chain root. Under approach (c), C now holds the Ed25519 signing keys for the subtree.',
+    before: { label: 'before — C grant', lines: [ L('(none)', 'cmt') ] },
+    after: {
+      label: 'after — read + write grant', lines: [
+        L('shares += {', 'add'),
+        L('  recipientPublicKey: C,', 'add'),
+        L(`  rootNodeId: "${V.faId}", rootIpnsName: "${V.faIpns}",`, 'add'),
+        L('  permission: "write",', 'mod'),
+        L(`  readKeyEcies:  "${V.eciesCr}",  // ECIES(fa.readKey  → C_pub)`, 'add'),
+        L(`  writeDescriptorRef: "${V.eciesCw}"  // ECIES(fa.writeKey → C_pub)`, 'add'),
+        L('}'),
+        L(''),
+        L('fa.writeKey unlocks the write-body → ed25519 keys', 'cmt'),
+        L('for Folder A + every file (the write chain).', 'cmt'),
+      ],
+    },
+    steps: [
+      'readKeyEcies  = wrapKey(fa.readKey,  C_pub)',
+      'writeKeyEcies = wrapKey(fa.writeKey, C_pub)   // root of the write chain',
+      'POST /shares { recipient:C, permission:"write", readKeyEcies, writeDescriptorRef }',
+      '(c) consequence: revoking C’s write later means ROTATING those ed25519 keys.',
+    ],
+  },
+  {
+    n: '06', id: 'edit', title: 'C edits the file’s contents', tag: 'content swap',
+    desc: 'Only the file node’s content changes. Its readKey and generation stay the same, so Folder A’s SealedChildRef stays valid — the parent is NOT touched.',
+    before: {
+      label: 'before — file content', lines: [
+        L(`cid: "${V.contentCid}",`),
+        L(`fileKey: "${V.f3File}",`),
+        L('versions: []'),
+        L('generation: 0'),
+      ],
+    },
+    after: {
+      label: 'after — new version', lines: [
+        L(`cid: "${V.contentCidV2}",`, 'mod'),
+        L(`fileKey: "${V.f3FileV2}",  // fresh key + IV per version`, 'mod'),
+        L(`versions: [ { cid:"${V.contentCid}", … } ]  // old retained`, 'add'),
+        L('generation: 0   // UNCHANGED — an edit, not a revoke', 'cmt'),
+        L(''),
+        L(`file IPNS record: seq 1 → 2  (signed by C)`, 'mod'),
+        L('Folder A: untouched. Root: untouched.', 'cmt'),
+      ],
+    },
+    steps: [
+      'C chains: fa.writeKey → file.writeKey → file.ed25519.priv (the signer)',
+      'encrypt new content under a fresh fileKey → POST /ipfs/upload → newContentCid',
+      're-seal file read-body (same file.readKey) → publish file IPNS (seq 2, C signs)',
+      'relay accepts by key-possession; sequence gate 1→2 passes. No parent update.',
+    ],
+  },
+  {
+    n: '07', id: 'revoke-r', title: 'A revokes B’s read access', tag: 'rotation walk',
+    desc: 'The expensive, irreducible side. Rotate readKey (and each fileKey) of every node in scope. k51 names stay the SAME. Scope-root first, so B is cut at the entry point immediately.',
+    before: {
+      label: 'before — Folder A + grants', lines: [
+        L(`Folder A: generation 0, readKey ${V.faRead}`),
+        L('shares: [ B(read), C(read) ]'),
+      ],
+    },
+    after: {
+      label: 'after — rotated', lines: [
+        L('Folder A.generation: 0 → 1', 'mod'),
+        L(`Folder A.readKey:  → ${V.faReadV2}`, 'mod'),
+        L('each file: readKey rotated; fileKey rotated', 'mod'),
+        L('  (contentRekeyPending — next write re-encrypts)  // CRIT-1', 'cmt'),
+        L(`ipnsName: ${V.faIpns}   // UNCHANGED`, 'cmt'),
+        L(''),
+        L('shares: [ C(read) ]', 'mod'),
+        L('  B grant: DELETED', 'del'),
+        L('  C.readKeyEcies: re-minted vs new fa.readKey; rootGeneration 0→1', 'add'),
+      ],
+    },
+    steps: [
+      'root step: rotate fa.readKey, re-seal Folder A, rewrite root’s child-ref, DELETE B, re-mint C',
+      'B now fails to unseal Folder A (M1: client also rejects a generation downgrade)',
+      'walk down: rotate each file readKey + fileKey; re-seal parent links; publish (seq+1)',
+      'resumable + idempotent: verifySubtreeClean = no parent/child generation mismatch. Cost O(items).',
+    ],
+  },
+  {
+    n: '08', id: 'revoke-w', title: 'A revokes C’s write access', tag: 'ed25519 cascade',
+    desc: 'Approach (c): C cached the signing keys, so deleting the grant is inert. You must ROTATE the Ed25519 keypairs — which changes the k51 names and cascades a parent re-point up to root.',
+    before: {
+      label: 'before — Folder A node', lines: [
+        L(`ipnsName: "${V.faIpns}"`),
+        L(`write: { ed25519: <C holds this> }`),
+        L(`root.childRef.ipnsName: "${V.faIpns}"`),
+      ],
+    },
+    after: {
+      label: 'after — rotated identity', lines: [
+        L(`ipnsName: "${V.faIpns}" → "${V.faIpnsV2}"`, 'mod'),
+        L(`write: { ed25519: NEW }   writeKey → ${V.faWriteV2}`, 'mod'),
+        L(`root.childRef.ipnsName → "${V.faIpnsV2}"   // parent re-point`, 'mod'),
+        L('(same for every file: new k51, parent re-point)', 'cmt'),
+        L(''),
+        L('readKey / fileKey / content: UNCHANGED (C keeps read)', 'cmt'),
+        L('TEE: enroll new names, UNENROLL old (old names go dark)', 'mod'),
+        L('grants: C → permission "read", writeDescriptorRef null;', 'mod'),
+        L('        B + C rootIpnsName updated to new k51', 'mod'),
+      ],
+    },
+    steps: [
+      'per node: new ed25519 → new ipnsName; new writeKey; re-seal write-body',
+      'parent-pointer cascade leaves→root: every SealedChildRef.ipnsName updated, parent read-body re-sealed',
+      'publish under new names (seq 1, TEE-enroll); POST /ipns/unenroll the old names',
+      'C’s cached keys now sign abandoned names. Cost O(subtree) + cascade — NOT cheap under (c).',
+    ],
+  },
+];
+
+// ---- expansion groups (filled from the explainer-flow-expansion workflow) ----
+const coreFlows = [
+{
+    id: 'mkdir-sub',
+    title: 'Create subfolder "Sub" inside Folder A',
+    tag: 'add child',
+    desc: 'A new folder Node is linked into Folder A under the SAME faRead. NO rotation and NO re-grant — read recipient B and write recipient C both auto-reach Sub by chaining from faRead.',
+    before: {
+      label: 'before — Folder A.children',
+      lines: [
+        L(`children: [`),
+        L(`  SealedChildRef { childId:"${V.f1Id}", kind:"file", name:"file1" }`, 'cmt'),
+        L(`  SealedChildRef { childId:"${V.f2Id}", kind:"file", name:"file2" }`, 'cmt'),
+        L(`]`),
+        L(`fa.generation: 0`, 'cmt'),
+      ],
+    },
+    after: {
+      label: 'after — Folder A.children',
+      lines: [
+        L(`children: [`),
+        L(`  SealedChildRef { childId:"${V.f1Id}", kind:"file", name:"file1" }`, 'cmt'),
+        L(`  SealedChildRef { childId:"${V.f2Id}", kind:"file", name:"file2" }`, 'cmt'),
+        L(`  SealedChildRef {`, 'add'),
+        L(`    childId: "${V.subId}", kind:"folder", name:"Sub",`, 'add'),
+        L(`    ipnsName: "${V.subIpns}", generation: 0,`, 'add'),
+        L(`    readKeySealed: AES-GCM(sub.readKey, fa.readKey, aad="...|${V.subId}|folder|0|child-readkey")`, 'add'),
+        L(`  }`, 'add'),
+        L(`]`),
+        L(`fa.generation: 0  // unchanged — add is not a rotation`, 'mod'),
+      ],
+    },
+    steps: [
+      'client: mint sub.readKey / sub.writeKey / sub.ed25519 -> subIpns; seal Sub bodies',
+      'IPFS/IPNS: upload Sub, publish (seq 1, TEE-enroll subIpns)',
+      'client: build SealedChildRef(sub.readKey under faRead, sub.writeKey under faWrite), re-seal Folder A read+write bodies under the SAME faRead/faWrite',
+      'IPNS/relay: publish Folder A (seq++, CAS gate); B & C auto-reach Sub via faRead chain — NO re-grant, O(1)',
+    ],
+  },
+  {
+    id: 'rename-file1',
+    title: 'Rename file1 to "report-final.txt"',
+    tag: 'rename',
+    desc: 'The name lives on the EDGE (parent SealedChildRef), so rename re-seals ONLY Folder A read-body under the SAME faRead. The file node, f1Read and f1Ipns are untouched; generation unchanged.',
+    before: {
+      label: 'before — Folder A.children[file1]',
+      lines: [
+        L(`SealedChildRef {`),
+        L(`  childId: "${V.f1Id}", kind:"file",`),
+        L(`  name: "file1",`, 'mod'),
+        L(`  ipnsName: "${V.f1Ipns}", generation: 0,`, 'cmt'),
+        L(`  readKeySealed: AES-GCM(f1.readKey, fa.readKey, aad)`, 'cmt'),
+        L(`}`),
+      ],
+    },
+    after: {
+      label: 'after — Folder A.children[file1]',
+      lines: [
+        L(`SealedChildRef {`),
+        L(`  childId: "${V.f1Id}", kind:"file",`),
+        L(`  name: "report-final.txt",`, 'mod'),
+        L(`  ipnsName: "${V.f1Ipns}", generation: 0,  // node UNTOUCHED`, 'cmt'),
+        L(`  readKeySealed: AES-GCM(f1.readKey, fa.readKey, aad)  // unchanged`, 'cmt'),
+        L(`}`),
+      ],
+    },
+    steps: [
+      'client: change name field in Folder A SealedChildRef for f1Id only',
+      'client: re-seal Folder A read-body under the SAME faRead (no key change)',
+      'IPNS/relay: publish Folder A (seq++, CAS gate) — O(1)',
+      'note: f1Ipns + file1 node never republished; readers see the new name by chaining faRead',
+    ],
+  },
+  {
+    id: 'rename-sub',
+    title: 'Rename subfolder Sub to "Archive"',
+    tag: 'rename',
+    desc: 'Same edge-rename: only Folder A read-body is re-sealed under faRead. Sub node, subRead, subIpns and its entire subtree (file3) are untouched; generation unchanged.',
+    before: {
+      label: 'before — Folder A.children[Sub]',
+      lines: [
+        L(`SealedChildRef {`),
+        L(`  childId: "${V.subId}", kind:"folder",`),
+        L(`  name: "Sub",`, 'mod'),
+        L(`  ipnsName: "${V.subIpns}", generation: 0,`, 'cmt'),
+        L(`  readKeySealed: AES-GCM(sub.readKey, fa.readKey, aad)`, 'cmt'),
+        L(`}`),
+      ],
+    },
+    after: {
+      label: 'after — Folder A.children[Sub]',
+      lines: [
+        L(`SealedChildRef {`),
+        L(`  childId: "${V.subId}", kind:"folder",`),
+        L(`  name: "Archive",`, 'mod'),
+        L(`  ipnsName: "${V.subIpns}", generation: 0,  // node + subtree UNTOUCHED`, 'cmt'),
+        L(`  readKeySealed: AES-GCM(sub.readKey, fa.readKey, aad)  // unchanged`, 'cmt'),
+        L(`}`),
+      ],
+    },
+    steps: [
+      'client: change name field in Folder A SealedChildRef for subId only',
+      'client: re-seal Folder A read-body under the SAME faRead',
+      'IPNS/relay: publish Folder A (seq++, CAS gate) — O(1)',
+      'note: subIpns + file3 never republished; the subtree stays sealed under subRead',
+    ],
+  },
+  {
+    id: 'copy-file2',
+    title: 'Copy file2 to "file2 (copy)"',
+    tag: 'add · re-encrypt',
+    desc: 'A copy is an ADD, but NOT a cheap pointer-copy: content is sealed under the file\'s own fileKey, so the copy CANNOT reference file2\'s encrypted CID — it must DECRYPT file2 and RE-ENCRYPT the plaintext under a fresh cpFile, yielding a new cpCid. No rotation, no re-grant; B & C auto-reach the copy by chaining.',
+    before: {
+      label: 'before — Folder A.children',
+      lines: [
+        L(`children: [`),
+        L(`  SealedChildRef { childId:"${V.f1Id}", kind:"file", name:"report-final.txt" }`, 'cmt'),
+        L(`  SealedChildRef { childId:"${V.f2Id}", kind:"file", name:"file2",`, 'cmt'),
+        L(`    fileKey: ${V.f2File}, cid: "${V.f2Cid}" }`, 'cmt'),
+        L(`]`),
+      ],
+    },
+    after: {
+      label: 'after — Folder A.children',
+      lines: [
+        L(`children: [`),
+        L(`  ... file1, file2 (unchanged) ...`, 'cmt'),
+        L(`  SealedChildRef {`, 'add'),
+        L(`    childId: "${V.cpId}", kind:"file", name:"file2 (copy)",`, 'add'),
+        L(`    ipnsName: "${V.cpIpns}", generation: 0,`, 'add'),
+        L(`    fileKey: ${V.cpFile},  // FRESH key — file2's f2File is NOT reused`, 'add'),
+        L(`    cid: "${V.cpCid}",     // NEW blob — file2's CID is sealed under f2File, unusable`, 'add'),
+        L(`    readKeySealed: AES-GCM(cp.readKey, fa.readKey, aad="...|${V.cpId}|file|0|child-readkey")`, 'add'),
+        L(`  }`, 'add'),
+        L(`]`),
+        L(`fa.generation: 0  // unchanged`, 'mod'),
+      ],
+    },
+    steps: [
+      'client: read file2 plaintext via f2File; mint cp.readKey / cpFile / cp.ed25519 -> cpIpns',
+      'IPFS: re-encrypt content under cpFile -> upload -> cpCid; publish cp node (seq 1, TEE-enroll)',
+      'client: build SealedChildRef(cp.readKey under faRead), re-seal Folder A read+write bodies under the SAME faRead/faWrite',
+      'IPNS/relay: publish Folder A (seq++, CAS gate); B & C auto-reach the copy via faRead with NO re-grant. Cost O(content size) — a copy re-encrypts the whole blob, NOT a metadata-only op',
+    ],
+  },
+{
+    id: 'move-filex-p-to-root',
+    title: 'Move fileX from Folder P to root',
+    tag: 'move (same scope)',
+    desc: 'Private->private move. Unlink the SealedChildRef from Folder P, add it to root, and re-seal fileX.readKey under root.readKey. The LINK changes; fileX\'s own readKey and generation do NOT. NO rotation — both parents are private (same scope).',
+    before: { label: 'before — P.children & root.children', lines: [
+      L(`Folder P.children: [`),
+      L(`  SealedChildRef {`, 'cmt'),
+      L(`    childId: "${V.fxId}", kind:"file", name:"fileX",`, 'cmt'),
+      L(`    readKeySealed: AES-GCM(fx.readKey, FP.readKey, aad)`, 'cmt'),
+      L(`  }`, 'cmt'),
+      L(`]`),
+      L(`root.children: [ Folder A, Folder P, Folder S2 ]`, 'cmt'),
+      L(`fileX.readKey: "${V.fxRead}", generation: 0`, 'cmt'),
+    ] },
+    after: { label: 'after — P.children & root.children', lines: [
+      L(`Folder P.children: [`),
+      L(`  // SealedChildRef "${V.fxId}" removed`, 'del'),
+      L(`]`),
+      L(`root.children: [`),
+      L(`  ...Folder A, Folder P, Folder S2,`, 'cmt'),
+      L(`  SealedChildRef {`, 'add'),
+      L(`    childId: "${V.fxId}", kind:"file", name:"fileX",`, 'add'),
+      L(`    ipnsName: "${V.fxIpns}", generation: 0,`, 'add'),
+      L(`    readKeySealed: AES-GCM(fx.readKey, ROOT.readKey, aad)`, 'add'),
+      L(`  }`, 'add'),
+      L(`]`),
+      L(`fileX.readKey: "${V.fxRead}"  // unchanged — only the link moved`, 'mod'),
+    ] },
+    steps: [
+      'client: remove fileX SealedChildRef from Folder P read-body; re-seal P under the SAME FP.readKey',
+      'client: re-seal fx.readKey under ROOT.readKey, append SealedChildRef to root read-body (SAME rootReadKey)',
+      'IPFS: upload re-sealed P and root read-bodies; fileX node untouched (no re-upload)',
+      'IPNS: publish Folder P then root (seq++ each, relay CAS forward-only); O(1), no rotation',
+    ],
+  },
+  {
+    id: 'move-folder-p-into-root-reorg',
+    title: 'Move Folder P (with fileX) in a root reorg',
+    tag: 'move folder O(1)',
+    desc: 'Moving a folder-with-contents is O(1): only the Folder P node is re-linked under the new parent. Its subtree (fileX) stays sealed under FP.readKey and is never touched. NO rotation, generation unchanged.',
+    before: { label: 'before — old parent vs root', lines: [
+      L(`root.children: [ Folder A, Folder P, Folder S2 ]`),
+      L(`Folder P.children: [ fileX ]  // sealed under FP.readKey`, 'cmt'),
+      L(`  fileX.readKeySealed: AES-GCM(fx.readKey, FP.readKey, aad)`, 'cmt'),
+      L(`Folder P.readKey: "${V.fpRead}", generation: 0`, 'cmt'),
+    ] },
+    after: { label: 'after — re-linked Folder P', lines: [
+      L(`// only Folder P's parent link changes`, 'cmt'),
+      L(`SealedChildRef(Folder P) {`),
+      L(`  childId: "${V.fpId}", kind:"folder", name:"Folder P",`),
+      L(`  ipnsName: "${V.fpIpns}", generation: 0,  // unchanged`, 'mod'),
+      L(`  readKeySealed: AES-GCM(fp.readKey, NEWPARENT.readKey, aad)`, 'mod'),
+      L(`}`),
+      L(`Folder P.children: [ fileX ]  // UNTOUCHED — subtree stays sealed`, 'cmt'),
+      L(`Folder P.readKey: "${V.fpRead}"  // unchanged`, 'cmt'),
+    ] },
+    steps: [
+      'client: remove Folder P SealedChildRef from old parent read-body; re-seal old parent (SAME key)',
+      'client: re-seal fp.readKey under the new parent.readKey; add SealedChildRef to new parent (SAME key)',
+      'IPFS: upload the two re-sealed parent read-bodies only; Folder P node + fileX subtree not re-uploaded',
+      'IPNS: publish both parents (seq++); O(1) regardless of subtree size, no rotation',
+    ],
+  },
+  {
+    id: 'delete-filex-to-bin',
+    title: 'Delete fileX (private) to the bin',
+    tag: 'delete -> bin',
+    desc: 'fileX lives in private Folder P, so deletion is just an unlink + BinEntry. Re-seal Folder P under the SAME key and move the node/content to the bin IPNS. NO rotation — it never left any recipient scope (private).',
+    before: { label: 'before — P.children & bin', lines: [
+      L(`Folder P.children: [`),
+      L(`  SealedChildRef { childId:"${V.fxId}", name:"fileX",`, 'cmt'),
+      L(`    readKeySealed: AES-GCM(fx.readKey, FP.readKey, aad) }`, 'cmt'),
+      L(`]`),
+      L(`bin(${V.binIpns}).entries: []`, 'cmt'),
+    ] },
+    after: { label: 'after — P.children & bin', lines: [
+      L(`Folder P.children: [`),
+      L(`  // SealedChildRef "${V.fxId}" unlinked`, 'del'),
+      L(`]`),
+      L(`bin(${V.binIpns}).entries: [`),
+      L(`  BinEntry {`, 'add'),
+      L(`    childId:"${V.fxId}", name:"fileX", origin:"${V.fpIpns}",`, 'add'),
+      L(`    fileKey:"${V.fxFile}", cid:"${V.fxCid}",`, 'add'),
+      L(`    readKeySealed: AES-GCM(fx.readKey, BIN.readKey, aad)`, 'add'),
+      L(`  }`, 'add'),
+      L(`]  // no rotation — fileX was private`, 'cmt'),
+    ] },
+    steps: [
+      'client: remove fileX SealedChildRef from Folder P read-body; re-seal P under the SAME FP.readKey',
+      'client: build BinEntry, re-seal fx.readKey under BIN.readKey; append to bin read-body',
+      'IPFS: content CID stays pinned (still referenced by the BinEntry); upload re-sealed P + bin bodies',
+      'IPNS: publish Folder P then bin (seq++ each); O(1), no rotation (private file)',
+    ],
+  },
+  {
+    id: 'delete-folder-p-to-bin',
+    title: 'Delete Folder P (with fileX) to the bin',
+    tag: 'delete subtree',
+    desc: 'Folder delete sends the whole subtree to the bin. Unlink Folder P from root and add a single BinEntry for the folder node — its subtree stays sealed under FP.readKey. NO rotation (Folder P is private).',
+    before: { label: 'before — root.children & bin', lines: [
+      L(`root.children: [ Folder A, Folder P, Folder S2 ]`),
+      L(`Folder P.children: [ fileX ]  // sealed under FP.readKey`, 'cmt'),
+      L(`bin(${V.binIpns}).entries: []`, 'cmt'),
+    ] },
+    after: { label: 'after — root.children & bin', lines: [
+      L(`root.children: [`),
+      L(`  Folder A, Folder S2,`, 'cmt'),
+      L(`  // SealedChildRef "${V.fpId}" (Folder P) unlinked`, 'del'),
+      L(`]`),
+      L(`bin(${V.binIpns}).entries: [`),
+      L(`  BinEntry {`, 'add'),
+      L(`    childId:"${V.fpId}", kind:"folder", name:"Folder P",`, 'add'),
+      L(`    origin:"${V.rootIpns}", ipnsName:"${V.fpIpns}",`, 'add'),
+      L(`    readKeySealed: AES-GCM(fp.readKey, BIN.readKey, aad)`, 'add'),
+      L(`  }  // subtree (fileX) untouched, stays sealed under FP.readKey`, 'add'),
+      L(`]  // no rotation — Folder P was private`, 'cmt'),
+    ] },
+    steps: [
+      'client: remove Folder P SealedChildRef from root read-body; re-seal root under the SAME rootReadKey',
+      'client: build one folder BinEntry, re-seal fp.readKey under BIN.readKey; subtree not re-sealed',
+      'IPFS: subtree CIDs stay pinned (reachable via the binned folder node); upload re-sealed root + bin bodies',
+      'IPNS: publish root then bin (seq++); O(1) re-link, no rotation (private subtree)',
+    ],
+  },
+  {
+    id: 'restore-filex-from-bin',
+    title: 'Restore fileX from bin into root',
+    tag: 'restore (re-link)',
+    desc: 'Restore re-links the binned node into a destination parent. Drop the BinEntry, re-seal fx.readKey under the destination root.readKey, and add a SealedChildRef to root. Add-child semantics — NO rotation.',
+    before: { label: 'before — bin & root.children', lines: [
+      L(`bin(${V.binIpns}).entries: [`),
+      L(`  BinEntry { childId:"${V.fxId}", name:"fileX",`, 'cmt'),
+      L(`    fileKey:"${V.fxFile}", cid:"${V.fxCid}",`, 'cmt'),
+      L(`    readKeySealed: AES-GCM(fx.readKey, BIN.readKey, aad) }`, 'cmt'),
+      L(`]`),
+      L(`root.children: [ Folder A, Folder S2 ]`, 'cmt'),
+    ] },
+    after: { label: 'after — bin & root.children', lines: [
+      L(`bin(${V.binIpns}).entries: [`),
+      L(`  // BinEntry "${V.fxId}" removed`, 'del'),
+      L(`]`),
+      L(`root.children: [`),
+      L(`  Folder A, Folder S2,`, 'cmt'),
+      L(`  SealedChildRef {`, 'add'),
+      L(`    childId:"${V.fxId}", kind:"file", name:"fileX",`, 'add'),
+      L(`    ipnsName:"${V.fxIpns}", generation: 0,`, 'add'),
+      L(`    readKeySealed: AES-GCM(fx.readKey, ROOT.readKey, aad)`, 'add'),
+      L(`  }`, 'add'),
+      L(`]  // fileX.readKey unchanged — only re-linked`, 'cmt'),
+    ] },
+    steps: [
+      'client: remove the BinEntry from the bin read-body; re-seal bin under the SAME BIN.readKey',
+      'client: re-seal fx.readKey under ROOT.readKey; append SealedChildRef to root read-body (SAME rootReadKey)',
+      'IPFS: content CID already pinned; upload re-sealed bin + root read-bodies',
+      'IPNS: publish bin then root (seq++); O(1), no rotation',
+    ],
+  },
+  {
+    id: 'empty-bin-permanent-delete',
+    title: 'Empty bin / permanently delete fileX',
+    tag: 'purge',
+    desc: 'Permanent delete drops the BinEntry and unpins the content CIDs. The node is already unlinked from every parent, so there is NO node re-seal and no rotation — only the bin read-body shrinks.',
+    before: { label: 'before — bin', lines: [
+      L(`bin(${V.binIpns}).entries: [`),
+      L(`  BinEntry { childId:"${V.fxId}", name:"fileX",`, 'cmt'),
+      L(`    fileKey:"${V.fxFile}", cid:"${V.fxCid}",`, 'cmt'),
+      L(`    readKeySealed: AES-GCM(fx.readKey, BIN.readKey, aad) }`, 'cmt'),
+      L(`]`),
+    ] },
+    after: { label: 'after — bin', lines: [
+      L(`bin(${V.binIpns}).entries: [`),
+      L(`  // BinEntry "${V.fxId}" dropped`, 'del'),
+      L(`]`),
+      L(`// content unpinned -> "${V.fxCid}" eligible for GC`, 'del'),
+      L(`// no node re-seal: fileX was already unlinked`, 'cmt'),
+    ] },
+    steps: [
+      'client: remove the BinEntry from the bin read-body; re-seal bin under the SAME BIN.readKey',
+      'relay/IPFS: unpin the fileX content CID (and any version CIDs); content becomes GC-eligible',
+      'IPNS: publish bin only (seq++); no parent node touched',
+      'DB: drop the bin-entry row; O(1), no rotation',
+    ],
+  }
+];
+const sharingFlows = [
+  {
+    id: 'share-single-file-read',
+    title: 'Share file3 read-only with D',
+    tag: 'file grant',
+    desc: 'A single file is shareable because its content self-seals under its own readKey. The grant is anchored at the file node itself (rootNodeId = f3Id) — one ECIES-wrapped readKey, no node change, no rotation, no republish.',
+    before: { label: 'before — grants for file3', lines: [
+      L('grants: []'),
+      L(`// file3 already self-sealed: content under "${V.f3File}", read-body under "${V.f3Read}"`, 'cmt'),
+    ] },
+    after: { label: 'after — grants for file3', lines: [
+      L('grants: ['),
+      L('  ShareGrant {', 'add'),
+      L(`    rootNodeId: "${V.f3Id}", kind: "file",`, 'add'),
+      L(`    rootIpnsName: "${V.f3Ipns}", permission: "read",`, 'add'),
+      L(`    readDescriptorRef: ECIES(f3.readKey, ${V.dPub}) = "${V.eciesD}"`, 'add'),
+      L('    writeDescriptorRef: null', 'add'),
+      L('  }', 'add'),
+      L(']'),
+      L(`f3.generation: 0  // unchanged — grant, not rotation`, 'cmt'),
+    ] },
+    steps: [
+      'client: ECIES-wrap f3.readKey to dPub -> readDescriptorRef (O(1))',
+      'DB: insert one ShareGrant row anchored at f3Id, permission "read"',
+      'no node re-seal, no IPNS republish — file content already self-seals under f3.readKey',
+      'D resolves f3Ipns, unwraps f3.readKey via ECIES, then decrypts content + version history',
+    ],
+  },
+  {
+    id: 'revoke-single-file',
+    title: 'Revoke D’s single-file share (file3)',
+    tag: 'rotate · O(1)',
+    desc: 'The other half of single-file sharing. Revoking a single-file grant rotates exactly ONE node: file3’s readKey + fileKey rotate, generation 0→1, the Sub parent ref is re-sealed, and D’s grant row is deleted. ipnsName unchanged; TEE untouched.',
+    before: { label: 'before — file3 + D grant', lines: [
+      L(`file3: generation 0, readKey ${V.f3Read}, fileKey ${V.f3File}`),
+      L(`shares: [ D(read @ ${V.f3Ipns}) ]`),
+    ] },
+    after: { label: 'after — rotated', lines: [
+      L('file3.generation: 0 → 1', 'mod'),
+      L(`file3.readKey: → ${V.f3ReadV2}`, 'mod'),
+      L(`file3.fileKey: → ${V.f3FileV2}   // contentRekeyPending`, 'mod'),
+      L('Sub.childRef[file3].readKeySealed: re-sealed under Sub.readKey', 'mod'),
+      L(`ipnsName: ${V.f3Ipns}   // UNCHANGED`, 'cmt'),
+      L('shares: []', 'mod'),
+      L('  D grant: DELETED', 'del'),
+    ] },
+    steps: [
+      'client: rotate f3.readKey + f3.fileKey; generation 0→1; re-seal file3 read-body',
+      'client: rewrite Sub’s SealedChildRef[file3].readKeySealed under Sub.readKey (owner keeps access)',
+      'IPNS/relay: publish file3 then Sub (seq++); k51 unchanged, TEE untouched',
+      'DB: delete D’s grant row. Single-node rotation — O(1), the cheapest revoke.',
+    ],
+  },
+  {
+    id: 'add-recipient-E-folderA',
+    title: 'Add recipient E (read) to Folder A share',
+    tag: 'add grant',
+    desc: 'Adding a recipient to an existing share is ONE new grant row: ECIES the share-root readKey to E. NO node change, NO republish — E chains the existing sealed tree from faRead downward.',
+    before: { label: 'before — Folder A grants', lines: [
+      L('grants: ['),
+      L(`  { recipient: bPub, permission:"read",  ref:"${V.eciesB}" },`),
+      L(`  { recipient: cPub, permission:"write", ref:"${V.eciesCw}" },`),
+      L(']'),
+    ] },
+    after: { label: 'after — Folder A grants', lines: [
+      L('grants: ['),
+      L(`  { recipient: bPub, permission:"read",  ref:"${V.eciesB}" },`),
+      L(`  { recipient: cPub, permission:"write", ref:"${V.eciesCw}" },`),
+      L('  ShareGrant {', 'add'),
+      L(`    rootNodeId: "${V.faId}", rootIpnsName: "${V.faIpns}",`, 'add'),
+      L(`    recipient: ePub, permission: "read",`, 'add'),
+      L(`    readDescriptorRef: ECIES(fa.readKey, ${V.ePub}) = "${V.eciesE}"`, 'add'),
+      L('  }', 'add'),
+      L(']'),
+      L('Folder A node: UNCHANGED — no re-seal, no republish', 'cmt'),
+    ] },
+    steps: [
+      'client: ECIES-wrap fa.readKey to ePub -> readDescriptorRef (O(1))',
+      'DB: insert one ShareGrant row for ePub at faId, permission "read"',
+      'no node re-seal, no IPNS publish — fa read-body + all descendants stay sealed under faRead',
+      'E resolves faIpns, unwraps fa.readKey, chains every child readKey (file1/file2/Sub/file3) via AES',
+    ],
+  },
+  {
+    id: 'upgrade-B-read-to-write',
+    title: 'Upgrade B from read to read/write on Folder A',
+    tag: 'add write',
+    desc: 'Read->write is purely additive: attach writeDescriptorRef = ECIES(fa.writeKey -> bPub) to B\'s existing grant. NO node change, NO rotation, NO republish — B already holds fa.readKey.',
+    before: { label: 'before — B grant on Folder A', lines: [
+      L('ShareGrant {'),
+      L(`  recipient: bPub, rootNodeId: "${V.faId}",`),
+      L('  permission: "read",'),
+      L(`  readDescriptorRef: "${V.eciesB}",`),
+      L('  writeDescriptorRef: null'),
+      L('}'),
+    ] },
+    after: { label: 'after — B grant on Folder A', lines: [
+      L('ShareGrant {'),
+      L(`  recipient: bPub, rootNodeId: "${V.faId}",`),
+      L('  permission: "write",', 'mod'),
+      L(`  readDescriptorRef: "${V.eciesB}",`),
+      L(`  writeDescriptorRef: ECIES(fa.writeKey, ${V.bPub})`, 'add'),
+      L('}'),
+      L('Folder A node: UNCHANGED — write-body still sealed under faWrite', 'cmt'),
+    ] },
+    steps: [
+      'client: ECIES-wrap fa.writeKey to bPub -> writeDescriptorRef (O(1))',
+      'DB: update B grant — permission "read"->"write", set writeDescriptorRef',
+      'no node re-seal, no IPNS publish — the write-body (fa Ed25519 + child writeKeys) is unchanged',
+      'B now unwraps fa.writeKey, reaches the folder Ed25519 via the write chain, and can sign Folder A publishes',
+    ],
+  },
+  {
+    id: 'downgrade-C-write-to-read',
+    title: 'Downgrade C from write back to read',
+    tag: 'revoke write',
+    desc: 'Revoking write means C must no longer hold a usable signing key, so this triggers the approach (c) Ed25519 cascade: rotate keypairs -> new k51 names -> parent re-point to the share root -> TEE re-enroll. readKey/content UNCHANGED. The grant-row delta is small; the node-side cost is O(subtree).',
+    before: { label: 'before — C grant + Folder A name', lines: [
+      L('ShareGrant {'),
+      L(`  recipient: cPub, rootNodeId: "${V.faId}",`),
+      L('  permission: "write",'),
+      L(`  readDescriptorRef: "${V.eciesCr}",`),
+      L(`  writeDescriptorRef: "${V.eciesCw}",`),
+      L(`  rootIpnsName: "${V.faIpns}"`),
+      L('}'),
+    ] },
+    after: { label: 'after — C grant + Folder A name', lines: [
+      L('ShareGrant {'),
+      L(`  recipient: cPub, rootNodeId: "${V.faId}",`),
+      L('  permission: "read",', 'mod'),
+      L(`  readDescriptorRef: "${V.eciesCr}",  // read unchanged`),
+      L('  writeDescriptorRef: null,', 'mod'),
+      L(`  rootIpnsName: "${V.faIpnsV2}"`, 'mod'),
+      L('}'),
+      L(`// node-side: fa Ed25519 rotated -> faIpnsV2 (faRead/content UNCHANGED)`, 'cmt'),
+    ] },
+    steps: [
+      'client: rotate Ed25519 for Folder A + every write-reachable descendant -> new k51 names (approach c, O(subtree))',
+      'client/IPNS: re-point parent write-chain links to the share root, publish new names; readKey + content stay sealed under faRead',
+      'TEE: unenroll old faIpns, re-enroll faIpnsV2 (and rotated descendants) for 6h re-signing',
+      'DB: update C grant -> permission "read", writeDescriptorRef null, rootIpnsName faIpnsV2; B/owner grants re-point to faIpnsV2 too',
+    ],
+  },
+];
+const permMoveFlows = [
+  {
+    id: 'move-in-private-to-shared',
+    title: 'Move fileX from private Folder P into shared Folder A',
+    tag: 'move-in / grant',
+    desc: 'Re-link only: remove the SealedChildRef from Folder P, add it to Folder A, and re-seal fileX.readKey under fa.readKey. fileX now ENTERS B and C scope — they auto-read it (and its version history) by chaining. NO rotation: a grant, not a revoke. The node and its ipnsName are untouched.',
+    before: { label: 'before — P.children + A.children', lines: [
+      L('Folder P (private).children: ['),
+      L(`  SealedChildRef { childId:"${V.fxId}", kind:"file", name:"fileX",`, 'cmt'),
+      L(`    ipnsName:"${V.fxIpns}", readKeySealed: AES-GCM(fx.readKey, P.readKey, aad) }`, 'cmt'),
+      L(']'),
+      L('Folder A (shared B,C).children: [ file1, file2, Sub ]', 'cmt'),
+      L(`fileX node: readKey=${V.fxRead}, fileKey=${V.fxFile}, generation:0`, 'cmt'),
+    ] },
+    after: { label: 'after — P.children + A.children', lines: [
+      L('Folder P (private).children: ['),
+      L('  // SealedChildRef for fileX removed', 'del'),
+      L(']'),
+      L('Folder A (shared B,C).children: ['),
+      L('  file1, file2, Sub,'),
+      L('  SealedChildRef {', 'add'),
+      L(`    childId:"${V.fxId}", kind:"file", name:"fileX", ipnsName:"${V.fxIpns}", generation:0,`, 'add'),
+      L('    readKeySealed: AES-GCM(fx.readKey, fa.readKey, aad)  // re-sealed under Folder A', 'add'),
+      L('  }', 'add'),
+      L(']'),
+      L(`fileX node UNCHANGED: readKey=${V.fxRead}, fileKey=${V.fxFile}, generation:0`, 'mod'),
+    ] },
+    steps: [
+      'client: re-seal fx.readKey under fa.readKey (link moves; node key unchanged) — O(1)',
+      'client: drop fileX SealedChildRef from P read-body, add it to Folder A read-body, re-seal BOTH parents under their SAME keys',
+      'IPNS: publish Folder P (seq++) then Folder A (seq++, CAS expected prior); fileX IPNS untouched',
+      'effect: B and C chain fa.readKey -> fx.readKey and now read fileX + its versions[]; NO re-grant, NO TEE change',
+    ],
+  },
+  {
+    id: 'move-out-shared-to-private',
+    title: 'Move file1 out of shared Folder A into private Folder P',
+    tag: 'move-out / ROTATE',
+    desc: 'file1 LEAVES B and C scope, so the move is a revocation: ROTATE to a new f1.readKey + f1.fileKey, generation++, then re-seal the link under private Folder P. ipnsName is UNCHANGED (a read rotation never changes the k51). Cost O(items-in-subtree) — here a single file.',
+    before: { label: 'before — A.children + file1 node', lines: [
+      L('Folder A (shared B,C).children: ['),
+      L(`  SealedChildRef { childId:"${V.f1Id}", kind:"file", name:"file1",`, 'cmt'),
+      L(`    generation:0, readKeySealed: AES-GCM(f1.readKey, fa.readKey, aad) }`, 'cmt'),
+      L('  file2, Sub'),
+      L(']'),
+      L(`file1 node: readKey=${V.f1Read}, fileKey=${V.f1File}, cid=${V.f1Cid}, generation:0`, 'cmt'),
+      L('B,C reach file1 via fa.readKey chain', 'cmt'),
+    ] },
+    after: { label: 'after — A.children + P.children + rotated file1', lines: [
+      L('Folder A (shared B,C).children: ['),
+      L('  // SealedChildRef for file1 removed', 'del'),
+      L('  file2, Sub'),
+      L(']'),
+      L('Folder P (private).children: ['),
+      L('  fileX,'),
+      L('  SealedChildRef {', 'add'),
+      L(`    childId:"${V.f1Id}", kind:"file", name:"file1", generation:1,`, 'mod'),
+      L(`    readKeySealed: AES-GCM(f1.readKeyV2, P.readKey, aad)  // NEW key under P`, 'add'),
+      L('  }', 'add'),
+      L(']'),
+      L(`file1 node ROTATED: readKey=${V.f1ReadV2}, fileKey=${V.f1FileV2}, generation:1`, 'mod'),
+      L(`ipnsName: "${V.f1Ipns}"  // UNCHANGED — read rotation never changes k51`, 'cmt'),
+    ] },
+    steps: [
+      'client: mint f1.readKeyV2 + f1.fileKeyV2, re-encrypt file1 content -> new wrapped fileKey, generation 0->1 — O(items)',
+      'client: unlink file1 from Folder A read-body, add SealedChildRef to Folder P, seal f1.readKeyV2 under P.readKey',
+      'IPFS/IPNS: re-upload file1 read-body, publish file1 (seq++, same ipnsName), then Folder A then Folder P',
+      'effect: B and C lose file1 — their fa.readKey now unwraps nothing for it; no grant rows touched (key itself rotated)',
+    ],
+  },
+  {
+    id: 'move-within-share',
+    title: 'Move file3 within Folder A (Sub -> Folder A top level)',
+    tag: 'move / same scope',
+    desc: 'Both Sub and Folder A live under the SAME share root (Folder A), so this is a pure re-link: unlink file3 from Sub, link it into Folder A, re-seal BOTH parents, and re-seal f3.readKey under fa.readKey. NO rotation; generation unchanged; B and C keep access throughout.',
+    before: { label: 'before — Sub.children + A.children', lines: [
+      L('Sub.children: ['),
+      L(`  SealedChildRef { childId:"${V.f3Id}", kind:"file", name:"file3",`, 'cmt'),
+      L(`    generation:0, readKeySealed: AES-GCM(f3.readKey, sub.readKey, aad) }`, 'cmt'),
+      L(']'),
+      L('Folder A.children: [ file1, file2, Sub ]', 'cmt'),
+      L(`file3 node: readKey=${V.f3Read}, fileKey=${V.f3File}, generation:0`, 'cmt'),
+    ] },
+    after: { label: 'after — Sub.children + A.children', lines: [
+      L('Sub.children: ['),
+      L('  // SealedChildRef for file3 removed', 'del'),
+      L(']'),
+      L('Folder A.children: ['),
+      L('  file1, file2, Sub,'),
+      L('  SealedChildRef {', 'add'),
+      L(`    childId:"${V.f3Id}", kind:"file", name:"file3", generation:0,`, 'add'),
+      L('    readKeySealed: AES-GCM(f3.readKey, fa.readKey, aad)  // re-sealed under A', 'add'),
+      L('  }', 'add'),
+      L(']'),
+      L(`file3 node UNCHANGED: readKey=${V.f3Read}, generation:0`, 'mod'),
+    ] },
+    steps: [
+      'client: re-seal f3.readKey under fa.readKey (LINK changes; node readKey does NOT) — O(1)',
+      'client: drop file3 ref from Sub read-body, add to Folder A read-body, re-seal Sub and Folder A under their SAME keys',
+      'IPNS: publish Sub (seq++) then Folder A (seq++); file3 IPNS untouched, generation 0',
+      'effect: B,C still chain fa.readKey -> f3.readKey; no rotation, no re-grant, no TEE change',
+    ],
+  },
+  {
+    id: 'move-folder-within-share',
+    title: 'Move subfolder Sub (with file3) elsewhere within Folder A',
+    tag: 'move folder / O(1)',
+    desc: 'Moving a folder-with-contents within the SAME scope is O(1): only Sub is re-linked. Its subtree (file3) stays sealed under sub.readKey and is never touched. NO rotation; generation unchanged; B and C keep access to Sub and everything inside.',
+    before: { label: 'before — A.children (Sub at top level)', lines: [
+      L('Folder A.children: ['),
+      L('  file1, file2,'),
+      L(`  SealedChildRef { childId:"${V.subId}", kind:"folder", name:"Sub",`, 'cmt'),
+      L(`    generation:0, readKeySealed: AES-GCM(sub.readKey, fa.readKey, aad) }`, 'cmt'),
+      L(']'),
+      L(`Sub.children: [ file3 ]  // sealed under sub.readKey — untouched`, 'cmt'),
+    ] },
+    after: { label: 'after — A.children (Sub re-linked)', lines: [
+      L('Folder A.children: ['),
+      L('  file1, file2,'),
+      L('  SealedChildRef {', 'mod'),
+      L(`    childId:"${V.subId}", kind:"folder", name:"Sub", generation:0,`, 'mod'),
+      L('    readKeySealed: AES-GCM(sub.readKey, fa.readKey, aad)  // re-linked, SAME key', 'mod'),
+      L('  }', 'mod'),
+      L(']'),
+      L(`Sub.children: [ file3 ]  // UNCHANGED — subtree never re-sealed`, 'cmt'),
+      L(`sub.readKey=${V.subRead}, file3 readKey=${V.f3Read}  // both unchanged`, 'cmt'),
+    ] },
+    steps: [
+      'client: re-seal sub.readKey under fa.readKey at the new slot — single re-seal, O(1) regardless of subtree size',
+      'client: re-seal Folder A read-body only; Sub node and file3 untouched (subtree stays sealed under sub.readKey)',
+      'IPNS: publish Folder A (seq++); Sub and file3 IPNS records untouched',
+      'effect: B,C reach Sub + file3 exactly as before; no rotation, no per-item re-seal, no re-grant',
+    ],
+  },
+  {
+    id: 'move-between-shares',
+    title: 'Move file9 from Folder S2 (shared D) into Folder A (shared B,C)',
+    tag: 'rotate-then-grant',
+    desc: 'A move BETWEEN two different shares = move-OUT of S2 then move-IN to A. First ROTATE file9 (new readKey + fileKey, generation++) to CUT recipient D, then link the NEW key under fa.readKey so B and C reach it. Rotate revokes the old audience; the grant onboards the new one. ipnsName unchanged.',
+    before: { label: 'before — S2.children + A.children + file9 node', lines: [
+      L('Folder S2 (shared D).children: ['),
+      L(`  SealedChildRef { childId:"${V.f9Id}", kind:"file", name:"file9",`, 'cmt'),
+      L(`    generation:0, readKeySealed: AES-GCM(f9.readKey, fs2.readKey, aad) }`, 'cmt'),
+      L(']'),
+      L('Folder A (shared B,C).children: [ file1, file2, Sub ]', 'cmt'),
+      L(`file9 node: readKey=${V.f9Read}, fileKey=${V.f9File}, generation:0`, 'cmt'),
+      L('D reaches file9 via fs2.readKey chain', 'cmt'),
+    ] },
+    after: { label: 'after — S2 cut, file9 rotated + linked under A', lines: [
+      L('Folder S2 (shared D).children: ['),
+      L('  // SealedChildRef for file9 removed', 'del'),
+      L(']'),
+      L('Folder A (shared B,C).children: ['),
+      L('  file1, file2, Sub,'),
+      L('  SealedChildRef {', 'add'),
+      L(`    childId:"${V.f9Id}", kind:"file", name:"file9", generation:1,`, 'mod'),
+      L('    readKeySealed: AES-GCM(f9.readKeyV2, fa.readKey, aad)  // NEW key under A', 'add'),
+      L('  }', 'add'),
+      L(']'),
+      L('file9 node ROTATED: readKey=f9.readKeyV2, fileKey=f9.fileKeyV2, generation:1', 'mod'),
+      L(`ipnsName: "${V.f9Ipns}"  // UNCHANGED`, 'cmt'),
+    ] },
+    steps: [
+      'client (move-OUT/ROTATE): mint f9.readKeyV2 + f9.fileKeyV2, re-encrypt content, generation 0->1 — cuts D (old fs2.readKey chain unwraps nothing) — O(items)',
+      'client (move-IN/grant): unlink file9 from S2 read-body, add SealedChildRef to Folder A, seal f9.readKeyV2 under fa.readKey',
+      'IPFS/IPNS: re-upload file9 read-body + content, publish file9 (seq++, same ipnsName), then Folder S2 then Folder A',
+      'effect: D loses file9 (rotation), B,C gain it (grant via chain); no grant rows added — B,C already hold fa.readKey',
+    ],
+  },
+];
+const permRenameFlows = [
+  {
+    id: 'rename-file1-in-shared-a',
+    title: 'Owner renames file1 to "q3.pdf" inside shared Folder A',
+    tag: 'rename',
+    desc: 'Name lives on the EDGE: only Folder A\'s read-body SealedChildRef changes. Parent re-seal under the SAME faRead — no rotation, no re-grant. B (read) and C (write) auto-see the new name by chaining.',
+    before: { label: 'before — Folder A read-body child[file1]', lines: [
+      L('SealedChildRef {'),
+      L(`  childId: "${V.f1Id}", kind:"file", name:"file1",`),
+      L(`  ipnsName: "${V.f1Ipns}", generation: 0,`),
+      L(`  readKeySealed: AES-GCM(${V.f1Read}, ${V.faRead}, aad)`, 'cmt'),
+      L('}'),
+      L(`fa.generation: 0`, 'cmt'),
+    ] },
+    after: { label: 'after — Folder A read-body child[file1]', lines: [
+      L('SealedChildRef {'),
+      L(`  childId: "${V.f1Id}", kind:"file", name:"q3.pdf",`, 'mod'),
+      L(`  ipnsName: "${V.f1Ipns}", generation: 0,`, 'cmt'),
+      L(`  readKeySealed: AES-GCM(${V.f1Read}, ${V.faRead}, aad)`, 'cmt'),
+      L('}'),
+      L(`fa.generation: 0  // unchanged — rename is not a rotation`, 'cmt'),
+    ] },
+    steps: [
+      'client: edit name field in the file1 SealedChildRef; file1 node untouched (readKey/ipnsName/generation unchanged)',
+      'client: re-seal Folder A read-body under the SAME faRead; write-body untouched',
+      'IPFS: upload new Folder A read-body block; IPNS: publish Folder A (faIpns seq++, CAS expected:prev)',
+      'relay/TEE: forward-only sequence gate passes; no re-grant — B/C chain the new name. O(1)',
+    ],
+  },
+  {
+    id: 'rename-over-file2-in-shared-a',
+    title: 'Owner renames file1 OVER existing file2 in shared Folder A',
+    tag: 'overwrite + rotate',
+    desc: 'B (file2) is destroyed and was reachable by shared recipients, so ROTATE file2\'s keys first to revoke (close the orphaned-share gap). Then file1 takes the "file2" name slot via a single parent re-seal. file1\'s own keys are untouched.',
+    before: { label: 'before — Folder A read-body children', lines: [
+      L(`child[file1]: name:"file1", childId:"${V.f1Id}"`),
+      L(`child[file2]: name:"file2", childId:"${V.f2Id}", readKeySealed: AES-GCM(${V.f2Read}, ${V.faRead}, aad)`),
+      L(`file2 reachable by B(read)+C(write) via the chain`, 'cmt'),
+    ] },
+    after: { label: 'after — Folder A read-body children', lines: [
+      L(`child[file2-slot]: name:"file2", childId:"${V.f1Id}",`, 'mod'),
+      L(`  readKeySealed: AES-GCM(${V.f1Read}, ${V.faRead}, aad)  // now points at file1 node`, 'mod'),
+      L(`old child[file2] (${V.f2Id}) removed; node sent to bin`, 'del'),
+      L(`file2 ROTATED before overwrite: ${V.f2Read} retired -> revoked for B/C`, 'mod'),
+      L(`file1 node keys unchanged (${V.f1Read}); fa.generation: 0`, 'cmt'),
+    ] },
+    steps: [
+      'client: ROTATE the destroyed file2 — mint new f2Read/f2File, generation++, so B/C can no longer reach the orphaned content (revocation)',
+      'client: unlink old file1 + old file2 refs; bin the displaced file2 node as a BinEntry',
+      'client: add one SealedChildRef in the "file2" name slot pointing at file1\'s node (readKeySealed: AES-GCM(f1Read, faRead)); re-seal Folder A read-body under SAME faRead',
+      'IPFS/IPNS: publish file2 rotation then Folder A (faIpns seq++); relay CAS gate; no re-grant for file1 move. O(1) parent re-seal + O(1) file2 rotation',
+    ],
+  },
+  {
+    id: 'delete-file3-shared-sub-to-bin',
+    title: 'Owner deletes file3 (shared, inside Sub) to the bin',
+    tag: 'delete + rotate',
+    desc: 'file3 sits inside Sub under shared Folder A AND is independently shared with D. Deleting it removes it from every recipient\'s scope => unlink from Sub (re-seal Sub) + ROTATE file3 + move node+content to a BinEntry + DELETE D\'s grant. Deleting a shared node revokes its share.',
+    before: { label: 'before — Sub read-body + file3', lines: [
+      L('Sub.children: ['),
+      L(`  SealedChildRef { childId:"${V.f3Id}", name:"file3", readKeySealed: AES-GCM(${V.f3Read}, ${V.subRead}, aad) }`),
+      L(']'),
+      L(`file3 reachable by B(read)+C(write) via Folder A -> Sub chain`, 'cmt'),
+      L(`bin.entries: [ ... ]`, 'cmt'),
+    ] },
+    after: { label: 'after — Sub read-body + bin', lines: [
+      L('Sub.children: []', 'mod'),
+      L(`removed SealedChildRef for ${V.f3Id}`, 'del'),
+      L(`file3 ROTATED: ${V.f3Read}->${V.f3ReadV2}, ${V.f3File}->${V.f3FileV2}, generation++`, 'mod'),
+      L(`content re-encrypted: ${V.f3Cid} -> ${V.f3CidV2}`, 'mod'),
+      L('bin.entries: [', 'add'),
+      L(`  BinEntry { childId:"${V.f3Id}", ipnsName:"${V.f3Ipns}", metaCid:"${V.f3MetaCid}" }`, 'add'),
+      L(']', 'add'),
+      L('shares: []', 'mod'),
+      L('  D grant on file3 (the single-file share): DELETED', 'del'),
+    ] },
+    steps: [
+      'client: unlink file3 from Sub; re-seal Sub read-body under SAME subRead; Folder A untouched',
+      'client: ROTATE file3 (mint f3ReadV2/f3FileV2, generation++, re-encrypt content to f3CidV2) — it left B/C scope (revocation)',
+      'IPFS: upload rotated file3 content + meta; add BinEntry to the bin (binIpns)',
+      'DB: DELETE D\'s grant row on file3 — deleting a shared node revokes its grant (the rotation already cut D cryptographically)',
+      'IPNS: publish Sub (subIpns seq++) then file3 (f3Ipns seq++) then bin (binIpns seq++); relay CAS gate. O(1) for one file + O(grants on it)',
+    ],
+  },
+  {
+    id: 'write-recipient-c-upload-notes',
+    title: 'Write-recipient C uploads "notes.txt" into shared Folder A',
+    tag: 'shared write add',
+    desc: 'C holds Folder A\'s writeKey (write grant), so C mints the new node and seals it into BOTH chains: readKey under faRead (owner + B + C reach it) and writeKey under faWrite (owner + writers reach the signer). C signs the Folder A publish with the folder Ed25519 it recovers via the write chain. B AUTO-sees notes.txt with NO re-grant.',
+    before: { label: 'before — Folder A read-body', lines: [
+      L('children: [ child[file1], child[file2], child[Sub] ]', 'cmt'),
+      L(`fa.generation: 0`, 'cmt'),
+    ] },
+    after: { label: 'after — Folder A read-body + write-body', lines: [
+      L('children: ['),
+      L('  child[file1], child[file2], child[Sub],', 'cmt'),
+      L('  SealedChildRef {', 'add'),
+      L(`    childId:"${V.cpId}", kind:"file", name:"notes.txt",`, 'add'),
+      L(`    ipnsName:"${V.cpIpns}", generation: 0,`, 'add'),
+      L(`    readKeySealed: AES-GCM(${V.cpRead}, ${V.faRead}, aad)`, 'add'),
+      L('  }', 'add'),
+      L(']'),
+      L(`fa write-body: + writeKeySealed: AES-GCM(cp.writeKey, ${V.faWrite}, aad)`, 'add'),
+      L(`fa.generation: 0  // add is not a rotation; NO re-grant for B`, 'cmt'),
+    ] },
+    steps: [
+      'client(C): mint notes.txt node — cpRead/cpFile, writeKey, ed25519 -> cpIpns; seal read-body (content) + write-body (its signer)',
+      'client(C): add SealedChildRef sealing cpRead under faRead AND cpWriteKey under faWrite; re-seal both Folder A bodies under SAME faRead/faWrite',
+      'IPFS: upload notes.txt blocks + Folder A bodies; IPNS: publish notes.txt then Folder A, C signs with the Folder A Ed25519 from the write chain',
+      'relay/TEE: CAS gate + anti-rollback on faIpns; owner + B reach notes.txt by chaining faRead — NO reWrap/re-grant fan-out. O(1)',
+    ],
+  },
+  {
+    id: 'write-recipient-c-mkdir-drafts',
+    title: 'Write-recipient C creates subfolder "drafts" in Folder A',
+    tag: 'shared write add',
+    desc: 'Same shared-write add as an upload: C mints the folder node and seals it into BOTH chains (readKey under faRead so owner+B+C read it; writeKey under faWrite so writers reach the signer), then signs the Folder A publish with the folder Ed25519. No rotation, no re-grant — B auto-reaches drafts.',
+    before: { label: 'before — Folder A read-body', lines: [
+      L('children: [ child[file1], child[file2], child[Sub] ]', 'cmt'),
+      L(`fa.generation: 0`, 'cmt'),
+    ] },
+    after: { label: 'after — Folder A read-body + write-body', lines: [
+      L('children: ['),
+      L('  child[file1], child[file2], child[Sub],', 'cmt'),
+      L('  SealedChildRef {', 'add'),
+      L(`    childId:"${V.cpId}", kind:"folder", name:"drafts",`, 'add'),
+      L(`    ipnsName:"${V.cpIpns}", generation: 0,`, 'add'),
+      L(`    readKeySealed: AES-GCM(${V.cpRead}, ${V.faRead}, aad)`, 'add'),
+      L('  }', 'add'),
+      L(']'),
+      L(`fa write-body: + writeKeySealed: AES-GCM(drafts.writeKey, ${V.faWrite}, aad)`, 'add'),
+      L(`fa.generation: 0  // unchanged; B auto-reaches drafts via chain`, 'cmt'),
+    ] },
+    steps: [
+      'client(C): mint drafts folder node — cpRead, writeKey, ed25519 -> cpIpns; seal empty read-body (children:[]) + write-body (its signer)',
+      'client(C): add SealedChildRef sealing cpRead under faRead AND drafts.writeKey under faWrite; re-seal both Folder A bodies under SAME faRead/faWrite',
+      'IPFS/IPNS: publish drafts then Folder A; C signs Folder A with the folder Ed25519 from the write chain',
+      'relay/TEE: CAS gate on faIpns; owner + B chain to drafts with NO re-grant. O(1)',
+    ],
+  },
+  {
+    id: 'write-recipient-c-delete-file1',
+    title: 'Write-recipient C deletes file1 inside Folder A',
+    tag: 'shared write delete',
+    desc: 'C holds Folder A\'s writeKey, so C can unlink file1 (re-seal Folder A read-body under SAME faRead, sign with the folder Ed25519) and bin the node. NUANCE: C cannot ROTATE file1\'s OWN external sub-shares — revoking file1\'s independent grants is an OWNER-scoped action and is flagged, not performed by C.',
+    before: { label: 'before — Folder A read-body', lines: [
+      L('children: ['),
+      L(`  SealedChildRef { childId:"${V.f1Id}", name:"file1", readKeySealed: AES-GCM(${V.f1Read}, ${V.faRead}, aad) },`),
+      L('  child[file2], child[Sub]', 'cmt'),
+      L(']'),
+      L(`bin.entries: [ ... ]`, 'cmt'),
+    ] },
+    after: { label: 'after — Folder A read-body + bin', lines: [
+      L('children: [ child[file2], child[Sub] ]', 'mod'),
+      L(`removed SealedChildRef for ${V.f1Id}`, 'del'),
+      L('bin.entries: [', 'add'),
+      L(`  BinEntry { childId:"${V.f1Id}", ipnsName:"${V.f1Ipns}" }`, 'add'),
+      L(']', 'add'),
+      L(`file1 keys NOT rotated by C; external sub-shares = OWNER-scoped, flagged`, 'cmt'),
+      L(`fa.generation: 0  // unlink is not a rotation`, 'cmt'),
+    ] },
+    steps: [
+      'client(C): unlink file1 from Folder A; re-seal Folder A read-body under SAME faRead; sign Folder A publish with the folder Ed25519 from the write chain',
+      'IPFS/IPNS: add BinEntry for file1 to the bin (binIpns); publish Folder A (faIpns seq++)',
+      'relay/TEE: CAS gate + anti-rollback on faIpns; B/owner see file1 gone by chaining',
+      'FLAG (owner-scoped): if file1 had its OWN external sub-shares, revoking those requires ROTATE by the owner — C cannot perform it. O(1) for the unlink',
+    ],
+  },
+  {
+    id: 'owner-delete-folder-a-cascade',
+    title: 'Owner deletes Folder A (parent of shared + sub-shared nodes)',
+    tag: 'delete · cascade revoke',
+    desc: 'Deleting a node deletes its whole subtree, so EVERY grant rooted anywhere in that subtree must be revoked. Folder A is shared with B(read) + C(write); file3 inside it is independently shared with D. Deleting Folder A unlinks it from root, rotates the subtree, bins it, and DELETES all three grants (B, C, D).',
+    before: { label: 'before — root + grants', lines: [
+      L('root.children: [ Folder A, Folder S2 ]'),
+      L('shares: ['),
+      L(`  B(read  @ Folder A ${V.faIpns}),`, 'cmt'),
+      L(`  C(write @ Folder A ${V.faIpns}),`, 'cmt'),
+      L(`  D(read  @ file3 ${V.f3Ipns}),   // nested sub-share`, 'cmt'),
+      L(']'),
+    ] },
+    after: { label: 'after — root + grants + bin', lines: [
+      L('root.children: [ Folder S2 ]', 'mod'),
+      L('  removed SealedChildRef for Folder A', 'del'),
+      L('subtree ROTATED: Folder A, file1, file2, Sub, file3 (generation++)', 'mod'),
+      L('shares: []', 'mod'),
+      L('  B grant: DELETED', 'del'),
+      L('  C grant: DELETED', 'del'),
+      L('  D grant (nested, on file3): DELETED', 'del'),
+      L('bin.entries: [ BinEntry { Folder A subtree } ]', 'add'),
+    ] },
+    steps: [
+      'client: unlink Folder A from root; re-seal root read-body under SAME rootRead',
+      'client: enumerate ALL grants whose rootNodeId is in the subtree {Folder A, file1, file2, Sub, file3} — finds B, C (Folder A) + D (file3)',
+      'client: ROTATE the subtree (scope-root first) + move nodes/content to the bin (binIpns)',
+      'DB: DELETE the B, C and D grant rows; IPNS: publish root + bin (seq++). Cost O(subtree) — a parent delete cascades to every descendant grant',
+    ],
+  },
+];
+
+const groups = [
+  { title: 'Foundations', desc: 'The lifecycle of one folder + file and the two share types — the spine the permutations build on.', flows: foundationsFlows },
+  { title: 'Core operations', desc: 'Everyday filesystem ops, mostly in a private (unshared) part of the vault.', flows: coreFlows },
+  { title: 'Sharing controls', desc: 'Grant-plane changes — usually one DB row, no node re-sealed. Includes single-file sharing.', flows: sharingFlows },
+  { title: 'Permutations · owner moves under sharing', desc: 'The same move is O(1), a grant, or a rotation depending on which scope boundary it crosses.', flows: permMoveFlows },
+  { title: 'Permutations · rename, delete & write-recipient actions', desc: 'Overwriting/destroying shared nodes, and a write-recipient mutating inside the share.', flows: permRenameFlows },
+];
+
+let __n = 0;
+const numberedGroups = groups
+  .filter((g) => g.flows.length)
+  .map((g) => ({ ...g, flows: g.flows.map((f) => ({ ...f, n: String(++__n).padStart(2, '0') })) }));
+
+// ---- operating-rules cheat-sheet ----
+const rules = [
+  { op: 'Create / upload / restore', ch: 'new node + parent read-body re-seal', rg: 'no (auto-reach)', rot: 'no', ipns: 'new node’s own', cost: 'O(1)' },
+  { op: 'Copy', ch: 'decrypt + RE-ENCRYPT under fresh key → new CID (can’t reuse source CID)', rg: 'no (auto-reach)', rot: 'no', ipns: 'new node’s own', cost: 'O(content)' },
+  { op: 'Rename (file / folder)', ch: 'name on the EDGE → parent read-body re-seal', rg: 'no', rot: 'no', ipns: 'unchanged', cost: 'O(1)' },
+  { op: 'Move within same scope', ch: 're-link both parents (folder = O(1))', rg: 'no', rot: 'no', ipns: 'unchanged', cost: 'O(1)' },
+  { op: 'Move INTO a share', ch: 're-link; key now reachable by recipients', rg: 'grant via chain', rot: 'no', ipns: 'unchanged', cost: 'O(1)' },
+  { op: 'Move OUT of a share', ch: 're-link + rotate (leaves scope)', rg: 're-mint remaining', rot: 'yes · read', ipns: 'unchanged', cost: 'O(subtree)' },
+  { op: 'Move BETWEEN shares', ch: 'rotate (cut A) then link (grant B)', rg: 're-mint + grant', rot: 'yes · read', ipns: 'unchanged', cost: 'O(subtree)' },
+  { op: 'Edit / new version', ch: 'content swap; old kept in versions[]', rg: 'no', rot: 'no', ipns: 'unchanged', cost: 'O(1)' },
+  { op: 'Delete private → bin', ch: 'unlink + BinEntry', rg: 'no', rot: 'no', ipns: 'unchanged', cost: 'O(1)' },
+  { op: 'Delete SHARED → bin', ch: 'unlink + BinEntry + rotate + delete grants (cascades to nested sub-shares)', rg: 'delete subtree grants', rot: 'yes · read', ipns: 'unchanged', cost: 'O(subtree)' },
+  { op: 'Rename OVER shared dest', ch: 'rotate victim (revoke) + parent re-seal', rg: 're-mint', rot: 'yes · read', ipns: 'unchanged', cost: 'O(victim)' },
+  { op: 'Add recipient / upgrade r→w', ch: 'one grant row (ECIES to recipient)', rg: 'new grant', rot: 'no', ipns: 'unchanged', cost: 'O(1)' },
+  { op: 'Revoke read', ch: 'rotate readKey + fileKey of subtree', rg: 're-mint remaining', rot: 'yes · read', ipns: 'unchanged', cost: 'O(items)' },
+  { op: 'Revoke write / downgrade', ch: 'Ed25519 cascade + parent re-point', rg: 'update grants', rot: 'yes · write', ipns: 'CHANGES (new k51)', cost: 'O(subtree)' },
+  { op: 'Write-recipient adds in share', ch: 'new node sealed into BOTH chains', rg: 'no (auto-reach)', rot: 'no', ipns: 'new node’s own', cost: 'O(1)' },
+];
+---
+
+<Base
+  title="CipherBox — The Node Model (Explainer)"
+  description="How encrypted folder/file metadata, key-chaining, sharing, and revocation work in the proposed CipherBox Node model."
+>
+  <!-- Intro -->
+  <section class="section intro">
+    <p class="kicker">{'// proposed design — approach (c) — not yet shipped'}</p>
+    <h1 class="intro-title">The Node Model</h1>
+    <p class="intro-lede">
+      One <strong>Node</strong> type for folders, files, and the vault root. Read access flows
+      down a <strong>key chain</strong> sealed into the metadata itself — so sharing a subtree is
+      <em>one</em> wrapped key, not a per-item table. Write access is a separate chain of Ed25519
+      signing keys. The server stays a zero-knowledge relay throughout.
+    </p>
+    <div class="planes">
+      <div class="plane card">
+        <h3 class="plane-h">{'> read plane'}</h3>
+        <p>Metadata key-chaining. Revocation = rotate the subtree (expensive, O(items)).</p>
+      </div>
+      <div class="plane card">
+        <h3 class="plane-h">{'> write plane'}</h3>
+        <p>Ed25519 signing keys. Revocation = rotate the keypairs / re-point parents.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Anatomy -->
+  <section class="section">
+    <h2 class="section-title">Anatomy of a Node</h2>
+    <p class="section-desc">
+      What the client holds (decrypted) vs. what IPFS and the relay store (sealed). The relay only
+      ever sees the right-hand object.
+    </p>
+    <div class="anatomy-grid">
+      <div>
+        <div class="meta-label">decrypted — client only</div>
+        <div class="meta">{anatomy.decrypted.map((l) => <div class={`ln ${l.k}`}>{l.t || ' '}</div>)}</div>
+      </div>
+      <div>
+        <div class="meta-label">published — relay / IPFS see this</div>
+        <div class="meta">{anatomy.published.map((l) => <div class={`ln ${l.k}`}>{l.t || ' '}</div>)}</div>
+      </div>
+    </div>
+    <div class="meta-label" style="margin-top: var(--spacing-lg)">the chain link</div>
+    <div class="meta">{anatomy.childref.map((l) => <div class={`ln ${l.k}`}>{l.t || ' '}</div>)}</div>
+
+    <div class="secrets">
+      {secrets.map((s) => (
+        <div class="secret">
+          <span class="secret-k">{s.k}</span>
+          <span class="secret-t">{s.t}</span>
+        </div>
+      ))}
+    </div>
+  </section>
+
+  <!-- Rules -->
+  <section class="section">
+    <h2 class="section-title">Operating rules</h2>
+    <p class="section-desc">
+      The whole model reduces to a handful of rules. Only operations that make a node LEAVE a
+      recipient’s scope trigger a key rotation; everything else is a parent re-seal or a single
+      grant row. k51 names change only on write-revocation.
+    </p>
+    <div class="rules-wrap">
+      <table class="rules-table">
+        <thead>
+          <tr><th>operation</th><th>what changes</th><th>re-grant?</th><th>rotation?</th><th>ipnsName</th><th>cost</th></tr>
+        </thead>
+        <tbody>
+          {rules.map((r) => (
+            <tr>
+              <td class="r-op">{r.op}</td>
+              <td>{r.ch}</td>
+              <td>{r.rg}</td>
+              <td class={r.rot.startsWith('yes') ? 'r-rot' : 'r-no'}>{r.rot}</td>
+              <td class={r.ipns.startsWith('CHANGES') ? 'r-rot' : ''}>{r.ipns}</td>
+              <td class="r-cost">{r.cost}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- Flows -->
+  <section class="section">
+    <h2 class="section-title">Transforms</h2>
+    <p class="section-desc">
+      Each operation as a before → after on the affected metadata, with the per-layer steps.
+      Highlighted lines are what changed.
+    </p>
+
+    {numberedGroups.map((g) => (
+      <div class="flow-group">
+        <h3 class="group-title">{g.title}</h3>
+        <p class="group-desc">{g.desc}</p>
+        <div class="flows">
+          {g.flows.map((f) => (
+        <article class="flow" id={f.id}>
+          <header class="flow-head">
+            <span class="flow-n">{f.n}</span>
+            <h3 class="flow-title">{f.title}</h3>
+            <span class="flow-tag">{f.tag}</span>
+          </header>
+          <p class="flow-desc">{f.desc}</p>
+
+          <div class="panels">
+            <div class="panel">
+              <div class="meta-label">{f.before.label}</div>
+              <div class="meta">{f.before.lines.map((l) => <div class={`ln ${l.k}`}>{l.t || ' '}</div>)}</div>
+            </div>
+            <div class="panel-arrow" aria-hidden="true">{'→'}</div>
+            <div class="panel">
+              <div class="meta-label">{f.after.label}</div>
+              <div class="meta">{f.after.lines.map((l) => <div class={`ln ${l.k}`}>{l.t || ' '}</div>)}</div>
+            </div>
+          </div>
+
+          <ol class="flow-legend steps">
+            {f.steps.map((s, i) => (
+              <li class="legend-item">
+                <span class="legend-step">{String(i + 1).padStart(2, '0')}</span>
+                <span class="legend-label">{s}</span>
+              </li>
+            ))}
+          </ol>
+        </article>
+          ))}
+        </div>
+      </div>
+    ))}
+  </section>
+
+  <!-- Asymmetry summary -->
+  <section class="section">
+    <h2 class="section-title">The revocation asymmetry</h2>
+    <div class="asym-grid">
+      <div class="card asym">
+        <h3 class="asym-h">{'> read-revoke'}</h3>
+        <p>Rotate readKey + fileKey of every node in scope. k51 names unchanged; TEE untouched.
+          <strong>O(items)</strong> republishes. Already-fetched content is irreducibly readable (it’s on IPFS).</p>
+      </div>
+      <div class="card asym">
+        <h3 class="asym-h">{'> write-revoke (c)'}</h3>
+        <p>Rotate Ed25519 keypairs → new k51 names → parent re-point cascade + TEE re-enroll + grant
+          updates. <strong>O(subtree)</strong>, and heavier per node than read-revoke. The cheap
+          O(1) version only exists under approach (a) mediated writes.</p>
+      </div>
+    </div>
+    <p class="foot"><a href="/">{'← back'}</a></p>
+  </section>
+</Base>
+
+<style>
+  .intro {
+    padding-bottom: var(--spacing-2xl);
+  }
+  .kicker {
+    color: var(--color-text-dim);
+    font-size: var(--font-size-sm);
+    margin-bottom: var(--spacing-md);
+  }
+  .intro-title {
+    font-size: var(--font-size-3xl);
+    font-weight: var(--font-weight-bold);
+    letter-spacing: 0.04em;
+    text-shadow: var(--glow-green);
+    margin-bottom: var(--spacing-lg);
+  }
+  .intro-lede {
+    max-width: 760px;
+    color: var(--color-text-muted);
+    font-size: var(--font-size-md);
+    line-height: 1.7;
+  }
+  .intro-lede strong { color: var(--color-green-primary); }
+  .intro-lede em { color: var(--color-text-primary); font-style: normal; text-decoration: underline; }
+
+  .planes {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--spacing-lg);
+    margin-top: var(--spacing-xl);
+  }
+  .plane-h { font-size: var(--font-size-md); margin-bottom: var(--spacing-xs); }
+  .plane p { color: var(--color-text-muted); font-size: var(--font-size-sm); }
+
+  /* ---- metadata panels ---- */
+  .meta-label {
+    font-size: var(--font-size-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--color-text-secondary);
+    margin-bottom: var(--spacing-xs);
+  }
+  .meta {
+    border: 1px solid var(--color-border-dim);
+    background: rgb(0 0 0 / 60%);
+    padding: var(--spacing-md);
+    font-family: var(--font-family-mono);
+    font-size: var(--font-size-sm);
+    line-height: 1.55;
+    overflow-x: auto;
+  }
+  .ln {
+    white-space: pre;
+    color: var(--color-text-muted);
+    display: block;
+  }
+  .ln.cmt { color: var(--color-text-dim); }
+  .ln.add {
+    color: var(--color-green-primary);
+    background: rgb(0 208 132 / 8%);
+    border-left: 2px solid var(--color-green-primary);
+    padding-left: 6px;
+    margin-left: -8px;
+  }
+  .ln.mod {
+    color: var(--color-green-primary);
+    border-left: 2px dashed var(--color-green-dim);
+    padding-left: 6px;
+    margin-left: -8px;
+  }
+  .ln.del {
+    color: var(--color-text-dim);
+    text-decoration: line-through;
+    opacity: 0.7;
+  }
+
+  .anatomy-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--spacing-lg);
+  }
+
+  .secrets {
+    margin-top: var(--spacing-xl);
+    display: grid;
+    gap: var(--spacing-sm);
+  }
+  .secret {
+    display: grid;
+    grid-template-columns: 120px 1fr;
+    gap: var(--spacing-md);
+    align-items: baseline;
+    border-left: 1px solid var(--color-border-dim);
+    padding-left: var(--spacing-md);
+  }
+  .secret-k {
+    color: var(--color-green-primary);
+    font-weight: var(--font-weight-bold);
+  }
+  .secret-t { color: var(--color-text-muted); font-size: var(--font-size-sm); }
+
+  /* ---- groups + rules ---- */
+  .flow-group { margin-bottom: var(--spacing-4xl); }
+  .group-title {
+    font-size: var(--font-size-lg);
+    font-weight: var(--font-weight-bold);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--color-green-primary);
+    border-bottom: 1px solid var(--color-border-dim);
+    padding-bottom: var(--spacing-xs);
+    margin-bottom: var(--spacing-xs);
+  }
+  .group-title::before { content: ">> "; color: var(--color-text-secondary); }
+  .group-desc {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+    margin-bottom: var(--spacing-xl);
+    max-width: 820px;
+  }
+
+  .rules-wrap { overflow-x: auto; border: 1px solid var(--color-border-dim); }
+  .rules-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--font-size-sm);
+    min-width: 880px;
+  }
+  .rules-table th {
+    text-align: left;
+    text-transform: uppercase;
+    font-size: var(--font-size-xs);
+    letter-spacing: 0.06em;
+    color: var(--color-black);
+    background: var(--color-green-dim);
+    padding: var(--spacing-xs) var(--spacing-sm);
+  }
+  .rules-table td {
+    padding: var(--spacing-xs) var(--spacing-sm);
+    border-top: 1px solid var(--color-border-dim);
+    color: var(--color-text-muted);
+    vertical-align: top;
+  }
+  .rules-table .r-op { color: var(--color-green-primary); font-weight: var(--font-weight-semibold); white-space: nowrap; }
+  .rules-table .r-rot { color: var(--color-green-primary); }
+  .rules-table .r-no { color: var(--color-text-dim); }
+  .rules-table .r-cost { color: var(--color-text-secondary); white-space: nowrap; }
+
+  /* ---- flows ---- */
+  .flows { display: flex; flex-direction: column; gap: var(--spacing-3xl); }
+  .flow { border-top: 1px solid var(--color-border-dim); padding-top: var(--spacing-xl); }
+  .flow-head {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    margin-bottom: var(--spacing-xs);
+    flex-wrap: wrap;
+  }
+  .flow-n {
+    font-size: var(--font-size-xl);
+    font-weight: var(--font-weight-bold);
+    color: var(--color-green-primary);
+    text-shadow: var(--glow-green);
+  }
+  .flow-title { font-size: var(--font-size-lg); font-weight: var(--font-weight-bold); }
+  .flow-tag {
+    font-size: var(--font-size-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--color-black);
+    background: var(--color-green-dim);
+    padding: 2px 8px;
+  }
+  .flow-desc {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+    max-width: 820px;
+    margin-bottom: var(--spacing-lg);
+  }
+
+  .panels {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: var(--spacing-md);
+    align-items: stretch;
+    margin-bottom: var(--spacing-lg);
+  }
+  .panel { min-width: 0; }
+  .panel-arrow {
+    align-self: center;
+    color: var(--color-green-primary);
+    font-size: var(--font-size-xl);
+    text-shadow: var(--glow-green);
+  }
+
+  .steps { margin-top: var(--spacing-md); }
+
+  /* ---- asymmetry ---- */
+  .asym-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--spacing-lg); }
+  .asym-h { font-size: var(--font-size-md); margin-bottom: var(--spacing-xs); }
+  .asym p { color: var(--color-text-muted); font-size: var(--font-size-sm); }
+  .asym strong { color: var(--color-green-primary); }
+  .foot { margin-top: var(--spacing-2xl); }
+
+  @media (max-width: 768px) {
+    .planes, .anatomy-grid, .asym-grid { grid-template-columns: 1fr; }
+    .secret { grid-template-columns: 1fr; gap: 2px; }
+    .panels { grid-template-columns: 1fr; }
+    .panel-arrow { transform: rotate(90deg); justify-self: center; }
+    .intro-title { font-size: var(--font-size-2xl); }
+  }
+</style>
