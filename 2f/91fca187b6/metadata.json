@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "2f91fca187b6",
+  "strategy": "manual-commit",
+  "branch": "docs/v1.1-milestone-audit-reconcile",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/REQUIREMENTS.md",
+    ".planning/v1.1-MILESTONE-AUDIT.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/2f/91fca187b6/0/metadata.json",
+      "transcript": "/2f/91fca187b6/0/full.jsonl",
+      "content_hash": "/2f/91fca187b6/0/content_hash.txt",
+      "prompt": "/2f/91fca187b6/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 11066,
+    "cache_creation_tokens": 137025,
+    "cache_read_tokens": 3734955,
+    "output_tokens": 65045,
+    "api_call_count": 30
+  }
+}
