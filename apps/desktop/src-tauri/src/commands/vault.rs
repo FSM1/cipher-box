@@ -182,7 +182,8 @@ pub(crate) async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Res
     match cipherbox_api_client::ipns::publish_ipns(&state.sdk.api, &folder_publish_req).await.map_err(|e| e.to_string())? {
         cipherbox_api_client::PublishResult::Success => {}
         cipherbox_api_client::PublishResult::Conflict { .. } => {
-            log::warn!("Unexpected conflict on root folder publish (sequence 1)");
+            log::warn!("Unexpected conflict on root folder publish (sequence 1); aborting vault initialization to avoid inconsistent state");
+            return Err("Vault initialization aborted due to existing root folder IPNS record".to_string());
         }
     }
 

@@ -1335,6 +1335,46 @@ mod tests {
         );
     }
 
+    // Non-strict `resolve_sequence` cache-fallback contract (mirror of the strict path).
+    // On a resolve failure WITH a cached sequence it must return Ok(cached); it must never
+    // invent a base sequence (e.g. 0). With the unroutable 127.0.0.1:1 API the resolve fails
+    // (VerifyError::Api) and the populated cache supplies the fallback.
+    #[cfg(any(feature = "fuse", feature = "winfsp"))]
+    #[tokio::test]
+    async fn resolve_sequence_falls_back_to_cache_on_resolve_failure() {
+        let api = cipherbox_api_client::ApiClient::new("http://127.0.0.1:1");
+        let coordinator = super::PublishCoordinator::new();
+        let ipns_name = "k51softfallback";
+
+        coordinator.record_publish(ipns_name, 42);
+
+        let result = coordinator.resolve_sequence(&api, ipns_name).await;
+        assert_eq!(
+            result,
+            Ok(42),
+            "non-strict resolve must fall back to the cached sequence on resolve failure (got {:?})",
+            result
+        );
+    }
+
+    // Non-strict `resolve_sequence` with NO cached sequence must return Err on a resolve
+    // failure — it must NOT fabricate a base sequence (the bug this hardens against, where a
+    // missing/unparsable sequence silently became 0). Empty cache + unroutable API ⇒ Err.
+    #[cfg(any(feature = "fuse", feature = "winfsp"))]
+    #[tokio::test]
+    async fn resolve_sequence_errs_on_resolve_failure_without_cache() {
+        let api = cipherbox_api_client::ApiClient::new("http://127.0.0.1:1");
+        let coordinator = super::PublishCoordinator::new();
+        let ipns_name = "k51softnocache";
+
+        let result = coordinator.resolve_sequence(&api, ipns_name).await;
+        assert!(
+            result.is_err(),
+            "non-strict resolve must err on resolve failure when no cached sequence exists, never invent a base (got {:?})",
+            result
+        );
+    }
+
     // REQ-5: a transient (non-404) resolve failure during replay retains the entry rather
     // than advancing IPNS off a stale cached sequence. The IPNS name has a cached sequence
     // seeded, but because resolve_ipns_for_replay now uses the strict resolve, the failure
