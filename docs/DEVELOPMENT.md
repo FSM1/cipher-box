@@ -122,6 +122,10 @@ pnpm --filter @cipherbox/crypto test
 
 > **Note:** `pnpm test` runs tests across all workspaces including E2E — use the filtered commands above for unit tests only.
 
+### Strict IPNS verification — wipe local DB first
+
+The strict fail-closed IPNS verification cutover (Phase 60 / HARD-11) rejects any IPNS record that embeds sequence `0`. A local dev database created before the cutover holds such "embedded-0" records, so a pre-existing vault or folder will fail strict verification and fail to resolve. Before running the strict build against an existing local DB, wipe it per [`DATABASE_EVOLUTION_PROTOCOL.md`](./DATABASE_EVOLUTION_PROTOCOL.md) (§reset) and log in again — the vault self-bootstraps fresh strict-verified records. Because all IPNS keys are deterministically derived from the Web3Auth key, the wipe is non-destructive to identity.
+
 ### E2E tests (Playwright)
 
 Playwright auto-starts API + web via `webServer` config (requires infra services: Postgres, IPFS, Redis):

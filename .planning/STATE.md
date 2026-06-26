@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: IPFS Infrastructure
-status: Ready to execute
-last_updated: "2026-06-24T01:45:06Z"
-last_activity: 2026-06-24
+status: v1.1 complete on disk — milestone close pending verify + re-audit
+last_updated: "2026-06-26T21:50:33Z"
+last_activity: 2026-06-26
 progress:
   total_phases: 45
-  completed_phases: 44
-  total_plans: 198
-  completed_plans: 196
-  percent: 98
+  completed_phases: 45
+  total_plans: 199
+  completed_plans: 199
+  percent: 100
 ---
 
 # Project State
@@ -20,13 +20,22 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 60 — ipns-verification-cross-layer-closeout-desktop-and-api
+**Current focus:** v1.1 milestone close — finish verification (Phases 59, 60) + re-audit hardening block, then /gsd:complete-milestone v1.1
 
 ## Current Position
 
-Phase: 60 (ipns-verification-cross-layer-closeout-desktop-and-api) — EXECUTING
-Plan: 8 of 8
-Milestone v1.1 hardening block extended 2026-06-21 with deferred-findings Phases 56–58 (HARD-07..09), sourced from the Phase 50–55 / PR #529 + #538 review backlog. Next: run /gsd:plan-phase 58 (recommended order was 56 FUSE/IPNS durability → 57 API CID/provider hardening → 58 IPNS signature-verify coverage; 58 last as it is the most regression-prone and full-SDK-E2E-gated). Note: STATE frontmatter progress counts are approximate and were periodically unreconciled (see todo `2026-06-18-gsd-phase-complete-regresses-state-final-phase.md`).
+Phase: 60 (ipns-verification-cross-layer-closeout-desktop-and-api) — COMPLETE (8/8 plans; 2026-06-26)
+Plan: 8 of 8 — COMPLETE
+Phase 60 closed 2026-06-26: 60-08 D-01/D-12 lockstep cutover done (cross-layer CI gates green, staging wiped + strict-verified smoke confirmed by maintainer). Adversarial closeout verification caught a 10th first-publish producer (StorageTab BYO storage-config embedded seq 0 → would 400 under the strict gate) that D-02/60-02 missed; fixed to embed sequence 1, completing D-02. 60-VERIFICATION flipped human_needed → passed (17/17). Every v1.1 phase (18–60) now has all plans executed on disk.
+
+**Next — resume the v1.1 milestone close (path chosen 2026-06-26):**
+
+1. `/gsd:verify-work 59` and `/gsd:verify-work 60` — clear the two human_needed verifications (59 still has 3 pending UAT scenarios; 60 now passed).
+2. `/gsd:health` — reconcile ROADMAP Progress-table drift (51 shows In Progress, 52–54 Planned, though their plans are executed on disk) and STATE counts.
+3. `/gsd:audit-milestone v1.1` — the existing audit only covers phases 18–35; the entire hardening block (50–60, HARD-01..11) is unaudited.
+4. `/gsd:complete-milestone v1.1` — once the re-audit passes.
+
+Note: STATE frontmatter progress counts are approximate and were periodically unreconciled (see todo `2026-06-18-gsd-phase-complete-regresses-state-final-phase.md`).
 
 ## Performance Metrics
 

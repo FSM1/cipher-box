@@ -1,9 +1,10 @@
 ---
 phase: 60-ipns-verification-cross-layer-closeout-desktop-and-api
 verified: 2026-06-24T02:15:00Z
-status: human_needed
-score: 16/17 must-haves verified
+status: passed
+score: 17/17 must-haves verified
 overrides_applied: 0
+closed_out: '2026-06-26 — Plan 08 staging cutover operator-confirmed (D-12 lockstep deploy->wipe->smoke; 4a strict-verified self-bootstrap, 4b embedded-0 publish rejected 400, 4c tampered/expired rejected). Adversarial closeout verification found + fixed a 10th first-publish producer the original truth #6 missed (StorageTab BYO storage-config embedded seq 0 -> would 400 under the strict gate); fixed to embed sequence 1, completing D-02. The human_verification item below is now satisfied.'
 human_verification:
   - test: "Staging DB wipe + redeploy + strict-verify smoke test"
     expected: |
