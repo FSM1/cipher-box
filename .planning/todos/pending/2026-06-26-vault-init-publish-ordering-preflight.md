@@ -30,6 +30,12 @@ proceed or none do.
 
 - Add a preflight resolve of both names ahead of the publishes.
 - On a detected pre-existing record → abort (no writes attempted).
+- On a preflight resolve that **fails transiently** (network error, timeout, any
+  non-404 / not-"absent" response) → **fail closed: abort init**, never treat a
+  resolve error as "record absent → proceed". A fail-open choice here would risk
+  publishing over an existing record and create the exact partial/inconsistent
+  state this preflight exists to prevent — so the security-relevant default is to
+  abort and surface the transient error for retry.
 - Decide and document the cleanup/recovery story for the rare case where a publish
   still fails after a clean preflight (transient), so a partial write is detectable
   and re-runnable rather than silently inconsistent.
