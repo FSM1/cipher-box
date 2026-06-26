@@ -24,6 +24,7 @@
     "@commitlint/config-conventional": "^20.4.1",
     "@eslint/js": "^9.18.0",
     "@noble/secp256k1": "^3.0.0",
+    "@types/node": "^22.19.7",
     "concurrently": "^9.2.1",
     "eslint": "^9.18.0",
     "eslint-config-prettier": "^10.0.1",
