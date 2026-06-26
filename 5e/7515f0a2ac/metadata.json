@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "5e7515f0a2ac",
+  "strategy": "manual-commit",
+  "branch": "docs/capture-revoke-and-init-followups",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/design/2026-06-26-sharing-read-keychaining-AMENDMENTS.md",
+    "CONTEXT.md",
+    "docs/adr/0001-write-revocation-full-ed25519-rotation.md",
+    "docs/adr/0002-read-revocation-protects-future-content-only.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/5e/7515f0a2ac/0/metadata.json",
+      "transcript": "/5e/7515f0a2ac/0/full.jsonl",
+      "content_hash": "/5e/7515f0a2ac/0/content_hash.txt",
+      "prompt": "/5e/7515f0a2ac/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 59041,
+    "cache_creation_tokens": 473530,
+    "cache_read_tokens": 14981547,
+    "output_tokens": 279509,
+    "api_call_count": 81
+  }
+}
