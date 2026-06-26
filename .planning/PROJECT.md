@@ -2,22 +2,17 @@
 
 ## What This Is
 
-CipherBox is a production-grade, privacy-first encrypted cloud storage platform using IPFS/IPNS and Web3Auth. It provides zero-knowledge file storage with user-to-user sharing, link sharing, client-side search, multi-factor authentication, file versioning, conflict detection, recycle bin, and cross-platform desktop apps (macOS, Windows, Linux). The server is cryptographically unable to access user data.
+CipherBox is a production-grade, privacy-first encrypted cloud storage platform using IPFS/IPNS and Web3Auth. It provides zero-knowledge file storage with user-to-user sharing (read-only and writable), link sharing, client-side search, multi-factor authentication, file versioning, conflict detection, recycle bin, and cross-platform desktop apps (macOS, Windows, Linux). Storage runs on self-hosted IPFS infrastructure (Kubo + self-hosted Someguy IPNS routing) with optional bring-your-own IPFS node support, and the platform ships a TypeScript and Rust SDK extracted from a unified monorepo. The server is cryptographically unable to access user data.
 
 ## Core Value
 
 **Zero-knowledge privacy**: Files are encrypted client-side before leaving the device, and encryption keys exist only in client memory. The server is cryptographically unable to access user data.
 
-## Current Milestone: v1.1 IPFS Infrastructure
+## Current State
 
-**Goal:** Make CipherBox more IPFS-native — replace delegated-ipfs.dev, migrate selected vault state to IPFS/IPNS, add BYO-IPFS server-relay support, and establish performance baselines.
+**v1.1 IPFS Infrastructure — SHIPPED 2026-06-27** (Milestone 3; 45 phases, 198 plans). All 77 requirements (66 formal v1.1 + 11 HARD) code-satisfied; integration 12/12 WIRED, E2E flows 4/4 INTACT. Delivered self-hosted Someguy IPNS routing (replacing delegated-ipfs.dev), vault blob v2 with DB crypto columns dropped, BYO-IPFS server-relay support, performance baselines + instrumentation, TS+Rust SDK extraction, writable shares, and a cross-layer fail-closed IPNS signature-verify hardening block. See `.planning/milestones/v1.1-MILESTONE-AUDIT.md` for the close-out verdict.
 
-**Target features:**
-
-- Reliable IPNS resolution (replace delegated-ipfs.dev with self-hosted or alternative provider)
-- Reduce database dependence where feasible — migrate vault crypto material to IPFS while retaining `folder_ipns`, shares, device approvals, quota tracking, and the DB fallback for `encryptedRootFolderKey` in v1.1
-- Bring-your-own IPFS node support via server-relay flow (client-direct deferred to v1.2)
-- Comprehensive performance baselines (API, client, IPFS/IPNS latency, end-to-end user journeys)
+**Next up:** Milestone 4 — Encrypted Productivity Suite (v2.0). Not yet scoped. Fresh requirements come from `/gsd-new-milestone`.
 
 ## Requirements
 
@@ -49,32 +44,25 @@ CipherBox is a production-grade, privacy-first encrypted cloud storage platform 
 - Per-file IPNS metadata split (content updates decoupled from folder publishes) — v1.0
 - Cross-platform E2E test matrix (macOS, Windows, Linux) — v1.0
 
-### Active (Milestone 3 — IPFS Infrastructure v1.1)
+### Validated (Milestone 3 — v1.1 IPFS Infrastructure)
 
-See `.planning/REQUIREMENTS.md` for full requirements.
+Full requirement IDs archived in `.planning/milestones/v1.1-REQUIREMENTS.md` (77/77 satisfied). Grouped:
 
-#### IPNS Reliability
+- ✓ Self-hosted Someguy IPNS routing + DB-first resolve (replaced delegated-ipfs.dev, sub-2s timeout + DB fallback) — v1.1
+- ✓ Vault blob v2 (rootFolderKey ECIES-wrapped in blob, DB crypto columns dropped, HKDF-derivable IPNS key) — v1.1
+- ✓ BYO-IPFS node support (Pinning-Service-API relay, dual-pin, advisory quota, settings UI) — v1.1
+- ✓ Performance baselines + instrumentation (IPFS/IPNS histograms, API p50/p95/p99, client throughput, E2E journeys, load harness) — v1.1
+- ✓ TypeScript SDK extraction (core / crypto / api-client / sdk-core / sdk) with per-package release automation — v1.1
+- ✓ Rust SDK workspace (crypto / core / api-client / fuse / sdk) + thin Tauri shell — v1.1
+- ✓ Writable shares (write-permission column, IPNS-key wrapping, multi-writer conflict retry, terminal-style UI) — v1.1
+- ✓ FUSE write durability + IPNS conflict handling (fsynced journal, replay-on-mount, three-way folder merge, file-record CAS) — v1.1
+- ✓ Cross-layer IPNS signature-verify hardening (HARD-01..11 — fail-closed verified-resolver chokepoint across web/sdk-core/API/Rust) — v1.1
 
-- [ ] Replace delegated-ipfs.dev with reliable IPNS resolution
-- [ ] Sub-2s resolution latency, >99.5% availability
+### Active
 
-#### Database Minimization
-
-- [x] Move rootFolderKey to IPFS vault blob v2 format (DB crypto columns dropped entirely) — Validated in Phase 20: Vault Migration
-- [x] Deprecate encryptedRootIpnsPrivateKey (HKDF-derivable, DB column dropped) — Validated in Phase 20: Vault Migration
-
-#### BYO-IPFS
-
-- [ ] User-configurable IPFS node endpoint
-- [ ] Server-relay upload to user's node (client-direct deferred to v1.2)
-- [ ] Quota and conflict detection strategy for BYO mode
-
-#### Performance Baselines
-
-- [ ] API endpoint response time baselines
-- [ ] IPFS/IPNS publish and resolve latency baselines
-- [ ] Client-side encryption throughput baselines
-- [ ] End-to-end user journey timing baselines
+- [ ] Phase 39 D-02 — add a confirmation dialog before permanent/hard delete (data-safety UX gap; captured todo)
+- [ ] Phase 39 D-06 — remove or document the residual server-side `RECYCLE_BIN_RETENTION_DAYS` endpoint/env var (dead backend surface)
+- [ ] HARD-11 — complete the Phase 60 staging operational smoke-test (D-12 lockstep checkpoint), or accept as an infra-limited override
 
 ### Out of Scope (Milestone 3 — v1.1)
 
@@ -139,11 +127,11 @@ See `.planning/REQUIREMENTS.md` for full requirements.
 | Encrypted recycle bin on IPFS               | Client-side retention enforcement, CID unpinning on delete | Good    |
 | SIWE wallet login with hashed identifiers   | Privacy-preserving auth, unified identity across methods   | Good    |
 | Decimal phase numbering for insertions      | Clear insertion semantics without renumbering              | Good    |
+| Self-hosted Someguy over delegated-ipfs.dev | Own the IPNS routing path; sub-2s resolve with DB fallback | ✓       |
+| Vault blob v2 — zero DB crypto              | rootFolderKey in IPFS blob, all DB crypto columns dropped  | ✓       |
+| Monorepo SDK extraction (TS + Rust)         | Reusable core shared across web, desktop, recovery tooling | ✓       |
+| Strict fail-closed IPNS verified-resolver   | Single signature-verify chokepoint across all layers       | ✓       |
 
 ---
 
-Last updated: 2026-06-13 after Phase 44 IPNS Conflict Handling completed. UAT-audit gap-closure phases 42-44 all done: Phase 42 ownership-guarded unpin (cross-user refcounting, transactional quota decrement, pending-unpins outbox); Phase 43 FUSE write durability (fsynced ciphertext journal, replay-on-mount, mkdir-conflict retry, park notifications across macOS/Linux/Windows); Phase 44 IPNS conflict handling (three-way folder merge on 409 with publishedChildren convergence, file-record CAS with loser-becomes-version). v1.1 milestone complete.
-
-Updated 2026-06-19: v1.1 (Milestone 3) reopened with a hardening block — Phases 50–55 absorb tracked tech-debt/security todos from v1.1 verification and audits (50 IPFS/IPNS data-integrity, 51 crypto-signature & secret-leak hardening, 52 desktop FUSE durability & at-rest safety, 53 release & supply-chain engineering, 54 E2E test-infra typing, 55 large source-file refactor). Reopened into M3 rather than opening v1.2, since Milestone 4 (v2.0) is already defined. See REQUIREMENTS.md HARD-01..HARD-06.
-
-Updated 2026-06-22: Phase 58 (HARD-09) complete — IPNS signature-verify coverage closes the Phase 51 / PR #529 residue: CBOR cid/sequence binding decoded and compared symmetrically in Rust and JS (closes the swap gap), a single Rust `resolve_ipns_verified` chokepoint making all 9 FUSE resolve sites safe-by-default with per-operation scoped fail-closed (folder-key descent kept hard fail-closed), unconditional non-CAS embedded-sequence validation (D-09) in the API without regressing the TEE idempotent re-sign path, web/sdk-core resolve dedup, and a shared 7-case cross-language verify-vector fixture consumed by both `cargo test` and sdk-core vitest. Gates green: cargo test (core/fuse), apps/api jest 913/913, full SDK E2E 89/89.
+Last updated: 2026-06-27 after v1.1 milestone. v1.1 IPFS Infrastructure (Milestone 3) shipped — 45 phases / 198 plans, 77/77 requirements code-satisfied (66 formal + 11 HARD), integration 12/12, flows 4/4. Remaining carried items: Phase 39 D-02 permanent-delete confirmation (captured todo), D-06 residual server env-var, and the HARD-11 staging operational smoke-test. Next milestone (4 — Encrypted Productivity Suite) not yet scoped; run `/gsd-new-milestone`. See `.planning/milestones/v1.1-MILESTONE-AUDIT.md`.
