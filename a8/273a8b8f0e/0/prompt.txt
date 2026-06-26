@@ -1,0 +1,21 @@
+ok please commit the explainer landing-page with these docs - I will base future versions of the landing page on some of the data defined in this doc.
+
+---
+
+ok please commit the explainer landing-page with these docs as a chore(landing): commit message - I will base future versions of the landing page on some of the data defined in this doc.
+
+---
+
+now fold the amendments in @.planning/design/2026-06-26-sharing-read-keychaining-AMENDMENTS.md into the original design doc, and run an adversarial review on the produced output to ensure it is consistent with the discussions we have had.
+
+---
+
+agree with the relay integrity being postponable.
+
+---
+
+I think the @.planning/design/2026-06-26-sharing-read-keychaining-AMENDMENTS.md file can be deleted, no need in poluting the working tree in my mind.
+
+---
+
+/resolve-pr-reviews
