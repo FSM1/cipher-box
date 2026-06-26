@@ -49,6 +49,37 @@
         "label": "Skill: gsd:capture",
         "default_collapsed": true
       }
+    },
+    {
+      "id": "claude-skill-toolu_01LrtLvFoWo1T31FmEHDZRY1",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd:complete-milestone"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "e6be50e373c4",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 386,
+        "end": 387,
+        "entry_ids": [
+          "80905609-99e6-4eab-8a04-f8175296db29"
+        ],
+        "tool_use_id": "toolu_01LrtLvFoWo1T31FmEHDZRY1"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01LrtLvFoWo1T31FmEHDZRY1"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd:complete-milestone",
+        "default_collapsed": true
+      }
     }
   ],
   "session_metrics": {
