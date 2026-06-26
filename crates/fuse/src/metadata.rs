@@ -212,6 +212,119 @@ fn is_ipns_not_found(error_message: &str) -> bool {
     error_message.to_lowercase().contains("not found")
 }
 
+/// Total wall-clock budget for a single blocking share-revocation, layered over
+/// the bounded retry loop. A hung or unreachable backend surfaces as a failure
+/// (→ EIO) rather than wedging the user's `rm` indefinitely.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+const REVOKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Maximum revocation attempts (1 initial + 2 retries). Mirrors the SDK
+/// `revokeBatchWithRetry` `maxAttempts = 3` default.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+const REVOKE_MAX_ATTEMPTS: u32 = 3;
+
+/// Decide whether a revocation error is a deterministic client failure that will
+/// never succeed on retry (a 4xx — validation 400, auth 401/403, etc.) and so
+/// should be surfaced immediately rather than burning the backoff budget.
+///
+/// Transport failures and 5xx are transient and retried. Mirrors the SDK
+/// `isNonRetryableError` predicate (share/index.ts).
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+fn is_non_retryable_revoke_error(err: &cipherbox_api_client::ApiError) -> bool {
+    matches!(
+        err,
+        cipherbox_api_client::ApiError::ApiResponse { status, .. }
+            if (400..=499).contains(status)
+    )
+}
+
+/// Synchronously revoke every share/invite for a single deleted node's IPNS
+/// name, blocking the calling filesystem thread until it succeeds, fails
+/// non-retryably, exhausts retries, or times out.
+///
+/// This is the fail-closed access cutoff that must run BEFORE the destructive
+/// inode removal / parent metadata update on the delete path. On `Err(())` the
+/// caller MUST abort the delete (e.g. `reply.error(libc::EIO)`) so the item
+/// stays put and no sharee is left with access to soon-to-be-orphaned content.
+///
+/// Returns `Ok(())` when:
+/// - the revocation succeeds (2xx), or
+/// - `ipns_name` is empty (nothing was ever shared without a name — nothing to
+///   revoke).
+///
+/// Returns `Err(())` on any non-retryable 4xx, exhausted transient retries, or
+/// timeout. The error is intentionally opaque (the caller maps it to a single
+/// errno); details are logged.
+///
+/// The whole loop is bounded by [`REVOKE_TIMEOUT`] layered over up to
+/// [`REVOKE_MAX_ATTEMPTS`] attempts with exponential backoff (300ms * 2^attempt).
+//
+// `Result<(), ()>` is deliberate: the only caller (the FUSE delete path) maps
+// every failure to a single errno (EIO / STATUS_ACCESS_DENIED) and the rich
+// error detail is logged here, so propagating a typed error would add no value.
+#[allow(clippy::result_unit_err)]
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+pub fn revoke_shares_blocking(
+    api: &Arc<ApiClient>,
+    rt: &tokio::runtime::Handle,
+    ipns_name: &str,
+) -> Result<(), ()> {
+    if ipns_name.is_empty() {
+        // Nothing to revoke for an unnamed node.
+        return Ok(());
+    }
+
+    let names = vec![ipns_name.to_string()];
+
+    let outcome = rt.block_on(async {
+        tokio::time::timeout(REVOKE_TIMEOUT, async {
+            let mut last_err: Option<cipherbox_api_client::ApiError> = None;
+            for attempt in 0..REVOKE_MAX_ATTEMPTS {
+                match cipherbox_api_client::shares::revoke_shares_for_items(api, &names).await {
+                    Ok(()) => return Ok(()),
+                    Err(err) => {
+                        // Deterministic 4xx: surface immediately, no retry.
+                        if is_non_retryable_revoke_error(&err) {
+                            return Err(err);
+                        }
+                        last_err = Some(err);
+                        // Backoff before the next attempt (skip after the last).
+                        if attempt < REVOKE_MAX_ATTEMPTS - 1 {
+                            let backoff_ms = 300u64 * (1u64 << attempt);
+                            tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                        }
+                    }
+                }
+            }
+            Err(last_err.unwrap_or(cipherbox_api_client::ApiError::ApiResponse {
+                status: 0,
+                message: "share revocation exhausted retries".to_string(),
+            }))
+        })
+        .await
+    });
+
+    match outcome {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => {
+            log::error!(
+                "share revocation failed for ipns {} (delete aborted): {}",
+                ipns_name,
+                e
+            );
+            Err(())
+        }
+        Err(_elapsed) => {
+            log::error!(
+                "share revocation timed out for ipns {} after {:?} (delete aborted)",
+                ipns_name,
+                REVOKE_TIMEOUT
+            );
+            Err(())
+        }
+    }
+}
+
 /// Spawn a background OS thread to upload encrypted metadata and publish via IPNS.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub fn spawn_metadata_publish(
@@ -1138,5 +1251,93 @@ mod tests {
         assert!(!super::is_ipns_not_found("connection refused"));
         assert!(!super::is_ipns_not_found("500 internal server error"));
         assert!(!super::is_ipns_not_found(""));
+    }
+
+    // --- revoke_shares_blocking classifier + no-op tests ---
+
+    use cipherbox_api_client::ApiError;
+
+    /// Every 4xx is a deterministic client failure → non-retryable (surface
+    /// immediately, no backoff). Mirrors the SDK `isNonRetryableError`.
+    #[test]
+    fn revoke_4xx_is_non_retryable() {
+        for status in [400u16, 401, 403, 404, 409, 422, 499] {
+            let err = ApiError::ApiResponse {
+                status,
+                message: "client error".to_string(),
+            };
+            assert!(
+                super::is_non_retryable_revoke_error(&err),
+                "status {} must be classified non-retryable",
+                status
+            );
+        }
+    }
+
+    /// 5xx is transient → retryable (consume the backoff budget).
+    #[test]
+    fn revoke_5xx_is_retryable() {
+        for status in [500u16, 502, 503, 504] {
+            let err = ApiError::ApiResponse {
+                status,
+                message: "server error".to_string(),
+            };
+            assert!(
+                !super::is_non_retryable_revoke_error(&err),
+                "status {} must be classified retryable",
+                status
+            );
+        }
+    }
+
+    /// Auth/deserialization/not-found error variants are not the
+    /// ApiResponse-4xx shape, so they are treated as retryable (the loop will
+    /// re-attempt and ultimately surface as a failure → EIO if persistent).
+    #[test]
+    fn revoke_non_apiresponse_errors_are_retryable() {
+        assert!(!super::is_non_retryable_revoke_error(&ApiError::AuthFailed(
+            "no token".to_string()
+        )));
+        assert!(!super::is_non_retryable_revoke_error(
+            &ApiError::DeserializationFailed("bad json".to_string())
+        ));
+        assert!(!super::is_non_retryable_revoke_error(&ApiError::IpnsNotFound(
+            "k51".to_string()
+        )));
+        // The internal "exhausted retries" sentinel (status 0) is NOT in the
+        // 4xx range, so it does not short-circuit a fresh attempt.
+        assert!(!super::is_non_retryable_revoke_error(&ApiError::ApiResponse {
+            status: 0,
+            message: "exhausted".to_string(),
+        }));
+    }
+
+    /// An empty ipns_name is a no-op: revoke_shares_blocking returns Ok(())
+    /// WITHOUT any network round-trip (proven by the unreachable base URL — a
+    /// real request would fail and return Err).
+    #[test]
+    fn revoke_blocking_empty_name_is_ok_no_network() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let api = std::sync::Arc::new(cipherbox_api_client::ApiClient::new("http://127.0.0.1:1"));
+        let result = super::revoke_shares_blocking(&api, rt.handle(), "");
+        assert!(result.is_ok());
+    }
+
+    /// A non-empty name against an unreachable backend exhausts retries and
+    /// returns Err(()) — the fail-closed signal the delete path maps to EIO.
+    /// Connection-refused is a transport error (retryable), so this also
+    /// exercises the retry loop terminating in Err.
+    #[test]
+    fn revoke_blocking_unreachable_backend_fails_closed() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        // Port 1 is unreachable: connect refused → RequestFailed (transient) →
+        // retried up to the cap → Err. Bounded by REVOKE_TIMEOUT well under the
+        // 15s ceiling for a connection-refused (returns immediately each time).
+        let api = std::sync::Arc::new(cipherbox_api_client::ApiClient::new("http://127.0.0.1:1"));
+        let result = super::revoke_shares_blocking(&api, rt.handle(), "k51unreachable");
+        assert!(
+            result.is_err(),
+            "revoke against an unreachable backend must fail closed (Err)"
+        );
     }
 }

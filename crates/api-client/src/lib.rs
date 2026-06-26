@@ -9,6 +9,7 @@ pub mod client;
 pub mod error;
 pub mod ipfs;
 pub mod ipns;
+pub mod shares;
 pub mod types;
 
 pub use client::ApiClient;

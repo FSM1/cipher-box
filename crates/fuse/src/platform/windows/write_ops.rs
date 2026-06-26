@@ -16,9 +16,10 @@ pub mod implementation {
     // Versioning constants now read from CipherBoxFS fields (user-configurable)
     use super::super::operations::implementation::{
         filetime_to_systemtime, fill_file_info, is_windows_special, publish_file_metadata,
-        resolve_path, split_path, status_directory_not_empty, status_invalid_handle,
-        status_invalid_parameter, status_io_device_error, status_object_name_collision,
-        status_object_name_not_found, WinFspContext, WinFspFileContext,
+        resolve_path, split_path, status_access_denied, status_directory_not_empty,
+        status_invalid_handle, status_invalid_parameter, status_io_device_error,
+        status_object_name_collision, status_object_name_not_found, WinFspContext,
+        WinFspFileContext,
     };
     use crate::file_handle::OpenFileHandle;
     use crate::inode::{FileAttrs, InodeData, InodeKind};
@@ -1195,8 +1196,32 @@ pub mod implementation {
         Ok(())
     }
 
-    /// set_delete handler
+    /// set_delete handler.
+    ///
+    /// This is the Windows fail-closed share-revocation point. WinFsp calls
+    /// `set_delete` BEFORE the actual delete-on-close runs in `handle_cleanup`
+    /// (which returns `()` and cannot abort), and unlike cleanup this callback
+    /// returns `Result<(), FspError>`, so returning `Err` rejects the delete.
+    /// We mirror the unix `handle_unlink`/`handle_rmdir` contract: revoke any
+    /// shares/invites for the node BEFORE it is destroyed, and on failure reject
+    /// the delete (`STATUS_ACCESS_DENIED`) so the item stays put and no sharee is
+    /// left with access to soon-to-be-orphaned content.
+    ///
+    /// When `delete_file` is `false` WinFsp is clearing a previously-set delete
+    /// flag (an un-delete); there is nothing to revoke, so we accept it.
+    ///
+    /// Known gap (accepted): `set_delete(true)` followed by `set_delete(false)`
+    /// (an application setting then cancelling `DELETE_ON_CLOSE`) revokes shares
+    /// eagerly on the `true` call and does not restore them on the cancel — the
+    /// node survives but its shares are gone. We accept this because `set_delete`
+    /// is the only WinFsp callback that can *reject* a delete; deferring to
+    /// `handle_cleanup` (the real deletion point) is impossible since cleanup
+    /// returns `()` and cannot abort. The cancelled-delete window is rare, and
+    /// the owner can always re-share; this trade favours TRUE fail-closed
+    /// revocation (never leaving a sharee with access to deleted content) over
+    /// avoiding the occasional spurious revoke on a cancelled delete.
     pub fn handle_set_delete(
+        ctx: &WinFspContext,
         context: &WinFspFileContext,
         file_name: &U16CStr,
         delete_file: bool,
@@ -1208,6 +1233,47 @@ pub mod implementation {
             file_name.to_string_lossy(),
             delete_file,
         );
+
+        if !delete_file {
+            // Clearing the delete disposition — nothing is being destroyed.
+            return Ok(());
+        }
+
+        // Resolve the node's own IPNS name under the lock, then drop the lock
+        // BEFORE blocking on the network revoke so we never hold the FS mutex
+        // across a (potentially 15s) round-trip. For a File this is the file's
+        // file_meta_ipns_name; for a Folder it is the folder's own ipns_name.
+        // Folder deletes only reach cleanup when empty, so the folder's own
+        // ipns_name is complete coverage (no descendants to revoke).
+        let (ipns_name, api, rt) = {
+            let fs = ctx.inner.lock().unwrap();
+            let ipns_name = match fs.inodes.get(context.ino) {
+                Some(inode) => match &inode.kind {
+                    InodeKind::File {
+                        file_meta_ipns_name,
+                        ..
+                    } => file_meta_ipns_name.clone().unwrap_or_default(),
+                    InodeKind::Folder { ipns_name, .. } => ipns_name.clone(),
+                    // Root is never deleted; nothing to revoke.
+                    _ => String::new(),
+                },
+                None => {
+                    // Inode already gone — nothing to revoke; let the delete
+                    // proceed (the cleanup path will no-op).
+                    String::new()
+                }
+            };
+            (ipns_name, fs.api.clone(), fs.rt.clone())
+        };
+
+        if crate::metadata::revoke_shares_blocking(&api, &rt, &ipns_name).is_err() {
+            log::error!(
+                "set_delete: share revocation failed for ino {} (rejecting delete)",
+                context.ino
+            );
+            return Err(status_access_denied());
+        }
+
         Ok(())
     }
 }
