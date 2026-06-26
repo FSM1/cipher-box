@@ -1,15 +1,15 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.1
-milestone_name: IPFS Infrastructure
-status: v1.1 complete on disk — milestone close pending verify + re-audit
-last_updated: "2026-06-26T21:50:33Z"
-last_activity: 2026-06-26
+milestone_name: milestone
+status: Awaiting next milestone
+last_updated: "2026-06-26T23:03:12.795Z"
+last_activity: 2026-06-26 — Milestone v1.1 completed and archived
 progress:
   total_phases: 45
   completed_phases: 45
-  total_plans: 199
-  completed_plans: 199
+  total_plans: 198
+  completed_plans: 198
   percent: 100
 ---
 
@@ -24,18 +24,25 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 
 ## Current Position
 
-Phase: 60 (ipns-verification-cross-layer-closeout-desktop-and-api) — COMPLETE (8/8 plans; 2026-06-26)
-Plan: 8 of 8 — COMPLETE
-Phase 60 closed 2026-06-26: 60-08 D-01/D-12 lockstep cutover done (cross-layer CI gates green, staging wiped + strict-verified smoke confirmed by maintainer). Adversarial closeout verification caught a 10th first-publish producer (StorageTab BYO storage-config embedded seq 0 → would 400 under the strict gate) that D-02/60-02 missed; fixed to embed sequence 1, completing D-02. 60-VERIFICATION flipped human_needed → passed (17/17). Every v1.1 phase (18–60) now has all plans executed on disk.
+Phase: Milestone v1.1 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-06-26 — Milestone v1.1 completed and archived
 
-**Next — resume the v1.1 milestone close (path chosen 2026-06-26):**
+## Deferred Items
 
-1. `/gsd:verify-work 59` and `/gsd:verify-work 60` — clear the two human_needed verifications (59 still has 3 pending UAT scenarios; 60 now passed).
-2. `/gsd:health` — reconcile ROADMAP Progress-table drift (51 shows In Progress, 52–54 Planned, though their plans are executed on disk) and STATE counts.
-3. `/gsd:audit-milestone v1.1` — the existing audit only covers phases 18–35; the entire hardening block (50–60, HARD-01..11) is unaudited.
-4. `/gsd:complete-milestone v1.1` — once the re-audit passes.
+Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are unsatisfied requirements (the close-out audit confirmed 77/77 requirements code-satisfied, integration 12/12, flows 4/4). Full enumeration via `node .claude/gsd-core/bin/gsd-tools.cjs query audit-open`.
 
-Note: STATE frontmatter progress counts are approximate and were periodically unreconciled (see todo `2026-06-18-gsd-phase-complete-regresses-state-final-phase.md`).
+| Category | Item | Status | Disposition |
+| --- | --- | --- | --- |
+| Verification | Phase 39 — 39-VERIFICATION.md | gaps_found | D-02 (no permanent-delete confirmation) captured as todo `2026-06-27-add-permanent-delete-confirmation-dialog-in-web-app.md`; D-06 (residual server `RECYCLE_BIN_RETENTION_DAYS` surface) + D-04 (cosmetic) documented in v1.1-MILESTONE-AUDIT.md |
+| Verification | Phase 59 — 59-VERIFICATION.md | human_needed | HARD-10/11 staging operational smoke-test (D-12 lockstep) — operational gate, code complete |
+| UAT | Phase 21 — 21-UAT.md | diagnosed | BYO-IPFS UI browser-verification items; all BYO requirements code-satisfied |
+| UAT | Phase 59 — 59-UAT.md | testing | 3 pending scenarios tied to the staging smoke-test above |
+| Context | Phase 49 — 49-CONTEXT.md | open questions (3) | Shared-folder move design Qs answered in implementation; left as historical record |
+| Quick tasks | 26 legacy quick-tasks (`001-*`..`023-*`, `260327-2ab`, `260401-5ft`, `260401-kyv`) | unknown | Mostly old UI/staging tasks of indeterminate status; not v1.1-blocking — triage in next milestone |
+| Todos | 17 pending todos (ERC-1271 wallet auth, CRDT IPNS inbox research, async search index, alt MFA factors, web logger redaction/Faro, route-shared-folder-writes, etc.) | pending | Forward-looking/research + tech-debt; carry to v1.2 / Milestone 4 backlog |
+| Seeds | SEED-001 (Phala TEE on-demand cost reduction) | dormant | Will auto-surface on next `/gsd-new-milestone` |
 
 ## Performance Metrics
 
@@ -305,6 +312,8 @@ Recent for v1.1:
 
 ### Pending Todos
 
+**2026-06-27:** Captured Phase 39 D-02 data-safety gap (surfaced by the v1.1 milestone audit): the web app performs permanent/hard delete with no confirmation dialog when the vault default delete mode is `'permanent'` (`useFolderMutations.ts` `deleteWithBehavior`). See `2026-06-27-add-permanent-delete-confirmation-dialog-in-web-app.md`.
+
 **2026-06-23:** Captured a high-severity storage/quota bug — bin delete + empty-bin never unpin content/version CIDs (client SDK `packages/sdk/src/bin/index.ts`), confirmed on staging (a user with empty vault+bin showing 442 MB quota used; 9 orphaned content CIDs = 439 MB still pinned). See `2026-06-23-bin-delete-and-empty-bin-leak-content-and-version-cid-pins.md`. Also captured the Phase 59 Finding F deferral as a Phase 60 carry-forward: `2026-06-23-phase60-ipns-first-publish-strict-equality-cutover.md` (resolves_phase: 60).
 
 See `/gsd:check-todos` for the full pending list. **2026-06-21:** filed resolved/superseded todos #5 (IPNS S1/S2/S3 → PR #529), #10 (refactor Tier-1/2 → PR #538), and the per-file-IPNS-conflict todo (folded into the PR #538 robustness todo) to `completed/`; re-captured the 14 Tier-3 refactor items as a new todo; grouped the FUSE/IPNS, API-CID, and IPNS-verify deferred-findings todos into new Phases 56–58. **2026-06-19:** todos #7 (useFolderNavigation consolidation) and #8 (shared-move re-encrypt) were verified already-resolved by Phase 49 (confirmed in live code) and moved to `completed/`; ten remaining tech-debt/security todos were grouped into the reopened v1.1 hardening block (Phases 50–55, see Roadmap Evolution). The four older feature todos (ERC-1271 wallet auth, CRDT IPNS inbox research, async search index, alternative MFA factors) and the GSD-tooling STATE regression (#10) remain unscheduled. _Historical:_ the desktop (6) and SDK (4) groups addressed by Phase 46 (merged) and Phase 47 (PR #494) were moved to `.planning/todos/completed/` on 2026-06-15 and their ROADMAP scope boxes checked. The architecture todo to give the SDK client the root IPNS key so it self-bootstraps/lazy-loads `folderTree` (root cause of the "Folder not loaded" class; bin-restore gap surfaced while combing the #494 fix) was completed 2026-06-16 in PR #498 (branch `feat/sdk-client-self-bootstrap-folder-tree`) and moved to `.planning/todos/completed/`; its follow-ups (delete the now-redundant web `ensureFolderRegistered`/`useFolderNavigation` unwrap paths once self-heal proves out; optional negative-cache) were captured as a new pending todo. Remaining pending still includes the route-shared-folder-writes follow-up — the lone folder-state mutation not consolidated by Phase 47. The v1.1 verification-ledger todo (phases 18/31/32 missing VERIFICATION.md) was completed 2026-06-19 — all three reports authored (goal-backward, adversarially spot-checked), PERF-01..04 closed (PERF-03 via accepted override), and the milestone audit verdict flipped to `passed` (66/66, 20/20); moved to `.planning/todos/completed/`.
@@ -323,7 +332,7 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last activity: 2026-06-24
+Last activity: 2026-06-26
 
 Last session: 2026-06-24T01:45:06Z
 
@@ -375,3 +384,7 @@ Last session: 2026-06-24T01:45:06Z
 - [Phase ?]: [Phase 60-05]: D-06 parseCachedRecord null-signedRecord path returns null; CID mismatch discards cached result
 - [Phase ?]: [Phase 60-05]: D-06 withCachedPublicKey enrich and equal-seq signatureV2 enrich removed from resolveRecord
 - [Phase ?]: [Phase 60-05]: api:generate NOT required; changes are internal service/codec logic with no OpenAPI surface change
+
+## Operator Next Steps
+
+- Start the next milestone with /gsd-new-milestone
