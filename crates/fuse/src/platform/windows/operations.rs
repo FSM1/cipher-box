@@ -66,6 +66,9 @@ pub mod implementation {
     pub fn status_device_not_ready() -> FspError {
         FspError::NTSTATUS(0xC00000A3_u32 as i32)
     }
+    pub fn status_access_denied() -> FspError {
+        FspError::NTSTATUS(0xC0000022_u32 as i32)
+    }
 
     /// Permissive self-relative security descriptor granting FILE_ALL_ACCESS
     /// to Everyone (S-1-1-0). CipherBox is single-user; encryption is the real
@@ -478,6 +481,7 @@ pub mod implementation {
             delete_file: bool,
         ) -> Result<(), FspError> {
             super::super::write_ops::implementation::handle_set_delete(
+                self,
                 context,
                 file_name,
                 delete_file,

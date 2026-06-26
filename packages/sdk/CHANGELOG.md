@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.37.2](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-v0.37.1...@cipherbox/sdk-v0.37.2) (2026-06-26)
+
+
+### Bug Fixes
+
+* **bin:** unpin deleted content and revoke its shares ([#563](https://github.com/FSM1/cipher-box/issues/563)) ([1699522](https://github.com/FSM1/cipher-box/commit/16995221c79421d086aeee0b58fb7af3c7198fa9))
+
 ## [0.37.1](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-v0.37.0...@cipherbox/sdk-v0.37.1) (2026-06-21)
 
 

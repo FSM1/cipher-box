@@ -19,6 +19,9 @@ importers:
       '@noble/secp256k1':
         specifier: ^3.0.0
         version: 3.0.0
+      '@types/node':
+        specifier: ^22.19.7
+        version: 22.19.7
       concurrently:
         specifier: ^9.2.1
         version: 9.2.1
