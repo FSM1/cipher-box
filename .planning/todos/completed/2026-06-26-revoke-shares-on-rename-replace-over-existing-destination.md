@@ -12,6 +12,22 @@ files:
   - apps/api/src/shares/shares.controller.ts
 ---
 
+## Status: SUPERSEDED — folded into the read key-chaining design (to be resolved on implementation)
+
+This per-path revocation gap is structurally eliminated by the read key-chaining design rather than
+patched as a standalone bug:
+
+- `.planning/design/2026-06-26-sharing-read-keychaining-design.md` §3.6 / §3.8 — rename/replace over
+  an existing destination collapses to a scope-exit rotation of the displaced destination subtree
+  (`rotateReadFromNode`), which revokes its grant rows the same way delete does, unified across the
+  web and both FUSE (unix + Windows) call sites.
+- `.planning/design/2026-06-26-sharing-read-keychaining-AMENDMENTS.md` — decision 2 (scope-exit
+  rotation) + the §3.6/§3.8 delete-rule rewrite, composing the shipped PR #563 revoke-for-items and
+  preserving its ordering invariant.
+
+Retired from the backlog: it will be closed by the design's implementation cycle, tracked there, not
+as a standalone bug.
+
 ## Problem
 
 PRs #563 (web/SDK) and #568 (desktop FUSE) added fail-closed share revocation on

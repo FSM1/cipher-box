@@ -12,6 +12,24 @@ files:
   - apps/api/src/shares/shares.controller.ts
 ---
 
+## Status: SUPERSEDED — folded into the read key-chaining design (to be resolved on implementation)
+
+This per-path revocation gap is structurally eliminated by the read key-chaining design rather than
+patched as a standalone bug:
+
+- `.planning/design/2026-06-26-sharing-read-keychaining-design.md` §3.5 / §4 / §3.8 — FUSE gains a
+  grant-root concept and every scope-exit mutation (a desktop FUSE delete included) calls
+  `rotateReadFromNode`, which rotates the departing subtree's `readKey`/`generation` AND revokes its
+  grant rows uniformly; "one rule, four call sites" (§3.8) removes the Rust-only delete path that
+  bypassed the SDK revocation wiring.
+- `.planning/design/2026-06-26-sharing-read-keychaining-AMENDMENTS.md` — decision 2 (delete/move
+  rotate on scope exit), the §3.5/§4 FUSE grant-root amendment, and the Bin amendment (shared delete
+  rotates + revokes, composing PR #563).
+
+The narrow CID-capture concern noted below is also covered (content self-seal + fresh `fileKey` on
+rotation — ADR 0002 / CRIT-1). Retired from the backlog: it will be closed by the design's
+implementation cycle, tracked there, not as a standalone bug.
+
 ## Problem
 
 PR #563 added fail-closed share revocation when an item is soft-deleted to the
