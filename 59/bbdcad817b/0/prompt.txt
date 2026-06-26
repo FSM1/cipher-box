@@ -11,3 +11,7 @@ now fold the amendments in @.planning/design/2026-06-26-sharing-read-keychaining
 ---
 
 agree with the relay integrity being postponable.
+
+---
+
+I think the @.planning/design/2026-06-26-sharing-read-keychaining-AMENDMENTS.md file can be deleted, no need in poluting the working tree in my mind.
