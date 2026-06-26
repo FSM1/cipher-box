@@ -3,12 +3,12 @@
   "checkpoint_id": "5e7515f0a2ac",
   "strategy": "manual-commit",
   "branch": "docs/capture-revoke-and-init-followups",
-  "checkpoints_count": 2,
+  "checkpoints_count": 1,
   "files_touched": [
-    ".planning/design/2026-06-26-sharing-read-keychaining-AMENDMENTS.md",
-    "CONTEXT.md",
-    "docs/adr/0001-write-revocation-full-ed25519-rotation.md",
-    "docs/adr/0002-read-revocation-protects-future-content-only.md"
+    ".planning/todos/completed/2026-06-26-desktop-fuse-deletes-bypass-share-revocation.md",
+    ".planning/todos/completed/2026-06-26-revoke-shares-on-rename-replace-over-existing-destination.md",
+    ".planning/todos/pending/2026-06-26-desktop-fuse-deletes-bypass-share-revocation.md",
+    ".planning/todos/pending/2026-06-26-revoke-shares-on-rename-replace-over-existing-destination.md"
   ],
   "sessions": [
     {
@@ -19,10 +19,10 @@
     }
   ],
   "token_usage": {
-    "input_tokens": 59041,
-    "cache_creation_tokens": 473530,
-    "cache_read_tokens": 14981547,
-    "output_tokens": 279509,
-    "api_call_count": 81
+    "input_tokens": 135,
+    "cache_creation_tokens": 3590,
+    "cache_read_tokens": 823378,
+    "output_tokens": 2992,
+    "api_call_count": 3
   }
 }
