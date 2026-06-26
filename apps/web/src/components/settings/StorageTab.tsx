@@ -181,16 +181,22 @@ export function StorageTab() {
 
       const byoKeypair = await deriveByoConfigIpnsKeypair(vaultKeypair.privateKey);
 
-      let sequenceNumber = BigInt(0);
+      // Strict IPNS verification (Phase 60 / HARD-11) requires the first publish to
+      // embed sequence 1 and every subsequent publish to increment monotonically.
+      // Embedding 0 here would be rejected by the API's first-publish gate (400).
+      let sequenceNumber = BigInt(1);
       const storedIpnsName = localStorage.getItem(BYO_IPNS_NAME_KEY);
       if (storedIpnsName) {
         try {
           const existing = await resolveIpnsRecord(storedIpnsName);
           if (existing?.sequenceNumber) {
-            sequenceNumber = BigInt(existing.sequenceNumber);
+            sequenceNumber = BigInt(existing.sequenceNumber) + 1n;
           }
         } catch {
-          // First publish -- sequence 0
+          // First publish or resolve failure -- fall back to sequence 1.
+          // Note: if a record already exists (storedIpnsName set) and this
+          // catch fires due to a transient network error, publishing with
+          // sequence 1 will be rejected by the API's monotonicity gate.
         }
       }
 
