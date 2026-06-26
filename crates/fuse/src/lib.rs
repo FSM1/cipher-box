@@ -59,8 +59,8 @@ pub use events::{
 pub use publish::{PublishCoordinator, PublishQueueEntry, next_file_publish_sequence};
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub use metadata::{
-    encrypt_metadata_to_json, merge_folder_children, spawn_metadata_publish,
-    spawn_bin_entry_publish, spawn_file_meta_reencrypt,
+    encrypt_metadata_to_json, merge_folder_children, revoke_shares_blocking,
+    spawn_bin_entry_publish, spawn_file_meta_reencrypt, spawn_metadata_publish,
 };
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub use fs::{CipherBoxFS, mount_point};

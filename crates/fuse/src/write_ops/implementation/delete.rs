@@ -72,6 +72,27 @@ pub fn handle_unlink(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Rep
         }
     };
 
+    // Capture the file's own metadata IPNS name before any mutation so we can
+    // revoke its shares (fail-closed) ahead of the destructive removal. Empty
+    // when the file was loaded from remote metadata before its IPNS resolve —
+    // in that case nothing was ever shared under a name, so there is nothing to
+    // revoke (and we skip the bin entry too, matching the existing behaviour).
+    let file_meta_ipns_name = match fs.inodes.get(child_ino) {
+        Some(inode) => match &inode.kind {
+            InodeKind::File {
+                file_meta_ipns_name, ..
+            } => file_meta_ipns_name.clone().unwrap_or_default(),
+            _ => {
+                reply.error(libc::EISDIR);
+                return;
+            }
+        },
+        None => {
+            reply.error(libc::ENOENT);
+            return;
+        }
+    };
+
     // Capture data for bin entry before inode removal
     let bin_entry_data = match fs.inodes.get(child_ino) {
         Some(inode) => match &inode.kind {
@@ -143,6 +164,14 @@ pub fn handle_unlink(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Rep
     };
 
     log::debug!("unlink: {} from parent {}", name_str, parent);
+
+    // Fail-closed share cutoff: revoke any shares/invites for this file BEFORE
+    // the destructive removal so a deleted-then-unpinned file can't leave a
+    // sharee with read access. Aborts the unlink (item stays put) on failure.
+    if crate::metadata::revoke_shares_blocking(&fs.api, &fs.rt, &file_meta_ipns_name).is_err() {
+        reply.error(libc::EIO);
+        return;
+    }
 
     let now = SystemTime::now();
 
@@ -284,7 +313,7 @@ pub fn handle_rmdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Repl
                         modified_at: now_ms,
                     };
 
-                    Some((inode.name.clone(), folder_entry))
+                    Some((inode.name.clone(), folder_entry, ipns_name.clone()))
                 }
                 _ => {
                     reply.error(libc::ENOTDIR);
@@ -299,6 +328,20 @@ pub fn handle_rmdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Repl
     };
 
     log::debug!("rmdir: {} from parent {}", name_str, parent);
+
+    // Fail-closed share cutoff: revoke any shares/invites for this folder BEFORE
+    // the destructive removal. The directory is guaranteed empty here (ENOTEMPTY
+    // returned above otherwise), so revoking the folder's own ipns_name is
+    // complete coverage — there are no descendant nodes to revoke. Aborts the
+    // rmdir (folder stays put) on failure.
+    let folder_ipns_name = bin_entry_data
+        .as_ref()
+        .map(|(_, _, ipns_name)| ipns_name.clone())
+        .unwrap_or_default();
+    if crate::metadata::revoke_shares_blocking(&fs.api, &fs.rt, &folder_ipns_name).is_err() {
+        reply.error(libc::EIO);
+        return;
+    }
 
     let now = SystemTime::now();
 
@@ -317,7 +360,7 @@ pub fn handle_rmdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Repl
     }
 
     // Create bin entry and publish to bin IPNS (fire-and-forget)
-    if let Some((item_name, folder_entry)) = bin_entry_data {
+    if let Some((item_name, folder_entry, _ipns_name)) = bin_entry_data {
         let deleted_at = now
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -345,4 +388,192 @@ pub fn handle_rmdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Repl
     }
 
     reply.ok();
+}
+
+#[cfg(all(test, feature = "fuse"))]
+mod tests {
+    use super::*;
+    use crate::inode::{FileAttrs, InodeData, InodeKind, ROOT_INO};
+    use crate::test_support::{make_test_fs_with_keypair, reply_error_code, CaptureSender};
+    use fuser::Reply;
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, UNIX_EPOCH};
+    use zeroize::Zeroizing;
+
+    /// Real secp256k1 keypair so `wrap_key` succeeds on the rmdir bin path.
+    fn real_keypair() -> (Zeroizing<Vec<u8>>, Zeroizing<Vec<u8>>) {
+        let (sk, pk) = ecies::utils::generate_keypair();
+        (
+            Zeroizing::new(sk.serialize().to_vec()),
+            Zeroizing::new(pk.serialize().to_vec()),
+        )
+    }
+
+    /// Insert a `secret.txt` File child of root carrying a non-empty
+    /// `file_meta_ipns_name` (so it has a shareable identity to revoke).
+    fn insert_file_child(fs: &mut crate::CipherBoxFS, name: &str) -> u64 {
+        let ino = fs.inodes.allocate_ino();
+        let t = UNIX_EPOCH + Duration::from_millis(1_700_000_000_000);
+        fs.inodes.insert(InodeData {
+            ino,
+            parent_ino: ROOT_INO,
+            name: name.to_string(),
+            kind: InodeKind::File {
+                cid: "bafyContent".to_string(),
+                encrypted_file_key: "deadbeef".to_string(),
+                iv: "aabbccdd".to_string(),
+                size: 10,
+                encryption_mode: "GCM".to_string(),
+                file_meta_ipns_name: Some("k51file-shared".to_string()),
+                file_meta_resolved: true,
+                file_ipns_private_key: Some(Zeroizing::new(vec![3u8; 32])),
+                file_ipns_key_encrypted_hex: Some("abcd".to_string()),
+                versions: None,
+            },
+            attr: FileAttrs {
+                ino,
+                size: 10,
+                blocks: 1,
+                atime: t,
+                mtime: t,
+                ctime: t,
+                crtime: t,
+                is_dir: false,
+                perm: 0o644,
+                nlink: 1,
+            },
+            children: None,
+            write_generation: 0,
+        });
+        if let Some(root) = fs.inodes.get_mut(ROOT_INO) {
+            root.children.get_or_insert_with(Vec::new).push(ino);
+        }
+        ino
+    }
+
+    /// Insert an EMPTY `subdir` Folder child of root with its own ipns_name.
+    fn insert_empty_folder_child(fs: &mut crate::CipherBoxFS, name: &str) -> u64 {
+        let ino = fs.inodes.allocate_ino();
+        let t = UNIX_EPOCH + Duration::from_millis(1_700_000_000_000);
+        fs.inodes.insert(InodeData {
+            ino,
+            parent_ino: ROOT_INO,
+            name: name.to_string(),
+            kind: InodeKind::Folder {
+                ipns_name: "k51folder-shared".to_string(),
+                encrypted_folder_key: "abcd".to_string(),
+                folder_key: Zeroizing::new(vec![1u8; 32]),
+                ipns_private_key: Some(Zeroizing::new(vec![5u8; 32])),
+                children_loaded: true,
+            },
+            attr: FileAttrs {
+                ino,
+                size: 0,
+                blocks: 0,
+                atime: t,
+                mtime: t,
+                ctime: t,
+                crtime: t,
+                is_dir: true,
+                perm: 0o755,
+                nlink: 2,
+            },
+            // Empty directory (Some, but no children) — rmdir is allowed.
+            children: Some(Vec::new()),
+            write_generation: 0,
+        });
+        if let Some(root) = fs.inodes.get_mut(ROOT_INO) {
+            root.children.get_or_insert_with(Vec::new).push(ino);
+        }
+        ino
+    }
+
+    /// Build a multi-thread runtime, construct the fs inside its context (so the
+    /// `Handle::current()` in `make_test_fs_with_keypair` resolves), and return
+    /// both. The caller invokes the handler on the TEST thread — which is NOT a
+    /// runtime worker — so `revoke_shares_blocking`'s `rt.block_on` is valid,
+    /// faithfully reproducing the production mount thread (the fuser callback
+    /// thread is likewise not a tokio worker). A `#[tokio::test]` would instead
+    /// run the body ON a worker thread and panic ("Cannot start a runtime from
+    /// within a runtime") — an artifact of the test driver, not the code.
+    fn fs_on_runtime() -> (tokio::runtime::Runtime, crate::CipherBoxFS) {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = rt.enter();
+        let (private_key, public_key) = real_keypair();
+        let fs = make_test_fs_with_keypair(private_key, public_key);
+        (rt, fs)
+    }
+
+    /// FAIL-CLOSED: when share revocation fails (backend unreachable — the test
+    /// harness points the API client at an unroutable host), handle_unlink must
+    /// return EIO and leave the file inode in place. No share is left stranded
+    /// active because the destructive removal never happens.
+    #[test]
+    fn unlink_aborts_with_eio_when_revoke_fails() {
+        let (_rt, mut fs) = fs_on_runtime();
+        let child = insert_file_child(&mut fs, "secret.txt");
+
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let reply = <fuser::ReplyEmpty as Reply>::new(1, CaptureSender(buf.clone()));
+        handle_unlink(&mut fs, ROOT_INO, OsStr::new("secret.txt"), reply);
+
+        assert_eq!(
+            reply_error_code(&buf),
+            -libc::EIO,
+            "unlink must abort with EIO when share revocation fails"
+        );
+        assert!(
+            fs.inodes.get(child).is_some(),
+            "file inode must remain (delete aborted) so its shares are not stranded"
+        );
+    }
+
+    /// FAIL-CLOSED: handle_rmdir on an empty, shareable folder must return EIO
+    /// and keep the folder inode when revocation fails.
+    #[test]
+    fn rmdir_aborts_with_eio_when_revoke_fails() {
+        let (_rt, mut fs) = fs_on_runtime();
+        let child = insert_empty_folder_child(&mut fs, "subdir");
+
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let reply = <fuser::ReplyEmpty as Reply>::new(1, CaptureSender(buf.clone()));
+        handle_rmdir(&mut fs, ROOT_INO, OsStr::new("subdir"), reply);
+
+        assert_eq!(
+            reply_error_code(&buf),
+            -libc::EIO,
+            "rmdir must abort with EIO when share revocation fails"
+        );
+        assert!(
+            fs.inodes.get(child).is_some(),
+            "folder inode must remain (delete aborted) so its shares are not stranded"
+        );
+    }
+
+    /// The non-empty rmdir guard (ENOTEMPTY) still fires BEFORE the revoke, so a
+    /// populated directory is rejected without a wasted revoke round-trip.
+    #[test]
+    fn rmdir_non_empty_returns_enotempty_before_revoke() {
+        let (_rt, mut fs) = fs_on_runtime();
+        let dir = insert_empty_folder_child(&mut fs, "subdir");
+        // Make it non-empty.
+        if let Some(d) = fs.inodes.get_mut(dir) {
+            d.children = Some(vec![999]);
+        }
+
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let reply = <fuser::ReplyEmpty as Reply>::new(1, CaptureSender(buf.clone()));
+        handle_rmdir(&mut fs, ROOT_INO, OsStr::new("subdir"), reply);
+
+        assert_eq!(
+            reply_error_code(&buf),
+            -libc::ENOTEMPTY,
+            "non-empty rmdir must return ENOTEMPTY before attempting revocation"
+        );
+        assert!(fs.inodes.get(dir).is_some(), "non-empty folder must remain");
+    }
 }
