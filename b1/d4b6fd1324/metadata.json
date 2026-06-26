@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "b1d4b6fd1324",
+  "strategy": "manual-commit",
+  "branch": "fix/byo-storage-config-first-publish-sequence",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "docs/DEVELOPMENT.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/b1/d4b6fd1324/0/metadata.json",
+      "transcript": "/b1/d4b6fd1324/0/full.jsonl",
+      "content_hash": "/b1/d4b6fd1324/0/content_hash.txt",
+      "prompt": "/b1/d4b6fd1324/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 34277,
+    "cache_creation_tokens": 235148,
+    "cache_read_tokens": 8361895,
+    "output_tokens": 71387,
+    "api_call_count": 43
+  }
+}
