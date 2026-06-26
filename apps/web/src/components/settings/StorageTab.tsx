@@ -193,7 +193,10 @@ export function StorageTab() {
             sequenceNumber = BigInt(existing.sequenceNumber) + 1n;
           }
         } catch {
-          // First publish -- sequence 1 (no existing record)
+          // First publish or resolve failure -- fall back to sequence 1.
+          // Note: if a record already exists (storedIpnsName set) and this
+          // catch fires due to a transient network error, publishing with
+          // sequence 1 will be rejected by the API's monotonicity gate.
         }
       }
 
