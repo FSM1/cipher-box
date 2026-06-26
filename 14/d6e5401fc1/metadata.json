@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "14d6e5401fc1",
+  "strategy": "manual-commit",
+  "branch": "docs/capture-revoke-and-init-followups",
+  "checkpoints_count": 2,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/14/d6e5401fc1/0/metadata.json",
+      "transcript": "/14/d6e5401fc1/0/full.jsonl",
+      "content_hash": "/14/d6e5401fc1/0/content_hash.txt",
+      "prompt": "/14/d6e5401fc1/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 197733,
+    "cache_creation_tokens": 1931957,
+    "cache_read_tokens": 107622404,
+    "output_tokens": 802644,
+    "api_call_count": 420
+  }
+}

@@ -1,0 +1,551 @@
+https://github.com/FSM1/cipher-box/actions/runs/28177924106 seems like the macos desktop e2e test still failed the same test again
+
+---
+
+<task-notification>
+<task-id>bxnsa92hz</task-id>
+<tool-use-id>toolu_015kyG8LuoBXaGPaUKE4nUFJ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2c9cca7a-f210-45f4-b940-4f091be387a8/tasks/bxnsa92hz.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll until macOS desktop job completes" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>adbbfceaa4b40936c</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2c9cca7a-f210-45f4-b940-4f091be387a8/tasks/adbbfceaa4b40936c.output</output-file>
+<status>completed</status>
+<summary>Agent "Build FUSE-T desktop binary + frontend" came to rest</summary>
+<note>A task-notification fires each time this agent comes to rest with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Verified. The binary links `@rpath/libfuse-t.dylib` (FUSE-T), not macFUSE's `libfuse.2.dylib`, and the `/usr/local/lib` rpath is present so the loader will resolve `libfuse-t.dylib`. The intentional DIAG `log::info!` in `crates/fuse/src/fs.rs` was included in the build (the crate compiled fresh after `cargo clean`). No commits, no servers launched, no working-tree changes reverted.
+
+---
+
+## Report
+
+**SDK packages:** All 5 built OK (`@cipherbox/crypto`, `@cipherbox/core`, `@cipherbox/api-client`, `@cipherbox/sdk-core`, `@cipherbox/sdk`) — EXIT=0, no failures.
+
+**Frontend dist:** Built OK at `/Users/myankelev/Code/random/cipher-box/apps/desktop/dist` (assets + google-callback.html present, not served).
+
+**Desktop binary:** `/Users/myankelev/Code/random/cipher-box/target/debug/cipherbox-desktop` (freshly built 17:22, 66 MB, BUILD_EXIT=0). Note: the `src-tauri/target/debug/` path does NOT exist — the workspace target dir is the correct one.
+
+**otool fuse line (verbatim):**
+```
+@rpath/libfuse-t.dylib (compatibility version 0.0.0, current version 0.0.0)
+```
+**PASS** — links libfuse-t (FUSE-T), NOT macFUSE's `libfuse.2.dylib`. The `LC_RPATH path /usr/local/lib` is present so the loader resolves `libfuse-t.dylib`.
+
+**Exact reproduce/rebuild commands (from repo root):**
+```bash
+cargo clean -p fuser -p cipherbox-fuse -p cipherbox-desktop
+PKG_CONFIG_PATH="/Users/myankelev/Code/random/cipher-box/apps/desktop/src-tauri/pkg-config:/usr/local/lib/pkgconfig:/opt/homebrew/lib/pkgconfig" \
+  cargo build -p cipherbox-desktop --no-default-features --features fuse
+install_name_tool -add_rpath /usr/local/lib /Users/myankelev/Code/random/cipher-box/target/debug/cipherbox-desktop
+otool -L /Users/myankelev/Code/random/cipher-box/target/debug/cipherbox-desktop | grep -i fuse
+```
+The PKG_CONFIG_PATH (repo's `apps/desktop/src-tauri/pkg-config` FIRST) is the load-bearing part — verified `pkg-config --libs fuse` prints `-L/usr/local/lib -Wl,-rpath,/usr/local/lib -lfuse-t` with that path.
+
+**Blockers:** None. The PKG_CONFIG_PATH approach worked on the first build; no need for the sudo `/usr/local/lib/pkgconfig/fuse.pc` overwrite fallback, and the intentional uncommitted DIAG `log::info!` in `crates/fuse/src/fs.rs` was compiled into the binary.
+
+Build logs are at `/Users/myankelev/.claude/jobs/2c9cca7a/tmp/` (sdk-build.log, vite-build.log, cargo-build.log).</result>
+<usage><subagent_tokens>38416</subagent_tokens><tool_uses>9</tool_uses><duration_ms>85243</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bi35ux66a</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2c9cca7a-f210-45f4-b940-4f091be387a8/tasks/bi35ux66a.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch repro loop for a failure" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b9cefwtge</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2c9cca7a-f210-45f4-b940-4f091be387a8/tasks/b9cefwtge.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch experiment loop to completion" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+ok, can you do some research in to whether the MacFUSE option is an alternative. Will the command line still have access to the mount if it is mounted in /Volumes?
+
+---
+
+Does the linux codepath not already use libfuse/libfuse3?
+
+---
+
+ok, please write up a todo for this test - I think this would be a much cleaner solution, and it is clear that there are a lot of issues with the current FUSE-T + SMB approach.
+
+---
+
+ok the staging deployment will be kicked off shortly - I think you can prepare the staging database reset.
+
+---
+
+would it not make sense to run it now since with the current data, the staging migration will fail
+
+---
+
+any idea why grafana is reporting 43 ipns entries? [Image #1]
+
+---
+
+I think a chore branch and PR make smore sense here
+
+---
+
+the ipns entries by type also seems to be wrong - only folders are shown, but I am running the mixed workload test with 50 users so files are definitely being uploaded.
+
+---
+
+ok before you go and do that, I want you to remove the `Check for stale release-as pins` action. It is not adding anything and just getting in the way every time I create a release.
+
+---
+
+is there any actual benefit to having this discriminator anywhere - an ipns record is an ipns record - it points at an encrypted blob on ipfs - why should the client leak that info anywhere?
+
+---
+
+yes please handle that end to end in a background agent
+
+---
+
+yes please handle that end to end in a background agent
+
+---
+
+/gsd:capture --list
+
+---
+
+14
+
+---
+
+<task-notification>
+<task-id>wdba935g4</task-id>
+<tool-use-id>toolu_01QCyiziFvCQE11epCqaMsbU</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2c9cca7a-f210-45f4-b940-4f091be387a8/tasks/wdba935g4.output</output-file>
+<status>completed</status>
+<summary>Dynamic workflow "Remove the vestigial folder/file record_type discriminator from CipherBox (client, API, DB, metrics, dashboard) and open a PR, then adversarially verify completeness" completed</summary>
+<result>{"branch":"refactor/drop-ipns-record-type-discriminator","prNumber":562,"prUrl":"https://github.com/FSM1/cipher-box/pull/562","migrationFile":"apps/api/src/migrations/1749400000000-DropFolderIpnsRecordType.ts","filesChanged":["apps/api/src/ipns/dto/publish.dto.ts","apps/api/src/ipns/entities/folder-ipns.entity.ts","apps/api/src/ipns/ipns.service.ts","apps/api/src/ipns/ipns.service.spec.ts","apps/api/src/ipns/ipns-verify-cache.spec.ts","apps/api/src/metrics/metrics.service.ts","apps/api/src/metrics/metrics.service.spec.ts","apps/api/src/migrations/1749400000000-DropFolderIpnsRecordType.ts","apps/web/src/services/ipns.service.ts","docker/grafana/dashboards/cipherbox-staging.json","docker/MONITORING.md","packages/sdk-core/src/folder/registration.ts","packages/sdk-core/src/ipns/index.ts","packages/sdk-core/src/__tests__/folder.test.ts","packages/sdk/src/share/shared-write.ts","packages/api-client/openapi.json","packages/api-client/src/models/publishIpnsEntryDto.ts","packages/api-client/src/models/publishIpnsEntryDtoRecordType.ts (deleted)","packages/api-client/src/models/index.ts (barrel export removed)","packages/api-client/src/** (130 generated files — OpenAPI version-bump header churn 0.42.0 to 0.44.0)"],"implementSelfVerify":{"pnpmInstall":"passed — pnpm install --frozen-lockfile in worktree, exit 0","apiGenerate":"passed — regenerated openapi.json + typed client; deleted orphaned publishIpnsEntryDtoRecordType.ts model + removed its barrel export; openapi.json and publishIpnsEntryDto.ts confirmed clean of recordType. Required building @cipherbox/crypto and @cipherbox/core dist first (workspace deps the ts-node openapi script resolves).","typecheck":"passed — api (nest build), sdk-core (tsup+tsc), sdk (tsup+tsc), web (tsc -b) all clean, exit 0","lint":"passed — eslint on all 13 changed source files clean (exit 0); prettier --check clean on grafana JSON, MONITORING.md, migration. Note: full `pnpm lint` initially flagged apps/web/vite.config.d.ts, but that is a gitignored tsc -b build artifact (removed, not committed); 2 pre-existing no-explicit-any warnings in unpin-helpers.spec.ts are unrelated.","tests":"passed — metrics.service.spec (11 passed), ipns.service.spec (98 passed), sdk-core folder suite (full vitest run: 252 passed incl folder.test.ts 32). All recordType-related assertions/fixtures updated.","dashboardJsonValid":"passed — python json.load parses cipherbox-staging.json; removed the record_type-labelled 'IPNS Entries by Type' piechart (a 'Total IPNS Entries' stat panel already existed) and converted 'IPNS Entry Growth' to a single sum(cipherbox_ipns_entries_total) series; no record_type label remains anywhere","distBuild":"passed — rebuilt @cipherbox/crypto, @cipherbox/core, @cipherbox/sdk-core, @cipherbox/sdk, @cipherbox/api-client dist before consumer typechecks"},"implementRemainingRefs":["apps/api/src/migrations/1739800000000-AddRecordTypeToFolderIpns.ts — historical/immutable migration that ADDED the column; the new DropFolderIpnsRecordType migration is its exact inverse, so this must stay as-is","apps/api/src/migrations/1749400000000-DropFolderIpnsRecordType.ts — legitimate SQL DDL naming record_type to DROP the column (up) and re-ADD it (down)"],"reviews":[{"dimension":"COMPLETENESS","verdict":"pass","blockers":[],"notes":"No live reference to the record_type discriminator survives on origin/refactor/drop-ipns-record-type-discriminator. The discriminator grep (record_type|recordType|PublishIpnsEntryDtoRecordType|RECORD_TYPE) over non-planning paths returns ONLY acceptable historical leftovers:\n\n1. Migration files only — /Users/myankelev/Code/random/cipher-box/apps/api/src/migrations/1739800000000-AddRecordTypeToFolderIpns.ts (historical add) and apps/api/src/migrations/1749400000000-DropFolderIpnsRecordType.ts (the new drop migration; clean up/down inverse, idempotent down, drops the folder_ipns.record_type column).\n2. One docs table row in docs/DATABASE_EVOLUTION_PROTOCOL.md:224 listing the historical AddRecordTypeToFolderIpns.ts migration filename — correct, the migration file still exists.\n\nGenerated api-client is fully regenerated and clean:\n- packages/api-client/src/models/publishIpnsEntryDtoRecordType.ts is DELETED (confirmed via gh pr diff 562 shows `---` deletion; absent from `git ls-tree`; not exported from models/index.ts).\n- packages/api-client/src/models/publishIpnsEntryDto.ts (orval lowercase filename) has NO recordType field — interface fields are ipnsName, record, publicKey, metadataCid, encryptedIpnsPrivateKey, keyEpoch, expectedSequenceNumber only.\n- packages/api-client/openapi.json: the PublishIpnsEntryDto schema has no recordType property; a full-file grep of openapi.json finds zero recordType/record_type occurrences.\n- packages/api-client/src/generated/ipns/ipns.ts has no recordType.\n\nSource side is clean across every touched file: apps/api/src/ipns/dto/publish.dto.ts, apps/api/src/ipns/entities/folder-ipns.entity.ts, apps/api/src/metrics/metrics.service.ts, apps/web/src/services/ipns.service.ts, packages/sdk-core/src/folder/registration.ts, packages/sdk-core/src/ipns/index.ts, packages/sdk/src/share/shared-write.ts, docker/grafana/dashboards/cipherbox-staging.json, and docker/MONITORING.md — none contain recordType/record_type. The Prometheus gauge and log strings the migration comment references were removed (no IPNS record-type metric remains)."},{"dimension":"DB MIGRATION + RUNTIME CONSISTENCY","verdict":"pass","blockers":[],"notes":"Migration is correct and the runtime is fully consistent with the dropped column — no runtime/migration failure risk.\n\nMigration (apps/api/src/migrations/1749400000000-DropFolderIpnsRecordType.ts):\n- up() runs `ALTER TABLE \"folder_ipns\" DROP COLUMN IF EXISTS \"record_type\"`. down() re-adds `varchar(10) NOT NULL DEFAULT 'folder'` wrapped in a `DO $$ ... IF NOT EXISTS` guard. This is an exact inverse of 1739800000000-AddRecordTypeToFolderIpns.ts (its up/down are mirror images: the add migration's up is this migration's down, and vice versa), and matches the repo convention of idempotent guards used elsewhere (e.g. the original add migration).\n- Type/default match the original column definition exactly (varchar(10), NOT NULL, DEFAULT 'folder').\n- Timestamp 1749400000000 &gt; 1749300000000 (the prior latest, IpnsCacheKeyedByName) and is the highest among all migration files — correct ordering.\n\nRuntime consistency (no remaining queries of the dropped column):\n- FolderIpns entity (apps/api/src/ipns/entities/folder-ipns.entity.ts) no longer declares the record_type column (the `@Column ... recordType` block was removed).\n- metrics.service.ts collectGauges() now uses `this.folderIpnsRepository.count()` instead of the prior `createQueryBuilder().select('ipns.record_type').groupBy('ipns.record_type')`; the gauge dropped its `record_type` label and the `IPNS_RECORD_TYPES` seeding loop was removed. No GROUP BY on the dropped column remains.\n- ipns.service.ts: removed the `recordType` param from publishRecord() and upsertRecord(), removed `existing.recordType = recordType`, removed recordType from the batch map and the new-row insert literal, and dropped recordType from the two log strings.\n- publish.dto.ts: removed the optional `recordType` field (and now-unused IsIn import).\n- A full `git grep -i 'record_type|recordType'` across apps/api/src (excluding .spec.ts) returns hits ONLY inside the two migration files (the original add and the new drop) — no entity/service/DTO/query references the dropped column. The API will not crash at runtime after the column is dropped."},{"dimension":"API CONTRACT + GENERATED CLIENT","verdict":"pass","blockers":[],"notes":"pnpm api:generate was run and its full output committed. Evidence on origin/refactor/drop-ipns-record-type-discriminator:\n\nDTO: apps/api/src/ipns/dto/publish.dto.ts removed the recordType field and all its validators (@IsString, @IsOptional, @IsIn(['folder','file'])) plus the now-unused IsIn import; doc comment
+... (truncated 3622 chars, full result in /private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2c9cca7a-f210-45f4-b940-4f091be387a8/tasks/wdba935g4.output)</result>
+<usage><agent_count>5</agent_count><subagent_tokens>309151</subagent_tokens><tool_uses>168</tool_uses><duration_ms>795651</duration_ms></usage>
+</task-notification>
+
+---
+
+lets go with a - please do not make any assumptions on how these should be handled and ask me how shares should be handled after the exploration
+
+---
+
+<task-notification>
+<task-id>ac0883548b3da3fa8</task-id>
+<tool-use-id>toolu_0189Ya2f7siETNHTJJN6faBs</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2c9cca7a-f210-45f4-b940-4f091be387a8/tasks/ac0883548b3da3fa8.output</output-file>
+<status>completed</status>
+<summary>Agent "Trace share revocation mechanism" came to rest</summary>
+<note>A task-notification fires each time this agent comes to rest with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Perfect! Now I have comprehensive information. Let me create a comprehensive report.
+
+---
+
+## FINDINGS REPORT: Share Model &amp; Revocation Mechanisms for CipherBox Bin Operations
+
+### A. SHARE DATA MODEL
+
+**Entities and Columns:**
+
+1. **`Share` entity** (`/Users/myankelev/Code/random/cipher-box/apps/api/src/shares/entities/share.entity.ts:17-106`)
+   - **Target identification:**
+     - `ipnsName` (varchar 255, indexed) — the file's `fileMetaIpnsName` (for files) OR folder's IPNS name (for folders)
+     - `itemType` (varchar 10) — `'file'` or `'folder'`
+   - **Participants:**
+     - `sharerId` (uuid, indexed) — user/vault creating the share
+     - `recipientId` (uuid, indexed) — specific user receiving the share (for user-to-user shares)
+   - **Key wrapping:**
+     - `encryptedKey` (bytea) — item's key ECIES-wrapped for recipient's secp256k1 pubkey
+     - `encryptedIpnsKey` (bytea, nullable) — IPNS private key (write shares only)
+   - **Metadata:**
+     - `itemName` (plaintext), `itemNameEncrypted` (ECIES-wrapped with recipient key)
+     - `permission` ('read' | 'write', default 'read')
+     - `hiddenByRecipient` (boolean, default false)
+   - **Revocation:**
+     - `revokedAt` (TIMESTAMP, nullable) — soft-delete marker for lazy key rotation
+   - **Unique constraint:** Partial unique index (WHERE revoked_at IS NULL) on `(sharer_id, recipient_id, ipns_name)` allows revoked records to coexist with new active shares for the same triple (migration 1740300000000).
+
+2. **`ShareKey` entity** (`/Users/myankelev/Code/random/cipher-box/apps/api/src/shares/entities/share-key.entity.ts:14-51`)
+   - **Purpose:** Re-wrapped child keys for descendant items (subfolders, files) when a folder is shared.
+   - **Relation:** `shareId` (uuid, indexed) — FK to `shares.id` with CASCADE delete
+   - **Key types:** `'file'`, `'folder'`, `'file-ipns'`, `'folder-ipns'` (defined in `/Users/myankelev/Code/random/cipher-box/apps/api/src/shares/types.ts:15`)
+   - **Identity:** `itemId` (varchar 255, indexed) — UUID of the file or subfolder
+   - **Unique constraint:** `(share_id, key_type, item_id)`
+   - **Storage:** `encryptedKey` (bytea) — re-wrapped child key
+
+3. **`ShareInvite` entity** (`/Users/myankelev/Code/random/cipher-box/apps/api/src/shares/entities/share-invite.entity.ts:13-83`)
+   - **Target identification:**
+     - `ipnsName` (varchar 255) — same as Share: file's `fileMetaIpnsName` or folder's IPNS name
+     - `itemType` ('file' | 'folder')
+   - **Creator:**
+     - `sharerId` (uuid, indexed) — user creating the invite link
+   - **Status:** `status` ('active' | 'claimed' | 'revoked'); `expiresAt` (7-day default via `INVITE_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000` in share-invite.service.ts:18)
+   - **Keys:** `encryptedKey` (ephemeral key wrapping), `encryptedChildKeys` (JSONB array of child keys for folder shares)
+   - **Claims:** `maxClaims`, `claimCount`, `claimedBy` (userId of single claimer)
+
+**Filter to enumerate shares for a file/folder:**
+
+- **User-to-user shares:**
+  ```typescript
+  shareRepo.find({ 
+    where: { 
+      sharerId, 
+      ipnsName,          // ← Filter by file's fileMetaIpnsName or folder's IPNS name
+      revokedAt: IsNull() // ← Active only (not yet rotated)
+    } 
+  })
+  ```
+
+- **Invite/link shares:**
+  ```typescript
+  inviteRepo.find({
+    where: {
+      sharerId,
+      ipnsName,          // ← Same: file's fileMetaIpnsName or folder's IPNS name
+      status: 'active'   // ← Not yet claimed or revoked
+    }
+  })
+  ```
+
+- **Client-side enumeration** (from web/SDK):
+  - For files: Use `FilePointer.fileMetaIpnsName` as the query key
+  - For folders: Use `FolderEntry.ipnsName` as the query key
+  - Functions: `getSentSharesForItem(ipnsName)` (share.service.ts:359), which fetches all sent shares and filters by `ipnsName` match.
+
+---
+
+### B. REVOKE PATH — ENDPOINT(S), SERVICE METHOD(S), &amp; SIDE EFFECTS
+
+**User-to-User Shares:**
+
+1. **Endpoint:** `DELETE /shares/:shareId` (shares.controller.ts:285-302)
+   - **Auth:** JwtAuthGuard — authenticated user only
+   - **Permission:** Only sharer can revoke (403 if not sharer)
+
+2. **Service method:** `SharesService.revokeShare(shareId, sharerId)` (shares.service.ts:256-269)
+   - **Operation:** Sets `share.revokedAt = new Date()` — soft-delete only
+   - **Side effects:**
+     - ✅ Updates `revokedAt` timestamp (triggers lazy key rotation on next folder modification)
+     - ⚠️ **NO immediate key rotation** — keys remain intact pending client-side rotation
+     - ⚠️ **NO hard-delete** of ShareKey records — they persist for rotation phase
+     - ⚠️ **NO IPFS/pinning impact** — shares themselves don't manage pins
+
+3. **Hard-delete path (after rotation):** `DELETE /shares/:shareId/complete-rotation` (shares.controller.ts:362-380)
+   - **Service method:** `SharesService.completeRotation(shareId, sharerId)` (shares.service.ts:324-341)
+   - **Precondition:** `share.revokedAt !== null` (409 Conflict if not revoked)
+   - **Operation:** Calls `shareRepo.remove(share)`
+   - **Cascade:** TypeORM cascade delete on ShareKey due to `@OneToMany(() =&gt; ShareKey, { cascade: true })` (share.entity.ts:98)
+   - **Side effects:**
+     - ✅ Hard-deletes the Share record
+     - ✅ CASCADE-deletes all associated ShareKey records
+     - ⚠️ No unpinning or content cleanup (shares don't manage CIDs)
+
+**Invite/Link Shares:**
+
+1. **Endpoint:** `DELETE /shares/invites/:inviteId` (share-invites.controller.ts:135-152)
+   - **Auth:** JwtAuthGuard
+   - **Permission:** Only sharer can revoke (403 if not sharer)
+
+2. **Service method:** `ShareInviteService.revokeInvite(inviteId, sharerId)` (share-invite.service.ts:255-268)
+   - **Operation:** Sets `invite.status = 'revoked'`
+   - **Side effects:**
+     - ✅ Marks the invite as revoked (prevents further claims via getInviteForClaim check)
+     - ⚠️ **NO hard-delete** — invite record persists with `status: 'revoked'`
+     - ⚠️ **Already-claimed invites unaffected** — claimed invites become independent Share records (separate user-to-user shares, see share-invite.service.ts:107-223)
+     - ⚠️ **No cascade cleanup** — the created Share from a claimed invite is NOT deleted (separate lifecycle)
+
+**Bulk Revocation on Item Delete (Proposed New Requirement):**
+- No existing endpoint or service method for bulk-revoking all shares for a file/folder
+- Current approach requires client to enumerate and call revoke per share (see lazy rotation pattern in share.service.ts:616-657)
+
+---
+
+### C. CLIENT/SDK REVOKE FLOW
+
+**Web/SDK Function:**
+```typescript
+// packages/sdk/src/share/index.ts:137-142
+async function revokeShare(params: {
+  shareId: string;
+  revokeShareFn: (shareId: string) =&gt; Promise&lt;void&gt;;
+}): Promise&lt;void&gt;
+```
+
+**Web Service Wrapper:**
+```typescript
+// apps/web/src/services/share.service.ts:302-304
+async function revokeShare(shareId: string): Promise&lt;void&gt; {
+  await sharesControllerRevokeShare(shareId);  // API client call
+}
+```
+
+**API Client Call (auto-generated via Orval):**
+- `sharesControllerRevokeShare(shareId)` — DELETE /shares/:shareId
+
+**Inputs Required:**
+- `shareId` (UUID) — must be known in advance; obtained from sent-shares list
+
+**Initiator:**
+- **Client-initiated:** Client (web app / SDK) calls API endpoint; requires authenticated user with owner/sharer authorization
+
+**Flow Context:**
+1. User clicks "Revoke share" in UI (share details, sent-shares list)
+2. Client calls `revokeShare(shareId)`
+3. API soft-deletes share (sets `revokedAt`)
+4. Client detects pending rotations via `fetchPendingRotations()` before next folder modification
+5. On folder change, client triggers lazy key rotation (executeLazyRotation), which re-wraps for remaining recipients and hard-deletes revoked shares
+
+---
+
+### D. ENUMERATE AN ITEM'S SHARES FROM CLIENT AT DELETE TIME
+
+**For Files:**
+- Input: `FilePointer.fileMetaIpnsName` (e.g., `"k51qzi5uqu5dh...7x"`)
+- Query function: `getSentSharesForItem(ipnsName)` (share.service.ts:359-362)
+- Implementation:
+  ```typescript
+  async function getSentSharesForItem(ipnsName: string): Promise&lt;SentShare[]&gt; {
+    const shares = await ensureFreshSentShares();
+    return shares.filter((s) =&gt; s.ipnsName === ipnsName);
+  }
+  ```
+- Matching key: `share.ipnsName === filePointer.fileMetaIpnsName`
+- **Same endpoint for invites:** Query `shareInviteService.getInvitesForItem(sharerId, ipnsName)` (share-invite.service.ts:229-249) — same `ipnsName` filter
+
+**For Folders:**
+- Input: `FolderEntry.ipnsName`
+- Same query function: `getSentSharesForItem(folderIpnsName)` with matching key `share.ipnsName === folderEntry.ipnsName`
+- **Same for invites:** `getInvitesForItem(sharerId, folderIpnsName)`
+
+**Implementation Detail:**
+- Client fetches ALL sent shares via `fetchAllSentShares()` (paginated, 100 per page), caches them for 30s
+- Filtering is client-side (not server-side) — no endpoint exists to query shares by IPNS name directly
+- Invite enumeration is separate: `listInvites()` endpoint takes `ipnsName` as query param
+
+---
+
+### E. FOLDER/RECURSION — SHAREABLE &amp; DESCENDANT HANDLING
+
+**Folders are shareable:**
+- ✅ `itemType: 'folder'` is a first-class share type (alongside 'file')
+- ✅ Folder's `ipnsName` (from FolderEntry) is stored directly in `shares.ipns_name`
+
+**Folder shares + descendant recursion:**
+- **Descendant items ARE independently keyed in ShareKey:**
+  - When a folder is shared, the client wraps **all descendant file &amp; subfolder keys** and sends them as `childKeys` to `/shares` POST endpoint (create-share.dto.ts)
+  - These are stored in `share_keys` table with `keyType: 'file' | 'folder' | 'file-ipns' | 'folder-ipns'`
+  - **Key types include `'folder-ipns'`** (types.ts:15) to allow write-share recipients to create/modify descendant subfolders (mirror of `file-ipns` for files)
+
+- **Descendant items are NOT independently deleted when folder share is revoked:**
+  - Revoking a folder share only revokes the single Share record (soft-delete via `revokedAt`)
+  - ShareKey records are CASCADE-deleted when the Share is hard-deleted (completeRotation), cleaning up all nested keys at once
+  - **No recursive traversal:** The server does NOT automatically revoke shares of descendant files/subfolders if they have independent shares
+  - **Client responsibility:** If a descendant file/subfolder is independently shared with another user, that share must be revoked separately
+
+- **Existing recursive handling:**
+  - `reWrapForRecipients()` (share.service.ts:469-524) handles re-wrapping descendant keys after adding items to a shared folder
+  - On folder modification with pending rotations, lazy key rotation (executeLazyRotation) re-wraps ALL child keys for remaining recipients
+  - **No cascade revocation logic** — each share is independent; folder revocation doesn't imply descendant share revocation
+
+---
+
+### F. INVITE/LINK SHARES — ATTACHMENT &amp; REVOCATION
+
+**Attachment Model:**
+- Invites are **NOT attached to a specific Share record**
+- Invites are **standalone records** tied only to the sharer + item (by `ipnsName`), not to a recipient until claimed
+- Multiple invites can exist for the same item/sharer (e.g., three separate link-share tokens for one folder)
+
+**Lifecycle (from share-invite.service.ts:34-223):**
+1. **Create:** `createInvite(sharerId, dto)` → generate random token, store with `status: 'active'`, 7-day expiry
+2. **Claim:** `claimInvite(token, claimerId, dto)` → atomic transactional create of a **new Share record** (user-to-user) with re-wrapped keys from claim DTO
+3. **Post-claim:** The Share and ShareInvite have independent lifecycles; revoking the invite doesn't affect the claimed Share
+
+**Revocation — Same or separate?**
+- **Separate paths:**
+  - **Invite revoke:** `ShareInviteService.revokeInvite(inviteId, sharerId)` — sets `status: 'revoked'`, prevents future claims
+  - **Share revoke:** `SharesService.revokeShare(shareId, sharerId)` — sets `revokedAt`, triggers lazy rotation
+  - **Already-claimed invites unaffected:** A claimed invite (which became a Share) is NOT revoked when the original invite is revoked; it's a separate Share with its own lifecycle
+
+**Can single item have both?**
+- ✅ **Yes.** A folder can have:
+  - Multiple active invite links (`shareInvites` with `status: 'active'`)
+  - Multiple user-to-user shares (`shares` with `revokedAt: null`)
+  - Simultaneously, allowing the owner to share via link-tokens AND direct user shares
+
+---
+
+### G. COUPLING TO CONTENT CIDs / PINNING
+
+**On Revoke:**
+- ❌ **No pinning side effects** — `revokeShare()` and `revokeInvite()` do NOT touch `pinned_cids` or perform any unpin
+- ❌ **No server-side pin management** — the shares service has zero references to pinning or CID cleanup
+
+**On Permanent Delete (bin permanentDeleteFromBin):**
+- ✅ **File content CID unpinned** (`permanentDeleteFromBin`, bin/index.ts:514-529):
+  ```typescript
+  if (entry.contentCid) {
+    try {
+      await sdkCore.unpinFromIpfs(params.binCtx.ctx, entry.contentCid);
+    } catch {
+      // Best-effort
+    }
+  }
+  ```
+- ✅ **Version CIDs unpinned** (purgeExpiredEntries, bin/index.ts:636-644):
+  ```typescript
+  if (entry.versionCids) {
+    for (const vc of entry.versionCids) {
+      try {
+        await sdkCore.unpinFromIpfs(params.binCtx.ctx, vc.cid);
+      } catch {}
+    }
+  }
+  ```
+- ⚠️ **Note:** Bin entry captures `contentCid` at soft-delete time (addToBin); shares have no coupling to this flow — shares remain active even if the file is in the bin (different concern)
+
+---
+
+### SUMMARY TABLE
+
+| Aspect | User-to-User Share | Invite/Link Share |
+|--------|--------------------|--------------------|
+| **Model target** | `Share.ipnsName` (file/folder IPNS) | `ShareInvite.ipnsName` (file/folder IPNS) |
+| **Participants** | `sharerId`, `recipientId` (specific user) | `sharerId`, ephemeral key (multi-use token) |
+| **Revoke endpoint** | DELETE /shares/:shareId | DELETE /shares/invites/:inviteId |
+| **Revoke side effect** | `revokedAt = now()` (soft-delete) | `status = 'revoked'` (mark inactive) |
+| **Hard-delete** | Via completeRotation after client key rotation | No hard-delete (status-only) |
+| **Cascade cleanup** | ShareKey records deleted via CASCADE | None (invite never references Share) |
+| **Already-claimed?** | N/A | Claimed invites become independent Shares; revoking invite doesn't revoke Share |
+
+---
+
+### GAPS / UNKNOWNS
+
+1. **Bulk revoke-on-delete:** No existing endpoint or service method to revoke all shares for a file/folder in one request. Client must enumerate and call revoke per share (see soft-delete to bin requirement).
+
+2. **Descendant share auto-revocation:** No automatic cascading revocation when a folder share is revoked. Independent shares of descendant items persist. Behavior is by design (each share is independent), but client must be aware.
+
+3. **Share enumeration endpoint:** No server-side "list shares for this IPNS name" endpoint; client always fetches all shares and filters client-side. Could be optimized for deletion path (low-risk but not currently implemented).
+
+4. **Invite hard-delete:** Revoked invites remain in database with `status: 'revoked'`. No cleanup / garbage collection documented.
+
+5. **Write-share descendant creation:** When a recipient creates subfolders in a write-shared folder, the parent share includes `folder-ipns` keys allowing them to sign those subfolders. Unclear if independently-shared-and-then-revoked subfolder poses any cross-share revocation risk (likely not, but warrants review).
+
+---
+
+### KEY FILES FOR WIRING SHARE REVOCATION INTO `addToBin`:
+
+1. **Share model &amp; revoke service:**
+   - `/Users/myankelev/Code/random/cipher-box/apps/api/src/shares/entities/share.entity.ts:42` — `ipnsName` index
+   - `/Users/myankelev/Code/random/cipher-box/apps/api/src/shares/shares.service.ts:256-269` — `revokeShare()`
+   - `/Users/myankelev/Code/random/cipher-box/apps/api/src/shares/shares.service.ts:309-317` — `getPendingRotations()`
+
+2. **Invite model &amp; revoke:**
+   - `/Users/myankelev/Code/random/cipher-box/apps/api/src/shares/entities/share-invite.entity.ts:32` — `ipnsName` field
+   - `/Users/myankelev/Code/random/cipher-box/apps/api/src/shares/share-invite.service.ts:255-268` — `revokeInvite()`
+   - `/Users/myankelev/Code/random/cipher-box/apps/api/src/shares/share-invite.service.ts:229-249` — `getInvitesForItem()`
+
+3. **Client-side enumeration:**
+   - `/Users/myankelev/Code/random/cipher-box/apps/web/src/services/share.service.ts:359-362` — `getSentSharesForItem(ipnsName)`
+   - `/Users/myankelev/Code/random/cipher-box/apps/web/src/services/share.service.ts:545-556` — `fetchPendingRotations()`
+   - `/Users/myankelev/Code/random/cipher-box/packages/sdk/src/share/index.ts:137-142` — SDK `revokeShare()` wrapper
+
+4. **Bin operations (integration point):**
+   - `/Users/myankelev/Code/random/cipher-box/packages/sdk/src/bin/index.ts:241-323` — `addToBin()` function (where share revocation should be wired)</result>
+<usage><subagent_tokens>73988</subagent_tokens><tool_uses>51</tool_uses><duration_ms>275972</duration_ms></usage>
+</task-notification>
+
+---
+
+so regarding a descendant of a folder being shared and being deleted should also revoke share - the whole deleted tree will need to be traversed.
+
+---
+
+yes kick this off in the background, and once the adversarial review is done, please run /simplify, coderabbit cli, as well as /resolve-pr-reviews (after a wait for the comments).
+
+---
+
+/gsd:capture --list
+
+---
+
+ok are there any major themes to group some phases to be implemented?
+
+---
+
+<task-notification>
+<task-id>wg6coauwb</task-id>
+<tool-use-id>toolu_01CCqcT3XPxgm9t3ieEigL21</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2c9cca7a-f210-45f4-b940-4f091be387a8/tasks/wg6coauwb.output</output-file>
+<status>completed</status>
+<summary>Dynamic workflow "Fix the bin content/version CID pin leak and revoke shares (incl. recursive folder subtree) on delete; open PR and adversarially verify" completed</summary>
+<result>{"branch":"fix/bin-delete-unpin-and-revoke-shares","prNumber":563,"prUrl":"https://github.com/FSM1/cipher-box/pull/563","newEndpoint":"POST /shares/revoke-for-items","binEntrySchemaChange":"Added optional descendantCids?: Array&lt;{ cid: string; size: number }&gt; to BinEntry (packages/core/src/bin/types.ts) for folder entries — flattened content+version CIDs of the whole deleted subtree. RecycleBinMetadata stays version 'v1' (additive optional field, backward-compatible). The pre-existing contentCid/contentSize/versionCids fields are now actually populated for file entries.","filesChanged":["packages/core/src/bin/types.ts","apps/api/src/shares/dto/revoke-for-items.dto.ts","apps/api/src/shares/dto/share-response.dto.ts","apps/api/src/shares/shares.service.ts","apps/api/src/shares/shares.controller.ts","apps/api/src/shares/shares.service.spec.ts","apps/api/src/shares/shares.controller.spec.ts","packages/sdk/src/bin/index.ts","packages/sdk/src/share/index.ts","packages/sdk/src/client.ts","packages/sdk/src/__tests__/bin.test.ts","packages/api-client/openapi.json","packages/api-client/src/generated/shares/shares.ts","packages/api-client/src/models/index.ts","packages/api-client/src/models/revokeForItemsDto.ts","packages/api-client/src/models/revokeForItemsResponseDto.ts",".planning/todos/pending/2026-06-23-bin-delete-and-empty-bin-leak-content-and-version-cid-pins.md"],"selfVerify":{"pnpmInstall":"PASS — pnpm install --frozen-lockfile, exit 0","apiGenerate":"PASS — pnpm api:generate regenerated openapi.json + api-client (generated sharesControllerRevokeForItems + RevokeForItemsDto/RevokeForItemsResponseDto models); api-client tsup+tsc build succeeded; committed regenerated files","typecheck":"PASS — API tsc -p tsconfig.build.json clean; core tsc --noEmit clean; sdk-core/sdk tsup+tsc clean; web tsc -b clean (no errors)","lint":"PASS — eslint on all changed source files clean (1 prettier formatting issue in bin.test.ts auto-fixed); prettier --check clean on all changed TS source. Note: packages/api-client/openapi.json fails prettier-check but the committed HEAD version also did — it is an orval-generated artifact not governed by prettier","tests":"PASS — API: full src/shares directory 176/176 pass (incl. new revokeForItems service+controller specs). SDK: bin.test.ts 25/25 pass; client-extended (28), collect-subtree-ipns-names (4), share (6) all pass. Did NOT run the full multi-package suite (RAM constraint, per instructions)","distBuild":"PASS — built dist for @cipherbox/crypto, @cipherbox/core, @cipherbox/sdk-core, @cipherbox/sdk, @cipherbox/api-client (api:generate). Web build typecheck (tsc -b) consumes the rebuilt dist and is clean"},"todoUpdated":true,"implNotes":"Implemented exactly to the locked design — no deviations. One signed commit (9a2ef2844, gpgsig present) on the auto-branch, pushed to fix/bin-delete-unpin-and-revoke-shares (real branch kept unchecked-out locally per instructions). The .planning todo Solution section was rewritten to reflect the shipped design and committed WITH the code on this branch.\n\nKey implementation decisions / design notes for the reviewer:\n- Share-revoke is injected into addToBin as revokeSharesForItemsFn (mirrors the existing revokeShareFn injection pattern) and the client wires it to the generated sharesControllerRevokeForItems via a private CipherBoxClient.revokeSharesForItems helper. This keeps packages/sdk/src/bin/index.ts free of api-client coupling and mockable at the boundary. The revokeSharesForItems wrapper (packages/sdk/src/share/index.ts) does 1+2 retries with exponential backoff and throws on final failure (fail-closed).\n- The subtree walk lives in bin/index.ts (walkDeletedSubtree) — it has folderKey + userPrivateKey in hand. It is FAIL-CLOSED on structure (throws if a folder won't resolve) and reuses sdkCore.loadFolderMetadata + unwrapKey, distinct from the existing best-effort collectSubtreeIpnsNamesAsync in client.ts (which is for fire-and-forget unenroll and must NOT abort). I deliberately did not merge the two because their failure policies are opposite.\n- Per-file CID capture (captureFileCids) is best-effort: a file whose FileMetadata won't resolve is logged and skipped (its ipnsName is still revoked), matching the locked policy.\n- Zeroization: walkDeletedSubtree and addToBin clearBytes only the subfolder/deleted-folder keys they unwrap (own), never the caller-owned folder.folderKey.\n- SharesService gained a DataSource injection for the transactional revokeForItems; the existing shares.service.spec providers were updated with a DataSource mock (otherwise all existing shares specs would break on the new constructor arg).\n- revokeForItems hard-deletes via manager.find(Share, ...) + manager.remove(shares) (entity remove path) so the ShareKey CASCADE fires — a bulk DELETE query would bypass the in-memory cascade. Invites are updated via query builder. De-dups ipnsNames; no-ops (no transaction) on empty list.\n- ArrayMaxSize(5000) chosen as a sane cap for the DTO (covers realistic vault subtrees, bounds the IN(...) clause).\n- openapi.json prettier note (see lint field): the orval-generated openapi.json is not prettier-clean at HEAD either; it is a generated artifact. lint-staged's prettier --write reformatted my staged copy during the manual commit (the hook ran), which is the correct/intended behavior for a manual signed commit — the check-api-client.sh hook only verifies the file is staged, not its exact format.\n- Out-of-scope items (CAS superseded-metadata-blob unpin; one-off staging 442 MB remediation) were NOT touched and are documented as deferred follow-ups in both the PR body and the todo.","reviews":[{"dimension":"Unpin / data-loss safety","verdict":"pass","blockers":[],"notes":"Reviewed origin/fix/bin-delete-unpin-and-revoke-shares read-only. All four lens sub-concerns pass.\n\n(a) SHARED HELPER unpins full set, called by all three callers. packages/sdk/src/bin/index.ts:312-325 unpinEntryCids pushes entry.contentCid + every entry.versionCids[].cid + every entry.descendantCids[].cid, each unpin independently try/caught. Called by emptyBin (line 792, loop over entries), permanentDeleteFromBin (line 757), and purgeExpiredEntries (line 852). This fixes the prior bug where emptyBin/permanentDeleteFromBin only guarded on entry.contentCid and never looped versions. Confirmed via git grep that these are the only three production unpin callers in bin/index.ts.\n\n(b) FOLDER subtree capture is complete. walkDeletedSubtree (bin/index.ts:235-303) recurses every child: for type==='file' it captures content + all version CIDs via captureFileCids (lines 197-217, reads metadata.cid + metadata.versions[].cid); for type==='folder' it unwraps the child folderKey and recurses (lines 278-298). A visited set guards cycles/diamonds. addToBin (lines 456-477) seeds the walk at the deleted folder's own ipnsName with its unwrapped key, so the top-level folder's direct-child files are enumerated too. Single-file path (lines 445-455) captures its own content + version CIDs. descendantCids is stored on the BinEntry (lines 532) and BinEntry types (packages/core/src/bin/types.ts:41,51) match the helper's reads.\n\n(c) No live-CID unpin from intra-user reuse. Per-file encryption uses a random IV (generateCtrIv) and random per-file fileKey, so two uploads of identical plaintext yield distinct ciphertexts and distinct content CIDs — no intra-user content-CID dedup arises from normal uploads. No copy/duplicate-file operation exists (git grep for copyFile/duplicateFile/copyTo across packages/sdk, sdk-core, core returned nothing). The only intra-user CID sharing is a single FileMetadata's versions[] chain, which is bundled with the deleted file and correctly unpinned wholesale. recordPin uses orIgnore (vault.service.ts:217-229) so a user holds at most one pinned_cids row per CID — consistent with this model.\n\n(d) Server cross-user backstop untouched and still authoritative. sdk-core is NOT in the PR diff; client unp
+... (truncated 13731 chars, full result in /private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2c9cca7a-f210-45f4-b940-4f091be387a8/tasks/wg6coauwb.output)</result>
+<usage><agent_count>6</agent_count><subagent_tokens>522184</subagent_tokens><tool_uses>232</tool_uses><duration_ms>1428518</duration_ms></usage>
+</task-notification>
+
+---
+
+please delegate the handling of all of this /resolve-pr-reviews to a background agent. another thing to be considered is the handling of deletes from the desktop (FUSE) side - currently if deleted from desktop the share records would still remain, so this revocation should also happen on desktop.
+
+---
+
+yes prune stale worktrees
+
+---
+
+ok now back to the todos and proposed path to tackling these
+
+---
+
+sure sounds like a plan, kick off that ultracode phase for desktop fuse revocation.
+
+---
+
+can you also kick off a separate background agent for the phase 60 safety tail?
+
+---
+
+now for a 3rd agent - CI/release sweep 5/8/10 — one chore(ci) batch
+
+I know you included #7 in that batch, but I am honestly not too sure what it is about and not sure whether it should actually be implemented as I am not as familiar with the rust world.
+
+---
+
+happy to park #5 and move both of these todos to @.planning/todos/completed/ in a docs branch, or on the #567 PR
+
+---
+
+<task-notification>
+<task-id>w04wj3hjr</task-id>
+<tool-use-id>toolu_019o7XDBvwjk9uYEaowACBh6</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2c9cca7a-f210-45f4-b940-4f091be387a8/tasks/w04wj3hjr.output</output-file>
+<status>completed</status>
+<summary>Dynamic workflow "Add fail-closed share revocation to the desktop FUSE delete path (design -&gt; implement -&gt; adversarial verify)" completed</summary>
+<result>{"prNumber":568,"prUrl":"https://github.com/FSM1/cipher-box/pull/568","branch":"fix/fuse-delete-share-revocation","failurePolicy":"hybrid","pinCaptureInScope":false,"design":{"recommendation":"Add share-revocation to the desktop FUSE delete path with a fail-closed-sync policy matching the SDK contract: before any destructive mutation (inode removal + parent update_folder_metadata), block on a single authed POST /shares/revoke-for-items for the one node being deleted, and abort the delete with an errno if it ultimately fails. Per-node revoke only (file's file_meta_ipns_name on unlink; folder's own ipns_name on rmdir) — no subtree walk, since FUSE deletes bottom-up. Add a new shares module to the hand-written crates/api-client (none exists) exposing revoke_shares_for_items, plus a small synchronous revoke helper (with bounded retry + 4xx short-circuit + timeout) next to spawn_bin_entry_publish in crates/fuse/src/metadata.rs for reuse. The unix (fuser) and Windows (winfsp) delete paths are NOT shared and both must be patched; only unix can fully fail-closed at the delete-validation point. Pin-capture parity is already correct on this path (content_cid/content_size/version_cids are set; folders are empty by rmdir invariant), so no pin-capture code changes — just don't regress it.","failurePolicy":"hybrid","failurePolicyRationale":"Unix (fuser) handle_unlink/handle_rmdir are sync callbacks that return via ReplyEmpty and already reply.error(EIO/ENOTEMPTY/EISDIR) before mutating — so true fail-closed-sync is achievable there: run the revoke via fs.rt.block_on BEFORE fs.inodes.remove/update_folder_metadata, and on failure reply.error(libc::EIO); return; aborting the delete so the item stays put and no share is left stranded-active. This matches the SDK's revoke-before-destructive-mutation contract. The Windows winfsp path is structurally different: the real delete runs in handle_cleanup (IRP_MJ_CLEANUP, delete-on-close), which returns () with NO errno channel — the OS has already committed the close, so it cannot abort. handle_set_delete (the natural validate-and-reject point, called before cleanup) is currently a no-op stub returning Ok(()). Two viable Windows options: (a) move revocation into handle_set_delete (which CAN return Err(FspError) → STATUS to reject the delete) for true fail-closed parity, but this requires plumbing the target inode/ipnsName resolution into set_delete and is harder to verify (winfsp builds only on the Windows CI gate); or (b) best-effort-sync in handle_cleanup before inodes.remove, logging on failure. RECOMMENDED: option (a) if set_delete can cleanly resolve the node's ipnsName from context.ino under the lock; otherwise fall back to (b) for Windows and document the residual gap. To bound the FUSE loop, every sync revoke MUST be wrapped in a timeout (e.g. fs.rt.block_on(tokio::time::timeout(Duration::from_secs(~15), ...))) layered over the existing bounded retry (1 + 2 retries, exp backoff), so a hung/unreachable backend surfaces as EIO and cannot wedge the user's rm indefinitely. A timeout/transport failure is treated as a failure → EIO (fail-closed), not a silent pass.","hookPoints":[{"file":"crates/api-client/src/lib.rs","fn":"module declarations","change":"Add `pub mod shares;` alongside the existing `pub mod ipns;` so the new endpoint module is exported as cipherbox_api_client::shares."},{"file":"crates/api-client/src/shares.rs","fn":"revoke_shares_for_items (new file)","change":"New free fn `pub async fn revoke_shares_for_items(client: &amp;ApiClient, ipns_names: &amp;[String]) -&gt; Result&lt;(), ApiError&gt;`. Define `#[derive(Serialize)] struct RevokeForItemsRequest { #[serde(rename = \"ipnsNames\")] ipns_names: Vec&lt;String&gt; }`. Call `client.authenticated_post(\"/shares/revoke-for-items\", &amp;req).await?`; on `!resp.status().is_success()` build `ApiError::ApiResponse { status: resp.status().as_u16(), message }` (mirror ipns.rs:426-433). Success = 2xx (controller @HttpCode(OK)=200). No chunking needed (one name), but keep an ArrayMaxSize(5000) guard if passing a slice."},{"file":"crates/fuse/src/metadata.rs","fn":"revoke_shares_blocking (new helper, near spawn_bin_entry_publish ~:424)","change":"New sync helper `fn revoke_shares_blocking(api: &amp;Arc&lt;ApiClient&gt;, rt: &amp;Arc&lt;Runtime&gt;, ipns_name: &amp;str) -&gt; Result&lt;(), ()&gt;`. Runs rt.block_on(timeout(~15s, retry_loop)) where retry_loop calls cipherbox_api_client::shares::revoke_shares_for_items with bounded retry (maxAttempts=3, 300ms*2^attempt backoff) and short-circuits on 4xx (match ApiError::ApiResponse{status,..} where (400..=499).contains(&amp;status) =&gt; return Err). Transport RequestFailed and 5xx are retried; timeout → Err. Mirrors SDK revokeBatchWithRetry / isNonRetryableError (share/index.ts:192,205). Returns Ok(()) on success or empty/missing ipnsName (nothing to revoke)."},{"file":"crates/fuse/src/write_ops/implementation/delete.rs","fn":"handle_unlink (~:143, after snapshot, before :149 fs.inodes.remove)","change":"After capturing bin_entry_data (which carries the file's file_meta_ipns_name via meta_ipns), call metadata::revoke_shares_blocking(&amp;fs.api, &amp;fs.rt, &amp;file_meta_ipns_name) BEFORE fs.inodes.remove(child_ino)/update_folder_metadata. On Err: `reply.error(libc::EIO); return;` (abort, fail-closed). If file_meta_ipns_name is absent (the existing best-effort skip-bin case), skip revoke too (nothing was shared without an ipnsName)."},{"file":"crates/fuse/src/write_ops/implementation/delete.rs","fn":"handle_rmdir (~:299, after snapshot/EMPTY check, before :307 publish_queue.remove)","change":"After the empty-dir check and capturing the folder's ipns_name, call metadata::revoke_shares_blocking(&amp;fs.api, &amp;fs.rt, &amp;ipns_name) BEFORE fs.publish_queue.remove/fs.inodes.remove/update_folder_metadata. On Err: `reply.error(libc::EIO); return;`. Folder is guaranteed empty (ENOTEMPTY at :238), so revoking the single folder ipns_name is complete coverage."},{"file":"crates/fuse/src/platform/windows/write_ops.rs","fn":"handle_set_delete (~:1199, currently a no-op stub) OR handle_cleanup (~:735, before inodes.remove)","change":"PREFERRED: implement revocation in handle_set_delete (it returns Result&lt;(),FspError&gt; and runs before cleanup, so Err → rejected delete = true fail-closed). Resolve the node's ipnsName from context.ino under ctx.inner.lock(), call revoke_shares_blocking, map Err to FspError (e.g. STATUS_ACCESS_DENIED) to abort. FALLBACK if set_delete can't cleanly resolve the ipnsName: in handle_cleanup, after computing bin_file_data/bin_folder_data and before fs.inodes.remove(ino) (:736), revoke best-effort and log on failure (cleanup has no errno channel). Reach the shared helper via super::super::metadata::revoke_shares_blocking (winfsp module nesting). Windows-only; verified by the Cargo Check &amp; Test (Windows) CI gate, not locally."}],"platformLayering":"NOT shared. The unix delete logic lives in crates/fuse/src/write_ops/implementation/delete.rs (handle_unlink:58, handle_rmdir:208), invoked by the fuser frontend operations.rs under #[cfg(feature=\\\"fuse\\\")]. Windows/winfsp has a completely separate, duplicated delete path: the trait set_delete (platform/windows/operations.rs:474) → handle_set_delete (platform/windows/write_ops.rs:1199, currently a no-op Ok(()) stub), with the ACTUAL delete-on-close in handle_cleanup (platform/windows/write_ops.rs:595, delete branch at flags&amp;0x01, building its own BinEntry and calling spawn_bin_entry_publish at :810). The two paths share only the leaf helpers (spawn_bin_entry_publish in metadata.rs:424, versions_to_bin_entries, build_folder_path). Therefore patching delete.rs alone does NOT cover Windows — both need the hook. The natural shared reuse point is a sync revoke helper added next to spawn_bin_entry_publish in metadata.rs, called from both paths (windows reaches it via super::super::metadata::). Critical asymmetry: unix can fail-closed (handlers ret
+... (truncated 30423 chars, full result in /private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/2c9cca7a-f210-45f4-b940-4f091be387a8/tasks/w04wj3hjr.output)</result>
+<usage><agent_count>10</agent_count><subagent_tokens>741983</subagent_tokens><tool_uses>321</tool_uses><duration_ms>2112384</duration_ms></usage>
+</task-notification>
+
+---
+
+ok PR 566 needs a /resolve-pr-reviews - please handle this in a background agent
