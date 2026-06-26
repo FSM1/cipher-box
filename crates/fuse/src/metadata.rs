@@ -325,6 +325,10 @@ pub fn spawn_metadata_publish(
                         Ok(v) => v.cid,
                         // D-04: Legacy variant removed — all-absent sig fields fail closed.
                         Err(cipherbox_api_client::ipns::VerifyError::Invalid(msg)) => {
+                            // F11: fail-closed verify failure strands the pre-uploaded blob;
+                            // unpin it best-effort (mirrors the Success/persistent-Conflict exits).
+                            let _ =
+                                cipherbox_api_client::ipfs::unpin_content(&api, &new_cid).await;
                             return Err(format!("IPNS {} verify failed on merge: {}", ipns_name, msg));
                         }
                         Err(cipherbox_api_client::ipns::VerifyError::Api(e)) => {
