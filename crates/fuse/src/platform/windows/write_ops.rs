@@ -1209,6 +1209,17 @@ pub mod implementation {
     ///
     /// When `delete_file` is `false` WinFsp is clearing a previously-set delete
     /// flag (an un-delete); there is nothing to revoke, so we accept it.
+    ///
+    /// Known gap (accepted): `set_delete(true)` followed by `set_delete(false)`
+    /// (an application setting then cancelling `DELETE_ON_CLOSE`) revokes shares
+    /// eagerly on the `true` call and does not restore them on the cancel — the
+    /// node survives but its shares are gone. We accept this because `set_delete`
+    /// is the only WinFsp callback that can *reject* a delete; deferring to
+    /// `handle_cleanup` (the real deletion point) is impossible since cleanup
+    /// returns `()` and cannot abort. The cancelled-delete window is rare, and
+    /// the owner can always re-share; this trade favours TRUE fail-closed
+    /// revocation (never leaving a sharee with access to deleted content) over
+    /// avoiding the occasional spurious revoke on a cancelled delete.
     pub fn handle_set_delete(
         ctx: &WinFspContext,
         context: &WinFspFileContext,

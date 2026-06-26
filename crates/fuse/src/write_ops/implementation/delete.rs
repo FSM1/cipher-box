@@ -72,29 +72,14 @@ pub fn handle_unlink(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Rep
         }
     };
 
-    // Capture the file's own metadata IPNS name before any mutation so we can
-    // revoke its shares (fail-closed) ahead of the destructive removal. Empty
-    // when the file was loaded from remote metadata before its IPNS resolve —
-    // in that case nothing was ever shared under a name, so there is nothing to
-    // revoke (and we skip the bin entry too, matching the existing behaviour).
-    let file_meta_ipns_name = match fs.inodes.get(child_ino) {
-        Some(inode) => match &inode.kind {
-            InodeKind::File {
-                file_meta_ipns_name, ..
-            } => file_meta_ipns_name.clone().unwrap_or_default(),
-            _ => {
-                reply.error(libc::EISDIR);
-                return;
-            }
-        },
-        None => {
-            reply.error(libc::ENOENT);
-            return;
-        }
-    };
-
-    // Capture data for bin entry before inode removal
-    let bin_entry_data = match fs.inodes.get(child_ino) {
+    // Capture the file's own metadata IPNS name (for fail-closed share
+    // revocation ahead of the destructive removal) and the bin-entry data in a
+    // single inode lookup. The revoke name is empty when the file was loaded
+    // from remote metadata before its IPNS resolve — in that case nothing was
+    // ever shared under a name, so there is nothing to revoke (and we skip the
+    // bin entry too, matching the existing behaviour). Mirrors the rmdir
+    // pattern of carrying the revoke name out of the same match.
+    let (file_meta_ipns_name, bin_entry_data) = match fs.inodes.get(child_ino) {
         Some(inode) => match &inode.kind {
             InodeKind::File {
                 file_meta_ipns_name,
@@ -104,6 +89,7 @@ pub fn handle_unlink(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Rep
                 versions,
                 ..
             } => {
+                let revoke_ipns_name = file_meta_ipns_name.clone().unwrap_or_default();
                 let now_ms = SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
@@ -130,7 +116,7 @@ pub fn handle_unlink(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Rep
                     }
                 };
 
-                if let Some(meta_ipns) = meta_ipns {
+                let bin_data = if let Some(meta_ipns) = meta_ipns {
                     let file_pointer = cipherbox_core::folder::FilePointer {
                         id: cipherbox_crypto::utils::generate_uuid_v4(),
                         name: inode.name.clone(),
@@ -150,7 +136,9 @@ pub fn handle_unlink(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Rep
                     ))
                 } else {
                     None
-                }
+                };
+
+                (revoke_ipns_name, bin_data)
             }
             _ => {
                 reply.error(libc::EISDIR);
