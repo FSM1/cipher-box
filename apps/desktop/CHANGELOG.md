@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.46.0](https://github.com/FSM1/cipher-box/compare/cipherbox-desktop-v0.45.0...cipherbox-desktop-v0.46.0) (2026-06-26)
+
+
+### Bug Fixes
+
+* harden Phase 60 deferred safety patches in FUSE publish and desktop vault init ([#566](https://github.com/FSM1/cipher-box/issues/566)) ([0adcb04](https://github.com/FSM1/cipher-box/commit/0adcb0418198b3cc311da98551c9d0a4bef293c2))
+
 ## [0.45.0](https://github.com/FSM1/cipher-box/compare/cipherbox-desktop-v0.44.0...cipherbox-desktop-v0.45.0) (2026-06-25)
 
 

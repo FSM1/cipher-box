@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.45.1](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.45.0...cipher-box-v0.45.1) (2026-06-26)
+
+
+### Bug Fixes
+
+* **bin:** unpin deleted content and revoke its shares ([#563](https://github.com/FSM1/cipher-box/issues/563)) ([1699522](https://github.com/FSM1/cipher-box/commit/16995221c79421d086aeee0b58fb7af3c7198fa9))
+* **fuse:** revoke shares when items are deleted via the desktop mount ([#568](https://github.com/FSM1/cipher-box/issues/568)) ([82ad5d7](https://github.com/FSM1/cipher-box/commit/82ad5d77b6d3b524da62888142400c3a2cd62380))
+* harden Phase 60 deferred safety patches in FUSE publish and desktop vault init ([#566](https://github.com/FSM1/cipher-box/issues/566)) ([0adcb04](https://github.com/FSM1/cipher-box/commit/0adcb0418198b3cc311da98551c9d0a4bef293c2))
+
 ## [0.45.0](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.44.1...cipher-box-v0.45.0) (2026-06-25)
 
 

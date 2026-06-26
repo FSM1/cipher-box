@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.36.1](https://github.com/FSM1/cipher-box/compare/cipherbox-api-client-v0.36.0...cipherbox-api-client-v0.36.1) (2026-06-26)
+
+
+### Bug Fixes
+
+* **fuse:** revoke shares when items are deleted via the desktop mount ([#568](https://github.com/FSM1/cipher-box/issues/568)) ([82ad5d7](https://github.com/FSM1/cipher-box/commit/82ad5d77b6d3b524da62888142400c3a2cd62380))
+
 ## [0.36.0](https://github.com/FSM1/cipher-box/compare/cipherbox-api-client-v0.35.0...cipherbox-api-client-v0.36.0) (2026-06-25)
 
 

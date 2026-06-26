@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.44.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/api-client-v0.43.0...@cipherbox/api-client-v0.44.0) (2026-06-26)
+
+
+### Bug Fixes
+
+* **bin:** unpin deleted content and revoke its shares ([#563](https://github.com/FSM1/cipher-box/issues/563)) ([1699522](https://github.com/FSM1/cipher-box/commit/16995221c79421d086aeee0b58fb7af3c7198fa9))
+
 ## [0.43.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/api-client-v0.42.0...@cipherbox/api-client-v0.43.0) (2026-06-22)
 
 

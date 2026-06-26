@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.31.1](https://github.com/FSM1/cipher-box/compare/@cipherbox/core-v0.31.0...@cipherbox/core-v0.31.1) (2026-06-26)
+
+
+### Bug Fixes
+
+* **bin:** unpin deleted content and revoke its shares ([#563](https://github.com/FSM1/cipher-box/issues/563)) ([1699522](https://github.com/FSM1/cipher-box/commit/16995221c79421d086aeee0b58fb7af3c7198fa9))
+
 ## [0.31.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/core-v0.30.0...@cipherbox/core-v0.31.0) (2026-06-17)
 
 
