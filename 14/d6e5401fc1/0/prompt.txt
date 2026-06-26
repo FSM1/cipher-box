@@ -549,3 +549,7 @@ happy to park #5 and move both of these todos to @.planning/todos/completed/ in 
 ---
 
 ok PR 566 needs a /resolve-pr-reviews - please handle this in a background agent
+
+---
+
+yes capture both todos, and also background /resolve-pr-reviews on 568
