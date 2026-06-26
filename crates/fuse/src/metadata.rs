@@ -332,6 +332,11 @@ pub fn spawn_metadata_publish(
                             return Err(format!("IPNS {} verify failed on merge: {}", ipns_name, msg));
                         }
                         Err(cipherbox_api_client::ipns::VerifyError::Api(e)) => {
+                            // F11: transient resolve API failure also strands the
+                            // pre-uploaded blob; unpin it best-effort (mirrors the
+                            // Invalid arm and the Success/persistent-Conflict exits).
+                            let _ =
+                                cipherbox_api_client::ipfs::unpin_content(&api, &new_cid).await;
                             return Err(format!("{}", e));
                         }
                     };
