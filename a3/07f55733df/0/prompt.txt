@@ -1,0 +1,1 @@
+/gsd:new-milestone v2.0 Metadata and Sharing Refactor @.planning/design/2026-06-26-sharing-read-keychaining-design.md
