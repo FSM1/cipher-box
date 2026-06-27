@@ -50,10 +50,13 @@ tests/e2e/test-results/*
 .claude/gsd-core/
 .claude/commands/gsd/
 .claude/commands/gsd-*
-.claude/scripts/fix-slash-commands.cjs
+.claude/scripts/
 .claude/agents/gsd-*
 .claude/hooks/gsd-*
 .claude/hooks/lib/gsd-*
+.claude/hooks/lib/git-cmd.js
+.claude/hooks/managed-hooks-registry.cjs
+.claude/package.json
 .claude/gsd-file-manifest.json
 .claude/gsd-install-state.json
 .claude/gsd-pristine/
