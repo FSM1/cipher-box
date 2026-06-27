@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "aecd4e95cb28",
+  "strategy": "manual-commit",
+  "branch": "docs/v2.0-metadata-and-sharing-refactor",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/ae/cd4e95cb28/0/metadata.json",
+      "transcript": "/ae/cd4e95cb28/0/full.jsonl",
+      "content_hash": "/ae/cd4e95cb28/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 42881,
+    "cache_creation_tokens": 221334,
+    "cache_read_tokens": 7174224,
+    "output_tokens": 58137,
+    "api_call_count": 41
+  }
+}

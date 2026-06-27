@@ -1,0 +1,70 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "aecd4e95cb28",
+  "session_id": "daff5e88-c6c1-43a2-991c-c8a4c2a77666",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-27T00:41:50.079236Z",
+  "branch": "docs/v2.0-metadata-and-sharing-refactor",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "fd2ab0acbf1d",
+  "token_usage": {
+    "input_tokens": 42881,
+    "cache_creation_tokens": 221334,
+    "cache_read_tokens": 7174224,
+    "output_tokens": 58137,
+    "api_call_count": 41
+  },
+  "summary": {
+    "intent": "Start the v2.0 Metadata and Sharing Refactor milestone for CipherBox using the GSD new-milestone workflow: update PROJECT.md with the new milestone, run optional research, define scoped requirements, and produce a phased roadmap.",
+    "outcome": "Full milestone initialized: PROJECT.md and STATE.md updated, Architecture + Pitfalls research completed, 39 requirements across 8 categories defined, 9-phase roadmap (phases 61–69) approved and committed, 1 pending todo linked to Phase 65. All artifacts committed on branch `docs/v2.0-metadata-and-sharing-refactor`.",
+    "learnings": {
+      "repo": [
+        "Main branch has commit protection — planning doc commits must go on a feature branch; the gsd commit helper silently stages files and exits 0 without creating a commit when branch protection blocks it.",
+        "`.planning/research/` is tracked in git (not gitignored); only `.planning/tmp/` is gitignored — research artifacts need to be committed with the milestone.",
+        "Stale v1.1 research files (March 23, 'IPFS Infrastructure v1.1') lived in `.planning/research/` and needed archiving before v2.0 research could be written cleanly.",
+        "v1.1 ended at Phase 60, so v2.0 phase numbering continues from Phase 61.",
+        "The `agent-skills` gsd-tools query returns empty output in this project setup — researcher agents carry their own prompts and don't rely on the skills output.",
+        "`.planning/design/2026-06-26-sharing-read-keychaining-design.md` is implementation-ready with two ratified ADRs, a flows walkthrough, a frozen 8-layer cutover order (crypto→core→sdk-core→sdk→api→tee-worker→web→fuse), and a 21-item test strategy (§7.3) — downstream agents should treat it as the single source of truth.",
+        "Of 17 pending todos, only the bin-delete CID-leak bug (`2026-06-23-bin-delete-and-empty-bin-leak-content-and-version-cid-pins.md`) matched v2.0 scope; auth, search, MFA, logging, infra GC, CRDT inbox, and IPNS-verify follow-ups are unrelated."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "finding": "Phase 65 rewrites this file as part of the bin re-link work; the existing bin-delete CID-leak bug (todo 2026-06-23) will be addressed here."
+        },
+        {
+          "path": "packages/core/src/bin/types.ts",
+          "finding": "Phase 65 rewrites this file alongside sdk/src/bin/index.ts; permanent delete must unpin CIDs per design §3.10."
+        },
+        {
+          "path": ".planning/todos/pending/2026-06-23-bin-delete-and-empty-bin-leak-content-and-version-cid-pins.md",
+          "line": 1,
+          "finding": "Tagged `resolves_phase: 65` — the only pending todo that confidently maps to the v2.0 roadmap."
+        }
+      ],
+      "workflow": [
+        "When a GSD research synthesizer subagent is blocked from writing output files (permissions), write SUMMARY.md manually from the returned synthesis text and continue — the roadmapper only needs the file to exist.",
+        "Per Bug #2630: always use `gsd_run query state.milestone-switch` to reset STATE.md frontmatter; hand-editing leaves stale milestone data in frontmatter while the body reflects the new milestone.",
+        "When the gsd commit helper false-negatives (lint-staged ✔ but no commit), fall back to direct `git commit` — the helper's exit code is unreliable under branch protection.",
+        "Best-effort todo-to-phase linking: only tag todos with a concrete, narrow scope that directly maps to a phase goal; vague or cross-cutting todos should be left unlinked rather than over-matched."
+      ]
+    },
+    "friction": [
+      "Main branch protection silently swallowed the gsd commit helper's commit attempt — lint-staged reported all green but no commit landed; required diagnosing via `git log` and switching to a feature branch.",
+      "The research synthesizer subagent was blocked from writing SUMMARY.md (likely a file-write permission gate in the subagent sandbox), requiring the orchestrator to write the file manually.",
+      "The `agent-skills` gsd-tools query returned empty output, suggesting the tool either isn't wired up or returns nothing for this project configuration — had to proceed without it.",
+      "Signing commits required unsandboxed access for the 1Password SSH agent, causing an extra branch-rename step when the initial commit attempt failed.",
+      "Requirement count was announced as 36 in the REQUIREMENTS.md header but was actually 39 (3+6+5+7+4+7+4+3); the roadmapper caught and corrected this."
+    ],
+    "open_items": [
+      "Three open questions from design §9.2 pinned to specific phases: (Q1) co-writer offline handling during rotation → Phase 63, (Q2) rotation host for pure-web users without desktop app → Phase 68, (Q3) write-recipient vs owner sub-share authority boundary → Phases 65/68/69.",
+      "Two sub-phase research flags: Phase 66 requires mapping TypeORM FK relationships before the `folder_ipns`→`ipns_records` rename; Phase 69 requires resolving the grant-root algorithm before the FUSE caller rewrite.",
+      "SEED-001 (Phala TEE on-demand cost reduction) deferred — user confirmed it should not be included in v2.0 scope.",
+      "Tier 3 capability layer and read-side TTL explicitly out of scope for v2.0; deferred to Future Requirements in REQUIREMENTS.md.",
+      "16 pending todos remain unlinked and unaddressed by v2.0 (auth flows, search, MFA, logging hardening, infra GC, IPNS-verify follow-ups, CRDT inbox)."
+    ]
+  }
+}
