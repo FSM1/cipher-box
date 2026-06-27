@@ -1,0 +1,11 @@
+<task-notification>
+<task-id>bbw7k18wi</task-id>
+<tool-use-id>toolu_01NYPhMDu9KmmGBjNZJmtaSD</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/ac5e5b7d-351c-4f05-a5f2-43a75f07b39b/tasks/bbw7k18wi.output</output-file>
+<status>completed</status>
+<summary>Background command "Commit GSD untracking on chore branch" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+scrub all absolute paths from @.planning/ on the same PR
