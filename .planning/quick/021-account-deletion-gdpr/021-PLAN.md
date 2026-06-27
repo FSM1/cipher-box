@@ -126,7 +126,7 @@ Output: Backend DELETE endpoint, frontend Danger Zone UI with typed confirmation
 
   </action>
   <verify>
-    - `cd /Users/michael/Code/cipher-box && pnpm --filter api build` compiles without errors.
+    - `cd . && pnpm --filter api build` compiles without errors.
     - `pnpm api:generate` succeeds and produces updated `apps/web/src/api/auth/auth.ts` with `authControllerDeleteAccount` function.
     - Grep for `deleteAccount` in `apps/web/src/api/auth/auth.ts` confirms the generated client has the endpoint.
   </verify>
@@ -402,7 +402,7 @@ Output: Backend DELETE endpoint, frontend Danger Zone UI with typed confirmation
 
   </action>
   <verify>
-    - `cd /Users/michael/Code/cipher-box && pnpm --filter web build` compiles without errors or type errors.
+    - `cd . && pnpm --filter web build` compiles without errors or type errors.
     - `pnpm lint` passes (no Biome warnings about comment text, accessibility, etc.).
     - Grep `security-tab-danger` in App.css shows all CSS rules.
     - Grep `deleteAccount` in SecurityTab.tsx confirms API call is wired.

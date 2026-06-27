@@ -78,7 +78,7 @@ Do NOT modify any other logic. The rest of the hook, store integration, and down
 </action>
 <verify>
 
-1. `cd /Users/michael/Code/cipher-box && pnpm --filter web exec tsc --noEmit` -- TypeScript compilation passes
+1. `cd . && pnpm --filter web exec tsc --noEmit` -- TypeScript compilation passes
 2. `grep -n 'totalFactors > 2' apps/web/src/hooks/useMfa.ts` -- confirms the fix is on line 46
 3. `grep -n 'totalFactors >= 2' apps/web/src/hooks/useMfa.ts` -- returns NO matches (old check removed)
    </verify>

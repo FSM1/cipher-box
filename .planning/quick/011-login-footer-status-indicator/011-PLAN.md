@@ -182,7 +182,7 @@ Corrected plan:
 
     </action>
     <verify>
-    1. `cd /Users/michael/Code/cipher-box && pnpm --filter web build` completes without errors.
+    1. `cd . && pnpm --filter web build` completes without errors.
     2. Start the dev server (`pnpm --filter web dev`) and visually verify at http://localhost:5173:
        - Footer visible at bottom of login page with "(c) 2026 CipherBox", links, and status indicator.
        - StatusIndicator shows [CONNECTED] or [DISCONNECTED] in the footer-right area.

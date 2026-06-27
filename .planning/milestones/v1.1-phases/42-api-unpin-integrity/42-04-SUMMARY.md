@@ -77,7 +77,7 @@ None — this plan applies migrations to the live DB with no source file modific
 
 ## Decisions Made
 
-- Ran `pnpm migration:run` from the main repo path (`/Users/myankelev/Code/random/cipher-box/apps/api`) rather than the worktree, because the worktree has no `node_modules`. Both paths target the same `src/data-source.ts` pointing at the dev Postgres (`cipherbox-postgres`), so the DB effect is identical.
+- Ran `pnpm migration:run` from the main repo path (`apps/api`) rather than the worktree, because the worktree has no `node_modules`. Both paths target the same `src/data-source.ts` pointing at the dev Postgres (`cipherbox-postgres`), so the DB effect is identical.
 - Did not modify any migration files (per plan instructions; defects must be fixed in 42-01).
 
 ## Deviations from Plan

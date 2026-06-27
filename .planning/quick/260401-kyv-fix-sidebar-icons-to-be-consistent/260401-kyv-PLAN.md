@@ -38,8 +38,8 @@ Output: Consistent monochrome SVG sidebar icons that respond to CSS color states
 </objective>
 
 <execution_context>
-@/Users/michael/Code/cipher-box/.claude/get-shit-done/workflows/execute-plan.md
-@/Users/michael/Code/cipher-box/.claude/get-shit-done/templates/summary.md
+@.claude/get-shit-done/workflows/execute-plan.md
+@.claude/get-shit-done/templates/summary.md
 </execution_context>
 
 <context>
@@ -108,7 +108,7 @@ In layout.css:
    Remove the `font-family` and `font-size` properties since they only applied to text-based emoji.
    </action>
    <verify>
-   <automated>cd /Users/michael/Code/cipher-box && pnpm --filter web exec tsc --noEmit 2>&1 | head -30</automated>
+   <automated>cd . && pnpm --filter web exec tsc --noEmit 2>&1 | head -30</automated>
    </verify>
    <done>All four sidebar nav icons render as inline SVGs using currentColor. No emoji or Unicode characters remain in NavItem.tsx. TypeScript compiles without errors. The icon type union ('folder' | 'shared' | 'bin' | 'settings') is unchanged so AppSidebar requires zero modifications.</done>
    </task>

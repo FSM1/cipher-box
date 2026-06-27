@@ -6,7 +6,7 @@ wrappers, fail-closed signature handling, key zeroization) is intact — Phase 5
 none of it.
 
 Branch: `feat/desktop-fuse-durability-at-rest-safety`
-Worktree: `/Users/myankelev/Code/random/cipher-box-p52`
+Worktree: `.`
 ASVS Level: not declared in plan config; verified against the plan threat registers (STRIDE).
 block_on: not declared; treated as informational (no `<config>` block in the plans).
 
@@ -81,5 +81,5 @@ entirely to the declared mitigation files).
 
 - No `<config>` block (asvs_level / block_on) was present in the phase plans; verification
   was performed against the per-plan STRIDE threat registers.
-- Repo-root `/Users/myankelev/Code/random/cipher-box-p52/SECURITY.md` was NOT modified by
+- Repo-root `SECURITY.md` was NOT modified by
   this audit. Git tree was clean before and after writing this phase doc.

@@ -80,7 +80,7 @@ quotaStore.fetchQuota().catch((err) => logger.warn('quota reconcile failed', err
 
 ### Worktree Node Modules
 
-The worktree has a near-empty `node_modules/` (only a `.vite` cache dir). Pre-commit hook runs `pnpm lint-staged` which fails because `lint-staged` is not in the worktree's PATH. Resolved by prepending the main repo's `node_modules/.bin` to PATH for git commit invocations: `PATH="/Users/myankelev/Code/random/cipher-box/node_modules/.bin:$PATH" git commit ...`. This is an infrastructure constraint of this worktree setup, not a code issue.
+The worktree has a near-empty `node_modules/` (only a `.vite` cache dir). Pre-commit hook runs `pnpm lint-staged` which fails because `lint-staged` is not in the worktree's PATH. Resolved by prepending the main repo's `node_modules/.bin` to PATH for git commit invocations: `PATH="node_modules/.bin:$PATH" git commit ...`. This is an infrastructure constraint of this worktree setup, not a code issue.
 
 ## TDD Gate Compliance
 

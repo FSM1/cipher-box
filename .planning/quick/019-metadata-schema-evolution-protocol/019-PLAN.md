@@ -430,7 +430,7 @@ Add the following entry to the MEMORY.md file (under a new "## Metadata Schema D
 
 This ensures future Claude sessions are aware of these docs when working on metadata-related tickets.
 
-NOTE: The MEMORY.md file is at `/Users/michael/.claude/projects/-Users-michael-Code-cipher-box/memory/MEMORY.md`. Read it first, then append the new section.
+NOTE: The MEMORY.md file is at `~/.claude/projects/-Users-michael-Code-cipher-box/memory/MEMORY.md`. Read it first, then append the new section.
 </action>
 <verify>
 MEMORY.md contains the new "Metadata Schema Documentation" section with references to both docs.
