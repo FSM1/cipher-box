@@ -1,0 +1,1 @@
+I think that these can be safely added to the gitignore list - they are clearly GSD specific, so shouldn't be polluting the codebase methinks

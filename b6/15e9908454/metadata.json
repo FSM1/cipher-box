@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "b615e9908454",
+  "strategy": "manual-commit",
+  "branch": "chore/untrack-local-gsd-install",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".gitignore"
+  ],
+  "sessions": [
+    {
+      "metadata": "/b6/15e9908454/0/metadata.json",
+      "transcript": "/b6/15e9908454/0/full.jsonl",
+      "content_hash": "/b6/15e9908454/0/content_hash.txt",
+      "prompt": "/b6/15e9908454/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 214,
+    "cache_creation_tokens": 13375,
+    "cache_read_tokens": 1763861,
+    "output_tokens": 10272,
+    "api_call_count": 9
+  }
+}
