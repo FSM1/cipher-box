@@ -1,0 +1,85 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "6c3c2756738d",
+  "session_id": "daff5e88-c6c1-43a2-991c-c8a4c2a77666",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-27T00:39:31.962826Z",
+  "branch": "docs/v2.0-metadata-and-sharing-refactor",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/research/ARCHITECTURE.md",
+    ".planning/research/PITFALLS.md",
+    ".planning/research/SUMMARY.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "fd2ab0acbf1d",
+  "token_usage": {
+    "input_tokens": 42873,
+    "cache_creation_tokens": 213160,
+    "cache_read_tokens": 6239488,
+    "output_tokens": 52253,
+    "api_call_count": 37
+  },
+  "summary": {
+    "intent": "Initialize GSD milestone v2.0 (Metadata and Sharing Refactor) for CipherBox — a brownfield workflow covering scope confirmation, optional research, requirements definition, and roadmap creation continuing phase numbering from v1.1.",
+    "outcome": "Milestone v2.0 fully initialized on branch `docs/v2.0-metadata-and-sharing-refactor`: PROJECT.md and STATE.md updated, 2 research agents run (Architecture + Pitfalls), SUMMARY.md written, REQUIREMENTS.md with 39 requirements across 8 categories created, and ROADMAP.md with 9 phases (61–69) approved and committed.",
+    "learnings": {
+      "repo": [
+        "`.planning/research/` is tracked in git; only `.planning/tmp/` is gitignored — research artifacts must be committed explicitly.",
+        "Direct commits to `main` are forbidden by a branch protection rule; all planning docs require a feature/docs branch and PR flow.",
+        "Milestone branch naming convention: `docs/v2.0-{milestone-slug}` (derived from config `milestone_branch_template`).",
+        "Phase numbering is continuous across milestones: v1.1 ended at phase 60, so v2.0 starts at phase 61.",
+        "Stale v1.1 research files (`STACK.md`, `FEATURES.md`, `ARCHITECTURE.md`, `PITFALLS.md`, `SUMMARY.md`) were tracked at `.planning/research/` root; archived to `.planning/research/_v1.1-archive/` before v2.0 research was written.",
+        "`gsd_run query agent-skills` returns empty for researcher/synthesizer agents — they carry their own prompts; the call is a no-op but not an error.",
+        "Commit signing (GPG via 1Password agent) requires unsandboxed shell access; sandboxed Bash tool blocks it silently."
+      ],
+      "code": [
+        {
+          "path": ".planning/design/2026-06-26-sharing-read-keychaining-design.md",
+          "finding": "8-layer blast radius (packages/crypto → core → sdk-core → sdk → apps/api → apps/tee-worker → apps/web → crates/fuse) with 39 requirements across CRYPTO, NODE, READ, ROT, WRITE, TEE, DATA, TEST categories. Three open questions remain in §9.2."
+        },
+        {
+          "path": ".planning/ROADMAP.md",
+          "finding": "9 phases 61–69 along strict dependency chain; Phase 66 has a TypeORM FK map research flag; Phase 69 has a grant-root algorithm research flag. STATE.md frontmatter correctly set to milestone v2.0 / 9 phases via SDK handler."
+        },
+        {
+          "path": ".planning/REQUIREMENTS.md",
+          "finding": "39 requirements (not 36 as initially counted by orchestrator — 3+6+5+7+4+7+4+3=39). Traceability verified 39/39 mapped, 0 unmapped."
+        }
+      ],
+      "workflow": [
+        "The GSD `query commit` helper can produce a false negative: lint-staged reports all ✔ but the commit silently fails when the target branch has push protection. Fall back to direct `git commit` with explicit signing flag.",
+        "The synthesizer subagent may be blocked from writing output files in sandboxed execution; the orchestrator must write SUMMARY.md directly from the returned synthesis text.",
+        "Requirement count should be verified arithmetically before presenting to user — orchestrator miscounted category totals (36 stated vs 39 actual).",
+        "When a design doc is comprehensive and implementation-ready (ADRs ratified, cutover order frozen, test strategy §7.3 defined), skip open-ended questioning and proceed directly to scope confirmation via AskUserQuestion."
+      ]
+    },
+    "friction": [
+      "Branch protection on `main` blocked the initial commit; had to create `docs/v2.0-metadata-and-sharing-refactor` branch mid-workflow after the first commit attempt silently failed.",
+      "`gsd_run query commit` false negative — lint-staged succeeded visually but no commit landed; required switching to direct `git commit -S` for all subsequent commits.",
+      "Synthesizer subagent could not write SUMMARY.md to disk (sandboxed permission block); orchestrator had to write the file manually from the returned text, adding an extra step.",
+      "Commit signing requires unsandboxed access (1Password SSH agent); each `git commit -S` call triggered a permission prompt.",
+      "Initial requirement count presented to user (36) was incorrect — caught only after roadmapper returned the correct count (39), requiring a correction in the approval flow."
+    ],
+    "open_items": [
+      "Three open questions from design §9.2 pinned to specific phases: (Q1) co-writer offline handling during rotation — Phase 63; (Q2/Q3) rotation host for pure-web users and write-recipient sub-share authority — Phases 65/68/69.",
+      "Two sub-phase research flags before implementation: Phase 66 TypeORM FK cascade map (safe to drop `share_keys`?); Phase 69 grant-root read algorithm (non-trivial traversal).",
+      "SEED-001 (Phala TEE on-demand cost reduction) deferred — trigger condition is a future milestone with TEE cost optimization focus.",
+      "Tier 3 capability layer / read-side TTL deferred to Future Requirements in REQUIREMENTS.md.",
+      "Branch `docs/v2.0-metadata-and-sharing-refactor` needs a PR to merge planning artifacts (PROJECT.md, STATE.md, ROADMAP.md, REQUIREMENTS.md, research/) to `main` before execution phases begin."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-27T00:38:43.235262Z",
+    "agent_lines": 663,
+    "agent_removed": 1226,
+    "human_added": 2512,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 3175,
+    "total_lines_changed": 5401,
+    "agent_percentage": 34.975004628772446,
+    "metric_version": 2
+  }
+}
