@@ -45,5 +45,20 @@ tests/e2e/test-results/*
 .claude/gsd-migration-journal/
 .worktale/
 
+# GSD local install — machine-specific (absolute paths baked in on local installs).
+# Regenerate on a fresh clone with: npx -y --package=@opengsd/gsd-core@1.6.0 -- gsd-core --claude --local
+.claude/gsd-core/
+.claude/commands/gsd/
+.claude/commands/gsd-*
+.claude/scripts/fix-slash-commands.cjs
+.claude/agents/gsd-*
+.claude/hooks/gsd-*
+.claude/hooks/lib/gsd-*
+.claude/gsd-file-manifest.json
+.claude/gsd-install-state.json
+.claude/gsd-pristine/
+.claude/gsd-local-patches/
+.claude/gsd-user-files-backup/
+
 # GSD planning scratch (docs-generation backups, wave manifests)
 .planning/tmp/
