@@ -1,187 +1,65 @@
-# Project Research Summary
+# Research Summary: v2.0 Metadata and Sharing Refactor
 
-**Project:** CipherBox v1.1 -- IPFS Infrastructure
-**Domain:** IPFS/IPNS reliability, database minimization, BYO-IPFS node support, performance baselines
-**Researched:** 2026-03-07
-**Confidence:** HIGH
+**Synthesized:** 2026-06-27
+**Dimensions researched:** Architecture + Pitfalls only (Stack + Features intentionally skipped — design is implementation-ready)
+**Confidence:** HIGH — all cited symbols verified against live codebase (zero material drift)
 
 ## Executive Summary
 
-CipherBox v1.1 is an infrastructure-hardening milestone, not a feature milestone. The four workstreams -- IPNS reliability, database minimization, BYO-IPFS, and performance baselines -- aim to transform CipherBox from "IPFS as a storage backend with database fallbacks" to "IPFS-native with the database serving only coordination and auth." The dominant finding across all four research files is that the existing stack already has the capabilities needed. The Kubo v0.34.0 node can resolve IPNS records locally via its DHT; the `IpfsProvider` interface already abstracts pin/unpin/get for provider extension; `prom-client` is installed with an established `MetricsService` pattern; and TypeORM handles all necessary migrations. **Zero new npm dependencies are required for this entire milestone.**
+CipherBox v2.0 replaces a database-driven per-item key fan-out model (`share_keys` table, `O(items × recipients)` rows) with metadata-driven read key-chaining, and closes two confirmed revocation gaps: lazy/unsound read-revocation and un-rotatable write delegation. Scope is locked to **Tier 1** (unified `Node` schema, read key-chain navigation, resumable read-rotation engine) and **Tier 2** (write-revocation via full Ed25519 rotation — ADR 0001, and the resolve/republish/TEE contract rewrite). **Tier 3** (capability-layer TTL/op-caps) is explicitly out of scope.
 
-The recommended approach is a five-phase execution with strict ordering (Phases 18-22). Phase 18 (performance instrumentation) is zero-risk and establishes server-side baselines before any architectural changes. Phase 19 (IPNS reliability) inverts the resolution model to DB-first with async Kubo DHT verification via self-hosted Someguy, eliminating the `delegated-ipfs.dev` dependency. Phase 20 (database minimization) moves `encryptedRootFolderKey` into an IPFS blob via a versioned vault blob v2 format, with dual-write migration and permanent DB fallback. Phase 21 (BYO-IPFS) adds a `RemotePinningProvider` speaking the standard IPFS Pinning Service API, with dual-pin strategy (always pin to CipherBox node, best-effort mirror to user's node). Phase 22 (performance baselines completion) adds client-side timing instrumentation, end-to-end journey timing, k6 load tests, and capacity documentation after all features are stable.
+The design is implementation-ready — three adversarial reviews, two grilling sessions, and two ratified ADRs; no design decisions remain open except the three §9.2 questions flagged below. Stack and Features research were deliberately skipped because the design already pins them.
 
-The primary risk is in Phase 3: moving rootFolderKey to IPFS creates a hard dependency on IPNS resolution for login. All four research files flag this independently. The mitigation is clear -- keep the DB copy as a permanent fallback, never make IPNS the sole access path for the root folder key. Secondary risks include sequence number divergence during routing provider migration (Phase 2) and quota tracking becoming unenforceable for BYO-IPFS users (Phase 4). Both have well-defined prevention strategies documented in PITFALLS.md.
+The build order is strictly dependency-constrained across 8 layers: crypto primitive → core keystone → sdk-core rotation engine → sdk write/bin/invite → api schema+publish-gate → tee-worker contract → web → fuse/winfsp. The **AAD-bound seal primitive must land first** because a byte-encoding mismatch between TS and Rust is a **silent total decryption failure** — no error, just broken unseals across every node. **`packages/core` is the keystone**: nothing below it typechecks until `Node`/`SealedChildRef`/`PublishedNode` exist and `dist/` is rebuilt.
 
-## Key Findings
+## The Three Silent-Failure Risks (must be test-gated before their phase closes)
 
-### Recommended Stack
+These fail with NO runtime error — the worst class for this refactor:
 
-The milestone requires zero new npm dependencies. Every capability is built using existing libraries, configuration changes, and new provider implementations. The only external tooling addition is Grafana k6 v1.0 (a standalone Go binary, not an npm package) for load testing scripts.
+1. **CRIT-1 — content-key rotation.** Rotating a file node without minting a new `fileKey'` leaves the revoked reader able to decrypt the next content version. Gate: §7.3 test 2.
+2. **M1 — generation downgrade defense persistence.** The `{nodeId → highestGeneration}` high-water must be **durable** (IndexedDB/sqlite); stored in memory it evaporates on restart and a colluding relay replays the pre-rotation record. Gate: §7.3 test 5 (must survive restart).
+3. **Republisher sequence increment.** The TEE republisher must STOP incrementing `sequenceNumber` (`apps/tee-worker/src/routes/republish.ts:79` `+ 1n` confirmed) — a re-signed stale pre-rotation CID at a forward sequence dominates the rotation publish. Gate: §7.3 test 12.
 
-**Core technologies (all existing):**
+Plus the top silent-**data-loss** risk:
 
-- **Kubo v0.34.0 (recommend upgrade to v0.40.1):** Self-hosted IPFS node already participating in the Amino DHT. Supports `Gateway.ExposeRoutingAPI` and `Ipns.UsePubsub` for local IPNS resolution. v0.40.1 makes routing API default and improves IPNS-over-PubSub.
-- **`prom-client` ^15.1.3:** Already installed with `MetricsService` pattern established. Extend with 4 new histograms for IPFS/IPNS latency tracking.
-- **TypeORM ^0.3.28 + PostgreSQL 16.x:** Handles all migration needs. 2-3 new migrations (ADD COLUMN, ALTER COLUMN, CREATE TABLE for user IPFS config).
-- **IPFS Pinning Service API (HTTP standard):** Vendor-agnostic OpenAPI spec with 4 endpoints. Implemented by Pinata, Filebase, web3.storage, IPFS Cluster. No SDK needed -- native `fetch` is sufficient.
-- **k6 v1.0+ (dev tooling only):** Standalone load test runner with native TypeScript support. Install via `brew install k6`. Not committed to repo.
+4. **HIGH-4 — add-during-rotation.** The 409-retry path must re-fetch and re-merge `SealedChildRef`s, not re-seal from stale in-memory `children[]`; otherwise a concurrent upload is silently dropped. Gate: §7.3 test 4.
 
-### Expected Features
+## Suggested Phase Decomposition (8 phases, dependency-ordered)
 
-**Must have (table stakes):**
+1. **Crypto Primitive** — `sealAesGcmAad`/`unsealAesGcmAad` + `buildNodeAad` (TS) + byte-identical Rust twin + committed cross-language KAT (all 4 role bytes; frozen byte encoding). Self-contained, no consumers break. Gate: tests 6 (AAD transplant) + 7 (TS↔Rust KAT).
+2. **Core Keystone** — unified `Node`/`SealedChildRef`/`PublishedNode` + codecs (two sealed bodies, content self-seal, structured write chain, `versionFloor`). Gate: all consumers typecheck after `dist/` rebuild. Critical-path bottleneck — nothing below typechecks until this lands.
+3. **sdk-core Rotation Engine** — read-chain navigation + `rotateReadFromNode`/`rotateOne`/`verifySubtreeClean` in **named files (not a fat `index.ts` barrel** — coverage excludes barrels). Must include CRIT-1, M1, HIGH-3, HIGH-4 as success criteria. Gate: tests 1–5, 9; SDK E2E pass.
+4. **sdk Write/Bin/Invite** — `shared-write.ts` rewrite (structured write-body, (c) full rotation, role `0x04`); delete `addShareKeys`/`reWrapForRecipients`; `bin/*` re-link (delete `originalFolderKeyEncrypted` re-encrypt path); invite claim re-wrap (delete `encryptedChildKeys[]` JSONB fan-out). Gate: tests 10 (bin restore), 11 (invite claim).
+5. **API Schema + Publish Gate** — delete `share_keys`; slim `shares` (`readDescriptorRef`/`writeDescriptorRef`); rename `folder_ipns` → `ipns_records`; **drop `folder_ipns.public_key`** (null-row footgun behind two Phase-60 regressions); collapse `ipns_republish_schedule` duplicated columns; **atomic conditional-UPDATE publish CAS**; tombstone state + publish-gate rejection + resolve fail-closed fall-through (case-split: expected-null shared-folder rows apply seq floor, CID-mismatch fails closed); server-side generation gate. Run `pnpm api:generate`, commit regenerated client (`check-api-client.sh` pre-commit gate). Gate: tests 13, 15, 16, 20.
+6. **TEE Worker Contract** — lease-renewer rewrite: receive marshaled record, verify signature, extend EOL only, **no CID origination, no sequence increment**; internal epoch derivation; name↔key binding; migration durability. Round-trip the TEE/republish E2E. Gate: tests 12, 17, 18, 19.
+7. **Web** — replace `executeLazyRotation` with `rotateReadFromNode`; drop per-mutation fan-out; reconcile `folderTree` against `sequenceNumber` before publishes; durable IndexedDB generation + seq high-water. Note: web vitest only runs `*.test.ts` (not `.spec.ts`). Gate: test 5 (durable survives restart), test 13.
+8. **FUSE + WinFsp** — symmetric child-key unwrap; delete `spawn_file_meta_reencrypt` from **both callers** (`write_ops/.../rename.rs` AND `platform/windows/write_ops.rs`); add `rotateReadFromNode`; unify scope-exit; **grant-root awareness** in `delete`/`rename`/`move` (net-new); durable client floors; strict-verify each republish (recover Ed25519 pubkey from k51 name via `publicKeyFromIpnsName`, never the dropped column); `Node` as a real Rust enum. Budget a Windows CI round-trip (winfsp can't compile on macOS; watch the `super::` vs `super::super::` nesting trap). Gate: test 21 (`Cargo Check & Test (Windows)` authoritative); desktop E2E is dispatch-gated — trigger explicitly.
 
-- Reliable IPNS resolution (<2s, >99.5% availability) -- current `delegated-ipfs.dev` has documented 502s and stale records
-- DB-cached CID fallback with sequence number comparison -- already implemented, needs to become the primary resolution path
-- IPNS publish/resolve latency monitoring -- counters exist, need duration histograms
-- API endpoint response time baselines with p50/p95/p99 targets
-- Graceful degradation when IPFS/IPNS is slow -- timeout + fallback pattern, partially implemented
+## Test Strategy Thread (§7.3 — must-pass-before-merge)
 
-**Should have (differentiators):**
+The design's 21-item test list maps onto the phases above. The crash-safety/resume suite (test 1) and the three silent-revocation-bypass tests (2, 5, 12) plus the silent-data-loss test (4) are the non-negotiable merge gates. `tests/sdk-e2e` is the only real client→API IPNS publish/resolve round-trip — extend it with abort-and-resume cases. Keep checker subagents to static analysis only (no concurrent vitest — RAM starvation).
 
-- Move rootFolderKey to IPFS vault record -- server retains DB copy as permanent fallback but primary access shifts to IPFS blob, reducing server's role toward zero-knowledge relay
-- BYO-IPFS node support via Pinning Service API -- unique among encrypted storage apps, enables self-sovereignty over data persistence
-- End-to-end user journey performance baselines -- login-to-vault, upload-to-visible timing
-- IPFS/IPNS latency histograms with per-operation breakdown in Prometheus
+## Drift Report (design citations vs live code)
 
-**Defer (v1.2+):**
+- `decryptFileMetadata` is ~line 231 in `packages/core/src/file/metadata.ts` (design cites 232) — immaterial.
+- All other 17 cited symbols verified present: TEE `+ 1n` (`republish.ts:79`), `unenrollIpns` schedule-only delete (`republish.service.ts:257`), `folder_ipns.public_key` nullable (`Buffer | null`, entity ~line 63), `encryptedChildKeys` JSONB on `share_invites`, `originalFolderKeyEncrypted` re-encrypt path (`packages/sdk/src/bin/index.ts:688`), `parseCachedRecord`-null fall-through (`ipns.service.ts:504`, case-dependent two-branch fix).
 
-- CRDT-based share discovery via IPNS inbox -- research-only in v1.1, architecturally desirable but premature
-- Migrate device registry off DB -- requires solving approval handshake without server coordination
-- Eliminate `pinned_cids` table -- requires alternative quota tracking
-- Client-direct IPFS upload mode -- CORS issues, breaks quota tracking and conflict detection
+## Sub-phase Research Flags
 
-### Architecture Approach
+- **Phase 5 (API):** TypeORM FK constraint map for the `folder_ipns` → `ipns_records` rename — the FK references must be inspected (against staging DB schema) before writing the migration; all referencing tables migrate atomically.
+- **Phase 8 (FUSE):** grant-root scope computation algorithm is net-new and under-specified in the design — needs a plan-time design pass.
+- Skip research: Phase 1 (additive AES primitive), Phase 2 (schema fully specified), Phase 6 (surgical TEE rewrite, fully specified in design §6.2–6.7).
 
-The architecture follows a "DB-first, IPFS-verify" pattern for IPNS resolution, a versioned blob format for metadata evolution, a provider factory pattern for BYO-IPFS extensibility, and additive histogram instrumentation for performance baselines. The key insight is that the DB already serves as the reliable source for IPNS CIDs -- making this explicit (instead of treating it as a fallback) simplifies the architecture and eliminates the external `delegated-ipfs.dev` dependency without adding new infrastructure.
+## Open Questions for Owning Phases (design §9.2)
 
-**Major components:**
+- **Q1 — Co-writer offline handling** under (c): a co-writer offline during write-key rotation can't write until re-fetch. Accept as explicit, or add grace/notification? → owning phase: Web (Phase 7).
+- **Q2 — Rotation host for pure-web users:** eager million-node rotation is owner-online and resumable; desktop (FUSE) is the natural host. Is a long, chunked, multi-session web rotation acceptable for a large revoke? → document in sdk-core (Phase 3).
+- **Q3 — Write-recipient-vs-owner sub-share authority:** when a write-recipient deletes/moves a node the owner independently sub-shared, the unlink and the revocation split across two principals. Decide the authority model + acceptable exposure window. → owning phases: Web (Phase 7) + FUSE delete path (Phase 8).
 
-1. **KuboIpnsClient** -- New NestJS injectable wrapping Kubo's RPC API (`/api/v0/name/resolve`, `/api/v0/name/publish`, `/api/v0/key/import`). Handles native DHT resolution and Kubo-native publishing for the TEE republish path.
-2. **Vault Blob v2 Format** -- Extends the root IPNS blob with a version byte and ECIES-wrapped `encryptedRootFolderKey` header, enabling client-side key extraction without a DB round-trip. Version-aware reading allows graceful fallback to blob v1.
-3. **Provider Factory + DualPinProvider** -- Per-user `IpfsProviderFactory` that returns either the default `LocalProvider` or a `DualPinProvider` wrapping both `LocalProvider` (always) and `UserCustomProvider` (best-effort mirror to user's node).
-4. **MetricsService Extensions** -- 4 new Prometheus histograms: IPNS resolve duration, IPNS publish duration, IPFS operation duration, TEE republish batch duration. All use the existing `prom-client` infrastructure.
+## Watch Out For (top execution traps from project history)
 
-### Critical Pitfalls
-
-1. **Sequence number divergence during routing provider migration** -- The new Kubo DHT endpoint may have no records initially. Run the new provider in read-parallel mode for 48+ hours before cutting writes. Dual-write to old and new providers during transition. Monitor for 409 Conflict error spikes.
-
-2. **rootFolderKey on IPNS creates login-critical IPNS dependency** -- Moving rootFolderKey exclusively to IPFS means login fails when IPNS is down. The mitigation is absolute: keep the DB copy as the primary source for login, use the IPFS copy for recovery tool independence. This is a "both, not either" situation. Never drop the DB column.
-
-3. **DHT record expiry during routing provider migration** -- IPNS records expire from the DHT after 48 hours regardless of the validity field. If both providers are misconfigured during a weekend deployment, ALL records expire simultaneously. Build an emergency republish endpoint that bypasses the 6-hour schedule.
-
-4. **BYO-IPFS bypasses server-side optimistic concurrency** -- If users publish IPNS records directly to their node (bypassing the API), the server cannot check sequence numbers. The fix: BYO-IPFS affects ONLY where data is pinned, never how metadata is published. All IPNS publishes must still go through the CipherBox API.
-
-5. **Quota tracking becomes unenforceable with BYO-IPFS** -- Server cannot meter uploads it does not relay. For BYO users, skip server-side quota enforcement and require client-reported CID sizes. Mark `pinned_cids` entries with a `provider` column to distinguish server-pinned from BYO-pinned.
-
-## Implications for Roadmap
-
-Based on research, suggested phase structure:
-
-### Phase 1: Performance Instrumentation
-
-**Rationale:** Zero risk to existing functionality. Purely additive. Establishes "before" measurements that Phase 2-4 can be compared against. Without baselines, we cannot prove that subsequent phases improve performance or detect regressions.
-**Delivers:** 4 new Prometheus histograms (IPNS resolve/publish duration, IPFS operation duration, TEE republish batch duration), client-side timing utility, baseline measurements document, k6 load test scripts.
-**Addresses:** Table stakes features -- IPNS publish latency monitoring, API endpoint baselines.
-**Avoids:** Pitfall P7 (instrumentation overhead) -- verify overhead < 5% on P95 latency with and without instrumentation.
-**Estimated scope:** Small. ~10 modified files, no new entities or migrations.
-
-### Phase 2: IPNS Resolution Improvement
-
-**Rationale:** Fixes the most critical reliability issue and is the gating dependency for Phase 3. The current `delegated-ipfs.dev` dependency causes 502 errors and stale records. Must be resolved before making IPNS a login-critical path.
-**Delivers:** `KuboIpnsClient` for native Kubo DHT resolution, DB-first resolution strategy, `delegated-ipfs.dev` demoted to disabled-by-default fallback, Kubo config with `Ipns.UsePubsub: true`, updated recovery tool resolution chain.
-**Addresses:** Table stakes -- reliable IPNS resolution, graceful degradation.
-**Avoids:** Pitfall P1 (sequence number divergence) -- run dual-provider for 48+ hours, compare sequence numbers across providers. Pitfall P5 (DHT record expiry) -- never take old provider offline until new one has processed a full republish cycle.
-**Estimated scope:** Medium. 1 new file, ~5 modified files, Kubo config change, recovery tool update.
-
-### Phase 3: Database Minimization (rootFolderKey to IPFS)
-
-**Rationale:** Requires reliable IPNS resolution from Phase 2. This is the highest-value zero-knowledge improvement: the server stores zero crypto material after migration. The vault blob v2 format is a breaking metadata change requiring careful migration across web, desktop, and recovery tool.
-**Delivers:** Vault blob v2 format with embedded `encryptedRootFolderKey`, version-aware blob reading, dual-write migration strategy, `encryptedRootIpnsPrivateKey` deprecation, updated recovery tool, metadata schema version bump per METADATA_EVOLUTION_PROTOCOL.
-**Addresses:** Differentiator -- server stores zero crypto material, true zero-knowledge relay.
-**Avoids:** Pitfall P2 (rootFolderKey on IPNS) -- keep DB copy as permanent fallback for login, use IPFS copy for recovery tool independence. Pitfall P3 (share discovery on IPFS) -- explicitly do NOT migrate shares, keep sharing graph in DB.
-**Estimated scope:** Large. New type definitions, serialization code, changes across 3 clients (web, desktop, recovery).
-
-### Phase 4: BYO-IPFS Node Support
-
-**Rationale:** Largest surface area but most independent feature. Benefits from stable IPNS resolution (Phase 2) and reduced DB dependency (Phase 3) but does not strictly require them. The `RemotePinningProvider` is additive -- it mirrors pins without replacing the local provider.
-**Delivers:** `UserCustomProvider` (Kubo RPC + Pinning Service API), `DualPinProvider` wrapper, `ProviderFactory` for per-user resolution, `user_ipfs_config` entity and migration, IPFS config CRUD API endpoints, connection test endpoint, Settings page UI for IPFS node configuration, BYO-specific Prometheus metrics.
-**Addresses:** Differentiator -- BYO-IPFS node support, unique among encrypted storage apps.
-**Avoids:** Pitfall P4 (BYO bypasses concurrency) -- all IPNS publishes still go through API, BYO affects only pinning. Pitfall P6 (quota tracking) -- skip server-side quota for BYO users, require client-reported CID sizes, add `provider` column to `pinned_cids`.
-**Estimated scope:** Large. New entity, migration, 4+ new provider files, UI component, multiple API endpoints.
-
-### Phase Ordering Rationale
-
-- **Phase 1 before everything:** Baselines must exist before changes, or you cannot measure impact. Zero dependencies, zero risk.
-- **Phase 2 before Phase 3 (hard dependency):** Moving rootFolderKey to IPFS makes IPNS resolution login-critical. IPNS must be reliable first. All four research files independently flag this as the most important ordering constraint.
-- **Phase 3 before Phase 4 (soft dependency):** Not strictly required, but Phase 3 reduces DB dependency which aligns with BYO-IPFS goals. Phase 4's design work can proceed in parallel with Phase 3's implementation.
-- **Phase 4 last:** Largest surface area, most new code, benefits from all prior infrastructure improvements.
-
-### Research Flags
-
-Phases likely needing deeper research during planning:
-
-- **Phase 3 (Database Minimization):** Migration protocol edge cases -- blob v2 format across 3 clients, dual-write/dual-read window management, recovery tool independence, desktop (Rust) blob parsing. This is the riskiest phase.
-- **Phase 4 (BYO-IPFS):** Per-user provider routing in NestJS DI, IPFS Pinning Service API real-world testing, auth token storage model (ECIES-wrapped vs server-encrypted), Settings UI design.
-
-Phases with standard patterns (skip research-phase):
-
-- **Phase 1 (Performance Instrumentation):** Established `prom-client` + `MetricsService` pattern. k6 is well-documented. Purely additive.
-- **Phase 2 (IPNS Resolution):** Kubo RPC API is documented, DB-first resolution is architecturally straightforward. The main risk (sequence number divergence during transition) is an operational concern, not a research gap.
-
-## Confidence Assessment
-
-| Area         | Confidence                                               | Notes                                                                                                                                                                                                                        |
-| ------------ | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Stack        | HIGH                                                     | Zero new npm dependencies. All capabilities use existing libraries. Kubo API contracts verified against official docs.                                                                                                       |
-| Features     | HIGH for IPNS/perf, MEDIUM for DB migration and BYO-IPFS | IPNS reliability and performance monitoring are well-documented domains. DB-to-IPFS migration has app-specific edge cases. BYO-IPFS Pinning Service API is well-specified but per-user provider routing patterns are sparse. |
-| Architecture | HIGH                                                     | Existing codebase analyzed in detail. DB-first resolution, provider factory, blob versioning are all established patterns. Build order validated against dependency graph.                                                   |
-| Pitfalls     | HIGH                                                     | 6 critical pitfalls identified with specific prevention strategies, warning signs, and recovery plans. Phase-to-pitfall mapping is complete.                                                                                 |
-
-**Overall confidence:** HIGH
-
-### Gaps to Address
-
-- **rootFolderKey migration dual-write window:** How long should the dual-write period last? What happens to users who never log in during the window? Need a forced migration strategy (background job that reads DB key, writes blob v2, publishes to IPNS) for dormant accounts.
-- **BYO-IPFS auth token storage model:** STACK.md recommends server-side encryption (server needs to decrypt to call user's node). ARCHITECTURE.md implements this. PITFALLS.md warns about server compromise exposing tokens. The tradeoff (server sees token but not plaintext content) needs explicit acceptance and documentation.
-- **Kubo version decision:** v0.34.0 works but v0.40.1 is recommended. The upgrade should happen before Phase 2 starts but is not blocking. Need to validate that Kubo v0.40.1 does not introduce breaking changes for the existing `LocalProvider` calls.
-- **CRDT inbox for shares:** Research-only this milestone. Need to document the CRDT approach as a design RFC during Phase 3 work so it feeds into v1.2 planning.
-- **Recovery tool independence:** The recovery tool currently resolves IPNS via `delegated-ipfs.dev` directly from the browser. Phases 2 and 3 both modify its behavior. Need to verify it works WITHOUT the CipherBox API running after all changes.
-- **IPNS routing approach reconciliation:** STACK.md recommends Kubo's `Gateway.ExposeRoutingAPI`, FEATURES.md recommends self-hosted Someguy, ARCHITECTURE.md recommends DB-first with Kubo RPC `/api/v0/name/resolve`. Adopt the ARCHITECTURE.md approach (DB-first with async Kubo DHT verification) as the definitive strategy -- it is the most robust because it makes the already-reliable DB the primary path and uses Kubo DHT only for background verification.
-
-## Sources
-
-### Primary (HIGH confidence)
-
-- [Delegated Routing V1 HTTP API Spec](https://specs.ipfs.tech/routing/http-routing-v1/) -- IPNS endpoint contract
-- [IPFS Pinning Service API Spec](https://ipfs.github.io/pinning-services-api-spec/) -- BYO-IPFS integration standard
-- [Kubo RPC API v0 Reference](https://docs.ipfs.tech/reference/kubo/rpc/) -- `/api/v0/name/resolve`, `/api/v0/name/publish`, `/api/v0/key/import`
-- [Kubo Configuration Reference](https://github.com/ipfs/kubo/blob/master/docs/config.md) -- `Ipns.UsePubsub`, `Routing.Type`, `Gateway.ExposeRoutingAPI`
-- [Kubo v0.34.0](https://github.com/ipfs/kubo/releases/tag/v0.34.0) and [v0.40.0](https://github.com/ipfs/kubo/releases/tag/v0.40.0) Release Notes
-- [Someguy GitHub](https://github.com/ipfs/someguy) -- Self-hosted delegated routing reference
-- [Grafana k6 1.0 Release](https://grafana.com/blog/grafana-k6-1-0-release/) -- Load testing
-- [prom-client GitHub](https://github.com/siimon/prom-client) -- Prometheus client for Node.js
-- [IPNS Record and Protocol spec](https://specs.ipfs.tech/ipns/ipns-record/) -- Sequence number semantics
-
-### Secondary (MEDIUM confidence)
-
-- [ProbeLab IPFS KPIs](https://www.probelab.io/ipfs/kpi/) and [Week 07, 2026 Results](https://discuss.ipfs.tech/t/probelabs-notable-ipfs-performance-results-week-07-2026/20048) -- DHT performance baselines
-- [IPIP-0379: Delegated IPNS HTTP API](https://specs.ipfs.tech/ipips/ipip-0379/) -- IPNS delegation spec
-- [IP Shipyard 2025 Year in Review](https://ipshipyard.com/blog/2025-shipyard-ipfs-year-in-review/) -- IPFS ecosystem context
-- [Measuring IPNS Performance on the Public Amino DHT](https://www.probelab.network/blog/ipns-performance-amino-dht) -- Median 11s retrieval latency reference
-- [Empirical study on performance overhead of code instrumentation (2025)](https://www.sciencedirect.com/science/article/pii/S0164121225002420) -- Instrumentation overhead benchmarks
-
-### Codebase (HIGH confidence)
-
-- `apps/api/src/ipns/ipns.service.ts` -- Current IPNS resolution logic with DB fallback
-- `apps/api/src/ipns/delegated-routing.client.ts` -- Current routing client (3 retries, 10s timeout)
-- `apps/api/src/ipfs/providers/ipfs-provider.interface.ts` -- 3-method provider abstraction
-- `apps/api/src/metrics/metrics.service.ts` -- Existing Prometheus infrastructure
-- `apps/api/src/republish/republish.service.ts` -- TEE republish via delegated routing
-- `apps/web/public/recovery.html` -- Standalone recovery tool with direct IPNS resolution
-- `docs/METADATA_SCHEMAS.md` and `docs/METADATA_EVOLUTION_PROTOCOL.md` -- Schema migration rules
-
----
-
-_Research completed: 2026-03-07_
-_Ready for roadmap: yes_
+- AAD byte-encoding drift TS↔Rust = silent total decryption failure → KAT is Phase 1's merge gate.
+- `folder_ipns.public_key` null-row footgun → drop the column; recover pubkey from k51 name.
+- folderTree/Zustand vs SDK desync ("Folder not loaded" class) → reconcile before rotation publishes.
+- Zeroization of caller-owned/reused buffers breaks SDK E2E → zero only at terminal owner.
+- winfsp can't compile on macOS; desktop E2E is dispatch-gated → explicit CI round-trips as phase completion criteria, not post-merge.

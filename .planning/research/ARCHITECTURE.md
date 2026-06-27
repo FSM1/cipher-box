@@ -1,979 +1,397 @@
-# Architecture: IPFS Infrastructure v1.1
+# Architecture: v2.0 Metadata and Sharing Refactor (node/v3 Integration)
 
-**Domain:** IPNS reliability, database minimization, BYO-IPFS, performance baselines
-**Researched:** 2026-03-07
-**Confidence:** HIGH (existing codebase analyzed; Kubo APIs verified against official docs)
+**Domain:** Brownfield integration of ratified node/v3 read key-chaining design into an existing 8-layer monorepo
+**Researched:** 2026-06-27
+**Confidence:** HIGH — design is implementation-ready; all cited symbols verified against live code
 
----
+## 1. Design Source of Truth (not relitigated here)
 
-## Table of Contents
+The design is complete and ratified. Sources:
 
-1. [Existing Architecture Summary](#1-existing-architecture-summary)
-2. [IPNS Resolution: Replace delegated-ipfs.dev](#2-ipns-resolution-replace-delegated-ipfsdev)
-3. [Database Minimization: Migration Path](#3-database-minimization-migration-path)
-4. [BYO-IPFS Node Support](#4-byo-ipfs-node-support)
-5. [Performance Instrumentation](#5-performance-instrumentation)
-6. [Component Boundary Map](#6-component-boundary-map)
-7. [Data Flow Changes](#7-data-flow-changes)
-8. [Suggested Build Order](#8-suggested-build-order)
-9. [Sources](#9-sources)
+- `.planning/design/2026-06-26-sharing-read-keychaining-design.md` — canonical implementation spec
+- `docs/adr/0001-write-revocation-full-ed25519-rotation.md` — write-revocation mechanism ratified as (c)
+- `docs/adr/0002-read-revocation-protects-future-content-only.md` — read-revoke scope ratified
+- `CONTEXT.md` — pinned terminology (`readKey`/`writeKey`, `generation`/`keyEpoch`/`sequenceNumber`, `grant`, `scope exit`)
 
----
+## 2. Existing System Architecture (verified)
 
-## 1. Existing Architecture Summary
+The live system has 8 layers:
 
-### Current IPNS Flow (What Changes)
+| Layer | Path | Role |
+| ----- | ---- | ---- |
+| crypto primitives (TS) | `packages/crypto/src/` | AES-GCM/CTR, ECIES, Ed25519, HKDF |
+| core domain (TS) | `packages/core/src/` | Metadata schemas + codecs, IPNS record construction |
+| sdk-core (TS) | `packages/sdk-core/src/` | Stateless upload/download/CRUD/IPNS |
+| sdk (TS) | `packages/sdk/src/` | Stateful client: sharing, bin, invite |
+| api (NestJS) | `apps/api/src/` | Untrusted relay: publish gate, share bookkeeping |
+| tee-worker | `apps/tee-worker/src/` | Phala enclave: 6h IPNS republish batch signer |
+| web | `apps/web/src/` | React 18 SPA, Zustand stores, Web Worker crypto |
+| fuse/desktop (Rust) | `crates/fuse/src/`, `apps/desktop/` | FUSE/WinFsp virtual filesystem, Tauri shell |
+
+Rust mirrors of layers 1–3 live in `crates/crypto/`, `crates/core/`, `crates/sdk/`, `crates/api-client/`.
+
+## 3. What the Design Replaces vs Extends
+
+### 3.1 Deleted (confirmed symbols verified in codebase)
+
+| Symbol | Path | Reason |
+| ------ | ---- | ------ |
+| `FolderMetadata`, `FolderEntry`, `FolderChild`, `EncryptedFolderMetadata` | `packages/core/src/folder/types.ts:15-53` | Replaced by unified `Node` |
+| `FileMetadata`, `FilePointer`, `VersionEntry` (current form), `EncryptedFileMetadata` | `packages/core/src/file/` | Replaced by unified `Node` with content self-seal |
+| `ShareKey` entity, `share_keys` DB table | `apps/api/src/shares/entities/share-key.entity.ts:14` | Entire per-item key fan-out model deleted |
+| `addShareKeys()` (line 337), `reWrapForRecipients()` (line 469) | `apps/web/src/services/share.service.ts` | Fan-out replaced by single `readDescriptorRef` |
+| `executeLazyRotation()` | `apps/web/src/services/share.service.ts:602` | Replaced by `rotateReadFromNode()` |
+| `spawn_file_meta_reencrypt()` | `crates/fuse/src/metadata.rs:777` | Content self-seal makes move-reencrypt unnecessary |
+| `originalFolderKeyEncrypted` field + restore re-encrypt path | `packages/core/src/bin/types.ts:69`, `packages/sdk/src/bin/index.ts:497,688` | Bin restore becomes a pure re-link |
+| `encryptedChildKeys` JSONB column on `share_invites` | `apps/api/src/shares/entities/share-invite.entity.ts:59` | Single root-key wrap replaces per-child fan-out |
+| `folder_ipns.public_key` column | `apps/api/src/ipns/entities/folder-ipns.entity.ts:63-64` (nullable `Buffer \| null`) | Derivable from k51 name via `publicKeyFromIpnsName`; null for shared-folder rows caused two Phase-60 regressions |
+| Dual-source columns on `ipns_republish_schedule` | `apps/api/src/republish/entities/republish-schedule.entity.ts:40-60` (`latestCid`, `sequenceNumber`, `encryptedIpnsKey`, `keyEpoch`) | Collapsed into `ipns_records` as sole source |
+
+Caller note on `spawn_file_meta_reencrypt` deletion: both call sites must be removed — `crates/fuse/src/write_ops/implementation/rename.rs:248` and `crates/fuse/src/platform/windows/write_ops.rs:1183`. The Windows path cannot compile on macOS; `Cargo Check & Test (Windows)` CI gate is authoritative.
+
+### 3.2 Renamed / Schema-Migrated
+
+| Old | New | Where |
+| --- | --- | ----- |
+| `folder_ipns` table | `ipns_records` table | `apps/api/src/ipns/entities/folder-ipns.entity.ts` entity rename; entity class rename to `IpnsRecord`; all repositories and service imports updated |
+| `folderKey` / `fileKey` / `rootFolderKey` | `readKey` | Terminology: retired in all code identifiers per `CONTEXT.md` |
+| `ShareGrant` type name | `grant` (concept), no separate type wrapper | `shares` table row is the grant |
+| `readKeyEcies` field | `readDescriptorRef` | `shares` entity |
+| vault blob: `encryptedRootFolderKey` | `ECIES(rootReadKey)` + `ECIES(rootWriteKey)` | `packages/core/src/vault/blob.ts` — vault blob re-designed to carry two keys |
+
+### 3.3 New Components
+
+| Component | Responsibility | Lives In |
+| --------- | -------------- | -------- |
+| `sealAesGcmAad` / `unsealAesGcmAad` | AAD-bound AES-256-GCM seal/unseal | `packages/crypto/src/aes/seal.ts` (additive) |
+| `buildNodeAad()` | Canonical AAD builder — frozen byte encoding | `packages/crypto/src/aes/seal.ts` (TS); `crates/crypto/` (Rust twin) |
+| Cross-language KAT fixture | Byte-identical vector asserted by both TS and Rust | `crates/crypto/tests/cross_language.rs` + `packages/crypto/__tests__/` |
+| `Node` / `SealedChildRef` / `PublishedNode` types + codecs | Unified metadata model with two sealed bodies | `packages/core/src/node/` (new subdirectory) |
+| `rotateReadFromNode()` | Resumable read-rotation engine with crash-safe frontier | `packages/sdk-core/src/` (named files, not barrel) |
+| Durable generation high-water map (`{nodeId → highestGeneration}`) | M1 downgrade defense — fail-closed on generation regression | IndexedDB (web), sqlite-adjacent journal (FUSE/desktop) |
+| Durable seq high-water map (`{nodeId → highestSeq}`) | Within-generation rollback defense | IndexedDB (web), FUSE journal adjacent |
+| Rotation job record | Crash-safe frontier for `rotateReadFromNode` | IndexedDB (web), FUSE durable state |
+| `verifySubtreeClean()` | O(items) read pass flagging dirty edges; resume entry point | `packages/sdk-core/src/` |
+| Atomic publish CAS | `UPDATE ipns_records SET … WHERE sequenceNumber = :expected` | `apps/api/src/ipns/ipns.service.ts` (replace non-atomic `findOne → save`) |
+| Tombstone state machine | `tombstoned` flag on `ipns_records`; publish-gate rejection; `410` resolve | `apps/api/src/ipns/` |
+| TEE lease-renewer contract | Receive marshaled `signedRecord`, verify signature, extend EOL only; no CID origination, no seq increment | `apps/tee-worker/src/routes/republish.ts` (rewrite) |
+| Server-side generation gate | Forward-only `generation` per node, mirrors sequence anti-rollback | `apps/api/src/ipns/ipns.service.ts` |
+| Grant-root awareness in FUSE | Per-grant scope computation for `delete`/`rename`/`move` paths | `crates/fuse/src/write_ops/` |
+| `Node` as Rust enum | `enum Node { Folder { children }, File { content }, Root { children } }` | `crates/core/src/` |
+
+### 3.4 Modified (Extended) — Key Paths
+
+| Component | What Changes |
+| --------- | ------------ |
+| `packages/crypto/src/aes/seal.ts` | Add `sealAesGcmAad`/`unsealAesGcmAad`/`buildNodeAad`; `sealAesGcm` stays for non-node uses |
+| `packages/core/src/ipns/create-record.ts` | Clients still self-sign; no change to signing mechanics — only the vault init path changes keys |
+| `apps/api/src/ipns/ipns.service.ts` | Atomic CAS publish; generation forward-only gate; tombstone check; `parseCachedRecord`-null fall-through made case-dependent |
+| `apps/api/src/ipns/ipns.service.ts:226` | Key-possession-only check unchanged structurally; tombstone check added before it |
+| `apps/api/src/shares/share-invite.service.ts` | Invite wraps single root `readKey`; claim re-wraps to claimer; delete `encryptedChildKeys` fan-out |
+| `apps/api/src/republish/republish.service.ts:257` | `unenrollIpns` must also tombstone the `ipns_records` row, not only delete the schedule row |
+| `crates/fuse/src/inode.rs:434,452,658,716` | ECIES unwrap of `folderKeyEncrypted`/`ipnsPrivateKey` per child → symmetric `unsealAesGcmAad` of `readKeySealed`/`writeKeySealed` |
+| `crates/fuse/src/replay.rs:365` | Journal replay ECIES unwrap → symmetric chain unwrap |
+| `crates/fuse/src/publish.rs:140` | `resolve_sequence_strict` extended with generation high-water check |
+| `apps/web/src/services/share.service.ts` | `executeLazyRotation` → `rotateReadFromNode`; folderTree reconcile before publish |
+
+## 4. Data Flow Under node/v3
+
+### 4.1 Node Publish Envelope (on IPFS)
 
 ```text
-Client                     API                        delegated-ipfs.dev        Kubo
-  |                         |                               |                    |
-  |-- sign IPNS record ---->|                               |                    |
-  |                         |-- upsert folder_ipns (DB) --->|                    |
-  |                         |-- PUT /routing/v1/ipns/:name ->|                    |
-  |                         |<-- 200 OK or 502 -------------|                    |
-  |<-- { sequenceNumber } --|                               |                    |
-  |                         |                               |                    |
-  |-- resolve IPNS -------->|                               |                    |
-  |                         |-- GET /routing/v1/ipns/:name ->|                    |
-  |                         |<-- record bytes or 502 --------|                    |
-  |                         |-- fallback: query folder_ipns --|                   |
-  |<-- { cid, seqNum } -----|                               |                    |
-```
+PublishedNode {
+  schema: "node/v3"
+  kind:  folder | file | root    -- PLAINTEXT, AAD input
+  id:    uuid                    -- PLAINTEXT, AAD input
+  generation: u32                -- PLAINTEXT, AAD input; anti-rollback witness
+  aeadVersion: 1                 -- PLAINTEXT, primitive tag
 
-**Key problem:** `delegated-ipfs.dev` is the sole IPNS resolution path from the API. The DB-cached CID is the fallback, but this means the DB is doing double duty as both CID cache and the reliable resolution source. The external service adds latency (10s timeout, 3 retries with backoff) and has documented 502 reliability issues.
-
-### Current Database Tables (What Shrinks)
-
-| Table                     | Rows/User          | Purpose                                                                           | Can Migrate to IPFS?                                   |
-| ------------------------- | ------------------ | --------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| `users`                   | 1                  | UUID, publicKey                                                                   | NO -- identity anchor                                  |
-| `auth_methods`            | 1-5                | Auth provider links                                                               | NO -- server-side auth                                 |
-| `refresh_tokens`          | 1-3                | JWT sessions                                                                      | NO -- server-side auth                                 |
-| `vaults`                  | 1                  | encryptedRootFolderKey, encryptedRootIpnsPrivateKey, rootIpnsName, ownerPublicKey | PARTIALLY -- rootFolderKey to IPFS                     |
-| `folder_ipns`             | N folders+files    | latestCid, sequenceNumber, encryptedIpnsPrivateKey, keyEpoch                      | YES -- but serves as CID cache and concurrency tracker |
-| `pinned_cids`             | N files            | CID, sizeBytes (quota tracking)                                                   | NO -- server enforces quota                            |
-| `ipns_republish_schedule` | N folders+files    | TEE republish state                                                               | NO -- TEE orchestration is server-side                 |
-| `shares`                  | N shares           | Sharer, recipient, encryptedKey, revocation                                       | FUTURE -- CRDT inbox research                          |
-| `share_keys`              | N file/folder keys | Per-item encrypted keys for shares                                                | FUTURE -- CRDT inbox research                          |
-| `share_invites`           | sparse             | Link sharing tokens                                                               | NO -- server-validated tokens                          |
-| `device_approvals`        | sparse             | MFA device approval state                                                         | NO -- short-lived server state                         |
-| `tee_key_state`           | 1                  | TEE epoch tracking                                                                | NO -- server-side TEE coordination                     |
-| `tee_key_rotation_log`    | sparse             | Rotation audit trail                                                              | NO -- admin audit                                      |
-
-### Current IPFS Provider Abstraction
-
-The existing `IpfsProvider` interface is minimal (3 methods):
-
-```typescript
-interface IpfsProvider {
-  pinFile(data: Buffer, metadata?: Record<string, string>): Promise<{ cid: string; size: number }>;
-  unpinFile(cid: string): Promise<void>;
-  getFile(cid: string): Promise<Buffer>;
+  readSealed:  base64            -- AES-256-GCM(read-body,  key=readKey,  aad=buildNodeAad(id,kind,gen,body))
+  writeSealed: base64 | null     -- AES-256-GCM(write-body, key=writeKey, aad=buildNodeAad(id,kind,gen,body))
 }
 ```
 
-Only `LocalProvider` (Kubo) exists. The interface is injected via `IPFS_PROVIDER` DI token in `IpfsModule.forRootAsync()`, configured from env vars `IPFS_LOCAL_API_URL` and `IPFS_LOCAL_GATEWAY_URL`.
+`buildNodeAad` encodes: `"cipherbox/node-seal/v1" ‖ 0x00 ‖ nodeId(16B raw UUID bytes) ‖ kind(1B: 0x01 folder/0x02 file/0x03 root) ‖ generation(4B BE) ‖ role(1B: 0x01 body/0x02 child-readkey/0x03 content/0x04 child-writekey)`. Byte encoding frozen — the KAT pins it.
 
----
-
-## 2. IPNS Resolution: Replace delegated-ipfs.dev
-
-### 2.1 Recommendation: DB-First Resolution + Kubo DHT Verification
-
-**Strategy:** Invert the current resolution priority. Make the DB-cached CID the primary resolution source (it is already written synchronously on every publish). Use the self-hosted Kubo node's `/api/v0/name/resolve` endpoint for background DHT verification. Demote `delegated-ipfs.dev` to a disabled-by-default fallback.
-
-**Why this approach:**
-
-1. **Eliminates external dependency.** The self-hosted Kubo node already participates in the IPFS DHT. It can resolve IPNS names directly without delegated-ipfs.dev.
-2. **DB cache is already the reliable source.** The `IpnsService.resolveRecord()` method (lines 290-350 of `ipns.service.ts`) already prefers DB cache when its sequence number is higher than the network result. Making DB-first explicit simplifies the architecture.
-3. **Kubo DHT resolution has improved.** Kubo 0.38+ has sweep providers with 97% fewer DHT lookups for large-scale operations. IPNS TTL defaults dropped from 1 hour to 5 minutes in recent releases, so changes propagate faster.
-4. **PubSub for same-node resolution.** Kubo supports `Ipns.UsePubsub` for near-instant IPNS record propagation between connected peers. When both the publishing client and the TEE republisher connect through the same Kubo node, PubSub makes resolution instantaneous.
-
-### 2.2 Architecture Change
-
-**Before (current):**
+### 4.2 Key Unwrap Walk (replaces per-child ECIES)
 
 ```text
-IpnsService.resolveRecord()
-  -> DelegatedRoutingClient.resolve() -> https://delegated-ipfs.dev (primary, 10s timeout)
-  -> folder_ipns DB query (fallback on 502/timeout)
-  -> Compare sequence numbers, return highest
+Owner (or grantee) holds:
+  share-root readKey  ← ECIES-unwrap(grant.readDescriptorRef, recipientPrivKey)  [1 ECIES once]
+
+To navigate to a depth-d child:
+  for each level:
+    unseal parent read-body with parent.readKey + buildNodeAad(parentId, kind, gen, body)
+    for target child in SealedChildRef[]:
+      child.readKey = unsealAesGcmAad(child.readKeySealed, parent.readKey,
+                        buildNodeAad(childId, child.kind, child.generation, child-readkey))
+    resolve child.ipnsName → child envelope; verify generation ≥ high-water
 ```
 
-**After:**
+This replaces all `cipherbox_crypto::ecies::unwrap_key` calls in `crates/fuse/src/inode.rs:434,452,658,716` and `crates/fuse/src/replay.rs:365`.
+
+### 4.3 AAD Byte Encoding — Cross-Language Parity Surface
+
+The byte encoding of `buildNodeAad` is the only TS↔Rust parity contract that is silent on failure (a mismatch causes `unsealAesGcmAad` to return `DecryptionError` with no indication of which language produced the wrong AAD). The cross-language KAT — one committed fixture asserted by both `packages/crypto/__tests__/` and `crates/crypto/tests/cross_language.rs` — is the sole guard. It must be the **first deliverable** in the crypto phase and must include role byte `0x04` (child-writekey).
+
+Critical encoding decisions pinned in the design (do not deviate):
+
+- `nodeId` = raw 16 RFC-4122 bytes, not a hash, not hex
+- `kind` = `0x01/0x02/0x03` (not a string)
+- `generation` = 4-byte big-endian
+- `role` bytes = `0x01..0x04`
+- Domain separator ends with `0x00` null byte before `nodeId`
+
+### 4.4 Rotation Engine Data Flow
 
 ```text
-IpnsService.resolveRecord()
-  -> folder_ipns DB query (primary, <5ms)
-  -> Return DB result immediately to caller
-  -> Async: KuboIpnsClient.resolve() -> http://kubo:5001/api/v0/name/resolve (background)
-     -> If DHT has higher sequence number, update DB cache
-     -> If DHT fails, no-op (DB is authoritative for our records)
+rotateReadFromNode(rootNodeId, reason, revokedRecipient?) →
+  1. Root step: new readKey', generation' = gen+1, for files fileKey' (contentRekeyPending)
+     Re-seal root read-body under readKey' with buildNodeAad(…, generation')
+     Re-mint readDescriptorRef for all remaining recipients (HIGH-3: also re-mint any grants
+       rooted at any descendant — indexed query on shares.rootNodeId ∈ rotated set)
+     Delete revoked recipient's grant row
+     Publish root (CAS); update parent SealedChildRef.generation mirror
+  2. Walk: per node, rotateOne(N, parentReadKey):
+     Re-fetch child list; merge any concurrent adds (HIGH-4 re-merge on 409)
+     New readKey'', generation'' = N.generation+1; for files fileKey''
+     Re-seal; publish N (CAS); batch parent-link updates
+  3. verifySubtreeClean(root): O(items) read pass; zero dirty edges = done
+  4. Job record (IndexedDB/FUSE durable state): frontier+done per-node checkpoint
 ```
 
-### 2.3 New Component: KuboIpnsClient
+Crash recovery: re-running `rotateOne` on an already-rotated node generates `readKey'''` and a second rotation step. This is safe — an extra rotation only strengthens the cut.
 
-Wraps Kubo's RPC API for IPNS operations:
+Convergence test: N is done iff `parent.SealedChildRef[N].generation == N.envelope.generation` and that generation exceeds the pre-job baseline.
 
-```typescript
-// apps/api/src/ipns/kubo-ipns.client.ts
-@Injectable()
-export class KuboIpnsClient {
-  constructor(private readonly configService: ConfigService) {
-    this.kuboApiUrl = configService.get('IPFS_LOCAL_API_URL', 'http://localhost:5001');
-  }
+### 4.5 TEE Contract Change (Section 6 of design)
 
-  /**
-   * Resolve IPNS name via Kubo DHT.
-   * POST /api/v0/name/resolve?arg=<ipnsName>&dht-timeout=5s&nocache=true
-   * Returns the resolved /ipfs/<cid> path or null if not found.
-   */
-  async resolve(ipnsName: string): Promise<{ path: string } | null> {
-    /* ... */
-  }
+Current TEE flow (broken — verified at `apps/tee-worker/src/routes/republish.ts:79`): receives `sequenceNumber`, increments to `+ 1n`, builds and signs a new record.
 
-  /**
-   * Publish via Kubo's native IPNS publisher (for TEE republish path).
-   * Requires key imported into Kubo's keystore first.
-   * POST /api/v0/name/publish?arg=/ipfs/<cid>&key=<keyName>&ttl=5m
-   */
-  async publish(keyName: string, cid: string, options?: { ttl?: string }): Promise<void> {
-    /* ... */
-  }
-
-  /**
-   * Import an Ed25519 private key into Kubo's keystore.
-   * POST /api/v0/key/import?arg=<keyName>&format=libp2p-protobuf-cleartext
-   * Body: multipart/form-data with key bytes
-   */
-  async importKey(keyName: string, privateKeyBytes: Uint8Array): Promise<void> {
-    /* ... */
-  }
-
-  /**
-   * List keys in Kubo's keystore (for cleanup).
-   * POST /api/v0/key/list
-   */
-  async listKeys(): Promise<string[]> {
-    /* ... */
-  }
-
-  /**
-   * Remove a key from Kubo's keystore.
-   * POST /api/v0/key/rm?arg=<keyName>
-   */
-  async removeKey(keyName: string): Promise<void> {
-    /* ... */
-  }
-}
-```
-
-### 2.4 Publishing Path: Keep Pre-Signed Records for Client Publishes
-
-The current publishing flow has clients sign IPNS records locally and send pre-signed bytes to the API. This is correct for zero-knowledge -- the server never has the unencrypted IPNS private key. This does NOT change.
-
-**For client publishes:** The API receives pre-signed record bytes via `POST /ipns/publish`. The API:
-
-1. Upserts the `folder_ipns` DB record (unchanged -- this is the reliable CID source)
-2. Broadcasts the pre-signed record to the DHT via Kubo's `/api/v0/routing/put` (replaces delegated-ipfs.dev)
-3. Falls back to delegated-ipfs.dev only if Kubo routing put fails and the fallback is enabled
-
-**For TEE republishes:** The existing flow is preserved: the TEE decrypts the IPNS private key in hardware, signs the IPNS record inside the TEE boundary, and returns the **signed record bytes** (not the raw key) to the API. The API then broadcasts the pre-signed record to the DHT via Kubo's `/api/v0/routing/put`, replacing delegated-ipfs.dev as the broadcast target.
-
-The IPNS private key never leaves the TEE boundary. This maintains the security invariant that the API server never handles raw IPNS private keys.
-
-**Rejected alternative (Kubo key import):** An optimization was considered where the TEE returns raw Ed25519 private key bytes for temporary import into Kubo's keystore (`/api/v0/key/import` → `/api/v0/name/publish` → `/api/v0/key/rm`). This was rejected because it would export the private key from the trusted boundary, undermining the TEE security model even if the key is only transiently present in Kubo's memory.
-
-### 2.5 Kubo Configuration Changes
-
-Enable on the self-hosted Kubo node:
-
-```json
-{
-  "Ipns": {
-    "UsePubsub": true
-  },
-  "Routing": {
-    "Type": "auto"
-  }
-}
-```
-
-`Routing.Type: "auto"` (default) uses both DHT and any configured delegated routers. `Ipns.UsePubsub: true` enables near-instant resolution when both publisher and resolver subscribe to the same pubsub topic. This is especially useful for same-node operations (client publishes, then immediately resolves on the same Kubo instance).
-
-### 2.6 Impact on Recovery Tool
-
-The recovery tool (`apps/web/public/recovery.html`) currently resolves IPNS via `delegated-ipfs.dev` directly from the browser (no API needed -- the tool works offline from the CipherBox API).
-
-Updated resolution order for recovery:
-
-1. Try the CipherBox API's `/ipns/resolve` endpoint (DB-first + Kubo DHT)
-2. Fall back to `delegated-ipfs.dev` only if the API is unreachable (true offline recovery)
-3. The tool should accept a manual CID input as a last resort (user pastes CID from backup)
-
-### 2.7 Modified Files
-
-| File                                            | Change                                                           |
-| ----------------------------------------------- | ---------------------------------------------------------------- |
-| `apps/api/src/ipns/kubo-ipns.client.ts`         | NEW -- Kubo RPC client for IPNS operations                       |
-| `apps/api/src/ipns/kubo-ipns.client.spec.ts`    | NEW -- Unit tests                                                |
-| `apps/api/src/ipns/ipns.service.ts`             | MODIFY `resolveRecord()` to DB-first with async DHT verification |
-| `apps/api/src/ipns/delegated-routing.client.ts` | MODIFY -- Add config flag to disable, demote to fallback         |
-| `apps/api/src/ipns/ipns.module.ts`              | MODIFY -- Register `KuboIpnsClient`                              |
-| `apps/api/src/republish/republish.service.ts`   | MODIFY -- Option to use Kubo native publish for TEE path         |
-| `apps/api/.env.example`                         | ADD `IPNS_DELEGATED_ROUTING_ENABLED=false`                       |
-| `apps/web/public/recovery.html`                 | MODIFY -- Updated resolution order                               |
-
----
-
-## 3. Database Minimization: Migration Path
-
-### 3.1 Table-by-Table Analysis
-
-#### 3.1.1 `vaults.encryptedRootFolderKey` -- MIGRATE TO IPFS
-
-**Current state:** The `vaults` table stores `encryptedRootFolderKey` (ECIES-wrapped with user's publicKey) and `encryptedRootIpnsPrivateKey` (also ECIES-wrapped, but redundant since the IPNS key is HKDF-derivable).
-
-**Migration:** Move `encryptedRootFolderKey` into the IPFS blob pointed at by the root vault IPNS record. The blob currently contains only AES-GCM encrypted folder metadata. The new format prepends the ECIES-wrapped root folder key.
-
-**New blob format (version 2):**
+New TEE contract:
 
 ```text
-Vault IPFS Blob v2:
-  Byte 0:       version = 0x02
-  Bytes 1-2:    encryptedRootFolderKey length (uint16, big-endian)
-  Bytes 3..N:   ECIES-encrypted rootFolderKey
-  Bytes N+1..:  AES-GCM encrypted folder metadata (unchanged)
-
-Vault IPFS Blob v1 (current, no version byte):
-  All bytes:    AES-GCM encrypted folder metadata
+API → TEE:  send marshaled signedRecord (existing signed bytes)
+TEE:        parse record; verify Ed25519 signature
+            assert publicKeyFromIpnsName(ipnsName) == record.pubkey
+            derive currentEpoch from own clock (never from relay's scalar)
+            emit same record with same value (CID) and same sequence, only later EOL
+TEE → API:  re-signed record (no CID, no seq change); optional upgradedEncryptedKey if epoch migrated
+API:        UPDATE ipns_records SET signed_record = :new WHERE sequenceNumber = :loaded (idempotent CAS)
 ```
 
-Detection: If the first byte is `0x02`, parse as v2. If the first bytes are a valid AES-GCM ciphertext (IV + ciphertext + tag), parse as v1.
+The idempotent EOL-renewal CAS (`WHERE sequenceNumber = :loaded`) guarantees the renewal can never regress `latestCid`/`sequenceNumber`. The tombstone check must also reject tombstoned names presented to the TEE renewer.
 
-**Login flow change:**
-
-Before:
+### 4.6 Write-Revocation Cascade (ADR 0001 — Ed25519 rotation)
 
 ```text
-Login -> API GET /vault -> { encryptedRootFolderKey, rootIpnsName }
-      -> Derive IPNS key via HKDF
-      -> Resolve IPNS -> fetch blob -> decrypt metadata with rootFolderKey
+Per node in revoked-writer's scope:
+  generate new Ed25519 keypair → new k51 ipnsName'
+  generate new writeKey'
+  re-seal write-body (now carrying ed25519'.priv) under writeKey'
+  update parent SealedChildRef.ipnsName to ipnsName'
+  re-seal parent read-body (same readKey, new ipnsName reference)
+  publish new name (seq=1, fresh enroll); tombstone old name
+  TEE: unenroll old name, enroll new name
+  Update all grant rows: shares.rootIpnsName → new name; re-mint writeDescriptorRef for surviving co-writers
 ```
 
-After:
+This is leaves-to-root (opposite of read-rotation which is root-first).
 
-```text
-Login -> Derive IPNS key via HKDF (no API call needed for key material)
-      -> API GET /ipns/resolve?ipnsName=<root> -> { cid }
-      -> API GET /ipfs/<cid> -> blob v2
-      -> Extract encryptedRootFolderKey from blob header
-      -> ECIES decrypt rootFolderKey with privateKey
-      -> Decrypt folder metadata with rootFolderKey
-```
+## 5. Build Order With Dependencies
 
-**Migration strategy (dual-write, version-aware read):**
+The design's Section 7.2 build order is verified against the codebase. Dependency rationale follows each step.
 
-1. **Write path:** Client publishes root metadata in blob v2 format (encryptedRootFolderKey in header). ALSO continues sending encryptedRootFolderKey in the vault init call for backward compatibility with older clients and the current recovery tool.
-2. **Read path:** Client checks first byte of blob. v2 -> extract key from blob. v1 or unrecognizable -> fall back to `GET /vault` for the key.
-3. **Cutover criteria:** When all active clients support blob v2 reading, the `GET /vault` endpoint can stop returning `encryptedRootFolderKey`. The column is kept in the DB as disaster recovery fallback but is no longer the primary source.
+### Phase 1 — `packages/crypto`: AAD-Bound Seal Primitive + KAT
 
-#### 3.1.2 `vaults.encryptedRootIpnsPrivateKey` -- ELIMINATE
+**Files changed:** `packages/crypto/src/aes/seal.ts` (add `sealAesGcmAad`/`unsealAesGcmAad`/`buildNodeAad`), `packages/crypto/__tests__/` (KAT), `crates/crypto/` (Rust twin + cross-language test in `crates/crypto/tests/cross_language.rs`)
 
-This field is redundant. The root IPNS private key is deterministically derivable from the user's secp256k1 private key via HKDF:
+**Why first:** Self-contained; no consumer breaks. The frozen byte encoding must be committed before any consumer seals a `Node` — a retroactive encoding change would require rotating every sealed body. The KAT must exist before the core codec uses the primitives (otherwise byte-mismatch failures are silent decryption errors at FUSE).
 
-```text
-rootIpnsPrivateKey = HKDF(userPrivateKey, info="cipherbox-root-ipns")
-```
+**Dependency:** Nothing above this.
 
-The client already performs this derivation. The server-stored copy was a bootstrapping convenience from v0.1 that is no longer needed. Stop sending it in vault init. Keep the DB column for backward compatibility but mark it deprecated.
+### Phase 2 — `packages/core`: Unified `Node` Codec (Keystone)
 
-#### 3.1.3 `folder_ipns` -- KEEP BUT REDUCE ROLE
+**Files changed:** Delete `packages/core/src/folder/`, `packages/core/src/file/metadata.ts` (core codec parts — keep IPNS derivation helpers). Add `packages/core/src/node/types.ts`, `packages/core/src/node/codec.ts`. Update `packages/core/src/vault/blob.ts` (two keys in vault blob). Update `packages/core/src/bin/types.ts` (delete `originalFolderKeyEncrypted`). Update `packages/core/src/index.ts` exports.
 
-The `folder_ipns` table currently serves four purposes:
+**Why second:** Nothing below `packages/core` typechecks until `Node`/`SealedChildRef`/`PublishedNode` exist. `packages/sdk-core`, `packages/sdk`, `apps/web`, and all Rust crates import from this package. `dist/` must be rebuilt before any consumer.
 
-1. **CID cache** -- Reliable fallback when IPNS DHT resolution fails
-2. **Sequence number tracking** -- Optimistic concurrency control (409 Conflict detection)
-3. **Encrypted IPNS key storage** -- For TEE enrollment
-4. **Record type metadata** -- folder vs file distinction
+**Dependency:** Phase 1 (`sealAesGcmAad`/`buildNodeAad` are the only new crypto calls here).
 
-With reliable Kubo IPNS resolution (section 2):
+**Invariant to document in `METADATA_SCHEMAS.md`:** `generation` is authoritative only on the child's own published envelope; `SealedChildRef.generation` and `shares.rootGeneration` are convergence witnesses. `fileKey` is no longer ECIES-wrapped — it lives inside the sealed read-body (semantic type change, not a rename).
 
-- Purpose 1 (CID cache) is still valuable as a fast path (<5ms vs seconds for DHT), but no longer critical as the sole reliable source
-- Purpose 2 (sequence numbers) is essential and CANNOT move to IPFS. You need to know the current sequence BEFORE publishing. This is inherently a server-side coordination concern.
-- Purpose 3 (encrypted IPNS key) is duplicated in `ipns_republish_schedule`. Can be deduplicated by having the republish schedule reference `folder_ipns` instead of storing its own copy. Minor cleanup.
-- Purpose 4 (record type) is metadata, could be derived but not worth the effort to remove.
+### Phase 3 — `packages/sdk-core`: Read-Chain Navigation + Rotation Driver
 
-**Recommendation:** Keep `folder_ipns` as a "publish coordination table." Rename its conceptual role in documentation. Do NOT attempt to eliminate it -- sequence number tracking is a hard requirement for conflict detection.
+**Files changed:** New named files (not barrel additions) for read-chain walk (`chainReadKey`, `navigateToNode`), `rotateReadFromNode` + `rotateOne` + `verifySubtreeClean`, durable high-water utilities. Rebuild `dist/` before consumers.
 
-#### 3.1.4 `shares`, `share_keys` -- FUTURE (CRDT INBOX RESEARCH ONLY)
+**Why third:** `sdk-core` is stateless; it consumes `packages/core` `Node` types and `packages/crypto` seal primitives. The rotation engine lives here because it is shared between the web (browser) and FUSE (via the Rust `crates/sdk` wrapper). Named files (not fat `index.ts` barrel) because `vitest` coverage excludes barrels — coverage drop would trip the 80% gate.
 
-Per the CRDT-based IPNS inbox todo, this milestone performs research only. The tables stay as-is. Key findings:
+**Dependency:** Phase 2 (`Node` types), Phase 1 (`sealAesGcmAad`).
 
-- G-Set CRDT solves concurrent share additions (append-only inbox)
-- Write-access control via signed envelopes prevents inbox spam
-- Revocation by key rotation (not by modifying inbox) aligns with existing lazy revocation pattern
-- State size growth needs compaction strategy
-- **Dependency:** Requires reliable IPNS resolution (section 2) before inbox-based discovery is viable
-- **Scope for v1.1:** Document the CRDT approach as a design RFC. Do NOT implement.
+### Phase 4 — `packages/sdk`: Write-Chain, Sharing, Bin, Invites
 
-#### 3.1.5 `device_approvals` -- MIGRATE TO IPFS (POSSIBLE BUT NOT RECOMMENDED)
+**Files changed:** Rewrite `packages/sdk/src/share/shared-write.ts` (structured write-body, role `0x04` child-writekey). Delete `addShareKeys`/`reWrapForRecipients` from `packages/sdk/src/`. Rewrite `packages/sdk/src/bin/index.ts` (restore as pure re-link; delete re-encrypt path). Rewrite invite claim (`packages/sdk/src/share/invite.ts` or equivalent).
 
-Device approvals are short-lived (15-minute expiry), require real-time status updates (pending -> approved/denied), and involve server-mediated notification polling. IPNS polling at 30s intervals is too slow for MFA approval UX. Keep server-side.
+**Why fourth:** `packages/sdk` wraps `sdk-core` and adds state + sharing semantics. The share + bin + invite rewrites all depend on `Node` types (Phase 2) and the rotation driver (Phase 3).
 
-#### 3.1.6 `pinned_cids` -- KEEP (QUOTA ENFORCEMENT)
+**Dependency:** Phase 3.
 
-The server must enforce storage quotas. If quota tracking moves to IPFS, a malicious client could lie about their storage usage. The server must independently track pinned CID sizes.
+### Phase 5 — `apps/api`: Schema + Publish Gate + Tombstone + Atomic CAS
 
-### 3.2 Post-Migration Database Role
+**Files changed:**
 
-After v1.1 migrations, the database serves these purposes:
+- **TypeORM migration:** Delete `share_keys` table + entity (`apps/api/src/shares/entities/share-key.entity.ts`). Slim `shares` entity: add `readDescriptorRef`/`writeDescriptorRef`/`rootNodeId`/`rootIpnsName`/`rootGeneration`, remove old per-item key columns. Rename `folder_ipns` → `ipns_records` (entity class, table name, all repository references). Drop `folder_ipns.public_key` column. Collapse `ipns_republish_schedule` duplicated columns into `ipns_records` (or fold the schedule table).
+- **`apps/api/src/ipns/ipns.service.ts`:** Atomic publish CAS (`UPDATE … WHERE sequenceNumber = :expected`); server-side generation forward-only gate; tombstone state check before key-possession gate at line 226; `parseCachedRecord`-null case-split (shared-folder null is expected → apply seq floor; `signedRecord` CID≠`latestCid` mismatch → fail closed). Fix TEE republish to use `ipns_records` as sole source (not schedule snapshot).
+- **`apps/api/src/republish/republish.service.ts:257`:** `unenrollIpns` must tombstone `ipns_records` row, not only delete the schedule row.
+- **`apps/api/src/shares/entities/share-invite.entity.ts`:** Remove `encryptedChildKeys` JSONB column; add `readDescriptorRef` for the single root-key wrap.
+- **Run `pnpm api:generate`** and commit the regenerated `packages/api-client/src/generated/` alongside these changes (pre-commit `scripts/check-api-client.sh` enforces this).
 
-| Purpose              | Tables                                                             | Why Server-Side                                                           |
-| -------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------- |
-| Identity             | `users`, `auth_methods`                                            | Server-mediated auth                                                      |
-| Sessions             | `refresh_tokens`                                                   | JWT lifecycle                                                             |
-| Quota enforcement    | `pinned_cids`                                                      | Server must prevent quota abuse                                           |
-| Publish coordination | `folder_ipns`                                                      | Sequence numbers for concurrency                                          |
-| TEE orchestration    | `ipns_republish_schedule`, `tee_key_state`, `tee_key_rotation_log` | Server schedules TEE work                                                 |
-| Sharing graph        | `shares`, `share_keys`, `share_invites`                            | Until CRDT inbox (v1.2+)                                                  |
-| MFA                  | `device_approvals`                                                 | Short-lived approval state                                                |
-| Vault metadata       | `vaults` (reduced)                                                 | ownerPublicKey, rootIpnsName, encryptedRootFolderKey (permanent fallback) |
+**Why fifth:** API schema changes unblock TEE worker (which references `ipns_records`) and web/FUSE (which call the new API shape). The atomic CAS must land before any rotation work exercises the publish path. The `check-api-client.sh` pre-commit hook will reject a commit that changes API endpoints without also regenerating the client.
 
-**What changed:** `encryptedRootIpnsPrivateKey` is deprecated (HKDF-derivable, redundant). `encryptedRootFolderKey` is retained as a permanent DB fallback even after migration to vault blob v2 on IPFS -- the IPFS copy is the primary source for recovery tool independence, but the DB copy ensures login works even if IPNS resolution fails. The server's role shifts from key escrow to coordination relay, though it still holds one ECIES-wrapped key for resilience.
+**Dependency:** Phase 2 (entity types reference `Node` schema shape conceptually; the migration itself is independent but must not reference deleted types).
 
----
+### Phase 6 — `apps/tee-worker`: Lease-Renewer Contract Rewrite
 
-## 4. BYO-IPFS Node Support
+**Files changed:** `apps/tee-worker/src/routes/republish.ts` — replace line 79 `+ 1n` increment with re-sign-same-sequence logic; add signature verification of incoming marshaled record; add internal epoch derivation (remove relay-supplied epoch scalar trust); add name↔key binding assertion (`publicKeyFromIpnsName(ipnsName) == pubkey(decryptedKey)`); add tombstone check (reject renewal of tombstoned name).
 
-### 4.1 Recommendation: Server-Relay Model with Provider Abstraction
+**Why sixth:** Depends on Phase 5 (`ipns_records` as sole source, tombstone column existing). The TEE republish round-trip E2E (`tests/sdk-e2e` or staging smoke) gates this phase.
 
-**Decision:** Server-relay (not client-direct) because:
+**Dependency:** Phase 5 (DB schema; sole-source contract).
 
-1. **Quota tracking:** Server must see upload sizes to enforce quota. Client-direct bypasses quota enforcement entirely.
-2. **IPNS publish coordination:** Sequence numbers are tracked server-side in `folder_ipns`. Bypassing the API means no conflict detection.
-3. **CORS/connectivity:** Kubo's RPC API has no CORS headers by default. Client-direct from the browser requires the user's node to be publicly accessible or configured with CORS -- unreliable for home nodes behind NAT.
-4. **Credential safety:** Server-relay means user's IPFS node credentials (API keys, auth tokens) are stored server-side, but the data passing through is already AES-256-GCM encrypted ciphertext. The server cannot read content regardless of relay model.
+### Phase 7 — `apps/web`: Replace Lazy Rotation, Add High-Water, folderTree Reconcile
 
-**Future exception:** Desktop clients (Tauri) can pin directly to a user's local Kubo node because there are no CORS restrictions and the desktop app is trusted. This is a v1.2+ enhancement.
+**Files changed:** `apps/web/src/services/share.service.ts` — replace `executeLazyRotation` (line 602) with `rotateReadFromNode` driver call; delete `addShareKeys` (line 337) and `reWrapForRecipients` (line 469) from per-mutation fan-out paths. Add durable M1 generation high-water to IndexedDB (alongside existing device identity store at `apps/web/src/lib/device/identity.ts`). Add durable seq high-water. Add generation-regression check in IPNS resolve path. Enforce `folderTree` reconcile before rotation publishes (existing reconcile-before-publish discipline at `#489`/`#494`).
 
-### 4.2 Provider Abstraction Extension
+**Why seventh:** Web consumes the API (Phase 5) and sdk-core (Phase 3). The generation high-water is web-specific durable state (IndexedDB). The folderTree desync pattern is pre-existing risk — the M1 generation check must compose with the existing `sequenceNumber` reconcile-before-publish discipline, not replace it.
 
-Extend the existing `IpfsProvider` with a per-user factory:
+**Dependency:** Phase 3 (rotation driver), Phase 5 (API shape).
 
-```typescript
-// apps/api/src/ipfs/providers/ipfs-provider.interface.ts -- ADDITIONS
-export interface IpfsProviderFactory {
-  /** Get the appropriate IPFS provider for a given user */
-  getProvider(userId: string): Promise<IpfsProvider>;
-  /** Get the default (CipherBox-managed) provider */
-  getDefaultProvider(): IpfsProvider;
-}
-
-export const IPFS_PROVIDER_FACTORY = 'IPFS_PROVIDER_FACTORY';
-```
-
-The factory checks for per-user IPFS configuration. If none exists, it returns the default `LocalProvider`. If the user has a custom node configured, it returns a dual-pin provider that pins to both nodes.
-
-### 4.3 New Provider: UserCustomProvider
-
-```typescript
-// apps/api/src/ipfs/providers/user-custom.provider.ts
-export class UserCustomProvider implements IpfsProvider {
-  constructor(
-    private readonly endpoint: string,
-    private readonly authToken?: string,
-    private readonly providerType: 'kubo' | 'pinning-api'
-  ) {}
-
-  async pinFile(data: Buffer): Promise<{ cid: string; size: number }> {
-    if (this.providerType === 'kubo') {
-      // Kubo RPC: POST /api/v0/add?pin=true&cid-version=1
-      return this.pinViaKuboApi(data);
-    } else {
-      // IPFS Pinning Service API (spec: ipfs.github.io/pinning-services-api-spec)
-      // POST /pins with CID (requires content already available on IPFS network)
-      // For fresh uploads, use /api/v0/add equivalent or add+pin flow
-      return this.pinViaPinningApi(data);
-    }
-  }
-
-  async unpinFile(cid: string): Promise<void> {
-    /* provider-specific unpin */
-  }
-  async getFile(cid: string): Promise<Buffer> {
-    /* provider-specific fetch */
-  }
-}
-```
-
-**Provider types supported:**
-
-| Provider Type | Protocol                   | Examples                       | Auth Method                    |
-| ------------- | -------------------------- | ------------------------------ | ------------------------------ |
-| `kubo`        | Kubo RPC API (`/api/v0/*`) | Self-hosted Kubo, IPFS Desktop | None (localhost) or Basic Auth |
-| `pinning-api` | IPFS Pinning Service API   | Pinata, Filebase, web3.storage | Bearer token                   |
-
-### 4.4 Dual-Pin Provider
-
-The actual provider used for BYO-IPFS users wraps both the default and custom providers:
-
-```typescript
-// apps/api/src/ipfs/providers/dual-pin.provider.ts
-export class DualPinProvider implements IpfsProvider {
-  constructor(
-    private readonly defaultProvider: IpfsProvider,
-    private readonly customProvider: IpfsProvider
-  ) {}
-
-  async pinFile(data: Buffer): Promise<{ cid: string; size: number }> {
-    // Always pin to default (CipherBox) node first -- this is the reliable source
-    const result = await this.defaultProvider.pinFile(data);
-
-    // Best-effort pin to user's custom node
-    try {
-      await this.customProvider.pinFile(data);
-    } catch (error) {
-      // Log warning but do NOT fail the upload
-      logger.warn(`BYO-IPFS pin failed: ${error.message}`);
-    }
-
-    return result; // Return CID from default node
-  }
-
-  async getFile(cid: string): Promise<Buffer> {
-    // Try default node first, fall back to custom
-    try {
-      return await this.defaultProvider.getFile(cid);
-    } catch {
-      return await this.customProvider.getFile(cid);
-    }
-  }
-
-  async unpinFile(cid: string): Promise<void> {
-    // Only unpin from CipherBox's node (user manages their own retention)
-    await this.defaultProvider.unpinFile(cid);
-  }
-}
-```
-
-### 4.5 User Settings Entity
-
-```sql
-CREATE TABLE user_ipfs_config (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
-  provider_type VARCHAR(20) NOT NULL DEFAULT 'default',  -- 'default' | 'kubo' | 'pinning-api'
-  endpoint_url VARCHAR(500),
-  auth_token_encrypted BYTEA,                             -- encrypted with server-side key
-  created_at TIMESTAMP DEFAULT NOW(),
-  updated_at TIMESTAMP DEFAULT NOW()
-);
-```
-
-**`auth_token_encrypted`:** Encrypted with a server-side symmetric key (from env var), NOT the user's key. The server needs to decrypt it to authenticate with the user's IPFS node. This is acceptable because the data being relayed is already AES-256-GCM encrypted ciphertext -- the server cannot read it regardless.
-
-### 4.6 API Endpoints
-
-```text
-GET    /vault/ipfs-config           Get user's IPFS node configuration
-PUT    /vault/ipfs-config           Set/update IPFS node configuration
-DELETE /vault/ipfs-config           Remove custom config (revert to default)
-POST   /vault/ipfs-config/test      Test connectivity to user's IPFS node
-```
-
-The test endpoint attempts a small pin+unpin operation on the user's node to verify connectivity and auth.
-
-### 4.7 Web UI: Settings Page Extension
-
-Add an "IPFS Node" section to the existing settings page:
-
-```text
-[IPFS Storage]
-  Provider:     ( ) CipherBox Default  ( ) Custom Kubo Node  ( ) Pinning Service
-  Endpoint:     [http://my-node:5001                                            ]
-  Auth Token:   [optional, for pinning services                                 ]
-  [Test Connection]  [Save Configuration]
-
-  Status: Connected -- last verified 2 minutes ago
-```
-
-### 4.8 IPNS and Conflict Detection Implications
-
-BYO-IPFS affects ONLY where encrypted data is pinned. It does NOT affect:
-
-- **IPNS publishing:** All publishes still go through the CipherBox API. The client signs IPNS records, the API broadcasts to the DHT.
-- **Sequence numbers:** Still tracked in `folder_ipns`. Conflict detection is unchanged.
-- **TEE republishing:** Unaffected -- TEE uses CipherBox's Kubo node.
-- **IPNS resolution:** Unaffected -- IPNS resolves to a CID, and the CID is available from any node that has it pinned.
-
-If a future version allows publishing directly to the user's node (bypassing the API), conflict detection would need to move client-side. This is NOT in v1.1 scope.
-
-### 4.9 Modified/New Files
-
-| File                                                           | Change                                                     |
-| -------------------------------------------------------------- | ---------------------------------------------------------- |
-| `apps/api/src/ipfs/providers/ipfs-provider.interface.ts`       | ADD `IpfsProviderFactory` interface                        |
-| `apps/api/src/ipfs/providers/user-custom.provider.ts`          | NEW -- Custom Kubo/Pinning API provider                    |
-| `apps/api/src/ipfs/providers/user-custom.provider.spec.ts`     | NEW -- Unit tests                                          |
-| `apps/api/src/ipfs/providers/dual-pin.provider.ts`             | NEW -- Dual-pin wrapper provider                           |
-| `apps/api/src/ipfs/providers/dual-pin.provider.spec.ts`        | NEW -- Unit tests                                          |
-| `apps/api/src/ipfs/providers/provider-factory.service.ts`      | NEW -- Per-user provider resolution                        |
-| `apps/api/src/ipfs/providers/provider-factory.service.spec.ts` | NEW -- Unit tests                                          |
-| `apps/api/src/ipfs/ipfs.module.ts`                             | MODIFY -- Register factory, user config repository         |
-| `apps/api/src/ipfs/ipfs.controller.ts`                         | MODIFY -- Use factory instead of direct provider injection |
-| `apps/api/src/vault/entities/user-ipfs-config.entity.ts`       | NEW -- User IPFS config entity                             |
-| `apps/api/src/vault/dto/ipfs-config.dto.ts`                    | NEW -- IPFS config CRUD DTOs                               |
-| `apps/api/src/vault/vault.controller.ts`                       | MODIFY -- Add IPFS config endpoints                        |
-| `apps/api/src/migrations/XXXXXXXXX-AddUserIpfsConfig.ts`       | NEW -- Create table migration                              |
-| `apps/web/src/components/settings/IpfsNodeConfig.tsx`          | NEW -- IPFS config UI                                      |
-| `apps/web/src/routes/SettingsPage.tsx`                         | MODIFY -- Add IPFS config section                          |
-
----
-
-## 5. Performance Instrumentation
-
-### 5.1 Existing Infrastructure
-
-The API already has Prometheus metrics via `prom-client`:
-
-- **Histogram:** `cipherbox_http_request_duration_seconds` with labels (method, route, status_code) and buckets [0.01 to 10s]
-- **Counters:** file uploads/downloads/unpins, IPNS publishes/resolves, republish runs, auth logins
-- **Gauges:** users total, files total, storage bytes, IPNS entries by type, republish schedule by status
-- **Interceptor:** `HttpMetricsInterceptor` captures all HTTP request durations automatically
-- **Endpoint:** `GET /metrics` exposes Prometheus-compatible output
-- **Polling:** DB gauges refresh every 30 seconds
-
-### 5.2 New Server-Side Metrics
-
-Add domain-specific histograms for IPFS/IPNS latency tracking:
-
-```typescript
-// IPNS resolution latency by source and outcome
-readonly ipnsResolveDuration: client.Histogram;
-// Labels: source (db|kubo_dht|delegated), result (hit|miss|error)
-// Buckets: [0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10]
-
-// IPNS publish latency by target and outcome
-readonly ipnsPublishDuration: client.Histogram;
-// Labels: target (db|kubo_dht|delegated), result (success|error)
-// Buckets: [0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10, 30]
-
-// IPFS operation latency (pin/unpin/get)
-readonly ipfsOperationDuration: client.Histogram;
-// Labels: operation (pin|unpin|get), provider (default|byo), result (success|error)
-// Buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10]
-
-// TEE republish batch processing duration
-readonly republishBatchDuration: client.Histogram;
-// Labels: result (success|partial|error)
-// Buckets: [0.5, 1, 2.5, 5, 10, 30, 60, 120]
-```
-
-### 5.3 Client-Side Performance Utility
-
-Add a lightweight timing utility for the web app:
-
-```typescript
-// apps/web/src/lib/perf.ts
-export function startTimer(label: string): () => number {
-  const start = performance.now();
-  return () => {
-    const durationMs = performance.now() - start;
-    logger.debug(`[perf] ${label}: ${durationMs.toFixed(1)}ms`);
-    return durationMs;
-  };
-}
-```
-
-**Key operations to instrument:**
-
-| Operation                           | File                     | What to Measure                        |
-| ----------------------------------- | ------------------------ | -------------------------------------- |
-| IPNS resolve (API round trip)       | `folder.service.ts`      | API call latency                       |
-| IPNS publish (API round trip)       | `folder.service.ts`      | API call + DB + DHT publish            |
-| File upload (encrypt + upload)      | `upload.service.ts`      | Full pipeline including encryption     |
-| File download (fetch + decrypt)     | `download.service.ts`    | Full pipeline including decryption     |
-| Folder metadata decrypt             | `folder.service.ts`      | AES-GCM decryption of metadata blob    |
-| AES-GCM encrypt throughput          | `packages/crypto`        | Encryption speed in MB/s               |
-| Full page load to interactive       | `useAuth.ts`             | Auth completion to first folder render |
-| Folder navigation (click to render) | `useFolderNavigation.ts` | Navigate + resolve + decrypt + render  |
-
-### 5.4 Baseline Collection Strategy
-
-1. **Instrument:** Add timing hooks with minimal overhead (no-op when not collecting)
-2. **Collect baselines:** Run standardized workloads against staging environment
-3. **Document:** Store baselines in `.planning/baselines/PERFORMANCE_BASELINES.md` with environment specs, dates, and methodology
-4. **Automate (stretch goal):** Add a Playwright E2E test suite that measures key user journeys and asserts maximum latencies
-
-**Standardized workload scenarios:**
-
-| Scenario                          | Description                                        | Target Metric                |
-| --------------------------------- | -------------------------------------------------- | ---------------------------- |
-| Login flow                        | Auth -> vault init -> root resolve -> first render | Total wall time              |
-| Upload 1 MB                       | Encrypt -> API upload -> IPNS publish -> confirm   | Total wall time              |
-| Upload 50 MB                      | Same as above, larger payload                      | Total wall time, memory peak |
-| Download 1 MB                     | API fetch -> decrypt -> save                       | Total wall time              |
-| Navigate 3 levels deep            | Resolve root -> subfolder -> subfolder             | Total wall time              |
-| IPNS publish + resolve round trip | Publish -> immediately resolve same name           | Latency                      |
-| Search 100 files                  | Index lookup -> render results                     | Latency                      |
-| Share a folder                    | Wrap key -> API call -> confirm                    | Total wall time              |
-
-### 5.5 Modified/New Files
-
-| File                                            | Change                                         |
-| ----------------------------------------------- | ---------------------------------------------- |
-| `apps/api/src/metrics/metrics.service.ts`       | ADD new histograms (4 new metrics)             |
-| `apps/api/src/ipns/ipns.service.ts`             | ADD histogram observations in resolve/publish  |
-| `apps/api/src/ipfs/ipfs.controller.ts`          | ADD histogram observations in pin/get/unpin    |
-| `apps/api/src/republish/republish.service.ts`   | ADD histogram observation for batch processing |
-| `apps/web/src/lib/perf.ts`                      | NEW -- Client-side performance timing utility  |
-| `apps/web/src/services/folder.service.ts`       | ADD timing instrumentation                     |
-| `apps/web/src/services/upload.service.ts`       | ADD timing instrumentation                     |
-| `apps/web/src/services/download.service.ts`     | ADD timing instrumentation                     |
-| `tests/e2e/tests/performance-baselines.spec.ts` | NEW -- Baseline collection E2E test (stretch)  |
-
----
-
-## 6. Component Boundary Map
-
-### New Components
-
-```text
-apps/api/src/
-  ipns/
-    kubo-ipns.client.ts                 NEW -- Kubo RPC client for IPNS
-    kubo-ipns.client.spec.ts            NEW -- Unit tests
-
-  ipfs/
-    providers/
-      user-custom.provider.ts           NEW -- BYO-IPFS provider (Kubo + Pinning API)
-      user-custom.provider.spec.ts      NEW -- Unit tests
-      dual-pin.provider.ts              NEW -- Dual-pin wrapper
-      dual-pin.provider.spec.ts         NEW -- Unit tests
-      provider-factory.service.ts       NEW -- Per-user provider resolution
-      provider-factory.service.spec.ts  NEW -- Unit tests
-
-  vault/
-    entities/
-      user-ipfs-config.entity.ts        NEW -- User IPFS node config entity
-    dto/
-      ipfs-config.dto.ts                NEW -- IPFS config CRUD DTOs
-
-  migrations/
-    XXXXXXXXX-AddUserIpfsConfig.ts      NEW -- user_ipfs_config table
-
-apps/web/src/
-  lib/
-    perf.ts                             NEW -- Performance timing utility
-
-  components/
-    settings/
-      IpfsNodeConfig.tsx                NEW -- IPFS node config UI
-```
-
-### Modified Components
-
-```text
-apps/api/src/
-  ipns/
-    ipns.service.ts                     MODIFY -- DB-first resolution, async DHT verify
-    ipns.module.ts                      MODIFY -- Register KuboIpnsClient
-    delegated-routing.client.ts         MODIFY -- Add disable flag, demote to fallback
-
-  ipfs/
-    ipfs.module.ts                      MODIFY -- Use provider factory pattern
-    ipfs.controller.ts                  MODIFY -- Use factory, add perf instrumentation
-
-  vault/
-    vault.service.ts                    MODIFY -- Handle vault blob v2 format
-    vault.controller.ts                 MODIFY -- Add IPFS config endpoints
-
-  republish/
-    republish.service.ts                MODIFY -- Optional Kubo native publish for TEE
-
-  metrics/
-    metrics.service.ts                  MODIFY -- Add 4 new histograms
-
-apps/web/src/
-  services/
-    folder.service.ts                   MODIFY -- Vault blob v2 reading, perf timers
-    upload.service.ts                   MODIFY -- Perf instrumentation
-    download.service.ts                 MODIFY -- Perf instrumentation
-
-  routes/
-    SettingsPage.tsx                     MODIFY -- Add IPFS node config section
-
-  public/
-    recovery.html                       MODIFY -- Vault blob v2, updated IPNS resolution
-
-packages/crypto/src/
-  vault/
-    types.ts                            MODIFY -- Add blob v2 type definitions
-    blob.ts                             NEW -- Blob v2 serialization/deserialization
-```
-
-### Inter-Component Communication
-
-```text
-IpfsController --> ProviderFactory --> LocalProvider (default)
-                                   --> DualPinProvider --> LocalProvider (always)
-                                                      --> UserCustomProvider (best-effort)
-
-IpnsController --> IpnsService --> folder_ipns DB (primary, fast path)
-                                --> KuboIpnsClient (async DHT verification)
-                                --> DelegatedRoutingClient (disabled-by-default fallback)
-
-RepublishService --> TeeService (signing)
-                 --> KuboIpnsClient (Kubo native publish, preferred)
-                 --> DelegatedRoutingClient (fallback if Kubo fails)
-
-MetricsService <-- IpnsService (resolve/publish duration)
-               <-- IpfsController (operation duration)
-               <-- RepublishService (batch duration)
-               <-- ProviderFactory (BYO-IPFS operation duration)
-```
-
----
-
-## 7. Data Flow Changes
-
-### 7.1 IPNS Resolution (Changed)
-
-**Before:**
-
-```text
-Client -> API /ipns/resolve
-  -> DelegatedRoutingClient.resolve() [10s timeout, 3 retries]
-  -> Parse IPNS record bytes
-  -> Compare with DB-cached CID (folder_ipns)
-  -> Return highest sequence number result
-```
-
-**After:**
-
-```text
-Client -> API /ipns/resolve
-  -> DB query folder_ipns WHERE ipnsName = ? [<5ms]
-  -> Return DB result immediately
-  -> Fire-and-forget: KuboIpnsClient.resolve() [5s DHT timeout]
-    -> If DHT has higher sequence number, update folder_ipns
-    -> If DHT fails, no-op
-```
-
-### 7.2 IPNS Publishing (Changed for TEE Path)
-
-**Before (TEE republish):**
-
-```text
-RepublishService -> TeeService.republish() -> signed record bytes
-                 -> DelegatedRoutingClient.publish() -> delegated-ipfs.dev
-```
-
-**After (TEE republish, preferred path):**
-
-```text
-RepublishService -> TeeService.republish() -> signed record bytes
-                 -> KuboIpnsClient.importKey() -> Kubo keystore
-                 -> KuboIpnsClient.publish() -> Kubo DHT native
-                 -> KuboIpnsClient.removeKey() -> cleanup
-                 -> Fallback: DelegatedRoutingClient.publish() if Kubo fails
-```
-
-### 7.3 Vault Access on Login (Changed)
-
-**Before:**
-
-```text
-Client -> API GET /vault -> { encryptedRootFolderKey, rootIpnsName, teeKeys }
-       -> Derive IPNS key via HKDF
-       -> API GET /ipns/resolve -> { cid }
-       -> API GET /ipfs/<cid> -> blob v1 (encrypted metadata only)
-       -> Decrypt metadata with rootFolderKey from vault response
-```
-
-**After (v1.1, with blob v2):**
-
-```text
-Client -> API GET /vault -> { rootIpnsName, teeKeys, ownerPublicKey }
-       -> Derive IPNS key via HKDF
-       -> API GET /ipns/resolve -> { cid }
-       -> API GET /ipfs/<cid> -> blob v2
-       -> Parse blob: extract encryptedRootFolderKey header
-       -> ECIES decrypt rootFolderKey with privateKey
-       -> Decrypt metadata with rootFolderKey
-       -> Fallback: if blob is v1, GET /vault.encryptedRootFolderKey
-```
-
-### 7.4 BYO-IPFS Upload (New)
-
-```text
-Client -> encrypt file -> API POST /ipfs/upload { file }
-       -> ProviderFactory.getProvider(userId)
-       -> If user has custom config:
-         -> DualPinProvider.pinFile(data)
-           -> LocalProvider.pinFile(data)           // CipherBox node (always, reliable)
-           -> UserCustomProvider.pinFile(data)       // User node (best-effort, logged)
-       -> If no custom config:
-         -> LocalProvider.pinFile(data)             // CipherBox node only
-       -> VaultService.recordPin(userId, cid, size) // Quota tracking (unchanged)
-       -> return { cid, size }
-```
-
-### 7.5 BYO-IPFS Download (New Path)
-
-```text
-Client -> API GET /ipfs/:cid
-       -> ProviderFactory.getProvider(userId)
-       -> If user has custom config:
-         -> DualPinProvider.getFile(cid)
-           -> Try LocalProvider.getFile(cid)         // CipherBox node first
-           -> If not found: UserCustomProvider.getFile(cid)  // Fall back to user node
-       -> If no custom config:
-         -> LocalProvider.getFile(cid)
-       -> return file buffer
-```
-
----
-
-## 8. Suggested Build Order
-
-### Phase 1: Performance Instrumentation
-
-**Why first:** Zero risk to existing functionality. Purely additive. Establishes baselines BEFORE making any architectural changes. Without baselines, we cannot measure whether subsequent phases improve or regress performance.
-
-**Scope:**
-
-- Add 4 new Prometheus histograms to `MetricsService`
-- Instrument `IpnsService.resolveRecord()` and `publishRecord()` with timing
-- Instrument `IpfsController` upload/download/unpin with timing
-- Instrument `RepublishService.processRepublishBatch()` with timing
-- Create client-side `perf.ts` utility
-- Instrument key web app operations (folder navigate, upload, download)
-- Run standardized baseline collection against staging
-- Document baselines in `.planning/baselines/`
-
-**Dependencies:** None. Uses existing `prom-client` and `MetricsService` infrastructure.
-**Risk:** LOW. Additive instrumentation only. No behavioral changes.
-**Estimated scope:** Small. ~10 modified files, no new entities or migrations.
-
-### Phase 2: IPNS Resolution Improvement
-
-**Why second:** Fixes the most critical reliability issue (delegated-ipfs.dev dependency). Required before Phase 3 because moving rootFolderKey to IPFS makes IPNS resolution a login-critical path. Baselines from Phase 1 enable before/after comparison.
-
-**Scope:**
-
-- Implement `KuboIpnsClient` for native Kubo IPNS resolution
-- Refactor `IpnsService.resolveRecord()` to DB-first with async DHT verification
-- Make `DelegatedRoutingClient` optional with config flag (`IPNS_DELEGATED_ROUTING_ENABLED`)
-- Configure Kubo with `Ipns.UsePubsub: true`
-- Optionally update `RepublishService` to use Kubo native publish
-- Update recovery tool IPNS resolution fallback chain
-- Measure resolution latency against Phase 1 baselines
-
-**Dependencies:** Phase 1 (for before/after measurement).
-**Risk:** MEDIUM. Changing the resolution path could cause resolution failures if Kubo DHT is slower than expected. Mitigated by: (1) DB-first strategy means the fast path is always local, (2) delegated routing remains as a disabled-by-default fallback, (3) existing retry logic in the delegated client.
-**Estimated scope:** Medium. 1 new file, ~5 modified files, Kubo config change.
-
-### Phase 3: Database Minimization (rootFolderKey to IPFS)
-
-**Why third:** Requires reliable IPNS resolution (Phase 2). The vault blob v2 format is a breaking metadata change that needs careful migration across web, desktop, and recovery tool.
-
-**Scope:**
-
-- Define vault blob v2 format in `packages/crypto/src/vault/`
-- Implement blob v2 serialization/deserialization
-- Implement dual-write in web client (blob v2 on publish, DB on vault init)
-- Implement version-aware blob reading (v2 -> extract key, v1 -> fall back to DB)
-- Update vault init flow to make encryptedRootFolderKey optional
-- Mark encryptedRootIpnsPrivateKey as deprecated
-- Update recovery tool for blob v2 format
-- Update desktop client blob parsing
-- Migration testing: new user, existing user upgrade, recovery
-- Update `docs/METADATA_SCHEMAS.md` per evolution protocol
-
-**Dependencies:** Phase 2 (IPNS must be reliable before making it login-critical).
-**Risk:** MEDIUM-HIGH. Metadata format change affects all clients. Mitigated by: (1) dual-write ensures backward compatibility, (2) version detection allows graceful fallback, (3) DB column is never dropped -- kept as disaster recovery.
-**Estimated scope:** Large. New type definitions, serialization code, changes in 3 clients (web, desktop, recovery).
-
-### Phase 4: BYO-IPFS Node Support
-
-**Why last:** Largest surface area (new entity, new providers, new UI, new API endpoints). Benefits from stable IPNS resolution (Phase 2) and reduced DB dependency (Phase 3). Independent in design but benefits from the improved infrastructure.
-
-**Scope:**
-
-- Create `user_ipfs_config` entity and migration
-- Implement `UserCustomProvider` with Kubo RPC and Pinning Service API support
-- Implement `DualPinProvider` wrapper
-- Implement `ProviderFactory` for per-user provider resolution
-- Refactor `IpfsController` to use factory
-- Add IPFS config CRUD endpoints to vault controller
-- Add connection test endpoint
-- Build IPFS node configuration UI in settings page
-- Implement dual-pin strategy (CipherBox node always + user node best-effort)
-- Add BYO-IPFS specific Prometheus metrics
-- E2E test: configure custom node, upload, verify pinned
-
-**Dependencies:** Phase 2 (reliable IPNS) and Phase 3 (reduced DB) are not strict blockers but provide a better foundation.
-**Risk:** MEDIUM. New provider implementations need thorough testing against real IPFS nodes and pinning services. Connectivity to arbitrary user nodes introduces unpredictable failure modes. Mitigated by: (1) dual-pin always keeps a copy on CipherBox node, (2) best-effort approach for user node, (3) connection test endpoint validates before saving config.
-**Estimated scope:** Large. New entity, migration, 4+ new files, UI component, multiple API endpoints.
-
-### Build Order Summary
-
-```text
-Phase 1: Performance Instrumentation
-    [No dependencies, zero-risk baseline establishment]
-    |
-    v
-Phase 2: IPNS Resolution Improvement
-    [Eliminates delegated-ipfs.dev, enables Phase 3]
-    |
-    v
-Phase 3: Database Minimization
-    [Moves rootFolderKey to IPFS, requires reliable IPNS from Phase 2]
-    |
-    v
-Phase 4: BYO-IPFS Node Support
-    [New capability, benefits from improved infrastructure]
-```
-
-**Critical dependency:** Phase 2 MUST precede Phase 3. Moving rootFolderKey to IPFS without reliable IPNS resolution means users cannot log in if Kubo DHT is slow.
-
-**Parallel opportunity:** Phase 4's design and provider implementation can be developed in parallel with Phase 3's blob format work, but integration testing should wait for Phase 3 completion.
-
----
-
-## 9. Sources
-
-### HIGH Confidence (Official Documentation, Verified)
-
-- [Kubo RPC API v0 Reference](https://docs.ipfs.tech/reference/kubo/rpc/) -- `/api/v0/name/resolve`, `/api/v0/name/publish`, `/api/v0/key/import` endpoints verified against v0.40.0
-- [Kubo Configuration Reference](https://github.com/ipfs/kubo/blob/master/docs/config.md) -- `Ipns.UsePubsub`, `Routing.Type` configuration
-- [IPFS Pinning Service API Spec](https://ipfs.github.io/pinning-services-api-spec/) -- Vendor-agnostic pinning API standard (OpenAPI spec)
-- [IPNS Concepts](https://docs.ipfs.tech/concepts/ipns/) -- IPNS TTL default (5 minutes), PubSub resolution
-- [prom-client GitHub](https://github.com/siimon/prom-client) -- Histogram, Counter, Gauge APIs
-
-### MEDIUM Confidence (Multiple Sources Agreeing)
-
-- [Kubo v0.38+ Release Notes](https://github.com/ipfs/kubo/releases) -- Sweep provider with 97% fewer DHT lookups, IPNS TTL changes
-- [Kubo Issue #10484: Download & Upload IPNS Records](https://github.com/ipfs/kubo/issues/10484) -- Confirms `/api/v0/routing/put` for pre-signed records
-- [Kubo Issue #8542: Publish IPNS with Signature](https://github.com/ipfs/kubo/issues/8542) -- Confirms key import workflow
-- [Kubo Delegated Routing Docs](https://github.com/ipfs/kubo/blob/master/docs/delegated-routing.md) -- `put-ipns` and `get-ipns` routing methods
-- [IP Shipyard 2025 Year in Review](https://ipshipyard.com/blog/2025-shipyard-ipfs-year-in-review/) -- DHT improvements context
-
-### Codebase Analysis (Direct Code Review)
-
-- `apps/api/src/ipns/ipns.service.ts` -- Current resolution logic, DB fallback (resolveRecord lines 290-350)
-- `apps/api/src/ipns/delegated-routing.client.ts` -- Current publish/resolve implementation (3 retries, 10s timeout)
-- `apps/api/src/ipfs/providers/ipfs-provider.interface.ts` -- Existing 3-method provider interface
-- `apps/api/src/ipfs/providers/local.provider.ts` -- Current Kubo provider (pin/unpin/get via RPC API)
-- `apps/api/src/ipfs/ipfs.module.ts` -- Current DI config (env var driven, single provider)
-- `apps/api/src/ipfs/ipfs.controller.ts` -- Current upload/download/unpin with metrics
-- `apps/api/src/vault/vault.service.ts` -- Current vault init with encryptedRootFolderKey
-- `apps/api/src/vault/entities/vault.entity.ts` -- Current vault schema (6 columns)
-- `apps/api/src/metrics/metrics.service.ts` -- Existing Prometheus infrastructure (gauges, counters, histogram)
-- `apps/api/src/metrics/http-metrics.interceptor.ts` -- Existing HTTP duration tracking
-- `apps/api/src/republish/republish.service.ts` -- Current TEE republish via delegated routing
-- `apps/api/src/ipns/entities/folder-ipns.entity.ts` -- CID cache + sequence tracking
-- `apps/api/src/republish/republish-schedule.entity.ts` -- TEE scheduling state
-- All 13 database entities analyzed for migration feasibility
+### Phase 8 — `crates/fuse`: Rust Integration (FUSE + WinFsp)
+
+**Files changed:**
+
+- Replace all `cipherbox_crypto::ecies::unwrap_key` calls in `crates/fuse/src/inode.rs:434,452,658,716` and `crates/fuse/src/replay.rs:365` with `cipherbox_crypto::aes::unseal_aes_gcm_aad` symmetric unwrap.
+- Delete `spawn_file_meta_reencrypt` from `crates/fuse/src/metadata.rs:777` and remove both call sites: `crates/fuse/src/write_ops/implementation/rename.rs:248` and `crates/fuse/src/platform/windows/write_ops.rs:1183`.
+- Add grant-root awareness to `delete`/`rename`/`move` paths — FUSE already holds the mounted tree, so ancestry is cheap.
+- Add durable generation + seq high-water (adjacent to existing write journal in `crates/fuse/src/cache.rs` or `journal_helpers.rs`).
+- Replace `crates/core/src/` Rust types: `Node` as a real Rust enum (`enum Node { Folder { children: Vec<SealedChildRef> }, File { content: SealedContent }, Root { children: Vec<SealedChildRef> } }`), not a struct with `Option` fields.
+- Add `crates/crypto/src/aes/` Rust twin of `buildNodeAad` + `sealAesGcmAad`/`unsealAesGcmAad`.
+- Add `rotateReadFromNode` to `crates/fuse/src/` rotation paths.
+- Strict-verify each rotation republish through the verified chokepoint, recovering Ed25519 pubkey from the k51 name via `publicKeyFromIpnsName` (never from the now-dropped `public_key` column).
+
+**Why eighth:** All prior layers must land first. The FUSE crate is the most complex consumer — it implements both macOS/Linux FUSE and Windows WinFsp, it has the widest ECIES-to-symmetric conversion surface, and it needs grant-root awareness which is net-new logic that builds on the finalized `Node` schema (Phase 2) and the rotation engine (Phase 3).
+
+**Critical:** `crates/fuse/src/platform/windows/write_ops.rs` and anything under `crates/fuse/src/platform/windows/` cannot compile on macOS. The `Cargo Check & Test (Windows)` CI gate is authoritative for this phase. Budget a CI round-trip. The `super::` vs `super::super::` nesting trap (from Phase 55 history) applies in the nested `pub mod implementation` structure; verify path imports in the Windows module explicitly.
+
+**Dependency:** Phases 1–7 (consumes all new types, all new API endpoints, all new crypto primitives).
+
+## 6. Cross-Cutting Integration Concerns
+
+### 6.1 TS↔Rust Parity Surface (AAD bytes)
+
+The `buildNodeAad` byte encoding is the only cross-language contract that fails silently. One KAT fixture — a hardcoded `(nodeId, kind, generation, role) → aad_bytes` vector — must be asserted by:
+
+- `packages/crypto/__tests__/build-node-aad.test.ts`
+- `crates/crypto/tests/cross_language.rs` (Rust `#[test]`)
+
+Both must pass before any consumer is written. The fixture must include role `0x04` (child-writekey).
+
+### 6.2 Triplication Surface: web / sdk-core / FUSE+WinFsp
+
+Three independent consumers must implement byte-identical AAD handling:
+
+| Consumer | Language | Durable state location | Rotation host |
+| -------- | -------- | ---------------------- | ------------- |
+| `apps/web` | TypeScript (Web Crypto) | IndexedDB | Client browser (long-lived tab) |
+| `packages/sdk-core` | TypeScript | Caller-provided (web: IndexedDB; FUSE: journal) | Shared library |
+| `crates/fuse` | Rust | FUSE write journal / adjacent sqlite-like store | Desktop process (preferred — long-lived, `PublishCoordinator`) |
+
+The `packages/sdk-core` rotation driver (`rotateReadFromNode`) is shared between web and FUSE (the Rust `crates/sdk` wraps `sdk-core`). The durable high-water state is caller-provided; each consumer wires its own storage backend (IndexedDB or Rust journal). The convergence test and frontier representation are identical regardless of host.
+
+### 6.3 folderTree Reconcile-Before-Publish Discipline
+
+Existing project memory: `folderTree` in Zustand `useFolderStore` and the SDK client's `folderTree` can desync (the `#489`/`#494` "Folder not loaded" class). Under v3, this matters more: a wrong "don't rotate" (because the tree appeared to show no covering grant) is a silent missed revocation. The rule is:
+
+> Before any rotation publishes, reconcile `folderTree` against the current `sequenceNumber`. If the tree cannot be reconciled, **defer** the mutation — never skip rotation.
+
+This is an extension of the existing discipline, not a replacement. The web `rotateReadFromNode` call site in `share.service.ts` must check reconciliation status before starting the walk.
+
+### 6.4 Durable Client State: What Persists Where
+
+| State | Web | FUSE/Desktop |
+| ----- | --- | ------------ |
+| `{nodeId → highestGeneration}` (M1 high-water) | IndexedDB (new store, alongside device identity in `apps/web/src/lib/device/identity.ts`) | FUSE write journal or adjacent key-value file |
+| `{nodeId → highestSeq}` (within-generation floor) | IndexedDB | FUSE journal |
+| Rotation job record (`jobId`, `rootNodeId`, `frontier[]`, `done[]`, `status`) | IndexedDB | FUSE durable state |
+
+The published IPNS records (not the job record) are the source of truth for convergence. The job record is advisory — it makes resume fast but losing it triggers a `verifySubtreeClean` rescan.
+
+### 6.5 API Client Regeneration Gate
+
+The pre-commit hook `scripts/check-api-client.sh` enforces that `packages/api-client/src/generated/` is staged whenever `apps/api/src/` changes. Phase 5 (api) triggers this. Run `pnpm api:generate` after every API endpoint/DTO/controller change and commit the regenerated files on the same branch. Failing to do so blocks the CI pre-commit.
+
+### 6.6 Sequence Race Residual
+
+The atomic CAS (`UPDATE ipns_records … WHERE sequenceNumber = :expected`) is the primary serialization point. It is not a full distributed lock — two co-writers at different clients can still race. The `PublishCoordinator.get_lock(name)` in `crates/fuse/src/metadata.rs:342` serializes the job against the same client's concurrent writes. The CAS turns a silent clobber into a `409 → refetch → retry` loop. This residual is accepted per the design.
+
+## 7. Symbol Drift Report (Design vs Live Code)
+
+All design-cited symbols verified. No drift found in file paths. Line number accuracy verified for material symbols:
+
+| Design Citation | Verified |
+| --------------- | -------- |
+| `executeLazyRotation` at `apps/web/src/services/share.service.ts:602` | Line 602 confirmed |
+| `revokeShare` keeping `ShareKey` rows "for lazy rotation" at `shares.service.ts:256-269` | Line 256 comment "kept for lazy rotation" confirmed |
+| `addShareKeys` at `share.service.ts:337`, `reWrapForRecipients` at `:469` | Lines 337 and 469 confirmed |
+| `ipns.service.ts:226` — "no ownership/share check" comment | Confirmed: comment at line 226 |
+| `shared-write.ts:138-141,311` ECIES-wraps Ed25519 key | `ipnsPrivateKeyEncrypted` is hex-wrapped at line 137; `ipnsPrivateKey` at 277/303/361/392 — confirmed |
+| `spawn_file_meta_reencrypt` at `crates/fuse/src/metadata.rs:777` | Line 777 confirmed |
+| Callers: `rename.rs:248` and `platform/windows/write_ops.rs:1183` | Lines 248 and 1183 confirmed |
+| `inode.rs:434,452` ECIES unwrap folder key / IPNS key | Lines 434 and 452 confirmed |
+| `inode.rs:658,716` additional ECIES unwrap calls | Lines 658 and 716 confirmed |
+| `replay.rs:365` ECIES unwrap | Line 365 confirmed |
+| `folder_ipns.public_key` nullable `Buffer \| null` at `folder-ipns.entity.ts:63-64` | Confirmed |
+| `republish-schedule.entity.ts:39-60` duplicated columns | `encryptedIpnsKey:40`, `keyEpoch:47`, `latestCid:53`, `sequenceNumber:60` confirmed |
+| `republish.service.ts:257` `unenrollIpns` only deletes schedule row | Line 257 `scheduleRepository.delete` confirmed — no tombstone |
+| `apps/tee-worker/src/routes/republish.ts:79` does `+ 1n` | Line 79 `+ 1n` confirmed |
+| `tee.service.ts:110` batch republish | Line 110 `async republish` confirmed |
+| `packages/core/src/ipns/create-record.ts` client self-signs | `createIpnsRecord` at line 31 confirmed |
+| `publish.rs:140` `resolve_sequence_strict` — sequence only, no generation | Line 140 confirmed; `verified.sequence_number` only, no generation field |
+| `share-invite.entity.ts` `encryptedChildKeys` JSONB column | Line 59 confirmed |
+| `originalFolderKeyEncrypted` in bin types and re-encrypt path | `packages/core/src/bin/types.ts:69` + `packages/sdk/src/bin/index.ts:497,688` confirmed |
+
+One notation note: the design cites `packages/core/src/file/metadata.ts:232` for `decryptFileMetadata` taking parent `folderKey`. The actual file has `decryptFileMetadata` at approximately line 231 (the comment "32-byte AES key of the parent folder" at line 227 confirms the semantic). Off by one from line 232; not material.
+
+## 8. Phase Seam Recommendations for the Roadmap
+
+The 8-phase build order above maps directly to natural milestone phases. Suggested seaming:
+
+1. **Crypto primitive** (Phase 1) — shippable independently; no consumer breaks; KAT is the merge gate.
+2. **Core keystone** (Phase 2) — nothing typechecks below until done; must rebuild `dist/` before proceeding.
+3. **sdk-core rotation engine** (Phase 3) — rotation tests (`verifySubtreeClean`, crash-safety suite) gate this phase.
+4. **sdk write/bin/invite** (Phase 4) — sdk E2E is the gate; the only real client→API IPNS publish/resolve round-trip.
+5. **API schema + publish gate** (Phase 5) — DB migration + atomic CAS + tombstone + `api:generate`. All downstream consumers blocked until this lands.
+6. **TEE worker** (Phase 6) — lease-renewer contract; republish E2E or staging smoke gate.
+7. **Web** (Phase 7) — rotation UX + M1 high-water + reconcile discipline; Playwright E2E gates.
+8. **FUSE + WinFsp** (Phase 8) — widest blast radius; Windows CI round-trip mandatory; grant-root awareness is net-new logic.
+
+Phases that likely need deeper sub-phase research: Phase 8 (FUSE/WinFsp grant-root scope computation is novel; the Windows path can only be CI-verified). Phase 5 (TypeORM migration for `folder_ipns → ipns_records` rename with active FK references from `ipns_republish_schedule`, `shares`, `vaults` tables — verify all FK constraints before the migration).
+
+## 9. Accepted Residuals (Not Fixed By This Refactor)
+
+Per ADR 0002: already-distributed CIDs and prior file versions remain readable by anyone who held the `readKey`. The `contentRekeyPending` marker and optional per-file "re-encrypt now" operation are the high-sensitivity mitigation path.
+
+Per ADR 0001 and design Section 9.2 open question 3: when a write-recipient (C) deletes a node that the owner independently sub-shared to a third party (D), C can unlink immediately but cannot revoke D's grant — the authority is split. Resolution (accept option (a) or (c) from the design) deferred to the implementing phase.
+
+The colluding-relay residual: a malicious relay that drops rotation publishes and serves stale records is bounded by the durable client generation + seq high-water floors (M1 + Section 6.5), not eliminated. This is the explicit systemic residual.
+
+## Sources
+
+- `.planning/design/2026-06-26-sharing-read-keychaining-design.md` — design source of truth (Sections 2–7)
+- `.planning/design/2026-06-26-sharing-flows-walkthrough.md` — flow-by-flow trace (Flows 1–8)
+- `docs/adr/0001-write-revocation-full-ed25519-rotation.md` — write-revocation rationale
+- `docs/adr/0002-read-revocation-protects-future-content-only.md` — read-revocation scope
+- `CONTEXT.md` — pinned terminology
+- `docs/ARCHITECTURE.md` — existing system overview
+- `docs/METADATA_SCHEMAS.md` v1.1 — schemas being replaced
+- Live codebase grep verification (all cited symbols confirmed as described above)

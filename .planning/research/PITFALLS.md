@@ -1,346 +1,487 @@
-# Pitfalls Research
+# Pitfalls Research — v2.0 Metadata and Sharing Refactor (node/v3)
 
-**Domain:** IPFS infrastructure improvements -- replacing delegated routing, migrating DB state to IPFS/IPNS, BYO-IPFS node support, and performance baselines for an existing zero-knowledge encrypted storage app
-**Researched:** 2026-03-07
-**Confidence:** HIGH for routing/migration pitfalls (verified against codebase + IPFS docs), MEDIUM for BYO-IPFS (fewer production precedents), MEDIUM for instrumentation (well-understood domain but CipherBox-specific interactions need validation)
-
-**Context:** CipherBox v1.0 shipped 2026-03-05 with 423K lines of TypeScript + Rust across 698 source files. IPNS is already deeply integrated: the `folder_ipns` table tracks per-folder and per-file IPNS records with sequence numbers for optimistic concurrency, the `ipns_republish_schedule` table drives TEE republishing every 6 hours, and `delegated-ipfs.dev` is the sole external routing provider (known unreliable, with DB-cached CID fallback). The database stores auth, vault keys, shares, device approvals, pinned CIDs for quota tracking, and all IPNS state. The recovery tool (`recovery.html`) directly resolves IPNS via `delegated-ipfs.dev` without any API intermediary.
+**Domain:** Brownfield security/crypto refactor — read key-chaining, resumable read-rotation, write-revocation via full Ed25519 rotation, TEE/resolve contract rewrite
+**Researched:** 2026-06-27
+**Confidence:** HIGH (sourced from design document, ADRs, codebase scar tissue, and project history)
 
 ---
 
 ## Critical Pitfalls
 
-Mistakes that cause data loss, break existing functionality, or require rearchitecting completed features.
+### Pitfall 1: AAD Byte-Encoding Drift Between TS and Rust = Silent Total Decryption Failure
+
+**What goes wrong:**
+The `buildNodeAad` function must produce an identical byte sequence in TypeScript (`packages/crypto`) and Rust (`crates/crypto`). If either side differs in any encoding detail — UUID bytes as a string vs raw 16-byte RFC-4122 big-endian, `generation` as little-endian vs big-endian, `kind` byte value, `role` byte value, or the null separator after the domain string — then every cross-language unseal silently returns a `DOMException: The operation failed` with no indication of which field diverged. This is a **total decryption failure** across every Node sealed by one side and read by the other (web seals, FUSE reads; desktop seals, web reads).
+
+**Why it happens:**
+The two crypto stacks share no code. TS uses `TextEncoder` for the domain string, Rust uses `b"..."` literals. UUID fields are easy to accidentally encode differently (`uuid.as_bytes()` = 16 raw bytes in RFC-4122 field order vs `uuid.to_string()` encoded as UTF-8). Generation is 4 bytes and big-endian is specified, but a developer implementing from spec can silently use the platform default. Role bytes must match the exact table (`0x01 body`, `0x02 child-readkey`, `0x03 content`, `0x04 child-writekey`); a transposition is invisible until an unseal fails.
+
+**How to avoid:**
+The design mandates a committed cross-language Known-Answer Test (KAT) fixture — one hardcoded test vector committed in `crates/crypto/tests/cross_language.rs` AND asserted by `packages/crypto/__tests__`. This must be the **first deliverable** in the crypto primitive phase, before any consumer is built. The KAT must exercise all four role bytes. The AAD encoding must be frozen in writing (the design's Section 2.5 encoding table is that freeze) and both implementors must implement strictly from it, not from the other language's source.
+
+**Warning signs:**
+Any `unsealAesGcmAad` call that worked in isolation (same-language round-trip) fails when the ciphertext crosses the TS/Rust boundary. FUSE read returning a deserialization error on a freshly-created node from the web app. KAT test missing or passing on mocked data.
+
+**Phase to address:**
+Crypto primitive phase (Phase 1 / `packages/crypto`). The KAT must be committed and passing before any downstream phase begins. Every subsequent phase that adds a new `role` byte must extend the KAT fixture.
 
 ---
 
-### Pitfall 1: Sequence Number Divergence When Switching Routing Providers
+### Pitfall 2: CRIT-1 — Content-Key Rotation Omitted from rotateOne = Silent Read-Revocation Bypass
 
 **What goes wrong:**
-The system currently has two sources of truth for IPNS sequence numbers: the `folder_ipns` PostgreSQL table and the DHT/delegated routing network. When replacing `delegated-ipfs.dev` with a self-hosted Someguy instance or Kubo DHT, the new routing endpoint may return different sequence numbers than the DB cache for a transition period. The `resolveRecord()` method in `ipns.service.ts` (line 290-350) already compares DB and network sequence numbers, taking the higher one. But during the switch, the new provider may have _no_ records (it has not seen previous publishes), causing resolution to return null from the network while the DB has valid data. If the resolution logic treats "null from network" differently than "null from delegated-ipfs.dev" -- or if the new provider starts returning stale records it picked up from DHT propagation with lower sequence numbers -- the system could serve outdated metadata, causing the client to see old folder contents or triggering false conflict detection (409 Conflict).
-
-The TEE republishing service (`republish.service.ts`) further complicates this: it publishes signed records to delegated routing and then syncs the sequence number back to `folder_ipns`. If the old and new routing providers are both receiving publishes during a transition window, the sequence number in each may diverge independently.
+Re-sealing a file node's read-body under a new `readKey` is not sufficient. The revoked reader already cached the old `readKey`, used it to unseal `content`, and holds the raw `content.fileKey`. If the next file version is encrypted under the same `fileKey`, the revoked reader decrypts it the moment they obtain the new CID (from any IPFS gateway — they do not need IPNS). The revocation appears complete (entry-point navigation is cut) but file content remains accessible.
 
 **Why it happens:**
-
-- Developers assume a clean cutover is possible -- swap one URL for another
-- IPNS records propagate through the DHT with eventual consistency; a new Someguy instance must discover existing records through DHT lookups, which takes time
-- The TEE republisher runs on a 6-hour cycle and may publish to the old provider after the API has switched to the new one, creating a split-publish window
+`rotateOne` is implemented to re-seal the read-body and bump `generation`; the file content path is a separate concern that is easy to miss when writing the rotation walk. `contentRekeyPending` must be set on the node; without it the next content write re-encrypts with the same `fileKey`. The failure is **silent** — no test will catch it unless a test specifically attempts to decrypt new content with the old `fileKey`.
 
 **How to avoid:**
-
-1. Run the new routing provider in read-parallel mode first: configure it alongside `delegated-ipfs.dev` and compare results for at least 48 hours (one full DHT record expiry cycle) before cutting writes over
-2. Seed the new provider by having the TEE republisher publish to BOTH providers during the transition. The `publishSignedRecord()` method at line 200-204 sends to one delegated routing client; extend this to dual-write
-3. Only cut over reads after the new provider consistently returns sequence numbers >= the DB cache for a representative sample of IPNS names
-4. Keep DB cache as the authoritative fallback throughout -- this already works and should remain the primary resolution path
+`rotateOne(N)` for a `kind: 'file'` node **must** mint a fresh `fileKey'` and set `contentRekeyPending` on the node record. The content write path must check `contentRekeyPending` and re-encrypt under the new `fileKey'`. Add a mandatory test: rotate a file node, publish a new version, assert a holder of the old `readKey`/`fileKey` cannot decrypt the new version (test item 2 in the design's Section 7.3).
 
 **Warning signs:**
+`rotateOne` implementation has no branch on `node.kind === 'file'`. `contentRekeyPending` marker is never written. Content write path does not read or clear `contentRekeyPending`. Any test that checks "revoked reader cannot access new version" is absent from the suite.
 
-- IPNS resolve latency spikes or increased null-from-network responses in Prometheus metrics (`cipherbox_ipns_resolves_total` by `source` label)
-- 409 Conflict errors on publish that were not present before the switch
-- Recovery tool fails to resolve IPNS records (it bypasses the API and hits the routing provider directly)
-
-**Phase to address:** IPNS Reliability phase (first phase of the milestone)
+**Phase to address:**
+Rotation engine phase (`packages/sdk-core` — `rotateReadFromNode`). Success criterion for the phase must require the CRIT-1 test passing before merge.
 
 ---
 
-### Pitfall 2: Moving rootFolderKey to IPFS Creates a Hard Dependency on IPNS for Login
+### Pitfall 3: M1 Generation Downgrade Defense Not Persisted = Silent Relay-Served Revocation Bypass
 
 **What goes wrong:**
-Today, `rootFolderKey` is stored as ECIES-wrapped bytes in the `vaults` table (`encrypted_root_folder_key` column in `vault.entity.ts`). The login flow retrieves it via a direct PostgreSQL query -- fast, reliable, always available. The proposal to move it to an IPFS blob pointed at by the root vault IPNS record means that login now requires: (1) HKDF derivation of IPNS key, (2) IPNS resolution to get the CID, (3) IPFS fetch of the blob, (4) ECIES unwrapping. Steps 2 and 3 are network operations against infrastructure that has documented reliability issues.
-
-If IPNS resolution fails (which it does -- the entire motivation for this milestone), the user cannot log in because they cannot get their root folder key. The DB-cached CID fallback helps, but it means the database still stores CIDs pointing to encrypted root folder key blobs -- you have not actually eliminated the DB dependency, you have just moved what the DB stores from "ECIES-wrapped key bytes" to "CID of IPFS blob containing ECIES-wrapped key bytes." The net reduction in server-side state is zero unless you also eliminate the CID cache, at which point login depends entirely on IPNS reliability.
+After a read-revoke rotation completes, a colluding or buggy relay can serve the revoked reader the pre-rotation (lower-generation) signed IPNS record indefinitely. The IPNS signature only covers the CID and sequence — not `generation`. The revoked reader's navigation succeeds from the old record. No in-memory client check survives a page refresh or app restart. The revocation appears to succeed but is undone by a relay rollback with zero signed evidence to the client.
 
 **Why it happens:**
-
-- The goal of "minimize database to auth-only" is laudable but creates a conflict with the reliability requirement
-- The rootFolderKey is unique: unlike IPNS private keys which are HKDF-derivable, the root folder key is a random AES-256 key. It literally cannot be rederived. Losing access to it means losing the entire vault.
-- Developers see the encryption key as "just data that should live on IPFS" without recognizing it is the single most critical piece of data in the entire system
+No resolve path in the current codebase enforces a per-node `generation` check. `resolve_sequence_strict` tracks only `sequence` in-memory and loses it on restart. `VerifiedResolve` exposes `{cid, sequence_number}` and never decodes node metadata. The M1 defense is entirely new work, not an extension of existing checks.
 
 **How to avoid:**
-
-1. Keep `encrypted_root_folder_key` in the database as the primary source. Optionally mirror it to IPFS for recovery tool independence, but the DB copy is canonical for login.
-2. If the goal is recovery-tool independence from the server, embed the wrapped key in the IPFS vault blob AND keep the DB copy. The recovery tool reads from IPFS; the normal login reads from the DB. Both paths work.
-3. Never make the sole access path for root folder key depend on IPNS resolution. This is a "both, not either" situation.
-4. Per `METADATA_EVOLUTION_PROTOCOL.md`, this is a breaking change to the root vault blob format. Version the blob format so old clients can still decrypt old-format blobs during migration.
+Persist `{nodeId → highestGeneration}` durably (IndexedDB on web; sqlite in FUSE) seeded from the grant's `rootGeneration` as the owner-vouched floor. Thread this into `resolve_ipns_verified` (Rust) and `resolveIpnsRecord` (web) to fail closed on a generation regression. Add a server-side generation-forward gate in the publish path (`ipns.service.ts`) mirroring the existing sequence CAS. The durable map must survive process restart — any in-memory-only implementation silently removes the protection after restart.
 
 **Warning signs:**
+`generation` check is implemented but stored in a React state variable or a non-durable JS variable. The sqlite/IndexedDB write for `highestGeneration` is absent. Publish gate in `ipns.service.ts` only gates `sequenceNumber`. Test 5 from the design (M1 generation downgrade) is absent or mocked.
 
-- Login latency increases from <100ms to multi-second (IPNS resolve is median 11s on DHT per ProbeLab measurements)
-- Login failure rate correlates with IPNS availability instead of being independent
-- Recovery tool works but normal login fails (or vice versa)
-
-**Phase to address:** Database Minimization phase -- but this pitfall argues for NOT moving rootFolderKey off the DB at all, or at minimum maintaining a dual-write pattern
+**Phase to address:**
+API + resolve phase (atomic CAS, server-side generation gate); Web phase (durable M1 client map, IndexedDB); FUSE phase (durable sqlite map, `resolve_ipns_verified`). The server-side gate belongs with the API DB cutover phase; the client-side durable map belongs with web and FUSE implementation phases.
 
 ---
 
-### Pitfall 3: Migrating Shares to IPFS Breaks Recipient-Initiated Discovery
+### Pitfall 4: HIGH-4 — Add-During-Rotation Child Drop = Silent Data Loss
 
 **What goes wrong:**
-The `shares` table enables recipient-initiated share discovery: a recipient calls `GET /shares/received` and the API queries `WHERE recipient_id = :userId`. If shares migrate to IPFS/IPNS (e.g., each user has an "inbox" IPNS record listing shares offered to them), the recipient must now know _where_ to look. In the current model, the server knows; in the IPFS model, either:
-
-(a) The sharer publishes to the recipient's inbox IPNS record -- but the sharer does not hold the recipient's IPNS private key and cannot sign the record, so this is architecturally impossible without a new key-sharing protocol.
-
-(b) The sharer publishes to their own IPNS record and the recipient polls all potential sharers -- but the recipient does not know who might share with them.
-
-(c) A server-side index maps recipients to share IPNS records -- but this puts the discovery mechanism back in the database, negating the migration.
-
-Additionally, the `share_keys` table stores per-file and per-subfolder ECIES-wrapped keys. Each key is specific to a recipient's public key. These cannot simply be "moved to IPFS" because they reference database UUIDs (`share_id`, `item_id`) for relational joins. The IPFS blob would need to embed all relationship data that currently lives in foreign keys and indices.
+`rotateOne` re-seals the parent's read-body from an in-memory `children[]` list decoded at step 3. A concurrent upload that CAS-wins first adds a new `SealedChildRef` to that parent. When rotation retries from a 409, it re-seals the body from the **stale** in-memory child list — the new child is gone from the sealed body, and the parent republishes without it. The upload appeared to succeed (the upload itself returned 200) but the file is now invisible to all clients and unreachable without the CID, which no parent links to.
 
 **Why it happens:**
-
-- The mental model "move everything to IPFS" does not account for relational operations like indexed queries on foreign keys
-- Share discovery is fundamentally a server-side operation in a system where users cannot enumerate other users' IPNS records
-- The existing share-revocation flow uses soft-delete with `revoked_at` timestamp and lazy key rotation -- this stateful lifecycle is hard to model in immutable IPFS blobs
+The 409 retry path re-seals from memory rather than re-fetching and re-decoding the parent node at the current sequence. It is a natural mistake to treat the CAS retry as "same operation, fresh sequence" rather than "refetch everything that could have changed."
 
 **How to avoid:**
-
-1. Accept that shares, share_keys, and share_invites are server-side state that SHOULD stay in the database. They are access-control metadata, not user content. The server already sees `sharer_id`, `recipient_id`, and `ipns_name` in plaintext -- moving them to IPFS does not improve privacy.
-2. If serverless share discovery is a goal (for BYO-IPFS or full decentralization), research CRDT-based IPNS inbox patterns BEFORE attempting migration. The todo at `2026-02-22-crdt-ipns-inbox-sharing.md` correctly flags this as research-only for this milestone.
-3. Categorize DB tables into "can migrate" vs "must stay":
-   - **Can migrate:** `folder_ipns` (IPNS tracking), `pinned_cids` (quota tracking if BYO replaces it), vault keys (if dual-written)
-   - **Must stay:** `shares`, `share_keys`, `share_invites` (relational discovery), `device_approvals` (cross-device MFA), `users`, `auth_methods`, `refresh_tokens` (auth)
+On every CAS-409 in `rotateOne`, **re-fetch the current parent node, re-decrypt the read-body, and merge any `SealedChildRef`s added since the initial decode** before re-sealing. The merge is: take the union of the pre-rotate child list and the freshly-fetched child list by `childId`, with the freshly-fetched entries winning for any conflict. Add the mandatory test (design Section 7.3, test 4): start a rotation, inject a concurrent upload via a separate client, assert the new child is present in the completed parent.
 
 **Warning signs:**
+`rotateOne` retry path re-seals from a captured variable rather than calling the decode path again. The `children` variable is captured in a closure that is not refreshed on retry. Test for concurrent modification is absent.
 
-- Design documents propose "share IPNS records" without specifying how recipients discover them
-- The words "poll all sharers" appear in a design doc (quadratic complexity)
-- Share acceptance latency goes from instant (DB query) to seconds (IPNS resolution)
-
-**Phase to address:** Database Minimization phase -- but the actual prevention is to scope "minimize database" more narrowly than "move everything off"
+**Phase to address:**
+Rotation engine phase (`packages/sdk-core` — `rotateReadFromNode`). The retry path must be reviewed explicitly in phase success criteria.
 
 ---
 
-### Pitfall 4: BYO-IPFS Bypasses Server-Side Optimistic Concurrency
+### Pitfall 5: HIGH-3 — Inner Grant Orphan = Grantee Permanently Locked Out
 
 **What goes wrong:**
-CipherBox's conflict detection works because ALL IPNS publishes go through the API, which checks `expectedSequenceNumber` against the `folder_ipns` table before accepting a publish (lines 177-189 of `ipns.service.ts`). When a user configures a BYO-IPFS node and publishes IPNS records directly (client-to-node without API relay), the server never sees the publish and cannot check sequence numbers. Two devices could publish conflicting metadata for the same folder, and the DHT will keep whichever has the higher sequence number -- but neither device knows about the conflict.
-
-Worse: the TEE republishing service tracks sequence numbers in `ipns_republish_schedule`. If a BYO user publishes directly to their node, the TEE's sequence number becomes stale. The next TEE republish will create a record with a LOWER sequence number than what the user published, causing the DHT to reject it (or worse, a race where different DHT nodes hold different records). The user's IPNS records silently stop being republished.
+A node deep in a subtree being rotated was independently shared to a third party (e.g., a single-file share to Carol). The rotation re-mints `readDescriptorRef` only for grants rooted **at the rotation root** — not for grants whose `rootNodeId` is a descendant. Carol's grant row now wraps a `readKey` that has been rotated away. Her `readDescriptorRef` is permanently invalid and there is no recovery path (the owner no longer has the old `readKey` to re-derive). Carol is locked out with no error message other than "decryption failed."
 
 **Why it happens:**
-
-- BYO-IPFS is designed for user sovereignty, but the entire concurrency model assumes server mediation
-- The provider interface (`IpfsProvider`) only abstracts pin/unpin/fetch -- it does not abstract IPNS publishing, which is handled separately through `DelegatedRoutingClient`
-- Client-direct upload to a user's Kubo node is the simplest implementation, but it bypasses every server-side check
+It is natural to implement grant re-mint as "re-mint all grants on the root node," missing that `shares.rootNodeId` can point to any node in the subtree, not just the root. Without an indexed scan of `shares` over the full rotated set, inner grants are silently skipped.
 
 **How to avoid:**
-
-1. Even with BYO-IPFS, require IPNS publishes to go through the API. The server does not need to contact the user's IPFS node for IPNS -- it just needs to see the publish request for concurrency checking and TEE enrollment.
-2. Separate the concerns: BYO-IPFS is about WHERE data is pinned, not about HOW metadata is published. Pin encrypted blobs to the user's node; publish IPNS records through the API.
-3. If client-direct IPNS publishing is a requirement (full decentralization), implement client-side conflict detection: before publishing, resolve the current IPNS record, compare sequence numbers, and abort on mismatch. This is weaker than server-side checks (no atomicity guarantee) but better than nothing.
-4. Add a "last known sequence number" field to the BYO-IPFS configuration so the client can detect when the TEE's sequence diverges from the user's actual sequence.
+The rotation engine must query `shares WHERE rootNodeId IN (rotated_node_ids)` for each batch of nodes processed, re-mint `readDescriptorRef` for each non-revoked recipient, and bump `rootGeneration`. This query must be batched with the walk, not only run at the rotation root. Add the mandatory test (design Section 7.3, test 3): a single-file share exists at a leaf of the deleted subtree; assert the inner grantee's `readDescriptorRef` is re-minted, and the revoked recipient is cut.
 
 **Warning signs:**
+Grant re-mint logic runs only at the initial call site in `rotateReadFromNode`, not in the per-node `rotateOne` callback. The `shares` table has no index on `rootNodeId`. No test exercises a grant rooted at an interior subtree node.
 
-- BYO users report "stale" folder contents on other devices
-- TEE republish success rate drops for BYO users specifically
-- Sequence numbers in `ipns_republish_schedule` are lower than what IPNS resolves to
-
-**Phase to address:** BYO-IPFS phase -- design decision required before implementation begins
+**Phase to address:**
+Rotation engine phase, with API support for the batched `shares` query. The API query path should be implemented and tested in the same phase as `rotateReadFromNode`, not deferred.
 
 ---
 
-### Pitfall 5: DHT Record Expiry During Routing Provider Migration
+### Pitfall 6: Republisher Incrementing Sequence During Rotation = Stale-CID Rollback / Revocation Bypass
 
 **What goes wrong:**
-IPNS records on the DHT expire after 48 hours regardless of the validity field in the record. Kubo's default republish period is 4 hours, and CipherBox's TEE republishes every 6 hours. During a routing provider migration, if there is a gap where neither the old provider nor the new provider successfully publishes records, the 48-hour expiry clock keeps ticking. If the gap exceeds 48 hours (e.g., a weekend deployment where the new provider is misconfigured), ALL IPNS records for ALL users expire from the DHT simultaneously. Recovery requires republishing every single record -- but the TEE processes records in batches of 100 with a 6-hour cycle, so catching up on thousands of records takes many cycles.
-
-The DB-cached CID fallback saves resolution, but only for users going through the API. The recovery tool (`recovery.html`) and any future BYO-IPFS clients resolving directly from the DHT will get nothing.
+The TEE 6-hour republisher currently does `+ 1n` on the sequence (`apps/tee-worker/src/routes/republish.ts:79`). During a rotation walk, a file node's pre-rotation record (with the old revoked-readable CID) gets republished at a **forward sequence** by the TEE. Because IPNS record selection is "higher sequence wins," the TEE's re-signed stale record now dominates the rotation's new record (which was published at an earlier sequence). The revoked reader receives the old, readable CID. The rotation appears to complete but is immediately undone by the next TEE cycle.
 
 **Why it happens:**
-
-- The 48-hour DHT expiry is not widely known -- developers assume IPNS records persist until explicitly replaced
-- The TEE republish cycle (6 hours) provides comfortable margin (48/6 = 8 missed cycles before expiry), creating false confidence
-- Migration testing often happens on small test datasets where a full republish cycle completes quickly, masking the problem at scale
+The `sequence + 1` behavior was originally correct for availability (it ensures the refreshed record beats any cached older record on the network). The collision with rotation was not anticipated. The design's Section 4.6 initially incorrectly called the republisher "orthogonal" — this was corrected in the grilling session.
 
 **How to avoid:**
-
-1. Never take the old routing provider offline until the new one has successfully processed at least one full republish cycle for ALL enrolled records
-2. Monitor the `cipherbox_republish_schedule_total` gauge by status during migration -- any spike in `retrying` or `stale` status indicates the new provider is not accepting publishes
-3. Before migration, calculate the worst-case catch-up time: `(total enrolled records / BATCH_SIZE) * republish_interval = (N / 100) * 6 hours`. For 1000 records, that is 60 hours to fully catch up from scratch -- already past the 48-hour expiry
-4. Consider a one-time "emergency republish" endpoint that processes all records immediately (bypassing the 6-hour schedule) after a provider switch
-5. Reduce BATCH_SIZE temporarily during migration to process more records per cycle, or run catch-up cycles more frequently
+The TEE republisher must **never increment the sequence**. The fix (design Section 6.2) is: the relay sends the marshaled existing signed record; the TEE parses it, verifies its signature, and re-emits a record with the **same value (CID) and same sequence** and only a later EOL. The IPNS equal-sequence/later-EOL tiebreak lets the refreshed record win network-wide without consuming a sequence. The publish path's `+ 1n` must be replaced on the TEE path. The atomic CAS gate (design Section 6.6) guards the idempotent renewal write identically.
 
 **Warning signs:**
+`republish.ts` still contains `sequenceNumber + 1n` on the TEE path after the TEE contract rewrite phase. The `apps/tee-worker` phase is treated as a small change rather than a contract rewrite. No test validates "republisher does not increment sequence" (design test 12).
 
-- `ipns_republish_schedule` entries accumulating in `retrying` or `stale` status
-- IPNS resolution returning null for records that were previously resolvable
-- Recovery tool stops working for all users simultaneously
-
-**Phase to address:** IPNS Reliability phase -- must be addressed in the migration runbook
+**Phase to address:**
+TEE worker rewrite phase (`apps/tee-worker`). Must be completed before any rotation E2E testing, since a misconfigured republisher poisons rotation correctness.
 
 ---
 
-### Pitfall 6: Quota Tracking Becomes Unenforceable with BYO-IPFS
+### Pitfall 7: Eager-vs-Lazy Scope-Exit Confusion = Massive Over-Rotation Storm on Private Deletes
 
 **What goes wrong:**
-CipherBox tracks storage quota via the `pinned_cids` table: every upload goes through `IpfsController`, which calls `pinFile()` on the server-managed Kubo node and records the CID + size in `pinned_cids`. The user's total is summed against a 500 MiB limit. With BYO-IPFS, if uploads go directly to the user's node (client-direct), the server never sees the upload and cannot record the CID. The `pinned_cids` table becomes incomplete. Quota enforcement is either (a) impossible, (b) advisory only, or (c) requires the client to self-report, which is trivially forgeable.
-
-The deeper issue: quota tracking exists to protect the CipherBox operator's IPFS node from unbounded storage consumption. If the user is pinning to their own node, the CipherBox operator has no storage cost and does not need to enforce quota. But the system currently conflates "enforce quota" with "track what the user has stored" -- and that tracking is also used for the recycle bin's CID unpinning (30-day retention + cleanup).
+The old `executeLazyRotation` rotated on every delete/move/rename. If the new implementation does not check "does this node have any covering grant?" before invoking `rotateReadFromNode`, every private (un-shared) delete triggers a full subtree rotation. A vault owner with 10,000 unshared files performs a routine folder delete and triggers 10,000 IPNS republishes, blocking the client for minutes and burning IPFS quota. This is not a security issue — it is a liveness / usability issue that will appear correct in unit tests but catastrophic at scale.
 
 **Why it happens:**
-
-- The existing quota model assumes all storage flows through the server
-- Client-direct upload is the most obvious BYO architecture but breaks server-side bookkeeping
-- Developers may add BYO pinning without considering that quota, recycle bin, and orphan cleanup all depend on the `pinned_cids` table
+The rotation call site is added to delete/move/rename without the scope predicate. The predicate ("any active grant covers this node") requires querying `shares` by `rootNodeId` ancestry, which is non-trivial and easy to skip in early implementations.
 
 **How to avoid:**
-
-1. For BYO-IPFS users, skip server-side quota enforcement entirely. The user manages their own node's capacity.
-2. Still require BYO uploads to be reported to the API (POST with CID + size after client-side pin succeeds). This maintains the `pinned_cids` ledger for features that depend on it (recycle bin, orphan detection) without requiring the server to handle the actual data.
-3. Mark `pinned_cids` entries with a `provider` column ("server" | "byo") so the system knows which CIDs it can directly unpin vs. which require the client to unpin.
-4. Accept that unpinning on a BYO node requires client cooperation -- the server cannot reach into the user's node. Document this limitation clearly.
+The unified scope-exit rule is: **no covering grant → pure relink, zero rotations**. Implement `hasCoveringGrant(nodeId, ancestorIds)` as a required predicate at every delete/move/rename call site, gated against the relay-provided active grant set. Add a mandatory test (design Section 7.3, test 9): private delete with no grants → assert zero `rotateReadFromNode` invocations and zero `publishRecord` calls beyond the parent relink.
 
 **Warning signs:**
+Delete/move/rename call sites invoke `rotateReadFromNode` unconditionally. `hasCoveringGrant` function does not exist. The scope predicate is a TODO comment. No test counts publish calls for an un-shared node deletion.
 
-- BYO users show 0 bytes used in quota display despite having files
-- Recycle bin emptying fails silently for BYO-pinned CIDs (unpin calls go to the wrong node)
-- Orphan CID detection reports all BYO CIDs as orphans
+**Phase to address:**
+Rotation engine phase (scope-exit logic) and SDK + web mutation phase (delete/move/rename call sites). Both phases need the predicate; the predicate implementation belongs in the rotation engine phase.
 
-**Phase to address:** BYO-IPFS phase
+---
+
+### Pitfall 8: Tombstone Enforcement Gap = Revoked Writer Keeps Publishing Forever
+
+**What goes wrong:**
+Approach (c) write-revocation changes the Ed25519 keypair and k51 name. The old `ipns_records` row persists and the publish gate has zero tombstone awareness, so the revoked co-writer's cached Ed25519 key can publish to the old name indefinitely. The old name's signed record is still served by the relay's resolve path (it has a valid signature and a non-deleted row). Clients with bookmarks to the old name resolve stale (pre-rotation) content. The write revocation is cryptographically complete on the new name but operationally bypassed on the old one.
+
+**Why it happens:**
+`unenrollIpns` only deletes the republish schedule row, not the `ipns_records` row, and adds no publish rejection flag. The publish gate in `ipns.service.ts` checks only sequence monotonicity and key-possession (`existing.publicKey.equals(...)`), not tombstone state. The tombstone is a new concept that requires a new DB column and a new gate check.
+
+**How to avoid:**
+On write-revocation, mark the old row with `tombstonedAt` (design Section 5.5). The publish gate must check `tombstonedAt IS NOT NULL` and return 403/410 before the sequence check. Resolve must return 410 (or a tombstone marker in the response) for a tombstoned name, never stale content. The TEE republisher's renewal must also be blocked at the publish-gate tombstone check, so a malicious relay cannot feed the old signed record to an honest TEE and keep the revoked name's lease alive. Add test 20 (design Section 7.3): write to a tombstoned name → 403/410; resolve a tombstoned name → 410, not stale content.
+
+**Warning signs:**
+`tombstonedAt` column does not exist in the migration. Publish gate checks only sequence and pubkey. Resolve falls through to the network record for tombstoned rows. `unenrollIpns` is used as the write-revocation teardown rather than a separate tombstone path.
+
+**Phase to address:**
+API DB cutover and publish-gate phase. Tombstone schema and gate logic must be in the same migration as the write-revocation implementation.
+
+---
+
+### Pitfall 9: Non-Atomic Publish CAS = Silent Lost Writes Under Concurrency
+
+**What goes wrong:**
+`publishRecord` is currently a non-atomic `findOne → gate → save` in TypeORM with no row lock and no conditional UPDATE. Two concurrent forward writers both at `dbSeq = N` both pass the gate check and the second `.save()` silently overwrites the first. The first writer receives `200` and believes the write landed. This is a data-loss bug that is invisible in single-client tests and appears only under realistic multi-device or rotation+upload concurrency.
+
+**Why it happens:**
+TypeORM `.save()` is not atomic. The design's existing "sequence CAS" at `ipns.service.ts:301-317` is implemented as application-level logic, not a SQL `WHERE sequenceNumber = :expected` constraint. This gap existed in v1.1 and the design's Section 6.6 explicitly calls it out as unresolved.
+
+**How to avoid:**
+Replace the `findOne → gate → save` with a single conditional UPDATE:
+
+```sql
+UPDATE ipns_records SET latestCid = :cid, sequenceNumber = :next, signedRecord = :rec, updatedAt = now()
+WHERE ipnsName = :name AND sequenceNumber = :expected
+```
+
+Zero rows affected = 409 to the client. The EOL-only renewal (TEE lease) hits the same gate with `WHERE sequenceNumber = :loaded` so it can never regress `latestCid` from a stale in-memory row. Add test 16 (design Section 7.3): two concurrent publishes at the same `dbSeq` → exactly one 409, zero lost updates.
+
+**Warning signs:**
+`publishRecord` still contains `findOne` followed by `save`. No `WHERE sequenceNumber = :expected` in any UPDATE. The "D-09 idempotent branch" short-circuits before the CAS rather than hitting the same conditional UPDATE. Test for concurrent writes is absent.
+
+**Phase to address:**
+API DB cutover phase. This is a correctness fix that must land before any rotation E2E testing.
+
+---
+
+### Pitfall 10: TEE Relay-as-Signing-Oracle Trap = Write-Forgery Risk
+
+**What goes wrong:**
+If the TEE's lease-renewer contract is implemented as "receive a CID scalar from the relay, sign it with the wrapped IPNS key" rather than "receive a marshaled signed record, verify its signature, extend only the EOL," then the relay can coerce the enclave to sign any CID for any name it controls. A token-validation bug, SSRF, or auth bypass allows the relay to forge IPNS records under users' IPNS keys — exactly what a zero-knowledge system is designed to prevent. The enclave's security guarantee is reduced to "API server is trustworthy," negating the TEE's purpose.
+
+**Why it happens:**
+The prior (stale) contract had the republisher sourcing `latestCid` from the `ipns_republish_schedule` snapshot. The simplest "fix" for the stale-CID bug is "refresh the snapshot from the canonical row" — which is still the scalar-signing trap. The structural fix (parse, verify, extend-EOL-only) requires more implementation complexity and a different enclave API shape.
+
+**How to avoid:**
+The new enclave contract (design Section 6.4): (1) relay sends the **marshaled existing `signedRecord`** bytes, not a CID scalar; (2) the TEE parses it and **verifies the embedded signature**; (3) TEE re-emits a record with the **same value (CID) and same sequence**, only a later EOL. The enclave cannot be fed a CID it did not verify from a pre-existing valid record. Additionally, the three enclave bindings (design Section 6.7) must be present: internal epoch derivation (TEE derives `currentEpoch` from its own clock, never from relay-supplied scalars), name↔key binding (assert `publicKeyFromIpnsName(name) == pubkey(decryptedKey) == record.pubkey`), and migration durability (refuse to renew a key older than `currentEpoch - 1`).
+
+**Warning signs:**
+TEE API receives a CID field from the relay rather than a marshaled signed record. TEE does not call a signature-verify function before re-emitting. Epoch scalars are passed in from the relay request body. Name↔key assertion is absent.
+
+**Phase to address:**
+TEE worker rewrite phase (`apps/tee-worker`). The three Section 6.7 bindings must be in the same phase as the lease-renewer contract, not deferred.
+
+---
+
+### Pitfall 11: `folder_ipns.public_key` Null-Row Footgun (Repeated Phase-60 Regression Pattern)
+
+**What goes wrong:**
+The `folder_ipns.public_key` column is null for shared-folder rows and not always populated for other rows. Any code that reads `row.public_key` to obtain the Ed25519 pubkey for strict-verify will silently get `null` on shared-folder rows, causing either a null-dereference crash or a skipped signature verify (if the null check gates the verify call). This pattern caused two Phase-60 regressions in unit tests that were not caught because the tests did not use shared-folder rows.
+
+**Why it happens:**
+The column exists in the schema as a convenience but is nullable and unreliable. Developers implementing new resolve or rotation paths naturally reach for `row.public_key` because it is on the same row — it is only null for a subset of rows that may not appear in unit test fixtures.
+
+**How to avoid:**
+The design's Section 7.1 and 7.2 mandate: drop `folder_ipns.public_key` outright (it is derivable from the k51 name via `publicKeyFromIpnsName`). The migration must include `ALTER TABLE ipns_records DROP COLUMN public_key`. Every strict-verify call must recover the Ed25519 pubkey from the k51 name via `publicKeyFromIpnsName`, never from the column. Add a test with a shared-folder `ipns_records` row (null `public_key`) and assert that strict-verify works correctly.
+
+**Warning signs:**
+Any code containing `row.public_key` or `ipnsRecord.publicKey` after the migration phase. `publicKeyFromIpnsName` is not imported in paths that previously used the column. Test fixtures only use owner rows (never shared-folder rows with null column).
+
+**Phase to address:**
+API DB cutover phase (the migration drops the column). FUSE and SDK-core resolve phases must verify they use `publicKeyFromIpnsName` and never the dropped column.
+
+---
+
+### Pitfall 12: winfsp Module Nesting Trap (`super::` vs `super::super::`) = Windows CI Failure, Invisible Locally
+
+**What goes wrong:**
+The Rust `winfsp` feature cannot compile on macOS — `windows/*` modules (`#[cfg(winfsp)]`) are silently excluded from local `cargo check`/`cargo test`. A `super::` path inside a doubly-nested `pub mod implementation { pub mod write_ops { ... } }` that should be `super::super::` compiles cleanly on macOS and fails only on the Windows CI gate. This exact pattern (`super::content_fetch` instead of `super::super::content_fetch`) surfaced in Phase 55. The `node/v3` refactor deletes `spawn_file_meta_reencrypt` at `crates/fuse/src/metadata.rs:655` — its callers are `write_ops/implementation/rename.rs:248` **and** `platform/windows/write_ops.rs:1182` (the WinFsp twin). Missing the twin and getting the nesting wrong are two independent failure modes, both invisible on macOS.
+
+**Why it happens:**
+macOS developers never see Windows-only modules compile. Path bugs in `platform/windows/write_ops.rs` look correct locally because the file is never loaded. Module nesting in `platform/windows/write_ops.rs` is one level deeper than the macOS equivalent, so a copy-paste from the macOS side uses the wrong number of `super::` prefixes.
+
+**How to avoid:**
+Any FUSE phase touching `crates/fuse/src` must budget a Windows CI round-trip (`gh workflow run "Cargo Check & Test (Windows)"`) as a phase completion gate, not a merge afterthought. The phase plan must explicitly list `platform/windows/write_ops.rs` as a file to check alongside its macOS counterpart for every deletion or refactor. Use `grep -r "spawn_file_meta_reencrypt\|reencrypt" crates/fuse/` to locate all callers before beginning.
+
+**Warning signs:**
+FUSE phase does not mention `platform/windows/write_ops.rs` in its blast radius. Phase success criteria do not include running the Windows Cargo CI gate. The `super::` depth in a new `platform/windows/` path is not independently reviewed.
+
+**Phase to address:**
+FUSE implementation phase. Make the Windows CI gate a required check in the phase's success criteria, not optional.
+
+---
+
+### Pitfall 13: Folderless Zustand/SDK folderTree Desync = "Folder not loaded" Class Under Rotation
+
+**What goes wrong:**
+The scope-exit predicate and the rotation walk both require a consistent view of which IPNS nodes are covered by active grants (`folderTree` in the web app, `PublishCoordinator` / in-memory tree in FUSE). If `folderTree` in Zustand has not been reconciled to the current `sequenceNumber` before a delete or move triggers the scope predicate, the predicate may compute "no covering grant" for a node that actually has one (because the grant was added since the last sync) — silently skipping a required rotation. This is the same desync class that produced `#489` / `#494` ("Folder not loaded," "stale-sequence 409 + merge resurrecting deleted files").
+
+**Why it happens:**
+The web app's `folderTree` and the SDK client's `folderTree` are separate state stores. A direct SDK mutation (e.g., a background rotation resuming mid-session) can advance the SDK's tree without advancing Zustand. The scope-exit check at delete/move time reads the Zustand store, which is stale.
+
+**How to avoid:**
+Reconcile `folderTree` against the current `sequenceNumber` before any scope-exit predicate evaluation (design Section 3.9). If reconciliation fails (cannot resolve the current IPNS state), the mutation **defers** rather than skips the rotation. The reconcile-before-publish discipline already exists in the codebase — apply it explicitly at the rotation entry point. Add a test that simulates a stale `folderTree` at the time a delete is invoked and asserts the rotation is either deferred or correctly computed from the refreshed tree.
+
+**Warning signs:**
+Scope-exit predicate reads `useFolderStore.getState().folderTree` without first calling a reconcile. The rotation entry point in the web layer does not await a sync before computing coverage. No test uses a pre-stale Zustand store to trigger a delete.
+
+**Phase to address:**
+Web implementation phase (the `executeLazyRotation` → `rotateReadFromNode` replacement). Add reconcile-before-rotate as a required step in the phase plan.
+
+---
+
+### Pitfall 14: SDK-Core Coverage Excludes `index.ts` Barrels = Rotation Engine Silently Uncovered
+
+**What goes wrong:**
+vitest coverage excludes `src/**/index.ts` barrels. If the `rotateReadFromNode` implementation or the `sealAesGcmAad` primitive is placed in a fat `index.ts` barrel file (to match existing sdk-core patterns), that code is excluded from coverage reports. A phase can hit the 80% coverage gate while leaving the most security-critical code unexercised by the coverage tool. The coverage gate passes, the phase completes, and silent gaps exist in the rotation engine.
+
+**Why it happens:**
+The sdk-core pattern uses fat `index.ts` files. Developers naturally add new exports to the nearest `index.ts`. The coverage exclusion is a project-specific configuration that is easy to forget (it was discovered in Phase 55 when `folder/index.ts` split dropped coverage to 77.11%).
+
+**How to avoid:**
+The rotation engine (`rotateReadFromNode`, `rotateOne`, `verifySubtreeClean`) and the job record persistence must be implemented in **named files** (e.g., `src/rotation/engine.ts`, `src/rotation/job.ts`), not in `index.ts` barrels. The design's Section 7.2 explicitly states: "in named files, not a fat `index.ts` barrel — coverage excludes barrels." The phase plan must name the output files, not just the API surface.
+
+**Warning signs:**
+`rotateReadFromNode` is exported from `src/index.ts`. Phase plan says "add to sdk-core" without specifying file names. Coverage report shows high percentage but `src/index.ts` is in the exclusion list.
+
+**Phase to address:**
+`packages/sdk-core` rotation engine phase. File naming must be specified in the phase plan as a success criterion.
+
+---
+
+### Pitfall 15: Web vitest Only Runs `*.test.ts` Files = Rotation Specs Silently Skipped
+
+**What goes wrong:**
+`apps/web` vitest configuration's `include` pattern is `src/**/*.test.ts`. Any test file named `*.spec.ts` is silently skipped and never appears in CI results. If rotation-related tests for the web layer are created with `.spec.ts` naming (which is common in NestJS-pattern tests and SDK integration tests), they never run. The CI passes and the tests are never executed.
+
+**Why it happens:**
+The web app adopted the `*.test.ts` convention but it is not enforced by any lint rule. Test file naming is easy to get wrong when copying from SDK or API test patterns that use `.spec.ts`.
+
+**How to avoid:**
+All test files for `apps/web` must use `.test.ts` naming. When creating new tests in the web phase, verify file naming convention before committing. A grep across the web test directory for `.spec.ts` is a cheap phase entry check.
+
+**Warning signs:**
+New test files in `apps/web/src/` with `.spec.ts` extension. CI shows no new test cases despite new test files being committed.
+
+**Phase to address:**
+Web implementation phase. Add a check in the phase plan: `find apps/web/src -name "*.spec.ts"` must return empty.
+
+---
+
+### Pitfall 16: Zeroization of Caller-Owned Reused Buffers in SDK E2E = 400 "publicKey does not correspond"
+
+**What goes wrong:**
+If `rotateReadFromNode` or any rotation helper zero-clears a key buffer that was passed in by the caller (rather than a buffer it owns), subsequent SDK operations that reuse that caller-owned buffer (e.g., the user's `publicKey` or a grant's `readKey`) will operate on a zeroed buffer and produce 400 errors from the API ("publicKey does not correspond"). This broke 48/89 SDK E2E tests in a prior incident. The failure is a runtime regression at SDK E2E level — unit tests will not catch it because they do not share buffers across calls.
+
+**Why it happens:**
+Zeroization discipline requires clearing key material after use. A callee that receives a buffer it does not own (e.g., the caller's `readKey`) zeros it "for safety" on completion, not realizing the caller reuses it across multiple operations. The bug is invisible in isolated unit tests.
+
+**How to avoid:**
+Rotation helpers must zero only key material they allocate. A caller-passed `readKey` buffer must be treated as owned by the caller; if the helper needs to zero something, it must zero its own derived copy. Document this in the function's JSDoc. The SDK E2E suite (`tests/sdk-e2e`) must run after any rotation helper is added — it is the only test that exercises real client→API IPNS publish/resolve round-trips with shared buffers.
+
+**Warning signs:**
+Any rotation helper calling `key.fill(0)` on a parameter buffer. SDK E2E failures of the form "400 publicKey does not correspond" after a rotation call. Unit tests all pass while SDK E2E shows `48/89` failures.
+
+**Phase to address:**
+`packages/sdk-core` rotation engine phase. Add a reminder in the phase plan: zero only locally-allocated buffers, never caller parameters. SDK E2E must pass before phase sign-off.
+
+---
+
+### Pitfall 17: SDK E2E Is the Only Real Publish/Resolve Gate — Desktop E2E Is Dispatch-Gated
+
+**What goes wrong:**
+`tests/sdk-e2e` is the only test suite that exercises a real client→API IPNS publish/resolve round-trip. It is not run on PRs by default (requires a live API). The desktop E2E (`apps/desktop`) is dispatch-gated — `CI E2E Tests` skips desktop on main pushes that do not touch desktop paths. A rotation engine merged to `packages/sdk-core` and a FUSE rewrite merged to `crates/fuse` can both pass unit CI and land on `main` without the full integration ever running.
+
+**Why it happens:**
+The gating is intentional (cost/speed), but it creates a coverage gap for the rotation feature that is more significant than for stable features — rotation is the first feature that exercises the full publish-rotate-resolve-verify loop at real IPNS latency.
+
+**How to avoid:**
+After the rotation engine phase and after the FUSE phase, run the SDK E2E suite manually (`tests/sdk-e2e` with the local API stack up) and run the desktop E2E via `gh workflow run "CI E2E Tests" --ref <branch>`. Do not merge the rotation engine or FUSE phases without at least one SDK E2E pass and one Windows CI pass. These must be explicit gates in the phase completion checklist, not post-merge follow-ups.
+
+**Warning signs:**
+Phase sign-off does not include "SDK E2E run locally." Desktop E2E CI gate is not triggered on the FUSE phase branch. Phase completion criteria only reference unit tests.
+
+**Phase to address:**
+Rotation engine phase (sdk-core) and FUSE phase — both must add SDK E2E and desktop E2E as explicit phase gates.
+
+---
+
+### Pitfall 18: `parseCachedRecord`-Null Fall-Through Serves Ungated Network Records
+
+**What goes wrong:**
+When `parseCachedRecord` returns null for a shared-folder `ipns_records` row (which legitimately has a null `signedRecord`), the resolve path currently falls through to the network record without applying any sequence floor. A malicious relay can exploit this by serving an old, legitimately-signed, low-sequence network record to a shared-folder reader without triggering any gate. This is not the same as the tombstone case; it is the normal shared-folder resolve path being ungated.
+
+**Why it happens:**
+The null check was originally added to handle corruption or absence. The shared-folder case (where `signedRecord` is legitimately null because the owner holds the key and the shared-folder row is a skeleton) was not distinguished from the corruption case. The design's Section 6.5 makes the case-split explicit: null-signedRecord for shared-folder rows → apply `seq ≥ storedSeq` floor from the DB `sequenceNumber` column; `signedRecord`-CID mismatch → fail closed.
+
+**How to avoid:**
+Implement the two-case split explicitly in `resolveRecord`: (1) if `signedRecord` is null and the row's `sequenceNumber` is set, apply `seq ≥ storedSeq` floor to the network record; (2) if `signedRecord` is present but its decoded CID disagrees with `latestCid`, fail closed with a 500/503, never falling through. Add test 15 (design Section 7.3): verify both cases behave correctly.
+
+**Warning signs:**
+The null check in `resolveRecord` is a single `if (signedRecord == null) return networkResult` with no floor. The two-case distinction is absent. No test uses a legitimate null-`signedRecord` shared-folder row.
+
+**Phase to address:**
+API resolve hardening phase (same as the atomic CAS and the generation gate).
+
+---
+
+### Pitfall 19: `spawn_file_meta_reencrypt` — Two Callers, Not One
+
+**What goes wrong:**
+The `node/v3` content self-seal (Section 2.9) makes file moves pure re-links (no re-encryption needed). This kills `spawn_file_meta_reencrypt` (`crates/fuse/src/metadata.rs:655`). The function has two callers: `write_ops/implementation/rename.rs:248` (visible on macOS) and `platform/windows/write_ops.rs:1182` (the WinFsp twin, invisible on macOS). If only the first caller is deleted, `platform/windows/write_ops.rs` retains a call to a deleted function and fails on the Windows CI gate with a compilation error.
+
+**Why it happens:**
+The two-caller structure mirrors the macOS/Windows split that exists throughout `crates/fuse`. The Windows twin is only visible under `#[cfg(winfsp)]` and requires a CI round-trip to verify. This exact pattern (a function called from both paths) caused the Phase-55 `super::` nesting bug.
+
+**How to avoid:**
+Before beginning the FUSE phase, run `grep -r "spawn_file_meta_reencrypt\|reencrypt" crates/fuse/` and list all callers in the phase plan. Treat the deletion as complete only after both callers are removed and the Windows Cargo CI gate passes.
+
+**Warning signs:**
+FUSE phase plan only mentions `rename.rs` as the caller to update. `platform/windows/write_ops.rs` is not in the blast radius list.
+
+**Phase to address:**
+FUSE implementation phase. This is a two-file deletion; both files must be listed in the phase plan explicitly.
+
+---
+
+### Pitfall 20: Cold-Node Filename Leak via Plaintext `SealedChildRef.name` on Un-Rotated Tail
+
+**What goes wrong:**
+`SealedChildRef.name` is plaintext **within** the parent's sealed read-body. A revoked reader who already decrypted the parent's read-body (before the rotation reached the parent) has a copy of all child names, including names of items added **after** the revocation but before the rotation reached that node. The lazy-walk variant of the old `executeLazyRotation` had this bug (MED-5 in the design). The eager walk of `rotateReadFromNode` bounds the window, but does not eliminate it: filenames added to a not-yet-rotated node are visible to the revoked reader.
+
+**Why it happens:**
+Name confidentiality within the sealed body depends on the parent node being rotated before the revoked reader can re-read the parent. During a multi-hour rotation walk over a large subtree, names added to interior nodes between the root step and the node's own rotation step are exposed. The root step cuts navigation from the entry point, but a reader who pre-fetched the interior node's CID can still unseal the body with the cached `readKey`.
+
+**How to avoid:**
+This is an accepted bounded residual under the eager-walk model (ADR 0002): the exposure window is ≤ the walk duration and the root step cuts the entry point immediately. Do NOT build a lazy-walk variant that leaves this window indefinitely open. The phase plan must document this residual in the rotation engine phase's security properties section so it is explicit, not an oversight. The optional per-file "re-encrypt now" path (design Section 4.1) is the mitigation for high-sensitivity cases.
+
+**Warning signs:**
+A deferred implementation adds lazy-walk logic as an "optimization" without documenting the MED-5 filename-leak regression. Phase success criteria do not state the eager-walk invariant.
+
+**Phase to address:**
+Rotation engine phase. The invariant "eager walk only; lazy walk is deferred and documented as introducing MED-5 regression" must be stated in the phase plan.
 
 ---
 
 ## Technical Debt Patterns
 
-Shortcuts that seem reasonable but create long-term problems.
-
-| Shortcut                                                             | Immediate Benefit                 | Long-term Cost                                                                                             | When Acceptable                                                                                                                                                                         |
-| -------------------------------------------------------------------- | --------------------------------- | ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Dual-write to old and new routing provider "forever"                 | Safe migration                    | Double the publish latency, double the failure surface, code complexity of maintaining two routing clients | Only during migration transition; set a hard deadline to remove the old provider within 2 weeks of cutover                                                                              |
-| Skip IPNS signature verification on DB-cached resolutions            | Faster resolve, simpler code      | DB-cached CIDs are not cryptographically verified -- a compromised DB could serve malicious CIDs           | Acceptable only if the DB is trusted infrastructure. The web client at `ipns.service.ts:160-169` already verifies signatures from network resolves but skips it for DB-fallback results |
-| BYO users self-report CID sizes for quota                            | Simple client-direct architecture | Users can lie about sizes; quota is advisory only                                                          | Acceptable for tech demonstrator. For production, require server verification of at least one byte-range to confirm size                                                                |
-| Use DB-cached CID as primary resolution (skip IPNS network entirely) | Instant resolve, no DHT latency   | DB becomes single point of truth for metadata location; IPNS becomes decorative                            | Acceptable as interim step. The current code already prefers DB when it has a newer sequence number. Making this explicit reduces complexity                                            |
-| Hardcode Someguy URL instead of making it configurable               | Faster initial implementation     | Cannot switch providers without code change and redeploy                                                   | Never -- use `DELEGATED_ROUTING_URL` env var (already exists in `delegated-routing.client.ts:22-25`). Zero cost to keep it configurable                                                 |
-| Measure performance baselines during staging only                    | No production impact              | Staging has different latency, load, and network characteristics than production                           | Never for baselines intended to represent production. Staging baselines are useful only for relative comparison (before/after a change)                                                 |
+| Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
+| -------- | ----------------- | -------------- | --------------- |
+| Skipping KAT in crypto primitive phase | Faster initial PR | Silent total decryption failure at first cross-language read | Never |
+| In-memory generation high-water (not persisted) | Simpler implementation | M1 defense evaporates on page reload / app restart | Never |
+| Mocking IPNS in rotation crash-safety tests | Faster test execution | Resume/idempotency never exercises real CAS race | Never for crash-safety suite |
+| Adding `rotateReadFromNode` to `index.ts` barrel | Consistent with existing sdk-core pattern | Implementation excluded from coverage; 80% gate passes with uncovered rotation engine | Never |
+| Using `folder_ipns.public_key` column instead of `publicKeyFromIpnsName` | Fewer function calls | Null-row crash on shared-folder rows (known Phase-60 pattern) | Never |
+| Running only unit tests to sign off FUSE phase | Fast phase completion | Windows CI winfsp path has undetected `super::` nesting bugs | Never |
+| Treating TEE tombstone and schedule-row deletion as equivalent | Simpler teardown | Revoked name keeps being renewed; publish gate is never closed | Never |
 
 ---
 
 ## Integration Gotchas
 
-Common mistakes when connecting to external services or changing existing integrations.
-
-| Integration                             | Common Mistake                                                                                                                                                                                                                    | Correct Approach                                                                                                                                                                                                          |
-| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Someguy (self-hosted delegated routing) | Deploying Someguy without DHT bootstrap peers, resulting in an isolated node that cannot resolve any existing IPNS records                                                                                                        | Configure Someguy with the Amino DHT bootstrap peers. Run it alongside Kubo so it benefits from Kubo's established DHT connections. Verify resolution of known IPNS names before cutting over                             |
-| Kubo DHT direct (Routing.Type=auto)     | Assuming the existing Kubo node already participates in DHT for IPNS. CipherBox's Kubo may be configured with DHT disabled (using only delegated routing)                                                                         | Check `Routing.Type` in Kubo config. If it is "none" or "custom" with only delegated HTTP routers, IPNS DHT publishing/resolution is not happening through Kubo itself                                                    |
-| IPFS Pinning Service API (for BYO)      | Treating the Pinning Service API as equivalent to Kubo's `/api/v0/add`. The Pinning Service API is async -- `POST /pins` returns a `requestid` and pinning happens in the background                                              | Poll pin status before assuming content is available. The CID may not be retrievable from the BYO node until pinning completes. Upload UX must reflect this ("pinning..." not "uploaded")                                 |
-| Recovery tool (`recovery.html`)         | Changing the API's routing provider but forgetting the recovery tool resolves IPNS directly at line 363. The recovery tool is a standalone HTML file with no build system -- it does not use the API client                       | Update the recovery tool's default gateway URL. Better: make the recovery tool configurable to use the same routing provider as the API, or provide a recovery-specific resolve endpoint                                  |
-| TEE republishing during provider switch | The TEE worker calls the API's `publishSignedRecord()` method, which calls `DelegatedRoutingClient.publish()`. If the URL changes, the TEE's publishes go to the new provider but existing DHT records on the old provider expire | During transition, have the republisher publish to both providers. The TEE itself does not need to change -- only the API's publish path needs to dual-write                                                              |
-| Prometheus metrics endpoint             | Adding IPNS latency histograms that create high-cardinality labels (e.g., per-ipnsName timings)                                                                                                                                   | Use fixed label values (e.g., `operation=publish/resolve`, `source=network/db_cache`). The existing `httpRequestDuration` histogram correctly normalizes routes. Follow the same pattern for new IPNS-specific histograms |
-
----
-
-## Performance Traps
-
-Patterns that work at small scale but fail as usage grows.
-
-| Trap                                                           | Symptoms                                                                                                                                                                                       | Prevention                                                                                                                                                                                               | When It Breaks                                                                                                                                                                                                                                |
-| -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Full DHT resolution on every IPNS resolve                      | Login takes 11+ seconds (DHT median); folder navigation feels frozen                                                                                                                           | Use DB-cached CID as primary resolve path; DHT resolve as background refresh (the current code approximates this but still blocks on DHT first)                                                          | Immediately -- median 11s latency per ProbeLab measurements on Amino DHT. Already broken for UX                                                                                                                                               |
-| TEE republishing all records in sequence                       | Republish cycle exceeds the 6-hour interval for users with many folders/files; records start expiring before the next cycle                                                                    | The current BATCH_SIZE=100 with concurrency helps. Monitor `republish_entries_processed_total` vs cycle duration. Add per-user prioritization                                                            | At ~600+ enrolled records per cycle (100 batches x 6s avg per batch = 600s = 10 min total, still fine; but network issues or TEE latency can push individual batches to 60s+, at which point 100 batches x 60s = 100 min, approaching limits) |
-| Instrumenting every IPFS operation with synchronous logging    | Console.log/warn calls on hot paths (the codebase has 50+ console calls per CONCERNS.md) block the event loop; adding structured logging to IPFS pin/unpin adds latency to user-facing uploads | Use async log shipping (not synchronous console). Instrument at the histogram level (timing), not the log level (string formatting). The existing Prometheus setup is the right model                    | Immediately -- any synchronous logging on IPFS hot paths adds measurable latency                                                                                                                                                              |
-| Client-side performance measurement using `Date.now()`         | Sub-millisecond operations appear as 0ms; timer coarsening in browsers hides real variance                                                                                                     | Use `performance.now()` for client-side timing, `process.hrtime.bigint()` for server-side (already used in `http-metrics.interceptor.ts:13`). Set histogram buckets appropriately for the expected range | Immediately -- `Date.now()` has millisecond resolution which is insufficient for sub-ms operations                                                                                                                                            |
-| Baseline measurements taken during development with hot caches | Baselines show artificially good numbers because Kubo's blockstore cache, OS page cache, and browser cache are warm                                                                            | Always include cold-start measurements: restart Kubo, clear browser cache, flush OS page cache. Report both cold and warm baselines                                                                      | When baselines are used to set SLO thresholds -- warm-cache numbers are artificially optimistic                                                                                                                                               |
-| BYO-IPFS with user's home node behind NAT                      | Pin succeeds locally but content is not retrievable by other peers because the node is not reachable. User reports "upload succeeded but file is missing"                                      | Verify content availability after pin by attempting retrieval from a different peer. Warn users about NAT traversal requirements. Kubo's relay/AutoNAT helps but is not guaranteed                       | Immediately for any user behind consumer NAT (most home connections)                                                                                                                                                                          |
-
----
-
-## Security Mistakes
-
-Domain-specific security issues beyond general web security, relevant to the IPFS infrastructure changes.
-
-| Mistake                                                                                         | Risk                                                                                                                                                    | Prevention                                                                                                                                                                                                                                                |
-| ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Exposing Kubo API (port 5001) to BYO users for "direct pinning"                                 | Kubo API has no authentication. Any client with network access can pin/unpin/add content, exhaust disk, or read any pinned content                      | Never expose Kubo API directly. Use the IPFS Pinning Service API (port-separated, auth-capable) or proxy through the CipherBox API with JWT auth                                                                                                          |
-| Storing BYO-IPFS node credentials (API tokens, auth headers) in the database without encryption | Server compromise exposes all BYO users' IPFS node credentials                                                                                          | Encrypt BYO config with the user's publicKey (ECIES). Store only the wrapped blob. The client unwraps and uses the credentials client-side                                                                                                                |
-| Self-hosted Someguy without rate limiting                                                       | DoS vector: anyone can flood the delegated routing endpoint with publish/resolve requests, exhausting DHT connections                                   | Deploy Someguy behind a reverse proxy with rate limiting. The existing `delegated-routing.client.ts` handles 429 responses (lines 62-69), so rate-limited responses are gracefully retried                                                                |
-| Performance baselines that include auth tokens in timing data                                   | Timing side-channels could reveal information about token validation (e.g., shorter response for invalid tokens vs. valid tokens with expired sessions) | Exclude auth endpoints from public-facing performance dashboards. Report only aggregate histograms, not per-request timings. The existing Prometheus setup correctly does this                                                                            |
-| IPNS records signed with leaked TEE epoch keys                                                  | If a previous-epoch TEE private key is compromised, an attacker could forge IPNS records for any user whose key was encrypted with that epoch           | The 4-week grace period for epoch rotation means old keys are eventually discarded. Ensure the new routing provider validates IPNS record signatures (Someguy does this inherently via the IPNS spec). Monitor for unexpected sequence number regressions |
-
----
-
-## UX Pitfalls
-
-Common user experience mistakes when adding these infrastructure features.
-
-| Pitfall                                                                       | User Impact                                                                                                         | Better Approach                                                                                                                                                                                      |
-| ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Showing IPNS resolution latency as a loading spinner without explanation      | Users see a 3-11 second spinner after every folder navigation and assume the app is broken                          | Show folder contents from DB cache immediately, then refresh in background when IPNS resolves. The current 30-second polling partially achieves this, but initial navigation still blocks on resolve |
-| BYO-IPFS setup requires knowing Kubo API URL, authentication, and IPNS config | Only technically sophisticated users can configure it; everyone else is stuck with default                          | Provide auto-detection: if user enters a hostname, probe standard ports (5001 for Kubo API, 9097 for Pinning Service API). Offer presets for common providers (web3.storage, Filebase, Pinata)       |
-| Performance baseline results displayed as raw numbers                         | Users see "IPNS resolve: 11234ms" and panic, not understanding this is a DHT operation                              | Present baselines as traffic-light indicators (green/yellow/red) with context: "IPNS resolve: 11.2s (typical for DHT; cached resolves are <100ms)"                                                   |
-| Silent fallback from IPNS to DB cache with no indication                      | User thinks they have "real IPFS" but resolution always falls back to the database. False sense of decentralization | Show a subtle indicator when resolution source is DB-cache vs. IPNS network. Log it in a diagnostics panel for advanced users                                                                        |
-| BYO-IPFS node goes offline and user loses access to files                     | User pinned files to their home node, it crashes, content is lost because no other node has copies                  | Warn users that BYO means single-point-of-failure unless they also pin to a backup. Offer "pin to both server and BYO" as default mode                                                               |
+| Integration | Common Mistake | Correct Approach |
+| ----------- | -------------- | ---------------- |
+| `pnpm api:generate` | Skipping after `apps/api` DTO changes for `shares`, `ipns_records` | Always run after API changes; `check-api-client.sh` pre-commit hook enforces this, but only when staged correctly |
+| SDK E2E (`tests/sdk-e2e`) | Running against a mocked API or skipping entirely | Must run against a live local stack (`docker compose up` + `pnpm --filter @cipherbox/api dev`); it is the only real publish/resolve gate |
+| Desktop E2E | Checking CI result on a main push that didn't touch `apps/desktop` | Trigger explicitly: `gh workflow run "CI E2E Tests" --ref <branch>` |
+| TypeORM migrations | Using `synchronize: true` locally to verify DB shape | `synchronize` is off everywhere; write explicit migration and verify it with `migrationsRun: true` |
+| Atomic CAS | Using TypeORM `.save()` for sequence-gated publishes | Use raw `UPDATE … WHERE sequenceNumber = :expected` and check rows-affected |
+| TEE epoch scalars | Reading epoch from relay request body in the enclave | TEE derives `currentEpoch` from its own clock + schedule; relay-supplied epoch scalars are untrusted and ignored |
 
 ---
 
 ## "Looks Done But Isn't" Checklist
 
-Things that appear complete but are missing critical pieces.
-
-- [ ] **Routing provider replacement:** New provider resolves IPNS names -- but verify it also PUBLISHES reliably. Resolution can fall back to DB; publishing cannot. Test publish + resolve round-trip, not just resolve.
-- [ ] **DB-to-IPFS migration for folder_ipns:** folder_ipns rows exist in IPFS blobs -- but verify the TEE republish service still works. It reads `encrypted_ipns_key` and `sequence_number` from the schedule table, not from IPFS. These columns cannot be eliminated if TEE republishing continues.
-- [ ] **BYO-IPFS pin integration:** Files pin to user's node -- but verify they are retrievable by the CipherBox API for serving to other devices. Content must be discoverable on the IPFS network, not just locally pinned.
-- [ ] **Performance baselines recorded:** Histograms populated in Prometheus -- but verify baselines include error cases. A P99 that excludes 502/504 errors paints a falsely rosy picture.
-- [ ] **Recovery tool updated for new routing:** recovery.html points to new routing endpoint -- but verify it works WITHOUT the CipherBox API running. The entire point of the recovery tool is server-independent vault access.
-- [ ] **Orphaned IPNS cleanup:** IPNS records migrated off DB -- but verify the orphaned IPNS records from pre-migration are cleaned up. The CONCERNS.md already flags orphaned IPNS records as tech debt.
-- [ ] **Sequence number continuity:** After migration, first publish from client succeeds -- but verify the sequence number is correctly incremented from the pre-migration value, not reset to 1. A reset would cause the DHT to prefer the old (higher-sequence) record.
-- [ ] **BYO quota display:** Settings page shows BYO config -- but verify the vault storage usage display updates correctly. If `pinned_cids` is incomplete, the UI shows wrong usage.
-
----
-
-## Recovery Strategies
-
-When pitfalls occur despite prevention, how to recover.
-
-| Pitfall                                                         | Recovery Cost                                        | Recovery Steps                                                                                                                                                                                                                                                        |
-| --------------------------------------------------------------- | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Sequence number divergence after provider switch                | LOW                                                  | DB is authoritative. Force-republish all records from DB state to new provider. Client-side sequence numbers in Zustand stores may be stale -- user must refresh (F5).                                                                                                |
-| rootFolderKey inaccessible (IPNS resolution failure)            | CRITICAL if DB copy removed; LOW if DB copy retained | If DB copy exists: serve from DB (already the fallback). If DB copy was removed: user must use recovery tool with their private key to re-derive IPNS key, resolve from DHT (may be expired), and fetch from IPFS. If both fail: vault is permanently inaccessible.   |
-| Shares unreachable after migration to IPFS                      | HIGH                                                 | Must revert to DB-backed shares. If DB tables were dropped: reconstruct from IPFS blobs by scanning each user's share IPNS records, but recipient discovery requires the server index to be rebuilt from scratch.                                                     |
-| BYO concurrency conflict (two devices wrote different metadata) | MEDIUM                                               | Detect by comparing IPNS records from multiple DHT lookups. The record with the higher sequence number wins. The losing device must fetch the winning metadata and re-apply its changes on top (manual merge). No automated merge exists in the current architecture. |
-| 48-hour DHT expiry (all records lost from DHT)                  | MEDIUM                                               | DB-cached CIDs still work for API-mediated resolution. To restore DHT records: trigger emergency republish of all entries. At BATCH_SIZE=100, 1000 records = 10 batches. If each batch takes 30s, full recovery = 5 minutes for TEE signing + publishing time.        |
-| Quota tracking broken for BYO users                             | LOW                                                  | Run a reconciliation job: for each BYO user, fetch their folder metadata from IPNS, enumerate all CIDs, check pin status on their node, update `pinned_cids` table. Can be run as a one-time migration or periodic background job.                                    |
-| False performance baselines from observer effect                | LOW                                                  | Re-run baselines with instrumentation disabled, compare. If overhead > 5%, switch to sampling-based measurement (10% sample rate). Document the measurement methodology alongside the baseline numbers.                                                               |
+- [ ] **Crypto primitive:** KAT fixture committed and asserted by both `packages/crypto/__tests__` and a Rust `#[test]` — verify all four role bytes are in the fixture
+- [ ] **Rotation engine:** `rotateOne` for file nodes mints `fileKey'` and sets `contentRekeyPending` — verify by checking for `node.kind === 'file'` branch in the implementation
+- [ ] **Rotation engine:** 409-retry path re-fetches and re-merges the parent's `SealedChildRef` list — verify no captured stale `children` variable
+- [ ] **Rotation engine:** Scope-exit predicate exists and gates every delete/move/rename call site — verify with a test counting zero publishes for an un-shared delete
+- [ ] **Grant re-mint:** Inner grants (those with `rootNodeId` pointing to a node inside a rotated subtree, not the root) are re-minted — verify test 3 from the design test strategy
+- [ ] **Tombstone:** `tombstonedAt` column exists; publish gate checks it before the sequence gate; resolve returns 410; TEE renewal is blocked at the same gate
+- [ ] **Republisher:** `apps/tee-worker` no longer increments `sequenceNumber`; same sequence is re-signed with extended EOL only
+- [ ] **M1 generation high-water:** Persisted to IndexedDB (web) / sqlite (FUSE), survives restart, seeded from `rootGeneration` on first grant receipt
+- [ ] **Atomic CAS:** `publishRecord` uses a conditional UPDATE; `.save()` is gone from the publish path
+- [ ] **`folder_ipns.public_key` column:** Dropped in migration; no code reads `row.public_key` or `record.publicKey` from the DB row
+- [ ] **`platform/windows/write_ops.rs`:** Updated alongside the macOS FUSE path for every file touched in the FUSE phase
+- [ ] **Windows CI gate:** `Cargo Check & Test (Windows)` passes for every FUSE phase PR
+- [ ] **SDK E2E:** Runs and passes after rotation engine and FUSE phases before merge
+- [ ] **api:generate:** Regenerated client committed alongside every API endpoint/DTO change
+- [ ] **`apps/web` tests:** All new test files use `.test.ts` not `.spec.ts`
+- [ ] **sdk-core rotation files:** Named files (not `index.ts`); coverage report shows them as covered
 
 ---
 
 ## Pitfall-to-Phase Mapping
 
-How roadmap phases should address these pitfalls.
-
-| Pitfall                                    | Prevention Phase      | Verification                                                                                                                                                   |
-| ------------------------------------------ | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| P1: Sequence number divergence             | IPNS Reliability      | Run dual-provider for 48+ hours; compare sequence numbers across providers for 100% of IPNS names                                                              |
-| P2: rootFolderKey on IPNS                  | Database Minimization | Verify login works when IPNS is completely down (kill Someguy, disable DHT); login must still succeed via DB                                                   |
-| P3: Share discovery on IPFS                | Database Minimization | N/A -- prevention is to NOT migrate shares. Verify shares still work after other tables are migrated                                                           |
-| P4: BYO bypasses concurrency               | BYO-IPFS              | Simulate two BYO devices publishing simultaneously; verify conflict is detected and one publish is rejected or flagged                                         |
-| P5: DHT record expiry during migration     | IPNS Reliability      | Before cutover, verify new provider has successfully republished all records at least once. Check that zero `stale` entries exist in `ipns_republish_schedule` |
-| P6: Quota tracking with BYO                | BYO-IPFS              | Upload 10 files via BYO, verify `pinned_cids` table has 10 entries with correct sizes. Empty recycle bin, verify CIDs are unpinned on user's node              |
-| P7: Instrumentation overhead               | Performance Baselines | Run baseline suite with and without instrumentation. Verify overhead < 5% on P95 latency. If higher, reduce sampling rate                                      |
-| P8: Recovery tool broken by routing change | IPNS Reliability      | Run full recovery flow using ONLY recovery.html (no API) with the new routing provider. Verify all files are recoverable                                       |
+| Pitfall | Prevention Phase | Verification |
+| ------- | ---------------- | ------------ |
+| AAD byte-encoding drift (TS/Rust KAT) | Crypto primitive phase (Phase 1) | KAT fixture committed and passing in both `packages/crypto` and `crates/crypto` |
+| CRIT-1 content-key rotation omitted | Rotation engine phase (sdk-core) | Test: old `fileKey` cannot decrypt new version after rotation |
+| M1 generation downgrade not persisted | API (server gate) + Web (IndexedDB) + FUSE (sqlite) phases | Test: generation regression rejected after restart |
+| HIGH-4 add-during-rotation child drop | Rotation engine phase | Test: concurrent upload is present in rotated parent |
+| HIGH-3 inner grant orphan | Rotation engine phase + API (query support) | Test: inner grantee's `readDescriptorRef` re-minted on subtree rotation |
+| Republisher sequence increment | TEE worker rewrite phase | Test: republish does not increment sequence; stale CID not re-signed |
+| Over-rotation on private deletes | Rotation engine + web/SDK mutation phases | Test: zero publish calls for un-shared delete |
+| Tombstone enforcement gap | API DB cutover + publish-gate phase | Test: write to tombstoned name → 403/410; resolve → 410 |
+| Non-atomic publish CAS | API DB cutover phase | Test: concurrent publishes → exactly one 409 |
+| TEE relay-as-signing-oracle | TEE worker rewrite phase | Test: TEE epoch self-derives; name↔key binding asserted |
+| `folder_ipns.public_key` null-row footgun | API DB cutover phase (migration drops column) | No code references `row.public_key`; shared-folder strict-verify test |
+| winfsp nesting trap | FUSE implementation phase | `Cargo Check & Test (Windows)` CI gate required in phase success criteria |
+| folderTree/SDK desync | Web implementation phase | Reconcile-before-rotate at every scope-exit entry point |
+| sdk-core barrel coverage gap | sdk-core rotation engine phase | Named files; coverage report includes rotation engine files |
+| `*.spec.ts` silently skipped in web vitest | Web implementation phase | `find apps/web/src -name "*.spec.ts"` returns empty |
+| Zeroization of caller-owned buffers | sdk-core rotation engine phase | SDK E2E passes after rotation helpers added |
+| SDK E2E / desktop E2E dispatch-gating | Rotation engine phase + FUSE phase | SDK E2E run manually; desktop E2E triggered explicitly before merge |
+| `parseCachedRecord`-null fall-through | API resolve hardening phase | Test: null-signedRecord shared-folder row applies seq floor, not ungated network |
+| `spawn_file_meta_reencrypt` twin caller | FUSE implementation phase | Both `rename.rs` and `platform/windows/write_ops.rs` updated; Windows CI passes |
+| Cold-node filename leak on rotation tail | Rotation engine phase | Eager-walk invariant documented; no lazy-walk variant introduced |
 
 ---
 
 ## Sources
 
-- [IPFS IPNS Concepts](https://docs.ipfs.tech/concepts/ipns/) -- DHT expiry (48h), TTL, republishing behavior
-- [Measuring IPNS Performance on the Public Amino DHT](https://www.probelab.network/blog/ipns-performance-amino-dht) -- Median 11s retrieval latency, 100% retrieval success rate
-- [Someguy - Delegated Routing V1 server](https://github.com/ipfs/someguy) -- Self-hosted delegated routing, proxies to DHT and IPNI
-- [Kubo Delegated Routing docs](https://github.com/ipfs/kubo/blob/master/docs/delegated-routing.md) -- Routing.Type auto/dht/custom configuration
-- [IPFS Public Utilities](https://docs.ipfs.tech/concepts/public-utilities/) -- delegated-ipfs.dev as public good endpoint
-- [Shipyard 2025 Year in Review](https://ipshipyard.com/blog/2025-shipyard-ipfs-year-in-review/) -- IPIP-476, IPIP-513, Someguy improvements
-- [IPFS Pinning Service API spec](https://ipfs.github.io/pinning-services-api-spec/) -- Async pinning, standard API for BYO integration
-- [Multiple users publish to IPNS at the same time](https://github.com/ipfs/kubo/issues/8433) -- Concurrent publish conflict, sequence number semantics
-- [IPNS Record and Protocol spec](https://specs.ipfs.tech/ipns/ipns-record/) -- Sequence number comparison, record validation
-- [Empirical study on performance overhead of code instrumentation (2025)](https://www.sciencedirect.com/science/article/pii/S0164121225002420) -- Up to 8.4% throughput reduction, 20-49% latency increase from instrumentation
-- [How to Reduce OpenTelemetry Performance Overhead in Production](https://oneuptime.com/blog/post/2026-02-06-reduce-opentelemetry-performance-overhead-production/view) -- Sampling strategies, batch processing
-- [OpenTelemetry NestJS Implementation Guide](https://signoz.io/blog/opentelemetry-nestjs/) -- NestJS-specific OTel setup and sampling
-- CipherBox codebase: `apps/api/src/ipns/ipns.service.ts`, `apps/api/src/ipns/delegated-routing.client.ts`, `apps/api/src/republish/republish.service.ts`, `apps/web/src/services/ipns.service.ts`, `apps/web/public/recovery.html`
-- CipherBox project context: `.planning/PROJECT.md`, `.planning/codebase/CONCERNS.md`, `.planning/todos/pending/` (IPNS alternatives, BYO-IPFS, move rootFolderKey)
+- `.planning/design/2026-06-26-sharing-read-keychaining-design.md` — primary design source; findings CRIT-1, M1, HIGH-3, HIGH-4, MED-5, MED-6, m1–m4 and Section 7.3 test strategy
+- `docs/adr/0001-write-revocation-full-ed25519-rotation.md` — write-revocation rationale and consequences
+- `docs/adr/0002-read-revocation-protects-future-content-only.md` — content-key rotation scope and accepted residuals
+- `CONTEXT.md` — glossary and counter disambiguation (`generation` vs `keyEpoch` vs `sequenceNumber`)
+- `docs/METADATA_EVOLUTION_PROTOCOL.md` — schema versioning discipline; cross-platform round-trip requirements
+- `docs/DATABASE_EVOLUTION_PROTOCOL.md` — migration discipline; conditional-UPDATE patterns
+- `CLAUDE.md` (project) — critical security rules; `Critical Security Rules` section
+- Project memory (`MEMORY.md`) — Phase-60 null-column regressions; winfsp nesting trap; sdk-core barrel coverage; SDK E2E as only real publish/resolve gate; zeroization bug; desktop E2E dispatch-gating; web vitest `.test.ts` only; folderTree/Zustand desync class
 
 ---
 
-_Pitfalls research for: CipherBox v1.1 IPFS Infrastructure_
-_Researched: 2026-03-07_
+_Pitfalls research for: v2.0 Metadata and Sharing Refactor (node/v3 read key-chaining)_
+_Researched: 2026-06-27_
