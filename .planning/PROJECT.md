@@ -8,11 +8,28 @@ CipherBox is a production-grade, privacy-first encrypted cloud storage platform 
 
 **Zero-knowledge privacy**: Files are encrypted client-side before leaving the device, and encryption keys exist only in client memory. The server is cryptographically unable to access user data.
 
+## Current Milestone: v2.0 Metadata and Sharing Refactor
+
+**Goal:** Replace the DB-driven `share_keys` sharing model with metadata-driven read key-chaining (`node/v3`), and close the two confirmed revocation gaps — lazy/unsound read-revocation and un-rotatable write delegation.
+
+**Target features:**
+
+- Unified `Node` metadata model (folder/file/root) with two independently sealed bodies (read-body + write-body) and content self-sealing — replaces `FolderMetadata`/`FileMetadata`/`FilePointer`/`FolderEntry` and enables single-file shares
+- AAD-bound AES-GCM seal primitive (`sealAesGcmAad`/`unsealAesGcmAad` + `buildNodeAad`) with a frozen byte encoding and a TS↔Rust cross-language KAT
+- Read key-chaining: one ECIES at the share-root, then `O(depth)` symmetric AES down the tree — no `share_keys` fan-out, `O(recipients)` grant rows only
+- Resumable read-rotation engine (`rotateReadFromNode`) backing read-revoke and every scope-exit mutation — crash-safe, idempotent, with CRIT-1 content-key rotation, M1 generation downgrade defense, HIGH-3 multi-rooted grant re-mint, HIGH-4 add-during-rotation merge
+- Unified scope-exit rule (rotate iff a node leaves a grantee's reachable scope; no covering grant ⇒ pure relink) across delete/move/rename, including bin re-link and invite claim re-wrap
+- Write-revocation via (c) full Ed25519 rotation (ADR 0001) with rotated-out IPNS name tombstoning
+- Resolve/republish/TEE contract rewrite: DB-canonical resolve with `generation` + seq-floor as anti-rollback authority, TEE as a record-lease-renewer (no CID origination, no sequence increment), atomic publish CAS, hardened enclave bindings
+- Schema/DB cutover: delete `share_keys`, slim `shares` to `readDescriptorRef`/`writeDescriptorRef`, rename `folder_ipns` → `ipns_records`, drop `folder_ipns.public_key`
+
+**Source of truth:** `.planning/design/2026-06-26-sharing-read-keychaining-design.md`, [`docs/adr/0001`](../docs/adr/0001-write-revocation-full-ed25519-rotation.md), [`docs/adr/0002`](../docs/adr/0002-read-revocation-protects-future-content-only.md), and the [`CONTEXT.md`](../CONTEXT.md) glossary. Greenfield — no production data, staging wiped — so `node/v3` is the sole codec (no dual-codec bridge, terminology renamed cleanly).
+
 ## Current State
 
 **v1.1 IPFS Infrastructure — SHIPPED 2026-06-27** (Milestone 3; 45 phases, 198 plans). All 77 requirements (66 formal v1.1 + 11 HARD) code-satisfied; integration 12/12 WIRED, E2E flows 4/4 INTACT. Delivered self-hosted Someguy IPNS routing (replacing delegated-ipfs.dev), vault blob v2 with DB crypto columns dropped, BYO-IPFS server-relay support, performance baselines + instrumentation, TS+Rust SDK extraction, writable shares, and a cross-layer fail-closed IPNS signature-verify hardening block. See `.planning/milestones/v1.1-MILESTONE-AUDIT.md` for the close-out verdict.
 
-**Next up:** Milestone 4 — Encrypted Productivity Suite (v2.0). Not yet scoped. Fresh requirements come from `/gsd-new-milestone`.
+**Next up:** Milestone 4 — v2.0 Metadata and Sharing Refactor (in planning). Scope locked to Tier 1 (read chain + rotation) + Tier 2 (write-revocation + TEE/resolve contract) of the read key-chaining design; Tier 3 capability layer and the Encrypted Productivity Suite are deferred. Requirements derived from the design in `/gsd-new-milestone`.
 
 ## Requirements
 
@@ -60,13 +77,27 @@ Full requirement IDs archived in `.planning/milestones/v1.1-REQUIREMENTS.md` (77
 
 ### Active
 
-- [ ] Phase 39 D-02 — add a confirmation dialog before permanent/hard delete (data-safety UX gap; captured todo)
+v2.0 Metadata and Sharing Refactor — full requirement list with REQ-IDs in `.planning/REQUIREMENTS.md` (NODE / CRYPTO / READ / ROT / WRITE / TEE / DATA categories). Scope: Tier 1 + Tier 2 of the read key-chaining design.
+
+Carried from v1.1 (deferred, not yet retired):
+
+- [ ] Phase 39 D-02 — add a confirmation dialog before permanent/hard delete (data-safety UX gap; captured todo). Note: the bin re-link rework under `node/v3` (DATA-/ROT-) touches this surface.
 - [ ] Phase 39 D-06 — remove or document the residual server-side `RECYCLE_BIN_RETENTION_DAYS` endpoint/env var (dead backend surface)
 - [ ] HARD-11 — complete the Phase 60 staging operational smoke-test (D-12 lockstep checkpoint), or accept as an infra-limited override
 
+### Out of Scope (Milestone 4 — v2.0)
+
+- Tier 3 capability layer (read-side TTL, op-count caps, `capabilityId`) — read-side TTL/op-caps are cryptographically unenforceable; do not add `ttl`/`opCap`/`capabilityId` to `Node` or `SealedChildRef`
+- Data migration / dual-codec bridge — greenfield (no prod data, staging wiped); `node/v3` is the sole codec
+- Mediated write signing — approach (a)/(d) `POST /ipns/sign` endpoint — runner-up only; (c) full Ed25519 rotation is ratified (ADR 0001)
+- Retroactive content protection — read-revoke protects future content/navigation only; already-distributed CIDs and prior versions stay readable (ADR 0002)
+- Lazy rotation *walk* (rotate-on-next-write across a subtree) — eager walk is the committed model; the `rotateOne` primitive stays amortizable later
+- SEED-001 Phala TEE on-demand cost cycling — separable infra-cost optimization; deferred to a future infra milestone (stays dormant in `.planning/seeds/`)
+- Encrypted Productivity Suite (billing, teams, doc editors, signing) — deferred to a later milestone (was tentatively v2.0; v2.0 is now the sharing refactor)
+
 ### Out of Scope (Milestone 3 — v1.1)
 
-- Encrypted Productivity Suite (billing, teams, doc editors, signing) — deferred to Milestone 4 (v2.0)
+- Encrypted Productivity Suite (billing, teams, doc editors, signing) — deferred to a post-v2.0 milestone
 - Mobile apps (iOS/Android) — deferred to Milestone 4+
 - Real-time collaborative editing — deferred to Milestone 4+
 - Offline write queue / selective sync — deferred to Milestone 4+
@@ -131,7 +162,32 @@ Full requirement IDs archived in `.planning/milestones/v1.1-REQUIREMENTS.md` (77
 | Vault blob v2 — zero DB crypto              | rootFolderKey in IPFS blob, all DB crypto columns dropped  | ✓       |
 | Monorepo SDK extraction (TS + Rust)         | Reusable core shared across web, desktop, recovery tooling | ✓       |
 | Strict fail-closed IPNS verified-resolver   | Single signature-verify chokepoint across all layers       | ✓       |
+| Metadata-driven read key-chaining (node/v3) | One ECIES at share-root + O(depth) AES; kills share_keys fan-out | — Pending |
+| Two sealed bodies per node (read + write)   | Structural read/write separation; read grant never conveys signing key | — Pending |
+| Write-revocation = (c) full Ed25519 rotation | No new TEE/relay trust; key-possession auth (ADR 0001)    | — Pending |
+| Read-revoke protects future content only    | IPFS is content-addressed; honest threat model (ADR 0002)  | — Pending |
+| TEE = record-lease-renewer (no CID, no seq++) | Closes republisher stale-CID rollback structurally        | — Pending |
+| Greenfield node/v3 sole codec               | No prod data, staging wiped; no dual-codec/migration bridge | — Pending |
+
+## Evolution
+
+This document evolves at phase transitions and milestone boundaries.
+
+**After each phase transition** (via `/gsd-transition`):
+
+1. Requirements invalidated? → Move to Out of Scope with reason
+2. Requirements validated? → Move to Validated with phase reference
+3. New requirements emerged? → Add to Active
+4. Decisions to log? → Add to Key Decisions
+5. "What This Is" still accurate? → Update if drifted
+
+**After each milestone** (via `/gsd-complete-milestone`):
+
+1. Full review of all sections
+2. Core Value check — still the right priority?
+3. Audit Out of Scope — reasons still valid?
+4. Update Context with current state
 
 ---
 
-Last updated: 2026-06-27 after v1.1 milestone. v1.1 IPFS Infrastructure (Milestone 3) shipped — 45 phases / 198 plans, 77/77 requirements code-satisfied (66 formal + 11 HARD), integration 12/12, flows 4/4. Remaining carried items: Phase 39 D-02 permanent-delete confirmation (captured todo), D-06 residual server env-var, and the HARD-11 staging operational smoke-test. Next milestone (4 — Encrypted Productivity Suite) not yet scoped; run `/gsd-new-milestone`. See `.planning/milestones/v1.1-MILESTONE-AUDIT.md`.
+Last updated: 2026-06-27 — Milestone 4 (v2.0 Metadata and Sharing Refactor) started. Scope locked to Tier 1 (read key-chaining + resumable read-rotation) + Tier 2 (write-revocation via ADR 0001 full Ed25519 rotation + resolve/republish/TEE contract rewrite). Tier 3 capability layer and SEED-001 TEE cost-cycling deferred. Greenfield `node/v3` sole codec. Requirements in `.planning/REQUIREMENTS.md`; design source of truth in `.planning/design/2026-06-26-sharing-read-keychaining-design.md` + ADR 0001/0002 + `CONTEXT.md`. v1.1 carried items (Phase 39 D-02/D-06, HARD-11 staging smoke-test) remain open.

@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.1
-milestone_name: milestone
-status: Awaiting next milestone
-last_updated: "2026-06-26T23:03:12.795Z"
-last_activity: 2026-06-26 — Milestone v1.1 completed and archived
+milestone: v2.0
+milestone_name: Metadata and Sharing Refactor
+status: planning
+last_updated: "2026-06-27T00:01:29.438Z"
+last_activity: 2026-06-27
 progress:
-  total_phases: 45
-  completed_phases: 45
-  total_plans: 198
-  completed_plans: 198
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -24,10 +24,10 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 
 ## Current Position
 
-Phase: Milestone v1.1 complete
+Phase: Not started (defining requirements)
 Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-06-26 — Milestone v1.1 completed and archived
+Status: Defining requirements
+Last activity: 2026-06-27 — Milestone v2.0 started
 
 ## Deferred Items
 
