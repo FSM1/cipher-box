@@ -1,0 +1,108 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "292b6ddf7d89",
+  "session_id": "73377c33-a7a3-47f3-bd4c-8f7965661187",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-27T23:36:27.067671Z",
+  "branch": "feat/aad-bound-seal-primitive-and-cross-language-kat",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "a2d72aeec334",
+  "token_usage": {
+    "input_tokens": 26860,
+    "cache_creation_tokens": 360265,
+    "cache_read_tokens": 3334170,
+    "output_tokens": 31720,
+    "api_call_count": 44
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01MP5FE4PxcXK1YRZVVVN1M9",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "a2d72aeec334",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 245,
+        "end": 246,
+        "entry_ids": [
+          "b3fe368c-131b-4f74-a100-0b89e8611411"
+        ],
+        "tool_use_id": "toolu_01MP5FE4PxcXK1YRZVVVN1M9"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01MP5FE4PxcXK1YRZVVVN1M9"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-plan-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Fix a broken statusline and Stop-hook error, update GSD to 1.6.0, clean up stale git worktrees, and start planning phase 61 (AAD-Bound Seal Primitive and Cross-Language KAT).",
+    "outcome": "Statusline fixed by renaming hook to .cjs; GSD reinstalled to 1.6.0 fixing the missing gsd-context-monitor.js Stop-hook error; three worktrees removed cleanly; phase 61 research completed with HIGH confidence and committed.",
+    "learnings": {
+      "repo": [
+        "package.json has \"type\": \"module\" — all .js files are treated as ESM by Node; hooks written in CommonJS must use .cjs extension to override this.",
+        "GSD hooks are gitignored (.gitignore:55, pattern .claude/hooks/gsd-*) — they are regenerated per-clone via npx @opengsd/gsd-core, not tracked in git.",
+        ".gitignore comment pins the canonical GSD version (1.6.0); worktree installs were on 1.4.3.",
+        "Phase 61 test files must live at packages/crypto/src/__tests__/ (not packages/crypto/__tests__/) — vitest include: ['src/**/*.ts'] won't discover the latter path.",
+        "scripts/check-vector-parity.sh has a hardcoded EXPECTED_VECTORS array; adding node-aad.json to it is a required CI integration task or the parity check step fails.",
+        "sealAesGcmAad mints a fresh random IV on every call — fixed-IV KAT vectors must target the lower-level encryptAesGcmAad/decrypt_aes_gcm_aad instead.",
+        "uuid crate (v1.23.4) is not yet in Cargo.toml workspace or crates/crypto/Cargo.toml — Phase 61 must add it.",
+        "Zero AAD consumers exist today across both packages — Phase 61 is purely additive with no risk of breaking existing callsites."
+      ],
+      "code": [
+        {
+          "path": "scripts/check-vector-parity.sh",
+          "finding": "Hardcoded EXPECTED_VECTORS array must be extended with tests/vectors/crypto/node-aad.json or the CI parity step fails even when both Rust and TS tests pass."
+        },
+        {
+          "path": "packages/crypto/src/__tests__/",
+          "finding": "Canonical location for crypto TS tests per vitest include glob; CONTEXT.md had the wrong path (packages/crypto/__tests__/)."
+        },
+        {
+          "path": ".claude/hooks/statusline.js",
+          "finding": "Renamed to statusline.cjs to force CommonJS interpretation. The .js extension was causing MODULE_NOT_FOUND-style crash under package.json \"type\": \"module\"."
+        }
+      ],
+      "workflow": [
+        "Renaming a CommonJS hook from .js to .cjs forces Node to treat it as CJS regardless of the project-wide \"type\": \"module\" setting — smallest fix for ESM/CJS conflicts in hooks.",
+        "When the GSD main-tree install is a broken fragment (missing gsd-tools.cjs, manifest, most workflows), /gsd-update cannot self-heal; the correct fix is a clean reinstall via npx @opengsd/gsd-core@<version> -- gsd-core --claude --local.",
+        "git worktree remove detaches the working directory but leaves the branch intact; branches must be deleted separately if cleanup is desired.",
+        "The commit helper has a known false-negative — always verify commits landed via git log rather than trusting the helper's success/failure signal.",
+        "GSD installer prompts interactively on stale fragment files (keep/remove); pass resolution flags or re-run non-interactively to avoid blocking."
+      ]
+    },
+    "friction": [
+      "GSD main-tree install was a broken fragment — missing gsd-tools.cjs, gsd-file-manifest.json, gsd-context-monitor.js, and most workflows — so the normal /gsd-update flow couldn't run at all.",
+      "Stop hook error (MODULE_NOT_FOUND for gsd-context-monitor.js) fired on every turn, spamming errors even though it was harmless to task execution.",
+      "GSD installer ran interactively and paused on stale fragment files, requiring a second non-interactive invocation.",
+      "CONTEXT.md for phase 61 contained an incorrect test path (packages/crypto/__tests__/) that would have caused the planner to generate unreachable test files without the researcher's catch.",
+      "Codebase drift map was stale (non-blocking per directive: warn, but noted as signal of staleness)."
+    ],
+    "open_items": [
+      "Branches fix/phase60-safety-tail and fix/fuse-delete-share-revocation still exist after worktree removal — user may want to delete them.",
+      "Plan-phase 61 pipeline is mid-flight: pattern-mapper → planner (Opus) → plan-checker (Sonnet) still to run; VALIDATION.md body not yet populated.",
+      "Three open questions from research deferred to planner: (1) one node-aad.json file with two keyed arrays vs two files, (2) hand-freeze vectors vs extending generate-test-vectors.ts, (3) CryptoError variant names for AAD validation.",
+      "GSD worktrees that were removed were on version 1.4.3 — any in-progress work staged there is now gone (confirmed clean before removal, but branches remain if recovery needed).",
+      "Statusline fix (statusline.cjs rename + settings.json update) is a tracked change not yet pushed — needs to be included in next commit/PR."
+    ]
+  }
+}
