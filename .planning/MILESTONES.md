@@ -187,32 +187,36 @@
 
 ## Active Milestone
 
-### Milestone 3: IPFS Infrastructure v1.1 (in progress)
+### Milestone 4: v2.0 Metadata and Sharing Refactor (in progress)
 
-**Goal:** Make CipherBox IPFS-native -- replace delegated-ipfs.dev, migrate server-side state to IPFS/IPNS, add BYO-IPFS node support, and establish performance baselines
-**Depends on:** Milestone 2
-**Phases:** 18-22
-**Requirements:** 25 (4 IPNS + 6 VAULT + 7 BYO + 8 PERF)
+**Goal:** Replace the DB-driven share_keys sharing model with metadata-driven read key-chaining (node/v3), and close the two confirmed revocation gaps -- lazy/unsound read-revocation and un-rotatable write delegation.
+**Depends on:** Milestone 3 (v1.1 — shipped 2026-06-27)
+**Phases:** 61-69
+**Requirements:** 39 (3 CRYPTO + 6 NODE + 5 READ + 7 ROT + 4 WRITE + 7 TEE + 4 DATA + 3 TEST)
 
 **Phase structure:**
 
-- Phase 18: Performance Instrumentation (PERF-01 to PERF-04)
-- Phase 19: IPNS Resolution Improvement (IPNS-01 to IPNS-04)
-- Phase 20: Vault Migration (VAULT-01 to VAULT-06)
-- Phase 21: BYO-IPFS Node Support (BYO-01 to BYO-07)
-- Phase 22: Performance Baselines Completion (PERF-05 to PERF-08)
+- Phase 61: AAD-Bound Seal Primitive and Cross-Language KAT (CRYPTO-01..03, TEST-02)
+- Phase 62: Unified Node Codec — Core Keystone (NODE-01..06)
+- Phase 63: Read-Chain Navigation and Rotation Core (READ-01..05, ROT-01..02)
+- Phase 64: Rotation Soundness — Revocation Guarantees (ROT-03..06, TEST-01)
+- Phase 65: SDK Write-Chain, Bin Re-link, and Invite Claim (WRITE-01..04)
+- Phase 66: API Schema Cutover, Publish Gate, and Tombstone (DATA-01..04, TEE-04, TEE-05, TEE-07)
+- Phase 67: TEE Lease-Renewer Contract Rewrite (TEE-01..03, TEE-06)
+- Phase 68: Web Integration — Rotation UX and Durable Client State (ROT-07)
+- Phase 69: FUSE and WinFsp — Rust Integration and Grant-Root Awareness (TEST-03)
 
 ---
 
 ## Future Milestones
 
-### Milestone 4: Encrypted Productivity Suite (planned)
+### Milestone 5: Encrypted Productivity Suite (planned)
 
 **Goal:** Full encrypted productivity suite -- docs/sheets/slides editors, team accounts, billing (Stripe or crypto), secure document signing, AWS Nitro TEE
-**Depends on:** Milestone 3
-**Phases:** 23+
+**Depends on:** Milestone 4
+**Phases:** 70+
 
 ---
 
 Created: 2026-02-11
-Last updated: 2026-03-07 after v1.1 IPFS Infrastructure roadmap created
+Last updated: 2026-06-27 after v2.0 Metadata and Sharing Refactor roadmap created

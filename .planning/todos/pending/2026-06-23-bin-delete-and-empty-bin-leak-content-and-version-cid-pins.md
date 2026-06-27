@@ -12,6 +12,7 @@ files:
   - apps/api/src/shares/shares.service.ts
   - apps/api/src/shares/shares.controller.ts
   - apps/api/src/shares/dto/revoke-for-items.dto.ts
+resolves_phase: 65
 ---
 
 ## Problem

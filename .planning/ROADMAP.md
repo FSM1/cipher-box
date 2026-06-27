@@ -1,9 +1,9 @@
-# Roadmap: CipherBox v1.1 IPFS Infrastructure
+# Roadmap: CipherBox
 
 ## Milestones
 
 - ✅ **v1.1 IPFS Infrastructure** — Phases 18–60 (shipped 2026-06-27) — full detail: `milestones/v1.1-ROADMAP.md`
-- 📋 **Milestone 4: Encrypted Productivity Suite** — planned (see MILESTONES.md)
+- 📋 **v2.0 Metadata and Sharing Refactor** — Phases 61–69 (active)
 
 ## Phases
 
@@ -58,6 +58,227 @@
 
 </details>
 
+### v2.0 Metadata and Sharing Refactor (Phases 61–69)
+
+- [ ] **Phase 61: AAD-Bound Seal Primitive and Cross-Language KAT** — Additive AES-GCM+AAD seal in `packages/crypto` and `crates/crypto` with a committed TS↔Rust known-answer test
+- [ ] **Phase 62: Unified Node Codec (Core Keystone)** — `Node`/`SealedChildRef`/`PublishedNode` types replacing all legacy metadata types; nothing downstream typechecks until this lands
+- [ ] **Phase 63: Read-Chain Navigation and Rotation Core** — Read key-chain walk, `rotateReadFromNode`/`rotateOne` engine, scope-exit predicate, and invite re-wrap in `packages/sdk-core`
+- [ ] **Phase 64: Rotation Soundness — Revocation Guarantees** — CRIT-1 content-key rotation, HIGH-3 inner grant re-mint, HIGH-4 concurrent-add merge, crash-safe resume, and the `tests/sdk-e2e` crash-safety suite
+- [ ] **Phase 65: SDK Write-Chain, Bin Re-link, and Invite Claim** — Structured write-body, (c) full Ed25519 write-revocation, bin restore as pure re-link, invite claim re-wrap; delete `addShareKeys`/`reWrapForRecipients`/`encryptedChildKeys`
+- [ ] **Phase 66: API Schema Cutover, Publish Gate, and Tombstone** — Delete `share_keys`, slim `shares`, rename `folder_ipns` → `ipns_records`, drop `public_key`, atomic CAS publish, tombstone state, resolve case-split, server-side generation gate; run `pnpm api:generate`
+- [ ] **Phase 67: TEE Lease-Renewer Contract Rewrite** — TEE becomes a record-lease-renewer (no CID origination, no sequence increment), internal epoch derivation, name↔key binding, tombstone guard
+- [ ] **Phase 68: Web Integration — Rotation UX and Durable Client State** — Replace `executeLazyRotation` with `rotateReadFromNode`, durable IndexedDB generation + seq high-water (M1 defense, survives restart), `folderTree` reconcile-before-rotate
+- [ ] **Phase 69: FUSE and WinFsp — Rust Integration and Grant-Root Awareness** — Symmetric child-key unwrap, `spawn_file_meta_reencrypt` deletion from both callers, grant-root scope computation, durable client floors, `Node` Rust enum, Windows CI gate
+
+## Phase Details
+
+### Phase 61: AAD-Bound Seal Primitive and Cross-Language KAT
+
+**Goal**: The canonical AES-GCM+AAD seal primitive and its frozen byte encoding exist in both TypeScript and Rust with a committed known-answer test proving byte-identical output.
+
+**Depends on**: Phase 60 (v1.1 complete)
+
+**Requirements**: CRYPTO-01, CRYPTO-02, CRYPTO-03, TEST-02
+
+**Success Criteria** (what must be TRUE):
+
+1. `sealAesGcmAad`/`unsealAesGcmAad`/`buildNodeAad` are exported from `packages/crypto` with each seal minting a fresh random IV
+2. A byte-identical Rust twin exists in `crates/crypto` with the same AAD encoding (domain separator, raw UUID bytes, 4-byte BE generation, role bytes 0x01–0x04)
+3. The cross-language KAT fixture — a single hardcoded vector covering all four role bytes — is asserted by both `packages/crypto/__tests__/build-node-aad.test.ts` AND a Rust `#[test]` in `crates/crypto/tests/cross_language.rs`; both pass in CI
+4. A sealed blob replayed under a different `childId`, `role`, or `generation` fails to unseal (AAD transplant resistance test passes)
+
+**Plans**: TBD
+
+---
+
+### Phase 62: Unified Node Codec (Core Keystone)
+
+**Goal**: The unified `Node`/`SealedChildRef`/`PublishedNode` types and codecs exist in `packages/core`, replacing all `FolderMetadata`/`FileMetadata`/`FilePointer`/`FolderEntry` types; all downstream packages typecheck after `dist/` rebuild.
+
+**Depends on**: Phase 61
+
+**Requirements**: NODE-01, NODE-02, NODE-03, NODE-04, NODE-05, NODE-06
+
+**Success Criteria** (what must be TRUE):
+
+1. A single `Node` discriminated by `kind` (folder/file/root) carries two independently sealed bodies — `readSealed` under `readKey` and `writeSealed` under `writeKey` — and the published envelope exposes `generation` plaintext as the AAD epoch and anti-rollback witness
+2. A file node's `content` (including `content.fileKey` and each `VersionEntry`'s inline `fileKey` + mandatory `encryptionMode`) self-seals under the file node's own `readKey`, not the parent's key
+3. `SealedChildRef` contains name, `ipnsName`, `generation` mirror, `versionFloor`, and `readKeySealed` only — the write link is in the parent write-body exclusively
+4. Vault recovery blob carries `ECIES(rootReadKey)` + `ECIES(rootWriteKey)` (two keys, one blob); old `encryptedRootFolderKey` field is removed
+5. `packages/sdk-core`, `packages/sdk`, and `apps/web` typecheck cleanly after `packages/core` `dist/` is rebuilt — zero references to retired `FolderMetadata`/`FileMetadata`/`FilePointer`/`FolderEntry`
+6. `METADATA_SCHEMAS.md` is updated to document the `generation`-as-convergence-witness invariant and the `fileKey`-inside-sealed-read-body semantic change
+
+**Plans**: TBD
+
+---
+
+### Phase 63: Read-Chain Navigation and Rotation Core
+
+**Goal**: The read key-chain navigation and rotation walk exist in `packages/sdk-core` as named implementation files; read grants require one ECIES unwrap then O(depth) symmetric AES; the scope-exit predicate gates every delete/move/rename.
+
+**Depends on**: Phase 62
+
+**Requirements**: READ-01, READ-02, READ-03, READ-04, READ-05, ROT-01, ROT-02
+
+**Open question (Q2)**: Document whether a large eager rotation in a browser-only (no desktop) session is acceptable — the rotation host question for pure-web users. Decision captured in the phase context file.
+
+**Success Criteria** (what must be TRUE):
+
+1. A read grant is issued by ECIES-wrapping the share-root `readKey` into one `shares` row (`readDescriptorRef`) with zero node touches and zero republishes; granting a single file is structurally identical to granting a deep folder
+2. A grantee navigates to a depth-`d` child via one ECIES unwrap then `d` symmetric `unsealAesGcmAad` calls, recovering the content key and CID at a file node; the read path distinguishes "soft behind, retry" from "hard revoked" without ambiguity
+3. Adding an item seals the child `readKey` under the parent `readKey` with no per-recipient fan-out; `reWrapForRecipients` and `addShareKeys` are deleted from the codebase
+4. A move within a grantee's scope produces link rewrites only (zero re-encryption); the scope-exit predicate `hasCoveringGrant` is present and gates every delete/move/rename — a private delete with no active grants triggers zero `rotateReadFromNode` invocations and zero IPNS publishes beyond the parent relink (test verifies zero publish calls)
+5. `rotateReadFromNode` is implemented in a named file (`src/rotation/engine.ts` or equivalent, not `index.ts` barrel) so vitest coverage counts it; `rotateOne` commits per-node atomically via CAS before advancing the walk frontier
+
+**Plans**: TBD
+
+---
+
+### Phase 64: Rotation Soundness — Revocation Guarantees
+
+**Goal**: Rotation correctly closes all three cryptographic revocation gaps — content-key rotation (CRIT-1), inner-grant re-mint (HIGH-3), concurrent-add merge (HIGH-4) — and survives a crash mid-walk; the `tests/sdk-e2e` crash-safety suite gates the phase.
+
+**Depends on**: Phase 63
+
+**Requirements**: ROT-03, ROT-04, ROT-05, ROT-06, TEST-01
+
+**Success Criteria** (what must be TRUE):
+
+1. (CRIT-1 / §7.3 test 2) Rotating a file node mints a new `fileKey'` and sets `contentRekeyPending`; a test asserts a holder of the old `readKey`/`fileKey` cannot decrypt the next published version of the file
+2. (HIGH-3 / §7.3 test 3) Rotation queries `shares WHERE rootNodeId IN (rotated_node_ids)` and re-mints `readDescriptorRef` for every non-revoked recipient including inner grants rooted at subtree nodes; a test with a leaf-level share asserts the inner grantee's descriptor is re-minted and the revoked recipient's row is deleted
+3. (HIGH-4 / §7.3 test 4) On a CAS-409, `rotateOne` re-fetches the current parent node, re-decodes the read-body, and merges concurrently-added `SealedChildRef`s before re-sealing; a test injects a concurrent upload mid-rotation and asserts the new child is present in the completed parent
+4. A crash mid-walk is recovered by re-running `rotateReadFromNode`; `verifySubtreeClean` rebuilds the frontier from published IPNS records, re-run converges without double-bumping any node's `generation`, and the revoked recipient is cut from the root after the root step
+5. (TEST-01) The `tests/sdk-e2e` abort-and-resume suite covering crash-safety passes against a live local API stack; SDK E2E must pass before phase sign-off (it is the only real client→API IPNS publish/resolve round-trip)
+
+**Plans**: TBD
+
+---
+
+### Phase 65: SDK Write-Chain, Bin Re-link, and Invite Claim
+
+**Goal**: The write-body carries Ed25519 signing material sealed under a separate `writeKey`; write-revocation performs full Ed25519 rotation per ADR 0001; bin restore is a pure re-link; invite claim re-wraps a single root `readKey`.
+
+**Depends on**: Phase 64
+
+**Requirements**: WRITE-01, WRITE-02, WRITE-03, WRITE-04
+
+**Open question (Q3)**: When a write-recipient deletes or moves a node the owner independently sub-shared, the unlink and the revocation split across two principals. Decide the authority model and the acceptable exposure window; document the decision in the phase context file.
+
+**Success Criteria** (what must be TRUE):
+
+1. The write-body holds the node's Ed25519 signing material sealed under `writeKey` with role `0x04` (`child-writekey`); a read-only holder who holds only `readDescriptorRef` can never reach signing material — verified by attempting to unseal the write-body with only the `readKey`
+2. Write-revocation generates a new Ed25519 keypair and k51 name per node, cascading parent re-points to the share root; old names are tombstoned (publish gate rejects, resolve returns 410) and removed from the TEE republish batch
+3. Surviving co-writers receive the rotated Ed25519 key re-wrapped into their `writeDescriptorRef`; an offline co-writer receives a clear "cannot write until re-fetch" error on next attempt
+4. `bin` restore is a pure re-link (`BinEntry` re-sealed under destination `readKey`); `originalFolderKeyEncrypted` and its re-encrypt-on-restore path are deleted from `packages/core/src/bin/types.ts` and `packages/sdk/src/bin/index.ts`; `encryptedChildKeys` JSONB fan-out is deleted from invite claim
+
+**Plans**: TBD
+
+---
+
+### Phase 66: API Schema Cutover, Publish Gate, and Tombstone
+
+**Goal**: The database reflects the `node/v3` model: `share_keys` deleted, `shares` slimmed to descriptor refs, `folder_ipns` renamed to `ipns_records` with `public_key` dropped, atomic CAS publish, tombstone state machine, and case-split resolve hardening.
+
+**Depends on**: Phase 65
+
+**Requirements**: DATA-01, DATA-02, DATA-03, DATA-04, TEE-04, TEE-05, TEE-07
+
+**Sub-phase research flag**: Before writing the TypeORM migration, inspect the live FK constraint map for `folder_ipns` → `ipns_records` rename against staging DB schema; all referencing tables (`ipns_republish_schedule`, `shares`, `vaults`) must migrate atomically.
+
+**Success Criteria** (what must be TRUE):
+
+1. `share_keys` table and entity are deleted; `shares` carries `readDescriptorRef`/`writeDescriptorRef`/`rootNodeId`/`rootIpnsName`/`rootGeneration`; the legacy `readKeyEcies`/`ShareGrant` shape is gone from all entity, DTO, and service files
+2. `folder_ipns` is renamed to `ipns_records` (entity class `IpnsRecord`); the `public_key` column is dropped; strict-verify recovers the Ed25519 pubkey exclusively via `publicKeyFromIpnsName`; a test with a null-`public_key` shared-folder row asserts strict-verify works correctly
+3. Publish is an atomic conditional UPDATE (`WHERE ipnsName = :n AND sequenceNumber = :expected`; zero rows ⇒ 409); (§7.3 test 16) two concurrent publishes at the same `dbSeq` produce exactly one 409 and zero lost updates
+4. (§7.3 test 15) The `parseCachedRecord`-null case-split is explicit: a legitimate null-`signedRecord` shared-folder row applies the `seq ≥ storedSeq` floor; a `signedRecord`-CID mismatch fails closed — neither falls through ungated
+5. A tombstoned `ipns_records` row is rejected at the publish gate (403/410) and at the EOL-only renewal; resolve returns a 410 marker for tombstoned names; server-side `generation` gate enforces forward-only per node, mirroring the sequence CAS
+6. `pnpm api:generate` is run and the regenerated `packages/api-client/src/generated/` is committed alongside the migration; the `check-api-client.sh` pre-commit hook passes
+
+**Plans**: TBD
+
+---
+
+### Phase 67: TEE Lease-Renewer Contract Rewrite
+
+**Goal**: The TEE worker is a record-lease-renewer — it receives a marshaled `signedRecord`, verifies its signature, and re-emits the same CID and sequence with only a later EOL; it cannot originate or repoint a CID.
+
+**Depends on**: Phase 66
+
+**Requirements**: TEE-01, TEE-02, TEE-03, TEE-06
+
+**Success Criteria** (what must be TRUE):
+
+1. (§7.3 test 12) The `+ 1n` sequence increment is removed from `apps/tee-worker/src/routes/republish.ts`; republish re-signs with the same `sequenceNumber` and same `value` (CID), only a later EOL; a test asserts the re-signed record has equal `sequenceNumber` to the input and that a revoked CID is never re-signed forward
+2. The TEE derives `currentEpoch` from its own clock (never from relay-supplied scalars); it asserts `publicKeyFromIpnsName(ipnsName) == pubkey(decryptedKey) == record.pubkey` before emitting any re-signed record; a tombstoned name presented to the renewer is rejected at the publish gate
+3. The canonical `ipns_records` row is the sole source of the TEE's signing inputs; `ipns_republish_schedule`'s duplicated `latestCid`/`sequenceNumber`/`encryptedIpnsKey`/`keyEpoch` columns are collapsed; no signing inputs are sourced from the schedule snapshot
+4. The EOL-only renewal uses the same atomic CAS guard (`WHERE sequenceNumber = :loaded`), so it can never regress `latestCid`/`sequenceNumber`; a TEE republish E2E round-trip (staging or local stack) confirms the new contract end-to-end
+
+**Plans**: TBD
+
+---
+
+### Phase 68: Web Integration — Rotation UX and Durable Client State
+
+**Goal**: The web app uses `rotateReadFromNode` for all revocation-triggering mutations, persists a durable IndexedDB generation + seq high-water that survives page reload, and reconciles `folderTree` before any rotation publish.
+
+**Depends on**: Phase 67
+
+**Requirements**: ROT-07
+
+**Open question (Q1)**: A co-writer offline during write-key rotation cannot write until re-fetch. Accept as explicit with a clear error message, or add a grace period/notification? Decision documented in the phase context file.
+
+**Open question (Q3 — web side)**: When a write-recipient deletes/moves a node the owner independently sub-shared, decide the authority model for the web mutation path (mirrors Phase 65 Q3 decision).
+
+**Success Criteria** (what must be TRUE):
+
+1. (M1 / §7.3 test 5) The `{nodeId → highestGeneration}` map persists to IndexedDB; a test simulates a page reload mid-session and asserts generation regression is rejected fail-closed after restart — in-memory-only storage is rejected at review
+2. `executeLazyRotation` is deleted from `apps/web/src/services/share.service.ts`; all revocation-triggering paths (delete, move, rename when scope exit) call `rotateReadFromNode`; `addShareKeys` and `reWrapForRecipients` are deleted from per-mutation fan-out paths
+3. `folderTree` is reconciled against the current `sequenceNumber` before any rotation publish; if reconciliation fails the mutation defers rather than skipping rotation — the `#489`/`#494` desync class cannot produce a silent missed revocation
+4. A durable per-node `{nodeId → highestSeq}` seq high-water is wired into `resolveIpnsRecord` in the web resolve path; a generation or seq regression from the relay causes a fail-closed error, not silent acceptance
+5. All new web test files use the `.test.ts` extension (not `.spec.ts`); `find apps/web/src -name "*.spec.ts"` returns empty
+
+**Plans**: TBD
+
+**UI hint**: yes
+
+---
+
+### Phase 69: FUSE and WinFsp — Rust Integration and Grant-Root Awareness
+
+**Goal**: The FUSE and WinFsp clients use symmetric key unwrap throughout, grant-root awareness gates scope-exit mutations, `Node` is a real Rust enum, and the Windows CI gate passes.
+
+**Depends on**: Phase 68
+
+**Requirements**: TEST-03
+
+**Sub-phase research flag**: The grant-root scope computation algorithm in `crates/fuse/src/write_ops/` is net-new and under-specified in the design; a plan-time design pass is required before implementation.
+
+**Open question (Q3 — FUSE side)**: When a write-recipient deletes/moves a node the owner independently sub-shared, decide the authority model for the FUSE delete path (mirrors Phase 65 Q3 decision).
+
+**Success Criteria** (what must be TRUE):
+
+1. All `cipherbox_crypto::ecies::unwrap_key` calls in `crates/fuse/src/inode.rs` (lines 434, 452, 658, 716) and `crates/fuse/src/replay.rs` (line 365) are replaced by `cipherbox_crypto::aes::unseal_aes_gcm_aad` symmetric unwrap with correct `buildNodeAad` AAD
+2. `spawn_file_meta_reencrypt` is deleted from `crates/fuse/src/metadata.rs` AND from both callers: `crates/fuse/src/write_ops/implementation/rename.rs` (line 248) and `crates/fuse/src/platform/windows/write_ops.rs` (line 1183) — Windows path verified in CI, not locally
+3. Grant-root awareness is implemented in `delete`/`rename`/`move` FUSE paths: a shared-scope exit triggers `rotateReadFromNode`; a private delete with no active grants is a pure relink with zero rotation publishes
+4. `enum Node { Folder { children: Vec<SealedChildRef> }, File { content: SealedContent }, Root { children: Vec<SealedChildRef> } }` exists in `crates/core/src/`; durable generation + seq high-water is persisted adjacent to the write journal (survives FUSE daemon restart)
+5. (TEST-03 / §7.3 test 21) `Cargo Check & Test (Windows)` CI gate passes; the dispatch-gated desktop E2E is triggered explicitly via `gh workflow run "CI E2E Tests" --ref <branch>` and passes before phase sign-off
+
+**Plans**: TBD
+
+---
+
 ## Progress
 
-All 45 phases complete (198 plans). See `milestones/v1.1-ROADMAP.md` for full detail and `milestones/v1.1-MILESTONE-AUDIT.md` for the close-out audit.
+| Phase | Name | Plans Complete | Status | Completed |
+| --- | --- | --- | --- | --- |
+| 61 | AAD-Bound Seal Primitive and Cross-Language KAT | 0/? | Not started | - |
+| 62 | Unified Node Codec (Core Keystone) | 0/? | Not started | - |
+| 63 | Read-Chain Navigation and Rotation Core | 0/? | Not started | - |
+| 64 | Rotation Soundness — Revocation Guarantees | 0/? | Not started | - |
+| 65 | SDK Write-Chain, Bin Re-link, and Invite Claim | 0/? | Not started | - |
+| 66 | API Schema Cutover, Publish Gate, and Tombstone | 0/? | Not started | - |
+| 67 | TEE Lease-Renewer Contract Rewrite | 0/? | Not started | - |
+| 68 | Web Integration — Rotation UX and Durable Client State | 0/? | Not started | - |
+| 69 | FUSE and WinFsp — Rust Integration and Grant-Root Awareness | 0/? | Not started | - |
+
+v1.1 history: 45 phases complete (198 plans). See `milestones/v1.1-ROADMAP.md` for full detail.
