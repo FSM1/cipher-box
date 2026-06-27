@@ -1,0 +1,72 @@
+what happened to my statusline?
+
+---
+
+what was that error about?
+
+---
+
+Im referring to the stop hook error from gsd-context-monitor.js
+
+---
+
+/gsd-update
+
+---
+
+please remove those worktrees
+
+---
+
+/gsd-manager
+
+---
+
+<task-notification>
+<task-id>a6f86b23033d30964</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/73377c33-a7a3-47f3-bd4c-8f7965661187/tasks/a6f86b23033d30964.output</output-file>
+<status>completed</status>
+<summary>Agent "Research Phase 61" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## RESEARCH COMPLETE
+
+**Phase:** 61 - AAD-Bound Seal Primitive and Cross-Language KAT
+**Confidence:** HIGH
+
+### Key Findings
+
+- **Test path discrepancy:** CONTEXT.md states `packages/crypto/__tests__/build-node-aad.test.ts` but all existing TS tests live at `packages/crypto/src/__tests__/`. Planner must use `packages/crypto/src/__tests__/build-node-aad.test.ts` — vitest `include: ['src/**/*.ts']` won't discover the other path.
+
+- **`check-vector-parity.sh` is a required task:** `scripts/check-vector-parity.sh` has a hardcoded `EXPECTED_VECTORS` array. Adding `tests/vectors/crypto/node-aad.json` to that array is a CI integration task that must be in the plan — otherwise the parity-check CI step fails even if both Rust and TS tests pass.
+
+- **KAT must test the lower-level `encryptAesGcmAad`, not `sealAesGcmAad`:** `sealAesGcmAad` mints a fresh random IV (cannot produce a fixed output). The D-01b fixed-IV full-seal KAT vector must test `encryptAesGcmAad`/`decrypt_aes_gcm_aad` directly, exactly as the existing `aes-gcm.json` vector tests `encrypt_aes_gcm` (not `seal_aes_gcm`). Both a lower-level and higher-level pair must be exported.
+
+- **`uuid` crate is the only new workspace dep.** Not currently in `Cargo.toml` or `crates/crypto/Cargo.toml`. Current version 1.23.4. Verdict OK (11M downloads/week, 2014, `github.com/uuid-rs/uuid`). Two-line addition to Cargo.toml workspace and crate.
+
+- **Zero AAD consumers today:** `grep additionalData/aad/associated_data` returns nothing in either package. Phase 61 is purely additive.
+
+### File Created
+
+`/Users/myankelev/Code/random/cipher-box/.planning/phases/61-aad-bound-seal-primitive-and-cross-language-kat/61-RESEARCH.md`
+
+### Confidence Assessment
+
+| Area | Level | Reason |
+|------|-------|--------|
+| Existing API signatures | HIGH | Read directly from source files |
+| Rust `aes-gcm` Payload syntax | MEDIUM | [ASSUMED] — KAT will confirm on first CI run |
+| UUID byte parity (TS hand-parse = Rust as_bytes) | MEDIUM | [ASSUMED] — KAT is the mechanical safety net |
+| CI wiring | HIGH | Read from `ci.yml` and `check-vector-parity.sh` |
+
+### Open Questions
+
+1. `node-aad.json` as one file with two keyed arrays vs two files — recommended: one file with `aad_vectors` + `seal_vectors` keys.
+2. Hand-freeze vectors vs extending `generate-test-vectors.ts` — recommended: hand-freeze first (unblocks C-01), optionally extend generator later.
+3. `CryptoError` variant names for AAD validation — recommended: `InvalidAadInput`.
+
+### Ready for Planning
+
+Research complete. Planner can now create PLAN.md files.</result>
+<usage><subagent_tokens>123531</subagent_tokens><tool_uses>42</tool_uses><duration_ms>443340</duration_ms></usage>
+</task-notification>
