@@ -1,0 +1,90 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "e1a3fb8e78f2",
+  "session_id": "daff5e88-c6c1-43a2-991c-c8a4c2a77666",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-27T00:37:58.921933Z",
+  "branch": "docs/v2.0-metadata-and-sharing-refactor",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/MILESTONES.md",
+    ".planning/REQUIREMENTS.md",
+    ".planning/ROADMAP.md",
+    ".planning/STATE.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "fd2ab0acbf1d",
+  "token_usage": {
+    "input_tokens": 42740,
+    "cache_creation_tokens": 210167,
+    "cache_read_tokens": 5782511,
+    "output_tokens": 49435,
+    "api_call_count": 35
+  },
+  "summary": {
+    "intent": "Start a new GSD milestone (v2.0 Metadata and Sharing Refactor) for CipherBox, covering the full new-milestone workflow: project context update, optional research, requirements definition, and roadmap creation.",
+    "outcome": "Completed all workflow gates: PROJECT.md and STATE.md updated for v2.0, Architecture + Pitfalls research completed and synthesized, 39 requirements defined across 8 categories in REQUIREMENTS.md, and a 9-phase roadmap (phases 61–69) created and committed on branch docs/v2.0-metadata-and-sharing-refactor.",
+    "learnings": {
+      "repo": [
+        "Main branch is protected from direct commits; planning docs must go through feature branches following the docs/<name> naming convention",
+        "Signing commits requires unsandboxed access to the 1Password agent (--gpg-sign fails in sandbox)",
+        ".planning/research/ is gitignored — stale content from prior milestones persists untracked and must be archived manually before new milestone research",
+        "v1.1 ended at phase 60; v2.0 continues numbering at phase 61 (phase numbering is continuous across milestones unless --reset-phase-numbers is passed)",
+        "v1.1 had no REQUIREMENTS.md on disk — the file was created fresh for v2.0",
+        "The repo has a milestone_branch_template in config that informs branch naming",
+        "gsd_run query agent-skills returns empty output for gsd-project-researcher, gsd-research-synthesizer, gsd-roadmapper — agent skills are self-contained in the subagent prompts, not injected via the CLI"
+      ],
+      "code": [
+        {
+          "path": ".planning/design/2026-06-26-sharing-read-keychaining-design.md",
+          "finding": "Implementation-ready design with ratified ADRs, a frozen cutover order (§7.2), and a 21-item must-pass-before-merge test strategy (§7.3); three open questions remain in §9.2 (co-writer offline, rotation host for pure-web users, write-recipient authority)"
+        },
+        {
+          "path": ".planning/ROADMAP.md",
+          "finding": "9-phase roadmap (61–69) follows strict dependency chain: crypto → core → sdk-core → sdk → api → tee → web → fuse; roadmapper independently verified 39/39 requirements mapped, correcting an earlier count of 36"
+        },
+        {
+          "path": ".planning/REQUIREMENTS.md",
+          "finding": "39 requirements across CRYPTO, NODE, READ, ROT, WRITE, TEE, DATA, TEST categories; Tier 3 (capability layer / read-side TTL) and SEED-001 explicitly deferred to Future Requirements"
+        }
+      ],
+      "workflow": [
+        "The gsd commit helper fails silently when on a protected branch — files stay staged, no error is surfaced, no commit is created; direct git commit is required",
+        "The synthesizer subagent can be blocked from writing files by sandbox permissions; when this happens the orchestrator must write SUMMARY.md manually from the returned content",
+        "For implementation-ready designs with ratified ADRs, skip open-ended questioning and go straight to scope confirmation — the design document is the source of truth",
+        "Archiving stale research files before spawning new researchers prevents confusion about which outputs are current; the archive step is not part of the workflow spec but is necessary in practice",
+        "When only a subset of researchers are needed (Architecture + Pitfalls, not Stack + Features), the synthesizer prompt must be adjusted to reference only the files that were actually written"
+      ]
+    },
+    "friction": [
+      "gsd commit helper silently no-ops on a protected main branch — left files staged with no error, required discovery via git log before switching to direct git",
+      "Commit signing requires unsandboxed 1Password agent access; every git commit needed the user to approve the sandboxed tool call or use a workaround",
+      "gsd_run query agent-skills returned empty output for all three GSD agent types — had to proceed without injected skills context",
+      "Synthesizer subagent was blocked from writing SUMMARY.md to disk; orchestrator had to write the file manually from the returned text",
+      "Stale v1.1 research files (SUMMARY.md, ARCHITECTURE.md, PITFALLS.md, m4/ dir, questions.md) were sitting in .planning/research/ and needed manual archiving before v2.0 research could begin",
+      "Miscounted requirements during definition (reported 36, actual count was 39 across 8 categories = 3+6+5+7+4+7+4+3); the roadmapper caught and corrected this"
+    ],
+    "open_items": [
+      "§9.2 Q1: Co-writer offline handling during rotation — pinned to Phase 63/68",
+      "§9.2 Q2: Rotation host for pure-web users (no desktop/FUSE) — pinned to Phase 63",
+      "§9.2 Q3: Write-recipient vs owner authority for sub-shares — pinned to Phase 65/68",
+      "Phase 66 research flag: TypeORM FK map for share_keys → shares migration",
+      "Phase 69 research flag: grant-root algorithm for FUSE re-encryption callers",
+      "SEED-001 (Phala TEE on-demand cost reduction) deferred to future milestone",
+      "Tier 3 (capability layer / read-side TTL cache) explicitly out of scope for v2.0"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-27T00:37:12.822214Z",
+    "agent_lines": 376,
+    "agent_removed": 123,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 376,
+    "total_lines_changed": 499,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
