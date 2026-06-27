@@ -105,15 +105,53 @@ Which phases cover which requirements. Populated during roadmap creation.
 
 | Requirement | Phase | Status |
 | --- | --- | --- |
-| (populated by roadmapper) | — | Pending |
+| CRYPTO-01 | Phase 61 | Pending |
+| CRYPTO-02 | Phase 61 | Pending |
+| CRYPTO-03 | Phase 61 | Pending |
+| TEST-02 | Phase 61 | Pending |
+| NODE-01 | Phase 62 | Pending |
+| NODE-02 | Phase 62 | Pending |
+| NODE-03 | Phase 62 | Pending |
+| NODE-04 | Phase 62 | Pending |
+| NODE-05 | Phase 62 | Pending |
+| NODE-06 | Phase 62 | Pending |
+| READ-01 | Phase 63 | Pending |
+| READ-02 | Phase 63 | Pending |
+| READ-03 | Phase 63 | Pending |
+| READ-04 | Phase 63 | Pending |
+| READ-05 | Phase 63 | Pending |
+| ROT-01 | Phase 63 | Pending |
+| ROT-02 | Phase 63 | Pending |
+| ROT-03 | Phase 64 | Pending |
+| ROT-04 | Phase 64 | Pending |
+| ROT-05 | Phase 64 | Pending |
+| ROT-06 | Phase 64 | Pending |
+| TEST-01 | Phase 64 | Pending |
+| WRITE-01 | Phase 65 | Pending |
+| WRITE-02 | Phase 65 | Pending |
+| WRITE-03 | Phase 65 | Pending |
+| WRITE-04 | Phase 65 | Pending |
+| DATA-01 | Phase 66 | Pending |
+| DATA-02 | Phase 66 | Pending |
+| DATA-03 | Phase 66 | Pending |
+| DATA-04 | Phase 66 | Pending |
+| TEE-04 | Phase 66 | Pending |
+| TEE-05 | Phase 66 | Pending |
+| TEE-07 | Phase 66 | Pending |
+| TEE-01 | Phase 67 | Pending |
+| TEE-02 | Phase 67 | Pending |
+| TEE-03 | Phase 67 | Pending |
+| TEE-06 | Phase 67 | Pending |
+| ROT-07 | Phase 68 | Pending |
+| TEST-03 | Phase 69 | Pending |
 
 **Coverage:**
 
-- v1 requirements: 36 total
-- Mapped to phases: 0 (pending roadmap)
-- Unmapped: 36 ⚠️
+- v1 requirements: 39 total (CRYPTO ×3, NODE ×6, READ ×5, ROT ×7, WRITE ×4, TEE ×7, DATA ×4, TEST ×3)
+- Mapped to phases: 39
+- Unmapped: 0 ✓
 
 ---
 
 _Requirements defined: 2026-06-27_
-_Last updated: 2026-06-27 after initial definition_
+_Last updated: 2026-06-27 — traceability table populated, coverage 39/39_

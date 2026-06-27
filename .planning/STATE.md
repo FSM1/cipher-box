@@ -2,11 +2,11 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
-status: planning
+status: planning_complete
 last_updated: "2026-06-27T00:01:29.438Z"
 last_activity: 2026-06-27
 progress:
-  total_phases: 0
+  total_phases: 9
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -17,17 +17,19 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-03-07)
+See: .planning/PROJECT.md (updated 2026-06-27)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** v1.1 milestone close — finish verification (Phases 59, 60) + re-audit hardening block, then /gsd:complete-milestone v1.1
+**Current focus:** v2.0 Metadata and Sharing Refactor — planning complete, ready to begin Phase 61
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: 61 — AAD-Bound Seal Primitive and Cross-Language KAT
 Plan: —
-Status: Defining requirements
-Last activity: 2026-06-27 — Milestone v2.0 started
+Status: Planning complete — awaiting `/gsd-plan-phase 61`
+Last activity: 2026-06-27 — v2.0 roadmap created (9 phases, Phases 61–69)
+
+Progress: `░░░░░░░░░░` 0 / 9 phases (0%)
 
 ## Deferred Items
 
@@ -46,7 +48,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 
 ## Performance Metrics
 
-**Velocity:**
+**Velocity (v1.1):**
 
 - Total plans completed: 164 (all 34 milestone v1.1 phases; every PLAN has a SUMMARY)
 - Average duration: 5.5 min
@@ -102,7 +104,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 25 P01    | 5min     | 2 tasks | -         |
 | Phase 25 P02    | 4min     | 2 tasks | -         |
 | Phase 25 P03    | -        | 2 tasks | -         |
-| Phase 26 P01    | 5min     | 2 tasks | 6 files   |
+| Phase 26 P01    | 5min     | 3 tasks | 6 files   |
 | Phase 26 P02    | 4min     | 2 tasks | 5 files   |
 | Phase 27 P01    | 6min     | 2 tasks | 23 files  |
 | Phase 27 P02    | 5min     | 2 tasks | 4 files   |
@@ -153,38 +155,38 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 41 P05    | 3min     | 2 tasks | 3 files   |
 | Phase 45 P01    | 8min     | 2 tasks | 2 files   |
 | Phase 45 P02    | 8min     | 1 tasks | 3 files   |
-| Phase 45 P03 | 7min | 2 tasks | 4 files |
-| Phase 45 P04 | 8min | 1 tasks | 2 files |
-| Phase 45 P05 | 12 | 2 tasks | 1 files |
-| Phase 45 P06 | 90 | - tasks | - files |
-| Phase 48 P01 | 15min | 3 tasks | 4 files |
-| Phase 48 P02 | 2min | 2 tasks | 5 files |
-| Phase 48 P03 | 6min | 3 tasks | 7 files |
-| Phase 48 P05 | 8min | 3 tasks | 145 files |
-| Phase 48 P06 | 18min | 3 tasks | 5 files |
-| Phase 49 P01 | 13min | 2 tasks | 5 files |
-| Phase 49 P02 | 15min | 1 tasks | 1 files |
-| Phase 49 P03 | 11min | 4 tasks | 7 files |
-| Phase 49 P04 | 26min | 3 tasks | 5 files |
-| Phase 49 P05 | 12min | 2 tasks | 2 files |
-| Phase 51 P01 | 9min | 3 tasks | 2 files |
-| Phase 51 P03 | 45min | 4 tasks | 12 files |
-| Phase 51 P04 | 12min | 3 tasks | 6 files |
-| Phase 56 P01 | 45min | 3 tasks | 5 files |
-| Phase 56 P02 | 90min | 3 tasks | 8 files |
-| Phase 58 P01 | 45 | 5 tasks | 10 files |
-| Phase 58-ipns-signature-verify-coverage P02 | 30min | 3 tasks | 2 files |
-| Phase 58-ipns-signature-verify-coverage P04 | 25min | 3 tasks | 4 files |
-| Phase 59 P01 | 35min | 2 tasks | 2 files |
-| Phase 59 P02 | 4min | 2 tasks | 6 files |
-| Phase 59 P03 | 12min | 2 tasks | 6 files |
-| Phase 59 P04 | 15min | 2 tasks | 7 files |
-| Phase Phase 60 P01 P01 | 35min | 2 tasks | 9 files |
-| Phase 60 P02 | 4min | 2 tasks | 7 files |
-| Phase 60 P03 | 9min | 2 tasks | 3 files |
-| Phase 60 P04 | 15min | 2 tasks | 11 files |
-| Phase 60 P05 | 16 | - tasks | - files |
-| Phase 60 P06 | 14min | 2 tasks | 7 files |
+| Phase 45 P03    | 7min     | 2 tasks | 4 files   |
+| Phase 45 P04    | 8min     | 1 tasks | 2 files   |
+| Phase 45 P05    | 12min    | 2 tasks | 1 files   |
+| Phase 45 P06    | 90min    | - tasks | - files   |
+| Phase 48 P01    | 15min    | 3 tasks | 4 files   |
+| Phase 48 P02    | 2min     | 2 tasks | 5 files   |
+| Phase 48 P03    | 6min     | 3 tasks | 7 files   |
+| Phase 48 P05    | 8min     | 3 tasks | 145 files |
+| Phase 48 P06    | 18min    | 3 tasks | 5 files   |
+| Phase 49 P01    | 13min    | 2 tasks | 5 files   |
+| Phase 49 P02    | 15min    | 1 tasks | 1 files   |
+| Phase 49 P03    | 11min    | 4 tasks | 7 files   |
+| Phase 49 P04    | 26min    | 3 tasks | 5 files   |
+| Phase 49 P05    | 12min    | 2 tasks | 2 files   |
+| Phase 51 P01    | 9min     | 3 tasks | 2 files   |
+| Phase 51 P03    | 45min    | 4 tasks | 12 files  |
+| Phase 51 P04    | 12min    | 3 tasks | 6 files   |
+| Phase 56 P01    | 45min    | 3 tasks | 5 files   |
+| Phase 56 P02    | 90min    | 3 tasks | 8 files   |
+| Phase 58 P01    | 45min    | 5 tasks | 10 files  |
+| Phase 58 P02    | 30min    | 3 tasks | 2 files   |
+| Phase 58 P04    | 25min    | 3 tasks | 4 files   |
+| Phase 59 P01    | 35min    | 2 tasks | 2 files   |
+| Phase 59 P02    | 4min     | 2 tasks | 6 files   |
+| Phase 59 P03    | 12min    | 2 tasks | 6 files   |
+| Phase 59 P04    | 15min    | 2 tasks | 7 files   |
+| Phase 60 P01    | 35min    | 2 tasks | 9 files   |
+| Phase 60 P02    | 4min     | 2 tasks | 7 files   |
+| Phase 60 P03    | 9min     | 2 tasks | 3 files   |
+| Phase 60 P04    | 15min    | 2 tasks | 11 files  |
+| Phase 60 P05    | 16min    | - tasks | - files   |
+| Phase 60 P06    | 14min    | 2 tasks | 7 files   |
 
 ## Accumulated Context
 
@@ -225,7 +227,7 @@ Recent for v1.1:
 - Recovery tool IPNS resolution uses gateway /ipns/ HEAD request with redirect following (most reliable without API dependency)
 - fetchAndDecryptMetadata handles both v1 JSON and v2 binary blobs transparently for folder sync
 - Zero-crypto vault schema: server stores only ownerPublicKey and rootIpnsName, all crypto material lives exclusively in IPFS v2 blobs
-- DB crypto columns (encrypted_root_folder_key, encrypted_root_ipns_private_key, migrated_at) fully dropped — no fallback paths
+- DB crypto columns (encrypted_root_folder_key, encrypted_root_ipns_private_key, migrated_at) fully dropped -- no fallback paths
 - PinningProvider interface: KuboProvider uses Basic auth, PsaProvider uses Bearer auth, matching each protocol's native auth model
 - PsaProvider.pin() throws intentionally; pinByCid() is the correct PSA workflow (CID-reference-only protocol)
 - Connection test uses sequential probe: Kubo /api/v0/id first, then PSA /pins, with 10s timeout per probe
@@ -236,13 +238,13 @@ Recent for v1.1:
 - PsaProvider.pinByCid() accessed via cast in client.ts (PSA-specific, not on PinningProvider interface)
 - Migration uses existing BullMQ pattern with pin-migration queue name; TEE decrypts ECIES-encrypted provider configs in-enclave with epoch key
 - SSRF protection on TEE migration: validates URL structure (HTTPS-only, no private IPs) and DNS resolution (rebinding check)
-- BYO config stored as encrypted IPNS entry using rootFolderKey — no server-side credential storage (zero-knowledge preserved)
+- BYO config stored as encrypted IPNS entry using rootFolderKey -- no server-side credential storage (zero-knowledge preserved)
 - Dedicated IPNS key derived via HKDF with context string byo-ipfs-config from vault keypair
-- BYO benchmark execution (21-07 Task 4) deferred — requires external IPFS provider infrastructure; test scenarios ready to run when provider available
+- BYO benchmark execution (21-07 Task 4) deferred -- requires external IPFS provider infrastructure; test scenarios ready to run when provider available
 - BYO config loaded at login via IPNS resolve with graceful fallback to cipherbox-only mode
 - Source unpin is best-effort and non-fatal after verified CID transfer to destination
 - Cargo workspace with centralized deps at repo root; cipherbox-crypto crate as foundation for all Rust SDK extraction
-- Module re-export pattern in desktop crypto/mod.rs preserves all existing crate::crypto::\* paths without touching call sites
+- Module re-export pattern in desktop crypto/mod.rs preserves all existing crate::crypto::* paths without touching call sites
 - cipherbox-core crate layered on cipherbox-crypto: folder, file, bin, vault_blob, ipns, registry, decrypt, error modules
 - File module re-exports FileMetadata types from folder.rs (shared AES encryption context with parent folder key)
 - decrypt module moved from fuse to crypto re-export (domain logic, not FUSE-specific)
@@ -251,7 +253,7 @@ Recent for v1.1:
 - Shared test vectors in tests/vectors/ JSON files loadable by both Rust and TypeScript for CI parity gates
 - SyncDaemon uses Arc<dyn Fn(SyncStatus)> generic callback instead of Tauri AppHandle for testability
 - Desktop api/client.rs re-exports cipherbox_api_client::ApiClient as type alias to unify types across modules
-- Desktop AppState wraps Arc<KeyState> from SDK; all key material accessed via state.sdk.\*
+- Desktop AppState wraps Arc<KeyState> from SDK; all key material accessed via state.sdk.*
 - Keychain operations kept as desktop-specific keychain.rs module (not in api-client crate)
 - Desktop api/ and crypto/ directories fully removed; all imports use workspace crates directly
 - CI parity gate uses needs.changes.outputs.src (not nonexistent packages) for trigger condition
@@ -271,56 +273,61 @@ Recent for v1.1:
 - Shared file download/view falls back to fileKeyEncrypted from metadata when no share_key exists
 - FilePointer resolution uses FileMetadata directly (no separate ResolvedFileMetadata struct)
 - FilePointer resolution scoped to parent folder via get_unresolved_file_pointers_for_parent() to avoid wrong-folder-key decryption
-- FilePointer async resolution: 500ms base \* 2^attempt exponential backoff (1s, 2s, 4s) with 3 retries
+- FilePointer async resolution: 500ms base * 2^attempt exponential backoff (1s, 2s, 4s) with 3 retries
 - Removed custom dstack-sdk.d.ts since @phala/dstack-sdk@0.5.7 ships own TypeScript types
 - Defensive CVM key derivation handles both key (v0.5+) and asUint8Array (legacy) SDK return types
 - TEE worker Prometheus metrics use `cipherbox_tee_*` prefix for Grafana dashboard coexistence with API metrics
 - TEE worker structured JSON logger has zero external dependencies (JSON.stringify to stdout/stderr)
 - [Phase 48-05] Share itemName encrypted at rest via additive nullable item_name_encrypted bytea on BOTH shares and share_invites (decision A3 includes invite flow); migration is additive-only with NO data UPDATE (server zero-knowledge cannot re-encrypt legacy plaintext); itemNameEncrypted optional hex DTO on create-share/create-invite/claim-invite; claim re-wraps ephemeral→recipient ciphertext onto the Share; web encrypt/decrypt/lazy-backfill deferred to 48-06
-- [Phase 48-06] Web ECIES-wraps itemName on share/invite create (recipient pubkey for direct, ephemeral pubkey for invite) and sends ciphertext-only (itemName: '' + itemNameEncrypted) — no plaintext display name at rest for new rows; recipient decrypts itemNameEncrypted into the store's plaintext projection on received-share load so display sites are unchanged; owner sent-list uses plaintext fallback (zero-knowledge: name wrapped for recipient, owner can't decrypt — T-48-18 accept). API GAP: no update endpoint accepts itemNameEncrypted, so the legacy lazy-backfill (A2) is detect+re-wrap only; persist blocked pending a follow-up API plan (PATCH itemNameEncrypted)
+- [Phase 48-06] Web ECIES-wraps itemName on share/invite create (recipient pubkey for direct, ephemeral pubkey for invite) and sends ciphertext-only (itemName: '' + itemNameEncrypted) -- no plaintext display name at rest for new rows; recipient decrypts itemNameEncrypted into the store's plaintext projection on received-share load so display sites are unchanged; owner sent-list uses plaintext fallback (zero-knowledge: name wrapped for recipient, owner can't decrypt -- T-48-18 accept). API GAP: no update endpoint accepts itemNameEncrypted, so the legacy lazy-backfill (A2) is detect+re-wrap only; persist blocked pending a follow-up API plan (PATCH itemNameEncrypted)
 
 ### Roadmap Evolution
 
 - Phase 19.1 inserted after Phase 19: Extract core crypto SDK as shared package (URGENT)
-- Phase 19.2 inserted after Phase 19: IPFS Upload Performance Optimization (URGENT) — concurrent pins, Kubo worker tuning, pin batching to address ~95% bottleneck in upload path identified by Phase 19 baselines
-- Phase 23 added: Rust SDK Extraction — extract shared cipherbox-core crate, replace duplicated logic in desktop FUSE code, enable unit testing parity with TypeScript
-- Phase 27 added: Writable Shares (PoC) — extend read-only sharing to read-write using existing server-coordinated conflict resolution
-- Phase 36 added: Refactor upload progress in web app, to an inline progress display and remove the popup upload progress
-- Phase 37 added: Parallel batch upload pipeline — replace sequential per-file upload loop with parallel encrypt+pin and single folder metadata update
+- Phase 19.2 inserted after Phase 19: IPFS Upload Performance Optimization (URGENT)
+- Phase 23 added: Rust SDK Extraction
+- Phase 27 added: Writable Shares (PoC)
+- Phase 36 added: Inline upload progress
+- Phase 37 added: Parallel batch upload pipeline
 - Phase 41 added: Package and app versioning and release cycles
-- Phase 42 added: API unpin integrity — ownership check, cross-user refcount, quota decrement (audit gap closure, todos 2026-06-11)
-- Phase 43 added: FUSE write durability — persisted upload journal, mkdir orphan fix (audit gap closure, todos 2026-06-11)
-- Phase 44 added: IPNS conflict handling — merge-on-409, file CAS (audit gap closure, todo 2026-06-11)
-- Phase 45 added: Desktop FUSE write-durability cleanup — Rust hygiene refactors + test coverage for phase 43/44 journal+replay (todos #11, #12, #14, #15, #18, #19, #20); excludes data-loss bugs #7/#8/#17
-- Phase 46 added 2026-06-15: Desktop FUSE data-loss bugs + replay hardening — the #7/#8/#17 bugs Phase 45 deferred, the two PR #491 replay follow-ups, and the deferred read_ops/write_ops + journal_helpers test coverage (grouped desktop todos)
-- Phase 47 added 2026-06-15: SDK folder-state and publish-path consolidation — unify folderTree/Zustand ownership, one publishWithCas CAS-retry, encapsulate baseChildren bookkeeping, fix updateSharedFile prunedCids pin leak (grouped SDK todos)
-- Phase 48 added 2026-06-16: SDK self-bootstrap regression fix + shared-folder/metadata consolidation — P0 fix for the PR #498 self-bootstrap clobber regressing main web-e2e (run 27587113911), then remove redundant web folder-seeding (#9, gated on the fix), route shared-folder writes through the SDK client (#8), encrypt share itemName at rest (#5 / Phase-14 M1); defers CRDT-inbox research (#2)
-- Phase 49 added 2026-06-18: Shared-folder intra-share move + useFolderNavigation unwrap consolidation — recipient-side move of a file between subfolders within one share (re-encrypts FileMetadata to the dest folderKey via reencryptFileMetadataForFolderChange, mirroring owner moveItem / #507), anywhere-in-subtree destination picker (new SDK shared-subtree enumeration), plus consolidating the duplicate web useFolderNavigation ECIES unwrap onto client.ensureFolderLoaded; closes captured todos #8 + #7; builds on Phase 48 shared-folder ownership
-- Milestone v1.1 REOPENED 2026-06-19 with a hardening block (Phases 50–55) absorbing tracked tech-debt/security todos from v1.1 verification and audits: 50 IPFS/IPNS data-integrity (#12 unpin-integrity, #14 unenroll-subtrees); 51 crypto-signature & secret-leak hardening (#5 IPNS sig, #15 web logger redaction/Faro); 52 desktop FUSE durability & at-rest safety (#9); 53 release & supply-chain engineering (#6 pin-actions, #13 cargo-lock, #16 release-please-pins); 54 E2E test-infra typing (#11); 55 large source-file refactor (#17). Reopened into Milestone 3 rather than opening v1.2, since Milestone 4 (v2.0) is already defined. Excludes the GSD-tooling STATE regression (#10 — upstream chore, not product code). Todos #7 (useFolderNavigation consolidation) and #8 (shared-move re-encrypt) were verified already-resolved by Phase 49 (confirmed in live code) and moved to `.planning/todos/completed/`.
-
-- Phase 56 added 2026-06-21: FUSE & IPNS Durability Hardening (HARD-07) — per-file/bin IPNS Conflict re-resolve/retry, write-path EINVAL/EFBIG/EEXIST guards, key-wrap/decode error propagation, inode identity reset, spawn_metadata_publish zeroization; the pre-existing findings surfaced byte-identical by the PR #538 / Phase 55 refactor review (absorbs the superseded per-file-IPNS-conflict todo)
-- Phase 57 added 2026-06-21: API CID/Provider Hardening & Module Dedup (HARD-08) — shared CID_REGEX+MaxLength across RegisterCidDto/UnpinDto, URL-encoded LocalProvider pin/cat URLs, leaf IpfsProviderModule, shared withCidLock/refcountAndMaybeUnpin
-- Phase 58 added 2026-06-21: IPNS Signature-Verify Coverage (HARD-09) — CBOR cid/sequence binding + Rust resolve_ipns_verified chokepoint, non-CAS embedded-sequence validation, web/sdk-core resolve dedup, shared verify test vectors; the S1/S2 residue of Phase 51 / PR #529. Master IPNS-sig todo (2026-06-13) and large-file-refactor Tier-1/2 todo (2026-06-19) filed to completed/, the latter with its Tier-3 residue re-captured.
-- Phase 59 added 2026-06-23: FUSE IPNS Verify/Publish Hardening & Cleanup (HARD-10) — the Phase 56/58 FUSE long-tail from the 2026-06-23 pending-todo audit: the 2 partial HARD-07 residuals (fs.rs File-branch wrap_key error propagation; inode file-side re-resolution on changed file_meta_ipns_name), VerifyError::Legacy carrying the legacy response, CAS dead journal_entry param + content_ops dead-binding cleanup, phase58 simplify follow-ups, and unifying the first-publish embedded-sequence convention (bridges to 60). Sourced from 6 captured todos.
-- Phase 60 added 2026-06-23: IPNS Verification Cross-Layer Closeout — Desktop + API (HARD-11) — route remaining apps/desktop Tauri resolve_ipns sites through the verified resolver (scoped fail-closed), and recover per-op IPNS verify CPU on the API publish/resolve hot path via a safe short-circuit / short-TTL verified-record cache that still fully verifies untrusted/DHT records. Sourced from 2 captured todos: the API verify-caching todo (migrated from issue #549) and the desktop verified-resolve coverage todo.
+- Phase 42 added: API unpin integrity
+- Phase 43 added: FUSE write durability
+- Phase 44 added: IPNS conflict handling
+- Phase 45 added: Desktop FUSE write-durability cleanup
+- Phase 46 added 2026-06-15: Desktop FUSE data-loss bugs + replay hardening
+- Phase 47 added 2026-06-15: SDK folder-state and publish-path consolidation
+- Phase 48 added 2026-06-16: SDK self-bootstrap regression fix + shared-folder/metadata consolidation
+- Phase 49 added 2026-06-18: Shared-folder intra-share move + useFolderNavigation unwrap consolidation
+- Milestone v1.1 REOPENED 2026-06-19 with hardening block (Phases 50–55)
+- Phase 56 added 2026-06-21: FUSE & IPNS Durability Hardening
+- Phase 57 added 2026-06-21: API CID/Provider Hardening & Module Dedup
+- Phase 58 added 2026-06-21: IPNS Signature-Verify Coverage
+- Phase 59 added 2026-06-23: FUSE IPNS Verify/Publish Hardening & Cleanup
+- Phase 60 added 2026-06-23: IPNS Verification Cross-Layer Closeout -- Desktop + API
+- **v2.0 Phases 61–69 added 2026-06-27**: Metadata and Sharing Refactor — read key-chaining + rotation soundness + write-revocation + TEE contract rewrite + schema cutover + web/FUSE integration
 
 ### Open Concerns
 
-- **main web-e2e is RED** (run 27587113911) since PR #498 merged — self-bootstrap `loadFolder` clobbers fresher folderTree state with a stale IPNS snapshot, failing `bin-restore-after-reload.spec.ts` + `full-workflow.spec.ts:6.6.2`. Blocks the staging E2E gate. Tracked as Phase 48 REQ-1 (P0).
 - 6 LOW-priority tech debt items remain from M2 audit: Settings URL param parsing, OCC coverage, addManyFiles atomicity, conflict telemetry, lazy rotation, desktop E2E (see `.planning/milestones/m2/m2-v1.0-production-MILESTONE-AUDIT.md`)
-- Recovery tool subfolder recovery limited by IPNS DHT propagation (root-level fully operational; per-file IPNS records may not be resolvable if not propagated — architectural limitation, not a bug)
+- Recovery tool subfolder recovery limited by IPNS DHT propagation (root-level fully operational; per-file IPNS records may not be resolvable if not propagated -- architectural limitation, not a bug)
+- **v2.0 open questions** (to resolve during respective phases):
+  - Q1 (Phase 68): Co-writer offline during write-key rotation -- accept explicit re-fetch requirement or add grace/notification?
+  - Q2 (Phase 63): Rotation host for pure-web users -- is a long chunked multi-session web rotation acceptable for large revokes, or is desktop the only host?
+  - Q3 (Phases 65, 68, 69): Write-recipient-vs-owner sub-share authority -- when C (write recipient) deletes a node the owner independently sub-shared to D, who controls revocation of D?
 
 ### Pending Todos
 
-**2026-06-27:** Captured Phase 39 D-02 data-safety gap (surfaced by the v1.1 milestone audit): the web app performs permanent/hard delete with no confirmation dialog when the vault default delete mode is `'permanent'` (`useFolderMutations.ts` `deleteWithBehavior`). See `2026-06-27-add-permanent-delete-confirmation-dialog-in-web-app.md`.
+**2026-06-27:** Captured Phase 39 D-02 data-safety gap: web app performs permanent/hard delete with no confirmation dialog. See `2026-06-27-add-permanent-delete-confirmation-dialog-in-web-app.md`.
 
-**2026-06-23:** Captured a high-severity storage/quota bug — bin delete + empty-bin never unpin content/version CIDs (client SDK `packages/sdk/src/bin/index.ts`), confirmed on staging (a user with empty vault+bin showing 442 MB quota used; 9 orphaned content CIDs = 439 MB still pinned). See `2026-06-23-bin-delete-and-empty-bin-leak-content-and-version-cid-pins.md`. Also captured the Phase 59 Finding F deferral as a Phase 60 carry-forward: `2026-06-23-phase60-ipns-first-publish-strict-equality-cutover.md` (resolves_phase: 60).
+**2026-06-23:** Captured high-severity storage/quota bug -- bin delete + empty-bin never unpin content/version CIDs. See `2026-06-23-bin-delete-and-empty-bin-leak-content-and-version-cid-pins.md`.
 
-See `/gsd:check-todos` for the full pending list. **2026-06-21:** filed resolved/superseded todos #5 (IPNS S1/S2/S3 → PR #529), #10 (refactor Tier-1/2 → PR #538), and the per-file-IPNS-conflict todo (folded into the PR #538 robustness todo) to `completed/`; re-captured the 14 Tier-3 refactor items as a new todo; grouped the FUSE/IPNS, API-CID, and IPNS-verify deferred-findings todos into new Phases 56–58. **2026-06-19:** todos #7 (useFolderNavigation consolidation) and #8 (shared-move re-encrypt) were verified already-resolved by Phase 49 (confirmed in live code) and moved to `completed/`; ten remaining tech-debt/security todos were grouped into the reopened v1.1 hardening block (Phases 50–55, see Roadmap Evolution). The four older feature todos (ERC-1271 wallet auth, CRDT IPNS inbox research, async search index, alternative MFA factors) and the GSD-tooling STATE regression (#10) remain unscheduled. _Historical:_ the desktop (6) and SDK (4) groups addressed by Phase 46 (merged) and Phase 47 (PR #494) were moved to `.planning/todos/completed/` on 2026-06-15 and their ROADMAP scope boxes checked. The architecture todo to give the SDK client the root IPNS key so it self-bootstraps/lazy-loads `folderTree` (root cause of the "Folder not loaded" class; bin-restore gap surfaced while combing the #494 fix) was completed 2026-06-16 in PR #498 (branch `feat/sdk-client-self-bootstrap-folder-tree`) and moved to `.planning/todos/completed/`; its follow-ups (delete the now-redundant web `ensureFolderRegistered`/`useFolderNavigation` unwrap paths once self-heal proves out; optional negative-cache) were captured as a new pending todo. Remaining pending still includes the route-shared-folder-writes follow-up — the lone folder-state mutation not consolidated by Phase 47. The v1.1 verification-ledger todo (phases 18/31/32 missing VERIFICATION.md) was completed 2026-06-19 — all three reports authored (goal-backward, adversarially spot-checked), PERF-01..04 closed (PERF-03 via accepted override), and the milestone audit verdict flipped to `passed` (66/66, 20/20); moved to `.planning/todos/completed/`.
+See `/gsd:check-todos` for the full pending list.
 
 ### Resolved
 
 All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILESTONE-AUDIT.md`.
+
+All v1.1 requirements code-satisfied (77/77). See `.planning/milestones/v1.1-MILESTONE-AUDIT.md`.
 
 ### Quick Tasks Completed
 
@@ -332,9 +339,9 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last activity: 2026-06-26
+Last activity: 2026-06-27
 
-Last session: 2026-06-24T01:45:06Z
+Last session: 2026-06-27T00:01:29Z
 
 ## Decisions
 
@@ -347,32 +354,15 @@ Last session: 2026-06-24T01:45:06Z
 - [Phase 59-03]: D.3 current_seq_for_cas replaced by direct if current_seq.is_none() guard (same error text)
 - [Phase 59-03]: E.1 VerifiedResolve::signature_verified field removed; was never read, only written
 - [Phase 59-03]: E.4 bytesToHex helper removed alongside the unused public_key/private_key vector fields
-- [Phase 59-02]: VerifyError::Legacy carries { cid: String, sequence_number: String } from bind_verified — no second resolve_ipns in any Legacy arm (T-59-04 TOCTOU eliminated)
+- [Phase 59-02]: VerifyError::Legacy carries { cid: String, sequence_number: String } from bind_verified -- no second resolve_ipns in any Legacy arm (T-59-04 TOCTOU eliminated)
 - [Phase 59-02]: Display for VerifyError::Legacy includes cid and seq: 'legacy record: all signature fields absent (cid={cid}, seq={sequence_number})'
 - [Phase 59-02]: events.rs synthetic VerifiedResolve keeps signature_verified: false until Finding E.1 (plan 03) removes the field
-- [Phase ?]: deser_opt_string maps legacy empty-string file_meta_ipns_name to None; serde compat shim mandatory for pre-Phase-45 journal replay
-- [Phase 45-04]: IpnsResolveOutcome lives in error.rs with #[derive(Debug)] only — not thiserror, it is an outcome not an error
+- [Phase 45-04]: IpnsResolveOutcome lives in error.rs with #[derive(Debug)] only -- not thiserror, it is an outcome not an error
 - [Phase 45-04]: resolve_ipns_for_replay preserves both contains(not found) and contains(404) predicates to avoid classification regression
-- [Phase ?]: Conditional use imports route replay to fuse->operations::implementation and winfsp->platform::windows::operations::implementation for publish_file_metadata
-- [Phase ?]: folder_key_cache seeded with root key in replay_for_vault; resolve_folder_key_cached wrapper memoizes per replay call, never persisted or shared
-- [Phase ?]: journal_helpers: helper takes &OpenFileHandle directly (open_files entry removed before call)
-- [Phase ?]: journal_helpers: WinFsp write_gen read after write_generation bump; fuser uses result field captured before mutation
-- [Phase ?]: journal_helpers: build_mkdir_journal_entry called after child inode inserted so build_folder_metadata sees new child
-- [Phase ?]: Keep @internal on ensureFolderLoaded; call directly from web hook
-- [Phase 49-03]: onMove wired for files only in folder-view ContextMenu; list-view synthetic items stay readOnly (T-49-09)
-- [Phase 49-03]: currentFolderId for SharedMoveDialog derived from breadcrumbs last entry (not separate state)
-- [Phase 49-03]: SharedMoveDialog lazy-loads subtree via enumerateSharedSubtree in useEffect gated on open && shareId
-- [Phase 49-04]: batchMoveItemsHandler clearSelection called after runWrite completes (full success only)
-- [Phase 49-04]: SharedFolderRow drop uses row's id/ipnsName as authoritative dest (ignores payload parentId per T-49-12)
-- [Phase 49-04]: SelectionActionBar onDelete/onDownload are no-op stubs (REQ-6 scopes to move parity only)
-- [Phase 49-05]: SharedMoveDialogPage.dialog() scoped via .move-dialog-folder-list filter (avoids collision with private MoveDialog)
-- [Phase 49-05]: readContentViaEditor dispatches rightClickFolderItem vs rightClickItem based on instanceof check (shared vs private browser page)
-- [Phase 49-05]: Alice decrypt assertion uses FileListPage (private vault view), not SharedFileBrowserPage — owner reads own files via vault browser
 - [Phase 51-01]: CAS ConflictException (409) check placed before S1 BadRequestException (400) sequence check so concurrent-modification signals remain authoritative; S1 reuses anti-rollback incomingParsed to avoid double parse
-- [Phase 51-03]: resolve_folder_key_cached cache left as HashMap<String, Vec<u8>> (not Zeroizing); cache is short-lived, cleared on replay_for_vault drop — only BFS queue and get_folder_key return changed
+- [Phase 51-03]: resolve_folder_key_cached cache left as HashMap<String, Vec<u8>> (not Zeroizing); cache is short-lived, cleared on replay_for_vault drop -- only BFS queue and get_folder_key return changed
 - [Phase 51-03]: verify_ipns_resolve_signature absent-fields path returns Ok(None) + warn (D-03), not error; verify gate in resolve_folder_key BFS only (not fetch_merge_publish_parent replay path)
-- [Phase 51-04]: updateFolderMetadataAndPublish SKIP zeroing — all client.ts call sites pass live session keys from folderTree state reused across session lifetime; caller retains ownership (T-47-01 documented skip with guard test)
-- [Phase ?]: CBOR import: cborg decode used in sdk-core; parseCborData from ipns unavailable
+- [Phase 51-04]: updateFolderMetadataAndPublish SKIP zeroing -- all client.ts call sites pass live session keys from folderTree state reused across session lifetime; caller retains ownership (T-47-01 documented skip with guard test)
 - [Phase 60-01]: decode_ipns_cbor_validity companion fn chosen over 3-tuple return; all 9 FUSE Legacy arms folded to Invalid; manual RFC3339 parse with 5-min skew buffer (D-04/D-07)
 - [Phase 60-02]: D-02 all 9 first-publish producers unified to embed sequence 1; coordinator.record_publish updated to match; vault-settings.service.ts forward-publish increment path unchanged
 - [Phase 60-04]: All 9 FUSE Legacy arms were pre-folded by 60-01 (compiler-forced); Task 1 re-pointed imports and deleted verify.rs only
@@ -380,11 +370,11 @@ Last session: 2026-06-24T01:45:06Z
 - [Phase 60-04]: registry.rs VerifyError::Invalid maps to SdkError::RegistryError (fail-closed)
 - [Phase 60-04]: prepopulate.rs and vault.rs: scoped per-operation fail-closed (D-09)
 - [Phase 60-06]: D-11 go decision: per-op verify cost (mean 0.105 ms) justifies a short-TTL cache; cache key = ipnsName + base64(recordBytes); TEE republish and resolve paths never populate cache
-- [Phase ?]: [Phase 60-05]: D-03 first-publish gate changed from {0n,1n} to strict {1n} only; embedded-0 now returns 400
-- [Phase ?]: [Phase 60-05]: D-06 parseCachedRecord null-signedRecord path returns null; CID mismatch discards cached result
-- [Phase ?]: [Phase 60-05]: D-06 withCachedPublicKey enrich and equal-seq signatureV2 enrich removed from resolveRecord
-- [Phase ?]: [Phase 60-05]: api:generate NOT required; changes are internal service/codec logic with no OpenAPI surface change
+- [Phase 60-05]: D-03 first-publish gate changed from {0n,1n} to strict {1n} only; embedded-0 now returns 400
+- [Phase 60-05]: D-06 parseCachedRecord null-signedRecord path returns null; CID mismatch discards cached result
+- [Phase 60-05]: D-06 withCachedPublicKey enrich and equal-seq signatureV2 enrich removed from resolveRecord
+- [Phase 60-05]: api:generate NOT required; changes are internal service/codec logic with no OpenAPI surface change
 
 ## Operator Next Steps
 
-- Start the next milestone with /gsd-new-milestone
+- Run `/gsd-plan-phase 61` to begin Phase 61: AAD-Bound Seal Primitive and Cross-Language KAT
