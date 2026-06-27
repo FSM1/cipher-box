@@ -1,0 +1,17 @@
+which version of gsd does this project use?
+
+---
+
+/gsd:help
+
+---
+
+/gsd;
+
+---
+
+/gsd:ultraplan-phase 61
+
+---
+
+/gsd:discuss-phase 61
