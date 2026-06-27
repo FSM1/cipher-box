@@ -198,7 +198,7 @@ Loading state: same pattern as `.image-preview-loading`.
 Error state: same pattern as `.image-preview-error`.
 </action>
 <verify>
-Run `cd /Users/michael/Code/cipher-box && pnpm --filter web build` -- should compile with no TypeScript errors.
+Run `cd . && pnpm --filter web build` -- should compile with no TypeScript errors.
 Verify pdfjs-dist is in apps/web/package.json dependencies.
 Verify useFilePreview.ts exports the hook.
 Verify PdfPreviewDialog.tsx imports and uses Modal, useFilePreview, and pdfjs-dist.
@@ -293,7 +293,7 @@ Controls row: flex, `justify-content: center`, `align-items: center`, `gap: var(
 Viz toggle: same button style, text changes between `[viz: on]` and `[viz: off]`.
 </action>
 <verify>
-Run `cd /Users/michael/Code/cipher-box && pnpm --filter web build` -- should compile with no TypeScript errors.
+Run `cd . && pnpm --filter web build` -- should compile with no TypeScript errors.
 Verify AudioPlayerDialog.tsx imports useFilePreview and does NOT use a native `<audio controls>` element (no browser chrome).
 Verify Web Audio API AnalyserNode is used for frequency visualization.
 Verify all audio state cleanup happens on dialog close.
@@ -382,7 +382,7 @@ Control row: flex, `justify-content: space-between`, `align-items: center`, `gap
 Volume slider: same as audio player.
 </action>
 <verify>
-Run `cd /Users/michael/Code/cipher-box && pnpm --filter web build` -- should compile with no TypeScript errors.
+Run `cd . && pnpm --filter web build` -- should compile with no TypeScript errors.
 Verify VideoPlayerDialog.tsx uses `<video>` with NO `controls` attribute.
 Verify custom controls include play/pause, seek, volume, speed, and fullscreen.
 Verify auto-hide behavior is implemented (3s timeout).
@@ -517,7 +517,7 @@ The existing `onPreview` prop and "Preview" menu item already exist and are gene
 No code changes needed in ContextMenu.tsx if the existing structure is sufficient. Verify this by reading the file -- the `onPreview` callback is already generic.
 </action>
 <verify>
-Run `cd /Users/michael/Code/cipher-box && pnpm --filter web build` -- should compile with no TypeScript errors.
+Run `cd . && pnpm --filter web build` -- should compile with no TypeScript errors.
 Verify FileBrowser.tsx imports all three new dialog components.
 Verify `isPreviewableFile` covers: .pdf, .mp3, .wav, .ogg, .m4a, .flac, .mp4, .webm, .mov, .mkv, plus existing image extensions.
 Verify the context menu "Preview" option appears for PDF, audio, and video files (via the `isPreviewableFile` guard).
@@ -534,7 +534,7 @@ FileBrowser.tsx has file type detection for PDF/audio/video, dialog states for a
     Three new file preview dialogs (PDF, Audio, Video) integrated into the CipherBox file browser. All use the terminal/hacker aesthetic with custom controls -- no native browser player chrome for audio or video.
   </what-built>
   <how-to-verify>
-    1. Start the dev server: `cd /Users/michael/Code/cipher-box && pnpm --filter web dev`
+    1. Start the dev server: `cd . && pnpm --filter web dev`
     2. Open http://localhost:5173 and log in
     3. Upload test files if not present: a PDF, an MP3/WAV, and an MP4/WebM
     4. **PDF test:** Right-click a PDF file -> click "Preview". Verify:

@@ -3,7 +3,7 @@
 **Researched:** 2026-01-30
 **Domain:** UI Implementation, Design System
 **Confidence:** HIGH
-**Design Source:** `/Users/michael/Code/cipher-box/designs/cipher-box-design.pen`
+**Design Source:** `designs/cipher-box-design.pen`
 **Primary Frame:** `nRzxj` (Phase 6.3 - Unified Structure Mockup)
 
 ## Summary
@@ -514,14 +514,14 @@ Create new button styles or update existing:
 
 ### Primary (HIGH confidence)
 
-- Design file: `/Users/michael/Code/cipher-box/designs/cipher-box-design.pen` - authoritative source
+- Design file: `designs/cipher-box-design.pen` - authoritative source
 - Frame ID: `nRzxj` - Phase 6.3 Unified Structure Mockup
 
 ### Secondary
 
-- Current CSS: `/Users/michael/Code/cipher-box/apps/web/src/styles/file-browser.css`
-- Current CSS: `/Users/michael/Code/cipher-box/apps/web/src/styles/breadcrumbs.css`
-- Current CSS: `/Users/michael/Code/cipher-box/apps/web/src/styles/layout.css`
+- Current CSS: `apps/web/src/styles/file-browser.css`
+- Current CSS: `apps/web/src/styles/breadcrumbs.css`
+- Current CSS: `apps/web/src/styles/layout.css`
 
 ---
 

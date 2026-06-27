@@ -343,7 +343,7 @@ No files in this phase lack a codebase analog. All fixes are in existing well-te
 
 ### File Created
 
-`/Users/myankelev/Code/random/cipher-box/.planning/phases/50-ipfs-ipns-data-integrity-fixes/50-PATTERNS.md`
+`.planning/phases/50-ipfs-ipns-data-integrity-fixes/50-PATTERNS.md`
 
 ### Ready for Planning
 

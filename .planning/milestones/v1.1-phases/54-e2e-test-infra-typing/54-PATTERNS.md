@@ -37,7 +37,7 @@
 
 **Analog:** `packages/sdk-core/tsconfig.json` (same `extends` pattern) + `tsconfig.base.json` (the base)
 
-**Base tsconfig.base.json** (`/Users/myankelev/Code/random/cipher-box-p54/tsconfig.base.json`, lines 1-21):
+**Base tsconfig.base.json** (`tsconfig.base.json`, lines 1-21):
 
 ```json
 {

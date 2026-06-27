@@ -126,7 +126,7 @@ Each task was committed atomically:
 
 ## Issues Encountered
 
-- **cargo not found in PATH**: Shell environment lacked cargo binary. Resolved by explicitly setting PATH to include /Users/michael/.cargo/bin before cargo commands.
+- **cargo not found in PATH**: Shell environment lacked cargo binary. Resolved by explicitly setting PATH to include ~/.cargo/bin before cargo commands.
 - **FUSE feature compilation on macOS**: fuser crate build script panics without FUSE-T installed ("Building without libfuse is only supported on Linux"). Expected limitation - verified compilation without fuse feature flag instead. FUSE code is gated behind `#[cfg(feature = "fuse")]`.
 - All 71 tests pass consistently across all 3 task commits.
 

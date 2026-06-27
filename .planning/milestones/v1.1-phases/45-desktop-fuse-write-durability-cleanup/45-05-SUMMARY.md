@@ -56,7 +56,7 @@ completed: 2026-06-15
 
 ## Files Created/Modified
 
-- `/Users/myankelev/Code/random/cipher-box/crates/fuse/src/lib.rs` — conditional use imports for `publish_file_metadata`; `folder_key_cache` in `replay_for_vault`; new `resolve_folder_key_cached` wrapper; updated signatures for `replay_mkdir_entry` and `replay_upload_entry`; inline publish block removed from `replay_upload_entry`; T-45-07 extended
+- `crates/fuse/src/lib.rs` — conditional use imports for `publish_file_metadata`; `folder_key_cache` in `replay_for_vault`; new `resolve_folder_key_cached` wrapper; updated signatures for `replay_mkdir_entry` and `replay_upload_entry`; inline publish block removed from `replay_upload_entry`; T-45-07 extended
 
 ## Decisions Made
 

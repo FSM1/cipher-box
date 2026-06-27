@@ -127,7 +127,7 @@ NOTE: The default opacity on MatrixBackground changes from 0.25 to 0.4. Both App
 </action>
 <verify>
 
-1. `cd /Users/michael/Code/cipher-box && pnpm --filter web build` compiles without errors
+1. `cd . && pnpm --filter web build` compiles without errors
 2. Visual check: header, sidebar, footer, and main area show green matrix rain bleeding through their semi-transparent backgrounds
    </verify>
    <done>
@@ -194,7 +194,7 @@ IMPORTANT: The MatrixBackground component creates a new canvas with its own anim
 </action>
 <verify>
 
-1. `cd /Users/michael/Code/cipher-box && pnpm --filter web build` compiles without errors
+1. `cd . && pnpm --filter web build` compiles without errors
 2. Open any modal (e.g., upload modal, settings) -- backdrop shows subtle green matrix rain behind the modal container
 3. Close modal -- no console errors, no lingering animation frames
 4. Modal content text remains fully readable
