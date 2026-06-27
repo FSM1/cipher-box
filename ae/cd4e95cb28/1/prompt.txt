@@ -1,0 +1,80 @@
+/gsd:execute-phase 59
+
+---
+
+ahhh come on now
+
+---
+
+ok great please run that query
+
+---
+
+<task-notification>
+<task-id>aec1d42b01f0a3ee8</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/f39cbb5d-53e0-4021-af0b-4b7371474c03/tasks/aec1d42b01f0a3ee8.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 59-03 of phase 59" came to rest</summary>
+<note>A task-notification fires each time this agent comes to rest with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 59-03
+**Tasks:** 2/2
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.planning/phases/59-fuse-ipns-verify-publish-hardening-and-cleanup/59-03-SUMMARY.md`
+
+**Commits:**
+
+- `9cb5feb6f`: refactor(59-03): D.1/D.2/D.3 dead-code cleanup + E.2 is_ipns_not_found test fix
+- `d391fa290`: refactor(59-03): E.1/E.4 remove dead signature_verified field + strip unused vector fixture fields
+- `cd664c073`: docs(59-03): complete dead-code cleanup and test-quality plan — SUMMARY, STATE, ROADMAP
+
+**Duration:** ~12 minutes
+
+**What landed:**
+
+- D.1: `publish_with_cas_retry` dead `if journal_entry.is_some() { Err } else { Err }` collapsed to one `Err`; param retained with D-01a TODO
+- D.2: `record`/`marshaled`/`record_b64` moved inside `if is_first_publish` (sole consumer); `ipns_key_arr`/`new_seq`/`value` kept outside for both branches
+- D.3: `current_seq_for_cas` binding + `let _ =` discard + 14-line NOTE replaced by direct `if current_seq.is_none()` guard; exact error text preserved
+- E.1: `VerifiedResolve::signature_verified` field removed from struct, both write sites (`verify.rs:132`, `events.rs:104`), and 2 unit test assertions
+- E.2: `is_ipns_not_found` test now uses `"record not found"` and adds negative `"404"`-alone assertion
+- E.4: `public_key`/`private_key` removed from generator interface + all 8 vector push sites; unused `bytesToHex` helper removed; `tests/vectors/ipns/verify.json` regenerated; cross-language vector test green
+
+96 tests pass (95 unit + 1 vector); 0 fail; clippy clean on `crates/fuse`.</result>
+<usage><subagent_tokens>113143</subagent_tokens><tool_uses>83</tool_uses><duration_ms>536027</duration_ms></usage>
+</task-notification>
+
+---
+
+while that plan executes could you take a look at the database to figure out why my user on staging has 441MB of quota used, while both the vault and bin are empty. the users pubkey is 0x046d97e4bdb4e5f98f86bc9ff0367e1e427e18a28fba558827b01b8133cacdd55f769aebb29e4941e5e70fd0d1303941af252f0411e7c45cabfd2f10697fe02a1b
+
+---
+
+definitely capture the bug todo and do so on this branch, to avoid any unnecessary churn on the current execution.
+
+---
+
+<task-notification>
+<task-id>a4b5402f241dedb41</task-id>
+<tool-use-id>toolu_01MwWwwTKm4Y8wbJ4aLH4KmB</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/f39cbb5d-53e0-4021-af0b-4b7371474c03/tasks/a4b5402f241dedb41.output</output-file>
+<status>completed</status>
+<summary>Agent "Deep code review of phase 59" came to rest</summary>
+<note>A task-notification fires each time this agent comes to rest with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Review complete. Wrote `/Users/myankelev/Code/random/cipher-box/.planning/phases/59-fuse-ipns-verify-publish-hardening-and-cleanup/59-REVIEW.md`.
+
+## Findings: 2 BLOCKER, 2 WARNING, 1 INFO
+
+**CR-01 (BLOCKER) — Finding F breaks resolution of records the live app writes.** The phase removed the resolve-side skew allowance (`embedded_seq == resp_seq || (resp_seq == 1 &amp;&amp; embedded_seq == 0)` → strict `embedded_seq == resp_seq`) on the premise that "all clients now embed 1 on first publish." That premise is false. The live FUSE mkdir folder-creation path still embeds `0` on both platforms and was untouched this phase:
+- `crates/fuse/src/write_ops/implementation/mkdir.rs:174` — `create_ipns_record(..., 0, ...)`
+- `crates/fuse/src/platform/windows/write_ops.rs:202` — `create_ipns_record(..., 0, ...)`
+
+The API stores DB `sequenceNumber = '1'` for any first publish regardless of embedded value (`apps/api/src/ipns/ipns.service.ts:280-285,362`), persisting the client's record embedding 0. On resolve, `resp_seq=1` vs `embedded_seq=0` → `bind_verified` now returns `VerifyError::Invalid`. In `replay.rs::resolve_folder_key` that's hard fail-closed, aborting folder-key BFS for any vault with a freshly-created subfolder. The TS SDK resolve side (`packages/sdk-core/src/ipns/index.ts:285-287`) still has the allowance, confirming the cross-layer contract was not actually unified — only the Rust side was tightened. The phase context flagged this exact existing-record risk.
+
+**CR-02 (BLOCKER) — generator desynced from fixture.** `scripts/gen-ipns-verify-vectors.ts` still emits case-8 `expected_result: 'valid'` (line 366) and its sanity array still expects `'valid'` (line 386), but the committed `tests/vectors/ipns/verify.json` and the Rust test expect `'invalid'`. Regenerating vectors via the documented command overwrites the new expectation and breaks `ipns_verify_cross_language`. The JSON was hand-edited (description text the generator doesn't produce), so generator and fixture now disagree on ground truth.
+
+**Findings A, B, C, D, E are implemented correctly** — error propagation in `fs.rs` surfaces via `map_err(...)?` with no key logging; `Legacy { cid, sequence_number }` is consumed at all five callers with no second resolve; `signature_verified` is fully removed (no remaining refs); the removed `current_seq_for_cas`/pre-built-record bindings were genuinely dead.
+
+WR-01/WR-02 are stale-after-edit comments that misdescribe the new sequence semantics (and mask the CR-01 inconsistency); IN-01 is a pre-existing not-found predicate divergence.</result>
+<usage><subagent_tokens>157718</subagent_tokens><tool_uses>26</tool_uses><duration_ms>187731</duration_ms></usage>
+</task-notification>

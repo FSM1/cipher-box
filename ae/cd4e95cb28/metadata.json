@@ -3,21 +3,29 @@
   "checkpoint_id": "aecd4e95cb28",
   "strategy": "manual-commit",
   "branch": "docs/v2.0-metadata-and-sharing-refactor",
-  "checkpoints_count": 1,
-  "files_touched": null,
+  "checkpoints_count": 3,
+  "files_touched": [
+    ".planning/todos/pending/2026-06-23-bin-delete-and-empty-bin-leak-content-and-version-cid-pins.md"
+  ],
   "sessions": [
     {
       "metadata": "/ae/cd4e95cb28/0/metadata.json",
       "transcript": "/ae/cd4e95cb28/0/full.jsonl",
       "content_hash": "/ae/cd4e95cb28/0/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/ae/cd4e95cb28/1/metadata.json",
+      "transcript": "/ae/cd4e95cb28/1/full.jsonl",
+      "content_hash": "/ae/cd4e95cb28/1/content_hash.txt",
+      "prompt": "/ae/cd4e95cb28/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 42881,
-    "cache_creation_tokens": 221334,
-    "cache_read_tokens": 7174224,
-    "output_tokens": 58137,
-    "api_call_count": 41
+    "input_tokens": 66397,
+    "cache_creation_tokens": 948351,
+    "cache_read_tokens": 32769640,
+    "output_tokens": 248700,
+    "api_call_count": 140
   }
 }
