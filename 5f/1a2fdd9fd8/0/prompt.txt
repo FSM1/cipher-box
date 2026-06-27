@@ -1,0 +1,5 @@
+/gsd-update --reapply
+
+---
+
+should the path substitution not be relative instead of absolute? I dont really like the idea of keeping full paths in the codebase.
