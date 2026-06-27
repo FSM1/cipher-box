@@ -1,0 +1,63 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "e8164a5861c9",
+  "session_id": "daff5e88-c6c1-43a2-991c-c8a4c2a77666",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-27T00:22:09.705761Z",
+  "branch": "docs/v2.0-metadata-and-sharing-refactor",
+  "checkpoints_count": 0,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "fd2ab0acbf1d",
+  "checkpoint_transcript_start": 109,
+  "transcript_lines_at_start": 109,
+  "token_usage": {
+    "input_tokens": 1773,
+    "cache_creation_tokens": 32625,
+    "cache_read_tokens": 2376798,
+    "output_tokens": 24667,
+    "api_call_count": 13
+  },
+  "summary": {
+    "intent": "Run the GSD research and requirements-definition phases for the CipherBox v2.0 metadata-and-sharing refactor, producing ARCHITECTURE.md, PITFALLS.md, SUMMARY.md, and REQUIREMENTS.md.",
+    "outcome": "Both research agents completed with high confidence; SUMMARY.md was written manually after the synthesizer agent was blocked from writing files; 36 requirements across 8 categories were written to .planning/REQUIREMENTS.md and committed to the docs/v2.0-metadata-and-sharing-refactor branch.",
+    "learnings": {
+      "repo": [
+        "packages/core is the keystone package in the 8-layer build order; FUSE budgets a Windows CI round-trip.",
+        ".planning/research/ is gitignored, so stale v1.1 research files persisted unnoticed until manually inspected.",
+        "v1.1 requirements used per-domain REQ-ID prefixes; v2.0 uses fresh category prefixes (CRYPTO, NODE, READ, ROT, WRITE, TEE, DATA, TEST).",
+        "folder_ipns table has a public_key null-row footgun that must be addressed in the DATA phase (rename to ipns_records, drop public_key column).",
+        "AAD byte-drift between TS and Rust causes silent total decryption failure — TS↔Rust KAT is Phase 1's gate requirement."
+      ],
+      "code": [
+        {
+          "path": ".planning/REQUIREMENTS.md",
+          "finding": "36 requirements: CRYPTO(3), NODE(6), READ(5), ROT(7), WRITE(4), TEE(7), DATA(4), TEST(3). Critical risks: CRIT-1 fileKey mint bypass, HIGH-3 multi-rooted re-mint, HIGH-4 add-during-rotation silent data loss, M1 generation persistence."
+        },
+        {
+          "path": ".planning/research/SUMMARY.md",
+          "finding": "Written manually by the main agent after synthesizer subagent was blocked from file writes; serves as roadmapper input."
+        }
+      ],
+      "workflow": [
+        "Synthesizer subagents can be blocked from writing files — have the orchestrator write the output itself from the returned text rather than retrying the subagent.",
+        "Stale research files from prior milestones should be archived before spawning new researchers to avoid confusion about what is current.",
+        "The gsd phase helper had trouble with git signing in sandboxed contexts; direct git commands work as a fallback."
+      ]
+    },
+    "friction": [
+      "Synthesizer agent was blocked from writing SUMMARY.md, requiring the main agent to write it manually.",
+      "gsd git helper failed due to signing/sandbox restrictions; had to fall back to direct git commands for the commit.",
+      "agent-skills query returned empty output, requiring a separate inspection step to confirm the researcher agent carries its own prompt.",
+      "Stale v1.1 research files were present in .planning/research/ and had to be archived before v2.0 research could begin cleanly."
+    ],
+    "open_items": [
+      "Tier 3 capability layer and read-side TTL deferred to Future Requirements.",
+      "SEED-001 deferred to Future Requirements.",
+      "Three silent-revocation-bypass risks (CRIT-1 fileKey mint, M1 generation persistence, republisher seq-increment) and HIGH-4 add-during-rotation must be test-gated — not yet implemented.",
+      "folderTree/SDK desync risk identified in research but not yet addressed.",
+      "Windows CI gate for winfsp/desktop (TEST category) is a requirement but not yet wired up."
+    ]
+  }
+}
