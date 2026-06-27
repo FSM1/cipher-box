@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.48.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/web-v0.47.0...@cipherbox/web-v0.48.0) (2026-06-26)
+
+
+### Bug Fixes
+
+* **web:** embed sequence 1 on first BYO storage-config IPNS publish ([#571](https://github.com/FSM1/cipher-box/issues/571)) ([91c96eb](https://github.com/FSM1/cipher-box/commit/91c96eb50839292c47bff4eceaf9a0b681c8b5ac))
+
 ## [0.47.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/web-v0.46.0...@cipherbox/web-v0.47.0) (2026-06-25)
 
 
