@@ -9,7 +9,7 @@
  * subscriber errors are caught to prevent cascading failures.
  */
 
-import type { FolderChild } from '@cipherbox/core';
+import type { SealedChildRef } from '@cipherbox/core';
 import type { BinEntry } from '@cipherbox/core';
 
 /**
@@ -23,14 +23,14 @@ export type SdkEvent =
       type: 'folder:loaded';
       folderId: string;
       ipnsName: string;
-      children: FolderChild[];
+      children: SealedChildRef[];
       sequenceNumber: bigint;
     }
   | {
       type: 'folder:updated';
       folderId: string;
       ipnsName: string;
-      children: FolderChild[];
+      children: SealedChildRef[];
       sequenceNumber: bigint;
     }
   | { type: 'folder:deleted'; folderId: string }
@@ -38,7 +38,7 @@ export type SdkEvent =
       type: 'sharedFolder:updated';
       shareId: string;
       ipnsName: string;
-      children: FolderChild[];
+      children: SealedChildRef[];
       sequenceNumber: bigint;
     }
   | { type: 'file:uploaded'; folderId: string; fileName: string; cid: string }

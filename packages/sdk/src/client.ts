@@ -23,15 +23,9 @@ import {
   ipnsControllerUnenrollBatch,
   sharesControllerRevokeForItems,
 } from '@cipherbox/api-client';
-import { clearBytes, unwrapKey, hexToBytes } from '@cipherbox/crypto';
+import { clearBytes } from '@cipherbox/crypto';
 import pLimit from 'p-limit';
-import type {
-  FolderChild,
-  FolderEntry,
-  FilePointer,
-  BinEntry,
-  FileMetadata,
-} from '@cipherbox/core';
+import type { BinEntry, SealedChildRef } from '@cipherbox/core';
 import type { CipherBoxClientConfig, FolderState, SharedFolderState } from './types';
 import { SdkEventEmitter, type SdkEvent, type SdkEventHandler } from './events';
 import { FolderTree } from './state/folder-tree';
@@ -41,7 +35,6 @@ import * as binOps from './bin';
 import type { BinState } from './bin';
 import * as shareOps from './share';
 import type { SentShareInfo } from './share';
-import { reencryptFileMetadataForFolderChange } from './reencrypt';
 
 /** Maximum concurrent encrypt+pin operations for batch uploads. */
 const UPLOAD_CONCURRENCY = 3;
@@ -240,150 +233,25 @@ export class CipherBoxClient {
   }
 
   /**
-   * Extract IPNS names from a removed FolderChild (file or folder subtree).
+   * Extract IPNS names from a removed SealedChildRef (file or folder subtree).
    *
-   * For folder items, unwraps the folder's key from its encrypted form (present
-   * because the item came from its parent's decrypted metadata) and delegates to
-   * the async on-demand subtree collector (D-03).
+   * @stub phase 65 (bin re-link): SealedChildRef has no type discriminant; the
+   * phase-65 subtree walk will traverse Node children via the read-chain.
    */
-  private async collectRemovedItemIpnsNames(item: FolderChild): Promise<string[]> {
-    if (item.type === 'file') {
-      return [(item as FilePointer).fileMetaIpnsName];
-    } else if (item.type === 'folder') {
-      const entry = item as FolderEntry;
-      return this.collectFolderSubtree(entry.ipnsName, entry.folderKeyEncrypted);
-    }
-    return [];
+  private async collectRemovedItemIpnsNames(item: SealedChildRef): Promise<string[]> {
+    void item;
+    throw new Error('not implemented — phase 65 (bin re-link: subtree IPNS collect)');
   }
 
   /**
-   * Unwrap a folder's key and collect its full subtree of IPNS names.
+   * Extract IPNS names from a BinEntry (node ref and/or folder subtree).
    *
-   * Shared by the removed-item and bin-entry collectors. On unwrap or fetch
-   * failure, falls back to returning only the folder's own IPNS name so the
-   * caller never aborts on a single bad node.
-   */
-  private async collectFolderSubtree(
-    ipnsName: string,
-    folderKeyEncrypted: string
-  ): Promise<string[]> {
-    try {
-      const folderKey = await unwrapKey(
-        hexToBytes(folderKeyEncrypted),
-        this.internalVaultKeypair.privateKey
-      );
-      return await this.collectSubtreeIpnsNamesAsync(ipnsName, folderKey);
-    } catch {
-      // Key unwrap or subtree fetch failed — return only the folder's own IPNS name
-      return [ipnsName];
-    }
-  }
-
-  /**
-   * Extract IPNS names from a BinEntry (file pointer and/or folder subtree).
-   *
-   * For folder entries, unwraps the folder key from its encrypted form and
-   * delegates to the async on-demand subtree collector (D-03).
+   * @stub phase 65 (bin re-link): BinEntry.filePointer / .folderEntry removed;
+   * phase-65 implementation reads from BinEntry.nodeRef instead.
    */
   private async collectBinEntryIpnsNames(entry: BinEntry): Promise<string[]> {
-    const names: string[] = [];
-    if (entry.filePointer?.fileMetaIpnsName) {
-      names.push(entry.filePointer.fileMetaIpnsName);
-    }
-    if (entry.folderEntry?.ipnsName) {
-      names.push(
-        ...(await this.collectFolderSubtree(
-          entry.folderEntry.ipnsName,
-          entry.folderEntry.folderKeyEncrypted
-        ))
-      );
-    }
-    return names;
-  }
-
-  /**
-   * Recursively collect all IPNS names from a folder subtree via on-demand fetch+decrypt.
-   *
-   * Tries in-memory folderTree first; on a miss, calls sdkCore.loadFolderMetadata
-   * to fetch and decrypt the persisted child folder metadata from IPNS (D-03 locked
-   * — on-demand traversal, no reconciliation-job backstop). This ensures that deleting
-   * a folder whose subtree was never expanded in the current session still unenrolls
-   * every descendant IPNS record, closing the nested-IPNS-unenroll leak (HARD-01).
-   *
-   * INVARIANT: This method NEVER writes to this.folderTree. Fire-and-forget timing
-   * means writing fetched state back would cause the Zustand/SDK folderTree desync
-   * (stale-sequence 409 / resurrected deletes). Fetched metadata is local only.
-   *
-   * A null return from loadFolderMetadata (IPNS record not yet published) and any
-   * per-child fetch/unwrap failure are caught independently — one bad node cannot
-   * abort collection for its siblings (Pitfall 4 / constraint 5).
-   */
-  private async collectSubtreeIpnsNamesAsync(
-    folderIpnsName: string,
-    folderKey: Uint8Array,
-    acc: string[] = [],
-    visited: Set<string> = new Set()
-  ): Promise<string[]> {
-    // Cycle/repeat guard: folder metadata is client-supplied, decrypted,
-    // attacker-or-corruption-influenceable data. Without this, an A→B→A cycle (or
-    // a deep/wide adversarial tree) recurses until the stack overflows, and a
-    // DAG/diamond accumulates the same names repeatedly (CR-01 / IN-02). Mirrors
-    // the `visited` set in ensureFolderLoaded's DFS.
-    if (visited.has(folderIpnsName)) return acc;
-    visited.add(folderIpnsName);
-    acc.push(folderIpnsName);
-
-    // Try in-memory first — avoids an unnecessary IPNS fetch for loaded subtrees.
-    let children = this.folderTree.get(folderIpnsName)?.children;
-
-    if (!children) {
-      // On-demand fetch from IPNS — mirrors the ensureFolderLoaded DFS pattern.
-      try {
-        const result = await sdkCore.loadFolderMetadata({
-          ipnsName: folderIpnsName,
-          folderKey,
-          ctx: this.ctx,
-        });
-        // null means the IPNS record has not been published yet (Pitfall 3).
-        // The folder's own IPNS name is already in acc; skip recursion.
-        if (!result) return acc;
-        children = result.metadata.children;
-      } catch {
-        // Fetch/decrypt failure: log without key material and skip this node's children.
-        // The folder's own IPNS name is already in acc.
-        console.warn(
-          `[CipherBox] IPNS unenroll traversal: could not load metadata for ${folderIpnsName}, skipping children`
-        );
-        return acc;
-      }
-    }
-
-    for (const child of children) {
-      if (child.type === 'file') {
-        acc.push((child as FilePointer).fileMetaIpnsName);
-      } else if (child.type === 'folder') {
-        const entry = child as FolderEntry;
-        // Skip children already visited (cycle/diamond) before any fetch or unwrap.
-        if (visited.has(entry.ipnsName)) continue;
-        try {
-          // Unwrap this subfolder's key with the vault keypair (ECIES).
-          // Each child's failure is caught independently so siblings are still collected.
-          const childFolderKey = await unwrapKey(
-            hexToBytes(entry.folderKeyEncrypted),
-            this.internalVaultKeypair.privateKey
-          );
-          await this.collectSubtreeIpnsNamesAsync(entry.ipnsName, childFolderKey, acc, visited);
-        } catch {
-          // Unwrap or child fetch failure: collect the child's IPNS name at minimum
-          // and continue with siblings (constraint 5 — one bad child must not abort all).
-          if (!visited.has(entry.ipnsName)) {
-            visited.add(entry.ipnsName);
-            acc.push(entry.ipnsName);
-          }
-        }
-      }
-    }
-    return acc;
+    void entry;
+    throw new Error('not implemented — phase 65 (bin re-link: subtree IPNS collect)');
   }
 
   /**
@@ -458,7 +326,7 @@ export class CipherBoxClient {
     ipnsName: string,
     folderKey: Uint8Array,
     ipnsKeypair: { publicKey: Uint8Array; privateKey: Uint8Array },
-    children: FolderChild[],
+    children: SealedChildRef[],
     sequenceNumber: bigint
   ): void {
     // Defensive copy so destroy() -> folderTree.clear() doesn't zero caller buffers
@@ -544,7 +412,7 @@ export class CipherBoxClient {
         folderKey,
         ipnsKeypair,
         sequenceNumber: result.sequenceNumber,
-        children: result.metadata.children,
+        children: result.metadata.children ?? [],
         metadata: result.metadata,
         lastLoadedAt: Date.now(),
       };
@@ -555,7 +423,7 @@ export class CipherBoxClient {
         type: 'folder:loaded',
         folderId: ipnsName,
         ipnsName,
-        children: result.metadata.children,
+        children: result.metadata.children ?? [],
         sequenceNumber: result.sequenceNumber,
       });
 
@@ -585,76 +453,15 @@ export class CipherBoxClient {
    * @returns The loaded FolderState, or null if it cannot be bootstrapped
    * @internal
    */
+  /**
+   * @stub phase 63 (navigation/read fan-out): SealedChildRef has no
+   * folderKeyEncrypted / ipnsPrivateKeyEncrypted fields; the phase-63 DFS will
+   * unseal the child readKey from SealedChildRef.readKeySealed using the parent
+   * Node's readKey chain to derive per-folder keys.
+   */
   async ensureFolderLoaded(targetIpnsName: string): Promise<FolderState | null> {
-    const existing = this.folderTree.get(targetIpnsName);
-    if (existing) return existing;
-
-    // Cannot self-bootstrap without the root IPNS signing key.
-    if (!this.internalRootIpnsKeypair) return null;
-
-    // 1. Ensure root is loaded. Root is special: it has no parent to unwrap its
-    //    keys from, so they come from config (rootFolderKey + rootIpnsKeypair).
-    const rootIpnsName = this.config.rootIpnsName;
-    const root =
-      this.folderTree.get(rootIpnsName) ??
-      (await this.loadFolder(
-        rootIpnsName,
-        this.internalRootFolderKey,
-        this.internalRootIpnsKeypair
-      ));
-    if (!root) return null;
-    if (rootIpnsName === targetIpnsName) return root;
-
-    // 2. DFS from root, unwrapping child keys and loading metadata until the
-    //    target is found. `visited` guards against repeats and pathological
-    //    cycles in folder metadata.
-    const visited = new Set<string>([rootIpnsName]);
-    const stack: FolderState[] = [root];
-    while (stack.length > 0) {
-      const current = stack.pop() as FolderState;
-      for (const child of current.children) {
-        // type === 'folder' narrows child to FolderEntry (discriminated union).
-        if (child.type !== 'folder') continue;
-        if (visited.has(child.ipnsName)) continue;
-        visited.add(child.ipnsName);
-
-        let childState = this.folderTree.get(child.ipnsName) ?? null;
-        if (!childState) {
-          try {
-            // Unwrap this subfolder's keys with the vault keypair (ECIES), then
-            // load its metadata. loadFolder adopts independent clones into the
-            // folderTree (zeroed on destroy()); the transient unwrapped buffers
-            // are left to GC, matching the existing loadFolder/registerFolder
-            // paths which likewise don't eagerly zero their unwrapped inputs.
-            const folderKey = await unwrapKey(
-              hexToBytes(child.folderKeyEncrypted),
-              this.internalVaultKeypair.privateKey
-            );
-            const ipnsPrivateKey = await unwrapKey(
-              hexToBytes(child.ipnsPrivateKeyEncrypted),
-              this.internalVaultKeypair.privateKey
-            );
-            childState = await this.loadFolder(child.ipnsName, folderKey, {
-              // Public key is derived from the private key at signing time.
-              publicKey: new Uint8Array(0),
-              privateKey: ipnsPrivateKey,
-            });
-          } catch {
-            // A single corrupt/undecryptable sibling entry must not abort the
-            // whole bootstrap — skip it so unrelated targets stay reachable.
-            // (Generic catch: unwrapKey/hexToBytes throw key-free errors.)
-            continue;
-          }
-        }
-        // Could not resolve this subfolder (no IPNS record) — skip it.
-        if (!childState) continue;
-        if (child.ipnsName === targetIpnsName) return childState;
-        stack.push(childState);
-      }
-    }
-
-    // Target not found anywhere under root.
-    return null;
+    void targetIpnsName;
+    throw new Error('not implemented — phase 63 (navigation/read fan-out)');
   }
 
   /**
@@ -685,96 +492,19 @@ export class CipherBoxClient {
    * @param name - Name for the new subfolder
    * @returns Created folder's UUID, IPNS name, folder key, and IPNS private key
    */
+  /**
+   * @stub phase 63 (navigation/read fan-out): createSubfolder now returns
+   * { node: Node; ... } not { folder: FolderEntry; ... }. Phase 63 will seal
+   * the new Node under the parent's write-body and emit a SealedChildRef for
+   * the parent's updated children list.
+   */
   async createFolder(
     parentIpnsName: string,
     name: string
   ): Promise<{ id: string; ipnsName: string; folderKey: Uint8Array; ipnsPrivateKey: Uint8Array }> {
-    return this.withOperation('createFolder', async () => {
-      const parent = await this.requireFolder(parentIpnsName, 'Parent folder');
-
-      // 1. Check for duplicate name before allocating keys
-      if (parent.children.some((child) => child.name === name)) {
-        throw new Error('An item with this name already exists');
-      }
-
-      // 2. Create subfolder (generates keys, wraps with user public key)
-      const { folder, ipnsPrivateKey, folderKey, encryptedIpnsPrivateKey, keyEpoch } =
-        await sdkCore.createSubfolder({
-          name,
-          userPublicKey: this.config.vaultKeypair.publicKey,
-          teeKeys: this.config.teeKeys,
-        });
-
-      try {
-        // 3. Add folder entry to parent's children
-        const baseChildren = [...parent.children];
-        const updatedChildren: FolderChild[] = [...parent.children, folder];
-
-        // 4. Update parent metadata and publish
-        const { newSequenceNumber, publishedChildren } =
-          await sdkCore.updateFolderMetadataAndPublish({
-            children: updatedChildren,
-            baseChildren,
-            folderKey: parent.folderKey,
-            ipnsPrivateKey: parent.ipnsKeypair.privateKey,
-            ipnsName: parentIpnsName,
-            sequenceNumber: parent.sequenceNumber,
-            ctx: this.ctx,
-            encryptedIpnsPrivateKey: encryptedIpnsPrivateKey,
-            keyEpoch,
-          });
-
-        // 5. Update parent state — adopt merged published set (CR-01)
-        parent.children = publishedChildren;
-        parent.sequenceNumber = newSequenceNumber;
-        parent.lastLoadedAt = Date.now();
-        this.folderTree.set(parentIpnsName, parent);
-
-        // 6. Publish empty metadata for the new subfolder
-        await sdkCore.updateFolderMetadataAndPublish({
-          children: [],
-          baseChildren: [],
-          folderKey,
-          ipnsPrivateKey,
-          ipnsName: folder.ipnsName,
-          sequenceNumber: 0n,
-          ctx: this.ctx,
-          encryptedIpnsPrivateKey,
-          keyEpoch,
-        });
-
-        // 7. Emit parent folder updated event
-        this.emitter.emit({
-          type: 'folder:updated',
-          folderId: parentIpnsName,
-          ipnsName: parentIpnsName,
-          children: publishedChildren,
-          sequenceNumber: newSequenceNumber,
-        });
-
-        // 8. Re-wrap subfolder key for share recipients (non-blocking)
-        if (this.config.shareCallbacks) {
-          // Copy folderKey for the detached task — caller may wipe the returned buffer
-          const folderKeyCopy = new Uint8Array(folderKey);
-          this.reWrapNewItems(parentIpnsName, [
-            { keyType: 'folder', itemId: folder.id, plaintextKey: folderKeyCopy },
-          ])
-            .catch((err) => {
-              console.warn('[SDK] Post-createFolder re-wrapping failed:', err);
-            })
-            .finally(() => {
-              clearBytes(folderKeyCopy);
-            });
-        }
-
-        return { id: folder.id, ipnsName: folder.ipnsName, folderKey, ipnsPrivateKey };
-      } catch (err) {
-        // Clear plaintext keys on failure — they won't reach the caller
-        clearBytes(folderKey);
-        clearBytes(ipnsPrivateKey);
-        throw err;
-      }
-    });
+    void parentIpnsName;
+    void name;
+    throw new Error('not implemented — phase 63 (create subfolder node)');
   }
 
   /**
@@ -843,108 +573,17 @@ export class CipherBoxClient {
    * @param destIpnsName - IPNS name of the destination folder
    * @param childId - ID of the child to move
    */
+  /**
+   * @stub phase 63 (navigation) / phase 65 (move re-encrypt): moveItem in sdk-core
+   * returns never; movedItem.type no longer exists on SealedChildRef; the phase-63
+   * implementation will unseal the child readKey from SealedChildRef.readKeySealed
+   * and re-seal it under the destination parent's readKey chain.
+   */
   async moveItem(sourceIpnsName: string, destIpnsName: string, childId: string): Promise<void> {
-    return this.withOperation('moveItem', async () => {
-      const source = await this.requireFolder(sourceIpnsName, 'Source folder');
-      const dest = await this.requireFolder(destIpnsName, 'Destination folder');
-
-      // 1. Compute updated children for both folders (pure operation)
-      const baseDestChildren = [...dest.children];
-      const baseSourceChildren = [...source.children];
-      const { updatedSourceChildren, updatedDestChildren, movedItem } = sdkCore.moveItem({
-        sourceChildren: source.children,
-        destChildren: dest.children,
-        childId,
-      });
-
-      // 2. Publish destination first (add-before-remove for crash safety): the
-      //    file is listed in BOTH folders during the transition, never orphaned.
-      const destResult = await sdkCore.updateFolderMetadataAndPublish({
-        children: updatedDestChildren,
-        baseChildren: baseDestChildren,
-        folderKey: dest.folderKey,
-        ipnsPrivateKey: dest.ipnsKeypair.privateKey,
-        ipnsName: destIpnsName,
-        sequenceNumber: dest.sequenceNumber,
-        ctx: this.ctx,
-      });
-
-      // 3. If the moved item is a file, re-encrypt its FileMetadata IPNS record
-      //    from source.folderKey to dest.folderKey. FileMetadata is AES-256-GCM
-      //    encrypted with the parent folder key; the decrypt path uses the key of
-      //    whichever folder lists the pointer.
-      //
-      //    Done AFTER the destination publish, not before: the metadata is only
-      //    re-keyed once the destination is durably visible, so at every
-      //    intermediate failure the file stays readable from a folder that still
-      //    lists it under the matching key — from the source before this step,
-      //    from the destination after it — never readable from neither. (If it
-      //    ran first, a failed destination publish would strand the file under the
-      //    destination key while only the source still pointed at it.)
-      //
-      //    A finally guards the key: updateFileMetadata (sdk-core) zeroes it on
-      //    its own path (T-47-01), but the resolve could throw first and leave
-      //    the unwrapped key in memory. The re-key is idempotent (see
-      //    reencryptFileMetadataForFolderChange): a retry after a partial failure
-      //    that already re-keyed the record completes instead of throwing.
-      if (movedItem.type === 'file') {
-        const filePointer = movedItem as FilePointer;
-        if (!filePointer.ipnsPrivateKeyEncrypted) {
-          throw new Error('Cannot re-encrypt file metadata on move: missing file IPNS key');
-        }
-        const fileIpnsPrivateKey = await unwrapKey(
-          hexToBytes(filePointer.ipnsPrivateKeyEncrypted),
-          this.config.vaultKeypair.privateKey
-        );
-        try {
-          await reencryptFileMetadataForFolderChange({
-            fileMetaIpnsName: filePointer.fileMetaIpnsName,
-            fileIpnsPrivateKey,
-            sourceFolderKey: source.folderKey,
-            destFolderKey: dest.folderKey,
-            ctx: this.ctx,
-          });
-        } finally {
-          clearBytes(fileIpnsPrivateKey);
-        }
-      }
-
-      // 4. Publish source (remove). The move is now complete: the pointer lives
-      //    only in the destination and its metadata is under the destination key.
-      const sourceResult = await sdkCore.updateFolderMetadataAndPublish({
-        children: updatedSourceChildren,
-        baseChildren: baseSourceChildren,
-        folderKey: source.folderKey,
-        ipnsPrivateKey: source.ipnsKeypair.privateKey,
-        ipnsName: sourceIpnsName,
-        sequenceNumber: source.sequenceNumber,
-        ctx: this.ctx,
-      });
-
-      // 5. Update internal state — adopt merged published sets (CR-01)
-      source.children = sourceResult.publishedChildren;
-      source.sequenceNumber = sourceResult.newSequenceNumber;
-      dest.children = destResult.publishedChildren;
-      dest.sequenceNumber = destResult.newSequenceNumber;
-      this.folderTree.set(sourceIpnsName, source);
-      this.folderTree.set(destIpnsName, dest);
-
-      // 6. Emit events for both folders
-      this.emitter.emit({
-        type: 'folder:updated',
-        folderId: sourceIpnsName,
-        ipnsName: sourceIpnsName,
-        children: sourceResult.publishedChildren,
-        sequenceNumber: sourceResult.newSequenceNumber,
-      });
-      this.emitter.emit({
-        type: 'folder:updated',
-        folderId: destIpnsName,
-        ipnsName: destIpnsName,
-        children: destResult.publishedChildren,
-        sequenceNumber: destResult.newSequenceNumber,
-      });
-    });
+    void sourceIpnsName;
+    void destIpnsName;
+    void childId;
+    throw new Error('not implemented — phase 63 (move item / re-seal child readKey)');
   }
 
   /**
@@ -957,7 +596,10 @@ export class CipherBoxClient {
    * @param childId - ID of the child to delete
    * @returns The removed child entry
    */
-  async deleteItem(folderIpnsName: string, childId: string): Promise<{ removedItem: FolderChild }> {
+  async deleteItem(
+    folderIpnsName: string,
+    childId: string
+  ): Promise<{ removedItem: SealedChildRef }> {
     return this.withOperation('deleteItem', async () => {
       const folder = await this.requireFolder(folderIpnsName);
 
@@ -1478,86 +1120,27 @@ export class CipherBoxClient {
    * @param fileData - Pre-resolved key + metadata + content updates
    * @returns Pruned version CIDs the caller should unpin
    */
+  /**
+   * @stub phase 65 (write-chain): FileMetadata replaced by NodeContent sealed in
+   * the file Node's write-body; the file's IPNS record contains a sealed Node,
+   * not a standalone FileMetadata blob. updateFileMetadata is stubbed in sdk-core.
+   */
   async replaceFile(
     parentIpnsName: string,
     fileId: string,
     fileData: {
       fileIpnsPrivateKey: Uint8Array;
-      currentMetadata: FileMetadata;
-      updates: Partial<
-        Pick<FileMetadata, 'cid' | 'fileKeyEncrypted' | 'fileIv' | 'size' | 'encryptionMode'>
-      >;
+      currentMetadata: unknown;
+      updates: unknown;
       createVersion: boolean;
       maxVersionsPerFile?: number;
-      /** Hex-encoded re-wrapped IPNS key to persist on the FilePointer (lazy migration). */
       migratedIpnsPrivateKeyEncrypted?: string;
     }
   ): Promise<{ prunedCids: string[] }> {
-    return this.withOperation('replaceFile', async () => {
-      const folder = await this.requireFolder(parentIpnsName);
-
-      // 1. Find the FilePointer's metadata IPNS name from authoritative state.
-      const filePointer = folder.children.find(
-        (c): c is FilePointer => c.type === 'file' && c.id === fileId
-      );
-      if (!filePointer) throw new Error('File not found');
-
-      // 2. Publish file metadata (CAS internally). updateFileMetadata zeroes the
-      //    fileIpnsPrivateKey in its own finally (T-47-01) — do NOT zero it here.
-      const { prunedCids } = await sdkCore.updateFileMetadata({
-        fileIpnsPrivateKey: fileData.fileIpnsPrivateKey,
-        fileMetaIpnsName: filePointer.fileMetaIpnsName,
-        folderKey: folder.folderKey,
-        currentMetadata: fileData.currentMetadata,
-        updates: fileData.updates,
-        createVersion: fileData.createVersion,
-        maxVersionsPerFile: fileData.maxVersionsPerFile,
-        ctx: this.ctx,
-      });
-
-      // 3. Touch the folder so other clients (e.g. FUSE mount) re-resolve the file.
-      const baseChildren = [...folder.children];
-      const nextChildren = folder.children.map((child) =>
-        child.type === 'file' && child.id === fileId
-          ? {
-              ...child,
-              modifiedAt: Date.now(),
-              ...(fileData.migratedIpnsPrivateKeyEncrypted
-                ? { ipnsPrivateKeyEncrypted: fileData.migratedIpnsPrivateKeyEncrypted }
-                : {}),
-            }
-          : child
-      );
-
-      const { newSequenceNumber, publishedChildren } = await sdkCore.updateFolderMetadataAndPublish(
-        {
-          children: nextChildren,
-          baseChildren,
-          folderKey: folder.folderKey,
-          ipnsPrivateKey: folder.ipnsKeypair.privateKey,
-          ipnsName: parentIpnsName,
-          sequenceNumber: folder.sequenceNumber,
-          ctx: this.ctx,
-        }
-      );
-
-      // 4. Adopt the merged published set (CR-01).
-      folder.children = publishedChildren;
-      folder.sequenceNumber = newSequenceNumber;
-      folder.lastLoadedAt = Date.now();
-      this.folderTree.set(parentIpnsName, folder);
-
-      // 5. Emit folder:updated.
-      this.emitter.emit({
-        type: 'folder:updated',
-        folderId: parentIpnsName,
-        ipnsName: parentIpnsName,
-        children: publishedChildren,
-        sequenceNumber: newSequenceNumber,
-      });
-
-      return { prunedCids };
-    });
+    void parentIpnsName;
+    void fileId;
+    void fileData;
+    throw new Error('not implemented — phase 65 (write-chain: replaceFile)');
   }
 
   /**
@@ -1587,65 +1170,29 @@ export class CipherBoxClient {
    * @param params - Pre-resolved key + metadata + restored content updates
    * @returns Pruned version CIDs the caller should unpin
    */
+  /**
+   * @stub phase 65 (write-chain): VersionEntry replaces FileMetadata.versions[];
+   * version restore will unseal a VersionEntry from NodeContent and publish an
+   * updated Node via the write-chain. updateFileMetadata is stubbed in sdk-core.
+   */
   async restoreFileVersion(
     parentIpnsName: string,
     fileId: string,
     versionIndex: number,
     params: {
       fileIpnsPrivateKey: Uint8Array;
-      currentMetadata: FileMetadata;
-      updates: Partial<
-        Pick<FileMetadata, 'cid' | 'fileKeyEncrypted' | 'fileIv' | 'size' | 'encryptionMode'>
-      >;
+      currentMetadata: unknown;
+      updates: unknown;
       createVersion?: boolean;
       maxVersionsPerFile?: number;
-      /** Hex-encoded re-wrapped IPNS key to persist on the FilePointer (lazy migration). */
       migratedIpnsPrivateKeyEncrypted?: string;
     }
   ): Promise<{ prunedCids: string[] }> {
+    void parentIpnsName;
+    void fileId;
     void versionIndex;
-    return this.withOperation('restoreFileVersion', async () => {
-      const folder = await this.requireFolder(parentIpnsName);
-
-      const filePointer = folder.children.find(
-        (c): c is FilePointer => c.type === 'file' && c.id === fileId
-      );
-      if (!filePointer) throw new Error('File not found');
-
-      // 1. Publish file metadata (CAS internally). updateFileMetadata zeroes the
-      //    fileIpnsPrivateKey in its own finally (T-47-01) — do NOT zero it here.
-      const { prunedCids } = await sdkCore.updateFileMetadata({
-        fileIpnsPrivateKey: params.fileIpnsPrivateKey,
-        fileMetaIpnsName: filePointer.fileMetaIpnsName,
-        folderKey: folder.folderKey,
-        currentMetadata: params.currentMetadata,
-        updates: params.updates,
-        createVersion: params.createVersion ?? false,
-        maxVersionsPerFile: params.maxVersionsPerFile,
-        ctx: this.ctx,
-      });
-
-      // 2. Conditional folder publish for lazy IPNS-key migration only.
-      await this.maybePublishKeyMigration(
-        folder,
-        parentIpnsName,
-        fileId,
-        params.migratedIpnsPrivateKeyEncrypted
-      );
-
-      // 3. Emit folder:updated from the (possibly advanced) folderTree snapshot.
-      folder.lastLoadedAt = Date.now();
-      this.folderTree.set(parentIpnsName, folder);
-      this.emitter.emit({
-        type: 'folder:updated',
-        folderId: parentIpnsName,
-        ipnsName: parentIpnsName,
-        children: folder.children,
-        sequenceNumber: folder.sequenceNumber,
-      });
-
-      return { prunedCids };
-    });
+    void params;
+    throw new Error('not implemented — phase 65 (write-chain: restoreFileVersion)');
   }
 
   /**
@@ -1669,69 +1216,29 @@ export class CipherBoxClient {
    * @returns The deleted version's `deletedCid` plus any `prunedCids` produced by a
    *   409-conflict merge round inside `updateFileMetadata` — the caller must unpin both.
    */
+  /**
+   * @stub phase 65 (write-chain): VersionEntry replaces FileMetadata.versions[];
+   * version delete will remove a VersionEntry from NodeContent and publish an
+   * updated Node via the write-chain. updateFileMetadata is stubbed in sdk-core.
+   */
   async deleteFileVersion(
     parentIpnsName: string,
     fileId: string,
     versionIndex: number,
     params: {
       fileIpnsPrivateKey: Uint8Array;
-      currentMetadata: FileMetadata;
-      updates: Partial<
-        Pick<FileMetadata, 'cid' | 'fileKeyEncrypted' | 'fileIv' | 'size' | 'encryptionMode'>
-      >;
+      currentMetadata: unknown;
+      updates: unknown;
       deletedCid?: string;
       maxVersionsPerFile?: number;
-      /** Hex-encoded re-wrapped IPNS key to persist on the FilePointer (lazy migration). */
       migratedIpnsPrivateKeyEncrypted?: string;
     }
   ): Promise<{ deletedCid?: string; prunedCids: string[] }> {
+    void parentIpnsName;
+    void fileId;
     void versionIndex;
-    return this.withOperation('deleteFileVersion', async () => {
-      const folder = await this.requireFolder(parentIpnsName);
-
-      const filePointer = folder.children.find(
-        (c): c is FilePointer => c.type === 'file' && c.id === fileId
-      );
-      if (!filePointer) throw new Error('File not found');
-
-      // 1. Publish file metadata (CAS internally). updateFileMetadata zeroes the
-      //    fileIpnsPrivateKey in its own finally (T-47-01) — do NOT zero it here.
-      //    Capture prunedCids: deleting a version never caps the history (count
-      //    decreases), but a 409-conflict merge round can re-add versions past the
-      //    cap, and those CIDs must be unpinned by the caller (matches replaceFile /
-      //    restoreFileVersion).
-      const { prunedCids } = await sdkCore.updateFileMetadata({
-        fileIpnsPrivateKey: params.fileIpnsPrivateKey,
-        fileMetaIpnsName: filePointer.fileMetaIpnsName,
-        folderKey: folder.folderKey,
-        currentMetadata: params.currentMetadata,
-        updates: params.updates,
-        createVersion: false,
-        maxVersionsPerFile: params.maxVersionsPerFile,
-        ctx: this.ctx,
-      });
-
-      // 2. Conditional folder publish for lazy IPNS-key migration only.
-      await this.maybePublishKeyMigration(
-        folder,
-        parentIpnsName,
-        fileId,
-        params.migratedIpnsPrivateKeyEncrypted
-      );
-
-      // 3. Emit folder:updated from the (possibly advanced) folderTree snapshot.
-      folder.lastLoadedAt = Date.now();
-      this.folderTree.set(parentIpnsName, folder);
-      this.emitter.emit({
-        type: 'folder:updated',
-        folderId: parentIpnsName,
-        ipnsName: parentIpnsName,
-        children: folder.children,
-        sequenceNumber: folder.sequenceNumber,
-      });
-
-      return { deletedCid: params.deletedCid, prunedCids };
-    });
+    void params;
+    throw new Error('not implemented — phase 65 (write-chain: deleteFileVersion)');
   }
 
   /**
@@ -1744,38 +1251,6 @@ export class CipherBoxClient {
    * no migration is needed — the file-only publish does not advance the folder
    * sequence. Mutates `folder` in place; callers persist it via folderTree.set.
    */
-  private async maybePublishKeyMigration(
-    folder: FolderState,
-    parentIpnsName: string,
-    fileId: string,
-    migratedIpnsPrivateKeyEncrypted?: string
-  ): Promise<void> {
-    if (!migratedIpnsPrivateKeyEncrypted) return;
-
-    const baseChildren = [...folder.children];
-    const nextChildren = folder.children.map((child) =>
-      child.type === 'file' && child.id === fileId
-        ? {
-            ...child,
-            modifiedAt: Date.now(),
-            ipnsPrivateKeyEncrypted: migratedIpnsPrivateKeyEncrypted,
-          }
-        : child
-    );
-
-    const { newSequenceNumber, publishedChildren } = await sdkCore.updateFolderMetadataAndPublish({
-      children: nextChildren,
-      baseChildren,
-      folderKey: folder.folderKey,
-      ipnsPrivateKey: folder.ipnsKeypair.privateKey,
-      ipnsName: parentIpnsName,
-      sequenceNumber: folder.sequenceNumber,
-      ctx: this.ctx,
-    });
-
-    folder.children = publishedChildren;
-    folder.sequenceNumber = newSequenceNumber;
-  }
 
   /**
    * Download a file using its per-file IPNS metadata.
@@ -1789,29 +1264,21 @@ export class CipherBoxClient {
    * @param onProgress - Optional download progress callback
    * @returns Decrypted file content
    */
+  /**
+   * @stub phase 65 (write-chain): resolveFileMetadata returns { metadata: unknown };
+   * the file's content-encryption fields now live in NodeContent inside the sealed
+   * Node, not in a standalone FileMetadata IPNS record. Phase 65 will unseal
+   * NodeContent from the file's Node and call downloadAndDecrypt with those fields.
+   */
   async downloadFromIpns(
     fileMetaIpnsName: string,
     folderKey: Uint8Array,
     onProgress?: DownloadProgressCallback
   ): Promise<Uint8Array> {
-    return this.withOperation('downloadFromIpns', async () => {
-      // 1. Resolve per-file IPNS to get FileMetadata
-      const resolved = await sdkCore.resolveFileMetadata(fileMetaIpnsName, folderKey, this.ctx);
-
-      // 2. Download and decrypt file content
-      const plaintext = await sdkCore.downloadAndDecrypt({
-        cid: resolved.metadata.cid,
-        fileKeyEncrypted: resolved.metadata.fileKeyEncrypted,
-        fileIv: resolved.metadata.fileIv,
-        userPrivateKey: this.config.vaultKeypair.privateKey,
-        encryptionMode: resolved.metadata.encryptionMode,
-        ctx: this.ctx,
-        onProgress,
-      });
-
-      this.emitter.emit({ type: 'file:downloaded', cid: resolved.metadata.cid });
-      return plaintext;
-    });
+    void fileMetaIpnsName;
+    void folderKey;
+    void onProgress;
+    throw new Error('not implemented — phase 65 (write-chain: downloadFromIpns)');
   }
 
   /**
@@ -2221,7 +1688,7 @@ export class CipherBoxClient {
    */
   private adoptSharedFolderResult(
     shareId: string,
-    result: { publishedChildren: FolderChild[]; newSequenceNumber: bigint }
+    result: { publishedChildren: SealedChildRef[]; newSequenceNumber: bigint }
   ): void {
     // Re-read live state: the share may have been unloaded (e.g. unmount →
     // unloadSharedFolder) while the async write/refresh was in-flight. Never
@@ -2324,40 +1791,21 @@ export class CipherBoxClient {
    * (share-key lookup with FilePointer fallback). `ctx`, `folderKey`,
    * owner/recipient pubkeys, `shareId`, and `addShareKeysFn` come from state.
    */
+  /**
+   * @stub phase 65 (write-chain): FilePointer replaced by SealedChildRef;
+   * updateSharedFile in share/shared-write.ts is stubbed for phase 65.
+   */
   async updateSharedFile(
     shareId: string,
     args: {
-      filePointer: FilePointer;
+      filePointer: SealedChildRef;
       newContent: Uint8Array;
       getFileIpnsKeyFn: (itemId: string) => Promise<Uint8Array | null>;
     }
   ): Promise<void> {
-    return this.withOperation('updateSharedFile', async () => {
-      const state = this.requireSharedFolder(shareId);
-      await shareOps.updateSharedFile({
-        ctx: this.ctx,
-        folderKey: state.folderKey,
-        ownerPublicKey: state.ownerPublicKey,
-        recipientPublicKey: state.recipientPublicKey,
-        shareId: state.shareId,
-        addShareKeysFn: state.addShareKeysFn,
-        filePointer: args.filePointer,
-        newContent: args.newContent,
-        getFileIpnsKeyFn: args.getFileIpnsKeyFn,
-      });
-      // File-only publish: folder children/sequence unchanged. Emit so consumers
-      // re-resolve the file metadata — but only if the share is still loaded (it
-      // may have been unloaded during the in-flight publish).
-      const live = this.sharedFolderTree.get(shareId);
-      if (!live) return;
-      this.emitter.emit({
-        type: 'sharedFolder:updated',
-        shareId,
-        ipnsName: live.ipnsName,
-        children: live.children,
-        sequenceNumber: live.sequenceNumber,
-      });
-    });
+    void shareId;
+    void args;
+    throw new Error('not implemented — phase 65 (write-chain: updateSharedFile)');
   }
 
   /**
@@ -2412,7 +1860,7 @@ export class CipherBoxClient {
       }
 
       this.adoptSharedFolderResult(shareId, {
-        publishedChildren: result.metadata.children,
+        publishedChildren: result.metadata.children ?? [],
         newSequenceNumber: result.sequenceNumber,
       });
     });
@@ -2433,6 +1881,12 @@ export class CipherBoxClient {
    * Key zeroing (T-49-04): `destFolderKey`, `destIpnsPrivateKey`, and
    * `fileIpnsPrivateKey` are zeroed in `finally` (caller owns `vaultPrivateKey`).
    */
+  /**
+   * @stub phase 63 (navigation): SealedChildRef has no type discriminant and no
+   * folderKeyEncrypted/ipnsPrivateKeyEncrypted fields; the phase-63 DFS will
+   * unseal the child readKey from SealedChildRef.readKeySealed using the parent
+   * Node's readKey chain. moveInSharedFolder in share/shared-write.ts also stubbed.
+   */
   async moveInSharedFolder(
     shareId: string,
     args: {
@@ -2445,110 +1899,15 @@ export class CipherBoxClient {
       ) => Promise<Array<{ keyType: string; itemId: string; encryptedKey: string }>>;
     }
   ): Promise<void> {
-    return this.withOperation('moveInSharedFolder', async () => {
-      const srcState = this.requireSharedFolder(shareId);
-
-      // Guard: a folder cannot be moved into itself — it would orphan/cycle the
-      // subtree. (Descendant-of-self is additionally prevented at the picker via
-      // enumerateSharedSubtree's parentId; this is defense-in-depth at the op.)
-      if (args.destFolderId === args.itemId) {
-        throw new Error('Cannot move a folder into itself');
-      }
-
-      const shareKeys = await args.getShareKeysFn(shareId);
-
-      // Validate both records exist BEFORE unwrapping any keys (write-cap guard T-49-01).
-      // Checking presence first keeps the error messages clear and avoids partial unwraps.
-      const destFolderKeyRecord = shareKeys.find(
-        (k) => k.keyType === 'folder' && k.itemId === args.destFolderId
-      );
-      if (!destFolderKeyRecord) throw new Error('No read key for destination folder');
-
-      const destFolderIpnsRecord = shareKeys.find(
-        (k) => k.keyType === 'folder-ipns' && k.itemId === args.destFolderId
-      );
-      if (!destFolderIpnsRecord) throw new Error('No write key for destination folder');
-
-      // Unwrap dest keys; declare before try so finally can zero them.
-      let destFolderKey: Uint8Array | null = null;
-      let destIpnsPrivateKey: Uint8Array | null = null;
-      let fileIpnsPrivateKey: Uint8Array | null = null;
-
-      try {
-        destFolderKey = await unwrapKey(
-          hexToBytes(destFolderKeyRecord.encryptedKey),
-          args.vaultPrivateKey
-        );
-        destIpnsPrivateKey = await unwrapKey(
-          hexToBytes(destFolderIpnsRecord.encryptedKey),
-          args.vaultPrivateKey
-        );
-
-        // Load dest children fresh — NEVER use a cached/stale ref (A1)
-        const destMeta = await sdkCore.loadFolderMetadata({
-          ipnsName: args.destIpnsName,
-          folderKey: destFolderKey,
-          ctx: this.ctx,
-        });
-        const destChildren = destMeta?.metadata?.children ?? [];
-        const destSequenceNumber = destMeta?.sequenceNumber ?? 0n;
-
-        // Resolve file IPNS key from share_keys (recipient-wrapped — NEVER FilePointer)
-        const movedItem = srcState.children.find((c) => c.id === args.itemId);
-        if (movedItem?.type === 'file') {
-          const fileIpnsRecord = shareKeys.find(
-            (k) => k.keyType === 'file-ipns' && k.itemId === args.itemId
-          );
-          if (fileIpnsRecord) {
-            fileIpnsPrivateKey = await unwrapKey(
-              hexToBytes(fileIpnsRecord.encryptedKey),
-              args.vaultPrivateKey
-            );
-          }
-        }
-
-        const { srcResult } = await shareOps.moveInSharedFolder({
-          ctx: this.ctx,
-          srcCtx: {
-            folderKey: srcState.folderKey,
-            ipnsPrivateKey: srcState.ipnsPrivateKey,
-            ipnsName: srcState.ipnsName,
-            sequenceNumber: srcState.sequenceNumber,
-            children: srcState.children,
-          },
-          destCtx: {
-            folderKey: destFolderKey,
-            ipnsPrivateKey: destIpnsPrivateKey,
-            ipnsName: args.destIpnsName,
-            sequenceNumber: destSequenceNumber,
-            children: destChildren,
-          },
-          itemId: args.itemId,
-          fileIpnsPrivateKey,
-        });
-        // Adopt SOURCE only — never call adoptSharedFolderResult for dest (Pitfall 1)
-        this.adoptSharedFolderResult(shareId, srcResult);
-      } finally {
-        // Zero all temporarily-resolved key material (T-49-04)
-        if (fileIpnsPrivateKey) fileIpnsPrivateKey.fill(0);
-        if (destIpnsPrivateKey) destIpnsPrivateKey.fill(0);
-        if (destFolderKey) destFolderKey.fill(0);
-      }
-    });
+    void shareId;
+    void args;
+    throw new Error('not implemented — phase 63 (navigation: moveInSharedFolder)');
   }
 
   /**
-   * Enumerate all subfolders reachable from the share root via DFS (REQ-1).
-   *
-   * Uses the loaded share-root state as the starting point, then resolves
-   * each subfolder's `folderKey` from `share_keys keyType:'folder'` and
-   * determines write-capability from the presence of a `keyType:'folder-ipns'`
-   * entry. A `visited` set prevents cycles / repeated walks. Nodes missing
-   * their `folder` key in `share_keys` are silently skipped (no read access).
-   *
-   * Never zeroes `vaultPrivateKey` — the caller owns zeroing.
-   *
-   * @returns Flat array of `{ id, name, ipnsName, writable }` picker nodes.
+   * @stub phase 63 (navigation): SealedChildRef has no type discriminant and no
+   * per-child folderKeyEncrypted; the phase-63 DFS will use the read-key chain
+   * from SealedChildRef.readKeySealed to unseal child folder keys for traversal.
    */
   async enumerateSharedSubtree(
     shareId: string,
@@ -2567,81 +1926,9 @@ export class CipherBoxClient {
       parentId: string | null;
     }>
   > {
-    return this.withOperation('enumerateSharedSubtree', async () => {
-      const rootState = this.requireSharedFolder(shareId);
-      const shareKeys = await args.getShareKeysFn(shareId);
-
-      const result: Array<{
-        id: string;
-        name: string;
-        ipnsName: string;
-        writable: boolean;
-        parentId: string | null;
-      }> = [];
-      // visited keyed by ipnsName prevents cycles (a folder that references
-      // an ancestor's ipnsName would otherwise loop indefinitely)
-      const visited = new Set<string>([rootState.ipnsName]);
-      // `id` is the containing folder's id (null for the share root), threaded
-      // onto each node as `parentId` so the picker can exclude the moved
-      // folder's own subtree (a move into a descendant would cycle the tree).
-      const stack: Array<{
-        id: string | null;
-        ipnsName: string;
-        children: typeof rootState.children;
-      }> = [{ id: null, ipnsName: rootState.ipnsName, children: rootState.children }];
-
-      while (stack.length > 0) {
-        const current = stack.pop()!;
-        for (const child of current.children) {
-          if (child.type !== 'folder') continue;
-          if (visited.has(child.ipnsName)) continue;
-          visited.add(child.ipnsName);
-
-          // Require a read key — skip nodes the recipient cannot decrypt
-          const keyRecord = shareKeys.find((k) => k.keyType === 'folder' && k.itemId === child.id);
-          if (!keyRecord) continue;
-
-          const folderKey = await unwrapKey(
-            hexToBytes(keyRecord.encryptedKey),
-            args.vaultPrivateKey
-          );
-
-          try {
-            const writable = shareKeys.some(
-              (k) => k.keyType === 'folder-ipns' && k.itemId === child.id
-            );
-
-            result.push({
-              id: child.id,
-              name: child.name,
-              ipnsName: child.ipnsName,
-              writable,
-              parentId: current.id,
-            });
-
-            // Load children to continue DFS
-            const meta = await sdkCore.loadFolderMetadata({
-              ipnsName: child.ipnsName,
-              folderKey,
-              ctx: this.ctx,
-            });
-            if (meta?.metadata?.children) {
-              stack.push({
-                id: child.id,
-                ipnsName: child.ipnsName,
-                children: meta.metadata.children,
-              });
-            }
-          } finally {
-            // Zero the per-iteration folder key — never leave plaintext AES folder
-            // keys live in the heap across the DFS (caller owns vaultPrivateKey).
-            folderKey.fill(0);
-          }
-        }
-      }
-
-      return result;
-    });
+    void shareId;
+    void args;
+    throw new Error('not implemented — phase 63 (navigation: enumerateSharedSubtree)');
   }
 
   // ---- BYO-IPFS pinning ----

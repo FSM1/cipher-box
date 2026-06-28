@@ -22,14 +22,10 @@ import {
   deriveBinIpnsKeypair,
   type BinEntry,
   type RecycleBinMetadata,
-  type FolderChild,
-  type FilePointer,
-  type FolderEntry,
 } from '@cipherbox/core';
-import { bytesToHex, clearBytes, hexToBytes, unwrapKey, wrapKey } from '@cipherbox/crypto';
+import type { SealedChildRef } from '@cipherbox/core';
+import { bytesToHex, hexToBytes, wrapKey } from '@cipherbox/crypto';
 import type { FolderTree } from '../state/folder-tree';
-import { reencryptFileMetadataForFolderChange } from '../reencrypt';
-import * as shareOps from '../share';
 
 /** Current bin metadata version. */
 const BIN_METADATA_VERSION = 'v1' as const;
@@ -168,139 +164,13 @@ async function publishWithVerify(params: {
 }
 
 // ---------------------------------------------------------------------------
-// Internal helpers: subtree walk (IPNS names + content CIDs) and unpin
+// Internal helpers: unpin
 // ---------------------------------------------------------------------------
-
-/** A captured content/version CID with its plaintext size, for unpin + quota. */
-type CapturedCid = { cid: string; size: number };
-
-/**
- * Result of walking a deleted subtree: every node's IPNS name (for share
- * revocation) and every descendant content + version CID (for unpin).
- */
-type SubtreeWalkResult = {
-  /** Folder's own ipnsName + every descendant file fileMetaIpnsName + subfolder ipnsName. */
-  ipnsNames: string[];
-  /** Flattened content + version CIDs of every descendant file. */
-  descendantCids: CapturedCid[];
-};
-
-/**
- * Capture a single file's content + version CIDs from its FileMetadata.
- *
- * Best-effort: a file whose metadata cannot be resolved/decrypted is skipped
- * (returns empty) — its IPNS name is still revoked/unenrolled by the caller, but
- * its content CID can't be captured for unpin. This matches the locked policy:
- * within a successfully-enumerated walk, an individual file's CID-capture failure
- * is non-fatal.
- */
-async function captureFileCids(
-  fileMetaIpnsName: string,
-  folderKey: Uint8Array,
-  ctx: SdkContext
-): Promise<CapturedCid[]> {
-  try {
-    const { metadata } = await sdkCore.resolveFileMetadata(fileMetaIpnsName, folderKey, ctx);
-    const cids: CapturedCid[] = [];
-    if (metadata.cid) cids.push({ cid: metadata.cid, size: metadata.size ?? 0 });
-    for (const v of metadata.versions ?? []) {
-      if (v.cid) cids.push({ cid: v.cid, size: v.size ?? 0 });
-    }
-    return cids;
-  } catch (err) {
-    console.warn(
-      `[CipherBox] bin: could not capture content CIDs for file ${fileMetaIpnsName} (skipping):`,
-      err instanceof Error ? err.message : err
-    );
-    return [];
-  }
-}
-
-/**
- * Recursively walk a deleted folder subtree, collecting every node's IPNS name
- * and every descendant file's content + version CIDs.
- *
- * FAIL-CLOSED for structure (locked): if a folder's metadata cannot be resolved
- * or decrypted, the whole walk THROWS — addToBin must then abort the delete
- * rather than half-revoke / partially unpin. This is what guarantees the share
- * set is complete before the destructive folder mutation. (An individual file's
- * CID capture is best-effort via captureFileCids and never throws.)
- *
- * Any subfolder folderKey this function unwraps is zeroized in `finally` — it
- * owns those buffers. The caller-owned `folderKey` passed in is never zeroed here.
- *
- * A `visited` set guards against cycles/diamonds in client-supplied (decryptable,
- * corruption-influenceable) folder metadata.
- */
-async function walkDeletedSubtree(params: {
-  folderIpnsName: string;
-  folderKey: Uint8Array;
-  userPrivateKey: Uint8Array;
-  ctx: SdkContext;
-  acc?: SubtreeWalkResult;
-  visited?: Set<string>;
-}): Promise<SubtreeWalkResult> {
-  const acc = params.acc ?? { ipnsNames: [], descendantCids: [] };
-  const visited = params.visited ?? new Set<string>();
-
-  if (visited.has(params.folderIpnsName)) return acc;
-  visited.add(params.folderIpnsName);
-  acc.ipnsNames.push(params.folderIpnsName);
-
-  // FAIL-CLOSED: a null/throwing resolve means we cannot enumerate this folder's
-  // structure, so we cannot guarantee a complete share set. Abort.
-  let children;
-  try {
-    const result = await sdkCore.loadFolderMetadata({
-      ipnsName: params.folderIpnsName,
-      folderKey: params.folderKey,
-      ctx: params.ctx,
-    });
-    if (!result) {
-      throw new Error(
-        `Cannot enumerate deleted subtree: folder ${params.folderIpnsName} did not resolve`
-      );
-    }
-    children = result.metadata.children;
-  } catch (err) {
-    throw err instanceof Error
-      ? err
-      : new Error(`Cannot enumerate deleted subtree for ${params.folderIpnsName}`, { cause: err });
-  }
-
-  for (const child of children) {
-    if (child.type === 'file') {
-      const fp = child as FilePointer;
-      acc.ipnsNames.push(fp.fileMetaIpnsName);
-      // Best-effort per-file CID capture (decrypt with THIS folder's key).
-      const cids = await captureFileCids(fp.fileMetaIpnsName, params.folderKey, params.ctx);
-      acc.descendantCids.push(...cids);
-    } else if (child.type === 'folder') {
-      const entry = child as FolderEntry;
-      if (visited.has(entry.ipnsName)) continue;
-      let childFolderKey: Uint8Array | undefined;
-      try {
-        childFolderKey = await unwrapKey(
-          hexToBytes(entry.folderKeyEncrypted),
-          params.userPrivateKey
-        );
-        await walkDeletedSubtree({
-          folderIpnsName: entry.ipnsName,
-          folderKey: childFolderKey,
-          userPrivateKey: params.userPrivateKey,
-          ctx: params.ctx,
-          acc,
-          visited,
-        });
-      } finally {
-        // Zero only the key buffer this frame unwrapped/owns.
-        if (childFolderKey) clearBytes(childFolderKey);
-      }
-    }
-  }
-
-  return acc;
-}
+// NOTE(phase 65 — bin re-link): captureFileCids and walkDeletedSubtree were
+// removed in phase 62 because they accessed FilePointer/FolderEntry types which
+// were retired in the node/v3 upgrade. The equivalent phase-65 helpers will
+// enumerate Node children and collect versionCids from NodeContent rather than
+// from standalone FileMetadata IPNS records.
 
 /**
  * Best-effort unpin of every content/version/descendant CID recorded on a bin
@@ -418,149 +288,21 @@ export async function addToBin(params: {
   binState: BinState;
   binCtx: BinOperationContext;
   revokeSharesForItemsFn?: (ipnsNames: string[]) => Promise<void>;
-}): Promise<{ removedItem: FolderChild; updatedBinState: BinState }> {
-  const folder = params.folderTree.get(params.folderIpnsName);
-  if (!folder) throw new Error('Folder not loaded');
-
-  // 0. Pre-compute the removed item WITHOUT mutating folder state yet, so the
-  //    fail-closed walk + revoke can run before any destructive publish.
-  const baseChildren = [...folder.children];
-  const { updatedChildren, removedItem } = sdkCore.deleteFromFolder({
-    children: folder.children,
-    childId: params.childId,
-  });
-
-  const isFile = removedItem.type === 'file';
-
-  // 1. Collect the deleted subtree: every node's ipnsName (for share revocation)
-  //    and every descendant content/version CID (for unpin on empty-bin). For a
-  //    single file this is just its own fileMetaIpnsName + its own CIDs; for a
-  //    folder we walk the whole subtree (FAIL-CLOSED on unreadable structure).
-  let collectedIpnsNames: string[];
-  let descendantCids: Array<{ cid: string; size: number }> | undefined;
-  let fileContentCid: string | undefined;
-  let fileContentSize: number | undefined;
-  let fileVersionCids: Array<{ cid: string; size: number }> | undefined;
-
-  if (isFile) {
-    const fp = removedItem as FilePointer;
-    collectedIpnsNames = [fp.fileMetaIpnsName];
-    // Best-effort capture of the file's own content + version CIDs.
-    const cids = await captureFileCids(fp.fileMetaIpnsName, folder.folderKey, params.binCtx.ctx);
-    if (cids.length > 0) {
-      fileContentCid = cids[0].cid;
-      fileContentSize = cids[0].size;
-      const versionCids = cids.slice(1);
-      if (versionCids.length > 0) fileVersionCids = versionCids;
-    }
-  } else {
-    const fe = removedItem as FolderEntry;
-    // Unwrap the deleted folder's own key, then walk. The walk THROWS if any
-    // descendant folder can't be enumerated — abort before the folder mutation.
-    let deletedFolderKey: Uint8Array | undefined;
-    try {
-      deletedFolderKey = await unwrapKey(
-        hexToBytes(fe.folderKeyEncrypted),
-        params.binCtx.userPrivateKey
-      );
-      const walk = await walkDeletedSubtree({
-        folderIpnsName: fe.ipnsName,
-        folderKey: deletedFolderKey,
-        userPrivateKey: params.binCtx.userPrivateKey,
-        ctx: params.binCtx.ctx,
-      });
-      collectedIpnsNames = walk.ipnsNames;
-      if (walk.descendantCids.length > 0) descendantCids = walk.descendantCids;
-    } finally {
-      if (deletedFolderKey) clearBytes(deletedFolderKey);
-    }
-  }
-
-  // 2. FAIL-CLOSED share revocation — MUST precede the destructive folder
-  //    mutation. If it ultimately fails (after its own retries), abort the whole
-  //    delete: the item stays in the folder and no shares are stranded-active on
-  //    deleted content.
-  if (params.revokeSharesForItemsFn) {
-    await shareOps.revokeSharesForItems({
-      ipnsNames: collectedIpnsNames,
-      revokeFn: params.revokeSharesForItemsFn,
-    });
-  }
-
-  // Capture the source folder's folderKey (the key the file's FileMetadata is
-  // encrypted under) wrapped for the vault, so restore can re-encrypt to any
-  // destination later even if this parent folder is gone by then. Files only —
-  // a restored folder carries its own folderKey in its FolderEntry. Computed
-  // BEFORE the publish so a wrapKey failure aborts before any folder/bin
-  // mutation, avoiding a split state where the file is removed from the folder
-  // but never recorded in the bin.
-  const originalFolderKeyEncrypted = isFile
-    ? bytesToHex(await wrapKey(folder.folderKey, params.binCtx.userPublicKey))
-    : undefined;
-
-  // 3. Publish updated folder metadata (destructive — only after revoke succeeded)
-  const { newSequenceNumber, publishedChildren } = await sdkCore.updateFolderMetadataAndPublish({
-    children: updatedChildren,
-    baseChildren,
-    folderKey: folder.folderKey,
-    ipnsPrivateKey: folder.ipnsKeypair.privateKey,
-    ipnsName: params.folderIpnsName,
-    sequenceNumber: folder.sequenceNumber,
-    ctx: params.binCtx.ctx,
-  });
-
-  // 4. Update folder state — adopt merged published set (CR-01)
-  folder.children = publishedChildren;
-  folder.sequenceNumber = newSequenceNumber;
-  folder.lastLoadedAt = Date.now();
-  params.folderTree.set(params.folderIpnsName, folder);
-
-  // 5. Build bin entry with the captured CIDs (so empty-bin/permanent-delete can
-  //    unpin the content + versions + descendant subtree).
-  const entry: BinEntry = {
-    id: crypto.randomUUID(),
-    itemType: isFile ? 'file' : 'folder',
-    name: removedItem.name,
-    originalParentIpnsName: params.folderIpnsName,
-    originalPath: params.parentPath,
-    deletedAt: Date.now(),
-    size: 0,
-    mimeType: '',
-    contentCid: fileContentCid,
-    contentSize: fileContentSize,
-    versionCids: fileVersionCids,
-    descendantCids,
-    filePointer: isFile ? (removedItem as FilePointer) : undefined,
-    folderEntry: !isFile ? (removedItem as FolderEntry) : undefined,
-    originalFolderKeyEncrypted,
-  };
-
-  // 6. Update bin metadata and publish
-  const updatedEntries = [...params.binState.entries, entry];
-  const newBinSeq = params.binState.sequenceNumber + 1;
-
-  const metadata: RecycleBinMetadata = {
-    version: BIN_METADATA_VERSION,
-    sequenceNumber: newBinSeq,
-    entries: updatedEntries,
-  };
-
-  await saveBinMetadata({ metadata, binCtx: params.binCtx });
-
-  const updatedBinState: BinState = {
-    entries: updatedEntries,
-    sequenceNumber: newBinSeq,
-    ipnsName: params.binState.ipnsName,
-  };
-
-  return { removedItem, updatedBinState };
+}): Promise<{ removedItem: SealedChildRef; updatedBinState: BinState }> {
+  void params;
+  throw new Error('not implemented — phase 65 (bin re-link)');
 }
 
 /**
  * Restore an item from the recycle bin back to a folder.
  *
- * Removes the entry from bin metadata, adds the preserved FolderChild
- * back to the target folder's children, and publishes both.
+ * PHASE 62 STUB: Phase 65 (bin re-link) will re-implement this using the
+ * Node/SealedChildRef model — a SealedChildRef stored on the BinEntry's
+ * nodeRef field is re-inserted into the target folder's write-body.
+ * The old FolderChild/FilePointer/originalFolderKeyEncrypted fields are
+ * removed from BinEntry; see docs/METADATA_SCHEMAS.md §BinEntry.
+ *
+ * @stub phase 65 (bin re-link)
  */
 export async function restoreFromBin(params: {
   entryId: string;
@@ -568,175 +310,9 @@ export async function restoreFromBin(params: {
   folderTree: FolderTree;
   binState: BinState;
   binCtx: BinOperationContext;
-}): Promise<{ restoredItem: FolderChild; updatedBinState: BinState }> {
-  // 1. Find the bin entry
-  const entry = params.binState.entries.find((e) => e.id === params.entryId);
-  if (!entry) throw new Error('Bin entry not found');
-
-  // 2. Get the FolderChild to restore
-  let child: FolderChild;
-  if (entry.itemType === 'file' && entry.filePointer) {
-    child = { ...entry.filePointer, modifiedAt: Date.now() };
-  } else if (entry.itemType === 'folder' && entry.folderEntry) {
-    child = { ...entry.folderEntry, modifiedAt: Date.now() };
-  } else {
-    throw new Error('Bin entry has no stored item reference');
-  }
-
-  // 3. Add child back to target folder
-  const targetFolder = params.folderTree.get(params.targetFolderIpnsName);
-  if (!targetFolder) throw new Error('Target folder not loaded');
-
-  // A retry of a partially-applied restore (the bin entry survives a step-5b /
-  // step-6 failure) can find this child already listed in the target from the prior
-  // attempt's publish. Drop any prior copy by id so the restore is idempotent —
-  // re-running REPLACES rather than duplicates the listing — and exclude it from the
-  // name-collision check so the file isn't spuriously renamed against itself. The
-  // no-conflict publish path doesn't dedup by id (only the 409 merge does), so a
-  // same-id duplicate appended here would otherwise persist.
-  const targetChildrenSansChild = targetFolder.children.filter((c) => c.id !== child.id);
-
-  // Handle name collisions (against other entries only)
-  const existingNames = new Set(targetChildrenSansChild.map((c) => c.name));
-  if (existingNames.has(child.name)) {
-    let newName = `${child.name} (restored)`;
-    let counter = 2;
-    while (existingNames.has(newName)) {
-      newName = `${child.name} (restored ${counter})`;
-      counter++;
-    }
-    child = { ...child, name: newName };
-  }
-
-  // 3b. Decide whether this restore must re-encrypt the file's FileMetadata to
-  // the target folderKey: only for a FILE restored to a DIFFERENT folder than its
-  // original parent. The record is AES-256-GCM sealed with the parent folderKey,
-  // and addToBin stores the FilePointer verbatim without re-keying; restoring to a
-  // folder with a different folderKey without re-encrypting would make the file
-  // undecryptable (CryptoError: Decryption failed) — the same class of bug as
-  // moveItem. Restoring in place (target === original parent, the default UI flow)
-  // leaves the key unchanged, so no re-encrypt is needed.
-  //
-  // Validate the preconditions NOW, before publishing, so a restore that is
-  // guaranteed to fail (missing file IPNS key, or a legacy entry whose source key
-  // can't be recovered) aborts cleanly without leaving an undecryptable listing in
-  // the target. The actual re-key — unwrap + network resolve/publish — runs AFTER
-  // the target folder is durably published (step 5b), mirroring moveItem: the
-  // metadata is only re-keyed once the target listing is durable, so at every
-  // intermediate failure the file stays readable from somewhere that lists it under
-  // the matching key (the bin, by the source key, before the re-key; the target, by
-  // the target key, after it) — never readable from neither.
-  const mustReencrypt =
-    entry.itemType === 'file' &&
-    !!entry.filePointer &&
-    params.targetFolderIpnsName !== entry.originalParentIpnsName;
-  if (mustReencrypt) {
-    if (!entry.filePointer!.ipnsPrivateKeyEncrypted) {
-      throw new Error('Cannot re-encrypt file metadata on restore: missing file IPNS key');
-    }
-    // Source key = the folderKey the FileMetadata is currently sealed under.
-    // Recoverable from the key captured at delete time (works even if the original
-    // parent is gone), or — for legacy entries created before that capture — from
-    // the still-loaded original parent folder.
-    if (!entry.originalFolderKeyEncrypted && !params.folderTree.get(entry.originalParentIpnsName)) {
-      throw new Error(
-        'Original parent folder must be loaded to restore a legacy file to a different folder'
-      );
-    }
-  }
-
-  const baseChildren = [...targetFolder.children];
-  const updatedFolderChildren = [...targetChildrenSansChild, child];
-
-  // 4. Publish target folder first (add-before-remove): the file is listed in the
-  //    target while still recorded in the bin, so it is never lost mid-restore.
-  const { newSequenceNumber, publishedChildren } = await sdkCore.updateFolderMetadataAndPublish({
-    children: updatedFolderChildren,
-    baseChildren,
-    folderKey: targetFolder.folderKey,
-    ipnsPrivateKey: targetFolder.ipnsKeypair.privateKey,
-    ipnsName: params.targetFolderIpnsName,
-    sequenceNumber: targetFolder.sequenceNumber,
-    ctx: params.binCtx.ctx,
-  });
-
-  // 5. Update folder state — adopt merged published set (CR-01)
-  targetFolder.children = publishedChildren;
-  targetFolder.sequenceNumber = newSequenceNumber;
-  targetFolder.lastLoadedAt = Date.now();
-  params.folderTree.set(params.targetFolderIpnsName, targetFolder);
-
-  // 5b. Re-key the FileMetadata to the target folderKey, now that the target
-  //     listing is durable (see step 3b). Idempotent via
-  //     reencryptFileMetadataForFolderChange: a retry after a partial failure that
-  //     already re-keyed the record completes cleanly instead of throwing.
-  if (mustReencrypt) {
-    // Only freshly-unwrapped key material is cleared in `finally` — never the
-    // shared folderTree key from the legacy fallback, which the tree still owns.
-    let unwrappedSourceFolderKey: Uint8Array | undefined;
-    let fileIpnsPrivateKey: Uint8Array | undefined;
-    try {
-      // Both guaranteed by the precondition check above; re-narrowed here for the
-      // type-checker and as defense in depth.
-      const filePointer = entry.filePointer;
-      const ipnsPrivateKeyEncrypted = filePointer?.ipnsPrivateKeyEncrypted;
-      if (!filePointer || !ipnsPrivateKeyEncrypted) {
-        throw new Error('Cannot re-encrypt file metadata on restore: missing file IPNS key');
-      }
-
-      let sourceFolderKey: Uint8Array;
-      if (entry.originalFolderKeyEncrypted) {
-        unwrappedSourceFolderKey = await unwrapKey(
-          hexToBytes(entry.originalFolderKeyEncrypted),
-          params.binCtx.userPrivateKey
-        );
-        sourceFolderKey = unwrappedSourceFolderKey;
-      } else {
-        const sourceFolder = params.folderTree.get(entry.originalParentIpnsName);
-        if (!sourceFolder) {
-          throw new Error(
-            'Original parent folder must be loaded to restore a legacy file to a different folder'
-          );
-        }
-        sourceFolderKey = sourceFolder.folderKey;
-      }
-
-      fileIpnsPrivateKey = await unwrapKey(
-        hexToBytes(ipnsPrivateKeyEncrypted),
-        params.binCtx.userPrivateKey
-      );
-      await reencryptFileMetadataForFolderChange({
-        fileMetaIpnsName: filePointer.fileMetaIpnsName,
-        fileIpnsPrivateKey,
-        sourceFolderKey,
-        destFolderKey: targetFolder.folderKey,
-        ctx: params.binCtx.ctx,
-      });
-    } finally {
-      if (unwrappedSourceFolderKey) clearBytes(unwrappedSourceFolderKey);
-      if (fileIpnsPrivateKey) clearBytes(fileIpnsPrivateKey);
-    }
-  }
-
-  // 6. Remove entry from bin and publish
-  const remainingEntries = params.binState.entries.filter((e) => e.id !== params.entryId);
-  const newBinSeq = params.binState.sequenceNumber + 1;
-
-  const metadata: RecycleBinMetadata = {
-    version: BIN_METADATA_VERSION,
-    sequenceNumber: newBinSeq,
-    entries: remainingEntries,
-  };
-
-  await saveBinMetadata({ metadata, binCtx: params.binCtx });
-
-  const updatedBinState: BinState = {
-    entries: remainingEntries,
-    sequenceNumber: newBinSeq,
-    ipnsName: params.binState.ipnsName,
-  };
-
-  return { restoredItem: child, updatedBinState };
+}): Promise<{ restoredItem: SealedChildRef; updatedBinState: BinState }> {
+  void params;
+  throw new Error('not implemented — phase 65 (bin re-link)');
 }
 
 /**

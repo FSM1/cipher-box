@@ -7,7 +7,7 @@
 
 import type { TeeKeys, PinningMode, ExternalProviderConfig } from '@cipherbox/sdk-core';
 import type { AxiosInstance } from '@cipherbox/api-client';
-import type { FolderChild, FolderMetadata } from '@cipherbox/core';
+import type { SealedChildRef, Node } from '@cipherbox/core';
 import type { SentShareInfo, ShareKeyType } from './share';
 
 /**
@@ -116,10 +116,10 @@ export type FolderState = {
   ipnsKeypair: { publicKey: Uint8Array; privateKey: Uint8Array };
   /** Current IPNS sequence number (monotonically increasing) */
   sequenceNumber: bigint;
-  /** Current folder children (files and subfolders) */
-  children: FolderChild[];
-  /** Full decrypted folder metadata, or null if not yet loaded */
-  metadata: FolderMetadata | null;
+  /** Current folder children (sealed child refs — phase 63 populates via read-chain navigation) */
+  children: SealedChildRef[];
+  /** Full decrypted folder node, or null if not yet loaded */
+  metadata: Node | null;
   /** Timestamp (ms) of last successful load from IPNS */
   lastLoadedAt: number;
 };
@@ -146,9 +146,9 @@ export type SharedFolderState = {
   ipnsPrivateKey: Uint8Array;
   /** Current IPNS sequence number (monotonically increasing) */
   sequenceNumber: bigint;
-  /** Current folder children (files and subfolders) */
-  children: FolderChild[];
-  /** Sharer's secp256k1 public key (FolderEntry/FilePointer keys wrap for owner) */
+  /** Current folder children (sealed child refs — phase 63 populates via read-chain navigation) */
+  children: SealedChildRef[];
+  /** Sharer's secp256k1 public key (SealedChildRef readKeys wrap for owner) */
   ownerPublicKey: Uint8Array;
   /** Current user's secp256k1 public key (share_keys entries wrap for recipient) */
   recipientPublicKey: Uint8Array;
