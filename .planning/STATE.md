@@ -5,14 +5,14 @@ milestone_name: Metadata and Sharing Refactor
 current_phase: 61
 current_phase_name: aad-bound-seal-primitive-and-cross-language-kat
 status: executing
-last_updated: "2026-06-28T01:12:49.945Z"
+last_updated: "2026-06-28T01:23:56.570Z"
 last_activity: 2026-06-28
 last_activity_desc: Phase 61 execution started
 progress:
   total_phases: 9
   completed_phases: 0
   total_plans: 5
-  completed_plans: 3
+  completed_plans: 4
   percent: 0
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 ## Current Position
 
 Phase: 61 (aad-bound-seal-primitive-and-cross-language-kat) — EXECUTING
-Plan: 4 of 5
+Plan: 5 of 5
 Status: Ready to execute
 Last activity: 2026-06-28 — Phase 61 execution started
 
@@ -193,6 +193,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 61 P01 | 18m | 2 tasks | 9 files |
 | Phase 61 P61-02 | 12 | 2 tasks | 6 files |
 | Phase 61-aad-bound-seal-primitive-and-cross-language-kat P03 | 11 | 2 tasks | 7 files |
+| Phase 61 P04 | 8 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -347,7 +348,7 @@ All v1.1 requirements code-satisfied (77/77). See `.planning/milestones/v1.1-MIL
 
 Last activity: 2026-06-27
 
-Last session: 2026-06-28T01:12:49.939Z
+Last session: 2026-06-28T01:23:54.112Z
 
 ## Decisions
 
@@ -380,6 +381,7 @@ Last session: 2026-06-28T01:12:49.939Z
 - [Phase 60-05]: D-06 parseCachedRecord null-signedRecord path returns null; CID mismatch discards cached result
 - [Phase 60-05]: D-06 withCachedPublicKey enrich and equal-seq signatureV2 enrich removed from resolveRecord
 - [Phase 60-05]: api:generate NOT required; changes are internal service/codec logic with no OpenAPI surface change
+- [Phase ?]: seal_vectors KAT asserts exact ciphertext byte-for-byte via serde_json::Value pull + NodeSealVector; !seal_vectors.is_empty() guard prevents vacuous pass
 
 ## Operator Next Steps
 
