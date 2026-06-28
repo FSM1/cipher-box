@@ -11,8 +11,8 @@ import { CryptoError } from '../types';
 import { AES_KEY_SIZE, AES_IV_SIZE, AES_TAG_SIZE } from '../constants';
 import { generateIv } from '../utils/random';
 import { concatBytes, uuidToBytes } from '../utils/encoding';
-import { encryptAesGcm } from './encrypt';
-import { decryptAesGcm } from './decrypt';
+import { encryptAesGcm, encryptAesGcmAad } from './encrypt';
+import { decryptAesGcm, decryptAesGcmAad } from './decrypt';
 
 /**
  * Frozen domain prefix for the AAD-bound node seal (D-00, ADR 0003).
@@ -109,6 +109,82 @@ export function buildNodeAad(
     genBytes,
     new Uint8Array([role])
   );
+}
+
+/**
+ * Seal data using AES-256-GCM with Additional Authenticated Data (AAD) and automatic IV generation.
+ *
+ * The AAD (e.g. built via buildNodeAad) is bound into the GCM authentication tag,
+ * so the sealed blob can only be unsealed with the exact same key AND AAD. This
+ * prevents AAD-transplant attacks where a blob is replayed under a different node identity.
+ *
+ * Each call mints a fresh random 12-byte IV — never reuses an IV under the same key (D-00a).
+ *
+ * Blob layout (frozen per D-00a / ADR 0003):
+ *   IV (12 bytes) ‖ ciphertext ‖ GCM auth tag (16 bytes)
+ *
+ * @param plaintext - Data to encrypt
+ * @param key - 32-byte AES key
+ * @param aad - Additional Authenticated Data (e.g. buildNodeAad output)
+ * @returns Sealed blob: IV (12 bytes) ‖ ciphertext ‖ auth tag (16 bytes)
+ * @throws CryptoError on any failure
+ */
+export async function sealAesGcmAad(
+  plaintext: Uint8Array,
+  key: Uint8Array,
+  aad: Uint8Array
+): Promise<Uint8Array> {
+  // Validate key size
+  if (key.length !== AES_KEY_SIZE) {
+    throw new CryptoError('Encryption failed', 'INVALID_KEY_SIZE');
+  }
+
+  // Mint a fresh IV — never accept a caller-supplied IV (D-00a: IV reuse under a fixed key is forbidden)
+  const iv = generateIv();
+
+  // Encrypt with AAD bound into the auth tag
+  const ciphertext = await encryptAesGcmAad(plaintext, key, iv, aad);
+
+  // Return IV ‖ ciphertext (IV is always the first 12 bytes of the blob)
+  return concatBytes(iv, ciphertext);
+}
+
+/**
+ * Unseal data encrypted with sealAesGcmAad.
+ *
+ * The AAD must be rebuilt identically to what was used during sealing.
+ * Any mismatch (different nodeId, role, generation, kind, or domain version) causes
+ * authentication failure and the function throws — preventing AAD-transplant attacks.
+ *
+ * @param sealed - Sealed blob from sealAesGcmAad: IV (12 bytes) ‖ ciphertext ‖ auth tag (16 bytes)
+ * @param key - 32-byte AES key (must match sealing key)
+ * @param aad - Additional Authenticated Data (must exactly match sealing AAD)
+ * @returns Decrypted plaintext
+ * @throws CryptoError on any failure (wrong key, wrong AAD, tampered blob, or blob too short)
+ */
+export async function unsealAesGcmAad(
+  sealed: Uint8Array,
+  key: Uint8Array,
+  aad: Uint8Array
+): Promise<Uint8Array> {
+  // Validate key size
+  if (key.length !== AES_KEY_SIZE) {
+    throw new CryptoError('Decryption failed', 'INVALID_KEY_SIZE');
+  }
+
+  // Validate minimum sealed data size: IV (12) + auth tag (16) = 28 bytes
+  if (sealed.length < MIN_SEALED_SIZE) {
+    throw new CryptoError('Decryption failed', 'DECRYPTION_FAILED');
+  }
+
+  // Extract IV (first 12 bytes)
+  const iv = sealed.slice(0, AES_IV_SIZE);
+
+  // Extract ciphertext (everything after IV; includes the 16-byte auth tag)
+  const ciphertext = sealed.slice(AES_IV_SIZE);
+
+  // Decrypt with AAD — throws if AAD or key or tag does not match
+  return decryptAesGcmAad(ciphertext, key, iv, aad);
 }
 
 /**
