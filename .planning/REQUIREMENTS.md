@@ -13,7 +13,7 @@ Requirements for v2.0. Each maps to exactly one roadmap phase. Categories: CRYPT
 
 - [x] **CRYPTO-01**: `packages/crypto` exposes `sealAesGcmAad`/`unsealAesGcmAad` + a canonical `buildNodeAad(domain‖nodeId‖kind‖generation‖role)` builder, each seal minting a fresh random IV
 - [x] **CRYPTO-02**: A byte-identical Rust twin lives in `cipherbox_crypto`, with a committed cross-language KAT (frozen byte encoding; `kind` 0x01/0x02/0x03, raw 16-byte uuid, 4-byte BE generation, role ∈ {0x01 body, 0x02 child-readkey, 0x03 content, 0x04 child-writekey}) asserted by both TS and Rust
-- [ ] **CRYPTO-03**: A sealed blob replayed under a different `childId`/`role`/`generation` fails to unseal (AAD transplant resistance)
+- [x] **CRYPTO-03**: A sealed blob replayed under a different `childId`/`role`/`generation` fails to unseal (AAD transplant resistance)
 
 ### NODE — unified metadata model and codecs
 
@@ -107,7 +107,7 @@ Which phases cover which requirements. Populated during roadmap creation.
 | --- | --- | --- |
 | CRYPTO-01 | Phase 61 | Complete |
 | CRYPTO-02 | Phase 61 | Complete |
-| CRYPTO-03 | Phase 61 | Pending |
+| CRYPTO-03 | Phase 61 | Complete |
 | TEST-02 | Phase 61 | Complete |
 | NODE-01 | Phase 62 | Pending |
 | NODE-02 | Phase 62 | Pending |

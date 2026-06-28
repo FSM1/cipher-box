@@ -87,7 +87,7 @@
 3. The cross-language KAT fixture — a single hardcoded vector covering all four role bytes — is asserted by both `packages/crypto/__tests__/build-node-aad.test.ts` AND a Rust `#[test]` in `crates/crypto/tests/cross_language.rs`; both pass in CI
 4. A sealed blob replayed under a different `childId`, `role`, or `generation` fails to unseal (AAD transplant resistance test passes)
 
-**Plans**: 2/5 plans executed
+**Plans**: 3/5 plans executed
 
 Plans:
 **Wave 1**
@@ -100,7 +100,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 61-03-PLAN.md — TS AEAD-with-AAD seal variants + full-seal vector (D-01b) + extended transplant/negative suite (D-02, CRYPTO-03)
+- [x] 61-03-PLAN.md — TS AEAD-with-AAD seal variants + full-seal vector (D-01b) + extended transplant/negative suite (D-02, CRYPTO-03)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
@@ -289,7 +289,7 @@ Plans:
 
 | Phase | Name | Plans Complete | Status | Completed |
 | --- | --- | --- | --- | --- |
-| 61 | AAD-Bound Seal Primitive and Cross-Language KAT | 2/5 | In Progress|  |
+| 61 | AAD-Bound Seal Primitive and Cross-Language KAT | 3/5 | In Progress|  |
 | 62 | Unified Node Codec (Core Keystone) | 0/? | Not started | - |
 | 63 | Read-Chain Navigation and Rotation Core | 0/? | Not started | - |
 | 64 | Rotation Soundness — Revocation Guarantees | 0/? | Not started | - |
