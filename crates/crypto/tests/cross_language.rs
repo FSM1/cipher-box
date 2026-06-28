@@ -254,6 +254,21 @@ struct NodeAadVector {
     expected_aad: String,
 }
 
+/// Full-seal KAT vector: fixed key/iv/plaintext/aad committed by the TS side.
+/// Rust must reproduce the exact ciphertext byte-for-byte (T-61-11).
+#[derive(Deserialize)]
+struct NodeSealVector {
+    description: String,
+    node_id: String,
+    kind: u8,
+    generation: u32,
+    role: u8,
+    key: String,
+    iv: String,
+    plaintext: String,
+    ciphertext: String,
+}
+
 #[test]
 fn node_aad_cross_language() {
     // node-aad.json is a top-level object (not a flat array), so parse via
@@ -263,6 +278,7 @@ fn node_aad_cross_language() {
         .unwrap_or_else(|e| panic!("Failed to load {}: {}", path.display(), e));
     let root: serde_json::Value = serde_json::from_str(&data).unwrap();
 
+    // ── aad_vectors: pin AAD construction byte-for-byte ──────────────────────
     let aad_vectors: Vec<NodeAadVector> =
         serde_json::from_value(root["aad_vectors"].clone()).unwrap();
 
@@ -277,6 +293,44 @@ fn node_aad_cross_language() {
             hex::encode(&aad),
             v.expected_aad,
             "AAD mismatch for: {}",
+            v.description
+        );
+    }
+
+    // ── seal_vectors: pin the full AEAD-with-AAD path TS↔Rust ───────────────
+    // encrypt_aes_gcm_aad must reproduce the exact ciphertext the TS side committed
+    // for the same fixed key/iv/plaintext/AAD (proves Web Crypto additionalData ≡
+    // aes-gcm Payload { msg, aad } byte-for-byte; T-61-11, CRYPTO-02, TEST-02).
+    let seal_vectors: Vec<NodeSealVector> =
+        serde_json::from_value(root["seal_vectors"].clone()).unwrap();
+
+    assert!(!seal_vectors.is_empty(), "seal_vectors must be non-empty");
+
+    for v in &seal_vectors {
+        let key_bytes = hex::decode(&v.key)
+            .unwrap_or_else(|_| panic!("Bad hex key in: {}", v.description));
+        let iv_bytes = hex::decode(&v.iv)
+            .unwrap_or_else(|_| panic!("Bad hex iv in: {}", v.description));
+        let plaintext = hex::decode(&v.plaintext)
+            .unwrap_or_else(|_| panic!("Bad hex plaintext in: {}", v.description));
+
+        let key_arr: [u8; 32] = key_bytes
+            .try_into()
+            .unwrap_or_else(|_| panic!("Key must be 32 bytes in: {}", v.description));
+        let iv_arr: [u8; 12] = iv_bytes
+            .try_into()
+            .unwrap_or_else(|_| panic!("IV must be 12 bytes in: {}", v.description));
+
+        let aad = cipherbox_crypto::build_node_aad(&v.node_id, v.kind, v.generation, v.role)
+            .unwrap_or_else(|e| panic!("build_node_aad failed for {}: {:?}", v.description, e));
+
+        let ciphertext = cipherbox_crypto::encrypt_aes_gcm_aad(&plaintext, &key_arr, &iv_arr, &aad)
+            .unwrap_or_else(|e| panic!("encrypt_aes_gcm_aad failed for {}: {:?}", v.description, e));
+
+        assert_eq!(
+            hex::encode(&ciphertext),
+            v.ciphertext,
+            "Full-seal KAT ciphertext mismatch for: {}",
             v.description
         );
     }
