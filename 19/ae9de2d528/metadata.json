@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "19ae9de2d528",
+  "strategy": "manual-commit",
+  "branch": "feat/unified-node-codec-core-keystone",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/19/ae9de2d528/0/metadata.json",
+      "transcript": "/19/ae9de2d528/0/full.jsonl",
+      "content_hash": "/19/ae9de2d528/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 14509,
+    "cache_creation_tokens": 413317,
+    "cache_read_tokens": 9222021,
+    "output_tokens": 116976,
+    "api_call_count": 50
+  }
+}
