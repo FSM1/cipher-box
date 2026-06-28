@@ -3,7 +3,7 @@
   "checkpoint_id": "f39a3cf02c88",
   "strategy": "manual-commit",
   "branch": "feat/unified-node-codec-core-keystone",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "packages/core/src/bin/schema.ts",
     "packages/core/src/bin/types.ts"
@@ -14,13 +14,19 @@
       "transcript": "/f3/9a3cf02c88/0/full.jsonl",
       "content_hash": "/f3/9a3cf02c88/0/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/f3/9a3cf02c88/1/metadata.json",
+      "transcript": "/f3/9a3cf02c88/1/full.jsonl",
+      "content_hash": "/f3/9a3cf02c88/1/content_hash.txt",
+      "prompt": ""
     }
   ],
   "token_usage": {
-    "input_tokens": 0,
-    "cache_creation_tokens": 0,
-    "cache_read_tokens": 0,
-    "output_tokens": 0,
-    "api_call_count": 0
+    "input_tokens": 14372,
+    "cache_creation_tokens": 399010,
+    "cache_read_tokens": 8006907,
+    "output_tokens": 105547,
+    "api_call_count": 46
   }
 }
