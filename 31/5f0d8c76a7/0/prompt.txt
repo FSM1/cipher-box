@@ -1,0 +1,138 @@
+what happened to my statusline?
+
+---
+
+what was that error about?
+
+---
+
+Im referring to the stop hook error from gsd-context-monitor.js
+
+---
+
+/gsd-update
+
+---
+
+please remove those worktrees
+
+---
+
+/gsd-manager
+
+---
+
+<task-notification>
+<task-id>a6f86b23033d30964</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/73377c33-a7a3-47f3-bd4c-8f7965661187/tasks/a6f86b23033d30964.output</output-file>
+<status>completed</status>
+<summary>Agent "Research Phase 61" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## RESEARCH COMPLETE
+
+**Phase:** 61 - AAD-Bound Seal Primitive and Cross-Language KAT
+**Confidence:** HIGH
+
+### Key Findings
+
+- **Test path discrepancy:** CONTEXT.md states `packages/crypto/__tests__/build-node-aad.test.ts` but all existing TS tests live at `packages/crypto/src/__tests__/`. Planner must use `packages/crypto/src/__tests__/build-node-aad.test.ts` — vitest `include: ['src/**/*.ts']` won't discover the other path.
+
+- **`check-vector-parity.sh` is a required task:** `scripts/check-vector-parity.sh` has a hardcoded `EXPECTED_VECTORS` array. Adding `tests/vectors/crypto/node-aad.json` to that array is a CI integration task that must be in the plan — otherwise the parity-check CI step fails even if both Rust and TS tests pass.
+
+- **KAT must test the lower-level `encryptAesGcmAad`, not `sealAesGcmAad`:** `sealAesGcmAad` mints a fresh random IV (cannot produce a fixed output). The D-01b fixed-IV full-seal KAT vector must test `encryptAesGcmAad`/`decrypt_aes_gcm_aad` directly, exactly as the existing `aes-gcm.json` vector tests `encrypt_aes_gcm` (not `seal_aes_gcm`). Both a lower-level and higher-level pair must be exported.
+
+- **`uuid` crate is the only new workspace dep.** Not currently in `Cargo.toml` or `crates/crypto/Cargo.toml`. Current version 1.23.4. Verdict OK (11M downloads/week, 2014, `github.com/uuid-rs/uuid`). Two-line addition to Cargo.toml workspace and crate.
+
+- **Zero AAD consumers today:** `grep additionalData/aad/associated_data` returns nothing in either package. Phase 61 is purely additive.
+
+### File Created
+
+`/Users/myankelev/Code/random/cipher-box/.planning/phases/61-aad-bound-seal-primitive-and-cross-language-kat/61-RESEARCH.md`
+
+### Confidence Assessment
+
+| Area | Level | Reason |
+|------|-------|--------|
+| Existing API signatures | HIGH | Read directly from source files |
+| Rust `aes-gcm` Payload syntax | MEDIUM | [ASSUMED] — KAT will confirm on first CI run |
+| UUID byte parity (TS hand-parse = Rust as_bytes) | MEDIUM | [ASSUMED] — KAT is the mechanical safety net |
+| CI wiring | HIGH | Read from `ci.yml` and `check-vector-parity.sh` |
+
+### Open Questions
+
+1. `node-aad.json` as one file with two keyed arrays vs two files — recommended: one file with `aad_vectors` + `seal_vectors` keys.
+2. Hand-freeze vectors vs extending `generate-test-vectors.ts` — recommended: hand-freeze first (unblocks C-01), optionally extend generator later.
+3. `CryptoError` variant names for AAD validation — recommended: `InvalidAadInput`.
+
+### Ready for Planning
+
+Research complete. Planner can now create PLAN.md files.</result>
+<usage><subagent_tokens>123531</subagent_tokens><tool_uses>42</tool_uses><duration_ms>443340</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a692c0620e5218aba</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/73377c33-a7a3-47f3-bd4c-8f7965661187/tasks/a692c0620e5218aba.output</output-file>
+<status>completed</status>
+<summary>Agent "Plan Phase 61" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Everything is intact and validated. The plans are complete. Final summary below.
+
+## PLANNING COMPLETE
+
+Phase 61 — AAD-Bound Seal Primitive and Cross-Language KAT decomposed into **5 plans across 4 waves**. All plans pass frontmatter + structure validation. ROADMAP.md updated (integrity verified: 9 phases, 292 lines). Not committed — orchestrator commits.
+
+### Wave structure
+
+| Wave | Plan | Deliverable | depends_on | Requirements |
+|------|------|-------------|------------|--------------|
+| 1 | 61-01 | TS AAD builder (`buildNodeAad`/`uuidToBytes`/`INVALID_AAD_INPUT`) + frozen `node-aad.json` (aad_vectors, all 4 roles) + TS KAT + parity-script registration **[merge gate, first half]** | — | CRYPTO-01, TEST-02 |
+| 2 | 61-02 | Rust AAD builder (`build_node_aad` + `uuid` workspace dep + `InvalidAadInput`) + cross-language AAD KAT **[closes merge gate]** | 61-01 | CRYPTO-02, TEST-02 |
+| 3 | 61-03 | TS AEAD-with-AAD seal variants (`encrypt/decrypt/seal/unsealAesGcmAad`) + full-seal vector (D-01b) + extended transplant/negative suite (D-02) | 61-01, 61-02 | CRYPTO-01, CRYPTO-03, TEST-02 |
+| 4 | 61-04 | Rust AEAD-with-AAD seal variants + Rust full-seal cross-language KAT | 61-02, 61-03 | CRYPTO-02, CRYPTO-03, TEST-02 |
+| 4 | 61-05 | Docs: ADR 0003 freeze + METADATA_SCHEMAS / METADATA_EVOLUTION_PROTOCOL / FILESYSTEM_SPECIFICATION pointers (D-05) | 61-01, 61-03 | CRYPTO-01, CRYPTO-02 |
+
+Waves 1–3 are single-plan and serial by design: the cross-language AAD-builder KAT is the **merge gate (C-01)** that must be green before seal/unseal-AAD, transplant, and docs proceed. The serialization is also forced by the `node-aad.json` read/write ordering (02 reads it, 03 extends it). Wave 4 runs 61-04 (Rust) ‖ 61-05 (docs) in parallel — zero `files_modified` overlap.
+
+### Multi-source coverage audit
+
+- **GOAL** (canonical AES-GCM+AAD seal + frozen encoding in TS+Rust + committed byte-identical KAT): COVERED — 61-01..61-04.
+- **REQ**: CRYPTO-01 (01,03), CRYPTO-02 (02,04), CRYPTO-03 (03,04), TEST-02 (01,02,03,04) — all COVERED, each in ≥1 plan.
+- **RESEARCH** (incl. the 4 surfaced catches): TS test path `src/__tests__/` → 61-01; `check-vector-parity.sh` EXPECTED_VECTORS → 61-01; fixed-IV vector targets lower-level `encryptAesGcmAad` not `sealAesGcmAad` → 61-03; `uuid` crate dep (root + crate Cargo.toml) → 61-02 — all COVERED.
+- **CONTEXT** D-00..D-05 + C-01..C-04: all cited across plans (D-00 ×5, D-01 ×1, D-02 ×2, D-03 ×2, D-04 ×2, D-05 ×1; C-01 ×2, C-02 ×2, C-03 ×2, C-04 ×2). No deferred ideas (Node schema → phase 62; consumer rewiring → 62–69) appear in any plan.
+
+No unplanned items. No phase split needed.
+
+### Artifacts this phase produces
+
+- **TS** (`@cipherbox/crypto`): `buildNodeAad`, `uuidToBytes`, `'INVALID_AAD_INPUT'` code, `encryptAesGcmAad`, `decryptAesGcmAad`, `sealAesGcmAad`, `unsealAesGcmAad` (named files `src/aes/seal.ts`, `src/aes/encrypt.ts`, `src/aes/decrypt.ts`, `src/utils/encoding.ts`, `src/types.ts`; barrels re-export only — C-02).
+- **Rust** (`cipherbox-crypto`): `build_node_aad`, `encrypt_aes_gcm_aad`, `decrypt_aes_gcm_aad`, `seal_aes_gcm_aad`, `unseal_aes_gcm_aad`, `CryptoError::InvalidAadInput`, `uuid` workspace dependency (`crates/crypto/src/aes.rs`, `error.rs`, `lib.rs` re-exports).
+- **Shared/tests/docs**: `tests/vectors/crypto/node-aad.json` (aad_vectors + seal_vectors), TS KAT `packages/crypto/src/__tests__/build-node-aad.test.ts`, Rust KAT `crates/crypto/tests/cross_language.rs::node_aad_cross_language`, `scripts/check-vector-parity.sh` registration, `docs/adr/0003-aad-bound-node-seal-encoding.md` + three doc pointers.
+
+### Notes for the orchestrator
+
+- TDD mode honored: every code-producing task carries `tdd="true"` + a `&lt;behavior&gt;` block (RED→GREEN). Docs (61-05) are `type: execute`.
+- Threat models present in all 5 plans (T-61-01..15 + T-61-SC). `uuid` is the only new package — RESEARCH Package Legitimacy Audit verdict **OK** (crates.io, ~12 yrs, 11.1M/wk), so **no blocking-human checkpoint** is required; the KAT mechanically catches any UUID-byte mismatch.
+- Validator emits benign `missing &lt;done&gt;` warnings — intentional: tasks use the downstream-required `&lt;read_first&gt;` + `&lt;acceptance_criteria&gt;` format (acceptance_criteria carries completion semantics).
+
+Plan files: `/Users/myankelev/Code/random/cipher-box/.planning/phases/61-aad-bound-seal-primitive-and-cross-language-kat/61-0{1..5}-PLAN.md`
+
+Next: `/gsd-execute-phase 61`</result>
+<usage><subagent_tokens>179913</subagent_tokens><tool_uses>30</tool_uses><duration_ms>989517</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>w57zxqbc6</task-id>
+<tool-use-id>toolu_01Be17rgNzqFMJuHYrirSeyZ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/73377c33-a7a3-47f3-bd4c-8f7965661187/tasks/w57zxqbc6.output</output-file>
+<status>completed</status>
+<summary>Dynamic workflow "Adversarial multi-lens verification + convergence of Phase 61 crypto plans" completed</summary>
+<result>{"rounds":2,"checkerPassed":true,"checkerTail":"node-aad.json, build-node-aad.test.ts) created in wave 1 before dependents. PASS.\n- **Research resolution:** `## Open Questions (RESOLVED)`. PASS.\n- **CLAUDE.md compliance:** Uint8Array binary, AES-256-GCM, C-02 named-file coverage placement (primitives out of barrels), markdownlint awareness in plan 05. PASS.\n- **Verify-command sanity:** no `^`-anchored package-tree greps, no `2&gt;/dev/null || echo` feeding comparisons, parity uses `python3 json.tool`. PASS.\n- **Codebase grounding:** all referenced files exist (encoding.ts, seal.ts, encrypt/decrypt.ts, aes.rs, error.rs, lib.rs line-16 re-export list, cross_language.rs, check-vector-parity.sh, aes-gcm.json); vitest `include: ['src/**/*.ts']` confirms the `src/__tests__/` path is correct. PASS.\n\n### Note (INFO, no action required)\nROADMAP SC#3 and TEST-02 cite the test path `packages/crypto/__tests__/build-node-aad.test.ts`, but plans place it at `packages/crypto/src/__tests__/build-node-aad.test.ts`. This is a deliberate, documented stale-path correction (VALIDATION.md line 68; the roadmap path lies outside the vitest `include` and would never be discovered). Correctly handled.\n\nPlans verified. Run `/gsd-execute-phase 61` to proceed.","remainingBlockers":[],"warnings":[{"severity":"warning","planFile":"/Users/myankelev/Code/random/cipher-box/.planning/phases/61-aad-bound-seal-primitive-and-cross-language-kat/61-01-PLAN.md","issue":"Asymmetric coverage guard: the Rust KAT asserts the vectors are non-empty (PATTERNS.md lines 309/319 'assert!(!aad_vectors.is_empty())'; plan 02 acceptance), but the TS aad_vectors KAT is specified only to 'iterate aad_vectors ... and assert hex(...) === expected_aad' (61-01 task 2 action line 149, acceptance lines 157-159) with NO assertion on array length or non-emptiness. A `for...of` over an empty/truncated aad_vectors passes vacuously on the TS side. Neither side pins the count at exactly 4, so a future edit (or an authoring bug) that drops role vectors 0x02/0x03/0x04 leaves both suites green while silently shrinking the 'all four role bytes' coverage that is this phase's core invariant and ADR 0003's standing rule.","fix":"Add an explicit count/role-set assertion to the TS KAT, e.g. `expect(vectors.aad_vectors).toHaveLength(4)` plus `expect(vectors.aad_vectors.map(v=&gt;v.role).sort()).toEqual([1,2,3,4])`, and mirror on the Rust side with `assert_eq!(aad_vectors.len(), 4)` so the four-role coverage cannot silently erode.","lens":"parity-rigor"},{"severity":"warning","planFile":"/Users/myankelev/Code/random/cipher-box/.planning/phases/61-aad-bound-seal-primitive-and-cross-language-kat/61-03-PLAN.md","issue":"Same vacuous-pass hole for the full-seal vector: 61-03 task 2 (line 125, acceptance line 132) has the TS KAT 'iterate seal_vectors' and assert each ciphertext, but specifies no non-empty/length assertion, whereas the Rust side asserts `!seal_vectors.is_empty()` (PATTERNS.md line 319; plan 04 task 2). If seal_vectors were ever emptied the TS full-seal KAT passes vacuously.","fix":"Require the TS full-seal KAT to assert `expect(vectors.seal_vectors.length).toBeGreaterThan(0)` (or a fixed expected length), matching the Rust `!seal_vectors.is_empty()` guard.","lens":"parity-rigor"}]}</result>
+<usage><agent_count>9</agent_count><subagent_tokens>855867</subagent_tokens><tool_uses>110</tool_uses><duration_ms>672723</duration_ms></usage>
+</task-notification>
