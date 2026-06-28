@@ -289,7 +289,7 @@ Plans:
 
 | Phase | Name | Plans Complete | Status | Completed |
 | --- | --- | --- | --- | --- |
-| 61 | AAD-Bound Seal Primitive and Cross-Language KAT | 5/5 | Complete   | 2026-06-28 |
+| 61 | AAD-Bound Seal Primitive and Cross-Language KAT | 5/5 | Complete    | 2026-06-28 |
 | 62 | Unified Node Codec (Core Keystone) | 0/? | Not started | - |
 | 63 | Read-Chain Navigation and Rotation Core | 0/? | Not started | - |
 | 64 | Rotation Soundness — Revocation Guarantees | 0/? | Not started | - |
