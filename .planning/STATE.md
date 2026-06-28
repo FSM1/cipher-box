@@ -4,17 +4,17 @@ milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
 current_phase: 62
 current_phase_name: Unified Node Codec (Core Keystone
-status: executing
+status: verifying
 stopped_at: Completed 62-05-PLAN.md
-last_updated: "2026-06-28T22:57:22.494Z"
+last_updated: "2026-06-28T23:28:25.918Z"
 last_activity: 2026-06-28
 last_activity_desc: Phase 62 execution started
 progress:
   total_phases: 9
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 14
-  completed_plans: 13
-  percent: 11
+  completed_plans: 14
+  percent: 22
 ---
 
 # Project State
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 
 Phase: 62 (Unified Node Codec (Core Keystone)) — EXECUTING
 Plan: 9 of 9
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-06-28 — Phase 62 execution started
 
 Progress: `░░░░░░░░░░` 0 / 9 phases (0%)
@@ -203,6 +203,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 62-unified-node-codec-core-keystone P06 | 2700 | 2 tasks | 11 files |
 | Phase 62 P07 | 90m | 2 tasks | 18 files |
 | Phase 62-unified-node-codec-core-keystone P08a | 180 | 1 tasks | 26 files |
+| Phase 62-unified-node-codec-core-keystone P08b | 240 | 1 tasks | 22 files |
 
 ## Accumulated Context
 
@@ -401,6 +402,8 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: vault adapted to v3 two-key format; sdk-core compile gate passes with zero retired-type references
 - [Phase ?]: vault.store: rootFolderKey split to rootReadKey+rootWriteKey for v3 vault
 - [Phase ?]: useAuth.ts vault load: unwrapKey x2 + deriveVaultIpnsKeypair (IPNS keypair derived, not in v3 blob)
+- [Phase ?]: Phase-63 kind-discrimination stubs: isFolder=true, fileCount=0 across file-browser until Node.kind available
+- [Phase ?]: ShareDialog.handleShare + handleUpgrade fully stubbed with throw phase-65; legacy FolderEntry key-wrapping path removed
 
 ## Operator Next Steps
 
@@ -408,6 +411,6 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-06-28T22:56:56.794Z
+**Last session:** 2026-06-28T23:28:19.767Z
 **Stopped at:** Completed 62-05-PLAN.md
 **Resume file:** None

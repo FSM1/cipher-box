@@ -61,7 +61,7 @@
 ### v2.0 Metadata and Sharing Refactor (Phases 61–69)
 
 - [x] **Phase 61: AAD-Bound Seal Primitive and Cross-Language KAT** — Additive AES-GCM+AAD seal in `packages/crypto` and `crates/crypto` with a committed TS↔Rust known-answer test (completed 2026-06-28)
-- [ ] **Phase 62: Unified Node Codec (Core Keystone)** — `Node`/`SealedChildRef`/`PublishedNode` types replacing all legacy metadata types; nothing downstream typechecks until this lands
+- [x] **Phase 62: Unified Node Codec (Core Keystone)** — `Node`/`SealedChildRef`/`PublishedNode` types replacing all legacy metadata types; nothing downstream typechecks until this lands (completed 2026-06-28)
 - [ ] **Phase 63: Read-Chain Navigation and Rotation Core** — Read key-chain walk, `rotateReadFromNode`/`rotateOne` engine, scope-exit predicate, and invite re-wrap in `packages/sdk-core`
 - [ ] **Phase 64: Rotation Soundness — Revocation Guarantees** — CRIT-1 content-key rotation, HIGH-3 inner grant re-mint, HIGH-4 concurrent-add merge, crash-safe resume, and the `tests/sdk-e2e` crash-safety suite
 - [ ] **Phase 65: SDK Write-Chain, Bin Re-link, and Invite Claim** — Structured write-body, (c) full Ed25519 write-revocation, bin restore as pure re-link, invite claim re-wrap; delete `addShareKeys`/`reWrapForRecipients`/`encryptedChildKeys`
@@ -126,7 +126,7 @@ Plans:
 5. `packages/sdk-core`, `packages/sdk`, and `apps/web` typecheck cleanly after `packages/core` `dist/` is rebuilt — zero references to retired `FolderMetadata`/`FileMetadata`/`FilePointer`/`FolderEntry`
 6. `METADATA_SCHEMAS.md` is updated to document the `generation`-as-convergence-witness invariant and the `fileKey`-inside-sealed-read-body semantic change
 
-**Plans**: 8/9 plans executed
+**Plans**: 9/9 plans complete
 
 Plans:
 **Wave 1**
@@ -157,7 +157,7 @@ Plans:
 
 **Wave 7** *(blocked on 62-08a)*
 
-- [ ] 62-08b-PLAN.md — web component-layer compile-gate (file-browser to Node, discover + quarantine all retired-type suites, full `pnpm typecheck` gate)
+- [x] 62-08b-PLAN.md — web component-layer compile-gate (file-browser to Node, discover + quarantine all retired-type suites, full `pnpm typecheck` gate)
 
 ---
 
@@ -321,7 +321,7 @@ Plans:
 | Phase | Name | Plans Complete | Status | Completed |
 | --- | --- | --- | --- | --- |
 | 61 | AAD-Bound Seal Primitive and Cross-Language KAT | 5/5 | Complete    | 2026-06-28 |
-| 62 | Unified Node Codec (Core Keystone) | 8/9 | In Progress|  |
+| 62 | Unified Node Codec (Core Keystone) | 9/9 | Complete   | 2026-06-28 |
 | 63 | Read-Chain Navigation and Rotation Core | 0/? | Not started | - |
 | 64 | Rotation Soundness — Revocation Guarantees | 0/? | Not started | - |
 | 65 | SDK Write-Chain, Bin Re-link, and Invite Claim | 0/? | Not started | - |
