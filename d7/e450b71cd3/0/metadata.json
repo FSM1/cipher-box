@@ -3,11 +3,17 @@
   "checkpoint_id": "d7e450b71cd3",
   "session_id": "b58306db-a0be-4e91-8a94-7d75458e6c2e",
   "strategy": "manual-commit",
-  "created_at": "2026-06-28T19:06:58.534316Z",
+  "created_at": "2026-06-28T19:08:03.753888Z",
   "branch": "feat/unified-node-codec-core-keystone",
   "checkpoints_count": 1,
   "files_touched": [
-    ".planning/phases/62-unified-node-codec-core-keystone/62-08-PLAN.md"
+    ".planning/ROADMAP.md",
+    ".planning/phases/62-unified-node-codec-core-keystone/62-03-PLAN.md",
+    ".planning/phases/62-unified-node-codec-core-keystone/62-05-PLAN.md",
+    ".planning/phases/62-unified-node-codec-core-keystone/62-08-PLAN.md",
+    ".planning/phases/62-unified-node-codec-core-keystone/62-08a-PLAN.md",
+    ".planning/phases/62-unified-node-codec-core-keystone/62-08b-PLAN.md",
+    ".planning/phases/62-unified-node-codec-core-keystone/62-RESEARCH.md"
   ],
   "agent": "Claude Code",
   "model": "",
@@ -22,15 +28,15 @@
     "api_call_count": 0
   },
   "initial_attribution": {
-    "calculated_at": "2026-06-28T19:06:58.529804Z",
-    "agent_lines": 0,
-    "agent_removed": 0,
+    "calculated_at": "2026-06-28T19:08:03.749942Z",
+    "agent_lines": 280,
+    "agent_removed": 12,
     "human_added": 0,
     "human_modified": 0,
-    "human_removed": 156,
-    "total_committed": 0,
-    "total_lines_changed": 156,
-    "agent_percentage": 0,
+    "human_removed": 0,
+    "total_committed": 280,
+    "total_lines_changed": 292,
+    "agent_percentage": 100,
     "metric_version": 2
   }
 }

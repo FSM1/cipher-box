@@ -5,7 +5,13 @@
   "branch": "feat/unified-node-codec-core-keystone",
   "checkpoints_count": 1,
   "files_touched": [
-    ".planning/phases/62-unified-node-codec-core-keystone/62-08-PLAN.md"
+    ".planning/ROADMAP.md",
+    ".planning/phases/62-unified-node-codec-core-keystone/62-03-PLAN.md",
+    ".planning/phases/62-unified-node-codec-core-keystone/62-05-PLAN.md",
+    ".planning/phases/62-unified-node-codec-core-keystone/62-08-PLAN.md",
+    ".planning/phases/62-unified-node-codec-core-keystone/62-08a-PLAN.md",
+    ".planning/phases/62-unified-node-codec-core-keystone/62-08b-PLAN.md",
+    ".planning/phases/62-unified-node-codec-core-keystone/62-RESEARCH.md"
   ],
   "sessions": [
     {
