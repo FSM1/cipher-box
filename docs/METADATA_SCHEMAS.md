@@ -1,21 +1,21 @@
 # CipherBox Metadata Schema Reference
 
-**Version:** 1.1
-**Last Updated:** 2026-03-24
-**Status:** Stable
+**Version:** 2.0
+**Last Updated:** 2026-06-28
+**Status:** Active (node/v3)
 
 ## Table of Contents
 
 1. [Overview](#1-overview)
 2. [Encryption Hierarchy](#2-encryption-hierarchy)
-3. [Wire Format](#3-wire-format)
-4. [FolderMetadata (v2)](#4-foldermetadata-v2)
-5. [FolderChild (Union)](#5-folderchild-union)
-6. [FolderEntry](#6-folderentry)
-7. [FilePointer](#7-filepointer)
-8. [FileMetadata (v1)](#8-filemetadata-v1)
-9. [VersionEntry](#9-versionentry)
-10. [VaultKeyBlob (v2)](#10-vaultkeyblob-v2)
+3. [Node (node/v3)](#3-node-nodev3)
+4. [SealedChildRef](#4-sealedchildref)
+5. [PublishedNode](#5-publishednode)
+6. [NodeContent](#6-nodecontent)
+7. [VersionEntry](#7-versionentry)
+8. [NodeWriteBody and WriteChildRef](#8-nodewritebody-and-writechildref)
+9. [VaultKeyBlob (v3)](#9-vaultkeyblob-v3)
+10. [Invariants](#10-invariants)
 11. [EncryptedVaultKeys (Removed)](#11-encryptedvaultkeys-removed)
 12. [DeviceRegistry (v1/v2)](#12-deviceregistry-v1v2)
 13. [DeviceEntry](#13-deviceentry)
@@ -26,14 +26,27 @@
 
 ## 1. Overview
 
-CipherBox stores all metadata encrypted client-side using AES-256-GCM or ECIES before persisting to IPFS or the server database. The server is zero-knowledge -- it never sees plaintext metadata or unencrypted keys.
+CipherBox stores all metadata encrypted client-side before persisting to IPFS or the server
+database. The server is zero-knowledge -- it never sees plaintext metadata or unencrypted keys.
 
-Metadata exists in two implementations that must produce byte-identical JSON (camelCase field names):
+Phase 62 introduced the unified **node/v3** schema replacing the legacy per-kind types
+(`FolderMetadata`, `FileMetadata`, `FilePointer`, `FolderEntry`). All metadata trees are
+modelled as a discriminated `Node` union keyed on `kind` (`folder`, `file`, `root`). The
+node/v3 schema is the sole current metadata model; the legacy schemas are retired.
 
-- **TypeScript** -- `packages/crypto/src/` (web app, shared crypto library)
-- **Rust** -- `crates/core/src/` (desktop app, uses `serde(rename_all = "camelCase")`)
+Metadata exists in two implementations that must produce byte-identical JSON (camelCase field
+names):
 
-This document defines the canonical schema for every metadata object in the system. For rules governing how these schemas evolve over time, see [METADATA_EVOLUTION_PROTOCOL.md](METADATA_EVOLUTION_PROTOCOL.md).
+- **TypeScript** -- `packages/core/src/node/` (web app, shared crypto library)
+- **Rust** -- `crates/core/src/` (desktop app; Phase 69 consumer of the frozen wire format)
+
+This document defines the canonical schema for every metadata object in the system. For rules
+governing how schemas evolve over time, see
+[METADATA_EVOLUTION_PROTOCOL.md](METADATA_EVOLUTION_PROTOCOL.md).
+
+> **Deferred:** Navigation walk, read-key rotation, and write-revocation FLOW behavior are not
+> documented here. Those behaviors depend on phases 63-69 and will be documented in their owning
+> phases. This document covers only the static node/v3 schema.
 
 ---
 
@@ -41,303 +54,362 @@ This document defines the canonical schema for every metadata object in the syst
 
 Each metadata type uses a specific encryption scheme and storage location.
 
-| Metadata Type     | Encrypted By                 | Algorithm                            | Storage   | IPNS Addressing            |
-| ----------------- | ---------------------------- | ------------------------------------ | --------- | -------------------------- |
-| FolderMetadata    | Folder's own `folderKey`     | AES-256-GCM                          | IPFS blob | Folder's IPNS name         |
-| VaultKeyBlob (v2) | User's secp256k1 `publicKey` | ECIES (wrapped `rootFolderKey` only) | IPFS blob | Vault key IPNS name (HKDF) |
-| FileMetadata      | Parent folder's `folderKey`  | AES-256-GCM                          | IPFS blob | File's own IPNS name       |
-| DeviceRegistry    | User's secp256k1 `publicKey` | ECIES                                | IPFS blob | Registry's IPNS name       |
-| File content      | Per-file random `fileKey`    | AES-256-GCM or AES-256-CTR           | IPFS blob | N/A (CID in FileMetadata)  |
+| Metadata Type                  | Encrypted By                    | Algorithm                  | Storage                    | IPNS Addressing          |
+| ------------------------------ | ------------------------------- | -------------------------- | -------------------------- | ------------------------ |
+| Node read-body (any kind)      | Node's `readKey` (32-byte AES)  | AES-256-GCM + AAD          | IPFS blob                  | Node's IPNS k51 name     |
+| Node write-body (any kind)     | Node's `writeKey` (32-byte AES) | AES-256-GCM + AAD          | IPFS blob                  | Same IPNS record         |
+| NodeContent (file kind)        | File node's `readKey`           | AES-256-GCM + AAD          | Inside `readSealed`        | N/A (embedded)           |
+| `SealedChildRef.readKeySealed` | Parent node's `readKey`         | AES-256-GCM + AAD          | Inside parent `readSealed` | N/A                      |
+| VaultKeyBlob (v3)              | User's secp256k1 `publicKey`    | ECIES (two root keys)      | IPFS blob                  | Vault key IPNS (HKDF)    |
+| DeviceRegistry                 | User's secp256k1 `publicKey`    | ECIES                      | IPFS blob                  | Registry IPNS (HKDF)     |
+| File content                   | Per-file random `fileKey`       | AES-256-GCM or AES-256-CTR | IPFS blob                  | N/A (CID in NodeContent) |
 
-**Key principle:** Access to a folder's `folderKey` grants access to all children (subfolders via ECIES-wrapped keys, files via the parent's `folderKey` encrypting their metadata).
+**Key principle:** Access to a node's `readKey` grants access to that node's read-body and to
+each `SealedChildRef.readKeySealed` sealed under it, enabling read traversal of the subtree.
 
 ### AAD-bound seal primitive
 
-Node metadata bodies (folder and file) are encrypted using AES-256-GCM with Additional
-Authenticated Data (AAD) that binds each sealed blob to the identity of the node it
-belongs to (node ID, kind, key generation, and role). This prevents a blob sealed for one
-node from being replayed under a different node identity without causing a cryptographic
-authentication failure.
+Node body sealing uses AES-256-GCM with Additional Authenticated Data (AAD) that binds each
+sealed blob to the identity of the node it belongs to (node ID, kind, key generation, and role).
+This prevents replay or transplant of a blob under a different node identity without a
+cryptographic authentication failure.
 
-See [ADR 0003](adr/0003-aad-bound-node-seal-encoding.md) for the authoritative freeze:
-the exact 45-byte AAD byte-encoding table, the kind-byte and role-byte assignments, the
-AEAD parameters, and the standing rule that every new role byte must extend the
-cross-language Known-Answer Test.
+See [ADR 0003](adr/0003-aad-bound-node-seal-encoding.md) for the authoritative freeze: the
+exact 45-byte AAD byte-encoding table, kind-byte and role-byte assignments, AEAD parameters
+(`AES-256-GCM`, 12-byte IV, 16-byte tag), and the standing rule that every new role byte must
+extend the cross-language Known-Answer Test.
 
----
+The role bytes reserved by this implementation are:
 
-## 3. Wire Format
-
-Folder metadata and file metadata share the same encrypted envelope format for IPFS storage.
-
-```json
-{
-  "iv": "<hex-encoded 12-byte IV>",
-  "data": "<base64-encoded AES-GCM ciphertext + 16-byte tag>"
-}
-```
-
-| Field  | Type   | Encoding | Description                                                     |
-| ------ | ------ | -------- | --------------------------------------------------------------- |
-| `iv`   | string | hex      | 12-byte AES-256-GCM initialization vector (24 hex characters)   |
-| `data` | string | base64   | AES-256-GCM ciphertext with appended 16-byte authentication tag |
-
-**Source files:**
-
-- TS folder: `packages/core/src/folder/types.ts:53-58` (`EncryptedFolderMetadata`)
-- TS file: `packages/core/src/file/types.ts:79-84` (`EncryptedFileMetadata`)
-- Rust: inline struct in `crates/fuse/src/operations.rs` (defined locally)
-
-**Encoding note:** The `iv` field is hex-encoded. The `data` field uses standard base64 (not base64url, not hex). Mixing up encodings causes decryption failures.
+| Value  | Role           | Usage                                 |
+| ------ | -------------- | ------------------------------------- |
+| `0x01` | body           | `readSealed` and `writeSealed` bodies |
+| `0x02` | child-readkey  | `SealedChildRef.readKeySealed`        |
+| `0x03` | content        | `NodeContent` self-seal (file nodes)  |
+| `0x04` | child-writekey | `WriteChildRef.writeKeySealed`        |
 
 ---
 
-## 4. FolderMetadata (v2)
+## 3. Node (node/v3)
 
-The top-level metadata object for each folder. Contains an array of children (subfolders and file pointers).
+The unified in-memory Node shape (decrypted plaintext). This is the type that lives inside
+the sealed read-body (and write-body). The `schema: 'node/v3'` discriminator is the version
+handle for this schema.
 
-**Current version:** `v2`
+**TypeScript source:** `packages/core/src/node/types.ts`
 
-| Field      | Type            | Required | Description                                   |
-| ---------- | --------------- | -------- | --------------------------------------------- |
-| `version`  | `'v2'`          | Yes      | Schema version (literal string `"v2"`)        |
-| `children` | `FolderChild[]` | Yes      | Array of FolderEntry and FilePointer children |
+| Field        | Type                           | Required         | Description                                                                              |
+| ------------ | ------------------------------ | ---------------- | ---------------------------------------------------------------------------------------- |
+| `schema`     | `'node/v3'`                    | Yes              | Schema discriminator -- always the literal string `"node/v3"`                            |
+| `kind`       | `'folder' \| 'file' \| 'root'` | Yes              | Node kind discriminator                                                                  |
+| `id`         | string (UUID)                  | Yes              | Hyphenated RFC-4122 UUID                                                                 |
+| `generation` | number                         | Yes              | Per-node read-key rotation clock; range `[0, 2^32-1]` (see [Invariants](#10-invariants)) |
+| `createdAt`  | number                         | Yes              | Unix timestamp in milliseconds                                                           |
+| `modifiedAt` | number                         | Yes              | Unix timestamp in milliseconds                                                           |
+| `children`   | `SealedChildRef[]`             | folder/root only | Sealed references to child nodes                                                         |
+| `content`    | `NodeContent`                  | file only        | File content descriptor (self-sealed under the file node's own `readKey`)                |
+| `writeBody`  | `NodeWriteBody`                | No               | IPNS signing material and write chain; absent on read-only nodes                         |
 
-**Encryption:** AES-256-GCM with this folder's 32-byte `folderKey`.
+### JSON body encoding
 
-**Storage:** IPFS (as JSON envelope `{iv, data}`), addressed via the folder's IPNS name.
+The read-body and write-body are independently JSON-encoded and then sealed. The read-body
+JSON uses a fixed field order (`schema`, `kind`, `id`, `generation`, kind-specific
+`children`/`content`, `createdAt`, `modifiedAt`) for wire-format determinism (D-04).
+`writeBody` does not appear in the read-body JSON -- it is encoded and sealed separately via
+`encodeWriteBody`.
+
+Encoding rules for the read-body JSON:
+
+- `SealedChildRef.versionFloor` bigint is serialized as a decimal string (`"0"`, `"1"`, etc.),
+  because `bigint` is not JSON-serializable.
+- `NodeContent.fileKey` and every `VersionEntry.fileKey` are base64-encoded (raw 32-byte
+  Uint8Array -- see [Invariants](#10-invariants) for the type-change context).
+- `NodeWriteBody.ipnsPrivateKey` is base64-encoded in the write-body JSON.
 
 **Source files:**
 
-- TS types: `packages/core/src/folder/types.ts:15-20`
-- TS validator: `packages/core/src/folder/metadata.ts:38-96`
-- Rust: `crates/core/src/folder.rs:85-91`
+- TS types: `packages/core/src/node/types.ts`
+- TS encoder: `packages/core/src/node/encode.ts` (`encodeReadBody`, `encodeWriteBody`, `serializeContentForWire`)
+- TS decoder: `packages/core/src/node/decode.ts` (`decodeReadBody`, `decodeWriteBody`, `validateNode`, `deserializeContentFromWire`)
+- TS seal: `packages/core/src/node/seal.ts` (`sealNode`, `unsealNode`)
+- Golden vectors: `tests/vectors/node-codec.json` (body-byte and full-seal cross-language vectors)
 
 **Version history:**
 
-| Version | Phase   | Change                                                                                                   |
-| ------- | ------- | -------------------------------------------------------------------------------------------------------- |
-| v1      | Initial | Children contained inline `FileEntry` with `cid`, `fileKeyEncrypted`, `fileIv`, `size`, `encryptionMode` |
-| v2      | 12.6    | Children use `FilePointer` (slim IPNS reference). Per-file metadata moved to dedicated IPNS records      |
-
-v1 was completely removed in Phase 11.2. The validator rejects v1 data with a `CryptoError`. This was a clean-break migration (pre-production vault wipe).
+| Change               | Phase | Description                                                                  |
+| -------------------- | ----- | ---------------------------------------------------------------------------- |
+| `node/v3` introduced | 62    | Unified Node replaces FolderMetadata, FileMetadata, FilePointer, FolderEntry |
 
 ---
 
-## 5. FolderChild (Union)
+## 4. SealedChildRef
 
-Discriminated union type for children within a folder.
+A sealed reference to a child node, stored inside the parent's read-body `children` array. The
+field set is **exactly** five fields -- no write field appears here (NODE-03, design §2.6).
 
-| Discriminant     | Type          | Description                              |
-| ---------------- | ------------- | ---------------------------------------- |
-| `type: 'folder'` | `FolderEntry` | Subfolder with ECIES-wrapped keys        |
-| `type: 'file'`   | `FilePointer` | Slim reference to a per-file IPNS record |
+| Field           | Type   | Encoding              | Description                                                                                         |
+| --------------- | ------ | --------------------- | --------------------------------------------------------------------------------------------------- |
+| `name`          | string | --                    | Display name of the child (plaintext within the sealed parent read-body)                            |
+| `ipnsName`      | string | k51 base32            | IPNS k51 name of the child node                                                                     |
+| `generation`    | number | --                    | Staleness witness for the child's read-key epoch (see [Invariants](#10-invariants))                 |
+| `versionFloor`  | bigint | decimal string (wire) | Owner-vouched IPNS sequence-number floor, bound at (re)share                                        |
+| `readKeySealed` | string | base64                | AES-256-GCM seal of the child's `readKey` under the parent `readKey`; AAD role `0x02` child-readkey |
 
-**Source files:**
+**Encryption:** `readKeySealed` is sealed by `sealChildReadKey` (role `0x02`). The entire
+`SealedChildRef` object lives inside the parent's sealed read-body -- it is not independently
+encrypted.
 
-- TS: `packages/core/src/folder/types.ts:25`
-- Rust: `crates/core/src/folder.rs:72-80` (serde internally tagged enum with `#[serde(tag = "type", rename_all = "lowercase")]`)
+**Wire format:** `versionFloor` is serialized as a decimal string on the JSON wire because
+`bigint` is not JSON-serializable. The decoder reconstructs it via `BigInt(String(raw.versionFloor))`.
 
----
-
-## 6. FolderEntry
-
-A subfolder child within folder metadata. Contains ECIES-wrapped keys for accessing the subfolder's own metadata.
-
-| Field                     | Type   | Encoding  | Required | Description                                                         |
-| ------------------------- | ------ | --------- | -------- | ------------------------------------------------------------------- |
-| `type`                    | string | --        | Yes      | Always `"folder"`                                                   |
-| `id`                      | string | UUID      | Yes      | Unique identifier for this subfolder                                |
-| `name`                    | string | --        | Yes      | Folder name (plaintext; entire metadata blob is encrypted)          |
-| `ipnsName`                | string | base32/36 | Yes      | IPNS name for resolving this subfolder's metadata                   |
-| `ipnsPrivateKeyEncrypted` | string | hex       | Yes      | ECIES-wrapped 64-byte Ed25519 IPNS key (161 bytes, 322 hex chars)   |
-| `folderKeyEncrypted`      | string | hex       | Yes      | ECIES-wrapped 32-byte AES-256 folder key (129 bytes, 258 hex chars) |
-| `createdAt`               | number | --        | Yes      | Unix timestamp in milliseconds                                      |
-| `modifiedAt`              | number | --        | Yes      | Unix timestamp in milliseconds                                      |
-
-**Not independently encrypted** -- lives inside the parent `FolderMetadata` blob.
-
-**ECIES wrapping:** Both `folderKeyEncrypted` and `ipnsPrivateKeyEncrypted` are encrypted to the vault owner's secp256k1 `publicKey`. See [VAULT_EXPORT_FORMAT.md](VAULT_EXPORT_FORMAT.md) Section 4 for the ECIES ciphertext binary format.
-
-**Subfolder IPNS keys:** Randomly generated Ed25519 keypairs (not HKDF-derived). This is different from root vault and per-file IPNS keys which are deterministically derived.
-
-**Source files:**
-
-- TS: `packages/core/src/folder/types.ts:31-47`
-- Rust: `crates/core/src/folder.rs:29-46`
-
-**Version history:** Unchanged since initial design.
+**Source files:** `packages/core/src/node/types.ts`, `packages/core/src/node/seal.ts`
+(`sealChildReadKey`, `unsealChildReadKey`)
 
 ---
 
-## 7. FilePointer
+## 5. PublishedNode
 
-A slim file reference within v2 folder metadata. Points to a file's own IPNS record instead of embedding file data inline.
+The on-wire published node as stored in IPFS and addressed via IPNS. The plaintext envelope
+wraps two sealed bodies. The plaintext fields are also AAD inputs -- they are tamper-evident
+via the IPNS signature chain.
 
-| Field                     | Type   | Encoding | Required | Description                                                                      |
-| ------------------------- | ------ | -------- | -------- | -------------------------------------------------------------------------------- |
-| `type`                    | string | --       | Yes      | Always `"file"`                                                                  |
-| `id`                      | string | UUID     | Yes      | Unique file identifier                                                           |
-| `name`                    | string | --       | Yes      | File name (plaintext; entire metadata blob is encrypted)                         |
-| `fileMetaIpnsName`        | string | base36   | Yes      | IPNS name of the file's own metadata record                                      |
-| `ipnsPrivateKeyEncrypted` | string | hex      | No       | ECIES-wrapped Ed25519 private key for IPNS signing. Absent for legacy HKDF files |
-| `createdAt`               | number | --       | Yes      | Unix timestamp in milliseconds                                                   |
-| `modifiedAt`              | number | --       | Yes      | Unix timestamp in milliseconds                                                   |
+| Field         | Type                           | Required | Description                                                                                  |
+| ------------- | ------------------------------ | -------- | -------------------------------------------------------------------------------------------- |
+| `schema`      | `'node/v3'`                    | Yes      | Schema discriminator                                                                         |
+| `kind`        | `'folder' \| 'file' \| 'root'` | Yes      | Node kind (plaintext; used in AAD)                                                           |
+| `id`          | string (UUID)                  | Yes      | Hyphenated UUID (plaintext; used in AAD)                                                     |
+| `generation`  | number                         | Yes      | Read-key epoch (plaintext; used in AAD; lets honest readers detect staleness)                |
+| `aeadVersion` | `1`                            | Yes      | AEAD primitive version tag (always `1` for this implementation)                              |
+| `readSealed`  | string                         | Yes      | Base64 of `IV \|\| AES-256-GCM ciphertext+tag` for the read-body                             |
+| `writeSealed` | string                         | No       | Base64 of `IV \|\| AES-256-GCM ciphertext+tag` for the write-body; absent on read-only nodes |
 
-**Not independently encrypted** -- lives inside the parent `FolderMetadata` blob.
+### Sealed body wire format
 
-**`ipnsPrivateKeyEncrypted` migration:** New files store a randomly generated Ed25519 IPNS private key, ECIES-wrapped with the vault owner's public key. Legacy files (created before v0.14.0) lack this field; their IPNS keys are derived via HKDF from `privateKey + fileId`. Consumers must check for this field and fall back to HKDF derivation when absent. Lazy migration writes the encrypted key on next folder metadata publish.
-
-**Key distinction from v1 FileEntry:** FilePointer does not contain `cid`, `fileKeyEncrypted`, `fileIv`, `encryptionMode`, or `size`. All file crypto material is in the per-file `FileMetadata` record, enabling file content updates without touching folder metadata.
-
-**Source files:**
-
-- TS: `packages/core/src/file/types.ts:57-73`
-- Rust: `crates/core/src/folder.rs:50-70`
-
-**Version history:** Added in Phase 12.6 (replaced inline `FileEntry` in v2 folders). `ipnsPrivateKeyEncrypted` added in v0.14.0 (random IPNS key migration).
-
----
-
-## 8. FileMetadata (v1)
-
-Per-file metadata stored in a file's own IPNS record. Contains all crypto material needed to decrypt the file content.
-
-**Current version:** `v1`
-
-| Field              | Type               | Encoding | Required | Default | Description                                            |
-| ------------------ | ------------------ | -------- | -------- | ------- | ------------------------------------------------------ |
-| `version`          | `'v1'`             | --       | Yes      | --      | Schema version (literal string `"v1"`)                 |
-| `cid`              | string             | CIDv1    | Yes      | --      | IPFS content identifier of the encrypted file          |
-| `fileKeyEncrypted` | string             | hex      | Yes      | --      | ECIES-wrapped 32-byte AES-256 file key (258 hex chars) |
-| `fileIv`           | string             | hex      | Yes      | --      | 12-byte IV used for file encryption (24 hex chars)     |
-| `size`             | number             | --       | Yes      | --      | Original unencrypted file size in bytes                |
-| `mimeType`         | string             | --       | Yes      | --      | MIME type of the original file                         |
-| `encryptionMode`   | `'GCM'` \| `'CTR'` | --       | No       | `'GCM'` | Encryption algorithm used for file content             |
-| `createdAt`        | number             | --       | Yes      | --      | Unix timestamp in milliseconds                         |
-| `modifiedAt`       | number             | --       | Yes      | --      | Unix timestamp in milliseconds                         |
-| `versions`         | `VersionEntry[]`   | --       | No       | omitted | Past versions of this file (newest first)              |
-
-**Encryption:** AES-256-GCM with the parent folder's `folderKey` (not the file's own key). This means anyone who can read the folder can also read file metadata and decrypt the file.
-
-**Storage:** IPFS (as JSON envelope `{iv, data}`), addressed via the file's own IPNS name. For new files, the IPNS keypair is randomly generated and stored in the parent's `FilePointer.ipnsPrivateKeyEncrypted`. For legacy files, it is derived via HKDF from `privateKey + fileId` (see [Section 15](#15-ipns-key-derivation-summary)).
-
-**Source files:**
-
-- TS types: `packages/core/src/file/types.ts:30-51`
-- TS validator: `packages/core/src/file/metadata.ts:98-193`
-- Rust: `crates/core/src/folder.rs:173-199` (re-exported via `file.rs`)
-
-**Version history:**
-
-| Version               | Phase     | Change                                                                 | Version Bumped? |
-| --------------------- | --------- | ---------------------------------------------------------------------- | --------------- |
-| v1 (initial)          | 12.6      | Initial per-file IPNS schema                                           | --              |
-| v1 + `encryptionMode` | 12.6/12.1 | Optional field added, defaults to `'GCM'`. Supports AES-CTR streaming. | No              |
-| v1 + `versions`       | 13        | Optional `VersionEntry[]` array. Omitted when empty.                   | No              |
-
-Both additions were additive optional fields with sensible defaults -- the version field was not bumped. This informal pattern is formalized in [METADATA_EVOLUTION_PROTOCOL.md](METADATA_EVOLUTION_PROTOCOL.md).
-
-**Rust serde annotations for optional fields:**
-
-```rust
-#[serde(default = "default_encryption_mode")]  // defaults to "GCM"
-pub encryption_mode: String,
-
-#[serde(skip_serializing_if = "Option::is_none")]
-#[serde(default)]
-pub versions: Option<Vec<VersionEntry>>,
-```
-
----
-
-## 9. VersionEntry
-
-A single past version of a file. Embedded in the `versions` array of `FileMetadata`. Each entry contains the full crypto context needed to independently decrypt that version's content.
-
-| Field              | Type               | Encoding | Required | Description                                                        |
-| ------------------ | ------------------ | -------- | -------- | ------------------------------------------------------------------ |
-| `cid`              | string             | CIDv1    | Yes      | IPFS content identifier of the encrypted file for this version     |
-| `fileKeyEncrypted` | string             | hex      | Yes      | ECIES-wrapped 32-byte AES-256 key for this version (258 hex chars) |
-| `fileIv`           | string             | hex      | Yes      | 12-byte IV used for this version's encryption (24 hex chars)       |
-| `size`             | number             | --       | Yes      | Original unencrypted file size in bytes                            |
-| `timestamp`        | number             | --       | Yes      | When this version was created (Unix ms)                            |
-| `encryptionMode`   | `'GCM'` \| `'CTR'` | --       | Yes      | Encryption mode used for this version                              |
-
-**Not independently encrypted** -- embedded in the parent `FileMetadata` blob.
-
-**Key difference from FileMetadata:** `encryptionMode` is **required** (not optional) because past versions always record the explicit encryption mode used at the time of creation.
-
-**Constraints:**
-
-- Maximum 10 versions per file
-- 15-minute cooldown between version creation
-
-**Source files:**
-
-- TS types: `packages/core/src/file/types.ts:10-23`
-- TS validator: `packages/core/src/file/metadata.ts:37-92`
-- Rust: `crates/core/src/folder.rs:152-167` (re-exported via `file.rs`)
-
-**Version history:** Added in Phase 13 (File Versioning).
-
----
-
-## 10. VaultKeyBlob (v2)
-
-Key-only binary envelope storing the ECIES-wrapped `rootFolderKey`. Written once during vault initialization and read on every login. Stored at a **dedicated IPNS name** separate from the root folder's IPNS name. Contains no folder metadata — the root folder uses standard v1 JSON format at its own IPNS name.
-
-**Binary format:**
+Each sealed body is:
 
 ```text
-0x02 | uint16_BE(key_len) | ECIES_encrypted_rootFolderKey
+base64( IV [12 bytes] | AES-256-GCM ciphertext | GCM tag [16 bytes] )
 ```
 
-| Offset | Size      | Field                    | Description                                                                        |
-| ------ | --------- | ------------------------ | ---------------------------------------------------------------------------------- |
-| 0      | 1         | Version                  | `0x02` — v2 blob identifier                                                        |
-| 1      | 2         | `key_len`                | Big-endian uint16: length of ECIES-wrapped key (typically 129 bytes). Must be > 0. |
-| 3      | `key_len` | `encryptedRootFolderKey` | ECIES-wrapped 32-byte AES-256 root folder key                                      |
+The AAD for both `readSealed` and `writeSealed` is `buildNodeAad(id, kind, generation, role=0x01)`
+(45 bytes; see [ADR 0003](adr/0003-aad-bound-node-seal-encoding.md)). `readSealed` is sealed
+under `readKey`; `writeSealed` is sealed under `writeKey`.
 
-**Encryption:** The `encryptedRootFolderKey` is ECIES-wrapped with the user's secp256k1 `publicKey`.
-
-**Storage:** IPFS blob, addressed via vault key IPNS name (HKDF-derived with `cipherbox-vault-key-ipns-v1`).
-
-**IPNS separation:** The vault key blob has its own IPNS name, distinct from the root folder's IPNS name. This prevents folder metadata publishes from overwriting the key blob. The root folder uses standard v1 JSON `{iv, data}` format like all other folders.
-
-**Lifecycle:**
-
-1. **Created** during vault init (new user). The vault key **blob content and CID are immutable** — a new vault key blob is never written for the same vault.
-2. **Read** on every login to extract `rootFolderKey` via ECIES unwrap.
-3. **Not affected** by folder operations — folder publishes go to the root folder IPNS name, not the vault key IPNS name.
-4. **IPNS record republishing:** The vault key IPNS record is signed with a finite lifetime. Although the blob content never changes, the IPNS record must be periodically republished to remain discoverable via DHT/gateways. This is handled automatically by TEE republishing (every 3 hours) alongside all other IPNS records.
+**Storage:** The `PublishedNode` JSON is uploaded to IPFS (the CID is the IPNS value) and
+addressed via the node's IPNS k51 name.
 
 **Source files:**
 
-- TS: `packages/core/src/vault/blob.ts` (`serializeVaultBlobV2`, `deserializeVaultBlobV2`, `detectBlobVersion`)
-- Return type: `Uint8Array` (raw ECIES-encrypted `rootFolderKey`)
-- Rust: `crates/core/src/vault_blob.rs`
+- TS types: `packages/core/src/node/types.ts`
+- TS seal: `packages/core/src/node/seal.ts` (`sealNode`, `unsealNode`)
+- Cross-language vectors: `tests/vectors/node-codec.json` (FULL-SEAL vectors with fixed IV;
+  Phase 69 Rust `#[test]` will assert the same bytes against these vectors)
 
-**Detection:** `detectBlobVersion(blob)` returns `2` if `blob[0] === 0x02`, else `1` (v1 JSON). v1 blobs start with `0x7B` (`{`).
+---
 
-**Validation:** Both serialize and deserialize reject `key_len === 0` (TypeScript and Rust). Maximum `key_len` is `0xFFFF` (65535 bytes).
+## 6. NodeContent
 
-**Cross-platform:** TypeScript and Rust produce byte-identical output for the same inputs (verified by cross-platform test vectors in `vault-blob-vectors.test.ts` and `vault_blob.rs`).
+File content descriptor for a `file`-kind node. Sealed separately under the file node's own
+`readKey` (role `0x03` content) by `sealContent`. The sealed blob (`base64(IV||ct+tag)`) is
+embedded as the `readSealed` field of the file node's `PublishedNode` envelope.
+
+| Field            | Type                    | Encoding      | Description                                                                   |
+| ---------------- | ----------------------- | ------------- | ----------------------------------------------------------------------------- |
+| `cid`            | string                  | CIDv1         | IPFS content identifier of the encrypted file                                 |
+| `fileIv`         | string                  | hex           | 12-byte IV used for file content encryption (24 hex chars)                    |
+| `size`           | number                  | --            | Original unencrypted file size in bytes                                       |
+| `mimeType`       | string                  | --            | MIME type of the original file                                                |
+| `encryptionMode` | `'GCM' \| 'CTR'`        | --            | **Mandatory** -- `'CTR'` supports large-file range reads                      |
+| `fileKey`        | `Uint8Array` (32 bytes) | base64 (wire) | Raw AES-256 key; **semantic type change** -- see [Invariants](#10-invariants) |
+| `versions`       | `VersionEntry[]`        | --            | Past versions of this file (newest first)                                     |
+
+**Wire encoding:** `fileKey` is base64-encoded on the JSON wire (raw 32-byte Uint8Array via
+chunked helper for large-blob safety, SECURITY MEDIUM-08). Each `VersionEntry.fileKey` is
+likewise base64-encoded.
+
+**Source files:**
+
+- TS types: `packages/core/src/node/types.ts`
+- TS encoder/decoder: `packages/core/src/node/encode.ts` (`serializeContentForWire`),
+  `packages/core/src/node/decode.ts` (`deserializeContentFromWire`)
+- TS seal: `packages/core/src/node/seal.ts` (`sealContent`, `unsealContent`)
+
+---
+
+## 7. VersionEntry
+
+A single past version of a file node's content. Embedded in the `NodeContent.versions` array
+inside the sealed content body. Each entry contains the full crypto context needed to
+independently decrypt that version.
+
+| Field            | Type                    | Encoding      | Description                                                                   |
+| ---------------- | ----------------------- | ------------- | ----------------------------------------------------------------------------- |
+| `versionId`      | string                  | UUID          | Unique identifier for this version                                            |
+| `cid`            | string                  | CIDv1         | IPFS content identifier of the encrypted file for this version                |
+| `fileIv`         | string                  | hex           | 12-byte IV for this version's file content (24 hex chars)                     |
+| `size`           | number                  | --            | Original unencrypted file size for this version                               |
+| `createdAt`      | number                  | --            | When this version was created (Unix ms)                                       |
+| `encryptionMode` | `'GCM' \| 'CTR'`        | --            | **Mandatory** -- encryption mode used for this version                        |
+| `fileKey`        | `Uint8Array` (32 bytes) | base64 (wire) | Raw AES-256 key; **semantic type change** -- see [Invariants](#10-invariants) |
+
+**Not independently encrypted** -- embedded in the parent `NodeContent` sealed body.
+
+**Key difference from NodeContent:** `encryptionMode` is required (not defaulted) because past
+versions must always record the explicit mode used at the time of creation.
+
+**Source files:** `packages/core/src/node/types.ts`
+
+---
+
+## 8. NodeWriteBody and WriteChildRef
+
+The write-body carries IPNS signing material and the write chain to child nodes. It is sealed
+separately from the read-body under the node's `writeKey` (role `0x01` body). It is absent on
+read-only nodes (when only `readKey` is held).
+
+### NodeWriteBody
+
+| Field            | Type              | Encoding      | Description                                          |
+| ---------------- | ----------------- | ------------- | ---------------------------------------------------- |
+| `ipnsPrivateKey` | `Uint8Array`      | base64 (wire) | Raw Ed25519 signing seed for this node's IPNS record |
+| `writeChildren`  | `WriteChildRef[]` | --            | Write-chain references to child nodes                |
+
+### WriteChildRef
+
+| Field            | Type            | Description                                                                                             |
+| ---------------- | --------------- | ------------------------------------------------------------------------------------------------------- |
+| `childId`        | string (UUID)   | Hyphenated UUID of the child node                                                                       |
+| `writeKeySealed` | string (base64) | AES-256-GCM seal of the child's `writeKey` under this node's `writeKey`; AAD role `0x04` child-writekey |
+
+**Separation invariant:** `writeKeySealed` appears ONLY in `WriteChildRef` (write-body). It
+NEVER appears in `SealedChildRef` (read-body). This separation ensures a read-only holder of
+`readKey` gains no write access (NODE-03, design §2.2).
+
+**Wire encoding:** `ipnsPrivateKey` Uint8Array is base64-encoded in the write-body JSON. The
+write-body JSON is then sealed by `sealNode` under `writeKey` with AAD role `0x01`.
+
+**Source files:** `packages/core/src/node/types.ts`, `packages/core/src/node/seal.ts`
+
+---
+
+## 9. VaultKeyBlob (v3)
+
+Binary envelope storing two ECIES-encrypted root keys on IPFS. Written once during vault
+initialization and read on every login. Version `0x03` replaces the single-key `v2` envelope
+retired in Phase 62 (greenfield hard-cut; staging vault wiped).
+
+### Binary format
+
+```text
+0x03 | u16_BE(readLen) | ECIES(rootReadKey) | u16_BE(writeLen) | ECIES(rootWriteKey)
+```
+
+| Offset      | Size       | Field                   | Description                                                               |
+| ----------- | ---------- | ----------------------- | ------------------------------------------------------------------------- |
+| 0           | 1          | Version                 | `0x03` -- v3 blob identifier                                              |
+| 1           | 2          | `readLen`               | Big-endian uint16: byte length of `encryptedRootReadKey` (typically 129)  |
+| 3           | `readLen`  | `encryptedRootReadKey`  | ECIES-wrapped 32-byte AES-256 root read key                               |
+| 3+readLen   | 2          | `writeLen`              | Big-endian uint16: byte length of `encryptedRootWriteKey` (typically 129) |
+| 3+readLen+2 | `writeLen` | `encryptedRootWriteKey` | ECIES-wrapped 32-byte AES-256 root write key                              |
+
+**Encryption:** Both keys are ECIES-wrapped with the user's secp256k1 `publicKey`.
+
+**Storage:** IPFS blob, addressed via vault key IPNS name (HKDF-derived with
+`cipherbox-vault-key-ipns-v1`). The blob content and CID are immutable after vault init; the
+IPNS record is periodically republished by the TEE without changing the blob.
+
+**Key independence:** `rootReadKey` and `rootWriteKey` are independently generated via
+`generateFileKey()`. Neither is derived from the other or from the Ed25519 IPNS keypair.
+
+**Source files:**
+
+- TS: `packages/core/src/vault/blob.ts` (`serializeVaultBlobV3`, `deserializeVaultBlobV3`,
+  `BLOB_V3_VERSION`)
+- TS types: `packages/core/src/vault/types.ts` (`VaultInit.rootReadKey`,
+  `VaultInit.rootWriteKey`, `EncryptedVaultKeys.encryptedRootReadKey`,
+  `EncryptedVaultKeys.encryptedRootWriteKey`)
+- Cross-language vectors: `tests/vectors/vault-v3-blob.json`
 
 **Version history:**
 
-| Change                  | Phase | Description                                                                                                       |
-| ----------------------- | ----- | ----------------------------------------------------------------------------------------------------------------- |
-| v2 blob format created  | 20    | Binary envelope replaces server-side `EncryptedVaultKeys` storage. rootFolderKey moves from DB to IPFS.           |
-| Separate vault key IPNS | 20    | Dedicated IPNS name (`cipherbox-vault-key-ipns-v1`) prevents root folder publishes from overwriting the key blob. |
+| Change                    | Phase | Description                                                                        |
+| ------------------------- | ----- | ---------------------------------------------------------------------------------- |
+| v3 introduced; v2 retired | 62    | Two-key envelope; greenfield hard-cut                                              |
+| v2 format                 | 20    | Binary envelope replaced server-side `EncryptedVaultKeys`. Single `rootFolderKey`. |
+
+---
+
+## 10. Invariants
+
+Two invariants are required by SC#6 of the v2.0 ROADMAP. Every implementation that reads or
+writes node/v3 data must uphold them.
+
+### generation-as-convergence-witness
+
+`generation` is a per-node read-key rotation clock, represented as a `number` (u32-safe,
+range `[0, 2^32-1]`).
+
+**Authoritative source:** The authoritative `generation` value for a node is the one on the
+**child's own `PublishedNode` envelope** -- the `generation` field in the plaintext
+`PublishedNode` JSON at the node's own IPNS k51 address. This value is also embedded in the
+AAD of both sealed bodies, making tampering a cryptographic authentication failure.
+
+**Staleness witnesses** (mirrors only -- never authoritative):
+
+- `SealedChildRef.generation` -- a mirror written by the parent when it last sealed the child's
+  `readKey`. It is a convergence hint that lets the parent detect when its sealed reference is
+  stale (e.g., after a read-key rotation). It is NOT an independent source of the child's
+  generation.
+- `shares.rootGeneration` -- a similar staleness mirror in share rows. The same rule applies:
+  it is a witness, never the authoritative value.
+
+**Distinction from the other per-node counters** (see the project CONTEXT.md Counters table
+for full definitions):
+
+| Counter          | Type                | Scope            | Role                                            |
+| ---------------- | ------------------- | ---------------- | ----------------------------------------------- |
+| `generation`     | `number` (u32-safe) | Per-node         | Read-key rotation clock; AAD-bound              |
+| `keyEpoch`       | number              | TEE / grant rows | TEE public-key rotation epoch                   |
+| `sequenceNumber` | `bigint`            | Per-IPNS record  | IPNS record ordering (monotonically increasing) |
+
+These three counters serve different purposes and must not be conflated.
+
+**Validation:** `decodeReadBody` and `validateNode` enforce `generation` in `[0, 0xffffffff]`
+fail-closed (D-08), mirroring the guard in `buildNodeAad`.
+
+### fileKey semantic type change
+
+In the legacy model (`FileMetadata.fileKeyEncrypted`, `VersionEntry.fileKeyEncrypted`), the
+file encryption key was an ECIES-wrapped hex string stored in the parent folder's metadata.
+
+In node/v3, the file encryption key (`NodeContent.fileKey`, `VersionEntry.fileKey`) is a
+**raw 32-byte `Uint8Array`** stored **inside the sealed read-body**. The outer AES-256-GCM
+sealed body (role `0x01` or `0x03`) provides confidentiality and integrity; ECIES wrapping
+is not used for the file key inside node metadata.
+
+This is a **semantic type change**, not a rename:
+
+| Aspect          | Legacy (`fileKeyEncrypted`)                     | node/v3 (`fileKey`)                      |
+| --------------- | ----------------------------------------------- | ---------------------------------------- |
+| Type            | string                                          | `Uint8Array` (raw 32 bytes)              |
+| Encoding        | ECIES-wrapped hex (258 hex chars)               | base64 on JSON wire (inside sealed body) |
+| Confidentiality | ECIES wrapping                                  | AES-256-GCM sealed body                  |
+| Where stored    | Inside parent FolderMetadata (plaintext object) | Inside child's own sealed read-body      |
+
+The change applies to `NodeContent.fileKey` and every `VersionEntry.fileKey`. The decoder
+(`deserializeContentFromWire`) asserts `instanceof Uint8Array && length === 32` on decode.
 
 ---
 
 ## 11. EncryptedVaultKeys (Removed)
 
-> **Removed in Phase 20.** The server no longer stores any crypto material. `rootFolderKey` is stored exclusively in the [VaultKeyBlob (v2)](#10-vaultkeyblob-v2) on IPFS. The IPNS private key is HKDF-derived client-side and never transmitted to the server.
+> **Removed in Phase 20.** The server no longer stores any crypto material. Root keys are
+> stored exclusively in the [VaultKeyBlob (v3)](#9-vaultkeyblob-v3) on IPFS. The IPNS
+> private key is HKDF-derived client-side and never transmitted to the server.
 >
-> The `encrypted_root_folder_key`, `encrypted_root_ipns_private_key`, and `migrated_at` database columns have been dropped. The API vault DTO only contains `ownerPublicKey` and `rootIpnsName`.
+> The `encrypted_root_folder_key`, `encrypted_root_ipns_private_key`, and `migrated_at`
+> database columns have been dropped. The API vault DTO only contains `ownerPublicKey`
+> and `rootIpnsName`.
 
 ---
 
@@ -347,17 +419,21 @@ The encrypted device registry tracking all authenticated devices for a user.
 
 **Current version:** `v1` | `v2`
 
-| Field            | Type             | Required | Description                                                   |
-| ---------------- | ---------------- | -------- | ------------------------------------------------------------- |
-| `version`        | `'v1'` \| `'v2'` | Yes      | Schema version (`'v1'` accepted for read, migrated to `'v2'`) |
-| `sequenceNumber` | number           | Yes      | Monotonically increasing counter for IPNS ordering            |
-| `devices`        | `DeviceEntry[]`  | Yes      | Array of all device entries (including revoked for audit)     |
+| Field            | Type            | Required | Description                                                   |
+| ---------------- | --------------- | -------- | ------------------------------------------------------------- |
+| `version`        | `'v1' \| 'v2'`  | Yes      | Schema version (`'v1'` accepted for read, migrated to `'v2'`) |
+| `sequenceNumber` | number          | Yes      | Monotonically increasing counter for IPNS ordering            |
+| `devices`        | `DeviceEntry[]` | Yes      | Array of all device entries (including revoked for audit)     |
 
-**Encryption:** ECIES with the user's secp256k1 `publicKey`. The entire registry is encrypted as a single blob (not AES-GCM like folder/file metadata).
+**Encryption:** ECIES with the user's secp256k1 `publicKey`. The entire registry is encrypted
+as a single blob (not AES-GCM like node metadata).
 
-**Storage:** IPFS (raw ECIES ciphertext blob, not the `{iv, data}` JSON envelope), addressed via the device registry IPNS name (HKDF-derived).
+**Storage:** IPFS (raw ECIES ciphertext blob, not the `{iv, data}` JSON envelope), addressed
+via the device registry IPNS name (HKDF-derived).
 
-**`sequenceNumber` usage:** Each update increments the sequence number. Used by the IPNS publisher to set the record's sequence field, ensuring newer records supersede older ones across the DHT.
+**`sequenceNumber` usage:** Each update increments the sequence number. Used by the IPNS
+publisher to set the record's sequence field, ensuring newer records supersede older ones
+across the DHT.
 
 **Validator constraints:**
 
@@ -365,14 +441,15 @@ The encrypted device registry tracking all authenticated devices for a user.
 - `devices` must be an array (may be empty)
 - v1 registries: ipHash may be empty (migrated to zero placeholder on read)
 - v2 registries: ipHash must be valid 64-char hex (strict validation)
-- Generic error messages (`'Invalid registry format'`) to avoid leaking schema details to attackers
+- Generic error messages (`'Invalid registry format'`) to avoid leaking schema details
 
 **Source files:**
 
 - TS types: `packages/core/src/registry/types.ts`
 - TS validator: `packages/core/src/registry/schema.ts`
 
-**No Rust equivalent.** The desktop app uses the webview's TypeScript crypto for device registry operations.
+**No Rust equivalent.** The desktop app uses the webview's TypeScript crypto for device
+registry operations.
 
 ### Version History
 
@@ -385,22 +462,23 @@ The encrypted device registry tracking all authenticated devices for a user.
 
 ## 13. DeviceEntry
 
-An individual device record within the `DeviceRegistry`. Tracks authentication status, platform information, and revocation state.
+An individual device record within the `DeviceRegistry`. Tracks authentication status,
+platform information, and revocation state.
 
-| Field         | Type                                             | Encoding | Required | Description                                                |
-| ------------- | ------------------------------------------------ | -------- | -------- | ---------------------------------------------------------- |
-| `deviceId`    | string                                           | hex      | Yes      | SHA-256 hash of device's Ed25519 public key (64 hex chars) |
-| `publicKey`   | string                                           | hex      | Yes      | Device's Ed25519 public key (64 hex chars)                 |
-| `name`        | string                                           | --       | Yes      | Human-readable device name (max 200 chars)                 |
-| `platform`    | `'web'` \| `'macos'` \| `'linux'` \| `'windows'` | --       | Yes      | Platform identifier                                        |
-| `appVersion`  | string                                           | --       | Yes      | Application version string (max 50 chars)                  |
-| `deviceModel` | string                                           | --       | Yes      | Device model or OS version (max 200 chars)                 |
-| `ipHash`      | string                                           | hex      | Yes      | SHA-256 hash of IP address at registration (64 hex chars)  |
-| `status`      | `'pending'` \| `'authorized'` \| `'revoked'`     | --       | Yes      | Authorization status                                       |
-| `createdAt`   | number                                           | --       | Yes      | When device was first registered (Unix ms)                 |
-| `lastSeenAt`  | number                                           | --       | Yes      | Last time device synced with registry (Unix ms)            |
-| `revokedAt`   | number \| null                                   | --       | Yes      | When device was revoked (Unix ms), `null` if not revoked   |
-| `revokedBy`   | string \| null                                   | --       | Yes      | Device ID of the revoking device, `null` if not revoked    |
+| Field         | Type                                       | Encoding | Required | Description                                                |
+| ------------- | ------------------------------------------ | -------- | -------- | ---------------------------------------------------------- |
+| `deviceId`    | string                                     | hex      | Yes      | SHA-256 hash of device's Ed25519 public key (64 hex chars) |
+| `publicKey`   | string                                     | hex      | Yes      | Device's Ed25519 public key (64 hex chars)                 |
+| `name`        | string                                     | --       | Yes      | Human-readable device name (max 200 chars)                 |
+| `platform`    | `'web' \| 'macos' \| 'linux' \| 'windows'` | --       | Yes      | Platform identifier                                        |
+| `appVersion`  | string                                     | --       | Yes      | Application version string (max 50 chars)                  |
+| `deviceModel` | string                                     | --       | Yes      | Device model or OS version (max 200 chars)                 |
+| `ipHash`      | string                                     | hex      | Yes      | SHA-256 hash of IP address at registration (64 hex chars)  |
+| `status`      | `'pending' \| 'authorized' \| 'revoked'`   | --       | Yes      | Authorization status                                       |
+| `createdAt`   | number                                     | --       | Yes      | When device was first registered (Unix ms)                 |
+| `lastSeenAt`  | number                                     | --       | Yes      | Last time device synced with registry (Unix ms)            |
+| `revokedAt`   | number \| null                             | --       | Yes      | When device was revoked (Unix ms), `null` if not revoked   |
+| `revokedBy`   | string \| null                             | --       | Yes      | Device ID of the revoking device, `null` if not revoked    |
 
 **Not independently encrypted** -- embedded in the parent `DeviceRegistry` blob.
 
@@ -429,41 +507,46 @@ An individual device record within the `DeviceRegistry`. Tracks authentication s
 
 TypeScript and Rust implementations must produce identical JSON for the same logical data.
 
-| Schema            | TypeScript          | Rust                                            | Notes                          |
-| ----------------- | ------------------- | ----------------------------------------------- | ------------------------------ |
-| FolderMetadata    | `folder/types.ts`   | `crates/core/src/folder.rs`                     | Both platforms                 |
-| FolderChild       | `folder/types.ts`   | `crates/core/src/folder.rs` (serde tagged enum) | Both platforms                 |
-| FolderEntry       | `folder/types.ts`   | `crates/core/src/folder.rs`                     | Both platforms                 |
-| FilePointer       | `file/types.ts`     | `crates/core/src/folder.rs`                     | Both platforms                 |
-| FileMetadata      | `file/types.ts`     | `crates/core/src/folder.rs`                     | Both platforms                 |
-| VersionEntry      | `file/types.ts`     | `crates/core/src/folder.rs`                     | Both platforms                 |
-| VaultKeyBlob (v2) | `vault/blob.ts`     | `crates/core/src/vault_blob.rs`                 | Both platforms (binary format) |
-| DeviceRegistry    | `registry/types.ts` | --                                              | TypeScript only                |
-| DeviceEntry       | `registry/types.ts` | --                                              | TypeScript only                |
+| Schema            | TypeScript          | Rust                                       | Notes                                                                 |
+| ----------------- | ------------------- | ------------------------------------------ | --------------------------------------------------------------------- |
+| Node (node/v3)    | `node/types.ts`     | `crates/core/src/` (Phase 69)              | Phase-69 Rust twin; frozen vectors in `tests/vectors/node-codec.json` |
+| SealedChildRef    | `node/types.ts`     | `crates/core/src/` (Phase 69)              | Embedded in Node read-body                                            |
+| PublishedNode     | `node/types.ts`     | `crates/core/src/` (Phase 69)              | On-wire IPFS/IPNS object                                              |
+| NodeContent       | `node/types.ts`     | `crates/core/src/` (Phase 69)              | Embedded in file node `readSealed`                                    |
+| VersionEntry      | `node/types.ts`     | `crates/core/src/` (Phase 69)              | Embedded in NodeContent                                               |
+| VaultKeyBlob (v3) | `vault/blob.ts`     | `crates/core/src/vault_blob.rs` (Phase 69) | Binary format; vectors in `tests/vectors/vault-v3-blob.json`          |
+| DeviceRegistry    | `registry/types.ts` | --                                         | TypeScript only                                                       |
+| DeviceEntry       | `registry/types.ts` | --                                         | TypeScript only                                                       |
 
-**Rust serialization strategy:** All Rust structs use `#[serde(rename_all = "camelCase")]` to produce camelCase JSON field names matching the TypeScript convention. The `FolderChild` enum uses `#[serde(tag = "type", rename_all = "lowercase")]` for internally tagged union serialization.
+**Rust serialization strategy:** All Rust structs use `#[serde(rename_all = "camelCase")]` to
+produce camelCase JSON field names matching the TypeScript convention.
 
-**Types without Rust implementations** (EncryptedVaultKeys, DeviceRegistry, DeviceEntry) are handled entirely by the TypeScript crypto library running in the desktop app's webview. The Rust backend does not need to serialize or deserialize these types directly.
+**Phase 69 consumer:** The Rust `Node` enum and FUSE/WinFsp symmetric unwrap are deferred to
+Phase 69. The TypeScript codec in Phase 62 freezes the wire format; Phase 69 will assert the
+same golden bytes from `tests/vectors/node-codec.json` in `crates/crypto/tests/cross_language.rs`.
 
 ---
 
 ## 15. IPNS Key Derivation Summary
 
-CipherBox uses two strategies for Ed25519 IPNS keypairs:
+CipherBox uses two strategies for Ed25519 IPNS keypairs.
 
 ### HKDF-derived (deterministic)
 
-Used for the root vault, vault key blob, and device registry where discoverability from the private key alone is required.
+Used for the root vault, vault key blob, and device registry where discoverability from the
+private key alone is required.
 
-| Purpose              | Salt           | HKDF Info                           | Stores                                      | Source File                                 |
-| -------------------- | -------------- | ----------------------------------- | ------------------------------------------- | ------------------------------------------- |
-| Root folder IPNS     | `CipherBox-v1` | `cipherbox-vault-ipns-v1`           | v1 folder metadata `{iv, data}`             | `packages/crypto/src/vault/derive-ipns.ts`  |
-| Vault key blob IPNS  | `CipherBox-v1` | `cipherbox-vault-key-ipns-v1`       | v2 key blob (ECIES-wrapped `rootFolderKey`) | `packages/crypto/src/vault/derive-ipns.ts`  |
-| Device registry IPNS | `CipherBox-v1` | `cipherbox-device-registry-ipns-v1` | ECIES-encrypted registry                    | `packages/core/src/registry/derive-ipns.ts` |
+| Purpose              | Salt           | HKDF Info                           | Stores                         | Source File                                 |
+| -------------------- | -------------- | ----------------------------------- | ------------------------------ | ------------------------------------------- |
+| Root node IPNS       | `CipherBox-v1` | `cipherbox-vault-ipns-v1`           | Root `PublishedNode` (node/v3) | `packages/crypto/src/vault/derive-ipns.ts`  |
+| Vault key blob IPNS  | `CipherBox-v1` | `cipherbox-vault-key-ipns-v1`       | VaultKeyBlob (v3)              | `packages/crypto/src/vault/derive-ipns.ts`  |
+| Device registry IPNS | `CipherBox-v1` | `cipherbox-device-registry-ipns-v1` | ECIES-encrypted registry       | `packages/core/src/registry/derive-ipns.ts` |
 
-**Root folder vs vault key blob:** These are two separate IPNS names derived from the same private key with different HKDF info strings. The root folder IPNS stores standard folder metadata (updated on every folder operation). The vault key blob IPNS stores the ECIES-wrapped `rootFolderKey` (written once at vault init, read on every login). This separation prevents folder publishes from overwriting the key blob.
-
-**Legacy: Per-file IPNS (HKDF fallback):** Files created before v0.14.0 use `cipherbox-file-ipns-v1:{fileId}` as the HKDF info string. This derivation path is retained for backward compatibility and used when `FilePointer.ipnsPrivateKeyEncrypted` is absent.
+**Root node vs vault key blob:** These are two separate IPNS names derived from the same
+private key with different HKDF info strings. The root node IPNS stores the root
+`PublishedNode` (updated on every node operation). The vault key blob IPNS stores the
+ECIES-wrapped root keys (written once at vault init, read on every login). This separation
+prevents node publishes from overwriting the key blob.
 
 **Derivation path:**
 
@@ -476,18 +559,18 @@ secp256k1 privateKey (32 bytes)
 
 ### Random Ed25519 keypairs
 
-Used for subfolders and new files. The private key is ECIES-wrapped with the vault owner's public key and stored in the parent folder's metadata.
+Used for all non-root nodes (subfolders, files). The Ed25519 private key (signing seed) is
+stored in the sealed `NodeWriteBody.ipnsPrivateKey` under the node's `writeKey`. Only a
+holder of the node's `writeKey` can read and use it for IPNS publishing.
 
-| Purpose       | Storage Location                      | Source File                             |
-| ------------- | ------------------------------------- | --------------------------------------- |
-| Subfolder     | `FolderEntry.ipnsPrivateKeyEncrypted` | `packages/crypto/src/ed25519/keygen.ts` |
-| Per-file IPNS | `FilePointer.ipnsPrivateKeyEncrypted` | `packages/core/src/file/derive-ipns.ts` |
-
-**Migration:** Legacy files without `ipnsPrivateKeyEncrypted` fall back to HKDF derivation. Lazy migration writes the encrypted key when folder metadata is next published. Recovery traverses the folder tree via `fileMetaIpnsName` and never derives IPNS names independently, so the random-key approach is safe.
+| Purpose           | Storage Location                                          | Access                   |
+| ----------------- | --------------------------------------------------------- | ------------------------ |
+| Any non-root node | `NodeWriteBody.ipnsPrivateKey` (inside sealed write-body) | Requires node `writeKey` |
 
 ---
 
-_Document version: 1.1_
-_Last updated: 2026-03-24_
+_Document version: 2.0_
+_Last updated: 2026-06-28_
 _See also: [METADATA_EVOLUTION_PROTOCOL.md](METADATA_EVOLUTION_PROTOCOL.md) for schema change rules_
 _See also: [VAULT_EXPORT_FORMAT.md](VAULT_EXPORT_FORMAT.md) for recovery and crypto format details_
+_See also: [ADR 0003](adr/0003-aad-bound-node-seal-encoding.md) for the frozen AAD/role byte encoding_
