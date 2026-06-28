@@ -1,0 +1,205 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "2ff90076a740",
+  "session_id": "73377c33-a7a3-47f3-bd4c-8f7965661187",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-28T03:03:00.662546Z",
+  "branch": "feat/aad-bound-seal-primitive-and-cross-language-kat",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "ae45fed6c5d0",
+  "token_usage": {
+    "input_tokens": 38819,
+    "cache_creation_tokens": 1222333,
+    "cache_read_tokens": 37995052,
+    "output_tokens": 187809,
+    "api_call_count": 153
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01MP5FE4PxcXK1YRZVVVN1M9",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "ae45fed6c5d0",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 245,
+        "end": 246,
+        "entry_ids": [
+          "b3fe368c-131b-4f74-a100-0b89e8611411"
+        ],
+        "tool_use_id": "toolu_01MP5FE4PxcXK1YRZVVVN1M9"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01MP5FE4PxcXK1YRZVVVN1M9"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01PZVpF4BYFpD6XAmPVvuHYX",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "ae45fed6c5d0",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 493,
+        "end": 494,
+        "entry_ids": [
+          "95424bb7-72a8-4b7d-9cec-e1452575a0e4"
+        ],
+        "tool_use_id": "toolu_01PZVpF4BYFpD6XAmPVvuHYX"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01PZVpF4BYFpD6XAmPVvuHYX"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_011CWCeJRxy9aRubKqPwTZge",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "ae45fed6c5d0",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 677,
+        "end": 678,
+        "entry_ids": [
+          "37d33beb-a2ad-4a79-b528-e463d71bfffb"
+        ],
+        "tool_use_id": "toolu_011CWCeJRxy9aRubKqPwTZge"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_011CWCeJRxy9aRubKqPwTZge"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ship-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "summary": {
+    "intent": "Debug two hook errors (blank statusline, Stop-hook MODULE_NOT_FOUND), fix the broken GSD install, then run the GSD manager to plan and execute Phase 61 — implementing AAD-bound AES-GCM seal primitives with a cross-language Known-Answer-Test suite in TypeScript and Rust.",
+    "outcome": "Both hook errors were fixed (statusline.cjs rename + GSD reinstall to 1.6.0); Phase 61 was fully implemented (5 plans, 31 commits, 196 TS + 97 Rust tests), security-reviewed, and shipped as PR #576 with all 29 CI checks green and 1 Greptile thread resolved.",
+    "learnings": {
+      "repo": [
+        "The repo has 'type': 'module' in package.json — all .js hook files are treated as ESM and crash on require(); Claude hooks must use the .cjs extension to stay CommonJS.",
+        "GSD hooks are gitignored via .claude/hooks/gsd-* (.gitignore:55) — they don't survive clone/branch-switch and require a GSD installer run to restore; the main tree can silently be missing hooks that worktrees have.",
+        "GSD worktrees under .claude/worktrees/ are also gitignored and disposable — they can stay on an older GSD version after a main-tree update without any consequence.",
+        "vitest include is 'src/**/*.ts' — KAT tests must live at packages/crypto/src/__tests__/, not at packages/crypto/__tests__/; the latter path is never discovered.",
+        "scripts/check-vector-parity.sh has a hardcoded EXPECTED_VECTORS array — adding a new vector file (e.g. node-aad.json) to that array is a required CI wiring task, otherwise the parity-check step fails even when both TS and Rust suites pass.",
+        "sealAesGcmAad mints a fresh random IV on every call and cannot produce a fixed KAT output — fixed-IV KAT vectors must target the lower-level encryptAesGcmAad/decrypt_aes_gcm_aad pair, mirroring how aes-gcm.json tests encrypt_aes_gcm rather than seal_aes_gcm.",
+        "gh pr edit fails on this repo due to Projects-classic GraphQL — patch PR bodies via 'env -u GITHUB_TOKEN gh api -X PATCH repos/FSM1/cipher-box/pulls/<N> -F body=@file' instead.",
+        "github-actions[bot] pushes a 'chore(release)' commit to the branch immediately after PR creation — always git fetch + rebase before any subsequent push or it will be rejected.",
+        "crates/crypto has release-as: 0.6.0 vs manifest 0.5.0 — this is a legitimate minor version bump for the new Rust APIs, not a stale pin (CodeRabbit flagged it as a false positive).",
+        "Greptile is a second AI reviewer that posts PR review threads independently of CodeRabbit; both need to be triaged and resolved before the PR is clean.",
+        "The root tsconfig.scripts.json has 'types': ['node'] but @types/node is not hoisted to root node_modules/@types/ — tsc -p tsconfig.scripts.json fails with TS2688 on any checkout; this is pre-existing and unrelated to crypto changes.",
+        "env -u GITHUB_TOKEN must prefix every gh CLI call in this repo."
+      ],
+      "code": [
+        {
+          "path": "packages/crypto/src/aes/seal.ts",
+          "line": 40,
+          "end_line": 42,
+          "finding": "Existing encryptAesGcm uses 'new Uint8Array(key)' copy without zeroizing afterward — the new AAD variants intentionally match this pattern; adding zeroize only to new functions would be inconsistent."
+        },
+        {
+          "path": "packages/crypto/src/__tests__/build-node-aad.test.ts",
+          "finding": "KAT must assert both array length (toHaveLength(4) for aad_vectors, toBe(1) for seal_vectors) and the role-set (.map(v=>v.role).sort()) — a bare for...of loop over an empty array passes vacuously and silently erodes coverage."
+        },
+        {
+          "path": "crates/crypto/tests/cross_language.rs",
+          "finding": "Rust KAT must pin exact counts (assert_eq!(aad_vectors.len(), 4); assert_eq!(seal_vectors.len(), 1)) and the role set — 'assert!(!aad_vectors.is_empty())' is insufficient to prevent silent role-vector erosion."
+        },
+        {
+          "path": "tests/vectors/crypto/node-aad.json",
+          "finding": "One file with two keyed arrays (aad_vectors + seal_vectors) is the chosen layout; the seal_vectors entry must use a fixed IV and test encryptAesGcmAad directly to produce a deterministic ciphertext (cf6bfe78…)."
+        },
+        {
+          "path": "packages/crypto/src/utils/encoding.ts",
+          "finding": "uuidToBytes must validate input with /^[0-9a-fA-F]{32}$/ after stripping hyphens and throw CryptoError('INVALID_AAD_INPUT') — plain Error throws break the error contract and were the CodeRabbit LOW-2 finding."
+        }
+      ],
+      "workflow": [
+        "The GSD commit helper can report 'updated: []' or 'commit_failed' while the commit actually lands — always verify with 'git log --oneline -1' and never blindly retry a commit.",
+        "CodeRabbit CLI '--base main' uses the local main branch as the merge-base; if local main is stale this can inflate the diff from ~44 files to 661+. Always use '--base origin/main' to match PR scope.",
+        "For AFK/autonomous execution sessions, disable commit signing locally ('git config commit.gpgsign false') to prevent 1Password SSH biometric prompts from hanging subagent commits; flag the resulting unsigned-commit caveat clearly in the final report.",
+        "Disable worktrees for single-plan-per-wave sequential phases where suites need node_modules — worktree isolation forces a slow pnpm install per executor and gains nothing when there is no inter-plan parallelism.",
+        "Ultracode multi-lens adversarial plan verification (canonical plan-checker + N independent crypto lenses) converges faster for security-critical phases: round 1 finds blockers, auto-revision via planner, round 2 passes with zero blockers.",
+        "A security review that independently re-derives KAT ciphertext via OpenSSL is a third-implementation proof — the strongest available cross-implementation correctness signal before shipping.",
+        "git fetch / git push are blocked inside the sandbox — must run with sandbox disabled; plain gh api reads/writes work sandboxed.",
+        "git rebase -i is unavailable in this environment; use 'git filter-branch --msg-filter' to reword commit subjects before opening a PR when conventional-commit enforcement is active.",
+        "Poll gh pr checks with a full settle loop (waiting for all expected checks to register before exiting) — an early-exit poll can miss checks that register after CI re-triggers on the bot's chore(release) commit."
+      ]
+    },
+    "friction": [
+      "Main-tree GSD install was a silent broken fragment (missing gsd-tools.cjs, gsd-context-monitor.js, file manifest, most workflows) — no error surfaced until the Stop hook fired each turn; the worktrees had the complete 1.4.3 install, masking the problem.",
+      "GSD installer's interactive keep/remove prompt for stale fragment files blocked non-interactive reinstall — needed a separate run passing the resolution explicitly.",
+      "CodeRabbit CLI defaulted to local main as merge-base (stale, 661-file diff) instead of origin/main (44-file diff); the first run errored on the 150-file limit.",
+      "CodeRabbit review showed 'Review skipped' transiently after PR creation, then completed with 5 threads on the next CI round — the poll exited too early and missed this.",
+      "1Password SSH signing requires biometric approval per commit, making it incompatible with autonomous AFK execution chains; commit signing had to be disabled for the session.",
+      "Pre-existing @types/node resolution failure in root tsconfig.scripts.json made the full typecheck chain appear to fail — required additional investigation to confirm it was not a phase-61 regression.",
+      "gh pr edit is broken on this repo (Projects-classic GraphQL error) — discovered mid-ship, required switching to gh api -X PATCH workaround.",
+      "The GSD CONTEXT.md had the wrong test path (packages/crypto/__tests__/ instead of src/__tests__/) — caught by the researcher subagent but would have caused a silent CI failure if missed."
+    ],
+    "open_items": [
+      "LOW-1 (deferred): TS and Rust accept slightly different non-canonical UUID string forms — each side fails-closed but on different edge inputs; choosing a canonical acceptance policy (and aligning both) is a user decision. Tracked in .planning/todos/pending/2026-06-28-harden-uuid-acceptance-parity-aad-builder.md.",
+      "Statusline hook hardening: execSync in statusline.cjs has no timeout (hangs the statusline on slow git), and paths use forward-slash separators incompatible with Windows. Tracked in .planning/todos/pending/2026-06-28-harden-statusline-hook-execsync-timeout-and-paths.md.",
+      "Project-wide zeroize pattern: encryptAesGcm and all new AAD variants copy key/plaintext into Uint8Array without wiping afterward — aligning on a zeroize convention is a project-wide consistency question, not phase-61-specific.",
+      "Phase 61 PR #576 is open and CI-green but not yet merged — merge decision deferred to user.",
+      "Commits on this branch are unsigned (commit signing disabled for AFK session) — user should review the signature check on PR #576 and re-sign/rebase if the repo enforces GPG/SSH signatures on merge.",
+      "Phase 62 (Unified Node Codec) is next in the serial dependency chain and is gated on phase 61 merge; Node schema and consumer rewiring were explicitly deferred out of phase 61 scope.",
+      "GSD worktrees (fix/phase60-safety-tail, fix/fuse-delete-share-revocation branches) were removed; if those branches still have unmerged work they need attention independently of phase 61."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
