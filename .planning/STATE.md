@@ -4,16 +4,16 @@ milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
 current_phase: 61
 current_phase_name: aad-bound-seal-primitive-and-cross-language-kat
-status: executing
-last_updated: "2026-06-28T01:23:56.570Z"
+status: verifying
+last_updated: "2026-06-28T01:34:55.270Z"
 last_activity: 2026-06-28
 last_activity_desc: Phase 61 execution started
 progress:
   total_phases: 9
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 5
-  completed_plans: 4
-  percent: 0
+  completed_plans: 5
+  percent: 11
 ---
 
 # Project State
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 
 Phase: 61 (aad-bound-seal-primitive-and-cross-language-kat) — EXECUTING
 Plan: 5 of 5
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-06-28 — Phase 61 execution started
 
 Progress: `░░░░░░░░░░` 0 / 9 phases (0%)
@@ -194,6 +194,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 61 P61-02 | 12 | 2 tasks | 6 files |
 | Phase 61-aad-bound-seal-primitive-and-cross-language-kat P03 | 11 | 2 tasks | 7 files |
 | Phase 61 P04 | 8 | 2 tasks | 2 files |
+| Phase 61 P05 | 10 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -348,7 +349,7 @@ All v1.1 requirements code-satisfied (77/77). See `.planning/milestones/v1.1-MIL
 
 Last activity: 2026-06-27
 
-Last session: 2026-06-28T01:23:54.112Z
+Last session: 2026-06-28T01:34:49.368Z
 
 ## Decisions
 
@@ -382,6 +383,7 @@ Last session: 2026-06-28T01:23:54.112Z
 - [Phase 60-05]: D-06 withCachedPublicKey enrich and equal-seq signatureV2 enrich removed from resolveRecord
 - [Phase 60-05]: api:generate NOT required; changes are internal service/codec logic with no OpenAPI surface change
 - [Phase ?]: seal_vectors KAT asserts exact ciphertext byte-for-byte via serde_json::Value pull + NodeSealVector; !seal_vectors.is_empty() guard prevents vacuous pass
+- [Phase ?]: ADR 0003 freezes the 45-byte AAD encoding; doc links replace inline restatement
 
 ## Operator Next Steps
 
