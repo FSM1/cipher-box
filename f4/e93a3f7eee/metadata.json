@@ -3,7 +3,7 @@
   "checkpoint_id": "f4e93a3f7eee",
   "strategy": "manual-commit",
   "branch": "feat/unified-node-codec-core-keystone",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     ".planning/ROADMAP.md",
     ".planning/phases/62-unified-node-codec-core-keystone/62-01-PLAN.md",
@@ -21,13 +21,19 @@
       "transcript": "/f4/e93a3f7eee/0/full.jsonl",
       "content_hash": "/f4/e93a3f7eee/0/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/f4/e93a3f7eee/1/metadata.json",
+      "transcript": "/f4/e93a3f7eee/1/full.jsonl",
+      "content_hash": "/f4/e93a3f7eee/1/content_hash.txt",
+      "prompt": ""
     }
   ],
   "token_usage": {
-    "input_tokens": 0,
-    "cache_creation_tokens": 0,
-    "cache_read_tokens": 0,
-    "output_tokens": 0,
-    "api_call_count": 0
+    "input_tokens": 13749,
+    "cache_creation_tokens": 268941,
+    "cache_read_tokens": 2564516,
+    "output_tokens": 45394,
+    "api_call_count": 23
   }
 }
