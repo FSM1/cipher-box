@@ -11,7 +11,7 @@ Requirements for v2.0. Each maps to exactly one roadmap phase. Categories: CRYPT
 
 ### CRYPTO — AAD-bound seal primitive
 
-- [ ] **CRYPTO-01**: `packages/crypto` exposes `sealAesGcmAad`/`unsealAesGcmAad` + a canonical `buildNodeAad(domain‖nodeId‖kind‖generation‖role)` builder, each seal minting a fresh random IV
+- [x] **CRYPTO-01**: `packages/crypto` exposes `sealAesGcmAad`/`unsealAesGcmAad` + a canonical `buildNodeAad(domain‖nodeId‖kind‖generation‖role)` builder, each seal minting a fresh random IV
 - [ ] **CRYPTO-02**: A byte-identical Rust twin lives in `cipherbox_crypto`, with a committed cross-language KAT (frozen byte encoding; `kind` 0x01/0x02/0x03, raw 16-byte uuid, 4-byte BE generation, role ∈ {0x01 body, 0x02 child-readkey, 0x03 content, 0x04 child-writekey}) asserted by both TS and Rust
 - [ ] **CRYPTO-03**: A sealed blob replayed under a different `childId`/`role`/`generation` fails to unseal (AAD transplant resistance)
 
@@ -69,7 +69,7 @@ Requirements for v2.0. Each maps to exactly one roadmap phase. Categories: CRYPT
 ### TEST — cross-cutting verification infrastructure
 
 - [ ] **TEST-01**: A rotation crash-safety/resume suite (the must-exist-before-merge suite) extends `tests/sdk-e2e` — the only real client→API IPNS publish/resolve round-trip — with abort-and-resume cases
-- [ ] **TEST-02**: The TS↔Rust AAD KAT is a single committed fixture asserted by both `packages/crypto/__tests__` and a Rust `#[test]` (a byte mismatch is silent total decryption failure)
+- [x] **TEST-02**: The TS↔Rust AAD KAT is a single committed fixture asserted by both `packages/crypto/__tests__` and a Rust `#[test]` (a byte mismatch is silent total decryption failure)
 - [ ] **TEST-03**: The winfsp read-path is validated via `Cargo Check & Test (Windows)` (authoritative) and the dispatch-gated desktop E2E is triggered explicitly
 
 ## Future Requirements (deferred)
@@ -105,10 +105,10 @@ Which phases cover which requirements. Populated during roadmap creation.
 
 | Requirement | Phase | Status |
 | --- | --- | --- |
-| CRYPTO-01 | Phase 61 | Pending |
+| CRYPTO-01 | Phase 61 | Complete |
 | CRYPTO-02 | Phase 61 | Pending |
 | CRYPTO-03 | Phase 61 | Pending |
-| TEST-02 | Phase 61 | Pending |
+| TEST-02 | Phase 61 | Complete |
 | NODE-01 | Phase 62 | Pending |
 | NODE-02 | Phase 62 | Pending |
 | NODE-03 | Phase 62 | Pending |
