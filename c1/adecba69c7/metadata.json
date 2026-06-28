@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "c1adecba69c7",
+  "strategy": "manual-commit",
+  "branch": "feat/unified-node-codec-core-keystone",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/sdk-core/src/file/index.ts",
+    "packages/sdk-core/src/folder/load.ts",
+    "packages/sdk-core/src/folder/merge.ts",
+    "packages/sdk-core/src/folder/metadata-ops.ts",
+    "packages/sdk-core/src/folder/registration.ts",
+    "packages/sdk-core/src/vault/index.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/c1/adecba69c7/0/metadata.json",
+      "transcript": "/c1/adecba69c7/0/full.jsonl",
+      "content_hash": "/c1/adecba69c7/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  }
+}
