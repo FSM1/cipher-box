@@ -12,7 +12,8 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import type { FolderChild } from '@cipherbox/core';
+// TODO(phase 63): FolderChild retired — update tests to use SealedChildRef
+import type { SealedChildRef } from '@cipherbox/core';
 import type { CipherBoxClient } from '@cipherbox/sdk';
 import type { SdkEvent, SdkEventHandler } from '@cipherbox/sdk';
 import { useFolderStore, type FolderNode } from '../folder.store';
@@ -45,15 +46,14 @@ function makeFakeClient(): {
   };
 }
 
-/** Helper: build a FolderChild file pointer fixture with a recognizable name. */
-function makeChild(name: string, modifiedAt = 1000): FolderChild {
+/** Helper: build a SealedChildRef fixture with a recognizable name. */
+function makeChild(name: string, _modifiedAt = 1000): SealedChildRef {
   return {
-    type: 'file',
-    id: `id-${name}`,
     name,
-    fileMetaIpnsName: `k51file-${name}`,
-    createdAt: 1,
-    modifiedAt,
+    ipnsName: `k51file-${name}`,
+    generation: 1,
+    versionFloor: 0n,
+    readKeySealed: 'AAAA',
   };
 }
 

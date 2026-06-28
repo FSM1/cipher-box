@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { FolderChild } from '@cipherbox/core';
+import type { SealedChildRef } from '@cipherbox/core';
 import type { CipherBoxClient } from '@cipherbox/sdk';
 
 /**
@@ -15,8 +15,8 @@ export type FolderNode = {
   ipnsName: string;
   /** Parent folder ID (null for root) */
   parentId: string | null;
-  /** Decrypted children (files and subfolders) */
-  children: FolderChild[];
+  /** Decrypted children (sealed child refs — phase 63 populates via read-chain navigation) */
+  children: SealedChildRef[];
   /** Has metadata been fetched and decrypted? */
   isLoaded: boolean;
   /** Is metadata currently being fetched? */
@@ -50,7 +50,7 @@ type FolderState = {
 
   // Actions
   setFolder: (folder: FolderNode) => void;
-  updateFolderChildren: (folderId: string, children: FolderChild[]) => void;
+  updateFolderChildren: (folderId: string, children: SealedChildRef[]) => void;
   updateFolderSequence: (folderId: string, sequenceNumber: bigint) => void;
   setCurrentFolder: (folderId: string | null) => void;
   setBreadcrumbs: (breadcrumbs: Breadcrumb[]) => void;

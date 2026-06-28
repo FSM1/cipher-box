@@ -1,4 +1,4 @@
-import type { FolderChild, FilePointer } from '@cipherbox/core';
+import type { SealedChildRef } from '@cipherbox/core';
 
 /** Extensions recognized as editable text files. */
 const TEXT_EXTENSIONS = new Set([
@@ -127,7 +127,12 @@ export function isPreviewableFile(name: string): boolean {
   return isImageFile(name) || isPdfFile(name) || isAudioFile(name) || isVideoFile(name);
 }
 
-/** Type guard: narrows FolderChild to FilePointer by checking type discriminant. */
-export function isFilePointer(item: FolderChild): item is FilePointer {
-  return item.type === 'file';
+/**
+ * Type guard: narrows SealedChildRef to a "file-kind" ref by checking ipnsName presence.
+ * In node/v3 all children are SealedChildRef — kind discrimination requires reading
+ * the child Node itself (phase 63).
+ * @stub phase 63 — file vs folder discrimination via Node.kind
+ */
+export function isFileRef(_item: SealedChildRef): boolean {
+  throw new Error('not implemented — phase 63 (file/folder kind discrimination via Node.kind)');
 }

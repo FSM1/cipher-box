@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import type { FolderEntry } from '@cipherbox/core';
+import type { SealedChildRef } from '@cipherbox/core';
 import type { FolderState } from '@cipherbox/sdk';
 import { useFolderStore, type FolderNode } from '../stores/folder.store';
 import { useVaultStore } from '../stores/vault.store';
@@ -39,7 +39,7 @@ function getRootFolder(
   if (existingRoot) return existingRoot;
 
   // Otherwise construct from vault state
-  if (!vaultStore.rootFolderKey || !vaultStore.rootIpnsKeypair || !vaultStore.rootIpnsName) {
+  if (!vaultStore.rootReadKey || !vaultStore.rootIpnsKeypair || !vaultStore.rootIpnsName) {
     return null;
   }
 
@@ -52,7 +52,7 @@ function getRootFolder(
     isLoaded: false,
     isLoading: false,
     sequenceNumber: 0n,
-    folderKey: vaultStore.rootFolderKey,
+    folderKey: vaultStore.rootReadKey,
     ipnsPrivateKey: vaultStore.rootIpnsKeypair.privateKey,
   };
 }
@@ -126,7 +126,7 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
   const setBreadcrumbs = useFolderStore((state) => state.setBreadcrumbs);
 
   // Vault state for root folder
-  const rootFolderKey = useVaultStore((state) => state.rootFolderKey);
+  const rootReadKey = useVaultStore((state) => state.rootReadKey);
   const rootIpnsKeypair = useVaultStore((state) => state.rootIpnsKeypair);
   const rootIpnsName = useVaultStore((state) => state.rootIpnsName);
 
@@ -145,13 +145,13 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
 
   // Initialize root folder in store if vault is ready but root not in store
   useEffect(() => {
-    if (rootFolderKey && rootIpnsKeypair && rootIpnsName && !folders['root']) {
+    if (rootReadKey && rootIpnsKeypair && rootIpnsName && !folders['root']) {
       const rootFolder = getRootFolder(vaultState, folders);
       if (rootFolder) {
         setFolder(rootFolder);
       }
     }
-  }, [rootFolderKey, rootIpnsKeypair, rootIpnsName, folders, setFolder, vaultState]);
+  }, [rootReadKey, rootIpnsKeypair, rootIpnsName, folders, setFolder, vaultState]);
 
   // Update store breadcrumbs when local breadcrumbs change
   useEffect(() => {
@@ -184,25 +184,29 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
         return;
       }
 
-      // Find the FolderEntry for this subfolder in any loaded parent's children
-      let folderEntry: FolderEntry | undefined;
+      // TODO(phase 63): read-chain navigation — find the SealedChildRef for this subfolder,
+      // unseal the parent read-body to recover the child readKey, then navigate.
+      // For now, find the child ref by ipnsName from any loaded parent's children.
+      let folderRef: SealedChildRef | undefined;
       let parentId: string | null = null;
 
       for (const [fId, fNode] of Object.entries(currentFolders)) {
         if (!fNode.isLoaded) continue;
+        // SealedChildRef identifies children by ipnsName; folderId maps to ipnsName
+        // via the FolderNode's own ipnsName field (phase 63 will use the Node id).
         const match = fNode.children.find(
-          (c): c is FolderEntry => c.type === 'folder' && c.id === targetFolderId
+          (c): c is SealedChildRef => c.ipnsName === targetFolderId
         );
         if (match) {
-          folderEntry = match;
+          folderRef = match;
           parentId = fId;
           break;
         }
       }
 
-      if (!folderEntry) {
+      if (!folderRef) {
         logger.error(
-          `[Nav] Cannot load folder ${targetFolderId}: no parent with its FolderEntry is loaded`
+          `[Nav] Cannot load folder ${targetFolderId}: no parent with its SealedChildRef is loaded`
         );
         return;
       }
@@ -212,8 +216,8 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
       setIsLoading(true);
       const loadingPlaceholder: FolderNode = {
         id: targetFolderId,
-        name: folderEntry.name,
-        ipnsName: folderEntry.ipnsName,
+        name: folderRef.name,
+        ipnsName: folderRef.ipnsName,
         parentId,
         children: [],
         isLoaded: false,
@@ -228,16 +232,15 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
       navigate(`/files/${targetFolderId}`);
 
       try {
-        // Load folder via SDK (handles ECIES unwrap + IPNS resolve + decrypt internally).
-        // ensureFolderLoaded returns null immediately without retry, so we wrap it in a
-        // thin 3x/2s retry loop to tolerate IPNS propagation delay on just-created folders.
+        // Phase 63: ensureFolderLoaded will implement read-chain navigation.
+        // This stub will throw; the catch block removes the placeholder.
         const MAX_RETRIES = 3;
         const RETRY_DELAY_MS = 2000;
         let state: FolderState | null = null;
 
         for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
           if (latestNavTarget.current !== targetFolderId) return;
-          state = await getSdkClient().ensureFolderLoaded(folderEntry.ipnsName);
+          state = await getSdkClient().ensureFolderLoaded(folderRef.ipnsName);
           if (state) break;
           if (attempt === MAX_RETRIES) break;
           // IPNS not propagated yet — wait and retry
@@ -247,23 +250,16 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
         // Re-check guard after all awaits (user may have navigated away mid-retry)
         if (latestNavTarget.current !== targetFolderId) return;
 
-        // ensureFolderLoaded exhausted its retries (IPNS not propagated yet) —
-        // treat as a load failure rather than rendering an empty, keyless folder.
-        // Throwing routes into the catch below (remove placeholder + redirect to
-        // parent), giving the user a clear failure instead of a stuck empty view.
         if (!state) {
           throw new Error('Folder not loaded — IPNS propagation timed out');
         }
 
         // Map FolderState -> FolderNode.
-        // Clone SDK-owned key buffers — client.destroy() zeroes them on logout,
-        // so aliasing would leave React state with use-after-zero references.
-        // Do NOT read state.ipnsKeypair.publicKey — it is new Uint8Array(0) for
-        // tree-walked folders (ensureFolderLoaded does not populate it).
+        // TODO(phase 63): use Node.id for the folder ID (not ipnsName).
         const folderNode: FolderNode = {
           id: targetFolderId,
-          name: folderEntry.name,
-          ipnsName: folderEntry.ipnsName,
+          name: folderRef.name,
+          ipnsName: folderRef.ipnsName,
           parentId,
           children: state.children,
           isLoaded: true,
@@ -279,14 +275,8 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
         // Only clean up if this is still the latest navigation
         if (latestNavTarget.current !== targetFolderId) return;
         // Remove the loading placeholder and navigate back to parent.
-        // Without this navigation, the URL stays at /files/<uuid> with no
-        // folder in the store, rendering a broken empty ~/root fallback.
         useFolderStore.getState().removeFolder(targetFolderId);
         setIsLoading(false);
-        // Only redirect if the user is still viewing this folder's route. If
-        // they navigated away during the resolve (e.g. to /bin, /shared,
-        // /settings) the broken-empty-fallback we're guarding against no longer
-        // applies, and force-navigating to /files would bounce them off-route.
         if (latestPathname.current !== `/files/${targetFolderId}`) return;
         latestNavTarget.current = parentId ?? 'root';
         if (parentId) {

@@ -10,7 +10,7 @@
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { type FolderChild, type FilePointer } from '@cipherbox/core';
+import { type SealedChildRef } from '@cipherbox/core';
 import { ShareKeyCache } from '@cipherbox/sdk';
 import { useShareStore, type ReceivedShare } from '../stores/share.store';
 import { fetchReceivedShares, fetchShareKeys, addShareKeys } from '../services/share.service';
@@ -38,7 +38,7 @@ export type SharedBreadcrumb = {
 export type SharedListItem = {
   share: ReceivedShare;
   /** Resolved folder children (for folders), or null (for files / unresolved) */
-  children: FolderChild[] | null;
+  children: SealedChildRef[] | null;
   /** Folder key for this shared item (decrypted from share record) */
   folderKey: Uint8Array | null;
 };
@@ -49,7 +49,7 @@ type UseSharedNavigationReturn = {
   currentView: SharedView;
   currentShareId: string | null;
   sharedItems: SharedListItem[];
-  folderChildren: FolderChild[];
+  folderChildren: SealedChildRef[];
   folderKey: Uint8Array | null;
   breadcrumbs: SharedBreadcrumb[];
   isLoading: boolean;
@@ -67,23 +67,24 @@ type UseSharedNavigationReturn = {
   navigateUp: () => void;
   navigateToRoot: () => void;
   navigateToBreadcrumb: (crumbIndex: number) => void;
-  downloadSharedFile: (item: FilePointer) => Promise<void>;
+  /** @stub phase 63 — file download requires Node read-chain navigation */
+  downloadSharedFile: (item: SealedChildRef) => Promise<void>;
   hideSharedItem: (shareId: string) => Promise<void>;
   /** Upload a file to the currently-viewed write-shared folder */
   uploadFile: (file: File) => Promise<void>;
   /** Create a subfolder in the currently-viewed write-shared folder */
   createFolder: (name: string) => Promise<void>;
   /** Rename an item in the currently-viewed write-shared folder */
-  renameItem: (item: FolderChild, newName: string) => Promise<void>;
+  renameItem: (item: SealedChildRef, newName: string) => Promise<void>;
   /** Delete an item from the currently-viewed write-shared folder */
-  deleteItem: (item: FolderChild) => Promise<void>;
-  /** Update a file's content in the currently-viewed write-shared folder */
-  updateSharedFile: (item: FilePointer, newContent: Uint8Array) => Promise<void>;
+  deleteItem: (item: SealedChildRef) => Promise<void>;
+  /** @stub phase 65 — shared file update requires Node read-chain */
+  updateSharedFile: (item: SealedChildRef, newContent: Uint8Array) => Promise<void>;
   /** Move an item to a destination subfolder within the same share */
-  moveItem: (item: FolderChild, destFolderId: string, destIpnsName: string) => Promise<void>;
+  moveItem: (item: SealedChildRef, destFolderId: string, destIpnsName: string) => Promise<void>;
   /** Move multiple items to a destination subfolder (web-layer loop, no SDK batch op) */
   batchMoveItems: (
-    items: FolderChild[],
+    items: SealedChildRef[],
     destFolderId: string,
     destIpnsName: string,
     clearSelection: () => void
@@ -106,7 +107,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
   const [currentView, setCurrentView] = useState<SharedView>('list');
   const [currentShareId, setCurrentShareId] = useState<string | null>(null);
   const [sharedItems, setSharedItems] = useState<SharedListItem[]>([]);
-  const [folderChildren, setFolderChildren] = useState<FolderChild[]>([]);
+  const [folderChildren, setFolderChildren] = useState<SealedChildRef[]>([]);
   const [folderKey, setFolderKey] = useState<Uint8Array | null>(null);
   const [breadcrumbs, setBreadcrumbs] = useState<SharedBreadcrumb[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -116,7 +117,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
   const [currentSequenceNumber, setCurrentSequenceNumber] = useState<bigint | null>(null);
 
   // Refs for values consumed in retry closures (C-01: avoids stale closure captures)
-  const folderChildrenRef = useRef<FolderChild[]>([]);
+  const folderChildrenRef = useRef<SealedChildRef[]>([]);
   const sequenceNumberRef = useRef<bigint | null>(null);
 
   // IPNS private key stored in ref to avoid re-renders; zeroed on cleanup
@@ -127,7 +128,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     Array<{
       folderId: string;
       folderName: string;
-      children: FolderChild[];
+      children: SealedChildRef[];
       folderKey: Uint8Array;
       ipnsName: string;
       sequenceNumber: bigint | null;
