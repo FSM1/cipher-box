@@ -87,7 +87,25 @@
 3. The cross-language KAT fixture — a single hardcoded vector covering all four role bytes — is asserted by both `packages/crypto/__tests__/build-node-aad.test.ts` AND a Rust `#[test]` in `crates/crypto/tests/cross_language.rs`; both pass in CI
 4. A sealed blob replayed under a different `childId`, `role`, or `generation` fails to unseal (AAD transplant resistance test passes)
 
-**Plans**: TBD
+**Plans**: 5 plans (4 waves)
+
+Plans:
+**Wave 1**
+
+- [ ] 61-01-PLAN.md — TS AAD builder (`buildNodeAad`/`uuidToBytes`) + frozen `node-aad.json` (aad_vectors, all 4 roles) + TS KAT + parity-script registration [merge gate]
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 61-02-PLAN.md — Rust AAD builder (`build_node_aad` + `uuid` dep + `InvalidAadInput`) + cross-language AAD KAT [closes merge gate]
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 61-03-PLAN.md — TS AEAD-with-AAD seal variants + full-seal vector (D-01b) + extended transplant/negative suite (D-02, CRYPTO-03)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 61-04-PLAN.md — Rust AEAD-with-AAD seal variants + Rust full-seal cross-language KAT
+- [ ] 61-05-PLAN.md — Docs: ADR 0003 freeze + METADATA_SCHEMAS / METADATA_EVOLUTION_PROTOCOL / FILESYSTEM_SPECIFICATION pointers (D-05)
 
 ---
 

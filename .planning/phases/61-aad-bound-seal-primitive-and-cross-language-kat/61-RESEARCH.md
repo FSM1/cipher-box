@@ -548,21 +548,24 @@ Notes on A2: both approaches produce the same bytes for a standard hyphenated UU
 - `uuid::Uuid::as_bytes()` returns the 16 bytes in the same big-endian field order.
 - Both are big-endian (network order) per RFC-4122. The KAT confirms this mechanically.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **`node-aad.json` structure — flat array or top-level object with two keys?**
    - What we know: existing `aes-gcm.json` is a flat JSON array. D-01 requires two vector kinds (AAD-bytes + full-seal).
    - What's unclear: one file with two arrays under different keys, or two files (`node-aad.json` + `node-seal.json`)?
    - Recommendation: Single file `node-aad.json` with two top-level arrays (`"aad_vectors"` and `"seal_vectors"`). Rust uses two `#[derive(Deserialize)]` structs. Simpler to commit atomically and extend.
+   - RESOLVED: Single file `tests/vectors/crypto/node-aad.json` is a top-level object holding both `aad_vectors` (frozen by plan 01) and `seal_vectors` (appended by plan 03). Rust parses it via `serde_json::Value` and two `#[derive(Deserialize)]` structs (`NodeAadVector` in plan 02, `NodeSealVector` in plan 04). No second file.
 
 2. **`generate-test-vectors.ts` extension vs hand-freeze**
    - What we know: the script uses `packages/crypto/dist/` (built output). It does not currently export `buildNodeAad` or `sealAesGcmAad`.
    - What's unclear: after implementing the TS functions, extending the script is straightforward. But hand-freezing is simpler (no build dependency for the vector file).
    - Recommendation: Hand-freeze first (to unblock the KAT as the first deliverable per C-01). Optionally extend the generator in a later wave. The frozen values are verified by both test suites anyway.
+   - RESOLVED: Hand-freeze. Plans 01 (`aad_vectors`) and 03 (`seal_vectors`) compute each `expected_aad`/`ciphertext` by calling the freshly implemented TS function and hex-encoding the result, then commit the literal bytes — no `generate-test-vectors.ts` build dependency. Both the TS and Rust suites assert against the committed values.
 
 3. **`CryptoError` variant name for AAD validation failures**
    - What we know: existing variants are `AesEncryptionFailed`, `AesDecryptionFailed`, `InvalidPublicKey`, `InvalidFileId` (pattern: PascalCase, specific).
    - Recommendation: Add `InvalidAadInput` for `buildNodeAad` rejections and `AadValidationFailed` for input format errors. Single error type for all AAD build failures.
+   - RESOLVED: A single fail-closed error path. TS adds the `'INVALID_AAD_INPUT'` `CryptoErrorCode` (plan 01); Rust adds the `CryptoError::InvalidAadInput` variant (plan 02). One error covers all `buildNodeAad`/`build_node_aad` rejections (malformed UUID, out-of-range kind/role/generation); the separate `AadValidationFailed` variant is not needed.
 
 ## Environment Availability
 
