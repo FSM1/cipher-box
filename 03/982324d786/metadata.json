@@ -1,0 +1,50 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "03982324d786",
+  "strategy": "manual-commit",
+  "branch": "feat/unified-node-codec-core-keystone",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/hooks/__tests__/useSharedWriteOps.test.ts",
+    "apps/web/src/hooks/folder-helpers.ts",
+    "apps/web/src/hooks/shared-folder-projection.ts",
+    "apps/web/src/hooks/useAuth.ts",
+    "apps/web/src/hooks/useContextMenu.ts",
+    "apps/web/src/hooks/useDropUpload.ts",
+    "apps/web/src/hooks/useFileOperations.ts",
+    "apps/web/src/hooks/useFilePreview.ts",
+    "apps/web/src/hooks/useFileVersions.ts",
+    "apps/web/src/hooks/useFolderMutations.ts",
+    "apps/web/src/hooks/useFolderNavigation.ts",
+    "apps/web/src/hooks/useSharedNavigation.ts",
+    "apps/web/src/hooks/useSharedNavigationActions.ts",
+    "apps/web/src/hooks/useSharedWriteOps.ts",
+    "apps/web/src/hooks/useStreamingPreview.ts",
+    "apps/web/src/lib/crypto/key-wrapping.ts",
+    "apps/web/src/lib/faro.ts",
+    "apps/web/src/services/download.service.ts",
+    "apps/web/src/services/file-metadata.service.ts",
+    "apps/web/src/services/invite.service.ts",
+    "apps/web/src/services/search-index.service.ts",
+    "apps/web/src/stores/__tests__/folder.store.test.ts",
+    "apps/web/src/stores/__tests__/logout-security.test.ts",
+    "apps/web/src/stores/folder.store.ts",
+    "apps/web/src/stores/vault.store.ts",
+    "apps/web/src/utils/fileTypes.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/03/982324d786/0/metadata.json",
+      "transcript": "/03/982324d786/0/full.jsonl",
+      "content_hash": "/03/982324d786/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  }
+}
