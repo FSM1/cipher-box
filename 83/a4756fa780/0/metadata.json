@@ -1,0 +1,169 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "83a4756fa780",
+  "session_id": "73377c33-a7a3-47f3-bd4c-8f7965661187",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-28T02:08:38.284864Z",
+  "branch": "feat/aad-bound-seal-primitive-and-cross-language-kat",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "2d04c6d14ad9",
+  "token_usage": {
+    "input_tokens": 37412,
+    "cache_creation_tokens": 765543,
+    "cache_read_tokens": 19164100,
+    "output_tokens": 123084,
+    "api_call_count": 105
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01MP5FE4PxcXK1YRZVVVN1M9",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "2d04c6d14ad9",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 245,
+        "end": 246,
+        "entry_ids": [
+          "b3fe368c-131b-4f74-a100-0b89e8611411"
+        ],
+        "tool_use_id": "toolu_01MP5FE4PxcXK1YRZVVVN1M9"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01MP5FE4PxcXK1YRZVVVN1M9"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01PZVpF4BYFpD6XAmPVvuHYX",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "2d04c6d14ad9",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 493,
+        "end": 494,
+        "entry_ids": [
+          "95424bb7-72a8-4b7d-9cec-e1452575a0e4"
+        ],
+        "tool_use_id": "toolu_01PZVpF4BYFpD6XAmPVvuHYX"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01PZVpF4BYFpD6XAmPVvuHYX"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Fix a broken statusline and Stop-hook error, update GSD to the latest version, clean up stale worktrees, then plan and fully execute phase 61 (AAD-Bound Seal Primitive and Cross-Language KAT) through to a shippable PR.",
+    "outcome": "All environment issues were resolved (statusline renamed to .cjs, GSD reinstalled to 1.6.0 restoring the missing hook), worktrees removed, and phase 61 was fully planned, implemented across 4 waves/5 plans, adversarially verified (including a third-implementation OpenSSL proof of the KAT ciphertext), and marked complete with 196 TS + 97 Rust tests green and a SHIP security verdict.",
+    "learnings": {
+      "repo": [
+        "package.json has \"type\": \"module\" — any hook written in CommonJS must use the .cjs extension; a .js file crashes with 'require is not defined in ES module scope' and silently blanks the statusline.",
+        ".claude/hooks/gsd-* is gitignored (.gitignore:55) — GSD hooks are installed locally via npx and not tracked; a fresh clone or partial install will silently lose them.",
+        "GSD package is @opengsd/gsd-core, installed via npx, gitignored. Reinstall command: npx @opengsd/gsd-core@<version> -- gsd-core --claude --local",
+        "vitest include is 'src/**/*.ts' — test files must live under packages/crypto/src/__tests__/, not packages/crypto/__tests__/. CONTEXT.md and ROADMAP (SC#3, TEST-02) had the wrong path; VALIDATION.md line 68 documents the deliberate correction.",
+        "scripts/check-vector-parity.sh has a hardcoded EXPECTED_VECTORS array — adding a new vector file (e.g. node-aad.json) is a required explicit CI integration task, not automatic.",
+        "sealAesGcmAad mints a fresh random IV on every call and cannot produce a fixed output; fixed-IV KAT vectors must target the lower-level encryptAesGcmAad / decrypt_aes_gcm_aad directly.",
+        "uuid crate was not in root Cargo.toml or crates/crypto/Cargo.toml — any new workspace dep needs two-line additions to both.",
+        "Phase 61 was purely additive (zero AAD consumers existed at time of implementation); no consumer rewiring was needed.",
+        "Pre-existing @types/node resolution failure exists in root tsconfig.scripts.json (types: [\"node\"] but @types/node not hoisted); not a regression surface for crypto changes.",
+        "1Password SSH signing requires biometric approval and will hang unattended commits — disable signing locally for AFK sessions; re-sign before merging if the repo enforces signatures on PRs."
+      ],
+      "code": [
+        {
+          "path": ".claude/hooks/gsd-context-monitor.js",
+          "finding": "Referenced by settings.local.json for four hook events (including Stop) but was never installed into the main tree — only existed in now-removed worktrees. Restored by GSD 1.6.0 reinstall."
+        },
+        {
+          "path": ".claude/hooks/statusline.cjs",
+          "finding": "Renamed from statusline.js to force CommonJS mode; the repo's package.json type:module caused Node to treat the original as ESM, crashing on require() calls."
+        },
+        {
+          "path": "scripts/check-vector-parity.sh",
+          "finding": "EXPECTED_VECTORS is a hardcoded bash array. node-aad.json was explicitly registered here in plan 61-01; any new vector file requires the same manual addition or the CI parity step fails."
+        },
+        {
+          "path": "tests/vectors/crypto/node-aad.json",
+          "finding": "New KAT fixture. Keyed structure with two arrays: aad_vectors (4 role-byte vectors) and seal_vectors (full-seal fixed-IV vector). aad_vectors role set must be asserted explicitly (expect length 4 + role set [1,2,3,4]) to prevent vacuous passes on future edits."
+        },
+        {
+          "path": "packages/crypto/src/__tests__/build-node-aad.test.ts",
+          "finding": "Correct TS KAT path — vitest include: ['src/**/*.ts'] means tests outside src/ are never discovered. Must include explicit toHaveLength(4) and role-set assertion on aad_vectors."
+        },
+        {
+          "path": "crates/crypto/tests/cross_language.rs",
+          "finding": "node_aad_cross_language test added; asserts Rust build_node_aad output is byte-identical to the committed node-aad.json vectors. assert_eq!(aad_vectors.len(), 4) pins role count."
+        },
+        {
+          "path": ".planning/phases/61-aad-bound-seal-primitive-and-cross-language-kat/61-RESEARCH.md",
+          "finding": "Contains a Validation Architecture section — per GSD conventions this triggers creation of a VALIDATION.md for the phase."
+        },
+        {
+          "path": ".planning/todos/pending/2026-06-28-harden-uuid-acceptance-parity-aad-builder.md",
+          "finding": "Tracks two LOW security findings: (1) TS/Rust accept slightly different non-canonical UUID string forms (fail-closed but a parity gap); (2) uuidToBytes throws plain Error instead of CryptoError INVALID_AAD_INPUT for 32-char non-hex input."
+        }
+      ],
+      "workflow": [
+        "GSD commit helper has a known false-negative pattern — it reports failure even when the commit succeeds. Always verify with git log rather than trusting the helper's exit status.",
+        "GSD plan-checker adversarial workflow (ultracode): spawning a canonical plan-checker plus multiple crypto-specific adversarial lenses in parallel, with an auto-revision round via the planner if blockers surface, converged in 2 rounds and caught a vacuous-pass hole that the single plan-checker alone might have missed.",
+        "KAT vector arrays require explicit length and content-set assertions (not just iteration) — a for...of over an empty array passes vacuously, silently eroding the coverage the phase was designed to freeze.",
+        "For sequential waves with cross-file dependencies (e.g. plan 02 reads a file written by plan 01), disable worktrees and run on the main tree with warm caches; worktree isolation adds overhead without parallelism benefit for single-plan-per-wave designs.",
+        "Post-implementation adversarial security review as a distinct step (separate from plan-checker) caught UUID acceptance-form parity divergence — a structural issue invisible to behavioral tests. For crypto code, a third-implementation verification (e.g. reproducing the KAT ciphertext via OpenSSL) is a strong correctness signal.",
+        "Pattern mapper independently re-confirmed all four research findings — running it as a separate subagent before the planner provides a useful redundancy check on research quality.",
+        "STATE.md automated update helper may silently no-op; always verify and hand-fix the Current Position before committing planning artifacts."
+      ]
+    },
+    "friction": [
+      "Statusline silently went blank with no error surfaced to the user — the ESM crash happened inside the hook subprocess and was swallowed.",
+      "Stop hook error fired every single turn because settings.local.json referenced a file that was never installed in the main tree, producing noisy MODULE_NOT_FOUND spam throughout the session.",
+      "Main-tree GSD install was a broken fragment (no gsd-tools.cjs, no update.md, no file manifest) despite settings referencing managed hooks — the normal /gsd-update flow couldn't self-repair because the tooling it would invoke was missing.",
+      "GSD worktrees were on 1.4.3 while the gitignore comment pinned 1.6.0 — the install state was inconsistent across the repo.",
+      "Plan-phase round 1 had blockers requiring a full planner re-spawn (round 2) before the plan-checker passed — added latency to the planning pipeline.",
+      "GSD commit helper false-negatives required a git log verification step after every commit, adding friction throughout the session.",
+      "CONTEXT.md contained the wrong test path (packages/crypto/__tests__/ instead of packages/crypto/src/__tests__/), which was only caught by the researcher subagent — not by the discuss-phase that produced CONTEXT.md.",
+      "Pre-existing @types/node hoisting gap in root tsconfig.scripts.json caused a false-positive typecheck failure that required manual investigation to rule out as a regression.",
+      "STATE.md automated update helper silently no-oped, requiring a manual read + two-edit sequence to fix Current Position before the planning commit."
+    ],
+    "open_items": [
+      "LOW-1 security finding: TS and Rust accept slightly different non-canonical UUID string forms (each rejects edge cases the other accepts). Tracked in .planning/todos/pending/2026-06-28-harden-uuid-acceptance-parity-aad-builder.md — needs a canonicalization policy decision before closing.",
+      "LOW-2 security finding: uuidToBytes throws plain Error instead of CryptoError INVALID_AAD_INPUT for 32-char non-hex input — contract inconsistency. Same todo file.",
+      "PR signature check will show red because commit signing was disabled for the AFK session. Needs re-sign/rebase before merging if the repo enforces signatures.",
+      "Pre-existing @types/node resolution failure in root tsconfig.scripts.json (scripts/*.ts typecheck broken independent of phase 61).",
+      "Branches fix/phase60-safety-tail and fix/fuse-delete-share-revocation still exist after worktree removal — may need cleanup or merging.",
+      "Consider extending generate-test-vectors.ts to auto-generate node-aad.json vectors rather than hand-freezing them (deferred per CONTEXT.md decision, recommended as follow-up after C-01 merge gate is green).",
+      "Phase 62 (Unified Node Codec) and phases 63-69 remain unstarted, all linearly gated behind phase 61's completion."
+    ]
+  }
+}
