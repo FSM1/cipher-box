@@ -23,9 +23,9 @@ Phase 61 security review (verdict SHIP, 0 BLOCKER/HIGH/MEDIUM) surfaced two LOW 
 
 Both sides are fail-closed (the stricter side rejects), so this is not exploitable today. It only matters if a non-canonical `node_id` ever reaches one side.
 
-### LOW-2 — `uuidToBytes` breaks its documented fail-closed contract for 32-char non-hex input
+### LOW-2 — RESOLVED (commit `f1a81344f`)
 
-A `node_id` whose hyphen-stripped form is exactly 32 chars but contains a non-hex character passes the `clean.length !== 32` guard and falls through to `hexToBytes`, which throws a plain `Error('Invalid hex string: …')` instead of the `CryptoError('INVALID_AAD_INPUT')` the docstring promises and the D-03 tests assert for other malformed inputs. Still fail-closed (throws, no wrong AAD), but breaks the error-type contract.
+`uuidToBytes` now validates `/^[0-9a-fA-F]{32}$/` on the hyphen-stripped value and throws `CryptoError('INVALID_AAD_INPUT')` for 32-char non-hex input (with a regression test in `build-node-aad.test.ts`). Fixed during the Phase 61 ship loop via the CodeRabbit review. No further action. The remaining open work below is LOW-1 only.
 
 ## Decision needed
 
