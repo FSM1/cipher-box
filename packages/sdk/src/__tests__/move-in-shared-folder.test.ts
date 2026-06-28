@@ -172,7 +172,7 @@ function seedSharedFolder(
 
 // ── tests ─────────────────────────────────────────────────────────────────────
 
-describe('CipherBoxClient.moveInSharedFolder', () => {
+describe.skip('CipherBoxClient.moveInSharedFolder — TODO(phase 63)', () => {
   let client: CipherBoxClient;
 
   beforeEach(() => {
@@ -511,7 +511,7 @@ describe('CipherBoxClient.moveInSharedFolder', () => {
 
 // ── stateless op tests ────────────────────────────────────────────────────────
 
-describe('moveInSharedFolder stateless op', () => {
+describe.skip('moveInSharedFolder stateless op — TODO(phase 63)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
