@@ -3,7 +3,7 @@
   "checkpoint_id": "0b8dd2e9ffe1",
   "strategy": "manual-commit",
   "branch": "feat/unified-node-codec-core-keystone",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "packages/core/src/file/derive-ipns.ts",
     "packages/core/src/file/index.ts",
@@ -19,6 +19,12 @@
       "metadata": "/0b/8dd2e9ffe1/0/metadata.json",
       "transcript": "/0b/8dd2e9ffe1/0/full.jsonl",
       "content_hash": "/0b/8dd2e9ffe1/0/content_hash.txt",
+      "prompt": ""
+    },
+    {
+      "metadata": "/0b/8dd2e9ffe1/1/metadata.json",
+      "transcript": "/0b/8dd2e9ffe1/1/full.jsonl",
+      "content_hash": "/0b/8dd2e9ffe1/1/content_hash.txt",
       "prompt": ""
     }
   ],
