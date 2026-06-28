@@ -1,0 +1,78 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "52e2384bc1e9",
+  "session_id": "b60bb197-27a4-4f23-9fa4-881b6cdc13c7",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-28T21:38:32.315751Z",
+  "branch": "feat/unified-node-codec-core-keystone",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "d3bafcfe2fde",
+  "checkpoint_transcript_start": 327,
+  "transcript_lines_at_start": 327,
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-plan-phase-2026-06-28T18:11:44.314969Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "d3bafcfe2fde",
+      "timestamp": "2026-06-28T18:11:44.314969Z",
+      "native": {
+        "command": "/gsd-plan-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_019xJEMkUftEVCgsENaGYPTz",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d3bafcfe2fde",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 216,
+        "end": 217,
+        "entry_ids": [
+          "92f183a1-36ba-44e1-aa90-f4c171db03db"
+        ],
+        "tool_use_id": "toolu_019xJEMkUftEVCgsENaGYPTz"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_019xJEMkUftEVCgsENaGYPTz"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ]
+}
