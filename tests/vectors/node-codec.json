@@ -1,0 +1,113 @@
+{
+  "body_vectors": [
+    {
+      "description": "folder node read-body PRIMARY LOCK (IV-independent, D-04)",
+      "node": {
+        "schema": "node/v3",
+        "kind": "folder",
+        "id": "550e8400-e29b-41d4-a716-446655440000",
+        "generation": 0,
+        "children": [],
+        "createdAt": 1719532800000,
+        "modifiedAt": 1719532800000
+      },
+      "expected_read_body_hex": "PLACEHOLDER"
+    },
+    {
+      "description": "file node read-body PRIMARY LOCK — GCM VersionEntry",
+      "node": {
+        "schema": "node/v3",
+        "kind": "file",
+        "id": "550e8400-e29b-41d4-a716-446655440001",
+        "generation": 0,
+        "content": {
+          "cid": "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
+          "fileIv": "000102030405060708090a0b",
+          "size": 1024,
+          "mimeType": "application/octet-stream",
+          "encryptionMode": "GCM",
+          "file_key_hex": "0707070707070707070707070707070707070707070707070707070707070707",
+          "versions": [
+            {
+              "versionId": "ver-gcm-1",
+              "cid": "bafyGCM0001",
+              "fileIv": "0a0b0c0d0e0f101112131415",
+              "size": 512,
+              "createdAt": 1719000000000,
+              "encryptionMode": "GCM",
+              "file_key_hex": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a"
+            }
+          ]
+        },
+        "createdAt": 1719532800000,
+        "modifiedAt": 1719532800000
+      },
+      "expected_read_body_hex": "PLACEHOLDER"
+    },
+    {
+      "description": "file node read-body PRIMARY LOCK — CTR VersionEntry",
+      "node": {
+        "schema": "node/v3",
+        "kind": "file",
+        "id": "550e8400-e29b-41d4-a716-446655440002",
+        "generation": 0,
+        "content": {
+          "cid": "bafyCTRxyz0001",
+          "fileIv": "111213141516171819202122",
+          "size": 8192000,
+          "mimeType": "video/mp4",
+          "encryptionMode": "CTR",
+          "file_key_hex": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+          "versions": [
+            {
+              "versionId": "ver-ctr-1",
+              "cid": "bafyCTR0100",
+              "fileIv": "1c1d1e1f20212223242526272829",
+              "size": 4096000,
+              "createdAt": 1718000000000,
+              "encryptionMode": "CTR",
+              "file_key_hex": "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c"
+            }
+          ]
+        },
+        "createdAt": 1719532800000,
+        "modifiedAt": 1719532800000
+      },
+      "expected_read_body_hex": "PLACEHOLDER"
+    },
+    {
+      "description": "root node read-body PRIMARY LOCK (IV-independent, D-04)",
+      "node": {
+        "schema": "node/v3",
+        "kind": "root",
+        "id": "550e8400-e29b-41d4-a716-446655440003",
+        "generation": 0,
+        "children": [],
+        "createdAt": 1719532800000,
+        "modifiedAt": 1719532800000
+      },
+      "expected_read_body_hex": "PLACEHOLDER"
+    }
+  ],
+  "seal_vectors": [
+    {
+      "description": "folder node FULL-SEAL LOCK (fixed key + fixed IV, D-04, T-62-06)",
+      "node_id": "550e8400-e29b-41d4-a716-446655440000",
+      "kind": 1,
+      "generation": 0,
+      "read_key": "0101010101010101010101010101010101010101010101010101010101010101",
+      "write_key": "0202020202020202020202020202020202020202020202020202020202020202",
+      "ipns_private_key_hex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "fixed_iv": "000102030405060708090a0b",
+      "expected_published_node": {
+        "schema": "node/v3",
+        "kind": "folder",
+        "id": "550e8400-e29b-41d4-a716-446655440000",
+        "generation": 0,
+        "aeadVersion": 1,
+        "readSealed": "PLACEHOLDER",
+        "writeSealed": "PLACEHOLDER"
+      }
+    }
+  ]
+}
