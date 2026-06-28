@@ -3,7 +3,7 @@
   "checkpoint_id": "15128caf4b15",
   "strategy": "manual-commit",
   "branch": "feat/unified-node-codec-core-keystone",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "docs/METADATA_SCHEMAS.md"
   ],
@@ -13,13 +13,19 @@
       "transcript": "/15/128caf4b15/0/full.jsonl",
       "content_hash": "/15/128caf4b15/0/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/15/128caf4b15/1/metadata.json",
+      "transcript": "/15/128caf4b15/1/full.jsonl",
+      "content_hash": "/15/128caf4b15/1/content_hash.txt",
+      "prompt": ""
     }
   ],
   "token_usage": {
-    "input_tokens": 0,
-    "cache_creation_tokens": 0,
-    "cache_read_tokens": 0,
-    "output_tokens": 0,
-    "api_call_count": 0
+    "input_tokens": 14370,
+    "cache_creation_tokens": 394704,
+    "cache_read_tokens": 7713017,
+    "output_tokens": 102226,
+    "api_call_count": 45
   }
 }
