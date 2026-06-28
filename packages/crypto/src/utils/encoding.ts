@@ -57,7 +57,7 @@ export function bytesToHex(bytes: Uint8Array): string {
  */
 export function uuidToBytes(uuid: string): Uint8Array {
   const clean = uuid.replace(/-/g, '');
-  if (clean.length !== 32) {
+  if (!/^[0-9a-fA-F]{32}$/.test(clean)) {
     throw new CryptoError('Malformed UUID', 'INVALID_AAD_INPUT');
   }
   return hexToBytes(clean);

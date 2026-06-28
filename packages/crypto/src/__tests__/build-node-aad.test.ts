@@ -47,6 +47,18 @@ describe('uuidToBytes', () => {
       expect((e as CryptoError).code).toBe('INVALID_AAD_INPUT');
     }
   });
+
+  it('throws CryptoError INVALID_AAD_INPUT on a 32-char non-hex string', () => {
+    // Stripped form is exactly 32 chars but contains a non-hex 'g' — must
+    // fail closed with CryptoError, not leak a plain Error from hexToBytes.
+    try {
+      uuidToBytes('550e8400-e29b-41d4-a716-44665544000g');
+      expect.fail('should have thrown');
+    } catch (e) {
+      expect(e).toBeInstanceOf(CryptoError);
+      expect((e as CryptoError).code).toBe('INVALID_AAD_INPUT');
+    }
+  });
 });
 
 describe('buildNodeAad', () => {
