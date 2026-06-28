@@ -240,6 +240,49 @@ fn hkdf_cross_language() {
 }
 
 // ============================================================
+// Node AAD Cross-Language Vectors
+// ============================================================
+
+#[derive(Deserialize)]
+struct NodeAadVector {
+    #[allow(dead_code)]
+    description: String,
+    node_id: String,
+    kind: u8,
+    generation: u32,
+    role: u8,
+    expected_aad: String,
+}
+
+#[test]
+fn node_aad_cross_language() {
+    // node-aad.json is a top-level object (not a flat array), so parse via
+    // serde_json::Value and pull the aad_vectors array — not load_vectors().
+    let path = vectors_path("crypto/node-aad.json");
+    let data = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("Failed to load {}: {}", path.display(), e));
+    let root: serde_json::Value = serde_json::from_str(&data).unwrap();
+
+    let aad_vectors: Vec<NodeAadVector> =
+        serde_json::from_value(root["aad_vectors"].clone()).unwrap();
+
+    // Guard: exactly 4 entries covering all role bytes 0x01..0x04.
+    // Mirrors the TS length guard so coverage cannot silently erode.
+    assert_eq!(aad_vectors.len(), 4, "Expected exactly 4 aad_vectors (one per role byte)");
+
+    for v in &aad_vectors {
+        let aad = cipherbox_crypto::build_node_aad(&v.node_id, v.kind, v.generation, v.role)
+            .unwrap_or_else(|e| panic!("build_node_aad failed for {}: {:?}", v.description, e));
+        assert_eq!(
+            hex::encode(&aad),
+            v.expected_aad,
+            "AAD mismatch for: {}",
+            v.description
+        );
+    }
+}
+
+// ============================================================
 // IPNS Name Derivation Cross-Language Vectors
 // ============================================================
 
