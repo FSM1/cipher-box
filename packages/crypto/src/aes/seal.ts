@@ -10,9 +10,18 @@
 import { CryptoError } from '../types';
 import { AES_KEY_SIZE, AES_IV_SIZE, AES_TAG_SIZE } from '../constants';
 import { generateIv } from '../utils/random';
-import { concatBytes } from '../utils/encoding';
+import { concatBytes, uuidToBytes } from '../utils/encoding';
 import { encryptAesGcm } from './encrypt';
 import { decryptAesGcm } from './decrypt';
+
+/**
+ * Frozen domain prefix for the AAD-bound node seal (D-00, ADR 0003).
+ * Computed once at module load; never re-created inside the function body.
+ *
+ * Layout: "cipherbox/node-seal/v1" (22 UTF-8 bytes) ‖ 0x00 (null separator)
+ */
+const DOMAIN = new TextEncoder().encode('cipherbox/node-seal/v1');
+const NULL_SEP = new Uint8Array([0x00]);
 
 /** Minimum sealed data size: IV + auth tag (no plaintext) */
 const MIN_SEALED_SIZE = AES_IV_SIZE + AES_TAG_SIZE;
@@ -46,6 +55,60 @@ export async function sealAesGcm(plaintext: Uint8Array, key: Uint8Array): Promis
 
   // Return IV || ciphertext (IV is always first 12 bytes)
   return concatBytes(iv, ciphertext);
+}
+
+/**
+ * Build the AAD (Additional Authenticated Data) for an AAD-bound node seal.
+ *
+ * Frozen byte layout per D-00 / ADR 0003:
+ *   "cipherbox/node-seal/v1" (22 bytes, UTF-8)
+ *   ‖ 0x00  (null separator, 1 byte)
+ *   ‖ nodeId (16 bytes, raw RFC-4122 UUID bytes — NOT UTF-8 of the string)
+ *   ‖ kind  (1 byte: 0x01 folder / 0x02 file / 0x03 root)
+ *   ‖ generation (4 bytes, big-endian u32)
+ *   ‖ role  (1 byte: 0x01 body / 0x02 child-readkey / 0x03 content / 0x04 child-writekey)
+ *
+ * Total: 45 bytes. Fail-closed: any invalid input throws (D-03).
+ *
+ * @param nodeId - Hyphenated UUID string for the node
+ * @param kind - Node kind byte (0x01 folder, 0x02 file, 0x03 root)
+ * @param generation - Key generation as a non-negative integer in [0, 2^32-1]
+ * @param role - Role byte (0x01..0x04)
+ * @returns 45-byte AAD
+ * @throws CryptoError with code 'INVALID_AAD_INPUT' on any invalid input
+ */
+export function buildNodeAad(
+  nodeId: string,
+  kind: number,
+  generation: number,
+  role: number
+): Uint8Array {
+  // D-03: fail-closed validation
+  if (!([0x01, 0x02, 0x03] as number[]).includes(kind)) {
+    throw new CryptoError('Invalid kind for AAD', 'INVALID_AAD_INPUT');
+  }
+  if (!([0x01, 0x02, 0x03, 0x04] as number[]).includes(role)) {
+    throw new CryptoError('Invalid role for AAD', 'INVALID_AAD_INPUT');
+  }
+  if (!Number.isInteger(generation) || generation < 0 || generation > 0xffffffff) {
+    throw new CryptoError('Invalid generation for AAD', 'INVALID_AAD_INPUT');
+  }
+
+  // uuidToBytes throws CryptoError('Malformed UUID', 'INVALID_AAD_INPUT') on bad input
+  const nodeIdBytes = uuidToBytes(nodeId);
+
+  // Encode generation as 4-byte big-endian u32
+  const genBytes = new Uint8Array(4);
+  new DataView(genBytes.buffer).setUint32(0, generation, false);
+
+  return concatBytes(
+    DOMAIN,
+    NULL_SEP,
+    nodeIdBytes,
+    new Uint8Array([kind]),
+    genBytes,
+    new Uint8Array([role])
+  );
 }
 
 /**

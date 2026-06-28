@@ -4,6 +4,8 @@
  * Hex and byte conversion utilities.
  */
 
+import { CryptoError } from '../types';
+
 /**
  * Convert hex string to Uint8Array.
  * Handles optional 0x prefix.
@@ -40,6 +42,25 @@ export function bytesToHex(bytes: Uint8Array): string {
   return Array.from(bytes)
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
+}
+
+/**
+ * Convert a hyphenated UUID string to a 16-byte Uint8Array (raw RFC-4122 bytes).
+ *
+ * Strips hyphens and delegates to hexToBytes. The conversion is a hex-field
+ * parse — never TextEncoder — producing 16 raw bytes in RFC-4122 field order.
+ * This is the canonical UUID→bytes path on the TypeScript side (D-04).
+ *
+ * @param uuid - Hyphenated UUID string (e.g. "550e8400-e29b-41d4-a716-446655440000")
+ * @returns 16-byte Uint8Array in RFC-4122 field order
+ * @throws CryptoError with code 'INVALID_AAD_INPUT' if the UUID is malformed
+ */
+export function uuidToBytes(uuid: string): Uint8Array {
+  const clean = uuid.replace(/-/g, '');
+  if (clean.length !== 32) {
+    throw new CryptoError('Malformed UUID', 'INVALID_AAD_INPUT');
+  }
+  return hexToBytes(clean);
 }
 
 /**

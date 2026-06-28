@@ -7,6 +7,6 @@
 
 export { encryptAesGcm } from './encrypt';
 export { decryptAesGcm } from './decrypt';
-export { sealAesGcm, unsealAesGcm } from './seal';
+export { sealAesGcm, unsealAesGcm, buildNodeAad } from './seal';
 export { encryptAesCtr } from './encrypt-ctr';
 export { decryptAesCtr, decryptAesCtrRange } from './decrypt-ctr';

@@ -8,7 +8,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { buildNodeAad } from '../aes';
-import { uuidToBytes, bytesToHex } from '../utils/encoding';
+import { uuidToBytes } from '../utils/encoding';
 import { CryptoError } from '../types';
 
 const CANONICAL_UUID = '550e8400-e29b-41d4-a716-446655440000';
@@ -180,32 +180,4 @@ describe('buildNodeAad', () => {
   });
 });
 
-// KAT assertions (Task 2 — added after node-aad.json is committed)
-// The import is relative: from src/__tests__/ up four levels is project root,
-// then into tests/vectors/crypto/node-aad.json.
-// We use a dynamic import so the file is resolved at test runtime.
-describe('buildNodeAad cross-language KAT (node-aad.json)', () => {
-  it('matches committed aad_vectors for all four role bytes', async () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const vectors = (await import('../../../../tests/vectors/crypto/node-aad.json')) as any;
-    const aadVectors = vectors.aad_vectors as Array<{
-      description: string;
-      node_id: string;
-      kind: number;
-      generation: number;
-      role: number;
-      expected_aad: string;
-    }>;
-
-    // Guard: all four role bytes must be present; a bare for-of over a
-    // truncated array would pass vacuously and silently drop role coverage.
-    expect(aadVectors.length).toBe(4);
-    const sortedRoles = [...aadVectors.map((v) => v.role)].sort((a, b) => a - b);
-    expect(sortedRoles).toEqual([1, 2, 3, 4]);
-
-    for (const v of aadVectors) {
-      const aad = buildNodeAad(v.node_id, v.kind, v.generation, v.role);
-      expect(bytesToHex(aad)).toBe(v.expected_aad);
-    }
-  });
-});
+// KAT assertions are added in Task 2 after node-aad.json is committed.
