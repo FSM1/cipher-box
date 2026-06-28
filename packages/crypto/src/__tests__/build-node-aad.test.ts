@@ -362,6 +362,15 @@ describe('full-seal KAT (seal_vectors in node-aad.json, D-01b)', () => {
       // is the cross-language ground truth proving AAD flows into the AEAD identically
       const result = await encryptAesGcmAad(plaintext, key, iv, aad);
       expect(bytesToHex(result)).toBe(v.ciphertext);
+
+      // Pin the frozen sealed-blob envelope order [IV(12)][ct+tag] (D-00a). The committed
+      // ciphertext above only pins the AEAD output; this asserts the high-level seal envelope
+      // is IV-FIRST — a seal/unseal pair that silently switched to `ct||iv` would still pass the
+      // round-trip and ciphertext checks, but unsealing this explicitly IV-first composition
+      // would fail. Cross-checked byte-for-byte on the Rust side (cross_language.rs).
+      const sealedEnvelope = new Uint8Array([...iv, ...result]);
+      const opened = await unsealAesGcmAad(sealedEnvelope, key, aad);
+      expect(bytesToHex(opened)).toBe(v.plaintext);
     }
   });
 });

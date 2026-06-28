@@ -336,6 +336,21 @@ fn node_aad_cross_language() {
             "Full-seal KAT ciphertext mismatch for: {}",
             v.description
         );
+
+        // Pin the frozen sealed-blob envelope order [IV(12)][ct+tag] (D-00a). The ciphertext
+        // assertion above only pins the AEAD output; this asserts the high-level seal envelope
+        // is IV-FIRST and identical to the TS side: a seal/unseal pair that silently switched to
+        // `ct||iv` would pass round-trip + ciphertext checks but fail to open this IV-first blob.
+        let mut sealed_envelope = iv_arr.to_vec();
+        sealed_envelope.extend_from_slice(&ciphertext);
+        let opened = cipherbox_crypto::unseal_aes_gcm_aad(&sealed_envelope, &key_arr, &aad)
+            .unwrap_or_else(|e| panic!("unseal_aes_gcm_aad failed for {}: {:?}", v.description, e));
+        assert_eq!(
+            hex::encode(&opened),
+            v.plaintext,
+            "Sealed-envelope [IV][ct+tag] order mismatch for: {}",
+            v.description
+        );
     }
 }
 
