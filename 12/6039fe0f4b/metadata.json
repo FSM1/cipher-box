@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "126039fe0f4b",
+  "strategy": "manual-commit",
+  "branch": "feat/aad-bound-seal-primitive-and-cross-language-kat",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/STATE.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/12/6039fe0f4b/0/metadata.json",
+      "transcript": "/12/6039fe0f4b/0/full.jsonl",
+      "content_hash": "/12/6039fe0f4b/0/content_hash.txt",
+      "prompt": "/12/6039fe0f4b/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 36263,
+    "cache_creation_tokens": 718412,
+    "cache_read_tokens": 12662284,
+    "output_tokens": 90546,
+    "api_call_count": 85
+  }
+}
