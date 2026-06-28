@@ -1,100 +1,125 @@
 /**
- * @cipherbox/core - Vault Key Blob v2 Format
+ * @cipherbox/core - Vault Key Blob v3 Format
  *
- * Binary envelope for storing ECIES-encrypted rootFolderKey on IPFS.
- * This is a key-only blob — folder metadata is stored separately at
- * the root folder's own IPNS name using standard v1 JSON format.
+ * Binary envelope for storing two ECIES-encrypted root keys on IPFS.
+ * Carries both rootReadKey and rootWriteKey in a single blob (NODE-06, D-05).
  *
- * Format: 0x02 | uint16_BE(key_len) | encrypted_key
+ * Format: 0x03 | u16_BE(readLen) | ECIES(rootReadKey) | u16_BE(writeLen) | ECIES(rootWriteKey)
  *
  * This module is pure byte manipulation with zero external dependencies
  * (beyond types), making it easy to verify and port to other languages (Rust).
  *
- * Cross-platform test vectors in vault-blob-vectors.test.ts ensure binary
- * compatibility between TypeScript and Rust implementations.
+ * Cross-platform test vectors in tests/vectors/vault-v3-blob.json ensure
+ * binary compatibility between TypeScript and Rust implementations (D-04).
  */
 
-/** Version byte for vault blob v2 format */
-export const BLOB_V2_VERSION = 0x02;
+/** Version byte for vault blob v3 format */
+export const BLOB_V3_VERSION = 0x03;
 
 /**
- * Detect whether a vault blob is v1 (JSON) or v2 (binary envelope).
- *
- * v1 blobs start with 0x7B ('{' -- JSON object).
- * v2 blobs start with 0x02 (version byte).
- *
- * Any blob that does not start with 0x02 is treated as v1 for backward
- * compatibility -- this includes malformed blobs, which will fail at
- * the JSON parse stage.
- *
- * @param blob - Raw bytes from IPFS
- * @returns 1 for v1 JSON blobs, 2 for v2 binary blobs
- */
-export function detectBlobVersion(blob: Uint8Array): 1 | 2 {
-  return blob.length > 0 && blob[0] === BLOB_V2_VERSION ? 2 : 1;
-}
-
-/**
- * Serialize vault key blob v2.
+ * Serialize vault key blob v3.
  *
  * Constructs a binary envelope:
- *   byte 0:    version (0x02)
- *   bytes 1-2: key_len as big-endian uint16
- *   bytes 3..: encrypted rootFolderKey (key_len bytes)
+ *   byte 0:        version (0x03)
+ *   bytes 1-2:     readLen as big-endian uint16
+ *   bytes 3..N:    ECIES(rootReadKey)  (readLen bytes)
+ *   bytes N+1..2:  writeLen as big-endian uint16
+ *   bytes N+3..:   ECIES(rootWriteKey) (writeLen bytes)
  *
- * @param encryptedRootFolderKey - ECIES-wrapped rootFolderKey (typically 129 bytes)
- * @returns Complete v2 key blob ready for IPFS storage
+ * @param encryptedRootReadKey  - ECIES-wrapped rootReadKey (typically 129 bytes)
+ * @param encryptedRootWriteKey - ECIES-wrapped rootWriteKey (typically 129 bytes)
+ * @returns Complete v3 key blob ready for IPFS storage
  */
-export function serializeVaultBlobV2(encryptedRootFolderKey: Uint8Array): Uint8Array {
-  const keyLen = encryptedRootFolderKey.length;
-  if (keyLen === 0) {
-    throw new Error('Encrypted key must not be empty for v2 blob');
+export function serializeVaultBlobV3(
+  encryptedRootReadKey: Uint8Array,
+  encryptedRootWriteKey: Uint8Array
+): Uint8Array {
+  const readLen = encryptedRootReadKey.length;
+  const writeLen = encryptedRootWriteKey.length;
+
+  if (readLen === 0) {
+    throw new Error('Encrypted read key must not be empty for v3 blob');
   }
-  if (keyLen > 0xffff) {
-    throw new Error(`Encrypted key too long for v2 blob (${keyLen} bytes, max ${0xffff})`);
+  if (readLen > 0xffff) {
+    throw new Error(`Encrypted read key too long for v3 blob (${readLen} bytes, max ${0xffff})`);
   }
-  const result = new Uint8Array(3 + keyLen);
+  if (writeLen === 0) {
+    throw new Error('Encrypted write key must not be empty for v3 blob');
+  }
+  if (writeLen > 0xffff) {
+    throw new Error(`Encrypted write key too long for v3 blob (${writeLen} bytes, max ${0xffff})`);
+  }
+
+  // Layout: 0x03 | u16_BE(readLen) | ecies(readKey) | u16_BE(writeLen) | ecies(writeKey)
+  const result = new Uint8Array(1 + 2 + readLen + 2 + writeLen);
 
   // Version byte
-  result[0] = BLOB_V2_VERSION;
-  // Key length as big-endian uint16
-  result[1] = (keyLen >> 8) & 0xff;
-  result[2] = keyLen & 0xff;
-  // ECIES-encrypted rootFolderKey
-  result.set(encryptedRootFolderKey, 3);
+  result[0] = BLOB_V3_VERSION;
+
+  // Read key length as big-endian uint16
+  result[1] = (readLen >> 8) & 0xff;
+  result[2] = readLen & 0xff;
+
+  // ECIES-encrypted rootReadKey
+  result.set(encryptedRootReadKey, 3);
+
+  // Write key length as big-endian uint16
+  const writeOffset = 3 + readLen;
+  result[writeOffset] = (writeLen >> 8) & 0xff;
+  result[writeOffset + 1] = writeLen & 0xff;
+
+  // ECIES-encrypted rootWriteKey
+  result.set(encryptedRootWriteKey, writeOffset + 2);
 
   return result;
 }
 
 /**
- * Deserialize vault key blob v2 to extract the encrypted rootFolderKey.
+ * Deserialize vault key blob v3 to extract both encrypted root keys.
  *
- * Validates the version byte and key_len field, then slices the key bytes.
+ * Validates the version byte, length fields, and bounds of the write
+ * key segment before returning.
  *
- * @param blob - Complete v2 key blob from IPFS
- * @returns The ECIES-encrypted rootFolderKey
- * @throws Error if blob is not v2 format, truncated, or key_len is invalid
+ * @param blob - Complete v3 key blob from IPFS
+ * @returns { encryptedRootReadKey, encryptedRootWriteKey } as subarray views
+ * @throws Error if blob is not v3 format, truncated, or length fields are invalid
  */
-export function deserializeVaultBlobV2(blob: Uint8Array): Uint8Array {
-  if (blob.length < 3) {
-    throw new Error('Vault blob too short for v2 header (need at least 3 bytes)');
+export function deserializeVaultBlobV3(blob: Uint8Array): {
+  encryptedRootReadKey: Uint8Array;
+  encryptedRootWriteKey: Uint8Array;
+} {
+  if (blob.length < 5) {
+    throw new Error('Vault blob too short for v3 header (need at least 5 bytes)');
   }
 
-  if (blob[0] !== BLOB_V2_VERSION) {
-    throw new Error('Not a v2 vault blob');
+  if (blob[0] !== BLOB_V3_VERSION) {
+    throw new Error('Not a v3 vault blob');
   }
 
-  const keyLen = (blob[1] << 8) | blob[2];
+  const readLen = (blob[1] << 8) | blob[2];
 
-  if (keyLen === 0) {
-    throw new Error('Invalid v2 blob: encrypted key length must be > 0');
+  if (readLen === 0) {
+    throw new Error('Invalid v3 blob: read key length must be > 0');
   }
 
-  if (blob.length < 3 + keyLen) {
-    throw new Error(
-      `Vault blob too short for key (expected ${keyLen} bytes, have ${blob.length - 3})`
-    );
+  if (blob.length < 3 + readLen + 2) {
+    throw new Error('Vault blob truncated (missing write key header)');
   }
 
-  return blob.subarray(3, 3 + keyLen);
+  const encryptedRootReadKey = blob.subarray(3, 3 + readLen);
+
+  const writeOffset = 3 + readLen;
+  const writeLen = (blob[writeOffset] << 8) | blob[writeOffset + 1];
+
+  if (writeLen === 0) {
+    throw new Error('Invalid v3 blob: write key length must be > 0');
+  }
+
+  if (blob.length < writeOffset + 2 + writeLen) {
+    throw new Error('Vault blob truncated (write key)');
+  }
+
+  const encryptedRootWriteKey = blob.subarray(writeOffset + 2, writeOffset + 2 + writeLen);
+
+  return { encryptedRootReadKey, encryptedRootWriteKey };
 }
