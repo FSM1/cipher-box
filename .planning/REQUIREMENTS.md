@@ -21,7 +21,7 @@ Requirements for v2.0. Each maps to exactly one roadmap phase. Categories: CRYPT
 - [x] **NODE-02**: A file node's `content` (incl. `content.fileKey`, and each `VersionEntry`'s inline `fileKey` + mandatory `encryptionMode` GCM/CTR) self-seals under the file node's own `readKey`
 - [x] **NODE-03**: `SealedChildRef` is the read-only chain link (`name`, `ipnsName`, `generation` mirror, `versionFloor`, `readKeySealed`); the write link lives in the parent write-body, never in `SealedChildRef`
 - [x] **NODE-04**: The published object is a plaintext envelope (`kind`/`id`/`generation`/`aeadVersion` + `readSealed`/`writeSealed`) with `generation` folded into AAD and tamper-evident
-- [ ] **NODE-05**: In Rust crates, `Node` is a real enum (`Folder { children } / File { content } / Root { children }`), not an `Option`-bag — impossible states unrepresentable
+- [x] **NODE-05**: In Rust crates, `Node` is a real enum (`Folder { children } / File { content } / Root { children }`), not an `Option`-bag — impossible states unrepresentable
 - [x] **NODE-06**: The vault recovery blob carries two keys — `ECIES(rootReadKey)` + `ECIES(rootWriteKey)` — re-designed (not migrated) for the root node's read + write bodies
 
 ### READ — read key-chaining navigation and sharing
@@ -113,7 +113,7 @@ Which phases cover which requirements. Populated during roadmap creation.
 | NODE-02 | Phase 62 | Complete |
 | NODE-03 | Phase 62 | Complete |
 | NODE-04 | Phase 62 | Complete |
-| NODE-05 | Phase 62 | Pending |
+| NODE-05 | Phase 62 | Complete |
 | NODE-06 | Phase 62 | Complete |
 | READ-01 | Phase 63 | Pending |
 | READ-02 | Phase 63 | Pending |
