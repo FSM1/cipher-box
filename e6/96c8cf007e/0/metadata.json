@@ -21,6 +21,62 @@
     "output_tokens": 0,
     "api_call_count": 0
   },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-plan-phase-2026-06-28T18:11:44.314969Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "d3bafcfe2fde",
+      "timestamp": "2026-06-28T18:11:44.314969Z",
+      "native": {
+        "command": "/gsd-plan-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_019xJEMkUftEVCgsENaGYPTz",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d3bafcfe2fde",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 216,
+        "end": 217,
+        "entry_ids": [
+          "92f183a1-36ba-44e1-aa90-f4c171db03db"
+        ],
+        "tool_use_id": "toolu_019xJEMkUftEVCgsENaGYPTz"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_019xJEMkUftEVCgsENaGYPTz"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
   "initial_attribution": {
     "calculated_at": "2026-06-28T18:23:01.153383Z",
     "agent_lines": 0,
