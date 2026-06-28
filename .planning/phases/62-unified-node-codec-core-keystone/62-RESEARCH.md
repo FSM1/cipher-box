@@ -550,14 +550,16 @@ Step 2.6 is SKIPPED — Phase 62 is a pure TypeScript/code change with no extern
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **`BinEntry` adaptation scope**
+   - **RESOLVED:** Use the `Node` type now (it is the correct future type) for the bin reference field, and stub any behavioral bin code in `bin/encrypt.ts` / `bin/schema.ts` with `throw new Error('not implemented — phase 65')`. Bin re-link behavior is owned by Phase 65. Implemented by Plan 05 (which cites this Open Q1).
    - What we know: `BinEntry` imports `FilePointer` and `FolderEntry` as the types for `filePointer?` and `folderEntry?` fields. After those types are deleted, `BinEntry` must either import `Node` or use a stub type.
    - What's unclear: The bin restore path in Phase 65 will convert `BinEntry` to use Node-based references properly. For this phase we need compile-only: should `filePointer?` and `folderEntry?` be typed as `Node` now (anticipating Phase 65), or as `unknown` with a TODO?
    - Recommendation: Use `Node` for the type (it's the correct future type) but stub any behavioral code in `bin/encrypt.ts` / `bin/schema.ts` with `throw new Error('not implemented — phase 65')`.
 
 2. **`vault/init.ts` two-key shape**
+   - **RESOLVED:** `rootWriteKey = generateFileKey()` — an independent random 32-byte AES key, NOT derived from the Ed25519 keypair (the Ed25519 key lives inside the sealed write-body, design §2.2). `rootReadKey = generateFileKey()` (independent random 32B, replaces `rootFolderKey`). `rootIpnsKeypair` is unchanged. `VaultInit` gains `rootWriteKey: Uint8Array`. Implemented by Plan 03 (which cites this Open Q2).
    - What we know: `initializeVault` generates `rootFolderKey` + `rootIpnsKeypair`. Under v3, it needs `rootReadKey` (random 32B, replaces `rootFolderKey`) + `rootWriteKey` (random 32B, new) + `rootIpnsKeypair` (unchanged — Ed25519 key is write-plane).
    - What's unclear: Is `rootWriteKey` derived from or independent of the Ed25519 key? The design (§2.2) says write-body is sealed under a separate `writeKey`; the Ed25519 key lives INSIDE the sealed write-body. So `writeKey` is a fresh random AES key, independent of the Ed25519 keypair.
    - Recommendation: `rootWriteKey = generateFileKey()` (independent random 32B AES key). `rootIpnsKeypair` unchanged. `VaultInit` gains `rootWriteKey: Uint8Array`.

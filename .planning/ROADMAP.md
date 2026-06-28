@@ -126,7 +126,7 @@ Plans:
 5. `packages/sdk-core`, `packages/sdk`, and `apps/web` typecheck cleanly after `packages/core` `dist/` is rebuilt — zero references to retired `FolderMetadata`/`FileMetadata`/`FilePointer`/`FolderEntry`
 6. `METADATA_SCHEMAS.md` is updated to document the `generation`-as-convergence-witness invariant and the `fileKey`-inside-sealed-read-body semantic change
 
-**Plans**: 8 plans
+**Plans**: 9 plans
 
 Plans:
 **Wave 1**
@@ -153,7 +153,11 @@ Plans:
 
 **Wave 6** *(blocked on 62-07)*
 
-- [ ] 62-08-PLAN.md — web compile-gate (logic + components to Node, quarantine suites, full `pnpm typecheck` gate)
+- [ ] 62-08a-PLAN.md — web logic-layer compile-gate (stores/hooks/services/lib/utils to Node + stubs, shared display projection)
+
+**Wave 7** *(blocked on 62-08a)*
+
+- [ ] 62-08b-PLAN.md — web component-layer compile-gate (file-browser to Node, discover + quarantine all retired-type suites, full `pnpm typecheck` gate)
 
 ---
 
