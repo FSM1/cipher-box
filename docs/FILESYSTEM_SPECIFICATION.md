@@ -175,7 +175,7 @@ if (nameExists) throw new Error('An item with this name already exists');
 
 ## Metadata Storage
 
-File and folder names, timestamps, and structural information are stored as encrypted JSON in IPNS records. The server never sees plaintext names or folder structure. See [METADATA_SCHEMAS.md](METADATA_SCHEMAS.md) for the full schema reference and [METADATA_EVOLUTION_PROTOCOL.md](METADATA_EVOLUTION_PROTOCOL.md) for change management rules.
+File and folder names, timestamps, and structural information are stored as encrypted JSON in IPNS records. The server never sees plaintext names or folder structure. Node metadata bodies use the AAD-bound AES-256-GCM seal primitive; see [ADR 0003](adr/0003-aad-bound-node-seal-encoding.md) for the frozen byte encoding. See [METADATA_SCHEMAS.md](METADATA_SCHEMAS.md) for the full schema reference and [METADATA_EVOLUTION_PROTOCOL.md](METADATA_EVOLUTION_PROTOCOL.md) for change management rules.
 
 ## Known Gaps
 

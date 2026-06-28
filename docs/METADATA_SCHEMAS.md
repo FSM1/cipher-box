@@ -51,6 +51,19 @@ Each metadata type uses a specific encryption scheme and storage location.
 
 **Key principle:** Access to a folder's `folderKey` grants access to all children (subfolders via ECIES-wrapped keys, files via the parent's `folderKey` encrypting their metadata).
 
+### AAD-bound seal primitive
+
+Node metadata bodies (folder and file) are encrypted using AES-256-GCM with Additional
+Authenticated Data (AAD) that binds each sealed blob to the identity of the node it
+belongs to (node ID, kind, key generation, and role). This prevents a blob sealed for one
+node from being replayed under a different node identity without causing a cryptographic
+authentication failure.
+
+See [ADR 0003](adr/0003-aad-bound-node-seal-encoding.md) for the authoritative freeze:
+the exact 45-byte AAD byte-encoding table, the kind-byte and role-byte assignments, the
+AEAD parameters, and the standing rule that every new role byte must extend the
+cross-language Known-Answer Test.
+
 ---
 
 ## 3. Wire Format
