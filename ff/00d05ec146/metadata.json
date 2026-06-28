@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "ff00d05ec146",
+  "strategy": "manual-commit",
+  "branch": "feat/unified-node-codec-core-keystone",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/62-unified-node-codec-core-keystone/62-PATTERNS.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ff/00d05ec146/0/metadata.json",
+      "transcript": "/ff/00d05ec146/0/full.jsonl",
+      "content_hash": "/ff/00d05ec146/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 139,
+    "cache_creation_tokens": 24404,
+    "cache_read_tokens": 754365,
+    "output_tokens": 8584,
+    "api_call_count": 5
+  }
+}
