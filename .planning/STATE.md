@@ -23,7 +23,7 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-27)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 61 — aad-bound-seal-primitive-and-cross-language-kat
+**Current focus:** Phase 62 — unified-node-codec
 
 ## Current Position
 

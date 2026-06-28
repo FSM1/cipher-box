@@ -76,7 +76,7 @@ variants are strictly additive.
 - Rust: `crates/crypto/src/aes.rs` — `build_node_aad`, `seal_aes_gcm_aad`,
   `unseal_aes_gcm_aad`
 - KAT fixture: `tests/vectors/crypto/node-aad.json` — asserted by both
-  `packages/crypto/__tests__/build-node-aad.test.ts` and
+  `packages/crypto/src/__tests__/build-node-aad.test.ts` and
   `crates/crypto/tests/cross_language.rs`
 
 ## Standing rules
