@@ -126,12 +126,12 @@ Plans:
 5. `packages/sdk-core`, `packages/sdk`, and `apps/web` typecheck cleanly after `packages/core` `dist/` is rebuilt — zero references to retired `FolderMetadata`/`FileMetadata`/`FilePointer`/`FolderEntry`
 6. `METADATA_SCHEMAS.md` is updated to document the `generation`-as-convergence-witness invariant and the `fileKey`-inside-sealed-read-body semantic change
 
-**Plans**: 9 plans
+**Plans**: 1/9 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 62-01-PLAN.md — Node type model + JSON encode/decode codec (folder/file/root round-trip, generation range, fileKey-as-Uint8Array)
+- [x] 62-01-PLAN.md — Node type model + JSON encode/decode codec (folder/file/root round-trip, generation range, fileKey-as-Uint8Array)
 - [ ] 62-03-PLAN.md — Vault recovery blob v3 hard-cut (two ECIES keys, delete v2/v1 + encryptedRootFolderKey, two-key init)
 
 **Wave 2** *(blocked on 62-01)*
@@ -321,7 +321,7 @@ Plans:
 | Phase | Name | Plans Complete | Status | Completed |
 | --- | --- | --- | --- | --- |
 | 61 | AAD-Bound Seal Primitive and Cross-Language KAT | 5/5 | Complete    | 2026-06-28 |
-| 62 | Unified Node Codec (Core Keystone) | 0/8 | Not started | - |
+| 62 | Unified Node Codec (Core Keystone) | 1/9 | In Progress|  |
 | 63 | Read-Chain Navigation and Rotation Core | 0/? | Not started | - |
 | 64 | Rotation Soundness — Revocation Guarantees | 0/? | Not started | - |
 | 65 | SDK Write-Chain, Bin Re-link, and Invite Claim | 0/? | Not started | - |
