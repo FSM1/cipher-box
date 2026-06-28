@@ -3,7 +3,7 @@
   "checkpoint_id": "15d9ad0fef45",
   "strategy": "manual-commit",
   "branch": "feat/unified-node-codec-core-keystone",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "apps/web/src/components/file-browser/AudioPlayerDialog.tsx",
     "apps/web/src/components/file-browser/ContextMenu.tsx",
@@ -34,13 +34,19 @@
       "transcript": "/15/d9ad0fef45/0/full.jsonl",
       "content_hash": "/15/d9ad0fef45/0/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/15/d9ad0fef45/1/metadata.json",
+      "transcript": "/15/d9ad0fef45/1/full.jsonl",
+      "content_hash": "/15/d9ad0fef45/1/content_hash.txt",
+      "prompt": ""
     }
   ],
   "token_usage": {
-    "input_tokens": 0,
-    "cache_creation_tokens": 0,
-    "cache_read_tokens": 0,
-    "output_tokens": 0,
-    "api_call_count": 0
+    "input_tokens": 14688,
+    "cache_creation_tokens": 421470,
+    "cache_read_tokens": 10167593,
+    "output_tokens": 124010,
+    "api_call_count": 53
   }
 }
