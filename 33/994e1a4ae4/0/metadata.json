@@ -1,0 +1,163 @@
+{
+  "cli_version": "0.7.3",
+  "checkpoint_id": "33994e1a4ae4",
+  "session_id": "73377c33-a7a3-47f3-bd4c-8f7965661187",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-28T01:22:05.000358Z",
+  "branch": "feat/aad-bound-seal-primitive-and-cross-language-kat",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "2d04c6d14ad9",
+  "token_usage": {
+    "input_tokens": 36860,
+    "cache_creation_tokens": 727406,
+    "cache_read_tokens": 13270570,
+    "output_tokens": 97002,
+    "api_call_count": 87
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01MP5FE4PxcXK1YRZVVVN1M9",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "2d04c6d14ad9",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 245,
+        "end": 246,
+        "entry_ids": [
+          "b3fe368c-131b-4f74-a100-0b89e8611411"
+        ],
+        "tool_use_id": "toolu_01MP5FE4PxcXK1YRZVVVN1M9"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01MP5FE4PxcXK1YRZVVVN1M9"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01PZVpF4BYFpD6XAmPVvuHYX",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "2d04c6d14ad9",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 493,
+        "end": 494,
+        "entry_ids": [
+          "95424bb7-72a8-4b7d-9cec-e1452575a0e4"
+        ],
+        "tool_use_id": "toolu_01PZVpF4BYFpD6XAmPVvuHYX"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01PZVpF4BYFpD6XAmPVvuHYX"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Debug a broken statusline and Stop-hook error, update GSD, clean up stale worktrees, then plan and execute Phase 61 (AAD-Bound Seal Primitive and Cross-Language KAT) of the CipherBox project.",
+    "outcome": "Fixed statusline (ESM/CJS conflict), restored a broken GSD install by upgrading to 1.6.0 (restoring gsd-context-monitor.js), removed 3 stale worktrees, produced 5 verified PLAN.md files across 4 waves for Phase 61, and executed Waves 1–3 (196 tests green, C-01 merge gate closed on both TS and Rust); Wave 4 was dispatched but the transcript ends before completion.",
+    "learnings": {
+      "repo": [
+        "package.json has `\"type\": \"module\"` — Node treats all .js files as ESM; any CommonJS hook (e.g. GSD statusline, gsd-context-monitor) must use the .cjs extension or it crashes with 'require is not defined'.",
+        "GSD hooks are gitignored via `.gitignore:55` (`gsd-*` glob), so they are not persisted across clones or branch switches — the main-tree GSD install was a broken fragment while worktrees had complete 1.4.3 installs.",
+        "vitest `include: ['src/**/*.ts']` only discovers tests under `packages/crypto/src/__tests__/`; the path `packages/crypto/__tests__/build-node-aad.test.ts` cited in CONTEXT.md and ROADMAP.md would never be discovered.",
+        "`scripts/check-vector-parity.sh` has a hardcoded `EXPECTED_VECTORS` array — any new vector file (e.g. `node-aad.json`) must be registered there or the parity CI step fails even when both TS and Rust tests pass.",
+        "`sealAesGcmAad` mints a fresh random IV and cannot produce a fixed test output; fixed-IV KAT vectors must target the lower-level `encryptAesGcmAad`/`decrypt_aes_gcm_aad` directly (same pattern as existing `aes-gcm.json` targeting `encrypt_aes_gcm`).",
+        "`uuid` crate (v1.23.4) is the only new workspace dependency introduced in Phase 61; it was not previously in `Cargo.toml` or `crates/crypto/Cargo.toml`.",
+        "Dead-code warnings from `crates/fuse`/`metadata.rs` are pre-existing noise from the workspace build, unrelated to Phase 61's `crates/crypto` changes.",
+        "GSD worktrees under `.claude/worktrees/` are disposable (gitignored, regeneratable via GSD install); the 1.4.3 installs inside them were safely removed.",
+        "The GSD commit helper consistently false-negatives — reports failure when the commit actually landed; always verify with `git log` immediately after."
+      ],
+      "code": [
+        {
+          "path": "packages/crypto/__tests__/build-node-aad.test.ts",
+          "finding": "This path is wrong — CONTEXT.md and ROADMAP.md reference it but vitest `include: ['src/**/*.ts']` will never discover it. Correct path: `packages/crypto/src/__tests__/build-node-aad.test.ts`."
+        },
+        {
+          "path": ".claude/hooks/statusline.js",
+          "finding": "Renamed to statusline.cjs to force CommonJS treatment; repo `\"type\": \"module\"` caused `require` to throw as ESM, silently blanking the statusline."
+        },
+        {
+          "path": ".claude/settings.json",
+          "finding": "Project-level `statusLine` command updated to reference `statusline.cjs` after the rename."
+        },
+        {
+          "path": ".planning/phases/61-aad-bound-seal-primitive-and-cross-language-kat/61-01-PLAN.md",
+          "line": 149,
+          "end_line": 159,
+          "finding": "TS AAD KAT acceptance criteria hardened to add `expect(vectors.aad_vectors).toHaveLength(4)` plus role-set assertion `expect(vectors.aad_vectors.map(v=>v.role).sort()).toEqual([1,2,3,4])` to prevent vacuous pass if role vectors are silently dropped."
+        },
+        {
+          "path": ".planning/phases/61-aad-bound-seal-primitive-and-cross-language-kat/61-02-PLAN.md",
+          "finding": "Rust AAD KAT acceptance criteria pinned to `assert_eq!(aad_vectors.len(), 4)` to match the TS count guard and prevent silent erosion of four-role coverage."
+        },
+        {
+          "path": ".planning/phases/61-aad-bound-seal-primitive-and-cross-language-kat/61-03-PLAN.md",
+          "line": 125,
+          "end_line": 132,
+          "finding": "TS seal KAT acceptance criteria hardened with `expect(vectors.seal_vectors.length).toBeGreaterThan(0)` to prevent vacuous pass on empty seal_vectors, matching the Rust `!seal_vectors.is_empty()` guard."
+        },
+        {
+          "path": "tests/vectors/crypto/node-aad.json",
+          "finding": "One file with two keyed arrays (`aad_vectors` + `seal_vectors`) rather than two files — frozen in Wave 1 with all four role-byte vectors [1,2,3,4]."
+        }
+      ],
+      "workflow": [
+        "Ultracode multi-lens adversarial plan review (plan-checker + 3 crypto lenses) caught a vacuous-pass hole in vector array KAT assertions that the standard plan-checker alone missed — worth running for security-critical crypto phases.",
+        "Adversarial verification converged in 2 rounds: round 1 found blockers, auto-revision via planner fixed them, round 2 passed with zero remaining blockers.",
+        "Unsigned commits must be configured locally (`git config commit.gpgsign false`) for AFK subagent sessions when 1Password SSH signing requires biometric approval — otherwise every commit hangs.",
+        "Worktrees disabled for sequential single-plan-per-wave phases to avoid per-worktree `pnpm install` overhead; only beneficial when plans have no shared file writes and can run in parallel.",
+        "GSD commit helper false-negatives are a known pattern — always follow up with `git log` to confirm the commit landed before reporting success.",
+        "The GSD `update-context` tool (not hand-written bash) is the correct way to detect install scope/runtime/version; the main-tree install can be a broken fragment while worktrees hold complete installs."
+      ]
+    },
+    "friction": [
+      "GSD install in the main tree was a broken fragment (missing gsd-tools.cjs, gsd-context-monitor.js, manifest, most workflows) while worktrees held complete 1.4.3 installs — the discrepancy was non-obvious and required multiple rounds of investigation.",
+      "The GSD commit helper consistently false-negatives, requiring a manual `git log` verification step after every commit throughout the session.",
+      "1Password SSH signing requires biometric approval per commit, making it incompatible with AFK subagent sessions; had to disable signing globally for the session.",
+      "CONTEXT.md cited the wrong test path (`packages/crypto/__tests__/`) which would have caused the TS KAT to be unreachable by vitest — caught only by the researcher subagent reading the vitest config.",
+      "The statusline broke silently (blank output, no error surfaced to user) when the repo adopted `\"type\": \"module\"` — the CommonJS crash was only diagnosable by running the hook manually.",
+      "The GSD installer prompted interactively for keep/remove decisions during the 1.6.0 reinstall, requiring a second non-interactive invocation to complete unattended."
+    ],
+    "open_items": [
+      "Wave 4 (61-04: Rust seal variants + full-seal cross-language KAT; 61-05: ADR 0003 + doc pointers) was dispatched but the transcript ends before completion — execution and ship-phase are unfinished.",
+      "PR will show a red signature check due to unsigned commits used for the AFK session — needs re-signing or an interactive rebase with signing re-enabled before merge.",
+      "`.planning/config.json` is dirty (worktree/chain-flag config toggles set during execution) — needs to be reconciled and committed at session end.",
+      "Optional: extend `generate-test-vectors.ts` to auto-generate `node-aad.json` vectors (Phase 61 hand-froze them as the recommended first step; generator extension was explicitly deferred).",
+      "GSD .planning/config.json has unknown keys (`created`, `notes`) that the init query warns about on every invocation — benign but worth cleaning up.",
+      "GSD worktrees (`fix/phase60-safety-tail`, `fix/fuse-delete-share-revocation`) were removed from disk; their branches still exist and may need eventual cleanup."
+    ]
+  }
+}
