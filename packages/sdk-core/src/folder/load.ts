@@ -1,72 +1,56 @@
 /**
  * Folder load operations - fetch and decrypt folder metadata from IPFS/IPNS.
+ *
+ * Phase 62 stub: read-chain navigation (decrypt + walk Node) is owned by phase 63.
+ * These functions throw 'not implemented — phase 63 (read-chain navigation)' until that
+ * phase rewires them.
  */
 
-import { decryptFolderMetadata } from '@cipherbox/core';
-import type { FolderMetadata, EncryptedFolderMetadata } from '@cipherbox/core';
+import type { Node } from '@cipherbox/core';
 import type { SdkContext } from '../types';
-import { fetchFromIpfs } from '../ipfs';
-import { resolveIpnsRecord } from '../ipns';
 import { withPerf } from '../perf';
 
 /**
  * Fetch and decrypt folder metadata from IPFS.
  *
+ * @stub phase 63 — will unseal the PublishedNode from IPFS and return the decrypted Node.
+ *
  * @param cid - IPFS CID of the encrypted metadata blob
- * @param folderKey - Decrypted AES-256 folder key
+ * @param folderKey - Decrypted AES-256 folder key (rootReadKey or childReadKey)
  * @param ctx - SDK context for IPFS access
- * @returns Decrypted folder metadata (v2)
+ * @returns Decrypted Node (phase 63 implements the read-chain unseal + decode)
  */
 export async function fetchAndDecryptMetadata(
   cid: string,
   folderKey: Uint8Array,
   ctx: SdkContext
-): Promise<FolderMetadata> {
+): Promise<Node> {
   return withPerf('folder:fetch-decrypt', async () => {
-    const encryptedBytes = await fetchFromIpfs(ctx, cid);
-
-    // All folder metadata (including root) is v1 JSON {iv, data}.
-    // v2 blob format is only for the vault key blob (separate IPNS name).
-    try {
-      const encryptedJson = new TextDecoder().decode(encryptedBytes);
-      const encrypted: EncryptedFolderMetadata = JSON.parse(encryptedJson);
-      return await decryptFolderMetadata(encrypted, folderKey);
-    } catch (cause) {
-      throw new Error(
-        `Failed to decode or decrypt folder metadata for CID ${cid}: ${String(cause)}`,
-        { cause }
-      );
-    }
+    void cid;
+    void folderKey;
+    void ctx;
+    throw new Error('not implemented — phase 63 (read-chain navigation)');
   });
 }
 
 /**
  * Load a folder's metadata from IPNS.
  *
- * Resolves the folder's IPNS name to get the current metadata CID,
- * fetches and decrypts the metadata.
+ * @stub phase 63 — will resolve IPNS, fetch PublishedNode, unseal + walk the read-chain.
  *
- * @returns Decrypted folder metadata, sequence number, and CID, or null if IPNS not found
+ * @returns Decrypted Node, sequence number, and CID, or null if IPNS not found
  */
 export async function loadFolderMetadata(params: {
   ipnsName: string;
   folderKey: Uint8Array;
   ctx: SdkContext;
 }): Promise<{
-  metadata: FolderMetadata;
+  metadata: Node;
   sequenceNumber: bigint;
   cid: string;
 } | null> {
   return withPerf('folder:load', async () => {
-    const resolved = await resolveIpnsRecord(params.ipnsName, params.ctx);
-    if (!resolved) return null;
-
-    const metadata = await fetchAndDecryptMetadata(resolved.cid, params.folderKey, params.ctx);
-
-    return {
-      metadata,
-      sequenceNumber: resolved.sequenceNumber,
-      cid: resolved.cid,
-    };
+    void params;
+    throw new Error('not implemented — phase 63 (read-chain navigation)');
   });
 }

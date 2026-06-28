@@ -1,142 +1,51 @@
 /**
- * Folder registration operations - IPNS record build and batch-publish.
+ * Folder registration operations — IPNS record build and batch-publish.
  *
- * Extracted from: packages/sdk-core/src/folder/index.ts
- * All functions that create or update IPNS records live here.
+ * Phase 62 stub: all operations that build or update folder IPNS records require the
+ * node/v3 seal-child-under-parent write-chain (phase 63) or file node integration
+ * (phase 65). All functions throw 'not implemented — phase NN' until those phases
+ * rewire them.
+ *
+ * The original implementation for FolderMetadata (FolderEntry / FolderChild / FilePointer)
+ * is preserved in the quarantined test suite (folder.test.ts, TODO phase 63) as the
+ * spec the owning phase revives.
  */
 
-import {
-  generateEd25519Keypair,
-  deriveIpnsName,
-  deriveEd25519PublicKey,
-  generateRandomBytes,
-  wrapKey,
-  bytesToHex,
-  hexToBytes,
-} from '@cipherbox/crypto';
-import {
-  encryptFolderMetadata,
-  createIpnsRecord,
-  marshalIpnsRecord,
-  type FolderMetadata,
-  type FolderEntry,
-  type FolderChild,
-  type FilePointer,
-} from '@cipherbox/core';
+import type { Node, SealedChildRef } from '@cipherbox/core';
 import type { SdkContext, TeeKeys } from '../types';
-import { addToIpfs } from '../ipfs';
-import { batchPublishIpnsRecords } from '../ipns';
-import { withPerf } from '../perf';
 import type { FileIpnsRecordPayload } from '../file';
-import { publishWithCas } from '../cas';
-import { fetchAndDecryptMetadata } from './load';
-import { mergeChildren } from './merge';
 
 /**
  * Create a new subfolder with generated keys.
  *
- * Generates new Ed25519 IPNS keypair and AES-256 folder key,
- * wraps them with the user's public key for storage.
- *
- * @returns Created folder entry and decrypted keys
+ * @stub phase 63 — will generate node IPNS keypair + readKey/writeKey, seal as a
+ * SealedChildRef under the parent readKey, and return a Node payload.
  */
 export async function createSubfolder(params: {
   name: string;
   userPublicKey: Uint8Array;
   teeKeys?: TeeKeys;
 }): Promise<{
-  folder: FolderEntry;
+  node: Node;
   ipnsPrivateKey: Uint8Array;
-  folderKey: Uint8Array;
+  rootReadKey: Uint8Array;
+  rootWriteKey: Uint8Array;
   encryptedIpnsPrivateKey?: string;
   keyEpoch?: number;
 }> {
-  // 1. Generate Ed25519 keypair for folder IPNS
-  const ipnsKeypair = await generateEd25519Keypair();
-  const ipnsName = await deriveIpnsName(ipnsKeypair.publicKey);
-
-  // 2. Generate random AES-256 folder key
-  const folderKey = generateRandomBytes(32);
-
-  // 3. Wrap keys with user's public key (ECIES encryption).
-  //    Both wrapKey calls are inside the try/catch so that a wrapKey failure
-  //    still triggers the catch block that zeroes ipnsKeypair.privateKey and
-  //    folderKey. Both buffers are generated fresh in this call and not reused
-  //    by the caller — the catch is the terminal owner.
-  //
-  // 4. TEE-02: Encrypt IPNS private key with TEE public key for republishing.
-  //    On success the caller receives the keys, so we only zero on failure.
-  try {
-    const ipnsPrivateKeyEncrypted = bytesToHex(
-      await wrapKey(ipnsKeypair.privateKey, params.userPublicKey)
-    );
-    const folderKeyEncrypted = bytesToHex(await wrapKey(folderKey, params.userPublicKey));
-    let encryptedIpnsPrivateKey: string | undefined;
-    let keyEpoch: number | undefined;
-
-    if (params.teeKeys?.currentPublicKey) {
-      const teePublicKey = hexToBytes(params.teeKeys.currentPublicKey);
-      const encryptedKey = await wrapKey(ipnsKeypair.privateKey, teePublicKey);
-      encryptedIpnsPrivateKey = bytesToHex(encryptedKey);
-      keyEpoch = params.teeKeys.currentEpoch;
-    }
-
-    // 5. Create folder entry for parent's metadata
-    const now = Date.now();
-    const folder: FolderEntry = {
-      type: 'folder',
-      id: crypto.randomUUID(),
-      name: params.name,
-      ipnsName,
-      ipnsPrivateKeyEncrypted,
-      folderKeyEncrypted,
-      createdAt: now,
-      modifiedAt: now,
-    };
-
-    return {
-      folder,
-      ipnsPrivateKey: ipnsKeypair.privateKey,
-      folderKey,
-      encryptedIpnsPrivateKey,
-      keyEpoch,
-    };
-  } catch (error) {
-    ipnsKeypair.privateKey.fill(0);
-    folderKey.fill(0);
-    throw error;
-  }
+  void params;
+  throw new Error('not implemented — phase 63 (create subfolder node + seal readKey under parent)');
 }
 
 /**
  * Update folder metadata and publish to IPNS.
  *
- * Encrypts the metadata with the folder key, uploads to IPFS,
- * and publishes an updated IPNS record pointing to the new CID.
- *
- * @returns New CID and sequence number
+ * @stub phase 63 — will seal the updated Node read-body + write-body, then publish the
+ * new PublishedNode to the folder's IPNS name.
  */
-// T-47-01 / D-05 zeroization decision for updateFolderMetadataAndPublish:
-//
-// CALLER RETAINS OWNERSHIP — do NOT zero params.ipnsPrivateKey or params.folderKey here.
-//
-// Rationale (client.ts audit, A2): every call site passes live session keys from
-// the `folderTree` state (folder.ipnsKeypair.privateKey, folder.folderKey). These
-// keys are reused across the full session lifetime — the same folder may receive
-// many sequential publish calls (renameItem, deleteItem, uploadFile, moveItem, etc.).
-// Zeroing here would corrupt the in-memory session state and break all subsequent
-// operations on the same folder.
-//
-// Contrast with updateFileMetadata (sdk-core/file/index.ts:369-373), which DOES
-// zero because per-file IPNS keys are unwrapped fresh for each use and not stored
-// in long-lived state — that function IS the terminal consumer.
-//
-// The caller (sdk/src/client.ts) must own zeroing when it is safe to do so.
-// A guard test in __tests__/folder.test.ts asserts this documented non-zeroing
-// behavior so it cannot be accidentally changed.
 export async function updateFolderMetadataAndPublish(params: {
-  children: FolderChild[];
-  baseChildren?: FolderChild[];
+  children: SealedChildRef[];
+  baseChildren?: SealedChildRef[];
   folderKey: Uint8Array;
   ipnsPrivateKey: Uint8Array;
   ipnsPublicKey?: Uint8Array;
@@ -145,141 +54,19 @@ export async function updateFolderMetadataAndPublish(params: {
   ctx: SdkContext;
   encryptedIpnsPrivateKey?: string;
   keyEpoch?: number;
-}): Promise<{ cid: string; newSequenceNumber: bigint; publishedChildren: FolderChild[] }> {
-  return withPerf('folder:update-publish', async () => {
-    // D-02: no base snapshot → warn once up front; the union fallback (mergeChildren
-    // with [] as base) still runs inside the merge callback below, but the warning is
-    // most useful when emitted regardless of whether a conflict occurs.
-    if (params.baseChildren === undefined) {
-      console.warn(
-        '[sdk-core] updateFolderMetadataAndPublish: baseChildren not provided for ' +
-          params.ipnsName +
-          ' — using union fallback (deletes may resurrect). Caller should pass baseChildren.'
-      );
-    }
-
-    // The base snapshot is owned here (REQ-3): the wrapper, not each caller, threads
-    // base → merge. Callers that omit baseChildren fall back to [] (union semantics).
-    const baseChildren = params.baseChildren ?? [];
-
-    const result = await publishWithCas<FolderChild[]>({
-      ipnsName: params.ipnsName,
-      ipnsPrivateKey: params.ipnsPrivateKey,
-      ipnsPublicKey: params.ipnsPublicKey,
-      sequenceNumber: params.sequenceNumber,
-      ctx: params.ctx,
-      encryptedIpnsPrivateKey: params.encryptedIpnsPrivateKey,
-      keyEpoch: params.keyEpoch,
-      maxAttempts: 4,
-      backoff: true,
-      // encrypt+upload happens per attempt so each gets a fresh CID (D-03)
-      encodeAndUpload: async (children) => {
-        const metadata: FolderMetadata = { version: 'v2', children };
-        const encrypted = await encryptFolderMetadata(metadata, params.folderKey);
-        const jsonStr = JSON.stringify(encrypted);
-        const encryptedBytes = new TextEncoder().encode(jsonStr);
-        const { cid } = await addToIpfs(params.ctx, encryptedBytes);
-        return cid;
-      },
-      decodeRemote: async (cid) => {
-        const remote = await fetchAndDecryptMetadata(cid, params.folderKey, params.ctx);
-        return remote.children;
-      },
-      // Three-way merge (D-01 / D-02). base is the snapshot owned by this wrapper.
-      merge: (base, local, remote) => ({
-        merged: mergeChildren(base ?? [], local, remote),
-      }),
-      localData: params.children,
-      baseData: baseChildren,
-    });
-
-    return {
-      cid: result.cid,
-      newSequenceNumber: result.newSequenceNumber,
-      publishedChildren: result.publishedData,
-    };
-  });
-}
-
-/** Safe base64 encoding that avoids call stack overflow from spread operator */
-function uint8ToBase64(bytes: Uint8Array): string {
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
-}
-
-/**
- * Build a folder IPNS record payload for batch publishing.
- *
- * Creates and signs an IPNS record locally without publishing.
- * Returns the payload for inclusion in a batch publish call.
- */
-async function buildFolderIpnsRecord(params: {
-  children: FolderChild[];
-  folderKey: Uint8Array;
-  ipnsPrivateKey: Uint8Array;
-  ipnsPublicKey?: Uint8Array;
-  ipnsName: string;
-  sequenceNumber: bigint;
-  ctx: SdkContext;
-  encryptedIpnsPrivateKey?: string;
-  keyEpoch?: number;
-}): Promise<{
-  cid: string;
-  record: FileIpnsRecordPayload & { expectedSequenceNumber: string };
-  newSequenceNumber: bigint;
-}> {
-  const metadata: FolderMetadata = {
-    version: 'v2',
-    children: params.children,
-  };
-
-  const encrypted = await encryptFolderMetadata(metadata, params.folderKey);
-  const jsonStr = JSON.stringify(encrypted);
-  const encryptedBytes = new TextEncoder().encode(jsonStr);
-  const { cid } = await addToIpfs(params.ctx, encryptedBytes);
-
-  const newSeq = params.sequenceNumber + 1n;
-  const record = await createIpnsRecord(
-    params.ipnsPrivateKey,
-    `/ipfs/${cid}`,
-    newSeq,
-    24 * 60 * 60 * 1000
-  );
-  const recordBytes = marshalIpnsRecord(record);
-  const recordBase64 = uint8ToBase64(recordBytes);
-  const publicKey = uint8ToBase64(
-    params.ipnsPublicKey ?? deriveEd25519PublicKey(params.ipnsPrivateKey)
-  );
-
-  return {
-    cid,
-    record: {
-      ipnsName: params.ipnsName,
-      recordBase64,
-      publicKey,
-      metadataCid: cid,
-      encryptedIpnsPrivateKey: params.encryptedIpnsPrivateKey,
-      keyEpoch: params.keyEpoch,
-      expectedSequenceNumber: params.sequenceNumber.toString(),
-    },
-    newSequenceNumber: newSeq,
-  };
+}): Promise<{ cid: string; newSequenceNumber: bigint; publishedChildren: SealedChildRef[] }> {
+  void params;
+  throw new Error('not implemented — phase 63 (seal updated Node + publish to IPNS)');
 }
 
 /**
  * Add a single file to a folder and batch-publish both IPNS records.
  *
- * Creates a FilePointer, builds a folder IPNS record, and publishes
- * both the file and folder IPNS records in a single batch API call.
- *
- * @returns Created file pointer and new folder sequence number
- * @throws Error if name collision exists or batch publish fails
+ * @stub phase 65 — will create a file Node, seal its readKey under the parent folder
+ * readKey as a SealedChildRef, and batch-publish both IPNS records.
  */
 export async function addFileToFolder(params: {
-  children: FolderChild[];
+  children: SealedChildRef[];
   folderKey: Uint8Array;
   ipnsPrivateKey: Uint8Array;
   ipnsPublicKey?: Uint8Array;
@@ -290,63 +77,21 @@ export async function addFileToFolder(params: {
   fileIpnsRecord: FileIpnsRecordPayload;
   ipnsPrivateKeyEncrypted: string;
   ctx: SdkContext;
-}): Promise<{ filePointer: FilePointer; newSequenceNumber: bigint }> {
-  // 1. Check for name collision
-  const nameExists = params.children.some((c) => c.name === params.name);
-  if (nameExists) {
-    throw new Error('A file with this name already exists');
-  }
-
-  // 2. Create FilePointer
-  const now = Date.now();
-  const filePointer: FilePointer = {
-    type: 'file',
-    id: params.fileId,
-    name: params.name,
-    fileMetaIpnsName: params.fileIpnsRecord.ipnsName,
-    ipnsPrivateKeyEncrypted: params.ipnsPrivateKeyEncrypted,
-    createdAt: now,
-    modifiedAt: now,
-  };
-
-  // 3. Add FilePointer to parent's children
-  const children: FolderChild[] = [...params.children, filePointer];
-
-  // 4. Build folder IPNS record for batch publish
-  const folderResult = await buildFolderIpnsRecord({
-    children,
-    folderKey: params.folderKey,
-    ipnsPrivateKey: params.ipnsPrivateKey,
-    ipnsPublicKey: params.ipnsPublicKey,
-    ipnsName: params.ipnsName,
-    sequenceNumber: params.sequenceNumber,
-    ctx: params.ctx,
-  });
-
-  // 5. Batch publish: file IPNS record + folder IPNS record
-  const publishResult = await batchPublishIpnsRecords(
-    [params.fileIpnsRecord, folderResult.record],
-    params.ctx
+}): Promise<{ fileNode: Node; newSequenceNumber: bigint }> {
+  void params;
+  throw new Error(
+    'not implemented — phase 65 (add file Node + seal child readKey + batch-publish)'
   );
-
-  if (publishResult.totalFailed > 0) {
-    throw new Error('Failed to publish one or more IPNS records');
-  }
-
-  return { filePointer, newSequenceNumber: folderResult.newSequenceNumber };
 }
 
 /**
  * Add multiple files to a folder and batch-publish all IPNS records.
  *
- * Creates FilePointers for each file, builds a single folder IPNS record,
- * and publishes all N file + 1 folder IPNS records in a single batch API call.
- *
- * @returns Created file pointers and new folder sequence number
- * @throws Error if any name collision exists or batch publish fails
+ * @stub phase 65 — will create file Nodes, seal their readKeys under the parent folder
+ * readKey, and batch-publish all records in a single API call.
  */
 export async function addFilesToFolder(params: {
-  children: FolderChild[];
+  children: SealedChildRef[];
   folderKey: Uint8Array;
   ipnsPrivateKey: Uint8Array;
   ipnsPublicKey?: Uint8Array;
@@ -359,80 +104,25 @@ export async function addFilesToFolder(params: {
     ipnsPrivateKeyEncrypted: string;
   }>;
   ctx: SdkContext;
-}): Promise<{ filePointers: FilePointer[]; newSequenceNumber: bigint }> {
-  // 1. Build a set of existing child names for collision detection
-  const existingNames = new Set(params.children.map((c) => c.name));
-
-  // 2. Create FilePointer for each file, checking collisions
-  const filePointers: FilePointer[] = [];
-  const now = Date.now();
-
-  for (const file of params.files) {
-    if (existingNames.has(file.name)) {
-      throw new Error(`A file with name "${file.name}" already exists`);
-    }
-    existingNames.add(file.name);
-
-    const filePointer: FilePointer = {
-      type: 'file',
-      id: file.fileId,
-      name: file.name,
-      fileMetaIpnsName: file.fileIpnsRecord.ipnsName,
-      ipnsPrivateKeyEncrypted: file.ipnsPrivateKeyEncrypted,
-      createdAt: now,
-      modifiedAt: now,
-    };
-    filePointers.push(filePointer);
-  }
-
-  // 3. Build updated children array
-  const children: FolderChild[] = [...params.children, ...filePointers];
-
-  // 4. Build folder IPNS record
-  const folderResult = await buildFolderIpnsRecord({
-    children,
-    folderKey: params.folderKey,
-    ipnsPrivateKey: params.ipnsPrivateKey,
-    ipnsPublicKey: params.ipnsPublicKey,
-    ipnsName: params.ipnsName,
-    sequenceNumber: params.sequenceNumber,
-    ctx: params.ctx,
-  });
-
-  // 5. Batch publish: all N file IPNS records + 1 folder IPNS record
-  const allRecords = [...params.files.map((f) => f.fileIpnsRecord), folderResult.record];
-  const publishResult = await batchPublishIpnsRecords(allRecords, params.ctx);
-
-  if (publishResult.totalFailed > 0) {
-    throw new Error('Failed to publish one or more IPNS records');
-  }
-
-  return { filePointers, newSequenceNumber: folderResult.newSequenceNumber };
+}): Promise<{ fileNodes: Node[]; newSequenceNumber: bigint }> {
+  void params;
+  throw new Error(
+    'not implemented — phase 65 (add file Nodes + seal child readKeys + batch-publish)'
+  );
 }
 
 /**
- * Replace file content in v2 metadata (content update).
+ * Replace file content in folder (content update — folder IPNS record unchanged).
  *
- * Publishes ONLY the file's IPNS record. The folder metadata is NOT
- * touched because the FilePointer still points to the same fileMetaIpnsName,
- * which now resolves to the updated content.
- *
- * @throws Error if file not found or publish fails
+ * @stub phase 65 — will publish only the file Node IPNS record; folder is untouched
+ * because the SealedChildRef still points to the same file IPNS name.
  */
 export async function replaceFileInFolder(params: {
-  children: FolderChild[];
+  children: SealedChildRef[];
   fileId: string;
   fileIpnsRecord: FileIpnsRecordPayload;
   ctx: SdkContext;
 }): Promise<void> {
-  // 1. Verify file exists in parent's children
-  const fileExists = params.children.some((c) => c.type === 'file' && c.id === params.fileId);
-  if (!fileExists) throw new Error('File not found');
-
-  // 2. Publish ONLY the file IPNS record (folder metadata untouched!)
-  const publishResult = await batchPublishIpnsRecords([params.fileIpnsRecord], params.ctx);
-
-  if (publishResult.totalFailed > 0) {
-    throw new Error('Failed to publish file IPNS record');
-  }
+  void params;
+  throw new Error('not implemented — phase 65 (replace file Node content + publish file IPNS)');
 }
