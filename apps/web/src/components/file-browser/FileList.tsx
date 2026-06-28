@@ -1,5 +1,5 @@
 import { type DragEvent, type MouseEvent, useRef } from 'react';
-import type { FolderChild } from '@cipherbox/core';
+import type { SealedChildRef } from '@cipherbox/core';
 import { useUploadStore } from '../../stores/upload.store';
 import type { PerFileUpload } from '../../stores/upload.store';
 import { FileListItem, type DragItem } from './FileListItem';
@@ -8,21 +8,23 @@ import { ParentDirRow } from './ParentDirRow';
 
 /**
  * Virtual entry representing an in-progress upload in the sorted file list.
- * The `_uploading` flag discriminates it from real FolderChild items.
+ * The `_uploading` flag discriminates it from real SealedChildRef items.
+ * Shape mirrors SealedChildRef for type-compatibility; ipnsName is empty during upload.
+ * TODO(phase 63): align with SealedChildRef semantics when upload produces a Node.
  */
 type UploadVirtualEntry = {
-  type: 'file';
-  id: string;
   name: string;
-  fileMetaIpnsName: '';
-  createdAt: number;
-  modifiedAt: number;
+  /** Empty during upload — real IPNS name assigned on completion. */
+  ipnsName: string;
+  generation: 0;
+  versionFloor: 0n;
+  readKeySealed: '';
   _uploading: true;
 };
 
 type FileListProps = {
   /** Items to display (files and folders) */
-  items: FolderChild[];
+  items: SealedChildRef[];
   /** Set of currently selected item IDs */
   selectedIds: Set<string>;
   /** Parent folder ID (for drag operations) */
@@ -43,9 +45,9 @@ type FileListProps = {
   /** Callback when navigating into a folder */
   onNavigate: (folderId: string) => void;
   /** Callback when context menu is requested */
-  onContextMenu: (event: MouseEvent, item: FolderChild) => void;
+  onContextMenu: (event: MouseEvent, item: SealedChildRef) => void;
   /** Callback when drag starts */
-  onDragStart: (event: DragEvent, item: FolderChild) => void;
+  onDragStart: (event: DragEvent, item: SealedChildRef) => void;
   /** Callback when items are dropped onto a folder */
   onDropOnFolder?: (items: DragItem[], sourceParentId: string, destFolderId: string) => void;
   /** Callback when external files are dropped onto a folder */
@@ -55,17 +57,14 @@ type FileListProps = {
 };
 
 /**
- * Sort items: folders first, then files, both alphabetically.
+ * Sort items alphabetically by name.
+ * TODO(phase 63): restore folders-first sort once Node.kind discrimination is available.
  */
-function sortItems(items: FolderChild[]): FolderChild[] {
-  return [...items].sort((a, b) => {
-    // Folders come first
-    if (a.type === 'folder' && b.type !== 'folder') return -1;
-    if (a.type !== 'folder' && b.type === 'folder') return 1;
-
-    // Within same type, sort alphabetically (case-insensitive)
-    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
-  });
+function sortItems(items: SealedChildRef[]): SealedChildRef[] {
+  return [...items].sort((a, b) =>
+    // TODO(phase 63): SealedChildRef has no .type; sort alphabetically only until phase 63
+    a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+  );
 }
 
 /**
@@ -106,8 +105,8 @@ export function FileList({
   onNavigate,
   onContextMenu,
   onDragStart,
-  onDropOnFolder,
-  onExternalFileDrop,
+  onDropOnFolder: _onDropOnFolder, // TODO(phase 63): drop disabled until Node.kind discrimination
+  onExternalFileDrop: _onExternalFileDrop, // TODO(phase 63): drop disabled until Node.kind discrimination
   onRetryUpload,
 }: FileListProps) {
   // Subscribe to upload entries for this folder only (IDs + status, not progress).
@@ -134,34 +133,32 @@ export function FileList({
   });
 
   // Create virtual entries for sorting alongside real items
+  // TODO(phase 63): SealedChildRef has no .id; use upload id as ipnsName placeholder
   const uploadVirtualEntries: UploadVirtualEntry[] = uploadEntries.map((f) => ({
-    type: 'file' as const,
-    id: f.id,
     name: f.filename,
-    fileMetaIpnsName: '' as const,
-    createdAt: 0,
-    modifiedAt: 0,
+    ipnsName: f.id, // placeholder: real ipnsName assigned on completion
+    generation: 0 as const,
+    versionFloor: 0n as const,
+    readKeySealed: '' as const,
     _uploading: true as const,
   }));
 
   // Prevent duplicate rows: when a real file already exists, hide the completing
-  // upload row instead of the real file row. This ensures the real file is never
-  // removed from the DOM during the 1-second completion flash. (Pitfall 5)
-  const realFileNames = new Set(
-    items.filter((item) => item.type === 'file').map((item) => item.name)
-  );
+  // upload row instead of the real file row. (Pitfall 5)
+  // TODO(phase 63): SealedChildRef has no .type; use all items' names as real file names
+  const realFileNames = new Set(items.map((item) => item.name));
   const completeUploadIds = new Set(
     uploadEntries
       .filter((e) => e.status === 'complete' && realFileNames.has(e.filename))
       .map((e) => e.id)
   );
   const filteredUploadEntries = uploadVirtualEntries.filter(
-    (entry) => !completeUploadIds.has(entry.id)
+    (entry) => !completeUploadIds.has(entry.ipnsName)
   );
 
   // Merge and sort all items together
   const allItems = [...items, ...filteredUploadEntries];
-  const sortedItems = sortItems(allItems as FolderChild[]);
+  const sortedItems = sortItems(allItems as SealedChildRef[]);
 
   // Select-all uses real item count only (upload rows are not selectable)
   const allSelected = items.length > 0 && selectedIds.size === items.length;
@@ -204,12 +201,13 @@ export function FileList({
         {showParentRow && onNavigateUp && <ParentDirRow onActivate={onNavigateUp} />}
         {sortedItems.map((item) =>
           '_uploading' in item ? (
-            <UploadListItem key={item.id} fileId={item.id} onRetry={onRetryUpload} />
+            // TODO(phase 63): ipnsName is used as id placeholder for upload virtual entries
+            <UploadListItem key={item.ipnsName} fileId={item.ipnsName} onRetry={onRetryUpload} />
           ) : (
             <FileListItem
-              key={item.id}
+              key={item.ipnsName}
               item={item}
-              isSelected={selectedIds.has(item.id)}
+              isSelected={selectedIds.has(item.ipnsName)}
               parentId={parentId}
               selectedIds={selectedIds}
               allItems={items}
@@ -219,12 +217,13 @@ export function FileList({
               onContextMenu={onContextMenu}
               onDragStart={onDragStart}
               onDrop={
-                onDropOnFolder && item.type === 'folder'
-                  ? (dragItems, sourceParentId) =>
-                      onDropOnFolder(dragItems, sourceParentId, item.id)
-                  : undefined
+                // TODO(phase 63): SealedChildRef has no .type; drop targets disabled until phase 63
+                undefined
               }
-              onExternalFileDrop={item.type === 'folder' ? onExternalFileDrop : undefined}
+              onExternalFileDrop={
+                // TODO(phase 63): SealedChildRef has no .type; external drop disabled until phase 63
+                undefined
+              }
             />
           )
         )}

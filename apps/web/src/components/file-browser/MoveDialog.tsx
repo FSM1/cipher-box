@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, type KeyboardEvent } from 'react';
-import type { FolderChild } from '@cipherbox/core';
+import type { SealedChildRef } from '@cipherbox/core';
 import { Modal } from '../ui/Modal';
 import { useFolderStore, type FolderNode } from '../../stores/folder.store';
 import { getDepth, isDescendantOf } from '@cipherbox/sdk-core';
@@ -16,9 +16,9 @@ type MoveDialogProps = {
   /** Callback when move is confirmed with destination folder ID */
   onConfirm: (destinationFolderId: string) => void;
   /** The item being moved (single-item mode) */
-  item: FolderChild | null;
+  item: SealedChildRef | null;
   /** Multiple items being moved (batch mode — takes precedence over item) */
-  items?: FolderChild[];
+  items?: SealedChildRef[];
   /** Current parent folder ID of the item(s) */
   currentFolderId: string;
   /** Loading state - disables buttons */
@@ -40,11 +40,13 @@ type FolderListItem = {
  */
 function buildFolderList(
   folders: Record<string, FolderNode>,
-  items: FolderChild[],
+  items: SealedChildRef[],
   currentFolderId: string
 ): FolderListItem[] {
   const result: FolderListItem[] = [];
-  const folderItemIds = new Set(items.filter((i) => i.type === 'folder').map((i) => i.id));
+  // TODO(phase 63): SealedChildRef has no .type or .id; use ipnsName as identifier
+  // phase-63 stub: treat all items as folders (conservative: all cycle-guard paths active)
+  const folderItemIds = new Set(items.map((i) => i.ipnsName));
   const hasFolders = folderItemIds.size > 0;
 
   // Add root folder
@@ -123,13 +125,14 @@ function buildFolderList(
  */
 function checkNameCollisions(
   destFolder: FolderNode | undefined,
-  items: FolderChild[]
+  items: SealedChildRef[]
 ): string | null {
   if (!destFolder) return null;
-  const itemIds = new Set(items.map((i) => i.id));
+  // TODO(phase 63): SealedChildRef uses ipnsName as identifier (no .id)
+  const itemIds = new Set(items.map((i) => i.ipnsName));
   for (const item of items) {
     const collision = destFolder.children.some(
-      (child) => child.name === item.name && !itemIds.has(child.id)
+      (child) => child.name === item.name && !itemIds.has(child.ipnsName)
     );
     if (collision) return item.name;
   }
@@ -145,7 +148,7 @@ function checkNameCollisions(
  * @example
  * ```tsx
  * function FileBrowser() {
- *   const [moveItem, setMoveItem] = useState<FolderChild | null>(null);
+ *   const [moveItem, setMoveItem] = useState<SealedChildRef | null>(null);
  *
  *   return (
  *     <MoveDialog
@@ -264,11 +267,8 @@ export function MoveDialog({
     [handleSelectFolder]
   );
 
-  const title = isBatch
-    ? `Move ${resolvedItems.length} Items`
-    : resolvedItems[0]?.type === 'folder'
-      ? 'Move Folder'
-      : 'Move File';
+  // TODO(phase 63): SealedChildRef has no .type; default to 'Move Item'
+  const title = isBatch ? `Move ${resolvedItems.length} Items` : 'Move Item'; // phase-63 stub: kind unknown until Node.kind discrimination
   const label = isBatch
     ? `Move ${resolvedItems.length} selected items to:`
     : `Move "${resolvedItems[0]?.name}" to:`;

@@ -136,3 +136,11 @@ export function isPreviewableFile(name: string): boolean {
 export function isFileRef(_item: SealedChildRef): boolean {
   throw new Error('not implemented — phase 63 (file/folder kind discrimination via Node.kind)');
 }
+
+/**
+ * Alias for isFileRef — kept as isFilePointer for component-layer compile compatibility.
+ * @stub phase 63 — file vs folder discrimination via Node.kind
+ */
+export function isFilePointer(_item: SealedChildRef): boolean {
+  throw new Error('not implemented — phase 63 (file/folder kind discrimination via Node.kind)');
+}

@@ -6,9 +6,8 @@ import {
   type MouseEvent,
   type TouchEvent,
 } from 'react';
-import type { FolderChild, FilePointer, FolderEntry } from '@cipherbox/core';
-import { formatBytes, formatDate, getItemIcon } from '../../utils/format';
-import { useFileSize } from '../../hooks/useFileSize';
+import type { SealedChildRef } from '@cipherbox/core';
+import { formatDate, getItemIcon } from '../../utils/format';
 import { isExternalFileDrag } from '../../hooks/useDropUpload';
 
 /**
@@ -20,16 +19,16 @@ const LONG_PRESS_DURATION = 500;
 export type DragItem = { id: string; type: 'file' | 'folder' };
 
 type FileListItemProps = {
-  /** The file or folder item to display */
-  item: FolderChild;
+  /** The child ref to display (node/v3 SealedChildRef) */
+  item: SealedChildRef;
   /** Whether this item is currently selected */
   isSelected: boolean;
   /** Parent folder ID (for drag data) */
   parentId: string;
-  /** All currently selected item IDs (for multi-select drag) */
+  /** All currently selected item IDs */
   selectedIds: Set<string>;
-  /** All items in the current folder (for resolving types of selected IDs) */
-  allItems: FolderChild[];
+  /** All items in the current folder (for multi-select drag) */
+  allItems: SealedChildRef[];
   /** Parent folder's decrypted AES-256 key (for resolving file sizes) */
   folderKey: Uint8Array | null;
   /** Callback when item is clicked (with modifier key info) */
@@ -40,9 +39,9 @@ type FileListItemProps = {
   /** Callback when folder is double-clicked to navigate into */
   onNavigate: (folderId: string) => void;
   /** Callback when right-click context menu is requested */
-  onContextMenu: (event: MouseEvent, item: FolderChild) => void;
+  onContextMenu: (event: MouseEvent, item: SealedChildRef) => void;
   /** Callback when drag starts */
-  onDragStart: (event: DragEvent, item: FolderChild) => void;
+  onDragStart: (event: DragEvent, item: SealedChildRef) => void;
   /** Callback when items are dropped onto this folder (folders only) */
   onDrop?: (items: DragItem[], sourceParentId: string) => void;
   /** Callback when external files are dropped onto this folder */
@@ -50,26 +49,10 @@ type FileListItemProps = {
 };
 
 /**
- * Type guard for folder entries.
- */
-function isFolder(item: FolderChild): item is FolderEntry {
-  return item.type === 'folder';
-}
-
-/**
- * Type guard for file pointers (v2).
- */
-function isFile(item: FolderChild): item is FilePointer {
-  return item.type === 'file';
-}
-
-/* File extension helper removed - TYPE column no longer used */
-
-/**
- * Single row in the file list.
+ * Single row in the file list (node/v3).
  *
- * Displays file/folder with icon, name, size, and date.
- * Supports selection, navigation (for folders), context menu, and drag-drop.
+ * TODO(phase 63): file/folder discrimination via Node.kind; until then all items display
+ * as folders (SealedChildRef has no .type field).
  */
 export function FileListItem({
   item,
@@ -77,7 +60,7 @@ export function FileListItem({
   parentId,
   selectedIds,
   allItems,
-  folderKey,
+  folderKey: _folderKey, // TODO(phase 63): used for per-file size resolution
   onSelect,
   onNavigate,
   onContextMenu,
@@ -92,15 +75,18 @@ export function FileListItem({
   // Drag-over state for folder drop targets
   const [isDragOver, setIsDragOver] = useState(false);
 
+  // TODO(phase 63): SealedChildRef has no .type; treat all as folders for navigation
+  const isFolder = true; // phase-63 stub
+
   /**
    * Handle single click - select the item.
-   * Passes modifier key state for multi-selection support.
+   * Uses ipnsName as the stable identifier (SealedChildRef has no .id).
    */
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
-      onSelect(item.id, { ctrlKey: e.ctrlKey, shiftKey: e.shiftKey, metaKey: e.metaKey });
+      onSelect(item.ipnsName, { ctrlKey: e.ctrlKey, shiftKey: e.shiftKey, metaKey: e.metaKey });
     },
-    [item.id, onSelect]
+    [item.ipnsName, onSelect]
   );
 
   /**
@@ -109,19 +95,18 @@ export function FileListItem({
   const handleCheckboxClick = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation();
-      // Checkbox click always toggles like Ctrl+click
-      onSelect(item.id, { ctrlKey: true, shiftKey: false, metaKey: false });
+      onSelect(item.ipnsName, { ctrlKey: true, shiftKey: false, metaKey: false });
     },
-    [item.id, onSelect]
+    [item.ipnsName, onSelect]
   );
 
   /**
    * Handle double click - navigate into folder.
+   * TODO(phase 63): check Node.kind before navigating; stub navigates all items.
    */
   const handleDoubleClick = useCallback(() => {
-    if (isFolder(item)) {
-      onNavigate(item.id);
-    }
+    // phase-63 stub: navigate as if all items are folders
+    onNavigate(item.ipnsName);
   }, [item, onNavigate]);
 
   /**
@@ -137,7 +122,6 @@ export function FileListItem({
 
   /**
    * Handle mobile action button click.
-   * Creates a synthetic mouse event positioned at the button for context menu.
    */
   const handleActionButtonClick = useCallback(
     (e: React.MouseEvent<HTMLButtonElement>) => {
@@ -156,17 +140,17 @@ export function FileListItem({
 
   /**
    * Handle drag start - serialize item data.
+   * TODO(phase 63): SealedChildRef has no .type or .id; use ipnsName and stub type.
    */
   const handleDragStart = useCallback(
     (e: DragEvent) => {
-      // Build items array: if dragged item is part of multi-selection, include all selected
       let items: DragItem[];
       if (isSelected && selectedIds.size > 1) {
         items = allItems
-          .filter((i) => selectedIds.has(i.id))
-          .map((i) => ({ id: i.id, type: i.type }));
+          .filter((i) => selectedIds.has(i.ipnsName))
+          .map((i) => ({ id: i.ipnsName, type: 'folder' as const })); // TODO(phase 63) stub type
       } else {
-        items = [{ id: item.id, type: item.type }];
+        items = [{ id: item.ipnsName, type: 'folder' as const }]; // TODO(phase 63) stub type
       }
 
       e.dataTransfer.setData('application/json', JSON.stringify({ items, parentId }));
@@ -195,12 +179,9 @@ export function FileListItem({
       const touch = e.touches[0];
       if (!touch) return;
 
-      // Store touch position for move detection
       touchStartPosRef.current = { x: touch.clientX, y: touch.clientY };
 
-      // Start long press timer
       longPressTimerRef.current = setTimeout(() => {
-        // Create synthetic mouse event for context menu
         const syntheticEvent = {
           preventDefault: () => {},
           stopPropagation: () => {},
@@ -224,7 +205,6 @@ export function FileListItem({
       const touch = e.touches[0];
       if (!touch) return;
 
-      // Cancel if moved more than 10px
       const dx = Math.abs(touch.clientX - touchStartPosRef.current.x);
       const dy = Math.abs(touch.clientY - touchStartPosRef.current.y);
       if (dx > 10 || dy > 10) {
@@ -242,22 +222,19 @@ export function FileListItem({
   }, [clearLongPressTimer]);
 
   /**
-   * Handle drag over - allow drop on folders.
-   * Accepts both internal drags (move) and external file drags (upload).
+   * Handle drag over - allow drop on folder items.
    */
   const handleDragOver = useCallback(
     (e: DragEvent) => {
-      // Only allow drop on folders
-      if (!isFolder(item)) return;
+      if (!isFolder) return;
 
       e.preventDefault();
       e.stopPropagation();
 
-      // External files get 'copy' effect, internal moves get 'move'
       e.dataTransfer.dropEffect = isExternalFileDrag(e.dataTransfer) ? 'copy' : 'move';
       setIsDragOver(true);
     },
-    [item]
+    [isFolder]
   );
 
   /**
@@ -271,6 +248,7 @@ export function FileListItem({
 
   /**
    * Handle drop - move item to this folder, or upload external files.
+   * TODO(phase 63): uses ipnsName as folder destination identifier.
    */
   const handleDrop = useCallback(
     (e: DragEvent) => {
@@ -278,22 +256,18 @@ export function FileListItem({
       e.stopPropagation();
       setIsDragOver(false);
 
-      // Only handle drop on folders
-      if (!isFolder(item)) return;
+      if (!isFolder) return;
 
-      // Read JSON once — empty string means external file drag from OS
       const jsonData = e.dataTransfer.getData('application/json');
 
       if (!jsonData) {
-        // External file drop
         if (e.dataTransfer.files.length > 0 && onExternalFileDrop) {
           const files = Array.from(e.dataTransfer.files);
-          onExternalFileDrop(files, item.id);
+          onExternalFileDrop(files, item.ipnsName); // TODO(phase 63): ipnsName as id
         }
         return;
       }
 
-      // Internal move operation
       if (!onDrop) return;
 
       try {
@@ -302,9 +276,8 @@ export function FileListItem({
           parentId: string;
         };
 
-        // Filter out items that are this folder or already in this folder
         const validItems = parsed.items.filter(
-          (i) => i.id !== item.id && parsed.parentId !== item.id
+          (i) => i.id !== item.ipnsName && parsed.parentId !== item.ipnsName
         );
         if (validItems.length === 0) return;
 
@@ -313,23 +286,24 @@ export function FileListItem({
         // Invalid drag data, ignore
       }
     },
-    [item, onDrop, onExternalFileDrop]
+    [item, onDrop, onExternalFileDrop, isFolder]
   );
 
-  // Lazily resolve file size from per-file IPNS metadata
-  const fileSize = useFileSize(isFile(item) ? item.fileMetaIpnsName : null, folderKey);
+  // TODO(phase 63): SealedChildRef has no .type; display all items with folder icon as placeholder
+  const itemType = 'folder'; // phase-63 stub
 
-  // Display size: resolved from IPNS metadata for files, dash for folders
-  const sizeDisplay = isFile(item) ? (fileSize !== null ? formatBytes(fileSize) : '...') : '-';
+  // Display size: stub until read-chain provides NodeContent.size
+  // TODO(phase 63): resolve size via Node read-chain
+  const sizeDisplay = '-';
 
-  // Display modified date
-  const dateDisplay = formatDate(item.modifiedAt);
+  // Display modified date: SealedChildRef has no modifiedAt
+  // TODO(phase 63): resolve modifiedAt from Node envelope
+  const dateDisplay = formatDate(0); // phase-63 stub
 
-  // Build class name with drag-over state
   const className = [
     'file-list-item',
     isSelected ? 'file-list-item--selected' : '',
-    isDragOver && isFolder(item) ? 'file-list-item--drag-over' : '',
+    isDragOver && isFolder ? 'file-list-item--drag-over' : '',
   ]
     .filter(Boolean)
     .join(' ');
@@ -337,15 +311,15 @@ export function FileListItem({
   return (
     <div
       className={className}
-      data-item-id={item.id}
+      data-item-id={item.ipnsName}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
       onContextMenu={handleContextMenu}
       draggable
       onDragStart={handleDragStart}
-      onDragOver={isFolder(item) && (onDrop || onExternalFileDrop) ? handleDragOver : undefined}
-      onDragLeave={isFolder(item) && (onDrop || onExternalFileDrop) ? handleDragLeave : undefined}
-      onDrop={isFolder(item) && (onDrop || onExternalFileDrop) ? handleDrop : undefined}
+      onDragOver={isFolder && (onDrop || onExternalFileDrop) ? handleDragOver : undefined}
+      onDragLeave={isFolder && (onDrop || onExternalFileDrop) ? handleDragLeave : undefined}
+      onDrop={isFolder && (onDrop || onExternalFileDrop) ? handleDrop : undefined}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
@@ -354,8 +328,8 @@ export function FileListItem({
       tabIndex={0}
       onKeyDown={(e) => {
         if (e.key === 'Enter') {
-          if (isFolder(item)) {
-            onNavigate(item.id);
+          if (isFolder) {
+            onNavigate(item.ipnsName);
           }
         }
       }}
@@ -373,14 +347,14 @@ export function FileListItem({
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault();
               e.stopPropagation();
-              onSelect(item.id, { ctrlKey: true, shiftKey: false, metaKey: false });
+              onSelect(item.ipnsName, { ctrlKey: true, shiftKey: false, metaKey: false });
             }
           }}
         >
           {isSelected ? '[x]' : '[ ]'}
         </span>
         <span className="file-list-item-icon" aria-hidden="true">
-          {getItemIcon(item.type)}
+          {getItemIcon(itemType)}
         </span>
         <span className="file-list-item-name">{item.name}</span>
       </div>

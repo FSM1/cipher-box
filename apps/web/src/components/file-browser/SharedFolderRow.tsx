@@ -9,7 +9,7 @@
 import type React from 'react';
 import { useState, useCallback } from 'react';
 import type { MouseEvent, DragEvent, KeyboardEvent } from 'react';
-import type { FolderChild } from '@cipherbox/core';
+import type { SealedChildRef } from '@cipherbox/core';
 import { isExternalFileDrag } from '../../hooks/useDropUpload';
 import type { DragItem } from './FileListItem';
 
@@ -18,7 +18,7 @@ type DragPayload = {
 };
 
 export type SharedFolderRowProps = {
-  item: FolderChild;
+  item: SealedChildRef;
   permission: 'read' | 'write' | null;
   isRenaming: boolean;
   renameValue: string;
@@ -40,7 +40,7 @@ export type SharedFolderRowProps = {
    */
   onMoveItemTo?: (destFolderId: string, destIpnsName: string, draggedItems: DragItem[]) => void;
   /** Currently selected items (for multi-select-aware drag payload) */
-  selectedItems?: FolderChild[];
+  selectedItems?: SealedChildRef[];
 };
 
 export function SharedFolderRow({
@@ -59,9 +59,11 @@ export function SharedFolderRow({
   onMoveItemTo,
   selectedItems = [],
 }: SharedFolderRowProps) {
-  const isFolder = item.type === 'folder';
+  // TODO(phase 63): SealedChildRef has no .type; kind discrimination deferred to Node.kind
+  const isFolder = true; // phase-63 stub: treat as folder for drag-drop and navigation
   const icon = isFolder ? '📁' : '📄';
-  const date = item.modifiedAt ? new Date(item.modifiedAt).toLocaleDateString() : '--';
+  // TODO(phase 63): SealedChildRef has no modifiedAt; resolve from Node envelope
+  const date = '--'; // phase-63 stub
   const isWrite = permission === 'write';
 
   // Internal drag-over visual state
@@ -75,8 +77,9 @@ export function SharedFolderRow({
       // If this item is part of a multi-select, payload includes all selected items
       const dragItems: DragItem[] =
         isSelected && selectedItems.length > 1
-          ? selectedItems.map((i) => ({ id: i.id, type: i.type }))
-          : [{ id: item.id, type: item.type }];
+          ? // TODO(phase 63): SealedChildRef has no .id or .type; use ipnsName as id, stub type
+            selectedItems.map((i) => ({ id: i.ipnsName, type: 'folder' as const }))
+          : [{ id: item.ipnsName, type: 'folder' as const }];
 
       const payload: DragPayload = { items: dragItems };
       e.dataTransfer.setData('application/json', JSON.stringify(payload));
@@ -141,12 +144,13 @@ export function SharedFolderRow({
 
       // Guard: never drop a folder onto itself (one of the dragged items) — that
       // would move it into itself and cycle the tree (mirrors FileListItem).
-      if (parsed.items.some((i) => i.id === item.id)) return;
+      // TODO(phase 63): SealedChildRef uses ipnsName as identifier
+      if (parsed.items.some((i) => i.id === item.ipnsName)) return;
 
       // Route through the parent's handleDropOnFolder-equivalent, forwarding the
       // dragged items so the parent moves exactly what was dragged. Per-item
       // validation (name collision + write-capability) is in the SDK.
-      onMoveItemTo(item.id, item.ipnsName, parsed.items);
+      onMoveItemTo(item.ipnsName, item.ipnsName, parsed.items);
     },
     [isFolder, item, onMoveItemTo]
   );

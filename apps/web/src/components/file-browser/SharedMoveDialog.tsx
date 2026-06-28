@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef, type KeyboardEvent } from 'react';
-import type { FolderChild } from '@cipherbox/core';
+import type { SealedChildRef } from '@cipherbox/core';
 import { Modal } from '../ui/Modal';
 import { getSdkClient } from '../../lib/sdk-provider';
 import { useAuthStore } from '../../stores/auth.store';
@@ -23,9 +23,9 @@ type SharedMoveDialogProps = {
   /** Callback when move is confirmed with destination folder ID and IPNS name */
   onConfirm: (destFolderId: string, destIpnsName: string) => void;
   /** The item being moved (single-item mode) */
-  item: FolderChild | null;
+  item: SealedChildRef | null;
   /** Multiple items being moved (batch mode — takes precedence over item when length > 1) */
-  items?: FolderChild[];
+  items?: SealedChildRef[];
   /** Current parent folder ID of the item(s) (disabled as a destination) */
   currentFolderId: string;
   /** Active share ID (required to load the subtree) */
@@ -105,7 +105,8 @@ export function SharedMoveDialog({
   // must be excluded as a destination.
   const movedFolderIds = useMemo(() => {
     const moved = isBatchMode ? (items ?? []) : item ? [item] : [];
-    return new Set(moved.filter((m) => m.type === 'folder').map((m) => m.id));
+    // TODO(phase 63): SealedChildRef has no .type; kind discrimination deferred to Node.kind
+    return new Set(moved.map((m) => m.ipnsName)); // phase-63 stub: treat all as folders
   }, [isBatchMode, items, item]);
 
   // A moved folder and every node beneath it cannot be a destination — moving a
@@ -165,11 +166,8 @@ export function SharedMoveDialog({
   }, [isLoading, onClose]);
 
   // Auto-adapt title/label for batch vs single mode (mirrors private MoveDialog :174-179)
-  const title = isBatchMode
-    ? `Move ${items!.length} items`
-    : item?.type === 'folder'
-      ? 'Move Folder'
-      : 'Move File';
+  // TODO(phase 63): SealedChildRef has no .type; treat all as folders until Node.kind available
+  const title = isBatchMode ? `Move ${items!.length} items` : 'Move Folder';
   const label = isBatchMode
     ? `Move ${items!.length} items to:`
     : item

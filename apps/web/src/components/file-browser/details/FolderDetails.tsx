@@ -1,9 +1,9 @@
-import type { FolderEntry } from '@cipherbox/core';
-import { formatDate } from '../../../utils/format';
+import type { SealedChildRef } from '@cipherbox/core';
 import { CopyableValue, DetailRow } from './DetailsPrimitives';
 
 /**
- * Folder details content.
+ * Folder details content (node/v3: SealedChildRef display).
+ * TODO(phase 63): wire read-chain navigation to load Node for full metadata.
  */
 export function FolderDetails({
   item,
@@ -12,7 +12,7 @@ export function FolderDetails({
   sequenceNumber,
   childCount,
 }: {
-  item: FolderEntry;
+  item: SealedChildRef;
   metadataCid: string | null;
   metadataLoading: boolean;
   sequenceNumber: bigint | null;
@@ -64,17 +64,11 @@ export function FolderDetails({
       {/* Crypto section */}
       <div className="details-section-header">{'// encryption'}</div>
 
-      <DetailRow label="Folder Key">
+      <DetailRow label="Read Key Sealed">
+        {/* TODO(phase 63): readKeySealed is an AES-GCM sealed blob inside the parent's read-body */}
         <span className="details-value details-value--redacted">
-          {item.folderKeyEncrypted.slice(0, 16)}...{item.folderKeyEncrypted.slice(-8)}{' '}
-          (ECIES-wrapped)
-        </span>
-      </DetailRow>
-
-      <DetailRow label="IPNS Private Key">
-        <span className="details-value details-value--redacted">
-          {item.ipnsPrivateKeyEncrypted.slice(0, 16)}...{item.ipnsPrivateKeyEncrypted.slice(-8)}{' '}
-          (ECIES-wrapped)
+          {item.readKeySealed.slice(0, 16)}...{item.readKeySealed.slice(-8)} (sealed under parent
+          read-key)
         </span>
       </DetailRow>
 
@@ -82,11 +76,13 @@ export function FolderDetails({
       <div className="details-section-header">{'// timestamps'}</div>
 
       <DetailRow label="Created">
-        <span className="details-value">{formatDate(item.createdAt)}</span>
+        {/* TODO(phase 63): SealedChildRef has no createdAt; resolve from Node envelope */}
+        <span className="details-value details-value--dim">unavailable (phase 63)</span>
       </DetailRow>
 
       <DetailRow label="Modified">
-        <span className="details-value">{formatDate(item.modifiedAt)}</span>
+        {/* TODO(phase 63): SealedChildRef has no modifiedAt; resolve from Node envelope */}
+        <span className="details-value details-value--dim">unavailable (phase 63)</span>
       </DetailRow>
     </div>
   );

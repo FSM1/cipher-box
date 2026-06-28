@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import type { FilePointer } from '@cipherbox/core';
+import type { SealedChildRef } from '@cipherbox/core';
 import * as pdfjsLib from 'pdfjs-dist';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import { Modal } from '../ui/Modal';
@@ -16,7 +16,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
 type PdfPreviewDialogProps = {
   open: boolean;
   onClose: () => void;
-  item: FilePointer | null;
+  item: SealedChildRef | null;
   /** Parent folder's decrypted AES-256 key (needed to decrypt file metadata) */
   folderKey: Uint8Array | null;
   /** Share ID when previewing from a shared folder — uses re-wrapped file keys */

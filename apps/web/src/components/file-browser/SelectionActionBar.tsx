@@ -1,8 +1,8 @@
-import type { FolderChild } from '@cipherbox/core';
+import type { SealedChildRef } from '@cipherbox/core';
 
 type SelectionActionBarProps = {
   /** Selected items */
-  selectedItems: FolderChild[];
+  selectedItems: SealedChildRef[];
   /** Whether an operation is in progress */
   isLoading: boolean;
   /** Callback to clear selection */
@@ -23,18 +23,14 @@ export function SelectionActionBar({
   selectedItems,
   isLoading,
   onClearSelection,
-  onDownload,
+  onDownload: _onDownload, // TODO(phase 63): deferred until Node.kind discrimination
   onMove,
   onDelete,
 }: SelectionActionBarProps) {
-  const fileCount = selectedItems.filter((i) => i.type === 'file').length;
-  const folderCount = selectedItems.filter((i) => i.type === 'folder').length;
-
-  // Build description like "3 files", "2 folders", or "2 files, 1 folder"
-  const parts: string[] = [];
-  if (fileCount > 0) parts.push(`${fileCount} file${fileCount !== 1 ? 's' : ''}`);
-  if (folderCount > 0) parts.push(`${folderCount} folder${folderCount !== 1 ? 's' : ''}`);
-  const description = parts.join(', ');
+  // TODO(phase 63): SealedChildRef has no .type; kind discrimination deferred to Node.kind
+  // phase-63 stub: treat all selected as folders, no file-specific actions
+  const folderCount = selectedItems.length;
+  const description = folderCount === 1 ? '1 item' : `${folderCount} items`;
 
   return (
     <div className="selection-action-bar" role="toolbar" aria-label="Selection actions">
@@ -50,17 +46,7 @@ export function SelectionActionBar({
         </button>
       </div>
       <div className="selection-action-bar-actions">
-        {onDownload && fileCount > 0 && (
-          <button
-            type="button"
-            className="toolbar-btn toolbar-btn--secondary"
-            onClick={onDownload}
-            disabled={isLoading}
-            aria-label={`Download ${fileCount} file${fileCount !== 1 ? 's' : ''}`}
-          >
-            &#8595; download
-          </button>
-        )}
+        {/* TODO(phase 63): download button deferred until Node.kind discrimination available */}
         <button
           type="button"
           className="toolbar-btn toolbar-btn--secondary"

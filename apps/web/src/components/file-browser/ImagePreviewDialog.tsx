@@ -1,4 +1,4 @@
-import type { FilePointer } from '@cipherbox/core';
+import type { SealedChildRef } from '@cipherbox/core';
 import { Modal } from '../ui/Modal';
 import { useFilePreview } from '../../hooks/useFilePreview';
 import '../../styles/image-preview-dialog.css';
@@ -6,7 +6,7 @@ import '../../styles/image-preview-dialog.css';
 type ImagePreviewDialogProps = {
   open: boolean;
   onClose: () => void;
-  item: FilePointer | null;
+  item: SealedChildRef | null;
   /** Parent folder's decrypted AES-256 key (needed to decrypt file metadata) */
   folderKey: Uint8Array | null;
   /** Share ID when previewing from a shared folder — uses re-wrapped file keys */

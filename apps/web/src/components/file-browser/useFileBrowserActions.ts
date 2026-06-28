@@ -3,6 +3,9 @@
  *
  * Contains all useCallback handlers, dialog state, selection state,
  * and drag state management.
+ *
+ * Phase 62: FolderChild → SealedChildRef. Behavioral stubs for item-type
+ * discrimination (phase 63) and write-chain mutations (phase 65/68).
  */
 
 import {
@@ -14,15 +17,9 @@ import {
   type DragEvent,
   type MouseEvent,
 } from 'react';
-import type { FolderChild } from '@cipherbox/core';
+import type { SealedChildRef } from '@cipherbox/core';
 import { useDialogState } from '../../hooks/useDialogState';
-import {
-  isFilePointer,
-  isImageFile,
-  isPdfFile,
-  isAudioFile,
-  isVideoFile,
-} from '../../utils/fileTypes';
+import { isImageFile, isPdfFile, isAudioFile, isVideoFile } from '../../utils/fileTypes';
 import { useFolderStore } from '../../stores/folder.store';
 import { useSyncStore } from '../../stores/sync.store';
 import { isExternalFileDrag } from '../../hooks/useDropUpload';
@@ -35,7 +32,7 @@ import { logger } from '../../lib/logger';
 export type FileBrowserActionsParams = {
   currentFolderId: string;
   currentFolder: {
-    children: FolderChild[];
+    children: SealedChildRef[];
     folderKey: Uint8Array;
   } | null;
   breadcrumbs: Array<{ id: string; name: string }>;
@@ -76,8 +73,8 @@ export type FileBrowserActionsParams = {
     visible: boolean;
     x: number;
     y: number;
-    item: FolderChild | null;
-    show: (event: MouseEvent, item: FolderChild) => void;
+    item: SealedChildRef | null;
+    show: (event: MouseEvent, item: SealedChildRef) => void;
     hide: () => void;
   };
   rootIpnsName: string | null;
@@ -94,7 +91,7 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
     moveItems,
     deleteItem,
     deleteItems,
-    downloadFromIpns,
+    // downloadFromIpns: TODO(phase 65) - unused until file read-chain implemented
     handleFileDrop,
     contextMenu,
     rootIpnsName,
@@ -123,7 +120,8 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
         rootFolder.folderKey,
         getSdkClient().getContext()
       );
-      useFolderStore.getState().updateFolderChildren('root', metadata.children);
+      // Node.children is optional (SealedChildRef[] | undefined); default to []
+      useFolderStore.getState().updateFolderChildren('root', metadata.children ?? []);
       useFolderStore.getState().updateFolderSequence('root', resolved.sequenceNumber);
       triggerSearchIndexRebuild();
     } catch (err) {
@@ -218,7 +216,8 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const lastSelectedIdRef = useRef<string | null>(null);
 
-  const childIds = useMemo(() => new Set(children.map((c) => c.id)), [children]);
+  // TODO(phase 63): SealedChildRef uses ipnsName as identifier (no .id)
+  const childIds = useMemo(() => new Set(children.map((c) => c.ipnsName)), [children]);
   useEffect(() => {
     setSelectedIds((prev) => {
       if (prev.size === 0) return prev;
@@ -229,7 +228,7 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
   }, [childIds]);
 
   const selectedItems = useMemo(
-    () => children.filter((c) => selectedIds.has(c.id)),
+    () => children.filter((c) => selectedIds.has(c.ipnsName)),
     [children, selectedIds]
   );
   const multiSelectActive = selectedIds.size > 0;
@@ -238,30 +237,30 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
   // Dialog states
   // ---------------------------------------------------------------------------
 
-  const [confirmDialog, openConfirmDialog, closeConfirmDialog] = useDialogState<FolderChild>();
-  const [renameDialog, openRenameDialog, closeRenameDialog] = useDialogState<FolderChild>();
-  const [moveDialog, openMoveDialog, closeMoveDialog] = useDialogState<FolderChild>();
-  const [detailsDialog, openDetailsDialog, closeDetailsDialog] = useDialogState<FolderChild>();
-  const [editorDialog, openEditorDialog, closeEditorDialog] = useDialogState<FolderChild>();
+  const [confirmDialog, openConfirmDialog, closeConfirmDialog] = useDialogState<SealedChildRef>();
+  const [renameDialog, openRenameDialog, closeRenameDialog] = useDialogState<SealedChildRef>();
+  const [moveDialog, openMoveDialog, closeMoveDialog] = useDialogState<SealedChildRef>();
+  const [detailsDialog, openDetailsDialog, closeDetailsDialog] = useDialogState<SealedChildRef>();
+  const [editorDialog, openEditorDialog, closeEditorDialog] = useDialogState<SealedChildRef>();
   const [imagePreviewDialog, openImagePreviewDialog, closeImagePreviewDialog] =
-    useDialogState<FolderChild>();
+    useDialogState<SealedChildRef>();
   const [pdfPreviewDialog, openPdfPreviewDialog, closePdfPreviewDialog] =
-    useDialogState<FolderChild>();
+    useDialogState<SealedChildRef>();
   const [audioPlayerDialog, openAudioPlayerDialog, closeAudioPlayerDialog] =
-    useDialogState<FolderChild>();
+    useDialogState<SealedChildRef>();
   const [videoPlayerDialog, openVideoPlayerDialog, closeVideoPlayerDialog] =
-    useDialogState<FolderChild>();
+    useDialogState<SealedChildRef>();
   const [createFolderDialogOpen, setCreateFolderDialogOpen] = useState(false);
-  const [shareItem, setShareItem] = useState<FolderChild | null>(null);
+  const [shareItem, setShareItem] = useState<SealedChildRef | null>(null);
 
   const [batchDeleteDialog, setBatchDeleteDialog] = useState<{
     open: boolean;
-    items: FolderChild[];
+    items: SealedChildRef[];
   }>({ open: false, items: [] });
 
   const [batchMoveDialog, setBatchMoveDialog] = useState<{
     open: boolean;
-    items: FolderChild[];
+    items: SealedChildRef[];
   }>({ open: false, items: [] });
 
   // ---------------------------------------------------------------------------
@@ -283,12 +282,11 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
       const isShift = event.shiftKey;
 
       if (isShift && lastSelectedIdRef.current) {
-        const sortedChildren = [...children].sort((a, b) => {
-          if (a.type === 'folder' && b.type !== 'folder') return -1;
-          if (a.type !== 'folder' && b.type === 'folder') return 1;
-          return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
-        });
-        const ids = sortedChildren.map((c) => c.id);
+        // TODO(phase 63): SealedChildRef has no .type; sort alphabetically only
+        const sortedChildren = [...children].sort((a, b) =>
+          a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+        );
+        const ids = sortedChildren.map((c) => c.ipnsName);
         const startIdx = ids.indexOf(lastSelectedIdRef.current);
         const endIdx = ids.indexOf(itemId);
         if (startIdx !== -1 && endIdx !== -1) {
@@ -322,7 +320,8 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
       setSelectedIds(new Set());
       lastSelectedIdRef.current = null;
     } else {
-      setSelectedIds(new Set(children.map((c) => c.id)));
+      // TODO(phase 63): SealedChildRef uses ipnsName as identifier
+      setSelectedIds(new Set(children.map((c) => c.ipnsName)));
     }
   }, [children, selectedIds.size]);
 
@@ -332,17 +331,18 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
   }, []);
 
   const handleContextMenu = useCallback(
-    (event: MouseEvent, item: FolderChild) => {
-      if (!selectedIds.has(item.id)) {
-        setSelectedIds(new Set([item.id]));
-        lastSelectedIdRef.current = item.id;
+    (event: MouseEvent, item: SealedChildRef) => {
+      // TODO(phase 63): SealedChildRef uses ipnsName as identifier (no .id)
+      if (!selectedIds.has(item.ipnsName)) {
+        setSelectedIds(new Set([item.ipnsName]));
+        lastSelectedIdRef.current = item.ipnsName;
       }
       contextMenu.show(event, item);
     },
     [contextMenu, selectedIds]
   );
 
-  const handleDragStart = useCallback((_event: DragEvent, _item: FolderChild) => {
+  const handleDragStart = useCallback((_event: DragEvent, _item: SealedChildRef) => {
     // Drag data set by FileListItem
   }, []);
 
@@ -368,19 +368,10 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
 
   const handleDownload = useCallback(async () => {
     const item = contextMenu.item;
-    if (!item || !isFilePointer(item)) return;
-    const folderKey = currentFolder?.folderKey;
-    if (!folderKey) return;
-    try {
-      await downloadFromIpns({
-        fileMetaIpnsName: item.fileMetaIpnsName,
-        folderKey,
-        fileName: item.name,
-      });
-    } catch (err) {
-      logger.error('[FileBrowser] Download failed:', err);
-    }
-  }, [contextMenu.item, downloadFromIpns, currentFolder?.folderKey]);
+    if (!item) return;
+    // TODO(phase 63): SealedChildRef has no .type; download deferred to phase 65 (file read-chain)
+    logger.warn('[FileBrowser] Download not implemented — phase 65 (file read-chain)');
+  }, [contextMenu.item]);
 
   const handleRenameClick = useCallback(() => {
     if (contextMenu.item) openRenameDialog(contextMenu.item);
@@ -408,7 +399,8 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
 
   const handlePreviewClick = useCallback(() => {
     const item = contextMenu.item;
-    if (!item || !isFilePointer(item)) return;
+    if (!item) return;
+    // TODO(phase 63): SealedChildRef has no .type; open preview by name extension only
     const name = item.name;
     if (isImageFile(name)) openImagePreviewDialog(item);
     else if (isPdfFile(name)) openPdfPreviewDialog(item);
@@ -433,29 +425,17 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
   }, [selectedItems]);
 
   const handleBatchDownload = useCallback(async () => {
-    const files = selectedItems.filter(isFilePointer);
-    if (files.length === 0) return;
-    const folderKey = currentFolder?.folderKey;
-    if (!folderKey) return;
-    for (const file of files) {
-      try {
-        await downloadFromIpns({
-          fileMetaIpnsName: file.fileMetaIpnsName,
-          folderKey,
-          fileName: file.name,
-        });
-      } catch (err) {
-        logger.error('[FileBrowser] Batch download item failed:', err);
-      }
-    }
-  }, [selectedItems, downloadFromIpns, currentFolder?.folderKey]);
+    // TODO(phase 65): batch download via Node read-chain not yet implemented
+    logger.warn('[FileBrowser] Batch download not implemented — phase 65 (file read-chain)');
+  }, []);
 
   const handleBatchDeleteConfirm = useCallback(async () => {
     const items = batchDeleteDialog.items;
     if (items.length === 0) return;
     try {
+      // TODO(phase 63): SealedChildRef uses ipnsName as id; stub type as 'folder'
       await deleteItems(
-        items.map((i) => ({ id: i.id, type: i.type })),
+        items.map((i) => ({ id: i.ipnsName, type: 'folder' as const })), // phase-63 stub type
         currentFolderId
       );
       setBatchDeleteDialog({ open: false, items: [] });
@@ -470,8 +450,9 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
       const items = batchMoveDialog.items;
       if (items.length === 0) return;
       try {
+        // TODO(phase 63): SealedChildRef uses ipnsName as id; stub type as 'folder'
         await moveItems(
-          items.map((i) => ({ id: i.id, type: i.type })),
+          items.map((i) => ({ id: i.ipnsName, type: 'folder' as const })), // phase-63 stub type
           currentFolderId,
           destinationFolderId
         );
@@ -497,7 +478,8 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
       const item = renameDialog.item;
       if (!item) return;
       try {
-        await renameItem(item.id, item.type, newName, currentFolderId);
+        // TODO(phase 63): SealedChildRef uses ipnsName as id; stub type as 'folder'
+        await renameItem(item.ipnsName, 'folder', newName, currentFolderId); // phase-63 stub type
         closeRenameDialog();
       } catch (err) {
         logger.error('[FileBrowser] Rename failed:', err);
@@ -510,7 +492,8 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
     const item = confirmDialog.item;
     if (!item) return;
     try {
-      await deleteItem(item.id, item.type, currentFolderId);
+      // TODO(phase 63): SealedChildRef uses ipnsName as id; stub type as 'folder'
+      await deleteItem(item.ipnsName, 'folder', currentFolderId); // phase-63 stub type
       closeConfirmDialog();
     } catch (err) {
       logger.error('[FileBrowser] Delete failed:', err);
@@ -522,7 +505,8 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
       const item = moveDialog.item;
       if (!item) return;
       try {
-        await moveItem(item.id, item.type, currentFolderId, destinationFolderId);
+        // TODO(phase 63): SealedChildRef uses ipnsName as id; stub type as 'folder'
+        await moveItem(item.ipnsName, 'folder', currentFolderId, destinationFolderId); // phase-63 stub type
         closeMoveDialog();
       } catch (err) {
         logger.error('[FileBrowser] Move failed:', err);

@@ -1,11 +1,8 @@
 import { useState, useCallback } from 'react';
 import type { VersionEntry } from '@cipherbox/core';
-import { useAuthStore } from '../../../stores/auth.store';
-import { downloadFile, triggerBrowserDownload } from '../../../services/download.service';
 import { useFolder } from '../../../hooks/useFolder';
 import { formatDate, formatBytes } from '../../../utils/format';
 import { formatDateWithTime } from './DetailsPrimitives';
-import { vaultKeyMissingError } from './version-download-guard';
 
 /**
  * Version history component for files with past versions.
@@ -13,7 +10,7 @@ import { vaultKeyMissingError } from './version-download-guard';
  */
 export function VersionHistory({
   versions,
-  fileName,
+  fileName: _fileName, // TODO(phase 65): used for download trigger stub
   folderKey,
   parentFolderId,
   fileId,
@@ -32,39 +29,11 @@ export function VersionHistory({
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  const handleDownloadVersion = useCallback(
-    async (version: VersionEntry) => {
-      const privateKey = useAuthStore.getState().vaultKeypair?.privateKey;
-      const keyError = vaultKeyMissingError(privateKey);
-      if (keyError || !privateKey) {
-        // keyError is non-null exactly when privateKey is missing; the explicit
-        // !privateKey also narrows the type for the downloadFile call below.
-        setActionError(keyError ?? 'Cannot download: vault key not available');
-        return;
-      }
-
-      setLoadingAction('download');
-      setActionError(null);
-      try {
-        const decrypted = await downloadFile(
-          {
-            cid: version.cid,
-            iv: version.fileIv,
-            wrappedKey: version.fileKeyEncrypted,
-            originalName: fileName,
-            encryptionMode: version.encryptionMode,
-          },
-          privateKey
-        );
-        triggerBrowserDownload(decrypted, fileName);
-      } catch {
-        setActionError('Failed to download version');
-      } finally {
-        setLoadingAction(null);
-      }
-    },
-    [fileName]
-  );
+  const handleDownloadVersion = useCallback(async (_version: VersionEntry) => {
+    // TODO(phase 65): VersionEntry.fileKey is now a raw Uint8Array inside the sealed body;
+    // the download path needs the Node read-chain to obtain it (phase 63/65).
+    throw new Error('not implemented — phase 65 (version download via Node read-chain)');
+  }, []);
 
   const handleRestore = useCallback(
     async (versionIndex: number) => {
@@ -120,11 +89,12 @@ export function VersionHistory({
           const isLoading = loadingAction !== null;
 
           return (
-            <div key={`${version.cid}-${version.timestamp}`} className="details-version-entry">
+            <div key={`${version.cid}-${version.createdAt}`} className="details-version-entry">
               <div className="details-version-info">
                 <span className="details-version-number">v{versionNumber}</span>
                 <span className="details-version-date">
-                  {formatDateWithTime(version.timestamp)}
+                  {/* TODO(phase 63): version.createdAt (ms) replaces retired version.timestamp */}
+                  {formatDateWithTime(version.createdAt)}
                 </span>
                 <span className="details-version-size">{formatBytes(version.size)}</span>
                 <span className="details-version-mode">{version.encryptionMode}</span>
@@ -134,7 +104,8 @@ export function VersionHistory({
               {confirmingRestore === index ? (
                 <div className="details-version-confirm" role="alert">
                   <span className="details-version-confirm-text">
-                    Restore version from {formatDate(version.timestamp)}? Current version will be
+                    {/* TODO(phase 63): version.createdAt (ms) replaces retired version.timestamp */}
+                    Restore version from {formatDate(version.createdAt)}? Current version will be
                     saved as a past version.
                   </span>
                   <div className="details-version-confirm-actions">
