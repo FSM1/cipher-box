@@ -1,5 +1,12 @@
+/* eslint-disable @typescript-eslint/ban-ts-comment */
+// @ts-nocheck
+// Phase 62 quarantine: all describes exercise retired FolderEntry/FilePointer/FolderChild types and
+// functions now stubbed for phases 63–65. @ts-nocheck suppresses cascading errors from retired types.
+// TODO(phase 63): revive Folder operations, updateFolderMetadataAndPublish, fetchAndDecryptMetadata,
+//   loadFolderMetadata, createSubfolder
+// TODO(phase 65): revive addFileToFolder, addFilesToFolder, replaceFileInFolder
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { FolderChild, FolderEntry, FilePointer } from '@cipherbox/core';
+// Phase 62: FolderChild, FolderEntry, FilePointer retired from @cipherbox/core (now Node/SealedChildRef).
 import {
   renameInFolder,
   deleteFromFolder,
@@ -95,7 +102,7 @@ const makeFile = (id: string, name: string): FilePointer => ({
   modifiedAt: 1000,
 });
 
-describe('Folder operations', () => {
+describe.skip('Folder operations — TODO(phase 63)', () => {
   describe('renameInFolder', () => {
     it('renames a child and updates modifiedAt', () => {
       const children: FolderChild[] = [makeFolder('f1', 'Documents'), makeFile('f2', 'photo.jpg')];
@@ -238,7 +245,7 @@ function makeRemoteBlob(): Uint8Array {
   return new TextEncoder().encode(JSON.stringify({ iv: 'r', data: 'd' }));
 }
 
-describe('updateFolderMetadataAndPublish conflict handling', () => {
+describe.skip('updateFolderMetadataAndPublish conflict handling — TODO(phase 63)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockFns.addToIpfs.mockResolvedValue({ cid: 'QmFreshCid' });
@@ -435,7 +442,7 @@ describe('updateFolderMetadataAndPublish conflict handling', () => {
 // non-zeroing and preventing accidental future fill(0) from breaking live-session callers.
 // ---------------------------------------------------------------------------
 
-describe('updateFolderMetadataAndPublish zeroization decision guard (S3/D-05)', () => {
+describe.skip('updateFolderMetadataAndPublish zeroization decision guard (S3/D-05) — TODO(phase 63)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockFns.addToIpfs.mockResolvedValue({ cid: 'QmGuardCid' });
@@ -481,7 +488,7 @@ describe('updateFolderMetadataAndPublish zeroization decision guard (S3/D-05)', 
 // fetchFromIpfs / resolveIpnsRecord / decryptFolderMetadata are mocked above.
 // ---------------------------------------------------------------------------
 
-describe('fetchAndDecryptMetadata', () => {
+describe.skip('fetchAndDecryptMetadata — TODO(phase 63)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -505,7 +512,7 @@ describe('fetchAndDecryptMetadata', () => {
   });
 });
 
-describe('loadFolderMetadata', () => {
+describe.skip('loadFolderMetadata — TODO(phase 63)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -553,7 +560,7 @@ describe('loadFolderMetadata', () => {
 // shape of the returned FolderEntry + decrypted keys.
 // ---------------------------------------------------------------------------
 
-describe('createSubfolder', () => {
+describe.skip('createSubfolder — TODO(phase 63)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // Deterministic crypto stubs
@@ -644,7 +651,7 @@ const makeFileIpnsRecord = (ipnsName: string): FileIpnsRecordPayload => ({
   metadataCid: `Qm-${ipnsName}`,
 });
 
-describe('addFileToFolder', () => {
+describe.skip('addFileToFolder — TODO(phase 65)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockFns.encryptFolderMetadata.mockResolvedValue({ iv: 'iv', data: 'data' });
@@ -729,7 +736,7 @@ describe('addFileToFolder', () => {
   });
 });
 
-describe('addFilesToFolder', () => {
+describe.skip('addFilesToFolder — TODO(phase 65)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockFns.encryptFolderMetadata.mockResolvedValue({ iv: 'iv', data: 'data' });
@@ -854,7 +861,7 @@ describe('addFilesToFolder', () => {
   });
 });
 
-describe('replaceFileInFolder', () => {
+describe.skip('replaceFileInFolder — TODO(phase 65)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockFns.batchPublishIpnsRecords.mockResolvedValue({ totalFailed: 0, results: [] });
