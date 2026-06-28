@@ -1,0 +1,46 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "15d9ad0fef45",
+  "strategy": "manual-commit",
+  "branch": "feat/unified-node-codec-core-keystone",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/components/file-browser/AudioPlayerDialog.tsx",
+    "apps/web/src/components/file-browser/ContextMenu.tsx",
+    "apps/web/src/components/file-browser/DetailsDialog.tsx",
+    "apps/web/src/components/file-browser/FileBrowser.tsx",
+    "apps/web/src/components/file-browser/FileList.tsx",
+    "apps/web/src/components/file-browser/FileListItem.tsx",
+    "apps/web/src/components/file-browser/ImagePreviewDialog.tsx",
+    "apps/web/src/components/file-browser/InviteLinkTab.tsx",
+    "apps/web/src/components/file-browser/MoveDialog.tsx",
+    "apps/web/src/components/file-browser/PdfPreviewDialog.tsx",
+    "apps/web/src/components/file-browser/SelectionActionBar.tsx",
+    "apps/web/src/components/file-browser/ShareDialog.tsx",
+    "apps/web/src/components/file-browser/SharedFileBrowser.tsx",
+    "apps/web/src/components/file-browser/SharedFolderRow.tsx",
+    "apps/web/src/components/file-browser/SharedMoveDialog.tsx",
+    "apps/web/src/components/file-browser/TextEditorDialog.tsx",
+    "apps/web/src/components/file-browser/VideoPlayerDialog.tsx",
+    "apps/web/src/components/file-browser/details/FileDetails.tsx",
+    "apps/web/src/components/file-browser/details/FolderDetails.tsx",
+    "apps/web/src/components/file-browser/details/VersionHistory.tsx",
+    "apps/web/src/components/file-browser/useFileBrowserActions.ts",
+    "apps/web/src/utils/fileTypes.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/15/d9ad0fef45/0/metadata.json",
+      "transcript": "/15/d9ad0fef45/0/full.jsonl",
+      "content_hash": "/15/d9ad0fef45/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  }
+}
