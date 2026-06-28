@@ -7,8 +7,15 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { buildNodeAad } from '../aes';
+import {
+  buildNodeAad,
+  sealAesGcmAad,
+  unsealAesGcmAad,
+  encryptAesGcmAad,
+  decryptAesGcmAad,
+} from '../aes';
 import { uuidToBytes, bytesToHex } from '../utils/encoding';
+import { generateFileKey, generateIv } from '../utils';
 import { CryptoError } from '../types';
 
 const CANONICAL_UUID = '550e8400-e29b-41d4-a716-446655440000';
@@ -177,6 +184,107 @@ describe('buildNodeAad', () => {
         expect(aad[44]).toBe(role);
       }
     });
+  });
+});
+
+// ============================================================
+// sealAesGcmAad / unsealAesGcmAad — AAD-bound seal primitive
+// ============================================================
+
+describe('sealAesGcmAad / unsealAesGcmAad (AAD-bound seal)', () => {
+  describe('round-trip', () => {
+    it('round-trips with matching key and AAD', async () => {
+      const key = generateFileKey();
+      const plaintext = new TextEncoder().encode('sealed node metadata');
+      const aad = buildNodeAad(CANONICAL_UUID, CANONICAL_KIND, CANONICAL_GEN, 0x01);
+      const sealed = await sealAesGcmAad(plaintext, key, aad);
+      const unsealed = await unsealAesGcmAad(sealed, key, aad);
+      expect(unsealed).toEqual(plaintext);
+    });
+
+    it('sealed output length is IV(12) + plaintext.length + tag(16)', async () => {
+      const key = generateFileKey();
+      const plaintext = new TextEncoder().encode('test payload');
+      const aad = buildNodeAad(CANONICAL_UUID, CANONICAL_KIND, CANONICAL_GEN, 0x01);
+      const sealed = await sealAesGcmAad(plaintext, key, aad);
+      expect(sealed.length).toBe(12 + plaintext.length + 16);
+    });
+
+    it('two identical-input calls produce different blobs (fresh IV per call)', async () => {
+      const key = generateFileKey();
+      const plaintext = new TextEncoder().encode('same plaintext');
+      const aad = buildNodeAad(CANONICAL_UUID, CANONICAL_KIND, CANONICAL_GEN, 0x01);
+      const sealed1 = await sealAesGcmAad(plaintext, key, aad);
+      const sealed2 = await sealAesGcmAad(plaintext, key, aad);
+      expect(sealed1).not.toEqual(sealed2);
+      // Both should round-trip correctly despite different IVs
+      const unsealed1 = await unsealAesGcmAad(sealed1, key, aad);
+      const unsealed2 = await unsealAesGcmAad(sealed2, key, aad);
+      expect(unsealed1).toEqual(plaintext);
+      expect(unsealed2).toEqual(plaintext);
+    });
+  });
+
+  describe('rejection cases', () => {
+    it('rejects blob shorter than 28 bytes (MIN_SEALED_SIZE: IV + tag)', async () => {
+      const key = generateFileKey();
+      const aad = buildNodeAad(CANONICAL_UUID, CANONICAL_KIND, CANONICAL_GEN, 0x01);
+      const shortBlob = new Uint8Array(27);
+      await expect(unsealAesGcmAad(shortBlob, key, aad)).rejects.toThrow();
+    });
+
+    it('rejects wrong key', async () => {
+      const key1 = generateFileKey();
+      const key2 = generateFileKey();
+      const plaintext = new TextEncoder().encode('secret');
+      const aad = buildNodeAad(CANONICAL_UUID, CANONICAL_KIND, CANONICAL_GEN, 0x01);
+      const sealed = await sealAesGcmAad(plaintext, key1, aad);
+      await expect(unsealAesGcmAad(sealed, key2, aad)).rejects.toThrow();
+    });
+
+    it('rejects non-32-byte key on seal', async () => {
+      const shortKey = new Uint8Array(16);
+      const plaintext = new TextEncoder().encode('test');
+      const aad = buildNodeAad(CANONICAL_UUID, CANONICAL_KIND, CANONICAL_GEN, 0x01);
+      await expect(sealAesGcmAad(plaintext, shortKey, aad)).rejects.toThrow();
+    });
+  });
+});
+
+// ============================================================
+// encryptAesGcmAad / decryptAesGcmAad — deterministic (IV as arg)
+// ============================================================
+
+describe('encryptAesGcmAad / decryptAesGcmAad (deterministic, IV-as-arg)', () => {
+  it('is deterministic: same inputs produce same output', async () => {
+    const key = generateFileKey();
+    const iv = generateIv();
+    const plaintext = new TextEncoder().encode('deterministic payload');
+    const aad = buildNodeAad(CANONICAL_UUID, CANONICAL_KIND, CANONICAL_GEN, 0x02);
+    const ct1 = await encryptAesGcmAad(plaintext, key, iv, aad);
+    const ct2 = await encryptAesGcmAad(plaintext, key, iv, aad);
+    expect(ct1).toEqual(ct2);
+  });
+
+  it('round-trips via decryptAesGcmAad', async () => {
+    const key = generateFileKey();
+    const iv = generateIv();
+    const plaintext = new TextEncoder().encode('aad-bound round-trip');
+    const aad = buildNodeAad(CANONICAL_UUID, CANONICAL_KIND, CANONICAL_GEN, 0x02);
+    const ciphertext = await encryptAesGcmAad(plaintext, key, iv, aad);
+    const decrypted = await decryptAesGcmAad(ciphertext, key, iv, aad);
+    expect(decrypted).toEqual(plaintext);
+  });
+
+  it('different AAD produces different ciphertext', async () => {
+    const key = generateFileKey();
+    const iv = generateIv();
+    const plaintext = new TextEncoder().encode('same plaintext');
+    const aad1 = buildNodeAad(CANONICAL_UUID, CANONICAL_KIND, CANONICAL_GEN, 0x01);
+    const aad2 = buildNodeAad(CANONICAL_UUID, CANONICAL_KIND, CANONICAL_GEN, 0x02);
+    const ct1 = await encryptAesGcmAad(plaintext, key, iv, aad1);
+    const ct2 = await encryptAesGcmAad(plaintext, key, iv, aad2);
+    expect(ct1).not.toEqual(ct2);
   });
 });
 
