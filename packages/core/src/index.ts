@@ -8,29 +8,31 @@
  * while @cipherbox/crypto retains only generic cryptographic operations.
  */
 
-// Folder metadata
+// Node codec (replaces legacy FolderMetadata / FileMetadata / FilePointer / FolderEntry)
 export {
-  encryptFolderMetadata,
-  decryptFolderMetadata,
-  validateFolderMetadata,
-  type FolderMetadata,
-  type FolderChild,
-  type FolderEntry,
-  type EncryptedFolderMetadata,
-} from './folder';
-
-// File metadata
-export {
-  deriveFileIpnsKeypair,
-  generateFileIpnsKeypair,
-  encryptFileMetadata,
-  decryptFileMetadata,
-  validateFileMetadata,
-  type FileMetadata,
-  type FilePointer,
-  type EncryptedFileMetadata,
+  encodeReadBody,
+  encodeWriteBody,
+  serializeContentForWire,
+  decodeReadBody,
+  decodeWriteBody,
+  deserializeContentFromWire,
+  validateNode,
+  sealNode,
+  unsealNode,
+  sealChildReadKey,
+  unsealChildReadKey,
+  sealContent,
+  unsealContent,
+  type Node,
+  type NodeKind,
+  type EncryptionMode,
+  type SealedChildRef,
+  type WriteChildRef,
+  type NodeWriteBody,
+  type NodeContent,
   type VersionEntry,
-} from './file';
+  type PublishedNode,
+} from './node';
 
 // Device registry
 export {
