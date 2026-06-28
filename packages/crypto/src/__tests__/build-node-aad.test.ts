@@ -348,8 +348,10 @@ describe('full-seal KAT (seal_vectors in node-aad.json, D-01b)', () => {
       ciphertext: string;
     }>;
 
-    // Guard: array must be non-empty; a vacuous for-of over an empty array always passes
-    expect(sealVectors.length).toBeGreaterThanOrEqual(1);
+    // Guard: exactly 1 committed seal vector — mirrors the Rust `assert_eq!(seal_vectors.len(), 1)`.
+    // Exact count (not >= 1) keeps the cross-language coverage contract symmetric: adding a
+    // second vector must be an intentional update on both sides, not a silent TS-side accept.
+    expect(sealVectors.length).toBe(1);
 
     for (const v of sealVectors) {
       const key = hexToBytes(v.key);
