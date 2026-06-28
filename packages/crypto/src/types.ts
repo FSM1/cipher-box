@@ -45,7 +45,8 @@ export type CryptoErrorCode =
   | 'SIGNING_FAILED'
   | 'KEY_REWRAP_FAILED'
   | 'RANDOM_GENERATION_FAILED'
-  | 'SECURE_CONTEXT_REQUIRED';
+  | 'SECURE_CONTEXT_REQUIRED'
+  | 'INVALID_AAD_INPUT';
 
 /**
  * Custom error class for cryptographic operations.

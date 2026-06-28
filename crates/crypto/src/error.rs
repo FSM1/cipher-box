@@ -38,4 +38,6 @@ pub enum CryptoError {
     InvalidRange,
     #[error("Invalid file ID: must be at least 10 characters")]
     InvalidFileId,
+    #[error("Invalid AAD input")]
+    InvalidAadInput,
 }

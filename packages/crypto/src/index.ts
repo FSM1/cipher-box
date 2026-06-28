@@ -50,7 +50,17 @@ export {
 export { deriveKey, deriveContextKey, generateFolderKey, type DeriveKeyParams } from './keys';
 
 // AES-256-GCM symmetric encryption
-export { encryptAesGcm, decryptAesGcm, sealAesGcm, unsealAesGcm } from './aes';
+export {
+  encryptAesGcm,
+  decryptAesGcm,
+  sealAesGcm,
+  unsealAesGcm,
+  buildNodeAad,
+  encryptAesGcmAad,
+  decryptAesGcmAad,
+  sealAesGcmAad,
+  unsealAesGcmAad,
+} from './aes';
 
 // AES-256-CTR streaming encryption (random-access decryption for media)
 export { encryptAesCtr, decryptAesCtr, decryptAesCtrRange } from './aes';
@@ -76,6 +86,7 @@ export {
   hexToBytes,
   bytesToHex,
   concatBytes,
+  uuidToBytes,
   clearBytes,
   clearAll,
   generateRandomBytes,

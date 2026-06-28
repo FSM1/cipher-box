@@ -240,6 +240,121 @@ fn hkdf_cross_language() {
 }
 
 // ============================================================
+// Node AAD Cross-Language Vectors
+// ============================================================
+
+#[derive(Deserialize)]
+struct NodeAadVector {
+    #[allow(dead_code)]
+    description: String,
+    node_id: String,
+    kind: u8,
+    generation: u32,
+    role: u8,
+    expected_aad: String,
+}
+
+/// Full-seal KAT vector: fixed key/iv/plaintext/aad committed by the TS side.
+/// Rust must reproduce the exact ciphertext byte-for-byte (T-61-11).
+#[derive(Deserialize)]
+struct NodeSealVector {
+    description: String,
+    node_id: String,
+    kind: u8,
+    generation: u32,
+    role: u8,
+    key: String,
+    iv: String,
+    plaintext: String,
+    ciphertext: String,
+}
+
+#[test]
+fn node_aad_cross_language() {
+    // node-aad.json is a top-level object (not a flat array), so parse via
+    // serde_json::Value and pull the aad_vectors array — not load_vectors().
+    let path = vectors_path("crypto/node-aad.json");
+    let data = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("Failed to load {}: {}", path.display(), e));
+    let root: serde_json::Value = serde_json::from_str(&data).unwrap();
+
+    // ── aad_vectors: pin AAD construction byte-for-byte ──────────────────────
+    let aad_vectors: Vec<NodeAadVector> =
+        serde_json::from_value(root["aad_vectors"].clone()).unwrap();
+
+    // Guard: exactly 4 entries covering all role bytes 0x01..0x04.
+    // Mirrors the TS length guard so coverage cannot silently erode.
+    assert_eq!(aad_vectors.len(), 4, "Expected exactly 4 aad_vectors (one per role byte)");
+    let mut roles: Vec<u8> = aad_vectors.iter().map(|v| v.role).collect();
+    roles.sort_unstable();
+    assert_eq!(roles, vec![1, 2, 3, 4], "aad_vectors must cover role bytes 0x01..0x04 exactly once");
+
+    for v in &aad_vectors {
+        let aad = cipherbox_crypto::build_node_aad(&v.node_id, v.kind, v.generation, v.role)
+            .unwrap_or_else(|e| panic!("build_node_aad failed for {}: {:?}", v.description, e));
+        assert_eq!(
+            hex::encode(&aad),
+            v.expected_aad,
+            "AAD mismatch for: {}",
+            v.description
+        );
+    }
+
+    // ── seal_vectors: pin the full AEAD-with-AAD path TS↔Rust ───────────────
+    // encrypt_aes_gcm_aad must reproduce the exact ciphertext the TS side committed
+    // for the same fixed key/iv/plaintext/AAD (proves Web Crypto additionalData ≡
+    // aes-gcm Payload { msg, aad } byte-for-byte; T-61-11, CRYPTO-02, TEST-02).
+    let seal_vectors: Vec<NodeSealVector> =
+        serde_json::from_value(root["seal_vectors"].clone()).unwrap();
+
+    assert_eq!(seal_vectors.len(), 1, "Expected exactly 1 committed seal_vector");
+
+    for v in &seal_vectors {
+        let key_bytes = hex::decode(&v.key)
+            .unwrap_or_else(|_| panic!("Bad hex key in: {}", v.description));
+        let iv_bytes = hex::decode(&v.iv)
+            .unwrap_or_else(|_| panic!("Bad hex iv in: {}", v.description));
+        let plaintext = hex::decode(&v.plaintext)
+            .unwrap_or_else(|_| panic!("Bad hex plaintext in: {}", v.description));
+
+        let key_arr: [u8; 32] = key_bytes
+            .try_into()
+            .unwrap_or_else(|_| panic!("Key must be 32 bytes in: {}", v.description));
+        let iv_arr: [u8; 12] = iv_bytes
+            .try_into()
+            .unwrap_or_else(|_| panic!("IV must be 12 bytes in: {}", v.description));
+
+        let aad = cipherbox_crypto::build_node_aad(&v.node_id, v.kind, v.generation, v.role)
+            .unwrap_or_else(|e| panic!("build_node_aad failed for {}: {:?}", v.description, e));
+
+        let ciphertext = cipherbox_crypto::encrypt_aes_gcm_aad(&plaintext, &key_arr, &iv_arr, &aad)
+            .unwrap_or_else(|e| panic!("encrypt_aes_gcm_aad failed for {}: {:?}", v.description, e));
+
+        assert_eq!(
+            hex::encode(&ciphertext),
+            v.ciphertext,
+            "Full-seal KAT ciphertext mismatch for: {}",
+            v.description
+        );
+
+        // Pin the frozen sealed-blob envelope order [IV(12)][ct+tag] (D-00a). The ciphertext
+        // assertion above only pins the AEAD output; this asserts the high-level seal envelope
+        // is IV-FIRST and identical to the TS side: a seal/unseal pair that silently switched to
+        // `ct||iv` would pass round-trip + ciphertext checks but fail to open this IV-first blob.
+        let mut sealed_envelope = iv_arr.to_vec();
+        sealed_envelope.extend_from_slice(&ciphertext);
+        let opened = cipherbox_crypto::unseal_aes_gcm_aad(&sealed_envelope, &key_arr, &aad)
+            .unwrap_or_else(|e| panic!("unseal_aes_gcm_aad failed for {}: {:?}", v.description, e));
+        assert_eq!(
+            hex::encode(&opened),
+            v.plaintext,
+            "Sealed-envelope [IV][ct+tag] order mismatch for: {}",
+            v.description
+        );
+    }
+}
+
+// ============================================================
 // IPNS Name Derivation Cross-Language Vectors
 // ============================================================
 

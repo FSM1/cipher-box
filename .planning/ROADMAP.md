@@ -60,7 +60,7 @@
 
 ### v2.0 Metadata and Sharing Refactor (Phases 61–69)
 
-- [ ] **Phase 61: AAD-Bound Seal Primitive and Cross-Language KAT** — Additive AES-GCM+AAD seal in `packages/crypto` and `crates/crypto` with a committed TS↔Rust known-answer test
+- [x] **Phase 61: AAD-Bound Seal Primitive and Cross-Language KAT** — Additive AES-GCM+AAD seal in `packages/crypto` and `crates/crypto` with a committed TS↔Rust known-answer test (completed 2026-06-28)
 - [ ] **Phase 62: Unified Node Codec (Core Keystone)** — `Node`/`SealedChildRef`/`PublishedNode` types replacing all legacy metadata types; nothing downstream typechecks until this lands
 - [ ] **Phase 63: Read-Chain Navigation and Rotation Core** — Read key-chain walk, `rotateReadFromNode`/`rotateOne` engine, scope-exit predicate, and invite re-wrap in `packages/sdk-core`
 - [ ] **Phase 64: Rotation Soundness — Revocation Guarantees** — CRIT-1 content-key rotation, HIGH-3 inner grant re-mint, HIGH-4 concurrent-add merge, crash-safe resume, and the `tests/sdk-e2e` crash-safety suite
@@ -87,7 +87,25 @@
 3. The cross-language KAT fixture — a single hardcoded vector covering all four role bytes — is asserted by both `packages/crypto/__tests__/build-node-aad.test.ts` AND a Rust `#[test]` in `crates/crypto/tests/cross_language.rs`; both pass in CI
 4. A sealed blob replayed under a different `childId`, `role`, or `generation` fails to unseal (AAD transplant resistance test passes)
 
-**Plans**: TBD
+**Plans**: 5/5 plans complete
+
+Plans:
+**Wave 1**
+
+- [x] 61-01-PLAN.md — TS AAD builder (`buildNodeAad`/`uuidToBytes`) + frozen `node-aad.json` (aad_vectors, all 4 roles) + TS KAT + parity-script registration [merge gate]
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 61-02-PLAN.md — Rust AAD builder (`build_node_aad` + `uuid` dep + `InvalidAadInput`) + cross-language AAD KAT [closes merge gate]
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 61-03-PLAN.md — TS AEAD-with-AAD seal variants + full-seal vector (D-01b) + extended transplant/negative suite (D-02, CRYPTO-03)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 61-04-PLAN.md — Rust AEAD-with-AAD seal variants + Rust full-seal cross-language KAT
+- [x] 61-05-PLAN.md — Docs: ADR 0003 freeze + METADATA_SCHEMAS / METADATA_EVOLUTION_PROTOCOL / FILESYSTEM_SPECIFICATION pointers (D-05)
 
 ---
 
@@ -271,7 +289,7 @@
 
 | Phase | Name | Plans Complete | Status | Completed |
 | --- | --- | --- | --- | --- |
-| 61 | AAD-Bound Seal Primitive and Cross-Language KAT | 0/? | Not started | - |
+| 61 | AAD-Bound Seal Primitive and Cross-Language KAT | 5/5 | Complete    | 2026-06-28 |
 | 62 | Unified Node Codec (Core Keystone) | 0/? | Not started | - |
 | 63 | Read-Chain Navigation and Rotation Core | 0/? | Not started | - |
 | 64 | Rotation Soundness — Revocation Guarantees | 0/? | Not started | - |

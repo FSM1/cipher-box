@@ -17,6 +17,7 @@ EXPECTED_VECTORS=(
   "tests/vectors/crypto/ecies.json"
   "tests/vectors/crypto/hkdf.json"
   "tests/vectors/crypto/ipns-name.json"
+  "tests/vectors/crypto/node-aad.json"
   "tests/vectors/core/vault-blob.json"
   "tests/vectors/core/folder-metadata.json"
   "tests/vectors/core/ipns-record.json"

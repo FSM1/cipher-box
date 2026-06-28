@@ -181,6 +181,14 @@ All versioned metadata objects use a string `version` field with values like `'v
 
 **EncryptedVaultKeys** has no version field. Changes to its structure should be paired with a new vault export format version (see `docs/VAULT_EXPORT_FORMAT.md`).
 
+### AAD domain-separator version lever
+
+The AAD-bound node-seal primitive (phase 61) uses the domain string `"cipherbox/node-seal/v1"` as
+a version lever embedded in the 45-byte AAD (see [ADR 0003](adr/0003-aad-bound-node-seal-encoding.md)
+for the full encoding). Any change to the AAD byte layout — field reorder, new field, or width
+change — must bump this string to `"cipherbox/node-seal/v2"` (and so on). A blob sealed under `v1`
+will fail to unseal under `v2` by design, making format changes explicit rather than silent drift.
+
 ---
 
 ## 6. Testing Requirements
@@ -231,6 +239,18 @@ The reverse direction (Rust-produced JSON verified in TypeScript) is equally val
 ### 6.3 Unknown Field Resilience Test
 
 Add a JSON string with an extra field that does not exist in the current schema. Verify both TypeScript and Rust deserializers accept the data without error and ignore the unknown field. This confirms forward compatibility.
+
+### 6.4 Cross-language KAT discipline for the AAD-bound seal
+
+The TypeScript and Rust implementations of `buildNodeAad`/`build_node_aad` and
+`sealAesGcmAad`/`seal_aes_gcm_aad` must remain byte-identical. This is asserted by
+the cross-language Known-Answer Test (KAT) in `tests/vectors/crypto/node-aad.json`,
+which is loaded and verified by both `packages/crypto/src/__tests__/build-node-aad.test.ts`
+and `crates/crypto/tests/cross_language.rs`.
+
+The KAT is a merge gate: no PR that introduces a new role byte or changes the AAD byte
+layout may merge until the KAT vector for that change is committed and passes on both
+sides. See [ADR 0003](adr/0003-aad-bound-node-seal-encoding.md) for the standing rule.
 
 ---
 
