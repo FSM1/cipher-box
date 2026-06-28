@@ -82,6 +82,37 @@
         "label": "Skill: gsd-execute-phase",
         "default_collapsed": true
       }
+    },
+    {
+      "id": "claude-skill-toolu_011CWCeJRxy9aRubKqPwTZge",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "2d04c6d14ad9",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 677,
+        "end": 678,
+        "entry_ids": [
+          "37d33beb-a2ad-4a79-b528-e463d71bfffb"
+        ],
+        "tool_use_id": "toolu_011CWCeJRxy9aRubKqPwTZge"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_011CWCeJRxy9aRubKqPwTZge"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ship-phase",
+        "default_collapsed": true
+      }
     }
   ],
   "session_metrics": {
