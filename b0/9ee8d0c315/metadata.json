@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "b09ee8d0c315",
+  "strategy": "manual-commit",
+  "branch": "feat/unified-node-codec-core-keystone",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/62-unified-node-codec-core-keystone/62-CONTEXT.md",
+    ".planning/phases/62-unified-node-codec-core-keystone/62-DISCUSSION-LOG.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/b0/9ee8d0c315/0/metadata.json",
+      "transcript": "/b0/9ee8d0c315/0/full.jsonl",
+      "content_hash": "/b0/9ee8d0c315/0/content_hash.txt",
+      "prompt": "/b0/9ee8d0c315/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 11494,
+    "cache_creation_tokens": 36020,
+    "cache_read_tokens": 327237,
+    "output_tokens": 3488,
+    "api_call_count": 8
+  }
+}
