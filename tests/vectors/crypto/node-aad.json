@@ -1,4 +1,17 @@
 {
+  "seal_vectors": [
+    {
+      "description": "encryptAesGcmAad fixed key/iv, kind=folder role=body generation=42 (D-01b full-seal KAT)",
+      "node_id": "550e8400-e29b-41d4-a716-446655440000",
+      "kind": 1,
+      "generation": 42,
+      "role": 1,
+      "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "iv": "000102030405060708090a0b",
+      "plaintext": "4e6f64654d657461",
+      "ciphertext": "cf6bfe784b825669294884ec63a59327c004cc03571e1227"
+    }
+  ],
   "aad_vectors": [
     {
       "description": "buildNodeAad kind=folder role=body generation=42",

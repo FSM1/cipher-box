@@ -14,7 +14,7 @@ import {
   encryptAesGcmAad,
   decryptAesGcmAad,
 } from '../aes';
-import { uuidToBytes, bytesToHex } from '../utils/encoding';
+import { uuidToBytes, bytesToHex, hexToBytes } from '../utils/encoding';
 import { generateFileKey, generateIv } from '../utils';
 import { CryptoError } from '../types';
 
@@ -313,5 +313,172 @@ describe('buildNodeAad cross-language KAT (node-aad.json)', () => {
       const aad = buildNodeAad(v.node_id, v.kind, v.generation, v.role);
       expect(bytesToHex(aad)).toBe(v.expected_aad);
     }
+  });
+});
+
+// ============================================================
+// D-01b: Full-seal KAT — encryptAesGcmAad with fixed IV pins the entire AEAD path
+// ============================================================
+
+describe('full-seal KAT (seal_vectors in node-aad.json, D-01b)', () => {
+  it('matches committed seal_vectors for encryptAesGcmAad with fixed key/iv', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vectors = (await import('../../../../tests/vectors/crypto/node-aad.json')) as any;
+    const sealVectors = vectors.seal_vectors as Array<{
+      description: string;
+      node_id: string;
+      kind: number;
+      generation: number;
+      role: number;
+      key: string;
+      iv: string;
+      plaintext: string;
+      ciphertext: string;
+    }>;
+
+    // Guard: array must be non-empty; a vacuous for-of over an empty array always passes
+    expect(sealVectors.length).toBeGreaterThanOrEqual(1);
+
+    for (const v of sealVectors) {
+      const key = hexToBytes(v.key);
+      const iv = hexToBytes(v.iv);
+      const plaintext = hexToBytes(v.plaintext);
+      const aad = buildNodeAad(v.node_id, v.kind, v.generation, v.role);
+      // encryptAesGcmAad is deterministic for fixed key/iv — the committed ciphertext
+      // is the cross-language ground truth proving AAD flows into the AEAD identically
+      const result = await encryptAesGcmAad(plaintext, key, iv, aad);
+      expect(bytesToHex(result)).toBe(v.ciphertext);
+    }
+  });
+});
+
+// ============================================================
+// D-02 / CRYPTO-03: Extended transplant-resistance and negative suite
+// ============================================================
+
+describe('AAD transplant-resistance and negative suite (D-02, CRYPTO-03)', () => {
+  const TRANSPLANT_UUID = '550e8400-e29b-41d4-a716-446655440000';
+  const TRANSPLANT_UUID_ALT = '12345678-1234-1234-1234-1234567890ab';
+  const TRANSPLANT_KIND = 0x01; // folder
+  const TRANSPLANT_GEN = 42;
+  const TRANSPLANT_ROLE = 0x01; // body
+
+  it('correct-AAD unseal succeeds (proves rejections below are AAD-specific)', async () => {
+    const key = generateFileKey();
+    const plaintext = new TextEncoder().encode('transplant-resistance test');
+    const aad = buildNodeAad(TRANSPLANT_UUID, TRANSPLANT_KIND, TRANSPLANT_GEN, TRANSPLANT_ROLE);
+    const sealed = await sealAesGcmAad(plaintext, key, aad);
+    const unsealed = await unsealAesGcmAad(sealed, key, aad);
+    expect(unsealed).toEqual(plaintext);
+  });
+
+  it('rejects when nodeId differs (AAD transplant: wrong node)', async () => {
+    const key = generateFileKey();
+    const plaintext = new TextEncoder().encode('transplant-resistance test');
+    const aadCorrect = buildNodeAad(
+      TRANSPLANT_UUID,
+      TRANSPLANT_KIND,
+      TRANSPLANT_GEN,
+      TRANSPLANT_ROLE
+    );
+    const aadWrongNode = buildNodeAad(
+      TRANSPLANT_UUID_ALT,
+      TRANSPLANT_KIND,
+      TRANSPLANT_GEN,
+      TRANSPLANT_ROLE
+    );
+    const sealed = await sealAesGcmAad(plaintext, key, aadCorrect);
+    await expect(unsealAesGcmAad(sealed, key, aadWrongNode)).rejects.toThrow();
+  });
+
+  it('rejects when role differs (AAD transplant: wrong role)', async () => {
+    const key = generateFileKey();
+    const plaintext = new TextEncoder().encode('transplant-resistance test');
+    const aadCorrect = buildNodeAad(
+      TRANSPLANT_UUID,
+      TRANSPLANT_KIND,
+      TRANSPLANT_GEN,
+      TRANSPLANT_ROLE
+    );
+    const aadWrongRole = buildNodeAad(
+      TRANSPLANT_UUID,
+      TRANSPLANT_KIND,
+      TRANSPLANT_GEN,
+      0x02 // child-readkey instead of body
+    );
+    const sealed = await sealAesGcmAad(plaintext, key, aadCorrect);
+    await expect(unsealAesGcmAad(sealed, key, aadWrongRole)).rejects.toThrow();
+  });
+
+  it('rejects when generation differs (AAD transplant: wrong generation)', async () => {
+    const key = generateFileKey();
+    const plaintext = new TextEncoder().encode('transplant-resistance test');
+    const aadCorrect = buildNodeAad(
+      TRANSPLANT_UUID,
+      TRANSPLANT_KIND,
+      TRANSPLANT_GEN,
+      TRANSPLANT_ROLE
+    );
+    const aadWrongGen = buildNodeAad(
+      TRANSPLANT_UUID,
+      TRANSPLANT_KIND,
+      43, // gen+1
+      TRANSPLANT_ROLE
+    );
+    const sealed = await sealAesGcmAad(plaintext, key, aadCorrect);
+    await expect(unsealAesGcmAad(sealed, key, aadWrongGen)).rejects.toThrow();
+  });
+
+  it('rejects when kind differs (AAD transplant: wrong kind)', async () => {
+    const key = generateFileKey();
+    const plaintext = new TextEncoder().encode('transplant-resistance test');
+    const aadCorrect = buildNodeAad(
+      TRANSPLANT_UUID,
+      TRANSPLANT_KIND,
+      TRANSPLANT_GEN,
+      TRANSPLANT_ROLE
+    );
+    const aadWrongKind = buildNodeAad(
+      TRANSPLANT_UUID,
+      0x02, // file instead of folder
+      TRANSPLANT_GEN,
+      TRANSPLANT_ROLE
+    );
+    const sealed = await sealAesGcmAad(plaintext, key, aadCorrect);
+    await expect(unsealAesGcmAad(sealed, key, aadWrongKind)).rejects.toThrow();
+  });
+
+  it('rejects when domain version is forged (v1 -> v2)', async () => {
+    const key = generateFileKey();
+    const plaintext = new TextEncoder().encode('transplant-resistance test');
+    const aadCorrect = buildNodeAad(
+      TRANSPLANT_UUID,
+      TRANSPLANT_KIND,
+      TRANSPLANT_GEN,
+      TRANSPLANT_ROLE
+    );
+    // Forge the domain version byte: byte 21 is '1' (0x31) in "v1" — change to '2' (0x32)
+    const forgedDomainAad = new Uint8Array(aadCorrect);
+    forgedDomainAad[21] = 0x32; // "node-seal/v2" domain
+    const sealed = await sealAesGcmAad(plaintext, key, aadCorrect);
+    await expect(unsealAesGcmAad(sealed, key, forgedDomainAad)).rejects.toThrow();
+  });
+
+  it('rejects when auth tag is tampered (flipped bit in tag area)', async () => {
+    const key = generateFileKey();
+    const plaintext = new TextEncoder().encode('transplant-resistance test');
+    const aad = buildNodeAad(TRANSPLANT_UUID, TRANSPLANT_KIND, TRANSPLANT_GEN, TRANSPLANT_ROLE);
+    const sealed = await sealAesGcmAad(plaintext, key, aad);
+    // Flip the last byte of the sealed blob (part of the auth tag)
+    const tampered = new Uint8Array(sealed);
+    tampered[tampered.length - 1] ^= 0x01;
+    await expect(unsealAesGcmAad(tampered, key, aad)).rejects.toThrow();
+  });
+
+  it('rejects when blob is truncated below IV + tag minimum (28 bytes)', async () => {
+    const key = generateFileKey();
+    const aad = buildNodeAad(TRANSPLANT_UUID, TRANSPLANT_KIND, TRANSPLANT_GEN, TRANSPLANT_ROLE);
+    const truncated = new Uint8Array(27); // one byte below MIN_SEALED_SIZE
+    await expect(unsealAesGcmAad(truncated, key, aad)).rejects.toThrow();
   });
 });
