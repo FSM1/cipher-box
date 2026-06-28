@@ -6,14 +6,14 @@ current_phase: 62
 current_phase_name: Unified Node Codec (Core Keystone
 status: executing
 stopped_at: Completed 62-05-PLAN.md
-last_updated: "2026-06-28T22:17:06.986Z"
+last_updated: "2026-06-28T22:57:22.494Z"
 last_activity: 2026-06-28
 last_activity_desc: Phase 62 execution started
 progress:
   total_phases: 9
   completed_phases: 1
   total_plans: 14
-  completed_plans: 12
+  completed_plans: 13
   percent: 11
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 ## Current Position
 
 Phase: 62 (Unified Node Codec (Core Keystone)) — EXECUTING
-Plan: 8 of 9
+Plan: 9 of 9
 Status: Ready to execute
 Last activity: 2026-06-28 — Phase 62 execution started
 
@@ -202,6 +202,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 62 P05 | 10m | 3 tasks | 9 files |
 | Phase 62-unified-node-codec-core-keystone P06 | 2700 | 2 tasks | 11 files |
 | Phase 62 P07 | 90m | 2 tasks | 18 files |
+| Phase 62-unified-node-codec-core-keystone P08a | 180 | 1 tasks | 26 files |
 
 ## Accumulated Context
 
@@ -398,6 +399,8 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: [62-05] nodeRef replaces filePointer/folderEntry/originalFolderKeyEncrypted in BinEntry; Phase 65 owns bin re-link behavior
 - [Phase ?]: [62-05] No describe.skip needed in bin.test.ts - all remaining tests are pure ECIES round-trip or schema validation
 - [Phase ?]: vault adapted to v3 two-key format; sdk-core compile gate passes with zero retired-type references
+- [Phase ?]: vault.store: rootFolderKey split to rootReadKey+rootWriteKey for v3 vault
+- [Phase ?]: useAuth.ts vault load: unwrapKey x2 + deriveVaultIpnsKeypair (IPNS keypair derived, not in v3 blob)
 
 ## Operator Next Steps
 
@@ -405,6 +408,6 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-06-28T22:17:06.980Z
+**Last session:** 2026-06-28T22:56:56.794Z
 **Stopped at:** Completed 62-05-PLAN.md
 **Resume file:** None

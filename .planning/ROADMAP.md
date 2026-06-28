@@ -126,7 +126,7 @@ Plans:
 5. `packages/sdk-core`, `packages/sdk`, and `apps/web` typecheck cleanly after `packages/core` `dist/` is rebuilt — zero references to retired `FolderMetadata`/`FileMetadata`/`FilePointer`/`FolderEntry`
 6. `METADATA_SCHEMAS.md` is updated to document the `generation`-as-convergence-witness invariant and the `fileKey`-inside-sealed-read-body semantic change
 
-**Plans**: 7/9 plans executed
+**Plans**: 8/9 plans executed
 
 Plans:
 **Wave 1**
@@ -153,7 +153,7 @@ Plans:
 
 **Wave 6** *(blocked on 62-07)*
 
-- [ ] 62-08a-PLAN.md — web logic-layer compile-gate (stores/hooks/services/lib/utils to Node + stubs, shared display projection)
+- [x] 62-08a-PLAN.md — web logic-layer compile-gate (stores/hooks/services/lib/utils to Node + stubs, shared display projection)
 
 **Wave 7** *(blocked on 62-08a)*
 
@@ -321,7 +321,7 @@ Plans:
 | Phase | Name | Plans Complete | Status | Completed |
 | --- | --- | --- | --- | --- |
 | 61 | AAD-Bound Seal Primitive and Cross-Language KAT | 5/5 | Complete    | 2026-06-28 |
-| 62 | Unified Node Codec (Core Keystone) | 7/9 | In Progress|  |
+| 62 | Unified Node Codec (Core Keystone) | 8/9 | In Progress|  |
 | 63 | Read-Chain Navigation and Rotation Core | 0/? | Not started | - |
 | 64 | Rotation Soundness — Revocation Guarantees | 0/? | Not started | - |
 | 65 | SDK Write-Chain, Bin Re-link, and Invite Claim | 0/? | Not started | - |
