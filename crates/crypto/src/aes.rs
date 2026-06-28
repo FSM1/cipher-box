@@ -364,6 +364,90 @@ mod tests {
         assert!(build_node_aad("550e8400-e29b-41d4-a716", 0x01, 0, 0x01).is_err());
     }
 
+    // ── encrypt/decrypt_aes_gcm_aad tests ───────────────────────────────────
+
+    #[test]
+    fn encrypt_decrypt_aad_round_trip() {
+        let key = [0x11u8; 32];
+        let iv = [0x22u8; 12];
+        let plaintext = b"aad round trip test";
+        let aad = b"node-seal-context";
+
+        let ciphertext = encrypt_aes_gcm_aad(plaintext, &key, &iv, aad).unwrap();
+        let decrypted = decrypt_aes_gcm_aad(&ciphertext, &key, &iv, aad).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn decrypt_aad_wrong_aad_fails() {
+        let key = [0x11u8; 32];
+        let iv = [0x22u8; 12];
+        let plaintext = b"secret payload";
+        let aad = b"correct-aad";
+        let wrong_aad = b"wrong-aad";
+
+        let ciphertext = encrypt_aes_gcm_aad(plaintext, &key, &iv, aad).unwrap();
+        let result = decrypt_aes_gcm_aad(&ciphertext, &key, &iv, wrong_aad);
+        assert!(result.is_err(), "Expected Err when decrypting with wrong AAD");
+    }
+
+    // ── seal/unseal_aes_gcm_aad tests ────────────────────────────────────────
+
+    #[test]
+    fn seal_unseal_aad_round_trip() {
+        let key = [0x33u8; 32];
+        let aad = b"cipherbox-node-aad";
+        let plaintext = b"sealed aad round trip";
+
+        let sealed = seal_aes_gcm_aad(plaintext, &key, aad).unwrap();
+        // Output length: IV (12) + plaintext.len() + tag (16)
+        assert_eq!(
+            sealed.len(),
+            AES_IV_SIZE + plaintext.len() + AES_TAG_SIZE,
+            "sealed length must be IV + plaintext + tag"
+        );
+
+        let decrypted = unseal_aes_gcm_aad(&sealed, &key, aad).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn seal_aad_two_calls_differ() {
+        // Fresh IV each call — identical inputs must produce different blobs.
+        let key = [0x44u8; 32];
+        let aad = b"same-aad";
+        let plaintext = b"same plaintext";
+
+        let sealed1 = seal_aes_gcm_aad(plaintext, &key, aad).unwrap();
+        let sealed2 = seal_aes_gcm_aad(plaintext, &key, aad).unwrap();
+        assert_ne!(sealed1, sealed2, "Two seals of the same input must differ (fresh IV)");
+    }
+
+    #[test]
+    fn unseal_aad_transplant_fails() {
+        // A blob sealed under aad_a must be rejected when unseal is given aad_b (CRYPTO-03).
+        let key = [0x55u8; 32];
+        let aad_a = b"original-aad";
+        let aad_b = b"transplanted-aad";
+        let plaintext = b"transplant test";
+
+        let sealed = seal_aes_gcm_aad(plaintext, &key, aad_a).unwrap();
+        let result = unseal_aes_gcm_aad(&sealed, &key, aad_b);
+        assert!(result.is_err(), "Expected Err when unsealing with wrong AAD (transplant)");
+    }
+
+    #[test]
+    fn unseal_aad_truncated_blob_fails() {
+        // A blob shorter than MIN_SEALED_SIZE must be rejected before decryption (CRYPTO-03).
+        let key = [0x66u8; 32];
+        let aad = b"any-aad";
+        let short = vec![0u8; AES_IV_SIZE + AES_TAG_SIZE - 1];
+        assert!(
+            unseal_aes_gcm_aad(&short, &key, aad).is_err(),
+            "Expected Err for truncated blob below MIN_SEALED_SIZE"
+        );
+    }
+
     #[test]
     fn build_node_aad_matches_committed_vectors() {
         // Verify all four role bytes against the committed node-aad.json expected_aad values.
