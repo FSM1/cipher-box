@@ -1,0 +1,217 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "4a9b7b039b8a",
+  "session_id": "73377c33-a7a3-47f3-bd4c-8f7965661187",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-28T18:13:22.165264Z",
+  "branch": "feat/unified-node-codec-core-keystone",
+  "checkpoints_count": 9,
+  "save_step_count": 1,
+  "files_touched": [
+    ".planning/STATE.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "894c77385893",
+  "token_usage": {
+    "input_tokens": 39105,
+    "cache_creation_tokens": 1690061,
+    "cache_read_tokens": 43904165,
+    "output_tokens": 209385,
+    "api_call_count": 167
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01MP5FE4PxcXK1YRZVVVN1M9",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "894c77385893",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 245,
+        "end": 246,
+        "entry_ids": [
+          "b3fe368c-131b-4f74-a100-0b89e8611411"
+        ],
+        "tool_use_id": "toolu_01MP5FE4PxcXK1YRZVVVN1M9"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01MP5FE4PxcXK1YRZVVVN1M9"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01PZVpF4BYFpD6XAmPVvuHYX",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "894c77385893",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 493,
+        "end": 494,
+        "entry_ids": [
+          "95424bb7-72a8-4b7d-9cec-e1452575a0e4"
+        ],
+        "tool_use_id": "toolu_01PZVpF4BYFpD6XAmPVvuHYX"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01PZVpF4BYFpD6XAmPVvuHYX"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_011CWCeJRxy9aRubKqPwTZge",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "894c77385893",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 677,
+        "end": 678,
+        "entry_ids": [
+          "37d33beb-a2ad-4a79-b528-e463d71bfffb"
+        ],
+        "tool_use_id": "toolu_011CWCeJRxy9aRubKqPwTZge"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_011CWCeJRxy9aRubKqPwTZge"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ship-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 9
+  },
+  "summary": {
+    "intent": "Debug two Claude Code tool errors (blank statusline and a per-turn Stop hook MODULE_NOT_FOUND from a missing GSD hook), then run the full GSD plan→execute→ship pipeline for Phase 61 — adding an AAD-bound AES-256-GCM seal primitive with a frozen cross-language KAT to both the TypeScript and Rust crypto packages.",
+    "outcome": "Both tool errors fixed (statusline.js renamed to .cjs; GSD reinstalled to v1.6.0 restoring missing hooks and manifest); Phase 61 fully delivered as PR #576 with 5 plans across 4 waves, 197 TS + 97 Rust tests green, 28/28 CI checks passing, 6 review threads resolved, and merged to main.",
+    "learnings": {
+      "repo": [
+        "The project has `\"type\": \"module\"` in package.json — all .js Claude hook files are treated as ESM. Hooks that use require() must use the .cjs extension or Node throws ReferenceError on startup, silently blanking the statusline.",
+        "GSD hooks are gitignored (.gitignore covers .claude/hooks/gsd-*) and are only installed by the GSD installer — git cannot restore them. A partial/broken GSD install in the main tree will silently wire missing hooks into settings.local.json.",
+        "GSD package is @opengsd/gsd-core, installed via npx. When the main-tree install is a broken fragment (missing gsd-tools.cjs, manifest, most workflows), re-run with auto-resolved --remove to let stale files regenerate cleanly: `npx @opengsd/gsd-core@1.6.0 -- gsd-core --claude --local`.",
+        "TS crypto tests must live at packages/crypto/src/__tests__/ — vitest include is ['src/**/*.ts']. The path packages/crypto/__tests__/ is outside the include and vitest will never discover it; CONTEXT.md had the wrong path.",
+        "scripts/check-vector-parity.sh has a hardcoded EXPECTED_VECTORS array. Adding a new tests/vectors/crypto/*.json file without registering it there causes the CI parity-check step to fail even when both TS and Rust tests pass.",
+        "Fixed-IV KAT vectors must target the lower-level encryptAesGcmAad (not sealAesGcmAad, which mints a random IV and cannot produce a fixed ciphertext). This mirrors how the existing aes-gcm.json vectors test encrypt_aes_gcm rather than seal_aes_gcm.",
+        "CodeRabbit CLI `--base main` uses local main, which can be stale and inflate the diff scope (661 files vs 44). Always use `--base origin/main` to match the actual PR scope.",
+        "main branch protection has required_signatures: False and 0 required reviews. The only ruleset targets tag creation, not branch PRs. Unsigned commits do not block merges here — prior memory claiming otherwise was stale.",
+        "The GSD commit helper can report commit_failed while the commit actually lands. Always verify with `git log --oneline -1`; never blindly retry based on the helper's exit status.",
+        "github-actions[bot] pushes a chore(release) commit to the branch after PR creation and after each subsequent push. Always git fetch + rebase before the next push or it will be rejected.",
+        "`gh pr edit` fails on this repo (Projects-classic GraphQL error) — patch the PR body via `env -u GITHUB_TOKEN gh api -X PATCH repos/FSM1/cipher-box/pulls/<N> -F body=@file` instead.",
+        "CodeRabbit may show 'Review skipped' transiently immediately after PR creation before its analysis completes. Re-poll rather than treating it as confirmation that no review will be posted."
+      ],
+      "code": [
+        {
+          "path": "packages/crypto/src/aes/seal.ts",
+          "line": 40,
+          "end_line": 42,
+          "finding": "Existing encryptAesGcm uses `new Uint8Array(key)` copy WITHOUT zeroizing afterward — this is the established project pattern. New AAD variants intentionally mirror it; zeroizing only the new variants would create inconsistency."
+        },
+        {
+          "path": "packages/crypto/src/__tests__/build-node-aad.test.ts",
+          "finding": "New cross-language KAT file. Must assert aad_vectors.length === 4 AND role-set [1,2,3,4] explicitly (not just iterate) — a for...of over an empty array passes vacuously. Same for seal_vectors: assert exact count, not just length > 0."
+        },
+        {
+          "path": "crates/crypto/tests/cross_language.rs",
+          "finding": "Cross-language KAT for AAD builder and AEAD seal. Envelope-order pin added: verifies that sealed output splits correctly as [12-byte IV][ciphertext+tag] by round-tripping via unseal_aes_gcm_aad on the split pieces."
+        },
+        {
+          "path": "scripts/check-vector-parity.sh",
+          "finding": "EXPECTED_VECTORS array is hardcoded — any new tests/vectors/crypto/*.json file must be registered here explicitly or CI parity fails silently even with passing unit tests on both sides."
+        },
+        {
+          "path": ".claude/hooks/statusline.cjs",
+          "finding": "Renamed from statusline.js to force Node.js to treat it as CommonJS (require() calls) despite project-level `\"type\": \"module\"`. The .cjs extension overrides the package-level ESM default."
+        }
+      ],
+      "workflow": [
+        "GSD plan-phase: PATTERNS.md is not auto-committed by the plan-phase workflow — the orchestrator must commit it explicitly after the pattern-mapper subagent returns.",
+        "GSD execute-phase: disable worktrees for sequential phases where plans read/write shared files in order (e.g. node-aad.json written by plan 01, read by plan 02). Worktrees lack node_modules and require a slow pnpm install per wave; running sequentially on the main tree with a warm cache is faster and more reliable.",
+        "Ultracode adversarial plan verification: a multi-lens workflow review caught the vacuous-pass KAT gap (TS vector arrays iterated without length assertions) before execution, enabling a cheap plan-level fix rather than a post-execute re-plan on security-critical crypto.",
+        "A security review subagent that independently re-derives a KAT ciphertext via OpenSSL constitutes a true third-implementation proof — stronger confidence than checking test output alone.",
+        "When AFK for an autonomous pipeline, disable commit signing locally (`git config --local commit.gpgsign false`) to prevent 1Password biometric prompts from hanging subagent commits. Re-enable on return with `git config --local --unset commit.gpgsign`.",
+        "The GSD plan verifier's two-gate design (deterministic script gate 5a + hunk-verification table 5b) provides defense-in-depth: the script gate cannot be shortcut by the LLM filling in 'verified: yes' without an actual content-presence check."
+      ]
+    },
+    "friction": [
+      "GSD commit helper false-negatives on every commit throughout the session — reports commit_failed while commits actually land, requiring a `git log --oneline -1` verification call after each commit.",
+      "CodeRabbit CLI `--base main` (local stale branch) inflated diff scope to 661 files vs the actual 44-file PR, triggering a file-limit error and requiring a re-run with `--base origin/main`.",
+      "CodeRabbit showed 'Review skipped' immediately after PR creation (transient), causing false confidence that no threads would land; 5 threads appeared on the next poll cycle.",
+      "The Stop hook MODULE_NOT_FOUND error (gsd-context-monitor.js) fired silently on every turn from the start of the session — noisy but non-blocking, with no obvious error surfaced in the UI.",
+      "The statusline went blank with no visible error message; the ESM/CJS root cause only surfaced when the hook script was manually executed.",
+      "The background CI check poll exited early when only 2 checks were registered on a new head, requiring a second manual poll to get the settled verdict.",
+      "The release bot pushes a chore(release) commit after PR creation and after each subsequent push, requiring a fetch+rebase before every push in the ship loop to avoid rejection.",
+      "Greptile posted a COMMENTED review rather than a pull-request-review, requiring separate thread-resolution handling outside the standard CodeRabbit flow."
+    ],
+    "open_items": [
+      "LOW-1 UUID acceptance parity: TS and Rust accept slightly different non-canonical UUID string forms (each side rejects what the other accepts at edge cases). Fail-closed and unreachable by the canonical pipeline, but needs a canonicalization-policy decision before fixing. Tracked at .planning/todos/pending/2026-06-28-harden-uuid-acceptance-parity-aad-builder.md",
+      "Zeroize local key/plaintext copies in AES helpers (encryptAesGcm and new AAD variants): best-effort in JS but worth a project-wide consistency pass. Tracked at .planning/todos/pending/2026-06-28-zeroize-local-key-plaintext-copies-in-aes-helpers.md",
+      "Harden statusline hook: execSync timeout and Windows path handling in .claude/hooks/statusline.cjs. Tracked at .planning/todos/pending/2026-06-28-harden-statusline-hook-execsync-timeout-and-paths.md",
+      "Re-enable commit signing: `git config --local --unset commit.gpgsign` — disabled for the AFK pipeline to prevent 1Password biometric hangs.",
+      "Delete merged local branch feat/aad-bound-seal-primitive-and-cross-language-kat (remote was auto-deleted on merge; local branch still exists).",
+      "Root tsconfig.scripts.json @types/node resolution failure — @types/node v20 is in the pnpm store but not hoisted to root node_modules/@types/. Pre-existing env issue, not introduced by Phase 61.",
+      "Phase 62 (Unified Node Codec — Core Keystone) is next in the roadmap and depends on Phase 61 completing. STATE.md already advanced to Phase 62."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-28T18:09:46.772627Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 7,
+    "human_modified": 2,
+    "human_removed": 0,
+    "total_committed": 7,
+    "total_lines_changed": 9,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
