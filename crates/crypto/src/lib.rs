@@ -13,7 +13,10 @@ pub mod ipns_name;
 pub mod utils;
 
 // Re-export primary functions
-pub use aes::{decrypt_aes_gcm, encrypt_aes_gcm, seal_aes_gcm, unseal_aes_gcm};
+pub use aes::{
+    build_node_aad, decrypt_aes_gcm, decrypt_aes_gcm_aad, encrypt_aes_gcm, encrypt_aes_gcm_aad,
+    seal_aes_gcm, seal_aes_gcm_aad, unseal_aes_gcm, unseal_aes_gcm_aad,
+};
 pub use aes_ctr::{decrypt_aes_ctr, encrypt_aes_ctr};
 pub use ecies::{unwrap_key, wrap_key};
 pub use ed25519::{generate_ed25519_keypair, get_public_key, sign_ed25519, verify_ed25519};
