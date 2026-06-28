@@ -285,6 +285,9 @@ fn node_aad_cross_language() {
     // Guard: exactly 4 entries covering all role bytes 0x01..0x04.
     // Mirrors the TS length guard so coverage cannot silently erode.
     assert_eq!(aad_vectors.len(), 4, "Expected exactly 4 aad_vectors (one per role byte)");
+    let mut roles: Vec<u8> = aad_vectors.iter().map(|v| v.role).collect();
+    roles.sort_unstable();
+    assert_eq!(roles, vec![1, 2, 3, 4], "aad_vectors must cover role bytes 0x01..0x04 exactly once");
 
     for v in &aad_vectors {
         let aad = cipherbox_crypto::build_node_aad(&v.node_id, v.kind, v.generation, v.role)
@@ -304,7 +307,7 @@ fn node_aad_cross_language() {
     let seal_vectors: Vec<NodeSealVector> =
         serde_json::from_value(root["seal_vectors"].clone()).unwrap();
 
-    assert!(!seal_vectors.is_empty(), "seal_vectors must be non-empty");
+    assert_eq!(seal_vectors.len(), 1, "Expected exactly 1 committed seal_vector");
 
     for v in &seal_vectors {
         let key_bytes = hex::decode(&v.key)

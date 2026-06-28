@@ -320,48 +320,45 @@ mod tests {
     #[test]
     fn build_node_aad_invalid_kind_returns_err() {
         // kind 0x04 is out of range (only 0x01..=0x03)
-        assert!(build_node_aad(
-            "550e8400-e29b-41d4-a716-446655440000",
-            0x04,
-            0,
-            0x01,
-        )
-        .is_err());
+        assert!(matches!(
+            build_node_aad("550e8400-e29b-41d4-a716-446655440000", 0x04, 0, 0x01),
+            Err(CryptoError::InvalidAadInput)
+        ));
         // kind 0x00 also invalid
-        assert!(build_node_aad(
-            "550e8400-e29b-41d4-a716-446655440000",
-            0x00,
-            0,
-            0x01,
-        )
-        .is_err());
+        assert!(matches!(
+            build_node_aad("550e8400-e29b-41d4-a716-446655440000", 0x00, 0, 0x01),
+            Err(CryptoError::InvalidAadInput)
+        ));
     }
 
     #[test]
     fn build_node_aad_invalid_role_returns_err() {
         // role 0x05 is out of range (only 0x01..=0x04)
-        assert!(build_node_aad(
-            "550e8400-e29b-41d4-a716-446655440000",
-            0x01,
-            0,
-            0x05,
-        )
-        .is_err());
+        assert!(matches!(
+            build_node_aad("550e8400-e29b-41d4-a716-446655440000", 0x01, 0, 0x05),
+            Err(CryptoError::InvalidAadInput)
+        ));
         // role 0x00 also invalid
-        assert!(build_node_aad(
-            "550e8400-e29b-41d4-a716-446655440000",
-            0x01,
-            0,
-            0x00,
-        )
-        .is_err());
+        assert!(matches!(
+            build_node_aad("550e8400-e29b-41d4-a716-446655440000", 0x01, 0, 0x00),
+            Err(CryptoError::InvalidAadInput)
+        ));
     }
 
     #[test]
     fn build_node_aad_malformed_uuid_returns_err() {
-        assert!(build_node_aad("not-a-uuid", 0x01, 0, 0x01).is_err());
-        assert!(build_node_aad("", 0x01, 0, 0x01).is_err());
-        assert!(build_node_aad("550e8400-e29b-41d4-a716", 0x01, 0, 0x01).is_err());
+        assert!(matches!(
+            build_node_aad("not-a-uuid", 0x01, 0, 0x01),
+            Err(CryptoError::InvalidAadInput)
+        ));
+        assert!(matches!(
+            build_node_aad("", 0x01, 0, 0x01),
+            Err(CryptoError::InvalidAadInput)
+        ));
+        assert!(matches!(
+            build_node_aad("550e8400-e29b-41d4-a716", 0x01, 0, 0x01),
+            Err(CryptoError::InvalidAadInput)
+        ));
     }
 
     // ── encrypt/decrypt_aes_gcm_aad tests ───────────────────────────────────
