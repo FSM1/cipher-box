@@ -164,29 +164,72 @@ Complete this checklist for every metadata schema change. This is the most impor
 
 ## 5. Version Field Convention
 
-All versioned metadata objects use a string `version` field with values like `'v1'`, `'v2'`, etc.
+The node/v3 schema (Phase 62) uses a `schema` discriminator field instead of a numeric `version`
+field. The table below covers both the current node/v3 types and the surviving non-node schemas.
 
-| Schema             | Current Version | Has Version Field | Evolves Via                   |
-| ------------------ | --------------- | ----------------- | ----------------------------- |
-| FolderMetadata     | `v2`            | Yes               | Own version field             |
-| FileMetadata       | `v1`            | Yes               | Own version field             |
-| DeviceRegistry     | `v1`            | Yes               | Own version field             |
-| EncryptedVaultKeys | --              | No                | Vault export format version   |
-| FolderEntry        | --              | No                | Parent FolderMetadata version |
-| FilePointer        | --              | No                | Parent FolderMetadata version |
-| VersionEntry       | --              | No                | Parent FileMetadata version   |
-| DeviceEntry        | --              | No                | Parent DeviceRegistry version |
+| Schema          | Current Version      | Version Lever          | Evolves Via                            |
+| --------------- | -------------------- | ---------------------- | -------------------------------------- |
+| Node (any kind) | `schema: 'node/v3'`  | `schema` field literal | Bump schema string (e.g., `'node/v4'`) |
+| SealedChildRef  | --                   | Parent Node            | Evolves through parent Node schema     |
+| PublishedNode   | --                   | Parent Node            | Evolves through parent Node schema     |
+| NodeContent     | --                   | Parent Node            | Evolves through parent Node schema     |
+| VersionEntry    | --                   | Parent Node            | Evolves through parent Node schema     |
+| NodeWriteBody   | --                   | Parent Node            | Evolves through parent Node schema     |
+| WriteChildRef   | --                   | Parent Node            | Evolves through parent Node `schema`   |
+| VaultKeyBlob    | `0x03` (binary byte) | Version byte           | New version byte (0x04, etc.)          |
+| DeviceRegistry  | `v1` / `v2`          | `version` string field | Own version field                      |
+| DeviceEntry     | --                   | Parent DeviceRegistry  | Evolves through parent                 |
 
-**Objects without version fields** (FolderEntry, FilePointer, VersionEntry, DeviceEntry) evolve only through their parent's version. For example, adding a field to FilePointer requires bumping FolderMetadata's version (unless the new field is optional with a sensible default, in which case the parent version is not bumped).
+**Objects without independent version levers** (SealedChildRef, NodeContent, VersionEntry, etc.)
+evolve only through the parent Node's `schema` discriminator. For example, adding a field to
+`NodeContent` requires bumping `schema` from `'node/v3'` to `'node/v4'` unless the new field is
+optional with a sensible default.
 
-**EncryptedVaultKeys** has no version field. Changes to its structure should be paired with a new vault export format version (see `docs/VAULT_EXPORT_FORMAT.md`).
+**Legacy schemas retired:** `FolderMetadata`, `FileMetadata`, `FilePointer`, `FolderEntry`,
+`EncryptedVaultKeys`, and VaultKeyBlob v2 are retired in Phase 62 (greenfield hard-cut; no
+migration path). The node/v3 `Node` / `SealedChildRef` / `PublishedNode` / `NodeContent` /
+`VersionEntry` types replace them.
+
+### node/v3 schema discriminator lever
+
+The Node schema uses `schema: 'node/v3'` as its version handle. This is validated by
+`validateNode` on decode -- a mismatch throws a `CryptoError` immediately. Any breaking change
+to the Node JSON body structure (field rename, type change, field removal) must bump the schema
+string to `'node/v4'` (and so on).
+
+Because the schema string is embedded in the read-body (inside the AES-256-GCM sealed body),
+a bump is also a key-epoch change in practice: the existing sealed bodies must be re-sealed
+under the new schema version. This makes schema changes expensive by design -- the cost
+discourages gratuitous changes.
+
+For additive changes (new optional field, new kind), the schema string may remain `'node/v3'`
+provided the decoder accepts missing fields with sensible defaults and the cross-language
+validators are updated simultaneously.
+
+### node/v3 cross-language vector lockstep discipline
+
+The frozen wire format for node/v3 is asserted by the golden vectors in
+`tests/vectors/node-codec.json` (body-byte PRIMARY LOCK vectors + full-seal FULL-SEAL vectors
+committed in Phase 62 Plan 02). The Phase 69 Rust `Node` implementation must assert the
+**same bytes** from the same fixture file:
+
+- **PRIMARY LOCK:** `expected_read_body_hex` -- the UTF-8 hex of `JSON.stringify(encodeReadBody(node))`.
+  IV-independent. Asserts the JSON body encoding is byte-identical across TypeScript and Rust.
+- **FULL-SEAL LOCK:** `expected_published_node.readSealed` / `.writeSealed` -- a deterministic
+  `base64(fixedIV || encryptAesGcmAad(bodyBytes, key, fixedIV, aad))`. Asserts the full
+  AES-256-GCM seal (including AAD assembly) is byte-identical across runtimes.
+
+**Lockstep rule:** Every new role byte added to the AAD (see
+[ADR 0003](adr/0003-aad-bound-node-seal-encoding.md)) must extend both `tests/vectors/crypto/node-aad.json`
+(AAD-only KAT) and `tests/vectors/node-codec.json` (full-seal vector using that role) before
+merging. Extending one without the other is forbidden.
 
 ### AAD domain-separator version lever
 
-The AAD-bound node-seal primitive (phase 61) uses the domain string `"cipherbox/node-seal/v1"` as
+The AAD-bound node-seal primitive (Phase 61) uses the domain string `"cipherbox/node-seal/v1"` as
 a version lever embedded in the 45-byte AAD (see [ADR 0003](adr/0003-aad-bound-node-seal-encoding.md)
-for the full encoding). Any change to the AAD byte layout — field reorder, new field, or width
-change — must bump this string to `"cipherbox/node-seal/v2"` (and so on). A blob sealed under `v1`
+for the full encoding). Any change to the AAD byte layout -- field reorder, new field, or width
+change -- must bump this string to `"cipherbox/node-seal/v2"` (and so on). A blob sealed under `v1`
 will fail to unseal under `v2` by design, making format changes explicit rather than silent drift.
 
 ---
@@ -240,7 +283,7 @@ The reverse direction (Rust-produced JSON verified in TypeScript) is equally val
 
 Add a JSON string with an extra field that does not exist in the current schema. Verify both TypeScript and Rust deserializers accept the data without error and ignore the unknown field. This confirms forward compatibility.
 
-### 6.4 Cross-language KAT discipline for the AAD-bound seal
+### 6.4 Cross-language KAT discipline for the AAD-bound seal and Node codec
 
 The TypeScript and Rust implementations of `buildNodeAad`/`build_node_aad` and
 `sealAesGcmAad`/`seal_aes_gcm_aad` must remain byte-identical. This is asserted by
@@ -251,6 +294,17 @@ and `crates/crypto/tests/cross_language.rs`.
 The KAT is a merge gate: no PR that introduces a new role byte or changes the AAD byte
 layout may merge until the KAT vector for that change is committed and passes on both
 sides. See [ADR 0003](adr/0003-aad-bound-node-seal-encoding.md) for the standing rule.
+
+For the Node codec specifically, `tests/vectors/node-codec.json` (Phase 62) provides:
+
+- **Body-byte (PRIMARY LOCK)** vectors for all three node kinds (folder, file/GCM, file/CTR, root)
+  asserting that `encodeReadBody` produces the same bytes in TypeScript and Rust.
+- **Full-seal (FULL-SEAL)** vectors with a fixed IV asserting that `sealNode` produces the
+  same `readSealed`/`writeSealed` base64 values in TypeScript and Rust.
+
+The Phase 69 Rust `Node` implementation must load and assert these same vectors in
+`crates/crypto/tests/cross_language.rs`. Any change to the Node body encoding must update
+`tests/vectors/node-codec.json` before merging. See Section 5 for the lockstep rule.
 
 ---
 
