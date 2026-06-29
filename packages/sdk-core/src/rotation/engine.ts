@@ -112,9 +112,14 @@ type RotateOneParams = {
   /** IPNS k51 name used to resolve and publish this node. */
   nodeIpnsName: string;
   /**
-   * IPNS Ed25519 private-key seed for this node (optional in Phase 63).
-   * Phase 65 populates from the node's unsealed write-body.
-   * When absent: publishWithCas receives a placeholder (tests mock publishWithCas).
+   * IPNS Ed25519 private-key seed for this node.
+   *
+   * REQUIRED for publish (D-01 fail-closed): `rotateOne` throws if absent.
+   * Phase 64 callers supply this via `nodeKeySource` in `RotationParams`.
+   * Phase 65 will derive it from the unsealed write-body instead.
+   *
+   * Field type remains optional (`?`) so callers can forward `undefined` from
+   * `nodeKeySource` results; the runtime guard surfaces the absence as an error.
    */
   nodeIpnsPrivateKey?: Uint8Array;
   /** Optional: Ed25519 public key for faster publish (avoids re-deriving). */
@@ -347,6 +352,16 @@ export async function rotateOne(
     return { skipped: true, childReadKey: new Uint8Array(32), newGeneration: node.generation };
   }
 
+  // D-01 fail-closed: require a real IPNS signing key for every frontier node.
+  // Phase 64 threads keys via nodeKeySource in RotationParams; Phase 65 derives them
+  // from the unsealed write-body. Never publish an IPNS record with a placeholder.
+  if (!nodeIpnsPrivateKey) {
+    throw new Error(
+      `rotateOne: no IPNS private key for ${nodeIpnsName} — ` +
+        'provide via nodeKeySource (Phase 64) or write-body wiring (Phase 65)'
+    );
+  }
+
   // Step 4: Mint fresh readKey' (32 cryptographically random bytes) and generation'
   // Do NOT zero parentReadKey — caller is terminal owner (D-09).
   const readKeyPrime = crypto.getRandomValues(new Uint8Array(32));
@@ -382,9 +397,10 @@ export async function rotateOne(
     // Step 8: Publish the child node via CAS.
     // Phase 64: batch parent-link publishes (D-09 optimization seam).
     // On CAS-409: the default merge throws Phase-64 (mergeConcurrentChildren seam).
+    // D-01: nodeIpnsPrivateKey is guaranteed non-null by the guard above.
     await publishWithCas<PublishedNode>({
       ipnsName: nodeIpnsName,
-      ipnsPrivateKey: nodeIpnsPrivateKey ?? PLACEHOLDER_WRITE_KEY,
+      ipnsPrivateKey: nodeIpnsPrivateKey,
       ipnsPublicKey: nodeIpnsPublicKey,
       sequenceNumber: resolved.sequenceNumber,
       ctx,
@@ -466,6 +482,7 @@ export async function rotateReadFromNode(params: RotationParams): Promise<void> 
     rootIpnsPublicKey,
     jobRecord,
     ctx,
+    nodeKeySource,
   } = params;
 
   jobRecord.status = 'in-progress';
@@ -541,12 +558,15 @@ export async function rotateReadFromNode(params: RotationParams): Promise<void> 
       childPub.kind,
       childRef.generation // parent-mirror (§2.6 D-07 invariant 1)
     );
+    // Thread per-node IPNS key from nodeKeySource (D-01 / Phase 64 seam).
+    // Phase 65 derives keys from the write-body instead.
+    const childKeys = nodeKeySource?.(childRef.ipnsName);
     queue.push({
       childRef,
       nodeReadKey: childReadKey, // child's own (pre-rotation) readKey
       parentIpnsName: rootNodeIpnsName,
-      ipnsPrivateKey: undefined, // Phase 65: populate from write-body
-      ipnsPublicKey: undefined,
+      ipnsPrivateKey: childKeys?.privateKey,
+      ipnsPublicKey: childKeys?.publicKey,
     });
   }
 
@@ -583,12 +603,14 @@ export async function rotateReadFromNode(params: RotationParams): Promise<void> 
         childPub.kind,
         childRef.generation
       );
+      // Thread per-node IPNS key from nodeKeySource (D-01 / Phase 64 seam).
+      const grandchildKeys = nodeKeySource?.(childRef.ipnsName);
       queue.push({
         childRef,
         nodeReadKey: childReadKey, // grandchild's own readKey
         parentIpnsName: item.childRef.ipnsName,
-        ipnsPrivateKey: undefined, // Phase 65: populate from write-body
-        ipnsPublicKey: undefined,
+        ipnsPrivateKey: grandchildKeys?.privateKey,
+        ipnsPublicKey: grandchildKeys?.publicKey,
       });
     }
   }

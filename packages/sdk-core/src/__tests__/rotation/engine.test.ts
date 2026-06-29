@@ -169,6 +169,9 @@ describe('rotateOne — happy path (folder node, no concurrent-add, no inner gra
     });
   });
 
+  // Fake non-zero key for tests (publishWithCas is mocked — key value is unused at runtime).
+  const FAKE_NODE_KEY = new Uint8Array(32).fill(0x11);
+
   it('completes without throwing any seam error', async () => {
     const jobRecord = makeJobRecord();
     const ctx = createMockContext();
@@ -177,6 +180,7 @@ describe('rotateOne — happy path (folder node, no concurrent-add, no inner gra
       rotateOne({
         nodeId: NODE_ID,
         nodeIpnsName: NODE_IPNS,
+        nodeIpnsPrivateKey: FAKE_NODE_KEY, // D-01 fail-closed requires a key
         parentReadKey: PARENT_READ_KEY,
         parentIpnsName: PARENT_IPNS,
         parentCurrentSeq: 5n,
@@ -195,6 +199,7 @@ describe('rotateOne — happy path (folder node, no concurrent-add, no inner gra
     await rotateOne({
       nodeId: NODE_ID,
       nodeIpnsName: NODE_IPNS,
+      nodeIpnsPrivateKey: FAKE_NODE_KEY,
       parentReadKey: PARENT_READ_KEY,
       parentIpnsName: PARENT_IPNS,
       parentCurrentSeq: 5n,
@@ -216,6 +221,7 @@ describe('rotateOne — happy path (folder node, no concurrent-add, no inner gra
     const result = await rotateOne({
       nodeId: NODE_ID,
       nodeIpnsName: NODE_IPNS,
+      nodeIpnsPrivateKey: FAKE_NODE_KEY,
       parentReadKey: PARENT_READ_KEY,
       parentIpnsName: PARENT_IPNS,
       parentCurrentSeq: 5n,
@@ -234,6 +240,7 @@ describe('rotateOne — happy path (folder node, no concurrent-add, no inner gra
     await rotateOne({
       nodeId: NODE_ID,
       nodeIpnsName: NODE_IPNS,
+      nodeIpnsPrivateKey: FAKE_NODE_KEY,
       parentReadKey: PARENT_READ_KEY,
       parentIpnsName: PARENT_IPNS,
       parentCurrentSeq: 5n,
@@ -251,6 +258,7 @@ describe('rotateOne — happy path (folder node, no concurrent-add, no inner gra
     await rotateOne({
       nodeId: NODE_ID,
       nodeIpnsName: NODE_IPNS,
+      nodeIpnsPrivateKey: FAKE_NODE_KEY,
       parentReadKey: PARENT_READ_KEY,
       parentIpnsName: PARENT_IPNS,
       parentCurrentSeq: 5n,
@@ -275,6 +283,7 @@ describe('rotateOne — happy path (folder node, no concurrent-add, no inner gra
     const result = await rotateOne({
       nodeId: NODE_ID,
       nodeIpnsName: NODE_IPNS,
+      nodeIpnsPrivateKey: FAKE_NODE_KEY,
       parentReadKey: PARENT_READ_KEY,
       parentIpnsName: PARENT_IPNS,
       parentCurrentSeq: 5n,
@@ -340,6 +349,7 @@ describe('rotateOne — zeroization invariant (Pitfall 4 / T-63-10)', () => {
     await rotateOne({
       nodeId: NODE_ID,
       nodeIpnsName: NODE_IPNS,
+      nodeIpnsPrivateKey: new Uint8Array(32).fill(0x11), // D-01 fail-closed requires a key
       parentReadKey: originalKey,
       parentIpnsName: PARENT_IPNS,
       parentCurrentSeq: 1n,
@@ -477,6 +487,7 @@ describe('rotateOne — file node with mintFileKeyOnRotate filled (ROT-03 integr
     await rotateOne({
       nodeId: NODE_ID,
       nodeIpnsName: NODE_IPNS,
+      nodeIpnsPrivateKey: new Uint8Array(32).fill(0x11), // D-01 fail-closed requires a key
       parentReadKey: PARENT_READ_KEY,
       parentIpnsName: PARENT_IPNS,
       parentCurrentSeq: 1n,
@@ -554,6 +565,7 @@ describe('rotateReadFromNode — root-first BFS ordering (§4.2)', () => {
     });
 
     mockFns.sealChildReadKey.mockResolvedValue('newsealed==');
+    mockFns.unsealChildReadKey.mockResolvedValue(new Uint8Array(32).fill(0x42));
     mockFns.publishWithCas.mockImplementation(async (params: { ipnsName: string }) => {
       callOrder.push(`publish:${params.ipnsName}`);
       return { cid: 'bafy-new', newSequenceNumber: 2n, publishedData: [], prunedCids: [] };
@@ -566,6 +578,11 @@ describe('rotateReadFromNode — root-first BFS ordering (§4.2)', () => {
       rootNodeId: NODE_ID,
       rootNodeIpnsName: NODE_IPNS,
       rootReadKey: new Uint8Array(32).fill(0x77),
+      rootIpnsPrivateKey: TASK1_ROOT_IPNS_PRIVATE_KEY,
+      nodeKeySource: (ipnsName: string) =>
+        ipnsName === CHILD_IPNS
+          ? { privateKey: TASK1_CHILD_IPNS_PRIVATE_KEY, publicKey: TASK1_STUB_PUBLIC_KEY }
+          : undefined,
       jobRecord,
       ctx,
     };
@@ -607,6 +624,7 @@ describe('rotateReadFromNode — root-first BFS ordering (§4.2)', () => {
       rootNodeId: NODE_ID,
       rootNodeIpnsName: NODE_IPNS,
       rootReadKey: new Uint8Array(32).fill(0x55),
+      rootIpnsPrivateKey: TASK1_ROOT_IPNS_PRIVATE_KEY, // D-01 fail-closed requires a key
       jobRecord,
       ctx: createMockContext(),
     });
@@ -642,6 +660,7 @@ describe('rotateReadFromNode — root-first BFS ordering (§4.2)', () => {
       rootNodeId: NODE_ID,
       rootNodeIpnsName: NODE_IPNS,
       rootReadKey: new Uint8Array(32).fill(0x33),
+      rootIpnsPrivateKey: TASK1_ROOT_IPNS_PRIVATE_KEY, // D-01 fail-closed requires a key
       jobRecord,
       ctx: createMockContext(),
     });
@@ -679,6 +698,7 @@ describe('rotateReadFromNode — root-first BFS ordering (§4.2)', () => {
         rootNodeId: NODE_ID,
         rootNodeIpnsName: NODE_IPNS,
         rootReadKey: new Uint8Array(32).fill(0x22),
+        rootIpnsPrivateKey: TASK1_ROOT_IPNS_PRIVATE_KEY, // D-01 fail-closed requires a key
         jobRecord: makeJobRecord({ rootNodeId: NODE_ID }),
         ctx: createMockContext(),
       })
@@ -732,6 +752,7 @@ describe('rotateReadFromNode — root-first BFS ordering (§4.2)', () => {
       makePublishedNode(node.id, node.generation + 1)
     );
     mockFns.sealChildReadKey.mockResolvedValue('sealed==');
+    mockFns.unsealChildReadKey.mockResolvedValue(new Uint8Array(32).fill(0x42));
     mockFns.publishWithCas.mockResolvedValue({
       cid: 'bafy-new',
       newSequenceNumber: 2n,
@@ -744,6 +765,11 @@ describe('rotateReadFromNode — root-first BFS ordering (§4.2)', () => {
       rootNodeId: NODE_ID,
       rootNodeIpnsName: NODE_IPNS,
       rootReadKey: new Uint8Array(32).fill(0x44),
+      rootIpnsPrivateKey: TASK1_ROOT_IPNS_PRIVATE_KEY, // D-01 fail-closed requires a key
+      nodeKeySource: (ipnsName: string) =>
+        ipnsName === CHILD_IPNS
+          ? { privateKey: TASK1_CHILD_IPNS_PRIVATE_KEY, publicKey: TASK1_STUB_PUBLIC_KEY }
+          : undefined,
       jobRecord,
       ctx: createMockContext(),
     });
@@ -818,11 +844,10 @@ describe('D-01 fail-closed: rotateOne requires a real nodeIpnsPrivateKey (Plan 6
     } catch {
       // Expected to throw after GREEN fix; in RED it resolves.
     }
-    const calledWithZeroKey = mockFns.publishWithCas.mock.calls.some(
-      ([callParams]: [{ ipnsPrivateKey?: Uint8Array }]) =>
-        callParams.ipnsPrivateKey instanceof Uint8Array &&
-        callParams.ipnsPrivateKey.every((b: number) => b === 0)
-    );
+    const calledWithZeroKey = mockFns.publishWithCas.mock.calls.some((callArgs: unknown[]) => {
+      const p = callArgs[0] as { ipnsPrivateKey?: Uint8Array };
+      return p.ipnsPrivateKey instanceof Uint8Array && p.ipnsPrivateKey.every((b) => b === 0);
+    });
     // In RED: calledWithZeroKey === true (buggy placeholder) → assertion fails
     // In GREEN: calledWithZeroKey === false (throw before publish) → assertion passes
     expect(calledWithZeroKey).toBe(false);
