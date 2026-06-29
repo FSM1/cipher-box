@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "7543ba0a73a9",
+  "strategy": "manual-commit",
+  "branch": "feat/unified-node-codec-core-keystone",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/todos/pending/2026-06-29-confirm-no-legacy-v1-v2-vault-blobs-on-auth-reenable.md",
+    "packages/core/src/vault/blob.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/75/43ba0a73a9/0/metadata.json",
+      "transcript": "/75/43ba0a73a9/0/full.jsonl",
+      "content_hash": "/75/43ba0a73a9/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  }
+}
