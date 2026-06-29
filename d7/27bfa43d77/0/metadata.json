@@ -51,6 +51,37 @@
         "label": "Skill: gsd-plan-phase",
         "default_collapsed": true
       }
+    },
+    {
+      "id": "claude-skill-toolu_01SKWu9Myx8B529ACtAoiDzT",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "a2e1deb32af2",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 346,
+        "end": 347,
+        "entry_ids": [
+          "7e054f66-7063-464a-8074-7fede44d4939"
+        ],
+        "tool_use_id": "toolu_01SKWu9Myx8B529ACtAoiDzT"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01SKWu9Myx8B529ACtAoiDzT"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
     }
   ],
   "session_metrics": {
