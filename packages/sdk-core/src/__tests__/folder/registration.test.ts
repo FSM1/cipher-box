@@ -77,10 +77,8 @@ describe('updateFolderMetadataAndPublish — nodeId/nodeGeneration required (D-0
   it('throws when nodeId is not provided (D-06 required field)', async () => {
     const ctx = createMockContext();
 
-    // @ts-expect-error — nodeId should be required (D-06). In RED nodeId is optional
-    // so this directive is unused (typecheck fails on "Unused @ts-expect-error").
-    // After GREEN (nodeId made required), this directive correctly suppresses the type error.
     await expect(
+      // @ts-expect-error — nodeId is required (D-06); omitting it must be a type error
       updateFolderMetadataAndPublish({
         children: [],
         readKey: READ_KEY,
@@ -96,8 +94,8 @@ describe('updateFolderMetadataAndPublish — nodeId/nodeGeneration required (D-0
   it('throws when nodeGeneration is not provided (D-06 required field)', async () => {
     const ctx = createMockContext();
 
-    // @ts-expect-error — same as above for nodeGeneration
     await expect(
+      // @ts-expect-error — nodeGeneration is required (D-06); omitting it must be a type error
       updateFolderMetadataAndPublish({
         children: [],
         readKey: READ_KEY,

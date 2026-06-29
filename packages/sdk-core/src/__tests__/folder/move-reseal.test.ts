@@ -20,7 +20,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { sealChildReadKey, unsealChildReadKey, CryptoError } from '@cipherbox/core';
+import { sealChildReadKey, unsealChildReadKey } from '@cipherbox/core';
+import { CryptoError } from '@cipherbox/crypto';
 
 // ---------------------------------------------------------------------------
 // Fixtures
