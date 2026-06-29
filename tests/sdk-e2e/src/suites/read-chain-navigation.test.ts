@@ -275,12 +275,11 @@ describe('Read-chain navigation + root-step rotation happy-path round-trip (D-04
     // The root node must have committed before the Phase-64 stub fired (§4.2).
     expect(jobRecord.completedNodeIds.has(folderNodeId)).toBe(true);
 
-    // If rotation threw, it must be the Phase-64 stub (not an unexpected failure).
-    // (If rotationError is undefined the BFS completed without hitting file nodes —
-    // also valid; revocation still holds because the root generation advanced.)
-    if (rotationError !== undefined) {
-      expect((rotationError as Error).message).toMatch(/phase 64/i);
-    }
+    // The BFS tail must reach the file child's Phase-64 stub and throw.
+    // rotateReadFromNode rotates the root then hits mintFileKeyOnRotate's Phase-64
+    // stub on the file child — the test captures that error as rotationError.
+    expect(rotationError).toBeDefined();
+    expect((rotationError as Error).message).toMatch(/phase 64/i);
 
     // -----------------------------------------------------------------------
     // Step 6: Bob's pre-rotation grant can no longer navigate (revocation cut).

@@ -116,6 +116,11 @@ export async function issueReadGrant(params: {
       `issueReadGrant: recipientPublicKey must be 65 bytes (uncompressed secp256k1), got ${params.recipientPublicKey.length}`
     );
   }
+  if (!Number.isInteger(params.rootGeneration) || params.rootGeneration < 0) {
+    throw new Error(
+      `issueReadGrant: rootGeneration must be a non-negative integer, got ${params.rootGeneration}`
+    );
+  }
 
   // ONE ECIES wrap — the only crypto op in grant issuance (READ-01).
   // wrapKey: secp256k1 ECDH ephemeral + HKDF + AES-GCM. Each call produces

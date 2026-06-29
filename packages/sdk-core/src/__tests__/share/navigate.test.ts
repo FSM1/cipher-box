@@ -79,8 +79,11 @@ const FILE_LEAF_IPNS = 'k51-file';
 describe('navigateReadChain', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // unwrapKey always returns the share-root readKey (one ECIES op)
-    mockFns.unwrapKey.mockResolvedValue(SHARE_ROOT_READ_KEY);
+    // unwrapKey always returns a fresh copy of the share-root readKey so that
+    // navigateReadChain's finally-block zeroization of the minted key does not
+    // wipe the shared SHARE_ROOT_READ_KEY fixture and make later tests
+    // order-dependent (T-63-mock-isolation).
+    mockFns.unwrapKey.mockImplementation(async () => SHARE_ROOT_READ_KEY.slice());
   });
 
   // -------------------------------------------------------------------------
@@ -428,10 +431,14 @@ describe('navigateReadChain', () => {
       ctx,
     });
 
-    // Verify the generation argument passed to unsealChildReadKey is the parent mirror (3), not the child envelope (4)
+    // Verify the generation argument passed to unsealChildReadKey is the parent mirror (3), not the child envelope (4).
+    // The minted readKey buffer is the fresh copy returned by unwrapKey.mockImplementation; navigateReadChain's
+    // finally block zeroes it after use, so Vitest's call-record reference shows zeros by assertion time.
+    // We check the key as expect.any(Uint8Array) — key-content correctness is covered by the depth-1/depth-2 tests;
+    // the purpose of this test is the GENERATION argument only.
     expect(mockFns.unsealChildReadKey).toHaveBeenCalledWith(
       'sealed-file-key==',
-      SHARE_ROOT_READ_KEY,
+      expect.any(Uint8Array), // minted readKey (zeroed after the finally block — key-content tested elsewhere)
       'file-id', // from child published envelope (plaintext)
       'file', // from child published envelope (plaintext)
       PARENT_MIRROR_GENERATION // must be the PARENT MIRROR, not child envelope generation
