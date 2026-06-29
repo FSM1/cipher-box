@@ -270,13 +270,23 @@ Plans:
 **Plans**: 7 plans
 
 Plans:
+**Wave 1**
 
 - [ ] 65-01-PLAN.md — core role-0x04 write-chain seal primitives (sealChildWriteKey / unsealChildWriteKey) [wave 1]
 - [ ] 65-02-PLAN.md — bin restore pure re-link + delete legacy re-encrypt path (BinEntry.nodeReadKey) [wave 1]
 - [ ] 65-03-PLAN.md — invite-claim service wiring (single readKey re-wrap; no encryptedChildKeys fan-out) [wave 1]
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 65-04-PLAN.md — shared-write on the write-body model + co-writer "cannot write until re-fetch" error [wave 2]
 - [ ] 65-05-PLAN.md — rotation engine real-writeKey wiring; remove PLACEHOLDER_WRITE_KEY (folds FLAG-63-U1) [wave 2]
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 65-06-PLAN.md — write-revocation driver rotateWriteFromNode (full Ed25519 rotation, child-first cascade, tombstone-intent, co-writer re-wrap) [wave 3]
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 65-07-PLAN.md — sdk-e2e write-chain rotation round-trip gate (D-04) [wave 4]
 
 ---
