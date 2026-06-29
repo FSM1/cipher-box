@@ -480,3 +480,36 @@ None. All Plan SUMMARY files report no new attack surface.
 <status>completed</status>
 <summary>Background command "Run CodeRabbit CLI review" completed (exit code 0)</summary>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a31eaf6fedd84a92f</task-id>
+<tool-use-id>toolu_018W4GcS3n7UmR8nc43eVui4</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/404f2777-3329-4599-ae19-feb8f3ce5e1f/tasks/a31eaf6fedd84a92f.output</output-file>
+<status>completed</status>
+<summary>Agent "Apply low-risk CodeRabbit fixes" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Only pre-existing errors. Zero new errors.
+
+---
+
+## FIXES APPLIED
+
+| Finding | Status | Notes |
+|---------|--------|-------|
+| **#1 [#6 doc] STATE.md duplicate P08 row** | applied | Removed placeholder `- tasks | - files` row; kept populated row. |
+| **#2 [#7 doc] REQUIREMENTS.md TEST-01 status** | applied | `Pending` → `Complete`. |
+| **#3 [#1 validation] registration.ts nodeGeneration guard** | applied | Added `typeof`, `Number.isFinite`, `&lt; 0`, `Number.isInteger` checks after the null/undefined guard. |
+| **#4 [#5 zeroize] client.ts moveItem childReadKey** | applied | Wrapped `sealChildReadKey` in `try/finally` so `childReadKey.fill(0)` runs on both success and throw. |
+| **#5 [#10 zeroize] rotation-crash-safety.test.ts clearCapturedReadKeys** | applied | Created `clearCapturedReadKeys()` helper that zeroes each buffer before truncating; replaces all 4 inline `capturedReadKeys.length = 0`; added call in `afterAll` before `vi.restoreAllMocks()`. Also added `.slice()` at the `readKeyPrimeRoot2` extraction site — necessary because `clearCapturedReadKeys()` zeroes the element in-place and the test later passes that same reference to `rotateReadFromNode`; without the copy the resume run received an all-zeros key and threw `CryptoError: Decryption failed`. |
+| **#6 [#13 zeroize] engine.ts mintFileKeyOnRotate failure path** | applied | Added `fileKeyMinted` flag, set to `true` after `mintFileKeyOnRotate` succeeds; in the existing `catch` block, added `if (fileKeyMinted &amp;&amp; node.content?.fileKey) { node.content.fileKey.fill(0); }` — only zeroes the minted key, never the caller-owned old fileKey. |
+| **#7 [#14 zeroize] engine.ts BFS frontier loop** | applied | Wrapped the entire `while` loop body in `try/finally`; moved `item.nodeReadKey.fill(0)` to the `finally` block so it runs on convergence-skip (`continue`), `result.skipped`, throw, and success paths. Convergence guard, parentTracking, and pendingChildCount logic unchanged. |
+
+**tsc result:** 23 pre-existing errors in `cas.test.ts` / `grant.test.ts` only — new errors: 0.
+
+**Unit tests:** 297 passed, 22 skipped — all green.
+
+**E2E tests:** 4/4 runnable tests passed (happy-path, abort-and-resume, concurrent-add, read-chain-navigation).</result>
+<usage><subagent_tokens>92713</subagent_tokens><tool_uses>50</tool_uses><duration_ms>568003</duration_ms></usage>
+</task-notification>
