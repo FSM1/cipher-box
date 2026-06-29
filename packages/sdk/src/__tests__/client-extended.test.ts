@@ -130,7 +130,7 @@ describe('CipherBoxClient - extended', () => {
     });
   });
 
-  describe.skip('moveItem — TODO(phase 63)', () => {
+  describe('moveItem', () => {
     it('moves item between folders and emits two folder:updated events', async () => {
       const events: SdkEvent[] = [];
       client.on((e) => events.push(e));
@@ -138,26 +138,22 @@ describe('CipherBoxClient - extended', () => {
       setupFolder(client, 'dest-ipns');
 
       vi.mocked(sdkCore.moveItem).mockReturnValue({
-        updatedSourceChildren: [],
-        updatedDestChildren: [
+        updatedSource: [],
+        updatedDest: [
           {
-            type: 'file',
-            id: 'file1',
             name: 'test.txt',
-            fileMetaIpnsName: 'k51file',
-            ipnsPrivateKeyEncrypted: 'abc',
-            createdAt: 0,
-            modifiedAt: 0,
+            ipnsName: 'k51file',
+            generation: 0,
+            versionFloor: 0n,
+            readKeySealed: 'sealed-key-hex',
           },
         ],
-        movedItem: {
-          type: 'file',
-          id: 'file1',
+        movedRef: {
           name: 'test.txt',
-          fileMetaIpnsName: 'k51file',
-          ipnsPrivateKeyEncrypted: 'abc',
-          createdAt: 0,
-          modifiedAt: 0,
+          ipnsName: 'k51file',
+          generation: 0,
+          versionFloor: 0n,
+          readKeySealed: 'sealed-key-hex',
         },
       });
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({

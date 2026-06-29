@@ -573,17 +573,71 @@ export class CipherBoxClient {
    * @param destIpnsName - IPNS name of the destination folder
    * @param childId - ID of the child to move
    */
-  /**
-   * @stub phase 63 (navigation) / phase 65 (move re-encrypt): moveItem in sdk-core
-   * returns never; movedItem.type no longer exists on SealedChildRef; the phase-63
-   * implementation will unseal the child readKey from SealedChildRef.readKeySealed
-   * and re-seal it under the destination parent's readKey chain.
-   */
   async moveItem(sourceIpnsName: string, destIpnsName: string, childId: string): Promise<void> {
-    void sourceIpnsName;
-    void destIpnsName;
-    void childId;
-    throw new Error('not implemented — phase 63 (move item / re-seal child readKey)');
+    return this.withOperation('moveItem', async () => {
+      // Direct folderTree lookup — both folders must already be loaded for a move
+      // (ensureFolderLoaded is wired in phase 63 navigation; moveItem does not auto-load)
+      const sourceFolder = this.folderTree.get(sourceIpnsName);
+      if (!sourceFolder) throw new Error('Source folder not loaded');
+      const destFolder = this.folderTree.get(destIpnsName);
+      if (!destFolder) throw new Error('Destination folder not loaded');
+
+      const baseSourceChildren = [...sourceFolder.children];
+      const baseDestChildren = [...destFolder.children];
+
+      // Pure link rewrite — zero re-encryption (READ-04)
+      const { updatedSource, updatedDest } = sdkCore.moveItem({
+        sourceChildren: sourceFolder.children,
+        destChildren: destFolder.children,
+        childId,
+      });
+
+      // Publish updated source folder
+      const { newSequenceNumber: srcSeq, publishedChildren: srcChildren } =
+        await sdkCore.updateFolderMetadataAndPublish({
+          children: updatedSource,
+          baseChildren: baseSourceChildren,
+          readKey: sourceFolder.folderKey,
+          ipnsPrivateKey: sourceFolder.ipnsKeypair.privateKey,
+          ipnsName: sourceIpnsName,
+          sequenceNumber: sourceFolder.sequenceNumber,
+          ctx: this.ctx,
+        });
+
+      sourceFolder.children = srcChildren;
+      sourceFolder.sequenceNumber = srcSeq;
+      this.folderTree.set(sourceIpnsName, sourceFolder);
+      this.emitter.emit({
+        type: 'folder:updated',
+        folderId: sourceIpnsName,
+        ipnsName: sourceIpnsName,
+        children: srcChildren,
+        sequenceNumber: srcSeq,
+      });
+
+      // Publish updated destination folder
+      const { newSequenceNumber: dstSeq, publishedChildren: dstChildren } =
+        await sdkCore.updateFolderMetadataAndPublish({
+          children: updatedDest,
+          baseChildren: baseDestChildren,
+          readKey: destFolder.folderKey,
+          ipnsPrivateKey: destFolder.ipnsKeypair.privateKey,
+          ipnsName: destIpnsName,
+          sequenceNumber: destFolder.sequenceNumber,
+          ctx: this.ctx,
+        });
+
+      destFolder.children = dstChildren;
+      destFolder.sequenceNumber = dstSeq;
+      this.folderTree.set(destIpnsName, destFolder);
+      this.emitter.emit({
+        type: 'folder:updated',
+        folderId: destIpnsName,
+        ipnsName: destIpnsName,
+        children: dstChildren,
+        sequenceNumber: dstSeq,
+      });
+    });
   }
 
   /**
