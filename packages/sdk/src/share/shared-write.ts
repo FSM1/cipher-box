@@ -14,10 +14,10 @@
  *   - An offline co-writer whose target was rotated out gets a typed
  *     CannotWriteUntilRefetchError — no grace/notification/retry (WRITE-03/D-03).
  *
- * Phase-65 convention: WriteChildRef.childId stores the child's IPNS name (a
- * unique string identifier) rather than a hyphenated UUID. This is a Phase-65
- * simplification that lets delete/rename operations match across read-body and
- * write-body using a single itemId. Phase 66 will formalise UUID-based childId.
+ * WriteChildRef.childId is a UUID (crypto.randomUUID()) matching the child's Node.id.
+ * deleteFromSharedFolder/moveInSharedFolder match write-body entries by UUID childId;
+ * callers must pass the UUID (or the child's UUID at creation time) as itemId when
+ * they need write-body cleanup. Phase 66 will surface childId in the public API.
  */
 
 import type { SdkContext } from '@cipherbox/sdk-core';
@@ -149,10 +149,7 @@ export class CannotWriteUntilRefetchError extends Error {
 /**
  * Build a WriteChildRef by sealing childWriteKey under parentWriteKey (role 0x04).
  *
- * Phase-65 convention: childId is the child's IPNS name (unique identifier) so
- * delete/rename operations can match across read-body and write-body with a
- * single itemId. Phase 66 will replace with UUID-based childId.
- *
+ * `childId` is the child node's UUID (from Node.id / crypto.randomUUID()).
  * Does NOT zero childWriteKey — caller is the terminal owner (D-09).
  */
 async function buildChildWriteLink(
@@ -588,7 +585,8 @@ export async function renameInSharedFolder(
  * WriteChildRef from the write-body (matched by Phase-65 childId=ipnsName
  * convention). Re-publishes the parent. addShareKeysFn is NEVER called (D-02).
  *
- * @param params.itemId - IPNS name of the item to delete
+ * @param params.itemId - IPNS name for read-body match; for write-body cleanup, pass the
+ *   child UUID (same as WriteChildRef.childId from the creation result).
  */
 export async function deleteFromSharedFolder(
   swCtx: SharedWriteContext,
