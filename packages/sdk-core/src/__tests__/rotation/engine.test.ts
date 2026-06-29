@@ -962,3 +962,198 @@ describe('D-01 nodeKeySource: BFS key threading (Plan 64-04 Task 1)', () => {
     ).rejects.toThrow(/no IPNS private key/i);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Plan 64-04 Task 2 RED — D-02 parent re-seal + D-09 batched parent publish
+// ---------------------------------------------------------------------------
+
+const TASK2_ROOT_READ_KEY = new Uint8Array(32).fill(0x77);
+const TASK2_ROOT_IPNS_KEY = new Uint8Array(32).fill(0x10);
+const TASK2_CHILD_IPNS_KEY = new Uint8Array(32).fill(0x12);
+const TASK2_STUB_PUB_KEY = new Uint8Array(32).fill(0x01);
+
+/**
+ * Shared fixture builder for the D-02/D-09 BFS tests.
+ *
+ * Topology: root (NODE_ID, NODE_IPNS) → child (CHILD_ID, CHILD_IPNS)
+ *
+ * rootNode has one SealedChildRef pointing at CHILD_IPNS.
+ * childNode has no children.
+ */
+function makeD02Fixtures() {
+  const rootNode = makeFolderNode({
+    id: NODE_ID,
+    generation: 0,
+    children: [
+      {
+        name: 'child',
+        ipnsName: CHILD_IPNS,
+        generation: 0,
+        versionFloor: 0n,
+        readKeySealed: 'childsealed==',
+      },
+    ],
+  });
+  const rootPublished = makePublishedNode(NODE_ID, 0);
+  const childNode: import('@cipherbox/core').Node = {
+    schema: 'node/v3',
+    kind: 'folder',
+    id: CHILD_ID,
+    generation: 0,
+    createdAt: 1000,
+    modifiedAt: 2000,
+    children: [],
+  };
+  const childPublished = makePublishedNode(CHILD_ID, 0);
+  return { rootNode, rootPublished, childNode, childPublished };
+}
+
+describe('D-02 parent-link re-seal + D-09 batched parent publish (Plan 64-04 Task 2)', () => {
+  /**
+   * Capture the readKeyPrime minted by each sealNode call so tests can verify
+   * which key was used as the parent's new readKey in the D-02 re-seal.
+   */
+  const capturedSealNodeReadKeys: Array<Uint8Array> = [];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    capturedSealNodeReadKeys.length = 0;
+
+    const { rootNode, rootPublished, childNode, childPublished } = makeD02Fixtures();
+
+    mockFns.resolveIpnsRecord.mockImplementation(async (ipnsName: string) => ({
+      cid: ipnsName === NODE_IPNS ? 'bafy-root' : 'bafy-child',
+      sequenceNumber: 3n,
+      signatureVerified: true,
+    }));
+
+    mockFns.fetchFromIpfs.mockImplementation(async (_ctx: unknown, cid: string) => {
+      const node = cid === 'bafy-root' ? rootPublished : childPublished;
+      return new TextEncoder().encode(JSON.stringify(node));
+    });
+
+    mockFns.unsealNode.mockImplementation(
+      async (published: import('@cipherbox/core').PublishedNode) =>
+        published.id === NODE_ID ? rootNode : childNode
+    );
+
+    // Capture the readKeyPrime argument (second arg) passed to sealNode per call.
+    mockFns.sealNode.mockImplementation(
+      async (node: import('@cipherbox/core').Node, readKey: Uint8Array) => {
+        capturedSealNodeReadKeys.push(new Uint8Array(readKey));
+        return makePublishedNode(node.id, node.generation + 1);
+      }
+    );
+
+    mockFns.sealChildReadKey.mockResolvedValue('newsealed==');
+    mockFns.unsealChildReadKey.mockResolvedValue(new Uint8Array(32).fill(0x42));
+    mockFns.publishWithCas.mockResolvedValue({
+      cid: 'bafy-new',
+      newSequenceNumber: 4n,
+      publishedData: [],
+      prunedCids: [],
+    });
+  });
+
+  it('D-02: sealChildReadKey is called with the parent NEW readKey for the child re-seal', async () => {
+    // In RED: the BFS does NOT perform the out-of-band D-02 re-seal, so sealChildReadKey
+    // is called only twice (once per rotateOne: root + child). Neither call uses the
+    // root's new readKey' as the parent key.
+    //
+    // In GREEN: a third sealChildReadKey call occurs in rotateReadFromNode AFTER the child
+    // rotates, using rootNewReadKey' as the second argument.
+    await rotateReadFromNode({
+      rootNodeId: NODE_ID,
+      rootNodeIpnsName: NODE_IPNS,
+      rootReadKey: TASK2_ROOT_READ_KEY,
+      rootIpnsPrivateKey: TASK2_ROOT_IPNS_KEY,
+      nodeKeySource: (ipnsName: string) =>
+        ipnsName === CHILD_IPNS
+          ? { privateKey: TASK2_CHILD_IPNS_KEY, publicKey: TASK2_STUB_PUB_KEY }
+          : undefined,
+      jobRecord: makeJobRecord({ rootNodeId: NODE_ID }),
+      ctx: createMockContext(),
+    });
+
+    // capturedSealNodeReadKeys[0] = root's new readKeyPrime
+    const rootNewReadKey = capturedSealNodeReadKeys[0];
+    expect(rootNewReadKey).toBeDefined();
+    expect(rootNewReadKey.length).toBe(32);
+
+    // In GREEN: one of the sealChildReadKey calls uses rootNewReadKey as the second arg,
+    // the child's id, and the child's new generation (1) to produce the D-02 re-sealed link.
+    const sealChildCalls = mockFns.sealChildReadKey.mock.calls;
+    const hasD02Call = sealChildCalls.some(
+      ([_childKey, parentKey, id, _kind, gen]: [Uint8Array, Uint8Array, string, string, number]) =>
+        id === CHILD_ID &&
+        gen === 1 && // child's new generation
+        parentKey instanceof Uint8Array &&
+        parentKey.length === 32 &&
+        parentKey.every((b, i) => b === rootNewReadKey[i])
+    );
+    // RED: hasD02Call === false → FAILS
+    // GREEN: hasD02Call === true → PASSES
+    expect(hasD02Call).toBe(true);
+  });
+
+  it('D-09: parent is republished exactly once after all children rotate (3 publishWithCas calls total)', async () => {
+    // In RED: only 2 publishWithCas calls (root + child) — no batched parent republish.
+    // In GREEN: 3 calls (root + child + parent re-publish).
+    const publishCalls: Array<{ ipnsName: string; sequenceNumber: bigint }> = [];
+    mockFns.publishWithCas.mockImplementation(
+      async (params: { ipnsName: string; sequenceNumber: bigint }) => {
+        publishCalls.push({ ipnsName: params.ipnsName, sequenceNumber: params.sequenceNumber });
+        return { cid: 'bafy-new', newSequenceNumber: 4n, publishedData: [], prunedCids: [] };
+      }
+    );
+
+    await rotateReadFromNode({
+      rootNodeId: NODE_ID,
+      rootNodeIpnsName: NODE_IPNS,
+      rootReadKey: TASK2_ROOT_READ_KEY,
+      rootIpnsPrivateKey: TASK2_ROOT_IPNS_KEY,
+      nodeKeySource: (ipnsName: string) =>
+        ipnsName === CHILD_IPNS
+          ? { privateKey: TASK2_CHILD_IPNS_KEY, publicKey: TASK2_STUB_PUB_KEY }
+          : undefined,
+      jobRecord: makeJobRecord({ rootNodeId: NODE_ID }),
+      ctx: createMockContext(),
+    });
+
+    // RED: publishCalls.length === 2 → FAILS
+    // GREEN: publishCalls.length === 3 → PASSES
+    expect(publishCalls.length).toBe(3);
+
+    // The third call must be the batched parent re-publish (root IPNS, sequenceNumber = 4n
+    // from root's first publish return value).
+    const thirdCall = publishCalls[2];
+    expect(thirdCall.ipnsName).toBe(NODE_IPNS);
+    // The CAS guard for the re-publish must be the sequence returned from root's first publish.
+    expect(thirdCall.sequenceNumber).toBe(4n);
+  });
+
+  it('D-09: sealChildReadKey total call count is 3 for root→child (2 from rotateOne + 1 D-02 re-seal)', async () => {
+    // rotateOne for root:  sealChildReadKey(rootReadKeyPrime, rootOldReadKey,  NODE_ID, kind, 1)
+    // rotateOne for child: sealChildReadKey(childReadKeyPrime, childOldReadKey, CHILD_ID, kind, 1)
+    // D-02 re-seal:        sealChildReadKey(childReadKeyPrime, rootNewReadKey', CHILD_ID, kind, 1)
+    //
+    // RED: sealChildReadKey called only 2× (no D-02 re-seal) → FAILS
+    // GREEN: called 3× → PASSES
+    await rotateReadFromNode({
+      rootNodeId: NODE_ID,
+      rootNodeIpnsName: NODE_IPNS,
+      rootReadKey: TASK2_ROOT_READ_KEY,
+      rootIpnsPrivateKey: TASK2_ROOT_IPNS_KEY,
+      nodeKeySource: (ipnsName: string) =>
+        ipnsName === CHILD_IPNS
+          ? { privateKey: TASK2_CHILD_IPNS_KEY, publicKey: TASK2_STUB_PUB_KEY }
+          : undefined,
+      jobRecord: makeJobRecord({ rootNodeId: NODE_ID }),
+      ctx: createMockContext(),
+    });
+
+    // RED: 2 calls → FAILS
+    // GREEN: 3 calls → PASSES
+    expect(mockFns.sealChildReadKey).toHaveBeenCalledTimes(3);
+  });
+});
