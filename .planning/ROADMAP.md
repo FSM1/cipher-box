@@ -219,7 +219,7 @@ Plans:
 4. A crash mid-walk is recovered by re-running `rotateReadFromNode`; `verifySubtreeClean` rebuilds the frontier from published IPNS records, re-run converges without double-bumping any node's `generation`, and the revoked recipient is cut from the root after the root step
 5. (TEST-01) The `tests/sdk-e2e` abort-and-resume suite covering crash-safety passes against a live local API stack; SDK E2E must pass before phase sign-off (it is the only real client→API IPNS publish/resolve round-trip)
 
-**Plans**: 4/8 plans executed
+**Plans**: 5/8 plans executed
 
 Plans:
 **Wave 1**
@@ -234,7 +234,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 64-05-PLAN.md — reMintGrantsRootedAt inner-grant re-mint (ROT-04/HIGH-3)
+- [x] 64-05-PLAN.md — reMintGrantsRootedAt inner-grant re-mint (ROT-04/HIGH-3)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
@@ -370,7 +370,7 @@ Plans:
 | 61 | AAD-Bound Seal Primitive and Cross-Language KAT | 5/5 | Complete    | 2026-06-28 |
 | 62 | Unified Node Codec (Core Keystone) | 9/9 | Complete    | 2026-06-28 |
 | 63 | Read-Chain Navigation and Rotation Core | 7/7 | Complete    | 2026-06-29 |
-| 64 | Rotation Soundness — Revocation Guarantees | 4/8 | In Progress|  |
+| 64 | Rotation Soundness — Revocation Guarantees | 5/8 | In Progress|  |
 | 65 | SDK Write-Chain, Bin Re-link, and Invite Claim | 0/? | Not started | - |
 | 66 | API Schema Cutover, Publish Gate, and Tombstone | 0/? | Not started | - |
 | 67 | TEE Lease-Renewer Contract Rewrite | 0/? | Not started | - |
