@@ -179,7 +179,7 @@ Plans:
 4. A move within a grantee's scope produces link rewrites only (zero re-encryption); the scope-exit predicate `hasCoveringGrant` is present and gates every delete/move/rename — a private delete with no active grants triggers zero `rotateReadFromNode` invocations and zero IPNS publishes beyond the parent relink (test verifies zero publish calls)
 5. `rotateReadFromNode` is implemented in a named file (`src/rotation/engine.ts` or equivalent, not `index.ts` barrel) so vitest coverage counts it; `rotateOne` commits per-node atomically via CAS before advancing the walk frontier
 
-**Plans**: 3/7 plans executed
+**Plans**: 4/7 plans executed
 
 Plans:
 **Wave 1**
@@ -190,7 +190,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1)*
 
-- [ ] 63-04-PLAN.md — Folder mutations: un-stub `metadata-ops.ts` (add seals child readKey under parent, move = link rewrites only) + `registration.ts` [READ-03, READ-04]
+- [x] 63-04-PLAN.md — Folder mutations: un-stub `metadata-ops.ts` (add seals child readKey under parent, move = link rewrites only) + `registration.ts` [READ-03, READ-04]
 - [ ] 63-05-PLAN.md — Scope-exit predicate `hasCoveringGrant` + gating + zero-rotation invariant test + sdk-core barrel wiring [ROT-02, READ-04, D-08]
 
 **Wave 3** *(blocked on 63-04)*
@@ -342,7 +342,7 @@ Plans:
 | --- | --- | --- | --- | --- |
 | 61 | AAD-Bound Seal Primitive and Cross-Language KAT | 5/5 | Complete    | 2026-06-28 |
 | 62 | Unified Node Codec (Core Keystone) | 9/9 | Complete    | 2026-06-28 |
-| 63 | Read-Chain Navigation and Rotation Core | 3/7 | In Progress|  |
+| 63 | Read-Chain Navigation and Rotation Core | 4/7 | In Progress|  |
 | 64 | Rotation Soundness — Revocation Guarantees | 0/? | Not started | - |
 | 65 | SDK Write-Chain, Bin Re-link, and Invite Claim | 0/? | Not started | - |
 | 66 | API Schema Cutover, Publish Gate, and Tombstone | 0/? | Not started | - |
