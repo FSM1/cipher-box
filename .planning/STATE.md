@@ -5,8 +5,8 @@ milestone_name: Metadata and Sharing Refactor
 current_phase: 64
 current_phase_name: rotation-soundness-revocation-guarantees
 status: verifying
-stopped_at: "Completed 64-08: rotation crash-safety E2E suite (TEST-01 phase gate)"
-last_updated: "2026-06-29T18:04:43.484Z"
+stopped_at: Phase 65 context gathered
+last_updated: "2026-06-29T21:53:19.788Z"
 last_activity: 2026-06-29
 last_activity_desc: Phase 64 execution started
 progress:
@@ -434,6 +434,6 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-06-29T18:04:43.479Z
-**Stopped at:** Completed 64-08: rotation crash-safety E2E suite (TEST-01 phase gate)
-**Resume file:** None
+**Last session:** 2026-06-29T21:53:19.782Z
+**Stopped at:** Phase 65 context gathered
+**Resume file:** .planning/phases/65-sdk-write-chain-bin-re-link-and-invite-claim/65-CONTEXT.md
