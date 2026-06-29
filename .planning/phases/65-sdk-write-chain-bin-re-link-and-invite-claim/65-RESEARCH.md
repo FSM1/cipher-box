@@ -512,19 +512,21 @@ await callbacks.teeUnenrollFn(oldIpnsName);
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED in planning)
 
-1. **BinEntry.nodeRef and readKey recovery for restore**
+> All three resolved during /gsd-plan-phase 65 and captured in the plans below. Retained here for the research trail.
+
+1. **BinEntry.nodeRef and readKey recovery for restore** — **RESOLVED (Plan 65-02):** add `BinEntry.nodeReadKey: Uint8Array` captured at `addToBin` via `unsealChildReadKey`, protected by the ECIES bin blob; restore re-seals under the destination parent `readKey`.
    - What we know: `BinEntry.nodeRef?: Node` is the `Node` type (decrypted in-memory struct). The bin metadata is ECIES-encrypted to the user's public key. At restore time, the owner unseals the bin metadata to get the `Node`.
    - What's unclear: Does the `Node` stored in `nodeRef` include enough to re-derive the node's `readKey` (it doesn't — `readKey` is not stored in the plaintext `Node`)? The re-link needs the node's `readKey` to `sealChildReadKey` under the destination parent.
    - Recommendation: Planner must decide whether to add a `nodeReadKey` field to `BinEntry` or store the `SealedChildRef` (which has `readKeySealed` but not the raw key). The most natural approach is to store the `SealedChildRef` as the bin entry's link — then restore re-seals `child.readKey` (unsealed from the bin entry's sealed ref under the bin's own readKey) under the destination parent readKey. This is what design §3.10 "BinEntry is a `SealedChildRef`-shaped link sealed under the bin's own readKey" implies.
 
-2. **Write-revocation cascade direction: upward vs. subtree**
+2. **Write-revocation cascade direction: upward vs. subtree** — **RESOLVED (Plan 65-06):** child-first / bottom-up — leaves get new k51 names first, then parents re-point upward to the share root.
    - What we know: Design §5.3 says "cascades parent re-points upward to the share root" — but the Ed25519 key rotation also changes each node's k51 name, which means CHILDREN need new names too (not just parents). The cascade goes BOTH ways: child nodes get new k51 names (bottom-up generation of new keypairs), and PARENT pointers must be updated to point at new child k51 names.
    - What's unclear: Is the cascade child-first (bottom-up) or root-first? The read-rotation is root-first (for immediate revocation cut). Write-rotation should be child-first (generate new k51 names for leaves first, then update parent pointers pointing at them, cascading up).
    - Recommendation: Child-first (bottom-up). Planner should document this ordering decision explicitly.
 
-3. **SharedWriteContext reshape scope**
+3. **SharedWriteContext reshape scope** — **RESOLVED (Plan 65-04, Claude's discretion):** reshape the type in place and keep the name; `ipnsPrivateKey` comes from unsealing the write-body, and `addShareKeysFn` stays as a type but is never called (Phase 68 removes it).
    - What we know: The current `SharedWriteContext` type in shared-write.ts has `folderKey: Uint8Array` and `ipnsPrivateKey: Uint8Array` (raw, exposed), plus `addShareKeysFn` (old fan-out callback). All six operations throw.
    - What's unclear: How much of `SharedWriteContext` survives? In the write-body model, `ipnsPrivateKey` comes from unsealing the write-body, not from a raw param. The `addShareKeysFn` callback stays as a type (Phase 68 removes it from types.ts) but Phase 65 rewires so the callback is never called.
    - Recommendation: Planner should decide whether to reshape the type or add a parallel `WriteChainContext` that replaces it. The safest approach is to reshape in place and keep the type name.
