@@ -269,10 +269,12 @@ async function fetchPublishedNode(cid: string, ctx: SdkContext): Promise<Publish
 /**
  * SEAM: Content-key rotation for file nodes.
  *
- * Phase 64 implementation: mint a fresh `fileKey'`, mark `contentRekeyPending`
- * on the file node, and schedule re-encryption of file content under `fileKey'`.
- *
  * Invoked ONLY when `node.kind === 'file'` (conditional — D-01).
+ *
+ * Phase 64 mints a fresh `fileKey'` and places it on the node so the re-sealed body
+ * carries it. The lazy `contentRekeyPending` marker + re-encrypt-on-next-write wiring
+ * is deferred to Phase 65 (the `node/v3` schema is frozen this phase); minting
+ * `fileKey'` onto the re-sealed body IS the Phase-64 CRIT-1 deliverable.
  *
  * Phase 64 implementation: mints `fileKey' = generateRandomBytes(32)` and assigns
  * it to `node.content.fileKey` so that `rotateOne`'s subsequent `sealNode` re-seals
@@ -398,9 +400,9 @@ export async function mergeConcurrentChildren(
  * truth (crash-recovery convergence per §4.5).
  *
  * Invoked ONLY on resume (when `completedNodeIds` is non-empty at walk start —
- * conditional per D-01/D-10); never on a fresh run.
- *
- * @throws Always in Phase 63 (ROT-06 — deferred).
+ * conditional per D-01/D-10); never on a fresh run. NOTE: a true fresh-record
+ * resume (empty `completedNodeIds`) is not yet wired here — it needs the Phase-68
+ * durable client floor (see todo `rotation-fresh-record-resume-and-sc4-double-bump`).
  */
 export async function verifySubtreeClean(
   rootIpnsName: string,
@@ -519,7 +521,6 @@ export async function rotateOne(
     // Invoked CONDITIONALLY — clean happy-path (folder node) NEVER reaches this.
     if (node.kind === 'file') {
       await mintFileKeyOnRotate(node, jobRecord);
-      // Phase 64 fills this seam; in Phase 63 it always throws above.
     }
 
     // Step 6: Re-seal the read-body under readKey' with the new generation'.
