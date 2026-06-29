@@ -1083,14 +1083,18 @@ describe('D-02 parent-link re-seal + D-09 batched parent publish (Plan 64-04 Tas
     // In GREEN: one of the sealChildReadKey calls uses rootNewReadKey as the second arg,
     // the child's id, and the child's new generation (1) to produce the D-02 re-sealed link.
     const sealChildCalls = mockFns.sealChildReadKey.mock.calls;
-    const hasD02Call = sealChildCalls.some(
-      ([_childKey, parentKey, id, _kind, gen]: [Uint8Array, Uint8Array, string, string, number]) =>
+    const hasD02Call = sealChildCalls.some((callArgs: unknown[]) => {
+      const parentKey = callArgs[1] as Uint8Array;
+      const id = callArgs[2] as string;
+      const gen = callArgs[4] as number;
+      return (
         id === CHILD_ID &&
-        gen === 1 && // child's new generation
+        gen === 1 &&
         parentKey instanceof Uint8Array &&
         parentKey.length === 32 &&
         parentKey.every((b, i) => b === rootNewReadKey[i])
-    );
+      );
+    });
     // RED: hasD02Call === false → FAILS
     // GREEN: hasD02Call === true → PASSES
     expect(hasD02Call).toBe(true);

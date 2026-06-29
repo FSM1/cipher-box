@@ -31,6 +31,7 @@ import { publishWithCas } from '../cas';
 import { resolveIpnsRecord } from '../ipns';
 import { fetchFromIpfs, addToIpfs } from '../ipfs';
 import type { SdkContext } from '../types';
+import { updateFolderMetadataAndPublish } from '../folder/registration';
 
 // ---------------------------------------------------------------------------
 // Types — string-literal unions, never TypeScript enums (project convention)
@@ -85,12 +86,22 @@ type RotateOneDone = {
   newGeneration: number;
   /**
    * New sealed readKey for the parent's SealedChildRef[N].readKeySealed.
-   * The caller (rotateReadFromNode) uses this to update the parent before the
-   * next frontier-publish round (D-09 per-node parent-link publish pattern).
+   * Sealed under this node's OWN pre-rotation readKey (legacy from Phase-63 contract).
+   * The D-02 re-seal (Phase 64) re-seals childReadKey under the PARENT's new readKey'
+   * out-of-band in rotateReadFromNode — not here.
    */
   newReadKeySealed: string;
   /** Plaintext children of the rotated node (to enqueue in the BFS frontier). */
   children: SealedChildRef[];
+  /**
+   * IPNS sequence number produced by this node's publish.
+   *
+   * D-09 (Phase 64): used as the CAS sequence guard for the parent's batched
+   * re-publish after all children rotate.  The parent's first publish returns
+   * this value; the second (batched) publish passes it as `sequenceNumber` to
+   * advance the CAS monotonic counter by 1.
+   */
+  newSequenceNumber: bigint;
 };
 
 /** Return type when a node was already completed (idempotency skip). */
@@ -395,10 +406,10 @@ export async function rotateOne(
     );
 
     // Step 8: Publish the child node via CAS.
-    // Phase 64: batch parent-link publishes (D-09 optimization seam).
-    // On CAS-409: the default merge throws Phase-64 (mergeConcurrentChildren seam).
     // D-01: nodeIpnsPrivateKey is guaranteed non-null by the guard above.
-    await publishWithCas<PublishedNode>({
+    // D-09: capture newSequenceNumber so the caller can use it as the CAS guard
+    // for the parent's batched re-publish after all children rotate.
+    const casResult = await publishWithCas<PublishedNode>({
       ipnsName: nodeIpnsName,
       ipnsPrivateKey: nodeIpnsPrivateKey,
       ipnsPublicKey: nodeIpnsPublicKey,
@@ -443,6 +454,7 @@ export async function rotateOne(
       newGeneration: generationPrime,
       newReadKeySealed,
       children: node.children ?? [],
+      newSequenceNumber: casResult.newSequenceNumber,
     };
   } catch (err) {
     // Zero readKeyPrime on failure — rotateOne minted it, so rotateOne is terminal owner.
@@ -512,7 +524,40 @@ export async function rotateReadFromNode(params: RotationParams): Promise<void> 
   // Persist after root commit (the high-value early checkpoint).
   if (jobRecord.persistCallback) await jobRecord.persistCallback(jobRecord);
 
-  // BFS frontier: each entry carries the NODE's own pre-rotation readKey.
+  // ---------------------------------------------------------------------------
+  // D-02 / D-09: parent tracking for out-of-band re-seal and batched republish
+  //
+  // Problem (Phase-63 CRITICAL bug): rotateOne seals the child's new readKey'
+  // under the child's OWN old readKey (legacy contract). But the parent's
+  // SealedChildRef[N].readKeySealed must be sealed under the PARENT's NEW readKey'
+  // for `unsealChildReadKey` to authenticate on next read. This out-of-band
+  // re-seal (D-02) and the single batched parent re-publish (D-09) happen HERE
+  // in the walk caller, not inside rotateOne.
+  //
+  // Per-parent state tracks:
+  //   - The parent's freshly minted readKey' (from the parent's rotateOne result)
+  //   - A mutable copy of the parent's SealedChildRef array (to update in-place)
+  //   - The IPNS keys needed for the batched re-publish
+  //   - A pending-child counter (decremented per child; publishes when zero)
+  // ---------------------------------------------------------------------------
+
+  type ParentTrackingState = {
+    parentNewReadKey: Uint8Array;
+    parentIpnsName: string;
+    parentIpnsPrivateKey?: Uint8Array;
+    parentIpnsPublicKey?: Uint8Array;
+    parentNodeId: string;
+    parentNodeGeneration: number;
+    parentLastSeq: bigint;
+    children: SealedChildRef[]; // mutable copy updated as children rotate
+    pendingChildCount: number;
+  };
+
+  // keyed by parent IPNS name (the IPNS name of the node that just rotated)
+  const parentTracking = new Map<string, ParentTrackingState>();
+
+  // BFS frontier: each entry carries the NODE's own pre-rotation readKey plus
+  // the child's stable id/kind (needed for the D-02 AAD binding).
   //
   // DESIGN NOTE (Bug fix — confirmed during Phase-63 E2E):
   //   Each node in the tree has its OWN readKey (sealed inside the parent's
@@ -535,6 +580,10 @@ export async function rotateReadFromNode(params: RotationParams): Promise<void> 
     parentIpnsName: string;
     ipnsPrivateKey?: Uint8Array;
     ipnsPublicKey?: Uint8Array;
+    /** Stable UUID from the child's PublishedNode envelope (for D-02 AAD binding). */
+    childPubId: string;
+    /** Node kind from the child's PublishedNode envelope (for D-02 AAD binding). */
+    childPubKind: 'folder' | 'file';
   }> = [];
 
   // Helper: resolve an IPNS name → fetch the IPFS CID → parse PublishedNode envelope.
@@ -544,6 +593,21 @@ export async function rotateReadFromNode(params: RotationParams): Promise<void> 
     if (!resolved) return null;
     const raw = await fetchFromIpfs(ctx, resolved.cid);
     return JSON.parse(new TextDecoder().decode(raw)) as PublishedNode;
+  }
+
+  // Set up parent tracking for root's children (D-02/D-09).
+  if (rootResult.children.length > 0) {
+    parentTracking.set(rootNodeIpnsName, {
+      parentNewReadKey: rootResult.childReadKey,
+      parentIpnsName: rootNodeIpnsName,
+      parentIpnsPrivateKey: rootIpnsPrivateKey,
+      parentIpnsPublicKey: rootIpnsPublicKey,
+      parentNodeId: rootNodeId,
+      parentNodeGeneration: rootResult.newGeneration,
+      parentLastSeq: rootResult.newSequenceNumber,
+      children: [...rootResult.children], // mutable copy for in-place SealedChildRef updates
+      pendingChildCount: rootResult.children.length,
+    });
   }
 
   // Enqueue root's children: derive each child's readKey from the root's OLD readKey.
@@ -567,10 +631,12 @@ export async function rotateReadFromNode(params: RotationParams): Promise<void> 
       parentIpnsName: rootNodeIpnsName,
       ipnsPrivateKey: childKeys?.privateKey,
       ipnsPublicKey: childKeys?.publicKey,
+      childPubId: childPub.id,
+      childPubKind: childPub.kind as 'folder' | 'file',
     });
   }
 
-  // Process the frontier BFS (D-09: per-node parent-link publish, not batched in Phase 63)
+  // Process the frontier BFS.
   while (queue.length > 0) {
     const item = queue.shift()!;
 
@@ -581,37 +647,104 @@ export async function rotateReadFromNode(params: RotationParams): Promise<void> 
       nodeIpnsPublicKey: item.ipnsPublicKey,
       parentReadKey: item.nodeReadKey, // this node's own (pre-rotation) readKey
       parentIpnsName: item.parentIpnsName,
-      parentCurrentSeq: 0n, // unused in Phase 63 (D-09 deferred)
+      parentCurrentSeq: 0n,
       jobRecord,
       ctx,
     });
 
-    if (result.skipped) continue; // idempotency: already committed in a prior run
+    if (!result.skipped) {
+      // Advisory checkpoint after per-node commit.
+      if (jobRecord.persistCallback) await jobRecord.persistCallback(jobRecord);
 
-    // Advisory checkpoint after per-node commit.
-    if (jobRecord.persistCallback) await jobRecord.persistCallback(jobRecord);
+      // D-02: re-seal the child's new readKey' under the PARENT's new readKey'.
+      // The legacy sealChildReadKey call inside rotateOne seals under the child's own
+      // old readKey — correct for the child's own identity binding but wrong for the
+      // parent's SealedChildRef (which must be sealed under the parent's NEW readKey'
+      // for `unsealChildReadKey` to authenticate). This out-of-band call is the fix.
+      const parentState = parentTracking.get(item.parentIpnsName);
+      if (parentState) {
+        const updatedChildReadKeySealed = await sealChildReadKey(
+          result.childReadKey, // child's freshly minted readKey'
+          parentState.parentNewReadKey, // parent's new readKey' (from parent's rotateOne)
+          item.childPubId, // child's stable UUID (AAD binding)
+          item.childPubKind, // child's kind (AAD binding)
+          result.newGeneration // child's new generation (AAD binding)
+        );
 
-    // Enqueue this node's children using THIS node's pre-rotation readKey.
-    // item.nodeReadKey is NOT zeroed by rotateOne (D-09) — still valid here.
-    for (const childRef of result.children) {
-      const childPub = await resolveAndFetch(childRef.ipnsName);
-      if (!childPub) continue;
-      const childReadKey = await unsealChildReadKey(
-        childRef.readKeySealed,
-        item.nodeReadKey, // THIS node's old readKey (seals its children's readKeys)
-        childPub.id,
-        childPub.kind,
-        childRef.generation
-      );
-      // Thread per-node IPNS key from nodeKeySource (D-01 / Phase 64 seam).
-      const grandchildKeys = nodeKeySource?.(childRef.ipnsName);
-      queue.push({
-        childRef,
-        nodeReadKey: childReadKey, // grandchild's own readKey
-        parentIpnsName: item.childRef.ipnsName,
-        ipnsPrivateKey: grandchildKeys?.privateKey,
-        ipnsPublicKey: grandchildKeys?.publicKey,
-      });
+        // Update the parent's mutable SealedChildRef copy.
+        const childIdx = parentState.children.findIndex(
+          (c) => c.ipnsName === item.childRef.ipnsName
+        );
+        if (childIdx !== -1) {
+          parentState.children[childIdx] = {
+            ...parentState.children[childIdx],
+            readKeySealed: updatedChildReadKeySealed,
+            generation: result.newGeneration,
+          };
+        }
+
+        // D-09: decrement pending count; republish parent exactly once when all children done.
+        parentState.pendingChildCount--;
+        if (parentState.pendingChildCount === 0) {
+          // Batched parent re-publish: advance the IPNS sequence counter once, carrying
+          // the updated SealedChildRef array so unsealChildReadKey on next read succeeds.
+          // nodeGeneration is the parent's generation from ITS rotateOne — NOT bumped again.
+          await updateFolderMetadataAndPublish({
+            ipnsName: parentState.parentIpnsName,
+            // parentIpnsPrivateKey is non-null: the D-01 guard in rotateOne already
+            // verified the parent had a key when it rotated.
+            ipnsPrivateKey: parentState.parentIpnsPrivateKey!,
+            ipnsPublicKey: parentState.parentIpnsPublicKey,
+            sequenceNumber: parentState.parentLastSeq,
+            readKey: parentState.parentNewReadKey,
+            nodeId: parentState.parentNodeId,
+            nodeGeneration: parentState.parentNodeGeneration,
+            children: parentState.children,
+            ctx,
+          });
+          parentTracking.delete(item.parentIpnsName);
+        }
+      }
+
+      // Set up parent tracking for this node's children (recursive D-02/D-09).
+      if (result.children.length > 0) {
+        parentTracking.set(item.childRef.ipnsName, {
+          parentNewReadKey: result.childReadKey,
+          parentIpnsName: item.childRef.ipnsName,
+          parentIpnsPrivateKey: item.ipnsPrivateKey,
+          parentIpnsPublicKey: item.ipnsPublicKey,
+          parentNodeId: item.childPubId,
+          parentNodeGeneration: result.newGeneration,
+          parentLastSeq: result.newSequenceNumber,
+          children: [...result.children],
+          pendingChildCount: result.children.length,
+        });
+      }
+
+      // Enqueue this node's children using THIS node's pre-rotation readKey.
+      // item.nodeReadKey is NOT zeroed by rotateOne (D-09) — still valid here.
+      for (const childRef of result.children) {
+        const childPub = await resolveAndFetch(childRef.ipnsName);
+        if (!childPub) continue;
+        const childReadKey = await unsealChildReadKey(
+          childRef.readKeySealed,
+          item.nodeReadKey, // THIS node's old readKey (seals its children's readKeys)
+          childPub.id,
+          childPub.kind,
+          childRef.generation
+        );
+        // Thread per-node IPNS key from nodeKeySource (D-01 / Phase 64 seam).
+        const grandchildKeys = nodeKeySource?.(childRef.ipnsName);
+        queue.push({
+          childRef,
+          nodeReadKey: childReadKey, // grandchild's own readKey
+          parentIpnsName: item.childRef.ipnsName,
+          ipnsPrivateKey: grandchildKeys?.privateKey,
+          ipnsPublicKey: grandchildKeys?.publicKey,
+          childPubId: childPub.id,
+          childPubKind: childPub.kind as 'folder' | 'file',
+        });
+      }
     }
   }
 
