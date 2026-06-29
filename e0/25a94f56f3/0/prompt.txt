@@ -1,0 +1,363 @@
+/gsd-plan-phase 65
+
+---
+
+<task-notification>
+<task-id>a0b37e11d9580f46c</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/404f2777-3329-4599-ae19-feb8f3ce5e1f/tasks/a0b37e11d9580f46c.output</output-file>
+<status>completed</status>
+<summary>Agent "Research Phase 65 write-chain" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## RESEARCH COMPLETE
+
+**Phase:** 65 - sdk-write-chain-bin-re-link-and-invite-claim
+**Confidence:** HIGH
+
+### Key Findings
+
+- **Critical gap: `sealChildWriteKey`/`unsealChildWriteKey` are missing.** Only `sealChildReadKey`/`unsealChildReadKey` (role 0x02) exist in `packages/core/src/node/seal.ts`. Phase 65 must add the role 0x04 equivalents as the first task — everything downstream is unblocked by this addition.
+
+- **PLACEHOLDER_WRITE_KEY at engine.ts L550 and L594.** `rotateOne` passes `new Uint8Array(32)` to `sealNode`. For Phase 65, `rotateOne` must receive the real `writeKey` (threaded from the write-body unseal), or it will silently corrupt the write-body of any node that has one.
+
+- **`claimInviteReadKey` is already fully implemented** in `packages/sdk-core/src/share/grant.ts:184`. Phase 65's invite-claim work is service wiring + deleting sdk-layer `encryptedChildKeys` consumption, not reimplementing the primitive.
+
+- **`BinEntry.nodeRef?: Node` exists (Phase 62), but `originalFolderKeyEncrypted` is already absent from the type.** It appears only in test fixtures at `bin.test.ts:724,1063`. The restore pattern needs a `nodeReadKey` or `SealedChildRef`-shaped field — the planner must resolve this open question (see OQ-1 in the research doc).
+
+- **`SharedWriteContext` needs reshaping.** The current type exposes raw `folderKey: Uint8Array` and `ipnsPrivateKey: Uint8Array` directly — in the write-body model, `ipnsPrivateKey` comes from unsealing the write-body, not from a direct field. The `addShareKeysFn` callback type stays (Phase 68 removes it) but must never be called.
+
+### File Created
+
+`.planning/phases/65-sdk-write-chain-bin-re-link-and-invite-claim/65-RESEARCH.md`
+
+### Confidence Assessment
+
+| Area | Level | Reason |
+|------|-------|--------|
+| Standard Stack (existing functions) | HIGH | Direct source verification of all signatures |
+| Missing gap (sealChildWriteKey) | HIGH | Confirmed absent via grep across all packages |
+| Rotation engine seam locations | HIGH | Line-level verified at L550/L594 (PLACEHOLDER) and L891/L1041 (nodeKeySource) |
+| Write-revocation driver shape | MEDIUM | Design §5.3 is prescriptive; exact factoring is planner's discretion |
+| BinEntry nodeRef / readKey recovery | MEDIUM | Type confirmed; restore mechanism needs planner decision |
+| Invite claim wiring | HIGH | `claimInviteReadKey` confirmed fully implemented; only wiring remains |
+
+### Open Questions
+
+1. **BinEntry.nodeRef and readKey recovery for restore** — `BinEntry.nodeRef` is a `Node` (plaintext), not a `SealedChildRef`. Restore needs the node's `readKey` to call `sealChildReadKey`. The planner must decide whether to store a separate `nodeReadKey` in `BinEntry` or use a `SealedChildRef`-shaped link (design §3.10: "BinEntry is a SealedChildRef-shaped link sealed under the bin's own readKey").
+
+2. **Write-revocation cascade direction** — Child-first (bottom-up) is the expected ordering (generate new k51 names for leaves, then update parent pointers upward), but this is not explicit in the design. Planner should document the ordering.
+
+### Ready for Planning
+
+Research complete. Planner can now create PLAN.md files.</result>
+<usage><subagent_tokens>156235</subagent_tokens><tool_uses>43</tool_uses><duration_ms>463653</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a2ca671313074c398</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/404f2777-3329-4599-ae19-feb8f3ce5e1f/tasks/a2ca671313074c398.output</output-file>
+<status>completed</status>
+<summary>Agent "Map Phase 65 patterns" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PATTERN MAPPING COMPLETE
+
+**Phase:** 65 - sdk-write-chain-bin-re-link-and-invite-claim
+**Files classified:** 7
+**Analogs found:** 7 / 7
+
+### Coverage
+
+- Files with exact analog: 5 (seal.ts, engine.ts, bin/index.ts, grant wiring, e2e test)
+- Files with role-match analog: 2 (shared-write.ts vs grant.ts, write-revocation unit test)
+- Files with no analog: 0
+
+### Key Patterns Identified
+
+1. **`sealChildWriteKey`/`unsealChildWriteKey` = verbatim copy of `sealChildReadKey`/`unsealChildReadKey` with `0x02` → `0x04`** (seal.ts lines 187–224 is the direct template)
+2. **`PLACEHOLDER_WRITE_KEY` at engine.ts L550 and L594** are the two removal sites; the surrounding `rotateOne` structure (lines 473–652) is the structural template for write-revocation
+3. **`GrantRemintCallbacks` type** (engine.ts lines 53–65) is the copy pattern for `WriteRevocationCallbacks`
+4. **`claimInviteReadKey`** (grant.ts lines 184–224) is already fully implemented; Phase 65 wraps it in a service function using the `insertShareFn` injection pattern (grant.ts lines 136–145)
+5. **`permanentDeleteFromBin`** (bin/index.ts lines 324–354) is the exact pattern for how `addToBin`/`restoreFromBin` should manipulate bin metadata and call `saveBinMetadata`
+6. **E2E test structure:** Copy `rotation-crash-safety.test.ts` suite setup + `publishFileNode` helper verbatim; extend `publishFileNode` to `publishWriteCapableNode` that passes a real write-body to `sealNode`
+7. **Zeroization rule is consistent throughout** — zero only minted keys on failure paths, never caller-supplied buffers; the engine.ts lines 641–651 catch block is the canonical template
+
+### File Created
+
+`/Users/myankelev/Code/random/cipher-box/.planning/phases/65-sdk-write-chain-bin-re-link-and-invite-claim/65-PATTERNS.md`
+
+### Ready for Planning
+
+Pattern mapping complete. Planner can now reference analog patterns in PLAN.md files.</result>
+<usage><subagent_tokens>77038</subagent_tokens><tool_uses>14</tool_uses><duration_ms>167744</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a922ba5148426549b</task-id>
+<tool-use-id>toolu_01X8vF1ziAoTmuRS1qVo6o6U</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/404f2777-3329-4599-ae19-feb8f3ce5e1f/tasks/a922ba5148426549b.output</output-file>
+<status>completed</status>
+<summary>Agent "Plan Phase 65 write-chain" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Boundary confirmed clean: the three flagged lines are all explicit boundary/defer assertions (not planned edits), and the `files_modified` union is exactly `packages/core`, `packages/sdk-core`, `packages/sdk`, `tests/sdk-e2e` — zero `apps/api`, `apps/web`, TEE, or `crates/fuse` edits.
+
+## PLANNING COMPLETE
+
+**Phase 65 — SDK Write-Chain, Bin Re-link, and Invite Claim:** 7 plans across 4 waves, committed to branch `docs/plan-phase-65` (commit `b96a63c6a`). All plans validate clean (`valid: true`, 0 errors, 0 warnings).
+
+### Plan set &amp; wave structure
+
+| Plan | Wave | depends_on | Type | Requirements | Scope |
+|------|------|-----------|------|--------------|-------|
+| 65-01 | 1 | — | tdd | WRITE-01 | core `sealChildWriteKey`/`unsealChildWriteKey` (role 0x04) — dependency-zero blocker |
+| 65-02 | 1 | — | tdd | WRITE-01 | bin pure re-link + `BinEntry.nodeReadKey` (OQ-1); delete legacy re-encrypt path |
+| 65-03 | 1 | — | tdd | WRITE-01 | invite-claim service wiring (single `readKey` re-wrap); kill sdk-layer `encryptedChildKeys` |
+| 65-04 | 2 | 65-01 | execute | WRITE-01, WRITE-03 | `shared-write.ts` write-body model + read-only/write separation + "cannot write until re-fetch" error |
+| 65-05 | 2 | 65-01 | execute | WRITE-01 | rotation engine real-`writeKey` wiring; remove `PLACEHOLDER_WRITE_KEY` (folds FLAG-63-U1) |
+| 65-06 | 3 | 65-05 | tdd | WRITE-02, WRITE-03, WRITE-04 | `rotateWriteFromNode` driver (full Ed25519 rotation, child-first cascade, tombstone-intent, co-writer re-wrap) |
+| 65-07 | 4 | 65-06, 65-04 | execute | WRITE-02, WRITE-03, WRITE-04 | sdk-e2e write-chain rotation round-trip gate (D-04) |
+
+**Parallelism:** Wave 1 runs 3 plans in parallel (no file overlap); Wave 2 runs 2; Waves 3–4 are sequential (engine.ts file-ownership + e2e gate).
+
+### Multi-source coverage audit (all COVERED, no gaps)
+
+- **GOAL** (ROADMAP): write-body Ed25519 under `writeKey` (01,04) + (c) full Ed25519 write-revocation (06) + bin re-link (02) + invite re-wrap (03) → covered.
+- **REQ:** WRITE-01 → 01/02/03/04/05/06; WRITE-02 → 06/07; WRITE-03 → 04/06/07; WRITE-04 → 06/07. Every ID in ≥1 plan.
+- **RESEARCH:** missing core primitives (01), `PLACEHOLDER_WRITE_KEY` removal/Pitfall 2 (05), `rotateWriteFromNode` (06), bin/invite wiring (02/03), e2e gate (07) → covered.
+- **CONTEXT D-01…D-06:** D-01 Q3 no-schema residual documented (02, 06); D-02 mock seams (04,05,06,07); D-03 offline error (04); D-04 e2e gate (07); D-05 call-codec + placeholder removal (01,04,05); D-06 bin/invite + read-chain invariant (02,03,06) → covered.
+
+### Open questions resolved in-plan
+- **OQ-1** (bin `readKey` recovery): `BinEntry.nodeReadKey: Uint8Array` captured at `addToBin` via `unsealChildReadKey`, protected by the ECIES bin-blob; restore re-seals under destination parent — Plan 02.
+- **OQ-2** (cascade direction): **child-first / bottom-up** documented — leaves get new k51 names first, then parents re-point upward to the share root — Plan 06.
+
+### Guardrails honored
+- Hard boundary: zero `apps/api`/`apps/web`/TEE/`crates/fuse` edits; all DB/transport behind injected callbacks (D-02).
+- Every task carries `&lt;read_first&gt;` + `&lt;acceptance_criteria&gt;`; every plan has `&lt;threat_model&gt;` (STRIDE T-65-01…29), `must_haves`, and an "Artifacts this plan produces" section.
+- No package installs → no legitimacy checkpoints. TDD mode: dedicated `type: tdd` plans for the seal primitive, bin re-link, invite-claim, and the write-revocation driver; the e2e suite is the integration gate (not a unit RED/GREEN cycle).
+
+**Plan files:** `/Users/myankelev/Code/random/cipher-box/.planning/phases/65-sdk-write-chain-bin-re-link-and-invite-claim/65-0{1..7}-PLAN.md`
+
+**Next:** orchestrator ff-merges `docs/plan-phase-65` and runs `/gsd-execute-phase 65` (Wave 1 = plans 01/02/03 in parallel). Note: commit sits on branch `docs/plan-phase-65` (not `main`, per branch protection) for the orchestrator to merge and delete.</result>
+<usage><subagent_tokens>259885</subagent_tokens><tool_uses>55</tool_uses><duration_ms>1177716</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aeb7d30fb302791f9</task-id>
+<tool-use-id>toolu_01FMJFkCVnyHMFJV4EHpAoAj</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/404f2777-3329-4599-ae19-feb8f3ce5e1f/tasks/aeb7d30fb302791f9.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify Phase 65 plans" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Now I have enough to produce the verification report.
+
+---
+
+## ISSUES FOUND
+
+**Phase:** 65-sdk-write-chain-bin-re-link-and-invite-claim
+**Plans checked:** 7 (65-01 through 65-07)
+**Issues:** 0 blocker(s), 2 warning(s), 0 info
+
+---
+
+### Dimension 1: Requirement Coverage — PASS
+
+| Requirement | Plans | Tasks | Status |
+|-------------|-------|-------|--------|
+| WRITE-01 | 01, 02, 03, 04, 05 | 01:T1-T2, 02:T1-T2, 03:T1-T2, 04:T1-T2, 05:T1-T2 | Covered |
+| WRITE-02 | 06, 07 | 06:T1-T2, 07:T2 | Covered |
+| WRITE-03 | 04, 06, 07 | 04:T3, 06:T2, 07:T2 | Covered |
+| WRITE-04 | 06, 07 | 06:T1-T2 (teeUnenrollFn), 07:T2 | Covered |
+
+Plans 02 and 03 claim WRITE-01 for bin re-link and invite claim respectively. This is a stretch mapping (WRITE-01 describes the write chain structure), but both are explicitly listed as phase deliverables in the ROADMAP Goal and SC4, and the phase requirement set is WRITE-01..04 with no separate bin/invite requirement IDs — acceptable under the phase-level mapping.
+
+---
+
+### Dimension 2: Task Completeness — PASS
+
+All 16 tasks across 7 plans carry `&lt;read_first&gt;`, `&lt;action&gt;`, `&lt;verify&gt;/&lt;automated&gt;`, `&lt;acceptance_criteria&gt;`, and `&lt;done&gt;`. Actions are concrete: they name specific file paths, line numbers, function signatures, and identifiers. No vague "implement X" tasks.
+
+---
+
+### Dimension 3: Dependency Correctness — PASS
+
+| Plan | Wave | depends_on | Valid |
+|------|------|-----------|-------|
+| 01 | 1 | [] | ✓ |
+| 02 | 1 | [] | ✓ (uses sealChildReadKey/role 0x02, which pre-exists) |
+| 03 | 1 | [] | ✓ (uses existing claimInviteReadKey) |
+| 04 | 2 | ["65-01"] | ✓ (needs sealChildWriteKey) |
+| 05 | 2 | ["65-01"] | ✓ (needs sealChildWriteKey for fail-closed guard) |
+| 06 | 3 | ["65-05"] | ✓ (needs PLACEHOLDER removed + nodeWriteKey seam) |
+| 07 | 4 | ["65-06","65-04"] | ✓ (needs rotateWriteFromNode + shared-write.ts) |
+
+Acyclic, forward-only, no missing references.
+
+---
+
+### Dimension 4: Key Links Planned — PASS
+
+All key wiring paths are explicit:
+- Plan 01 → 04/05/06: `sealChildWriteKey`/`unsealChildWriteKey` consumed by downstream plans, all listed in key_links
+- Plan 04: write-body build path → `sealNode` + `sealChildWriteKey` → parent write-body; walk path via `unsealChildWriteKey`
+- Plan 06: `rotateWriteFromNode` per-node keygen → first-publish → parent re-point via `sealChildWriteKey` → co-writer re-wrap via `wrapKey` → `writeDescriptorRefPersistFn`
+- Plan 07: `publishWriteCapableNode` helper → `rotateWriteFromNode` → live IPNS resolve assertions
+
+---
+
+### Dimension 5: Scope Sanity — PASS
+
+| Plan | Tasks | Files | Status |
+|------|-------|-------|--------|
+| 01 | 2 | 4 | OK |
+| 02 | 2 | 3 | OK |
+| 03 | 2 | 3 | OK |
+| 04 | 3 | 2 | OK |
+| 05 | 2 | 2 | OK |
+| 06 | 2 | 3 | OK |
+| 07 | 2 | 1 | OK |
+
+All within the 2–3 task target; no plan exceeds 4 tasks or 10 files.
+
+---
+
+### Dimension 6: Verification Derivation — PASS
+
+All `must_haves.truths` are user/system-observable and directly trace to the phase goal:
+- Plan 01: round-trip correctness + role-0x04 isolation + AAD binding + zeroization rule
+- Plan 02: re-link AEAD asymmetry + legacy-field absence
+- Plan 03: single-grant-per-claimer + zero encryptedChildKeys consumption
+- Plan 04: read-only holder cannot reach writeBody + write-link placement invariant + offline error
+- Plan 05: write-plane preservation through read-rotation + PLACEHOLDER gone + fail-closed
+- Plan 06: per-node new k51, child-first cascade, tombstone-intent, co-writer re-wrap, read-plane invariance
+- Plan 07: end-to-end round-trip against live API
+
+All plans have an `&lt;artifacts_produced&gt;` section.
+
+---
+
+### Dimension 7: Context Compliance — PASS
+
+All six locked decisions are covered:
+- **D-01**: Plan 02 explicitly documents the Q3 residual with no marker, no new schema, no cross-principal revoke attempt
+- **D-02**: Zero plans modify `apps/api`, `apps/web`, TEE worker, or `crates/fuse`. All transport is injected callbacks in every plan
+- **D-03**: Plan 04 Task 3 delivers `CannotWriteUntilRefetchError` with no grace/notification logic
+- **D-04**: Plan 07 is the explicit `tests/sdk-e2e` write-chain rotation round-trip gate
+- **D-05**: Every plan that calls crypto explicitly says "call the codec, never reimplement"; `sealNode`/`unsealNode`/`encodeWriteBody` composed not rebuilt
+- **D-06**: Plan 02 deletes `originalFolderKeyEncrypted`; Plan 03 eliminates `encryptedChildKeys` sdk-layer consumption
+
+Deferred ideas are excluded: no Q3 revocation queue, no grace-period UX, no live tombstone enforcement, no apps/api schema changes.
+
+### Dimension 7b: Scope Reduction Detection — PASS
+
+No scope-reduction language found. Plans reference decisions by name and deliver them fully — the mocked callbacks are the explicitly-decided Phase-64-discipline boundary (D-02), not a simplification.
+
+### Dimension 7c: Architectural Tier Compliance — PASS
+
+All file modifications are in `packages/core`, `packages/sdk-core`, `packages/sdk`, and `tests/sdk-e2e` — the correct tier. No security-sensitive logic placed in a less-trusted tier.
+
+---
+
+### Phase-Specific Checks — PASS
+
+1. **Scope fence (D-02)**: No `files_modified` entry in any plan touches `apps/api`, `apps/web`, TEE, or `crates/fuse`. ✓
+2. **SC1–SC4 mapping**:
+   - SC1 (read-only cannot reach signing material): Plan 04 Task 1 — `unsealNode(pub, readKey)` returns no writeBody assertion ✓
+   - SC2 (write-revocation: new k51 per node, child-first cascade, tombstone): Plan 06 Tasks 1–2 ✓
+   - SC3 (co-writer re-wrap, offline error): Plan 04 Task 3 (explicit error) + Plan 06 Task 2 (survivor re-wrap + revoked drop) ✓
+   - SC4 (bin pure re-link + delete originalFolderKeyEncrypted + delete encryptedChildKeys): Plans 02 + 03 ✓
+3. **Dependency-zero ordering**: Plan 01 (sealChildWriteKey) is wave 1; Plans 04/05 depend on it; Plan 06 depends on 05; Plan 07 depends on 06 + 04 ✓
+4. **PLACEHOLDER_WRITE_KEY removal**: Plan 05 Task 2 removes it from all 3 sites ✓
+5. **OQ-1 and OQ-2 resolved**: OQ-1 resolved in Plan 02 ("OQ-1 resolution (documented decision)": `BinEntry.nodeReadKey`); OQ-2 resolved in Plan 06 ("OQ-2 resolution (documented decision)": child-first / bottom-up) ✓
+6. **D-04 gate**: Plan 07 is the sdk-e2e write-chain rotation round-trip ✓
+7. **`&lt;read_first&gt;` + `&lt;acceptance_criteria&gt;`**: Present in every task ✓
+
+---
+
+### Dimension 8: Nyquist Compliance — PASS with WARNING
+
+VALIDATION.md exists (`65-VALIDATION.md`). All 16 tasks carry `&lt;automated&gt;` blocks. Sampling continuity is maintained across all waves (no window of 3 consecutive tasks without automated verify). However, see Warning 2 below.
+
+---
+
+### Dimension 10: CLAUDE.md Compliance — PASS
+
+- TypeScript throughout: ✓
+- `Uint8Array` for binary data: all plans use `Uint8Array` ✓
+- String literals over TypeScript enums: multiple plans explicitly note "string-literal/structural types (no enums)" ✓
+- Zero-knowledge server: all plans use injected callbacks, zero direct API calls ✓
+- Role-byte AAD seal / AES-256-GCM: plans call existing primitives (D-05), never hand-roll ✓
+- Zeroization-ownership rule: all plans cite D-09 ("never zero caller-supplied buffers") ✓
+- `pnpm api:generate`: not applicable — no API surface changes in this phase ✓
+
+---
+
+### Dimension 11: Research Resolution — WARNING
+
+**Issue:**
+```yaml
+issue:
+  plan: null
+  dimension: research_resolution
+  severity: warning
+  description: "RESEARCH.md `## Open Questions` section lacks the `(RESOLVED)` suffix; the three listed questions (OQ-1 BinEntry readKey recovery, OQ-2 cascade direction, OQ-3 SharedWriteContext reshape) have no inline RESOLVED markers in the research file"
+  file: "65-RESEARCH.md"
+  note: "Resolutions ARE documented in Plans 02 (OQ-1), 06 (OQ-2), and 04 (OQ-3 — Claude's discretion) — execution is not blocked, but RESEARCH.md is stale"
+  fix_hint: "Add '(RESOLVED)' to the section heading and inline RESOLVED annotations to each question in 65-RESEARCH.md"
+```
+
+This is a WARNING not a BLOCKER: all three resolutions are explicitly documented in the plan objectives and must_haves; no question is silently dropped.
+
+---
+
+### Dimension: Verify Command Format Sanity — WARNING
+
+**Issue:**
+```yaml
+issue:
+  plan: "65-07"
+  dimension: verify_command_format
+  severity: warning
+  description: "Plan 07 Task 2 &lt;automated&gt; block ends with `|| true`, suppressing typecheck failure. The actual D-04 gate command (`pnpm --filter @cipherbox/sdk-e2e test run -- write-chain-rotation`) is documented in acceptance_criteria and an echo statement but is NOT executed by the automated verify — it is silently skipped because the live stack is required"
+  task: 2
+  problematic_verify: "pnpm --filter @cipherbox/sdk-e2e exec tsc --noEmit -p tsconfig.json 2&gt;&amp;1 | tail -15 || true"
+  fix_hint: "Remove `|| true` from the tsc command so typecheck failures surface. The acceptance_criteria already documents that the D-04 live command must be run manually against a live stack — the static verify should at least gate on typecheck passing"
+```
+
+This is a WARNING not a BLOCKER: the D-04 gate requirement is satisfied by the acceptance_criteria specification and the established pattern for sdk-e2e suites in this project (docker stack required). The `|| true` is a latency artifact (live stack not available in static verify), but suppressing typecheck errors silently is worse than failing loudly on the static gate.
+
+---
+
+### Structured Issues (YAML)
+
+```yaml
+issues:
+  - plan: null
+    dimension: research_resolution
+    severity: warning
+    description: "RESEARCH.md ## Open Questions section lacks (RESOLVED) suffix; three questions have no inline RESOLVED markers"
+    file: "65-RESEARCH.md"
+    fix_hint: "Add (RESOLVED) to section heading; add inline RESOLVED annotations to OQ-1 (Plan 02), OQ-2 (Plan 06), OQ-3 (Plan 04 discretion)"
+
+  - plan: "65-07"
+    dimension: verify_command_format
+    severity: warning
+    description: "Task 2 &lt;automated&gt; block ends with `|| true`, suppressing typecheck failures in the static verify gate"
+    task: 2
+    affected_field: "&lt;automated&gt;"
+    fix_hint: "Remove `|| true` from tsc --noEmit command so static typecheck failures are surfaced; document the live D-04 gate command in a separate comment"
+```
+
+---
+
+### Recommendation
+
+No blockers. 2 warnings (procedural formality in RESEARCH.md + suppressed static verify gate in Plan 07 Task 2). Plans can execute as written. Fixing the `|| true` in Plan 07 Task 2 is the higher-priority of the two.</result>
+<usage><subagent_tokens>82061</subagent_tokens><tool_uses>17</tool_uses><duration_ms>172984</duration_ms></usage>
+</task-notification>
