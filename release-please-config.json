@@ -119,14 +119,14 @@
       "component": "@cipherbox/sdk-core",
       "include-component-in-tag": true,
       "bump-minor-pre-major": true,
-      "release-as": "0.39.1"
+      "release-as": "0.40.0"
     },
     "packages/sdk": {
       "release-type": "node",
       "component": "@cipherbox/sdk",
       "include-component-in-tag": true,
       "bump-minor-pre-major": true,
-      "release-as": "0.37.3"
+      "release-as": "0.38.0"
     },
     "crates/crypto": {
       "release-type": "rust",
