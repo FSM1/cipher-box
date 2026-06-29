@@ -1,0 +1,51 @@
+ok, please follow the following steps:
+- plan and verify plan for phase 64
+- execute the plan
+- finally /ship-phase 64
+
+---
+
+<task-notification>
+<task-id>a0d42a702fc86cc6a</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/404f2777-3329-4599-ae19-feb8f3ce5e1f/tasks/a0d42a702fc86cc6a.output</output-file>
+<status>completed</status>
+<summary>Agent "Research Phase 64" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## RESEARCH COMPLETE
+
+**Phase:** 64 - Rotation Soundness — Revocation Guarantees
+**Confidence:** HIGH
+
+### Key Findings
+
+- **D-02 CRITICAL confirmed in live code (engine.ts L344-350):** `sealChildReadKey(readKeyPrime, parentReadKey, ...)` seals under the child's own pre-rotation key (legacy `parentReadKey` misnomer), and `rotateReadFromNode` never writes the result back to any parent's `SealedChildRef`. Non-root nodes AEAD-fail on `unsealChildReadKey` without the D-02 fix. Fix lives in the BFS caller, not in `rotateOne`.
+- **D-06 confirmed in live code (registration.ts L174-175):** `id: params.nodeId ?? crypto.randomUUID()` and `generation: params.nodeGeneration ?? 0` silently break AAD stability and the convergence test on every one of the 6 `updateFolderMetadataAndPublish` call sites in `client.ts` that omit `nodeId`/`nodeGeneration`.
+- **D-07 two bugs confirmed (engine.ts L386, L458-462):** `completedNodeIds.add` fires before `reMintGrantsRootedAt`; resume guard marks whole walk complete without calling `verifySubtreeClean`.
+- **Four seam signatures frozen:** `mintFileKeyOnRotate`, `reMintGrantsRootedAt`, `mergeConcurrentChildren`, `verifySubtreeClean` — all confirmed throwing, signatures locked, bodies are Phase 64's primary deliverable.
+- **`mergeChildren` in `folder/merge.ts` also throws a Phase-64 stub** — fills alongside `mergeConcurrentChildren` for the CAS-409 three-way merge.
+
+### File Created
+
+`/Users/myankelev/Code/random/cipher-box/.planning/phases/64-rotation-soundness-revocation-guarantees/64-RESEARCH.md`
+
+### Confidence Assessment
+
+| Area | Level | Reason |
+|------|-------|--------|
+| Current engine state (seam locations, bugs) | HIGH | Directly read from live code at exact line numbers |
+| D-02 re-seal fix shape | HIGH | Design §4.5/§4.7 confirmed against actual bug in code |
+| D-06 call-site threading | HIGH | All 6 call sites and `FolderState` type read directly |
+| TEST-01 sdk-e2e pattern | HIGH | Phase-63 scaffold read; extends established pattern |
+| `reMintGrantsRootedAt` callback signature | MEDIUM | Pattern from design §4.4; exact shape is Claude's discretion |
+
+### Open Questions
+
+- `FolderState.metadata` nullability at call sites: if `registerFolder` doesn't populate metadata, the D-06 fix needs `nodeId`/`nodeGeneration` as explicit required `FolderState` fields (not reliant on `metadata` being non-null). Safest approach is explicit fields.
+- BFS parent-grouping for D-09 batched parent-publish: tracking `Map&lt;parentIpnsName, parentState&gt;` is the likely approach; exact implementation is Claude's discretion.
+
+### Ready for Planning
+
+Research complete. Planner can now create PLAN.md files.</result>
+<usage><subagent_tokens>67681</subagent_tokens><tool_uses>42</tool_uses><duration_ms>716545</duration_ms></usage>
+</task-notification>
