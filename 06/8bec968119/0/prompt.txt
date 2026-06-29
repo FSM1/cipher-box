@@ -1,0 +1,173 @@
+<task-notification>
+<task-id>b7zs2piu3</task-id>
+<tool-use-id>toolu_01L8c2kic2UJXbuMkwfscRLE</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/404f2777-3329-4599-ae19-feb8f3ce5e1f/tasks/b7zs2piu3.output</output-file>
+<status>completed</status>
+<summary>Background command "Commit RESEARCH.md and VALIDATION.md fixes" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a7a7512cac88d0c80</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/404f2777-3329-4599-ae19-feb8f3ce5e1f/tasks/a7a7512cac88d0c80.output</output-file>
+<status>completed</status>
+<summary>Agent "Re-verify Phase 64 plans" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All three prior issues confirmed resolved. The dependency graph is acyclic and wave-consistent. All five requirements (ROT-03, ROT-04, ROT-05, ROT-06, TEST-01) have covering plans. The 64-07 targeted edit pinned the no-double-bump mechanism explicitly (per-node convergence guard + fresh-job idempotency, RED Test 5) with wave: 5, depends_on: [64-06] intact. Prohibitions against scope pull-forward are present in the frontmatter. CLAUDE.md security rules (no key logging, no unencrypted keys to server, AES-256-GCM, ECIES) are explicitly honored in RESEARCH.md Project Constraints section. No fenced code appears in the 64-07 `&lt;action&gt;` block.
+
+## VERIFICATION PASSED
+
+**Phase:** 64 — rotation-soundness-revocation-guarantees
+**Plans verified:** 8
+**Iteration:** 2 (re-check after revision)
+**Status:** All checks passed
+
+### Prior Issues Resolution
+
+| Prior Issue | Status |
+|-------------|--------|
+| [BLOCKER — research_resolution] `## Open Questions` not marked RESOLVED | FIXED: `## Open Questions (RESOLVED)` with both questions inline-marked |
+| [WARNING — verification_derivation] VALIDATION.md missing per-task map | FIXED: 8-row per-task map, `status: final`, `nyquist_compliant: true` |
+| [WARNING — task_completeness] 64-07 Task 1 no-double-bump mechanism unspecified | FIXED: per-node convergence guard explicitly described in `&lt;action&gt;`; RED Test 5 asserts a node at baseline+1 is not re-rotated under a fresh job record |
+
+### Coverage Summary
+
+| Requirement | Plans | Status |
+|-------------|-------|--------|
+| ROT-03 | 64-03 | Covered |
+| ROT-04 | 64-05 | Covered |
+| ROT-05 | 64-02, 64-06 | Covered |
+| ROT-06 | 64-01, 64-04, 64-07 | Covered |
+| TEST-01 | 64-08 | Covered |
+
+### Plan Summary
+
+| Plan | Wave | Deps | Requirements | Status |
+|------|------|------|-------------|--------|
+| 64-01 | 1 | [] | ROT-06 (D-06 node-identity) | Valid |
+| 64-02 | 1 | [] | ROT-05 (merge.ts fill) | Valid |
+| 64-03 | 1 | [] | ROT-03 (mintFileKeyOnRotate) | Valid |
+| 64-04 | 2 | [64-03] | ROT-06 (D-01/D-02/D-09) | Valid |
+| 64-05 | 3 | [64-04] | ROT-04 (reMintGrantsRootedAt) | Valid |
+| 64-06 | 4 | [64-02, 64-05] | ROT-05 (mergeConcurrentChildren) | Valid |
+| 64-07 | 5 | [64-06] | ROT-06 (verifySubtreeClean + D-07) | Valid |
+| 64-08 | 6 | [all] | TEST-01 (sdk-e2e crash-safety) | Valid |
+
+### 64-07 Targeted Edit Regression Check
+
+- Wave and dependency (`wave: 5`, `depends_on: [64-06]`) intact.
+- `&lt;action&gt;` specifies the per-node convergence guard in prose; no fenced code blocks introduced.
+- Fill-don't-re-architect discipline preserved: seam names unchanged, body-only replacement.
+- Threat model present and unchanged.
+- No Phase-65/66/68 deferred scope pulled forward (confirmed against CONTEXT.md Deferred section).
+
+Run `/gsd-execute-phase 64` to proceed.</result>
+<usage><subagent_tokens>71288</subagent_tokens><tool_uses>12</tool_uses><duration_ms>85200</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ae083f771d803fa3a</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/404f2777-3329-4599-ae19-feb8f3ce5e1f/tasks/ae083f771d803fa3a.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 64-01 of phase 64" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The commit landed at `64f67d183` — the gsd-tools `commit_failed` return is the known false-negative documented in project memory.
+
+## PLAN COMPLETE
+
+**Plan:** 64-01
+**Tasks:** 3/3
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.planning/phases/64-rotation-soundness-revocation-guarantees/64-01-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"64-01","worktree_path":"","branch":"","expected_base":""}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `8478ab86a`: test(64-01): add failing tests for nodeId/nodeGeneration required fields
+- `a817e41ad`: feat(64-01): make nodeId/nodeGeneration required on updateFolderMetadataAndPublish
+- `8ab626086`: feat(64-01): thread nodeId/nodeGeneration through all six client.ts CRUD call sites
+- `962d1a804`: test(64-01): add AEAD round-trip spec for moveItem dest-parent re-seal (FLAG-63-U2)
+- `072428a2b`: feat(64-01): re-seal moved child readKey under dest parent readKey in moveItem (FLAG-63-U2)
+- `64f67d183`: docs(64-01): complete nodeId/nodeGeneration required + moveItem re-seal plan
+
+**Duration:** ~90 minutes</result>
+<usage><subagent_tokens>64648</subagent_tokens><tool_uses>164</tool_uses><duration_ms>2572404</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a8a5325ef7ab5f56e</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/404f2777-3329-4599-ae19-feb8f3ce5e1f/tasks/a8a5325ef7ab5f56e.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 64-02 of phase 64" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 64-02
+**Tasks:** 1 feature (RED + GREEN + no-REFACTOR) / 1 plan
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.planning/phases/64-rotation-soundness-revocation-guarantees/64-02-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"64-02","worktree_path":"","branch":"feat/rotation-soundness-revocation-guarantees","expected_base":""}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `ecf64c5e2`: test(64-02): add failing three-way merge tests for SealedChildRef (RED)
+- `1aad8adfd`: feat(64-02): implement mergeChildren three-way merge for SealedChildRef (GREEN)
+- `3e5fccdaa`: docs(64-02): complete mergeChildren three-way merge plan
+
+**Duration:** ~3 min
+
+**What changed:**
+
+`packages/sdk-core/src/folder/merge.ts` — `mergeChildren` stub (was `never`/throwing) replaced with a 12-line three-way merge: build a `Map&lt;ipnsName, SealedChildRef&gt;` from local (first) then remote (overwrites — remote wins on conflict), then delete any base entry absent from both sides. No crypto, no mutation of sealed bytes.
+
+`packages/sdk-core/src/__tests__/folder-merge.test.ts` — quarantined `describe.skip` block (retired `FolderChild` era) replaced with 6 live tests against `SealedChildRef`: T1 concurrent-add survives, T2 remote wins on conflict, T3 both-sides delete pruned, T4 one-sided delete kept, T5 return type / no-throw, + immutability guard. ConflictError / is409 suites untouched (12 tests passing throughout). Final: 18/18 green.</result>
+<usage><subagent_tokens>91867</subagent_tokens><tool_uses>29</tool_uses><duration_ms>251468</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a4c8198407198d193</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/404f2777-3329-4599-ae19-feb8f3ce5e1f/tasks/a4c8198407198d193.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 64-03 of phase 64" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All done. Final commit hash: `38e1a2bbc`.
+
+---
+
+## PLAN COMPLETE
+
+**Plan:** 64-03
+**Tasks:** 1 (TDD: RED + GREEN)
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.planning/phases/64-rotation-soundness-revocation-guarantees/64-03-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"64-03","worktree_path":"","branch":"","expected_base":""}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `a8ee41eae`: test(64-03): add failing content-key rotation tests (RED)
+- `9989e2fa5`: feat(64-03): mint fresh fileKey on file rotation (GREEN)
+- `38e1a2bbc`: docs(64-03): complete mintFileKeyOnRotate seam fill plan
+
+**Duration:** 2 min
+
+**What changed:**
+
+`packages/sdk-core/src/rotation/engine.ts` — `mintFileKeyOnRotate` seam filled (was `throw new Error('not implemented...')`). Now imports `generateRandomBytes` from `@cipherbox/crypto`, mints `fileKeyPrime = generateRandomBytes(32)`, and assigns to `node.content.fileKey` when content is present. Folder nodes (no content) return early. Does not zero `fileKeyPrime` after assignment — `rotateOne` is the terminal consumer via `sealNode`.
+
+`packages/sdk-core/src/__tests__/rotation/engine.test.ts` — 3 new ROT-03 assertions (fresh-key, no-op folder, rotateOne sealNode integration). 2 Phase-63 placeholder throw-tests removed. Suite: 19 tests, all pass.</result>
+<usage><subagent_tokens>112735</subagent_tokens><tool_uses>33</tool_uses><duration_ms>329466</duration_ms></usage>
+</task-notification>
