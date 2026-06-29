@@ -2,17 +2,17 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
-current_phase: 64
-current_phase_name: rotation-soundness-revocation-guarantees
+current_phase: 65
+current_phase_name: sdk-write-chain-bin-re-link-and-invite-claim
 status: executing
 stopped_at: Phase 65 context gathered
-last_updated: "2026-06-29T22:45:14.520Z"
+last_updated: "2026-06-29T22:57:39.117Z"
 last_activity: 2026-06-29
-last_activity_desc: Phase 64 execution started
+last_activity_desc: Phase 65 execution started
 progress:
   total_phases: 9
   completed_phases: 4
-  total_plans: 29
+  total_plans: 36
   completed_plans: 29
   percent: 44
 ---
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-27)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 64 — rotation-soundness-revocation-guarantees
+**Current focus:** Phase 65 — sdk-write-chain-bin-re-link-and-invite-claim
 
 ## Current Position
 
-Phase: 64 (rotation-soundness-revocation-guarantees) — EXECUTING
-Plan: 8 of 8
-Status: Ready to execute
-Last activity: 2026-06-29 — Phase 64 execution started
+Phase: 65 (sdk-write-chain-bin-re-link-and-invite-claim) — EXECUTING
+Plan: 1 of 7
+Status: Executing Phase 65
+Last activity: 2026-06-29 — Phase 65 execution started
 
 Progress: `░░░░░░░░░░` 0 / 9 phases (0%)
 
