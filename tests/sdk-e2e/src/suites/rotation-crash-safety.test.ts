@@ -65,10 +65,18 @@ let fixture: MultiAccountFixture;
  * rotateOne calls `crypto.getRandomValues(new Uint8Array(32))` to mint readKeyPrime.
  * mintFileKeyOnRotate calls `generateRandomBytes(32)` → same underlying call.
  *
- * Reset (`capturedReadKeys.length = 0`) immediately before each rotateReadFromNode
+ * Reset via clearCapturedReadKeys() immediately before each rotateReadFromNode
  * call so indices are stable: [0]=readKeyPrime_root, [1]=readKeyPrime_first-child, …
  */
 const capturedReadKeys: Uint8Array[] = [];
+
+/** Zero each captured key buffer before truncating the array. */
+function clearCapturedReadKeys(): void {
+  for (const key of capturedReadKeys) {
+    key.fill(0);
+  }
+  capturedReadKeys.length = 0;
+}
 
 beforeAll(async () => {
   fixture = await createMultiAccountFixture(['alice', 'bob']);
@@ -89,6 +97,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  clearCapturedReadKeys();
   vi.restoreAllMocks();
   if (fixture) await fixture.cleanupAll();
 });
@@ -249,7 +258,7 @@ describe('Rotation crash-safety suite (TEST-01 phase gate)', () => {
     });
 
     // --- Rotate the full tree ---
-    capturedReadKeys.length = 0;
+    clearCapturedReadKeys();
     const jobRecord: RotationJobRecord = {
       rootNodeId: rootResult.node.id,
       status: 'pending',
@@ -427,7 +436,7 @@ describe('Rotation crash-safety suite (TEST-01 phase gate)', () => {
       }
     };
 
-    capturedReadKeys.length = 0;
+    clearCapturedReadKeys();
     const jobRecord2: RotationJobRecord = {
       rootNodeId: root2Result.node.id,
       status: 'pending',
@@ -455,8 +464,11 @@ describe('Rotation crash-safety suite (TEST-01 phase gate)', () => {
     expect(crashed).toBe(true);
     expect(persistCallCount).toBe(4); // 3 nodes + final status
 
-    // readKeyPrime_root2 captured before the persistCallback (spy fires inside rotateOne)
-    const readKeyPrimeRoot2 = capturedReadKeys[0];
+    // readKeyPrime_root2 captured before the persistCallback (spy fires inside rotateOne).
+    // Use .slice() to make an independent copy: clearCapturedReadKeys() below zeros
+    // capturedReadKeys[0] in place; without a copy, readKeyPrimeRoot2 would become
+    // all-zeros before being passed to rotateReadFromNode.
+    const readKeyPrimeRoot2 = capturedReadKeys[0].slice();
     expect(readKeyPrimeRoot2).toBeInstanceOf(Uint8Array);
 
     // All 3 nodes committed before crash
@@ -495,7 +507,7 @@ describe('Rotation crash-safety suite (TEST-01 phase gate)', () => {
       frontier: [],
     };
 
-    capturedReadKeys.length = 0; // should stay empty — no rotation on resume
+    clearCapturedReadKeys(); // should stay empty — no rotation on resume
     let resumeError: unknown;
     try {
       await rotateReadFromNode({
@@ -661,7 +673,7 @@ describe('Rotation crash-safety suite (TEST-01 phase gate)', () => {
       });
     };
 
-    capturedReadKeys.length = 0;
+    clearCapturedReadKeys();
     const jobRecord3: RotationJobRecord = {
       rootNodeId: root3Result.node.id,
       status: 'pending',

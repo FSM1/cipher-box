@@ -178,6 +178,17 @@ export async function updateFolderMetadataAndPublish(params: {
           'nodeGeneration is required — do not reset to 0 (D-06): rotation relies on monotonic generation'
         );
       }
+      if (
+        typeof params.nodeGeneration !== 'number' ||
+        !Number.isFinite(params.nodeGeneration) ||
+        params.nodeGeneration < 0 ||
+        !Number.isInteger(params.nodeGeneration)
+      ) {
+        throw new Error(
+          'nodeGeneration must be a finite non-negative integer (D-06): got ' +
+            String(params.nodeGeneration)
+        );
+      }
       const node: Node = {
         schema: 'node/v3',
         kind: 'folder',

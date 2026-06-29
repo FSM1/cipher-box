@@ -215,7 +215,6 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 64 P04 | 60 | 4 tasks | 2 files |
 | Phase 64 P06 | 13 | 2 tasks | 3 files |
 | Phase 64 P07 | 40m | 4 tasks | 2 files |
-| Phase 64 P08 | 45 | - tasks | - files |
 | Phase 64 P08 | 45 | 3 tasks | 1 files |
 
 ## Accumulated Context

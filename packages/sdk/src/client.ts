@@ -605,16 +605,19 @@ export class CipherBoxClient {
 
       // Re-seal the child readKey under the DESTINATION parent key.
       // D-09: do NOT zero destFolder.folderKey (caller-owned buffer).
-      movedRef.readKeySealed = await sealChildReadKey(
-        childReadKey,
-        destFolder.folderKey,
-        childPub.id,
-        childPub.kind,
-        movedRef.generation // generation unchanged — no content re-encryption, no bump
-      );
-
-      // Zero the recovered child readKey — engine-derived, terminal-owned (D-09).
-      childReadKey.fill(0);
+      try {
+        movedRef.readKeySealed = await sealChildReadKey(
+          childReadKey,
+          destFolder.folderKey,
+          childPub.id,
+          childPub.kind,
+          movedRef.generation // generation unchanged — no content re-encryption, no bump
+        );
+      } finally {
+        // Zero the recovered child readKey on every exit path — engine-derived,
+        // terminal-owned (D-09).
+        childReadKey.fill(0);
+      }
 
       // Publish updated source folder
       const { newSequenceNumber: srcSeq, publishedChildren: srcChildren } =

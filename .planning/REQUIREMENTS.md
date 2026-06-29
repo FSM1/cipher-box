@@ -126,7 +126,7 @@ Which phases cover which requirements. Populated during roadmap creation.
 | ROT-04 | Phase 64 | Complete |
 | ROT-05 | Phase 64 | Complete |
 | ROT-06 | Phase 64 | Complete |
-| TEST-01 | Phase 64 | Pending |
+| TEST-01 | Phase 64 | Complete |
 | WRITE-01 | Phase 65 | Pending |
 | WRITE-02 | Phase 65 | Pending |
 | WRITE-03 | Phase 65 | Pending |
