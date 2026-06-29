@@ -36,7 +36,7 @@ Requirements for v2.0. Each maps to exactly one roadmap phase. Categories: CRYPT
 
 - [x] **ROT-01**: `rotateReadFromNode` is a resumable, per-node-commit, idempotent walk backing read-revoke and every scope-exit mutation; published IPNS records are the source of truth (job record advisory)
 - [x] **ROT-02**: Rotation fires iff a node leaves a grantee's reachable scope; a node with no covering grant is a pure relink (zero rotations) — enforced as a hard test across delete/move/rename
-- [ ] **ROT-03**: (CRIT-1) Rotating a file node mints a new `fileKey` (lazy `contentRekeyPending`); a holder of the old `readKey`/`fileKey` cannot decrypt the next published version
+- [x] **ROT-03**: (CRIT-1) Rotating a file node mints a new `fileKey` (lazy `contentRekeyPending`); a holder of the old `readKey`/`fileKey` cannot decrypt the next published version
 - [ ] **ROT-04**: (HIGH-3) Rotation re-mints `readDescriptorRef` for every non-revoked grant whose `rootNodeId` is in the rotated set — no orphaned inner grant
 - [x] **ROT-05**: (HIGH-4) On a CAS-409 the walk re-fetches and re-merges `SealedChildRef`s rather than re-sealing from a stale child list — a concurrent add is never silently dropped
 - [x] **ROT-06**: A crash mid-walk is recoverable — `verifySubtreeClean` rebuilds the frontier, re-run converges, no incorrect double-bump, and the revoked recipient is cut from the root after the root step
@@ -122,7 +122,7 @@ Which phases cover which requirements. Populated during roadmap creation.
 | READ-05 | Phase 63 | Complete |
 | ROT-01 | Phase 63 | Complete |
 | ROT-02 | Phase 63 | Complete |
-| ROT-03 | Phase 64 | Pending |
+| ROT-03 | Phase 64 | Complete |
 | ROT-04 | Phase 64 | Pending |
 | ROT-05 | Phase 64 | Complete |
 | ROT-06 | Phase 64 | Complete |
