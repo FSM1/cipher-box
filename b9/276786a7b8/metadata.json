@@ -3,13 +3,22 @@
   "checkpoint_id": "b9276786a7b8",
   "strategy": "manual-commit",
   "branch": "feat/read-chain-navigation-and-rotation-core",
-  "checkpoints_count": 1,
-  "files_touched": null,
+  "checkpoints_count": 2,
+  "files_touched": [
+    "packages/sdk-core/src/__tests__/share/grant.test.ts",
+    "packages/sdk-core/src/share/grant.ts"
+  ],
   "sessions": [
     {
       "metadata": "/b9/276786a7b8/0/metadata.json",
       "transcript": "/b9/276786a7b8/0/full.jsonl",
       "content_hash": "/b9/276786a7b8/0/content_hash.txt",
+      "prompt": ""
+    },
+    {
+      "metadata": "/b9/276786a7b8/1/metadata.json",
+      "transcript": "/b9/276786a7b8/1/full.jsonl",
+      "content_hash": "/b9/276786a7b8/1/content_hash.txt",
       "prompt": ""
     }
   ],
