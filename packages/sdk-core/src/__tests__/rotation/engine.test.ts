@@ -374,9 +374,7 @@ describe('Phase-64 named seams — each throws an error naming "phase 64"', () =
     ).resolves.toBeUndefined();
   });
 
-  it('verifySubtreeClean throws with "phase 64" in the message (ROT-06)', async () => {
-    await expect(verifySubtreeClean(NODE_ID, createMockContext())).rejects.toThrow(/phase 64/i);
-  });
+  // verifySubtreeClean now returns { isDirty, frontier } — tested in Plan 64-07 suite below.
 });
 
 // Note: The Phase-63 'throws the Phase-64 mintFileKeyOnRotate error for file nodes' test
@@ -1392,5 +1390,335 @@ describe('D-02 parent-link re-seal + D-09 batched parent publish (Plan 64-04 Tas
     // RED: 2 calls → FAILS
     // GREEN: 3 calls → PASSES
     expect(mockFns.sealChildReadKey).toHaveBeenCalledTimes(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Plan 64-07 Task 1 RED — verifySubtreeClean + resume guard + convergence guard
+// ---------------------------------------------------------------------------
+
+// Shared IPNS key constants for 64-07 Task 1 tests
+const T07_ROOT_READ_KEY = new Uint8Array(32).fill(0xcc);
+const T07_ROOT_IPNS_KEY = new Uint8Array(32).fill(0x10);
+const T07_CHILD_IPNS_KEY = new Uint8Array(32).fill(0x12);
+const T07_STUB_PUB_KEY = new Uint8Array(32).fill(0x01);
+
+describe('verifySubtreeClean — BFS dirty-edge frontier (Plan 64-07 ROT-06)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it('Test 1: returns { isDirty: false, frontier: [] } when all child generations match', async () => {
+    // Root: children[{generation: 1}] (parent mirror = 1), child published at generation 1 → clean
+    const rootNode = makeFolderNode({
+      id: NODE_ID,
+      generation: 1,
+      children: [
+        {
+          name: 'child',
+          ipnsName: CHILD_IPNS,
+          generation: 1, // parent mirror matches child's actual generation
+          versionFloor: 0n,
+          readKeySealed: 'childsealed==',
+        },
+      ],
+    });
+
+    mockFns.resolveIpnsRecord.mockImplementation(async (ipnsName: string) => ({
+      cid: ipnsName === NODE_IPNS ? 'bafy-root' : 'bafy-child',
+      sequenceNumber: 2n,
+      signatureVerified: true,
+    }));
+    mockFns.fetchFromIpfs.mockImplementation(async (_ctx: unknown, cid: string) => {
+      const id = cid === 'bafy-root' ? NODE_ID : CHILD_ID;
+      return new TextEncoder().encode(JSON.stringify(makePublishedNode(id, 1)));
+    });
+    mockFns.unsealNode.mockResolvedValue(rootNode);
+
+    // RED: verifySubtreeClean throws "not implemented — phase 64" → test fails
+    // GREEN: returns { isDirty: false, frontier: [] }
+    const result = await verifySubtreeClean(NODE_IPNS, T07_ROOT_READ_KEY, createMockContext());
+    expect(result.isDirty).toBe(false);
+    expect(result.frontier).toHaveLength(0);
+  });
+
+  it('Test 2: returns { isDirty: true, frontier: [child] } when child generation mismatches', async () => {
+    // Root: children[{generation: 0}] (parent mirror = 0), child published at generation 1 → dirty
+    const rootNode = makeFolderNode({
+      id: NODE_ID,
+      generation: 1,
+      children: [
+        {
+          name: 'child',
+          ipnsName: CHILD_IPNS,
+          generation: 0, // parent mirror is stale (0), child was already rotated to 1
+          versionFloor: 0n,
+          readKeySealed: 'childsealed==',
+        },
+      ],
+    });
+
+    mockFns.resolveIpnsRecord.mockImplementation(async (ipnsName: string) => ({
+      cid: ipnsName === NODE_IPNS ? 'bafy-root' : 'bafy-child',
+      sequenceNumber: 2n,
+      signatureVerified: true,
+    }));
+    mockFns.fetchFromIpfs.mockImplementation(async (_ctx: unknown, cid: string) => {
+      if (cid === 'bafy-root')
+        return new TextEncoder().encode(JSON.stringify(makePublishedNode(NODE_ID, 1)));
+      // Child is at generation 1 (rotated by prior run; parent mirror still shows 0)
+      return new TextEncoder().encode(JSON.stringify(makePublishedNode(CHILD_ID, 1)));
+    });
+    mockFns.unsealNode.mockResolvedValue(rootNode);
+
+    // RED: verifySubtreeClean throws → test fails
+    // GREEN: returns { isDirty: true, frontier: [{ ipnsName: CHILD_IPNS, nodeId: CHILD_ID }] }
+    const result = await verifySubtreeClean(NODE_IPNS, T07_ROOT_READ_KEY, createMockContext());
+    expect(result.isDirty).toBe(true);
+    expect(result.frontier).toHaveLength(1);
+    expect(result.frontier[0].ipnsName).toBe(CHILD_IPNS);
+    expect(result.frontier[0].nodeId).toBe(CHILD_ID);
+  });
+});
+
+describe('rotateReadFromNode — resume guard (Plan 64-07)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it('Test 3: resume with dirty child triggers D-09 parent re-publish (does not short-circuit complete)', async () => {
+    // Root already in completedNodeIds: rotateOne returns skipped.
+    // Child has dirty edge: parent mirror = 0, child published gen = 1.
+    // Expected (GREEN): verifySubtreeClean detects dirty → frontier seeded → convergence guard
+    //   fires for child → D-09 publishWithCas called for root re-publish.
+    // RED: resume guard marks complete immediately → publishWithCas NOT called → FAILS.
+    const rootNode = makeFolderNode({
+      id: NODE_ID,
+      generation: 1,
+      children: [
+        {
+          name: 'child',
+          ipnsName: CHILD_IPNS,
+          generation: 0, // parent mirror stale
+          versionFloor: 0n,
+          readKeySealed: 'childsealed==',
+        },
+      ],
+    });
+
+    mockFns.resolveIpnsRecord.mockImplementation(async (ipnsName: string) => ({
+      cid: ipnsName === NODE_IPNS ? 'bafy-root' : 'bafy-child',
+      sequenceNumber: 3n,
+      signatureVerified: true,
+    }));
+    mockFns.fetchFromIpfs.mockImplementation(async (_ctx: unknown, cid: string) => {
+      if (cid === 'bafy-root')
+        return new TextEncoder().encode(JSON.stringify(makePublishedNode(NODE_ID, 1)));
+      // Child is already at generation 1
+      return new TextEncoder().encode(JSON.stringify(makePublishedNode(CHILD_ID, 1)));
+    });
+    mockFns.unsealNode.mockResolvedValue(rootNode);
+    mockFns.sealNode.mockImplementation(async (node: import('@cipherbox/core').Node) =>
+      makePublishedNode(node.id, node.generation)
+    );
+    mockFns.sealChildReadKey.mockResolvedValue('resealed==');
+    mockFns.unsealChildReadKey.mockResolvedValue(new Uint8Array(32).fill(0x42));
+    mockFns.publishWithCas.mockResolvedValue({
+      cid: 'bafy-updated',
+      newSequenceNumber: 4n,
+      publishedData: [],
+      prunedCids: [],
+    });
+
+    const jobRecord = makeJobRecord({
+      rootNodeId: NODE_ID,
+      completedNodeIds: new Set([NODE_ID]), // resume: root already committed
+    });
+
+    await rotateReadFromNode({
+      rootNodeId: NODE_ID,
+      rootNodeIpnsName: NODE_IPNS,
+      rootReadKey: T07_ROOT_READ_KEY,
+      rootIpnsPrivateKey: T07_ROOT_IPNS_KEY,
+      nodeKeySource: () => ({ privateKey: T07_CHILD_IPNS_KEY, publicKey: T07_STUB_PUB_KEY }),
+      jobRecord,
+      ctx: createMockContext(),
+    });
+
+    // In RED: publishWithCas NOT called (resume guard marks complete immediately).
+    // In GREEN: publishWithCas IS called for D-09 parent re-publish after dirty frontier BFS.
+    expect(mockFns.publishWithCas).toHaveBeenCalled();
+    expect(jobRecord.status).toBe('complete');
+  });
+
+  it('Test 4: clean resume (isDirty: false) sets status complete and calls persistCallback', async () => {
+    // Root in completedNodeIds, clean subtree (all child mirrors match).
+    // Expected: status='complete' and persistCallback called.
+    const rootNode = makeFolderNode({
+      id: NODE_ID,
+      generation: 1,
+      children: [
+        {
+          name: 'child',
+          ipnsName: CHILD_IPNS,
+          generation: 1, // parent mirror matches child's published gen → clean
+          versionFloor: 0n,
+          readKeySealed: 'childsealed==',
+        },
+      ],
+    });
+
+    const persistCallback = vi.fn();
+
+    mockFns.resolveIpnsRecord.mockImplementation(async (ipnsName: string) => ({
+      cid: ipnsName === NODE_IPNS ? 'bafy-root' : 'bafy-child',
+      sequenceNumber: 2n,
+      signatureVerified: true,
+    }));
+    mockFns.fetchFromIpfs.mockImplementation(async (_ctx: unknown, cid: string) => {
+      if (cid === 'bafy-root')
+        return new TextEncoder().encode(JSON.stringify(makePublishedNode(NODE_ID, 1)));
+      return new TextEncoder().encode(JSON.stringify(makePublishedNode(CHILD_ID, 1)));
+    });
+    mockFns.unsealNode.mockResolvedValue(rootNode);
+    mockFns.publishWithCas.mockResolvedValue({
+      cid: 'bafy-new',
+      newSequenceNumber: 3n,
+      publishedData: [],
+      prunedCids: [],
+    });
+
+    const jobRecord = makeJobRecord({
+      rootNodeId: NODE_ID,
+      completedNodeIds: new Set([NODE_ID]),
+      persistCallback,
+    });
+
+    await rotateReadFromNode({
+      rootNodeId: NODE_ID,
+      rootNodeIpnsName: NODE_IPNS,
+      rootReadKey: T07_ROOT_READ_KEY,
+      rootIpnsPrivateKey: T07_ROOT_IPNS_KEY,
+      jobRecord,
+      ctx: createMockContext(),
+    });
+
+    expect(jobRecord.status).toBe('complete');
+    expect(persistCallback).toHaveBeenCalled();
+  });
+});
+
+describe('rotateReadFromNode — no-double-bump convergence guard (Plan 64-07)', () => {
+  it('Test 5: fresh job, child already at baseline+1 — sealNode/publishWithCas NOT invoked for child', async () => {
+    // Fresh job: empty completedNodeIds, root at generation 0.
+    // Root's SealedChildRef shows child at generation 0 (baseline).
+    // BUT child is ALREADY published at generation 1 (rotated by a prior crashed run).
+    //
+    // Expected:
+    // - Root rotates normally (sealNode called for root).
+    // - Convergence guard: child current gen (1) > enqueued baseline (0) → SKIP rotateOne.
+    // - sealNode NOT called with CHILD_ID.
+    // - publishWithCas NOT called with CHILD_IPNS.
+    //
+    // RED: no convergence guard → rotateOne(child) called → sealNode/publishWithCas invoked → FAILS.
+    // GREEN: convergence guard fires → skip → assertions pass.
+
+    const rootNode = makeFolderNode({
+      id: NODE_ID,
+      generation: 0,
+      children: [
+        {
+          name: 'child',
+          ipnsName: CHILD_IPNS,
+          generation: 0, // baseline: parent mirror shows 0 (child not yet rotated from parent's view)
+          versionFloor: 0n,
+          readKeySealed: 'childsealed==',
+        },
+      ],
+    });
+
+    const publishedRootGen0 = makePublishedNode(NODE_ID, 0);
+    const publishedChildGen1 = makePublishedNode(CHILD_ID, 1); // ALREADY rotated by prior run
+
+    const sealNodeCalls: string[] = [];
+    const publishWithCasCalls: string[] = [];
+
+    mockFns.resolveIpnsRecord.mockImplementation(async (ipnsName: string) => ({
+      cid: ipnsName === NODE_IPNS ? 'bafy-root' : 'bafy-child',
+      sequenceNumber: 1n,
+      signatureVerified: true,
+    }));
+    mockFns.fetchFromIpfs.mockImplementation(async (_ctx: unknown, cid: string) => {
+      if (cid === 'bafy-root') return new TextEncoder().encode(JSON.stringify(publishedRootGen0));
+      return new TextEncoder().encode(JSON.stringify(publishedChildGen1));
+    });
+    mockFns.unsealNode.mockImplementation(
+      async (published: import('@cipherbox/core').PublishedNode) => {
+        if (published.id === NODE_ID) return rootNode;
+        // Child's body (would only be unsealed if rotateOne is erroneously invoked for child)
+        return makeFolderNode({ id: CHILD_ID, generation: 1, children: [] });
+      }
+    );
+    mockFns.sealNode.mockImplementation(async (node: import('@cipherbox/core').Node) => {
+      sealNodeCalls.push(node.id);
+      return makePublishedNode(node.id, node.generation + 1);
+    });
+    mockFns.sealChildReadKey.mockResolvedValue('newsealed==');
+    mockFns.unsealChildReadKey.mockResolvedValue(new Uint8Array(32).fill(0x42));
+    mockFns.publishWithCas.mockImplementation(async (params: { ipnsName: string }) => {
+      publishWithCasCalls.push(params.ipnsName);
+      return { cid: 'bafy-new', newSequenceNumber: 2n, publishedData: [], prunedCids: [] };
+    });
+
+    vi.resetAllMocks();
+    // Re-set after resetAllMocks
+    mockFns.resolveIpnsRecord.mockImplementation(async (ipnsName: string) => ({
+      cid: ipnsName === NODE_IPNS ? 'bafy-root' : 'bafy-child',
+      sequenceNumber: 1n,
+      signatureVerified: true,
+    }));
+    mockFns.fetchFromIpfs.mockImplementation(async (_ctx: unknown, cid: string) => {
+      if (cid === 'bafy-root') return new TextEncoder().encode(JSON.stringify(publishedRootGen0));
+      return new TextEncoder().encode(JSON.stringify(publishedChildGen1));
+    });
+    mockFns.unsealNode.mockImplementation(
+      async (published: import('@cipherbox/core').PublishedNode) => {
+        if (published.id === NODE_ID) return rootNode;
+        return makeFolderNode({ id: CHILD_ID, generation: 1, children: [] });
+      }
+    );
+    mockFns.sealNode.mockImplementation(async (node: import('@cipherbox/core').Node) => {
+      sealNodeCalls.push(node.id);
+      return makePublishedNode(node.id, node.generation + 1);
+    });
+    mockFns.sealChildReadKey.mockResolvedValue('newsealed==');
+    mockFns.unsealChildReadKey.mockResolvedValue(new Uint8Array(32).fill(0x42));
+    mockFns.publishWithCas.mockImplementation(async (params: { ipnsName: string }) => {
+      publishWithCasCalls.push(params.ipnsName);
+      return { cid: 'bafy-new', newSequenceNumber: 2n, publishedData: [], prunedCids: [] };
+    });
+
+    const jobRecord = makeJobRecord({
+      rootNodeId: NODE_ID,
+      completedNodeIds: new Set<string>(), // FRESH job
+      status: 'pending',
+    });
+
+    await rotateReadFromNode({
+      rootNodeId: NODE_ID,
+      rootNodeIpnsName: NODE_IPNS,
+      rootReadKey: new Uint8Array(32).fill(0x77),
+      rootIpnsPrivateKey: T07_ROOT_IPNS_KEY,
+      nodeKeySource: () => ({ privateKey: T07_CHILD_IPNS_KEY, publicKey: T07_STUB_PUB_KEY }),
+      jobRecord,
+      ctx: createMockContext(),
+    });
+
+    // Root MUST rotate (sealNode called with NODE_ID)
+    expect(sealNodeCalls).toContain(NODE_ID);
+    // Child must NOT be sealed (convergence guard must skip rotateOne for child)
+    expect(sealNodeCalls).not.toContain(CHILD_ID);
+    // publishWithCas must NOT be called for CHILD_IPNS (child rotation skipped)
+    expect(publishWithCasCalls).not.toContain(CHILD_IPNS);
   });
 });

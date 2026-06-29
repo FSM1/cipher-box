@@ -402,7 +402,11 @@ export async function mergeConcurrentChildren(
  *
  * @throws Always in Phase 63 (ROT-06 — deferred).
  */
-export async function verifySubtreeClean(_rootNodeId: string, _ctx: SdkContext): Promise<boolean> {
+export async function verifySubtreeClean(
+  _rootIpnsName: string,
+  _rootReadKey: Uint8Array,
+  _ctx: SdkContext
+): Promise<{ isDirty: boolean; frontier: Array<{ ipnsName: string; nodeId: string }> }> {
   throw new Error('not implemented — phase 64 (ROT-06 crash-resume + verifySubtreeClean)');
 }
 
