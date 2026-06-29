@@ -119,10 +119,19 @@ type RotateOneParams = {
   /** Optional: Ed25519 public key for faster publish (avoids re-deriving). */
   nodeIpnsPublicKey?: Uint8Array;
   /**
-   * Read key used to UNSEAL this node's read-body.
-   * For the root node this is the root's own readKey.
-   * For all other nodes this is the NEW readKey' minted when the parent was rotated.
-   * NEVER zeroed by rotateOne — caller is the terminal owner (D-09).
+   * Read key used to UNSEAL this node's read-body — i.e. THIS node's own
+   * pre-rotation readKey: the root's own readKey for the root; for a child,
+   * the child's own readKey (derived via `unsealChildReadKey` from the parent
+   * before the child is enqueued — see the BFS in `rotateReadFromNode`). The
+   * field name is a legacy misnomer: it carries the node's OWN key, not the
+   * parent's. NEVER zeroed by rotateOne — caller is the terminal owner (D-09).
+   *
+   * Phase 64 NOTE: `rotateOne` currently seals the returned `newReadKeySealed`
+   * under THIS key, but the parent's `SealedChildRef[N].readKeySealed` must be
+   * sealed under the PARENT's NEW readKey' for `unsealChildReadKey` to
+   * authenticate. The Phase-64 parent-link publish must re-seal under the
+   * parent's rotated key (a separate param or an out-of-band re-seal) — see
+   * `.planning/todos/pending/2026-06-29-rotation-engine-walk-soundness-phase64.md`.
    */
   parentReadKey: Uint8Array;
   /**
