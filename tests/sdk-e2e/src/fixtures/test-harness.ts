@@ -98,7 +98,8 @@ export async function createTestAccount(opts: CreateAccountOptions): Promise<Tes
     await publishVaultKeyBlob({
       userPrivateKey: privateKey,
       userPublicKey: publicKey,
-      rootFolderKey: vault.rootFolderKey,
+      rootReadKey: vault.rootReadKey,
+      rootWriteKey: vault.rootWriteKey,
       ctx: { apiUrl, getAccessToken: async () => accessToken, axiosInstance },
     });
 
@@ -124,10 +125,10 @@ export async function createTestAccount(opts: CreateAccountOptions): Promise<Tes
       getAccessToken: async () => accessToken,
       vaultKeypair: { publicKey, privateKey },
       rootIpnsName,
-      rootFolderKey: vault.rootFolderKey,
+      rootFolderKey: vault.rootReadKey,
       defaultHeaders: axiosDefaultHeaders(),
     });
-    client.registerFolder(rootIpnsName, vault.rootFolderKey, vault.rootIpnsKeypair, [], 0n);
+    client.registerFolder(rootIpnsName, vault.rootReadKey, vault.rootIpnsKeypair, [], 0n);
 
     return {
       client,
@@ -135,7 +136,7 @@ export async function createTestAccount(opts: CreateAccountOptions): Promise<Tes
       publicKey,
       privateKey,
       rootIpnsName,
-      rootFolderKey: vault.rootFolderKey,
+      rootFolderKey: vault.rootReadKey,
       rootIpnsKeypair: vault.rootIpnsKeypair,
       email,
     };

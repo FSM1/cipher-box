@@ -136,6 +136,17 @@ export async function updateFolderMetadataAndPublish(params: {
   ctx: SdkContext;
   encryptedIpnsPrivateKey?: string;
   keyEpoch?: number;
+  /**
+   * UUID of the underlying folder Node. Preserving the original UUID is preferred
+   * so AAD stays stable across updates; omit to mint a fresh UUID (safe: the id is
+   * stored in plaintext on the PublishedNode envelope and unsealNode reads it back).
+   */
+  nodeId?: string;
+  /**
+   * Generation of the underlying folder Node. Pass the current generation if known
+   * so that rotateReadFromNode can read a consistent generation value post-update.
+   */
+  nodeGeneration?: number;
 }): Promise<{ cid: string; newSequenceNumber: bigint; publishedChildren: SealedChildRef[] }> {
   const key = params.readKey ?? params.folderKey;
   if (!key) throw new Error('updateFolderMetadataAndPublish: readKey or folderKey is required');
@@ -153,12 +164,15 @@ export async function updateFolderMetadataAndPublish(params: {
     backoff: true,
 
     encodeAndUpload: async (localChildren: SealedChildRef[]): Promise<string> => {
-      // Build a minimal Node with the updated children list
+      // Build a minimal Node with the updated children list.
+      // id must be a valid UUID (buildNodeAad validates via uuidToBytes).
+      // nodeId param preserves the original UUID when callers supply it;
+      // otherwise a fresh UUID is minted (self-consistent with its own sealed body).
       const node: Node = {
         schema: 'node/v3',
         kind: 'folder',
-        id: params.ipnsName,
-        generation: 0,
+        id: params.nodeId ?? crypto.randomUUID(),
+        generation: params.nodeGeneration ?? 0,
         createdAt: Date.now(),
         modifiedAt: Date.now(),
         children: localChildren,

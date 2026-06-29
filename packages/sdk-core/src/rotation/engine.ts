@@ -24,7 +24,7 @@
  *   `index.ts` barrel would silently drop rotation from coverage metrics.
  */
 
-import { sealNode, unsealNode, sealChildReadKey } from '@cipherbox/core';
+import { sealNode, unsealNode, sealChildReadKey, unsealChildReadKey } from '@cipherbox/core';
 import type { Node, PublishedNode, SealedChildRef } from '@cipherbox/core';
 import { publishWithCas } from '../cas';
 import { resolveIpnsRecord } from '../ipns';
@@ -456,20 +456,55 @@ export async function rotateReadFromNode(params: RotationParams): Promise<void> 
   // Persist after root commit (the high-value early checkpoint).
   if (jobRecord.persistCallback) await jobRecord.persistCallback(jobRecord);
 
-  // BFS frontier: each entry carries the parent's new readKey' so rotateOne can
-  // unseal the child's read-body under the post-rotation parent key.
+  // BFS frontier: each entry carries the NODE's own pre-rotation readKey.
+  //
+  // DESIGN NOTE (Bug fix — confirmed during Phase-63 E2E):
+  //   Each node in the tree has its OWN readKey (sealed inside the parent's
+  //   SealedChildRef via sealChildReadKey). rotateOne receives a node's OWN
+  //   readKey as `parentReadKey` to unseal that node's read-body. It does NOT
+  //   receive the parent's readKey — that conflation was the root cause of the
+  //   "Decryption failed" regression when the BFS passed the root's new readKey'
+  //   to child rotateOne calls.
+  //
+  //   To derive a child's readKey from a SealedChildRef we need:
+  //     1. The PARENT's OLD readKey (not the new readKey'; the sealed ref was
+  //        created under the old key before rotation).
+  //     2. The child's published node envelope (for id and kind — used in AAD).
+  //   The parent's OLD readKey is the `parentReadKey` param that was just used
+  //   to unseal the parent (D-09: never zeroed by rotateOne).
   const queue: Array<{
     childRef: SealedChildRef;
-    parentReadKey: Uint8Array; // parent's NEW readKey' (not the original)
+    /** The node's own pre-rotation readKey — used by rotateOne to unseal the node. */
+    nodeReadKey: Uint8Array;
     parentIpnsName: string;
     ipnsPrivateKey?: Uint8Array;
     ipnsPublicKey?: Uint8Array;
   }> = [];
 
+  // Helper: resolve an IPNS name → fetch the IPFS CID → parse PublishedNode envelope.
+  // Used to obtain id/kind from the child's plaintext envelope before deriving its readKey.
+  async function resolveAndFetch(ipnsName: string): Promise<PublishedNode | null> {
+    const resolved = await resolveIpnsRecord(ipnsName, ctx);
+    if (!resolved) return null;
+    const raw = await fetchFromIpfs(ctx, resolved.cid);
+    return JSON.parse(new TextDecoder().decode(raw)) as PublishedNode;
+  }
+
+  // Enqueue root's children: derive each child's readKey from the root's OLD readKey.
+  // rootReadKey is the root's own (pre-rotation) key and is NOT zeroed by rotateOne (D-09).
   for (const childRef of rootResult.children) {
+    const childPub = await resolveAndFetch(childRef.ipnsName);
+    if (!childPub) continue; // child IPNS missing — skip (data inconsistency)
+    const childReadKey = await unsealChildReadKey(
+      childRef.readKeySealed,
+      rootReadKey, // root's OLD readKey (still valid; never zeroed — D-09)
+      childPub.id,
+      childPub.kind,
+      childRef.generation // parent-mirror (§2.6 D-07 invariant 1)
+    );
     queue.push({
       childRef,
-      parentReadKey: rootResult.childReadKey, // root's new readKey'
+      nodeReadKey: childReadKey, // child's own (pre-rotation) readKey
       parentIpnsName: rootNodeIpnsName,
       ipnsPrivateKey: undefined, // Phase 65: populate from write-body
       ipnsPublicKey: undefined,
@@ -485,7 +520,7 @@ export async function rotateReadFromNode(params: RotationParams): Promise<void> 
       nodeIpnsName: item.childRef.ipnsName,
       nodeIpnsPrivateKey: item.ipnsPrivateKey,
       nodeIpnsPublicKey: item.ipnsPublicKey,
-      parentReadKey: item.parentReadKey,
+      parentReadKey: item.nodeReadKey, // this node's own (pre-rotation) readKey
       parentIpnsName: item.parentIpnsName,
       parentCurrentSeq: 0n, // unused in Phase 63 (D-09 deferred)
       jobRecord,
@@ -497,11 +532,21 @@ export async function rotateReadFromNode(params: RotationParams): Promise<void> 
     // Advisory checkpoint after per-node commit.
     if (jobRecord.persistCallback) await jobRecord.persistCallback(jobRecord);
 
-    // Enqueue this node's children using the node's new readKey'.
+    // Enqueue this node's children using THIS node's pre-rotation readKey.
+    // item.nodeReadKey is NOT zeroed by rotateOne (D-09) — still valid here.
     for (const childRef of result.children) {
+      const childPub = await resolveAndFetch(childRef.ipnsName);
+      if (!childPub) continue;
+      const childReadKey = await unsealChildReadKey(
+        childRef.readKeySealed,
+        item.nodeReadKey, // THIS node's old readKey (seals its children's readKeys)
+        childPub.id,
+        childPub.kind,
+        childRef.generation
+      );
       queue.push({
         childRef,
-        parentReadKey: result.childReadKey, // this node's new readKey'
+        nodeReadKey: childReadKey, // grandchild's own readKey
         parentIpnsName: item.childRef.ipnsName,
         ipnsPrivateKey: undefined, // Phase 65: populate from write-body
         ipnsPublicKey: undefined,
