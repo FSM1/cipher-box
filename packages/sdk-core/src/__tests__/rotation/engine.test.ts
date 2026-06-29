@@ -16,6 +16,7 @@ import {
   mintFileKeyOnRotate,
   reMintGrantsRootedAt,
   verifySubtreeClean,
+  type GrantRemintCallbacks,
   type RotationJobRecord,
   type RotationParams,
 } from '../../rotation/engine';
@@ -1720,5 +1721,201 @@ describe('rotateReadFromNode — no-double-bump convergence guard (Plan 64-07)',
     expect(sealNodeCalls).not.toContain(CHILD_ID);
     // publishWithCas must NOT be called for CHILD_IPNS (child rotation skipped)
     expect(publishWithCasCalls).not.toContain(CHILD_IPNS);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Plan 64-07 Task 2 RED — D-07 job-record ordering, terminal persist, zeroization
+// ---------------------------------------------------------------------------
+
+describe('rotateOne — D-07 completedNodeIds ordering (Plan 64-07)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mockFns.resolveIpnsRecord.mockResolvedValue({
+      cid: 'bafy-node-cid',
+      sequenceNumber: 3n,
+      signatureVerified: true,
+    });
+    mockFns.fetchFromIpfs.mockResolvedValue(
+      new TextEncoder().encode(JSON.stringify(makePublishedNode(NODE_ID, 2)))
+    );
+    mockFns.unsealNode.mockResolvedValue(
+      makeFolderNode({ id: NODE_ID, generation: 2, children: [] })
+    );
+    mockFns.sealNode.mockResolvedValue(makePublishedNode(NODE_ID, 3));
+    mockFns.sealChildReadKey.mockResolvedValue('newchildsealed==');
+    mockFns.publishWithCas.mockResolvedValue({
+      cid: 'bafy-new-cid',
+      newSequenceNumber: 4n,
+      publishedData: [],
+      prunedCids: [],
+    });
+  });
+
+  it('Test 1: reMintGrantsRootedAt throws → nodeId NOT added to completedNodeIds (D-07)', async () => {
+    // D-07 ordering bug: completedNodeIds.add(nodeId) runs BEFORE reMintGrantsRootedAt.
+    // If reMintGrantsRootedAt throws, nodeId is already in completedNodeIds → silent skip on resume.
+    //
+    // RED: add before reMint → nodeId IS in completedNodeIds after throw → assertion fails.
+    // GREEN: add after reMint → nodeId NOT in completedNodeIds after throw → assertion passes.
+    const jobRecord = makeJobRecord({ rootNodeId: NODE_ID });
+    const ctx = createMockContext();
+
+    const failingCallbacks: GrantRemintCallbacks = {
+      queryGrantsFn: vi.fn().mockRejectedValue(new Error('queryGrants failed')),
+      updateGrantFn: vi.fn(),
+      deleteGrantFn: vi.fn(),
+    };
+
+    await expect(
+      rotateOne({
+        nodeId: NODE_ID,
+        nodeIpnsName: NODE_IPNS,
+        nodeIpnsPrivateKey: new Uint8Array(32).fill(0x11),
+        parentReadKey: PARENT_READ_KEY,
+        parentIpnsName: PARENT_IPNS,
+        parentCurrentSeq: 3n,
+        jobRecord,
+        ctx,
+        innerGrants: [{}],
+        grantCallbacks: failingCallbacks,
+      })
+    ).rejects.toThrow('queryGrants failed');
+
+    // D-07: after reMint failure, nodeId must NOT be in completedNodeIds.
+    // In RED: completedNodeIds.add ran before the throw → this assertion FAILS.
+    // In GREEN: completedNodeIds.add runs after reMint → this assertion PASSES.
+    expect(jobRecord.completedNodeIds.has(NODE_ID)).toBe(false);
+  });
+});
+
+describe('rotateReadFromNode — terminal persist and child-key zeroization (Plan 64-07)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it('Test 2: terminal jobRecord.status = "complete" is persisted via persistCallback', async () => {
+    // Root-only job (no children) — BFS loop is empty.
+    // Expected: persistCallback called TWICE — once after root commit (status in-progress),
+    // once at terminal status='complete'.
+    //
+    // RED: persistCallback called only once (after root commit) → toHaveBeenCalledTimes(2) FAILS.
+    // GREEN: persistCallback called at terminal too → assertion PASSES.
+    const rootNode = makeFolderNode({ id: NODE_ID, generation: 0, children: [] });
+
+    mockFns.resolveIpnsRecord.mockResolvedValue({
+      cid: 'bafy-root',
+      sequenceNumber: 1n,
+      signatureVerified: true,
+    });
+    mockFns.fetchFromIpfs.mockResolvedValue(
+      new TextEncoder().encode(JSON.stringify(makePublishedNode(NODE_ID, 0)))
+    );
+    mockFns.unsealNode.mockResolvedValue(rootNode);
+    mockFns.sealNode.mockResolvedValue(makePublishedNode(NODE_ID, 1));
+    mockFns.sealChildReadKey.mockResolvedValue('newsealed==');
+    mockFns.publishWithCas.mockResolvedValue({
+      cid: 'bafy-new',
+      newSequenceNumber: 2n,
+      publishedData: [],
+      prunedCids: [],
+    });
+
+    const persistCallback = vi.fn();
+    const jobRecord = makeJobRecord({ rootNodeId: NODE_ID, persistCallback });
+
+    await rotateReadFromNode({
+      rootNodeId: NODE_ID,
+      rootNodeIpnsName: NODE_IPNS,
+      rootReadKey: new Uint8Array(32).fill(0xcc),
+      rootIpnsPrivateKey: new Uint8Array(32).fill(0x10),
+      jobRecord,
+      ctx: createMockContext(),
+    });
+
+    expect(jobRecord.status).toBe('complete');
+    // In RED: only 1 call (after root commit). In GREEN: 2 calls (root + terminal).
+    expect(persistCallback).toHaveBeenCalledTimes(2);
+  });
+
+  it('Test 3: queue-derived child readKey zeroed after grandchildren enqueued; rootReadKey not zeroed', async () => {
+    // Root with one child, child has no grandchildren.
+    // item.nodeReadKey (child's readKey, queue-derived) must be zeroed by the engine
+    // after the child's grandchildren are enqueued (D-09 terminal-owner rule for BFS keys).
+    // rootReadKey (caller-supplied) must NOT be zeroed (caller is terminal owner — D-09).
+    //
+    // RED: no zeroization → capturedChildReadKeys[0] is all-0x42 → assertion fails.
+    // GREEN: zeroed after grandchildren loop → capturedChildReadKeys[0] is all-0x00 → passes.
+    const rootNode = makeFolderNode({
+      id: NODE_ID,
+      generation: 0,
+      children: [
+        {
+          name: 'child',
+          ipnsName: CHILD_IPNS,
+          generation: 0,
+          versionFloor: 0n,
+          readKeySealed: 'childsealed==',
+        },
+      ],
+    });
+    const childNode = makeFolderNode({ id: CHILD_ID, generation: 0, children: [] });
+
+    const capturedChildReadKeys: Uint8Array[] = [];
+
+    mockFns.resolveIpnsRecord.mockImplementation(async (ipnsName: string) => ({
+      cid: ipnsName === NODE_IPNS ? 'bafy-root' : 'bafy-child',
+      sequenceNumber: 1n,
+      signatureVerified: true,
+    }));
+    mockFns.fetchFromIpfs.mockImplementation(async (_ctx: unknown, cid: string) => {
+      if (cid === 'bafy-root')
+        return new TextEncoder().encode(JSON.stringify(makePublishedNode(NODE_ID, 0)));
+      return new TextEncoder().encode(JSON.stringify(makePublishedNode(CHILD_ID, 0)));
+    });
+    mockFns.unsealNode.mockImplementation(
+      async (published: import('@cipherbox/core').PublishedNode) => {
+        if (published.id === NODE_ID) return rootNode;
+        return childNode;
+      }
+    );
+    mockFns.sealNode.mockResolvedValue(makePublishedNode(NODE_ID, 1));
+    mockFns.sealChildReadKey.mockResolvedValue('newsealed==');
+    mockFns.unsealChildReadKey.mockImplementation(async () => {
+      const key = new Uint8Array(32).fill(0x42);
+      capturedChildReadKeys.push(key);
+      return key;
+    });
+    mockFns.publishWithCas.mockResolvedValue({
+      cid: 'bafy-new',
+      newSequenceNumber: 2n,
+      publishedData: [],
+      prunedCids: [],
+    });
+
+    const rootReadKey = new Uint8Array(32).fill(0xcc);
+
+    await rotateReadFromNode({
+      rootNodeId: NODE_ID,
+      rootNodeIpnsName: NODE_IPNS,
+      rootReadKey,
+      rootIpnsPrivateKey: new Uint8Array(32).fill(0x10),
+      nodeKeySource: () => ({
+        privateKey: new Uint8Array(32).fill(0x12),
+        publicKey: new Uint8Array(32).fill(0x01),
+      }),
+      jobRecord: makeJobRecord({ rootNodeId: NODE_ID }),
+      ctx: createMockContext(),
+    });
+
+    // rootReadKey must NOT be zeroed (caller is terminal owner — D-09).
+    // This passes in both RED and GREEN: regression gate.
+    expect(rootReadKey.some((b) => b !== 0)).toBe(true);
+
+    // Queue-derived child readKey (item.nodeReadKey) MUST be zeroed after grandchildren enqueued.
+    // In RED: not zeroed → some bytes are 0x42 → assertion fails.
+    // In GREEN: zeroed → all bytes are 0 → assertion passes.
+    expect(capturedChildReadKeys.length).toBeGreaterThan(0);
+    expect(capturedChildReadKeys[0].every((b) => b === 0)).toBe(true);
   });
 });
