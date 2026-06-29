@@ -99,6 +99,8 @@ function setupFolders(client: CipherBoxClient) {
     children: [filePointer],
     metadata: null,
     lastLoadedAt: now,
+    nodeId: '',
+    nodeGeneration: 0,
   });
 
   client.getFolderTree().set(DEST_IPNS, {
@@ -112,6 +114,8 @@ function setupFolders(client: CipherBoxClient) {
     children: [],
     metadata: null,
     lastLoadedAt: now,
+    nodeId: '',
+    nodeGeneration: 0,
   });
 }
 

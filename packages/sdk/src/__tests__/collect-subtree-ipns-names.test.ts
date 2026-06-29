@@ -136,6 +136,8 @@ describe.skip('collectSubtreeIpnsNamesAsync — D-03 on-demand traversal — TOD
       children: [folderEntry(SUBFOLDER, 'SubFolder')],
       metadata: null,
       lastLoadedAt: Date.now(),
+      nodeId: '',
+      nodeGeneration: 0,
     });
 
     // loadFolderMetadata returns SUBFOLDER's metadata (one file child).
@@ -191,6 +193,8 @@ describe.skip('collectSubtreeIpnsNamesAsync — D-03 on-demand traversal — TOD
       children: [folderEntry(PARENT, 'Parent')],
       metadata: null,
       lastLoadedAt: Date.now(),
+      nodeId: '',
+      nodeGeneration: 0,
     });
 
     // loadFolderMetadata for PARENT returns two sibling children.
@@ -266,6 +270,8 @@ describe.skip('collectSubtreeIpnsNamesAsync — D-03 on-demand traversal — TOD
       children: [folderEntry(SUBFOLDER, 'SubFolder')],
       metadata: null,
       lastLoadedAt: Date.now(),
+      nodeId: '',
+      nodeGeneration: 0,
     });
 
     mockTree({
@@ -315,6 +321,8 @@ describe.skip('collectSubtreeIpnsNamesAsync — D-03 on-demand traversal — TOD
       children: [folderEntry(FOLDER_A, 'FolderA')],
       metadata: null,
       lastLoadedAt: Date.now(),
+      nodeId: '',
+      nodeGeneration: 0,
     });
 
     // A lists B as a child; B lists A as a child — a cycle.

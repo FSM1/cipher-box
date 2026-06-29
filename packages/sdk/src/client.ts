@@ -282,13 +282,20 @@ export class CipherBoxClient {
    * @param ipnsKeypair - Ed25519 keypair for IPNS signing
    * @param children - Current folder children
    * @param sequenceNumber - Current IPNS sequence number
+   * @param nodeId - UUID of the folder's underlying Node (D-06). Callers who know the
+   *   UUID (e.g. after createSubfolder) should supply it. Omitting leaves an empty
+   *   placeholder that will be filled by loadFolder; CRUD operations called before
+   *   loadFolder will throw 'nodeId is required'.
+   * @param nodeGeneration - Rotation counter of the folder's Node (D-06).
    */
   registerFolder(
     ipnsName: string,
     folderKey: Uint8Array,
     ipnsKeypair: { publicKey: Uint8Array; privateKey: Uint8Array },
     children: SealedChildRef[],
-    sequenceNumber: bigint
+    sequenceNumber: bigint,
+    nodeId?: string,
+    nodeGeneration?: number
   ): void {
     // Defensive copy so destroy() -> folderTree.clear() doesn't zero caller buffers
     this.folderTree.set(ipnsName, {
@@ -302,6 +309,10 @@ export class CipherBoxClient {
       children,
       metadata: null,
       lastLoadedAt: Date.now(),
+      // D-06: nodeId/nodeGeneration required for AAD-stable CRUD operations.
+      // Empty string placeholder if caller omits — loadFolder will fill it.
+      nodeId: nodeId ?? '',
+      nodeGeneration: nodeGeneration ?? 0,
     });
   }
 
@@ -376,6 +387,9 @@ export class CipherBoxClient {
         children: result.metadata.children ?? [],
         metadata: result.metadata,
         lastLoadedAt: Date.now(),
+        // D-06: populate from the sealed Node's plaintext envelope fields.
+        nodeId: result.metadata.id,
+        nodeGeneration: result.metadata.generation,
       };
 
       this.folderTree.set(ipnsName, state);
@@ -499,6 +513,8 @@ export class CipherBoxClient {
           ipnsName: folderIpnsName,
           sequenceNumber: folder.sequenceNumber,
           ctx: this.ctx,
+          nodeId: folder.nodeId,
+          nodeGeneration: folder.nodeGeneration,
         }
       );
 
@@ -563,6 +579,8 @@ export class CipherBoxClient {
           ipnsName: sourceIpnsName,
           sequenceNumber: sourceFolder.sequenceNumber,
           ctx: this.ctx,
+          nodeId: sourceFolder.nodeId,
+          nodeGeneration: sourceFolder.nodeGeneration,
         });
 
       sourceFolder.children = srcChildren;
@@ -586,6 +604,8 @@ export class CipherBoxClient {
           ipnsName: destIpnsName,
           sequenceNumber: destFolder.sequenceNumber,
           ctx: this.ctx,
+          nodeId: destFolder.nodeId,
+          nodeGeneration: destFolder.nodeGeneration,
         });
 
       destFolder.children = dstChildren;
@@ -635,6 +655,8 @@ export class CipherBoxClient {
           ipnsName: folderIpnsName,
           sequenceNumber: folder.sequenceNumber,
           ctx: this.ctx,
+          nodeId: folder.nodeId,
+          nodeGeneration: folder.nodeGeneration,
         }
       );
 
@@ -752,6 +774,8 @@ export class CipherBoxClient {
             ipnsName: folderIpnsName,
             sequenceNumber: folder.sequenceNumber,
             ctx: this.ctx,
+            nodeId: folder.nodeId,
+            nodeGeneration: folder.nodeGeneration,
           }),
         ]);
 
@@ -1011,6 +1035,8 @@ export class CipherBoxClient {
             ipnsName: folderIpnsName,
             sequenceNumber: freshSeq,
             ctx: this.ctx,
+            nodeId: folder.nodeId,
+            nodeGeneration: folder.nodeGeneration,
           }),
           sdkCore.batchPublishIpnsRecords(ipnsRecords, this.ctx),
         ]);

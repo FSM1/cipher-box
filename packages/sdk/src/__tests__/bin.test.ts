@@ -182,6 +182,8 @@ describe('bin operations', () => {
         children: [child],
         metadata: null,
         lastLoadedAt: Date.now(),
+        nodeId: '',
+        nodeGeneration: 0,
       });
 
       vi.mocked(sdkCore.deleteFromFolder).mockReturnValue({
@@ -268,6 +270,8 @@ describe('bin operations', () => {
         children: [child],
         metadata: null,
         lastLoadedAt: Date.now(),
+        nodeId: '',
+        nodeGeneration: 0,
       });
       vi.mocked(sdkCore.deleteFromFolder).mockReturnValue({
         updatedChildren: [],
@@ -318,6 +322,8 @@ describe('bin operations', () => {
         children: [folderChild],
         metadata: null,
         lastLoadedAt: Date.now(),
+        nodeId: '',
+        nodeGeneration: 0,
       });
 
       vi.mocked(sdkCore.deleteFromFolder).mockReturnValue({
@@ -417,6 +423,8 @@ describe('bin operations', () => {
         children: [folderChild],
         metadata: null,
         lastLoadedAt: Date.now(),
+        nodeId: '',
+        nodeGeneration: 0,
       });
       vi.mocked(sdkCore.deleteFromFolder).mockReturnValue({
         updatedChildren: [],
@@ -473,6 +481,8 @@ describe('bin operations', () => {
         children: [],
         metadata: null,
         lastLoadedAt: Date.now(),
+        nodeId: '',
+        nodeGeneration: 0,
       });
 
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
@@ -541,6 +551,8 @@ describe('bin operations', () => {
         children: [],
         metadata: null,
         lastLoadedAt: Date.now(),
+        nodeId: '',
+        nodeGeneration: 0,
       });
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
         cid: 'bafynew',
@@ -598,6 +610,8 @@ describe('bin operations', () => {
         children: [],
         metadata: null,
         lastLoadedAt: Date.now(),
+        nodeId: '',
+        nodeGeneration: 0,
       });
       folderTree.set('target-ipns', {
         ipnsName: 'target-ipns',
@@ -607,6 +621,8 @@ describe('bin operations', () => {
         children: [],
         metadata: null,
         lastLoadedAt: Date.now(),
+        nodeId: '',
+        nodeGeneration: 0,
       });
 
       const currentMetadata = { version: 'v1', name: 'doc.txt' } as never;
@@ -680,6 +696,8 @@ describe('bin operations', () => {
         children: [],
         metadata: null,
         lastLoadedAt: Date.now(),
+        nodeId: '',
+        nodeGeneration: 0,
       });
 
       vi.mocked(sdkCore.resolveFileMetadata).mockResolvedValue({
@@ -753,6 +771,8 @@ describe('bin operations', () => {
         children: [],
         metadata: null,
         lastLoadedAt: Date.now(),
+        nodeId: '',
+        nodeGeneration: 0,
       });
       folderTree.set('target-ipns', {
         ipnsName: 'target-ipns',
@@ -762,6 +782,8 @@ describe('bin operations', () => {
         children: [],
         metadata: null,
         lastLoadedAt: Date.now(),
+        nodeId: '',
+        nodeGeneration: 0,
       });
 
       const order: string[] = [];
@@ -838,6 +860,8 @@ describe('bin operations', () => {
         children: [],
         metadata: null,
         lastLoadedAt: Date.now(),
+        nodeId: '',
+        nodeGeneration: 0,
       });
       folderTree.set('target-ipns', {
         ipnsName: 'target-ipns',
@@ -847,6 +871,8 @@ describe('bin operations', () => {
         children: [],
         metadata: null,
         lastLoadedAt: Date.now(),
+        nodeId: '',
+        nodeGeneration: 0,
       });
 
       vi.mocked(sdkCore.resolveFileMetadata)
@@ -938,6 +964,8 @@ describe('bin operations', () => {
         children: [],
         metadata: null,
         lastLoadedAt: Date.now(),
+        nodeId: '',
+        nodeGeneration: 0,
       });
       folderTree.set('target-ipns', {
         ipnsName: 'target-ipns',
@@ -947,6 +975,8 @@ describe('bin operations', () => {
         children: [existingChild], // already published by attempt 1
         metadata: null,
         lastLoadedAt: Date.now(),
+        nodeId: '',
+        nodeGeneration: 0,
       });
 
       let publishedChildren: FolderChild[] | undefined;
@@ -1015,6 +1045,8 @@ describe('bin operations', () => {
         children: [],
         metadata: null,
         lastLoadedAt: Date.now(),
+        nodeId: '',
+        nodeGeneration: 0,
       });
 
       const binState: BinState = {
@@ -1067,6 +1099,8 @@ describe('bin operations', () => {
         children: [],
         metadata: null,
         lastLoadedAt: Date.now(),
+        nodeId: '',
+        nodeGeneration: 0,
       });
 
       const binState: BinState = {

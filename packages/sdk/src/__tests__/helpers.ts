@@ -55,6 +55,8 @@ export function setupFolder(client: CipherBoxClient, ipnsName = 'folder-ipns', n
     children: [{ ...child }],
     metadata: null,
     lastLoadedAt: now,
+    nodeId: '',
+    nodeGeneration: 0,
   });
   return { ...child };
 }

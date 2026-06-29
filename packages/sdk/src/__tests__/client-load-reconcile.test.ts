@@ -75,6 +75,8 @@ describe('CipherBoxClient.loadFolder — sequenceNumber reconcile guard (REQ-1)'
       children: existingChildren,
       metadata: null,
       lastLoadedAt: Date.now(),
+      nodeId: '',
+      nodeGeneration: 0,
     });
 
     // IPNS resolves a STALE snapshot at sequence 3 with empty children
@@ -137,6 +139,8 @@ describe('CipherBoxClient.loadFolder — sequenceNumber reconcile guard (REQ-1)'
       children: [],
       metadata: null,
       lastLoadedAt: Date.now(),
+      nodeId: '',
+      nodeGeneration: 0,
     });
 
     // IPNS resolves a FRESHER snapshot at sequence 7

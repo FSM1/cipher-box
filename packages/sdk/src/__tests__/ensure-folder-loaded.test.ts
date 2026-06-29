@@ -72,6 +72,8 @@ describe.skip('CipherBoxClient.ensureFolderLoaded — TODO(phase 63)', () => {
       children: [],
       metadata: null,
       lastLoadedAt: 1,
+      nodeId: '',
+      nodeGeneration: 0,
     });
 
     const result = await client.ensureFolderLoaded('k51a');
