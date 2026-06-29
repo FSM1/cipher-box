@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "c85e68fa1b12",
+  "strategy": "manual-commit",
+  "branch": "feat/rotation-soundness-revocation-guarantees",
+  "checkpoints_count": 2,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/c8/5e68fa1b12/0/metadata.json",
+      "transcript": "/c8/5e68fa1b12/0/full.jsonl",
+      "content_hash": "/c8/5e68fa1b12/0/content_hash.txt",
+      "prompt": "/c8/5e68fa1b12/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 45747,
+    "cache_creation_tokens": 2251928,
+    "cache_read_tokens": 61993132,
+    "output_tokens": 321704,
+    "api_call_count": 240
+  }
+}
