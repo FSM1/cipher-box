@@ -222,14 +222,30 @@ Plans:
 **Plans**: 8 plans
 
 Plans:
+**Wave 1**
 
 - [ ] 64-01-PLAN.md — D-06 binding-stability: node-identity/generation preservation + moveItem dest re-seal
 - [ ] 64-02-PLAN.md — mergeChildren three-way merge (ROT-05 domain logic)
 - [ ] 64-03-PLAN.md — mintFileKeyOnRotate content-key rotation (ROT-03/CRIT-1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 64-04-PLAN.md — D-01 fail-closed publish + D-02 re-seal + batched parent-publish
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 64-05-PLAN.md — reMintGrantsRootedAt inner-grant re-mint (ROT-04/HIGH-3)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 64-06-PLAN.md — mergeConcurrentChildren CAS-409 merge (ROT-05/HIGH-4)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
 - [ ] 64-07-PLAN.md — verifySubtreeClean + resume guard + D-07 ordering (ROT-06)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
 - [ ] 64-08-PLAN.md — sdk-e2e abort-and-resume crash-safety suite (TEST-01)
 
 ---
