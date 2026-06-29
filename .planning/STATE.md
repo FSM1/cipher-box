@@ -6,14 +6,14 @@ current_phase: 64
 current_phase_name: rotation-soundness-revocation-guarantees
 status: executing
 stopped_at: Phase 64 context gathered
-last_updated: "2026-06-29T14:01:51.189Z"
+last_updated: "2026-06-29T14:08:42.858Z"
 last_activity: 2026-06-29
 last_activity_desc: Phase 64 execution started
 progress:
   total_phases: 9
   completed_phases: 3
   total_plans: 29
-  completed_plans: 22
+  completed_plans: 23
   percent: 33
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 ## Current Position
 
 Phase: 64 (rotation-soundness-revocation-guarantees) — EXECUTING
-Plan: 2 of 8
+Plan: 3 of 8
 Status: Ready to execute
 Last activity: 2026-06-29 — Phase 64 execution started
 
@@ -210,6 +210,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 63 P06 | 45 | 2 tasks | 9 files |
 | Phase 63 P07 | 25 | 1 tasks | 4 files |
 | Phase 64-rotation-soundness-revocation-guarantees P01 | 90 | 3 tasks | 13 files |
+| Phase 64 P02 | 3min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -415,6 +416,7 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: hasCoveringGrant pure predicate (D-08): both relay set and localGrantRecord cross-checked; injectable deps.rotate for SC#4 zero-rotation invariant
 - [Phase ?]: BFS in rotateReadFromNode must derive child readKeys via unsealChildReadKey with parent OLD readKey before enqueuing
 - [Phase ?]: Bypass Phase-65 createFileMetadata by manually building file node: sealNode+addToIpfs+createAndPublishIpnsRecord in sdk-e2e
+- [Phase ?]: mergeChildren union semantics: local first, remote overwrites (ROT-05 concurrent-add)
 
 ## Operator Next Steps
 
@@ -422,6 +424,6 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-06-29T14:01:51.182Z
+**Last session:** 2026-06-29T14:08:39.202Z
 **Stopped at:** Phase 64 context gathered
 **Resume file:** .planning/phases/64-rotation-soundness-revocation-guarantees/64-CONTEXT.md
