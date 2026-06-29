@@ -267,7 +267,17 @@ Plans:
 3. Surviving co-writers receive the rotated Ed25519 key re-wrapped into their `writeDescriptorRef`; an offline co-writer receives a clear "cannot write until re-fetch" error on next attempt
 4. `bin` restore is a pure re-link (`BinEntry` re-sealed under destination `readKey`); `originalFolderKeyEncrypted` and its re-encrypt-on-restore path are deleted from `packages/core/src/bin/types.ts` and `packages/sdk/src/bin/index.ts`; `encryptedChildKeys` JSONB fan-out is deleted from invite claim
 
-**Plans**: TBD
+**Plans**: 7 plans
+
+Plans:
+
+- [ ] 65-01-PLAN.md — core role-0x04 write-chain seal primitives (sealChildWriteKey / unsealChildWriteKey) [wave 1]
+- [ ] 65-02-PLAN.md — bin restore pure re-link + delete legacy re-encrypt path (BinEntry.nodeReadKey) [wave 1]
+- [ ] 65-03-PLAN.md — invite-claim service wiring (single readKey re-wrap; no encryptedChildKeys fan-out) [wave 1]
+- [ ] 65-04-PLAN.md — shared-write on the write-body model + co-writer "cannot write until re-fetch" error [wave 2]
+- [ ] 65-05-PLAN.md — rotation engine real-writeKey wiring; remove PLACEHOLDER_WRITE_KEY (folds FLAG-63-U1) [wave 2]
+- [ ] 65-06-PLAN.md — write-revocation driver rotateWriteFromNode (full Ed25519 rotation, child-first cascade, tombstone-intent, co-writer re-wrap) [wave 3]
+- [ ] 65-07-PLAN.md — sdk-e2e write-chain rotation round-trip gate (D-04) [wave 4]
 
 ---
 
