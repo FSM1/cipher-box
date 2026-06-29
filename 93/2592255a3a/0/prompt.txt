@@ -1,0 +1,245 @@
+<task-notification>
+<task-id>a91be1a559c95b85a</task-id>
+<tool-use-id>toolu_01MTobon4rm3id4313TMw5pj</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/404f2777-3329-4599-ae19-feb8f3ce5e1f/tasks/a91be1a559c95b85a.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify phase 63 goal achievement" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Verification Complete
+
+**Status:** passed
+**Score:** 5/5 must-haves verified
+**Report:** `/Users/myankelev/Code/random/cipher-box/.planning/phases/63-read-chain-navigation-and-rotation-core/63-VERIFICATION.md`
+
+---
+
+All 5 ROADMAP success criteria are satisfied in the committed code. All 7 requirement IDs (READ-01..05, ROT-01, ROT-02) are accounted for.
+
+### SC verdicts
+
+**SC#1 (READ-01) — VERIFIED.** `issueReadGrant` in `/packages/sdk-core/src/share/grant.ts` L100–124: single `wrapKey` call, zero IPNS/node operations, transport-decoupled `insertShareFn`. Tests assert `wrapKey` called exactly once and no resolve/seal mock invoked.
+
+**SC#2 (READ-02 / D-06) — VERIFIED.** `navigateReadChain` in `share/navigate.ts`: single `unwrapKey` (ECIES), then O(depth) loop over `unsealChildReadKey` using `childRef.generation` (parent-mirror, not child envelope — the critical generation-source rule). `NavigateResult` is a string-literal union with `'ok' | 'behind-retry' | 'revoked'`, no enum.
+
+**SC#3 (READ-03 / D-03) — VERIFIED (override).** `reWrapForRecipients` and `reWrapNewItems` are both deleted (grep returns 0 in `sdk/src/share/index.ts` and `sdk/src/client.ts`). `addFilePointerToFolder` seals the child readKey once via `sealChildReadKey`. The `addShareKeys` callback TYPE in `packages/sdk/src/types.ts:32` is intentionally preserved per locked decision D-03 (Phase 68 boundary). Override applied — this was decided before Phase 63 planning.
+
+**SC#4 (READ-04 / ROT-02) — VERIFIED.** `moveItem` is a pure synchronous link rewrite; test confirms `sealChildReadKey` and `sealNode` not called. `hasCoveringGrant` in `rotation/scope.ts` is a pure function (zero I/O). `scope.test.ts` L134–146 is the zero-rotation invariant: injected `rotateSpy` called 0 times for a private (no-covering-grant) mutation, called once for a covered scope-exit. Anti-malicious-relay cross-check implemented (localGrantRecord checked independently of relay set).
+
+**SC#5 (ROT-01 / D-01) — VERIFIED.** `rotation/engine.ts` (558 lines, not `index.ts`). All four Phase-64 seams exist as named functions throwing `"not implemented — phase 64 (...)"` and are invoked conditionally (clean folder-node happy path never triggers them). `publishWithCas` CAS commit present. Zero FUSE/Tauri/web imports.
+
+### Two overrides applied
+
+1. **addShareKeys TYPE** — pre-decided deviation in locked CONTEXT.md D-03, correctly reflected in PLAN must_haves.
+2. **sdk-e2e round-trip** — infrastructure-limited (no live stack in verifier env). Deliverable is fully wired (`read-chain-navigation.test.ts`, 313 lines, not skipped). Executor documented the pass in 63-07-SUMMARY.md with commit `e405ec6f9`, specific assertion evidence (root committed before Phase-64 stub, `behind-retry` post-rotation). Per project convention: infra-limited items → accepted override, not human_needed.
+
+### Stale skip blocks — informational finding
+
+`packages/sdk-core/src/__tests__/folder.test.ts` contains 4 `describe.skip('...TODO(phase 63)')` blocks at L114, L257, L454, L878. These test the retired `FolderChild`/`encryptFolderMetadata` API under `@ts-nocheck`. The executors wrote new active describe blocks covering all Phase-63 scenarios with the new `SealedChildRef` API. All 4 stale blocks are **safe to delete** — redundant dead code, no critical scenario is missing from active coverage. This is a cleanup recommendation, not a blocker.</result>
+<usage><subagent_tokens>151581</subagent_tokens><tool_uses>36</tool_uses><duration_ms>416800</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a58e9b99c91ff74a7</task-id>
+<tool-use-id>toolu_01Mag1ymG4Ympy6UGwzznpfH</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/404f2777-3329-4599-ae19-feb8f3ce5e1f/tasks/a58e9b99c91ff74a7.output</output-file>
+<status>completed</status>
+<summary>Agent "Remove stale phase-63 skip blocks" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Clean. Done.
+
+`6a739a20a` — 14 tests pass, 10 skipped (3 phase-65 blocks × ~3-4 tests each), 0 TODO(phase 63) refs remaining.</result>
+<usage><subagent_tokens>94224</subagent_tokens><tool_uses>10</tool_uses><duration_ms>614670</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ad62ae0b2bf43a038</task-id>
+<tool-use-id>toolu_01N8FuwCNAFPkX6WyFACZwwT</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/404f2777-3329-4599-ae19-feb8f3ce5e1f/tasks/ad62ae0b2bf43a038.output</output-file>
+<status>completed</status>
+<summary>Agent "SDK-E2E integration gate" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Working tree is clean (no output from `git status --short`).
+
+---
+
+## PASS
+
+**Suite results:**
+
+| Suite | Tests | Result |
+|---|---|---|
+| `read-chain-navigation.test.ts` | 1 | PASSED (461ms) |
+| `vault-lifecycle.test.ts` | 8 | SKIPPED (intentional quarantine) |
+| `file-operations.test.ts` | 9 | SKIPPED (intentional quarantine) |
+| `folder-crud.test.ts` | 10 | SKIPPED (intentional quarantine) |
+| `data-integrity.test.ts` | 10 | SKIPPED (intentional quarantine) |
+| `error-cases.test.ts` | 13 | SKIPPED (intentional quarantine) |
+| `ipns-consistency.test.ts` | 7 | SKIPPED (intentional quarantine) |
+| `concurrent-operations.test.ts` | 5 | SKIPPED (intentional quarantine) |
+| `batch-upload.test.ts` | 5 | SKIPPED (intentional quarantine) |
+| `share-operations.test.ts` | 7 | SKIPPED (intentional quarantine) |
+| `invite-link.test.ts` | 7 | SKIPPED (intentional quarantine) |
+| `bin-operations.test.ts` | 8 | SKIPPED (intentional quarantine) |
+
+**Total: 1 passed / 89 skipped / 0 failed**
+
+**The 89 skips are pre-existing, not regressions.** All 11 suites carry `describe.skip('... [quarantined D-01: SDK runtime stubbed mid-milestone, re-enable at phase 63-65 consumer re-wire]')` — these were applied during Phase 62 when the SDK runtime was being rebuilt and have not been lifted yet. The quarantine note explicitly spans phases 63-65; Phase 63's mandate was to add the single focused E2E (`read-chain-navigation.test.ts`) for the read-chain/rotation engine, which it did.
+
+**The Phase-63 deliverable (`read-chain-navigation.test.ts`)** exercises a live IPNS round-trip: Alice creates a folder and file node, issues a read grant to Bob, Bob successfully navigates the read chain pre-rotation, Alice performs root-step rotation (expected Phase-64 stub throw on the file child — caught and verified), and Bob's pre-rotation grant correctly returns `behind-retry` (revocation effective). All 4 assertions passed against the real stack in 461ms.
+
+Working tree is clean. No commits made. No interceptor added.</result>
+<usage><subagent_tokens>59791</subagent_tokens><tool_uses>47</tool_uses><duration_ms>250058</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a2e06e5e4030bde84</task-id>
+<tool-use-id>toolu_01ACrNwk2r7EsjoP21kPjotR</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/404f2777-3329-4599-ae19-feb8f3ce5e1f/tasks/a2e06e5e4030bde84.output</output-file>
+<status>completed</status>
+<summary>Agent "Security audit phase 63" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## SECURED
+
+**Phase:** 63 — read-chain-navigation-and-rotation-core
+**Threats Closed:** 27/27
+**ASVS Level:** 1
+**Block on:** high
+
+### Threat Verification
+
+| Threat ID | Category | Severity | Disposition | Status | Evidence |
+|-----------|----------|----------|-------------|--------|----------|
+| T-63-01 | Spoofing | high | mitigate | CLOSED | `navigate.ts` L151: `childRef.generation` (parent mirror), never `childPublished.generation` |
+| T-63-02 | Tampering | high | mitigate | CLOSED | Zero `sealAesGcmAad`/`buildNodeAad` in any Phase-63 file; codec composed from `@cipherbox/core` |
+| T-63-03 | Information Disclosure | medium | mitigate | CLOSED | No console/logger calls; no localStorage/sessionStorage; no fill(0) on caller keys in navigate.ts |
+| T-63-04 | Denial of Service | low | accept | CLOSED | Logged in accepted risks |
+| T-63-05 | Information Disclosure | high | mitigate | CLOSED | `rewrap.ts` L43+L48: `plainKey.fill(0)` in both success and catch paths; intermediate always zeroed |
+| T-63-06 | Spoofing | medium | accept | CLOSED | ADR-0002 honest stance; logged in accepted risks |
+| T-63-07 | Information Disclosure | high | mitigate | CLOSED | 0 matches for `encryptedChildKeys` in `grant.ts`; `claimInviteReadKey` returns `string` not array |
+| T-63-08 | Tampering | low | accept | CLOSED | Logged in accepted risks |
+| T-63-09 | Elevation of Privilege | high | mitigate | CLOSED | `engine.ts` L437: root `rotateOne` fires before BFS frontier per §4.2 |
+| T-63-10 | Denial of Service | critical | mitigate | CLOSED | `engine.ts` catch L395: only `readKeyPrime.fill(0)`; `parentReadKey` never zeroed |
+| T-63-11 | Tampering | high | transfer | CLOSED | `mergeConcurrentChildren` seam at `engine.ts` L226; `63-CONTEXT.md` D-01 transfer docs |
+| T-63-12 | Spoofing | high | mitigate | CLOSED | `engine.ts` L340: `sealChildReadKey` uses `generationPrime` (node.generation + 1) |
+| T-63-SC | Tampering | n/a | accept | CLOSED | Zero new external dependencies this phase |
+| T-63-13 | Information Disclosure | high | mitigate | CLOSED | `metadata-ops.ts` L101: one `sealChildReadKey` call, no per-recipient loop |
+| T-63-14 | Tampering | medium | mitigate | CLOSED | `registration.ts` L155: `publishWithCas` with expected-seq CAS guard |
+| T-63-15 | Spoofing | medium | mitigate | CLOSED | `registration.ts` L87-92: `sequenceNumber: 1n` embedded verbatim on first publish |
+| T-63-16 | Information Disclosure | low | mitigate | CLOSED | `registration.ts` L94-101: minted keys returned to caller, not zeroed |
+| T-63-17 | Elevation of Privilege | high | mitigate | CLOSED | `scope.ts` L98-112: both relay set AND `localGrantRecord` cross-checked independently |
+| T-63-18 | Denial of Service | medium | mitigate | CLOSED | `scope.ts` L149: early return `'no-rotation'` without calling `deps.rotate` when uncovered |
+| T-63-19 | Elevation of Privilege | medium | transfer | CLOSED | `63-CONTEXT.md` D-08: host responsibility at Phase 68/69 |
+| T-63-20 | Tampering | low | accept | CLOSED | Logged in accepted risks |
+| T-63-21 | Information Disclosure | high | mitigate | CLOSED | 0 matches for `reWrapForRecipients`/`reWrapNewItems` in `sdk/src/share/index.ts` and `client.ts` |
+| T-63-22 | Tampering | medium | mitigate | CLOSED | SDK typecheck gate + enumerate-shared-subtree test passing |
+| T-63-23 | Elevation of Privilege | low | mitigate | CLOSED | `sdk/src/types.ts`: `addShareKeys` type preserved (3 references confirmed) |
+| T-63-24 | Elevation of Privilege | high | mitigate | CLOSED | `read-chain-navigation.test.ts` asserts NOT `'ok'` post-rotation; infra override |
+| T-63-25 | Tampering | high | mitigate | CLOSED | SDK-e2e exercises real IPNS seq 1n/CAS/rotation over live API; infra override |
+| T-63-26 | Denial of Service | low | mitigate | CLOSED | Single test file only, not full suite |
+
+### Unregistered Flags (non-blocking)
+
+**FLAG-63-U1 — PLACEHOLDER_WRITE_KEY in `engine.ts` L329-330**: `new Uint8Array(32)` passed as `writeKey` to `sealNode`. Safe in Phase 63 because `unsealNode` without a writeKey produces a node with no `writeBody`, which `sealNode` skips (confirmed at `seal.ts` L118). Latent risk: if Phase 65+ calls this path on a node with a `writeBody` before wiring the real key, the write body would reseal under all-zeros. The Phase-65 seam comment in `engine.ts` L324-328 acknowledges this.
+
+**FLAG-63-U2 — `moveItem` preserves `SealedChildRef` sealed under source parent readKey**: After a within-scope move, a grantee navigating via the destination path would fail AAD authentication (dest parent readKey != source parent readKey). This is the READ-04 "zero re-encryption" design; correctness/functionality concern, not a key-material leak. Phase 64/68 attention recommended.
+
+### Note on T-63-05 Comment Accuracy
+
+`grant.ts` L157 claims `reWrapKey` "zeroes the intermediate in a `finally` block." The actual implementation uses try/catch (`rewrap.ts` L43 success, L48 catch). The security outcome is identical — both paths zero — but the comment is inaccurate. Documentation-only inaccuracy; no security gap.
+
+SECURITY.md: `/Users/myankelev/Code/random/cipher-box/.planning/phases/63-read-chain-navigation-and-rotation-core/63-SECURITY.md`</result>
+<usage><subagent_tokens>125445</subagent_tokens><tool_uses>38</tool_uses><duration_ms>508526</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bspm0havc</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/404f2777-3329-4599-ae19-feb8f3ce5e1f/tasks/bspm0havc.output</output-file>
+<status>completed</status>
+<summary>Background command "Run CodeRabbit review in background" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a570e2255835e2364</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/404f2777-3329-4599-ae19-feb8f3ce5e1f/tasks/a570e2255835e2364.output</output-file>
+<status>completed</status>
+<summary>Agent "Apply in-scope CodeRabbit fixes" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Clean — only the `.planning/` untracked files you mentioned. Commit hash: `027d488b3`.
+
+---
+
+**Per-item disposition:**
+
+| # | Status | Notes |
+|---|--------|-------|
+| 1 | **Fixed** | `navigate.ts`: try/finally with `mintedKeys: Uint8Array[]` — zeroes `shareRootReadKey` + each `childReadKey` on all exit paths (ok, behind-retry, revoked, thrown error). `recipientPrivKey` and the returned `content` object are untouched. |
+| 2 | **Fixed** | `issueReadGrant`: rejects `shareRootReadKey` != 32 bytes and `recipientPublicKey` != 65 bytes before any crypto. `claimInviteReadKey`: rejects `ephemeralPrivateKey` != 32 bytes and `claimerPublicKey` != 65 bytes. |
+| 3 | **Fixed** | `wrapKey` call wrapped in try/catch; `base64ToBytes` + `reWrapKey` each wrapped separately in `claimInviteReadKey`. All rethrow with `{ cause }` naming the operation. |
+| 4 | **Fixed** | `ephemeralPrivKey` → `ephemeralPrivateKey` in `grant.ts` (parameter, JSDoc, all usages) and `grant.test.ts` (5 call sites + 1 `it` description). `apps/web` occurrences are unrelated internal variable names in `useDeviceApproval.ts`/`invite.service.ts` — not calls to `claimInviteReadKey`, not updated. |
+| 5 | **Fixed** | `folder.test.ts` `beforeEach`: `mockReturnValue(fill(3))` → `mockReturnValueOnce(fill(3)).mockReturnValueOnce(fill(4))`. Updated the `rootWriteKey` assertion from `fill(3)` to `fill(4)`. |
+| 6 | **Fixed** | `read-chain-navigation.test.ts` L307-310: replaced permissive `not.toBe('ok')` + `toContain(['revoked','behind-retry'])` with specific `toBe('behind-retry')`. |
+| 7 | **Skipped** — false positive | `NodeContent.fileIv` is typed as `string` (hex) in `packages/core/src/node/types.ts:59` and the codec validates `typeof raw.fileIv !== 'string'`. Changing to `Uint8Array` would violate the type contract and break decode. The hex conversion is correct. |
+| 8 | **Deferred** — false positive | `client.ts` L561/584 pass `readKey: sourceFolder.folderKey` — this uses the canonical `readKey` parameter name with the correct value (`FolderState.folderKey` IS the AES-256 read key). No wrong-field bug. `updateFolderMetadataAndPublish` accepts both `readKey` and deprecated `folderKey` fields; the code is using `readKey` with the right value. Left as-is. |
+
+**Results:**
+- `@cipherbox/core` build: green
+- `@cipherbox/sdk-core` build: green
+- `@cipherbox/sdk` build: green
+- sdk-core unit tests: 261 passed, 33 skipped
+- sdk unit tests: 169 passed, 79 skipped
+- `read-chain-navigation.test.ts` E2E: 1 passed (490ms)
+- Commit: `027d488b3`</result>
+<usage><subagent_tokens>95607</subagent_tokens><tool_uses>51</tool_uses><duration_ms>552980</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bqvwrjc6p</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/404f2777-3329-4599-ae19-feb8f3ce5e1f/tasks/bqvwrjc6p.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll PR checks until CodeRabbit settles" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ae2bcee54f41f1f0f</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/404f2777-3329-4599-ae19-feb8f3ce5e1f/tasks/ae2bcee54f41f1f0f.output</output-file>
+<status>completed</status>
+<summary>Agent "Apply 3 PR-nitpick fixes" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Exactly the three files, no `.planning/`, no dist. Done.
+
+---
+
+Per-item disposition:
+
+**Fix 1 — `grant.ts` `rootGeneration` validation:** Applied. Added guard after the `recipientPublicKey` check: throws `issueReadGrant: rootGeneration must be a non-negative integer, got ${...}` when `!Number.isInteger(...)` or `&lt; 0`.
+
+**Fix 2 — e2e strict stub assertion:** Applied. Replaced the conditional `if (rotationError !== undefined)` block with two unconditional expects: `expect(rotationError).toBeDefined()` + `expect(...).toMatch(/phase 64/i)`. The BFS correctly reached the file child's `mintFileKeyOnRotate` Phase-64 stub and threw — e2e passed with the strict assertion.
+
+**Fix 3 — navigate.test.ts per-test mock isolation:** Applied. Changed `mockFns.unwrapKey.mockResolvedValue(SHARE_ROOT_READ_KEY)` to `mockFns.unwrapKey.mockImplementation(async () =&gt; SHARE_ROOT_READ_KEY.slice())`. This also exposed a secondary issue: Case 7's `toHaveBeenCalledWith` assertion was checking `SHARE_ROOT_READ_KEY` (the shared buffer reference), but `navigateReadChain`'s finally block zeroes the minted copy after the call, so Vitest's recorded call reference showed all zeros. Fixed the assertion to use `expect.any(Uint8Array)` since the test's purpose is verifying the generation argument (3 vs 4), not the key bytes. No other per-test `unwrapKey` overrides used shared buffers.
+
+**Results:**
+- `@cipherbox/core` build: green
+- `@cipherbox/sdk-core` build: green
+- sdk-core unit suite: 261 passed, 0 failed, 33 skipped
+- read-chain e2e: 1 passed (strict assertion held)
+- Commit: `1163b63f3`</result>
+<usage><subagent_tokens>61317</subagent_tokens><tool_uses>22</tool_uses><duration_ms>260539</duration_ms></usage>
+</task-notification>

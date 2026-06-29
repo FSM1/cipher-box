@@ -1,0 +1,266 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "932592255a3a",
+  "session_id": "b138c49b-687f-49bd-aa30-ffb4dde5e4e5",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-29T11:41:05.476537Z",
+  "branch": "feat/read-chain-navigation-and-rotation-core",
+  "checkpoints_count": 1,
+  "save_step_count": 2,
+  "files_touched": [
+    ".planning/todos/pending/2026-06-29-rotation-engine-walk-soundness-phase64.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "77032ae9c2d8",
+  "token_usage": {
+    "input_tokens": 20791,
+    "cache_creation_tokens": 1587542,
+    "cache_read_tokens": 57796212,
+    "output_tokens": 270932,
+    "api_call_count": 181
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-resolve-pr-reviews-2026-06-29T11:36:30.156598Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "resolve-pr-reviews"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "77032ae9c2d8",
+      "timestamp": "2026-06-29T11:36:30.156598Z",
+      "native": {
+        "command": "/resolve-pr-reviews"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/resolve-pr-reviews",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_013QQzgxUHQN245qBmhyghRw",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "77032ae9c2d8",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 41,
+        "end": 42,
+        "entry_ids": [
+          "fe8ef216-dd96-4b2f-bf2e-5d4876997fd9"
+        ],
+        "tool_use_id": "toolu_013QQzgxUHQN245qBmhyghRw"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_013QQzgxUHQN245qBmhyghRw"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01SKZ2doAKEneeyZP8ntcsd9",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "77032ae9c2d8",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 284,
+        "end": 285,
+        "entry_ids": [
+          "1bbf609c-3b67-4e41-bccb-0dac5c91e156"
+        ],
+        "tool_use_id": "toolu_01SKZ2doAKEneeyZP8ntcsd9"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01SKZ2doAKEneeyZP8ntcsd9"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01BQZ8QErcJYYYmTXhc9bZXr",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "77032ae9c2d8",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 594,
+        "end": 595,
+        "entry_ids": [
+          "6dc4a5e9-ec97-4340-874b-4e1366393c74"
+        ],
+        "tool_use_id": "toolu_01BQZ8QErcJYYYmTXhc9bZXr"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01BQZ8QErcJYYYmTXhc9bZXr"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ship-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "summary": {
+    "intent": "Plan, execute, and ship Phase 63 (Read-Chain Navigation and Rotation Core) of CipherBox using the GSD workflow, fully autonomously while the user was AFK.",
+    "outcome": "Phase 63 was fully planned (7 plans/4 waves, plan-checker PASSED), executed (~30 commits, all 7 plans), verified (5/5 SCs), security-audited (27/27 threats), and shipped as PR #579 with all CI checks green and all 14 review threads resolved.",
+    "learnings": {
+      "repo": [
+        "The repo squash-merges to main, so individual commit subjects never reach release-please — only the PR title needs to be conventional and paren-free; the filter-branch reword step can be skipped",
+        "sdk-core has no `typecheck` script; the real type gate is `build` which runs `tsup && tsc -p tsconfig.build.json`",
+        "A second PR reviewer bot exists: greptile-apps (in addition to CodeRabbit) — it re-reviews on each push and posts its own threads",
+        "The GSD commit helper reports `commit_failed` as a false-negative while the commit actually lands; always verify with `git log --oneline -1`",
+        "Pre-commit hooks (husky) are slow — commit commands regularly need a 3–4 min timeout to avoid spurious failures",
+        "`gh pr edit` fails on this repo (Projects-classic GraphQL); patch PR body via `gh api -X PATCH repos/FSM1/cipher-box/pulls/<N> -F body=@file`",
+        "After `gh pr create`, the github-actions release bot pushes `chore(release)` to the branch — always `git fetch` + rebase before the next push or it will be rejected",
+        "The GraphQL author filter must use `coderabbitai` (not `coderabbitai[bot]`) to match CodeRabbit's actual login",
+        "The 89 sdk-e2e skips are a pre-existing Phase-62 D-01 quarantine (SDK runtime stubbed mid-milestone, note says re-enable at phases 63-65) — not regressions from Phase 63 work",
+        "`updateFolderMetadataAndPublish` mints a fresh UUID and resets generation to 0 when `nodeId`/`nodeGeneration` are omitted — all 6 callers currently omit them, breaking node identity continuity",
+        "`moveItem` does not re-seal the child readKey under the new parent's readKey per design §3.5 — a grantee navigating via the destination path would fail AAD authentication",
+        "`markdownlint` runs on commit but excludes `.planning/` — no need to lint files there"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/rotation/engine.ts",
+          "line": 124,
+          "end_line": 124,
+          "finding": "`RotateOneParams.parentReadKey` doc-comment was stale ('the NEW readKey minted when the parent was rotated'); it is actually this node's own pre-rotation readKey — fixed in the final resolve-pr-reviews commit"
+        },
+        {
+          "path": "packages/sdk-core/src/rotation/engine.ts",
+          "line": 329,
+          "end_line": 330,
+          "finding": "PLACEHOLDER_WRITE_KEY (`new Uint8Array(32)`) passed as writeKey to sealNode; safe in Phase 63 because sealNode skips writeBody when absent, but latent risk for Phase 65+ if a node with a writeBody is sealed before the real key is wired"
+        },
+        {
+          "path": "packages/sdk-core/src/rotation/engine.ts",
+          "line": 395,
+          "end_line": 395,
+          "finding": "In the catch path, only `readKeyPrime.fill(0)` is called; `parentReadKey` is never zeroed (security audit FLAG, accepted as low-risk for Phase 63)"
+        },
+        {
+          "path": "packages/sdk-core/src/share/grant.ts",
+          "line": 157,
+          "end_line": 157,
+          "finding": "Comment claimed `reWrapKey` zeroes the intermediate in a `finally` block; actual implementation uses try/catch (`rewrap.ts` L43 success, L48 catch) — documentation-only inaccuracy, security outcome identical"
+        },
+        {
+          "path": "packages/sdk-core/src/__tests__/folder.test.ts",
+          "line": 114,
+          "end_line": 968,
+          "finding": "Four `describe.skip('...TODO(phase 63)')` blocks at L114, L257, L454, L878 tested the retired `FolderChild`/`encryptFolderMetadata` API under `@ts-nocheck`; new active blocks cover all Phase-63 scenarios with the new `SealedChildRef` API — stale blocks deleted in a cleanup commit"
+        },
+        {
+          "path": "packages/sdk-core/src/rotation/engine.ts",
+          "line": 437,
+          "end_line": 437,
+          "finding": "Root `rotateOne` fires before BFS frontier per §4.2 (SC#1); 63-07 live e2e caught a real BFS bug where child `rotateOne` calls were receiving the root's new readKey instead of each child's own derived readKey"
+        },
+        {
+          "path": "packages/sdk-core/src/rotation/scope.ts",
+          "line": 134,
+          "end_line": 146,
+          "finding": "Zero-rotation invariant test (SC#4): injected rotateSpy called 0 times for private (no-covering-grant) mutation, called once for covered scope-exit; anti-malicious-relay cross-check uses `localGrantRecord` independently of relay set"
+        }
+      ],
+      "workflow": [
+        "When a weekly usage limit hits mid-execution, check if the reset time (7am Berlin) has just passed — retry immediately rather than pausing; a clean tree (atomic commits) means the retry is safe",
+        "Running CodeRabbit CLI review (`coderabbit review --agent --base main`) before opening the PR and triaging in-scope fixes avoids a push → re-review → more findings loop after the PR is open",
+        "Every push to an open PR triggers both CodeRabbit and greptile to re-review — stop pushing once threads are manageable to avoid an unbounded fix-and-re-review cycle; defer marginal nits to todos instead",
+        "Sequential in-tree execution (no worktrees) is safer than parallel worktrees when plans share test files (e.g. folder.test.ts touched by 63-01 and 63-04) — this repo also has documented node_modules/api:generate worktree pitfalls",
+        "The Phase-64 seam pattern (named stub functions throwing `'not implemented — phase 64 (...)'`) allows live e2e verification of the happy path while deferring multi-recipient key propagation cleanly",
+        "Running security audit, SDK-E2E gate, and CodeRabbit CLI review in parallel (3 background agents) significantly reduces ship pipeline wall-clock time"
+      ]
+    },
+    "friction": [
+      "Weekly usage limit hit mid-execution during plan 63-06 (fortunately reset ~immediately at 07:00 Berlin; tree was untouched so retry was clean)",
+      "GSD commit helper consistently reports `commit_failed` as a false-negative — requires verifying every commit via `git log --oneline -1` rather than trusting the helper output",
+      "Pre-commit hooks are slow enough to cause 2-min Bash tool timeouts on commit commands; commits landed but the timeouts added confusion",
+      "GraphQL `coderabbitai[bot]` author filter returned 0 results — actual login is `coderabbitai` without the `[bot]` suffix, causing a wasted query and a re-fetch",
+      "API surface regeneration returned 0 symbols (empty) — had to omit it rather than use it as an intel gate",
+      "Codebase map drift gate flagged stale `.planning/codebase/` entries as blocking, but the gate is non-blocking at plan time — the warning added noise without guidance on resolution"
+    ],
+    "open_items": [
+      "Phase 64: `moveItem` must re-seal child readKey under the new parent's readKey per design §3.5 — current implementation breaks AAD auth for grantees navigating via the destination path (todo: 2026-06-29-move-within-scope-reseal-child-readkey.md)",
+      "Phase 64: `updateFolderMetadataAndPublish` must require `nodeId`/`nodeGeneration` from callers — currently mints fresh UUID + resets generation on every update across all 6 call sites, breaking parent binding (todo: 2026-06-29-update-folder-metadata-preserve-node-identity.md)",
+      "Phase 64: Rotation engine walk/resume soundness — BFS write-back, job-record ordering before BFS, resume from checkpoint, persist-callback on completion, `newReadKeySealed` sealed under wrong key for non-root nodes (todo: 2026-06-29-rotation-engine-walk-soundness-phase64.md)",
+      "Phase 65: `rotateOne` placeholder writeKey (`new Uint8Array(32)`) is latent risk if a node with a writeBody is rotated before the real key is wired (todo: 2026-06-29-rotateone-placeholder-writekey-phase65.md)",
+      "Phase 64/68: SDK client `moveItem` publish ordering — destination published before source removal creates a window where both parents claim the node (todo: 2026-06-29-sdk-client-move-publish-durability.md)",
+      "Phase 67: `createSubfolder` teeKeys supplied but not wired to republish to co-owners (greptile CRITICAL, todo: 2026-06-29-createsubfolder-tee-republish-wiring.md)",
+      "Phase 64: Dedup `base64ToBytes`/`bytesToBase64` helpers duplicated in navigate.ts vs shared codec (minor DRY nit, todo: 2026-06-29-dedup-base64-helpers-sdk-core-share.md)",
+      "Phases 63-65: 89 sdk-e2e suites remain quarantined under D-01 (SDK runtime stubbed mid-milestone) — quarantine note explicitly targets phases 63-65 for re-enablement",
+      "Pre-existing: `phase uat-passed` CLI command exists in help but has no handler — workaround is editing VERIFICATION.md + `phase complete`"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-29T11:39:35.982176Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 14,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 14,
+    "total_lines_changed": 18,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 23,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}

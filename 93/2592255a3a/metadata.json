@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "932592255a3a",
+  "strategy": "manual-commit",
+  "branch": "feat/read-chain-navigation-and-rotation-core",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/todos/pending/2026-06-29-rotation-engine-walk-soundness-phase64.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/93/2592255a3a/0/metadata.json",
+      "transcript": "/93/2592255a3a/0/full.jsonl",
+      "content_hash": "/93/2592255a3a/0/content_hash.txt",
+      "prompt": "/93/2592255a3a/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 20791,
+    "cache_creation_tokens": 1587542,
+    "cache_read_tokens": 57796212,
+    "output_tokens": 270932,
+    "api_call_count": 181
+  }
+}
