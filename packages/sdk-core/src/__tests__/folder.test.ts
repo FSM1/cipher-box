@@ -37,8 +37,14 @@ const mockFns = vi.hoisted(() => ({
   resolveIpnsRecord: vi.fn(),
   addToIpfs: vi.fn(),
   fetchFromIpfs: vi.fn(),
+  // Retired (phase 62): kept in mockFns so skipped describe blocks compile
   encryptFolderMetadata: vi.fn(),
   decryptFolderMetadata: vi.fn(),
+  // Phase-62 codec (node/v3)
+  sealNode: vi.fn(),
+  unsealNode: vi.fn(),
+  sealChildReadKey: vi.fn(),
+  unsealChildReadKey: vi.fn(),
   createIpnsRecord: vi.fn(),
   marshalIpnsRecord: vi.fn(),
   generateEd25519Keypair: vi.fn(),
@@ -60,8 +66,11 @@ vi.mock('@cipherbox/crypto', () => ({
 }));
 
 vi.mock('@cipherbox/core', () => ({
-  encryptFolderMetadata: mockFns.encryptFolderMetadata,
-  decryptFolderMetadata: mockFns.decryptFolderMetadata,
+  // Phase-62 codec mocks (replaces retired encryptFolderMetadata/decryptFolderMetadata)
+  sealNode: mockFns.sealNode,
+  unsealNode: mockFns.unsealNode,
+  sealChildReadKey: mockFns.sealChildReadKey,
+  unsealChildReadKey: mockFns.unsealChildReadKey,
   createIpnsRecord: mockFns.createIpnsRecord,
   marshalIpnsRecord: mockFns.marshalIpnsRecord,
 }));
@@ -488,31 +497,47 @@ describe.skip('updateFolderMetadataAndPublish zeroization decision guard (S3/D-0
 // fetchFromIpfs / resolveIpnsRecord / decryptFolderMetadata are mocked above.
 // ---------------------------------------------------------------------------
 
-describe.skip('fetchAndDecryptMetadata — TODO(phase 63)', () => {
+describe('fetchAndDecryptMetadata', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('fetches the encrypted blob, JSON-parses it, and decrypts with the folder key', async () => {
+  it('fetches from IPFS, JSON-parses as PublishedNode, and unseals with the folder key', async () => {
     const ctx = createMockContext();
     const folderKey = new Uint8Array(32).fill(9);
-    const encryptedBlob = { iv: 'the-iv', data: 'the-data' };
+    // fetchFromIpfs returns a Uint8Array of JSON-encoded PublishedNode
+    const publishedNode = {
+      schema: 'node/v3',
+      kind: 'folder',
+      id: 'node-test-1',
+      generation: 0,
+      aeadVersion: 1,
+      readSealed: 'base64==',
+    };
     mockFns.fetchFromIpfs.mockResolvedValue(
-      new TextEncoder().encode(JSON.stringify(encryptedBlob))
+      new TextEncoder().encode(JSON.stringify(publishedNode))
     );
-    const decrypted = { version: 'v2' as const, children: [makeFile('x', 'a.txt')] };
-    mockFns.decryptFolderMetadata.mockResolvedValue(decrypted);
+    const unsealedNode = {
+      schema: 'node/v3',
+      kind: 'folder',
+      id: 'node-test-1',
+      generation: 0,
+      createdAt: 0,
+      modifiedAt: 0,
+      children: [],
+    };
+    mockFns.unsealNode.mockResolvedValue(unsealedNode);
 
     const result = await fetchAndDecryptMetadata('QmCid123', folderKey, ctx);
 
     expect(mockFns.fetchFromIpfs).toHaveBeenCalledWith(ctx, 'QmCid123');
-    // The parsed encrypted object and the folder key must be passed to decrypt
-    expect(mockFns.decryptFolderMetadata).toHaveBeenCalledWith(encryptedBlob, folderKey);
-    expect(result).toBe(decrypted);
+    // unsealNode must receive the parsed PublishedNode object and the folder key
+    expect(mockFns.unsealNode).toHaveBeenCalledWith(publishedNode, folderKey);
+    expect(result).toBe(unsealedNode);
   });
 });
 
-describe.skip('loadFolderMetadata — TODO(phase 63)', () => {
+describe('loadFolderMetadata', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -532,24 +557,38 @@ describe.skip('loadFolderMetadata — TODO(phase 63)', () => {
     expect(mockFns.fetchFromIpfs).not.toHaveBeenCalled();
   });
 
-  it('resolves IPNS, fetches+decrypts, and surfaces metadata, sequenceNumber and cid', async () => {
+  it('resolves IPNS, fetches+unseals, and surfaces metadata, sequenceNumber and cid', async () => {
     const ctx = createMockContext();
     const folderKey = new Uint8Array(32).fill(3);
     mockFns.resolveIpnsRecord.mockResolvedValue({
       sequenceNumber: 42n,
       cid: 'QmResolved',
-      ipnsName: 'k51found',
     });
+    const publishedNode = {
+      schema: 'node/v3',
+      kind: 'folder',
+      id: 'node-resolved-2',
+      generation: 0,
+      aeadVersion: 1,
+      readSealed: 'base64==',
+    };
     mockFns.fetchFromIpfs.mockResolvedValue(
-      new TextEncoder().encode(JSON.stringify({ iv: 'i', data: 'd' }))
+      new TextEncoder().encode(JSON.stringify(publishedNode))
     );
-    const metadata = { version: 'v2' as const, children: [makeFolder('sub', 'Sub')] };
-    mockFns.decryptFolderMetadata.mockResolvedValue(metadata);
+    const metadata = {
+      schema: 'node/v3',
+      kind: 'folder',
+      id: 'node-resolved-2',
+      generation: 0,
+      createdAt: 0,
+      modifiedAt: 0,
+      children: [],
+    };
+    mockFns.unsealNode.mockResolvedValue(metadata);
 
     const result = await loadFolderMetadata({ ipnsName: 'k51found', folderKey, ctx });
 
     expect(mockFns.resolveIpnsRecord).toHaveBeenCalledWith('k51found', ctx);
-    expect(mockFns.fetchFromIpfs).toHaveBeenCalledWith(ctx, 'QmResolved');
     expect(result).toEqual({ metadata, sequenceNumber: 42n, cid: 'QmResolved' });
   });
 });
