@@ -568,17 +568,17 @@ The resume path in `rotateReadFromNode`: call `verifySubtreeClean` when `complet
 
 **If this table is empty:** Not empty — four low-risk assumptions logged above.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **FolderState identity fields vs metadata access**
+1. **FolderState identity fields vs metadata access** — **RESOLVED** (planned in 64-01)
    - What we know: `FolderState.metadata: Node | null`; `registerFolder` sets `metadata: null`; `loadFolder` sets `metadata: result.metadata`.
    - What's unclear: Which of the 6 call sites may have `metadata: null` at invocation time? The `createSubfolder` path (used in sdk-e2e) registers a folder without loading it.
-   - Recommendation: Add `nodeId: string; nodeGeneration: number` as explicit required fields to `FolderState`, populated in both `registerFolder` (from the caller-supplied node) and `loadFolder` (from `result.metadata.id`/`.generation`). This is safer than relying on `metadata` being non-null.
+   - **Resolution:** Plan 64-01 adds `nodeId: string; nodeGeneration: number` as explicit required fields to `FolderState`, populated in both `registerFolder` (from the caller-supplied node) and `loadFolder` (from `result.metadata.id`/`.generation`), and threads them through all 6 `client.ts` call sites. This is safer than relying on `metadata` being non-null (closes assumption A1).
 
-2. **BFS parent-grouping for batched parent-publish (D-09)**
+2. **BFS parent-grouping for batched parent-publish (D-09)** — **RESOLVED** (planned in 64-04)
    - What we know: D-02 requires publishing each parent ONCE after all its children rotate.
-   - What's unclear: The flat BFS queue doesn't inherently know when all children of a parent are done. Need a parent-tracking structure (e.g., `Map<parentIpnsName, { expectedChildren: number; processed: SealedChildRef[]; nodeState }>`) or a simpler per-child publish (less efficient but correct).
-   - Recommendation: For Phase 64, a `Map<parentIpnsName, parentState>` approach is clean. Claude's discretion per D-02 on the exact implementation.
+   - What's unclear: The flat BFS queue doesn't inherently know when all children of a parent are done. Need a parent-tracking structure or a simpler per-child publish (less efficient but correct).
+   - **Resolution:** Plan 64-04 Task 2 uses a `Map<parentIpnsName, parentState>` accumulator in `rotateReadFromNode` to collect each parent's re-sealed `SealedChildRef`s and publish the parent once after all its children rotate (Claude's discretion per D-02 exercised toward the Map approach).
 
 ## Environment Availability
 
