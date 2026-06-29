@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "e139be04f1ef",
+  "strategy": "manual-commit",
+  "branch": "feat/read-chain-navigation-and-rotation-core",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/63-read-chain-navigation-and-rotation-core/63-CONTEXT.md",
+    ".planning/phases/63-read-chain-navigation-and-rotation-core/63-DISCUSSION-LOG.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e1/39be04f1ef/0/metadata.json",
+      "transcript": "/e1/39be04f1ef/0/full.jsonl",
+      "content_hash": "/e1/39be04f1ef/0/content_hash.txt",
+      "prompt": "/e1/39be04f1ef/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 11719,
+    "cache_creation_tokens": 184115,
+    "cache_read_tokens": 2991916,
+    "output_tokens": 52285,
+    "api_call_count": 25
+  }
+}
