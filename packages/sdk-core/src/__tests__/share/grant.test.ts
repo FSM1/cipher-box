@@ -1,14 +1,15 @@
 /**
- * Tests for issueReadGrant and claimInviteReadKey.
+ * Tests for issueReadGrant, claimInviteReadKey, and claimInvite.
  *
  * issueReadGrant: ONE ECIES wrap → readDescriptorRef; zero node touches; zero IPNS publishes.
  * claimInviteReadKey: unwrap with ephemeral private key, re-wrap to claimer public key.
+ * claimInvite: full service flow — fetch invite data → claimInviteReadKey → insertShareFn.
  *
- * Design §3.2 (issue grant), §3.11 (invite), READ-01, READ-05, D-05, D-07.
+ * Design §3.2 (issue grant), §3.11 (invite), READ-01, READ-05, D-05, D-06, D-07.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { issueReadGrant, claimInviteReadKey } from '../../share/grant';
+import { issueReadGrant, claimInviteReadKey, claimInvite } from '../../share/grant';
 
 // ---------------------------------------------------------------------------
 // Module mocks — hoisted before all imports.
@@ -259,6 +260,185 @@ describe('claimInviteReadKey', () => {
       readDescriptorRef: INVITE_DESCRIPTOR_REF,
       ephemeralPrivateKey: EPHEMERAL_PRIV_KEY,
       claimerPublicKey: CLAIMER_PUBLIC_KEY,
+    });
+
+    expect(mockFns.sealNode).not.toHaveBeenCalled();
+    expect(mockFns.unsealNode).not.toHaveBeenCalled();
+    expect(mockFns.resolveIpnsRecord).not.toHaveBeenCalled();
+    expect(mockFns.createAndPublishIpnsRecord).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// claimInvite tests (Plan 65-03 — §3.11 / D-06)
+// ---------------------------------------------------------------------------
+
+describe('claimInvite', () => {
+  /** Fake 32-byte secp256k1 ephemeral private key (from URL fragment). */
+  const EPHEMERAL_PRIV_KEY = new Uint8Array(32).fill(0x11);
+
+  /** Fake 65-byte uncompressed secp256k1 claimer public key. */
+  const CLAIMER_PUBLIC_KEY = new Uint8Array(65).fill(0x04);
+
+  /** Fake invite-wrapped bytes (ECIES ciphertext encrypted to ephemeral pubkey). */
+  const INVITE_WRAPPED_BYTES = new Uint8Array([0x01, 0x02, 0x03, 0x04]);
+
+  /** base64 of INVITE_WRAPPED_BYTES — the invite readDescriptorRef in the invite row. */
+  const INVITE_DESCRIPTOR_REF = btoa(String.fromCharCode(0x01, 0x02, 0x03, 0x04));
+
+  /** Fake re-wrapped bytes returned by the mocked reWrapKey. */
+  const CLAIMER_WRAPPED_BYTES = new Uint8Array([0xca, 0xfe, 0xba, 0xbe]);
+
+  /** base64 of CLAIMER_WRAPPED_BYTES — the expected claimer readDescriptorRef. */
+  const EXPECTED_CLAIMER_REF = btoa(String.fromCharCode(0xca, 0xfe, 0xba, 0xbe));
+
+  const getInviteDataFn = vi.fn<[], Promise<{ readDescriptorRef: string }>>();
+  const insertShareFn = vi.fn<
+    [Parameters<Parameters<typeof claimInvite>[0]['insertShareFn']>[0]],
+    Promise<{ shareId: string }>
+  >();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFns.reWrapKey.mockResolvedValue(CLAIMER_WRAPPED_BYTES);
+    getInviteDataFn.mockResolvedValue({ readDescriptorRef: INVITE_DESCRIPTOR_REF });
+    insertShareFn.mockResolvedValue({ shareId: 'share-claim-001' });
+  });
+
+  it('calls getInviteDataFn exactly once with the inviteToken', async () => {
+    await claimInvite({
+      inviteToken: 'tok-abc',
+      ephemeralPrivateKey: EPHEMERAL_PRIV_KEY,
+      claimerPublicKey: CLAIMER_PUBLIC_KEY,
+      rootNodeId: 'node-root-1',
+      rootIpnsName: 'k51inviteroot',
+      rootGeneration: 0,
+      getInviteDataFn,
+      insertShareFn,
+    });
+
+    expect(getInviteDataFn).toHaveBeenCalledOnce();
+    expect(getInviteDataFn).toHaveBeenCalledWith('tok-abc');
+  });
+
+  it('calls reWrapKey exactly once with invite-wrapped bytes, ephemeralPrivateKey, claimerPublicKey', async () => {
+    await claimInvite({
+      inviteToken: 'tok-abc',
+      ephemeralPrivateKey: EPHEMERAL_PRIV_KEY,
+      claimerPublicKey: CLAIMER_PUBLIC_KEY,
+      rootNodeId: 'node-root-1',
+      rootIpnsName: 'k51inviteroot',
+      rootGeneration: 0,
+      getInviteDataFn,
+      insertShareFn,
+    });
+
+    expect(mockFns.reWrapKey).toHaveBeenCalledOnce();
+    expect(mockFns.reWrapKey).toHaveBeenCalledWith(
+      INVITE_WRAPPED_BYTES,
+      EPHEMERAL_PRIV_KEY,
+      CLAIMER_PUBLIC_KEY
+    );
+  });
+
+  it('calls insertShareFn exactly once per claim with correct standard grant payload — no encryptedChildKeys (D-06)', async () => {
+    await claimInvite({
+      inviteToken: 'tok-abc',
+      ephemeralPrivateKey: EPHEMERAL_PRIV_KEY,
+      claimerPublicKey: CLAIMER_PUBLIC_KEY,
+      rootNodeId: 'node-root-1',
+      rootIpnsName: 'k51inviteroot',
+      rootGeneration: 2,
+      getInviteDataFn,
+      insertShareFn,
+    });
+
+    expect(insertShareFn).toHaveBeenCalledOnce();
+    const [payload] = insertShareFn.mock.calls[0];
+    expect(payload.recipientPublicKey).toBe(CLAIMER_PUBLIC_KEY);
+    expect(payload.rootNodeId).toBe('node-root-1');
+    expect(payload.rootIpnsName).toBe('k51inviteroot');
+    expect(payload.rootGeneration).toBe(2);
+    expect(payload.readDescriptorRef).toBe(EXPECTED_CLAIMER_REF);
+    // No encryptedChildKeys fan-out — Success Criterion 4 / D-06
+    expect(payload).not.toHaveProperty('encryptedChildKeys');
+  });
+
+  it('returns { shareId, readDescriptorRef } matching insertShareFn and the re-wrapped key', async () => {
+    const result = await claimInvite({
+      inviteToken: 'tok-xyz',
+      ephemeralPrivateKey: EPHEMERAL_PRIV_KEY,
+      claimerPublicKey: CLAIMER_PUBLIC_KEY,
+      rootNodeId: 'node-root-1',
+      rootIpnsName: 'k51inviteroot',
+      rootGeneration: 0,
+      getInviteDataFn,
+      insertShareFn,
+    });
+
+    expect(result.shareId).toBe('share-claim-001');
+    expect(result.readDescriptorRef).toBe(EXPECTED_CLAIMER_REF);
+  });
+
+  it('two claims of the same invite produce two independent standard grants of the same readKey (D-06 multi-claim)', async () => {
+    const claimerPubKey1 = new Uint8Array(65).fill(0x04);
+    const claimerPubKey2 = new Uint8Array(65).fill(0x05);
+
+    const insertShareFn1 = vi.fn().mockResolvedValue({ shareId: 'share-claimer-1' });
+    const insertShareFn2 = vi.fn().mockResolvedValue({ shareId: 'share-claimer-2' });
+
+    const claimerWrapped1 = new Uint8Array([0x11, 0x22]);
+    const claimerWrapped2 = new Uint8Array([0x33, 0x44]);
+
+    // First claim
+    mockFns.reWrapKey.mockResolvedValueOnce(claimerWrapped1);
+    const result1 = await claimInvite({
+      inviteToken: 'tok-shared',
+      ephemeralPrivateKey: EPHEMERAL_PRIV_KEY,
+      claimerPublicKey: claimerPubKey1,
+      rootNodeId: 'node-root-shared',
+      rootIpnsName: 'k51shared',
+      rootGeneration: 1,
+      getInviteDataFn,
+      insertShareFn: insertShareFn1,
+    });
+
+    // Second claim
+    mockFns.reWrapKey.mockResolvedValueOnce(claimerWrapped2);
+    const result2 = await claimInvite({
+      inviteToken: 'tok-shared',
+      ephemeralPrivateKey: EPHEMERAL_PRIV_KEY,
+      claimerPublicKey: claimerPubKey2,
+      rootNodeId: 'node-root-shared',
+      rootIpnsName: 'k51shared',
+      rootGeneration: 1,
+      getInviteDataFn,
+      insertShareFn: insertShareFn2,
+    });
+
+    // Each claim calls getInviteDataFn exactly once (total 2 calls)
+    expect(getInviteDataFn).toHaveBeenCalledTimes(2);
+    // Each insertShareFn called exactly once with its own claimer
+    expect(insertShareFn1).toHaveBeenCalledOnce();
+    expect(insertShareFn2).toHaveBeenCalledOnce();
+    // Each claim yields a different shareId — independent grants
+    expect(result1.shareId).toBe('share-claimer-1');
+    expect(result2.shareId).toBe('share-claimer-2');
+    // Each payload has no encryptedChildKeys
+    expect(insertShareFn1.mock.calls[0][0]).not.toHaveProperty('encryptedChildKeys');
+    expect(insertShareFn2.mock.calls[0][0]).not.toHaveProperty('encryptedChildKeys');
+  });
+
+  it('does NOT touch sealNode, resolveIpnsRecord, or createAndPublishIpnsRecord (no node/IPNS side effects)', async () => {
+    await claimInvite({
+      inviteToken: 'tok-abc',
+      ephemeralPrivateKey: EPHEMERAL_PRIV_KEY,
+      claimerPublicKey: CLAIMER_PUBLIC_KEY,
+      rootNodeId: 'node-root-1',
+      rootIpnsName: 'k51inviteroot',
+      rootGeneration: 0,
+      getInviteDataFn,
+      insertShareFn,
     });
 
     expect(mockFns.sealNode).not.toHaveBeenCalled();
