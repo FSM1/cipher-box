@@ -1,0 +1,54 @@
+<task-notification>
+<task-id>a91be1a559c95b85a</task-id>
+<tool-use-id>toolu_01MTobon4rm3id4313TMw5pj</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/404f2777-3329-4599-ae19-feb8f3ce5e1f/tasks/a91be1a559c95b85a.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify phase 63 goal achievement" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Verification Complete
+
+**Status:** passed
+**Score:** 5/5 must-haves verified
+**Report:** `/Users/myankelev/Code/random/cipher-box/.planning/phases/63-read-chain-navigation-and-rotation-core/63-VERIFICATION.md`
+
+---
+
+All 5 ROADMAP success criteria are satisfied in the committed code. All 7 requirement IDs (READ-01..05, ROT-01, ROT-02) are accounted for.
+
+### SC verdicts
+
+**SC#1 (READ-01) — VERIFIED.** `issueReadGrant` in `/packages/sdk-core/src/share/grant.ts` L100–124: single `wrapKey` call, zero IPNS/node operations, transport-decoupled `insertShareFn`. Tests assert `wrapKey` called exactly once and no resolve/seal mock invoked.
+
+**SC#2 (READ-02 / D-06) — VERIFIED.** `navigateReadChain` in `share/navigate.ts`: single `unwrapKey` (ECIES), then O(depth) loop over `unsealChildReadKey` using `childRef.generation` (parent-mirror, not child envelope — the critical generation-source rule). `NavigateResult` is a string-literal union with `'ok' | 'behind-retry' | 'revoked'`, no enum.
+
+**SC#3 (READ-03 / D-03) — VERIFIED (override).** `reWrapForRecipients` and `reWrapNewItems` are both deleted (grep returns 0 in `sdk/src/share/index.ts` and `sdk/src/client.ts`). `addFilePointerToFolder` seals the child readKey once via `sealChildReadKey`. The `addShareKeys` callback TYPE in `packages/sdk/src/types.ts:32` is intentionally preserved per locked decision D-03 (Phase 68 boundary). Override applied — this was decided before Phase 63 planning.
+
+**SC#4 (READ-04 / ROT-02) — VERIFIED.** `moveItem` is a pure synchronous link rewrite; test confirms `sealChildReadKey` and `sealNode` not called. `hasCoveringGrant` in `rotation/scope.ts` is a pure function (zero I/O). `scope.test.ts` L134–146 is the zero-rotation invariant: injected `rotateSpy` called 0 times for a private (no-covering-grant) mutation, called once for a covered scope-exit. Anti-malicious-relay cross-check implemented (localGrantRecord checked independently of relay set).
+
+**SC#5 (ROT-01 / D-01) — VERIFIED.** `rotation/engine.ts` (558 lines, not `index.ts`). All four Phase-64 seams exist as named functions throwing `"not implemented — phase 64 (...)"` and are invoked conditionally (clean folder-node happy path never triggers them). `publishWithCas` CAS commit present. Zero FUSE/Tauri/web imports.
+
+### Two overrides applied
+
+1. **addShareKeys TYPE** — pre-decided deviation in locked CONTEXT.md D-03, correctly reflected in PLAN must_haves.
+2. **sdk-e2e round-trip** — infrastructure-limited (no live stack in verifier env). Deliverable is fully wired (`read-chain-navigation.test.ts`, 313 lines, not skipped). Executor documented the pass in 63-07-SUMMARY.md with commit `e405ec6f9`, specific assertion evidence (root committed before Phase-64 stub, `behind-retry` post-rotation). Per project convention: infra-limited items → accepted override, not human_needed.
+
+### Stale skip blocks — informational finding
+
+`packages/sdk-core/src/__tests__/folder.test.ts` contains 4 `describe.skip('...TODO(phase 63)')` blocks at L114, L257, L454, L878. These test the retired `FolderChild`/`encryptFolderMetadata` API under `@ts-nocheck`. The executors wrote new active describe blocks covering all Phase-63 scenarios with the new `SealedChildRef` API. All 4 stale blocks are **safe to delete** — redundant dead code, no critical scenario is missing from active coverage. This is a cleanup recommendation, not a blocker.</result>
+<usage><subagent_tokens>151581</subagent_tokens><tool_uses>36</tool_uses><duration_ms>416800</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a58e9b99c91ff74a7</task-id>
+<tool-use-id>toolu_01Mag1ymG4Ympy6UGwzznpfH</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/404f2777-3329-4599-ae19-feb8f3ce5e1f/tasks/a58e9b99c91ff74a7.output</output-file>
+<status>completed</status>
+<summary>Agent "Remove stale phase-63 skip blocks" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Clean. Done.
+
+`6a739a20a` — 14 tests pass, 10 skipped (3 phase-65 blocks × ~3-4 tests each), 0 TODO(phase 63) refs remaining.</result>
+<usage><subagent_tokens>94224</subagent_tokens><tool_uses>10</tool_uses><duration_ms>614670</duration_ms></usage>
+</task-notification>

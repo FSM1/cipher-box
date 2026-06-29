@@ -1,0 +1,172 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "e6b26a545f92",
+  "session_id": "b138c49b-687f-49bd-aa30-ffb4dde5e4e5",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-29T06:38:52.196356Z",
+  "branch": "feat/read-chain-navigation-and-rotation-core",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "f8cfead940d8",
+  "token_usage": {
+    "input_tokens": 14271,
+    "cache_creation_tokens": 849777,
+    "cache_read_tokens": 22146037,
+    "output_tokens": 128475,
+    "api_call_count": 103
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_013QQzgxUHQN245qBmhyghRw",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "f8cfead940d8",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 41,
+        "end": 42,
+        "entry_ids": [
+          "fe8ef216-dd96-4b2f-bf2e-5d4876997fd9"
+        ],
+        "tool_use_id": "toolu_013QQzgxUHQN245qBmhyghRw"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_013QQzgxUHQN245qBmhyghRw"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01SKZ2doAKEneeyZP8ntcsd9",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "f8cfead940d8",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 284,
+        "end": 285,
+        "entry_ids": [
+          "1bbf609c-3b67-4e41-bccb-0dac5c91e156"
+        ],
+        "tool_use_id": "toolu_01SKZ2doAKEneeyZP8ntcsd9"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01SKZ2doAKEneeyZP8ntcsd9"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Plan, execute, and ship phase 63 ('read-chain-navigation-and-rotation-core') of CipherBox — covering read-grant issuance, navigation walk, rotation engine, folder mutations, and a live sdk-e2e round-trip.",
+    "outcome": "Phase 63 fully planned (7 plans, 4 waves, plan-checker PASSED iteration 2, 7/7 requirements + 10/10 decisions covered), executed (all 7 plans, ~25 commits, 0 regressions), verified (5/5 must-haves), and marked complete in tracking files. /ship-phase 63 (PR creation) was not reached within the transcript.",
+    "learnings": {
+      "repo": [
+        "sdk-core has no `typecheck` npm script; the real type gate is `build` which runs `tsup && tsc -p tsconfig.build.json`. Plans 63-05 and 63-06 referenced a nonexistent `typecheck` script.",
+        "API health endpoint is port 3000 `/health`; CI polls with `curl -fsS http://localhost:3000/health` in a bounded loop — use this pattern instead of `sleep N` in e2e setup.",
+        "The GSD commit helper consistently reports false 'needs human verification' warnings on successful commits — git log is the authoritative check.",
+        "Worktrees are contraindicated in this repo (documented node_modules and api:generate leaks). Sequential main-tree execution is the safe default for phases with shared test files.",
+        "commitlint and release-please dislike parenthetical references in commit subject descriptions (e.g. `(READ-01)`, `(D-03 SC#3)`) — 5 commits in this phase have this pattern.",
+        "Weekly API usage limit resets at 7am Europe/Berlin. When a subagent hits the limit, atomic commit discipline means the tree is always clean at the interruption boundary.",
+        "`addShareKeys` callback TYPE in `packages/sdk/src/types.ts:32` is intentionally preserved through Phase 68 per locked decision D-03 — not dead code.",
+        "The live sdk-e2e round-trip (63-07) caught a real BFS bug in engine.ts: child `rotateOne` calls were receiving the root's new readKey instead of each child's own derived readKey."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/share/grant.ts",
+          "line": 100,
+          "end_line": 124,
+          "finding": "`issueReadGrant`: single `wrapKey` call, zero IPNS/node operations, transport-decoupled `insertShareFn`. Tests assert `wrapKey` called exactly once and no resolve/seal mock invoked."
+        },
+        {
+          "path": "packages/sdk-core/src/share/navigate.ts",
+          "finding": "`navigateReadChain`: single `unwrapKey` (ECIES), then O(depth) loop over `unsealChildReadKey` using `childRef.generation` (parent-mirror, not child envelope — the critical generation-source rule). Returns `'ok' | 'behind-retry' | 'revoked'` string-literal union."
+        },
+        {
+          "path": "packages/sdk-core/src/rotation/engine.ts",
+          "finding": "Named file (not index.ts), 558 lines. Contains 4 Phase-64 seams as named functions throwing `'not implemented — phase 64 (...)'`, invoked conditionally so the clean happy path never triggers them."
+        },
+        {
+          "path": "packages/sdk-core/src/rotation/scope.ts",
+          "finding": "`hasCoveringGrant` is a pure function (zero I/O). Zero-rotation invariant (SC#4) is proven by spy in scope.test.ts L134-146."
+        },
+        {
+          "path": "packages/sdk/src/types.ts",
+          "line": 32,
+          "end_line": 32,
+          "finding": "`addShareKeys` callback TYPE intentionally preserved for Phase 68 boundary per locked decision D-03."
+        },
+        {
+          "path": "packages/sdk-core/src/__tests__/folder.test.ts",
+          "line": 114,
+          "end_line": 968,
+          "finding": "Had 4 stale `describe.skip('...TODO(phase 63)')` blocks at L114, L257, L454, L878 testing the retired `FolderChild`/`encryptFolderMetadata` API under `@ts-nocheck`. All deleted in cleanup commit `6a739a20a`; conflict/CAS tests migrated to `cas.test.ts`."
+        }
+      ],
+      "workflow": [
+        "Always run a second plan-checker iteration after self-fixing checker findings rather than marking them resolved inline — keeps the gate honest.",
+        "When a usage limit hits mid-phase, check tree state before doing anything. Atomic subagent commits leave a clean resume point; verify with git status before retrying.",
+        "Delegate large stale-test block removal to a focused subagent rather than editing inline — reduces orchestrator context pollution and risk of touching adjacent live tests.",
+        "The VALIDATION.md per-task map should be filled during planning (step 5.5 body), not left as a template — the plan-checker will flag it as a blocker.",
+        "RESEARCH.md `## Open Questions` must be marked `(RESOLVED)` after answers are incorporated — the checker treats unresolved open questions as a blocker.",
+        "Non-blocking drift gate at plan time: a stale `.planning/codebase/` map doesn't block planning when CONTEXT.md and RESEARCH.md carry verified implementation-site references."
+      ]
+    },
+    "friction": [
+      "Weekly usage limit hit mid-wave-3 (63-06) at ~07:00 Berlin, interrupting the subagent. Required a timed retry after reset.",
+      "GSD commit helper consistently emits false 'needs human verification' on successful commits — required manual `git log` verification after every commit step, adding friction throughout.",
+      "Plans 63-05 and 63-06 referenced a `typecheck` npm script that doesn't exist in sdk-core; executor had to redirect to `build` mid-execution.",
+      "Plan-checker required a second iteration: 1 blocker (RESEARCH.md open questions unmarked) and 2 warnings (VALIDATION.md template unfilled, fragile `sleep 12` in 63-07) needed fixes before verification passed.",
+      "Drift gate flagged a stale codebase map early in planning, adding noise even though it was non-blocking."
+    ],
+    "open_items": [
+      "/ship-phase 63 (PR creation, CodeRabbit review, merge) was not completed in this session — phase is marked complete in tracking files but no PR exists yet.",
+      "5 commit subjects contain parenthetical references (e.g. `(READ-01)`, `(D-03 SC#3)`) that commitlint and release-please dislike — may need reword or squash at ship time.",
+      "4 Phase-64 seams in `rotation/engine.ts` are named throw stubs (`'not implemented — phase 64'`) waiting for Phase 64 implementation.",
+      "3 `describe.skip('...TODO(phase 65)')` blocks remain in `folder.test.ts` — intentional deferrals for Phase 65.",
+      "`addShareKeys` callback type in `packages/sdk/src/types.ts:32` needs cleanup/unwiring in Phase 68 per D-03."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 138,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/phases/63-read-chain-navigation-and-rotation-core/63-VERIFICATION.md": 137
+      }
+    }
+  ]
+}
