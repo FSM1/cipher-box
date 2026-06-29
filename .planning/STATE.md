@@ -3,18 +3,18 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
 current_phase: 64
-current_phase_name: Rotation Soundness — Revocation Guarantees
+current_phase_name: rotation-soundness-revocation-guarantees
 status: verifying
-stopped_at: Completed 63-02-PLAN.md
-last_updated: "2026-06-29T06:37:34.461Z"
+stopped_at: "Completed 64-08: rotation crash-safety E2E suite (TEST-01 phase gate)"
+last_updated: "2026-06-29T18:04:43.484Z"
 last_activity: 2026-06-29
-last_activity_desc: Phase 63 complete, transitioned to Phase 64
+last_activity_desc: Phase 64 execution started
 progress:
   total_phases: 9
-  completed_phases: 3
-  total_plans: 21
-  completed_plans: 21
-  percent: 33
+  completed_phases: 4
+  total_plans: 29
+  completed_plans: 29
+  percent: 44
 ---
 
 # Project State
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-27)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 63 — read-chain-navigation-and-rotation-core
+**Current focus:** Phase 64 — rotation-soundness-revocation-guarantees
 
 ## Current Position
 
-Phase: 64 — Rotation Soundness — Revocation Guarantees
-Plan: Not started
+Phase: 64 (rotation-soundness-revocation-guarantees) — EXECUTING
+Plan: 8 of 8
 Status: Phase complete — ready for verification
-Last activity: 2026-06-29 — Phase 63 complete, transitioned to Phase 64
+Last activity: 2026-06-29 — Phase 64 execution started
 
 Progress: `░░░░░░░░░░` 0 / 9 phases (0%)
 
@@ -209,6 +209,13 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 63-read-chain-navigation-and-rotation-core P05 | 12m | 2 tasks | 5 files |
 | Phase 63 P06 | 45 | 2 tasks | 9 files |
 | Phase 63 P07 | 25 | 1 tasks | 4 files |
+| Phase 64-rotation-soundness-revocation-guarantees P01 | 90 | 3 tasks | 13 files |
+| Phase 64 P02 | 3min | 2 tasks | 2 files |
+| Phase 64 P03 | 2min | 2 tasks | 2 files |
+| Phase 64 P04 | 60 | 4 tasks | 2 files |
+| Phase 64 P06 | 13 | 2 tasks | 3 files |
+| Phase 64 P07 | 40m | 4 tasks | 2 files |
+| Phase 64 P08 | 45 | 3 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -414,6 +421,12 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: hasCoveringGrant pure predicate (D-08): both relay set and localGrantRecord cross-checked; injectable deps.rotate for SC#4 zero-rotation invariant
 - [Phase ?]: BFS in rotateReadFromNode must derive child readKeys via unsealChildReadKey with parent OLD readKey before enqueuing
 - [Phase ?]: Bypass Phase-65 createFileMetadata by manually building file node: sealNode+addToIpfs+createAndPublishIpnsRecord in sdk-e2e
+- [Phase ?]: mergeChildren union semantics: local first, remote overwrites (ROT-05 concurrent-add)
+- [Phase ?]: D-02 re-seal out-of-band in BFS caller
+- [Phase ?]: ParentTrackingState Map keyed by IPNS name for D-09 batched parent republish
+- [Phase ?]: cas.ts merge callback accepts sync|Promise union — backward-compat
+- [Phase ?]: Crash at call 4
+- [Phase ?]: Resume job seeded with crash-time completedNodeIds (not empty set) — empty set causes double-bump on the committed root node
 
 ## Operator Next Steps
 
@@ -421,6 +434,6 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-06-29T06:05:06.963Z
-**Stopped at:** Completed 63-02-PLAN.md
+**Last session:** 2026-06-29T18:04:43.479Z
+**Stopped at:** Completed 64-08: rotation crash-safety E2E suite (TEST-01 phase gate)
 **Resume file:** None

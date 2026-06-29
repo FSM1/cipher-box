@@ -26,14 +26,43 @@
 
 import { sealNode, unsealNode, sealChildReadKey, unsealChildReadKey } from '@cipherbox/core';
 import type { Node, PublishedNode, SealedChildRef } from '@cipherbox/core';
+import { generateRandomBytes, wrapKey } from '@cipherbox/crypto';
 import { publishWithCas } from '../cas';
 import { resolveIpnsRecord } from '../ipns';
 import { fetchFromIpfs, addToIpfs } from '../ipfs';
 import type { SdkContext } from '../types';
+import { updateFolderMetadataAndPublish } from '../folder/registration';
+import { mergeChildren } from '../folder/merge';
 
 // ---------------------------------------------------------------------------
 // Types — string-literal unions, never TypeScript enums (project convention)
 // ---------------------------------------------------------------------------
+
+/**
+ * Injectable callbacks for `reMintGrantsRootedAt` (D-04 transport seam).
+ *
+ * Keeps the rotation engine transport-decoupled: unit tests inject vi.fn()
+ * mocks; production callers (Phase 66) will supply real API/DB callbacks.
+ *
+ * Callback contract:
+ *   - `queryGrantsFn(nodeId)` — returns all grants whose root is `nodeId`.
+ *   - `updateGrantFn(shareId, readDescriptorRef, newGeneration)` — persists the
+ *     re-minted ECIES-wrapped descriptor for a non-revoked recipient.
+ *   - `deleteGrantFn(shareId)` — removes a revoked recipient's grant row.
+ */
+export type GrantRemintCallbacks = {
+  queryGrantsFn: (
+    nodeId: string
+  ) => Promise<
+    ReadonlyArray<{ shareId: string; recipientPublicKey: Uint8Array; isRevoked: boolean }>
+  >;
+  updateGrantFn: (
+    shareId: string,
+    readDescriptorRef: string,
+    newGeneration: number
+  ) => Promise<void>;
+  deleteGrantFn: (shareId: string) => Promise<void>;
+};
 
 /** Advisory status of a rotation job. */
 export type RotationStatus = 'pending' | 'in-progress' | 'complete' | 'failed';
@@ -84,12 +113,22 @@ type RotateOneDone = {
   newGeneration: number;
   /**
    * New sealed readKey for the parent's SealedChildRef[N].readKeySealed.
-   * The caller (rotateReadFromNode) uses this to update the parent before the
-   * next frontier-publish round (D-09 per-node parent-link publish pattern).
+   * Sealed under this node's OWN pre-rotation readKey (legacy from Phase-63 contract).
+   * The D-02 re-seal (Phase 64) re-seals childReadKey under the PARENT's new readKey'
+   * out-of-band in rotateReadFromNode — not here.
    */
   newReadKeySealed: string;
   /** Plaintext children of the rotated node (to enqueue in the BFS frontier). */
   children: SealedChildRef[];
+  /**
+   * IPNS sequence number produced by this node's publish.
+   *
+   * D-09 (Phase 64): used as the CAS sequence guard for the parent's batched
+   * re-publish after all children rotate.  The parent's first publish returns
+   * this value; the second (batched) publish passes it as `sequenceNumber` to
+   * advance the CAS monotonic counter by 1.
+   */
+  newSequenceNumber: bigint;
 };
 
 /** Return type when a node was already completed (idempotency skip). */
@@ -111,9 +150,14 @@ type RotateOneParams = {
   /** IPNS k51 name used to resolve and publish this node. */
   nodeIpnsName: string;
   /**
-   * IPNS Ed25519 private-key seed for this node (optional in Phase 63).
-   * Phase 65 populates from the node's unsealed write-body.
-   * When absent: publishWithCas receives a placeholder (tests mock publishWithCas).
+   * IPNS Ed25519 private-key seed for this node.
+   *
+   * REQUIRED for publish (D-01 fail-closed): `rotateOne` throws if absent.
+   * Phase 64 callers supply this via `nodeKeySource` in `RotationParams`.
+   * Phase 65 will derive it from the unsealed write-body instead.
+   *
+   * Field type remains optional (`?`) so callers can forward `undefined` from
+   * `nodeKeySource` results; the runtime guard surfaces the absence as an error.
    */
   nodeIpnsPrivateKey?: Uint8Array;
   /** Optional: Ed25519 public key for faster publish (avoids re-deriving). */
@@ -152,6 +196,12 @@ type RotateOneParams = {
    * MUST be absent on the clean happy-path so the seam is never invoked (D-01).
    */
   innerGrants?: ReadonlyArray<unknown>;
+  /**
+   * Optional injectable callbacks for the `reMintGrantsRootedAt` seam (D-04).
+   * Threaded from `RotationParams.grantCallbacks` so the host can inject
+   * real API callbacks in production and vi.fn() mocks in tests.
+   */
+  grantCallbacks?: GrantRemintCallbacks;
 };
 
 /** Parameters for the resumable frontier walk. */
@@ -165,11 +215,40 @@ export type RotationParams = {
   rootIpnsPublicKey?: Uint8Array;
   jobRecord: RotationJobRecord;
   ctx: SdkContext;
+  /**
+   * Optional test-supplied key source for per-node IPNS signing keys.
+   *
+   * Phase 64 uses this seam to thread real per-node signing keys through the BFS
+   * walk in unit tests and sdk-e2e suites, without requiring the full Phase-65
+   * write-body → key derivation chain. When provided, `rotateReadFromNode` calls
+   * `nodeKeySource(childIpnsName)` when enqueuing each BFS child. If the source
+   * returns undefined for a node, `rotateOne` for that node throws fail-closed (D-01).
+   *
+   * Production note: Phase 65 replaces this seam with write-body-derived keys.
+   * Never ship a production rotation call that depends on this field.
+   */
+  nodeKeySource?: (
+    ipnsName: string
+  ) => { privateKey: Uint8Array; publicKey: Uint8Array } | undefined;
 };
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Encode a Uint8Array to a base64 string.
+ * Processes in chunks to avoid call-stack overflow on large ECIES ciphertexts.
+ * Local copy — dedup with share/grant.ts is deferred per CONTEXT.md.
+ */
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const chunkSize = 8192;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, Math.min(i + chunkSize, bytes.length)));
+  }
+  return btoa(binary);
+}
 
 /** Fetch a PublishedNode envelope from IPFS by CID. */
 async function fetchPublishedNode(cid: string, ctx: SdkContext): Promise<PublishedNode> {
@@ -190,54 +269,134 @@ async function fetchPublishedNode(cid: string, ctx: SdkContext): Promise<Publish
 /**
  * SEAM: Content-key rotation for file nodes.
  *
- * Phase 64 implementation: mint a fresh `fileKey'`, mark `contentRekeyPending`
- * on the file node, and schedule re-encryption of file content under `fileKey'`.
- *
  * Invoked ONLY when `node.kind === 'file'` (conditional — D-01).
  *
- * @throws Always in Phase 63 (ROT-03/CRIT-1 — deferred).
+ * Phase 64 mints a fresh `fileKey'` and places it on the node so the re-sealed body
+ * carries it. The lazy `contentRekeyPending` marker + re-encrypt-on-next-write wiring
+ * is deferred to Phase 65 (the `node/v3` schema is frozen this phase); minting
+ * `fileKey'` onto the re-sealed body IS the Phase-64 CRIT-1 deliverable.
+ *
+ * Phase 64 implementation: mints `fileKey' = generateRandomBytes(32)` and assigns
+ * it to `node.content.fileKey` so that `rotateOne`'s subsequent `sealNode` re-seals
+ * the read-body carrying the new fileKey. A holder of the old readKey/fileKey cannot
+ * decrypt the NEXT published version (CRIT-1 / ADR 0002).
+ *
+ * Nodes without content (folder nodes) are a no-op — no content field is added.
+ *
+ * @security
+ *   Do NOT zero the NEW `node.content.fileKey` after assignment — `rotateOne` consumes it
+ *   via `sealNode` (terminal owner rule, D-09). The OLD pre-rotation fileKey IS zeroed before
+ *   the swap: `node` is a fresh `unsealNode` output (engine-owned, not a caller-reused buffer),
+ *   so its decrypted content key is terminally owned here and wiping it is safe D-09 hygiene.
+ *   Only zero the new minted key on your own failure paths (handled by the caller in rotateOne).
  */
-export async function mintFileKeyOnRotate(_node: Node, _job: RotationJobRecord): Promise<void> {
-  throw new Error('not implemented — phase 64 (ROT-03/CRIT-1 content-key rotation)');
+export async function mintFileKeyOnRotate(node: Node, _job: RotationJobRecord): Promise<void> {
+  if (!node.content) {
+    // Folder node (or any node without content) — no-op.
+    return;
+  }
+  // Zero the pre-rotation content key before discarding the reference (D-09 hygiene).
+  if (node.content.fileKey instanceof Uint8Array) {
+    node.content.fileKey.fill(0);
+  }
+  const fileKeyPrime = generateRandomBytes(32);
+  node.content.fileKey = fileKeyPrime;
 }
 
 /**
  * SEAM: Re-mint read grants rooted at a rotated node.
  *
- * Phase 64 implementation: for every non-revoked grant whose `rootNodeId` is in
- * the rotated set, re-wrap the share-root readKey under the new `readKey'` and
- * re-issue a `readDescriptorRef`.
+ * Phase 64 implementation (ROT-04/HIGH-3): for every non-revoked grant whose
+ * `rootNodeId` is in the rotated set, ECIES-re-wrap the share-root readKey
+ * under the new `readKey'` and re-issue a `readDescriptorRef` via
+ * `callbacks.updateGrantFn`. Revoked recipients' rows are deleted via
+ * `callbacks.deleteGrantFn`.
  *
  * Invoked ONLY when `innerGrants` is non-empty (conditional — D-01).
+ * When `callbacks` is absent the function is a clean no-op (D-04 seam).
  *
- * @throws Always in Phase 63 (ROT-04/HIGH-3 — deferred).
+ * @security
+ *   Uses ECIES `wrapKey` (from `@cipherbox/crypto`) — never hand-roll key
+ *   wrapping. Does NOT zero `newReadKey` — caller is terminal owner (D-09).
  */
 export async function reMintGrantsRootedAt(
-  _nodeId: string,
-  _key: Uint8Array,
-  _gen: number,
+  nodeId: string,
+  newReadKey: Uint8Array,
+  newGeneration: number,
   _job: RotationJobRecord,
-  _ctx: SdkContext
+  _ctx: SdkContext,
+  callbacks?: GrantRemintCallbacks
 ): Promise<void> {
-  throw new Error('not implemented — phase 64 (ROT-04/HIGH-3 inner-grant re-mint)');
+  // D-04 transport seam: when no callbacks are supplied the function is a clean
+  // no-op. This preserves the D-01 conditional-invocation contract — the clean
+  // happy-path only supplies innerGrants, never callbacks, so no re-mint work runs.
+  if (!callbacks) return;
+
+  const grants = await callbacks.queryGrantsFn(nodeId);
+
+  for (const grant of grants) {
+    if (grant.isRevoked) {
+      // Revoked recipient: delete the grant row. Do NOT re-mint a descriptor.
+      // T-64-04b: re-minting for a revoked recipient defeats revocation.
+      await callbacks.deleteGrantFn(grant.shareId);
+    } else {
+      // Non-revoked recipient: ECIES-wrap the new readKey under their public key.
+      // T-64-04c: always use wrapKey — never hand-roll key wrapping.
+      // Do NOT zero newReadKey here — caller is terminal owner (D-09).
+      const wrappedBytes = await wrapKey(newReadKey, grant.recipientPublicKey);
+      const readDescriptorRef = bytesToBase64(wrappedBytes);
+      await callbacks.updateGrantFn(grant.shareId, readDescriptorRef, newGeneration);
+    }
+  }
 }
 
 /**
- * SEAM: Re-fetch and merge concurrent child additions on CAS-409.
+ * Re-seal a node after merging concurrently-added children on CAS-409.
  *
- * Phase 64 implementation: on a CAS-409, re-resolve the node, fetch the remote
- * children, merge them with the local children list, and retry the publish.
+ * Phase 64 implementation (ROT-05/HIGH-4): on a rotation CAS-409, the remote
+ * winner may contain child refs added concurrently that are absent from the
+ * local rotation result. This function:
+ *   1. Unseals `basePub` under `oldReadKey` to recover the base children list.
+ *   2. Unseals `remotePub` under `oldReadKey` to recover the remote children list.
+ *   3. Three-way merges (base, local, remote) via `mergeChildren` so that any
+ *      child added only in the remote is preserved (never silently dropped).
+ *   4. Re-seals the merged node under `newReadKey` (readKey-prime) and returns
+ *      the new PublishedNode.
  *
- * Invoked ONLY on CAS-409 (conditional — D-01); never on the happy path.
+ * Invoked ONLY from the `rotateOne` CAS-409 merge callback (conditional — D-01).
  *
- * @throws Always in Phase 63 (ROT-05/HIGH-4 — deferred).
+ * @security
+ *   - Does NOT zero `oldReadKey` or `newReadKey` — callers are terminal owners (D-09).
+ *   - `localChildren` must come from the node's pre-rotation children (closure over
+ *     the unsealed node), NOT from the sealed `localPub`. This avoids an extra
+ *     unseal round-trip and an unnecessary dependency on `newReadKey` during merge.
  */
 export async function mergeConcurrentChildren(
-  _node: Node,
-  _resolved: unknown,
-  _ctx: SdkContext
-): Promise<void> {
-  throw new Error('not implemented — phase 64 (ROT-05/HIGH-4 concurrent-add merge)');
+  basePub: PublishedNode,
+  remotePub: PublishedNode,
+  oldReadKey: Uint8Array,
+  localChildren: SealedChildRef[],
+  newReadKey: Uint8Array,
+  localNode: Node,
+  generationPrime: number,
+  writeKey: Uint8Array
+): Promise<PublishedNode> {
+  // 1. Unseal base snapshot under the old (pre-rotation) readKey.
+  const baseNodeDecoded = await unsealNode(basePub, oldReadKey);
+
+  // 2. Unseal remote node under the old readKey — it was sealed before rotation.
+  const remoteNodeDecoded = await unsealNode(remotePub, oldReadKey);
+
+  // 3. Three-way merge: union by ipnsName, remote wins, honour intentional deletes.
+  const mergedChildren = mergeChildren(
+    baseNodeDecoded.children ?? [],
+    localChildren,
+    remoteNodeDecoded.children ?? []
+  );
+
+  // 4. Re-seal merged node under readKey-prime (the rotation's new key).
+  const mergedNode: Node = { ...localNode, generation: generationPrime, children: mergedChildren };
+  return sealNode(mergedNode, newReadKey, writeKey);
 }
 
 /**
@@ -248,12 +407,43 @@ export async function mergeConcurrentChildren(
  * truth (crash-recovery convergence per §4.5).
  *
  * Invoked ONLY on resume (when `completedNodeIds` is non-empty at walk start —
- * conditional per D-01/D-10); never on a fresh run.
- *
- * @throws Always in Phase 63 (ROT-06 — deferred).
+ * conditional per D-01/D-10); never on a fresh run. NOTE: a true fresh-record
+ * resume (empty `completedNodeIds`) is not yet wired here — it needs the Phase-68
+ * durable client floor (see todo `rotation-fresh-record-resume-and-sc4-double-bump`).
  */
-export async function verifySubtreeClean(_rootNodeId: string, _ctx: SdkContext): Promise<boolean> {
-  throw new Error('not implemented — phase 64 (ROT-06 crash-resume + verifySubtreeClean)');
+export async function verifySubtreeClean(
+  rootIpnsName: string,
+  rootReadKey: Uint8Array,
+  ctx: SdkContext
+): Promise<{ isDirty: boolean; frontier: Array<{ ipnsName: string; nodeId: string }> }> {
+  const frontier: Array<{ ipnsName: string; nodeId: string }> = [];
+
+  // 1. Resolve root → fetch PublishedNode envelope
+  const rootResolved = await resolveIpnsRecord(rootIpnsName, ctx);
+  if (!rootResolved) return { isDirty: false, frontier: [] };
+
+  const rootRaw = await fetchFromIpfs(ctx, rootResolved.cid);
+  const rootPub = JSON.parse(new TextDecoder().decode(rootRaw)) as PublishedNode;
+
+  // 2. Unseal root to get the SealedChildRef list
+  const rootNode = await unsealNode(rootPub, rootReadKey);
+
+  // 3. Compare parent mirror (SealedChildRef.generation) vs child's published generation.
+  // Published IPNS records are the source of truth (D-10).
+  for (const childRef of rootNode.children ?? []) {
+    const childResolved = await resolveIpnsRecord(childRef.ipnsName, ctx);
+    if (!childResolved) continue; // child IPNS missing — skip
+
+    const childRaw = await fetchFromIpfs(ctx, childResolved.cid);
+    const childPub = JSON.parse(new TextDecoder().decode(childRaw)) as PublishedNode;
+
+    // Dirty edge: child has rotated further than parent's mirror records
+    if (childPub.generation > childRef.generation) {
+      frontier.push({ ipnsName: childRef.ipnsName, nodeId: childPub.id });
+    }
+  }
+
+  return { isDirty: frontier.length > 0, frontier };
 }
 
 // ---------------------------------------------------------------------------
@@ -292,6 +482,7 @@ export async function rotateOne(
     jobRecord,
     ctx,
     innerGrants,
+    grantCallbacks,
   } = params;
 
   // Step 2 (fast path): idempotency check when nodeId is already known
@@ -317,17 +508,37 @@ export async function rotateOne(
     return { skipped: true, childReadKey: new Uint8Array(32), newGeneration: node.generation };
   }
 
+  // D-01 fail-closed: require a real IPNS signing key for every frontier node.
+  // Phase 64 threads keys via nodeKeySource in RotationParams; Phase 65 derives them
+  // from the unsealed write-body. Never publish an IPNS record with a placeholder —
+  // reject not just undefined but malformed/all-zero key material (the old placeholder
+  // was `new Uint8Array(32)`). IPNS keys here are the 32-byte Ed25519 seed (derive-ipns.ts).
+  if (
+    !(nodeIpnsPrivateKey instanceof Uint8Array) ||
+    nodeIpnsPrivateKey.length !== 32 ||
+    nodeIpnsPrivateKey.every((byte) => byte === 0)
+  ) {
+    throw new Error(
+      `rotateOne: no valid IPNS private key for ${nodeIpnsName} — ` +
+        'provide via nodeKeySource (Phase 64) or write-body wiring (Phase 65)'
+    );
+  }
+
   // Step 4: Mint fresh readKey' (32 cryptographically random bytes) and generation'
   // Do NOT zero parentReadKey — caller is terminal owner (D-09).
   const readKeyPrime = crypto.getRandomValues(new Uint8Array(32));
   const generationPrime = node.generation + 1;
+
+  // Track whether mintFileKeyOnRotate placed a minted key onto the node so the
+  // failure path can zero it without touching the caller-owned old fileKey (D-09).
+  let fileKeyMinted = false;
 
   try {
     // Step 5: SEAM — content-key rotation for file nodes (Phase 64 — ROT-03/CRIT-1)
     // Invoked CONDITIONALLY — clean happy-path (folder node) NEVER reaches this.
     if (node.kind === 'file') {
       await mintFileKeyOnRotate(node, jobRecord);
-      // Phase 64 fills this seam; in Phase 63 it always throws above.
+      fileKeyMinted = true;
     }
 
     // Step 6: Re-seal the read-body under readKey' with the new generation'.
@@ -350,11 +561,12 @@ export async function rotateOne(
     );
 
     // Step 8: Publish the child node via CAS.
-    // Phase 64: batch parent-link publishes (D-09 optimization seam).
-    // On CAS-409: the default merge throws Phase-64 (mergeConcurrentChildren seam).
-    await publishWithCas<PublishedNode>({
+    // D-01: nodeIpnsPrivateKey is guaranteed non-null by the guard above.
+    // D-09: capture newSequenceNumber so the caller can use it as the CAS guard
+    // for the parent's batched re-publish after all children rotate.
+    const casResult = await publishWithCas<PublishedNode>({
       ipnsName: nodeIpnsName,
-      ipnsPrivateKey: nodeIpnsPrivateKey ?? PLACEHOLDER_WRITE_KEY,
+      ipnsPrivateKey: nodeIpnsPrivateKey,
       ipnsPublicKey: nodeIpnsPublicKey,
       sequenceNumber: resolved.sequenceNumber,
       ctx,
@@ -368,28 +580,54 @@ export async function rotateOne(
       decodeRemote: async (cid) => {
         return fetchPublishedNode(cid, ctx);
       },
-      merge: (_base, local, _remote) => {
-        // Phase 64 (D-09): batch parent-link publishes + mergeConcurrentChildren seam.
-        // On CAS-409, this merge is invoked. Phase 63 surfaces the gap explicitly —
-        // a concurrent add during rotation is not handled until Phase 64 (ROT-05/HIGH-4).
-        throw new Error(
-          'not implemented — phase 64 (ROT-05/HIGH-4 concurrent-add merge): CAS-409 on rotation publish'
+      merge: async (base, _local, remote) => {
+        // ROT-05/HIGH-4: CAS-409 on rotation publish — merge concurrent child adds.
+        // Re-unseal base + remote under the OLD readKey, three-way merge children,
+        // then re-seal under readKeyPrime so the merged result is published atomically.
+        //
+        // `base` is always set here (baseData = published, the initial fetch), but
+        // we guard against undefined for defensive correctness.
+        if (!base) {
+          // No base snapshot: treat local children as both base and local.
+          // This path should not occur in practice (published is always set).
+          const mergedNode: Node = { ...node, generation: generationPrime };
+          return { merged: await sealNode(mergedNode, readKeyPrime, PLACEHOLDER_WRITE_KEY) };
+        }
+        const mergedPublished = await mergeConcurrentChildren(
+          base,
+          remote,
+          parentReadKey, // OLD readKey — remote was sealed under this key
+          node.children ?? [], // local children (from closure — no extra unseal needed)
+          readKeyPrime, // NEW readKey — re-seal merged result under rotation key
+          node,
+          generationPrime,
+          PLACEHOLDER_WRITE_KEY
         );
-        // Unreachable: satisfies TypeScript return type constraint
-        return { merged: local };
+        return { merged: mergedPublished };
       },
       localData: resealedPublished,
       baseData: published,
     });
 
-    // Step 9: Mark N done in the job record.
-    jobRecord.completedNodeIds.add(nodeId);
-
     // Step 9 (continued): SEAM — re-mint inner grants only when supplied (D-01 conditional).
     // Clean happy-path (no inner grants) NEVER invokes this seam.
+    // D-07: reMintGrantsRootedAt runs BEFORE completedNodeIds.add(nodeId) so that a
+    // failure during re-mint does NOT silently skip the node on resume (the add must be
+    // the last mutation — if reMint throws, the catch below zeros readKeyPrime and
+    // re-throws, and nodeId is never written to completedNodeIds).
     if (innerGrants && innerGrants.length > 0) {
-      await reMintGrantsRootedAt(nodeId, readKeyPrime, generationPrime, jobRecord, ctx);
+      await reMintGrantsRootedAt(
+        nodeId,
+        readKeyPrime,
+        generationPrime,
+        jobRecord,
+        ctx,
+        grantCallbacks
+      );
     }
+
+    // Step 9: Mark N done in the job record (D-07: AFTER reMintGrantsRootedAt succeeds).
+    jobRecord.completedNodeIds.add(nodeId);
 
     return {
       skipped: false,
@@ -397,11 +635,18 @@ export async function rotateOne(
       newGeneration: generationPrime,
       newReadKeySealed,
       children: node.children ?? [],
+      newSequenceNumber: casResult.newSequenceNumber,
     };
   } catch (err) {
     // Zero readKeyPrime on failure — rotateOne minted it, so rotateOne is terminal owner.
     // DO NOT zero parentReadKey — caller is terminal owner (D-09).
     readKeyPrime.fill(0);
+    // Zero the minted fileKey' on failure only if mintFileKeyOnRotate already ran (seal/publish
+    // failed after minting). Do NOT zero if fileKeyMinted is false (old key is caller-owned,
+    // D-09). Do NOT zero on the success path — sealNode is the terminal consumer there.
+    if (fileKeyMinted && node.content?.fileKey) {
+      node.content.fileKey.fill(0);
+    }
     throw err;
   }
 }
@@ -436,6 +681,7 @@ export async function rotateReadFromNode(params: RotationParams): Promise<void> 
     rootIpnsPublicKey,
     jobRecord,
     ctx,
+    nodeKeySource,
   } = params;
 
   jobRecord.status = 'in-progress';
@@ -455,17 +701,40 @@ export async function rotateReadFromNode(params: RotationParams): Promise<void> 
     ctx,
   });
 
-  if (rootResult.skipped) {
-    // Root already committed (resume scenario — verifySubtreeClean is Phase 64).
-    jobRecord.status = 'complete';
-    if (jobRecord.persistCallback) await jobRecord.persistCallback(jobRecord);
-    return;
-  }
+  // ---------------------------------------------------------------------------
+  // D-02 / D-09: parent tracking for out-of-band re-seal and batched republish
+  //
+  // Problem (Phase-63 CRITICAL bug): rotateOne seals the child's new readKey'
+  // under the child's OWN old readKey (legacy contract). But the parent's
+  // SealedChildRef[N].readKeySealed must be sealed under the PARENT's NEW readKey'
+  // for `unsealChildReadKey` to authenticate on next read. This out-of-band
+  // re-seal (D-02) and the single batched parent re-publish (D-09) happen HERE
+  // in the walk caller, not inside rotateOne.
+  //
+  // Per-parent state tracks:
+  //   - The parent's freshly minted readKey' (from the parent's rotateOne result)
+  //   - A mutable copy of the parent's SealedChildRef array (to update in-place)
+  //   - The IPNS keys needed for the batched re-publish
+  //   - A pending-child counter (decremented per child; publishes when zero)
+  // ---------------------------------------------------------------------------
 
-  // Persist after root commit (the high-value early checkpoint).
-  if (jobRecord.persistCallback) await jobRecord.persistCallback(jobRecord);
+  type ParentTrackingState = {
+    parentNewReadKey: Uint8Array;
+    parentIpnsName: string;
+    parentIpnsPrivateKey?: Uint8Array;
+    parentIpnsPublicKey?: Uint8Array;
+    parentNodeId: string;
+    parentNodeGeneration: number;
+    parentLastSeq: bigint;
+    children: SealedChildRef[]; // mutable copy updated as children rotate
+    pendingChildCount: number;
+  };
 
-  // BFS frontier: each entry carries the NODE's own pre-rotation readKey.
+  // keyed by parent IPNS name (the IPNS name of the node that just rotated)
+  const parentTracking = new Map<string, ParentTrackingState>();
+
+  // BFS frontier: each entry carries the NODE's own pre-rotation readKey plus
+  // the child's stable id/kind (needed for the D-02 AAD binding).
   //
   // DESIGN NOTE (Bug fix — confirmed during Phase-63 E2E):
   //   Each node in the tree has its OWN readKey (sealed inside the parent's
@@ -488,6 +757,16 @@ export async function rotateReadFromNode(params: RotationParams): Promise<void> 
     parentIpnsName: string;
     ipnsPrivateKey?: Uint8Array;
     ipnsPublicKey?: Uint8Array;
+    /** Stable UUID from the child's PublishedNode envelope (for D-02 AAD binding). */
+    childPubId: string;
+    /** Node kind from the child's PublishedNode envelope (for D-02 AAD binding). */
+    childPubKind: 'folder' | 'file';
+    /**
+     * SealedChildRef.generation captured at enqueue time (parent mirror).
+     * Convergence guard (ROT-06): if child's current published generation exceeds
+     * this baseline at dequeue time, skip rotateOne to avoid double-bump.
+     */
+    enqueuedGeneration: number;
   }> = [];
 
   // Helper: resolve an IPNS name → fetch the IPFS CID → parse PublishedNode envelope.
@@ -499,69 +778,293 @@ export async function rotateReadFromNode(params: RotationParams): Promise<void> 
     return JSON.parse(new TextDecoder().decode(raw)) as PublishedNode;
   }
 
-  // Enqueue root's children: derive each child's readKey from the root's OLD readKey.
-  // rootReadKey is the root's own (pre-rotation) key and is NOT zeroed by rotateOne (D-09).
-  for (const childRef of rootResult.children) {
-    const childPub = await resolveAndFetch(childRef.ipnsName);
-    if (!childPub) continue; // child IPNS missing — skip (data inconsistency)
-    const childReadKey = await unsealChildReadKey(
-      childRef.readKeySealed,
-      rootReadKey, // root's OLD readKey (still valid; never zeroed — D-09)
-      childPub.id,
-      childPub.kind,
-      childRef.generation // parent-mirror (§2.6 D-07 invariant 1)
-    );
-    queue.push({
-      childRef,
-      nodeReadKey: childReadKey, // child's own (pre-rotation) readKey
-      parentIpnsName: rootNodeIpnsName,
-      ipnsPrivateKey: undefined, // Phase 65: populate from write-body
-      ipnsPublicKey: undefined,
-    });
-  }
+  if (rootResult.skipped) {
+    // Resume path: root already committed in a prior run.
+    // ROT-06: call verifySubtreeClean to check for dirty edges.
+    // Published IPNS records are source of truth (D-10); advisory job record may be stale.
+    const { isDirty, frontier } = await verifySubtreeClean(rootNodeIpnsName, rootReadKey, ctx);
+    if (!isDirty) {
+      // Subtree fully converged — no dirty edges to process.
+      jobRecord.status = 'complete';
+      if (jobRecord.persistCallback) await jobRecord.persistCallback(jobRecord);
+      return;
+    }
 
-  // Process the frontier BFS (D-09: per-node parent-link publish, not batched in Phase 63)
-  while (queue.length > 0) {
-    const item = queue.shift()!;
+    // Dirty resume: re-fetch root's current state and seed BFS from dirty frontier nodes.
+    const rootResolved = await resolveIpnsRecord(rootNodeIpnsName, ctx);
+    if (!rootResolved) {
+      throw new Error('rotateReadFromNode: root IPNS not found on dirty resume');
+    }
+    const rootRaw = await fetchFromIpfs(ctx, rootResolved.cid);
+    const rootPub = JSON.parse(new TextDecoder().decode(rootRaw)) as PublishedNode;
+    const rootNode = await unsealNode(rootPub, rootReadKey);
 
-    const result = await rotateOne({
-      // nodeId is absent: it will be derived from the unsealed node's id inside rotateOne.
-      nodeIpnsName: item.childRef.ipnsName,
-      nodeIpnsPrivateKey: item.ipnsPrivateKey,
-      nodeIpnsPublicKey: item.ipnsPublicKey,
-      parentReadKey: item.nodeReadKey, // this node's own (pre-rotation) readKey
-      parentIpnsName: item.parentIpnsName,
-      parentCurrentSeq: 0n, // unused in Phase 63 (D-09 deferred)
-      jobRecord,
-      ctx,
-    });
+    if (frontier.length > 0) {
+      // D-01 fail-closed: the dirty-resume path does NOT pass through rotateOne's
+      // non-null key check (root was rotated in a prior run), so guard here before
+      // seeding parentTracking. Otherwise `parentIpnsPrivateKey!` at the convergence-skip
+      // republish (below) would force an `undefined` key into updateFolderMetadataAndPublish.
+      if (!rootIpnsPrivateKey) {
+        throw new Error(
+          `rotateReadFromNode: no IPNS private key for dirty root republish ${rootNodeIpnsName} ` +
+            '— provide via nodeKeySource (D-01 fail-closed)'
+        );
+      }
+      // Set up parent tracking for root using rootReadKey as the readKey proxy.
+      // (Root was rotated in a prior run; rootReadKey unseals the current sealed body as
+      // confirmed by verifySubtreeClean's successful unseal.)
+      parentTracking.set(rootNodeIpnsName, {
+        parentNewReadKey: rootReadKey,
+        parentIpnsName: rootNodeIpnsName,
+        parentIpnsPrivateKey: rootIpnsPrivateKey,
+        parentIpnsPublicKey: rootIpnsPublicKey,
+        parentNodeId: rootNode.id,
+        parentNodeGeneration: rootNode.generation,
+        parentLastSeq: rootResolved.sequenceNumber,
+        children: [...(rootNode.children ?? [])],
+        pendingChildCount: frontier.length,
+      });
 
-    if (result.skipped) continue; // idempotency: already committed in a prior run
+      for (const frontierItem of frontier) {
+        const childRef = (rootNode.children ?? []).find(
+          (c) => c.ipnsName === frontierItem.ipnsName
+        );
+        if (!childRef) continue;
+        const childPub = await resolveAndFetch(frontierItem.ipnsName);
+        if (!childPub) continue;
+        const childReadKey = await unsealChildReadKey(
+          childRef.readKeySealed,
+          rootReadKey,
+          childPub.id,
+          childPub.kind,
+          childRef.generation
+        );
+        const childKeys = nodeKeySource?.(frontierItem.ipnsName);
+        queue.push({
+          childRef,
+          nodeReadKey: childReadKey,
+          parentIpnsName: rootNodeIpnsName,
+          ipnsPrivateKey: childKeys?.privateKey,
+          ipnsPublicKey: childKeys?.publicKey,
+          childPubId: childPub.id,
+          childPubKind: childPub.kind as 'folder' | 'file',
+          enqueuedGeneration: childRef.generation,
+        });
+      }
+    }
+    // Fall through to BFS loop.
+  } else {
+    // Normal path: root just committed in this run.
 
-    // Advisory checkpoint after per-node commit.
+    // Persist after root commit (the high-value early checkpoint).
     if (jobRecord.persistCallback) await jobRecord.persistCallback(jobRecord);
 
-    // Enqueue this node's children using THIS node's pre-rotation readKey.
-    // item.nodeReadKey is NOT zeroed by rotateOne (D-09) — still valid here.
-    for (const childRef of result.children) {
+    // Set up parent tracking for root's children (D-02/D-09).
+    if (rootResult.children.length > 0) {
+      parentTracking.set(rootNodeIpnsName, {
+        parentNewReadKey: rootResult.childReadKey,
+        parentIpnsName: rootNodeIpnsName,
+        parentIpnsPrivateKey: rootIpnsPrivateKey,
+        parentIpnsPublicKey: rootIpnsPublicKey,
+        parentNodeId: rootNodeId,
+        parentNodeGeneration: rootResult.newGeneration,
+        parentLastSeq: rootResult.newSequenceNumber,
+        children: [...rootResult.children], // mutable copy for in-place SealedChildRef updates
+        pendingChildCount: rootResult.children.length,
+      });
+    }
+
+    // Enqueue root's children: derive each child's readKey from the root's OLD readKey.
+    // rootReadKey is the root's own (pre-rotation) key and is NOT zeroed by rotateOne (D-09).
+    for (const childRef of rootResult.children) {
       const childPub = await resolveAndFetch(childRef.ipnsName);
-      if (!childPub) continue;
+      if (!childPub) continue; // child IPNS missing — skip (data inconsistency)
       const childReadKey = await unsealChildReadKey(
         childRef.readKeySealed,
-        item.nodeReadKey, // THIS node's old readKey (seals its children's readKeys)
+        rootReadKey, // root's OLD readKey (still valid; never zeroed — D-09)
         childPub.id,
         childPub.kind,
-        childRef.generation
+        childRef.generation // parent-mirror (§2.6 D-07 invariant 1)
       );
+      // Thread per-node IPNS key from nodeKeySource (D-01 / Phase 64 seam).
+      // Phase 65 derives keys from the write-body instead.
+      const childKeys = nodeKeySource?.(childRef.ipnsName);
       queue.push({
         childRef,
-        nodeReadKey: childReadKey, // grandchild's own readKey
-        parentIpnsName: item.childRef.ipnsName,
-        ipnsPrivateKey: undefined, // Phase 65: populate from write-body
-        ipnsPublicKey: undefined,
+        nodeReadKey: childReadKey, // child's own (pre-rotation) readKey
+        parentIpnsName: rootNodeIpnsName,
+        ipnsPrivateKey: childKeys?.privateKey,
+        ipnsPublicKey: childKeys?.publicKey,
+        childPubId: childPub.id,
+        childPubKind: childPub.kind as 'folder' | 'file',
+        enqueuedGeneration: childRef.generation,
       });
     }
   }
 
+  // Process the frontier BFS.
+  while (queue.length > 0) {
+    const item = queue.shift()!;
+
+    try {
+      // Convergence guard (ROT-06 no-double-bump): compare child's current published
+      // generation against the baseline captured at enqueue time (parent mirror).
+      // If the child already rotated beyond the baseline, skip rotateOne.
+      const currentPub = await resolveAndFetch(item.childRef.ipnsName);
+      if (currentPub && currentPub.generation > item.enqueuedGeneration) {
+        // Child already rotated in a prior run — skip rotateOne.
+        // Still handle D-09: update generation witness and decrement pending count.
+        const parentState = parentTracking.get(item.parentIpnsName);
+        if (parentState) {
+          const childIdx = parentState.children.findIndex(
+            (c) => c.ipnsName === item.childRef.ipnsName
+          );
+          if (childIdx !== -1) {
+            parentState.children[childIdx] = {
+              ...parentState.children[childIdx],
+              generation: currentPub.generation,
+            };
+          }
+          parentState.pendingChildCount--;
+          if (parentState.pendingChildCount === 0) {
+            await updateFolderMetadataAndPublish({
+              ipnsName: parentState.parentIpnsName,
+              ipnsPrivateKey: parentState.parentIpnsPrivateKey!,
+              ipnsPublicKey: parentState.parentIpnsPublicKey,
+              sequenceNumber: parentState.parentLastSeq,
+              readKey: parentState.parentNewReadKey,
+              nodeId: parentState.parentNodeId,
+              nodeGeneration: parentState.parentNodeGeneration,
+              children: parentState.children,
+              ctx,
+            });
+            parentTracking.delete(item.parentIpnsName);
+          }
+        }
+        continue;
+      }
+
+      const result = await rotateOne({
+        // nodeId is absent: it will be derived from the unsealed node's id inside rotateOne.
+        nodeIpnsName: item.childRef.ipnsName,
+        nodeIpnsPrivateKey: item.ipnsPrivateKey,
+        nodeIpnsPublicKey: item.ipnsPublicKey,
+        parentReadKey: item.nodeReadKey, // this node's own (pre-rotation) readKey
+        parentIpnsName: item.parentIpnsName,
+        parentCurrentSeq: 0n,
+        jobRecord,
+        ctx,
+      });
+
+      if (!result.skipped) {
+        // Advisory checkpoint after per-node commit.
+        if (jobRecord.persistCallback) await jobRecord.persistCallback(jobRecord);
+
+        // D-02: re-seal the child's new readKey' under the PARENT's new readKey'.
+        // The legacy sealChildReadKey call inside rotateOne seals under the child's own
+        // old readKey — correct for the child's own identity binding but wrong for the
+        // parent's SealedChildRef (which must be sealed under the parent's NEW readKey'
+        // for `unsealChildReadKey` to authenticate). This out-of-band call is the fix.
+        const parentState = parentTracking.get(item.parentIpnsName);
+        if (parentState) {
+          const updatedChildReadKeySealed = await sealChildReadKey(
+            result.childReadKey, // child's freshly minted readKey'
+            parentState.parentNewReadKey, // parent's new readKey' (from parent's rotateOne)
+            item.childPubId, // child's stable UUID (AAD binding)
+            item.childPubKind, // child's kind (AAD binding)
+            result.newGeneration // child's new generation (AAD binding)
+          );
+
+          // Update the parent's mutable SealedChildRef copy.
+          const childIdx = parentState.children.findIndex(
+            (c) => c.ipnsName === item.childRef.ipnsName
+          );
+          if (childIdx !== -1) {
+            parentState.children[childIdx] = {
+              ...parentState.children[childIdx],
+              readKeySealed: updatedChildReadKeySealed,
+              generation: result.newGeneration,
+            };
+          }
+
+          // D-09: decrement pending count; republish parent exactly once when all children done.
+          parentState.pendingChildCount--;
+          if (parentState.pendingChildCount === 0) {
+            // Batched parent re-publish: advance the IPNS sequence counter once, carrying
+            // the updated SealedChildRef array so unsealChildReadKey on next read succeeds.
+            // nodeGeneration is the parent's generation from ITS rotateOne — NOT bumped again.
+            await updateFolderMetadataAndPublish({
+              ipnsName: parentState.parentIpnsName,
+              // parentIpnsPrivateKey is non-null: the D-01 guard in rotateOne already
+              // verified the parent had a key when it rotated.
+              ipnsPrivateKey: parentState.parentIpnsPrivateKey!,
+              ipnsPublicKey: parentState.parentIpnsPublicKey,
+              sequenceNumber: parentState.parentLastSeq,
+              readKey: parentState.parentNewReadKey,
+              nodeId: parentState.parentNodeId,
+              nodeGeneration: parentState.parentNodeGeneration,
+              children: parentState.children,
+              ctx,
+            });
+            parentTracking.delete(item.parentIpnsName);
+          }
+        }
+
+        // Set up parent tracking for this node's children (recursive D-02/D-09).
+        if (result.children.length > 0) {
+          parentTracking.set(item.childRef.ipnsName, {
+            parentNewReadKey: result.childReadKey,
+            parentIpnsName: item.childRef.ipnsName,
+            parentIpnsPrivateKey: item.ipnsPrivateKey,
+            parentIpnsPublicKey: item.ipnsPublicKey,
+            parentNodeId: item.childPubId,
+            parentNodeGeneration: result.newGeneration,
+            parentLastSeq: result.newSequenceNumber,
+            children: [...result.children],
+            pendingChildCount: result.children.length,
+          });
+        }
+
+        // Enqueue this node's children using THIS node's pre-rotation readKey.
+        // item.nodeReadKey is NOT zeroed by rotateOne (D-09) — still valid here.
+        for (const childRef of result.children) {
+          const childPub = await resolveAndFetch(childRef.ipnsName);
+          if (!childPub) continue;
+          const childReadKey = await unsealChildReadKey(
+            childRef.readKeySealed,
+            item.nodeReadKey, // THIS node's old readKey (seals its children's readKeys)
+            childPub.id,
+            childPub.kind,
+            childRef.generation
+          );
+          // Thread per-node IPNS key from nodeKeySource (D-01 / Phase 64 seam).
+          const grandchildKeys = nodeKeySource?.(childRef.ipnsName);
+          queue.push({
+            childRef,
+            nodeReadKey: childReadKey, // grandchild's own readKey
+            parentIpnsName: item.childRef.ipnsName,
+            ipnsPrivateKey: grandchildKeys?.privateKey,
+            ipnsPublicKey: grandchildKeys?.publicKey,
+            childPubId: childPub.id,
+            childPubKind: childPub.kind as 'folder' | 'file',
+            enqueuedGeneration: childRef.generation,
+          });
+        }
+      }
+    } finally {
+      // D-09 queue-key zeroization: zero the queue-derived readKey on ALL exit paths
+      // (success, convergence-skip via continue, result.skipped, or throw). Runs after
+      // all grandchildren have been enqueued (unsealChildReadKey used item.nodeReadKey
+      // above). This node's item.nodeReadKey was minted by the parent's unsealChildReadKey
+      // — the engine is the terminal owner. Never zero caller-supplied rootReadKey (D-09).
+      item.nodeReadKey.fill(0);
+    }
+  }
+
+  // Terminal status: all nodes rotated (or skipped via convergence guard).
+  // Persist the complete status so the host can safely discard the job record
+  // (Pitfall 5: never mark complete without persisting — the resumable walk gate
+  // in verifySubtreeClean relies on the persisted status being accurate).
   jobRecord.status = 'complete';
+  if (jobRecord.persistCallback) await jobRecord.persistCallback(jobRecord);
 }

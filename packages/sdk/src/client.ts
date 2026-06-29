@@ -25,7 +25,8 @@ import {
 } from '@cipherbox/api-client';
 import { clearBytes, unwrapKey, hexToBytes } from '@cipherbox/crypto';
 import pLimit from 'p-limit';
-import type { BinEntry, SealedChildRef } from '@cipherbox/core';
+import type { BinEntry, SealedChildRef, PublishedNode } from '@cipherbox/core';
+import { sealChildReadKey, unsealChildReadKey } from '@cipherbox/core';
 import type { CipherBoxClientConfig, FolderState, SharedFolderState } from './types';
 import { SdkEventEmitter, type SdkEvent, type SdkEventHandler } from './events';
 import { FolderTree } from './state/folder-tree';
@@ -282,13 +283,20 @@ export class CipherBoxClient {
    * @param ipnsKeypair - Ed25519 keypair for IPNS signing
    * @param children - Current folder children
    * @param sequenceNumber - Current IPNS sequence number
+   * @param nodeId - UUID of the folder's underlying Node (D-06). Callers who know the
+   *   UUID (e.g. after createSubfolder) should supply it. Omitting leaves an empty
+   *   placeholder that will be filled by loadFolder; CRUD operations called before
+   *   loadFolder will throw 'nodeId is required'.
+   * @param nodeGeneration - Rotation counter of the folder's Node (D-06).
    */
   registerFolder(
     ipnsName: string,
     folderKey: Uint8Array,
     ipnsKeypair: { publicKey: Uint8Array; privateKey: Uint8Array },
     children: SealedChildRef[],
-    sequenceNumber: bigint
+    sequenceNumber: bigint,
+    nodeId?: string,
+    nodeGeneration?: number
   ): void {
     // Defensive copy so destroy() -> folderTree.clear() doesn't zero caller buffers
     this.folderTree.set(ipnsName, {
@@ -302,6 +310,10 @@ export class CipherBoxClient {
       children,
       metadata: null,
       lastLoadedAt: Date.now(),
+      // D-06: nodeId/nodeGeneration required for AAD-stable CRUD operations.
+      // Empty string placeholder if caller omits — loadFolder will fill it.
+      nodeId: nodeId ?? '',
+      nodeGeneration: nodeGeneration ?? 0,
     });
   }
 
@@ -376,6 +388,9 @@ export class CipherBoxClient {
         children: result.metadata.children ?? [],
         metadata: result.metadata,
         lastLoadedAt: Date.now(),
+        // D-06: populate from the sealed Node's plaintext envelope fields.
+        nodeId: result.metadata.id,
+        nodeGeneration: result.metadata.generation,
       };
 
       this.folderTree.set(ipnsName, state);
@@ -499,6 +514,8 @@ export class CipherBoxClient {
           ipnsName: folderIpnsName,
           sequenceNumber: folder.sequenceNumber,
           ctx: this.ctx,
+          nodeId: folder.nodeId,
+          nodeGeneration: folder.nodeGeneration,
         }
       );
 
@@ -547,11 +564,65 @@ export class CipherBoxClient {
       const baseDestChildren = [...destFolder.children];
 
       // Pure link rewrite — zero re-encryption (READ-04)
-      const { updatedSource, updatedDest } = sdkCore.moveItem({
+      const { updatedSource, updatedDest, movedRef } = sdkCore.moveItem({
         sourceChildren: sourceFolder.children,
         destChildren: destFolder.children,
         childId,
       });
+
+      // FLAG-63-U2: Re-seal the moved child's readKeySealed under the DEST parent readKey.
+      // sdkCore.moveItem() is a pure link rewrite — the moved ref still carries a
+      // readKeySealed blob bound to the SOURCE parent's readKey. Any reader navigating
+      // the dest-folder IPNS path will fail AEAD verification unless we re-seal.
+      //
+      // The moved record is identified by its ipnsName (SealedChildRef carries no `id`
+      // — NODE-03, design §2.2); `childId` is the caller-facing handle that
+      // sdkCore.moveItem resolves to `movedRef`. Mutate the entry that is actually
+      // present in `updatedDest` so the published record carries the re-sealed key.
+      const destEntry = updatedDest.find((c) => c.ipnsName === movedRef.ipnsName);
+      if (!destEntry) {
+        throw new Error(
+          `moveItem: moved child ${movedRef.ipnsName} not found in dest after link rewrite (FLAG-63-U2)`
+        );
+      }
+
+      // Resolve the child's IPNS to read the plaintext id and kind from the PublishedNode
+      // envelope. These are AAD inputs for sealChildReadKey / unsealChildReadKey.
+      // id/kind are NEVER stored in SealedChildRef (NODE-03, design §2.2).
+      const childIpnsRecord = await sdkCore.resolveIpnsRecord(movedRef.ipnsName, this.ctx);
+      if (!childIpnsRecord) {
+        throw new Error(
+          `moveItem: cannot resolve child IPNS ${movedRef.ipnsName} for re-seal — record not found`
+        );
+      }
+      const rawChildNode = await sdkCore.fetchFromIpfs(this.ctx, childIpnsRecord.cid);
+      const childPub = JSON.parse(new TextDecoder().decode(rawChildNode)) as PublishedNode;
+
+      // Recover the child readKey under the SOURCE parent key.
+      // D-09: do NOT zero sourceFolder.folderKey (caller-owned buffer).
+      const childReadKey = await unsealChildReadKey(
+        destEntry.readKeySealed,
+        sourceFolder.folderKey,
+        childPub.id,
+        childPub.kind,
+        destEntry.generation
+      );
+
+      // Re-seal the child readKey under the DESTINATION parent key.
+      // D-09: do NOT zero destFolder.folderKey (caller-owned buffer).
+      try {
+        destEntry.readKeySealed = await sealChildReadKey(
+          childReadKey,
+          destFolder.folderKey,
+          childPub.id,
+          childPub.kind,
+          destEntry.generation // generation unchanged — no content re-encryption, no bump
+        );
+      } finally {
+        // Zero the recovered child readKey on every exit path — engine-derived,
+        // terminal-owned (D-09).
+        childReadKey.fill(0);
+      }
 
       // Publish updated source folder
       const { newSequenceNumber: srcSeq, publishedChildren: srcChildren } =
@@ -563,6 +634,8 @@ export class CipherBoxClient {
           ipnsName: sourceIpnsName,
           sequenceNumber: sourceFolder.sequenceNumber,
           ctx: this.ctx,
+          nodeId: sourceFolder.nodeId,
+          nodeGeneration: sourceFolder.nodeGeneration,
         });
 
       sourceFolder.children = srcChildren;
@@ -586,6 +659,8 @@ export class CipherBoxClient {
           ipnsName: destIpnsName,
           sequenceNumber: destFolder.sequenceNumber,
           ctx: this.ctx,
+          nodeId: destFolder.nodeId,
+          nodeGeneration: destFolder.nodeGeneration,
         });
 
       destFolder.children = dstChildren;
@@ -635,6 +710,8 @@ export class CipherBoxClient {
           ipnsName: folderIpnsName,
           sequenceNumber: folder.sequenceNumber,
           ctx: this.ctx,
+          nodeId: folder.nodeId,
+          nodeGeneration: folder.nodeGeneration,
         }
       );
 
@@ -752,6 +829,8 @@ export class CipherBoxClient {
             ipnsName: folderIpnsName,
             sequenceNumber: folder.sequenceNumber,
             ctx: this.ctx,
+            nodeId: folder.nodeId,
+            nodeGeneration: folder.nodeGeneration,
           }),
         ]);
 
@@ -1011,6 +1090,8 @@ export class CipherBoxClient {
             ipnsName: folderIpnsName,
             sequenceNumber: freshSeq,
             ctx: this.ctx,
+            nodeId: folder.nodeId,
+            nodeGeneration: folder.nodeGeneration,
           }),
           sdkCore.batchPublishIpnsRecords(ipnsRecords, this.ctx),
         ]);

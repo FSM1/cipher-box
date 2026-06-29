@@ -67,6 +67,8 @@ describe('CipherBoxClient', () => {
         children: [],
         metadata: null,
         lastLoadedAt: Date.now(),
+        nodeId: '',
+        nodeGeneration: 0,
       });
 
       client.destroy();
@@ -290,6 +292,8 @@ describe('CipherBoxClient', () => {
         children: [child],
         metadata: null,
         lastLoadedAt: Date.now(),
+        nodeId: 'folder-node-id',
+        nodeGeneration: 0,
       });
 
       vi.mocked(sdkCore.deleteFromFolder).mockReturnValue({

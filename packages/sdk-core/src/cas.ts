@@ -55,12 +55,16 @@ export async function publishWithCas<TData>(params: {
    * `base` is `undefined` when the caller omits `baseData` (e.g. the latest-wins
    * file path, which ignores `base`); merge implementations that read `base`
    * must defend against `undefined`.
+   *
+   * May return a Promise to support async merge implementations (e.g. the
+   * rotation engine unseals + re-seals during merge). Sync returns are
+   * wrapped via `Promise.resolve()` and are fully backward-compatible.
    */
   merge: (
     base: TData | undefined,
     local: TData,
     remote: TData
-  ) => { merged: TData; prunedCids?: string[] };
+  ) => { merged: TData; prunedCids?: string[] } | Promise<{ merged: TData; prunedCids?: string[] }>;
   /** Initial local data for the first publish attempt. */
   localData: TData;
   /** Base snapshot for three-way merge. */
@@ -110,10 +114,9 @@ export async function publishWithCas<TData>(params: {
       const remoteData = await params.decodeRemote(resolved.cid);
 
       // 5. Three-way merge (domain-specific, injected)
-      const { merged, prunedCids: extraPruned } = params.merge(
-        params.baseData,
-        localData,
-        remoteData
+      // await Promise.resolve() supports both sync and async merge callbacks.
+      const { merged, prunedCids: extraPruned } = await Promise.resolve(
+        params.merge(params.baseData, localData, remoteData)
       );
       localData = merged;
       prunedCids = [...new Set([...prunedCids, ...(extraPruned ?? [])])];
