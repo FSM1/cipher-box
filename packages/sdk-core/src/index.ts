@@ -67,6 +67,33 @@ export { downloadAndDecrypt } from './download';
 // Vault key blob operations
 export { publishVaultKeyBlob, loadVaultKeyBlob } from './vault';
 
+// Share operations (read-chain navigation + grant issuance)
+export {
+  navigateReadChain,
+  type NavigateResult,
+  issueReadGrant,
+  claimInviteReadKey,
+  type ReadGrantPayload,
+} from './share';
+
+// Rotation engine + scope-exit predicate
+export {
+  rotateReadFromNode,
+  rotateOne,
+  mintFileKeyOnRotate,
+  reMintGrantsRootedAt,
+  mergeConcurrentChildren,
+  verifySubtreeClean,
+  type RotationJobRecord,
+  type RotationStatus,
+  type RotationParams,
+  hasCoveringGrant,
+  maybeRotateOnScopeExit,
+  type CoverageParams,
+  type ScopeExitResult,
+  type ScopeExitDeps,
+} from './rotation';
+
 // Pinning providers (BYO-IPFS)
 export {
   type PinningProvider,

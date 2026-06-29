@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
-current_phase: 63
-current_phase_name: Read-Chain Navigation and Rotation Core
+current_phase: 64
+current_phase_name: Rotation Soundness — Revocation Guarantees
 status: verifying
-stopped_at: Completed 62-05-PLAN.md
-last_updated: "2026-06-28T23:44:40.862Z"
-last_activity: 2026-06-28
-last_activity_desc: Phase 62 complete, transitioned to Phase 63
+stopped_at: Completed 63-02-PLAN.md
+last_updated: "2026-06-29T06:37:34.461Z"
+last_activity: 2026-06-29
+last_activity_desc: Phase 63 complete, transitioned to Phase 64
 progress:
   total_phases: 9
-  completed_phases: 2
-  total_plans: 14
-  completed_plans: 14
-  percent: 22
+  completed_phases: 3
+  total_plans: 21
+  completed_plans: 21
+  percent: 33
 ---
 
 # Project State
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-27)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 62 — Unified Node Codec (Core Keystone)
+**Current focus:** Phase 63 — read-chain-navigation-and-rotation-core
 
 ## Current Position
 
-Phase: 63 — Read-Chain Navigation and Rotation Core
+Phase: 64 — Rotation Soundness — Revocation Guarantees
 Plan: Not started
 Status: Phase complete — ready for verification
-Last activity: 2026-06-28 — Phase 62 complete, transitioned to Phase 63
+Last activity: 2026-06-29 — Phase 63 complete, transitioned to Phase 64
 
 Progress: `░░░░░░░░░░` 0 / 9 phases (0%)
 
@@ -204,6 +204,11 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 62 P07 | 90m | 2 tasks | 18 files |
 | Phase 62-unified-node-codec-core-keystone P08a | 180 | 1 tasks | 26 files |
 | Phase 62-unified-node-codec-core-keystone P08b | 240 | 1 tasks | 22 files |
+| Phase 63 P01 | 17 | 2 tasks | 4 files |
+| Phase 63 P02 | 13 | 2 tasks | 2 files |
+| Phase 63-read-chain-navigation-and-rotation-core P05 | 12m | 2 tasks | 5 files |
+| Phase 63 P06 | 45 | 2 tasks | 9 files |
+| Phase 63 P07 | 25 | 1 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -404,6 +409,11 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: useAuth.ts vault load: unwrapKey x2 + deriveVaultIpnsKeypair (IPNS keypair derived, not in v3 blob)
 - [Phase ?]: Phase-63 kind-discrimination stubs: isFolder=true, fileCount=0 across file-browser until Node.kind available
 - [Phase ?]: ShareDialog.handleShare + handleUpgrade fully stubbed with throw phase-65; legacy FolderEntry key-wrapping path removed
+- [Phase ?]: Transport-decoupled insertShareFn callback (D-05): grant issuance unit-tested against mocked API; real shares persistence deferred to Phase 66
+- [Phase ?]: reWrapKey used for claimInviteReadKey to delegate intermediate zeroization (T-63-05)
+- [Phase ?]: hasCoveringGrant pure predicate (D-08): both relay set and localGrantRecord cross-checked; injectable deps.rotate for SC#4 zero-rotation invariant
+- [Phase ?]: BFS in rotateReadFromNode must derive child readKeys via unsealChildReadKey with parent OLD readKey before enqueuing
+- [Phase ?]: Bypass Phase-65 createFileMetadata by manually building file node: sealNode+addToIpfs+createAndPublishIpnsRecord in sdk-e2e
 
 ## Operator Next Steps
 
@@ -411,6 +421,6 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-06-28T23:28:19.767Z
-**Stopped at:** Completed 62-05-PLAN.md
+**Last session:** 2026-06-29T06:05:06.963Z
+**Stopped at:** Completed 63-02-PLAN.md
 **Resume file:** None

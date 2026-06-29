@@ -1,29 +1,48 @@
 /**
- * Folder registration operations — IPNS record build and batch-publish.
+ * Folder registration operations — IPNS record build and publish.
  *
- * Phase 62 stub: all operations that build or update folder IPNS records require the
- * node/v3 seal-child-under-parent write-chain (phase 63) or file node integration
- * (phase 65). All functions throw 'not implemented — phase NN' until those phases
- * rewire them.
+ * Phase 63 implementation: un-stubbed createSubfolder and updateFolderMetadataAndPublish
+ * using the Phase-62 node/v3 codec (sealNode) and the CAS-retry helper (publishWithCas).
  *
- * The original implementation for FolderMetadata (FolderEntry / FolderChild / FilePointer)
- * is preserved in the quarantined test suite (folder.test.ts, TODO phase 63) as the
- * spec the owning phase revives.
+ * Phase 65 stubs are preserved: addFileToFolder, addFilesToFolder, replaceFileInFolder.
+ *
+ * Security invariants:
+ *   - createSubfolder mints new Ed25519 keypair + readKey/writeKey and does NOT zero them
+ *     before returning — caller is the terminal owner (D-09).
+ *   - updateFolderMetadataAndPublish does NOT zero readKey or ipnsPrivateKey — callers are
+ *     terminal owners (D-09).
+ *   - mergeChildren is a Phase-64 stub; conflict path throws until phase 64 wires the merge.
  */
 
-import type { Node, SealedChildRef } from '@cipherbox/core';
+import { sealNode, unsealNode } from '@cipherbox/core';
+import type { Node, PublishedNode, SealedChildRef } from '@cipherbox/core';
+import { generateEd25519Keypair, generateRandomBytes, deriveIpnsName } from '@cipherbox/crypto';
 import type { SdkContext, TeeKeys } from '../types';
 import type { FileIpnsRecordPayload } from '../file';
+import { addToIpfs, fetchFromIpfs } from '../ipfs';
+import { createAndPublishIpnsRecord } from '../ipns';
+import { publishWithCas } from '../cas';
+import { mergeChildren } from './merge';
 
 /**
  * Create a new subfolder with generated keys.
  *
- * @stub phase 63 — will generate node IPNS keypair + readKey/writeKey, seal as a
- * SealedChildRef under the parent readKey, and return a Node payload.
+ * Generates a fresh Ed25519 IPNS keypair, derives the k51 IPNS name, generates a
+ * 32-byte readKey and writeKey, builds and seals the initial empty folder Node,
+ * uploads to IPFS, and publishes the first IPNS record with sequenceNumber 1n
+ * (required by the Phase-60 strict CAS gate — a first publish with embedded seq != 1
+ * is rejected with 400).
+ *
+ * @param params.name - Display name of the new subfolder (stored in parent metadata only)
+ * @param params.ctx  - SDK context for IPFS + IPNS access
+ * @param params.userPublicKey - Optional: user's public key for future grant fan-out (phase 65)
+ * @param params.teeKeys       - Optional: TEE keys for IPNS republishing (phase 65)
+ * @returns Fresh node, IPNS private key, readKey and writeKey (caller is terminal owner — D-09)
  */
 export async function createSubfolder(params: {
   name: string;
-  userPublicKey: Uint8Array;
+  ctx: SdkContext;
+  userPublicKey?: Uint8Array;
   teeKeys?: TeeKeys;
 }): Promise<{
   node: Node;
@@ -33,20 +52,83 @@ export async function createSubfolder(params: {
   encryptedIpnsPrivateKey?: string;
   keyEpoch?: number;
 }> {
-  void params;
-  throw new Error('not implemented — phase 63 (create subfolder node + seal readKey under parent)');
+  // 1. Generate IPNS keypair
+  const { publicKey: ipnsPublicKey, privateKey: ipnsPrivateKey } = await generateEd25519Keypair();
+
+  // 2. Derive the k51 IPNS name from the public key
+  const ipnsName = await deriveIpnsName(ipnsPublicKey);
+
+  // 3. Generate 32-byte readKey and writeKey
+  const readKey = generateRandomBytes(32);
+  const writeKey = generateRandomBytes(32);
+
+  // 4. Build the initial empty folder Node
+  const node: Node = {
+    schema: 'node/v3',
+    kind: 'folder',
+    id: crypto.randomUUID(),
+    generation: 0,
+    createdAt: Date.now(),
+    modifiedAt: Date.now(),
+    children: [],
+  };
+
+  // 5. Seal the Node with the generated keys
+  const publishedNode = await sealNode(node, readKey, writeKey);
+
+  // 6. Upload sealed Node to IPFS
+  const { cid } = await addToIpfs(
+    params.ctx,
+    new TextEncoder().encode(JSON.stringify(publishedNode))
+  );
+
+  // 7. Publish first IPNS record — sequenceNumber MUST be 1n (Phase-60 strict gate)
+  await createAndPublishIpnsRecord({
+    ipnsPrivateKey,
+    ipnsName,
+    metadataCid: cid,
+    sequenceNumber: 1n,
+    ctx: params.ctx,
+  });
+
+  // 8. Return keys to caller — do NOT zero (caller is terminal owner, D-09)
+  return {
+    node,
+    ipnsPrivateKey,
+    rootReadKey: readKey,
+    rootWriteKey: writeKey,
+    // TEE republishing (phase 65): encryptedIpnsPrivateKey and keyEpoch not wired yet
+  };
 }
 
 /**
- * Update folder metadata and publish to IPNS.
+ * Update folder metadata and publish to IPNS via CAS-retry.
  *
- * @stub phase 63 — will seal the updated Node read-body + write-body, then publish the
- * new PublishedNode to the folder's IPNS name.
+ * Seals the updated SealedChildRef children list into a new folder Node and publishes
+ * via the generic CAS-retry helper. On 409 conflict, delegates three-way merge to
+ * mergeChildren (Phase-64 stub — throws until phase 64 wires the merge logic).
+ *
+ * @param params.children       - Updated SealedChildRef array (new local state)
+ * @param params.baseChildren   - Base snapshot for three-way merge on conflict
+ * @param params.readKey        - 32-byte AES-256 readKey (canonical; phase 63+)
+ * @param params.folderKey      - 32-byte AES-256 readKey (backward-compat alias for readKey)
+ * @param params.writeKey       - 32-byte AES-256 writeKey (optional; zero-fallback until phase 65)
+ * @param params.ipnsPrivateKey - Ed25519 private key for IPNS signing
+ * @param params.ipnsName       - IPNS k51 name of the folder
+ * @param params.sequenceNumber - Current sequence number (CAS guard: next will be +1)
+ * @param params.ctx            - SDK context for IPFS + IPNS access
+ *
+ * @security Does NOT zero readKey or ipnsPrivateKey — callers are terminal owners (D-09).
  */
 export async function updateFolderMetadataAndPublish(params: {
   children: SealedChildRef[];
   baseChildren?: SealedChildRef[];
-  folderKey: Uint8Array;
+  /** Canonical readKey name (phase 63). */
+  readKey?: Uint8Array;
+  /** @deprecated Backward-compat alias — use readKey. client.ts callers still pass folderKey. */
+  folderKey?: Uint8Array;
+  /** Optional writeKey for sealing the write-body. Defaults to zero (write-body unprotected until phase 65). */
+  writeKey?: Uint8Array;
   ipnsPrivateKey: Uint8Array;
   ipnsPublicKey?: Uint8Array;
   ipnsName: string;
@@ -54,9 +136,80 @@ export async function updateFolderMetadataAndPublish(params: {
   ctx: SdkContext;
   encryptedIpnsPrivateKey?: string;
   keyEpoch?: number;
+  /**
+   * UUID of the underlying folder Node. Preserving the original UUID is preferred
+   * so AAD stays stable across updates; omit to mint a fresh UUID (safe: the id is
+   * stored in plaintext on the PublishedNode envelope and unsealNode reads it back).
+   */
+  nodeId?: string;
+  /**
+   * Generation of the underlying folder Node. Pass the current generation if known
+   * so that rotateReadFromNode can read a consistent generation value post-update.
+   */
+  nodeGeneration?: number;
 }): Promise<{ cid: string; newSequenceNumber: bigint; publishedChildren: SealedChildRef[] }> {
-  void params;
-  throw new Error('not implemented — phase 63 (seal updated Node + publish to IPNS)');
+  const key = params.readKey ?? params.folderKey;
+  if (!key) throw new Error('updateFolderMetadataAndPublish: readKey or folderKey is required');
+  const writeKey = params.writeKey ?? new Uint8Array(32);
+
+  const result = await publishWithCas<SealedChildRef[]>({
+    ipnsName: params.ipnsName,
+    ipnsPrivateKey: params.ipnsPrivateKey,
+    ipnsPublicKey: params.ipnsPublicKey,
+    sequenceNumber: params.sequenceNumber,
+    ctx: params.ctx,
+    encryptedIpnsPrivateKey: params.encryptedIpnsPrivateKey,
+    keyEpoch: params.keyEpoch,
+    maxAttempts: 3,
+    backoff: true,
+
+    encodeAndUpload: async (localChildren: SealedChildRef[]): Promise<string> => {
+      // Build a minimal Node with the updated children list.
+      // id must be a valid UUID (buildNodeAad validates via uuidToBytes).
+      // nodeId param preserves the original UUID when callers supply it;
+      // otherwise a fresh UUID is minted (self-consistent with its own sealed body).
+      const node: Node = {
+        schema: 'node/v3',
+        kind: 'folder',
+        id: params.nodeId ?? crypto.randomUUID(),
+        generation: params.nodeGeneration ?? 0,
+        createdAt: Date.now(),
+        modifiedAt: Date.now(),
+        children: localChildren,
+      };
+      const publishedNode: PublishedNode = await sealNode(node, key, writeKey);
+      const { cid } = await addToIpfs(
+        params.ctx,
+        new TextEncoder().encode(JSON.stringify(publishedNode))
+      );
+      return cid;
+    },
+
+    decodeRemote: async (cid: string): Promise<SealedChildRef[]> => {
+      const raw = await fetchFromIpfs(params.ctx, cid);
+      const publishedNode = JSON.parse(new TextDecoder().decode(raw)) as PublishedNode;
+      const node = await unsealNode(publishedNode, key);
+      return node.children ?? [];
+    },
+
+    merge: (
+      base: SealedChildRef[] | undefined,
+      local: SealedChildRef[],
+      remote: SealedChildRef[]
+    ) => ({
+      // mergeChildren is a Phase-64 stub — throws on any conflict until phase 64
+      merged: mergeChildren(base ?? [], local, remote),
+    }),
+
+    localData: params.children,
+    baseData: params.baseChildren,
+  });
+
+  return {
+    cid: result.cid,
+    newSequenceNumber: result.newSequenceNumber,
+    publishedChildren: result.publishedData,
+  };
 }
 
 /**

@@ -1,12 +1,9 @@
 /* eslint-disable @typescript-eslint/ban-ts-comment */
 // @ts-nocheck
-// Phase 62 quarantine: all describes exercise retired FolderEntry/FilePointer/FolderChild types and
-// functions now stubbed for phases 63–65. @ts-nocheck suppresses cascading errors from retired types.
-// TODO(phase 63): revive Folder operations, updateFolderMetadataAndPublish, fetchAndDecryptMetadata,
-//   loadFolderMetadata, createSubfolder
+// Phase 65 quarantine: addFileToFolder / addFilesToFolder / replaceFileInFolder skip blocks reference
+// retired FolderEntry/FilePointer types via makeFolder/makeFile helpers.
 // TODO(phase 65): revive addFileToFolder, addFilesToFolder, replaceFileInFolder
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-// Phase 62: FolderChild, FolderEntry, FilePointer retired from @cipherbox/core (now Node/SealedChildRef).
 import {
   renameInFolder,
   deleteFromFolder,
@@ -21,8 +18,6 @@ import {
   replaceFileInFolder,
 } from '../folder';
 import type { FileIpnsRecordPayload } from '../file';
-import type { TeeKeys } from '../types';
-import { isConflictExhausted } from '../errors';
 import { createMockContext } from './helpers';
 
 // ---------------------------------------------------------------------------
@@ -37,16 +32,18 @@ const mockFns = vi.hoisted(() => ({
   resolveIpnsRecord: vi.fn(),
   addToIpfs: vi.fn(),
   fetchFromIpfs: vi.fn(),
+  // Kept for phase-65-skip blocks (addFileToFolder / addFilesToFolder / replaceFileInFolder)
   encryptFolderMetadata: vi.fn(),
-  decryptFolderMetadata: vi.fn(),
+  // Phase-62 codec (node/v3)
+  sealNode: vi.fn(),
+  unsealNode: vi.fn(),
+  sealChildReadKey: vi.fn(),
+  unsealChildReadKey: vi.fn(),
   createIpnsRecord: vi.fn(),
   marshalIpnsRecord: vi.fn(),
   generateEd25519Keypair: vi.fn(),
   deriveIpnsName: vi.fn(),
   generateRandomBytes: vi.fn(),
-  wrapKey: vi.fn(),
-  bytesToHex: vi.fn(),
-  hexToBytes: vi.fn(),
 }));
 
 vi.mock('@cipherbox/crypto', () => ({
@@ -54,14 +51,14 @@ vi.mock('@cipherbox/crypto', () => ({
   deriveIpnsName: mockFns.deriveIpnsName,
   deriveEd25519PublicKey: vi.fn().mockReturnValue(new Uint8Array(32).fill(7)),
   generateRandomBytes: mockFns.generateRandomBytes,
-  wrapKey: mockFns.wrapKey,
-  bytesToHex: mockFns.bytesToHex,
-  hexToBytes: mockFns.hexToBytes,
 }));
 
 vi.mock('@cipherbox/core', () => ({
-  encryptFolderMetadata: mockFns.encryptFolderMetadata,
-  decryptFolderMetadata: mockFns.decryptFolderMetadata,
+  // Phase-62 node/v3 codec mocks
+  sealNode: mockFns.sealNode,
+  unsealNode: mockFns.unsealNode,
+  sealChildReadKey: mockFns.sealChildReadKey,
+  unsealChildReadKey: mockFns.unsealChildReadKey,
   createIpnsRecord: mockFns.createIpnsRecord,
   marshalIpnsRecord: mockFns.marshalIpnsRecord,
 }));
@@ -76,10 +73,6 @@ vi.mock('../ipns', () => ({
   batchPublishIpnsRecords: mockFns.batchPublishIpnsRecords,
   resolveIpnsRecord: mockFns.resolveIpnsRecord,
 }));
-
-// These tests cover the pure (synchronous) folder metadata operations.
-// async operations (loadFolderMetadata, updateFolderMetadataAndPublish, createSubfolder)
-// require mocking IPFS/IPNS and are covered in integration tests.
 
 const makeFolder = (id: string, name: string): FolderEntry => ({
   type: 'folder',
@@ -102,417 +95,52 @@ const makeFile = (id: string, name: string): FilePointer => ({
   modifiedAt: 1000,
 });
 
-describe.skip('Folder operations — TODO(phase 63)', () => {
-  describe('renameInFolder', () => {
-    it('renames a child and updates modifiedAt', () => {
-      const children: FolderChild[] = [makeFolder('f1', 'Documents'), makeFile('f2', 'photo.jpg')];
-
-      const result = renameInFolder({
-        children,
-        childId: 'f1',
-        newName: 'My Documents',
-      });
-
-      expect(result.updatedChildren).toHaveLength(2);
-      expect(result.renamedChild.name).toBe('My Documents');
-      expect(result.renamedChild.modifiedAt).toBeGreaterThan(1000);
-      // Original array not mutated
-      expect(children[0].name).toBe('Documents');
-    });
-
-    it('throws when child not found', () => {
-      const children: FolderChild[] = [makeFolder('f1', 'Documents')];
-
-      expect(() => renameInFolder({ children, childId: 'nonexistent', newName: 'New' })).toThrow(
-        'Item not found'
-      );
-    });
-
-    it('throws on name collision', () => {
-      const children: FolderChild[] = [makeFolder('f1', 'Documents'), makeFolder('f2', 'Photos')];
-
-      expect(() => renameInFolder({ children, childId: 'f1', newName: 'Photos' })).toThrow(
-        'An item with this name already exists'
-      );
-    });
-  });
-
-  describe('deleteFromFolder', () => {
-    it('removes child and returns it', () => {
-      const children: FolderChild[] = [
-        makeFolder('f1', 'Documents'),
-        makeFile('f2', 'photo.jpg'),
-        makeFile('f3', 'video.mp4'),
-      ];
-
-      const result = deleteFromFolder({ children, childId: 'f2' });
-
-      expect(result.updatedChildren).toHaveLength(2);
-      expect(result.removedItem.id).toBe('f2');
-      expect(result.removedItem.name).toBe('photo.jpg');
-      expect(result.updatedChildren.find((c) => c.id === 'f2')).toBeUndefined();
-    });
-
-    it('throws when child not found', () => {
-      const children: FolderChild[] = [makeFolder('f1', 'Documents')];
-
-      expect(() => deleteFromFolder({ children, childId: 'missing' })).toThrow('Item not found');
-    });
-  });
-
-  describe('addFilePointerToFolder', () => {
-    it('adds file pointer to children', () => {
-      const children: FolderChild[] = [makeFolder('f1', 'Documents')];
-
-      const result = addFilePointerToFolder({
-        children,
-        fileId: 'file-1',
-        fileName: 'readme.txt',
-        fileMetaIpnsName: 'k51-file-meta',
-        ipnsPrivateKeyEncrypted: 'wrapped-key',
-      });
-
-      expect(result.updatedChildren).toHaveLength(2);
-      expect(result.filePointer.type).toBe('file');
-      expect(result.filePointer.id).toBe('file-1');
-      expect(result.filePointer.name).toBe('readme.txt');
-      expect(result.filePointer.fileMetaIpnsName).toBe('k51-file-meta');
-    });
-
-    it('throws on name collision', () => {
-      const children: FolderChild[] = [makeFile('f1', 'readme.txt')];
-
-      expect(() =>
-        addFilePointerToFolder({
-          children,
-          fileId: 'file-2',
-          fileName: 'readme.txt',
-          fileMetaIpnsName: 'k51-new',
-          ipnsPrivateKeyEncrypted: 'key',
-        })
-      ).toThrow('A file with this name already exists');
-    });
-  });
-
-  describe('moveItem', () => {
-    it('moves item from source to destination', () => {
-      const sourceChildren: FolderChild[] = [
-        makeFolder('f1', 'Documents'),
-        makeFile('f2', 'photo.jpg'),
-      ];
-      const destChildren: FolderChild[] = [makeFolder('f3', 'Archive')];
-
-      const result = moveItem({
-        sourceChildren,
-        destChildren,
-        childId: 'f2',
-      });
-
-      expect(result.updatedSourceChildren).toHaveLength(1);
-      expect(result.updatedDestChildren).toHaveLength(2);
-      expect(result.movedItem.name).toBe('photo.jpg');
-      expect(result.movedItem.modifiedAt).toBeGreaterThan(1000);
-    });
-
-    it('throws when item not found in source', () => {
-      expect(() =>
-        moveItem({
-          sourceChildren: [makeFolder('f1', 'Docs')],
-          destChildren: [],
-          childId: 'missing',
-        })
-      ).toThrow('Item not found');
-    });
-
-    it('throws on name collision in destination', () => {
-      const sourceChildren: FolderChild[] = [makeFile('f1', 'readme.txt')];
-      const destChildren: FolderChild[] = [makeFile('f2', 'readme.txt')];
-
-      expect(() => moveItem({ sourceChildren, destChildren, childId: 'f1' })).toThrow(
-        'An item with this name already exists in destination'
-      );
-    });
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Conflict handling tests for updateFolderMetadataAndPublish
-// Uses the shared mockFns references wired into the vi.mock factories above.
-// ---------------------------------------------------------------------------
-
-/** Build a minimal remote metadata blob for fetchFromIpfs to return. */
-function makeRemoteBlob(): Uint8Array {
-  return new TextEncoder().encode(JSON.stringify({ iv: 'r', data: 'd' }));
-}
-
-describe.skip('updateFolderMetadataAndPublish conflict handling — TODO(phase 63)', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockFns.addToIpfs.mockResolvedValue({ cid: 'QmFreshCid' });
-    mockFns.encryptFolderMetadata.mockResolvedValue({ iv: 'iv', data: 'data' });
-  });
-
-  it('merges remote children on 409 then republishes (no lost update)', async () => {
-    const ctx = createMockContext();
-    const localChild = makeFile('local-1', 'local-file.txt');
-    const remoteChild = makeFile('remote-1', 'remote-file.txt');
-
-    const conflictErr = Object.assign(new Error('conflict'), { status: 409 });
-    mockFns.createAndPublishIpnsRecord
-      .mockRejectedValueOnce(conflictErr)
-      .mockResolvedValueOnce({ success: true, sequenceNumber: '6', ipnsName: 'k51test' });
-
-    mockFns.resolveIpnsRecord.mockResolvedValue({
-      sequenceNumber: 5n,
-      cid: 'QmRemoteCid',
-      ipnsName: 'k51test',
-    });
-
-    mockFns.fetchFromIpfs.mockResolvedValue(makeRemoteBlob());
-
-    mockFns.decryptFolderMetadata.mockResolvedValue({
-      version: 'v2' as const,
-      children: [remoteChild],
-    });
-
-    // Track what FolderMetadata is encrypted each attempt
-    const encryptedMetas: unknown[] = [];
-    mockFns.encryptFolderMetadata.mockImplementation(async (meta: unknown) => {
-      encryptedMetas.push(meta);
-      return { iv: 'iv', data: 'data' };
-    });
-
-    const result = await updateFolderMetadataAndPublish({
-      children: [localChild],
-      baseChildren: [],
-      folderKey: new Uint8Array(32).fill(1),
-      ipnsPrivateKey: new Uint8Array(64).fill(2),
-      ipnsName: 'k51test',
-      sequenceNumber: 4n,
-      ctx,
-    });
-
-    expect(result.cid).toBe('QmFreshCid');
-    expect(result.newSequenceNumber).toBe(6n);
-
-    // Second encrypt call must include BOTH local and remote children (merged, no lost update)
-    expect(encryptedMetas).toHaveLength(2);
-    const secondMeta = encryptedMetas[1] as { version: string; children: FolderChild[] };
-    const childIds = secondMeta.children.map((c: FolderChild) => c.id);
-    expect(childIds).toContain('local-1');
-    expect(childIds).toContain('remote-1');
-  });
-
-  it('logs a union-fallback warning when baseChildren omitted', async () => {
-    const ctx = createMockContext();
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
-    const conflictErr = Object.assign(new Error('conflict'), { status: 409 });
-    mockFns.createAndPublishIpnsRecord
-      .mockRejectedValueOnce(conflictErr)
-      .mockResolvedValueOnce({ success: true, sequenceNumber: '2', ipnsName: 'k51warn' });
-
-    mockFns.resolveIpnsRecord.mockResolvedValue({
-      sequenceNumber: 1n,
-      cid: 'QmRemote',
-      ipnsName: 'k51warn',
-    });
-
-    mockFns.fetchFromIpfs.mockResolvedValue(makeRemoteBlob());
-    mockFns.decryptFolderMetadata.mockResolvedValue({ version: 'v2' as const, children: [] });
-
-    await updateFolderMetadataAndPublish({
-      children: [makeFile('f1', 'test.txt')],
-      // baseChildren intentionally omitted to trigger union fallback (D-02)
-      folderKey: new Uint8Array(32),
-      ipnsPrivateKey: new Uint8Array(64),
-      ipnsName: 'k51warn',
-      sequenceNumber: 0n,
-      ctx,
-    });
-
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('baseChildren not provided'));
-
-    warnSpy.mockRestore();
-  });
-
-  it('throws ConflictError after 4 failed attempts', async () => {
-    const ctx = createMockContext();
-
-    const conflictErr = Object.assign(new Error('conflict'), { status: 409 });
-    mockFns.createAndPublishIpnsRecord.mockRejectedValue(conflictErr);
-
-    mockFns.resolveIpnsRecord.mockResolvedValue({
-      sequenceNumber: 10n,
-      cid: 'QmAlwaysConflict',
-      ipnsName: 'k51exhaust',
-    });
-
-    mockFns.fetchFromIpfs.mockResolvedValue(makeRemoteBlob());
-    mockFns.decryptFolderMetadata.mockResolvedValue({ version: 'v2' as const, children: [] });
-
-    await expect(
-      updateFolderMetadataAndPublish({
-        children: [makeFile('f1', 'file.txt')],
-        baseChildren: [],
-        folderKey: new Uint8Array(32),
-        ipnsPrivateKey: new Uint8Array(64),
-        ipnsName: 'k51exhaust',
-        sequenceNumber: 9n,
-        ctx,
-      })
-    ).rejects.toSatisfy((err: unknown) => {
-      return isConflictExhausted(err) && err.attempts === 4 && err.ipnsName === 'k51exhaust';
-    });
-  });
-
-  it('does not throw ConflictError for non-409 errors', async () => {
-    const ctx = createMockContext();
-
-    const serverErr = Object.assign(new Error('Internal Server Error'), { status: 500 });
-    mockFns.createAndPublishIpnsRecord.mockRejectedValue(serverErr);
-
-    await expect(
-      updateFolderMetadataAndPublish({
-        children: [makeFile('f1', 'file.txt')],
-        folderKey: new Uint8Array(32),
-        ipnsPrivateKey: new Uint8Array(64),
-        ipnsName: 'k51nonconflict',
-        sequenceNumber: 0n,
-        ctx,
-      })
-    ).rejects.toSatisfy((err: unknown) => {
-      return !isConflictExhausted(err) && (err as Error).message === 'Internal Server Error';
-    });
-  });
-
-  it('returns publishedChildren containing merged local+remote set after 409 (WR-08 folder)', async () => {
-    // Tests CR-01: the published merged children must be surfaced to callers so
-    // the next write composes from the correct base, not the stale pre-merge local set.
-    // Non-empty baseChildren exercises the three-way merge path (WR-08).
-    const ctx = createMockContext();
-    const baseChild = makeFile('base-1', 'base-file.txt');
-    const localChild = makeFile('local-2', 'local-file.txt');
-    const remoteChild = makeFile('remote-3', 'remote-file.txt');
-
-    const conflictErr = Object.assign(new Error('conflict'), { status: 409 });
-    mockFns.createAndPublishIpnsRecord
-      .mockRejectedValueOnce(conflictErr)
-      .mockResolvedValueOnce({ success: true, sequenceNumber: '8', ipnsName: 'k51merged' });
-
-    mockFns.resolveIpnsRecord.mockResolvedValue({
-      sequenceNumber: 7n,
-      cid: 'QmRemoteMerged',
-      ipnsName: 'k51merged',
-    });
-
-    mockFns.fetchFromIpfs.mockResolvedValue(makeRemoteBlob());
-    // Remote folder already has baseChild + remoteChild (remote-only child not in local set)
-    mockFns.decryptFolderMetadata.mockResolvedValue({
-      version: 'v2' as const,
-      children: [baseChild, remoteChild],
-    });
-
-    const result = await updateFolderMetadataAndPublish({
-      children: [baseChild, localChild],
-      // Non-empty baseChildren — exercises three-way merge (WR-08)
-      baseChildren: [baseChild],
-      folderKey: new Uint8Array(32).fill(1),
-      ipnsPrivateKey: new Uint8Array(64).fill(2),
-      ipnsName: 'k51merged',
-      sequenceNumber: 6n,
-      ctx,
-    });
-
-    // publishedChildren must be the merged published set, not the stale pre-merge local set
-    expect(result.publishedChildren).toBeDefined();
-    const publishedIds = result.publishedChildren.map((c: FolderChild) => c.id);
-    // Local-only child must survive the merge
-    expect(publishedIds).toContain('local-2');
-    // Remote-only child must be included (proves three-way merge ran, not a local-only publish)
-    expect(publishedIds).toContain('remote-3');
-  });
-});
-
-// ---------------------------------------------------------------------------
-// S3 zeroization guard for updateFolderMetadataAndPublish (D-05 / T-47-01)
-//
-// Decision: SKIP zeroing — caller retains ownership of keys (see folder/index.ts comment).
-// Guard test: assert keys are UNCHANGED after the call returns, documenting the deliberate
-// non-zeroing and preventing accidental future fill(0) from breaking live-session callers.
-// ---------------------------------------------------------------------------
-
-describe.skip('updateFolderMetadataAndPublish zeroization decision guard (S3/D-05) — TODO(phase 63)', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockFns.addToIpfs.mockResolvedValue({ cid: 'QmGuardCid' });
-    mockFns.encryptFolderMetadata.mockResolvedValue({ iv: 'iv', data: 'data' });
-  });
-
-  it('SKIP guard: does NOT zero ipnsPrivateKey or folderKey (caller retains ownership)', async () => {
-    const ctx = createMockContext();
-
-    // Use distinctly non-zero buffers so zeroing would be detectable
-    const ipnsKey = new Uint8Array(64).fill(0x77);
-    const folderKey = new Uint8Array(32).fill(0x88);
-
-    // Snapshot initial values to compare after the call
-    const ipnsKeySnapshot = new Uint8Array(ipnsKey);
-    const folderKeySnapshot = new Uint8Array(folderKey);
-
-    mockFns.createAndPublishIpnsRecord.mockResolvedValueOnce({
-      success: true,
-      sequenceNumber: 1n,
-      ipnsName: 'k51guard',
-    });
-
-    await updateFolderMetadataAndPublish({
-      children: [],
-      baseChildren: [],
-      folderKey,
-      ipnsPrivateKey: ipnsKey,
-      ipnsName: 'k51guard',
-      sequenceNumber: 0n,
-      ctx,
-    });
-
-    // Keys must be UNCHANGED — caller (sdk/client.ts) stores them in live folderTree state
-    // and reuses them across subsequent operations. Zeroing here would corrupt session state.
-    expect(ipnsKey).toEqual(ipnsKeySnapshot);
-    expect(folderKey).toEqual(folderKeySnapshot);
-  });
-});
-
 // ---------------------------------------------------------------------------
 // load.ts — fetchAndDecryptMetadata + loadFolderMetadata
-// fetchFromIpfs / resolveIpnsRecord / decryptFolderMetadata are mocked above.
+// fetchFromIpfs / resolveIpnsRecord / unsealNode are mocked above.
 // ---------------------------------------------------------------------------
 
-describe.skip('fetchAndDecryptMetadata — TODO(phase 63)', () => {
+describe('fetchAndDecryptMetadata', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('fetches the encrypted blob, JSON-parses it, and decrypts with the folder key', async () => {
+  it('fetches from IPFS, JSON-parses as PublishedNode, and unseals with the folder key', async () => {
     const ctx = createMockContext();
     const folderKey = new Uint8Array(32).fill(9);
-    const encryptedBlob = { iv: 'the-iv', data: 'the-data' };
+    // fetchFromIpfs returns a Uint8Array of JSON-encoded PublishedNode
+    const publishedNode = {
+      schema: 'node/v3',
+      kind: 'folder',
+      id: 'node-test-1',
+      generation: 0,
+      aeadVersion: 1,
+      readSealed: 'base64==',
+    };
     mockFns.fetchFromIpfs.mockResolvedValue(
-      new TextEncoder().encode(JSON.stringify(encryptedBlob))
+      new TextEncoder().encode(JSON.stringify(publishedNode))
     );
-    const decrypted = { version: 'v2' as const, children: [makeFile('x', 'a.txt')] };
-    mockFns.decryptFolderMetadata.mockResolvedValue(decrypted);
+    const unsealedNode = {
+      schema: 'node/v3',
+      kind: 'folder',
+      id: 'node-test-1',
+      generation: 0,
+      createdAt: 0,
+      modifiedAt: 0,
+      children: [],
+    };
+    mockFns.unsealNode.mockResolvedValue(unsealedNode);
 
     const result = await fetchAndDecryptMetadata('QmCid123', folderKey, ctx);
 
     expect(mockFns.fetchFromIpfs).toHaveBeenCalledWith(ctx, 'QmCid123');
-    // The parsed encrypted object and the folder key must be passed to decrypt
-    expect(mockFns.decryptFolderMetadata).toHaveBeenCalledWith(encryptedBlob, folderKey);
-    expect(result).toBe(decrypted);
+    // unsealNode must receive the parsed PublishedNode object and the folder key
+    expect(mockFns.unsealNode).toHaveBeenCalledWith(publishedNode, folderKey);
+    expect(result).toBe(unsealedNode);
   });
 });
 
-describe.skip('loadFolderMetadata — TODO(phase 63)', () => {
+describe('loadFolderMetadata', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -532,110 +160,318 @@ describe.skip('loadFolderMetadata — TODO(phase 63)', () => {
     expect(mockFns.fetchFromIpfs).not.toHaveBeenCalled();
   });
 
-  it('resolves IPNS, fetches+decrypts, and surfaces metadata, sequenceNumber and cid', async () => {
+  it('resolves IPNS, fetches+unseals, and surfaces metadata, sequenceNumber and cid', async () => {
     const ctx = createMockContext();
     const folderKey = new Uint8Array(32).fill(3);
     mockFns.resolveIpnsRecord.mockResolvedValue({
       sequenceNumber: 42n,
       cid: 'QmResolved',
-      ipnsName: 'k51found',
     });
+    const publishedNode = {
+      schema: 'node/v3',
+      kind: 'folder',
+      id: 'node-resolved-2',
+      generation: 0,
+      aeadVersion: 1,
+      readSealed: 'base64==',
+    };
     mockFns.fetchFromIpfs.mockResolvedValue(
-      new TextEncoder().encode(JSON.stringify({ iv: 'i', data: 'd' }))
+      new TextEncoder().encode(JSON.stringify(publishedNode))
     );
-    const metadata = { version: 'v2' as const, children: [makeFolder('sub', 'Sub')] };
-    mockFns.decryptFolderMetadata.mockResolvedValue(metadata);
+    const metadata = {
+      schema: 'node/v3',
+      kind: 'folder',
+      id: 'node-resolved-2',
+      generation: 0,
+      createdAt: 0,
+      modifiedAt: 0,
+      children: [],
+    };
+    mockFns.unsealNode.mockResolvedValue(metadata);
 
     const result = await loadFolderMetadata({ ipnsName: 'k51found', folderKey, ctx });
 
     expect(mockFns.resolveIpnsRecord).toHaveBeenCalledWith('k51found', ctx);
-    expect(mockFns.fetchFromIpfs).toHaveBeenCalledWith(ctx, 'QmResolved');
     expect(result).toEqual({ metadata, sequenceNumber: 42n, cid: 'QmResolved' });
   });
 });
 
 // ---------------------------------------------------------------------------
-// registration.ts — createSubfolder
-// crypto primitives are mocked above; we assert the wrapped-key wiring and the
-// shape of the returned FolderEntry + decrypted keys.
+// metadata-ops.ts — phase 63 SealedChildRef mutations (Task 1 of Plan 63-04)
+// renameInFolder, deleteFromFolder, addFilePointerToFolder, moveItem.
+// All use SealedChildRef instead of the retired FolderChild / FilePointer types.
 // ---------------------------------------------------------------------------
 
-describe.skip('createSubfolder — TODO(phase 63)', () => {
+/** Minimal SealedChildRef fixture for phase-63 metadata-ops tests. */
+const makeRef = (
+  ipnsName: string,
+  name: string
+): {
+  name: string;
+  ipnsName: string;
+  generation: number;
+  versionFloor: bigint;
+  readKeySealed: string;
+} => ({
+  name,
+  ipnsName,
+  generation: 0,
+  versionFloor: 0n,
+  readKeySealed: 'sealed==',
+});
+
+describe('renameInFolder (SealedChildRef)', () => {
+  it('renames a child by ipnsName, returns new array without mutating original', () => {
+    const children = [makeRef('k51-f1', 'Documents'), makeRef('k51-f2', 'Photos')];
+    const result = renameInFolder({ children, childId: 'k51-f1', newName: 'My Documents' });
+    expect(result.updatedChildren).toHaveLength(2);
+    expect(result.renamedChild.name).toBe('My Documents');
+    expect(result.renamedChild.ipnsName).toBe('k51-f1');
+    // Original array must not be mutated
+    expect(children[0].name).toBe('Documents');
+  });
+
+  it('throws when child ipnsName not found', () => {
+    expect(() =>
+      renameInFolder({ children: [], childId: 'k51-nonexistent', newName: 'X' })
+    ).toThrow('Item not found');
+  });
+});
+
+describe('deleteFromFolder (SealedChildRef)', () => {
+  it('removes child by ipnsName and returns it', () => {
+    const children = [makeRef('k51-f1', 'Documents'), makeRef('k51-f2', 'photo.jpg')];
+    const result = deleteFromFolder({ children, childId: 'k51-f2' });
+    expect(result.updatedChildren).toHaveLength(1);
+    expect(result.removedItem.ipnsName).toBe('k51-f2');
+    expect(result.removedItem.name).toBe('photo.jpg');
+    expect(result.updatedChildren.find((c) => c.ipnsName === 'k51-f2')).toBeUndefined();
+  });
+
+  it('throws when child not found', () => {
+    expect(() => deleteFromFolder({ children: [], childId: 'k51-missing' })).toThrow(
+      'Item not found'
+    );
+  });
+});
+
+describe('addFilePointerToFolder (SealedChildRef — READ-03: one seal, no fan-out)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Deterministic crypto stubs
+    mockFns.sealChildReadKey.mockResolvedValue('child-read-key-sealed==');
+  });
+
+  it('seals child readKey under parent readKey exactly once regardless of existing children', async () => {
+    const children = [makeRef('k51-existing', 'existing.txt')];
+    const childReadKey = new Uint8Array(32).fill(1);
+    const parentReadKey = new Uint8Array(32).fill(2);
+
+    const result = await addFilePointerToFolder({
+      children,
+      childReadKey,
+      parentReadKey,
+      childId: 'child-node-uuid-1234',
+      childKind: 'file',
+      childGeneration: 0,
+      name: 'newfile.txt',
+      ipnsName: 'k51-new-child',
+      versionFloor: 1n,
+    });
+
+    // Exactly one sealChildReadKey call — no per-recipient fan-out (READ-03 / SC#3)
+    expect(mockFns.sealChildReadKey).toHaveBeenCalledTimes(1);
+    expect(mockFns.sealChildReadKey).toHaveBeenCalledWith(
+      childReadKey,
+      parentReadKey,
+      'child-node-uuid-1234',
+      'file',
+      0
+    );
+    expect(result.updatedChildren).toHaveLength(2);
+    expect(result.newRef.name).toBe('newfile.txt');
+    expect(result.newRef.ipnsName).toBe('k51-new-child');
+    expect(result.newRef.readKeySealed).toBe('child-read-key-sealed==');
+    expect(result.newRef.generation).toBe(0);
+    expect(result.newRef.versionFloor).toBe(1n);
+  });
+});
+
+describe('moveItem (SealedChildRef — READ-04: zero re-encryption)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('moves SealedChildRef from source to dest as a link rewrite — sealChildReadKey not called', () => {
+    const sourceChildren = [
+      makeRef('k51-doc', 'Document.docx'),
+      {
+        name: 'MovableFile.txt',
+        ipnsName: 'k51-move',
+        generation: 0,
+        versionFloor: 1n,
+        readKeySealed: 'sealed-move==',
+      },
+    ];
+    const destChildren = [makeRef('k51-arch', 'Archive.zip')];
+
+    const result = moveItem({ sourceChildren, destChildren, childId: 'k51-move' });
+
+    // Zero re-encryption (READ-04): no sealChildReadKey or sealNode calls
+    expect(mockFns.sealChildReadKey).not.toHaveBeenCalled();
+    expect(mockFns.sealNode).not.toHaveBeenCalled();
+
+    expect(result.updatedSource).toHaveLength(1);
+    expect(result.updatedSource[0].ipnsName).toBe('k51-doc');
+    expect(result.updatedDest).toHaveLength(2);
+    expect(result.movedRef.ipnsName).toBe('k51-move');
+    // readKeySealed is moved as-is — no re-seal (READ-04)
+    expect(result.movedRef.readKeySealed).toBe('sealed-move==');
+  });
+
+  it('throws when child not found in source', () => {
+    expect(() =>
+      moveItem({
+        sourceChildren: [makeRef('k51-f1', 'Docs')],
+        destChildren: [],
+        childId: 'k51-nonexistent',
+      })
+    ).toThrow('Item not found');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// registration.ts — createSubfolder (phase 63 — Task 2 of Plan 63-04)
+// ---------------------------------------------------------------------------
+
+describe('createSubfolder (phase 63 — first-publish seq 1n)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
     mockFns.generateEd25519Keypair.mockResolvedValue({
       publicKey: new Uint8Array(32).fill(1),
       privateKey: new Uint8Array(64).fill(2),
     });
-    mockFns.deriveIpnsName.mockResolvedValue('k51-derived-name');
-    mockFns.generateRandomBytes.mockReturnValue(new Uint8Array(32).fill(3));
-    // wrapKey returns a tagged buffer; bytesToHex turns it into a stable hex token
-    mockFns.wrapKey.mockImplementation(async (key: Uint8Array) => key);
-    mockFns.bytesToHex.mockReturnValue('hex-wrapped');
-    mockFns.hexToBytes.mockReturnValue(new Uint8Array(32).fill(8));
-  });
-
-  it('generates keys, derives the ipnsName, and builds a folder entry without TEE keys', async () => {
-    const userPublicKey = new Uint8Array(32).fill(5);
-
-    const result = await createSubfolder({ name: 'NewFolder', userPublicKey });
-
-    expect(mockFns.generateEd25519Keypair).toHaveBeenCalled();
-    // deriveIpnsName is called with the generated keypair public key
-    expect(mockFns.deriveIpnsName).toHaveBeenCalledWith(new Uint8Array(32).fill(1));
-    expect(result.folder.type).toBe('folder');
-    expect(result.folder.name).toBe('NewFolder');
-    expect(result.folder.ipnsName).toBe('k51-derived-name');
-    expect(result.folder.ipnsPrivateKeyEncrypted).toBe('hex-wrapped');
-    expect(result.folder.folderKeyEncrypted).toBe('hex-wrapped');
-    expect(typeof result.folder.id).toBe('string');
-    // Decrypted keys returned to caller
-    expect(result.folderKey).toEqual(new Uint8Array(32).fill(3));
-    expect(result.ipnsPrivateKey).toEqual(new Uint8Array(64).fill(2));
-    // No TEE keys → no encrypted republish key / epoch
-    expect(result.encryptedIpnsPrivateKey).toBeUndefined();
-    expect(result.keyEpoch).toBeUndefined();
-    // The user public key must be used to wrap both private/folder keys
-    expect(mockFns.wrapKey).toHaveBeenCalledWith(expect.anything(), userPublicKey);
-  });
-
-  it('encrypts the IPNS private key for the TEE when teeKeys are provided', async () => {
-    const userPublicKey = new Uint8Array(32).fill(5);
-    const teeKeys: TeeKeys = { currentPublicKey: 'aabbcc', currentEpoch: 7 };
-
-    const result = await createSubfolder({ name: 'TeeFolder', userPublicKey, teeKeys });
-
-    expect(mockFns.hexToBytes).toHaveBeenCalledWith('aabbcc');
-    expect(result.encryptedIpnsPrivateKey).toBe('hex-wrapped');
-    expect(result.keyEpoch).toBe(7);
-  });
-
-  it('zeros key material and rethrows if TEE wrapping fails', async () => {
-    const userPublicKey = new Uint8Array(32).fill(5);
-    const teeKeys: TeeKeys = { currentPublicKey: 'deadbeef', currentEpoch: 1 };
-
-    // First two wrapKey calls succeed (private + folder key for user pubkey),
-    // the third (TEE wrap) rejects → triggers the catch/zero branch.
-    const ipnsPriv = new Uint8Array(64).fill(2);
-    const folderKey = new Uint8Array(32).fill(3);
-    mockFns.generateEd25519Keypair.mockResolvedValue({
-      publicKey: new Uint8Array(32).fill(1),
-      privateKey: ipnsPriv,
+    mockFns.deriveIpnsName.mockResolvedValue('k51-derived-subfolder');
+    // Return DISTINCT buffers so read/write key aliasing cannot hide accidental shared state.
+    mockFns.generateRandomBytes
+      .mockReturnValueOnce(new Uint8Array(32).fill(3)) // readKey (first call)
+      .mockReturnValueOnce(new Uint8Array(32).fill(4)); // writeKey (second call)
+    mockFns.sealNode.mockResolvedValue({
+      schema: 'node/v3',
+      kind: 'folder',
+      id: 'subfolder-node-id',
+      generation: 0,
+      aeadVersion: 1,
+      readSealed: 'read-sealed-base64==',
     });
-    mockFns.generateRandomBytes.mockReturnValue(folderKey);
-    mockFns.wrapKey
-      .mockResolvedValueOnce(new Uint8Array([1]))
-      .mockResolvedValueOnce(new Uint8Array([2]))
-      .mockRejectedValueOnce(new Error('tee wrap failed'));
+    mockFns.addToIpfs.mockResolvedValue({ cid: 'QmSubfolderCid', size: 128, recorded: true });
+    mockFns.createAndPublishIpnsRecord.mockResolvedValue({ success: true, sequenceNumber: 1n });
+  });
 
-    await expect(createSubfolder({ name: 'Boom', userPublicKey, teeKeys })).rejects.toThrow(
-      'tee wrap failed'
+  it('first-publishes with sequenceNumber 1n (post-Phase-60 strict gate)', async () => {
+    const ctx = createMockContext();
+    const result = await createSubfolder({ name: 'MySubfolder', ctx });
+
+    // generateEd25519Keypair must be called to create the IPNS keypair
+    expect(mockFns.generateEd25519Keypair).toHaveBeenCalled();
+    // deriveIpnsName derives the k51 name from the generated public key
+    expect(mockFns.deriveIpnsName).toHaveBeenCalledWith(new Uint8Array(32).fill(1));
+    // generateRandomBytes called twice for readKey + writeKey (32 bytes each)
+    expect(mockFns.generateRandomBytes).toHaveBeenCalledTimes(2);
+    // sealNode seals the node with the generated readKey + writeKey
+    expect(mockFns.sealNode).toHaveBeenCalled();
+    // First-publish MUST embed sequenceNumber: 1n (post-Phase-60 strict gate rejects != 1)
+    expect(mockFns.createAndPublishIpnsRecord).toHaveBeenCalledWith(
+      expect.objectContaining({ sequenceNumber: 1n, ipnsName: 'k51-derived-subfolder' })
     );
 
-    // Both buffers must be zeroed on the error path
-    expect(ipnsPriv.every((b) => b === 0)).toBe(true);
-    expect(folderKey.every((b) => b === 0)).toBe(true);
+    expect(result.node.kind).toBe('folder');
+    expect(result.ipnsPrivateKey).toEqual(new Uint8Array(64).fill(2));
+    expect(result.rootReadKey).toEqual(new Uint8Array(32).fill(3));
+    expect(result.rootWriteKey).toEqual(new Uint8Array(32).fill(4)); // distinct from readKey
+    // No TEE keys → no encrypted republish key
+    expect(result.encryptedIpnsPrivateKey).toBeUndefined();
+    expect(result.keyEpoch).toBeUndefined();
+  });
+
+  it('does NOT zero minted keys before return (caller is terminal owner, D-09)', async () => {
+    const ctx = createMockContext();
+    const result = await createSubfolder({ name: 'NoZeroFolder', ctx });
+
+    // Keys must be non-zero buffers on return
+    expect(result.ipnsPrivateKey.some((b) => b !== 0)).toBe(true);
+    expect(result.rootReadKey.some((b) => b !== 0)).toBe(true);
+    expect(result.rootWriteKey.some((b) => b !== 0)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// registration.ts — updateFolderMetadataAndPublish (phase 63 — Task 2)
+// Delegates to publishWithCas for CAS-retry + three-way merge infrastructure.
+// ---------------------------------------------------------------------------
+
+describe('updateFolderMetadataAndPublish (phase 63 — delegates to publishWithCas)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFns.sealNode.mockResolvedValue({
+      schema: 'node/v3',
+      kind: 'folder',
+      id: 'folder-node-id',
+      generation: 0,
+      aeadVersion: 1,
+      readSealed: 'sealed-read-body==',
+    });
+    mockFns.addToIpfs.mockResolvedValue({ cid: 'QmUpdatedCid', size: 64, recorded: true });
+    mockFns.createAndPublishIpnsRecord.mockResolvedValue({ success: true, sequenceNumber: 6n });
+  });
+
+  it('publishes resealed node via CAS (sequenceNumber increments by 1) and returns cid + new seq', async () => {
+    const ctx = createMockContext();
+    const children = [makeRef('k51-child-a', 'FileA.txt'), makeRef('k51-child-b', 'FileB.txt')];
+
+    const result = await updateFolderMetadataAndPublish({
+      children,
+      readKey: new Uint8Array(32).fill(1),
+      ipnsPrivateKey: new Uint8Array(64).fill(2),
+      ipnsName: 'k51-parent',
+      sequenceNumber: 5n,
+      ctx,
+    });
+
+    // publishWithCas delegates to sealNode + addToIpfs (encodeAndUpload seam)
+    expect(mockFns.sealNode).toHaveBeenCalled();
+    expect(mockFns.addToIpfs).toHaveBeenCalled();
+    // CAS guard: expectedSequenceNumber = '5' (pre-increment), sequenceNumber = 6n
+    expect(mockFns.createAndPublishIpnsRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sequenceNumber: 6n,
+        expectedSequenceNumber: '5',
+        metadataCid: 'QmUpdatedCid',
+        ipnsName: 'k51-parent',
+      })
+    );
+    expect(result.cid).toBe('QmUpdatedCid');
+    expect(result.newSequenceNumber).toBe(6n);
+    expect(result.publishedChildren).toEqual(children);
+  });
+
+  it('does NOT zero readKey or ipnsPrivateKey (caller retains ownership, D-09)', async () => {
+    const ctx = createMockContext();
+    const readKey = new Uint8Array(32).fill(0x42);
+    const ipnsKey = new Uint8Array(64).fill(0x77);
+    const readKeySnapshot = new Uint8Array(readKey);
+    const ipnsKeySnapshot = new Uint8Array(ipnsKey);
+
+    await updateFolderMetadataAndPublish({
+      children: [],
+      readKey,
+      ipnsPrivateKey: ipnsKey,
+      ipnsName: 'k51-guard',
+      sequenceNumber: 0n,
+      ctx,
+    });
+
+    expect(readKey).toEqual(readKeySnapshot);
+    expect(ipnsKey).toEqual(ipnsKeySnapshot);
   });
 });
 

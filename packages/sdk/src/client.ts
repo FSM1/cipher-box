@@ -23,7 +23,7 @@ import {
   ipnsControllerUnenrollBatch,
   sharesControllerRevokeForItems,
 } from '@cipherbox/api-client';
-import { clearBytes } from '@cipherbox/crypto';
+import { clearBytes, unwrapKey, hexToBytes } from '@cipherbox/crypto';
 import pLimit from 'p-limit';
 import type { BinEntry, SealedChildRef } from '@cipherbox/core';
 import type { CipherBoxClientConfig, FolderState, SharedFolderState } from './types';
@@ -34,7 +34,6 @@ import { KeyCache } from './state/key-cache';
 import * as binOps from './bin';
 import type { BinState } from './bin';
 import * as shareOps from './share';
-import type { SentShareInfo } from './share';
 
 /** Maximum concurrent encrypt+pin operations for batch uploads. */
 const UPLOAD_CONCURRENCY = 3;
@@ -141,44 +140,6 @@ export class CipherBoxClient {
   }
 
   // ---- Lifecycle ----
-
-  // ---- Share re-wrapping (internal) ----
-
-  /**
-   * Re-wrap keys for share recipients after adding items to a folder.
-   *
-   * Queries the share callbacks for active shares covering the folder,
-   * then wraps each new item's plaintext key for each recipient.
-   * Failures are logged but do not propagate (re-wrapping is best-effort).
-   */
-  private async reWrapNewItems(
-    folderIpnsName: string,
-    items: Array<{ keyType: 'file' | 'folder'; itemId: string; plaintextKey: Uint8Array }>
-  ): Promise<void> {
-    const callbacks = this.config.shareCallbacks;
-    if (!callbacks) return;
-
-    const coveringShares = await callbacks.getCoveringShares(folderIpnsName);
-    if (coveringShares.length === 0) return;
-
-    const { failedRecipients } = await shareOps.reWrapForRecipients({
-      coveringShares,
-      newItems: items,
-      addShareKeysFn: callbacks.addShareKeys,
-    });
-
-    if (failedRecipients.length > 0) {
-      console.warn(
-        `[SDK] Re-wrapping failed for ${failedRecipients.length} recipient(s):`,
-        failedRecipients.map((k) => k.slice(0, 10) + '...')
-      );
-      this.emitter.emit({
-        type: 'share:reWrapFailed',
-        folderIpnsName,
-        failedRecipients,
-      } as SdkEvent);
-    }
-  }
 
   /**
    * Fire-and-forget IPNS unenrollment for deleted items.
@@ -573,17 +534,71 @@ export class CipherBoxClient {
    * @param destIpnsName - IPNS name of the destination folder
    * @param childId - ID of the child to move
    */
-  /**
-   * @stub phase 63 (navigation) / phase 65 (move re-encrypt): moveItem in sdk-core
-   * returns never; movedItem.type no longer exists on SealedChildRef; the phase-63
-   * implementation will unseal the child readKey from SealedChildRef.readKeySealed
-   * and re-seal it under the destination parent's readKey chain.
-   */
   async moveItem(sourceIpnsName: string, destIpnsName: string, childId: string): Promise<void> {
-    void sourceIpnsName;
-    void destIpnsName;
-    void childId;
-    throw new Error('not implemented — phase 63 (move item / re-seal child readKey)');
+    return this.withOperation('moveItem', async () => {
+      // Direct folderTree lookup — both folders must already be loaded for a move
+      // (ensureFolderLoaded is wired in phase 63 navigation; moveItem does not auto-load)
+      const sourceFolder = this.folderTree.get(sourceIpnsName);
+      if (!sourceFolder) throw new Error('Source folder not loaded');
+      const destFolder = this.folderTree.get(destIpnsName);
+      if (!destFolder) throw new Error('Destination folder not loaded');
+
+      const baseSourceChildren = [...sourceFolder.children];
+      const baseDestChildren = [...destFolder.children];
+
+      // Pure link rewrite — zero re-encryption (READ-04)
+      const { updatedSource, updatedDest } = sdkCore.moveItem({
+        sourceChildren: sourceFolder.children,
+        destChildren: destFolder.children,
+        childId,
+      });
+
+      // Publish updated source folder
+      const { newSequenceNumber: srcSeq, publishedChildren: srcChildren } =
+        await sdkCore.updateFolderMetadataAndPublish({
+          children: updatedSource,
+          baseChildren: baseSourceChildren,
+          readKey: sourceFolder.folderKey,
+          ipnsPrivateKey: sourceFolder.ipnsKeypair.privateKey,
+          ipnsName: sourceIpnsName,
+          sequenceNumber: sourceFolder.sequenceNumber,
+          ctx: this.ctx,
+        });
+
+      sourceFolder.children = srcChildren;
+      sourceFolder.sequenceNumber = srcSeq;
+      this.folderTree.set(sourceIpnsName, sourceFolder);
+      this.emitter.emit({
+        type: 'folder:updated',
+        folderId: sourceIpnsName,
+        ipnsName: sourceIpnsName,
+        children: srcChildren,
+        sequenceNumber: srcSeq,
+      });
+
+      // Publish updated destination folder
+      const { newSequenceNumber: dstSeq, publishedChildren: dstChildren } =
+        await sdkCore.updateFolderMetadataAndPublish({
+          children: updatedDest,
+          baseChildren: baseDestChildren,
+          readKey: destFolder.folderKey,
+          ipnsPrivateKey: destFolder.ipnsKeypair.privateKey,
+          ipnsName: destIpnsName,
+          sequenceNumber: destFolder.sequenceNumber,
+          ctx: this.ctx,
+        });
+
+      destFolder.children = dstChildren;
+      destFolder.sequenceNumber = dstSeq;
+      this.folderTree.set(destIpnsName, destFolder);
+      this.emitter.emit({
+        type: 'folder:updated',
+        folderId: destIpnsName,
+        ipnsName: destIpnsName,
+        children: dstChildren,
+        sequenceNumber: dstSeq,
+      });
+    });
   }
 
   /**
@@ -710,14 +725,18 @@ export class CipherBoxClient {
       });
 
       try {
-        // 2. Add FilePointer to folder's children
+        // 2. Add FilePointer to folder's children (seals child readKey under parent readKey — READ-03)
         const baseChildren = [...folder.children];
-        const { updatedChildren } = sdkCore.addFilePointerToFolder({
+        const { updatedChildren } = await sdkCore.addFilePointerToFolder({
           children: folder.children,
-          fileId,
-          fileName,
-          fileMetaIpnsName: uploadResult.fileMetaIpnsName,
-          ipnsPrivateKeyEncrypted: uploadResult.ipnsPrivateKeyEncrypted,
+          childReadKey: uploadResult.fileKey,
+          parentReadKey: folder.folderKey,
+          childId: fileId,
+          childKind: 'file',
+          childGeneration: 0,
+          name: fileName,
+          ipnsName: uploadResult.fileMetaIpnsName,
+          versionFloor: 0n,
         });
 
         // 3. Concurrent: file IPNS batch publish + folder metadata update
@@ -807,17 +826,6 @@ export class CipherBoxClient {
               this.config.pinningConfig?.externalProvider?.providerName ?? 'external node',
             error: secondaryWarning,
           });
-        }
-
-        // 6. Re-wrap file key for share recipients (best-effort)
-        try {
-          if (this.config.shareCallbacks) {
-            await this.reWrapNewItems(folderIpnsName, [
-              { keyType: 'file', itemId: fileId, plaintextKey: uploadResult.fileKey },
-            ]);
-          }
-        } catch (err) {
-          console.warn('[SDK] Post-upload re-wrapping failed:', err);
         }
 
         return { cid: uploadResult.cid };
@@ -960,12 +968,16 @@ export class CipherBoxClient {
         const registeredSuccesses: FileResult[] = [];
         for (const success of successes) {
           try {
-            const { updatedChildren } = sdkCore.addFilePointerToFolder({
+            const { updatedChildren } = await sdkCore.addFilePointerToFolder({
               children: mergedChildren,
-              fileId: success.fileId,
-              fileName: success.fileName,
-              fileMetaIpnsName: success.uploadResult.fileMetaIpnsName,
-              ipnsPrivateKeyEncrypted: success.uploadResult.ipnsPrivateKeyEncrypted,
+              childReadKey: success.uploadResult.fileKey,
+              parentReadKey: folder.folderKey,
+              childId: success.fileId,
+              childKind: 'file',
+              childGeneration: 0,
+              name: success.fileName,
+              ipnsName: success.uploadResult.fileMetaIpnsName,
+              versionFloor: 0n,
             });
             mergedChildren = updatedChildren;
             registeredSuccesses.push(success);
@@ -1061,22 +1073,6 @@ export class CipherBoxClient {
           children: publishedChildren,
           sequenceNumber: newSequenceNumber,
         });
-
-        // Re-wrap file keys for share recipients (best-effort)
-        try {
-          if (this.config.shareCallbacks) {
-            await this.reWrapNewItems(
-              folderIpnsName,
-              registeredSuccesses.map((s) => ({
-                keyType: 'file' as const,
-                itemId: s.fileId,
-                plaintextKey: s.uploadResult.fileKey,
-              }))
-            );
-          }
-        } catch (err) {
-          console.warn('[SDK] Post-batch-upload re-wrapping failed:', err);
-        }
 
         return {
           successes: registeredSuccesses.map((s) => ({
@@ -1583,30 +1579,6 @@ export class CipherBoxClient {
     });
   }
 
-  /**
-   * Re-wrap keys for share recipients after adding items to a shared folder.
-   *
-   * @param coveringShares - Active shares covering the folder
-   * @param newItems - New items whose keys need re-wrapping
-   * @param addShareKeysFn - Function to add wrapped keys to a share via API
-   */
-  async reWrapForRecipients(
-    coveringShares: SentShareInfo[],
-    newItems: Array<{ keyType: 'file' | 'folder'; itemId: string; plaintextKey: Uint8Array }>,
-    addShareKeysFn: (
-      shareId: string,
-      keys: Array<{ keyType: 'file' | 'folder'; itemId: string; encryptedKey: string }>
-    ) => Promise<void>
-  ): Promise<{ failedRecipients: string[] }> {
-    return this.withOperation('reWrapForRecipients', async () => {
-      return shareOps.reWrapForRecipients({
-        coveringShares,
-        newItems,
-        addShareKeysFn,
-      });
-    });
-  }
-
   // ---- Shared-folder operations (REQ-3) ----
 
   /**
@@ -1905,9 +1877,21 @@ export class CipherBoxClient {
   }
 
   /**
-   * @stub phase 63 (navigation): SealedChildRef has no type discriminant and no
-   * per-child folderKeyEncrypted; the phase-63 DFS will use the read-key chain
-   * from SealedChildRef.readKeySealed to unseal child folder keys for traversal.
+   * Enumerate all reachable subfolders within a shared folder tree (DFS).
+   *
+   * Uses share_keys entries (ECIES-wrapped per recipient in the current schema) to
+   * derive each subfolder's readKey, loading children via the read-chain. Writable
+   * status is determined by the presence of a `keyType: 'folder-ipns'` entry for
+   * the node in the share_keys table.
+   *
+   * D-09 zeroization: caller owns `vaultPrivateKey` — this method does NOT zero it.
+   * Per-node childFolderKey buffers (locally minted via unwrapKey) are zeroed in
+   * the finally block after each subtree load.
+   *
+   * @param shareId - Share ID seeded via loadSharedFolder
+   * @param args.getShareKeysFn - Returns share_keys entries for this share
+   * @param args.vaultPrivateKey - Recipient's vault private key (ECIES unwrap)
+   * @returns Flat list of reachable subfolders with writable flag and parentId
    */
   async enumerateSharedSubtree(
     shareId: string,
@@ -1926,9 +1910,84 @@ export class CipherBoxClient {
       parentId: string | null;
     }>
   > {
-    void shareId;
-    void args;
-    throw new Error('not implemented — phase 63 (navigation: enumerateSharedSubtree)');
+    return this.withOperation('enumerateSharedSubtree', async () => {
+      const state = this.sharedFolderTree.get(shareId);
+      if (!state) throw new Error('Shared folder not loaded');
+
+      const shareKeys = await args.getShareKeysFn(shareId);
+
+      // Build maps: ipnsName → encryptedKey (folder readKey) and writable set
+      const folderKeyMap = new Map<string, string>();
+      const writableSet = new Set<string>();
+      for (const key of shareKeys) {
+        if (key.keyType === 'folder') {
+          folderKeyMap.set(key.itemId, key.encryptedKey);
+        } else if (key.keyType === 'folder-ipns') {
+          writableSet.add(key.itemId);
+        }
+      }
+
+      const result: Array<{
+        id: string;
+        name: string;
+        ipnsName: string;
+        writable: boolean;
+        parentId: string | null;
+      }> = [];
+
+      // Visited guard prevents infinite loops on cyclic ipnsName references
+      const visited = new Set<string>();
+
+      // Iterative DFS stack — each entry is (children array, parent ipnsName)
+      const stack: Array<{ children: SealedChildRef[]; parentId: string | null }> = [
+        { children: state.children, parentId: null },
+      ];
+
+      while (stack.length > 0) {
+        const frame = stack.pop()!;
+        for (const child of frame.children) {
+          if (visited.has(child.ipnsName)) continue;
+
+          // Only enumerate subfolders that have a share key entry
+          const encryptedKey = folderKeyMap.get(child.ipnsName);
+          if (!encryptedKey) continue;
+
+          visited.add(child.ipnsName);
+          const writable = writableSet.has(child.ipnsName);
+
+          result.push({
+            id: child.ipnsName,
+            name: child.name,
+            ipnsName: child.ipnsName,
+            writable,
+            parentId: frame.parentId,
+          });
+
+          // Decrypt child folder key to load its children
+          // D-09: childFolderKey is locally minted here — zero it in finally
+          let childFolderKey: Uint8Array | null = null;
+          try {
+            const encKeyBytes = hexToBytes(encryptedKey);
+            childFolderKey = await unwrapKey(encKeyBytes, args.vaultPrivateKey);
+
+            const subMeta = await sdkCore.loadFolderMetadata({
+              ipnsName: child.ipnsName,
+              folderKey: childFolderKey,
+              ctx: this.ctx,
+            });
+
+            const subChildren = subMeta?.metadata.children;
+            if (subChildren && subChildren.length > 0) {
+              stack.push({ children: subChildren, parentId: child.ipnsName });
+            }
+          } finally {
+            if (childFolderKey) clearBytes(childFolderKey);
+          }
+        }
+      }
+
+      return result;
+    });
   }
 
   // ---- BYO-IPFS pinning ----

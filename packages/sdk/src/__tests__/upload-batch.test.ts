@@ -50,7 +50,6 @@ vi.mock('../bin', () => ({
 vi.mock('../share', () => ({
   createShareKey: vi.fn(),
   revokeShare: vi.fn(),
-  reWrapForRecipients: vi.fn().mockResolvedValue({ failedRecipients: [] }),
 }));
 
 import * as sdkCore from '@cipherbox/sdk-core';
@@ -500,26 +499,7 @@ describe('CipherBoxClient.uploadFiles - batch upload orchestration', () => {
     expect(failEvent!.error!.message).toBe('string error');
   });
 
-  it('re-wraps file keys for share recipients when shareCallbacks configured', async () => {
-    const getCoveringShares = vi.fn().mockResolvedValue([]);
-    const addShareKeys = vi.fn().mockResolvedValue(undefined);
-    const shareClient = new CipherBoxClient(
-      createTestConfig({
-        shareCallbacks: { getCoveringShares, addShareKeys },
-      })
-    );
-    setupFolder(shareClient);
-    setupBatchMocks(2);
-    vi.mocked(sdkCore.loadFolderMetadata).mockResolvedValue(null);
-
-    const files = makeTestFiles(2);
-    await shareClient.uploadFiles('folder-ipns', files);
-
-    // getCoveringShares should be called for the folder
-    expect(getCoveringShares).toHaveBeenCalled();
-  });
-
-  it('handles re-wrap failure gracefully (best-effort)', async () => {
+  it('completes upload even when shareCallbacks configured (no re-wrapping)', async () => {
     const getCoveringShares = vi.fn().mockRejectedValue(new Error('share lookup failed'));
     const addShareKeys = vi.fn();
     const shareClient = new CipherBoxClient(
@@ -532,9 +512,10 @@ describe('CipherBoxClient.uploadFiles - batch upload orchestration', () => {
     vi.mocked(sdkCore.loadFolderMetadata).mockResolvedValue(null);
 
     const files = makeTestFiles(1);
-    // Should not throw — re-wrap failure is best-effort
+    // Should succeed — D-03 removed per-recipient fan-out, so getCoveringShares is never called
     const result = await shareClient.uploadFiles('folder-ipns', files);
     expect(result.successes).toHaveLength(1);
+    expect(getCoveringShares).not.toHaveBeenCalled();
   });
 
   it('emits folder:updated event after successful batch publish', async () => {

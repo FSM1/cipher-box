@@ -11,7 +11,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { unwrapKey } from '@cipherbox/crypto';
 import { CipherBoxClient } from '../client';
 import type { SharedFolderState } from '../types';
-import type { FolderChild, FolderEntry } from '@cipherbox/core';
+import type { SealedChildRef } from '@cipherbox/core';
 import { createTestConfig } from './helpers';
 
 // ── crypto mock ───────────────────────────────────────────────────────────────
@@ -76,61 +76,52 @@ const ROOT_IPNS = 'k51root-shared';
 //   root -> [subA (writable), subB (read-only), subC (no key = skip)]
 // subA -> [subA1 (writable)]
 
-const SUB_A_ID = 'sub-a-uuid';
 const SUB_A_IPNS = 'k51sub-a';
 const SUB_A_NAME = 'FolderA';
 
-const SUB_B_ID = 'sub-b-uuid';
 const SUB_B_IPNS = 'k51sub-b';
 const SUB_B_NAME = 'FolderB';
 
-const SUB_C_ID = 'sub-c-uuid';
 const SUB_C_IPNS = 'k51sub-c';
 const SUB_C_NAME = 'FolderC'; // no folder key → must be skipped
 
-const SUB_A1_ID = 'sub-a1-uuid';
 const SUB_A1_IPNS = 'k51sub-a1';
 const SUB_A1_NAME = 'FolderA1';
 
-const now = Date.now();
-
-function makeFolderEntry(id: string, name: string, ipnsName: string): FolderEntry {
+function makeRef(name: string, ipnsName: string): SealedChildRef {
   return {
-    type: 'folder',
-    id,
     name,
     ipnsName,
-    folderKeyEncrypted: `enc-${id}`,
-    ipnsPrivateKeyEncrypted: `ipns-${id}`,
-    createdAt: now,
-    modifiedAt: now,
+    generation: 0,
+    versionFloor: 0n,
+    readKeySealed: `enc-${ipnsName}`,
   };
 }
 
 // Root children: subA, subB, subC (subC has no share_keys folder entry)
-const rootChildren: FolderChild[] = [
-  makeFolderEntry(SUB_A_ID, SUB_A_NAME, SUB_A_IPNS),
-  makeFolderEntry(SUB_B_ID, SUB_B_NAME, SUB_B_IPNS),
-  makeFolderEntry(SUB_C_ID, SUB_C_NAME, SUB_C_IPNS),
+const rootChildren: SealedChildRef[] = [
+  makeRef(SUB_A_NAME, SUB_A_IPNS),
+  makeRef(SUB_B_NAME, SUB_B_IPNS),
+  makeRef(SUB_C_NAME, SUB_C_IPNS),
 ];
 
 // subA children: subA1
-const subAChildren: FolderChild[] = [makeFolderEntry(SUB_A1_ID, SUB_A1_NAME, SUB_A1_IPNS)];
+const subAChildren: SealedChildRef[] = [makeRef(SUB_A1_NAME, SUB_A1_IPNS)];
 
 type ShareKeyEntry = { keyType: string; itemId: string; encryptedKey: string };
 
 function makeShareKeys(): ShareKeyEntry[] {
   return [
-    // subA: readable + writable
-    { keyType: 'folder', itemId: SUB_A_ID, encryptedKey: 'enc-sub-a-folder' },
-    { keyType: 'folder-ipns', itemId: SUB_A_ID, encryptedKey: 'enc-sub-a-ipns' },
+    // subA: readable + writable (itemId is ipnsName)
+    { keyType: 'folder', itemId: SUB_A_IPNS, encryptedKey: 'enc-sub-a-folder' },
+    { keyType: 'folder-ipns', itemId: SUB_A_IPNS, encryptedKey: 'enc-sub-a-ipns' },
     // subB: readable only (no folder-ipns → writable=false)
-    { keyType: 'folder', itemId: SUB_B_ID, encryptedKey: 'enc-sub-b-folder' },
+    { keyType: 'folder', itemId: SUB_B_IPNS, encryptedKey: 'enc-sub-b-folder' },
     // subC: NO folder key → DFS must skip this node
     // (intentionally absent)
     // subA1: readable + writable
-    { keyType: 'folder', itemId: SUB_A1_ID, encryptedKey: 'enc-sub-a1-folder' },
-    { keyType: 'folder-ipns', itemId: SUB_A1_ID, encryptedKey: 'enc-sub-a1-ipns' },
+    { keyType: 'folder', itemId: SUB_A1_IPNS, encryptedKey: 'enc-sub-a1-folder' },
+    { keyType: 'folder-ipns', itemId: SUB_A1_IPNS, encryptedKey: 'enc-sub-a1-ipns' },
   ];
 }
 
@@ -151,7 +142,7 @@ function seedSharedFolder(client: CipherBoxClient): void {
 
 // ── tests ─────────────────────────────────────────────────────────────────────
 
-describe.skip('CipherBoxClient.enumerateSharedSubtree — TODO(phase 63)', () => {
+describe('CipherBoxClient.enumerateSharedSubtree', () => {
   let client: CipherBoxClient;
 
   beforeEach(() => {
@@ -181,10 +172,10 @@ describe.skip('CipherBoxClient.enumerateSharedSubtree — TODO(phase 63)', () =>
 
     // Should include subA, subB, subA1 — but NOT subC (no folder key)
     const ids = result.map((n) => n.id);
-    expect(ids).toContain(SUB_A_ID);
-    expect(ids).toContain(SUB_B_ID);
-    expect(ids).toContain(SUB_A1_ID);
-    expect(ids).not.toContain(SUB_C_ID);
+    expect(ids).toContain(SUB_A_IPNS);
+    expect(ids).toContain(SUB_B_IPNS);
+    expect(ids).toContain(SUB_A1_IPNS);
+    expect(ids).not.toContain(SUB_C_IPNS);
     expect(result).toHaveLength(3);
   });
 
@@ -196,9 +187,9 @@ describe.skip('CipherBoxClient.enumerateSharedSubtree — TODO(phase 63)', () =>
       vaultPrivateKey: new Uint8Array(32).fill(0x99),
     });
 
-    const subA = result.find((n) => n.id === SUB_A_ID);
-    const subB = result.find((n) => n.id === SUB_B_ID);
-    const subA1 = result.find((n) => n.id === SUB_A1_ID);
+    const subA = result.find((n) => n.id === SUB_A_IPNS);
+    const subB = result.find((n) => n.id === SUB_B_IPNS);
+    const subA1 = result.find((n) => n.id === SUB_A1_IPNS);
 
     expect(subA?.writable).toBe(true);
     expect(subB?.writable).toBe(false); // read-only (no folder-ipns key)
@@ -213,21 +204,18 @@ describe.skip('CipherBoxClient.enumerateSharedSubtree — TODO(phase 63)', () =>
       vaultPrivateKey: new Uint8Array(32).fill(0x99),
     });
 
-    const subC = result.find((n) => n.id === SUB_C_ID);
+    const subC = result.find((n) => n.id === SUB_C_IPNS);
     expect(subC).toBeUndefined();
   });
 
   it('does not loop on a cyclic ipnsName (visited set guard)', async () => {
-    // Make subA's children contain a folder with the same ipnsName as subA (cycle)
-    const cyclicChild: FolderEntry = {
-      ...makeFolderEntry('cyclic-id', 'CyclicFolder', SUB_A_IPNS), // SAME ipnsName as subA!
-      id: 'cyclic-id',
-    };
+    // Make subA's children contain a ref with the same ipnsName as subA (cycle)
+    const cyclicRef: SealedChildRef = makeRef('CyclicFolder', SUB_A_IPNS);
 
     vi.mocked(sdkCore.loadFolderMetadata).mockImplementation(async (p) => {
       if (p.ipnsName === SUB_A_IPNS) {
         return {
-          metadata: { children: [cyclicChild] } as never,
+          metadata: { children: [cyclicRef] } as never,
           sequenceNumber: 2n,
           cid: 'bafysuba',
         };
@@ -235,17 +223,11 @@ describe.skip('CipherBoxClient.enumerateSharedSubtree — TODO(phase 63)', () =>
       return { metadata: { children: [] } as never, sequenceNumber: 1n, cid: 'bafyempty' };
     });
 
-    // Add a folder key for cyclic-id so it's not skipped by the key check
-    const keysWithCyclic = [
-      ...makeShareKeys(),
-      { keyType: 'folder', itemId: 'cyclic-id', encryptedKey: 'enc-cyclic' },
-    ];
-
     seedSharedFolder(client);
 
     // Should complete without infinite loop (the visited guard for SUB_A_IPNS prevents re-visiting)
     const result = await client.enumerateSharedSubtree(SHARE_ID, {
-      getShareKeysFn: async () => keysWithCyclic,
+      getShareKeysFn: async () => makeShareKeys(),
       vaultPrivateKey: new Uint8Array(32).fill(0x99),
     });
 
@@ -262,18 +244,17 @@ describe.skip('CipherBoxClient.enumerateSharedSubtree — TODO(phase 63)', () =>
       vaultPrivateKey: new Uint8Array(32).fill(0x99),
     });
 
-    const subA = result.find((n) => n.id === SUB_A_ID)!;
+    const subA = result.find((n) => n.id === SUB_A_IPNS)!;
     expect(subA.name).toBe(SUB_A_NAME);
     expect(subA.ipnsName).toBe(SUB_A_IPNS);
     // Root-level subfolder → no parent id (used by the move-cycle guard).
     expect(subA.parentId).toBeNull();
 
-    const subA1 = result.find((n) => n.id === SUB_A1_ID)!;
+    const subA1 = result.find((n) => n.id === SUB_A1_IPNS)!;
     expect(subA1.name).toBe(SUB_A1_NAME);
     expect(subA1.ipnsName).toBe(SUB_A1_IPNS);
-    // Nested subfolder → parentId points at its containing folder (subA), so the
-    // picker can exclude subA's subtree when subA itself is the moved item.
-    expect(subA1.parentId).toBe(SUB_A_ID);
+    // Nested subfolder → parentId points at containing folder's ipnsName.
+    expect(subA1.parentId).toBe(SUB_A_IPNS);
   });
 
   it('throws "Shared folder not loaded" when share is not seeded', async () => {
