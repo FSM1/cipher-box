@@ -37,6 +37,32 @@ import { updateFolderMetadataAndPublish } from '../folder/registration';
 // Types — string-literal unions, never TypeScript enums (project convention)
 // ---------------------------------------------------------------------------
 
+/**
+ * Injectable callbacks for `reMintGrantsRootedAt` (D-04 transport seam).
+ *
+ * Keeps the rotation engine transport-decoupled: unit tests inject vi.fn()
+ * mocks; production callers (Phase 66) will supply real API/DB callbacks.
+ *
+ * Callback contract:
+ *   - `queryGrantsFn(nodeId)` — returns all grants whose root is `nodeId`.
+ *   - `updateGrantFn(shareId, readDescriptorRef, newGeneration)` — persists the
+ *     re-minted ECIES-wrapped descriptor for a non-revoked recipient.
+ *   - `deleteGrantFn(shareId)` — removes a revoked recipient's grant row.
+ */
+export type GrantRemintCallbacks = {
+  queryGrantsFn: (
+    nodeId: string
+  ) => Promise<
+    ReadonlyArray<{ shareId: string; recipientPublicKey: Uint8Array; isRevoked: boolean }>
+  >;
+  updateGrantFn: (
+    shareId: string,
+    readDescriptorRef: string,
+    newGeneration: number
+  ) => Promise<void>;
+  deleteGrantFn: (shareId: string) => Promise<void>;
+};
+
 /** Advisory status of a rotation job. */
 export type RotationStatus = 'pending' | 'in-progress' | 'complete' | 'failed';
 
@@ -169,6 +195,12 @@ type RotateOneParams = {
    * MUST be absent on the clean happy-path so the seam is never invoked (D-01).
    */
   innerGrants?: ReadonlyArray<unknown>;
+  /**
+   * Optional injectable callbacks for the `reMintGrantsRootedAt` seam (D-04).
+   * Threaded from `RotationParams.grantCallbacks` so the host can inject
+   * real API callbacks in production and vi.fn() mocks in tests.
+   */
+  grantCallbacks?: GrantRemintCallbacks;
 };
 
 /** Parameters for the resumable frontier walk. */
@@ -250,20 +282,26 @@ export async function mintFileKeyOnRotate(node: Node, _job: RotationJobRecord): 
 /**
  * SEAM: Re-mint read grants rooted at a rotated node.
  *
- * Phase 64 implementation: for every non-revoked grant whose `rootNodeId` is in
- * the rotated set, re-wrap the share-root readKey under the new `readKey'` and
- * re-issue a `readDescriptorRef`.
+ * Phase 64 implementation (ROT-04/HIGH-3): for every non-revoked grant whose
+ * `rootNodeId` is in the rotated set, ECIES-re-wrap the share-root readKey
+ * under the new `readKey'` and re-issue a `readDescriptorRef` via
+ * `callbacks.updateGrantFn`. Revoked recipients' rows are deleted via
+ * `callbacks.deleteGrantFn`.
  *
  * Invoked ONLY when `innerGrants` is non-empty (conditional — D-01).
+ * When `callbacks` is absent the function is a clean no-op (D-04 seam).
  *
- * @throws Always in Phase 63 (ROT-04/HIGH-3 — deferred).
+ * @security
+ *   Uses ECIES `wrapKey` (from `@cipherbox/crypto`) — never hand-roll key
+ *   wrapping. Does NOT zero `newReadKey` — caller is terminal owner (D-09).
  */
 export async function reMintGrantsRootedAt(
   _nodeId: string,
   _key: Uint8Array,
   _gen: number,
   _job: RotationJobRecord,
-  _ctx: SdkContext
+  _ctx: SdkContext,
+  _callbacks?: GrantRemintCallbacks
 ): Promise<void> {
   throw new Error('not implemented — phase 64 (ROT-04/HIGH-3 inner-grant re-mint)');
 }
