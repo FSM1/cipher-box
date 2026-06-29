@@ -357,12 +357,6 @@ describe('rotateOne — zeroization invariant (Pitfall 4 / T-63-10)', () => {
 // ---------------------------------------------------------------------------
 
 describe('Phase-64 named seams — each throws an error naming "phase 64"', () => {
-  it('mintFileKeyOnRotate throws with "phase 64" in the message (ROT-03/CRIT-1)', async () => {
-    await expect(mintFileKeyOnRotate(makeFolderNode(), makeJobRecord())).rejects.toThrow(
-      /phase 64/i
-    );
-  });
-
   it('reMintGrantsRootedAt throws with "phase 64" in the message (ROT-04/HIGH-3)', async () => {
     await expect(
       reMintGrantsRootedAt(NODE_ID, new Uint8Array(32), 1, makeJobRecord(), createMockContext())
@@ -380,51 +374,8 @@ describe('Phase-64 named seams — each throws an error naming "phase 64"', () =
   });
 });
 
-describe('rotateOne — file node reaches mintFileKeyOnRotate and surfaces Phase-64 throw', () => {
-  it('throws the Phase-64 mintFileKeyOnRotate error for file nodes', async () => {
-    vi.clearAllMocks();
-
-    const fileNode: import('@cipherbox/core').Node = {
-      schema: 'node/v3',
-      kind: 'file',
-      id: NODE_ID,
-      generation: 0,
-      createdAt: 1000,
-      modifiedAt: 2000,
-      content: {
-        cid: 'bafy-file',
-        fileIv: 'iv==',
-        size: 1024,
-        mimeType: 'text/plain',
-        encryptionMode: 'GCM',
-        fileKey: new Uint8Array(32).fill(0x11),
-        versions: [],
-      },
-    };
-
-    mockFns.resolveIpnsRecord.mockResolvedValue({
-      cid: 'bafy',
-      sequenceNumber: 1n,
-      signatureVerified: true,
-    });
-    mockFns.fetchFromIpfs.mockResolvedValue(
-      new TextEncoder().encode(JSON.stringify(makePublishedNode(NODE_ID, 0, 'file')))
-    );
-    mockFns.unsealNode.mockResolvedValue(fileNode);
-
-    await expect(
-      rotateOne({
-        nodeId: NODE_ID,
-        nodeIpnsName: NODE_IPNS,
-        parentReadKey: PARENT_READ_KEY,
-        parentIpnsName: PARENT_IPNS,
-        parentCurrentSeq: 1n,
-        jobRecord: makeJobRecord(),
-        ctx: createMockContext(),
-      })
-    ).rejects.toThrow(/phase 64/i);
-  });
-});
+// Note: The Phase-63 'throws the Phase-64 mintFileKeyOnRotate error for file nodes' test
+// was removed in plan 64-03 GREEN phase — mintFileKeyOnRotate is now filled and no longer throws.
 
 // ---------------------------------------------------------------------------
 // Task 2: rotateReadFromNode — resumable frontier walk (ROT-01)

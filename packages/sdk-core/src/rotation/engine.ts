@@ -26,6 +26,7 @@
 
 import { sealNode, unsealNode, sealChildReadKey, unsealChildReadKey } from '@cipherbox/core';
 import type { Node, PublishedNode, SealedChildRef } from '@cipherbox/core';
+import { generateRandomBytes } from '@cipherbox/crypto';
 import { publishWithCas } from '../cas';
 import { resolveIpnsRecord } from '../ipns';
 import { fetchFromIpfs, addToIpfs } from '../ipfs';
@@ -195,10 +196,24 @@ async function fetchPublishedNode(cid: string, ctx: SdkContext): Promise<Publish
  *
  * Invoked ONLY when `node.kind === 'file'` (conditional — D-01).
  *
- * @throws Always in Phase 63 (ROT-03/CRIT-1 — deferred).
+ * Phase 64 implementation: mints `fileKey' = generateRandomBytes(32)` and assigns
+ * it to `node.content.fileKey` so that `rotateOne`'s subsequent `sealNode` re-seals
+ * the read-body carrying the new fileKey. A holder of the old readKey/fileKey cannot
+ * decrypt the NEXT published version (CRIT-1 / ADR 0002).
+ *
+ * Nodes without content (folder nodes) are a no-op — no content field is added.
+ *
+ * @security
+ *   Do NOT zero `node.content.fileKey` after assignment — `rotateOne` consumes it via
+ *   `sealNode` (terminal owner rule, D-09). Only zero on your own failure paths (none here).
  */
-export async function mintFileKeyOnRotate(_node: Node, _job: RotationJobRecord): Promise<void> {
-  throw new Error('not implemented — phase 64 (ROT-03/CRIT-1 content-key rotation)');
+export async function mintFileKeyOnRotate(node: Node, _job: RotationJobRecord): Promise<void> {
+  if (!node.content) {
+    // Folder node (or any node without content) — no-op.
+    return;
+  }
+  const fileKeyPrime = generateRandomBytes(32);
+  node.content.fileKey = fileKeyPrime;
 }
 
 /**
