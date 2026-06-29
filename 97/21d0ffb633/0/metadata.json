@@ -1,0 +1,187 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "9721d0ffb633",
+  "session_id": "25bb1960-4e3b-4f74-9875-6a02898bfffc",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-29T14:03:35.221959Z",
+  "branch": "feat/rotation-soundness-revocation-guarantees",
+  "checkpoints_count": 1,
+  "save_step_count": 2,
+  "files_touched": [
+    ".planning/STATE.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "a2e1deb32af2",
+  "token_usage": {
+    "input_tokens": 13573,
+    "cache_creation_tokens": 832535,
+    "cache_read_tokens": 9915250,
+    "output_tokens": 74732,
+    "api_call_count": 64
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01YNQc7xEBNeSchdQ4D25b6D",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "a2e1deb32af2",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 43,
+        "end": 44,
+        "entry_ids": [
+          "39a4e40a-6e5c-4b74-a071-2dcb66c4ef28"
+        ],
+        "tool_use_id": "toolu_01YNQc7xEBNeSchdQ4D25b6D"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01YNQc7xEBNeSchdQ4D25b6D"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01SKWu9Myx8B529ACtAoiDzT",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "a2e1deb32af2",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 346,
+        "end": 347,
+        "entry_ids": [
+          "7e054f66-7063-464a-8074-7fede44d4939"
+        ],
+        "tool_use_id": "toolu_01SKWu9Myx8B529ACtAoiDzT"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01SKWu9Myx8B529ACtAoiDzT"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "summary": {
+    "intent": "Plan, verify, and execute phase 64 (Rotation Soundness — Revocation Guarantees) of CipherBox, then ship it via /ship-phase 64.",
+    "outcome": "Planning completed successfully after 2 verification iterations (1 blocker + 2 warnings found and fixed), producing 8 plans across 6 waves. Execution was initiated with Wave 1 plan 64-01 dispatched; the transcript ends mid-execution before /ship-phase 64 ran.",
+    "learnings": {
+      "repo": [
+        "D-02 bug: `sealChildReadKey` in engine.ts L344-350 seals under the child's own pre-rotation key (legacy `parentReadKey` misnomer). The correct re-seal belongs out-of-band in `rotateReadFromNode` (BFS caller) under the parent's NEW readKey', not inside `rotateOne`.",
+        "D-06 bug: `registration.ts` L174-175 uses `params.nodeId ?? crypto.randomUUID()` and `params.nodeGeneration ?? 0`, silently breaking AAD stability across all 6 `updateFolderMetadataAndPublish` call sites in client.ts that omit these params.",
+        "D-07 bug: Two ordering bugs in engine.ts — `completedNodeIds.add` at L386 fires before `reMintGrantsRootedAt` at L391 (must swap); resume guard at L458-462 short-circuits without calling `verifySubtreeClean` (must rebuild frontier from IPNS truth).",
+        "`mergeChildren` in `folder/merge.ts` is a Phase-64 stub — researcher found it as a bonus beyond the four seams named in the design.",
+        "Fresh worktrees in this monorepo lack node_modules, making typecheck/tests fail without a multi-minute `pnpm i`; sequential execution on the main tree is the correct GSD executor mode here.",
+        "Wave 6 (64-08 sdk-e2e) requires live docker stack (ipfs, postgres, redis:6380) plus API dev server on port 3000 — must be started before execution begins to allow warm-up time.",
+        "GSD plan-checker enforces that RESEARCH.md `## Open Questions` must be renamed to `## Open Questions (RESOLVED)` with inline markers before execution can proceed — this is a hard blocker gate.",
+        "GSD commit helper JSON output reports `commit_failed` even on successful commits (known false-negative); must verify via `git log --oneline -1` to confirm actual outcome."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/engine.ts",
+          "line": 344,
+          "end_line": 350,
+          "finding": "sealChildReadKey uses `parentReadKey` which is actually the child's own pre-rotation key (misnomer). Out-of-band re-seal under parent's NEW readKey' must happen in the BFS caller rotateReadFromNode, not here."
+        },
+        {
+          "path": "packages/sdk-core/src/engine.ts",
+          "line": 386,
+          "end_line": 386,
+          "finding": "completedNodeIds.add fires here, BEFORE reMintGrantsRootedAt at L391. Must be swapped — node should only be marked complete after re-minting succeeds."
+        },
+        {
+          "path": "packages/sdk-core/src/engine.ts",
+          "line": 458,
+          "end_line": 462,
+          "finding": "Resume guard short-circuits the walk without calling verifySubtreeClean. Must rebuild frontier from published IPNS truth (D-10) instead of returning early."
+        },
+        {
+          "path": "packages/sdk-core/src/engine.ts",
+          "line": 200,
+          "end_line": 257,
+          "finding": "Four named throwing stubs (mintFileKeyOnRotate, reMintGrantsRootedAt, mergeConcurrentChildren, verifySubtreeClean) — signatures frozen, bodies are Phase 64's primary deliverable."
+        },
+        {
+          "path": "packages/sdk-core/src/registration.ts",
+          "line": 174,
+          "end_line": 175,
+          "finding": "id: params.nodeId ?? crypto.randomUUID() and generation: params.nodeGeneration ?? 0 silently break AAD stability. All 6 client.ts call sites omit these params; D-06 fix requires threading explicit nodeId/nodeGeneration through FolderState."
+        },
+        {
+          "path": "tests/sdk-e2e/src/suites/read-chain-navigation.test.ts",
+          "finding": "Canonical sdk-e2e scaffold template — same imports, sealNode + addToIpfs + createAndPublishIpnsRecord(sequenceNumber: 1n) pattern, 120s timeout. Plan 64-08 extends this pattern for depth ≥ 2 + fault-injection + resume assertions."
+        }
+      ],
+      "workflow": [
+        "Concurrent background git operations race on the index — 'could not write index' is a transient plumbing error, not data loss. Wait for background subagents to finish before retrying commits.",
+        "plan-phase does not auto-commit PATTERNS.md; orchestrator must stage and commit it alongside VALIDATION.md after the pattern-mapper subagent returns.",
+        "VALIDATION.md is written as a skeleton (TBD per-task map, status: draft) by the orchestrator at §5.5; it must be filled from RESEARCH.md Validation Architecture table and set to status: final / nyquist_compliant: true before the plan-checker passes.",
+        "API-SURFACE.md regenerated with 0 symbols for this phase (pure SDK TypeScript, no schema changes) — skip it from planner reading list; RESEARCH.md + PATTERNS.md carry far richer detail.",
+        "Start long-running prereqs (API dev server, docker services) before execution begins — wave 6 e2e needs them warm, and they take time to boot.",
+        "Non-blocking drift gate firing on top-level config/repo files (unrelated to phase scope) is safe to ignore and continue — it is a stale-baseline artifact, not a real drift signal."
+      ]
+    },
+    "friction": [
+      "Git index race: concurrent pattern-mapper subagent and VALIDATION.md commit caused 'could not write index' plumbing error, requiring a retry after the subagent finished.",
+      "GSD commit helper false-negative: JSON output reported commit_failed even though lint-staged + commit succeeded; required `git log` verification every time.",
+      "Plan-checker blocker on RESEARCH.md: open questions not marked (RESOLVED) was a one-line doc fix but triggered a full revision loop (re-spawn planner for 64-07 warning + doc edits + re-verify), adding ~15 min to planning.",
+      "VALIDATION.md TBD skeleton: the template writes a placeholder per-task map that the orchestrator must manually populate from RESEARCH.md — this is an easy-to-miss step that became a plan-checker warning."
+    ],
+    "open_items": [
+      "Execution is incomplete — transcript ends with Wave 1 plan 64-01 dispatched; Waves 2–6 (64-02 through 64-08) not yet run.",
+      "/ship-phase 64 not yet executed — depends on all 8 plans completing successfully.",
+      "64-08 sdk-e2e suite (Wave 6) requires live local API stack; API dev server was started in background but wave 6 hasn't been reached yet.",
+      "Write-body keys intentionally deferred to Phase 65.",
+      "Live `shares` schema changes intentionally deferred to Phase 66.",
+      "Durable client floor and move-publish-ordering durability intentionally deferred to Phase 68.",
+      "api:generate leak risk with git worktrees noted as a concern but not formally addressed — sequential execution was chosen as the workaround."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-29T14:02:07.416386Z",
+    "agent_lines": 4,
+    "agent_removed": 9,
+    "human_added": 148,
+    "human_modified": 5,
+    "human_removed": 0,
+    "total_committed": 157,
+    "total_lines_changed": 171,
+    "agent_percentage": 7.602339181286549,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
