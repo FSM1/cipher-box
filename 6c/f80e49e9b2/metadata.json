@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "6cf80e49e9b2",
+  "strategy": "manual-commit",
+  "branch": "feat/rotation-soundness-revocation-guarantees",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/sdk-core/src/__tests__/folder-merge.test.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/6c/f80e49e9b2/0/metadata.json",
+      "transcript": "/6c/f80e49e9b2/0/full.jsonl",
+      "content_hash": "/6c/f80e49e9b2/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  }
+}
