@@ -1,0 +1,4 @@
+ok, please follow the following steps:
+- plan and verify plan for phase 63
+- execute the plan
+- finally /ship-phase 63
