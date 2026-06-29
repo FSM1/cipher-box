@@ -141,6 +141,13 @@ export async function unsealNode(
   readKey: Uint8Array,
   writeKey?: Uint8Array
 ): Promise<Node> {
+  // Fail closed on an envelope we cannot interpret. `schema` and `aeadVersion`
+  // are plaintext and NOT covered by the AAD, so a node/v3 reader must reject
+  // anything else rather than blindly unseal it under v1 assumptions (forward-compat).
+  if (published.schema !== 'node/v3' || published.aeadVersion !== 1) {
+    throw new CryptoError('Unsupported PublishedNode envelope', 'INVALID_AAD_INPUT');
+  }
+
   const kb = kindByte(published.kind);
 
   // Unseal read-body (role 0x01)
