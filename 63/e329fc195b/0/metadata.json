@@ -1,0 +1,267 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "63e329fc195b",
+  "session_id": "b138c49b-687f-49bd-aa30-ffb4dde5e4e5",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-29T07:07:00.303224Z",
+  "branch": "feat/read-chain-navigation-and-rotation-core",
+  "checkpoints_count": 4,
+  "save_step_count": 3,
+  "files_touched": [
+    "packages/sdk-core/src/share/grant.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "7947d0c7d7ed",
+  "token_usage": {
+    "input_tokens": 15278,
+    "cache_creation_tokens": 945000,
+    "cache_read_tokens": 35007596,
+    "output_tokens": 194023,
+    "api_call_count": 135
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_013QQzgxUHQN245qBmhyghRw",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "7947d0c7d7ed",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 41,
+        "end": 42,
+        "entry_ids": [
+          "fe8ef216-dd96-4b2f-bf2e-5d4876997fd9"
+        ],
+        "tool_use_id": "toolu_013QQzgxUHQN245qBmhyghRw"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_013QQzgxUHQN245qBmhyghRw"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01SKZ2doAKEneeyZP8ntcsd9",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "7947d0c7d7ed",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 284,
+        "end": 285,
+        "entry_ids": [
+          "1bbf609c-3b67-4e41-bccb-0dac5c91e156"
+        ],
+        "tool_use_id": "toolu_01SKZ2doAKEneeyZP8ntcsd9"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01SKZ2doAKEneeyZP8ntcsd9"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01BQZ8QErcJYYYmTXhc9bZXr",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "7947d0c7d7ed",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 594,
+        "end": 595,
+        "entry_ids": [
+          "6dc4a5e9-ec97-4340-874b-4e1366393c74"
+        ],
+        "tool_use_id": "toolu_01BQZ8QErcJYYYmTXhc9bZXr"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01BQZ8QErcJYYYmTXhc9bZXr"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ship-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "summary": {
+    "intent": "Autonomously plan, execute, and ship phase 63 (read-chain navigation and rotation core) — a crypto-heavy sdk-core phase covering IPNS-backed read-chain navigation, read grant issuance, and a rotation engine — while the user was AFK.",
+    "outcome": "All 7 plans executed across 4 waves with 25+ commits; verification passed (5/5 must-haves), security audit secured (27/27 threats closed), SDK-E2E gate passed against live stack, CodeRabbit review triaged. At transcript end the in-scope fixer agent was still applying CodeRabbit hygiene fixes before the PR would be opened.",
+    "learnings": {
+      "repo": [
+        "Repo squash-merges to main, so individual commit subjects never reach release-please. Only the PR title needs to be conventional and paren-free; rewording branch commits via filter-branch is unnecessary.",
+        "sdk-core has no `typecheck` script — the real type gate is `build` which runs `tsup && tsc -p tsconfig.build.json`. Plans 63-05 and 63-06 referenced a non-existent `typecheck` script and had to be redirected.",
+        "The §3.5 design spec for move-within-scope requires re-sealing the child readKey under the new parent's readKey (reseal + republish). The implemented `moveItem` is a pure synchronous link rewrite and does not re-seal, meaning a grantee navigating via the destination path would fail AAD authentication.",
+        "The GSD commit helper has a known false-negative pattern where it reports `commit_failed` even when the commit actually landed. Always verify with `git log --oneline -1` rather than retrying.",
+        "Worktree isolation is unsafe for this repo (node_modules leaks, api:generate side effects, tight cross-plan coupling on shared files like folder.test.ts). Sequential execution in the main tree is the correct default.",
+        "The Phase-62 D-01 quarantine left 89 intentionally skipped SDK-E2E tests across 11 suites with a note to re-enable at phases 63-65. This is expected and not a regression.",
+        "pr-release-preview.js parses individual commit types but the paren-rejection rule applies only to the PR title, not commit message descriptions."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/share/navigate.ts",
+          "line": 151,
+          "end_line": 151,
+          "finding": "Uses `childRef.generation` (the parent-mirror value) rather than `childPublished.generation` — the critical generation-source rule that prevents spoofing."
+        },
+        {
+          "path": "packages/sdk-core/src/share/rewrap.ts",
+          "line": 43,
+          "end_line": 48,
+          "finding": "`plainKey.fill(0)` called in both success path (L43) and catch path (L48), ensuring intermediate key material is always zeroed regardless of outcome."
+        },
+        {
+          "path": "packages/sdk-core/src/share/grant.ts",
+          "line": 157,
+          "end_line": 157,
+          "finding": "Comment claimed zeroization happens in a `finally` block; actual implementation uses try/catch in rewrap.ts. Outcome is identical but the comment was inaccurate (fixed in this session)."
+        },
+        {
+          "path": "packages/sdk-core/src/rotation/engine.ts",
+          "line": 329,
+          "end_line": 330,
+          "finding": "PLACEHOLDER_WRITE_KEY (`new Uint8Array(32)`) passed as writeKey to `sealNode`. Safe in Phase 63 because the happy path never reaches a node with a writeBody, but latent risk if Phase 65+ hits this path before wiring the real key."
+        },
+        {
+          "path": "packages/sdk-core/src/rotation/engine.ts",
+          "line": 395,
+          "end_line": 395,
+          "finding": "In the catch block, only `readKeyPrime.fill(0)` is called; `parentReadKey` is never zeroed (flagged by security audit as T-63-10 critical, mitigated)."
+        },
+        {
+          "path": "packages/sdk-core/src/rotation/engine.ts",
+          "line": 437,
+          "end_line": 437,
+          "finding": "Root `rotateOne` fires before the BFS frontier per §4.2 ordering requirement."
+        },
+        {
+          "path": "packages/sdk-core/src/rotation/scope.ts",
+          "line": 98,
+          "end_line": 112,
+          "finding": "Anti-malicious-relay check: both the relay set AND `localGrantRecord` are cross-checked independently to prevent elevation of privilege (T-63-17)."
+        },
+        {
+          "path": "packages/sdk-core/src/rotation/scope.ts",
+          "line": 149,
+          "end_line": 149,
+          "finding": "Early returns `'no-rotation'` without calling `deps.rotate` when the item has no covering grant — the SC#4 zero-rotation invariant."
+        },
+        {
+          "path": "packages/sdk-core/src/registration.ts",
+          "line": 87,
+          "end_line": 92,
+          "finding": "`sequenceNumber: 1n` embedded verbatim on first IPNS publish."
+        },
+        {
+          "path": "packages/sdk-core/src/registration.ts",
+          "line": 155,
+          "end_line": 155,
+          "finding": "`publishWithCas` uses expected-sequence CAS guard to prevent concurrent write races (T-63-14)."
+        },
+        {
+          "path": "packages/sdk-core/src/__tests__/folder.test.ts",
+          "line": 114,
+          "end_line": 878,
+          "finding": "Had 4 `describe.skip('...TODO(phase 63)')` blocks testing the retired `FolderChild`/`encryptFolderMetadata` API under `@ts-nocheck`. All confirmed superseded by new active blocks; removed in cleanup commit `6a739a20a`."
+        }
+      ],
+      "workflow": [
+        "When a weekly API usage limit hits mid-subagent, the working tree remains clean if the subagent made atomic commits — no partial state to repair. Simply retry after reset.",
+        "Running the SDK-E2E gate during execution (plan 63-07) caught a real BFS bug in engine.ts: child `rotateOne` calls were receiving the root's new readKey instead of each child's own derived readKey. Unit suites with mocks would have missed this.",
+        "The GSD plan-checker should be re-run (iteration 2) after fixing its findings rather than skipping — it caught 1 blocker (RESEARCH.md open questions unmarked) and 2 warnings in iteration 1 that were all trivially fixable.",
+        "Drift gate (stale codebase map) is non-blocking at plan time when CONTEXT.md and RESEARCH.md carry precise, verified implementation-site references.",
+        "Security audit should be run in background in parallel with SDK-E2E gate and CodeRabbit to save wall-clock time during the ship pipeline.",
+        "CodeRabbit bundles findings by severity (critical/major/minor) in the review body; the correct triage split for a crypto phase is: hygiene fixes applied now, rotation-soundness and cross-phase concerns deferred as todos with file refs and destination phase."
+      ]
+    },
+    "friction": [
+      "Weekly API usage limit hit during plan 63-06 executor mid-run at ~07:00 Berlin, causing a hard stop. The tree was clean (no partial work) so recovery was clean on retry after reset.",
+      "GSD commit helper false-negative pattern: reports `commit_failed` on every commit but the commit actually lands. Required verifying every commit via `git log --oneline -1` throughout the session.",
+      "Plans 63-05 and 63-06 referenced a non-existent `typecheck` script in sdk-core. Had to redirect to `build` at runtime.",
+      "4 stale `describe.skip(TODO(phase 63))` blocks in folder.test.ts were left by executors and required a dedicated cleanup subagent to safely remove (needed careful boundary analysis to avoid touching phase-65 blocks).",
+      "CodeRabbit returned 3 critical + 12 major + 5 minor findings requiring manual triage; most criticals/majors were in Phase-64 domain (rotation soundness) and had to be deferred rather than fixed.",
+      "The `gh pr edit` command is known to fail on this repo (Projects-classic GraphQL) — PR body must be patched via `gh api -X PATCH`."
+    ],
+    "open_items": [
+      "moveItem missing child-readKey re-seal under new parent: grantees navigating via the destination path will fail AAD authentication (todo: .planning/todos/pending/2026-06-29-move-within-scope-reseal-child-readkey.md, Phase 64/68)",
+      "PLACEHOLDER_WRITE_KEY (all-zeros) in engine.ts L329-330: latent risk if Phase 65+ exercises a node with a writeBody before wiring the real write key (todo: .planning/todos/pending/2026-06-29-rotateone-placeholder-writekey-phase65.md, Phase 65)",
+      "Rotation engine walk soundness bundle: BFS write-back ordering, job-record ordering before BFS, resume-from-crash semantics, durable job persistence (todo: .planning/todos/pending/2026-06-29-rotation-engine-walk-soundness-phase64.md, Phase 64)",
+      "SDK client move/publish durability: optimistic vs confirmed publish decision for moveItem/addFilePointerToFolder (todo: .planning/todos/pending/2026-06-29-sdk-client-move-publish-durability.md, Phase 64)",
+      "4 named Phase-64 seams in engine.ts throwing 'not implemented — phase 64 (...)': mergeConcurrentChildren, full subtree BFS, job persistence, and rotation-continuation seams",
+      "89 intentionally quarantined SDK-E2E tests from Phase-62 D-01 (11 suites): to be re-enabled across phases 63-65 as the SDK runtime is wired",
+      "In-scope CodeRabbit fixer agent (navigate key zeroization, grant error context, grant input validation, ephemeralPrivKey rename, test key buffer isolation, e2e assertion tightening) was still running at end of transcript — PR not yet opened",
+      "parentReadKey not zeroed in engine.ts catch block (L395) — security audit flagged but mitigated; worth revisiting when Phase 64 fully wires the rotation path"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-29T07:05:40.243862Z",
+    "agent_lines": 0,
+    "agent_removed": 1,
+    "human_added": 124,
+    "human_modified": 11,
+    "human_removed": 0,
+    "total_committed": 126,
+    "total_lines_changed": 198,
+    "agent_percentage": 0.5050505050505051,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 186,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/phases/63-read-chain-navigation-and-rotation-core/63-SECURITY.md": 185
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 186,
+      "user_lines_removed": 0,
+      "agent_lines_added": 68,
+      "agent_lines_removed": 1,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/phases/63-read-chain-navigation-and-rotation-core/63-SECURITY.md": 185
+      }
+    }
+  ]
+}
