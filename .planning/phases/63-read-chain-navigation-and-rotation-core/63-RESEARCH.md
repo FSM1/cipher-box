@@ -615,17 +615,17 @@ Phase 63 is a greenfield sdk-core behavioral phase — no production data, no ru
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Write-body key source in rotateOne**
    - What we know: `rotateOne` re-seals the read-body under `readKey'`. The write-body reseal requires the node's `writeKey` — but Phase 63 is read-chain only and `writeBody` may be absent on read-only nodes.
    - What's unclear: Should `rotateOne` skip write-body re-seal entirely (read-chain only, Phase 65 owns write-chain)? Or pass `writeKey` as an optional parameter?
-   - Recommendation: Skip write-body in Phase 63. `sealNode` only re-seals the write-body if `node.writeBody` is set AND `writeKey` is supplied. Read-only rotation (Phase 63) passes no writeKey; Phase 65 adds write-chain rotation.
+   - RESOLVED: Skip write-body in Phase 63. `sealNode` only re-seals the write-body if `node.writeBody` is set AND `writeKey` is supplied. Read-only rotation (Phase 63) passes no writeKey; Phase 65 adds write-chain rotation. (Encoded in Plan 63-03; consistent with the read-chain-only scope boundary and D-01.)
 
 2. **updateFolderMetadataAndPublish signature alignment**
    - What we know: The current stub signature has `children: SealedChildRef[]`, `folderKey: Uint8Array`, `ipnsPrivateKey`, etc. but the v3 path requires sealing a full `Node` (read-body + optional write-body).
    - What's unclear: Whether the stub's `folderKey` maps directly to `readKey` or whether the write-body key is a separate parameter.
-   - Recommendation: Rename `folderKey → readKey`, add optional `writeKey` parameter — align with `sealNode(node, readKey, writeKey)`.
+   - RESOLVED: Rename `folderKey → readKey`, add optional `writeKey` parameter — align with `sealNode(node, readKey, writeKey)`. (Claude's Discretion area per CONTEXT.md; encoded in Plan 63-04.)
 
 ---
 
