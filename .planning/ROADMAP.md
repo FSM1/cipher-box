@@ -179,7 +179,27 @@ Plans:
 4. A move within a grantee's scope produces link rewrites only (zero re-encryption); the scope-exit predicate `hasCoveringGrant` is present and gates every delete/move/rename — a private delete with no active grants triggers zero `rotateReadFromNode` invocations and zero IPNS publishes beyond the parent relink (test verifies zero publish calls)
 5. `rotateReadFromNode` is implemented in a named file (`src/rotation/engine.ts` or equivalent, not `index.ts` barrel) so vitest coverage counts it; `rotateOne` commits per-node atomically via CAS before advancing the walk frontier
 
-**Plans**: TBD
+**Plans**: 7 plans
+
+Plans:
+**Wave 1**
+
+- [ ] 63-01-PLAN.md — Read-chain navigation: un-stub `folder/load.ts` + new `share/navigate.ts` (`navigateReadChain` + `NavigateResult` ok/behind-retry/revoked) [READ-02, D-06]
+- [ ] 63-02-PLAN.md — Grant issuance + invite claim re-wrap: `share/grant.ts` (`issueReadGrant`, `claimInviteReadKey`) mock-tested [READ-01, READ-05, D-05, D-07]
+- [ ] 63-03-PLAN.md — Rotation engine core: `rotation/engine.ts` (`rotateOne`, `rotateReadFromNode`, 4 named Phase-64 seams, `RotationJobRecord`) [ROT-01, D-01, D-02, D-09, D-10]
+
+**Wave 2** *(blocked on Wave 1)*
+
+- [ ] 63-04-PLAN.md — Folder mutations: un-stub `metadata-ops.ts` (add seals child readKey under parent, move = link rewrites only) + `registration.ts` [READ-03, READ-04]
+- [ ] 63-05-PLAN.md — Scope-exit predicate `hasCoveringGrant` + gating + zero-rotation invariant test + sdk-core barrel wiring [ROT-02, READ-04, D-08]
+
+**Wave 3** *(blocked on 63-04)*
+
+- [ ] 63-06-PLAN.md — Delete `reWrapForRecipients` from sdk layer + rewire `client.ts` add-item off the fan-out (addShareKeys type stays for Phase 68) [READ-03, D-03]
+
+**Wave 4** *(blocked on Waves 1-3)*
+
+- [ ] 63-07-PLAN.md — One happy-path sdk-e2e round-trip: issue grant → navigate → root-step rotate → revoked grant can't navigate [D-04]
 
 ---
 
@@ -322,7 +342,7 @@ Plans:
 | --- | --- | --- | --- | --- |
 | 61 | AAD-Bound Seal Primitive and Cross-Language KAT | 5/5 | Complete    | 2026-06-28 |
 | 62 | Unified Node Codec (Core Keystone) | 9/9 | Complete    | 2026-06-28 |
-| 63 | Read-Chain Navigation and Rotation Core | 0/? | Not started | - |
+| 63 | Read-Chain Navigation and Rotation Core | 0/7 | Not started | - |
 | 64 | Rotation Soundness — Revocation Guarantees | 0/? | Not started | - |
 | 65 | SDK Write-Chain, Bin Re-link, and Invite Claim | 0/? | Not started | - |
 | 66 | API Schema Cutover, Publish Gate, and Tombstone | 0/? | Not started | - |
