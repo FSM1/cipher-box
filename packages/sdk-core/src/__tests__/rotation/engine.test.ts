@@ -1010,6 +1010,239 @@ function makeD02Fixtures() {
   return { rootNode, rootPublished, childNode, childPublished };
 }
 
+// ---------------------------------------------------------------------------
+// Plan 64-06 RED — CAS-409 concurrent-add merge (ROT-05/HIGH-4)
+// ---------------------------------------------------------------------------
+
+const CONCURRENT_CHILD_IPNS = 'k51concurrent000000000000000000000000000000000000000000000000000';
+
+describe('CAS-409 concurrent-add merge — ROT-05/HIGH-4 (Plan 64-06)', () => {
+  const LOCAL_CHILD_REF = {
+    name: 'local-child',
+    ipnsName: CHILD_IPNS,
+    generation: 0,
+    versionFloor: 0n,
+    readKeySealed: 'localChildSealed==',
+  };
+  const CONCURRENT_CHILD_REF = {
+    name: 'concurrent-child',
+    ipnsName: CONCURRENT_CHILD_IPNS,
+    generation: 0,
+    versionFloor: 0n,
+    readKeySealed: 'concurrentChildSealed==',
+  };
+
+  const FAKE_NODE_KEY_06 = new Uint8Array(32).fill(0x11);
+
+  /** Configures publishWithCas to simulate a CAS-409 by invoking params.merge directly. */
+  function setupCas409Mock(
+    basePub: import('@cipherbox/core').PublishedNode,
+    localPub: import('@cipherbox/core').PublishedNode,
+    remotePub: import('@cipherbox/core').PublishedNode
+  ) {
+    mockFns.publishWithCas.mockImplementation(
+      async (params: {
+        merge: (
+          base: import('@cipherbox/core').PublishedNode | undefined,
+          local: import('@cipherbox/core').PublishedNode,
+          remote: import('@cipherbox/core').PublishedNode
+        ) => unknown;
+      }) => {
+        const mergeResult = await Promise.resolve(params.merge(basePub, localPub, remotePub));
+        const { merged } = mergeResult as { merged: import('@cipherbox/core').PublishedNode };
+        return { cid: 'bafy-merged', newSequenceNumber: 4n, publishedData: merged, prunedCids: [] };
+      }
+    );
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFns.resolveIpnsRecord.mockResolvedValue({
+      cid: 'bafy-base-cid',
+      sequenceNumber: 3n,
+      signatureVerified: true,
+    });
+    const basePub = makePublishedNode(NODE_ID, 2);
+    mockFns.fetchFromIpfs.mockResolvedValue(new TextEncoder().encode(JSON.stringify(basePub)));
+    mockFns.sealChildReadKey.mockResolvedValue('newsealed==');
+  });
+
+  it('Test 1: concurrent child add survives — merged node includes the remote-only child', async () => {
+    const basePub = makePublishedNode(NODE_ID, 2);
+    const remotePub = { ...makePublishedNode(NODE_ID, 2), readSealed: 'remoteSealed==' };
+    const localPub = makePublishedNode(NODE_ID, 3);
+
+    const localNode = makeFolderNode({ id: NODE_ID, generation: 2, children: [LOCAL_CHILD_REF] });
+    const baseNode = makeFolderNode({ id: NODE_ID, generation: 2, children: [LOCAL_CHILD_REF] });
+    const remoteNode = makeFolderNode({
+      id: NODE_ID,
+      generation: 2,
+      children: [LOCAL_CHILD_REF, CONCURRENT_CHILD_REF],
+    });
+
+    mockFns.unsealNode
+      .mockResolvedValueOnce(localNode)
+      .mockResolvedValueOnce(baseNode)
+      .mockResolvedValueOnce(remoteNode);
+
+    const capturedSealNodes: import('@cipherbox/core').Node[] = [];
+    mockFns.sealNode.mockImplementation(async (node: import('@cipherbox/core').Node) => {
+      capturedSealNodes.push(node);
+      return makePublishedNode(node.id, node.generation);
+    });
+
+    setupCas409Mock(basePub, localPub, remotePub);
+
+    // RED: throws "not implemented — phase 64" from the merge callback
+    // GREEN: resolves; merged node has both local + concurrent children
+    await expect(
+      rotateOne({
+        nodeId: NODE_ID,
+        nodeIpnsName: NODE_IPNS,
+        nodeIpnsPrivateKey: FAKE_NODE_KEY_06,
+        parentReadKey: PARENT_READ_KEY,
+        parentIpnsName: PARENT_IPNS,
+        parentCurrentSeq: 3n,
+        jobRecord: makeJobRecord(),
+        ctx: createMockContext(),
+      })
+    ).resolves.toBeDefined();
+
+    const lastSeal = capturedSealNodes[capturedSealNodes.length - 1];
+    expect(lastSeal).toBeDefined();
+    const childIpnsNames = lastSeal.children?.map((c) => c.ipnsName) ?? [];
+    expect(childIpnsNames).toContain(CHILD_IPNS);
+    expect(childIpnsNames).toContain(CONCURRENT_CHILD_IPNS);
+  });
+
+  it('Test 2: merge re-decodes the REMOTE node — 3 unsealNode calls prove remote was decoded', async () => {
+    const basePub = makePublishedNode(NODE_ID, 2);
+    const remotePub = { ...makePublishedNode(NODE_ID, 2), readSealed: 'remoteSealed==' };
+    const localPub = makePublishedNode(NODE_ID, 3);
+
+    const localNode = makeFolderNode({ id: NODE_ID, generation: 2, children: [LOCAL_CHILD_REF] });
+    const baseNode = makeFolderNode({ id: NODE_ID, generation: 2, children: [LOCAL_CHILD_REF] });
+    const remoteNode = makeFolderNode({
+      id: NODE_ID,
+      generation: 2,
+      children: [LOCAL_CHILD_REF, CONCURRENT_CHILD_REF],
+    });
+
+    mockFns.unsealNode
+      .mockResolvedValueOnce(localNode)
+      .mockResolvedValueOnce(baseNode)
+      .mockResolvedValueOnce(remoteNode);
+
+    mockFns.sealNode.mockImplementation(async (node: import('@cipherbox/core').Node) =>
+      makePublishedNode(node.id, node.generation)
+    );
+
+    setupCas409Mock(basePub, localPub, remotePub);
+
+    // RED: throws; GREEN: 3 unsealNode calls (initial + base + remote)
+    await expect(
+      rotateOne({
+        nodeId: NODE_ID,
+        nodeIpnsName: NODE_IPNS,
+        nodeIpnsPrivateKey: FAKE_NODE_KEY_06,
+        parentReadKey: PARENT_READ_KEY,
+        parentIpnsName: PARENT_IPNS,
+        parentCurrentSeq: 3n,
+        jobRecord: makeJobRecord(),
+        ctx: createMockContext(),
+      })
+    ).resolves.toBeDefined();
+
+    // 3 calls: initial unseal, unseal(base) in merge callback, unseal(remote) in mergeConcurrentChildren
+    expect(mockFns.unsealNode).toHaveBeenCalledTimes(3);
+  });
+
+  it('Test 3: merge re-seals under readKey-prime — both sealNode calls share the same (non-old) key', async () => {
+    const basePub = makePublishedNode(NODE_ID, 2);
+    const remotePub = { ...makePublishedNode(NODE_ID, 2), readSealed: 'remoteSealed==' };
+    const localPub = makePublishedNode(NODE_ID, 3);
+
+    const localNode = makeFolderNode({ id: NODE_ID, generation: 2, children: [LOCAL_CHILD_REF] });
+    const baseNode = makeFolderNode({ id: NODE_ID, generation: 2, children: [LOCAL_CHILD_REF] });
+    const remoteNode = makeFolderNode({
+      id: NODE_ID,
+      generation: 2,
+      children: [LOCAL_CHILD_REF, CONCURRENT_CHILD_REF],
+    });
+
+    mockFns.unsealNode
+      .mockResolvedValueOnce(localNode)
+      .mockResolvedValueOnce(baseNode)
+      .mockResolvedValueOnce(remoteNode);
+
+    const capturedSealKeys: Uint8Array[] = [];
+    mockFns.sealNode.mockImplementation(
+      async (_node: import('@cipherbox/core').Node, key: Uint8Array) => {
+        capturedSealKeys.push(new Uint8Array(key));
+        return makePublishedNode(_node.id, _node.generation);
+      }
+    );
+
+    setupCas409Mock(basePub, localPub, remotePub);
+
+    // RED: throws; GREEN: merge re-seal uses readKey' (same as initial seal key, not PARENT_READ_KEY)
+    await expect(
+      rotateOne({
+        nodeId: NODE_ID,
+        nodeIpnsName: NODE_IPNS,
+        nodeIpnsPrivateKey: FAKE_NODE_KEY_06,
+        parentReadKey: PARENT_READ_KEY,
+        parentIpnsName: PARENT_IPNS,
+        parentCurrentSeq: 3n,
+        jobRecord: makeJobRecord(),
+        ctx: createMockContext(),
+      })
+    ).resolves.toBeDefined();
+
+    // Two sealNode calls: initial re-seal + merge re-seal
+    expect(capturedSealKeys.length).toBeGreaterThanOrEqual(2);
+
+    // Both calls use the same readKey' (minted once in rotateOne)
+    const firstKey = capturedSealKeys[0];
+    const mergeKey = capturedSealKeys[capturedSealKeys.length - 1];
+    expect(mergeKey).toEqual(firstKey);
+
+    // That key must NOT be the old readKey (PARENT_READ_KEY = fill(0xab))
+    expect(mergeKey).not.toEqual(PARENT_READ_KEY);
+  });
+
+  it('Test 4: happy path — no 409 never invokes the merge callback (unsealNode + sealNode called once each)', async () => {
+    const localNode = makeFolderNode({ id: NODE_ID, generation: 2, children: [LOCAL_CHILD_REF] });
+    mockFns.unsealNode.mockResolvedValue(localNode);
+    mockFns.sealNode.mockImplementation(async (node: import('@cipherbox/core').Node) =>
+      makePublishedNode(node.id, node.generation)
+    );
+
+    // Standard happy-path mock: does NOT invoke params.merge
+    mockFns.publishWithCas.mockResolvedValue({
+      cid: 'bafy-new',
+      newSequenceNumber: 4n,
+      publishedData: makePublishedNode(NODE_ID, 3),
+      prunedCids: [],
+    });
+
+    await rotateOne({
+      nodeId: NODE_ID,
+      nodeIpnsName: NODE_IPNS,
+      nodeIpnsPrivateKey: FAKE_NODE_KEY_06,
+      parentReadKey: PARENT_READ_KEY,
+      parentIpnsName: PARENT_IPNS,
+      parentCurrentSeq: 3n,
+      jobRecord: makeJobRecord(),
+      ctx: createMockContext(),
+    });
+
+    // No merge invocation: unsealNode called once (initial fetch), sealNode called once (initial seal)
+    expect(mockFns.unsealNode).toHaveBeenCalledTimes(1);
+    expect(mockFns.sealNode).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('D-02 parent-link re-seal + D-09 batched parent publish (Plan 64-04 Task 2)', () => {
   /**
    * Capture the readKeyPrime minted by each sealNode call so tests can verify
