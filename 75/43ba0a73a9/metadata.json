@@ -3,7 +3,7 @@
   "checkpoint_id": "7543ba0a73a9",
   "strategy": "manual-commit",
   "branch": "feat/unified-node-codec-core-keystone",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     ".planning/todos/pending/2026-06-29-confirm-no-legacy-v1-v2-vault-blobs-on-auth-reenable.md",
     "packages/core/src/vault/blob.ts"
@@ -14,13 +14,19 @@
       "transcript": "/75/43ba0a73a9/0/full.jsonl",
       "content_hash": "/75/43ba0a73a9/0/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/75/43ba0a73a9/1/metadata.json",
+      "transcript": "/75/43ba0a73a9/1/full.jsonl",
+      "content_hash": "/75/43ba0a73a9/1/content_hash.txt",
+      "prompt": "/75/43ba0a73a9/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 0,
-    "cache_creation_tokens": 0,
-    "cache_read_tokens": 0,
-    "output_tokens": 0,
-    "api_call_count": 0
+    "input_tokens": 36692,
+    "cache_creation_tokens": 1156801,
+    "cache_read_tokens": 28222903,
+    "output_tokens": 312588,
+    "api_call_count": 134
   }
 }
