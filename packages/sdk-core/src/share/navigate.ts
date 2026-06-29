@@ -17,7 +17,9 @@
  *   6. Return { status: 'ok', content, nodeId } from the file leaf.
  *
  * Security invariants:
- *   - Does NOT zero `recipientPrivKey` or any chained readKey — caller is terminal owner (D-09).
+ *   - Does NOT zero `recipientPrivKey` — caller is terminal owner (D-09).
+ *   - DOES zero navigate-minted intermediates (shareRootReadKey, per-hop childReadKeys) via
+ *     a try/finally block so they are wiped on all exit paths (T-63-05 extension).
  *   - Never logs key material (T-63-03).
  *   - A missing IPNS record → revoked (fail-closed, T-63-04).
  *   - An AEAD auth failure during unsealChildReadKey propagates as a throw (not silent success).
@@ -96,7 +98,10 @@ async function fetchPublishedNode(
  * @returns `NavigateResult` discriminated union (never throws for expected states;
  *          does throw for unexpected crypto failures such as AEAD auth failures)
  *
- * @security Does NOT zero `recipientPrivKey` or any chained readKey — caller is terminal owner (D-09).
+ * @security Does NOT zero `recipientPrivKey` — caller is the terminal owner (D-09).
+ *   DOES zero navigate-minted intermediates (shareRootReadKey, per-hop childReadKeys)
+ *   via a try/finally block so they are wiped on all exit paths (T-63-05 extension).
+ *   The recovered content key returned inside `content` is caller-owned and NOT zeroed.
  */
 export async function navigateReadChain(params: {
   readDescriptorRef: string;
@@ -107,63 +112,78 @@ export async function navigateReadChain(params: {
   ctx: SdkContext;
 }): Promise<NavigateResult> {
   return withPerf('share:navigate', async () => {
-    // Step 1: ONE ECIES unwrap → share-root readKey
-    // D-09: do NOT zero recipientPrivKey — caller is the terminal owner.
-    const shareRootReadKey = await unwrapKey(
-      base64ToBytes(params.readDescriptorRef),
-      params.recipientPrivKey
-    );
+    // Collect every key this function mints so they can be wiped in the finally block.
+    // D-09: recipientPrivKey is caller-owned — NOT added to mintedKeys.
+    const mintedKeys: Uint8Array[] = [];
 
-    // Step 2: Resolve + fetch the root PublishedNode
-    const rootPublished = await fetchPublishedNode(params.rootIpnsName, params.ctx);
-    if (!rootPublished) return { status: 'revoked' };
-
-    // Step 3: Behind-retry check (§4.6 / D-06)
-    // The envelope generation is plaintext; if it exceeds the grant's rootExpectedGeneration
-    // the root has been rotated since the grant was issued. The caller should re-fetch the
-    // re-minted grant (honest-reader liveness).
-    if (rootPublished.generation > params.rootExpectedGeneration) {
-      return { status: 'behind-retry' };
-    }
-
-    // Step 4: Unseal root node
-    let currentNode = await unsealNode(rootPublished, shareRootReadKey);
-    let currentReadKey = shareRootReadKey;
-
-    // Step 5: Walk the path — O(depth) symmetric hops
-    for (const hopIpnsName of params.path) {
-      // 5a. Find the SealedChildRef for this hop by ipnsName
-      const childRef = (currentNode.children ?? []).find((c) => c.ipnsName === hopIpnsName);
-      if (!childRef) return { status: 'revoked' };
-
-      // 5b. Fetch child PublishedNode (need plaintext id + kind for AAD construction)
-      const childPublished = await fetchPublishedNode(hopIpnsName, params.ctx);
-      if (!childPublished) return { status: 'revoked' };
-
-      // 5c. Derive child readKey — generation-source rule (§2.6, Pitfall 1):
-      //     AAD MUST use childRef.generation (the PARENT MIRROR), NOT childPublished.generation
-      //     (the child's own envelope generation). A stale-CID serve fails GCM auth closed.
-      const childReadKey = await unsealChildReadKey(
-        childRef.readKeySealed,
-        currentReadKey,
-        childPublished.id, // plaintext from child envelope
-        childPublished.kind, // plaintext from child envelope
-        childRef.generation // ← parent mirror (NOT childPublished.generation)
+    try {
+      // Step 1: ONE ECIES unwrap → share-root readKey
+      // D-09: do NOT zero recipientPrivKey — caller is the terminal owner.
+      const shareRootReadKey = await unwrapKey(
+        base64ToBytes(params.readDescriptorRef),
+        params.recipientPrivKey
       );
+      mintedKeys.push(shareRootReadKey);
 
-      // 5d. Unseal child node
-      const childNode = await unsealNode(childPublished, childReadKey);
+      // Step 2: Resolve + fetch the root PublishedNode
+      const rootPublished = await fetchPublishedNode(params.rootIpnsName, params.ctx);
+      if (!rootPublished) return { status: 'revoked' };
 
-      currentNode = childNode;
-      currentReadKey = childReadKey;
+      // Step 3: Behind-retry check (§4.6 / D-06)
+      // The envelope generation is plaintext; if it exceeds the grant's rootExpectedGeneration
+      // the root has been rotated since the grant was issued. The caller should re-fetch the
+      // re-minted grant (honest-reader liveness).
+      if (rootPublished.generation > params.rootExpectedGeneration) {
+        return { status: 'behind-retry' };
+      }
+
+      // Step 4: Unseal root node
+      let currentNode = await unsealNode(rootPublished, shareRootReadKey);
+      let currentReadKey = shareRootReadKey;
+
+      // Step 5: Walk the path — O(depth) symmetric hops
+      for (const hopIpnsName of params.path) {
+        // 5a. Find the SealedChildRef for this hop by ipnsName
+        const childRef = (currentNode.children ?? []).find((c) => c.ipnsName === hopIpnsName);
+        if (!childRef) return { status: 'revoked' };
+
+        // 5b. Fetch child PublishedNode (need plaintext id + kind for AAD construction)
+        const childPublished = await fetchPublishedNode(hopIpnsName, params.ctx);
+        if (!childPublished) return { status: 'revoked' };
+
+        // 5c. Derive child readKey — generation-source rule (§2.6, Pitfall 1):
+        //     AAD MUST use childRef.generation (the PARENT MIRROR), NOT childPublished.generation
+        //     (the child's own envelope generation). A stale-CID serve fails GCM auth closed.
+        const childReadKey = await unsealChildReadKey(
+          childRef.readKeySealed,
+          currentReadKey,
+          childPublished.id, // plaintext from child envelope
+          childPublished.kind, // plaintext from child envelope
+          childRef.generation // ← parent mirror (NOT childPublished.generation)
+        );
+        mintedKeys.push(childReadKey);
+
+        // 5d. Unseal child node
+        const childNode = await unsealNode(childPublished, childReadKey);
+
+        currentNode = childNode;
+        currentReadKey = childReadKey;
+      }
+
+      // Step 6: At the leaf — must be a file node with content
+      if (currentNode.kind !== 'file' || !currentNode.content) {
+        // Path ended at a folder; callers should provide a complete path to a file.
+        return { status: 'revoked' };
+      }
+
+      // Return content to caller — content.fileKey is caller-owned, NOT zeroed here (D-09).
+      return { status: 'ok', content: currentNode.content, nodeId: currentNode.id };
+    } finally {
+      // Zero all navigate-minted intermediate keys on every exit path (success, early
+      // return, or thrown error). recipientPrivKey is excluded — caller is terminal owner.
+      for (const key of mintedKeys) {
+        key.fill(0);
+      }
     }
-
-    // Step 6: At the leaf — must be a file node with content
-    if (currentNode.kind !== 'file' || !currentNode.content) {
-      // Path ended at a folder; callers should provide a complete path to a file.
-      return { status: 'revoked' };
-    }
-
-    return { status: 'ok', content: currentNode.content, nodeId: currentNode.id };
   });
 }

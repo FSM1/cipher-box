@@ -202,10 +202,10 @@ describe('claimInviteReadKey', () => {
     mockFns.reWrapKey.mockResolvedValue(CLAIMER_WRAPPED_BYTES);
   });
 
-  it('calls reWrapKey with the decoded invite bytes, ephemeralPrivKey, and claimerPublicKey', async () => {
+  it('calls reWrapKey with the decoded invite bytes, ephemeralPrivateKey, and claimerPublicKey', async () => {
     await claimInviteReadKey({
       readDescriptorRef: INVITE_DESCRIPTOR_REF,
-      ephemeralPrivKey: EPHEMERAL_PRIV_KEY,
+      ephemeralPrivateKey: EPHEMERAL_PRIV_KEY,
       claimerPublicKey: CLAIMER_PUBLIC_KEY,
     });
 
@@ -220,7 +220,7 @@ describe('claimInviteReadKey', () => {
   it('returns the base64-encoded result of reWrapKey (standard grant readDescriptorRef)', async () => {
     const result = await claimInviteReadKey({
       readDescriptorRef: INVITE_DESCRIPTOR_REF,
-      ephemeralPrivKey: EPHEMERAL_PRIV_KEY,
+      ephemeralPrivateKey: EPHEMERAL_PRIV_KEY,
       claimerPublicKey: CLAIMER_PUBLIC_KEY,
     });
 
@@ -230,7 +230,7 @@ describe('claimInviteReadKey', () => {
   it('returns a plain string — no encryptedChildKeys fan-out (D-07)', async () => {
     const result = await claimInviteReadKey({
       readDescriptorRef: INVITE_DESCRIPTOR_REF,
-      ephemeralPrivKey: EPHEMERAL_PRIV_KEY,
+      ephemeralPrivateKey: EPHEMERAL_PRIV_KEY,
       claimerPublicKey: CLAIMER_PUBLIC_KEY,
     });
 
@@ -243,7 +243,7 @@ describe('claimInviteReadKey', () => {
   it('uses reWrapKey (not separate unwrapKey + wrapKey) — intermediate zeroization delegated to reWrapKey (T-63-05)', async () => {
     await claimInviteReadKey({
       readDescriptorRef: INVITE_DESCRIPTOR_REF,
-      ephemeralPrivKey: EPHEMERAL_PRIV_KEY,
+      ephemeralPrivateKey: EPHEMERAL_PRIV_KEY,
       claimerPublicKey: CLAIMER_PUBLIC_KEY,
     });
 
@@ -257,7 +257,7 @@ describe('claimInviteReadKey', () => {
   it('does NOT touch sealNode, resolveIpnsRecord, or createAndPublishIpnsRecord (READ-05 — no node/IPNS side effects)', async () => {
     await claimInviteReadKey({
       readDescriptorRef: INVITE_DESCRIPTOR_REF,
-      ephemeralPrivKey: EPHEMERAL_PRIV_KEY,
+      ephemeralPrivateKey: EPHEMERAL_PRIV_KEY,
       claimerPublicKey: CLAIMER_PUBLIC_KEY,
     });
 

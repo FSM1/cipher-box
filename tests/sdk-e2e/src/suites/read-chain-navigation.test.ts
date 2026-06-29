@@ -304,9 +304,9 @@ describe('Read-chain navigation + root-step rotation happy-path round-trip (D-04
       ctx: bobCtx,
     });
 
-    // Post-rotation: the pre-rotation grant must NOT return 'ok' (D-04 / T-63-24).
-    expect(postResult.status).not.toBe('ok');
-    // Must be 'behind-retry' (root generation advanced) or 'revoked' (IPNS unreachable).
-    expect(['revoked', 'behind-retry']).toContain(postResult.status);
+    // Post-rotation: the pre-rotation grant must be 'behind-retry' (D-04 / T-63-24).
+    // Root generation advanced from 0 to 1; rootExpectedGeneration=0 → generation(1) > 0
+    // → navigateReadChain Step 3 returns 'behind-retry' (NOT 'revoked' or 'ok').
+    expect(postResult.status).toBe('behind-retry');
   }, 120_000); // 2-minute timeout: live IPNS round-trips involve multiple publish/resolve cycles
 });

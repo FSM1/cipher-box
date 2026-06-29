@@ -105,10 +105,27 @@ export async function issueReadGrant(params: {
   rootGeneration: number;
   insertShareFn: (payload: ReadGrantPayload) => Promise<{ shareId: string }>;
 }): Promise<{ shareId: string; readDescriptorRef: string }> {
+  // Input validation — reject malformed keys before any crypto work or persistence.
+  if (params.shareRootReadKey.length !== 32) {
+    throw new Error(
+      `issueReadGrant: shareRootReadKey must be 32 bytes, got ${params.shareRootReadKey.length}`
+    );
+  }
+  if (params.recipientPublicKey.length !== 65) {
+    throw new Error(
+      `issueReadGrant: recipientPublicKey must be 65 bytes (uncompressed secp256k1), got ${params.recipientPublicKey.length}`
+    );
+  }
+
   // ONE ECIES wrap — the only crypto op in grant issuance (READ-01).
   // wrapKey: secp256k1 ECDH ephemeral + HKDF + AES-GCM. Each call produces
   // a fresh ciphertext; the recipient's private key is the sole decryption key.
-  const wrapped = await wrapKey(params.shareRootReadKey, params.recipientPublicKey);
+  let wrapped: Uint8Array;
+  try {
+    wrapped = await wrapKey(params.shareRootReadKey, params.recipientPublicKey);
+  } catch (err) {
+    throw new Error('issueReadGrant: key wrapping failed', { cause: err });
+  }
   const readDescriptorRef = bytesToBase64(wrapped);
 
   // Persist the grant row via the injected callback (D-05 transport seam).
@@ -145,7 +162,7 @@ export async function issueReadGrant(params: {
  *
  * @param params.readDescriptorRef - Base64 ECIES-wrapped share-root readKey
  *   from the invite link (encrypted to the URL-fragment ephemeral public key)
- * @param params.ephemeralPrivKey - 32-byte secp256k1 private key from the
+ * @param params.ephemeralPrivateKey - 32-byte secp256k1 private key from the
  *   URL fragment; caller-owned, NOT zeroed here (D-09)
  * @param params.claimerPublicKey - 65-byte uncompressed secp256k1 public key
  *   of the claimer; caller-owned, NOT zeroed here (D-09)
@@ -155,25 +172,48 @@ export async function issueReadGrant(params: {
  *
  * @security This function MINTS the intermediate share-root readKey buffer.
  *   It is the terminal owner of that intermediate. `reWrapKey` zeroes the
- *   intermediate in a `finally` block (T-63-05 mitigation). Caller-supplied
- *   `ephemeralPrivKey` and `claimerPublicKey` are NEVER zeroed here (D-09).
+ *   intermediate on both the success and failure (catch) paths, so it is
+ *   never left in memory after use (T-63-05 mitigation). Caller-supplied
+ *   `ephemeralPrivateKey` and `claimerPublicKey` are NEVER zeroed here (D-09).
  */
 export async function claimInviteReadKey(params: {
   readDescriptorRef: string;
-  ephemeralPrivKey: Uint8Array;
+  ephemeralPrivateKey: Uint8Array;
   claimerPublicKey: Uint8Array;
 }): Promise<string> {
-  const inviteWrapped = base64ToBytes(params.readDescriptorRef);
+  // Input validation — reject malformed keys before any crypto work.
+  if (params.ephemeralPrivateKey.length !== 32) {
+    throw new Error(
+      `claimInviteReadKey: ephemeralPrivateKey must be 32 bytes (secp256k1 private key), got ${params.ephemeralPrivateKey.length}`
+    );
+  }
+  if (params.claimerPublicKey.length !== 65) {
+    throw new Error(
+      `claimInviteReadKey: claimerPublicKey must be 65 bytes (uncompressed secp256k1), got ${params.claimerPublicKey.length}`
+    );
+  }
 
-  // reWrapKey: unwrap with ephemeralPrivKey → share-root readKey (intermediate,
+  let inviteWrapped: Uint8Array;
+  try {
+    inviteWrapped = base64ToBytes(params.readDescriptorRef);
+  } catch (err) {
+    throw new Error('claimInviteReadKey: failed to decode readDescriptorRef', { cause: err });
+  }
+
+  // reWrapKey: unwrap with ephemeralPrivateKey → share-root readKey (intermediate,
   // minted here), then re-wrap with claimerPublicKey. The intermediate is zeroed
   // in reWrapKey's finally block — this function delegates terminal ownership
   // of that buffer to reWrapKey (T-63-05).
-  const claimerWrapped = await reWrapKey(
-    inviteWrapped,
-    params.ephemeralPrivKey,
-    params.claimerPublicKey
-  );
+  let claimerWrapped: Uint8Array;
+  try {
+    claimerWrapped = await reWrapKey(
+      inviteWrapped,
+      params.ephemeralPrivateKey,
+      params.claimerPublicKey
+    );
+  } catch (err) {
+    throw new Error('claimInviteReadKey: key re-wrap failed', { cause: err });
+  }
 
   return bytesToBase64(claimerWrapped);
 }

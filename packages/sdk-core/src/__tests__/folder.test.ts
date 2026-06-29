@@ -351,7 +351,10 @@ describe('createSubfolder (phase 63 — first-publish seq 1n)', () => {
       privateKey: new Uint8Array(64).fill(2),
     });
     mockFns.deriveIpnsName.mockResolvedValue('k51-derived-subfolder');
-    mockFns.generateRandomBytes.mockReturnValue(new Uint8Array(32).fill(3));
+    // Return DISTINCT buffers so read/write key aliasing cannot hide accidental shared state.
+    mockFns.generateRandomBytes
+      .mockReturnValueOnce(new Uint8Array(32).fill(3)) // readKey (first call)
+      .mockReturnValueOnce(new Uint8Array(32).fill(4)); // writeKey (second call)
     mockFns.sealNode.mockResolvedValue({
       schema: 'node/v3',
       kind: 'folder',
@@ -384,7 +387,7 @@ describe('createSubfolder (phase 63 — first-publish seq 1n)', () => {
     expect(result.node.kind).toBe('folder');
     expect(result.ipnsPrivateKey).toEqual(new Uint8Array(64).fill(2));
     expect(result.rootReadKey).toEqual(new Uint8Array(32).fill(3));
-    expect(result.rootWriteKey).toEqual(new Uint8Array(32).fill(3));
+    expect(result.rootWriteKey).toEqual(new Uint8Array(32).fill(4)); // distinct from readKey
     // No TEE keys → no encrypted republish key
     expect(result.encryptedIpnsPrivateKey).toBeUndefined();
     expect(result.keyEpoch).toBeUndefined();
