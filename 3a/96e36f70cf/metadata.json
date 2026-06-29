@@ -3,7 +3,7 @@
   "checkpoint_id": "3a96e36f70cf",
   "strategy": "manual-commit",
   "branch": "feat/unified-node-codec-core-keystone",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     ".planning/todos/pending/2026-06-29-remigrate-filepointer-era-e2e-helper-scripts.md",
     "tsconfig.scripts.json"
@@ -14,13 +14,19 @@
       "transcript": "/3a/96e36f70cf/0/full.jsonl",
       "content_hash": "/3a/96e36f70cf/0/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/3a/96e36f70cf/1/metadata.json",
+      "transcript": "/3a/96e36f70cf/1/full.jsonl",
+      "content_hash": "/3a/96e36f70cf/1/content_hash.txt",
+      "prompt": "/3a/96e36f70cf/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 0,
-    "cache_creation_tokens": 0,
-    "cache_read_tokens": 0,
-    "output_tokens": 0,
-    "api_call_count": 0
+    "input_tokens": 36284,
+    "cache_creation_tokens": 1143746,
+    "cache_read_tokens": 26331740,
+    "output_tokens": 303788,
+    "api_call_count": 127
   }
 }
