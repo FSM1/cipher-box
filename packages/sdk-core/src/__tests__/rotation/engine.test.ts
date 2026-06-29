@@ -15,7 +15,6 @@ import {
   rotateReadFromNode,
   mintFileKeyOnRotate,
   reMintGrantsRootedAt,
-  mergeConcurrentChildren,
   verifySubtreeClean,
   type RotationJobRecord,
   type RotationParams,
@@ -373,12 +372,6 @@ describe('Phase-64 named seams — each throws an error naming "phase 64"', () =
     await expect(
       reMintGrantsRootedAt(NODE_ID, new Uint8Array(32), 1, makeJobRecord(), createMockContext())
     ).resolves.toBeUndefined();
-  });
-
-  it('mergeConcurrentChildren throws with "phase 64" in the message (ROT-05/HIGH-4)', async () => {
-    await expect(
-      mergeConcurrentChildren(makeFolderNode(), {}, createMockContext())
-    ).rejects.toThrow(/phase 64/i);
   });
 
   it('verifySubtreeClean throws with "phase 64" in the message (ROT-06)', async () => {
@@ -1056,7 +1049,9 @@ describe('CAS-409 concurrent-add merge — ROT-05/HIGH-4 (Plan 64-06)', () => {
   }
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    // vi.resetAllMocks() clears calls AND drains mockResolvedValueOnce queues,
+    // preventing leftover Once-values from failing tests contaminating later tests.
+    vi.resetAllMocks();
     mockFns.resolveIpnsRecord.mockResolvedValue({
       cid: 'bafy-base-cid',
       sequenceNumber: 3n,
@@ -1251,7 +1246,10 @@ describe('D-02 parent-link re-seal + D-09 batched parent publish (Plan 64-04 Tas
   const capturedSealNodeReadKeys: Array<Uint8Array> = [];
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    // vi.resetAllMocks() clears calls AND drains mockResolvedValueOnce queues,
+    // preventing leftover Once-values from failing 64-06 RED tests contaminating
+    // these tests when the full suite runs. vi.clearAllMocks() was insufficient.
+    vi.resetAllMocks();
     capturedSealNodeReadKeys.length = 0;
 
     const { rootNode, rootPublished, childNode, childPublished } = makeD02Fixtures();

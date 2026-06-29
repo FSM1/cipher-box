@@ -32,6 +32,7 @@ import { resolveIpnsRecord } from '../ipns';
 import { fetchFromIpfs, addToIpfs } from '../ipfs';
 import type { SdkContext } from '../types';
 import { updateFolderMetadataAndPublish } from '../folder/registration';
+import { mergeChildren } from '../folder/merge';
 
 // ---------------------------------------------------------------------------
 // Types — string-literal unions, never TypeScript enums (project convention)
@@ -341,21 +342,52 @@ export async function reMintGrantsRootedAt(
 }
 
 /**
- * SEAM: Re-fetch and merge concurrent child additions on CAS-409.
+ * Re-seal a node after merging concurrently-added children on CAS-409.
  *
- * Phase 64 implementation: on a CAS-409, re-resolve the node, fetch the remote
- * children, merge them with the local children list, and retry the publish.
+ * Phase 64 implementation (ROT-05/HIGH-4): on a rotation CAS-409, the remote
+ * winner may contain child refs added concurrently that are absent from the
+ * local rotation result. This function:
+ *   1. Unseals `basePub` under `oldReadKey` to recover the base children list.
+ *   2. Unseals `remotePub` under `oldReadKey` to recover the remote children list.
+ *   3. Three-way merges (base, local, remote) via `mergeChildren` so that any
+ *      child added only in the remote is preserved (never silently dropped).
+ *   4. Re-seals the merged node under `newReadKey` (readKey-prime) and returns
+ *      the new PublishedNode.
  *
- * Invoked ONLY on CAS-409 (conditional — D-01); never on the happy path.
+ * Invoked ONLY from the `rotateOne` CAS-409 merge callback (conditional — D-01).
  *
- * @throws Always in Phase 63 (ROT-05/HIGH-4 — deferred).
+ * @security
+ *   - Does NOT zero `oldReadKey` or `newReadKey` — callers are terminal owners (D-09).
+ *   - `localChildren` must come from the node's pre-rotation children (closure over
+ *     the unsealed node), NOT from the sealed `localPub`. This avoids an extra
+ *     unseal round-trip and an unnecessary dependency on `newReadKey` during merge.
  */
 export async function mergeConcurrentChildren(
-  _node: Node,
-  _resolved: unknown,
-  _ctx: SdkContext
-): Promise<void> {
-  throw new Error('not implemented — phase 64 (ROT-05/HIGH-4 concurrent-add merge)');
+  basePub: PublishedNode,
+  remotePub: PublishedNode,
+  oldReadKey: Uint8Array,
+  localChildren: SealedChildRef[],
+  newReadKey: Uint8Array,
+  localNode: Node,
+  generationPrime: number,
+  writeKey: Uint8Array
+): Promise<PublishedNode> {
+  // 1. Unseal base snapshot under the old (pre-rotation) readKey.
+  const baseNodeDecoded = await unsealNode(basePub, oldReadKey);
+
+  // 2. Unseal remote node under the old readKey — it was sealed before rotation.
+  const remoteNodeDecoded = await unsealNode(remotePub, oldReadKey);
+
+  // 3. Three-way merge: union by ipnsName, remote wins, honour intentional deletes.
+  const mergedChildren = mergeChildren(
+    baseNodeDecoded.children ?? [],
+    localChildren,
+    remoteNodeDecoded.children ?? []
+  );
+
+  // 4. Re-seal merged node under readKey-prime (the rotation's new key).
+  const mergedNode: Node = { ...localNode, generation: generationPrime, children: mergedChildren };
+  return sealNode(mergedNode, newReadKey, writeKey);
 }
 
 /**
@@ -498,15 +530,30 @@ export async function rotateOne(
       decodeRemote: async (cid) => {
         return fetchPublishedNode(cid, ctx);
       },
-      merge: (_base, local, _remote) => {
-        // Phase 64 (D-09): batch parent-link publishes + mergeConcurrentChildren seam.
-        // On CAS-409, this merge is invoked. Phase 63 surfaces the gap explicitly —
-        // a concurrent add during rotation is not handled until Phase 64 (ROT-05/HIGH-4).
-        throw new Error(
-          'not implemented — phase 64 (ROT-05/HIGH-4 concurrent-add merge): CAS-409 on rotation publish'
+      merge: async (base, _local, remote) => {
+        // ROT-05/HIGH-4: CAS-409 on rotation publish — merge concurrent child adds.
+        // Re-unseal base + remote under the OLD readKey, three-way merge children,
+        // then re-seal under readKeyPrime so the merged result is published atomically.
+        //
+        // `base` is always set here (baseData = published, the initial fetch), but
+        // we guard against undefined for defensive correctness.
+        if (!base) {
+          // No base snapshot: treat local children as both base and local.
+          // This path should not occur in practice (published is always set).
+          const mergedNode: Node = { ...node, generation: generationPrime };
+          return { merged: await sealNode(mergedNode, readKeyPrime, PLACEHOLDER_WRITE_KEY) };
+        }
+        const mergedPublished = await mergeConcurrentChildren(
+          base,
+          remote,
+          parentReadKey, // OLD readKey — remote was sealed under this key
+          node.children ?? [], // local children (from closure — no extra unseal needed)
+          readKeyPrime, // NEW readKey — re-seal merged result under rotation key
+          node,
+          generationPrime,
+          PLACEHOLDER_WRITE_KEY
         );
-        // Unreachable: satisfies TypeScript return type constraint
-        return { merged: local };
+        return { merged: mergedPublished };
       },
       localData: resealedPublished,
       baseData: published,
