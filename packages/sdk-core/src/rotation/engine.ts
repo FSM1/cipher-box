@@ -166,6 +166,21 @@ export type RotationParams = {
   rootIpnsPublicKey?: Uint8Array;
   jobRecord: RotationJobRecord;
   ctx: SdkContext;
+  /**
+   * Optional test-supplied key source for per-node IPNS signing keys.
+   *
+   * Phase 64 uses this seam to thread real per-node signing keys through the BFS
+   * walk in unit tests and sdk-e2e suites, without requiring the full Phase-65
+   * write-body → key derivation chain. When provided, `rotateReadFromNode` calls
+   * `nodeKeySource(childIpnsName)` when enqueuing each BFS child. If the source
+   * returns undefined for a node, `rotateOne` for that node throws fail-closed (D-01).
+   *
+   * Production note: Phase 65 replaces this seam with write-body-derived keys.
+   * Never ship a production rotation call that depends on this field.
+   */
+  nodeKeySource?: (
+    ipnsName: string
+  ) => { privateKey: Uint8Array; publicKey: Uint8Array } | undefined;
 };
 
 // ---------------------------------------------------------------------------
