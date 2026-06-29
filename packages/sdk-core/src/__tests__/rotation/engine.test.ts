@@ -367,10 +367,12 @@ describe('rotateOne — zeroization invariant (Pitfall 4 / T-63-10)', () => {
 // ---------------------------------------------------------------------------
 
 describe('Phase-64 named seams — each throws an error naming "phase 64"', () => {
-  it('reMintGrantsRootedAt throws with "phase 64" in the message (ROT-04/HIGH-3)', async () => {
+  it('reMintGrantsRootedAt is a no-op when no callbacks supplied (seam filled in Phase 64)', async () => {
+    // Phase 64 fills this seam: calling without callbacks is a clean no-op (D-04).
+    // Full behavior is tested in grant-remint.test.ts (ROT-04/HIGH-3/D-04).
     await expect(
       reMintGrantsRootedAt(NODE_ID, new Uint8Array(32), 1, makeJobRecord(), createMockContext())
-    ).rejects.toThrow(/phase 64/i);
+    ).resolves.toBeUndefined();
   });
 
   it('mergeConcurrentChildren throws with "phase 64" in the message (ROT-05/HIGH-4)', async () => {

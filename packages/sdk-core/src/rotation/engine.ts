@@ -26,7 +26,7 @@
 
 import { sealNode, unsealNode, sealChildReadKey, unsealChildReadKey } from '@cipherbox/core';
 import type { Node, PublishedNode, SealedChildRef } from '@cipherbox/core';
-import { generateRandomBytes } from '@cipherbox/crypto';
+import { generateRandomBytes, wrapKey } from '@cipherbox/crypto';
 import { publishWithCas } from '../cas';
 import { resolveIpnsRecord } from '../ipns';
 import { fetchFromIpfs, addToIpfs } from '../ipfs';
@@ -235,6 +235,20 @@ export type RotationParams = {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Encode a Uint8Array to a base64 string.
+ * Processes in chunks to avoid call-stack overflow on large ECIES ciphertexts.
+ * Local copy — dedup with share/grant.ts is deferred per CONTEXT.md.
+ */
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const chunkSize = 8192;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, Math.min(i + chunkSize, bytes.length)));
+  }
+  return btoa(binary);
+}
+
 /** Fetch a PublishedNode envelope from IPFS by CID. */
 async function fetchPublishedNode(cid: string, ctx: SdkContext): Promise<PublishedNode> {
   const raw = await fetchFromIpfs(ctx, cid);
@@ -296,14 +310,34 @@ export async function mintFileKeyOnRotate(node: Node, _job: RotationJobRecord): 
  *   wrapping. Does NOT zero `newReadKey` — caller is terminal owner (D-09).
  */
 export async function reMintGrantsRootedAt(
-  _nodeId: string,
-  _key: Uint8Array,
-  _gen: number,
+  nodeId: string,
+  newReadKey: Uint8Array,
+  newGeneration: number,
   _job: RotationJobRecord,
   _ctx: SdkContext,
-  _callbacks?: GrantRemintCallbacks
+  callbacks?: GrantRemintCallbacks
 ): Promise<void> {
-  throw new Error('not implemented — phase 64 (ROT-04/HIGH-3 inner-grant re-mint)');
+  // D-04 transport seam: when no callbacks are supplied the function is a clean
+  // no-op. This preserves the D-01 conditional-invocation contract — the clean
+  // happy-path only supplies innerGrants, never callbacks, so no re-mint work runs.
+  if (!callbacks) return;
+
+  const grants = await callbacks.queryGrantsFn(nodeId);
+
+  for (const grant of grants) {
+    if (grant.isRevoked) {
+      // Revoked recipient: delete the grant row. Do NOT re-mint a descriptor.
+      // T-64-04b: re-minting for a revoked recipient defeats revocation.
+      await callbacks.deleteGrantFn(grant.shareId);
+    } else {
+      // Non-revoked recipient: ECIES-wrap the new readKey under their public key.
+      // T-64-04c: always use wrapKey — never hand-roll key wrapping.
+      // Do NOT zero newReadKey here — caller is terminal owner (D-09).
+      const wrappedBytes = await wrapKey(newReadKey, grant.recipientPublicKey);
+      const readDescriptorRef = bytesToBase64(wrappedBytes);
+      await callbacks.updateGrantFn(grant.shareId, readDescriptorRef, newGeneration);
+    }
+  }
 }
 
 /**
@@ -376,6 +410,7 @@ export async function rotateOne(
     jobRecord,
     ctx,
     innerGrants,
+    grantCallbacks,
   } = params;
 
   // Step 2 (fast path): idempotency check when nodeId is already known
@@ -483,7 +518,14 @@ export async function rotateOne(
     // Step 9 (continued): SEAM — re-mint inner grants only when supplied (D-01 conditional).
     // Clean happy-path (no inner grants) NEVER invokes this seam.
     if (innerGrants && innerGrants.length > 0) {
-      await reMintGrantsRootedAt(nodeId, readKeyPrime, generationPrime, jobRecord, ctx);
+      await reMintGrantsRootedAt(
+        nodeId,
+        readKeyPrime,
+        generationPrime,
+        jobRecord,
+        ctx,
+        grantCallbacks
+      );
     }
 
     return {
