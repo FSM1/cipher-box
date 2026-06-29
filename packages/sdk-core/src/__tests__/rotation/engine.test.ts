@@ -430,6 +430,117 @@ describe('rotateOne — file node reaches mintFileKeyOnRotate and surfaces Phase
 // Task 2: rotateReadFromNode — resumable frontier walk (ROT-01)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Plan 64-03 RED tests — content-key rotation (ROT-03/CRIT-1)
+// ---------------------------------------------------------------------------
+
+describe('mintFileKeyOnRotate — content-key rotation (ROT-03/CRIT-1)', () => {
+  it('assigns a fresh 32-byte fileKey to the node content, different from the old key', async () => {
+    const oldKey = new Uint8Array(32).fill(0x11);
+    const fileNode: import('@cipherbox/core').Node = {
+      schema: 'node/v3',
+      kind: 'file',
+      id: NODE_ID,
+      generation: 0,
+      createdAt: 1000,
+      modifiedAt: 2000,
+      content: {
+        cid: 'bafy-file',
+        fileIv: 'iv==',
+        size: 1024,
+        mimeType: 'text/plain',
+        encryptionMode: 'GCM',
+        fileKey: new Uint8Array(oldKey),
+        versions: [],
+      },
+    };
+
+    await mintFileKeyOnRotate(fileNode, makeJobRecord());
+
+    // Must have been assigned a new value
+    expect(fileNode.content!.fileKey).toBeInstanceOf(Uint8Array);
+    expect(fileNode.content!.fileKey.length).toBe(32);
+    // Must differ from the original key
+    expect(fileNode.content!.fileKey).not.toEqual(oldKey);
+  });
+
+  it('is a no-op for nodes without content (folder nodes) — no throw, no content field added', async () => {
+    const folderNode = makeFolderNode();
+    // Ensure no content field
+    expect((folderNode as Record<string, unknown>)['content']).toBeUndefined();
+
+    await expect(mintFileKeyOnRotate(folderNode, makeJobRecord())).resolves.toBeUndefined();
+
+    // No content field should have been added
+    expect((folderNode as Record<string, unknown>)['content']).toBeUndefined();
+  });
+});
+
+describe('rotateOne — file node with mintFileKeyOnRotate filled (ROT-03 integration)', () => {
+  it('sealNode receives the new fileKey after mintFileKeyOnRotate (§7.3 test 2 shape)', async () => {
+    vi.clearAllMocks();
+
+    const oldKey = new Uint8Array(32).fill(0x11);
+    const fileNode: import('@cipherbox/core').Node = {
+      schema: 'node/v3',
+      kind: 'file',
+      id: NODE_ID,
+      generation: 0,
+      createdAt: 1000,
+      modifiedAt: 2000,
+      content: {
+        cid: 'bafy-file',
+        fileIv: 'iv==',
+        size: 1024,
+        mimeType: 'text/plain',
+        encryptionMode: 'GCM',
+        fileKey: new Uint8Array(oldKey),
+        versions: [],
+      },
+    };
+
+    mockFns.resolveIpnsRecord.mockResolvedValue({
+      cid: 'bafy-file-cid',
+      sequenceNumber: 1n,
+      signatureVerified: true,
+    });
+    mockFns.fetchFromIpfs.mockResolvedValue(
+      new TextEncoder().encode(JSON.stringify(makePublishedNode(NODE_ID, 0, 'file')))
+    );
+    mockFns.unsealNode.mockResolvedValue(fileNode);
+
+    let sealNodeCalledWithNode: import('@cipherbox/core').Node | undefined;
+    mockFns.sealNode.mockImplementation(async (node: import('@cipherbox/core').Node) => {
+      sealNodeCalledWithNode = node;
+      return makePublishedNode(node.id, node.generation + 1, 'file');
+    });
+
+    mockFns.sealChildReadKey.mockResolvedValue('sealed==');
+    mockFns.publishWithCas.mockResolvedValue({
+      cid: 'bafy-new',
+      newSequenceNumber: 2n,
+      publishedData: [],
+      prunedCids: [],
+    });
+
+    await rotateOne({
+      nodeId: NODE_ID,
+      nodeIpnsName: NODE_IPNS,
+      parentReadKey: PARENT_READ_KEY,
+      parentIpnsName: PARENT_IPNS,
+      parentCurrentSeq: 1n,
+      jobRecord: makeJobRecord(),
+      ctx: createMockContext(),
+    });
+
+    // sealNode must have been called after mintFileKeyOnRotate mutated the node
+    expect(sealNodeCalledWithNode).toBeDefined();
+    expect(sealNodeCalledWithNode!.content!.fileKey).toBeInstanceOf(Uint8Array);
+    // The fileKey handed to sealNode must differ from the pre-rotation key
+    expect(sealNodeCalledWithNode!.content!.fileKey).not.toEqual(oldKey);
+  });
+});
+
 describe('rotateReadFromNode — root-first BFS ordering (§4.2)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
