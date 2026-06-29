@@ -7,13 +7,12 @@
  * Share operations handle user-to-user sharing via ECIES key wrapping:
  * - createShare: wrap folder/file key with recipient's public key
  * - revokeShare: soft-delete a share via API
- * - reWrapForRecipients: after adding items to shared folder, re-wrap keys
  *
  * The API client functions are called directly for server communication.
  * No store dependencies -- all state passed as explicit params.
  */
 
-import { wrapKey, bytesToHex, hexToBytes } from '@cipherbox/crypto';
+import { wrapKey, bytesToHex } from '@cipherbox/crypto';
 import type { SdkContext } from '@cipherbox/sdk-core';
 import { isNonRetryableError } from '../error';
 
@@ -70,67 +69,6 @@ export async function createShareKey(params: {
   // Wrap the folder key with recipient's public key via ECIES
   const wrappedKey = await wrapKey(params.folderKey, params.recipientPublicKey);
   return { encryptedKey: bytesToHex(wrappedKey) };
-}
-
-/**
- * Re-wrap keys for all share recipients after adding new items to a shared folder.
- *
- * For each existing share covering the folder, wraps each new item's key
- * with the share recipient's public key.
- *
- * This is a fire-and-forget operation -- individual failures are collected
- * but don't block the overall operation.
- *
- * @param params.coveringShares - Active shares that cover this folder
- * @param params.newItems - New items whose keys need re-wrapping
- * @returns List of failed recipient public keys
- */
-export async function reWrapForRecipients(params: {
-  coveringShares: SentShareInfo[];
-  newItems: Array<{
-    keyType: 'file' | 'folder';
-    itemId: string;
-    plaintextKey: Uint8Array;
-  }>;
-  addShareKeysFn: (
-    shareId: string,
-    keys: Array<{ keyType: 'file' | 'folder'; itemId: string; encryptedKey: string }>
-  ) => Promise<void>;
-}): Promise<{ failedRecipients: string[] }> {
-  if (params.coveringShares.length === 0) return { failedRecipients: [] };
-
-  const failedRecipients: string[] = [];
-
-  for (const share of params.coveringShares) {
-    try {
-      const recipientPubKey = hexToBytes(
-        share.recipientPublicKey.startsWith('0x')
-          ? share.recipientPublicKey.slice(2)
-          : share.recipientPublicKey
-      );
-
-      const wrappedKeys: Array<{
-        keyType: 'file' | 'folder';
-        itemId: string;
-        encryptedKey: string;
-      }> = [];
-
-      for (const item of params.newItems) {
-        const wrapped = await wrapKey(item.plaintextKey, recipientPubKey);
-        wrappedKeys.push({
-          keyType: item.keyType,
-          itemId: item.itemId,
-          encryptedKey: bytesToHex(wrapped),
-        });
-      }
-
-      await params.addShareKeysFn(share.shareId, wrappedKeys);
-    } catch {
-      failedRecipients.push(share.recipientPublicKey);
-    }
-  }
-
-  return { failedRecipients };
 }
 
 /**
