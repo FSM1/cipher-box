@@ -11,7 +11,7 @@
  * claimInviteReadKey: unwrap readKey with URL-fragment ephemeral private key,
  *   re-wrap to claimer's public key → standard grant readDescriptorRef (READ-05 / §3.11).
  *   - Crypto primitive only; full service wiring deferred to Phase 65 (D-07).
- *   - Emits ONE re-wrapped root readKey — NO encryptedChildKeys fan-out (D-07).
+ *   - Emits ONE re-wrapped root readKey — no per-child key fan-out (D-07).
  */
 
 import { wrapKey, reWrapKey } from '@cipherbox/crypto';
@@ -136,7 +136,7 @@ export async function issueReadGrant(params: {
  *
  * This is a crypto primitive only. Full invite create/claim service wiring
  * (link generation, invite row storage, server-side re-wrap coordination) is
- * deferred to Phase 65 (D-07). The encryptedChildKeys fan-out is NOT produced
+ * deferred to Phase 65 (D-07). No per-child key fan-out array is produced
  * here or elsewhere in this module (D-07 / T-63-07).
  *
  * ADR 0002: read-revocation protects future content only. A replayed invite

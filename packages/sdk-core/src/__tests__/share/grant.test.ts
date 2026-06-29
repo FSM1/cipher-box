@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { issueReadGrant } from '../../share/grant';
+import { issueReadGrant, claimInviteReadKey } from '../../share/grant';
 
 // ---------------------------------------------------------------------------
 // Module mocks — hoisted before all imports.
@@ -165,6 +165,100 @@ describe('issueReadGrant', () => {
       rootIpnsName: 'k51abc',
       rootGeneration: 0,
       insertShareFn,
+    });
+
+    expect(mockFns.sealNode).not.toHaveBeenCalled();
+    expect(mockFns.unsealNode).not.toHaveBeenCalled();
+    expect(mockFns.resolveIpnsRecord).not.toHaveBeenCalled();
+    expect(mockFns.createAndPublishIpnsRecord).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// claimInviteReadKey tests (Task 2 — READ-05 / D-07 / §3.11)
+// ---------------------------------------------------------------------------
+
+describe('claimInviteReadKey', () => {
+  /** Fake 32-byte secp256k1 ephemeral private key (from URL fragment). */
+  const EPHEMERAL_PRIV_KEY = new Uint8Array(32).fill(0x11);
+
+  /** Fake 65-byte uncompressed secp256k1 claimer public key. */
+  const CLAIMER_PUBLIC_KEY = new Uint8Array(65).fill(0x04);
+
+  /** Fake invite-wrapped bytes (ECIES ciphertext encrypted to ephemeral pubkey). */
+  const INVITE_WRAPPED_BYTES = new Uint8Array([0x01, 0x02, 0x03, 0x04]);
+
+  /** base64 of INVITE_WRAPPED_BYTES — the invite readDescriptorRef. */
+  const INVITE_DESCRIPTOR_REF = btoa(String.fromCharCode(0x01, 0x02, 0x03, 0x04));
+
+  /** Fake re-wrapped bytes returned by the mocked reWrapKey. */
+  const CLAIMER_WRAPPED_BYTES = new Uint8Array([0xca, 0xfe, 0xba, 0xbe]);
+
+  /** base64 of CLAIMER_WRAPPED_BYTES — the expected claimer readDescriptorRef. */
+  const EXPECTED_CLAIMER_REF = btoa(String.fromCharCode(0xca, 0xfe, 0xba, 0xbe));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFns.reWrapKey.mockResolvedValue(CLAIMER_WRAPPED_BYTES);
+  });
+
+  it('calls reWrapKey with the decoded invite bytes, ephemeralPrivKey, and claimerPublicKey', async () => {
+    await claimInviteReadKey({
+      readDescriptorRef: INVITE_DESCRIPTOR_REF,
+      ephemeralPrivKey: EPHEMERAL_PRIV_KEY,
+      claimerPublicKey: CLAIMER_PUBLIC_KEY,
+    });
+
+    expect(mockFns.reWrapKey).toHaveBeenCalledOnce();
+    expect(mockFns.reWrapKey).toHaveBeenCalledWith(
+      INVITE_WRAPPED_BYTES,
+      EPHEMERAL_PRIV_KEY,
+      CLAIMER_PUBLIC_KEY
+    );
+  });
+
+  it('returns the base64-encoded result of reWrapKey (standard grant readDescriptorRef)', async () => {
+    const result = await claimInviteReadKey({
+      readDescriptorRef: INVITE_DESCRIPTOR_REF,
+      ephemeralPrivKey: EPHEMERAL_PRIV_KEY,
+      claimerPublicKey: CLAIMER_PUBLIC_KEY,
+    });
+
+    expect(result).toBe(EXPECTED_CLAIMER_REF);
+  });
+
+  it('returns a plain string — no encryptedChildKeys fan-out (D-07)', async () => {
+    const result = await claimInviteReadKey({
+      readDescriptorRef: INVITE_DESCRIPTOR_REF,
+      ephemeralPrivKey: EPHEMERAL_PRIV_KEY,
+      claimerPublicKey: CLAIMER_PUBLIC_KEY,
+    });
+
+    // A plain string return proves no encryptedChildKeys array is produced.
+    expect(typeof result).toBe('string');
+    // Narrow-proof: the result has no property that would exist on a fan-out structure.
+    expect(result).not.toHaveProperty('encryptedChildKeys');
+  });
+
+  it('uses reWrapKey (not separate unwrapKey + wrapKey) — intermediate zeroization delegated to reWrapKey (T-63-05)', async () => {
+    await claimInviteReadKey({
+      readDescriptorRef: INVITE_DESCRIPTOR_REF,
+      ephemeralPrivKey: EPHEMERAL_PRIV_KEY,
+      claimerPublicKey: CLAIMER_PUBLIC_KEY,
+    });
+
+    // reWrapKey zeros the intermediate share-root readKey in its own finally block.
+    // Using reWrapKey (not manual unwrapKey + zero + wrapKey) satisfies T-63-05.
+    expect(mockFns.reWrapKey).toHaveBeenCalledOnce();
+    // wrapKey is NOT called separately — reWrapKey owns the entire unwrap+rewrap.
+    expect(mockFns.wrapKey).not.toHaveBeenCalled();
+  });
+
+  it('does NOT touch sealNode, resolveIpnsRecord, or createAndPublishIpnsRecord (READ-05 — no node/IPNS side effects)', async () => {
+    await claimInviteReadKey({
+      readDescriptorRef: INVITE_DESCRIPTOR_REF,
+      ephemeralPrivKey: EPHEMERAL_PRIV_KEY,
+      claimerPublicKey: CLAIMER_PUBLIC_KEY,
     });
 
     expect(mockFns.sealNode).not.toHaveBeenCalled();
