@@ -361,10 +361,11 @@ describe('bin operations', () => {
 
   describe('restoreFromBin', () => {
     // Shared node metadata fixture — carried on BinEntry.nodeRef for AAD binding
+    // NOTE: id must be a valid UUID (uuidToBytes validates format for real sealChildReadKey)
     const nodeRef = {
       schema: 'node/v3' as const,
       kind: 'file' as const,
-      id: 'node-uuid-1',
+      id: '00000000-0000-0000-0000-000000000001',
       generation: 0,
       createdAt: 0,
       modifiedAt: 0,
@@ -427,11 +428,12 @@ describe('bin operations', () => {
 
     it('restores item to target folder by re-sealing nodeReadKey under destination parent readKey', async () => {
       setupRestoreMocks();
-      // sealChildReadKey is real (from importOriginal spread); mock its result for this basic test
+      // sealChildReadKey is real (from importOriginal spread); spy and mock for this flow test.
+      // Use sealSpy.mockRestore() (NOT vi.restoreAllMocks) to avoid resetting module-level
+      // vi.fn() mocks (deriveBinIpnsKeypair etc.) that subsequent tests depend on.
       const fakeSealedKey = 'c2VhbGVkLWtleS1iYXNlNjQ='; // valid base64
-      // Use a simple mock return for the flow test
       const coreModule = await import('@cipherbox/core');
-      vi.spyOn(coreModule, 'sealChildReadKey').mockResolvedValue(fakeSealedKey);
+      const sealSpy = vi.spyOn(coreModule, 'sealChildReadKey').mockResolvedValue(fakeSealedKey);
 
       const folderTree = new FolderTree();
       folderTree.set('target-ipns', PLACEHOLDER_TARGET);
@@ -451,7 +453,8 @@ describe('bin operations', () => {
       expect(result.restoredItem.ipnsName).toBe('k51child');
       expect(result.restoredItem.readKeySealed).toBe(fakeSealedKey);
 
-      vi.restoreAllMocks();
+      // Restore only this spy so subsequent tests get the real sealChildReadKey
+      sealSpy.mockRestore();
     });
 
     it('re-link AEAD asymmetry: restoredItem.readKeySealed unseals under dest parent and fails under source parent', async () => {
@@ -483,10 +486,10 @@ describe('bin operations', () => {
 
       // Re-link is bound to destParentReadKey — unseals under dest, rejects under source
       await expect(
-        realUnseal(result.restoredItem.readKeySealed, destParentReadKey, 'node-uuid-1', 'file', 0)
+        realUnseal(result.restoredItem.readKeySealed, destParentReadKey, nodeRef.id, 'file', 0)
       ).resolves.toBeDefined();
       await expect(
-        realUnseal(result.restoredItem.readKeySealed, sourceParentReadKey, 'node-uuid-1', 'file', 0)
+        realUnseal(result.restoredItem.readKeySealed, sourceParentReadKey, nodeRef.id, 'file', 0)
       ).rejects.toThrow();
     });
 
