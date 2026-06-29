@@ -1,0 +1,87 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "42f9010f36d4",
+  "session_id": "b138c49b-687f-49bd-aa30-ffb4dde5e4e5",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-29T05:25:53.506785Z",
+  "branch": "feat/read-chain-navigation-and-rotation-core",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "a9ed4044554d",
+  "checkpoint_transcript_start": 446,
+  "transcript_lines_at_start": 446,
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_013QQzgxUHQN245qBmhyghRw",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "a9ed4044554d",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 41,
+        "end": 42,
+        "entry_ids": [
+          "fe8ef216-dd96-4b2f-bf2e-5d4876997fd9"
+        ],
+        "tool_use_id": "toolu_013QQzgxUHQN245qBmhyghRw"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_013QQzgxUHQN245qBmhyghRw"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01SKZ2doAKEneeyZP8ntcsd9",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "a9ed4044554d",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 284,
+        "end": 285,
+        "entry_ids": [
+          "1bbf609c-3b67-4e41-bccb-0dac5c91e156"
+        ],
+        "tool_use_id": "toolu_01SKZ2doAKEneeyZP8ntcsd9"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01SKZ2doAKEneeyZP8ntcsd9"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ]
+}
