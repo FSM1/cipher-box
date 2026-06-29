@@ -1,10 +1,11 @@
 ---
 phase: 62
 slug: unified-node-codec-core-keystone
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: validated
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-06-28
+validated: 2026-06-29
 ---
 
 # Phase 62 — Validation Strategy
@@ -37,22 +38,22 @@ created: 2026-06-28
 
 ## Per-Task Verification Map
 
-> Task IDs are TBD until planning (step 8) completes. Rows below are the requirement→test seams lifted from 62-RESEARCH.md; the planner/auditor maps them onto concrete `{N}-PP-TT` task IDs.
+> Task IDs map each requirement seam to its concrete test file + test name. All seams are present and green (`pnpm --filter @cipherbox/core test` → 9 files, 190 tests passed, 2026-06-29).
 
-| Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
-|---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| TBD | TBD | TBD | NODE-01 | — | encode/decode round-trip for folder/file/root | unit | `pnpm --filter @cipherbox/core test -- node-codec` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | NODE-01 | — | body bytes match primary-lock golden vector (IV-independent) | golden-vector | `pnpm --filter @cipherbox/core test -- node-codec-vectors` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | NODE-01 | — | full-seal (fixed key/IV) matches sealed-envelope golden vector | golden-vector | `pnpm --filter @cipherbox/core test -- node-codec-vectors` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | NODE-02 | T-content-self-seal | content seals role `0x03`; unseal recovers `fileKey` as `Uint8Array` | unit | `pnpm --filter @cipherbox/core test -- node-codec` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | NODE-02 | — | both `GCM` and `CTR` `encryptionMode` survive round-trip | unit | `pnpm --filter @cipherbox/core test -- node-codec` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | NODE-03 | T-aad-transplant | `SealedChildRef` read-only fields; `readKeySealed` role `0x02`; no write field | unit | `pnpm --filter @cipherbox/core test -- node-codec` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | NODE-04 | T-stale-generation | envelope plaintext `generation`; wrong-`generation` AAD fails unseal | unit | `pnpm --filter @cipherbox/core test -- node-codec` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | NODE-04 | — | `generation` outside `[0, 2^32-1]` throws on encode (fail-closed) | unit | `pnpm --filter @cipherbox/core test -- node-codec` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | NODE-05 | — | Rust `Node` enum + cross-language `#[test]` — **Phase 69, not tested here** | — | — | n/a | ⬜ deferred |
-| TBD | TBD | TBD | NODE-06 | — | vault v3 blob serialize/deserialize round-trip; exact hex matches golden vector | golden-vector | `pnpm --filter @cipherbox/core test -- vault-blob` | ❌ W0 (modify) | ⬜ pending |
-| TBD | TBD | TBD | NODE-06 | — | `encryptedRootFolderKey` absent from all vault types | typecheck | `pnpm typecheck` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | D-02 (gate) | — | `sdk-core` + `sdk` + `web` typecheck after `dist/` rebuild | typecheck | compile-gate command (see Test Infrastructure) | ❌ W0 | ⬜ pending |
+| Task ID | Test File | Requirement | Threat Ref | Secure Behavior · Test Name | Test Type | Automated Command | File Exists | Status |
+|---------|-----------|-------------|------------|-----------------------------|-----------|-------------------|-------------|--------|
+| NODE-01-RT | `node-codec.test.ts` | NODE-01 | — | encode/decode round-trip for folder/file/root · `NODE-01: encode/decode round-trip` (folder/root/file deep-equal, 3 tests) | unit | `pnpm --filter @cipherbox/core test node-codec` | ✅ | ✅ green |
+| NODE-01-BL | `node-codec-vectors.test.ts` | NODE-01/05 | — | body bytes match primary-lock golden vector · `Node Codec — Body Bytes PRIMARY LOCK` (folder/file-GCM/file-CTR/root, 4 tests) | golden-vector | `pnpm --filter @cipherbox/core test node-codec-vectors` | ✅ | ✅ green |
+| NODE-01-FS | `node-codec-vectors.test.ts` | NODE-01/05 | T-62-06 | full-seal (fixed key/IV) matches sealed-envelope golden vector · `Node Codec — FULL-SEAL LOCK` (readSealed + writeSealed base64, 2 tests) | golden-vector | `pnpm --filter @cipherbox/core test node-codec-vectors` | ✅ | ✅ green |
+| NODE-02-SS | `node-codec.test.ts` + `node-codec-vectors.test.ts` | NODE-02 | T-content-self-seal | content seals role `0x03`; unseal recovers `fileKey` as 32-byte `Uint8Array` · `Node Codec — Content Self-Seal (NODE-02, role 0x03)` (GCM+CTR recover, wrong key/nodeId/generation throw, 5 tests) + `NODE-02: fileKey survives as 32-byte Uint8Array` | unit | `pnpm --filter @cipherbox/core test node-codec` | ✅ | ✅ green |
+| NODE-02-EM | `node-codec.test.ts` | NODE-02 | — | both `GCM` and `CTR` `encryptionMode` survive round-trip · `both GCM and CTR encryptionMode values are preserved after round-trip` | unit | `pnpm --filter @cipherbox/core test node-codec` | ✅ | ✅ green |
+| NODE-03-CR | `node-codec.test.ts` | NODE-03 | T-aad-transplant | `SealedChildRef` exactly 5 read-only fields; `readKeySealed` role `0x02`; no write field · `NODE-03: SealedChildRef has no write field` + `Node Codec — AAD Transplant Rejection` (child A vs B id, 4 tests) | unit | `pnpm --filter @cipherbox/core test node-codec` | ✅ | ✅ green |
+| NODE-04-GA | `node-codec.test.ts` | NODE-04 | T-stale-generation | envelope plaintext `generation` folded into AAD; wrong-`generation` AAD fails unseal · `readKeySealed at generation 0 cannot be unsealed at generation 1` + `node body sealed at generation 5 fails unseal when envelope generation tampered to 6` | unit | `pnpm --filter @cipherbox/core test node-codec` | ✅ | ✅ green |
+| NODE-04-GR | `node-codec.test.ts` | NODE-04 | — | `generation` outside `[0, 2^32-1]` throws fail-closed · `NODE-04: generation range [0, 2^32-1] validated fail-closed` (0x100000000 / -1 / 1.5 throw; 0 and 0xffffffff accepted, 5 tests) | unit | `pnpm --filter @cipherbox/core test node-codec` | ✅ | ✅ green |
+| NODE-05-RUST | — | NODE-05 | — | Rust `Node` enum + cross-language `#[test]` — **deferred to Phase 69, n/a here** (TS wire-format freeze covered by NODE-01-BL/FS) | — | — | n/a | ⬜ deferred |
+| NODE-06-BV | `vault-blob-vectors.test.ts` | NODE-06 | — | vault v3 blob serialize/deserialize round-trip; exact hex matches golden vector; v2-byte/truncation throw · `Vault Key Blob v3 Test Vectors` (11 tests) | golden-vector | `pnpm --filter @cipherbox/core test vault-blob-vectors` | ✅ | ✅ green |
+| NODE-06-NF | `vault-blob-vectors.test.ts` (verified absent in src) | NODE-06 | — | `encryptedRootFolderKey` absent from all vault types; v3 two-key only · verified by D-02 compile gate + grep (VERIFICATION truth #4) | typecheck | compile-gate command (see Test Infrastructure) | ✅ | ✅ green |
+| D-02-GATE | (compile gate) | D-02 (gate) | — | `sdk-core` + `sdk` + `web` typecheck after `dist/` rebuild · 0 errors (VERIFICATION spot-checks) | typecheck | compile-gate command (see Test Infrastructure) | ✅ | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -60,10 +61,12 @@ created: 2026-06-28
 
 ## Wave 0 Requirements
 
-- [ ] `packages/core/src/__tests__/node-codec-vectors.test.ts` — NODE-01..NODE-04 (body-bytes lock + full-seal lock + round-trip + generation validation)
-- [ ] `tests/vectors/node-codec.json` — frozen JSON fixture: all three node kinds (folder; file with `content` + GCM + CTR `VersionEntry`; root) + vault v3 blob vector
-- [ ] Modify `packages/core/src/__tests__/vault-blob-vectors.test.ts` to the v3 two-key format (D-05) — existing file, not new
-- [ ] No framework install needed — vitest 3.0.5 already configured in `packages/core`
+- [x] `packages/core/src/__tests__/node-codec-vectors.test.ts` — NODE-01..NODE-05 (20 tests: body-bytes lock + full-seal lock + round-trip + AAD-transplant rejection)
+- [x] `packages/core/src/__tests__/node-codec.test.ts` — NODE-01..NODE-04 (15 tests: round-trip, fileKey/encryptionMode, SealedChildRef shape, generation range guard, content self-seal)
+- [x] `tests/vectors/node-codec.json` — frozen JSON fixture: all three node kinds (folder; file with `content` + GCM + CTR `VersionEntry`; root) + full-seal vector
+- [x] `tests/vectors/vault-v3-blob.json` — frozen v3 two-key blob vector
+- [x] `packages/core/src/__tests__/vault-blob-vectors.test.ts` — v3 two-key format (D-05), 11 tests
+- [x] No framework install needed — vitest already configured in `packages/core`
 
 ---
 
@@ -77,11 +80,11 @@ created: 2026-06-28
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 30s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies (NODE-05 Rust deferred to Phase 69, n/a)
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references (all test files + JSON fixtures present)
+- [x] No watch-mode flags
+- [x] Feedback latency < 30s (core suite ~1.2s)
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** validated 2026-06-29 — 11/11 active requirement seams green (190/190 core tests pass); NODE-05 Rust deferred to Phase 69. 0 gaps.
