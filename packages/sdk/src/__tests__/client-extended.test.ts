@@ -52,7 +52,19 @@ vi.mock('@cipherbox/sdk-core', async (importOriginal) => {
     createAndPublishIpnsRecord: vi.fn(),
     addToIpfs: vi.fn(),
     fetchFromIpfs: vi.fn(),
+    resolveIpnsRecord: vi.fn(),
     unpinFromIpfs: vi.fn(),
+  };
+});
+
+// Mock @cipherbox/core seal/unseal — used only by moveItem's FLAG-63-U2 re-seal.
+// Spread actual so SealedChildRef / PublishedNode types and all other exports pass through.
+vi.mock('@cipherbox/core', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@cipherbox/core')>();
+  return {
+    ...actual,
+    sealChildReadKey: vi.fn().mockResolvedValue('resealed-dest-hex'),
+    unsealChildReadKey: vi.fn().mockResolvedValue(new Uint8Array(32).fill(0x42)),
   };
 });
 
@@ -160,12 +172,29 @@ describe('CipherBoxClient - extended', () => {
         newSequenceNumber: 2n,
         publishedChildren: [],
       });
+      // FLAG-63-U2 re-seal path: resolve the moved child's IPNS by its ipnsName
+      // ('k51file'), fetch its PublishedNode envelope for the id/kind AAD inputs.
+      vi.mocked(sdkCore.resolveIpnsRecord).mockResolvedValue({ cid: 'bafychild' } as never);
+      vi.mocked(sdkCore.fetchFromIpfs).mockResolvedValue(
+        new TextEncoder().encode(JSON.stringify({ id: 'file1', kind: 'file' }))
+      );
 
       await client.moveItem('src-ipns', 'dest-ipns', 'file1');
 
       expect(sdkCore.moveItem).toHaveBeenCalled();
       const updatedEvents = events.filter((e) => e.type === 'folder:updated');
       expect(updatedEvents).toHaveLength(2);
+
+      // The IPNS resolve must use the moved ref's ipnsName, not the caller-facing childId.
+      expect(sdkCore.resolveIpnsRecord).toHaveBeenCalledWith('k51file', expect.anything());
+
+      // The dest publish must carry the re-sealed key (re-sealed under the dest parent),
+      // not the source-sealed blob (FLAG-63-U2 / CodeRabbit #2 + #3).
+      const destPublish = vi
+        .mocked(sdkCore.updateFolderMetadataAndPublish)
+        .mock.calls.find(([arg]) => arg.ipnsName === 'dest-ipns');
+      expect(destPublish).toBeDefined();
+      expect(destPublish?.[0].children[0]?.readKeySealed).toBe('resealed-dest-hex');
     });
 
     it('throws when source folder not loaded', async () => {

@@ -564,30 +564,35 @@ export class CipherBoxClient {
       const baseDestChildren = [...destFolder.children];
 
       // Pure link rewrite — zero re-encryption (READ-04)
-      const { updatedSource, updatedDest } = sdkCore.moveItem({
+      const { updatedSource, updatedDest, movedRef } = sdkCore.moveItem({
         sourceChildren: sourceFolder.children,
         destChildren: destFolder.children,
         childId,
       });
 
       // FLAG-63-U2: Re-seal the moved child's readKeySealed under the DEST parent readKey.
-      // sdkCore.moveItem() is a pure link rewrite — the movedRef still carries a
+      // sdkCore.moveItem() is a pure link rewrite — the moved ref still carries a
       // readKeySealed blob bound to the SOURCE parent's readKey. Any reader navigating
       // the dest-folder IPNS path will fail AEAD verification unless we re-seal.
-      const movedRef = updatedDest.find((c) => c.ipnsName === childId);
-      if (!movedRef) {
+      //
+      // The moved record is identified by its ipnsName (SealedChildRef carries no `id`
+      // — NODE-03, design §2.2); `childId` is the caller-facing handle that
+      // sdkCore.moveItem resolves to `movedRef`. Mutate the entry that is actually
+      // present in `updatedDest` so the published record carries the re-sealed key.
+      const destEntry = updatedDest.find((c) => c.ipnsName === movedRef.ipnsName);
+      if (!destEntry) {
         throw new Error(
-          `moveItem: moved child ${childId} not found in dest after link rewrite (FLAG-63-U2)`
+          `moveItem: moved child ${movedRef.ipnsName} not found in dest after link rewrite (FLAG-63-U2)`
         );
       }
 
       // Resolve the child's IPNS to read the plaintext id and kind from the PublishedNode
       // envelope. These are AAD inputs for sealChildReadKey / unsealChildReadKey.
       // id/kind are NEVER stored in SealedChildRef (NODE-03, design §2.2).
-      const childIpnsRecord = await sdkCore.resolveIpnsRecord(childId, this.ctx);
+      const childIpnsRecord = await sdkCore.resolveIpnsRecord(movedRef.ipnsName, this.ctx);
       if (!childIpnsRecord) {
         throw new Error(
-          `moveItem: cannot resolve child IPNS ${childId} for re-seal — record not found`
+          `moveItem: cannot resolve child IPNS ${movedRef.ipnsName} for re-seal — record not found`
         );
       }
       const rawChildNode = await sdkCore.fetchFromIpfs(this.ctx, childIpnsRecord.cid);
@@ -596,22 +601,22 @@ export class CipherBoxClient {
       // Recover the child readKey under the SOURCE parent key.
       // D-09: do NOT zero sourceFolder.folderKey (caller-owned buffer).
       const childReadKey = await unsealChildReadKey(
-        movedRef.readKeySealed,
+        destEntry.readKeySealed,
         sourceFolder.folderKey,
         childPub.id,
         childPub.kind,
-        movedRef.generation
+        destEntry.generation
       );
 
       // Re-seal the child readKey under the DESTINATION parent key.
       // D-09: do NOT zero destFolder.folderKey (caller-owned buffer).
       try {
-        movedRef.readKeySealed = await sealChildReadKey(
+        destEntry.readKeySealed = await sealChildReadKey(
           childReadKey,
           destFolder.folderKey,
           childPub.id,
           childPub.kind,
-          movedRef.generation // generation unchanged — no content re-encryption, no bump
+          destEntry.generation // generation unchanged — no content re-encryption, no bump
         );
       } finally {
         // Zero the recovered child readKey on every exit path — engine-derived,
