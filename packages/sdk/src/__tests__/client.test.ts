@@ -292,7 +292,7 @@ describe('CipherBoxClient', () => {
         children: [child],
         metadata: null,
         lastLoadedAt: Date.now(),
-        nodeId: '',
+        nodeId: 'folder-node-id',
         nodeGeneration: 0,
       });
 

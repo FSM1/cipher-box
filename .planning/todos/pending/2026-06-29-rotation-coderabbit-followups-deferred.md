@@ -11,7 +11,13 @@ files:
 
 ## Problem
 
-CodeRabbit CLI review at Phase 64 ship (2026-06-29) surfaced 17 findings. The low-risk set (docs, input validation, zeroization completeness) was fixed in-line before merge. The findings below are in the rotation-soundness domain the user explicitly deferred ("ship as-is, defer both") and are recorded here. They refine / extend the two primary deferrals [[rotation-concurrent-add-merge-downgrades-rotated-child-readkey]] (RR-01) and [[rotation-fresh-record-resume-and-sc4-double-bump]] (RR-02).
+CodeRabbit CLI review at Phase 64 ship (2026-06-29) surfaced 17 findings; the PR-level CodeRabbit + greptile reviews added more. The low-risk set (docs, input validation, zeroization completeness) was fixed in-line before merge. The findings below are in the rotation-soundness domain the user explicitly deferred ("ship as-is, defer both") and are recorded here. They refine / extend the two primary deferrals [[rotation-concurrent-add-merge-downgrades-rotated-child-readkey]] (RR-01) and [[rotation-fresh-record-resume-and-sc4-double-bump]] (RR-02).
+
+Additional quick-win hardening fixed at PR review (2026-06-29), beyond the items above:
+
+- **fileKey D-09 hygiene** (greptile P2, engine.ts `mintFileKeyOnRotate`): zero the pre-rotation `node.content.fileKey` before overwriting with `fileKeyPrime` — safe because `node` is a fresh `unsealNode` output (engine-owned, not a caller-reused buffer).
+- **D-01 key-material validation** (CodeRabbit Major, engine.ts `rotateOne`): the fail-closed guard now rejects malformed/all-zero/wrong-length IPNS keys (`!(x instanceof Uint8Array) || x.length !== 32 || all-zero`), not just `undefined` — the old placeholder was `new Uint8Array(32)`.
+- **Test-fixture node identity** (CodeRabbit Major/Minor): `helpers.ts setupFolder`, `client.test.ts`, and `client-move-reencrypt.test.ts` now seed stable non-empty `nodeId` placeholders instead of `''`, matching the folder publish contract.
 
 ### Merge path (RR-01 family) → rotation merge rework
 
@@ -22,7 +28,7 @@ CodeRabbit CLI review at Phase 64 ship (2026-06-29) surfaced 17 findings. The lo
 
 - **[MAJOR, engine.ts ~L407-439] `verifySubtreeClean` is shallow.** It only checks the root's IMMEDIATE children and returns `clean` when the root IPNS record is missing. It must recursively traverse the whole subtree (resolve each child's IPNS record, compare every parent mirror vs the child's published generation, collect dirty frontier nodes at any depth), and treat a missing root record as dirty/surfaced rather than short-circuiting to clean. This is required for the true fresh-record resume RR-02 describes.
 - **[MAJOR, engine.ts ~L794-807] Frontier skips missing child records, desyncing `pendingChildCount`.** Missing IPNS/envelope records hit `continue` paths without decrementing/accounting `pendingChildCount`, so a parent can reach `complete` while unresolved children remain implicitly counted. Treat missing records as fail-closed errors or explicitly account for them before continuing.
-- **[MAJOR, engine.ts ~L778-792] Dirty-resume root parentTracking can proceed without a signing key.** The root-skipped parentTracking path can store `parentIpnsPrivateKey` and later force it non-null, leaking `undefined` into the publish flow instead of failing closed (D-01). Require a real signing key before storing it; surface the error early. Apply the same guard in the later dirty-resume parentTracking block.
+- **[MAJOR, engine.ts ~L778-792] Dirty-resume root parentTracking can proceed without a signing key.** ✅ FIXED at PR review (CodeRabbit `#5` + greptile P1): a `if (!rootIpnsPrivateKey) throw` D-01 fail-closed guard now precedes the `frontier.length > 0` parentTracking seeding, so the later `parentIpnsPrivateKey!` convergence-skip republish can never force `undefined` into the publish flow.
 
 ### Grant re-mint wiring → Phase 66 (live shares transport)
 

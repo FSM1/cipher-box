@@ -55,7 +55,9 @@ export function setupFolder(client: CipherBoxClient, ipnsName = 'folder-ipns', n
     children: [{ ...child }],
     metadata: null,
     lastLoadedAt: now,
-    nodeId: '',
+    // Stable non-empty placeholder — the folder publish contract requires a truthy
+    // nodeId; '' would fail fixture validity on any real publish path.
+    nodeId: 'test-node-id',
     nodeGeneration: 0,
   });
   return { ...child };

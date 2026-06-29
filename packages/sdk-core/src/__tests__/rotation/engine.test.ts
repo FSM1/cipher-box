@@ -817,7 +817,7 @@ describe('D-01 fail-closed: rotateOne requires a real nodeIpnsPrivateKey (Plan 6
         jobRecord: makeJobRecord(),
         ctx: createMockContext(),
       })
-    ).rejects.toThrow(/no IPNS private key/i);
+    ).rejects.toThrow(/no valid IPNS private key/i);
   });
 
   it('does not call publishWithCas with an all-zero placeholder key when nodeIpnsPrivateKey absent', async () => {
@@ -953,7 +953,7 @@ describe('D-01 nodeKeySource: BFS key threading (Plan 64-04 Task 1)', () => {
         jobRecord: makeJobRecord({ rootNodeId: NODE_ID }),
         ctx: createMockContext(),
       })
-    ).rejects.toThrow(/no IPNS private key/i);
+    ).rejects.toThrow(/no valid IPNS private key/i);
   });
 });
 

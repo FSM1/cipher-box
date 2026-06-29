@@ -284,13 +284,20 @@ async function fetchPublishedNode(cid: string, ctx: SdkContext): Promise<Publish
  * Nodes without content (folder nodes) are a no-op — no content field is added.
  *
  * @security
- *   Do NOT zero `node.content.fileKey` after assignment — `rotateOne` consumes it via
- *   `sealNode` (terminal owner rule, D-09). Only zero on your own failure paths (none here).
+ *   Do NOT zero the NEW `node.content.fileKey` after assignment — `rotateOne` consumes it
+ *   via `sealNode` (terminal owner rule, D-09). The OLD pre-rotation fileKey IS zeroed before
+ *   the swap: `node` is a fresh `unsealNode` output (engine-owned, not a caller-reused buffer),
+ *   so its decrypted content key is terminally owned here and wiping it is safe D-09 hygiene.
+ *   Only zero the new minted key on your own failure paths (handled by the caller in rotateOne).
  */
 export async function mintFileKeyOnRotate(node: Node, _job: RotationJobRecord): Promise<void> {
   if (!node.content) {
     // Folder node (or any node without content) — no-op.
     return;
+  }
+  // Zero the pre-rotation content key before discarding the reference (D-09 hygiene).
+  if (node.content.fileKey instanceof Uint8Array) {
+    node.content.fileKey.fill(0);
   }
   const fileKeyPrime = generateRandomBytes(32);
   node.content.fileKey = fileKeyPrime;
@@ -503,10 +510,16 @@ export async function rotateOne(
 
   // D-01 fail-closed: require a real IPNS signing key for every frontier node.
   // Phase 64 threads keys via nodeKeySource in RotationParams; Phase 65 derives them
-  // from the unsealed write-body. Never publish an IPNS record with a placeholder.
-  if (!nodeIpnsPrivateKey) {
+  // from the unsealed write-body. Never publish an IPNS record with a placeholder —
+  // reject not just undefined but malformed/all-zero key material (the old placeholder
+  // was `new Uint8Array(32)`). IPNS keys here are the 32-byte Ed25519 seed (derive-ipns.ts).
+  if (
+    !(nodeIpnsPrivateKey instanceof Uint8Array) ||
+    nodeIpnsPrivateKey.length !== 32 ||
+    nodeIpnsPrivateKey.every((byte) => byte === 0)
+  ) {
     throw new Error(
-      `rotateOne: no IPNS private key for ${nodeIpnsName} — ` +
+      `rotateOne: no valid IPNS private key for ${nodeIpnsName} — ` +
         'provide via nodeKeySource (Phase 64) or write-body wiring (Phase 65)'
     );
   }
@@ -787,6 +800,16 @@ export async function rotateReadFromNode(params: RotationParams): Promise<void> 
     const rootNode = await unsealNode(rootPub, rootReadKey);
 
     if (frontier.length > 0) {
+      // D-01 fail-closed: the dirty-resume path does NOT pass through rotateOne's
+      // non-null key check (root was rotated in a prior run), so guard here before
+      // seeding parentTracking. Otherwise `parentIpnsPrivateKey!` at the convergence-skip
+      // republish (below) would force an `undefined` key into updateFolderMetadataAndPublish.
+      if (!rootIpnsPrivateKey) {
+        throw new Error(
+          `rotateReadFromNode: no IPNS private key for dirty root republish ${rootNodeIpnsName} ` +
+            '— provide via nodeKeySource (D-01 fail-closed)'
+        );
+      }
       // Set up parent tracking for root using rootReadKey as the readKey proxy.
       // (Root was rotated in a prior run; rootReadKey unseals the current sealed body as
       // confirmed by verifySubtreeClean's successful unseal.)

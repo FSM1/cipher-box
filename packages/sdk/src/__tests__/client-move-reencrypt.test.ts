@@ -99,7 +99,7 @@ function setupFolders(client: CipherBoxClient) {
     children: [filePointer],
     metadata: null,
     lastLoadedAt: now,
-    nodeId: '',
+    nodeId: 'src-node-id',
     nodeGeneration: 0,
   });
 
@@ -114,7 +114,7 @@ function setupFolders(client: CipherBoxClient) {
     children: [],
     metadata: null,
     lastLoadedAt: now,
-    nodeId: '',
+    nodeId: 'dest-node-id',
     nodeGeneration: 0,
   });
 }
