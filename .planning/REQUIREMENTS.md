@@ -27,7 +27,7 @@ Requirements for v2.0. Each maps to exactly one roadmap phase. Categories: CRYPT
 ### READ — read key-chaining navigation and sharing
 
 - [ ] **READ-01**: A user can issue a read grant with one ECIES wrap of the share-root `readKey` + one `shares` row (0 node touches, 0 republishes); granting a single file is identical to granting a deep folder
-- [ ] **READ-02**: A grantee can navigate to a depth-`d` child via one ECIES unwrap then `O(depth)` symmetric AES, recovering content key/CID/mode at a file node; the read path distinguishes "soft behind, retry" from "hard revoked"
+- [x] **READ-02**: A grantee can navigate to a depth-`d` child via one ECIES unwrap then `O(depth)` symmetric AES, recovering content key/CID/mode at a file node; the read path distinguishes "soft behind, retry" from "hard revoked"
 - [ ] **READ-03**: Adding an item seals the child `readKey` under the parent `readKey` with no per-recipient fan-out; `reWrapForRecipients`/`addShareKeys` are deleted
 - [ ] **READ-04**: A move within a grantee's scope is link rewrites only (no re-encrypt), computing exact per-grant scope so benign within-scope moves do not over-rotate
 - [ ] **READ-05**: An invite wraps the single share-root `readKey` to an ephemeral key (private half in the URL fragment); claim re-wraps it to the claimer's key and stores a standard grant; the `encryptedChildKeys[]` fan-out is deleted
@@ -116,7 +116,7 @@ Which phases cover which requirements. Populated during roadmap creation.
 | NODE-05 | Phase 62 | Complete |
 | NODE-06 | Phase 62 | Complete |
 | READ-01 | Phase 63 | Pending |
-| READ-02 | Phase 63 | Pending |
+| READ-02 | Phase 63 | Complete |
 | READ-03 | Phase 63 | Pending |
 | READ-04 | Phase 63 | Pending |
 | READ-05 | Phase 63 | Pending |
