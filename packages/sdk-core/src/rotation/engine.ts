@@ -202,6 +202,22 @@ type RotateOneParams = {
    * real API callbacks in production and vi.fn() mocks in tests.
    */
   grantCallbacks?: GrantRemintCallbacks;
+  /**
+   * Write key for this node's write-body (optional).
+   *
+   * When the node's published envelope has `writeSealed`, this key is required:
+   *   - `unsealNode(published, parentReadKey, nodeWriteKey)` recovers the write-body.
+   *   - `sealNode(updatedNode, readKeyPrime, nodeWriteKey)` re-seals it unchanged.
+   * Fail-closed: if `published.writeSealed` is present and this key is absent or
+   * all-zeros, `rotateOne` throws (RESEARCH Pitfall 2 / T-65-17).
+   *
+   * Read-rotation does NOT rotate the write plane (that is Plan-06's job).
+   * The write-body is re-sealed under the SAME nodeWriteKey — ipnsPrivateKey
+   * and writeChildren are preserved byte-for-byte (read/write planes are independent).
+   *
+   * NEVER zeroed by rotateOne — caller is terminal owner (D-09).
+   */
+  nodeWriteKey?: Uint8Array;
 };
 
 /** Parameters for the resumable frontier walk. */
@@ -229,7 +245,7 @@ export type RotationParams = {
    */
   nodeKeySource?: (
     ipnsName: string
-  ) => { privateKey: Uint8Array; publicKey: Uint8Array } | undefined;
+  ) => { privateKey: Uint8Array; publicKey: Uint8Array; writeKey?: Uint8Array } | undefined;
 };
 
 // ---------------------------------------------------------------------------
@@ -483,6 +499,7 @@ export async function rotateOne(
     ctx,
     innerGrants,
     grantCallbacks,
+    nodeWriteKey,
   } = params;
 
   // Step 2 (fast path): idempotency check when nodeId is already known
@@ -496,11 +513,13 @@ export async function rotateOne(
     throw new Error(`rotateOne: node ${nodeIpnsName} not found in IPNS`);
   }
 
-  // Fetch and unseal the node's read-body under parentReadKey
+  // Fetch and unseal the node's read-body under parentReadKey.
+  // When nodeWriteKey is provided, also recover the write-body in the same call so
+  // it can be re-sealed unchanged on the reseal step (read/write planes are independent).
   // (parentReadKey is the key chained from the parent — for root nodes it is the
   //  root's own readKey, supplied by the rotation caller)
   const published = await fetchPublishedNode(resolved.cid, ctx);
-  const node = await unsealNode(published, parentReadKey);
+  const node = await unsealNode(published, parentReadKey, nodeWriteKey);
 
   // Step 2 (continued): idempotency check with the derived nodeId from the unsealed node
   const nodeId = providedNodeId ?? node.id;
@@ -524,6 +543,22 @@ export async function rotateOne(
     );
   }
 
+  // D-01 fail-closed: if the published envelope has a write-body, a real writeKey MUST be
+  // threaded. A missing or all-zero writeKey would silently drop the write-plane on re-seal
+  // (RESEARCH Pitfall 2 / T-65-17). Guard mirrors the IPNS-key guard above.
+  if (published.writeSealed) {
+    if (
+      !(nodeWriteKey instanceof Uint8Array) ||
+      nodeWriteKey.length !== 32 ||
+      nodeWriteKey.every((byte) => byte === 0)
+    ) {
+      throw new Error(
+        `rotateOne: writeSealed present for ${nodeIpnsName} but no valid writeKey threaded — ` +
+          'provide via nodeKeySource.writeKey (Phase 65)'
+      );
+    }
+  }
+
   // Step 4: Mint fresh readKey' (32 cryptographically random bytes) and generation'
   // Do NOT zero parentReadKey — caller is terminal owner (D-09).
   const readKeyPrime = crypto.getRandomValues(new Uint8Array(32));
@@ -542,12 +577,14 @@ export async function rotateOne(
     }
 
     // Step 6: Re-seal the read-body under readKey' with the new generation'.
-    // write-body is SKIPPED in Phase 63 (read-chain only; no writeKey supplied).
-    // node.writeBody is absent since unsealNode was called without a writeKey.
+    // When nodeWriteKey is provided, the write-body is re-sealed under the SAME key —
+    // read-rotation does NOT rotate the write plane (read/write planes are independent).
+    // If the node has no write-body, an empty writeKey is passed (sealNode ignores it).
     const updatedNode: Node = { ...node, generation: generationPrime };
-    // Placeholder writeKey: unused because updatedNode.writeBody is absent (D-09 safe).
-    const PLACEHOLDER_WRITE_KEY = new Uint8Array(32);
-    const resealedPublished = await sealNode(updatedNode, readKeyPrime, PLACEHOLDER_WRITE_KEY);
+    // Use the real writeKey when the node has a write-body; otherwise pass empty bytes
+    // (sealNode only uses writeKey when node.writeBody is set — empty is safe here).
+    const writeKeyForReseal: Uint8Array = node.writeBody ? nodeWriteKey! : new Uint8Array(0);
+    const resealedPublished = await sealNode(updatedNode, readKeyPrime, writeKeyForReseal);
 
     // Step 7: Compute the new sealed child-readKey for the parent's SealedChildRef[N].
     // The parent caller (rotateReadFromNode) uses newReadKeySealed to update the parent
@@ -591,7 +628,7 @@ export async function rotateOne(
           // No base snapshot: treat local children as both base and local.
           // This path should not occur in practice (published is always set).
           const mergedNode: Node = { ...node, generation: generationPrime };
-          return { merged: await sealNode(mergedNode, readKeyPrime, PLACEHOLDER_WRITE_KEY) };
+          return { merged: await sealNode(mergedNode, readKeyPrime, writeKeyForReseal) };
         }
         const mergedPublished = await mergeConcurrentChildren(
           base,
@@ -601,7 +638,7 @@ export async function rotateOne(
           readKeyPrime, // NEW readKey — re-seal merged result under rotation key
           node,
           generationPrime,
-          PLACEHOLDER_WRITE_KEY
+          writeKeyForReseal
         );
         return { merged: mergedPublished };
       },
@@ -694,6 +731,8 @@ export async function rotateReadFromNode(params: RotationParams): Promise<void> 
     nodeIpnsName: rootNodeIpnsName,
     nodeIpnsPrivateKey: rootIpnsPrivateKey,
     nodeIpnsPublicKey: rootIpnsPublicKey,
+    // Thread the root's writeKey from nodeKeySource if available (Phase 65).
+    nodeWriteKey: nodeKeySource?.(rootNodeIpnsName)?.writeKey,
     parentReadKey: rootReadKey,
     parentIpnsName: rootNodeIpnsName, // root has no parent; parentIpnsName unused in Phase 63
     parentCurrentSeq: 0n, // unused in Phase 63 (parent-link publish deferred to Phase 64)
@@ -757,6 +796,8 @@ export async function rotateReadFromNode(params: RotationParams): Promise<void> 
     parentIpnsName: string;
     ipnsPrivateKey?: Uint8Array;
     ipnsPublicKey?: Uint8Array;
+    /** Write key threaded from nodeKeySource for write-body re-seal (Phase 65). */
+    nodeWriteKey?: Uint8Array;
     /** Stable UUID from the child's PublishedNode envelope (for D-02 AAD binding). */
     childPubId: string;
     /** Node kind from the child's PublishedNode envelope (for D-02 AAD binding). */
@@ -846,6 +887,7 @@ export async function rotateReadFromNode(params: RotationParams): Promise<void> 
           parentIpnsName: rootNodeIpnsName,
           ipnsPrivateKey: childKeys?.privateKey,
           ipnsPublicKey: childKeys?.publicKey,
+          nodeWriteKey: childKeys?.writeKey,
           childPubId: childPub.id,
           childPubKind: childPub.kind as 'folder' | 'file',
           enqueuedGeneration: childRef.generation,
@@ -887,7 +929,7 @@ export async function rotateReadFromNode(params: RotationParams): Promise<void> 
         childRef.generation // parent-mirror (§2.6 D-07 invariant 1)
       );
       // Thread per-node IPNS key from nodeKeySource (D-01 / Phase 64 seam).
-      // Phase 65 derives keys from the write-body instead.
+      // Phase 65 also threads writeKey via the same seam.
       const childKeys = nodeKeySource?.(childRef.ipnsName);
       queue.push({
         childRef,
@@ -895,6 +937,7 @@ export async function rotateReadFromNode(params: RotationParams): Promise<void> 
         parentIpnsName: rootNodeIpnsName,
         ipnsPrivateKey: childKeys?.privateKey,
         ipnsPublicKey: childKeys?.publicKey,
+        nodeWriteKey: childKeys?.writeKey,
         childPubId: childPub.id,
         childPubKind: childPub.kind as 'folder' | 'file',
         enqueuedGeneration: childRef.generation,
@@ -949,6 +992,8 @@ export async function rotateReadFromNode(params: RotationParams): Promise<void> 
         nodeIpnsName: item.childRef.ipnsName,
         nodeIpnsPrivateKey: item.ipnsPrivateKey,
         nodeIpnsPublicKey: item.ipnsPublicKey,
+        // Thread the write key sourced at enqueue time (Phase 65).
+        nodeWriteKey: item.nodeWriteKey,
         parentReadKey: item.nodeReadKey, // this node's own (pre-rotation) readKey
         parentIpnsName: item.parentIpnsName,
         parentCurrentSeq: 0n,
@@ -1038,6 +1083,7 @@ export async function rotateReadFromNode(params: RotationParams): Promise<void> 
             childRef.generation
           );
           // Thread per-node IPNS key from nodeKeySource (D-01 / Phase 64 seam).
+          // Phase 65 also threads writeKey via the same seam.
           const grandchildKeys = nodeKeySource?.(childRef.ipnsName);
           queue.push({
             childRef,
@@ -1045,6 +1091,7 @@ export async function rotateReadFromNode(params: RotationParams): Promise<void> 
             parentIpnsName: item.childRef.ipnsName,
             ipnsPrivateKey: grandchildKeys?.privateKey,
             ipnsPublicKey: grandchildKeys?.publicKey,
+            nodeWriteKey: grandchildKeys?.writeKey,
             childPubId: childPub.id,
             childPubKind: childPub.kind as 'folder' | 'file',
             enqueuedGeneration: childRef.generation,
