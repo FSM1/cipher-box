@@ -20,10 +20,12 @@ import {
   encryptBinMetadata,
   decryptBinMetadata,
   deriveBinIpnsKeypair,
+  sealChildReadKey,
+  unsealChildReadKey,
   type BinEntry,
   type RecycleBinMetadata,
 } from '@cipherbox/core';
-import type { SealedChildRef } from '@cipherbox/core';
+import type { SealedChildRef, Node } from '@cipherbox/core';
 import { bytesToHex, hexToBytes, wrapKey } from '@cipherbox/crypto';
 import type { FolderTree } from '../state/folder-tree';
 
@@ -289,20 +291,118 @@ export async function addToBin(params: {
   binCtx: BinOperationContext;
   revokeSharesForItemsFn?: (ipnsNames: string[]) => Promise<void>;
 }): Promise<{ removedItem: SealedChildRef; updatedBinState: BinState }> {
-  void params;
-  throw new Error('not implemented — phase 65 (bin re-link)');
+  const { folderIpnsName, childId, parentPath, folderTree, binState, binCtx } = params;
+
+  // 1. Validate source folder is loaded
+  const folderState = folderTree.get(folderIpnsName);
+  if (!folderState) throw new Error('Folder not loaded');
+
+  // 2. Resolve child IPNS record to get PublishedNode envelope bytes
+  //    (mirrors moveItem pattern in client.ts lines 589-606 for id/kind extraction)
+  const childResolved = await sdkCore.resolveIpnsRecord(childId, binCtx.ctx);
+  if (!childResolved) throw new Error(`Could not resolve child IPNS record: ${childId}`);
+  const nodeBytes = await sdkCore.fetchFromIpfs(binCtx.ctx, childResolved.cid);
+
+  // 3. Parse PublishedNode plaintext envelope (no decryption needed — id/kind are plaintext)
+  const publishedNode = JSON.parse(new TextDecoder().decode(nodeBytes)) as {
+    schema: string;
+    kind: Node['kind'];
+    id: string;
+    generation: number;
+    aeadVersion: number;
+    readSealed: string;
+  };
+
+  // 4. Find the child ref in the source folder children
+  const childRef = folderState.children.find((c) => c.ipnsName === childId);
+  if (!childRef) throw new Error(`Child not found in folder: ${childId}`);
+
+  // 5. Unseal the child's nodeReadKey from the source parent folderKey
+  //    — gives us the raw 32-byte readKey to capture in the BinEntry
+  const nodeReadKey = await unsealChildReadKey(
+    childRef.readKeySealed,
+    folderState.folderKey,
+    publishedNode.id,
+    publishedNode.kind,
+    publishedNode.generation
+  );
+
+  // 6. Revoke shares BEFORE the destructive folder mutation (fail-closed)
+  if (params.revokeSharesForItemsFn) {
+    await params.revokeSharesForItemsFn([childId]);
+  }
+
+  // 7. Remove child from source folder (pure sync transform)
+  const { updatedChildren, removedItem } = sdkCore.deleteFromFolder({
+    children: folderState.children,
+    childId,
+  });
+
+  // 8. Publish updated folder (destructive — must succeed after revoke)
+  await sdkCore.updateFolderMetadataAndPublish({
+    children: updatedChildren,
+    folderKey: folderState.folderKey,
+    ipnsPrivateKey: folderState.ipnsKeypair.privateKey,
+    ipnsPublicKey: folderState.ipnsKeypair.publicKey,
+    ipnsName: folderIpnsName,
+    sequenceNumber: folderState.sequenceNumber,
+    ctx: binCtx.ctx,
+    nodeId: folderState.nodeId,
+    nodeGeneration: folderState.nodeGeneration,
+  });
+
+  // 9. Build BinEntry with captured nodeReadKey and nodeIpnsName for restore
+  const newEntry: BinEntry = {
+    id: crypto.randomUUID(),
+    itemType: publishedNode.kind === 'folder' ? 'folder' : 'file',
+    name: childRef.name,
+    originalParentIpnsName: folderIpnsName,
+    originalPath: parentPath,
+    deletedAt: Date.now(),
+    size: 0,
+    mimeType: '',
+    nodeReadKey,
+    nodeIpnsName: childId,
+    nodeRef: {
+      schema: 'node/v3' as const,
+      kind: publishedNode.kind,
+      id: publishedNode.id,
+      generation: publishedNode.generation,
+      createdAt: 0,
+      modifiedAt: 0,
+    },
+  };
+
+  // 10. Publish updated bin metadata
+  const newBinSeq = binState.sequenceNumber + 1;
+  const newEntries = [...binState.entries, newEntry];
+  const metadata: RecycleBinMetadata = {
+    version: BIN_METADATA_VERSION,
+    sequenceNumber: newBinSeq,
+    entries: newEntries,
+  };
+  await saveBinMetadata({ metadata, binCtx });
+
+  return {
+    removedItem,
+    updatedBinState: {
+      entries: newEntries,
+      sequenceNumber: newBinSeq,
+      ipnsName: binState.ipnsName,
+    },
+  };
 }
 
 /**
  * Restore an item from the recycle bin back to a folder.
  *
- * PHASE 62 STUB: Phase 65 (bin re-link) will re-implement this using the
- * Node/SealedChildRef model — a SealedChildRef stored on the BinEntry's
- * nodeRef field is re-inserted into the target folder's write-body.
- * The old FolderChild/FilePointer/originalFolderKeyEncrypted fields are
- * removed from BinEntry; see docs/METADATA_SCHEMAS.md §BinEntry.
- *
- * @stub phase 65 (bin re-link)
+ * Pure re-link implementation (Phase 65 / design §3.10):
+ *   - The deleted node's own readKey (captured in BinEntry.nodeReadKey at
+ *     addToBin time) is re-sealed under the destination parent's folderKey
+ *     via sealChildReadKey (role 0x02 child-readkey AAD).
+ *   - No content re-encryption — the item's IPNS record and content CIDs
+ *     are unchanged. Only the SealedChildRef link in the parent folder's
+ *     read-body is updated.
  */
 export async function restoreFromBin(params: {
   entryId: string;
@@ -311,8 +411,76 @@ export async function restoreFromBin(params: {
   binState: BinState;
   binCtx: BinOperationContext;
 }): Promise<{ restoredItem: SealedChildRef; updatedBinState: BinState }> {
-  void params;
-  throw new Error('not implemented — phase 65 (bin re-link)');
+  const { entryId, targetFolderIpnsName, folderTree, binState, binCtx } = params;
+
+  // 1. Find the bin entry
+  const entry = binState.entries.find((e) => e.id === entryId);
+  if (!entry) throw new Error('Bin entry not found');
+
+  // 2. Verify nodeReadKey is present (required for re-link)
+  if (!entry.nodeReadKey) {
+    throw new Error(`nodeReadKey is missing on bin entry ${entryId} — cannot restore without it`);
+  }
+
+  // 3. Validate target folder is loaded
+  const targetFolder = folderTree.get(targetFolderIpnsName);
+  if (!targetFolder) throw new Error('Folder not loaded');
+
+  const nodeRef = entry.nodeRef;
+  const generation = nodeRef?.generation ?? 0;
+  const nodeId = nodeRef?.id ?? '';
+  const nodeKind = nodeRef?.kind ?? 'file';
+
+  // 4. Re-seal the node's own readKey under the destination parent's folderKey
+  //    (pure re-link: sealChildReadKey role 0x02 — no content re-encryption)
+  const readKeySealed = await sealChildReadKey(
+    entry.nodeReadKey,
+    targetFolder.folderKey,
+    nodeId,
+    nodeKind,
+    generation
+  );
+
+  // 5. Build the restored SealedChildRef
+  const restoredItem: SealedChildRef = {
+    name: entry.name,
+    ipnsName: entry.nodeIpnsName ?? '',
+    generation,
+    versionFloor: 0n,
+    readKeySealed,
+  };
+
+  // 6. Add restored ref to target folder and publish
+  await sdkCore.updateFolderMetadataAndPublish({
+    children: [...targetFolder.children, restoredItem],
+    folderKey: targetFolder.folderKey,
+    ipnsPrivateKey: targetFolder.ipnsKeypair.privateKey,
+    ipnsPublicKey: targetFolder.ipnsKeypair.publicKey,
+    ipnsName: targetFolderIpnsName,
+    sequenceNumber: targetFolder.sequenceNumber,
+    ctx: binCtx.ctx,
+    nodeId: targetFolder.nodeId,
+    nodeGeneration: targetFolder.nodeGeneration,
+  });
+
+  // 7. Remove entry from bin and publish updated bin metadata
+  const remainingEntries = binState.entries.filter((e) => e.id !== entryId);
+  const newBinSeq = binState.sequenceNumber + 1;
+  const metadata: RecycleBinMetadata = {
+    version: BIN_METADATA_VERSION,
+    sequenceNumber: newBinSeq,
+    entries: remainingEntries,
+  };
+  await saveBinMetadata({ metadata, binCtx });
+
+  return {
+    restoredItem,
+    updatedBinState: {
+      entries: remainingEntries,
+      sequenceNumber: newBinSeq,
+      ipnsName: binState.ipnsName,
+    },
+  };
 }
 
 /**
