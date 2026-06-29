@@ -137,16 +137,17 @@ export async function updateFolderMetadataAndPublish(params: {
   encryptedIpnsPrivateKey?: string;
   keyEpoch?: number;
   /**
-   * UUID of the underlying folder Node. Preserving the original UUID is preferred
-   * so AAD stays stable across updates; omit to mint a fresh UUID (safe: the id is
-   * stored in plaintext on the PublishedNode envelope and unsealNode reads it back).
+   * UUID of the underlying folder Node. REQUIRED (D-06): must be the stable id of
+   * the folder's Node — never omit to mint a fresh UUID. Omitting breaks
+   * buildNodeAad AAD stability and the rotation convergence witness.
    */
-  nodeId?: string;
+  nodeId: string;
   /**
-   * Generation of the underlying folder Node. Pass the current generation if known
-   * so that rotateReadFromNode can read a consistent generation value post-update.
+   * Generation of the underlying folder Node. REQUIRED (D-06): must be the current
+   * rotation counter — never reset to 0. Omitting corrupts the convergence witness
+   * that rotateReadFromNode relies on.
    */
-  nodeGeneration?: number;
+  nodeGeneration: number;
 }): Promise<{ cid: string; newSequenceNumber: bigint; publishedChildren: SealedChildRef[] }> {
   const key = params.readKey ?? params.folderKey;
   if (!key) throw new Error('updateFolderMetadataAndPublish: readKey or folderKey is required');
@@ -164,15 +165,24 @@ export async function updateFolderMetadataAndPublish(params: {
     backoff: true,
 
     encodeAndUpload: async (localChildren: SealedChildRef[]): Promise<string> => {
-      // Build a minimal Node with the updated children list.
-      // id must be a valid UUID (buildNodeAad validates via uuidToBytes).
-      // nodeId param preserves the original UUID when callers supply it;
-      // otherwise a fresh UUID is minted (self-consistent with its own sealed body).
+      // D-06: nodeId and nodeGeneration are required — no fallbacks.
+      // A fresh UUID per call breaks buildNodeAad AAD stability; generation=0 after
+      // any rotation breaks the parent.SealedChildRef[N].generation convergence test.
+      if (!params.nodeId) {
+        throw new Error(
+          'nodeId is required — do not omit (D-06): a fresh UUID per call breaks AAD binding'
+        );
+      }
+      if (params.nodeGeneration === undefined || params.nodeGeneration === null) {
+        throw new Error(
+          'nodeGeneration is required — do not reset to 0 (D-06): rotation relies on monotonic generation'
+        );
+      }
       const node: Node = {
         schema: 'node/v3',
         kind: 'folder',
-        id: params.nodeId ?? crypto.randomUUID(),
-        generation: params.nodeGeneration ?? 0,
+        id: params.nodeId,
+        generation: params.nodeGeneration,
         createdAt: Date.now(),
         modifiedAt: Date.now(),
         children: localChildren,

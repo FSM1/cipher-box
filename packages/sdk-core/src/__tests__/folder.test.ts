@@ -435,6 +435,8 @@ describe('updateFolderMetadataAndPublish (phase 63 — delegates to publishWithC
       ipnsName: 'k51-parent',
       sequenceNumber: 5n,
       ctx,
+      nodeId: 'folder-node-id-aaa-bbb',
+      nodeGeneration: 0,
     });
 
     // publishWithCas delegates to sealNode + addToIpfs (encodeAndUpload seam)
@@ -468,6 +470,8 @@ describe('updateFolderMetadataAndPublish (phase 63 — delegates to publishWithC
       ipnsName: 'k51-guard',
       sequenceNumber: 0n,
       ctx,
+      nodeId: 'guard-test-node-id-ccc',
+      nodeGeneration: 0,
     });
 
     expect(readKey).toEqual(readKeySnapshot);

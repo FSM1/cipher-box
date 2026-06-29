@@ -122,6 +122,19 @@ export type FolderState = {
   metadata: Node | null;
   /** Timestamp (ms) of last successful load from IPNS */
   lastLoadedAt: number;
+  /**
+   * Stable UUID of the folder's underlying Node (D-06).
+   * Populated on both registerFolder (from the registered node) and loadFolder
+   * (from result.metadata.id). Never changes across publish cycles — rotation
+   * bumps generation but keeps the same id.
+   */
+  nodeId: string;
+  /**
+   * Rotation/convergence counter of the folder's underlying Node (D-06).
+   * Populated from the sealed Node's generation field. Never reset to 0 after
+   * the first publish — monotonically increasing per rotation step.
+   */
+  nodeGeneration: number;
 };
 
 /**
