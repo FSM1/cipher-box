@@ -62,7 +62,7 @@
 
 - [x] **Phase 61: AAD-Bound Seal Primitive and Cross-Language KAT** — Additive AES-GCM+AAD seal in `packages/crypto` and `crates/crypto` with a committed TS↔Rust known-answer test (completed 2026-06-28)
 - [x] **Phase 62: Unified Node Codec (Core Keystone)** — `Node`/`SealedChildRef`/`PublishedNode` types replacing all legacy metadata types; nothing downstream typechecks until this lands (completed 2026-06-28)
-- [ ] **Phase 63: Read-Chain Navigation and Rotation Core** — Read key-chain walk, `rotateReadFromNode`/`rotateOne` engine, scope-exit predicate, and invite re-wrap in `packages/sdk-core`
+- [x] **Phase 63: Read-Chain Navigation and Rotation Core** — Read key-chain walk, `rotateReadFromNode`/`rotateOne` engine, scope-exit predicate, and invite re-wrap in `packages/sdk-core` (completed 2026-06-29)
 - [ ] **Phase 64: Rotation Soundness — Revocation Guarantees** — CRIT-1 content-key rotation, HIGH-3 inner grant re-mint, HIGH-4 concurrent-add merge, crash-safe resume, and the `tests/sdk-e2e` crash-safety suite
 - [ ] **Phase 65: SDK Write-Chain, Bin Re-link, and Invite Claim** — Structured write-body, (c) full Ed25519 write-revocation, bin restore as pure re-link, invite claim re-wrap; delete `addShareKeys`/`reWrapForRecipients`/`encryptedChildKeys`
 - [ ] **Phase 66: API Schema Cutover, Publish Gate, and Tombstone** — Delete `share_keys`, slim `shares`, rename `folder_ipns` → `ipns_records`, drop `public_key`, atomic CAS publish, tombstone state, resolve case-split, server-side generation gate; run `pnpm api:generate`
@@ -179,7 +179,7 @@ Plans:
 4. A move within a grantee's scope produces link rewrites only (zero re-encryption); the scope-exit predicate `hasCoveringGrant` is present and gates every delete/move/rename — a private delete with no active grants triggers zero `rotateReadFromNode` invocations and zero IPNS publishes beyond the parent relink (test verifies zero publish calls)
 5. `rotateReadFromNode` is implemented in a named file (`src/rotation/engine.ts` or equivalent, not `index.ts` barrel) so vitest coverage counts it; `rotateOne` commits per-node atomically via CAS before advancing the walk frontier
 
-**Plans**: 6/7 plans executed
+**Plans**: 7/7 plans complete
 
 Plans:
 **Wave 1**
@@ -199,7 +199,7 @@ Plans:
 
 **Wave 4** *(blocked on Waves 1-3)*
 
-- [ ] 63-07-PLAN.md — One happy-path sdk-e2e round-trip: issue grant → navigate → root-step rotate → revoked grant can't navigate [D-04]
+- [x] 63-07-PLAN.md — One happy-path sdk-e2e round-trip: issue grant → navigate → root-step rotate → revoked grant can't navigate [D-04]
 
 ---
 
@@ -342,7 +342,7 @@ Plans:
 | --- | --- | --- | --- | --- |
 | 61 | AAD-Bound Seal Primitive and Cross-Language KAT | 5/5 | Complete    | 2026-06-28 |
 | 62 | Unified Node Codec (Core Keystone) | 9/9 | Complete    | 2026-06-28 |
-| 63 | Read-Chain Navigation and Rotation Core | 6/7 | In Progress|  |
+| 63 | Read-Chain Navigation and Rotation Core | 7/7 | Complete   | 2026-06-29 |
 | 64 | Rotation Soundness — Revocation Guarantees | 0/? | Not started | - |
 | 65 | SDK Write-Chain, Bin Re-link, and Invite Claim | 0/? | Not started | - |
 | 66 | API Schema Cutover, Publish Gate, and Tombstone | 0/? | Not started | - |

@@ -4,17 +4,17 @@ milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
 current_phase: 63
 current_phase_name: read-chain-navigation-and-rotation-core
-status: executing
+status: verifying
 stopped_at: Completed 63-02-PLAN.md
-last_updated: "2026-06-29T05:28:43.591Z"
+last_updated: "2026-06-29T06:05:43.173Z"
 last_activity: 2026-06-29
 last_activity_desc: Phase 63 execution started
 progress:
   total_phases: 9
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 21
-  completed_plans: 20
-  percent: 22
+  completed_plans: 21
+  percent: 33
 ---
 
 # Project State
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 
 Phase: 63 (read-chain-navigation-and-rotation-core) — EXECUTING
 Plan: 7 of 7
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-06-29 — Phase 63 execution started
 
 Progress: `░░░░░░░░░░` 0 / 9 phases (0%)
@@ -208,6 +208,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 63 P02 | 13 | 2 tasks | 2 files |
 | Phase 63-read-chain-navigation-and-rotation-core P05 | 12m | 2 tasks | 5 files |
 | Phase 63 P06 | 45 | 2 tasks | 9 files |
+| Phase 63 P07 | 25 | 1 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -411,6 +412,8 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: Transport-decoupled insertShareFn callback (D-05): grant issuance unit-tested against mocked API; real shares persistence deferred to Phase 66
 - [Phase ?]: reWrapKey used for claimInviteReadKey to delegate intermediate zeroization (T-63-05)
 - [Phase ?]: hasCoveringGrant pure predicate (D-08): both relay set and localGrantRecord cross-checked; injectable deps.rotate for SC#4 zero-rotation invariant
+- [Phase ?]: BFS in rotateReadFromNode must derive child readKeys via unsealChildReadKey with parent OLD readKey before enqueuing
+- [Phase ?]: Bypass Phase-65 createFileMetadata by manually building file node: sealNode+addToIpfs+createAndPublishIpnsRecord in sdk-e2e
 
 ## Operator Next Steps
 
@@ -418,6 +421,6 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-06-29T05:28:43.584Z
+**Last session:** 2026-06-29T06:05:06.963Z
 **Stopped at:** Completed 63-02-PLAN.md
 **Resume file:** None
