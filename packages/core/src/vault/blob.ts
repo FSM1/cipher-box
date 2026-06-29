@@ -106,7 +106,10 @@ export function deserializeVaultBlobV3(blob: Uint8Array): {
     throw new Error('Vault blob truncated (missing write key header)');
   }
 
-  const encryptedRootReadKey = blob.subarray(3, 3 + readLen);
+  // slice (copy), not subarray (view): EncryptedVaultKeys is a storable struct, so
+  // the returned keys must own their buffers and not alias the caller's blob — a
+  // later zeroization of the source blob (D-09) must not corrupt cached keys.
+  const encryptedRootReadKey = blob.slice(3, 3 + readLen);
 
   const writeOffset = 3 + readLen;
   const writeLen = (blob[writeOffset] << 8) | blob[writeOffset + 1];
@@ -119,7 +122,7 @@ export function deserializeVaultBlobV3(blob: Uint8Array): {
     throw new Error('Vault blob truncated (write key)');
   }
 
-  const encryptedRootWriteKey = blob.subarray(writeOffset + 2, writeOffset + 2 + writeLen);
+  const encryptedRootWriteKey = blob.slice(writeOffset + 2, writeOffset + 2 + writeLen);
 
   return { encryptedRootReadKey, encryptedRootWriteKey };
 }
