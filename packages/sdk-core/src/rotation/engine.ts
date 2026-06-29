@@ -403,11 +403,38 @@ export async function mergeConcurrentChildren(
  * @throws Always in Phase 63 (ROT-06 — deferred).
  */
 export async function verifySubtreeClean(
-  _rootIpnsName: string,
-  _rootReadKey: Uint8Array,
-  _ctx: SdkContext
+  rootIpnsName: string,
+  rootReadKey: Uint8Array,
+  ctx: SdkContext
 ): Promise<{ isDirty: boolean; frontier: Array<{ ipnsName: string; nodeId: string }> }> {
-  throw new Error('not implemented — phase 64 (ROT-06 crash-resume + verifySubtreeClean)');
+  const frontier: Array<{ ipnsName: string; nodeId: string }> = [];
+
+  // 1. Resolve root → fetch PublishedNode envelope
+  const rootResolved = await resolveIpnsRecord(rootIpnsName, ctx);
+  if (!rootResolved) return { isDirty: false, frontier: [] };
+
+  const rootRaw = await fetchFromIpfs(ctx, rootResolved.cid);
+  const rootPub = JSON.parse(new TextDecoder().decode(rootRaw)) as PublishedNode;
+
+  // 2. Unseal root to get the SealedChildRef list
+  const rootNode = await unsealNode(rootPub, rootReadKey);
+
+  // 3. Compare parent mirror (SealedChildRef.generation) vs child's published generation.
+  // Published IPNS records are the source of truth (D-10).
+  for (const childRef of rootNode.children ?? []) {
+    const childResolved = await resolveIpnsRecord(childRef.ipnsName, ctx);
+    if (!childResolved) continue; // child IPNS missing — skip
+
+    const childRaw = await fetchFromIpfs(ctx, childResolved.cid);
+    const childPub = JSON.parse(new TextDecoder().decode(childRaw)) as PublishedNode;
+
+    // Dirty edge: child has rotated further than parent's mirror records
+    if (childPub.generation > childRef.generation) {
+      frontier.push({ ipnsName: childRef.ipnsName, nodeId: childPub.id });
+    }
+  }
+
+  return { isDirty: frontier.length > 0, frontier };
 }
 
 // ---------------------------------------------------------------------------
@@ -645,16 +672,6 @@ export async function rotateReadFromNode(params: RotationParams): Promise<void> 
     ctx,
   });
 
-  if (rootResult.skipped) {
-    // Root already committed (resume scenario — verifySubtreeClean is Phase 64).
-    jobRecord.status = 'complete';
-    if (jobRecord.persistCallback) await jobRecord.persistCallback(jobRecord);
-    return;
-  }
-
-  // Persist after root commit (the high-value early checkpoint).
-  if (jobRecord.persistCallback) await jobRecord.persistCallback(jobRecord);
-
   // ---------------------------------------------------------------------------
   // D-02 / D-09: parent tracking for out-of-band re-seal and batched republish
   //
@@ -715,6 +732,12 @@ export async function rotateReadFromNode(params: RotationParams): Promise<void> 
     childPubId: string;
     /** Node kind from the child's PublishedNode envelope (for D-02 AAD binding). */
     childPubKind: 'folder' | 'file';
+    /**
+     * SealedChildRef.generation captured at enqueue time (parent mirror).
+     * Convergence guard (ROT-06): if child's current published generation exceeds
+     * this baseline at dequeue time, skip rotateOne to avoid double-bump.
+     */
+    enqueuedGeneration: number;
   }> = [];
 
   // Helper: resolve an IPNS name → fetch the IPFS CID → parse PublishedNode envelope.
@@ -726,50 +749,160 @@ export async function rotateReadFromNode(params: RotationParams): Promise<void> 
     return JSON.parse(new TextDecoder().decode(raw)) as PublishedNode;
   }
 
-  // Set up parent tracking for root's children (D-02/D-09).
-  if (rootResult.children.length > 0) {
-    parentTracking.set(rootNodeIpnsName, {
-      parentNewReadKey: rootResult.childReadKey,
-      parentIpnsName: rootNodeIpnsName,
-      parentIpnsPrivateKey: rootIpnsPrivateKey,
-      parentIpnsPublicKey: rootIpnsPublicKey,
-      parentNodeId: rootNodeId,
-      parentNodeGeneration: rootResult.newGeneration,
-      parentLastSeq: rootResult.newSequenceNumber,
-      children: [...rootResult.children], // mutable copy for in-place SealedChildRef updates
-      pendingChildCount: rootResult.children.length,
-    });
-  }
+  if (rootResult.skipped) {
+    // Resume path: root already committed in a prior run.
+    // ROT-06: call verifySubtreeClean to check for dirty edges.
+    // Published IPNS records are source of truth (D-10); advisory job record may be stale.
+    const { isDirty, frontier } = await verifySubtreeClean(rootNodeIpnsName, rootReadKey, ctx);
+    if (!isDirty) {
+      // Subtree fully converged — no dirty edges to process.
+      jobRecord.status = 'complete';
+      if (jobRecord.persistCallback) await jobRecord.persistCallback(jobRecord);
+      return;
+    }
 
-  // Enqueue root's children: derive each child's readKey from the root's OLD readKey.
-  // rootReadKey is the root's own (pre-rotation) key and is NOT zeroed by rotateOne (D-09).
-  for (const childRef of rootResult.children) {
-    const childPub = await resolveAndFetch(childRef.ipnsName);
-    if (!childPub) continue; // child IPNS missing — skip (data inconsistency)
-    const childReadKey = await unsealChildReadKey(
-      childRef.readKeySealed,
-      rootReadKey, // root's OLD readKey (still valid; never zeroed — D-09)
-      childPub.id,
-      childPub.kind,
-      childRef.generation // parent-mirror (§2.6 D-07 invariant 1)
-    );
-    // Thread per-node IPNS key from nodeKeySource (D-01 / Phase 64 seam).
-    // Phase 65 derives keys from the write-body instead.
-    const childKeys = nodeKeySource?.(childRef.ipnsName);
-    queue.push({
-      childRef,
-      nodeReadKey: childReadKey, // child's own (pre-rotation) readKey
-      parentIpnsName: rootNodeIpnsName,
-      ipnsPrivateKey: childKeys?.privateKey,
-      ipnsPublicKey: childKeys?.publicKey,
-      childPubId: childPub.id,
-      childPubKind: childPub.kind as 'folder' | 'file',
-    });
+    // Dirty resume: re-fetch root's current state and seed BFS from dirty frontier nodes.
+    const rootResolved = await resolveIpnsRecord(rootNodeIpnsName, ctx);
+    if (!rootResolved) {
+      throw new Error('rotateReadFromNode: root IPNS not found on dirty resume');
+    }
+    const rootRaw = await fetchFromIpfs(ctx, rootResolved.cid);
+    const rootPub = JSON.parse(new TextDecoder().decode(rootRaw)) as PublishedNode;
+    const rootNode = await unsealNode(rootPub, rootReadKey);
+
+    if (frontier.length > 0) {
+      // Set up parent tracking for root using rootReadKey as the readKey proxy.
+      // (Root was rotated in a prior run; rootReadKey unseals the current sealed body as
+      // confirmed by verifySubtreeClean's successful unseal.)
+      parentTracking.set(rootNodeIpnsName, {
+        parentNewReadKey: rootReadKey,
+        parentIpnsName: rootNodeIpnsName,
+        parentIpnsPrivateKey: rootIpnsPrivateKey,
+        parentIpnsPublicKey: rootIpnsPublicKey,
+        parentNodeId: rootNode.id,
+        parentNodeGeneration: rootNode.generation,
+        parentLastSeq: rootResolved.sequenceNumber,
+        children: [...(rootNode.children ?? [])],
+        pendingChildCount: frontier.length,
+      });
+
+      for (const frontierItem of frontier) {
+        const childRef = (rootNode.children ?? []).find(
+          (c) => c.ipnsName === frontierItem.ipnsName
+        );
+        if (!childRef) continue;
+        const childPub = await resolveAndFetch(frontierItem.ipnsName);
+        if (!childPub) continue;
+        const childReadKey = await unsealChildReadKey(
+          childRef.readKeySealed,
+          rootReadKey,
+          childPub.id,
+          childPub.kind,
+          childRef.generation
+        );
+        const childKeys = nodeKeySource?.(frontierItem.ipnsName);
+        queue.push({
+          childRef,
+          nodeReadKey: childReadKey,
+          parentIpnsName: rootNodeIpnsName,
+          ipnsPrivateKey: childKeys?.privateKey,
+          ipnsPublicKey: childKeys?.publicKey,
+          childPubId: childPub.id,
+          childPubKind: childPub.kind as 'folder' | 'file',
+          enqueuedGeneration: childRef.generation,
+        });
+      }
+    }
+    // Fall through to BFS loop.
+  } else {
+    // Normal path: root just committed in this run.
+
+    // Persist after root commit (the high-value early checkpoint).
+    if (jobRecord.persistCallback) await jobRecord.persistCallback(jobRecord);
+
+    // Set up parent tracking for root's children (D-02/D-09).
+    if (rootResult.children.length > 0) {
+      parentTracking.set(rootNodeIpnsName, {
+        parentNewReadKey: rootResult.childReadKey,
+        parentIpnsName: rootNodeIpnsName,
+        parentIpnsPrivateKey: rootIpnsPrivateKey,
+        parentIpnsPublicKey: rootIpnsPublicKey,
+        parentNodeId: rootNodeId,
+        parentNodeGeneration: rootResult.newGeneration,
+        parentLastSeq: rootResult.newSequenceNumber,
+        children: [...rootResult.children], // mutable copy for in-place SealedChildRef updates
+        pendingChildCount: rootResult.children.length,
+      });
+    }
+
+    // Enqueue root's children: derive each child's readKey from the root's OLD readKey.
+    // rootReadKey is the root's own (pre-rotation) key and is NOT zeroed by rotateOne (D-09).
+    for (const childRef of rootResult.children) {
+      const childPub = await resolveAndFetch(childRef.ipnsName);
+      if (!childPub) continue; // child IPNS missing — skip (data inconsistency)
+      const childReadKey = await unsealChildReadKey(
+        childRef.readKeySealed,
+        rootReadKey, // root's OLD readKey (still valid; never zeroed — D-09)
+        childPub.id,
+        childPub.kind,
+        childRef.generation // parent-mirror (§2.6 D-07 invariant 1)
+      );
+      // Thread per-node IPNS key from nodeKeySource (D-01 / Phase 64 seam).
+      // Phase 65 derives keys from the write-body instead.
+      const childKeys = nodeKeySource?.(childRef.ipnsName);
+      queue.push({
+        childRef,
+        nodeReadKey: childReadKey, // child's own (pre-rotation) readKey
+        parentIpnsName: rootNodeIpnsName,
+        ipnsPrivateKey: childKeys?.privateKey,
+        ipnsPublicKey: childKeys?.publicKey,
+        childPubId: childPub.id,
+        childPubKind: childPub.kind as 'folder' | 'file',
+        enqueuedGeneration: childRef.generation,
+      });
+    }
   }
 
   // Process the frontier BFS.
   while (queue.length > 0) {
     const item = queue.shift()!;
+
+    // Convergence guard (ROT-06 no-double-bump): compare child's current published
+    // generation against the baseline captured at enqueue time (parent mirror).
+    // If the child already rotated beyond the baseline, skip rotateOne.
+    const currentPub = await resolveAndFetch(item.childRef.ipnsName);
+    if (currentPub && currentPub.generation > item.enqueuedGeneration) {
+      // Child already rotated in a prior run — skip rotateOne.
+      // Still handle D-09: update generation witness and decrement pending count.
+      const parentState = parentTracking.get(item.parentIpnsName);
+      if (parentState) {
+        const childIdx = parentState.children.findIndex(
+          (c) => c.ipnsName === item.childRef.ipnsName
+        );
+        if (childIdx !== -1) {
+          parentState.children[childIdx] = {
+            ...parentState.children[childIdx],
+            generation: currentPub.generation,
+          };
+        }
+        parentState.pendingChildCount--;
+        if (parentState.pendingChildCount === 0) {
+          await updateFolderMetadataAndPublish({
+            ipnsName: parentState.parentIpnsName,
+            ipnsPrivateKey: parentState.parentIpnsPrivateKey!,
+            ipnsPublicKey: parentState.parentIpnsPublicKey,
+            sequenceNumber: parentState.parentLastSeq,
+            readKey: parentState.parentNewReadKey,
+            nodeId: parentState.parentNodeId,
+            nodeGeneration: parentState.parentNodeGeneration,
+            children: parentState.children,
+            ctx,
+          });
+          parentTracking.delete(item.parentIpnsName);
+        }
+      }
+      continue;
+    }
 
     const result = await rotateOne({
       // nodeId is absent: it will be derived from the unsealed node's id inside rotateOne.
@@ -874,6 +1007,7 @@ export async function rotateReadFromNode(params: RotationParams): Promise<void> 
           ipnsPublicKey: grandchildKeys?.publicKey,
           childPubId: childPub.id,
           childPubKind: childPub.kind as 'folder' | 'file',
+          enqueuedGeneration: childRef.generation,
         });
       }
     }
