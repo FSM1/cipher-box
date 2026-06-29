@@ -5,15 +5,15 @@ milestone_name: Metadata and Sharing Refactor
 current_phase: 63
 current_phase_name: read-chain-navigation-and-rotation-core
 status: executing
-stopped_at: Phase 63 context gathered
-last_updated: "2026-06-29T03:03:47.430Z"
+stopped_at: Completed 63-02-PLAN.md
+last_updated: "2026-06-29T03:27:16.324Z"
 last_activity: 2026-06-29
 last_activity_desc: Phase 63 execution started
 progress:
   total_phases: 9
   completed_phases: 2
   total_plans: 21
-  completed_plans: 15
+  completed_plans: 16
   percent: 22
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 ## Current Position
 
 Phase: 63 (read-chain-navigation-and-rotation-core) — EXECUTING
-Plan: 2 of 7
+Plan: 3 of 7
 Status: Ready to execute
 Last activity: 2026-06-29 — Phase 63 execution started
 
@@ -205,6 +205,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 62-unified-node-codec-core-keystone P08a | 180 | 1 tasks | 26 files |
 | Phase 62-unified-node-codec-core-keystone P08b | 240 | 1 tasks | 22 files |
 | Phase 63 P01 | 17 | 2 tasks | 4 files |
+| Phase 63 P02 | 13 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -405,6 +406,8 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: useAuth.ts vault load: unwrapKey x2 + deriveVaultIpnsKeypair (IPNS keypair derived, not in v3 blob)
 - [Phase ?]: Phase-63 kind-discrimination stubs: isFolder=true, fileCount=0 across file-browser until Node.kind available
 - [Phase ?]: ShareDialog.handleShare + handleUpgrade fully stubbed with throw phase-65; legacy FolderEntry key-wrapping path removed
+- [Phase ?]: Transport-decoupled insertShareFn callback (D-05): grant issuance unit-tested against mocked API; real shares persistence deferred to Phase 66
+- [Phase ?]: reWrapKey used for claimInviteReadKey to delegate intermediate zeroization (T-63-05)
 
 ## Operator Next Steps
 
@@ -412,6 +415,6 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-06-29T03:03:40.732Z
-**Stopped at:** Phase 63 context gathered
-**Resume file:** .planning/phases/63-read-chain-navigation-and-rotation-core/63-CONTEXT.md
+**Last session:** 2026-06-29T03:27:16.319Z
+**Stopped at:** Completed 63-02-PLAN.md
+**Resume file:** None
