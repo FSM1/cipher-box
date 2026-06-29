@@ -3,7 +3,7 @@
   "checkpoint_id": "e139be04f1ef",
   "strategy": "manual-commit",
   "branch": "feat/read-chain-navigation-and-rotation-core",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     ".planning/phases/63-read-chain-navigation-and-rotation-core/63-CONTEXT.md",
     ".planning/phases/63-read-chain-navigation-and-rotation-core/63-DISCUSSION-LOG.md"
@@ -14,6 +14,12 @@
       "transcript": "/e1/39be04f1ef/0/full.jsonl",
       "content_hash": "/e1/39be04f1ef/0/content_hash.txt",
       "prompt": "/e1/39be04f1ef/0/prompt.txt"
+    },
+    {
+      "metadata": "/e1/39be04f1ef/1/metadata.json",
+      "transcript": "/e1/39be04f1ef/1/full.jsonl",
+      "content_hash": "/e1/39be04f1ef/1/content_hash.txt",
+      "prompt": ""
     }
   ],
   "token_usage": {
