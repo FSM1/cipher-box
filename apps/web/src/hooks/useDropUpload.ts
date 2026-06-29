@@ -65,16 +65,15 @@ export function useDropUpload() {
     }
 
     // Identify which files already exist in the target folder
+    // TODO(phase 63): use Node.kind to distinguish file/folder; SealedChildRef has no .type or .id
     const folder = useFolderStore.getState().folders[folderId];
-    const existingByName = new Map<string, string>(); // name -> fileId
+    const existingByName = new Map<string, string>(); // name -> fileId (phase 63: use Node id)
     const existingFolderNames = new Set<string>();
     if (folder) {
       for (const child of folder.children) {
-        if (child.type === 'file') {
-          existingByName.set(child.name, child.id);
-        } else if (child.type === 'folder') {
-          existingFolderNames.add(child.name);
-        }
+        // Phase 63 placeholder: treat all children as potential name conflicts by name only
+        existingByName.set(child.name, child.ipnsName);
+        // existingFolderNames is populated by phase 63 via Node.kind discrimination
       }
     }
 

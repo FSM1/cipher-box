@@ -19,11 +19,11 @@ import {
   type MouseEvent,
   type DragEvent,
 } from 'react';
-import type { FolderChild, FilePointer } from '@cipherbox/core';
+// TODO(phase 63): FolderChild/FilePointer removed; SealedChildRef from core
+import type { SealedChildRef } from '@cipherbox/core';
 import { useSharedNavigation } from '../../hooks/useSharedNavigation';
 import { useContextMenu } from '../../hooks/useContextMenu';
 import {
-  isFilePointer,
   isTextFile,
   isImageFile,
   isPdfFile,
@@ -45,19 +45,19 @@ import { SelectionActionBar } from './SelectionActionBar';
 import '../../styles/shared-browser.css';
 
 /**
- * Sort items: folders first, then files, both alphabetically.
+ * Sort items alphabetically by name.
+ * TODO(phase 63): restore folders-first sort once Node.kind discrimination is available.
  */
-function sortItems(items: FolderChild[]): FolderChild[] {
-  return [...items].sort((a, b) => {
-    if (a.type === 'folder' && b.type !== 'folder') return -1;
-    if (a.type !== 'folder' && b.type === 'folder') return 1;
-    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
-  });
+function sortItems(items: SealedChildRef[]): SealedChildRef[] {
+  return [...items].sort((a, b) =>
+    // TODO(phase 63): SealedChildRef has no .type; sort alphabetically only
+    a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+  );
 }
 
 type DialogState = {
   open: boolean;
-  item: FolderChild | null;
+  item: SealedChildRef | null;
 };
 
 /**
@@ -133,8 +133,8 @@ export function SharedFileBrowser() {
   const [isDragOver, setIsDragOver] = useState(false);
 
   // Move dialog state
-  const [moveDialogItem, setMoveDialogItem] = useState<FolderChild | null>(null);
-  const handleMoveClick = useCallback((item: FolderChild) => setMoveDialogItem(item), []);
+  const [moveDialogItem, setMoveDialogItem] = useState<SealedChildRef | null>(null);
+  const handleMoveClick = useCallback((item: SealedChildRef) => setMoveDialogItem(item), []);
 
   // ---------------------------------------------------------------------------
   // Multi-select selection state (mirrors useFileBrowserActions :218-235)
@@ -142,8 +142,9 @@ export function SharedFileBrowser() {
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
+  // TODO(phase 63): SealedChildRef uses ipnsName as identifier (no .id)
   const selectedItems = useMemo(
-    () => folderChildren.filter((c) => selectedIds.has(c.id)),
+    () => folderChildren.filter((c) => selectedIds.has(c.ipnsName)),
     [folderChildren, selectedIds]
   );
   // The batch action bar only appears for a genuine multi-selection (>1), mirroring
@@ -175,10 +176,11 @@ export function SharedFileBrowser() {
   );
 
   // Prune selected IDs when folder children change (navigation)
+  // TODO(phase 63): SealedChildRef uses ipnsName as identifier (no .id)
   useEffect(() => {
     setSelectedIds((prev) => {
       if (prev.size === 0) return prev;
-      const childIdSet = new Set(folderChildren.map((c) => c.id));
+      const childIdSet = new Set(folderChildren.map((c) => c.ipnsName));
       const pruned = new Set([...prev].filter((id) => childIdSet.has(id)));
       if (pruned.size === prev.size) return prev;
       return pruned;
@@ -192,7 +194,7 @@ export function SharedFileBrowser() {
 
   // Batch move dialog state
   const [batchMoveDialogOpen, setBatchMoveDialogOpen] = useState(false);
-  const [batchMoveItems_, setBatchMoveItems_] = useState<FolderChild[]>([]);
+  const [batchMoveItems_, setBatchMoveItems_] = useState<SealedChildRef[]>([]);
 
   const handleBatchMoveClick = useCallback(() => {
     if (selectedItems.length === 0) return;
@@ -201,7 +203,7 @@ export function SharedFileBrowser() {
   }, [selectedItems]);
 
   // Inline rename state
-  const [renamingItem, setRenamingItem] = useState<FolderChild | null>(null);
+  const [renamingItem, setRenamingItem] = useState<SealedChildRef | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const renameInputRef = useRef<HTMLInputElement>(null);
 
@@ -209,7 +211,7 @@ export function SharedFileBrowser() {
 
   // Context menu handlers for folder view
   const handleContextMenu = useCallback(
-    (event: MouseEvent, item: FolderChild) => {
+    (event: MouseEvent, item: SealedChildRef) => {
       contextMenu.show(event, item);
       setContextShareId(null);
     },
@@ -218,7 +220,7 @@ export function SharedFileBrowser() {
 
   // Context menu for top-level shared items
   const handleSharedItemContextMenu = useCallback(
-    (event: MouseEvent, item: FolderChild, shareId: string) => {
+    (event: MouseEvent, item: SealedChildRef, shareId: string) => {
       contextMenu.show(event, item);
       setContextShareId(shareId);
     },
@@ -227,15 +229,13 @@ export function SharedFileBrowser() {
 
   const handleDownload = useCallback(async () => {
     const item = contextMenu.item;
-    if (!item || !isFilePointer(item)) return;
-
-    // In list view, context menu download needs to use navigateToShare
-    // because downloadSharedFile requires currentShareId/folderKey (null in list view)
+    if (!item) return;
+    // TODO(phase 63): SealedChildRef has no .type; download deferred to phase 65 (file read-chain)
+    // In list view, context menu download navigates to share first
     if (currentView === 'list' && contextShareId) {
       await navigateToShare(contextShareId);
       return;
     }
-
     await downloadSharedFile(item);
   }, [contextMenu.item, downloadSharedFile, currentView, contextShareId, navigateToShare]);
 
@@ -253,7 +253,8 @@ export function SharedFileBrowser() {
 
   const handlePreviewClick = useCallback(() => {
     const item = contextMenu.item;
-    if (!item || !isFilePointer(item)) return;
+    if (!item) return;
+    // TODO(phase 63): SealedChildRef has no .type; preview by name extension only
     const name = item.name;
     if (isTextFile(name)) {
       setEditorDialog({ open: true, item });
@@ -413,30 +414,32 @@ export function SharedFileBrowser() {
   );
 
   // Auto-open text editor when entering a writable file share view
+  // TODO(phase 63): synthetic SealedChildRef replaces the former FilePointer construction
   useEffect(() => {
     if (currentView === 'file' && currentShareId) {
       const shareItem = sharedItems.find((s) => s.share.shareId === currentShareId);
       if (shareItem && isTextFile(shareItem.share.itemName)) {
-        const fakeFilePointer: FilePointer = {
-          type: 'file',
-          id: shareItem.share.shareId,
+        // Synthesize a SealedChildRef for the text editor dialog
+        const fakeChildRef: SealedChildRef = {
           name: shareItem.share.itemName,
-          fileMetaIpnsName: shareItem.share.ipnsName,
-          createdAt: Date.parse(shareItem.share.createdAt),
-          modifiedAt: Date.parse(shareItem.share.createdAt),
+          ipnsName: shareItem.share.ipnsName,
+          generation: 0,
+          versionFloor: 0n,
+          readKeySealed: '', // TODO(phase 63): populated when read-chain is available
         };
-        setEditorDialog({ open: true, item: fakeFilePointer });
+        setEditorDialog({ open: true, item: fakeChildRef });
       } else {
         // Non-text files: download and return to list
         if (shareItem) {
-          downloadSharedFile({
-            type: 'file',
-            id: shareItem.share.shareId,
+          // Synthesize a SealedChildRef for download
+          const fakeChildRef: SealedChildRef = {
             name: shareItem.share.itemName,
-            fileMetaIpnsName: shareItem.share.ipnsName,
-            createdAt: Date.parse(shareItem.share.createdAt),
-            modifiedAt: Date.parse(shareItem.share.createdAt),
-          }).finally(() => navigateToRoot());
+            ipnsName: shareItem.share.ipnsName,
+            generation: 0,
+            versionFloor: 0n,
+            readKeySealed: '',
+          };
+          downloadSharedFile(fakeChildRef).finally(() => navigateToRoot());
         }
       }
     }
@@ -513,28 +516,15 @@ export function SharedFileBrowser() {
                   sharedItem={sharedItem}
                   onOpen={() => navigateToShare(sharedItem.share.shareId)}
                   onContextMenu={(e) => {
-                    // Create a synthetic FolderChild for context menu
-                    const fakeItem: FolderChild =
-                      sharedItem.share.itemType === 'folder'
-                        ? {
-                            type: 'folder' as const,
-                            id: sharedItem.share.shareId,
-                            name: sharedItem.share.itemName,
-                            ipnsName: sharedItem.share.ipnsName,
-                            ipnsPrivateKeyEncrypted: '',
-                            folderKeyEncrypted: '',
-                            createdAt: Date.parse(sharedItem.share.createdAt),
-                            modifiedAt: Date.parse(sharedItem.share.createdAt),
-                          }
-                        : {
-                            type: 'file' as const,
-                            id: sharedItem.share.shareId,
-                            name: sharedItem.share.itemName,
-                            fileMetaIpnsName: sharedItem.share.ipnsName,
-                            createdAt: Date.parse(sharedItem.share.createdAt),
-                            modifiedAt: Date.parse(sharedItem.share.createdAt),
-                          };
-                    handleSharedItemContextMenu(e, fakeItem, sharedItem.share.shareId);
+                    // TODO(phase 63): Synthetic SealedChildRef replaces FolderChild construction
+                    const fakeChildRef: SealedChildRef = {
+                      name: sharedItem.share.itemName,
+                      ipnsName: sharedItem.share.ipnsName,
+                      generation: 0,
+                      versionFloor: 0n,
+                      readKeySealed: '',
+                    };
+                    handleSharedItemContextMenu(e, fakeChildRef, sharedItem.share.shareId);
                   }}
                 />
               ))}
@@ -550,7 +540,8 @@ export function SharedFileBrowser() {
             item={contextMenu.item}
             selectedCount={1}
             onClose={contextMenu.hide}
-            onDownload={contextMenu.item.type === 'file' ? handleDownload : undefined}
+            // TODO(phase 63): SealedChildRef has no .type; download enabled by default for shared items
+            onDownload={handleDownload}
             onRename={() => {}}
             onDelete={() => {}}
             onDetails={handleDetailsClick}
@@ -732,35 +723,32 @@ export function SharedFileBrowser() {
             </div>
 
             {/* File/folder rows */}
+            {/* TODO(phase 63): SealedChildRef uses ipnsName as identifier; .type replaced by phase-63 stubs */}
             {sortedChildren.map((item) => (
               <SharedFolderRow
-                key={item.id}
+                key={item.ipnsName}
                 item={item}
                 permission={permission}
-                isRenaming={renamingItem?.id === item.id}
+                isRenaming={renamingItem?.ipnsName === item.ipnsName}
                 renameValue={renameValue}
                 renameInputRef={renameInputRef}
                 onRenameChange={setRenameValue}
                 onRenameKeyDown={handleRenameKeyDown}
                 onRenameSubmit={handleRenameSubmit}
                 onContextMenu={(e) => handleContextMenu(e, item)}
-                isSelected={selectedIds.has(item.id)}
-                onSelect={(e) => handleSelect(item.id, e)}
+                isSelected={selectedIds.has(item.ipnsName)}
+                onSelect={(e) => handleSelect(item.ipnsName, e)}
                 onDoubleClick={() => {
-                  if (item.type === 'folder') {
-                    navigateToSubfolder(item.id, item.name);
-                  } else if (isFilePointer(item)) {
-                    downloadSharedFile(item);
-                  }
+                  // TODO(phase 63): SealedChildRef has no .type; treat all as folders for navigation
+                  navigateToSubfolder(item.ipnsName, item.name); // phase-63 stub: navigate as folder
                 }}
                 onMoveItemTo={
                   isWritable
                     ? (destFolderId, destIpnsName, draggedItems) => {
-                        // Route by what was actually dragged (not the current
-                        // selection, nor the drop target). Resolve the dragged
-                        // ids back to the current folder's children.
+                        // Route by what was actually dragged. Resolve by ipnsName.
+                        // TODO(phase 63): DragItem.id maps to SealedChildRef.ipnsName
                         const draggedIds = new Set(draggedItems.map((d) => d.id));
-                        const movedItems = sortedChildren.filter((c) => draggedIds.has(c.id));
+                        const movedItems = sortedChildren.filter((c) => draggedIds.has(c.ipnsName));
                         if (movedItems.length === 0) return;
                         if (movedItems.length > 1) {
                           void batchMoveItems(
@@ -807,24 +795,13 @@ export function SharedFileBrowser() {
           item={contextMenu.item}
           selectedCount={1}
           onClose={contextMenu.hide}
-          onDownload={contextMenu.item.type === 'file' ? handleDownload : undefined}
-          onEdit={
-            contextMenu.item.type === 'file' && isTextFile(contextMenu.item.name)
-              ? handleEditClick
-              : undefined
-          }
-          onPreview={
-            contextMenu.item.type === 'file' && isPreviewableFile(contextMenu.item.name)
-              ? handlePreviewClick
-              : undefined
-          }
+          // TODO(phase 63): SealedChildRef has no .type; file-only actions use name extension
+          onDownload={undefined /* phase-63 stub */}
+          onEdit={isTextFile(contextMenu.item.name) ? handleEditClick : undefined}
+          onPreview={isPreviewableFile(contextMenu.item.name) ? handlePreviewClick : undefined}
           onRename={isWritable ? handleRename : () => {}}
           onDelete={isWritable ? handleDelete : () => {}}
-          onMove={
-            isWritable && contextMenu.item?.type === 'file'
-              ? () => handleMoveClick(contextMenu.item!)
-              : undefined
-          }
+          onMove={isWritable ? () => handleMoveClick(contextMenu.item!) : undefined}
           onDetails={handleDetailsClick}
           readOnly={permission !== 'write'}
         />
@@ -882,7 +859,8 @@ export function SharedFileBrowser() {
             navigateToRoot();
           }
         }}
-        item={editorDialog.item && isFilePointer(editorDialog.item) ? editorDialog.item : null}
+        // TODO(phase 63): isFilePointer removed; SealedChildRef passed directly
+        item={editorDialog.item ?? null}
         parentFolderId=""
         folderKey={folderKey}
         readOnly={!isWritable}
@@ -894,11 +872,8 @@ export function SharedFileBrowser() {
       <ImagePreviewDialog
         open={imagePreviewDialog.open}
         onClose={() => setImagePreviewDialog({ open: false, item: null })}
-        item={
-          imagePreviewDialog.item && isFilePointer(imagePreviewDialog.item)
-            ? imagePreviewDialog.item
-            : null
-        }
+        // TODO(phase 63): isFilePointer removed
+        item={imagePreviewDialog.item ?? null}
         folderKey={folderKey}
         shareId={currentShareId}
       />
@@ -907,11 +882,8 @@ export function SharedFileBrowser() {
       <PdfPreviewDialog
         open={pdfPreviewDialog.open}
         onClose={() => setPdfPreviewDialog({ open: false, item: null })}
-        item={
-          pdfPreviewDialog.item && isFilePointer(pdfPreviewDialog.item)
-            ? pdfPreviewDialog.item
-            : null
-        }
+        // TODO(phase 63): isFilePointer removed
+        item={pdfPreviewDialog.item ?? null}
         folderKey={folderKey}
         shareId={currentShareId}
       />
@@ -920,11 +892,8 @@ export function SharedFileBrowser() {
       <AudioPlayerDialog
         open={audioPlayerDialog.open}
         onClose={() => setAudioPlayerDialog({ open: false, item: null })}
-        item={
-          audioPlayerDialog.item && isFilePointer(audioPlayerDialog.item)
-            ? audioPlayerDialog.item
-            : null
-        }
+        // TODO(phase 63): isFilePointer removed
+        item={audioPlayerDialog.item ?? null}
         folderKey={folderKey}
         shareId={currentShareId}
       />
@@ -933,11 +902,8 @@ export function SharedFileBrowser() {
       <VideoPlayerDialog
         open={videoPlayerDialog.open}
         onClose={() => setVideoPlayerDialog({ open: false, item: null })}
-        item={
-          videoPlayerDialog.item && isFilePointer(videoPlayerDialog.item)
-            ? videoPlayerDialog.item
-            : null
-        }
+        // TODO(phase 63): isFilePointer removed
+        item={videoPlayerDialog.item ?? null}
         folderKey={folderKey}
         shareId={currentShareId}
       />

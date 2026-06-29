@@ -6,15 +6,13 @@
  * enabling recovery to the original vault location.
  */
 
-import type { FilePointer } from '../file/types';
-import type { FolderEntry } from '../folder/types';
+import type { Node } from '../node/types';
 
 /**
  * Individual bin entry representing a soft-deleted item.
  *
- * Each entry preserves the full FolderChild (FilePointer or FolderEntry)
- * that was removed from the parent folder's metadata, enabling restore
- * by re-inserting it into the original parent.
+ * Each entry preserves a reference to the deleted node (via nodeRef),
+ * enabling restore as a pure re-link under the destination readKey (Phase 65).
  */
 export type BinEntry = {
   /** Unique ID for this bin entry (UUID) */
@@ -52,21 +50,12 @@ export type BinEntry = {
 
   // --- Item reference data (needed for restore and permanent delete) ---
 
-  /** For files: the preserved FilePointer from parent folder metadata */
-  filePointer?: FilePointer;
-  /** For folders: the preserved FolderEntry from parent folder metadata */
-  folderEntry?: FolderEntry;
   /**
-   * For files: the original parent folder's folderKey, ECIES-wrapped for the
-   * vault public key, captured at soft-delete time. A file's FileMetadata is
-   * AES-256-GCM encrypted with this key; restoring to a folder with a different
-   * folderKey must re-encrypt the record (otherwise it becomes undecryptable).
-   * Captured here so restore can re-encrypt to ANY destination without needing
-   * the original parent to still exist in the folder tree. Hex-encoded.
-   * Optional for backward compatibility: entries created before this field
-   * fall back to resolving the original parent's key from the live folder tree.
+   * Reference to the deleted node (file or folder).
+   * Phase 65 implements bin restore as a pure re-link under the destination readKey.
+   * TODO(phase 65): bin restore is a pure re-link under destination readKey
    */
-  originalFolderKeyEncrypted?: string;
+  nodeRef?: Node;
 };
 
 /**

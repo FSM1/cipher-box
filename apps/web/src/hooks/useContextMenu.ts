@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import type { FolderChild } from '@cipherbox/core';
+import type { SealedChildRef } from '@cipherbox/core';
 
 /**
  * Context menu state shape.
@@ -8,7 +8,7 @@ type ContextMenuState = {
   visible: boolean;
   x: number;
   y: number;
-  item: FolderChild | null;
+  item: SealedChildRef | null;
 };
 
 /**
@@ -21,7 +21,7 @@ type ContextMenuState = {
  * function FileList() {
  *   const contextMenu = useContextMenu();
  *
- *   const handleContextMenu = (e: MouseEvent, item: FolderChild) => {
+ *   const handleContextMenu = (e: MouseEvent, item: SealedChildRef) => {
  *     contextMenu.show(e, item);
  *   };
  *
@@ -51,7 +51,7 @@ export function useContextMenu() {
   /**
    * Show context menu at the event position for the given item.
    */
-  const show = useCallback((event: React.MouseEvent, item: FolderChild) => {
+  const show = useCallback((event: React.MouseEvent, item: SealedChildRef) => {
     event.preventDefault();
     event.stopPropagation();
     setState({

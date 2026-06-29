@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { FolderChild, FilePointer, FileMetadata } from '@cipherbox/core';
+import type { SealedChildRef, NodeContent } from '@cipherbox/core';
 import { Modal } from '../ui/Modal';
 import { useFolderStore } from '../../stores/folder.store';
 import { resolveIpnsRecord } from '../../services/ipns.service';
@@ -11,20 +11,17 @@ import { FolderDetails } from './details/FolderDetails';
 type DetailsDialogProps = {
   open: boolean;
   onClose: () => void;
-  item: FolderChild | null;
+  item: SealedChildRef | null;
   folderKey: Uint8Array | null;
   parentFolderId: string;
 };
 
 /**
- * Details dialog for file/folder metadata.
+ * Details dialog for file/folder metadata (node/v3).
  *
- * Shows technical information about the selected item:
- * - Files: Content CID, metadata CID, encryption mode, IV, wrapped key, version history
- * - Folders: IPNS name, metadata CID, sequence number, wrapped keys
- *
- * Resolves the parent folder's IPNS record on open to get the live
- * metadata CID. Sensitive key material is displayed in redacted form.
+ * Shows technical information about the selected item.
+ * TODO(phase 63): wire read-chain navigation to discriminate file vs folder (Node.kind).
+ * Until then, the item type is derived from whether folderStore has an entry for ipnsName.
  */
 export function DetailsDialog({
   open,
@@ -35,20 +32,22 @@ export function DetailsDialog({
 }: DetailsDialogProps) {
   const [metadataCid, setMetadataCid] = useState<string | null>(null);
   const [metadataLoading, setMetadataLoading] = useState(false);
-  const [fileMeta, setFileMeta] = useState<FileMetadata | null>(null);
+  const [fileMeta, setFileMeta] = useState<NodeContent | null>(null);
   const [fileMetaLoading, setFileMetaLoading] = useState(false);
-  // Counter to force re-fetch after version restore/delete
   const [metadataRefresh, setMetadataRefresh] = useState(0);
 
-  // For folders, also look up the folder node for sequence number and child count
-  const folderNode = useFolderStore((state) =>
-    item?.type === 'folder' ? state.folders[item.id] : undefined
-  );
+  // Heuristic: if the folder store has a node for this ipnsName, treat as folder.
+  // TODO(phase 63): replace with Node.kind discrimination via read-chain.
+  const folderStoreEntry = useFolderStore((state) => {
+    if (!item) return undefined;
+    return Object.values(state.folders).find((f) => f.ipnsName === item.ipnsName);
+  });
+  const isFolderHeuristic = !!folderStoreEntry;
 
-  // Resolve folder IPNS to get metadata CID (folders only)
+  // Resolve IPNS to get metadata CID (folder view only)
   useEffect(() => {
-    if (!open || !item || item.type !== 'folder') {
-      if (!item || item.type !== 'file') {
+    if (!open || !item || !isFolderHeuristic) {
+      if (!item || !isFolderHeuristic) {
         setMetadataCid(null);
         setMetadataLoading(false);
       }
@@ -84,14 +83,13 @@ export function DetailsDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, item]);
+  }, [open, item, isFolderHeuristic]);
 
-  // Resolve per-file metadata and CID in a single IPNS call (files only)
+  // Resolve per-file metadata (file view only)
   useEffect(() => {
-    if (!open || !item || item.type !== 'file' || !folderKey) {
+    if (!open || !item || isFolderHeuristic || !folderKey) {
       setFileMeta(null);
       setFileMetaLoading(false);
-      // Only reset shared metadataCid when dialog is closed, not when viewing a folder
       if (!open || !item) {
         setMetadataCid(null);
         setMetadataLoading(false);
@@ -99,23 +97,15 @@ export function DetailsDialog({
       return;
     }
 
-    const fileItem = item as FilePointer;
-    if (!fileItem.fileMetaIpnsName) {
-      setFileMeta(null);
-      setFileMetaLoading(false);
-      setMetadataCid(null);
-      setMetadataLoading(false);
-      return;
-    }
-
     let cancelled = false;
     setFileMetaLoading(true);
     setMetadataLoading(true);
 
-    resolveFileMetadata(fileItem.fileMetaIpnsName, folderKey)
+    // TODO(phase 63): resolveFileMetadata is stubbed — throws 'not implemented — phase 63'
+    resolveFileMetadata(item.ipnsName, folderKey)
       .then(({ metadata, metadataCid: cid }) => {
         if (!cancelled) {
-          setFileMeta(metadata);
+          setFileMeta(metadata as unknown as NodeContent);
           setMetadataCid(cid);
         }
       })
@@ -135,22 +125,21 @@ export function DetailsDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, item, folderKey, metadataRefresh]);
+  }, [open, item, folderKey, isFolderHeuristic, metadataRefresh]);
 
-  // Callback to refresh metadata after version restore/delete
   const handleVersionAction = useCallback(() => {
     setMetadataRefresh((prev) => prev + 1);
   }, []);
 
   if (!item) return null;
 
-  const title = item.type === 'folder' ? 'Folder Details' : 'File Details';
+  const title = isFolderHeuristic ? 'Folder Details' : 'File Details';
 
   return (
     <Modal open={open} onClose={onClose} title={title}>
-      {item.type === 'file' ? (
+      {!isFolderHeuristic ? (
         <FileDetails
-          item={item as FilePointer}
+          item={item}
           metadataCid={metadataCid}
           metadataLoading={metadataLoading}
           fileMeta={fileMeta}
@@ -164,8 +153,8 @@ export function DetailsDialog({
           item={item}
           metadataCid={metadataCid}
           metadataLoading={metadataLoading}
-          sequenceNumber={folderNode?.sequenceNumber ?? null}
-          childCount={folderNode ? folderNode.children.length : null}
+          sequenceNumber={folderStoreEntry?.sequenceNumber ?? null}
+          childCount={folderStoreEntry ? folderStoreEntry.children.length : null}
         />
       )}
     </Modal>

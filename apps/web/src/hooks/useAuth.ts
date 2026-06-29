@@ -14,19 +14,16 @@ import { setFaroUser, clearFaroUser } from '../lib/faro';
 // api-config.ts handles setApiClientConfig at module load time
 import {
   initializeVault,
-  detectBlobVersion,
-  deserializeVaultBlobV2,
-  serializeVaultBlobV2,
-  encryptFolderMetadata,
+  encryptVaultKeys,
+  serializeVaultBlobV3,
+  deserializeVaultBlobV3,
 } from '@cipherbox/core';
-import type { FolderMetadata } from '@cipherbox/core';
+// TODO(phase 63): re-add deriveIpnsName when root Node initialization is implemented
 import {
-  deriveIpnsName,
   deriveVaultIpnsKeypair,
   deriveVaultKeyIpnsKeypair,
   deriveByoConfigIpnsKeypair,
   bytesToHex,
-  wrapKey,
   unwrapKey,
   clearBytes,
 } from '@cipherbox/crypto';
@@ -145,7 +142,7 @@ export function useAuth() {
           useAuthStore.getState().setTeeKeys(existingVault.teeKeys);
         }
 
-        // Read rootFolderKey from dedicated vault key IPNS (separate from root folder IPNS)
+        // Load vault v3 key blob from dedicated vault key IPNS (separate from root folder IPNS)
         const vaultKeyKeypair = await deriveVaultKeyIpnsKeypair(userKeypair.privateKey);
 
         const resolved = await resolveIpnsRecord(vaultKeyKeypair.ipnsName);
@@ -153,37 +150,40 @@ export function useAuth() {
 
         const blobBytes = await fetchFromIpfs(resolved.cid);
 
-        if (detectBlobVersion(blobBytes) !== 2) {
-          throw new Error('Vault key blob is not v2 format');
-        }
+        // Deserialize v3 blob (only rootReadKey + rootWriteKey; IPNS keypair is derived)
+        const { encryptedRootReadKey, encryptedRootWriteKey } = deserializeVaultBlobV3(blobBytes);
+        const rootReadKey = await unwrapKey(encryptedRootReadKey, userKeypair.privateKey);
+        const rootWriteKey = await unwrapKey(encryptedRootWriteKey, userKeypair.privateKey);
 
-        const encKey = deserializeVaultBlobV2(blobBytes);
-        const rootFolderKey = await unwrapKey(encKey, userKeypair.privateKey);
-
-        // Root folder IPNS keypair is the original vault derivation
+        // IPNS keypair is deterministically derived from user private key (not in blob)
         const rootIpnsKeypair = await deriveVaultIpnsKeypair(userKeypair.privateKey);
 
         setVaultKeys({
-          rootFolderKey,
+          rootReadKey,
+          rootWriteKey,
           rootIpnsKeypair,
           rootIpnsName: existingVault.rootIpnsName,
           vaultId: existingVault.id,
         });
       } else {
-        // New user -- initialize vault with separate key blob + folder metadata
-        logger.info('[Auth] New user -- initializing vault');
+        // New user -- initialize vault with v3 key blob + root Node
+        logger.info('[Auth] New user -- initializing vault (v3)');
         const newVault = await initializeVault(userKeypair.privateKey);
-        const rootIpnsName = await deriveIpnsName(newVault.rootIpnsKeypair.publicKey);
+        // TODO(phase 63): derive rootIpnsName = await deriveIpnsName(newVault.rootIpnsKeypair.publicKey)
 
         // Derive vault key IPNS keypair (separate from root folder IPNS)
         const vaultKeyKeypair = await deriveVaultKeyIpnsKeypair(userKeypair.privateKey);
         const vaultKeyIpnsName = vaultKeyKeypair.ipnsName;
 
-        // 1. Publish v2 key blob to vault key IPNS (rootFolderKey storage — key only, no metadata)
-        const encryptedRootFolderKey = await wrapKey(newVault.rootFolderKey, userKeypair.publicKey);
-        const v2Blob = serializeVaultBlobV2(encryptedRootFolderKey);
+        // 1. Encrypt and serialize v3 key blob, publish to vault key IPNS
+        // serializeVaultBlobV3 stores only rootReadKey + rootWriteKey (IPNS keypair is derived)
+        const encryptedKeys = await encryptVaultKeys(newVault, userKeypair.publicKey);
+        const v3Blob = serializeVaultBlobV3(
+          encryptedKeys.encryptedRootReadKey,
+          encryptedKeys.encryptedRootWriteKey
+        );
 
-        const keyBlobUpload = await addToIpfs(new Blob([v2Blob as BlobPart]));
+        const keyBlobUpload = await addToIpfs(new Blob([v3Blob as unknown as BlobPart]));
         const keyPublishResult = await createAndPublishIpnsRecord({
           ipnsPrivateKey: vaultKeyKeypair.privateKey,
           ipnsName: vaultKeyIpnsName,
@@ -195,40 +195,10 @@ export function useAuth() {
           throw new Error('Failed to publish vault key blob to IPNS');
         }
 
-        // 2. Publish folder metadata using v1 encrypted envelope format on IPFS ({iv, data});
-        //    FolderMetadata.version remains 'v2' (metadata schema version).
-        const emptyMetadata: FolderMetadata = { version: 'v2', children: [] };
-        const encrypted = await encryptFolderMetadata(emptyMetadata, newVault.rootFolderKey);
-        const metadataBlob = new Blob([JSON.stringify(encrypted)], { type: 'application/json' });
-        const metadataUpload = await addToIpfs(metadataBlob);
-        const folderPublishResult = await createAndPublishIpnsRecord({
-          ipnsPrivateKey: newVault.rootIpnsKeypair.privateKey,
-          ipnsName: rootIpnsName,
-          metadataCid: metadataUpload.cid,
-          sequenceNumber: 1n,
-          expectedSequenceNumber: undefined,
-        });
-        if (!folderPublishResult.success) {
-          throw new Error('Failed to publish initial root folder metadata');
-        }
-
-        // 3. Register vault with API (no crypto fields -- IPFS-only)
-        const storedVault = await vaultApi.initVault({
-          ownerPublicKey: bytesToHex(userKeypair.publicKey),
-          rootIpnsName,
-        });
-
-        if (storedVault.teeKeys) {
-          useAuthStore.getState().setTeeKeys(storedVault.teeKeys);
-        }
-
-        setVaultKeys({
-          rootFolderKey: newVault.rootFolderKey,
-          rootIpnsKeypair: newVault.rootIpnsKeypair,
-          rootIpnsName,
-          vaultId: storedVault.id,
-          isNewVault: true,
-        });
+        // 2. TODO(phase 63): publish empty root Node to root IPNS using Node codec.
+        // 3. TODO(phase 63): register vault with API, set vault keys.
+        // Both steps require root Node initialization which is phase 63.
+        throw new Error('not implemented — phase 63 (root Node initialization via Node codec)');
       }
 
       // Load BYO pinning config from encrypted IPNS entry (if configured).
@@ -287,7 +257,12 @@ export function useAuth() {
       // Initialize SDK client with decrypted vault keys
       const vaultState = useVaultStore.getState();
       const authState = useAuthStore.getState();
-      if (vaultState.rootFolderKey && vaultState.rootIpnsKeypair && vaultState.rootIpnsName) {
+      if (
+        vaultState.rootReadKey &&
+        vaultState.rootWriteKey &&
+        vaultState.rootIpnsKeypair &&
+        vaultState.rootIpnsName
+      ) {
         const apiUrl = import.meta.env.VITE_API_URL || window.location.origin + '/api';
         const getAccessToken = async () => {
           const state = useAuthStore.getState();
@@ -313,7 +288,10 @@ export function useAuth() {
             privateKey: userKeypair.privateKey,
           },
           rootIpnsName: vaultState.rootIpnsName,
-          rootFolderKey: vaultState.rootFolderKey,
+          // TODO(phase 63): SDK config will be updated to accept rootReadKey/rootWriteKey
+          // For now, bridge: rootReadKey maps to the SDK's rootFolderKey slot
+
+          rootFolderKey: vaultState.rootReadKey!,
           // Pass the root IPNS signing keypair so the client can self-bootstrap
           // and lazy-load folderTree from root (dissolves "Folder not loaded";
           // fixes bin restore after reload). Guaranteed non-null by the guard above.

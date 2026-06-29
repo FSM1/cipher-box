@@ -258,7 +258,8 @@ export function useFolderMutations() {
 
         // Validate batch move preconditions
         const folders = useFolderStore.getState().folders;
-        const itemIds = new Set(items.map((i) => i.id));
+        // TODO(phase 63): use itemIds for SealedChildRef lookup (no id field yet)
+        // const itemIds = new Set(items.map((i) => i.id));
 
         for (const item of items) {
           if (item.type === 'folder') {
@@ -279,11 +280,17 @@ export function useFolderMutations() {
         }
 
         // Name collision check against destination
-        const movedChildren = sourceFolder.children.filter((c) => itemIds.has(c.id));
-        for (const child of movedChildren) {
-          const nameExists = destFolder.children.some((c) => c.name === child.name);
+        // TODO(phase 63): use Node id for collision detection (SealedChildRef has no id field)
+        const movedNames = items
+          .map((i) => {
+            const ref = sourceFolder.children.find((c) => c.ipnsName === i.id);
+            return ref?.name;
+          })
+          .filter((n): n is string => n !== undefined);
+        for (const name of movedNames) {
+          const nameExists = destFolder.children.some((c) => c.name === name);
           if (nameExists) {
-            throw new Error(`An item named "${child.name}" already exists in the destination`);
+            throw new Error(`An item named "${name}" already exists in the destination`);
           }
         }
 
@@ -337,16 +344,8 @@ export function useFolderMutations() {
         // Remove folder subtree from store if deleting a folder
         if (itemType === 'folder') {
           const store = useFolderStore.getState();
-          const removeRecursive = (folderId: string) => {
-            const node = store.folders[folderId];
-            if (node) {
-              for (const child of node.children) {
-                if (child.type === 'folder') removeRecursive(child.id);
-              }
-            }
-            store.removeFolder(folderId);
-          };
-          removeRecursive(itemId);
+          // TODO(phase 63): recurse into sub-folders using Node.kind discrimination
+          store.removeFolder(itemId);
         }
 
         setState({ isLoading: false, error: null });
@@ -376,24 +375,10 @@ export function useFolderMutations() {
         if (!parentFolder) throw new Error('Parent folder not found');
 
         // Collect nested folder IDs to remove from store
-        const folderIdsToRemove: string[] = [];
-        const collectFolderIds = (folderId: string) => {
-          folderIdsToRemove.push(folderId);
-          const folders = useFolderStore.getState().folders;
-          const folder = folders[folderId];
-          if (!folder) return;
-          for (const child of folder.children) {
-            if (child.type === 'folder') {
-              collectFolderIds(child.id);
-            }
-          }
-        };
-
-        for (const item of items) {
-          if (item.type === 'folder') {
-            collectFolderIds(item.id);
-          }
-        }
+        // TODO(phase 63): recurse into sub-folders using Node.kind discrimination
+        const folderIdsToRemove: string[] = items
+          .filter((item) => item.type === 'folder')
+          .map((item) => item.id);
 
         // Delete each item via SDK (sequentially to maintain consistency)
         const client = getSdkClient();

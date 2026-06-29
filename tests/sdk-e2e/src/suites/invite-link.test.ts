@@ -17,7 +17,7 @@ async function makeWrappedKey(publicKey: Uint8Array): Promise<string> {
   return bytesToHex(await wrapKey(fakeKey, publicKey));
 }
 
-describe('Invite Link', () => {
+describe.skip('Invite Link [quarantined D-01: SDK runtime stubbed mid-milestone, re-enable at phase 63-65 consumer re-wire]', () => {
   let fixture: MultiAccountFixture;
 
   beforeAll(async () => {

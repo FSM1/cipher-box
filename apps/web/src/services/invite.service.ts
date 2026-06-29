@@ -9,24 +9,20 @@
  * All ephemeral and plaintext key material is zeroed in finally blocks.
  */
 
-import * as secp256k1 from '@noble/secp256k1';
 import { wrapKey, unwrapKey, hexToBytes, bytesToHex } from '@cipherbox/crypto';
-import type { FolderChild, FolderEntry, FilePointer } from '@cipherbox/core';
+import type { SealedChildRef } from '@cipherbox/core';
 import { useAuthStore } from '../stores/auth.store';
 import {
   invitesControllerGetInviteStatus,
   invitesControllerGetInviteData,
   invitesControllerClaimInvite,
-  shareInvitesControllerCreateInvite,
   shareInvitesControllerListInvites,
   shareInvitesControllerRevokeInvite,
   type ChildKeyDtoKeyType,
 } from '@cipherbox/api-client';
-import { collectChildKeys } from '../lib/crypto/key-wrapping';
-import { resolveFileMetadata } from './file-metadata.service';
-import { resolveIpnsRecord } from './ipns.service';
-import { fetchFromIpfs } from '../lib/api/ipfs';
-import { decryptFolderMetadata } from '@cipherbox/core';
+// collectChildKeys stubbed — phase 65 (write-chain key distribution)
+// resolveFileMetadata stubbed — phase 63 (Node read-chain)
+// resolveIpnsRecord, fetchFromIpfs, decryptFolderMetadata — retired (phase 63+)
 
 // ---------------------------------------------------------------------------
 // Types
@@ -48,23 +44,7 @@ export type InviteInfo = {
 // Ephemeral keypair generation
 // ---------------------------------------------------------------------------
 
-/**
- * Generate an ephemeral secp256k1 keypair for invite link creation.
- * The private key goes in the URL fragment (never sent to server).
- * The public key wraps the item key (stored on server as ciphertext).
- */
-function generateEphemeralKeypair(): {
-  privateKey: Uint8Array;
-  publicKey: Uint8Array;
-  privateKeyHex: string;
-} {
-  const keypair = secp256k1.keygen();
-  return {
-    privateKey: keypair.secretKey,
-    publicKey: secp256k1.getPublicKey(keypair.secretKey, false), // uncompressed 65-byte key for ECIES
-    privateKeyHex: bytesToHex(keypair.secretKey),
-  };
-}
+// TODO(phase 65): restore generateEphemeralKeypair when createInviteLink is implemented
 
 // ---------------------------------------------------------------------------
 // URL construction
@@ -100,120 +80,22 @@ export function buildInviteUrl(token: string, ephemeralPrivKeyHex: string): stri
  *
  * @returns The invite URL and token
  */
-export async function createInviteLink(params: {
-  item: FolderChild;
+/**
+ * Create an invite link for a file or folder.
+ *
+ * @stub phase 65 — invite creation requires Node read-chain (to resolve NodeContent
+ * for key collection) and write-chain (SealedChildRef has no folderKeyEncrypted or
+ * fileMetaIpnsName — those are inside the sealed Node bodies).
+ */
+export async function createInviteLink(_params: {
+  item: SealedChildRef;
   folderKey: Uint8Array;
   ipnsName: string;
   parentFolderId: string;
 }): Promise<{ url: string; token: string }> {
-  const { item, folderKey, ipnsName } = params;
-  const ephemeralKeypair = generateEphemeralKeypair();
-
-  try {
-    const vaultKeypair = useAuthStore.getState().vaultKeypair;
-    if (!vaultKeypair) {
-      throw new Error('Vault keypair not available');
-    }
-
-    const ownerPrivateKey = vaultKeypair.privateKey;
-    let encryptedKey: string;
-    let encryptedChildKeys:
-      | Array<{ keyType: ChildKeyDtoKeyType; itemId: string; encryptedKey: string }>
-      | undefined;
-
-    if (item.type === 'folder') {
-      const folderEntry = item as FolderEntry;
-
-      // Unwrap the folder's own key from its ECIES-encrypted form
-      const itemFolderKey = await unwrapKey(
-        hexToBytes(folderEntry.folderKeyEncrypted),
-        ownerPrivateKey
-      );
-
-      try {
-        // Wrap the folder key with ephemeral public key
-        const wrappedForEphemeral = await wrapKey(itemFolderKey, ephemeralKeypair.publicKey);
-        encryptedKey = bytesToHex(wrappedForEphemeral);
-
-        // Resolve folder metadata and collect child keys
-        const resolved = await resolveIpnsRecord(folderEntry.ipnsName);
-        if (resolved) {
-          const encryptedBytes = await fetchFromIpfs(resolved.cid);
-          const encryptedJson = new TextDecoder().decode(encryptedBytes);
-          const encrypted = JSON.parse(encryptedJson);
-          const metadata = await decryptFolderMetadata(encrypted, itemFolderKey);
-
-          encryptedChildKeys = await collectChildKeys(
-            metadata.children,
-            itemFolderKey,
-            ownerPrivateKey,
-            ephemeralKeypair.publicKey,
-            // Invite links are read-only — never distribute IPNS signing keys.
-            'read',
-            () => {} // No progress UI for invite creation
-          );
-        }
-      } finally {
-        itemFolderKey.fill(0);
-      }
-    } else {
-      // File sharing: wrap parent folder key with ephemeral key
-      // (recipient needs parent folder key to decrypt file metadata)
-      const filePointer = item as FilePointer;
-
-      const wrappedFolderKey = await wrapKey(folderKey, ephemeralKeypair.publicKey);
-      encryptedKey = bytesToHex(wrappedFolderKey);
-
-      // Resolve file metadata and wrap the file key as a child key
-      const { metadata: fileMeta } = await resolveFileMetadata(
-        filePointer.fileMetaIpnsName,
-        folderKey
-      );
-      const fileKeyPlain = await unwrapKey(hexToBytes(fileMeta.fileKeyEncrypted), ownerPrivateKey);
-      try {
-        const wrappedFileKey = await wrapKey(fileKeyPlain, ephemeralKeypair.publicKey);
-        encryptedChildKeys = [
-          {
-            keyType: 'file' as const,
-            itemId: filePointer.id,
-            encryptedKey: bytesToHex(wrappedFileKey),
-          },
-        ];
-      } finally {
-        fileKeyPlain.fill(0);
-      }
-    }
-
-    // REQ-4 / decision A3: ECIES-wrap the display name with the ephemeral public
-    // key (mirrors the encryptedKey wrap). On claim the recipient re-wraps it
-    // with their real vault pubkey. Only ciphertext leaves the browser — the
-    // plaintext itemName is NOT sent for new invites.
-    const itemNameBytes = new TextEncoder().encode(item.name);
-    let itemNameEncrypted: string;
-    try {
-      itemNameEncrypted = bytesToHex(await wrapKey(itemNameBytes, ephemeralKeypair.publicKey));
-    } finally {
-      itemNameBytes.fill(0);
-    }
-
-    // Create invite on server
-    const result = await shareInvitesControllerCreateInvite({
-      itemType: item.type === 'folder' ? 'folder' : 'file',
-      ipnsName,
-      itemName: '',
-      itemNameEncrypted,
-      encryptedKey,
-      encryptedChildKeys,
-    });
-
-    // Build URL with ephemeral private key in hash fragment
-    const url = buildInviteUrl(result.token, ephemeralKeypair.privateKeyHex);
-
-    return { url, token: result.token };
-  } finally {
-    // Zero ephemeral private key from memory
-    ephemeralKeypair.privateKey.fill(0);
-  }
+  throw new Error(
+    'not implemented — phase 65 (invite creation requires Node read-chain + write-chain)'
+  );
 }
 
 // ---------------------------------------------------------------------------

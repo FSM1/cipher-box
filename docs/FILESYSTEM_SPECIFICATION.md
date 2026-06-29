@@ -175,7 +175,33 @@ if (nameExists) throw new Error('An item with this name already exists');
 
 ## Metadata Storage
 
-File and folder names, timestamps, and structural information are stored as encrypted JSON in IPNS records. The server never sees plaintext names or folder structure. Node metadata bodies use the AAD-bound AES-256-GCM seal primitive; see [ADR 0003](adr/0003-aad-bound-node-seal-encoding.md) for the frozen byte encoding. See [METADATA_SCHEMAS.md](METADATA_SCHEMAS.md) for the full schema reference and [METADATA_EVOLUTION_PROTOCOL.md](METADATA_EVOLUTION_PROTOCOL.md) for change management rules.
+File and folder names, timestamps, and structural information are stored as encrypted JSON in
+IPFS blobs addressed via IPNS. The server never sees plaintext names or folder structure.
+
+### node/v3 storage model
+
+Every folder, file, and the vault root is represented as a **node/v3** `PublishedNode` object
+stored on IPFS and addressed by the node's IPNS k51 name. The `PublishedNode` is a JSON
+envelope with plaintext identity fields (`schema`, `kind`, `id`, `generation`, `aeadVersion`)
+and two independently sealed bodies:
+
+- **`readSealed`** -- AES-256-GCM-sealed read-body (children refs for folders/root; content
+  descriptor for files), sealed under the node's 32-byte `readKey` with AAD role `0x01`.
+- **`writeSealed`** -- AES-256-GCM-sealed write-body (IPNS signing seed + write-chain links),
+  sealed under a separate 32-byte `writeKey` with AAD role `0x01`. Absent on read-only nodes.
+
+The vault recovery blob (`VaultKeyBlob v3`) is a separate IPFS blob carrying two
+ECIES-wrapped root keys (`rootReadKey` and `rootWriteKey`) at a dedicated IPNS name
+(HKDF-derived). It is written once at vault initialization and read on every login.
+
+Node metadata bodies use the AAD-bound AES-256-GCM seal primitive; see
+[ADR 0003](adr/0003-aad-bound-node-seal-encoding.md) for the frozen 45-byte AAD encoding
+(kind byte, role byte, generation u32-BE). The sealed body wire format is
+`base64(IV [12 B] || AES-256-GCM ciphertext+tag [16 B])`.
+
+See [METADATA_SCHEMAS.md](METADATA_SCHEMAS.md) for the full node/v3 schema reference
+(Node, SealedChildRef, PublishedNode, NodeContent, VersionEntry, VaultKeyBlob v3) and
+[METADATA_EVOLUTION_PROTOCOL.md](METADATA_EVOLUTION_PROTOCOL.md) for change management rules.
 
 ## Known Gaps
 

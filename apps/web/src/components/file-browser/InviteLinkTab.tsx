@@ -1,11 +1,11 @@
 import { useState, useCallback, useEffect } from 'react';
-import type { FolderChild } from '@cipherbox/core';
+import type { SealedChildRef } from '@cipherbox/core';
 import { createInviteLink, fetchInvitesForItem, revokeInvite } from '../../services/invite.service';
 import type { InviteInfo } from '../../services/invite.service';
 import { logger } from '../../lib/logger';
 
 type InviteLinkTabProps = {
-  item: FolderChild;
+  item: SealedChildRef;
   folderKey: Uint8Array;
   ipnsName: string;
   parentFolderId: string;

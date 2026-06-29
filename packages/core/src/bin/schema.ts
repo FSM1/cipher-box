@@ -146,29 +146,12 @@ function validateBinEntry(data: unknown): void {
     }
   }
 
-  // Validate filePointer/folderEntry: optional, but if present must be objects
-  // Be lenient -- schema may evolve, so we don't enforce strict presence based on itemType
+  // Validate optional nodeRef: if present must be a non-null object
+  // Be lenient -- Phase 65 (bin re-link) will enforce the full Node shape
   if (
-    entry.filePointer !== undefined &&
-    (typeof entry.filePointer !== 'object' || entry.filePointer === null)
+    entry.nodeRef !== undefined &&
+    (typeof entry.nodeRef !== 'object' || entry.nodeRef === null)
   ) {
     throw new CryptoError('Invalid bin metadata format', 'DECRYPTION_FAILED');
-  }
-
-  if (
-    entry.folderEntry !== undefined &&
-    (typeof entry.folderEntry !== 'object' || entry.folderEntry === null)
-  ) {
-    throw new CryptoError('Invalid bin metadata format', 'DECRYPTION_FAILED');
-  }
-
-  // Validate optional originalFolderKeyEncrypted (even-length hex string if present)
-  if (entry.originalFolderKeyEncrypted !== undefined) {
-    if (
-      typeof entry.originalFolderKeyEncrypted !== 'string' ||
-      !/^(?:[0-9a-fA-F]{2})+$/.test(entry.originalFolderKeyEncrypted)
-    ) {
-      throw new CryptoError('Invalid bin metadata format', 'DECRYPTION_FAILED');
-    }
   }
 }

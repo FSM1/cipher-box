@@ -26,10 +26,19 @@ export function createTestConfig(
 }
 
 export function setupFolder(client: CipherBoxClient, ipnsName = 'folder-ipns', now = Date.now()) {
+  // SealedChildRef shape (node/v3) — old FolderChild fields kept as extras for
+  // quarantined tests that still reference them. Required fields: ipnsName,
+  // generation, versionFloor, readKeySealed (phase 62 compile gate).
   const child = {
+    // SealedChildRef required fields
+    name: 'test.txt',
+    ipnsName: 'k51file',
+    generation: 0,
+    versionFloor: 0n,
+    readKeySealed: 'sealed-key-hex',
+    // Legacy FolderChild fields retained for quarantined test reads
     type: 'file' as const,
     id: 'file1',
-    name: 'test.txt',
     fileMetaIpnsName: 'k51file',
     ipnsPrivateKeyEncrypted: 'abc',
     createdAt: now,

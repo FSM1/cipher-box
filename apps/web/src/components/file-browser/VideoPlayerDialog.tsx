@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import type { FilePointer } from '@cipherbox/core';
+import type { SealedChildRef } from '@cipherbox/core';
 import { Modal } from '../ui/Modal';
 import { useFilePreview } from '../../hooks/useFilePreview';
 import { useStreamingPreview } from '../../hooks/useStreamingPreview';
@@ -8,7 +8,7 @@ import '../../styles/video-player-dialog.css';
 type VideoPlayerDialogProps = {
   open: boolean;
   onClose: () => void;
-  item: FilePointer | null;
+  item: SealedChildRef | null;
   /** Parent folder's decrypted AES-256 key (needed to decrypt file metadata) */
   folderKey: Uint8Array | null;
   /** Share ID when previewing from a shared folder — uses re-wrapped file keys */

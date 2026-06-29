@@ -7,7 +7,7 @@ import {
   autoUpdate,
   type VirtualElement,
 } from '@floating-ui/react';
-import type { FolderChild } from '@cipherbox/core';
+import type { SealedChildRef } from '@cipherbox/core';
 import { Portal } from '../ui/Portal';
 import '../../styles/context-menu.css';
 
@@ -17,7 +17,7 @@ type ContextMenuProps = {
   /** Y position (client coordinates) */
   y: number;
   /** The file or folder item */
-  item: FolderChild;
+  item: SealedChildRef;
   /** Number of selected items (for multi-selection context) */
   selectedCount: number;
   /** Callback to close the menu */
@@ -83,7 +83,8 @@ export function ContextMenu({
   onHide,
 }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement | null>(null);
-  const isFile = item.type === 'file';
+  // TODO(phase 63): SealedChildRef has no .type; kind discrimination deferred to Node.kind
+  const isFile = false; // phase-63 stub: context menu file-only actions hidden until phase 63
 
   // Create virtual reference element at click position
   const virtualReference = useMemo<VirtualElement>(

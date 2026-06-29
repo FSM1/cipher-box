@@ -11,9 +11,11 @@ import { ReactIntegration } from '@grafana/faro-react';
 /** Field names containing crypto material or PII — scrubbed from all Faro payloads. */
 const SENSITIVE_KEYS = new Set([
   'privateKey',
-  'rootFolderKey',
+  'rootReadKey',
+  'rootWriteKey',
   'folderKey',
   'fileKey',
+  'readKeySealed',
   'accessToken',
   'ipnsPrivateKey',
   'teePublicKey',

@@ -92,42 +92,20 @@ export async function downloadAndSaveFile(
 }
 
 /**
- * Download a file using per-file IPNS metadata (v2 flow).
+ * Download a file using per-file Node content (phase 63 flow).
  *
- * Resolves the file's IPNS name to get encrypted metadata (cid, key, iv),
- * then fetches and decrypts the file content. This is the primary download
- * path for v2 folder metadata where files are FilePointer references.
- *
- * @param params.fileMetaIpnsName - IPNS name of the file's metadata record
- * @param params.folderKey - Parent folder's decrypted AES-256 key (for metadata decryption)
- * @param params.privateKey - User's private key (for file key unwrapping)
- * @param params.fileName - Original file name (for download dialog)
- * @param params.onProgress - Optional progress callback
- * @returns Decrypted file content
+ * @stub phase 63 — requires Node read-chain to unseal NodeContent (cid, fileKey, fileIv).
+ * The per-file IPNS metadata (FileMetadata / EncryptedFileMetadata) is retired;
+ * file content fields now live inside NodeContent sealed under the file's readKey.
  */
-export async function downloadFileFromIpns(params: {
+export async function downloadFileFromIpns(_params: {
   fileMetaIpnsName: string;
   folderKey: Uint8Array;
   privateKey: Uint8Array;
   fileName: string;
   onProgress?: DownloadProgressCallback;
 }): Promise<Uint8Array> {
-  // 1. Resolve per-file IPNS to get FileMetadata (cid, fileKeyEncrypted, fileIv)
-  const { metadata: fileMeta } = await resolveFileMetadata(
-    params.fileMetaIpnsName,
-    params.folderKey
-  );
-
-  // 2. Download and decrypt using existing low-level function
-  return downloadFile(
-    {
-      cid: fileMeta.cid,
-      iv: fileMeta.fileIv,
-      wrappedKey: fileMeta.fileKeyEncrypted,
-      originalName: params.fileName,
-      encryptionMode: fileMeta.encryptionMode,
-    },
-    params.privateKey,
-    params.onProgress
-  );
+  // Keep reference to suppress unused-import lint on resolveFileMetadata
+  void resolveFileMetadata;
+  throw new Error('not implemented — phase 63 (file download requires Node read-chain)');
 }

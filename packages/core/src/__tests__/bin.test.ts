@@ -39,27 +39,10 @@ function createTestBinMetadata(entryCount = 1): RecycleBinMetadata {
       ? {
           contentCid: `bafybeicontent${i}${'a'.repeat(40)}`,
           contentSize: (i + 1) * 512,
-          filePointer: {
-            type: 'file' as const,
-            id: crypto.randomUUID(),
-            name: `test-item-${i}.txt`,
-            fileMetaIpnsName: `k51${'c'.repeat(59)}`,
-            createdAt: now - i * 120_000,
-            modifiedAt: now - i * 60_000,
-          },
+          // nodeRef placeholder — Phase 65 will wire bin restore as a re-link under destination readKey
+          // TODO(phase 65): populate nodeRef with actual Node when bin re-link is implemented
         }
-      : {
-          folderEntry: {
-            type: 'folder' as const,
-            id: crypto.randomUUID(),
-            name: `test-item-${i}.txt`,
-            ipnsName: `k51${'b'.repeat(59)}`,
-            ipnsPrivateKeyEncrypted: `${'dd'.repeat(48)}`,
-            folderKeyEncrypted: `${'ee'.repeat(48)}`,
-            createdAt: now - i * 120_000,
-            modifiedAt: now - i * 60_000,
-          },
-        }),
+      : {}),
   }));
 
   return {
@@ -167,9 +150,10 @@ describe('encryptBinMetadata / decryptBinMetadata', () => {
     expect(restored.deletedAt).toBe(original.deletedAt);
     expect(restored.size).toBe(original.size);
     expect(restored.mimeType).toBe(original.mimeType);
-    expect(restored.filePointer).toEqual(original.filePointer);
     expect(restored.contentCid).toBe(original.contentCid);
     expect(restored.contentSize).toBe(original.contentSize);
+    // nodeRef round-trip: undefined in test data (Phase 65 will wire bin re-link)
+    expect(restored.nodeRef).toBeUndefined();
   });
 
   it('fails to decrypt with wrong key', async () => {
@@ -438,7 +422,7 @@ describe('validateBinMetadata', () => {
     ).toThrow('Invalid bin metadata format');
   });
 
-  it('rejects entry with non-object filePointer', () => {
+  it('rejects entry with non-object nodeRef', () => {
     expect(() =>
       validateBinMetadata({
         version: 'v1',
@@ -453,37 +437,15 @@ describe('validateBinMetadata', () => {
             deletedAt: Date.now(),
             size: 100,
             mimeType: 'text/plain',
-            filePointer: 'not-an-object',
+            nodeRef: 'not-an-object',
           },
         ],
       })
     ).toThrow('Invalid bin metadata format');
   });
 
-  it('rejects entry with non-object folderEntry', () => {
-    expect(() =>
-      validateBinMetadata({
-        version: 'v1',
-        sequenceNumber: 1,
-        entries: [
-          {
-            id: 'abc',
-            itemType: 'folder',
-            name: 'docs',
-            originalParentIpnsName: 'k51xxx',
-            originalPath: '/docs',
-            deletedAt: Date.now(),
-            size: 0,
-            mimeType: '',
-            folderEntry: 'not-an-object',
-          },
-        ],
-      })
-    ).toThrow('Invalid bin metadata format');
-  });
-
-  it('rejects entry with null filePointer', () => {
-    // null filePointer should fail since it's not undefined and not a non-null object
+  it('rejects entry with null nodeRef', () => {
+    // null nodeRef should fail since it's not undefined and not a non-null object
     expect(() =>
       validateBinMetadata({
         version: 'v1',
@@ -498,11 +460,40 @@ describe('validateBinMetadata', () => {
             deletedAt: Date.now(),
             size: 100,
             mimeType: 'text/plain',
-            filePointer: null,
+            nodeRef: null,
           },
         ],
       })
     ).toThrow('Invalid bin metadata format');
+  });
+
+  it('accepts entry with valid nodeRef object', () => {
+    expect(() =>
+      validateBinMetadata({
+        version: 'v1',
+        sequenceNumber: 1,
+        entries: [
+          {
+            id: 'abc',
+            itemType: 'file',
+            name: 'test.txt',
+            originalParentIpnsName: 'k51xxx',
+            originalPath: '/test.txt',
+            deletedAt: Date.now(),
+            size: 100,
+            mimeType: 'text/plain',
+            nodeRef: {
+              schema: 'node/v3',
+              kind: 'file',
+              id: 'abc',
+              generation: 0,
+              createdAt: 0,
+              modifiedAt: 0,
+            },
+          },
+        ],
+      })
+    ).not.toThrow();
   });
 
   it('rejects entry that is not an object', () => {

@@ -61,7 +61,7 @@
 ### v2.0 Metadata and Sharing Refactor (Phases 61–69)
 
 - [x] **Phase 61: AAD-Bound Seal Primitive and Cross-Language KAT** — Additive AES-GCM+AAD seal in `packages/crypto` and `crates/crypto` with a committed TS↔Rust known-answer test (completed 2026-06-28)
-- [ ] **Phase 62: Unified Node Codec (Core Keystone)** — `Node`/`SealedChildRef`/`PublishedNode` types replacing all legacy metadata types; nothing downstream typechecks until this lands
+- [x] **Phase 62: Unified Node Codec (Core Keystone)** — `Node`/`SealedChildRef`/`PublishedNode` types replacing all legacy metadata types; nothing downstream typechecks until this lands (completed 2026-06-28)
 - [ ] **Phase 63: Read-Chain Navigation and Rotation Core** — Read key-chain walk, `rotateReadFromNode`/`rotateOne` engine, scope-exit predicate, and invite re-wrap in `packages/sdk-core`
 - [ ] **Phase 64: Rotation Soundness — Revocation Guarantees** — CRIT-1 content-key rotation, HIGH-3 inner grant re-mint, HIGH-4 concurrent-add merge, crash-safe resume, and the `tests/sdk-e2e` crash-safety suite
 - [ ] **Phase 65: SDK Write-Chain, Bin Re-link, and Invite Claim** — Structured write-body, (c) full Ed25519 write-revocation, bin restore as pure re-link, invite claim re-wrap; delete `addShareKeys`/`reWrapForRecipients`/`encryptedChildKeys`
@@ -126,7 +126,38 @@ Plans:
 5. `packages/sdk-core`, `packages/sdk`, and `apps/web` typecheck cleanly after `packages/core` `dist/` is rebuilt — zero references to retired `FolderMetadata`/`FileMetadata`/`FilePointer`/`FolderEntry`
 6. `METADATA_SCHEMAS.md` is updated to document the `generation`-as-convergence-witness invariant and the `fileKey`-inside-sealed-read-body semantic change
 
-**Plans**: TBD
+**Plans**: 9/9 plans complete
+
+Plans:
+**Wave 1**
+
+- [x] 62-01-PLAN.md — Node type model + JSON encode/decode codec (folder/file/root round-trip, generation range, fileKey-as-Uint8Array)
+- [x] 62-03-PLAN.md — Vault recovery blob v3 hard-cut (two ECIES keys, delete v2/v1 + encryptedRootFolderKey, two-key init)
+
+**Wave 2** *(blocked on 62-01)*
+
+- [x] 62-02-PLAN.md — AAD-bound sealNode/unsealNode + node/index barrel + frozen golden vectors (body-bytes + full-seal lock)
+
+**Wave 3** *(blocked on 62-02, 62-03)*
+
+- [x] 62-04-PLAN.md — Docs: METADATA_SCHEMAS node/v3 rewrite + two SC#6 invariants + evolution/filesystem pointers
+- [x] 62-05-PLAN.md — Core barrel cutover, delete folder/+file/, bin→Node adaptation, legacy-test cleanup
+
+**Wave 4** *(blocked on 62-05)*
+
+- [x] 62-06-PLAN.md — sdk-core compile-gate (core dist rebuild, stub behavioral paths, quarantine suites)
+
+**Wave 5** *(blocked on 62-06)*
+
+- [x] 62-07-PLAN.md — sdk compile-gate (write-chain/share/bin/invite stubs, quarantine suites)
+
+**Wave 6** *(blocked on 62-07)*
+
+- [x] 62-08a-PLAN.md — web logic-layer compile-gate (stores/hooks/services/lib/utils to Node + stubs, shared display projection)
+
+**Wave 7** *(blocked on 62-08a)*
+
+- [x] 62-08b-PLAN.md — web component-layer compile-gate (file-browser to Node, discover + quarantine all retired-type suites, full `pnpm typecheck` gate)
 
 ---
 
@@ -290,7 +321,7 @@ Plans:
 | Phase | Name | Plans Complete | Status | Completed |
 | --- | --- | --- | --- | --- |
 | 61 | AAD-Bound Seal Primitive and Cross-Language KAT | 5/5 | Complete    | 2026-06-28 |
-| 62 | Unified Node Codec (Core Keystone) | 0/? | Not started | - |
+| 62 | Unified Node Codec (Core Keystone) | 9/9 | Complete    | 2026-06-28 |
 | 63 | Read-Chain Navigation and Rotation Core | 0/? | Not started | - |
 | 64 | Rotation Soundness — Revocation Guarantees | 0/? | Not started | - |
 | 65 | SDK Write-Chain, Bin Re-link, and Invite Claim | 0/? | Not started | - |

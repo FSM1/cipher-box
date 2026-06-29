@@ -1,5 +1,5 @@
 import { useCallback } from 'react';
-import type { FolderEntry, FilePointer } from '@cipherbox/core';
+// TODO(phase 63): FolderEntry, FilePointer, isFilePointer removed — use SealedChildRef
 import { useFolderNavigation } from '../../hooks/useFolderNavigation';
 import { useFolder } from '../../hooks/useFolder';
 import { useFileDownload } from '../../hooks/useFileDownload';
@@ -7,7 +7,7 @@ import { useContextMenu } from '../../hooks/useContextMenu';
 import { useSyncPolling } from '../../hooks/useSyncPolling';
 import { useDeviceRegistrySync } from '../../hooks/useDeviceRegistrySync';
 import { useDropUpload } from '../../hooks/useDropUpload';
-import { isFilePointer, isPreviewableFile, isTextFile } from '../../utils/fileTypes';
+import { isPreviewableFile, isTextFile } from '../../utils/fileTypes';
 import { useVaultStore } from '../../stores/vault.store';
 import { useSyncStore } from '../../stores/sync.store';
 import { useUploadStore } from '../../stores/upload.store';
@@ -103,10 +103,8 @@ export function FileBrowser() {
     return false;
   });
 
-  const deleteMessage =
-    actions.confirmDialog.item?.type === 'folder'
-      ? `Are you sure you want to delete "${actions.confirmDialog.item?.name}"? This will also delete all files and subfolders inside. This cannot be undone.`
-      : `Are you sure you want to delete "${actions.confirmDialog.item?.name}"? This cannot be undone.`;
+  // TODO(phase 63): SealedChildRef has no .type; treat all as folders for delete message
+  const deleteMessage = `Are you sure you want to delete "${actions.confirmDialog.item?.name}"? This will also delete all files and subfolders inside. This cannot be undone.`;
 
   const contentClassName = [
     'file-browser-content',
@@ -220,27 +218,22 @@ export function FileBrowser() {
           item={contextMenu.item}
           selectedCount={actions.selectedIds.size}
           onClose={contextMenu.hide}
-          onDownload={isFilePointer(contextMenu.item) ? actions.handleDownload : undefined}
+          // TODO(phase 63): SealedChildRef has no .type; file-only actions deferred
+          onDownload={undefined /* phase-63 stub */}
           onEdit={
-            isFilePointer(contextMenu.item) && isTextFile(contextMenu.item.name)
-              ? actions.handleEditClick
-              : undefined
+            /* phase-63 stub: text file edit deferred */
+            isTextFile(contextMenu.item.name) ? actions.handleEditClick : undefined
           }
           onPreview={
-            isFilePointer(contextMenu.item) && isPreviewableFile(contextMenu.item.name)
-              ? actions.handlePreviewClick
-              : undefined
+            /* phase-63 stub: preview by name extension, no .type check */
+            isPreviewableFile(contextMenu.item.name) ? actions.handlePreviewClick : undefined
           }
           onRename={actions.handleRenameClick}
           onMove={actions.handleMoveClick}
           onShare={actions.handleShareClick}
           onDelete={actions.handleDeleteClick}
           onDetails={actions.handleDetailsClick}
-          onBatchDownload={
-            actions.selectedIds.size > 1 && actions.selectedItems.some(isFilePointer)
-              ? actions.handleBatchDownload
-              : undefined
-          }
+          onBatchDownload={undefined /* phase-63 stub: batch download deferred */}
           onBatchMove={actions.selectedIds.size > 1 ? actions.handleBatchMoveClick : undefined}
           onBatchDelete={actions.selectedIds.size > 1 ? actions.handleBatchDeleteClick : undefined}
         />
@@ -251,7 +244,7 @@ export function FileBrowser() {
         onClose={actions.closeRenameDialog}
         onConfirm={actions.handleRenameConfirm}
         currentName={actions.renameDialog.item?.name ?? ''}
-        itemType={actions.renameDialog.item?.type ?? 'file'}
+        itemType={'folder' /* TODO(phase 63): SealedChildRef has no .type */}
         isLoading={isOperating}
       />
 
@@ -259,7 +252,7 @@ export function FileBrowser() {
         open={actions.confirmDialog.open}
         onClose={actions.closeConfirmDialog}
         onConfirm={actions.handleDeleteConfirm}
-        title={actions.confirmDialog.item?.type === 'folder' ? 'Delete Folder?' : 'Delete File?'}
+        title={'Delete Folder?' /* TODO(phase 63): SealedChildRef has no .type */}
         message={deleteMessage}
         confirmLabel="Delete"
         isDestructive
@@ -296,23 +289,16 @@ export function FileBrowser() {
           onClose={actions.closeShareDialog}
           item={actions.shareItem}
           folderKey={currentFolder.folderKey}
-          ipnsName={
-            actions.shareItem.type === 'folder'
-              ? (actions.shareItem as FolderEntry).ipnsName
-              : (actions.shareItem as FilePointer).fileMetaIpnsName
-          }
+          ipnsName={actions.shareItem.ipnsName /* TODO(phase 63): SealedChildRef.ipnsName */}
           parentFolderId={currentFolderId}
         />
       )}
 
+      {/* TODO(phase 63): isFilePointer removed; pass item directly (SealedChildRef) */}
       <TextEditorDialog
         open={actions.editorDialog.open}
         onClose={actions.closeEditorDialog}
-        item={
-          actions.editorDialog.item && isFilePointer(actions.editorDialog.item)
-            ? actions.editorDialog.item
-            : null
-        }
+        item={actions.editorDialog.item ?? null}
         parentFolderId={currentFolderId}
         folderKey={currentFolder?.folderKey ?? null}
       />
@@ -320,44 +306,28 @@ export function FileBrowser() {
       <ImagePreviewDialog
         open={actions.imagePreviewDialog.open}
         onClose={actions.closeImagePreviewDialog}
-        item={
-          actions.imagePreviewDialog.item && isFilePointer(actions.imagePreviewDialog.item)
-            ? actions.imagePreviewDialog.item
-            : null
-        }
+        item={actions.imagePreviewDialog.item ?? null}
         folderKey={currentFolder?.folderKey ?? null}
       />
 
       <PdfPreviewDialog
         open={actions.pdfPreviewDialog.open}
         onClose={actions.closePdfPreviewDialog}
-        item={
-          actions.pdfPreviewDialog.item && isFilePointer(actions.pdfPreviewDialog.item)
-            ? actions.pdfPreviewDialog.item
-            : null
-        }
+        item={actions.pdfPreviewDialog.item ?? null}
         folderKey={currentFolder?.folderKey ?? null}
       />
 
       <AudioPlayerDialog
         open={actions.audioPlayerDialog.open}
         onClose={actions.closeAudioPlayerDialog}
-        item={
-          actions.audioPlayerDialog.item && isFilePointer(actions.audioPlayerDialog.item)
-            ? actions.audioPlayerDialog.item
-            : null
-        }
+        item={actions.audioPlayerDialog.item ?? null}
         folderKey={currentFolder?.folderKey ?? null}
       />
 
       <VideoPlayerDialog
         open={actions.videoPlayerDialog.open}
         onClose={actions.closeVideoPlayerDialog}
-        item={
-          actions.videoPlayerDialog.item && isFilePointer(actions.videoPlayerDialog.item)
-            ? actions.videoPlayerDialog.item
-            : null
-        }
+        item={actions.videoPlayerDialog.item ?? null}
         folderKey={currentFolder?.folderKey ?? null}
       />
 

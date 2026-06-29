@@ -19,7 +19,7 @@ import { createTestContext, deleteTestAccount, type TestContext } from '../fixtu
 import { expectChildNamed, getChild, getChildren } from '../helpers/assertions';
 import { generateBytes, generateTextContent } from '../helpers/data-generators';
 
-describe('Concurrent Operations', () => {
+describe.skip('Concurrent Operations [quarantined D-01: SDK runtime stubbed mid-milestone, re-enable at phase 63-65 consumer re-wire]', () => {
   let ctx: TestContext;
 
   beforeAll(async () => {

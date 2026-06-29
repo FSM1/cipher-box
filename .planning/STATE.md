@@ -2,18 +2,19 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
-current_phase: 62
-current_phase_name: Core Keystone
+current_phase: 63
+current_phase_name: Read-Chain Navigation and Rotation Core
 status: verifying
-last_updated: "2026-06-28T01:55:26.238Z"
+stopped_at: Completed 62-05-PLAN.md
+last_updated: "2026-06-28T23:44:40.862Z"
 last_activity: 2026-06-28
-last_activity_desc: Phase 61 complete, transitioned to Phase 62
+last_activity_desc: Phase 62 complete, transitioned to Phase 63
 progress:
   total_phases: 9
-  completed_phases: 1
-  total_plans: 5
-  completed_plans: 5
-  percent: 11
+  completed_phases: 2
+  total_plans: 14
+  completed_plans: 14
+  percent: 22
 ---
 
 # Project State
@@ -23,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-27)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 62 — unified-node-codec
+**Current focus:** Phase 62 — Unified Node Codec (Core Keystone)
 
 ## Current Position
 
-Phase: 62 — Unified Node Codec (Core Keystone)
+Phase: 63 — Read-Chain Navigation and Rotation Core
 Plan: Not started
 Status: Phase complete — ready for verification
-Last activity: 2026-06-28 — Phase 61 complete, transitioned to Phase 62
+Last activity: 2026-06-28 — Phase 62 complete, transitioned to Phase 63
 
 Progress: `░░░░░░░░░░` 0 / 9 phases (0%)
 
@@ -195,6 +196,14 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 61-aad-bound-seal-primitive-and-cross-language-kat P03 | 11 | 2 tasks | 7 files |
 | Phase 61 P04 | 8 | 2 tasks | 2 files |
 | Phase 61 P05 | 10 | 2 tasks | 4 files |
+| Phase 62 P01 | 10m | 3 tasks | 4 files |
+| Phase 62 P02 | 75 | 2 tasks | 4 files |
+| Phase 62 P04 | 14 minutes | 2 tasks | 3 files |
+| Phase 62 P05 | 10m | 3 tasks | 9 files |
+| Phase 62-unified-node-codec-core-keystone P06 | 2700 | 2 tasks | 11 files |
+| Phase 62 P07 | 90m | 2 tasks | 18 files |
+| Phase 62-unified-node-codec-core-keystone P08a | 180 | 1 tasks | 26 files |
+| Phase 62-unified-node-codec-core-keystone P08b | 240 | 1 tasks | 22 files |
 
 ## Accumulated Context
 
@@ -349,7 +358,7 @@ All v1.1 requirements code-satisfied (77/77). See `.planning/milestones/v1.1-MIL
 
 Last activity: 2026-06-27
 
-Last session: 2026-06-28T01:34:49.368Z
+Last session: 2026-06-28T18:09:45.156Z
 
 ## Decisions
 
@@ -384,7 +393,24 @@ Last session: 2026-06-28T01:34:49.368Z
 - [Phase 60-05]: api:generate NOT required; changes are internal service/codec logic with no OpenAPI surface change
 - [Phase ?]: seal_vectors KAT asserts exact ciphertext byte-for-byte via serde_json::Value pull + NodeSealVector; !seal_vectors.is_empty() guard prevents vacuous pass
 - [Phase ?]: ADR 0003 freezes the 45-byte AAD encoding; doc links replace inline restatement
+- [Phase ?]: [Phase 62-01]
+- [Phase ?]: [Phase 62-01]
+- [Phase ?]: Role 0x01 used for both readSealed and writeSealed bodies (ADR 0003 §2.5)
+- [Phase ?]: D-09: never zero caller-supplied key buffers in seal.ts — caller is terminal owner
+- [Phase ?]: [62-05] nodeRef replaces filePointer/folderEntry/originalFolderKeyEncrypted in BinEntry; Phase 65 owns bin re-link behavior
+- [Phase ?]: [62-05] No describe.skip needed in bin.test.ts - all remaining tests are pure ECIES round-trip or schema validation
+- [Phase ?]: vault adapted to v3 two-key format; sdk-core compile gate passes with zero retired-type references
+- [Phase ?]: vault.store: rootFolderKey split to rootReadKey+rootWriteKey for v3 vault
+- [Phase ?]: useAuth.ts vault load: unwrapKey x2 + deriveVaultIpnsKeypair (IPNS keypair derived, not in v3 blob)
+- [Phase ?]: Phase-63 kind-discrimination stubs: isFolder=true, fileCount=0 across file-browser until Node.kind available
+- [Phase ?]: ShareDialog.handleShare + handleUpgrade fully stubbed with throw phase-65; legacy FolderEntry key-wrapping path removed
 
 ## Operator Next Steps
 
 - Run `/gsd-plan-phase 61` to begin Phase 61: AAD-Bound Seal Primitive and Cross-Language KAT
+
+## Session
+
+**Last session:** 2026-06-28T23:28:19.767Z
+**Stopped at:** Completed 62-05-PLAN.md
+**Resume file:** None

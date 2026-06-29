@@ -14,7 +14,7 @@
  * owned-path `folder.store` projection tests).
  */
 
-import type { FolderChild } from '@cipherbox/core';
+import type { SealedChildRef } from '@cipherbox/core';
 import { hexToBytes } from '@cipherbox/crypto';
 import type { CipherBoxClient, SharedFolderState, ShareKeyType } from '@cipherbox/sdk';
 
@@ -46,7 +46,7 @@ export type SeedSharedFolderArgs = {
   folderKey: Uint8Array;
   ipnsPrivateKey: Uint8Array;
   sequenceNumber: bigint;
-  children: FolderChild[];
+  children: SealedChildRef[];
   ownerPublicKey: Uint8Array;
   recipientPublicKey: Uint8Array;
   addShareKeysFn: (
@@ -83,7 +83,10 @@ export function seedSharedFolder(client: SharedFolderClient, args: SeedSharedFol
 }
 
 /** Callback shape for the projection: receives the SDK's authoritative state. */
-export type SharedFolderProjectionApply = (children: FolderChild[], sequenceNumber: bigint) => void;
+export type SharedFolderProjectionApply = (
+  children: SealedChildRef[],
+  sequenceNumber: bigint
+) => void;
 
 /**
  * Subscribe to `sharedFolder:updated` and project the SDK's authoritative

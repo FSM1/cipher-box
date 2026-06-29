@@ -75,7 +75,7 @@ export function getRootFolderState(
   vaultStore: ReturnType<typeof useVaultStore.getState>,
   folders: Record<string, FolderNode>
 ): FolderNode | null {
-  if (!vaultStore.rootFolderKey || !vaultStore.rootIpnsKeypair || !vaultStore.rootIpnsName) {
+  if (!vaultStore.rootReadKey || !vaultStore.rootIpnsKeypair || !vaultStore.rootIpnsName) {
     return null;
   }
 
@@ -93,7 +93,7 @@ export function getRootFolderState(
     isLoaded: false,
     isLoading: false,
     sequenceNumber: 0n,
-    folderKey: vaultStore.rootFolderKey,
+    folderKey: vaultStore.rootReadKey,
     ipnsPrivateKey: vaultStore.rootIpnsKeypair.privateKey,
   };
 }

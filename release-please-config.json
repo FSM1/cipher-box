@@ -98,7 +98,7 @@
       "component": "@cipherbox/core",
       "include-component-in-tag": true,
       "bump-minor-pre-major": true,
-      "release-as": "0.31.2"
+      "release-as": "0.32.0"
     },
     "packages/crypto": {
       "release-type": "node",

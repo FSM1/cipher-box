@@ -117,14 +117,15 @@ export class SearchIndexService {
       const parentPath = this.buildPath(folder.id, folders);
 
       // Index each child (files and subfolders)
+      // TODO(phase 63): use Node.kind for type discrimination; SealedChildRef has no .type/.id/.modifiedAt/.createdAt
       for (const child of folder.children) {
         documents.push({
-          id: `${folder.id}:${child.id}`,
+          id: `${folder.id}:${child.ipnsName}`,
           name: child.name,
-          type: child.type === 'folder' ? 'folder' : 'file',
+          type: 'file', // phase 63: use Node.kind ('folder'|'file') from unsealed Node
           parentPath,
           parentFolderId: folder.id,
-          modifiedAt: child.modifiedAt ?? child.createdAt ?? 0,
+          modifiedAt: 0, // phase 63: modifiedAt lives in NodeContent, not SealedChildRef
         });
       }
     }

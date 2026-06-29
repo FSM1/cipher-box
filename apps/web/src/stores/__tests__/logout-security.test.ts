@@ -13,7 +13,8 @@ describe('Logout Security', () => {
   beforeEach(() => {
     // Reset stores before each test
     useVaultStore.setState({
-      rootFolderKey: null,
+      rootReadKey: null,
+      rootWriteKey: null,
       rootIpnsKeypair: null,
       rootIpnsName: null,
       vaultId: null,
@@ -31,20 +32,23 @@ describe('Logout Security', () => {
   describe('useVaultStore.clearVaultKeys', () => {
     it('should zero-fill vault keys on clearVaultKeys', () => {
       // Setup: Create mock keys with known values
-      const rootFolderKey = new Uint8Array(32).fill(0xaa);
+      const rootReadKey = new Uint8Array(32).fill(0xaa);
+      const rootWriteKey = new Uint8Array(32).fill(0xdd);
       const publicKey = new Uint8Array(32).fill(0xbb);
       const privateKey = new Uint8Array(32).fill(0xcc);
 
       // Keep references to check after clearing
       const keyReferences = {
-        rootFolderKey,
+        rootReadKey,
+        rootWriteKey,
         publicKey,
         privateKey,
       };
 
       // Initialize vault with keys
       useVaultStore.getState().setVaultKeys({
-        rootFolderKey,
+        rootReadKey,
+        rootWriteKey,
         rootIpnsKeypair: { publicKey, privateKey },
         rootIpnsName: 'k51qzi5uqu5test',
         vaultId: 'test-vault-id',
@@ -52,7 +56,8 @@ describe('Logout Security', () => {
 
       // Verify keys are set
       const stateBefore = useVaultStore.getState();
-      expect(stateBefore.rootFolderKey).not.toBeNull();
+      expect(stateBefore.rootReadKey).not.toBeNull();
+      expect(stateBefore.rootWriteKey).not.toBeNull();
       expect(stateBefore.rootIpnsKeypair).not.toBeNull();
 
       // Clear vault keys
@@ -60,7 +65,8 @@ describe('Logout Security', () => {
 
       // Verify state is cleared
       const stateAfter = useVaultStore.getState();
-      expect(stateAfter.rootFolderKey).toBeNull();
+      expect(stateAfter.rootReadKey).toBeNull();
+      expect(stateAfter.rootWriteKey).toBeNull();
       expect(stateAfter.rootIpnsKeypair).toBeNull();
       expect(stateAfter.rootIpnsName).toBeNull();
       expect(stateAfter.vaultId).toBeNull();
@@ -68,7 +74,8 @@ describe('Logout Security', () => {
 
       // Verify the original arrays were zero-filled (security check)
       // This confirms memory was overwritten, not just dereferenced
-      expect(keyReferences.rootFolderKey.every((b) => b === 0)).toBe(true);
+      expect(keyReferences.rootReadKey.every((b) => b === 0)).toBe(true);
+      expect(keyReferences.rootWriteKey.every((b) => b === 0)).toBe(true);
       expect(keyReferences.publicKey.every((b) => b === 0)).toBe(true);
       expect(keyReferences.privateKey.every((b) => b === 0)).toBe(true);
     });
@@ -80,7 +87,7 @@ describe('Logout Security', () => {
       }).not.toThrow();
 
       const state = useVaultStore.getState();
-      expect(state.rootFolderKey).toBeNull();
+      expect(state.rootReadKey).toBeNull();
       expect(state.isInitialized).toBe(false);
     });
   });
@@ -187,7 +194,8 @@ describe('Logout Security', () => {
 
       // Initialize vault
       useVaultStore.getState().setVaultKeys({
-        rootFolderKey: vaultRootKey,
+        rootReadKey: vaultRootKey,
+        rootWriteKey: new Uint8Array(32).fill(0xff),
         rootIpnsKeypair: { publicKey: vaultIpnsPublic, privateKey: vaultIpnsPrivate },
         rootIpnsName: 'k51qzi5uqu5root',
         vaultId: 'test-vault',
@@ -220,7 +228,8 @@ describe('Logout Security', () => {
       const vaultState = useVaultStore.getState();
       const folderState = useFolderStore.getState();
 
-      expect(vaultState.rootFolderKey).toBeNull();
+      expect(vaultState.rootReadKey).toBeNull();
+      expect(vaultState.rootWriteKey).toBeNull();
       expect(vaultState.rootIpnsKeypair).toBeNull();
       expect(vaultState.isInitialized).toBe(false);
       expect(Object.keys(folderState.folders)).toHaveLength(0);
@@ -238,7 +247,8 @@ describe('Logout Security', () => {
       const privateKey = new Uint8Array(32).fill(0xdd);
 
       useVaultStore.getState().setVaultKeys({
-        rootFolderKey: rootKey,
+        rootReadKey: rootKey,
+        rootWriteKey: new Uint8Array(32).fill(0xfe),
         rootIpnsKeypair: { publicKey, privateKey },
         rootIpnsName: 'k51test',
         vaultId: 'vault-1',
@@ -253,7 +263,8 @@ describe('Logout Security', () => {
       const folderState = useFolderStore.getState();
 
       // Keys should be null (not accessible)
-      expect(vaultState.rootFolderKey).toBeNull();
+      expect(vaultState.rootReadKey).toBeNull();
+      expect(vaultState.rootWriteKey).toBeNull();
       expect(vaultState.rootIpnsKeypair).toBeNull();
 
       // Even if attacker had reference to original arrays, they're zeroed

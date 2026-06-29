@@ -1,119 +1,71 @@
 /**
- * Folder metadata operations - pure transforms on folder children arrays.
- * No IPFS/IPNS side effects; returns updated data for caller to publish.
+ * Folder metadata operations — child ref mutations on SealedChildRef arrays.
+ *
+ * Phase 62 stub: every operation that mutates a folder's child list requires sealing
+ * child readKeys under the parent readKey (phase 63) or re-sealing after a CAS merge
+ * (phase 64). All functions throw 'not implemented — phase 63' until that phase
+ * rewires them with the write-chain sealing logic.
+ *
+ * The original pure-transform logic for FolderChild[] (FolderEntry | FilePointer) is
+ * preserved in the quarantined test suite (folder.test.ts, TODO phase 63) as the
+ * spec the owning phase revives.
  */
 
-import type { FolderChild, FilePointer } from '@cipherbox/core';
+import type { SealedChildRef } from '@cipherbox/core';
 
 /**
- * Rename a child entry (folder or file) in folder metadata.
+ * Rename a child entry in a folder's sealed child ref list.
  *
- * Pure metadata operation: returns updated children array without publishing.
+ * @stub phase 63 — will re-seal the updated child ref under the parent readKey.
  */
 export function renameInFolder(params: {
-  children: FolderChild[];
+  children: SealedChildRef[];
   childId: string;
   newName: string;
-}): { updatedChildren: FolderChild[]; renamedChild: FolderChild } {
-  const children = [...params.children];
-  const index = children.findIndex((c) => c.id === params.childId);
-
-  if (index === -1) throw new Error('Item not found');
-
-  const nameExists = children.some((c) => c.name === params.newName && c.id !== params.childId);
-  if (nameExists) throw new Error('An item with this name already exists');
-
-  const renamedChild = {
-    ...children[index],
-    name: params.newName,
-    modifiedAt: Date.now(),
-  };
-  children[index] = renamedChild;
-
-  return { updatedChildren: children, renamedChild };
+}): never {
+  void params;
+  throw new Error('not implemented — phase 63 (write-chain child ref mutation)');
 }
 
 /**
- * Remove a child entry (folder or file) from folder metadata.
+ * Remove a child entry from a folder's sealed child ref list.
  *
- * Pure metadata operation: returns updated children array and the removed item.
+ * @stub phase 63 — will re-seal the updated child list under the parent readKey.
  */
-export function deleteFromFolder(params: { children: FolderChild[]; childId: string }): {
-  updatedChildren: FolderChild[];
-  removedItem: FolderChild;
-} {
-  const index = params.children.findIndex((c) => c.id === params.childId);
-  if (index === -1) throw new Error('Item not found');
-
-  const removedItem = params.children[index];
-  const updatedChildren = params.children.filter((c) => c.id !== params.childId);
-
-  return { updatedChildren, removedItem };
+export function deleteFromFolder(params: { children: SealedChildRef[]; childId: string }): never {
+  void params;
+  throw new Error('not implemented — phase 63 (write-chain child ref mutation)');
 }
 
 /**
- * Add a file pointer to folder children.
+ * Add a file node ref to a folder's sealed child ref list.
  *
- * Pure metadata operation: returns updated children array with the new file pointer.
+ * @stub phase 63 — will seal the new child readKey under the parent readKey
+ * and re-seal the updated read-body.
  */
 export function addFilePointerToFolder(params: {
-  children: FolderChild[];
+  children: SealedChildRef[];
   fileId: string;
   fileName: string;
   fileMetaIpnsName: string;
   ipnsPrivateKeyEncrypted: string;
-}): { updatedChildren: FolderChild[]; filePointer: FilePointer } {
-  const nameExists = params.children.some((c) => c.name === params.fileName);
-  if (nameExists) throw new Error('A file with this name already exists');
-
-  const now = Date.now();
-  const filePointer: FilePointer = {
-    type: 'file',
-    id: params.fileId,
-    name: params.fileName,
-    fileMetaIpnsName: params.fileMetaIpnsName,
-    ipnsPrivateKeyEncrypted: params.ipnsPrivateKeyEncrypted,
-    createdAt: now,
-    modifiedAt: now,
-  };
-
-  return {
-    updatedChildren: [...params.children, filePointer],
-    filePointer,
-  };
+}): never {
+  void params;
+  throw new Error('not implemented — phase 63 (add file node + seal child readKey under parent)');
 }
 
 /**
- * Move a child entry between folders.
+ * Move a child entry between two folders' sealed child ref lists.
  *
- * Pure metadata operation: returns updated source and dest children arrays.
- * Uses add-before-remove pattern conceptually (caller publishes dest first, then source).
+ * @stub phase 63 — will re-seal the child readKey under the destination parent's readKey.
  */
 export function moveItem(params: {
-  sourceChildren: FolderChild[];
-  destChildren: FolderChild[];
+  sourceChildren: SealedChildRef[];
+  destChildren: SealedChildRef[];
   childId: string;
-}): {
-  updatedSourceChildren: FolderChild[];
-  updatedDestChildren: FolderChild[];
-  movedItem: FolderChild;
-} {
-  const index = params.sourceChildren.findIndex((c) => c.id === params.childId);
-  if (index === -1) throw new Error('Item not found');
-
-  const movedItem = {
-    ...params.sourceChildren[index],
-    modifiedAt: Date.now(),
-  };
-
-  // Check name collision in destination
-  const nameExists = params.destChildren.some((c) => c.name === movedItem.name);
-  if (nameExists) {
-    throw new Error('An item with this name already exists in destination');
-  }
-
-  const updatedSourceChildren = params.sourceChildren.filter((c) => c.id !== params.childId);
-  const updatedDestChildren = [...params.destChildren, movedItem];
-
-  return { updatedSourceChildren, updatedDestChildren, movedItem };
+}): never {
+  void params;
+  throw new Error(
+    'not implemented — phase 63 (move node + re-seal child readKey under dest parent)'
+  );
 }

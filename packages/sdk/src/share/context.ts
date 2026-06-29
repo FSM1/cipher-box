@@ -4,7 +4,7 @@
  * Takes explicit params to construct a SharedWriteContext for write operations.
  */
 
-import type { FolderChild } from '@cipherbox/core';
+import type { SealedChildRef } from '@cipherbox/core';
 import type { SdkContext } from '@cipherbox/sdk-core';
 import type { SharedWriteContext, ShareKeyType } from './shared-write';
 
@@ -18,7 +18,7 @@ export type SharedWriteContextParams = {
   ipnsPrivateKey: Uint8Array;
   ipnsName: string;
   sequenceNumber: bigint;
-  children: FolderChild[];
+  children: SealedChildRef[];
   ownerPublicKey: Uint8Array;
   recipientPublicKey: Uint8Array;
   shareId: string;

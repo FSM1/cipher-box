@@ -1,10 +1,11 @@
-import type { FilePointer, FileMetadata } from '@cipherbox/core';
-import { formatDate } from '../../../utils/format';
+import type { SealedChildRef, NodeContent } from '@cipherbox/core';
+// TODO(phase 63): formatDate deferred; timestamps come from Node envelope
 import { CopyableValue, DetailRow } from './DetailsPrimitives';
 import { VersionHistory } from './VersionHistory';
 
 /**
- * File details content (v2: FilePointer with per-file IPNS metadata).
+ * File details content (node/v3: SealedChildRef display; content resolved via read-chain).
+ * TODO(phase 63): wire read-chain navigation to load NodeContent for display.
  */
 export function FileDetails({
   item,
@@ -16,10 +17,11 @@ export function FileDetails({
   parentFolderId,
   onVersionAction,
 }: {
-  item: FilePointer;
+  item: SealedChildRef;
   metadataCid: string | null;
   metadataLoading: boolean;
-  fileMeta: FileMetadata | null;
+  /** NodeContent resolved via read-chain — null until phase-63 read-chain lands. */
+  fileMeta: NodeContent | null;
   fileMetaLoading: boolean;
   folderKey: Uint8Array | null;
   parentFolderId: string;
@@ -38,8 +40,9 @@ export function FileDetails({
       {/* IPNS section */}
       <div className="details-section-header">{'// ipns'}</div>
 
-      <DetailRow label="File Metadata IPNS">
-        <CopyableValue value={item.fileMetaIpnsName} />
+      {/* TODO(phase 63): item.ipnsName is the child's IPNS k51 name (SealedChildRef) */}
+      <DetailRow label="File IPNS">
+        <CopyableValue value={item.ipnsName} />
       </DetailRow>
 
       <DetailRow label="Metadata CID">
@@ -75,8 +78,8 @@ export function FileDetails({
           <span className="details-loading">resolving...</span>
         ) : fileMeta ? (
           <span className="details-value details-value--redacted">
-            {fileMeta.fileKeyEncrypted.slice(0, 16)}...{fileMeta.fileKeyEncrypted.slice(-8)}{' '}
-            (ECIES-wrapped)
+            {/* TODO(phase 63): fileKey is now a raw Uint8Array inside the sealed body */}
+            [sealed inside read-body — phase 63]
           </span>
         ) : (
           <span className="details-value details-value--dim">unavailable</span>
@@ -87,11 +90,13 @@ export function FileDetails({
       <div className="details-section-header">{'// timestamps'}</div>
 
       <DetailRow label="Created">
-        <span className="details-value">{formatDate(item.createdAt)}</span>
+        {/* TODO(phase 63): SealedChildRef has no createdAt; resolve from Node envelope */}
+        <span className="details-value details-value--dim">unavailable (phase 63)</span>
       </DetailRow>
 
       <DetailRow label="Modified">
-        <span className="details-value">{formatDate(item.modifiedAt)}</span>
+        {/* TODO(phase 63): SealedChildRef has no modifiedAt; resolve from Node envelope */}
+        <span className="details-value details-value--dim">unavailable (phase 63)</span>
       </DetailRow>
 
       {/* Version history (only shown when versions exist) */}
@@ -101,7 +106,7 @@ export function FileDetails({
           fileName={item.name}
           folderKey={folderKey}
           parentFolderId={parentFolderId}
-          fileId={item.id}
+          fileId={item.ipnsName}
           onRestored={onVersionAction}
         />
       )}

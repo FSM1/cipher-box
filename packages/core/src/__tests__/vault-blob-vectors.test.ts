@@ -1,45 +1,18 @@
 /**
- * @cipherbox/core - Vault Key Blob v2 Test Vectors
+ * @cipherbox/core - Vault Key Blob v3 Test Vectors
  *
- * Hardcoded test vectors for cross-platform verification.
- * These exact hex values must be replicated in the Rust implementation
- * to guarantee binary compatibility across TypeScript and Rust clients.
+ * Cross-platform verification vectors for the v3 two-key binary envelope.
+ * The frozen hex in tests/vectors/vault-v3-blob.json is the canonical
+ * cross-language fixture — the Phase-69 Rust cross_language.rs asserts
+ * the same bytes (D-04, D-05).
+ *
+ * Keys are synthetic ECIES-output stand-ins (not real ciphertext) that
+ * freeze the v3 envelope byte-layout independent of ECIES randomness.
  */
 
 import { describe, it, expect } from 'vitest';
-import { serializeVaultBlobV2, deserializeVaultBlobV2, BLOB_V2_VERSION } from '../vault/blob';
-
-/**
- * Test Vector 1: Standard 129-byte ECIES key (key-only blob).
- *
- * Key (129 bytes): 0xAA followed by 128 bytes incrementing 0x00..0x7F (128 values).
- *
- * Expected binary layout:
- *   [0]     = 0x02 (version)
- *   [1..2]  = 0x00 0x81 (key_len = 129, big-endian)
- *   [3..131] = key bytes (129 bytes)
- */
-
-// Build the 129-byte test key: 0xAA then 0x00..0x7F (128 bytes)
-const TEST_KEY_129 = new Uint8Array(129);
-TEST_KEY_129[0] = 0xaa;
-for (let i = 0; i < 128; i++) {
-  TEST_KEY_129[1 + i] = i;
-}
-
-// Pre-computed expected hex for the full blob (key only, no metadata)
-const EXPECTED_HEX =
-  '02' + // version byte
-  '0081' + // key_len = 129
-  'aa' + // key[0]
-  '000102030405060708090a0b0c0d0e0f' + // key[1..16]
-  '101112131415161718191a1b1c1d1e1f' + // key[17..32]
-  '202122232425262728292a2b2c2d2e2f' + // key[33..48]
-  '303132333435363738393a3b3c3d3e3f' + // key[49..64]
-  '404142434445464748494a4b4c4d4e4f' + // key[65..80]
-  '505152535455565758595a5b5c5d5e5f' + // key[81..96]
-  '606162636465666768696a6b6c6d6e6f' + // key[97..112]
-  '707172737475767778797a7b7c7d7e7f'; // key[113..128]
+import { serializeVaultBlobV3, deserializeVaultBlobV3, BLOB_V3_VERSION } from '../vault/blob';
+import VAULT_V3 from '../../../../tests/vectors/vault-v3-blob.json';
 
 function toHex(bytes: Uint8Array): string {
   return Array.from(bytes)
@@ -55,43 +28,93 @@ function fromHex(hex: string): Uint8Array {
   return bytes;
 }
 
-describe('Vault Key Blob v2 Test Vectors', () => {
-  it('Vector 1: serialize produces exact expected hex output', () => {
-    const blob = serializeVaultBlobV2(TEST_KEY_129);
-    const blobHex = toHex(blob);
+describe('Vault Key Blob v3 Test Vectors', () => {
+  it('Vector: serialize two 129-byte keys produces exact expected hex output', () => {
+    const readKey = fromHex(VAULT_V3.read_key_hex);
+    const writeKey = fromHex(VAULT_V3.write_key_hex);
 
-    expect(blobHex).toBe(EXPECTED_HEX);
+    const blob = serializeVaultBlobV3(readKey, writeKey);
+    expect(toHex(blob)).toBe(VAULT_V3.expected_blob_hex);
   });
 
-  it('Vector 1: deserialize from expected hex recovers exact key', () => {
-    const blob = fromHex(EXPECTED_HEX);
-    const parsed = deserializeVaultBlobV2(blob);
+  it('Vector: deserialize from expected hex recovers exact read and write keys', () => {
+    const blob = fromHex(VAULT_V3.expected_blob_hex);
+    const { encryptedRootReadKey, encryptedRootWriteKey } = deserializeVaultBlobV3(blob);
 
-    expect(toHex(parsed)).toBe(toHex(TEST_KEY_129));
+    expect(toHex(encryptedRootReadKey)).toBe(VAULT_V3.read_key_hex);
+    expect(toHex(encryptedRootWriteKey)).toBe(VAULT_V3.write_key_hex);
   });
 
-  it('Vector 1: round-trip produces byte-identical output', () => {
-    const blob1 = serializeVaultBlobV2(TEST_KEY_129);
-    const parsed = deserializeVaultBlobV2(blob1);
-    const blob2 = serializeVaultBlobV2(parsed);
-
-    expect(toHex(blob2)).toBe(toHex(blob1));
+  it('Vector: version byte is BLOB_V3_VERSION (0x03)', () => {
+    const blob = fromHex(VAULT_V3.expected_blob_hex);
+    expect(blob[0]).toBe(BLOB_V3_VERSION);
+    expect(BLOB_V3_VERSION).toBe(0x03);
   });
 
-  it('Vector 1: version byte is BLOB_V2_VERSION', () => {
-    const blob = fromHex(EXPECTED_HEX);
-    expect(blob[0]).toBe(BLOB_V2_VERSION);
+  it('Round-trip: deserialize(serialize(a, b)) returns byte-identical keys', () => {
+    const readKey = fromHex(VAULT_V3.read_key_hex);
+    const writeKey = fromHex(VAULT_V3.write_key_hex);
+
+    const blob = serializeVaultBlobV3(readKey, writeKey);
+    const { encryptedRootReadKey, encryptedRootWriteKey } = deserializeVaultBlobV3(blob);
+
+    expect(toHex(encryptedRootReadKey)).toBe(toHex(readKey));
+    expect(toHex(encryptedRootWriteKey)).toBe(toHex(writeKey));
   });
 
-  it('Vector 2: minimal blob with 1-byte key', () => {
-    const minimalKey = new Uint8Array([0xff]);
+  it('Negative: deserializing a v2-version-byte blob (0x02) throws', () => {
+    // Build a blob that starts with 0x02 (old v2 version byte)
+    const fakeV2 = new Uint8Array([0x02, 0x00, 0x01, 0xaa]);
+    expect(() => deserializeVaultBlobV3(fakeV2)).toThrow();
+  });
 
-    const blob = serializeVaultBlobV2(minimalKey);
-    const expectedMinimalHex = '02' + '0001' + 'ff';
+  it('Negative: truncated blob (too short for v3 header) throws', () => {
+    const truncated = new Uint8Array([0x03, 0x00]); // only 2 bytes, need >= 5
+    expect(() => deserializeVaultBlobV3(truncated)).toThrow();
+  });
 
-    expect(toHex(blob)).toBe(expectedMinimalHex);
+  it('Negative: blob truncated — missing write key header throws', () => {
+    // Valid v3 header + read key, but no write header
+    const readKey = fromHex(VAULT_V3.read_key_hex);
+    const partial = new Uint8Array(3 + readKey.length); // missing write u16 + body
+    partial[0] = 0x03;
+    partial[1] = (readKey.length >> 8) & 0xff;
+    partial[2] = readKey.length & 0xff;
+    partial.set(readKey, 3);
+    expect(() => deserializeVaultBlobV3(partial)).toThrow();
+  });
 
-    const parsed = deserializeVaultBlobV2(blob);
-    expect(parsed).toEqual(minimalKey);
+  it('Negative: blob truncated — write key body incomplete throws', () => {
+    const readKey = fromHex(VAULT_V3.read_key_hex);
+    // Write header says 129 bytes but we only provide 1
+    const truncated = new Uint8Array(3 + readKey.length + 2 + 1);
+    truncated[0] = 0x03;
+    truncated[1] = (readKey.length >> 8) & 0xff;
+    truncated[2] = readKey.length & 0xff;
+    truncated.set(readKey, 3);
+    const writeOffset = 3 + readKey.length;
+    truncated[writeOffset] = 0x00;
+    truncated[writeOffset + 1] = 0x81; // claims 129 bytes
+    truncated[writeOffset + 2] = 0xbb; // only 1 byte
+    expect(() => deserializeVaultBlobV3(truncated)).toThrow();
+  });
+
+  it('Negative: zero-length read key throws on serialize', () => {
+    expect(() => serializeVaultBlobV3(new Uint8Array(0), new Uint8Array(1))).toThrow();
+  });
+
+  it('Negative: zero-length write key throws on serialize', () => {
+    expect(() => serializeVaultBlobV3(new Uint8Array(1), new Uint8Array(0))).toThrow();
+  });
+
+  it('Minimal: 1-byte read key + 1-byte write key round-trips', () => {
+    const tiny1 = new Uint8Array([0xaa]);
+    const tiny2 = new Uint8Array([0xbb]);
+    const blob = serializeVaultBlobV3(tiny1, tiny2);
+    // Layout: 03 0001 aa 0001 bb = 7 bytes
+    expect(blob.length).toBe(7);
+    const { encryptedRootReadKey, encryptedRootWriteKey } = deserializeVaultBlobV3(blob);
+    expect(encryptedRootReadKey).toEqual(tiny1);
+    expect(encryptedRootWriteKey).toEqual(tiny2);
   });
 });

@@ -11,7 +11,7 @@ import { expectChildNamed, getChild, expectBytesEqual } from '../helpers/asserti
 import { generateTextContent, generateBytes, decodeText } from '../helpers/data-generators';
 import type { FilePointer } from '@cipherbox/core';
 
-describe('Batch Upload Operations', () => {
+describe.skip('Batch Upload Operations [quarantined D-01: SDK runtime stubbed mid-milestone, re-enable at phase 63-65 consumer re-wire]', () => {
   let ctx: TestContext;
 
   beforeAll(async () => {

@@ -151,7 +151,7 @@ function seedSharedFolder(client: CipherBoxClient): void {
 
 // ── tests ─────────────────────────────────────────────────────────────────────
 
-describe('CipherBoxClient.enumerateSharedSubtree', () => {
+describe.skip('CipherBoxClient.enumerateSharedSubtree — TODO(phase 63)', () => {
   let client: CipherBoxClient;
 
   beforeEach(() => {

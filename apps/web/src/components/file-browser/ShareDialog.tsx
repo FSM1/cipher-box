@@ -1,22 +1,10 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import type { FolderChild, FolderEntry, FilePointer } from '@cipherbox/core';
-import { decryptFolderMetadata } from '@cipherbox/core';
-import { wrapKey, unwrapKey, hexToBytes, bytesToHex } from '@cipherbox/crypto';
+// TODO(phase 65): ShareDialog share creation deferred — FolderEntry/FilePointer removed
+// Behavioral crypto (decryptFolderMetadata, reWrapEncryptedKey, collectChildKeys) stubbed
+import type { SealedChildRef } from '@cipherbox/core';
 import { Modal } from '../ui/Modal';
-import { useAuthStore } from '../../stores/auth.store';
-import { useFolderStore } from '../../stores/folder.store';
-import {
-  sharesControllerCreateShare,
-  sharesControllerLookupUser,
-  sharesControllerGetSentShares,
-  sharesControllerRevokeShare,
-} from '@cipherbox/api-client';
-import type { CreateShareDtoItemType, ChildKeyDto } from '@cipherbox/api-client';
-import { resolveFileMetadata } from '../../services/file-metadata.service';
-import { resolveIpnsRecord } from '../../services/ipns.service';
-import { fetchFromIpfs } from '../../lib/api/ipfs';
+import { sharesControllerGetSentShares, sharesControllerRevokeShare } from '@cipherbox/api-client';
 import { useShareStore } from '../../stores/share.store';
-import { collectChildKeys, reWrapEncryptedKey } from '../../lib/crypto/key-wrapping';
 import { updateSharePermission } from '../../services/share.service';
 import { InviteLinkTab } from './InviteLinkTab';
 import '../../styles/share-dialog.css';
@@ -25,7 +13,8 @@ import { logger } from '../../lib/logger';
 type ShareDialogProps = {
   isOpen: boolean;
   onClose: () => void;
-  item: FolderChild;
+  /** The item to share (node/v3 SealedChildRef). TODO(phase 65): use for key re-wrapping */
+  item: SealedChildRef;
   folderKey: Uint8Array;
   ipnsName: string;
   parentFolderId: string;
@@ -41,17 +30,6 @@ type SentShare = {
   permission: 'read' | 'write';
   createdAt: string;
 };
-
-/**
- * Validate public key format: must be 0x04 prefix + 128 hex chars (64 bytes body = 65 bytes total uncompressed).
- */
-function isValidPublicKey(key: string): boolean {
-  if (!key.startsWith('0x04')) return false;
-  // 0x + 130 hex chars = 65 bytes uncompressed secp256k1
-  const hexPart = key.slice(2);
-  if (hexPart.length !== 130) return false;
-  return /^[0-9a-fA-F]+$/.test(hexPart);
-}
 
 /**
  * Truncate a public key for display: 0x{first4}...{last4}
@@ -172,221 +150,11 @@ export function ShareDialog({
   }, [isOpen, ipnsName]);
 
   const handleShare = useCallback(async () => {
-    setError(null);
-    setSuccess(null);
-
-    const key = pubKeyInput.trim();
-
-    // Validate format
-    if (!isValidPublicKey(key)) {
-      setError('invalid key format -- expected 0x04 + 128 hex chars');
-      return;
-    }
-
-    // Prevent sharing root folder
-    if (parentFolderId === 'root' && item.type === 'folder') {
-      // Check if item is the root folder itself (the one navigated to at root)
-      const rootFolder = useFolderStore.getState().folders['root'];
-      if (rootFolder && item.id === 'root') {
-        setError('cannot share root folder');
-        return;
-      }
-    }
-
-    // Check not sharing with yourself
-    const vaultKeypair = useAuthStore.getState().vaultKeypair;
-    if (!vaultKeypair) {
-      setError('vault keypair not available');
-      return;
-    }
-
-    const myPubKeyHex = '0x' + bytesToHex(vaultKeypair.publicKey);
-    if (key.toLowerCase() === myPubKeyHex.toLowerCase()) {
-      setError('cannot share with yourself');
-      return;
-    }
-
-    setIsSharing(true);
-
-    try {
-      // Verify recipient is a registered user
-      const lookup = await sharesControllerLookupUser({ publicKey: key });
-      if (!lookup.exists) {
-        setError('user not found');
-        setIsSharing(false);
-        return;
-      }
-    } catch {
-      setError('lookup failed, please try again');
-      setIsSharing(false);
-      return;
-    }
-
-    try {
-      const recipientPubKeyBytes = hexToBytes(key.slice(2));
-      const ownerPrivateKey = vaultKeypair.privateKey;
-
-      let encryptedKey: string;
-      let childKeys: ChildKeyDto[] | undefined;
-      let encryptedIpnsKeyHex: string | undefined;
-
-      if (item.type === 'folder') {
-        const folderEntry = item as FolderEntry;
-
-        // Unwrap the folder's own key from its ECIES-encrypted form
-        const itemFolderKey = await unwrapKey(
-          hexToBytes(folderEntry.folderKeyEncrypted),
-          ownerPrivateKey
-        );
-
-        try {
-          // Wrap the folder key for the recipient
-          const wrappedForRecipient = await wrapKey(itemFolderKey, recipientPubKeyBytes);
-          encryptedKey = bytesToHex(wrappedForRecipient);
-
-          // For write shares, also wrap the IPNS private key for the recipient
-          if (permission === 'write') {
-            const ipnsPrivKey = await unwrapKey(
-              hexToBytes(folderEntry.ipnsPrivateKeyEncrypted),
-              ownerPrivateKey
-            );
-            try {
-              const wrappedIpnsKey = await wrapKey(ipnsPrivKey, recipientPubKeyBytes);
-              encryptedIpnsKeyHex = bytesToHex(wrappedIpnsKey);
-            } finally {
-              ipnsPrivKey.fill(0);
-            }
-          }
-
-          // Traverse children and re-wrap descendant keys
-          const resolved = await resolveIpnsRecord(folderEntry.ipnsName);
-          if (resolved) {
-            const encryptedBytes = await fetchFromIpfs(resolved.cid);
-            const encryptedJson = new TextDecoder().decode(encryptedBytes);
-            const encrypted = JSON.parse(encryptedJson);
-            const metadata = await decryptFolderMetadata(encrypted, itemFolderKey);
-
-            setProgress({ current: 0, total: 0 });
-
-            childKeys = await collectChildKeys(
-              metadata.children,
-              itemFolderKey,
-              ownerPrivateKey,
-              recipientPubKeyBytes,
-              permission,
-              (wrapped) => setProgress({ current: wrapped, total: 0 })
-            );
-          }
-        } finally {
-          itemFolderKey.fill(0);
-        }
-      } else {
-        // File sharing: wrap parent folder key for recipient (needed to decrypt file metadata),
-        // and re-wrap the file key as a child key entry
-        const filePointer = item as FilePointer;
-
-        // encryptedKey = parent folder key wrapped for recipient
-        const wrappedFolderKey = await wrapKey(folderKey, recipientPubKeyBytes);
-        encryptedKey = bytesToHex(wrappedFolderKey);
-
-        // Re-wrap the file key for the recipient and store as child key
-        const { metadata: fileMeta } = await resolveFileMetadata(
-          filePointer.fileMetaIpnsName,
-          folderKey
-        );
-        const reWrappedFileKey = await reWrapEncryptedKey(
-          fileMeta.fileKeyEncrypted,
-          ownerPrivateKey,
-          recipientPubKeyBytes
-        );
-        childKeys = [
-          { keyType: 'file' as const, itemId: filePointer.id, encryptedKey: reWrappedFileKey },
-        ];
-
-        // For write shares, also wrap the file's IPNS private key for the recipient
-        if (permission === 'write' && filePointer.ipnsPrivateKeyEncrypted) {
-          const fileIpnsPrivKey = await unwrapKey(
-            hexToBytes(filePointer.ipnsPrivateKeyEncrypted),
-            ownerPrivateKey
-          );
-          try {
-            const wrappedIpnsKey = await wrapKey(fileIpnsPrivKey, recipientPubKeyBytes);
-            encryptedIpnsKeyHex = bytesToHex(wrappedIpnsKey);
-
-            // Also add file-ipns child key so recipient can update file content
-            const recipientWrappedIpnsKey = await wrapKey(fileIpnsPrivKey, recipientPubKeyBytes);
-            childKeys.push({
-              keyType: 'file-ipns' as const,
-              itemId: filePointer.id,
-              encryptedKey: bytesToHex(recipientWrappedIpnsKey),
-            });
-          } finally {
-            fileIpnsPrivKey.fill(0);
-          }
-        }
-      }
-
-      // Downgrade to read if write was requested but IPNS key is unavailable (legacy files)
-      const effectivePermission =
-        permission === 'write' && !encryptedIpnsKeyHex ? 'read' : permission;
-
-      // REQ-4: ECIES-wrap the display name for the recipient (mirrors the
-      // encryptedKey wrap above). Only ciphertext leaves the browser — the
-      // plaintext itemName is NOT sent for new shares (server stores '' + bytea).
-      const itemNameBytes = new TextEncoder().encode(item.name);
-      let itemNameEncrypted: string;
-      try {
-        itemNameEncrypted = bytesToHex(await wrapKey(itemNameBytes, recipientPubKeyBytes));
-      } finally {
-        itemNameBytes.fill(0);
-      }
-
-      // Create the share via API
-      const itemType: CreateShareDtoItemType = item.type === 'folder' ? 'folder' : 'file';
-      const result = await sharesControllerCreateShare({
-        recipientPublicKey: key,
-        itemType,
-        ipnsName,
-        itemName: '',
-        itemNameEncrypted,
-        encryptedKey,
-        permission: effectivePermission,
-        encryptedIpnsKey: encryptedIpnsKeyHex,
-        childKeys: childKeys && childKeys.length > 0 ? childKeys : undefined,
-      });
-
-      // Update local recipients list and global store (for re-wrapping cache).
-      // The owner keeps the plaintext display name in-memory only (it never
-      // leaves the browser); itemNameEncrypted marks the row as already wrapped
-      // so the lazy backfill never re-fires on it.
-      const newShare = {
-        shareId: result.shareId,
-        recipientPublicKey: key,
-        itemType: item.type as 'folder' | 'file',
-        ipnsName,
-        itemName: item.name,
-        itemNameEncrypted,
-        permission: effectivePermission,
-        createdAt: new Date().toISOString(),
-      };
-      setRecipients((prev) => [...prev, newShare]);
-      useShareStore.getState().addSentShare(newShare);
-
-      setSuccess(
-        effectivePermission === 'write'
-          ? `shared (read-write) with ${truncateKey(key)}`
-          : `shared with ${truncateKey(key)}`
-      );
-      setPubKeyInput('');
-      setProgress(null);
-    } catch (err) {
-      logger.error('[Share] Share creation failed:', err);
-      const message = err instanceof Error ? err.message : 'share creation failed';
-      setError(message);
-    } finally {
-      setIsSharing(false);
-      setProgress(null);
-    }
+    // TODO(phase 65): share creation via Node read-chain (SealedChildRef.readKeySealed unwrap
+    // + re-wrap for recipient) not yet implemented. The legacy FolderEntry.folderKeyEncrypted /
+    // FilePointer.fileMetaIpnsName paths have been removed with the FolderChild → SealedChildRef
+    // type migration. Phase 65 will re-implement using Node.writeBody key-wrapping.
+    throw new Error('not implemented — phase 65 (share creation via Node write-chain)');
   }, [pubKeyInput, item, folderKey, ipnsName, parentFolderId, permission]);
 
   const handleRevoke = useCallback(async (shareId: string) => {
@@ -405,62 +173,9 @@ export function ShareDialog({
   }, []);
 
   const handleUpgrade = useCallback(
-    async (share: SentShare) => {
-      setError(null);
-      setSuccess(null);
-      setUpgradingId(share.shareId);
-
-      try {
-        // Get vault keypair for unwrapping IPNS key
-        const vaultKeypair = useAuthStore.getState().vaultKeypair;
-        if (!vaultKeypair) {
-          setError('vault keypair not available');
-          setUpgradingId(null);
-          return;
-        }
-
-        const ownerPrivateKey = vaultKeypair.privateKey;
-        const recipientPubKeyBytes = hexToBytes(
-          share.recipientPublicKey.startsWith('0x')
-            ? share.recipientPublicKey.slice(2)
-            : share.recipientPublicKey
-        );
-
-        // Unwrap IPNS private key and re-wrap for recipient
-        const ipnsKeyEncrypted =
-          item.type === 'folder'
-            ? (item as FolderEntry).ipnsPrivateKeyEncrypted
-            : (item as FilePointer).ipnsPrivateKeyEncrypted;
-
-        if (!ipnsKeyEncrypted) {
-          setError('IPNS key not available for this item');
-          setUpgradingId(null);
-          return;
-        }
-
-        const ipnsPrivKey = await unwrapKey(hexToBytes(ipnsKeyEncrypted), ownerPrivateKey);
-        let encryptedIpnsKeyHex: string;
-        try {
-          const wrappedIpnsKey = await wrapKey(ipnsPrivKey, recipientPubKeyBytes);
-          encryptedIpnsKeyHex = bytesToHex(wrappedIpnsKey);
-        } finally {
-          ipnsPrivKey.fill(0);
-        }
-
-        await updateSharePermission(share.shareId, 'write', encryptedIpnsKeyHex);
-
-        // Update local state
-        setRecipients((prev) =>
-          prev.map((r) => (r.shareId === share.shareId ? { ...r, permission: 'write' } : r))
-        );
-        useShareStore.getState().updateSentSharePermission(share.shareId, 'write');
-        setSuccess('> upgraded to read-write');
-      } catch (err) {
-        logger.error('[Share] Permission upgrade failed:', err);
-        setError('> permission change failed, please try again');
-      } finally {
-        setUpgradingId(null);
-      }
+    async (_share: SentShare) => {
+      // TODO(phase 65): permission upgrade via Node write-chain not yet implemented
+      throw new Error('not implemented — phase 65 (permission upgrade via Node write-chain)');
     },
     [item]
   );
@@ -497,7 +212,8 @@ export function ShareDialog({
     [handleShare, isSharing]
   );
 
-  const itemDisplayName = item.type === 'folder' ? `${item.name}/` : item.name;
+  // TODO(phase 63): SealedChildRef has no .type; display name without kind suffix
+  const itemDisplayName = `${item.name}/`; // phase-63 stub: treat as folder
   const title = `SHARE: ${itemDisplayName}`;
 
   return (
@@ -670,61 +386,59 @@ export function ShareDialog({
                       </span>
 
                       <div className="share-recipient-actions">
-                        {/* Upgrade/downgrade controls (folders only) */}
-                        {item.type === 'folder' && (
-                          <>
-                            {recipient.permission === 'read' ? (
+                        {/* TODO(phase 63): upgrade/downgrade always shown; SealedChildRef has no .type */}
+                        <>
+                          {recipient.permission === 'read' ? (
+                            <button
+                              type="button"
+                              className="share-action-btn share-upgrade-btn"
+                              onClick={() => handleUpgrade(recipient)}
+                              disabled={
+                                upgradingId !== null ||
+                                downgradingId !== null ||
+                                revokingId !== null
+                              }
+                              aria-label={`Upgrade ${truncateKey(recipient.recipientPublicKey)} to read-write`}
+                            >
+                              {upgradingId === recipient.shareId ? '...' : '--upgrade'}
+                            </button>
+                          ) : confirmDowngradeId === recipient.shareId ? (
+                            <div className="share-revoke-confirm">
+                              <span className="share-revoke-confirm-text">{'confirm?'}</span>
                               <button
                                 type="button"
-                                className="share-action-btn share-upgrade-btn"
-                                onClick={() => handleUpgrade(recipient)}
-                                disabled={
-                                  upgradingId !== null ||
-                                  downgradingId !== null ||
-                                  revokingId !== null
-                                }
-                                aria-label={`Upgrade ${truncateKey(recipient.recipientPublicKey)} to read-write`}
+                                className="share-revoke-confirm-btn share-revoke-confirm-btn--yes"
+                                onClick={() => handleDowngradeConfirm(recipient)}
+                                disabled={downgradingId === recipient.shareId}
+                                aria-label="Confirm downgrade"
                               >
-                                {upgradingId === recipient.shareId ? '...' : '--upgrade'}
+                                {downgradingId === recipient.shareId ? '...' : '[y]'}
                               </button>
-                            ) : confirmDowngradeId === recipient.shareId ? (
-                              <div className="share-revoke-confirm">
-                                <span className="share-revoke-confirm-text">{'confirm?'}</span>
-                                <button
-                                  type="button"
-                                  className="share-revoke-confirm-btn share-revoke-confirm-btn--yes"
-                                  onClick={() => handleDowngradeConfirm(recipient)}
-                                  disabled={downgradingId === recipient.shareId}
-                                  aria-label="Confirm downgrade"
-                                >
-                                  {downgradingId === recipient.shareId ? '...' : '[y]'}
-                                </button>
-                                <button
-                                  type="button"
-                                  className="share-revoke-confirm-btn share-revoke-confirm-btn--no"
-                                  onClick={() => setConfirmDowngradeId(null)}
-                                  aria-label="Cancel downgrade"
-                                >
-                                  {'[n]'}
-                                </button>
-                              </div>
-                            ) : (
                               <button
                                 type="button"
-                                className="share-action-btn share-downgrade-btn"
-                                onClick={() => setConfirmDowngradeId(recipient.shareId)}
-                                disabled={
-                                  upgradingId !== null ||
-                                  downgradingId !== null ||
-                                  revokingId !== null
-                                }
-                                aria-label={`Downgrade ${truncateKey(recipient.recipientPublicKey)} to read-only`}
+                                className="share-revoke-confirm-btn share-revoke-confirm-btn--no"
+                                onClick={() => setConfirmDowngradeId(null)}
+                                aria-label="Cancel downgrade"
                               >
-                                {'--downgrade'}
+                                {'[n]'}
                               </button>
-                            )}
-                          </>
-                        )}
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              className="share-action-btn share-downgrade-btn"
+                              onClick={() => setConfirmDowngradeId(recipient.shareId)}
+                              disabled={
+                                upgradingId !== null ||
+                                downgradingId !== null ||
+                                revokingId !== null
+                              }
+                              aria-label={`Downgrade ${truncateKey(recipient.recipientPublicKey)} to read-only`}
+                            >
+                              {'--downgrade'}
+                            </button>
+                          )}
+                        </>
 
                         {/* Revoke button */}
                         {confirmRevokeId === recipient.shareId ? (

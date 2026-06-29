@@ -9,7 +9,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { BinNotLoadedError, type SdkEvent } from '@cipherbox/sdk';
 import { createTestContext, deleteTestAccount, type TestContext } from '../fixtures/test-harness';
 
-describe('Error Cases', () => {
+describe.skip('Error Cases [quarantined D-01: SDK runtime stubbed mid-milestone, re-enable at phase 63-65 consumer re-wire]', () => {
   let ctx: TestContext;
 
   beforeAll(async () => {

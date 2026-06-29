@@ -12,11 +12,8 @@
  */
 
 import { useCallback } from 'react';
-import type { FolderChild, FilePointer } from '@cipherbox/core';
-import { unwrapKey, hexToBytes } from '@cipherbox/crypto';
+import type { SealedChildRef } from '@cipherbox/core';
 import { withRevocationGuard as sdkWithRevocationGuard } from '@cipherbox/sdk';
-import { useAuthStore } from '../stores/auth.store';
-import { fetchShareKeys } from '../services/share.service';
 import { getSdkClient } from '../lib/sdk-provider';
 import { logger } from '../lib/logger';
 import type { SharedListItem } from './useSharedNavigation';
@@ -105,14 +102,9 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
   /**
    * Rename an item in the currently-viewed write-shared folder.
    */
-  const renameItemHandler = useCallback(
-    async (item: FolderChild, newName: string) => {
-      await runWrite(async (shareId) => {
-        await getSdkClient().renameInSharedFolder(shareId, { itemId: item.id, newName });
-      }, 'Shared folder rename failed');
-    },
-    [runWrite]
-  );
+  const renameItemHandler = useCallback(async (_item: SealedChildRef, _newName: string) => {
+    throw new Error('not implemented — phase 65 (shared folder rename requires Node write-chain)');
+  }, []);
 
   /**
    * Update a file's content in the currently-viewed write-shared folder.
@@ -123,63 +115,18 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
    * match the prior contract used by the file editor caller.
    */
   const updateSharedFileHandler = useCallback(
-    async (item: FilePointer, newContent: Uint8Array): Promise<void> => {
-      const shareId = p.currentShareId;
-      if (!shareId) throw new Error('Write access not available');
-
-      const auth = useAuthStore.getState();
-      if (!auth.vaultKeypair) throw new Error('No keypair available');
-
-      const shareItem = p.sharedItems.find((s) => s.share.shareId === shareId);
-      if (!shareItem) throw new Error('Share not found');
-
-      await withRevocationGuard(async () => {
-        await getSdkClient().updateSharedFile(shareId, {
-          filePointer: item,
-          newContent,
-          getFileIpnsKeyFn: async (itemId: string) => {
-            const keys = await fetchShareKeys(shareId);
-            const exactMatch = keys.find((k) => k.keyType === 'file-ipns' && k.itemId === itemId);
-            const ipnsKeyRecord =
-              exactMatch ??
-              (shareItem.share.itemType === 'file'
-                ? keys.find((k) => k.keyType === 'file-ipns')
-                : undefined);
-            if (ipnsKeyRecord) {
-              return unwrapKey(
-                hexToBytes(ipnsKeyRecord.encryptedKey),
-                auth.vaultKeypair!.privateKey
-              );
-            }
-            if (item.ipnsPrivateKeyEncrypted) {
-              try {
-                return await unwrapKey(
-                  hexToBytes(item.ipnsPrivateKeyEncrypted),
-                  auth.vaultKeypair!.privateKey
-                );
-              } catch {
-                return null;
-              }
-            }
-            return null;
-          },
-        });
-      });
+    async (_item: SealedChildRef, _newContent: Uint8Array): Promise<void> => {
+      throw new Error('not implemented — phase 65 (shared file update requires Node read-chain)');
     },
-    [p.currentShareId, p.sharedItems, withRevocationGuard]
+    []
   );
 
   /**
    * Delete an item from the currently-viewed write-shared folder.
    */
-  const deleteItemHandler = useCallback(
-    async (item: FolderChild) => {
-      await runWrite(async (shareId) => {
-        await getSdkClient().deleteFromSharedFolder(shareId, { itemId: item.id });
-      }, 'Shared folder delete failed');
-    },
-    [runWrite]
-  );
+  const deleteItemHandler = useCallback(async (_item: SealedChildRef) => {
+    throw new Error('not implemented — phase 65 (shared folder delete requires Node write-chain)');
+  }, []);
 
   /**
    * Move an item within the shared folder to a different destination subfolder.
@@ -189,23 +136,10 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
    * zero it here (matches the established pattern; T-49-10 accepted).
    */
   const moveItemHandler = useCallback(
-    async (item: FolderChild, destFolderId: string, destIpnsName: string) => {
-      const auth = useAuthStore.getState();
-      if (!auth.vaultKeypair) {
-        p.setError('No keypair available');
-        return;
-      }
-      await runWrite(async (shareId) => {
-        await getSdkClient().moveInSharedFolder(shareId, {
-          itemId: item.id,
-          destFolderId,
-          destIpnsName,
-          vaultPrivateKey: auth.vaultKeypair!.privateKey,
-          getShareKeysFn: fetchShareKeys,
-        });
-      }, 'Shared folder move failed');
+    async (_item: SealedChildRef, _destFolderId: string, _destIpnsName: string) => {
+      throw new Error('not implemented — phase 65 (shared folder move requires Node write-chain)');
     },
-    [runWrite, p.setError]
+    []
   );
 
   /**
@@ -217,35 +151,16 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
    */
   const batchMoveItemsHandler = useCallback(
     async (
-      items: FolderChild[],
-      destFolderId: string,
-      destIpnsName: string,
-      clearSelection: () => void
+      _items: SealedChildRef[],
+      _destFolderId: string,
+      _destIpnsName: string,
+      _clearSelection: () => void
     ) => {
-      const auth = useAuthStore.getState();
-      if (!auth.vaultKeypair) {
-        p.setError('No keypair available');
-        return;
-      }
-      if (items.length === 0) return;
-
-      const ok = await runWrite(async (shareId) => {
-        for (const item of items) {
-          await getSdkClient().moveInSharedFolder(shareId, {
-            itemId: item.id,
-            destFolderId,
-            destIpnsName,
-            vaultPrivateKey: auth.vaultKeypair!.privateKey,
-            getShareKeysFn: fetchShareKeys,
-          });
-        }
-      }, 'Shared folder batch move failed');
-
-      // Clear the selection only on full success — on failure (a per-item error
-      // stops the loop) keep the selection so the user can retry.
-      if (ok) clearSelection();
+      throw new Error(
+        'not implemented — phase 65 (shared folder batch move requires Node write-chain)'
+      );
     },
-    [runWrite, p.setError]
+    []
   );
 
   return {
