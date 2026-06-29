@@ -10,8 +10,7 @@
  * (shared-write.test.ts, client-shared-write.test.ts — TODO phase 65) as the
  * spec the owning phase revives.
  *
- * addShareKeys/reWrapForRecipients: the share fan-out is being redesigned for the
- * read-keychaining model (phase 63 for read fan-out, phase 65 for write fan-out).
+ * addShareKeys: the share write fan-out is being redesigned for phase 65.
  * Call sites that added share_keys entries are stubbed here and quarantined.
  */
 

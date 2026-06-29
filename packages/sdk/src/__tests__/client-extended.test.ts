@@ -70,7 +70,6 @@ vi.mock('../bin', () => ({
 vi.mock('../share', () => ({
   createShareKey: vi.fn(),
   revokeShare: vi.fn(),
-  reWrapForRecipients: vi.fn().mockResolvedValue({ failedRecipients: [] }),
 }));
 
 import * as sdkCore from '@cipherbox/sdk-core';
@@ -244,181 +243,9 @@ describe('CipherBoxClient - extended', () => {
       expect(events.some((e) => e.type === 'folder:updated')).toBe(true);
     });
 
-    it('re-wraps file key for share recipients when shareCallbacks configured', async () => {
-      const getCoveringShares = vi.fn().mockResolvedValue([
-        {
-          shareId: 'share-1',
-          recipientPublicKey: '0xaabb',
-          itemType: 'folder',
-          ipnsName: 'folder-ipns',
-          itemName: 'Shared',
-        },
-      ]);
-      const addShareKeys = vi.fn().mockResolvedValue(undefined);
-
-      const shareClient = new CipherBoxClient(
-        createTestConfig({
-          shareCallbacks: { getCoveringShares, addShareKeys },
-        })
-      );
-      setupFolder(shareClient);
-
-      vi.mocked(sdkCore.uploadFile).mockResolvedValue({
-        cid: 'bafyfile',
-        encryptedSize: 100,
-        fileMetaIpnsName: 'k51filemeta',
-        ipnsRecord: {
-          ipnsName: 'k51filemeta',
-          recordBase64: 'mock-record',
-          metadataCid: 'bafymeta',
-        },
-        ipnsPrivateKeyEncrypted: 'enc',
-        fileKey: new Uint8Array(32).fill(0x42),
-      });
-      vi.mocked(sdkCore.addFilePointerToFolder).mockReturnValue({
-        updatedChildren: [],
-        filePointer: {
-          type: 'file',
-          id: 'new-file-id',
-          name: 'shared.txt',
-          fileMetaIpnsName: 'k51filemeta',
-          ipnsPrivateKeyEncrypted: 'enc',
-          createdAt: 0,
-          modifiedAt: 0,
-        },
-      });
-      vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
-        cid: 'bafynew',
-        newSequenceNumber: 2n,
-        publishedChildren: [],
-      });
-
-      await shareClient.uploadFile(
-        'folder-ipns',
-        new Uint8Array([1, 2, 3]),
-        'shared.txt',
-        'text/plain'
-      );
-
-      expect(getCoveringShares).toHaveBeenCalledWith('folder-ipns');
-      // reWrapForRecipients (mocked) is called with the covering shares and addShareKeys callback
-      expect(shareOps.reWrapForRecipients).toHaveBeenCalledWith(
-        expect.objectContaining({
-          coveringShares: expect.arrayContaining([expect.objectContaining({ shareId: 'share-1' })]),
-          addShareKeysFn: addShareKeys,
-        })
-      );
-    });
-
-    it('skips re-wrapping when no shareCallbacks configured', async () => {
-      setupFolder(client);
-
-      vi.mocked(sdkCore.uploadFile).mockResolvedValue({
-        cid: 'bafyfile',
-        encryptedSize: 100,
-        fileMetaIpnsName: 'k51filemeta',
-        ipnsRecord: {
-          ipnsName: 'k51filemeta',
-          recordBase64: 'mock-record',
-          metadataCid: 'bafymeta',
-        },
-        ipnsPrivateKeyEncrypted: 'enc',
-        fileKey: new Uint8Array(32).fill(0x42),
-      });
-      vi.mocked(sdkCore.addFilePointerToFolder).mockReturnValue({
-        updatedChildren: [],
-        filePointer: {
-          type: 'file',
-          id: 'f1',
-          name: 'no-share.txt',
-          fileMetaIpnsName: 'k51filemeta',
-          ipnsPrivateKeyEncrypted: 'enc',
-          createdAt: 0,
-          modifiedAt: 0,
-        },
-      });
-      vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
-        cid: 'bafynew',
-        newSequenceNumber: 2n,
-        publishedChildren: [],
-      });
-
-      // Should not throw — no shareCallbacks means no re-wrapping
-      await client.uploadFile(
-        'folder-ipns',
-        new Uint8Array([1, 2, 3]),
-        'no-share.txt',
-        'text/plain'
-      );
-
-      // The reWrapForRecipients mock should NOT have been called
-      const { reWrapForRecipients } = await import('../share');
-      expect(reWrapForRecipients).not.toHaveBeenCalled();
-    });
-
-    it('skips re-wrapping when no covering shares exist', async () => {
-      const getCoveringShares = vi.fn().mockResolvedValue([]);
-      const addShareKeys = vi.fn();
-
-      const shareClient = new CipherBoxClient(
-        createTestConfig({
-          shareCallbacks: { getCoveringShares, addShareKeys },
-        })
-      );
-      setupFolder(shareClient);
-
-      vi.mocked(sdkCore.uploadFile).mockResolvedValue({
-        cid: 'bafyfile',
-        encryptedSize: 100,
-        fileMetaIpnsName: 'k51filemeta',
-        ipnsRecord: {
-          ipnsName: 'k51filemeta',
-          recordBase64: 'mock-record',
-          metadataCid: 'bafymeta',
-        },
-        ipnsPrivateKeyEncrypted: 'enc',
-        fileKey: new Uint8Array(32).fill(0x42),
-      });
-      vi.mocked(sdkCore.addFilePointerToFolder).mockReturnValue({
-        updatedChildren: [],
-        filePointer: {
-          type: 'file',
-          id: 'f1',
-          name: 'no-shares.txt',
-          fileMetaIpnsName: 'k51filemeta',
-          ipnsPrivateKeyEncrypted: 'enc',
-          createdAt: 0,
-          modifiedAt: 0,
-        },
-      });
-      vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
-        cid: 'bafynew',
-        newSequenceNumber: 2n,
-        publishedChildren: [],
-      });
-
-      await shareClient.uploadFile(
-        'folder-ipns',
-        new Uint8Array([1, 2, 3]),
-        'no-shares.txt',
-        'text/plain'
-      );
-
-      expect(getCoveringShares).toHaveBeenCalledWith('folder-ipns');
-      expect(addShareKeys).not.toHaveBeenCalled();
-    });
-
-    it('clears fileKey after re-wrapping even on failure', async () => {
-      const getCoveringShares = vi.fn().mockRejectedValue(new Error('Share discovery failed'));
-      const addShareKeys = vi.fn();
+    it('clears fileKey after upload (D-09 zeroization)', async () => {
       const fileKey = new Uint8Array(32).fill(0x42);
-
-      const shareClient = new CipherBoxClient(
-        createTestConfig({
-          shareCallbacks: { getCoveringShares, addShareKeys },
-        })
-      );
-      setupFolder(shareClient);
+      setupFolder(client);
 
       vi.mocked(sdkCore.uploadFile).mockResolvedValue({
         cid: 'bafyfile',
@@ -432,16 +259,14 @@ describe('CipherBoxClient - extended', () => {
         ipnsPrivateKeyEncrypted: 'enc',
         fileKey,
       });
-      vi.mocked(sdkCore.addFilePointerToFolder).mockReturnValue({
+      vi.mocked(sdkCore.addFilePointerToFolder).mockResolvedValue({
         updatedChildren: [],
-        filePointer: {
-          type: 'file',
-          id: 'f1',
-          name: 'fail.txt',
-          fileMetaIpnsName: 'k51filemeta',
-          ipnsPrivateKeyEncrypted: 'enc',
-          createdAt: 0,
-          modifiedAt: 0,
+        newRef: {
+          name: 'clear.txt',
+          ipnsName: 'k51filemeta',
+          generation: 0,
+          versionFloor: 0n,
+          readKeySealed: 'mock',
         },
       });
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
@@ -450,16 +275,9 @@ describe('CipherBoxClient - extended', () => {
         publishedChildren: [],
       });
 
-      // Upload should still succeed even if re-wrapping fails
-      const result = await shareClient.uploadFile(
-        'folder-ipns',
-        new Uint8Array([1, 2, 3]),
-        'fail.txt',
-        'text/plain'
-      );
+      await client.uploadFile('folder-ipns', new Uint8Array([1, 2, 3]), 'clear.txt', 'text/plain');
 
-      expect(result.cid).toBe('bafyfile');
-      // fileKey should be zeroed
+      // fileKey must be zeroed (clearBytes mock fills with 0)
       expect(fileKey.every((b) => b === 0)).toBe(true);
     });
   });
