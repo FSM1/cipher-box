@@ -1,0 +1,143 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "2e97d8416be3",
+  "session_id": "b60bb197-27a4-4f23-9fa4-881b6cdc13c7",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-29T00:01:45.001275Z",
+  "branch": "feat/unified-node-codec-core-keystone",
+  "checkpoints_count": 1,
+  "save_step_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "b740bb81bcff",
+  "token_usage": {
+    "input_tokens": 30484,
+    "cache_creation_tokens": 973202,
+    "cache_read_tokens": 17601937,
+    "output_tokens": 195396,
+    "api_call_count": 81
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-plan-phase-2026-06-28T18:11:44.314969Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "d3bafcfe2fde",
+      "timestamp": "2026-06-28T18:11:44.314969Z",
+      "native": {
+        "command": "/gsd-plan-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-ship-phase-2026-06-28T23:49:45.357325Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "4a97f9f223f0",
+      "timestamp": "2026-06-28T23:49:45.357325Z",
+      "native": {
+        "command": "/ship-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/ship-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-ship-phase-2026-06-28T23:54:36.438271Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "b740bb81bcff",
+      "timestamp": "2026-06-28T23:54:36.438271Z",
+      "native": {
+        "command": "/ship-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/ship-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_019xJEMkUftEVCgsENaGYPTz",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "b740bb81bcff",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 216,
+        "end": 217,
+        "entry_ids": [
+          "92f183a1-36ba-44e1-aa90-f4c171db03db"
+        ],
+        "tool_use_id": "toolu_019xJEMkUftEVCgsENaGYPTz"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_019xJEMkUftEVCgsENaGYPTz"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
