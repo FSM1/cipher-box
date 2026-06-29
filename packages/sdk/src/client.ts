@@ -25,7 +25,8 @@ import {
 } from '@cipherbox/api-client';
 import { clearBytes, unwrapKey, hexToBytes } from '@cipherbox/crypto';
 import pLimit from 'p-limit';
-import type { BinEntry, SealedChildRef } from '@cipherbox/core';
+import type { BinEntry, SealedChildRef, PublishedNode } from '@cipherbox/core';
+import { sealChildReadKey, unsealChildReadKey } from '@cipherbox/core';
 import type { CipherBoxClientConfig, FolderState, SharedFolderState } from './types';
 import { SdkEventEmitter, type SdkEvent, type SdkEventHandler } from './events';
 import { FolderTree } from './state/folder-tree';
@@ -568,6 +569,52 @@ export class CipherBoxClient {
         destChildren: destFolder.children,
         childId,
       });
+
+      // FLAG-63-U2: Re-seal the moved child's readKeySealed under the DEST parent readKey.
+      // sdkCore.moveItem() is a pure link rewrite — the movedRef still carries a
+      // readKeySealed blob bound to the SOURCE parent's readKey. Any reader navigating
+      // the dest-folder IPNS path will fail AEAD verification unless we re-seal.
+      const movedRef = updatedDest.find((c) => c.ipnsName === childId);
+      if (!movedRef) {
+        throw new Error(
+          `moveItem: moved child ${childId} not found in dest after link rewrite (FLAG-63-U2)`
+        );
+      }
+
+      // Resolve the child's IPNS to read the plaintext id and kind from the PublishedNode
+      // envelope. These are AAD inputs for sealChildReadKey / unsealChildReadKey.
+      // id/kind are NEVER stored in SealedChildRef (NODE-03, design §2.2).
+      const childIpnsRecord = await sdkCore.resolveIpnsRecord(childId, this.ctx);
+      if (!childIpnsRecord) {
+        throw new Error(
+          `moveItem: cannot resolve child IPNS ${childId} for re-seal — record not found`
+        );
+      }
+      const rawChildNode = await sdkCore.fetchFromIpfs(this.ctx, childIpnsRecord.cid);
+      const childPub = JSON.parse(new TextDecoder().decode(rawChildNode)) as PublishedNode;
+
+      // Recover the child readKey under the SOURCE parent key.
+      // D-09: do NOT zero sourceFolder.folderKey (caller-owned buffer).
+      const childReadKey = await unsealChildReadKey(
+        movedRef.readKeySealed,
+        sourceFolder.folderKey,
+        childPub.id,
+        childPub.kind,
+        movedRef.generation
+      );
+
+      // Re-seal the child readKey under the DESTINATION parent key.
+      // D-09: do NOT zero destFolder.folderKey (caller-owned buffer).
+      movedRef.readKeySealed = await sealChildReadKey(
+        childReadKey,
+        destFolder.folderKey,
+        childPub.id,
+        childPub.kind,
+        movedRef.generation // generation unchanged — no content re-encryption, no bump
+      );
+
+      // Zero the recovered child readKey — engine-derived, terminal-owned (D-09).
+      childReadKey.fill(0);
 
       // Publish updated source folder
       const { newSequenceNumber: srcSeq, publishedChildren: srcChildren } =
