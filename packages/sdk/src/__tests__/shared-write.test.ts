@@ -1,76 +1,50 @@
-import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
-import type { FolderChild, FilePointer } from '@cipherbox/core';
+/**
+ * Shared-write tests — Phase 65 write-body model
+ *
+ * Three test sections:
+ *   1. WRITE-01 security: read-only holder cannot reach writeBody (pure crypto, real @cipherbox/core)
+ *   2. Write-body operations: 6 write ops on the write-body model (mock publishNodeFn / addToIpfsFn)
+ *   3. WRITE-03 offline co-writer: tombstoned target throws CannotWriteUntilRefetchError
+ */
 
-// ---- Mocks ----
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('@cipherbox/crypto', () => ({
-  encryptAesGcm: vi.fn().mockResolvedValue(new Uint8Array([0xde, 0xad])),
-  generateFileKey: vi.fn().mockReturnValue(new Uint8Array(32).fill(0x11)),
-  generateIv: vi.fn().mockReturnValue(new Uint8Array(12).fill(0x22)),
-  wrapKey: vi.fn().mockResolvedValue(new Uint8Array([0xaa, 0xbb, 0xcc])),
-  bytesToHex: vi.fn().mockReturnValue('aabbcc'),
-  hexToBytes: vi.fn().mockReturnValue(new Uint8Array(33).fill(9)),
-  generateRandomBytes: vi.fn().mockReturnValue(new Uint8Array(32).fill(0x33)),
-  generateEd25519Keypair: vi.fn().mockResolvedValue({
-    publicKey: new Uint8Array(32).fill(0x44),
-    privateKey: new Uint8Array(64).fill(0x55),
-  }),
-  deriveIpnsName: vi.fn().mockResolvedValue('k51subfolder'),
-}));
+// ---- Real crypto for WRITE-01 security section ----------------------------
+// sealNode / unsealNode / sealChildWriteKey / unsealChildWriteKey are accessed
+// via vi.importActual inside individual tests so module-level mocks do not
+// interfere. Only types are imported here.
 
+import { sealNode } from '@cipherbox/core';
+import type { Node, PublishedNode, SealedChildRef, WriteChildRef } from '@cipherbox/core';
+import { generateRandomBytes, generateEd25519Keypair } from '@cipherbox/crypto';
+
+// ---- Mocks for operation tests --------------------------------------------
+
+// @cipherbox/crypto: mock key/keypair generation so tests are deterministic.
+// sealChildWriteKey / unsealChildWriteKey / sealChildReadKey are handled by
+// spreading the real @cipherbox/core below.
+vi.mock('@cipherbox/crypto', async () => {
+  const actual = await vi.importActual<typeof import('@cipherbox/crypto')>('@cipherbox/crypto');
+  return {
+    ...actual,
+    generateRandomBytes: vi.fn().mockImplementation((n: number) => new Uint8Array(n).fill(0x42)),
+    generateEd25519Keypair: vi.fn().mockReturnValue({
+      publicKey: new Uint8Array(32).fill(0x44),
+      privateKey: new Uint8Array(32).fill(0x55),
+    }),
+    deriveIpnsName: vi.fn().mockResolvedValue('k51child1234'),
+  };
+});
+
+// @cipherbox/core: spread actual so real sealNode/unsealNode/sealChildWriteKey
+// etc. work in operation tests too. We only override what is genuinely
+// expensive or network-bound (none here — crypto runs in-process).
 vi.mock('@cipherbox/core', async () => {
   const actual = await vi.importActual<typeof import('@cipherbox/core')>('@cipherbox/core');
-  return {
-    ...actual,
-    generateFileIpnsKeypair: vi.fn().mockResolvedValue({
-      ipnsName: 'k51fileipns',
-      publicKey: new Uint8Array(32).fill(0x66),
-      privateKey: new Uint8Array(64).fill(0x77),
-    }),
-    encryptFolderMetadata: vi.fn().mockResolvedValue({ iv: 'mock-iv', data: 'mock-data' }),
-    encryptFileMetadata: vi.fn().mockResolvedValue({ iv: 'mock-iv', data: 'mock-data' }),
-    createIpnsRecord: vi.fn().mockResolvedValue({ value: new Uint8Array([1, 2, 3]) }),
-    marshalIpnsRecord: vi.fn().mockReturnValue(new Uint8Array([4, 5, 6])),
-  };
+  return { ...actual };
 });
 
-vi.mock('@cipherbox/sdk-core', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@cipherbox/sdk-core')>();
-  return {
-    ...actual,
-    updateFolderMetadataAndPublish: vi.fn().mockImplementation(async (params) => ({
-      cid: 'QmUpdated',
-      newSequenceNumber: 2n,
-      publishedChildren: params.children,
-    })),
-    addToIpfs: vi.fn().mockResolvedValue({ cid: 'QmUploaded', size: 100, recorded: true }),
-    batchPublishIpnsRecords: vi.fn().mockResolvedValue({ totalSucceeded: 1, totalFailed: 0 }),
-    createAndPublishIpnsRecord: vi.fn().mockResolvedValue({ success: true, sequenceNumber: 1n }),
-    resolveFileMetadata: vi.fn().mockResolvedValue({
-      metadata: {
-        version: 'v1',
-        cid: 'QmOldFile',
-        fileKeyEncrypted: 'oldkey',
-        fileIv: 'oldiv',
-        size: 50,
-        mimeType: 'text/plain',
-        encryptionMode: 'GCM',
-        createdAt: 1000,
-        modifiedAt: 1000,
-      },
-      metadataCid: 'QmOldMeta',
-    }),
-    updateFileMetadata: vi.fn().mockResolvedValue({
-      ipnsName: 'k51fileipns',
-      metadataCid: 'QmNewMeta',
-      newSequenceNumber: 2n,
-      prunedCids: [],
-    }),
-    unpinFromIpfs: vi.fn().mockResolvedValue(undefined),
-  };
-});
-
-// ---- Imports under test (after mocks) ----
+// ---- Imports under test (after mock hoisting) ----------------------------
 
 import {
   uploadToSharedFolder,
@@ -78,459 +52,650 @@ import {
   renameInSharedFolder,
   deleteFromSharedFolder,
   updateSharedFile,
+  moveInSharedFolder,
   updateSharePermission,
+  CannotWriteUntilRefetchError,
   type SharedWriteContext,
+  type PublishNodeResult,
 } from '../share/shared-write';
 
-import {
-  updateFolderMetadataAndPublish,
-  addToIpfs,
-  batchPublishIpnsRecords,
-  createAndPublishIpnsRecord,
-  updateFileMetadata,
-  unpinFromIpfs,
-} from '@cipherbox/sdk-core';
-import { wrapKey, encryptAesGcm } from '@cipherbox/crypto';
+// ---- Helpers ---------------------------------------------------------------
 
-// ---- Helpers ----
-
-function makeSWCtx(overrides?: Partial<SharedWriteContext>): SharedWriteContext {
-  return {
-    ctx: {
-      apiUrl: 'http://localhost:3000',
-      getAccessToken: async () => 'token',
+/** Build a real sealed parent node for use in operation tests. */
+async function buildSealedParent(opts?: {
+  extraChildren?: SealedChildRef[];
+  ipnsPrivKey?: Uint8Array;
+}): Promise<{
+  publishedNode: PublishedNode;
+  readKey: Uint8Array;
+  writeKey: Uint8Array;
+  ipnsPrivateKey: Uint8Array;
+}> {
+  const readKey = new Uint8Array(32).fill(0x01);
+  const writeKey = new Uint8Array(32).fill(0x02);
+  const ipnsPrivateKey = new Uint8Array(32).fill(0x03);
+  const parent: Node = {
+    schema: 'node/v3',
+    kind: 'folder',
+    id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+    generation: 0,
+    createdAt: 1000,
+    modifiedAt: 1000,
+    children: opts?.extraChildren ?? [],
+    writeBody: {
+      ipnsPrivateKey: opts?.ipnsPrivKey ?? ipnsPrivateKey,
+      writeChildren: [],
     },
-    folderKey: new Uint8Array(32).fill(1),
-    ipnsPrivateKey: new Uint8Array(64).fill(2),
-    ipnsName: 'k51folder',
+  };
+  const publishedNode = await sealNode(parent, readKey, writeKey);
+  return { publishedNode, readKey, writeKey, ipnsPrivateKey: opts?.ipnsPrivKey ?? ipnsPrivateKey };
+}
+
+const mockCtx = {
+  apiUrl: 'http://localhost:3000',
+  getAccessToken: async () => 'token',
+};
+
+function makePublishNodeFn(
+  result: PublishNodeResult = { tombstoned: false, newSequenceNumber: 2n }
+): SharedWriteContext['publishNodeFn'] {
+  return vi.fn().mockResolvedValue(result);
+}
+
+function makeAddToIpfsFn(): SharedWriteContext['addToIpfsFn'] {
+  return vi.fn().mockResolvedValue({ cid: 'QmMockedCid' });
+}
+
+async function makeSWCtx(overrides?: Partial<SharedWriteContext>): Promise<SharedWriteContext> {
+  const { publishedNode, readKey, writeKey } = await buildSealedParent();
+  return {
+    ctx: mockCtx,
+    readKey,
+    writeKey,
+    publishedNode,
+    ipnsName: 'k51parentfolder',
     sequenceNumber: 1n,
     children: [],
     ownerPublicKey: new Uint8Array(33).fill(3),
     recipientPublicKey: new Uint8Array(33).fill(4),
     shareId: 'share-123',
+    publishNodeFn: makePublishNodeFn(),
+    addToIpfsFn: makeAddToIpfsFn(),
     addShareKeysFn: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }
 
-// ---- Tests ----
+// ===========================================================================
+// Section 1: WRITE-01 security — read-only holder cannot reach writeBody
+// ===========================================================================
 
-describe('shared-write operations', () => {
+describe('WRITE-01 security: read-only holder cannot reach writeBody', () => {
+  it('unsealNode without writeKey returns a node with no writeBody', async () => {
+    const { actual: coreActual } = await vi
+      .importActual<typeof import('@cipherbox/core')>('@cipherbox/core')
+      .then((a) => ({ actual: a }));
+
+    const readKey = generateRandomBytes(32);
+    const writeKey = generateRandomBytes(32);
+    const ipnsPrivateKey = generateEd25519Keypair().privateKey;
+
+    const node: Node = {
+      schema: 'node/v3',
+      kind: 'folder',
+      id: '11111111-2222-3333-4444-555555555555',
+      generation: 0,
+      createdAt: 1000,
+      modifiedAt: 1000,
+      children: [],
+      writeBody: {
+        ipnsPrivateKey,
+        writeChildren: [],
+      },
+    };
+
+    const published = await coreActual.sealNode(node, readKey, writeKey);
+
+    // A read-only holder (no writeKey) gets NO writeBody
+    const readOnlyNode = await coreActual.unsealNode(published, readKey);
+    expect(readOnlyNode.writeBody).toBeUndefined();
+
+    // A write-capable holder (with writeKey) gets the writeBody + ipnsPrivateKey
+    const writeCapableNode = await coreActual.unsealNode(published, readKey, writeKey);
+    expect(writeCapableNode.writeBody).toBeDefined();
+    expect(writeCapableNode.writeBody!.ipnsPrivateKey).toEqual(ipnsPrivateKey);
+  });
+
+  it('published envelope has writeSealed when writeBody is present', async () => {
+    const { actual: coreActual } = await vi
+      .importActual<typeof import('@cipherbox/core')>('@cipherbox/core')
+      .then((a) => ({ actual: a }));
+
+    const readKey = generateRandomBytes(32);
+    const writeKey = generateRandomBytes(32);
+    const node: Node = {
+      schema: 'node/v3',
+      kind: 'folder',
+      id: '22222222-3333-4444-5555-666666666666',
+      generation: 0,
+      createdAt: 1000,
+      modifiedAt: 1000,
+      children: [],
+      writeBody: {
+        ipnsPrivateKey: generateEd25519Keypair().privateKey,
+        writeChildren: [],
+      },
+    };
+
+    const published = await coreActual.sealNode(node, readKey, writeKey);
+    expect(published.writeSealed).toBeDefined();
+    expect(typeof published.writeSealed).toBe('string');
+  });
+
+  it('write-link round-trip: buildChildWriteLink seals; walkChildWriteKey unseals back to original', async () => {
+    const { actual: coreActual } = await vi
+      .importActual<typeof import('@cipherbox/core')>('@cipherbox/core')
+      .then((a) => ({ actual: a }));
+
+    const parentWriteKey = generateRandomBytes(32);
+    const childWriteKey = generateRandomBytes(32);
+    const childId = '33333333-4444-5555-6666-777777777777';
+    const childKind = 'folder' as const;
+    const childGeneration = 0;
+
+    // Seal childWriteKey under parentWriteKey
+    const writeKeySealed = await coreActual.sealChildWriteKey(
+      childWriteKey,
+      parentWriteKey,
+      childId,
+      childKind,
+      childGeneration
+    );
+    const childRef: WriteChildRef = { childId, writeKeySealed };
+
+    // Unseal back
+    const recovered = await coreActual.unsealChildWriteKey(
+      childRef.writeKeySealed,
+      parentWriteKey,
+      childRef.childId,
+      childKind,
+      childGeneration
+    );
+    expect(recovered).toEqual(childWriteKey);
+  });
+
+  it('SealedChildRef carries no write field (NODE-03)', async () => {
+    // This test ensures the type constraint is upheld: SealedChildRef
+    // must not have writeKeySealed or any write field.
+    const childRef: SealedChildRef = {
+      name: 'test',
+      ipnsName: 'k51child',
+      generation: 0,
+      versionFloor: 1n,
+      readKeySealed: 'base64sealed',
+    };
+    // TypeScript already guards this; also assert at runtime.
+    expect('writeKeySealed' in childRef).toBe(false);
+    expect(Object.keys(childRef).includes('writeKeySealed')).toBe(false);
+  });
+});
+
+// ===========================================================================
+// Section 2: SharedWriteContext shape
+// ===========================================================================
+
+describe('SharedWriteContext shape', () => {
+  it('carries writeKey and readKey — no raw folderKey or top-level ipnsPrivateKey', async () => {
+    const swCtx = await makeSWCtx();
+    expect(swCtx).toHaveProperty('readKey');
+    expect(swCtx).toHaveProperty('writeKey');
+    expect(swCtx).not.toHaveProperty('folderKey');
+    expect(swCtx).not.toHaveProperty('ipnsPrivateKey');
+  });
+
+  it('has publishNodeFn and addToIpfsFn transport seams', async () => {
+    const swCtx = await makeSWCtx();
+    expect(typeof swCtx.publishNodeFn).toBe('function');
+    expect(typeof swCtx.addToIpfsFn).toBe('function');
+  });
+});
+
+// ===========================================================================
+// Section 3: Operation tests — write-body model, no fan-out
+// ===========================================================================
+
+describe('createSharedSubfolder', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  // ---------- uploadToSharedFolder ----------
+  it('returns publishedChildren, newSequenceNumber, and folderEntry', async () => {
+    const swCtx = await makeSWCtx();
+    const result = await createSharedSubfolder(swCtx, { name: 'NewFolder' });
 
-  describe.skip('uploadToSharedFolder — TODO(phase 65)', () => {
-    it('encrypts file, uploads to IPFS, creates file metadata IPNS, updates folder, and calls addShareKeysFn', async () => {
-      const swCtx = makeSWCtx();
-      const result = await uploadToSharedFolder(swCtx, {
-        data: new Uint8Array([1, 2, 3]),
-        fileName: 'test.txt',
-        mimeType: 'text/plain',
-      });
-
-      // Encryption was called
-      expect(encryptAesGcm).toHaveBeenCalled();
-
-      // Uploaded encrypted content to IPFS
-      expect(addToIpfs).toHaveBeenCalled();
-
-      // File IPNS published via batch
-      expect(batchPublishIpnsRecords).toHaveBeenCalled();
-
-      // Parent folder updated
-      expect(updateFolderMetadataAndPublish).toHaveBeenCalled();
-
-      // Result contains FilePointer and updated state
-      expect(result.filePointer).toBeDefined();
-      expect(result.filePointer.type).toBe('file');
-      expect(result.filePointer.name).toBe('test.txt');
-      expect(result.publishedChildren).toHaveLength(1);
-      expect(result.newSequenceNumber).toBe(2n);
-    });
-
-    it('wraps keys with both owner and recipient public keys', async () => {
-      const swCtx = makeSWCtx();
-      await uploadToSharedFolder(swCtx, {
-        data: new Uint8Array([1]),
-        fileName: 'test.txt',
-      });
-
-      // wrapKey is called multiple times: fileKey for owner, IPNS key for owner,
-      // IPNS key for recipient, fileKey for recipient
-      expect(wrapKey).toHaveBeenCalledTimes(4);
-    });
-
-    it('calls addShareKeysFn with file and file-ipns keys', async () => {
-      const addFn = vi.fn().mockResolvedValue(undefined);
-      const swCtx = makeSWCtx({ addShareKeysFn: addFn });
-
-      await uploadToSharedFolder(swCtx, {
-        data: new Uint8Array([1]),
-        fileName: 'test.txt',
-      });
-
-      expect(addFn).toHaveBeenCalledWith(
-        'share-123',
-        expect.arrayContaining([
-          expect.objectContaining({ keyType: 'file' }),
-          expect.objectContaining({ keyType: 'file-ipns' }),
-        ])
-      );
-    });
-
-    it('warns but does not throw when addShareKeysFn fails', async () => {
-      const addFn = vi.fn().mockRejectedValue(new Error('API error'));
-      const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-      const swCtx = makeSWCtx({ addShareKeysFn: addFn });
-
-      // Should not throw
-      const result = await uploadToSharedFolder(swCtx, {
-        data: new Uint8Array([1]),
-        fileName: 'test.txt',
-      });
-
-      expect(result.filePointer).toBeDefined();
-      expect(consoleWarn).toHaveBeenCalled();
-      consoleWarn.mockRestore();
-    });
+    expect(result.publishedChildren).toHaveLength(1);
+    expect(result.folderEntry.name).toBe('NewFolder');
+    expect(result.newSequenceNumber).toBe(2n);
   });
 
-  // ---------- createSharedSubfolder ----------
+  it('never calls addShareKeysFn', async () => {
+    const swCtx = await makeSWCtx();
+    await createSharedSubfolder(swCtx, { name: 'Sub' });
+    expect(swCtx.addShareKeysFn).not.toHaveBeenCalled();
+  });
 
-  describe.skip('createSharedSubfolder — TODO(phase 65)', () => {
-    it('creates subfolder IPNS, updates parent, and calls addShareKeysFn', async () => {
-      const swCtx = makeSWCtx();
-      const result = await createSharedSubfolder(swCtx, { name: 'New Folder' });
+  it('folderEntry SealedChildRef has no writeKeySealed (NODE-03)', async () => {
+    const swCtx = await makeSWCtx();
+    const { folderEntry } = await createSharedSubfolder(swCtx, { name: 'Sub' });
+    expect('writeKeySealed' in folderEntry).toBe(false);
+  });
 
-      // Subfolder IPNS published
-      expect(createAndPublishIpnsRecord).toHaveBeenCalled();
+  it('calls publishNodeFn for the child and then the parent', async () => {
+    const publishFn = makePublishNodeFn();
+    const swCtx = await makeSWCtx({ publishNodeFn: publishFn });
+    await createSharedSubfolder(swCtx, { name: 'Sub' });
+    // Called at least twice: once for child, once for parent
+    expect(publishFn).toHaveBeenCalledTimes(2);
+  });
+});
 
-      // Parent folder updated
-      expect(updateFolderMetadataAndPublish).toHaveBeenCalled();
+describe('uploadToSharedFolder', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
 
-      // Result contains FolderEntry
-      expect(result.folderEntry).toBeDefined();
-      expect(result.folderEntry.type).toBe('folder');
-      expect(result.folderEntry.name).toBe('New Folder');
-      expect(result.publishedChildren).toHaveLength(1);
-      expect(result.newSequenceNumber).toBe(2n);
+  it('returns publishedChildren, newSequenceNumber, and filePointer', async () => {
+    const swCtx = await makeSWCtx();
+    const result = await uploadToSharedFolder(swCtx, {
+      data: new Uint8Array([1, 2, 3]),
+      fileName: 'test.txt',
+      mimeType: 'text/plain',
     });
 
-    it('calls addShareKeysFn with folder and folder-ipns keys', async () => {
-      const addFn = vi.fn().mockResolvedValue(undefined);
-      const swCtx = makeSWCtx({ addShareKeysFn: addFn });
+    expect(result.publishedChildren).toHaveLength(1);
+    expect(result.filePointer.name).toBe('test.txt');
+    expect(result.newSequenceNumber).toBe(2n);
+  });
 
+  it('never calls addShareKeysFn', async () => {
+    const swCtx = await makeSWCtx();
+    await uploadToSharedFolder(swCtx, { data: new Uint8Array([1]), fileName: 'f.txt' });
+    expect(swCtx.addShareKeysFn).not.toHaveBeenCalled();
+  });
+
+  it('filePointer SealedChildRef has no writeKeySealed (NODE-03)', async () => {
+    const swCtx = await makeSWCtx();
+    const { filePointer } = await uploadToSharedFolder(swCtx, {
+      data: new Uint8Array([1]),
+      fileName: 'f.txt',
+    });
+    expect('writeKeySealed' in filePointer).toBe(false);
+  });
+
+  it('calls addToIpfsFn to upload file content', async () => {
+    const addFn = makeAddToIpfsFn();
+    const swCtx = await makeSWCtx({ addToIpfsFn: addFn });
+    await uploadToSharedFolder(swCtx, { data: new Uint8Array([1, 2, 3]), fileName: 'f.txt' });
+    expect(addFn).toHaveBeenCalled();
+  });
+});
+
+describe('renameInSharedFolder', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('renames the item and republishes the parent', async () => {
+    // Set up a parent with one child
+    const existingChild: SealedChildRef = {
+      name: 'old.txt',
+      ipnsName: 'k51child',
+      generation: 0,
+      versionFloor: 1n,
+      readKeySealed: 'fakebase64sealed',
+    };
+
+    // We need a parent node with that child in its read-body.
+    // Build a properly sealed parent that includes the existing child.
+    const {
+      publishedNode: pn,
+      readKey,
+      writeKey,
+    } = await buildSealedParent({
+      extraChildren: [existingChild],
+    });
+
+    const swCtx = await makeSWCtx({
+      publishedNode: pn,
+      readKey,
+      writeKey,
+      children: [existingChild],
+    });
+
+    const result = await renameInSharedFolder(swCtx, {
+      // Use ipnsName as identifier (the name is what we're changing)
+      itemId: 'k51child',
+      newName: 'new.txt',
+    });
+
+    expect(result.publishedChildren).toHaveLength(1);
+    expect(result.publishedChildren[0].name).toBe('new.txt');
+    expect(result.newSequenceNumber).toBe(2n);
+  });
+
+  it('never calls addShareKeysFn', async () => {
+    const existingChild: SealedChildRef = {
+      name: 'old.txt',
+      ipnsName: 'k51child',
+      generation: 0,
+      versionFloor: 1n,
+      readKeySealed: 'fakebase64sealed',
+    };
+    const {
+      publishedNode: pn,
+      readKey,
+      writeKey,
+    } = await buildSealedParent({
+      extraChildren: [existingChild],
+    });
+    const swCtx = await makeSWCtx({
+      publishedNode: pn,
+      readKey,
+      writeKey,
+      children: [existingChild],
+    });
+    await renameInSharedFolder(swCtx, { itemId: 'k51child', newName: 'new.txt' });
+    expect(swCtx.addShareKeysFn).not.toHaveBeenCalled();
+  });
+});
+
+describe('deleteFromSharedFolder', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('removes the item and republishes the parent', async () => {
+    const child: SealedChildRef = {
+      name: 'doomed.txt',
+      ipnsName: 'k51child',
+      generation: 0,
+      versionFloor: 1n,
+      readKeySealed: 'fakebase64sealed',
+    };
+    const {
+      publishedNode: pn,
+      readKey,
+      writeKey,
+    } = await buildSealedParent({
+      extraChildren: [child],
+    });
+    const swCtx = await makeSWCtx({ publishedNode: pn, readKey, writeKey, children: [child] });
+
+    const result = await deleteFromSharedFolder(swCtx, { itemId: 'k51child' });
+
+    expect(result.publishedChildren).toHaveLength(0);
+    expect(result.newSequenceNumber).toBe(2n);
+  });
+
+  it('never calls addShareKeysFn', async () => {
+    const child: SealedChildRef = {
+      name: 'doomed.txt',
+      ipnsName: 'k51child',
+      generation: 0,
+      versionFloor: 1n,
+      readKeySealed: 'fakebase64sealed',
+    };
+    const {
+      publishedNode: pn,
+      readKey,
+      writeKey,
+    } = await buildSealedParent({
+      extraChildren: [child],
+    });
+    const swCtx = await makeSWCtx({ publishedNode: pn, readKey, writeKey, children: [child] });
+    await deleteFromSharedFolder(swCtx, { itemId: 'k51child' });
+    expect(swCtx.addShareKeysFn).not.toHaveBeenCalled();
+  });
+});
+
+describe('updateSharedFile', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('re-publishes the file node with new content', async () => {
+    const publishFn = makePublishNodeFn();
+    const addFn = makeAddToIpfsFn();
+    const swCtx = await makeSWCtx({ publishNodeFn: publishFn, addToIpfsFn: addFn });
+
+    const fileRef: SealedChildRef = {
+      name: 'file.txt',
+      ipnsName: 'k51file',
+      generation: 0,
+      versionFloor: 1n,
+      readKeySealed: 'fakebase64sealed',
+    };
+    const fileReadKey = new Uint8Array(32).fill(0xaa);
+    const fileWriteKey = new Uint8Array(32).fill(0xbb);
+    const fileIpnsPrivateKey = new Uint8Array(32).fill(0xcc);
+
+    await updateSharedFile(swCtx, {
+      fileRef,
+      fileReadKey,
+      fileWriteKey,
+      fileIpnsPrivateKey,
+      fileSequenceNumber: 1n,
+      newData: new Uint8Array([10, 20, 30]),
+      mimeType: 'text/plain',
+    });
+
+    // Should have published the file node
+    expect(publishFn).toHaveBeenCalledWith(expect.objectContaining({ ipnsName: 'k51file' }));
+  });
+
+  it('never calls addShareKeysFn', async () => {
+    const swCtx = await makeSWCtx();
+    const fileRef: SealedChildRef = {
+      name: 'file.txt',
+      ipnsName: 'k51file',
+      generation: 0,
+      versionFloor: 1n,
+      readKeySealed: 'fakebase64sealed',
+    };
+    await updateSharedFile(swCtx, {
+      fileRef,
+      fileReadKey: new Uint8Array(32).fill(0xaa),
+      fileWriteKey: new Uint8Array(32).fill(0xbb),
+      fileIpnsPrivateKey: new Uint8Array(32).fill(0xcc),
+      fileSequenceNumber: 1n,
+      newData: new Uint8Array([1]),
+    });
+    expect(swCtx.addShareKeysFn).not.toHaveBeenCalled();
+  });
+});
+
+describe('moveInSharedFolder', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('moves item from src to dest and returns both results', async () => {
+    const CHILD_UUID = '33333333-4444-5555-6666-777777777777';
+    const child: SealedChildRef = {
+      name: 'tomove.txt',
+      ipnsName: 'k51child',
+      generation: 0,
+      versionFloor: 1n,
+      readKeySealed: 'fakebase64sealed',
+    };
+
+    const {
+      publishedNode: srcPn,
+      readKey: srcReadKey,
+      writeKey: srcWriteKey,
+    } = await buildSealedParent({
+      extraChildren: [child],
+    });
+    const {
+      publishedNode: destPn,
+      readKey: destReadKey,
+      writeKey: destWriteKey,
+    } = await buildSealedParent();
+
+    const srcCtx = await makeSWCtx({
+      publishedNode: srcPn,
+      readKey: srcReadKey,
+      writeKey: srcWriteKey,
+      ipnsName: 'k51src',
+      children: [child],
+    });
+    const destCtx = await makeSWCtx({
+      publishedNode: destPn,
+      readKey: destReadKey,
+      writeKey: destWriteKey,
+      ipnsName: 'k51dest',
+      children: [],
+    });
+
+    const result = await moveInSharedFolder({
+      srcCtx,
+      destCtx,
+      itemId: 'k51child',
+      childNodeId: CHILD_UUID,
+      childKind: 'folder',
+      childGeneration: 0,
+      childReadKey: new Uint8Array(32).fill(0xdd),
+    });
+
+    expect(result.srcResult.publishedChildren).toHaveLength(0);
+    expect(result.destResult.publishedChildren).toHaveLength(1);
+    expect(result.destResult.publishedChildren[0].name).toBe('tomove.txt');
+  });
+});
+
+// ===========================================================================
+// Section 4: WRITE-03 — CannotWriteUntilRefetchError for tombstoned target
+// ===========================================================================
+
+describe('CannotWriteUntilRefetchError (WRITE-03 / D-03)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('CannotWriteUntilRefetchError is exported and has a stable code', () => {
+    const err = new CannotWriteUntilRefetchError('k51test');
+    expect(err.name).toBe('CannotWriteUntilRefetchError');
+    expect(err.code).toBe('CANNOT_WRITE_UNTIL_REFETCH');
+    expect(err.message).toMatch(/cannot write until re-fetch/i);
+    expect(err instanceof Error).toBe(true);
+  });
+
+  it('createSharedSubfolder throws CannotWriteUntilRefetchError when publishNodeFn returns tombstoned', async () => {
+    const tombstonedPublishFn = vi.fn().mockResolvedValue({ tombstoned: true });
+    const swCtx = await makeSWCtx({ publishNodeFn: tombstonedPublishFn });
+
+    await expect(createSharedSubfolder(swCtx, { name: 'Sub' })).rejects.toThrow(
+      CannotWriteUntilRefetchError
+    );
+  });
+
+  it('uploadToSharedFolder throws CannotWriteUntilRefetchError when publishNodeFn returns tombstoned', async () => {
+    const tombstonedPublishFn = vi.fn().mockResolvedValue({ tombstoned: true });
+    const swCtx = await makeSWCtx({ publishNodeFn: tombstonedPublishFn });
+
+    await expect(
+      uploadToSharedFolder(swCtx, { data: new Uint8Array([1]), fileName: 'f.txt' })
+    ).rejects.toThrow(CannotWriteUntilRefetchError);
+  });
+
+  it('renameInSharedFolder throws CannotWriteUntilRefetchError when publishNodeFn returns tombstoned', async () => {
+    const child: SealedChildRef = {
+      name: 'old.txt',
+      ipnsName: 'k51child',
+      generation: 0,
+      versionFloor: 1n,
+      readKeySealed: 'fakebase64sealed',
+    };
+    const {
+      publishedNode: pn,
+      readKey,
+      writeKey,
+    } = await buildSealedParent({
+      extraChildren: [child],
+    });
+    const tombstonedPublishFn = vi.fn().mockResolvedValue({ tombstoned: true });
+    const swCtx = await makeSWCtx({
+      publishedNode: pn,
+      readKey,
+      writeKey,
+      children: [child],
+      publishNodeFn: tombstonedPublishFn,
+    });
+
+    await expect(
+      renameInSharedFolder(swCtx, { itemId: 'k51child', newName: 'new.txt' })
+    ).rejects.toThrow(CannotWriteUntilRefetchError);
+  });
+
+  it('error is instanceof CannotWriteUntilRefetchError (discriminant works)', async () => {
+    const tombstonedPublishFn = vi.fn().mockResolvedValue({ tombstoned: true });
+    const swCtx = await makeSWCtx({ publishNodeFn: tombstonedPublishFn });
+
+    let caught: unknown;
+    try {
       await createSharedSubfolder(swCtx, { name: 'Sub' });
-
-      expect(addFn).toHaveBeenCalledWith(
-        'share-123',
-        expect.arrayContaining([
-          expect.objectContaining({ keyType: 'folder' }),
-          expect.objectContaining({ keyType: 'folder-ipns' }),
-        ])
-      );
-    });
-
-    it('warns but does not throw when addShareKeysFn fails', async () => {
-      const addFn = vi.fn().mockRejectedValue(new Error('API error'));
-      const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-      const swCtx = makeSWCtx({ addShareKeysFn: addFn });
-
-      const result = await createSharedSubfolder(swCtx, { name: 'Sub' });
-
-      expect(result.folderEntry).toBeDefined();
-      expect(consoleWarn).toHaveBeenCalled();
-      consoleWarn.mockRestore();
-    });
-  });
-
-  // ---------- renameInSharedFolder ----------
-
-  describe.skip('renameInSharedFolder — TODO(phase 65)', () => {
-    it('updates the item name and republishes folder', async () => {
-      const existingChild: FilePointer = {
-        type: 'file',
-        id: 'f1',
-        name: 'old.txt',
-        fileMetaIpnsName: 'k51file',
-        ipnsPrivateKeyEncrypted: 'enc',
-        createdAt: 1000,
-        modifiedAt: 1000,
-      };
-      const swCtx = makeSWCtx({ children: [existingChild] });
-
-      const result = await renameInSharedFolder(swCtx, {
-        itemId: 'f1',
-        newName: 'new.txt',
-      });
-
-      // Folder was re-published
-      expect(updateFolderMetadataAndPublish).toHaveBeenCalled();
-
-      // Updated children have new name
-      const call = (updateFolderMetadataAndPublish as Mock).mock.calls[0][0];
-      const updated = call.children.find((c: FolderChild) => c.id === 'f1');
-      expect(updated.name).toBe('new.txt');
-      expect(updated.modifiedAt).toBeGreaterThan(1000);
-
-      expect(result.publishedChildren).toHaveLength(1);
-      expect(result.newSequenceNumber).toBe(2n);
-    });
-  });
-
-  // ---------- deleteFromSharedFolder ----------
-
-  describe.skip('deleteFromSharedFolder — TODO(phase 65)', () => {
-    it('removes the item from children and republishes folder', async () => {
-      const existingChild: FilePointer = {
-        type: 'file',
-        id: 'f1',
-        name: 'doomed.txt',
-        fileMetaIpnsName: 'k51file',
-        ipnsPrivateKeyEncrypted: 'enc',
-        createdAt: 1000,
-        modifiedAt: 1000,
-      };
-      const swCtx = makeSWCtx({ children: [existingChild] });
-
-      const result = await deleteFromSharedFolder(swCtx, { itemId: 'f1' });
-
-      // Folder was re-published with empty children
-      expect(updateFolderMetadataAndPublish).toHaveBeenCalled();
-      const call = (updateFolderMetadataAndPublish as Mock).mock.calls[0][0];
-      expect(call.children).toHaveLength(0);
-
-      expect(result.publishedChildren).toHaveLength(0);
-      expect(result.newSequenceNumber).toBe(2n);
-    });
-  });
-
-  // ---------- updateSharedFile ----------
-
-  describe.skip('updateSharedFile — TODO(phase 65)', () => {
-    it('encrypts new content, updates file metadata IPNS, and publishes', async () => {
-      const getFileIpnsKeyFn = vi.fn().mockResolvedValue(new Uint8Array(64).fill(0x88));
-      const addFn = vi.fn().mockResolvedValue(undefined);
-
-      await updateSharedFile({
-        ctx: {
-          apiUrl: 'http://localhost:3000',
-          getAccessToken: async () => 'token',
-        },
-        folderKey: new Uint8Array(32).fill(1),
-        ownerPublicKey: new Uint8Array(33).fill(3),
-        recipientPublicKey: new Uint8Array(33).fill(4),
-        shareId: 'share-123',
-        addShareKeysFn: addFn,
-        filePointer: {
-          type: 'file',
-          id: 'f1',
-          name: 'test.txt',
-          fileMetaIpnsName: 'k51fileipns',
-          ipnsPrivateKeyEncrypted: 'enc',
-          createdAt: 1000,
-          modifiedAt: 1000,
-        },
-        newContent: new Uint8Array([10, 20, 30]),
-        getFileIpnsKeyFn,
-      });
-
-      // Content encrypted
-      expect(encryptAesGcm).toHaveBeenCalled();
-
-      // Uploaded to IPFS
-      expect(addToIpfs).toHaveBeenCalled();
-
-      // File metadata updated and published internally via CAS (Plan-03):
-      // updateSharedFile no longer calls batchPublishIpnsRecords directly —
-      // updateFileMetadata publishes the file record itself to avoid double-publish.
-      const { updateFileMetadata } = await import('@cipherbox/sdk-core');
-      expect(updateFileMetadata).toHaveBeenCalled();
-    });
-
-    it('calls addShareKeysFn with updated file key', async () => {
-      const getFileIpnsKeyFn = vi.fn().mockResolvedValue(new Uint8Array(64).fill(0x88));
-      const addFn = vi.fn().mockResolvedValue(undefined);
-
-      await updateSharedFile({
-        ctx: {
-          apiUrl: 'http://localhost:3000',
-          getAccessToken: async () => 'token',
-        },
-        folderKey: new Uint8Array(32).fill(1),
-        ownerPublicKey: new Uint8Array(33).fill(3),
-        recipientPublicKey: new Uint8Array(33).fill(4),
-        shareId: 'share-123',
-        addShareKeysFn: addFn,
-        filePointer: {
-          type: 'file',
-          id: 'f1',
-          name: 'test.txt',
-          fileMetaIpnsName: 'k51fileipns',
-          ipnsPrivateKeyEncrypted: 'enc',
-          createdAt: 1000,
-          modifiedAt: 1000,
-        },
-        newContent: new Uint8Array([10]),
-        getFileIpnsKeyFn,
-      });
-
-      expect(addFn).toHaveBeenCalledWith('share-123', [
-        expect.objectContaining({ keyType: 'file', itemId: 'f1' }),
-      ]);
-    });
-
-    it('throws when getFileIpnsKeyFn returns null', async () => {
-      const getFileIpnsKeyFn = vi.fn().mockResolvedValue(null);
-
-      await expect(
-        updateSharedFile({
-          ctx: {
-            apiUrl: 'http://localhost:3000',
-            getAccessToken: async () => 'token',
-          },
-          folderKey: new Uint8Array(32).fill(1),
-          ownerPublicKey: new Uint8Array(33).fill(3),
-          recipientPublicKey: new Uint8Array(33).fill(4),
-          shareId: 'share-123',
-          addShareKeysFn: vi.fn(),
-          filePointer: {
-            type: 'file',
-            id: 'f1',
-            name: 'test.txt',
-            fileMetaIpnsName: 'k51fileipns',
-            ipnsPrivateKeyEncrypted: 'enc',
-            createdAt: 1000,
-            modifiedAt: 1000,
-          },
-          newContent: new Uint8Array([10]),
-          getFileIpnsKeyFn,
-        })
-      ).rejects.toThrow(/IPNS key/i);
-    });
-
-    // ---- prunedCids unpin (Plan 47-02 / REQ-4) ----
-
-    function makeUpdateParams() {
-      return {
-        ctx: {
-          apiUrl: 'http://localhost:3000',
-          getAccessToken: async () => 'token',
-        },
-        folderKey: new Uint8Array(32).fill(1),
-        ownerPublicKey: new Uint8Array(33).fill(3),
-        recipientPublicKey: new Uint8Array(33).fill(4),
-        shareId: 'share-123',
-        addShareKeysFn: vi.fn().mockResolvedValue(undefined),
-        filePointer: {
-          type: 'file' as const,
-          id: 'f1',
-          name: 'test.txt',
-          fileMetaIpnsName: 'k51fileipns',
-          ipnsPrivateKeyEncrypted: 'enc',
-          createdAt: 1000,
-          modifiedAt: 1000,
-        },
-        newContent: new Uint8Array([10, 20, 30]),
-        getFileIpnsKeyFn: vi.fn().mockResolvedValue(new Uint8Array(64).fill(0x88)),
-      };
+    } catch (e) {
+      caught = e;
     }
+    expect(caught instanceof CannotWriteUntilRefetchError).toBe(true);
+    if (caught instanceof CannotWriteUntilRefetchError) {
+      expect(caught.code).toBe('CANNOT_WRITE_UNTIL_REFETCH');
+    }
+  });
 
-    it('unpins each pruned CID returned by updateFileMetadata', async () => {
-      (updateFileMetadata as Mock).mockResolvedValueOnce({
-        ipnsName: 'k51fileipns',
-        metadataCid: 'QmNewMeta',
-        newSequenceNumber: 2n,
-        prunedCids: ['cidX', 'cidY'],
-      });
+  it('no grace-period / notification / pending-rekey added (only typed error)', () => {
+    const err = new CannotWriteUntilRefetchError('k51test');
+    // Verify only the expected properties exist — no retry/notification state
+    const extraKeys = Object.keys(err).filter(
+      (k) => !['name', 'message', 'code', 'stack'].includes(k)
+    );
+    expect(extraKeys).toHaveLength(0);
+  });
+});
 
-      const params = makeUpdateParams();
-      await updateSharedFile(params);
+// ===========================================================================
+// Section 5: updateSharePermission (unchanged from Phase 62)
+// ===========================================================================
 
-      // Flush the fire-and-forget unpin microtasks
-      await Promise.resolve();
-      await Promise.resolve();
+describe('updateSharePermission', () => {
+  it('calls the provided updatePermissionFn with correct params', async () => {
+    const updateFn = vi.fn().mockResolvedValue(undefined);
 
-      expect(unpinFromIpfs).toHaveBeenCalledTimes(2);
-      expect(unpinFromIpfs).toHaveBeenCalledWith(params.ctx, 'cidX');
-      expect(unpinFromIpfs).toHaveBeenCalledWith(params.ctx, 'cidY');
+    await updateSharePermission({
+      shareId: 'share-456',
+      permission: 'write',
+      encryptedIpnsKey: 'wrapped-key',
+      updatePermissionFn: updateFn,
     });
 
-    it('does not throw when an unpin fails (e.g. Phase-42 server 403 for a non-owned CID)', async () => {
-      (updateFileMetadata as Mock).mockResolvedValueOnce({
-        ipnsName: 'k51fileipns',
-        metadataCid: 'QmNewMeta',
-        newSequenceNumber: 2n,
-        prunedCids: ['cidX'],
-      });
-      (unpinFromIpfs as Mock).mockRejectedValueOnce(new Error('403 Forbidden'));
-      const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
-      const params = makeUpdateParams();
-
-      // Must resolve (not reject) even though the unpin rejects
-      await expect(updateSharedFile(params)).resolves.toBeUndefined();
-
-      // Flush the fire-and-forget .catch so its rejection is handled (no unhandled rejection)
-      await Promise.resolve();
-      await Promise.resolve();
-
-      expect(unpinFromIpfs).toHaveBeenCalledWith(params.ctx, 'cidX');
-      expect(consoleWarn).toHaveBeenCalled();
-      consoleWarn.mockRestore();
-    });
-
-    it('does not unpin when there are no pruned CIDs', async () => {
-      (updateFileMetadata as Mock).mockResolvedValueOnce({
-        ipnsName: 'k51fileipns',
-        metadataCid: 'QmNewMeta',
-        newSequenceNumber: 2n,
-        prunedCids: [],
-      });
-
-      await updateSharedFile(makeUpdateParams());
-
-      await Promise.resolve();
-
-      expect(unpinFromIpfs).not.toHaveBeenCalled();
+    expect(updateFn).toHaveBeenCalledWith('share-456', {
+      permission: 'write',
+      encryptedIpnsKey: 'wrapped-key',
     });
   });
 
-  // ---------- updateSharePermission ----------
+  it('calls without encryptedIpnsKey when not provided', async () => {
+    const updateFn = vi.fn().mockResolvedValue(undefined);
 
-  describe('updateSharePermission', () => {
-    it('calls the provided updatePermissionFn with correct params', async () => {
-      const updateFn = vi.fn().mockResolvedValue(undefined);
-
-      await updateSharePermission({
-        shareId: 'share-456',
-        permission: 'write',
-        encryptedIpnsKey: 'wrapped-key',
-        updatePermissionFn: updateFn,
-      });
-
-      expect(updateFn).toHaveBeenCalledWith('share-456', {
-        permission: 'write',
-        encryptedIpnsKey: 'wrapped-key',
-      });
+    await updateSharePermission({
+      shareId: 'share-456',
+      permission: 'read',
+      updatePermissionFn: updateFn,
     });
 
-    it('calls without encryptedIpnsKey when not provided', async () => {
-      const updateFn = vi.fn().mockResolvedValue(undefined);
-
-      await updateSharePermission({
-        shareId: 'share-456',
-        permission: 'read',
-        updatePermissionFn: updateFn,
-      });
-
-      expect(updateFn).toHaveBeenCalledWith('share-456', {
-        permission: 'read',
-        encryptedIpnsKey: undefined,
-      });
+    expect(updateFn).toHaveBeenCalledWith('share-456', {
+      permission: 'read',
+      encryptedIpnsKey: undefined,
     });
   });
 });
