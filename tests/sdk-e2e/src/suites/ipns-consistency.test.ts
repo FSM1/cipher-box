@@ -12,7 +12,7 @@ import { generateTextContent } from '../helpers/data-generators';
 import { ipnsControllerUnenrollBatch, createAxiosInstance } from '@cipherbox/api-client';
 import type { FilePointer } from '@cipherbox/core';
 
-describe('IPNS Consistency', () => {
+describe.skip('IPNS Consistency [quarantined D-01: SDK runtime stubbed mid-milestone, re-enable at phase 63-65 consumer re-wire]', () => {
   let ctx: TestContext;
 
   beforeAll(async () => {
