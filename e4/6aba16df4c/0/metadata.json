@@ -1,0 +1,231 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "e46aba16df4c",
+  "session_id": "b138c49b-687f-49bd-aa30-ffb4dde5e4e5",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-29T07:47:07.180031Z",
+  "branch": "feat/read-chain-navigation-and-rotation-core",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "packages/sdk-core/src/share/grant.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "4c241e0a8e62",
+  "token_usage": {
+    "input_tokens": 19903,
+    "cache_creation_tokens": 996157,
+    "cache_read_tokens": 44518890,
+    "output_tokens": 232118,
+    "api_call_count": 155
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_013QQzgxUHQN245qBmhyghRw",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "4c241e0a8e62",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 41,
+        "end": 42,
+        "entry_ids": [
+          "fe8ef216-dd96-4b2f-bf2e-5d4876997fd9"
+        ],
+        "tool_use_id": "toolu_013QQzgxUHQN245qBmhyghRw"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_013QQzgxUHQN245qBmhyghRw"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01SKZ2doAKEneeyZP8ntcsd9",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "4c241e0a8e62",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 284,
+        "end": 285,
+        "entry_ids": [
+          "1bbf609c-3b67-4e41-bccb-0dac5c91e156"
+        ],
+        "tool_use_id": "toolu_01SKZ2doAKEneeyZP8ntcsd9"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01SKZ2doAKEneeyZP8ntcsd9"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01BQZ8QErcJYYYmTXhc9bZXr",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "4c241e0a8e62",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 594,
+        "end": 595,
+        "entry_ids": [
+          "6dc4a5e9-ec97-4340-874b-4e1366393c74"
+        ],
+        "tool_use_id": "toolu_01BQZ8QErcJYYYmTXhc9bZXr"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01BQZ8QErcJYYYmTXhc9bZXr"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ship-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "summary": {
+    "intent": "Autonomously plan, execute, and ship Phase 63 (Read-Chain Navigation and Rotation Core) of CipherBox while the user was AFK, running the full GSD pipeline: plan-phase → execute-phase → ship-phase.",
+    "outcome": "Phase 63 fully planned (7 plans, 4 waves, plan-checker PASSED iteration 2), executed (all 7 plans committed, sdk-core 261 passed, sdk 169 passed, live e2e round-trip passed), verified (5/5 must-haves), secured (27/27 threats closed), and PR #579 opened. Ship pipeline was 9/10 complete — CodeRabbit PR review thread resolution was in-flight at transcript end.",
+    "learnings": {
+      "repo": [
+        "The repo squash-merges — PR title is the only commit subject that reaches release-please; individual branch commit subjects with parens in the description don't affect type parsing, so filter-branch reword is unnecessary.",
+        "sdk-core has no `typecheck` script; `build` runs `tsup && tsc -p tsconfig.build.json` and is the real type gate. Plans referencing `typecheck` must be redirected.",
+        "Port 3000 with `/health` endpoint; CI and plans poll it with `curl -fsS http://localhost:3000/health` — use a bounded health-poll loop, not `sleep 12`.",
+        "`gh pr edit` fails on this repo (Projects-classic GraphQL mutation incompatibility) — patch the PR body via `env -u GITHUB_TOKEN gh api -X PATCH repos/FSM1/cipher-box/pulls/<N> -F body=@file`.",
+        "GitHub release bot pushes a `chore(release)` commit to the feature branch immediately after `gh pr create` — must `git fetch` + rebase before any further push or it's rejected.",
+        "The GSD commit helper reports `commit_failed` as a false-negative; commits actually land. Always verify with `git log --oneline -1`, never blindly retry.",
+        "husky pre-commit hooks are slow and regularly exceed the default 2-minute bash timeout — use explicit longer timeouts for git commit commands.",
+        "All 6 callers of `updateFolderMetadataAndPublish` omit `nodeId`/`nodeGeneration`, causing every folder metadata update to mint a fresh UUID and reset generation to 0 — breaks node identity continuity.",
+        "CodeRabbit bundles findings in both the COMMENTED review body AND as separate inline review threads — must fetch both via REST and GraphQL to get the full set.",
+        "89 sdk-e2e tests are intentionally quarantined since Phase 62 under `D-01: SDK runtime stubbed mid-milestone`; re-enable spanning phases 63-65. The Phase-63 deliverable was a single focused test, not lifting the quarantine."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/rotation/engine.ts",
+          "line": 329,
+          "end_line": 330,
+          "finding": "Placeholder `new Uint8Array(32)` (all-zeros) passed as `writeKey` to `sealNode`. Safe in Phase 63 because `unsealNode` without a writeKey produces a node with no `writeBody` which `sealNode` skips at `seal.ts:118`. Latent risk: if Phase 65+ calls this path on a node with a writeBody before wiring the real key, the write body reseals under all-zeros."
+        },
+        {
+          "path": "packages/sdk-core/src/share/navigate.ts",
+          "line": 151,
+          "end_line": 151,
+          "finding": "Uses `childRef.generation` (parent-mirror value), never `childPublished.generation`. Critical generation-source rule per D-06 — the generation must come from the parent's sealed child ref, not the child's published envelope."
+        },
+        {
+          "path": "packages/sdk-core/src/share/rewrap.ts",
+          "line": 43,
+          "end_line": 48,
+          "finding": "`plainKey.fill(0)` present in both success (L43) and catch (L48) paths — intermediate key always zeroed. grant.ts L157 comment incorrectly said 'finally block'; actual implementation uses try/catch."
+        },
+        {
+          "path": "packages/sdk-core/src/rotation/scope.ts",
+          "line": 98,
+          "end_line": 112,
+          "finding": "Anti-malicious-relay guard: both the relay grant set AND `localGrantRecord` are checked independently before triggering rotation. SC#4 zero-rotation invariant: returns 'no-rotation' without calling `deps.rotate` when no covering grant found."
+        },
+        {
+          "path": "packages/core/src/node/types.ts",
+          "line": 59,
+          "end_line": 59,
+          "finding": "`NodeContent.fileIv` is typed as `string` (hex), validated by codec. CodeRabbit suggestion to change to `Uint8Array` was a false positive — would violate the type contract and break decode."
+        },
+        {
+          "path": "packages/sdk-core/src/__tests__/folder.test.ts",
+          "line": 114,
+          "end_line": 878,
+          "finding": "Had 4 stale `describe.skip('...TODO(phase 63)')` blocks testing the retired `FolderChild`/`encryptFolderMetadata` API under `@ts-nocheck`. All superseded by new active Phase-63 describe blocks with `SealedChildRef` API. Safely deleted in cleanup commit."
+        }
+      ],
+      "workflow": [
+        "Sequential execution in the main tree (no worktrees) is safer for phases with tight cross-plan coupling and shared test files — avoids node_modules/api:generate leaks documented in project memory.",
+        "Running the sdk-core build as an early integration gate between waves is cheap and catches type errors before they compound. Run after Wave 1 and before Wave 3 as checkpoints.",
+        "Live e2e suites catch bugs that unit/mock suites miss — 63-07 caught a real engine.ts BFS bug where child `rotateOne` calls received the root's new readKey instead of each child's own derived readKey.",
+        "Weekly usage limits can hit mid-execution during long autonomous runs. If it hits near the stated reset time (7am Berlin), retry the failed plan immediately — the tree is left clean on limit-hit (subagent never starts editing).",
+        "When the GSD commit helper reports `commit_failed`, verify with `git log --oneline -1` before taking any action. Re-attempting the commit would create a duplicate.",
+        "The `pr-release-preview` CI gate parses commit types (feat/fix/test/etc.) from individual commits, not just the PR title. As long as types are valid conventional prefixes, parens in the description text don't trigger rejection.",
+        "CodeRabbit re-reviews fix commits pushed after PR creation — triage the second-wave findings with the same operating rule; expect it to surface new issues not in the CLI review."
+      ]
+    },
+    "friction": [
+      "Weekly usage limit hit mid-execution during plan 63-06, interrupting the phase. The limit reset ~1 minute later (7am Berlin), but required detecting the interruption, assessing tree state, and retrying.",
+      "sdk-core `typecheck` script referenced in multiple plans doesn't exist — all three plans (63-05, 63-06) had to be redirected to `build` at runtime.",
+      "husky pre-commit hooks regularly exceed 2-minute bash timeout, causing git commit calls to appear to fail (they actually succeed). Required adding explicit longer timeouts and always verifying with `git log`.",
+      "`git push` and `git fetch` are blocked in the sandbox; required sandbox-disabled execution for every push operation.",
+      "`gh pr edit` is broken for this repo due to Projects-classic GraphQL incompatibility — required workaround via `gh api -X PATCH` with a body file for every PR body update.",
+      "CodeRabbit PR review GraphQL `reviewThreads` query returned 0 results when filtering by author, requiring debugging and a fallback approach to fetch threads.",
+      "GitHub release bot pushes `chore(release)` immediately after `gh pr create` — any push without fetching first is rejected; requires a `git fetch` + rebase step that wasn't originally in the plan."
+    ],
+    "open_items": [
+      "FLAG-63-U2 / TODO: `moveItem` preserves `SealedChildRef` sealed under source parent readKey — a grantee navigating via the destination path fails AAD authentication. §3.5 of the design specifies a re-seal under the destination parent readKey. Deferred to Phase 64/68. Todo: `.planning/todos/pending/2026-06-29-move-within-scope-reseal-child-readkey.md`",
+      "FLAG-63-U1 / TODO: Placeholder `new Uint8Array(32)` writeKey in `engine.ts` L329-330 — latent risk for Phase 65+ if the write body path is reached before the real key is wired. Todo: `.planning/todos/pending/2026-06-29-rotateone-placeholder-writekey-phase65.md`",
+      "TODO: Rotation engine BFS/job-record soundness — parallel write-back on BFS frontier (all children see same readKey prime before write-back completes), job-record ordering (grant record must precede IPNS seal), resume/idempotency on partial failure, key zeroization in catch paths. Deferred to Phase 64. Todo: `.planning/todos/pending/2026-06-29-rotation-engine-walk-soundness-phase64.md`",
+      "TODO: `updateFolderMetadataAndPublish` doesn't require/validate `nodeId`/`nodeGeneration` — all 6 callers omit them, causing every update to mint a fresh UUID and reset generation to 0. CRITICAL for node identity stability. Deferred. Todo: `.planning/todos/pending/2026-06-29-update-folder-metadata-preserve-node-identity.md`",
+      "TODO: SDK client move publish durability — `publishFolderState` for destination folder called before removing the item from the source folder; a crash between the two steps leaves the item in both locations. Deferred to Phase 64. Todo: `.planning/todos/pending/2026-06-29-sdk-client-move-publish-durability.md`",
+      "Phase-64 seams in `engine.ts`: 4 functions throwing 'not implemented — phase 64' (`mergeConcurrentChildren`, batch rotation, multi-child BFS write-back, job persistence) — waiting to be filled in Phase 64.",
+      "89 sdk-e2e tests remain quarantined under D-01 (SDK runtime stubbed mid-milestone) since Phase 62 — to be re-enabled progressively across phases 63-65.",
+      "PR #579 CodeRabbit review thread resolution was in-flight at transcript end (3 nitpick fixes being applied by fixer agent, 10 threads to resolve). Merge decision left to user.",
+      "3 PR-level CodeRabbit nitpick fixes (grant.ts rootGeneration validation, e2e Phase-64 stub assertion, navigate.test fresh mock key buffer) were being applied by a fixer agent when the transcript ended — commit and push not yet confirmed."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-29T07:45:24.93199Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 21,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 21,
+    "total_lines_changed": 31,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
