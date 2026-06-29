@@ -1,0 +1,135 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "2471de4a4926",
+  "session_id": "b138c49b-687f-49bd-aa30-ffb4dde5e4e5",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-29T04:45:39.577274Z",
+  "branch": "feat/read-chain-navigation-and-rotation-core",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "a9ed4044554d",
+  "token_usage": {
+    "input_tokens": 13501,
+    "cache_creation_tokens": 438897,
+    "cache_read_tokens": 12447681,
+    "output_tokens": 77729,
+    "api_call_count": 72
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_013QQzgxUHQN245qBmhyghRw",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "a9ed4044554d",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 41,
+        "end": 42,
+        "entry_ids": [
+          "fe8ef216-dd96-4b2f-bf2e-5d4876997fd9"
+        ],
+        "tool_use_id": "toolu_013QQzgxUHQN245qBmhyghRw"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_013QQzgxUHQN245qBmhyghRw"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01SKZ2doAKEneeyZP8ntcsd9",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "a9ed4044554d",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 284,
+        "end": 285,
+        "entry_ids": [
+          "1bbf609c-3b67-4e41-bccb-0dac5c91e156"
+        ],
+        "tool_use_id": "toolu_01SKZ2doAKEneeyZP8ntcsd9"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01SKZ2doAKEneeyZP8ntcsd9"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "summary": {
+    "intent": "Plan and execute phase 63 (Read-Chain Navigation and Rotation Core) of the CipherBox project, then ship it via /ship-phase 63.",
+    "outcome": "Planning completed fully (7 plans in 4 waves, verification passed on iteration 2, all 7 requirements and 10 decisions covered). Execution reached wave 2, plan 63-05 in progress at transcript end; /ship-phase 63 not yet reached.",
+    "learnings": {
+      "repo": [
+        "sdk-core has no `typecheck` script — type checking is done via `build` which runs `tsup && tsc -p tsconfig.build.json`; plans 63-05 and 63-06 incorrectly reference a `typecheck` script that must be redirected to `build`",
+        "The GSD commit helper consistently reports a false-negative ('needs human verification') when `previous_status: human_needed` is in frontmatter history — verified clean state via `git log` instead",
+        "Worktrees are unsafe for this phase due to shared `folder.test.ts` between 63-01/63-04, api:generate leaks, and node_modules conflicts; planner explicitly recommended sequential in-tree execution",
+        "Phase 63 branch `feat/read-chain-navigation-and-rotation-core` already existed from discuss-phase; executor must NOT re-fork off main to avoid losing planning commits",
+        "CI health poll uses `curl -fsS http://localhost:3000/health` on port 3000 — mirrors the pattern that replaced fragile `sleep 12` in 63-07",
+        "The `.planning/codebase/` map drift is non-blocking at plan time when CONTEXT.md + RESEARCH.md carry precise, verified implementation-site references",
+        "API-SURFACE regeneration returned 0 symbols for sdk-core (backend crypto module with no exported API surface to map)"
+      ],
+      "code": [
+        {
+          "path": ".planning/phases/63-read-chain-navigation-and-rotation-core/63-07-PLAN.md",
+          "finding": "Replaced fragile `sleep 12` with bounded health-poll loop mirroring CI pattern (`curl -fsS http://localhost:3000/health`)"
+        },
+        {
+          "path": ".planning/phases/63-read-chain-navigation-and-rotation-core/63-RESEARCH.md",
+          "finding": "Open Questions section required `(RESOLVED)` markers to pass plan-checker blocker; questions were substantively answered in research body but heading was missing the marker"
+        },
+        {
+          "path": ".planning/phases/63-read-chain-navigation-and-rotation-core/63-VALIDATION.md",
+          "finding": "VALIDATION.md per-task map must be filled with actual task IDs and automated verify commands during planning, not left as template skeleton — checker flags this as a warning"
+        }
+      ],
+      "workflow": [
+        "GSD plan-checker iteration loop: trivial deterministic fixes (formatting/tracking) can be applied directly by orchestrator without replanning, then re-spawning the independent checker preserves gate integrity",
+        "Plan-checker findings categories: coverage/decision audit passes are the meaningful gates; artifact formatting issues (RESEARCH.md markers, VALIDATION.md fill) are fixable without design judgment",
+        "Commit signing should be verified disabled before autonomous AFK runs to prevent biometric prompt hangs; `git config --local commit.gpgsign false` is the safe local override",
+        "Nyquist VALIDATION.md body is populated during planning (step 5.5 writes frontmatter only; per-task map filled after plans exist with actual task IDs and automated commands)",
+        "Sequential in-tree execution is preferred over worktrees when plans share test files or have barrel/build-order dependencies"
+      ]
+    },
+    "friction": [
+      "GSD commit helper false-negative on `phase complete` when `previous_status: human_needed` is in frontmatter history — required manual `git log` verification on every commit (occurred 3+ times)",
+      "Plans 63-05 and 63-06 reference a non-existent `typecheck` script in sdk-core — executor must know to redirect to `build`; this is a plan artifact quality issue that slipped past the checker",
+      "Plan-checker required two iterations (1 blocker, 2 warnings on first pass) before passing — all findings were artifact/formatting issues rather than plan design problems",
+      "API-SURFACE regeneration returned empty (0 symbols) for sdk-core, providing no value for this phase's intel gate step"
+    ],
+    "open_items": [
+      "Wave 2 plan 63-05 execution was in progress at transcript end (`hasCoveringGrant` + zero-rotation invariant + sdk-core barrel) — not yet confirmed complete",
+      "Wave 3 (63-06: delete `reWrapForRecipients`, rewire sdk add-item) and Wave 4 (63-07: live sdk-e2e round-trip) remain unexecuted",
+      "/ship-phase 63 (PR creation, review, merge prep) not yet run",
+      "4 named Phase-64 seams were introduced in 63-03 engine.ts — these are intentional stubs that Phase 64 must implement",
+      "Stale `.planning/codebase/` map flagged by drift gate — non-blocking at plan time but should be refreshed before or during Phase 64 planning"
+    ]
+  }
+}
