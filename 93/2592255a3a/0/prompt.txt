@@ -243,3 +243,7 @@ Per-item disposition:
 - Commit: `1163b63f3`</result>
 <usage><subagent_tokens>61317</subagent_tokens><tool_uses>22</tool_uses><duration_ms>260539</duration_ms></usage>
 </task-notification>
+
+---
+
+/resolve-pr-reviews
