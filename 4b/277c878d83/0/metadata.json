@@ -1,0 +1,228 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "4b277c878d83",
+  "session_id": "25bb1960-4e3b-4f74-9875-6a02898bfffc",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-29T20:03:29.268309Z",
+  "branch": "feat/rotation-soundness-revocation-guarantees",
+  "checkpoints_count": 2,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "949a5088e666",
+  "token_usage": {
+    "input_tokens": 16548,
+    "cache_creation_tokens": 2013471,
+    "cache_read_tokens": 36482774,
+    "output_tokens": 194740,
+    "api_call_count": 142
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01YNQc7xEBNeSchdQ4D25b6D",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "949a5088e666",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 43,
+        "end": 44,
+        "entry_ids": [
+          "39a4e40a-6e5c-4b74-a071-2dcb66c4ef28"
+        ],
+        "tool_use_id": "toolu_01YNQc7xEBNeSchdQ4D25b6D"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01YNQc7xEBNeSchdQ4D25b6D"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01SKWu9Myx8B529ACtAoiDzT",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "949a5088e666",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 346,
+        "end": 347,
+        "entry_ids": [
+          "7e054f66-7063-464a-8074-7fede44d4939"
+        ],
+        "tool_use_id": "toolu_01SKWu9Myx8B529ACtAoiDzT"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01SKWu9Myx8B529ACtAoiDzT"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01ASzfmwDJaDTSuhjjHP7838",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "949a5088e666",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 749,
+        "end": 750,
+        "entry_ids": [
+          "d72f500c-f088-4b75-a12b-95bf117b8cbd"
+        ],
+        "tool_use_id": "toolu_01ASzfmwDJaDTSuhjjHP7838"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01ASzfmwDJaDTSuhjjHP7838"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ship-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Plan, execute, and ship Phase 64 (Rotation Soundness — Revocation Guarantees) for CipherBox, covering five bugs in the key-rotation engine (D-01 through D-07), four seam fills, and an sdk-e2e crash-safety gate.",
+    "outcome": "All 8 plans across 6 waves were fully executed with TDD throughout; the ship-phase pipeline ran through verify (passed), secure (SECURED), and simplify (stale-comment cleanup) before the transcript ends mid-commit — the PR had not yet been opened.",
+    "learnings": {
+      "repo": [
+        "Test files are excluded from tsconfig.build.json, so type errors in *.test.ts files are invisible to CI; only explicit `tsc --noEmit` (not tsup/vitest) catches them.",
+        "tsup (esbuild) does not type-check during build — it only bundles. Always run `tsc --noEmit` separately to surface real type errors.",
+        "vi.clearAllMocks() does NOT drain mockResolvedValueOnce queues; leftover Once values contaminate subsequent tests. Use vi.resetAllMocks() in beforeEach when using Once mocks.",
+        "The GSD commit helper reliably reports `commit_failed` as a false-negative — always verify with `git log --oneline -1`, never blindly retry.",
+        "Running a background git commit while a subagent also commits causes lint-staged to stash-pop into conflict, surfacing STATE.md merge markers and unrelated stash garbage as untracked files. Never overlap background git operations.",
+        "The design's crash-recovery model (§4.5) is double-rotation, not no-double-bump: 'an extra rotation only strengthens revocation.' A success criterion in the ROADMAP that said 'without double-bumping' directly contradicted the design.",
+        "mergeChildren uses remote-wins policy, which can downgrade an already-rotated child's readKeySealed on a CAS-409 re-merge (the concurrent add survives but the child becomes un-navigable). Local-wins for known-rotated refs is the correct policy.",
+        "The PLACEHOLDER_WRITE_KEY remaining in sealNode write-body calls (role 0x04) is legitimate Phase-65 scope — it is NOT the D-01 fail-closed bug, which applies only to the IPNS publish key.",
+        "verifySubtreeClean is only invoked when completedNodeIds is non-empty; a genuine fresh-record resume (empty set) bypasses it and hits AEAD failure on the already-rotated root. True mid-walk crash recovery requires the Phase-68 durable floor."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/rotation/engine.ts",
+          "line": 344,
+          "end_line": 350,
+          "finding": "D-02 bug: sealChildReadKey was called with the child's own pre-rotation key (misnomer `parentReadKey`) instead of the parent's new readKey'. Fixed in 64-04 to re-seal out-of-band in the BFS caller under the parent's NEW readKey'."
+        },
+        {
+          "path": "packages/sdk-core/src/rotation/engine.ts",
+          "line": 366,
+          "end_line": 374,
+          "finding": "D-01 fail-closed guard: throws if nodeIpnsPrivateKey is absent before publish. The PLACEHOLDER_WRITE_KEY at L394 (write-body seal role 0x04) is a separate, intentional Phase-65 deferral."
+        },
+        {
+          "path": "packages/sdk-core/src/rotation/engine.ts",
+          "line": 386,
+          "finding": "D-07 ordering bug: completedNodeIds.add fired before reMintGrantsRootedAt (L391). Must be swapped so a crash between them doesn't mark a node complete without re-minting grants."
+        },
+        {
+          "path": "packages/sdk-core/src/rotation/engine.ts",
+          "line": 458,
+          "end_line": 462,
+          "finding": "D-07 resume guard short-circuited the walk without calling verifySubtreeClean, allowing a previously-complete node to be reported done without confirming subtree convergence."
+        },
+        {
+          "path": "packages/sdk-core/src/rotation/engine.ts",
+          "line": 600,
+          "end_line": 611,
+          "finding": "Correct ordering after D-07 fix: reMintGrantsRootedAt (L600) must complete before completedNodeIds.add (L611), with the catch at L621 rethrowing before L611 so crashes don't mark nodes done."
+        },
+        {
+          "path": "packages/sdk-core/src/rotation/engine.ts",
+          "line": 643,
+          "finding": "verifySubtreeClean is only called when completedNodeIds is non-empty; a fresh-record resume (empty set) never enters the verification path, causing AEAD failure at the already-rotated root."
+        },
+        {
+          "path": "packages/sdk-core/src/rotation/engine.ts",
+          "line": 660,
+          "end_line": 681,
+          "finding": "D-02 fix location: the out-of-band parent re-seal is in the BFS caller (rotateReadFromNode), not in rotateOne. sealChildReadKey(result.childReadKey, parentState.parentNewReadKey, ...) writes back to the parent's SealedChildRef."
+        },
+        {
+          "path": "packages/sdk-core/src/rotation/engine.ts",
+          "line": 877,
+          "end_line": 909,
+          "finding": "Convergence guard: currentPub.generation > item.enqueuedGeneration skips rotateOne for frontier children. This only covers children with a parent mirror; the root has no parent mirror so it can never be skipped — requiring the Phase-68 durable floor for mid-walk resume."
+        },
+        {
+          "path": "packages/sdk-core/src/folder/registration.ts",
+          "line": 174,
+          "end_line": 175,
+          "finding": "D-06 bug: id: params.nodeId ?? crypto.randomUUID() and generation: params.nodeGeneration ?? 0 silently broke AAD stability on every updateFolderMetadataAndPublish call site that omitted these fields. Fixed to require them as non-optional."
+        },
+        {
+          "path": "packages/sdk-core/src/__tests__/folder/registration.test.ts",
+          "line": 80,
+          "finding": "@ts-expect-error directive was placed above `await expect(` rather than directly above the erroring multi-line call, causing it to be 'unused' while the real TS2345 fired below. Directives must sit on the line immediately preceding the error."
+        },
+        {
+          "path": "packages/sdk-core/src/__tests__/folder/move-reseal.test.ts",
+          "line": 1,
+          "finding": "CryptoError was imported from @cipherbox/core (wrong) instead of @cipherbox/crypto (correct). The test passed at runtime only because toThrow(undefined) matches any throw — the wrong import was masked until tsc --noEmit ran."
+        }
+      ],
+      "workflow": [
+        "Never run background git commits concurrently with subagent commits — lint-staged's stash/pop mechanism produces merge conflicts and surfaces untracked garbage from old stashes.",
+        "TypeScript incremental build artifacts (.tsbuildinfo) are left untracked between executor runs and must be cleaned manually to avoid accidental commits by subsequent executors.",
+        "The GSD plan-checker enforces two doc-level gates: RESEARCH.md Open Questions must be marked (RESOLVED) and VALIDATION.md must have a concrete per-task map (not TBD placeholders) before execution can proceed.",
+        "When a ROADMAP success criterion contradicts the design document, the design document wins — update the SC rather than implementing an over-constrained guard that silently weakens the test.",
+        "sdk-e2e tests can silently weaken their assertions to pass when the underlying mechanism isn't fully implemented; always scrutinize documented deviations in SUMMARY files rather than accepting a green suite at face value.",
+        "Pre-execution: confirm the API dev server is up and healthy before dispatching the sdk-e2e wave — docker-compose healthy alone is not sufficient.",
+        "The GSD false-negative commit pattern: lint-staged runs markdownlint + prettier successfully, the commit lands, but the gsd-tools wrapper returns commit_failed. git log is authoritative."
+      ]
+    },
+    "friction": [
+      "lint-staged stash-pop conflict: running a background commit while a subagent also committed caused STATE.md to enter merge-conflict state and surfaced untracked directories from an old phase-3 stash as apparent working-tree noise.",
+      "tsup builds mask type errors entirely — two categories of phase-64-introduced test type errors (misplaced @ts-expect-error, wrong CryptoError import source) were invisible until an explicit tsc --noEmit was added to the executor prompt mid-phase.",
+      "vi.clearAllMocks() contaminated D-02/D-09 tests via leftover mockResolvedValueOnce queues from a failed RED test run; required switching to vi.resetAllMocks() as a Rule 1 deviation.",
+      "Plan-checker first pass returned 1 blocker + 2 warnings, requiring a planner revision loop (SendMessage to resume the planner agent) and a second checker run before proceeding to execution.",
+      "ROADMAP SC#4 ('without double-bumping') directly contradicted design §4.5 ('double-rotation only strengthens revocation'), which wasn't caught until the sdk-e2e executor hit the corner case and reported it as a deviation.",
+      "The GSD commit-helper false-negative fires consistently and requires a separate git log verification step every time — adds cognitive overhead across many commits.",
+      "API-surface regen produced 0 symbols (stale/empty tool), providing no value for this phase and creating a misleading artifact."
+    ],
+    "open_items": [
+      "CAS-409 merge remote-wins downgrades rotated child's readKeySealed on concurrent-add: fix is local-wins for known-rotated child refs during merge. Todo: .planning/todos/pending/2026-06-29-rotation-concurrent-add-merge-downgrades-rotated-child-readkey.md, targeting Phase 68.",
+      "Fresh-record resume (empty completedNodeIds) is not viable mid-walk — requires Phase-68 durable client floor (IndexedDB) to persist readKeyPrime across crash. SC#4's 'without double-bumping' wording should be corrected in the ROADMAP to match §4.5 design intent. Todo: rotation-fresh-record-resume-and-sc4-double-bump.md.",
+      "contentRekeyPending marker and lazy file re-encryption wiring deferred to Phase 65 (node/v3 schema frozen this phase).",
+      "Live shares API grant wiring (updateGrantFn/deleteGrantFn connected to real persistence) deferred to Phase 66 (schema cutover).",
+      "rootReadKey is never zeroed after use in rotateReadFromNode — only readKeyPrime and item.nodeReadKey are explicitly zeroed. The security audit classified this as T-64-06f mitigated but the rootReadKey gap was noted.",
+      "Pre-existing test type errors: 12 errors in cas.test.ts (from Phase prior) and 11 in grant.test.ts (Phase 63) are invisible to CI because test files are excluded from tsconfig.build.json.",
+      "Ship-phase pipeline incomplete at transcript end: verification and security docs committed, simplify done, but PR not yet opened — steps 6-10 (CodeRabbit CLI, commit reword, gh pr create, review resolution) still pending."
+    ]
+  }
+}
