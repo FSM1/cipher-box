@@ -20,5 +20,17 @@
     "tests/e2e-helpers/**/*.ts",
     "scripts/gen-ipns-verify-vectors.ts",
     "scripts/bench-ipns-verify.ts"
+  ],
+  // Phase 62 (unified Node codec) retired FilePointer/FolderEntry and the single
+  // rootFolderKey. These FilePointer-era E2E helper scripts operate on the old
+  // model; their new-model equivalents depend on read-chain navigation that is
+  // stubbed until the phase 63-65 consumer re-wire, so they cannot be migrated
+  // yet. Quarantined from the compile gate until then (see .planning/todos);
+  // re-add once the helpers are rewritten against the Node/SealedChildRef model.
+  "exclude": [
+    "packages/sdk-core/scripts/edit-filepointer.mts",
+    "packages/sdk-core/scripts/rename-folder.mts",
+    "packages/sdk-core/scripts/verify-filepointer.mts",
+    "tests/desktop-e2e/scripts/bump-ipns-sequence.ts"
   ]
 }
