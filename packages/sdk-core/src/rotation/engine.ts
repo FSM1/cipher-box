@@ -590,11 +590,12 @@ export async function rotateOne(
       baseData: published,
     });
 
-    // Step 9: Mark N done in the job record.
-    jobRecord.completedNodeIds.add(nodeId);
-
     // Step 9 (continued): SEAM — re-mint inner grants only when supplied (D-01 conditional).
     // Clean happy-path (no inner grants) NEVER invokes this seam.
+    // D-07: reMintGrantsRootedAt runs BEFORE completedNodeIds.add(nodeId) so that a
+    // failure during re-mint does NOT silently skip the node on resume (the add must be
+    // the last mutation — if reMint throws, the catch below zeros readKeyPrime and
+    // re-throws, and nodeId is never written to completedNodeIds).
     if (innerGrants && innerGrants.length > 0) {
       await reMintGrantsRootedAt(
         nodeId,
@@ -605,6 +606,9 @@ export async function rotateOne(
         grantCallbacks
       );
     }
+
+    // Step 9: Mark N done in the job record (D-07: AFTER reMintGrantsRootedAt succeeds).
+    jobRecord.completedNodeIds.add(nodeId);
 
     return {
       skipped: false,
@@ -1010,8 +1014,20 @@ export async function rotateReadFromNode(params: RotationParams): Promise<void> 
           enqueuedGeneration: childRef.generation,
         });
       }
+
+      // D-09 queue-key zeroization: zero the queue-derived readKey AFTER all grandchildren
+      // have been enqueued (they used it above via unsealChildReadKey). This node's
+      // item.nodeReadKey was minted by the parent's unsealChildReadKey call — the engine
+      // is the terminal owner. Do NOT zero before the grandchild enqueue loop above.
+      // Never zero caller-supplied rootReadKey — that belongs to the caller (D-09).
+      item.nodeReadKey.fill(0);
     }
   }
 
+  // Terminal status: all nodes rotated (or skipped via convergence guard).
+  // Persist the complete status so the host can safely discard the job record
+  // (Pitfall 5: never mark complete without persisting — the resumable walk gate
+  // in verifySubtreeClean relies on the persisted status being accurate).
   jobRecord.status = 'complete';
+  if (jobRecord.persistCallback) await jobRecord.persistCallback(jobRecord);
 }
