@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "b59b1e9c67c3",
+  "strategy": "manual-commit",
+  "branch": "feat/read-chain-navigation-and-rotation-core",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/b5/9b1e9c67c3/0/metadata.json",
+      "transcript": "/b5/9b1e9c67c3/0/full.jsonl",
+      "content_hash": "/b5/9b1e9c67c3/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 13079,
+    "cache_creation_tokens": 418048,
+    "cache_read_tokens": 9449003,
+    "output_tokens": 62481,
+    "api_call_count": 61
+  }
+}
