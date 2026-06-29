@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "12a1608afe91",
+  "session_id": "b58306db-a0be-4e91-8a94-7d75458e6c2e",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-29T03:02:02.383817Z",
+  "branch": "feat/read-chain-navigation-and-rotation-core",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/sdk-core/src/share/navigate.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "0d9e545748a7",
+  "checkpoint_transcript_start": 81,
+  "transcript_lines_at_start": 81,
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-29T03:02:02.379809Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 169,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 169,
+    "total_lines_changed": 169,
+    "agent_percentage": 0,
+    "metric_version": 2
+  }
+}
