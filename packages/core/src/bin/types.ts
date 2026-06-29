@@ -52,10 +52,33 @@ export type BinEntry = {
 
   /**
    * Reference to the deleted node (file or folder).
-   * Phase 65 implements bin restore as a pure re-link under the destination readKey.
-   * TODO(phase 65): bin restore is a pure re-link under destination readKey
+   * Carries id, kind, and generation — the AAD inputs for sealChildReadKey /
+   * unsealChildReadKey — so restore can re-seal the nodeReadKey under the
+   * destination parent without resolving the child's IPNS again.
    */
   nodeRef?: Node;
+
+  /**
+   * The deleted node's own 32-byte readKey, captured at addToBin time.
+   *
+   * Recovered via unsealChildReadKey from the source parent readKey at delete
+   * time. On restore, sealChildReadKey seals it under the destination parent
+   * readKey (pure re-link, design §3.10 / OQ-1 resolution). Protected at rest
+   * by the ECIES bin-blob encryption (encryptBinMetadata to owner pubkey).
+   *
+   * Wire encoding: hex string (JSON-safe). The encryptBinMetadata / decryptBinMetadata
+   * helpers handle the Uint8Array ↔ hex conversion before / after JSON serialisation.
+   */
+  nodeReadKey?: Uint8Array;
+
+  /**
+   * The deleted node's own IPNS name (k51-prefixed).
+   *
+   * Captured from the source SealedChildRef at addToBin time. Required to
+   * build the restored SealedChildRef.ipnsName on restore without source-parent
+   * access (design §3.10).
+   */
+  nodeIpnsName?: string;
 };
 
 /**
