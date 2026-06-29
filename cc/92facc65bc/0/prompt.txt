@@ -1,0 +1,135 @@
+<task-notification>
+<task-id>a7a5406c3367523ce</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/404f2777-3329-4599-ae19-feb8f3ce5e1f/tasks/a7a5406c3367523ce.output</output-file>
+<status>completed</status>
+<summary>Agent "Plan Phase 64" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>On the feature branch, no stray branch created.
+
+## PLANNING COMPLETE
+
+**Phase 64: Rotation Soundness — Revocation Guarantees** — 8 plans across 6 waves, committed (`2451e916b`). Fine granularity, TDD throughout, fill-the-seams discipline (no re-architecture). Every line number, signature, and stub verified against live code.
+
+| Plan | Wave | Req | Decisions | Summary |
+|------|------|-----|-----------|---------|
+| 64-01 | 1 | ROT-06 | D-06 | Node-identity/generation required at the seal site + 6 client.ts call sites; `moveItem` dest-parent re-seal (FLAG-63-U2) |
+| 64-02 | 1 | ROT-05 | D-06 | `mergeChildren` three-way merge (union by ipnsName, remote wins, base detects deletes) — pure TDD |
+| 64-03 | 1 | ROT-03 | D-01/D-05 | `mintFileKeyOnRotate` — mint fresh `fileKey'` (CRIT-1); ADR-0002 lazy-rekey honesty |
+| 64-04 | 2 | ROT-06 | D-01/D-02/D-09 | Fail-closed publish (delete placeholder fallback) + out-of-band parent-link re-seal under parent's NEW readKey' + batched parent-publish + `nodeKeySource` |
+| 64-05 | 3 | ROT-04 | D-04 | `reMintGrantsRootedAt` — inner-grant re-mint behind injected callbacks (mock-tested); revoked row deleted |
+| 64-06 | 4 | ROT-05 | D-09 | `mergeConcurrentChildren` — CAS-409 re-fetch + merge (HIGH-4) wired into rotateOne's merge callback |
+| 64-07 | 5 | ROT-06 | D-07/D-09 | `verifySubtreeClean` ({isDirty,frontier}) + resume-guard fix + completedNodeIds ordering + queue-key zeroization |
+| 64-08 | 6 | TEST-01 | D-01/D-02/D-03/D-07 | sdk-e2e abort-and-resume crash-safety suite (depth ≥ 2 tree, throw-after-N, fresh-resume convergence, concurrent-add) against live stack |
+
+**Wave structure:** engine.ts is a single-file bottleneck, so 64-03→04→05→06→07 run sequentially; 64-01 (sdk/registration), 64-02 (folder/merge), and 64-03 (the isolated content-key seam) parallelize in Wave 1 (disjoint files); 64-08 gates last. Same-wave file overlap is zero.
+
+**Coverage:** all five requirements (ROT-03/04/05/06, TEST-01) and all seven locked decisions (D-01..D-07, plus adopted D-09) are cited across plans. `must_haves.truths` derive from the 5 ROADMAP success criteria; `prohibitions` enforce fail-closed publishing, the caller-key zeroization invariant, and the no-barrel coverage rule. Each plan carries a STRIDE `&lt;threat_model&gt;` (T-64-xx) plus the `T-64-SC` supply-chain row (no package installs this phase per the RESEARCH legitimacy audit). Every task has `&lt;read_first&gt;` + `&lt;acceptance_criteria&gt;`; no `&lt;action&gt;` contains fenced code.
+
+Scope guardrails honored — write-body keys (Phase 65), live `shares` schema (Phase 66), durable client floor + move-publish-ordering durability (Phase 68) are all explicitly excluded, with the fail-closed engine taking test-supplied keys via `nodeKeySource` (D-01).
+
+Plans: `/Users/myankelev/Code/random/cipher-box/.planning/phases/64-rotation-soundness-revocation-guarantees/64-0{1..8}-PLAN.md`
+
+Next: `/gsd-execute-phase 64` (Wave 1 runs 64-01, 64-02, 64-03 in parallel). Note 64-08 requires the live local API stack (`docker compose -f docker/docker-compose.yml up -d` + `pnpm --filter @cipherbox/api dev`, redis on 6380).</result>
+<usage><subagent_tokens>206332</subagent_tokens><tool_uses>43</tool_uses><duration_ms>1040783</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a09cb79f396906e54</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/404f2777-3329-4599-ae19-feb8f3ce5e1f/tasks/a09cb79f396906e54.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify Phase 64 plans" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## ISSUES FOUND
+
+**Phase:** 64 — Rotation Soundness — Revocation Guarantees
+**Plans checked:** 8
+**Issues:** 1 blocker, 2 warnings
+
+---
+
+### Blockers (must fix)
+
+**1. [research_resolution] RESEARCH.md `## Open Questions` section is not marked `(RESOLVED)`**
+
+The section header at line 571 of `64-RESEARCH.md` reads `## Open Questions` — no `(RESOLVED)` suffix, and neither question carries an inline `RESOLVED` marker. Both questions are answered in the plans (Question 1 → 64-01 adds `nodeId`/`nodeGeneration` to `FolderState`; Question 2 → 64-04 Task 2 uses a `Map&lt;parentIpnsName, parentState&gt;`), but the RESEARCH.md file itself is not marked resolved.
+
+Per the project memory convention ("Plan-checker enforces a FILLED VALIDATION.md + (RESOLVED) RESEARCH.md Open Questions") and Dimension 11, this is a blocking condition.
+
+- **Fix:** Resolve both questions inline and rename the section to `## Open Questions (RESOLVED)`.
+
+---
+
+### Warnings (should fix)
+
+**1. [verification_derivation] VALIDATION.md per-task map is a TBD placeholder**
+
+`64-VALIDATION.md` contains a single row (`TBD | TBD | TBD | ROT-03/04/05/06, TEST-01`) in the Per-Task Verification Map and `status: draft` / `nyquist_compliant: false` in the frontmatter. The Nyquist automated checks in the plans themselves all have concrete `&lt;automated&gt;` commands (no `MISSING` tags), so Dimension 8 structural checks pass. But the project memory convention requires a "filled" VALIDATION.md, and the executor will have no per-task sampling contract to follow during execution.
+
+- **Fix:** Replace the TBD row with the concrete per-task rows (the RESEARCH.md `## Validation Architecture` table at lines 611–620 already contains the content; promote it into the VALIDATION.md per-task map and set `nyquist_compliant: true` / `status: final`).
+
+**2. [task_completeness] "No double-bump in fresh RotationJobRecord resume" mechanism not pinned in 64-07**
+
+Plan 64-07 Task 1's resume guard fires when `completedNodeIds is non-empty at walk start`. D-03's crash-resume explicitly uses a FRESH `RotationJobRecord` (empty `completedNodeIds`, `status: 'pending'`). With an empty `completedNodeIds`, the guard does not fire, and the fresh re-run proceeds as a full walk — potentially double-bumping already-rotated nodes. The mechanism that prevents double-bumping under a fresh job record (presumably a per-node convergence check inside `rotateOne` comparing the current published generation against the enqueued baseline) is not described in any plan's `&lt;action&gt;` or `&lt;acceptance_criteria&gt;`.
+
+Plan 64-08 Task 2 acceptance criteria do assert "every node's generation after convergence is exactly its single-rotation value — no node is double-bumped," which will catch an implementation bug at the e2e level. But no unit-level task pins the specific guard, leaving the executor to infer the mechanism from D-07's convergence test text alone.
+
+- **Fix:** Add a sentence to 64-07 Task 1 `&lt;action&gt;` specifying how a fresh-job-record resume avoids double-bumping — e.g., "before calling `rotateOne(N)`, fetch N's current published generation; if it already exceeds the generation at which N was enqueued in this walk, skip `rotateOne` and treat N as done." Add a corresponding unit test case: "a node already at baseline+1 is not re-rotated in a fresh-job-record resume." Alternatively, if the design intent is that `verifySubtreeClean` is called regardless of `completedNodeIds` at the start of every `rotateReadFromNode` invocation, make that explicit in the action.
+
+---
+
+### Structured Issues
+
+```yaml
+issues:
+  - plan: null
+    dimension: research_resolution
+    severity: blocker
+    description: &gt;
+      64-RESEARCH.md line 571 has "## Open Questions" without a "(RESOLVED)" suffix
+      and neither question carries an inline RESOLVED marker. Both are answered in the
+      plans but the file must be marked resolved before execution.
+    fix_hint: &gt;
+      Edit 64-RESEARCH.md: mark both questions as RESOLVED inline and rename the
+      section to "## Open Questions (RESOLVED)".
+
+  - plan: null
+    dimension: verification_derivation
+    severity: warning
+    description: &gt;
+      64-VALIDATION.md per-task verification map has a single TBD placeholder row
+      (status: draft, nyquist_compliant: false). No concrete per-task sampling
+      contract will be available during execution.
+    fix_hint: &gt;
+      Promote the RESEARCH.md Validation Architecture table rows into the
+      VALIDATION.md Per-Task Verification Map and set nyquist_compliant: true /
+      status: final.
+
+  - plan: "64-07"
+    task: 1
+    dimension: task_completeness
+    severity: warning
+    description: &gt;
+      The resume guard fires only when "completedNodeIds is non-empty at walk start."
+      D-03's crash-resume uses a FRESH RotationJobRecord (empty completedNodeIds),
+      so the guard does not fire. The mechanism preventing double-bumping of
+      already-rotated nodes in this case (likely a per-node convergence check inside
+      rotateOne before calling rotateOne) is not described in the action or
+      acceptance_criteria, leaving the executor to infer it from D-07 text alone.
+    fix_hint: &gt;
+      Add to 64-07 Task 1 action: before calling rotateOne(N), compare N's current
+      published generation against the generation at which N was enqueued; if already
+      advanced, skip and treat as done. Add a unit test: "a node at baseline+1 is not
+      re-rotated in a fresh-job-record resume." Alternatively clarify that
+      verifySubtreeClean is always called at rotateReadFromNode entry regardless of
+      completedNodeIds state.
+```
+
+### Recommendation
+
+1 blocker requires revision. The RESEARCH.md open-questions marker is a one-line fix. Return to planner with the structured issues above.</result>
+<usage><subagent_tokens>97136</subagent_tokens><tool_uses>18</tool_uses><duration_ms>372343</duration_ms></usage>
+</task-notification>
