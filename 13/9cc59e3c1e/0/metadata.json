@@ -1,0 +1,217 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "139cc59e3c1e",
+  "session_id": "3a6781af-f138-4624-9282-008e4a4f85ee",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-30T19:45:36.227061Z",
+  "branch": "feat/api-schema-cutover-publish-gate-and-tombstone",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "ae8590cda98a",
+  "token_usage": {
+    "input_tokens": 32128,
+    "cache_creation_tokens": 794628,
+    "cache_read_tokens": 65722070,
+    "output_tokens": 308712,
+    "api_call_count": 233
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-ship-phase-2026-06-30T17:43:21.996672Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "313c42cba7d5",
+      "timestamp": "2026-06-30T17:43:21.996672Z",
+      "native": {
+        "command": "/ship-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/ship-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_015hnviiBjJefSJag3vhEWWk",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-secure-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "ae8590cda98a",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 94,
+        "end": 95,
+        "entry_ids": [
+          "91b663a4-ddcb-449c-9146-b30ed488bcc4"
+        ],
+        "tool_use_id": "toolu_015hnviiBjJefSJag3vhEWWk"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015hnviiBjJefSJag3vhEWWk"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-secure-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01W9vTebF5NW7EcKbA996zxF",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-validate-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "ae8590cda98a",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 583,
+        "end": 584,
+        "entry_ids": [
+          "041ee225-2240-42de-b3d6-9dff6c495437"
+        ],
+        "tool_use_id": "toolu_01W9vTebF5NW7EcKbA996zxF"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01W9vTebF5NW7EcKbA996zxF"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-validate-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "summary": {
+    "intent": "Run the complete post-execute-phase loop for Phase 66 (API schema cutover, publish gate, tombstone) autonomously: verify → secure → validate → simplify → SDK E2E → CodeRabbit → ship → resolve reviews → confirm green CI.",
+    "outcome": "PR #584 opened and all in-scope review findings triaged; CI reached green on Test and Typecheck after restoring 75 deleted spec tests across 5 modules and fixing a throttle-bypass mis-wiring that caused SDK E2E Test 15 to fail in CI only. Session ended with two final fix commits staged (greptile batch-tombstone + throttle test-env guard) before the transcript cut off.",
+    "learnings": {
+      "repo": [
+        "The `BypassableThrottlerGuard` bypass only works when the API process itself has `THROTTLE_BYPASS_SECRET` set AND the request carries the bypass header. CI only sets the secret on the jest/e2e client step, not the API process, so per-IP throttle buckets fill under load and 429s drop delegated-routing publishes — causing Test 15's at-floor assertion to fail.",
+        "Phase 66's cutover deleted all 5 shares spec files (`share-invite.service.spec.ts`, `shares.controller.spec.ts`, `share-invites.controller.spec.ts`, `invites.controller.spec.ts`, `shares.service.spec.ts`) without rewriting them, leaving their jest per-file coverage thresholds in place and dropping global branches from ~80% to 74.73%.",
+        "`api:generate` (triggered by ESLint's api-client pre-commit hook) reformats `openapi.json` with trailing-comma/line-wrap churn even when the OpenAPI surface is semantically unchanged. Revert the file after generation when there's no real diff.",
+        "The `ApiSchemaCutover` migration was silently prettier-reformatted by `api:generate` and passed the local pre-commit hook (since the hook only blocks on openapi.json diff), but CI's repo-wide `eslint .` caught it.",
+        "`gh pr edit` fails on this repo due to a Projects-classic GraphQL conflict — must patch PR body via `env -u GITHUB_TOKEN gh api -X PATCH repos/FSM1/cipher-box/pulls/<N> -F body=@file`.",
+        "Greptile posts 'outside of diff range' findings in the issue-comment body, not as inline review threads — the GraphQL `reviewThreads` query misses them.",
+        "The commit helper can report `commit_failed` while the commit actually lands; the canonical verify is `git log --oneline -1`.",
+        "The `gsd-context-monitor.js` and `gsd-check-update.js` PostToolUse hooks used relative paths (`.claude/hooks/...`) in `settings.local.json` instead of `$CLAUDE_PROJECT_DIR`-prefixed paths like the other hooks, causing `cjs/loader:1433` module-not-found errors on every Bash command that cd'd into a subdirectory."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/shares/share-invite.service.ts",
+          "line": 184,
+          "end_line": 186,
+          "finding": "T-66-E1 security bug: claim path set `writeDescriptorRef` from `dto.writeDescriptorRef` without gating on whether `invite.writeDescriptorRef` was non-null. A read-only invite could be exploited to mint a write-capable Share if the claimer supplied a writeDescriptorRef. Fix: only propagate the claimer's value when `invite.writeDescriptorRef !== null`."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 131,
+          "end_line": 131,
+          "finding": "The delegated-routing publish is a detached/fire-and-forget promise. Under CI load it hits the throttle retry path and the network record never lands, making any test that depends solely on the network record non-deterministic in CI."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 1630,
+          "end_line": 1637,
+          "finding": "`publishBatch` error handler only re-threw `ConflictException` (409); the tombstone gate's `410 GONE HttpException` fell through to the generic `{success:false, sequenceNumber:'0'}` result, losing the permanent-failure signal for batch callers."
+        },
+        {
+          "path": "apps/api/src/republish/republish.service.ts",
+          "line": 1,
+          "end_line": 1,
+          "finding": "`syncIpnsRecordSequence` lacked a `tombstonedAt: IsNull()` guard in its update criteria, so the republish loop could race and bump a tombstoned row after tombstone was set."
+        },
+        {
+          "path": "apps/api/src/shares/dto/create-share.dto.ts",
+          "line": 62,
+          "end_line": 62,
+          "finding": "Used loose `/^k[a-z0-9]+$/` regex for `rootIpnsName` validation while all other IPNS-name DTOs (resolve, tombstone) use the canonical strict pattern. Tightened to match sibling validators."
+        },
+        {
+          "path": "apps/api/src/shares/dto/create-invite.dto.ts",
+          "line": 17,
+          "end_line": 17,
+          "finding": "Same loose IPNS name regex as create-share.dto — both were reshaped in this phase but the canonical strict validator wasn't carried over."
+        },
+        {
+          "path": "apps/api/src/common/guards/throttler-bypass.guard.ts",
+          "line": 1,
+          "end_line": 1,
+          "finding": "No test-environment short-circuit: under `NODE_ENV=test` the guard fell through to the parent ThrottlerGuard, enforcing per-IP limits. The integration suite exhausted the resolve bucket (30/min), causing SDK E2E Test 15 to receive 429s and return null on the at-floor serve. Fix: return `true` immediately when `NODE_ENV === 'test'`."
+        },
+        {
+          "path": ".claude/settings.local.json",
+          "line": 125,
+          "end_line": 195,
+          "finding": "Two hook commands (`gsd-context-monitor.js` PostToolUse, `gsd-check-update.js` SessionStart) used relative paths. When Bash commands cd into subdirectories the hook CWD is the subdir, not the repo root, so node cannot resolve the script. Must use `$CLAUDE_PROJECT_DIR/.claude/hooks/...` consistently."
+        }
+      ],
+      "workflow": [
+        "Adversarially verify subagent results: read the actual assertion in the generated spec to confirm it would fail against pre-fix code, not just trust the green summary.",
+        "CodeRabbit CLI and the security auditor subagent independently converged on T-66-E1 — cross-corroboration across two review tools is a strong signal for real bugs.",
+        "CodeRabbit CLI false-positive rate was high (~60% of 15 findings) for entity-removal claims (FolderIpns consumers); a clean build + API boot (DI resolves) is the decisive disproof — grep alone is insufficient.",
+        "jest's `global` coverage threshold is computed over `collectCoverageFrom` files minus path-specific overrides, not the `All files` display row. EXIT=0 is authoritative even when the summary row shows below-threshold numbers.",
+        "When a CI failure is 'only in CI, passes locally', the first hypothesis should be environment differences (secrets not forwarded to the API process, NODE_ENV, rate limits) rather than timing or flake.",
+        "Running the full e2e suite with `NODE_ENV=test` on the API but *without* supplying `THROTTLE_BYPASS_SECRET` to the test client is the definitive reproduction of CI throttle conditions.",
+        "Never run the full test suite concurrently from parallel subagents (RAM starvation); have each coverage-authoring agent run only scoped coverage for its target file, then do one authoritative full run from the orchestrator."
+      ]
+    },
+    "friction": [
+      "`gh pr edit` is permanently broken on this repo (Projects-classic GraphQL) — requires a wrapper `gh api -X PATCH` invocation every session.",
+      "`git push` and `git fetch` are blocked in the default sandbox mode, requiring explicit sandbox-disabled invocations that weren't always obvious at the right moment.",
+      "The commit helper timed out multiple times mid-commit-hook execution, requiring manual `git log` verification after each group of commits to avoid false retries.",
+      "CodeRabbit CLI initially failed with a service connection error and required a full retry (the first run produced only 3 of 15 findings before dying).",
+      "`api:generate` triggers a semantic-no-op `openapi.json` reformat on every ESLint pre-commit run, requiring a manual revert to avoid committing noise.",
+      "The greptile 'outside of diff range' comment was posted in the issue-comment body, invisible to the GraphQL `reviewThreads` query — required the user to manually surface it.",
+      "After every push, the release bot pushes a `chore(release)` commit requiring fetch + rebase before the next push; this happened multiple times and caused one near-rejected push.",
+      "The throttle bypass mis-wiring (secret only on client, not API) was non-obvious: Test 15 passed 5/5 locally with bypass but failed consistently in CI, suggesting a timing issue rather than a 429, adding diagnostic detours."
+    ],
+    "open_items": [
+      "Add a partial-unique index on `ipns_records(userId) WHERE is_root=true` — requires invariant analysis (can a user have multiple roots?); deferred to `.planning/todos/pending/2026-06-30-ipns-records-root-uniqueness-index.md`.",
+      "Fix the first-publish INSERT race window in `syncIpnsRecordSequence` under concurrent publish; deferred to `.planning/todos/pending/2026-06-30-ipns-first-publish-insert-race.md`.",
+      "Add a CHECK constraint enforcing `claim_count <= max_claims` on the `share_invites` table; deferred to `.planning/todos/pending/2026-06-30-share-invites-claim-count-check-constraint.md`.",
+      "Restore broader share-invite lifecycle coverage (`share-invite.service.spec.ts` beyond the claim-path: invite creation, revocation, expiry, max-claims enforcement); deferred to `.planning/todos/pending/2026-06-30-restore-shares-module-unit-coverage.md`.",
+      "89 pre-existing skipped SDK e2e tests (D-01 quarantine: 'SDK runtime stubbed mid-milestone, re-enable at phase 63-65') remain disabled across 11 suites including share-operations, folder-crud, file-operations.",
+      "Merge decision for PR #584 left to the user — all CI gates were passing or being fixed at session end.",
+      "Final two commits (greptile batch-tombstone + throttle test-env guard fix) were staged at session end but the transcript cut off before the rebase + push was confirmed."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
