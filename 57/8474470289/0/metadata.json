@@ -1,0 +1,180 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "578474470289",
+  "session_id": "3a6781af-f138-4624-9282-008e4a4f85ee",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-30T18:16:50.946898Z",
+  "branch": "feat/api-schema-cutover-publish-gate-and-tombstone",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "apps/api/src/ipns/ipns.service.ts",
+    "apps/api/src/shares/dto/index.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "313c42cba7d5",
+  "token_usage": {
+    "input_tokens": 21960,
+    "cache_creation_tokens": 256017,
+    "cache_read_tokens": 13226600,
+    "output_tokens": 95310,
+    "api_call_count": 91
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-ship-phase-2026-06-30T17:43:21.996672Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "313c42cba7d5",
+      "timestamp": "2026-06-30T17:43:21.996672Z",
+      "native": {
+        "command": "/ship-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/ship-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_015hnviiBjJefSJag3vhEWWk",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-secure-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "313c42cba7d5",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 94,
+        "end": 95,
+        "entry_ids": [
+          "91b663a4-ddcb-449c-9146-b30ed488bcc4"
+        ],
+        "tool_use_id": "toolu_015hnviiBjJefSJag3vhEWWk"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015hnviiBjJefSJag3vhEWWk"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-secure-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "summary": {
+    "intent": "Run the full post-execute-phase loop for GSD Phase 66 (API schema cutover for IPNS publish-gate and tombstone) autonomously: verify → secure → validate → simplify → SDK E2E gate → CodeRabbit → ship → resolve PR reviews.",
+    "outcome": "Completed through commit 3 of ~8 planned steps: security audit found and fixed a real write-escalation vulnerability (T-66-E1), SDK E2E gate passed (5/5 phase-relevant tests), three focused commits landed (security fix, hardening, dead-code cleanup), and 66-SECURITY.md written with SECURED verdict. Ship, validate, and PR steps remain.",
+    "learnings": {
+      "repo": [
+        "Phase 66 deleted all 5 shares spec files without replacement — the reshaped shares/claim path (including T-66-E1 fix) now has zero unit coverage; Nyquist validate-phase gate must restore it.",
+        "89 sdk-e2e tests are pre-existing D-01 milestone quarantine skips (comment: 'SDK runtime stubbed mid-milestone, re-enable at phase 63-65') — confirmed on origin/main, not a phase 66 regression.",
+        "Running `pnpm api:generate` reformats openapi.json with formatting churn and also reformats migration files via prettier — revert both before committing to keep scope tight; use canonical JSON diff to verify no semantic surface change.",
+        "`api:generate` fails its final step on a pre-existing lint error in `landing/.astro/types.d.ts` (generated Astro types) — this is unrelated to phase changes and can be ignored.",
+        "The pre-commit api-client hook only blocks on actual unstaged openapi.json changes — formatting-only churn still triggers a diff and must be reverted.",
+        "The `cipherbox_test` DB uses TypeORM migrations via `migration:run`; migration was already applied (no pending migrations) before SDK E2E run.",
+        "All sibling IPNS endpoints (publish/batch/unenroll/resolve) carry `@Throttle`; the new tombstone endpoint was the only one missing it."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/shares/share-invite.service.ts",
+          "line": 184,
+          "end_line": 186,
+          "finding": "T-66-E1: writeDescriptorRef was stored from dto input without checking invite.writeDescriptorRef — allowed a read-only invite to yield a write grant. Fix: gate dto.writeDescriptorRef on invite.writeDescriptorRef !== null."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 1630,
+          "end_line": 1637,
+          "finding": "upsertIpnsRecord had unused `_publicKey?` param (underscore-flagged, single caller, never read). Removed without behavior change; 174 unit tests confirm."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.controller.ts",
+          "line": 226,
+          "end_line": 226,
+          "finding": "tombstone endpoint was missing @Throttle decorator; all siblings have it. Added to match established pattern for destructive endpoints."
+        },
+        {
+          "path": "apps/api/src/shares/dto/create-share.dto.ts",
+          "line": 62,
+          "end_line": 62,
+          "finding": "rootIpnsName used loose /^k[a-z0-9]+$/ regex; sibling DTOs (resolve, tombstone) use strict k51qzi5uqu5…|bafzaa… canonical validator. Tightened to match."
+        },
+        {
+          "path": "apps/api/src/shares/dto/create-invite.dto.ts",
+          "line": 17,
+          "end_line": 17,
+          "finding": "Same loose IPNS regex as create-share.dto — tightened to canonical pattern for consistency."
+        },
+        {
+          "path": "apps/api/src/shares/dto/index.ts",
+          "line": 1,
+          "end_line": 5,
+          "finding": "UpdateEncryptedKeyDto barrel export was dead — the encrypted-key endpoint and service method were deleted in phase 66 but the export remained. Removed."
+        },
+        {
+          "path": "apps/api/src/shares/types.ts",
+          "line": 1,
+          "end_line": 1,
+          "finding": "shares/types.ts had zero importers (only self/barrel/generated-dist); deleted as dead code."
+        },
+        {
+          "path": "tests/sdk-e2e/src/suites/ipns-publish-gate.test.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "psql helper functions lacked statement_timeout; added connect_timeout=5 and statement_timeout=5000ms to both helpers (CodeRabbit F4)."
+        }
+      ],
+      "workflow": [
+        "When CodeRabbit CLI streams findings progressively, check multiple times — it reported 3, then 9, then 15 total findings; triaging too early misses the tail.",
+        "Both the security auditor subagent and CodeRabbit independently flagged T-66-E1 — convergent findings from independent tools are high-confidence; divergent findings warrant deeper verification.",
+        "CodeRabbit false-positived on deleted FolderIpns entity (claimed 4 consumers still depend on it) — always verify with grep + API clean build (DI resolution at boot proves all @InjectRepository bindings resolve).",
+        "For openapi surface-change verification, use `jq -S . | md5` canonical comparison rather than visual diff — formatting churn produces large diffs that hide actual semantic identity.",
+        "Running the full rebuild chain (crypto→core→api-client→sdk-core→sdk→api) before SDK E2E is required; dist mismatch between packages causes integration-layer failures even when unit suites pass."
+      ]
+    },
+    "friction": [
+      "CodeRabbit CLI first run failed with a service connection error and needed a retry — no indication of the error type until checking the output file.",
+      "api:generate reformatted openapi.json and migration files as side effects, requiring manual revert and a canonical semantic diff to confirm no real change before committing.",
+      "CodeRabbit streamed findings progressively across multiple check passes (3 → 9 → 15), making it impossible to triage in one pass.",
+      "The pre-existing landing/.astro lint error causes api:generate to exit non-zero every time, adding noise to every regeneration.",
+      "Task output files required reading via filesystem path rather than inline — several background-job result checks needed extra reads to get the actual test summary lines."
+    ],
+    "open_items": [
+      "isRoot partial-unique index on ipns_records (userId) WHERE is_root — deferred; needs invariant analysis on whether a user can have multiple roots before adding constraint (.planning/todos/pending/2026-06-30-ipns-records-root-uniqueness-index.md).",
+      "First-publish insert race on IPNS records — deferred todo (.planning/todos/pending/2026-06-30-ipns-first-publish-insert-race.md).",
+      "share_invites.claim_count CHECK constraint — deferred todo (.planning/todos/pending/2026-06-30-share-invites-claim-count-check-constraint.md).",
+      "All 5 shares spec files were deleted in phase 66 without replacement — reshaped claim path, T-66-E1 fix, and all shares logic currently has zero unit coverage; Nyquist validate-phase gate must address this.",
+      "89 sdk-e2e tests remain quarantined under D-01 milestone skip (share-operations, invite-link, folder-crud, file-operations, etc.) — need re-enable at phases 63-65 per comment.",
+      "Web stubs flagged by simplify review deferred as intentional Phase 68 placeholders.",
+      "Steps 3 (Validate/Nyquist), 8 (Ship), 9 (Resolve PR reviews), and 10 (Confirm green CI) were not reached in this session."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-30T18:15:44.612475Z",
+    "agent_lines": 1,
+    "agent_removed": 4,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 1,
+    "total_lines_changed": 24,
+    "agent_percentage": 20.833333333333336,
+    "metric_version": 2
+  }
+}
