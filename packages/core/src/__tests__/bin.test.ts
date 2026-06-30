@@ -156,6 +156,53 @@ describe('encryptBinMetadata / decryptBinMetadata', () => {
     expect(restored.nodeRef).toBeUndefined();
   });
 
+  it('round-trips a nodeReadKey Uint8Array as a 32-byte Uint8Array (hex wire encoding)', async () => {
+    // Regression for the bin re-link path (Phase 65): nodeReadKey is a Uint8Array
+    // in memory but MUST survive the JSON wire round-trip as a Uint8Array — a raw
+    // JSON.stringify turns it into {"0":..,"1":..}, which restoreFromBin then hands
+    // to sealChildReadKey and crashes at runtime. This test uses the REAL
+    // encrypt/decrypt (no mocks) so the serialisation contract is actually exercised.
+    const keypair = generateTestKeypair();
+    const nodeReadKey = new Uint8Array(32);
+    for (let i = 0; i < 32; i++) nodeReadKey[i] = (i * 7 + 3) & 0xff;
+
+    const metadata: RecycleBinMetadata = {
+      version: 'v1',
+      sequenceNumber: 4,
+      entries: [
+        {
+          id: `entry-${crypto.randomUUID()}`,
+          itemType: 'folder',
+          name: 'Restored Folder',
+          originalParentIpnsName: 'k51parent',
+          originalPath: 'My Vault / Restored Folder',
+          deletedAt: Date.now(),
+          size: 0,
+          mimeType: '',
+          nodeReadKey,
+          nodeIpnsName: 'k51child',
+          nodeRef: {
+            schema: 'node/v3',
+            kind: 'folder',
+            id: '00000000-0000-0000-0000-000000000001',
+            generation: 0,
+            createdAt: 0,
+            modifiedAt: 0,
+          },
+        },
+      ],
+    };
+
+    const encrypted = await encryptBinMetadata(metadata, keypair.publicKey);
+    const decrypted = await decryptBinMetadata(encrypted, keypair.privateKey);
+
+    const got = decrypted.entries[0].nodeReadKey;
+    expect(got).toBeInstanceOf(Uint8Array);
+    expect(got).toEqual(nodeReadKey);
+    expect(got?.length).toBe(32);
+    expect(decrypted.entries[0].nodeIpnsName).toBe('k51child');
+  });
+
   it('fails to decrypt with wrong key', async () => {
     const keypair1 = generateTestKeypair();
     const keypair2 = generateTestKeypair();
