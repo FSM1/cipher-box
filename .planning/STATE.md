@@ -5,8 +5,8 @@ milestone_name: Metadata and Sharing Refactor
 current_phase: 66
 current_phase_name: API Schema Cutover, Publish Gate, and Tombstone
 status: executing
-stopped_at: Phase 65 context gathered
-last_updated: "2026-06-30T01:05:42.404Z"
+stopped_at: Phase 66 context gathered
+last_updated: "2026-06-30T13:44:56.807Z"
 last_activity: 2026-06-30
 last_activity_desc: Phase 65 complete, transitioned to Phase 66
 progress:
@@ -434,6 +434,6 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-06-29T21:53:19.782Z
-**Stopped at:** Phase 65 context gathered
-**Resume file:** .planning/phases/65-sdk-write-chain-bin-re-link-and-invite-claim/65-CONTEXT.md
+**Last session:** 2026-06-30T13:44:56.801Z
+**Stopped at:** Phase 66 context gathered
+**Resume file:** .planning/phases/66-api-schema-cutover-publish-gate-and-tombstone/66-CONTEXT.md
