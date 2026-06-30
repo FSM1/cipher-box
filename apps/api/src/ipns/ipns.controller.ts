@@ -236,6 +236,7 @@ export class IpnsController {
     };
   }
 
+  @Throttle({ default: { limit: 10, ttl: 60000 } }) // 10 tombstones per minute per user
   @Post('tombstone')
   @HttpCode(200)
   @ApiOperation({
