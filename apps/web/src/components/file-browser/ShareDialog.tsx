@@ -3,7 +3,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 // Behavioral crypto (decryptFolderMetadata, reWrapEncryptedKey, collectChildKeys) stubbed
 import type { SealedChildRef } from '@cipherbox/core';
 import { Modal } from '../ui/Modal';
-import { sharesControllerGetSentShares, sharesControllerRevokeShare } from '@cipherbox/api-client';
+import { sharesControllerRevokeShare } from '@cipherbox/api-client';
 import { useShareStore } from '../../stores/share.store';
 import { updateSharePermission } from '../../services/share.service';
 import { InviteLinkTab } from './InviteLinkTab';
@@ -105,33 +105,8 @@ export function ShareDialog({
     setRecipientsLoading(true);
 
     (async () => {
-      const pageSize = 100;
-      let offset = 0;
-      const allShares: SentShare[] = [];
-
-      // Paginate through all sent shares (API max 100 per page)
-
-      while (true) {
-        const response = await sharesControllerGetSentShares({ limit: pageSize, offset });
-        if (cancelled) return;
-        const pageShares = response.shares
-          .filter((s) => s.ipnsName === ipnsName)
-          .map((s) => ({
-            shareId: s.shareId,
-            recipientPublicKey: s.recipientPublicKey,
-            itemType: s.itemType as 'folder' | 'file',
-            ipnsName: s.ipnsName,
-            itemName: s.itemName,
-            permission: ((s.permission as 'read' | 'write') ?? 'read') as 'read' | 'write',
-            createdAt: String(s.createdAt),
-          }));
-        allShares.push(...pageShares);
-        offset += response.shares.length;
-        if (offset >= response.total || response.shares.length === 0) break;
-      }
-
-      if (cancelled) return;
-      setRecipients(allShares);
+      // deferred to Phase 68 — descriptor-ref rotation/grant path not yet wired
+      throw new Error('deferred to Phase 68 — descriptor-ref rotation/grant path not yet wired');
     })()
       .catch((err) => {
         if (cancelled) return;

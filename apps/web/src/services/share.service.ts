@@ -12,19 +12,10 @@
  */
 
 import {
-  sharesControllerCreateShare,
-  sharesControllerGetReceivedShares,
-  sharesControllerGetSentShares,
   sharesControllerLookupUser,
-  sharesControllerGetShareKeys,
-  sharesControllerAddShareKeys,
   sharesControllerRevokeShare,
   sharesControllerHideShare,
-  sharesControllerGetPendingRotations,
-  sharesControllerUpdateShareEncryptedKey,
   sharesControllerUpdateShareItemName,
-  sharesControllerCompleteRotation,
-  sharesControllerUpdatePermission,
   type ShareKeyEntryDtoKeyType,
   type ChildKeyDtoKeyType,
 } from '@cipherbox/api-client';
@@ -103,72 +94,20 @@ export function shouldBackfill(row: ItemNameBearingRow, hasRecipientPubKey: bool
  * Fetch active, non-hidden shares received by the current user (paginated).
  */
 export async function fetchReceivedShares(
-  limit = 50,
-  offset = 0
+  _limit = 50,
+  _offset = 0
 ): Promise<{ shares: ReceivedShare[]; total: number }> {
-  const response = await sharesControllerGetReceivedShares({ limit, offset });
-
-  // The recipient (current user) holds the matching vault private key, so decrypt
-  // itemNameEncrypted into the plaintext display projection. Legacy plaintext-only
-  // rows fall back to itemName. Display sites read the projected plaintext only.
-  const vaultPrivateKey = useAuthStore.getState().vaultKeypair?.privateKey;
-
-  const shares = await Promise.all(
-    response.shares.map(async (s) => {
-      // A single corrupt / wrong-key / truncated itemNameEncrypted row must not
-      // reject the whole page (decryptItemName throws on unwrap failure). Degrade
-      // that one row to its legacy plaintext fallback instead of denying the list.
-      let displayName = s.itemName;
-      if (vaultPrivateKey) {
-        try {
-          displayName = await decryptItemName(s, vaultPrivateKey);
-        } catch (err) {
-          logger.warn('[share] itemName decrypt failed; using plaintext fallback', s.shareId, err);
-        }
-      }
-      return {
-        shareId: s.shareId,
-        sharerPublicKey: s.sharerPublicKey,
-        itemType: s.itemType as 'folder' | 'file',
-        ipnsName: s.ipnsName,
-        itemName: displayName,
-        itemNameEncrypted: s.itemNameEncrypted,
-        encryptedKey: s.encryptedKey,
-        permission: (s.permission as 'read' | 'write') ?? 'read',
-        encryptedIpnsKey: (s.encryptedIpnsKey as string | null | undefined) ?? null,
-        createdAt: String(s.createdAt),
-      };
-    })
-  );
-
-  return { shares, total: response.total };
+  throw new Error('deferred to Phase 68 — descriptor-ref rotation/grant path not yet wired');
 }
 
 /**
  * Fetch active shares sent by the current user (paginated).
  */
 export async function fetchSentShares(
-  limit = 50,
-  offset = 0
+  _limit = 50,
+  _offset = 0
 ): Promise<{ shares: SentShare[]; total: number }> {
-  const response = await sharesControllerGetSentShares({ limit, offset });
-
-  return {
-    // The owner cannot decrypt itemNameEncrypted (it is wrapped for the recipient),
-    // so the sent-share list displays the server-held plaintext fallback. The
-    // ciphertext is carried through so the lazy backfill can detect legacy rows.
-    shares: response.shares.map((s) => ({
-      shareId: s.shareId,
-      recipientPublicKey: s.recipientPublicKey,
-      itemType: s.itemType as 'folder' | 'file',
-      ipnsName: s.ipnsName,
-      itemName: s.itemName,
-      itemNameEncrypted: s.itemNameEncrypted,
-      permission: (s.permission as 'read' | 'write') ?? 'read',
-      createdAt: String(s.createdAt),
-    })),
-    total: response.total,
-  };
+  throw new Error('deferred to Phase 68 — descriptor-ref rotation/grant path not yet wired');
 }
 
 /**
@@ -247,7 +186,7 @@ export async function lookupUser(publicKeyHex: string): Promise<boolean> {
  * @param params.encryptedKey - Hex-encoded ECIES ciphertext of the item key
  * @param params.childKeys - Optional re-wrapped descendant keys
  */
-export async function createShare(params: {
+export async function createShare(_params: {
   recipientPublicKey: string;
   itemType: 'folder' | 'file';
   ipnsName: string;
@@ -256,23 +195,7 @@ export async function createShare(params: {
   encryptedKey: string;
   childKeys?: Array<{ keyType: ChildKeyDtoKeyType; itemId: string; encryptedKey: string }>;
 }): Promise<{ shareId: string }> {
-  const response = await sharesControllerCreateShare({
-    recipientPublicKey: params.recipientPublicKey,
-    itemType: params.itemType,
-    ipnsName: params.ipnsName,
-    // REQ-4: send ciphertext-only for new shares. itemName is required by the
-    // DTO, so send empty when ciphertext is present (no plaintext at rest).
-    itemName: params.itemNameEncrypted ? '' : params.itemName,
-    itemNameEncrypted: params.itemNameEncrypted,
-    encryptedKey: params.encryptedKey,
-    childKeys: params.childKeys?.map((k) => ({
-      keyType: k.keyType,
-      itemId: k.itemId,
-      encryptedKey: k.encryptedKey,
-    })),
-  });
-
-  return { shareId: response.shareId };
+  throw new Error('deferred to Phase 68 — descriptor-ref rotation/grant path not yet wired');
 }
 
 /**
@@ -285,14 +208,11 @@ export async function createShare(params: {
  * @param encryptedIpnsKey - ECIES-wrapped IPNS key (required for upgrade to write)
  */
 export async function updateSharePermission(
-  shareId: string,
-  permission: 'read' | 'write',
-  encryptedIpnsKey?: string
+  _shareId: string,
+  _permission: 'read' | 'write',
+  _encryptedIpnsKey?: string
 ): Promise<void> {
-  await sharesControllerUpdatePermission(shareId, {
-    permission,
-    encryptedIpnsKey,
-  });
+  throw new Error('deferred to Phase 68 — descriptor-ref rotation/grant path not yet wired');
 }
 
 /**
@@ -314,20 +234,14 @@ export async function hideShare(shareId: string): Promise<void> {
  * Get all re-wrapped child keys for a share.
  * Accessible by both sharer and recipient.
  */
-export async function fetchShareKeys(shareId: string): Promise<
+export async function fetchShareKeys(_shareId: string): Promise<
   Array<{
     keyType: ShareKeyEntryDtoKeyType;
     itemId: string;
     encryptedKey: string;
   }>
 > {
-  const response = await sharesControllerGetShareKeys(shareId);
-
-  return response.map((k) => ({
-    keyType: k.keyType as ShareKeyEntryDtoKeyType,
-    itemId: k.itemId,
-    encryptedKey: k.encryptedKey,
-  }));
+  throw new Error('deferred to Phase 68 — descriptor-ref rotation/grant path not yet wired');
 }
 
 /**
@@ -335,20 +249,14 @@ export async function fetchShareKeys(shareId: string): Promise<
  * Allowed for the sharer (owner) or write-share recipients (file/file-ipns keys only).
  */
 export async function addShareKeys(
-  shareId: string,
-  keys: Array<{
+  _shareId: string,
+  _keys: Array<{
     keyType: ShareKeyEntryDtoKeyType;
     itemId: string;
     encryptedKey: string;
   }>
 ): Promise<void> {
-  await sharesControllerAddShareKeys(shareId, {
-    keys: keys.map((k) => ({
-      keyType: k.keyType,
-      itemId: k.itemId,
-      encryptedKey: k.encryptedKey,
-    })),
-  });
+  throw new Error('deferred to Phase 68 — descriptor-ref rotation/grant path not yet wired');
 }
 
 /**
@@ -543,16 +451,7 @@ export type PendingRotation = {
  * These are shares where revokedAt is set but the share has not been hard-deleted.
  */
 export async function fetchPendingRotations(): Promise<PendingRotation[]> {
-  const response = await sharesControllerGetPendingRotations();
-
-  return response.map((r) => ({
-    shareId: r.shareId,
-    recipientPublicKey: r.recipientPublicKey,
-    itemType: r.itemType as 'folder' | 'file',
-    ipnsName: r.ipnsName,
-    itemName: r.itemName,
-    revokedAt: String(r.revokedAt),
-  }));
+  throw new Error('deferred to Phase 68 — descriptor-ref rotation/grant path not yet wired');
 }
 
 /**
@@ -571,15 +470,15 @@ export async function checkPendingRotation(folderIpnsName: string): Promise<bool
  * Update the encrypted key on a share record after lazy key rotation.
  * Re-wraps the new folder key for a remaining (non-revoked) recipient.
  */
-export async function updateShareKey(shareId: string, encryptedKey: string): Promise<void> {
-  await sharesControllerUpdateShareEncryptedKey(shareId, { encryptedKey });
+export async function updateShareKey(_shareId: string, _encryptedKey: string): Promise<void> {
+  throw new Error('deferred to Phase 68 — descriptor-ref rotation/grant path not yet wired');
 }
 
 /**
  * Hard-delete a revoked share after rotation is complete.
  */
-export async function completeShareRotation(shareId: string): Promise<void> {
-  await sharesControllerCompleteRotation(shareId);
+export async function completeShareRotation(_shareId: string): Promise<void> {
+  throw new Error('deferred to Phase 68 — descriptor-ref rotation/grant path not yet wired');
 }
 
 /**

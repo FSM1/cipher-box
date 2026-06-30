@@ -9,16 +9,10 @@
  * All ephemeral and plaintext key material is zeroed in finally blocks.
  */
 
-import { wrapKey, unwrapKey, hexToBytes, bytesToHex } from '@cipherbox/crypto';
 import type { SealedChildRef } from '@cipherbox/core';
-import { useAuthStore } from '../stores/auth.store';
 import {
   invitesControllerGetInviteStatus,
-  invitesControllerGetInviteData,
-  invitesControllerClaimInvite,
-  shareInvitesControllerListInvites,
   shareInvitesControllerRevokeInvite,
-  type ChildKeyDtoKeyType,
 } from '@cipherbox/api-client';
 // collectChildKeys stubbed — phase 65 (write-chain key distribution)
 // resolveFileMetadata stubbed — phase 63 (Node read-chain)
@@ -115,84 +109,10 @@ export async function createInviteLink(_params: {
  * @returns The share ID of the created share
  */
 export async function claimInvite(
-  token: string,
-  ephemeralPrivKeyHex: string
+  _token: string,
+  _ephemeralPrivKeyHex: string
 ): Promise<{ shareId: string }> {
-  const ephemeralPrivKey = hexToBytes(ephemeralPrivKeyHex);
-
-  try {
-    // Fetch full invite data (authenticated endpoint)
-    const inviteData = await invitesControllerGetInviteData(token);
-
-    // Get recipient's own vault keypair
-    const vaultKeypair = useAuthStore.getState().vaultKeypair;
-    if (!vaultKeypair) {
-      throw new Error('Vault keypair not available');
-    }
-
-    // Unwrap item key with ephemeral private key
-    const plaintextKey = await unwrapKey(hexToBytes(inviteData.encryptedKey), ephemeralPrivKey);
-
-    let reWrappedKey: string;
-    try {
-      // Re-wrap with recipient's own public key
-      const wrapped = await wrapKey(plaintextKey, vaultKeypair.publicKey);
-      reWrappedKey = bytesToHex(wrapped);
-    } finally {
-      plaintextKey.fill(0);
-    }
-
-    // REQ-4 / decision A3: re-wrap the display name from the ephemeral-wrapped
-    // form to the recipient's vault pubkey so the resulting Share row carries
-    // recipient-decryptable ciphertext. Legacy invites without ciphertext skip
-    // this and rely on the plaintext fallback.
-    let reWrappedItemNameEncrypted: string | undefined;
-    if (inviteData.itemNameEncrypted) {
-      const plainName = await unwrapKey(hexToBytes(inviteData.itemNameEncrypted), ephemeralPrivKey);
-      try {
-        reWrappedItemNameEncrypted = bytesToHex(await wrapKey(plainName, vaultKeypair.publicKey));
-      } finally {
-        plainName.fill(0);
-      }
-    }
-
-    // Re-wrap child keys
-    const childKeys: Array<{
-      keyType: ChildKeyDtoKeyType;
-      itemId: string;
-      encryptedKey: string;
-    }> = [];
-
-    const rawChildKeys = inviteData.encryptedChildKeys;
-
-    if (rawChildKeys && rawChildKeys.length > 0) {
-      for (const ck of rawChildKeys) {
-        const plainChildKey = await unwrapKey(hexToBytes(ck.encryptedKey), ephemeralPrivKey);
-        try {
-          const wrappedChild = await wrapKey(plainChildKey, vaultKeypair.publicKey);
-          childKeys.push({
-            keyType: ck.keyType,
-            itemId: ck.itemId,
-            encryptedKey: bytesToHex(wrappedChild),
-          });
-        } finally {
-          plainChildKey.fill(0);
-        }
-      }
-    }
-
-    // POST claim with re-wrapped keys
-    const result = await invitesControllerClaimInvite(token, {
-      encryptedKey: reWrappedKey,
-      itemNameEncrypted: reWrappedItemNameEncrypted,
-      childKeys,
-    });
-
-    return { shareId: result.shareId };
-  } finally {
-    // Zero ephemeral private key
-    ephemeralPrivKey.fill(0);
-  }
+  throw new Error('deferred to Phase 68 — descriptor-ref rotation/grant path not yet wired');
 }
 
 // ---------------------------------------------------------------------------
@@ -221,18 +141,8 @@ export async function checkInviteStatus(token: string): Promise<'active' | 'expi
  * Fetch all active invites for a specific item.
  * Uses the authenticated ShareInvitesController endpoint.
  */
-export async function fetchInvitesForItem(ipnsName: string): Promise<InviteInfo[]> {
-  const response = await shareInvitesControllerListInvites({ ipnsName });
-  return response.map((inv) => ({
-    id: inv.id,
-    token: inv.token,
-    status: inv.status,
-    itemType: inv.itemType,
-    ipnsName: inv.ipnsName,
-    itemName: inv.itemName,
-    expiresAt: String(inv.expiresAt),
-    createdAt: String(inv.createdAt),
-  }));
+export async function fetchInvitesForItem(_ipnsName: string): Promise<InviteInfo[]> {
+  throw new Error('deferred to Phase 68 — descriptor-ref rotation/grant path not yet wired');
 }
 
 /**
