@@ -1,1 +1,1 @@
-export { FolderIpns } from './folder-ipns.entity';
+export { IpnsRecord } from './ipns-record.entity';
