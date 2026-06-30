@@ -1,0 +1,99 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "1276ff23a70f",
+  "session_id": "dda78467-98d8-444f-a74c-4762636fe3dc",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-30T14:05:36.150551Z",
+  "branch": "feat/api-schema-cutover-publish-gate-and-tombstone",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/66-api-schema-cutover-publish-gate-and-tombstone/66-VALIDATION.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "decfae2f9fdc",
+  "token_usage": {
+    "input_tokens": 13399,
+    "cache_creation_tokens": 217031,
+    "cache_read_tokens": 1553192,
+    "output_tokens": 23368,
+    "api_call_count": 16
+  },
+  "summary": {
+    "intent": "Run the GSD plan-phase workflow for Phase 66 (api-schema-cutover-publish-gate-and-tombstone) to produce a PLAN.md via the full research → plan → verify pipeline.",
+    "outcome": "Research completed with HIGH confidence (RESEARCH.md written and committed by the researcher subagent), VALIDATION.md drafted and committed. Session ended before the planner was spawned; pattern-mapping was the next pending step.",
+    "learnings": {
+      "repo": [
+        "folder_ipns has zero real SQL FK dependents — shares.ipns_name, vaults.root_ipns_name, and ipns_republish_schedule.ipns_name are all plain varchar(255) columns, not FK constraints, making drop-recreate order straightforward.",
+        "upsertFolderIpns has a confirmed TOCTOU race: findOne → gate → save allows two concurrent writers at dbSeq=N to both pass the in-memory CAS check, with the second save silently overwriting the first.",
+        "Atomic CAS fix must use TypeORM createQueryBuilder().update().where('ipns_name = :n AND sequence_number = :expected AND generation <= :incoming AND tombstoned_at IS NULL') and assert result.affected !== 0.",
+        "parseCachedRecord treats expected-null signedRecord (shared-folder rows) and CID-mismatch corruption identically — both return null — but §6.5 requires differentiating them for correct seq-floor behavior.",
+        "NestJS HttpStatus.GONE = 410 is confirmed available in the installed NestJS ^11.0.0; throw new HttpException({ error: 'IPNS_TOMBSTONED', ipnsName }, HttpStatus.GONE) emits a typed JSON body Swagger propagates.",
+        "SDK-E2E concurrent-CAS forcing uses the persistCallback hook injection pattern (established in Phase 64/65) to interpose a concurrent publish between rotation steps.",
+        "shares table data-minimization: permission column dropped (derive from writeDescriptorRef IS NOT NULL), revoked_at dropped (hard-delete revoke), unique constraint changes from partial WHERE revoked_at IS NULL on (sharer_id, recipient_id, ipns_name) to plain UNIQUE (sharer_id, recipient_id, root_node_id).",
+        "Drift pre-check is non-blocking for Phase 66 (documented §5.65); 143 noisy elements were all from .learnings/, .husky/, landing/, and config files unrelated to apps/api.",
+        "The researcher subagent committed RESEARCH.md itself (docs(66): research phase domain), so the orchestrator should not double-commit it."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 214,
+          "end_line": 406,
+          "finding": "upsertFolderIpns is a findOne → gate → save sequence with a confirmed TOCTOU; must be replaced with an atomic conditional UPDATE checking sequence_number, generation, and tombstoned_at."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 64,
+          "end_line": 64,
+          "finding": "parseCachedRecord returns null for both expected-null signedRecord (shared-folder rows) and CID-mismatch corruption, conflating two distinct cases that §6.5 requires differentiating."
+        },
+        {
+          "path": "apps/api/src/ipns/rotation-crash-safety.test.ts",
+          "line": 628,
+          "end_line": 628,
+          "finding": "persistCallback hook injection pattern used in Phase 64/65 to force concurrent-CAS races; Tests 16/17 in Phase 66 will reuse this mechanism with Promise.allSettled over two simultaneous publishWithCas calls."
+        }
+      ],
+      "workflow": [
+        "Researcher subagent runtime was ~815 seconds (13.5 min) and consumed 100 tool uses / 153k tokens — well beyond the '~1–5 min' liveness notice shown to the user.",
+        "auto_advance: true on the phase config requires explicit orchestrator handling at step 15 to avoid unintended automatic phase advancement.",
+        "RESEARCH.md is committed by the researcher subagent itself; the orchestrator should skip re-committing it and only commit orchestrator-produced artifacts (VALIDATION.md, PLAN files)."
+      ]
+    },
+    "friction": [
+      "Researcher subagent took ~13.5 minutes vs the '~1–5 min' estimate displayed to the user, creating a long silent period.",
+      "Drift pre-check generated 143 noisy elements from unrelated directories (.learnings/, .husky/, landing/, config), requiring manual triage to confirm non-blocking status."
+    ],
+    "open_items": [
+      "parseCachedRecord return-type change: adding a seqFloor discriminant breaks the existing IpnsRecordFields | null return type; planner must update resolveRecord to handle both shapes in one step.",
+      "First-publish CAS INSERT path: decision needed between INSERT…ON CONFLICT DO NOTHING with subsequent check vs. keeping the existing findOne + create path for first-publish only.",
+      "tombstoneRecord authorization: who may call POST /ipns/tombstone — original creator (user_id on row) or any authenticated user proving key possession — needs explicit decision.",
+      "TypeORM createQueryBuilder().update() + result.affected pattern flagged MEDIUM confidence; planner should verify against TypeORM docs before committing to it.",
+      "Pattern-mapping, planner spawn (opus), verification loop, and all downstream workflow gates were not reached — session ended mid-pipeline."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-30T14:04:48.93359Z",
+    "agent_lines": 76,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 76,
+    "total_lines_changed": 76,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}

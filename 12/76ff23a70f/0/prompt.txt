@@ -1,0 +1,56 @@
+/gsd-plan-phase 66
+
+---
+
+<task-notification>
+<task-id>ac4f25dabee0f01c7</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/13524ecf-de1b-47de-bf59-e080a2ed8848/tasks/ac4f25dabee0f01c7.output</output-file>
+<status>completed</status>
+<summary>Agent "Research Phase 66" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## RESEARCH COMPLETE
+
+**Phase:** 66 - api-schema-cutover-publish-gate-and-tombstone
+**Confidence:** HIGH
+
+### Key Findings
+
+- **FK map (D-01):** `folder_ipns` has zero SQL FK dependents from other tables. `shares.ipns_name`, `vaults.root_ipns_name`, and `ipns_republish_schedule.ipns_name` are all plain `varchar(255)` columns — not FK constraints. The migration drop-recreate order is straightforward: `DROP TABLE share_keys CASCADE` → `DROP TABLE shares CASCADE` → `CREATE TABLE shares` (new schema) → `DROP TABLE folder_ipns CASCADE` → `CREATE TABLE ipns_records`.
+
+- **Current publish path is non-atomic (confirmed TOCTOU):** `upsertFolderIpns` (L214–L406 of `ipns.service.ts`) is a `findOne → gate → save` sequence. Two concurrent writers both at `dbSeq = N` both pass the in-memory CAS check, and the second `save` silently overwrites the first. The atomic replacement must use `createQueryBuilder().update().where('ipns_name = :n AND sequence_number = :expected AND generation &lt;= :incoming AND tombstoned_at IS NULL').execute()` and check `result.affected === 0`.
+
+- **`parseCachedRecord` case-split (Test 15):** Current code at L64 returns `null` for both expected-null `signedRecord` (shared-folder rows) and CID-mismatch corruption, treating both as undifferentiated "fail closed." §6.5 requires differentiating: null `signedRecord` shared-folder rows should apply a `seq ≥ storedSeq` floor against the network record, not unconditionally 404.
+
+- **NestJS 410 wiring:** `HttpStatus.GONE = 410` confirmed in installed NestJS ^11.0.0. `throw new HttpException({ error: 'IPNS_TOMBSTONED', ipnsName }, HttpStatus.GONE)` emits a typed JSON body that Swagger picks up and `pnpm api:generate` propagates into `@cipherbox/api-client`.
+
+- **SDK-E2E concurrent-CAS forcing mechanism:** Phase 64/65 used a `persistCallback` hook injection (`rotation-crash-safety.test.ts` ~L628) to interpose a concurrent publish between rotation steps. Tests 16/17 use `Promise.allSettled` with two simultaneous `publishWithCas` calls at the same `expectedSequenceNumber`, then assert exactly one 409 and one 200 (test 16), and that `latestCid` is never regressed by a stale renewal (test 17).
+
+- **`shares` data-minimization:** `permission` column dropped (derive from `writeDescriptorRef IS NOT NULL`), `revoked_at` dropped (hard-delete revoke), `encrypted_key`/`encrypted_ipns_key` dropped (replaced by descriptor refs). Unique constraint changes from partial (`WHERE revoked_at IS NULL`) on `(sharer_id, recipient_id, ipns_name)` to plain `UNIQUE (sharer_id, recipient_id, root_node_id)`.
+
+### File Created
+
+`/Users/myankelev/Code/random/cipher-box/.planning/phases/66-api-schema-cutover-publish-gate-and-tombstone/66-RESEARCH.md`
+
+### Confidence Assessment
+
+| Area | Level | Reason |
+|------|-------|--------|
+| FK map | HIGH | All migration SQL + entity files read directly |
+| Current publish path | HIGH | Full `ipns.service.ts` read |
+| Atomic CAS pattern | MEDIUM | TypeORM `createQueryBuilder().update()` + `result.affected` is standard; verify against TypeORM docs in plan |
+| 410 NestJS wiring | HIGH | `HttpStatus.GONE = 410` verified via node module introspection |
+| Test forcing mechanism | HIGH | `persistCallback` pattern directly observed in rotation-crash-safety test |
+| Shares reshape | HIGH | Current entity columns verified directly from source |
+
+### Open Questions
+
+1. **`parseCachedRecord` return type change** — adding a `seqFloor` discriminant breaks the existing `IpnsRecordFields | null` return type; the planner must update `resolveRecord` to handle both shapes in one step.
+2. **First-publish CAS INSERT path** — whether to use `INSERT … ON CONFLICT DO NOTHING` with a subsequent check, or keep the existing `findOne` + `create` path for the first-publish only. The atomic CAS UPDATE only applies to forward-publishes where an existing row must exist.
+3. **`tombstoneRecord` authorization** — who may call `POST /ipns/tombstone`: the original creator (`user_id` on the row), or any authenticated user who proves key possession? The design says tombstone fires via the write-rotation callback path (client-side initiated); the endpoint should check `ipns_records.user_id = req.user.id`.
+
+### Ready for Planning
+
+Research complete. Planner can now create PLAN.md files.</result>
+<usage><subagent_tokens>153439</subagent_tokens><tool_uses>100</tool_uses><duration_ms>815353</duration_ms></usage>
+</task-notification>
