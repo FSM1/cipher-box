@@ -462,8 +462,18 @@ jobs:
       - name: Start mock IPNS routing
         run: |
           cd tools/mock-ipns-routing
-          node dist/server.js &
-          sleep 2
+          node dist/index.js &
+          for i in $(seq 1 15); do
+            if curl -fsS http://localhost:3001/health > /dev/null 2>&1; then
+              echo "Mock IPNS routing is ready"
+              break
+            fi
+            sleep 1
+          done
+          if ! curl -fsS http://localhost:3001/health > /dev/null 2>&1; then
+            echo "Mock IPNS routing failed to start within 15s"
+            exit 1
+          fi
 
       - name: Start API server
         run: |
