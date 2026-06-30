@@ -325,9 +325,14 @@ export async function addToBin(params: {
   const nodeReadKey = await unsealChildReadKey(
     childRef.readKeySealed,
     folderState.folderKey,
-    publishedNode.id,
-    publishedNode.kind,
-    publishedNode.generation
+    publishedNode.id, // plaintext id — immutable across generations
+    publishedNode.kind, // plaintext kind — immutable across generations
+    // Generation-source rule (§2.6, Pitfall 1): the AAD MUST use childRef.generation
+    // (the PARENT MIRROR that childRef.readKeySealed was sealed under), NOT
+    // publishedNode.generation. A stale-CID IPNS serve makes the envelope generation
+    // diverge from the seal generation, failing GCM auth closed even though the
+    // parent's folder state is current. Mirrors moveItem / navigate.ts.
+    childRef.generation
   );
 
   // 6. Revoke shares BEFORE the destructive folder mutation (fail-closed)
@@ -357,7 +362,11 @@ export async function addToBin(params: {
       schema: 'node/v3' as const,
       kind: publishedNode.kind,
       id: publishedNode.id,
-      generation: publishedNode.generation,
+      // Capture the generation that matches nodeReadKey (the readKey wrapped by
+      // childRef.readKeySealed, unsealed under childRef.generation above). restoreFromBin
+      // re-seals with nodeRef.generation, so it must equal the seal generation — using
+      // the possibly-stale publishedNode.generation would store an inconsistent witness.
+      generation: childRef.generation,
       createdAt: 0,
       modifiedAt: 0,
     },
