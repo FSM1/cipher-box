@@ -22,7 +22,12 @@ import {
 import { RepublishService } from '../republish/republish.service';
 import { DelegatedRoutingClient } from './delegated-routing.client';
 import { MetricsService } from '../metrics/metrics.service';
-import { deriveIpnsName, parseIpnsRecord, verifyIpnsRecordSignature } from '@cipherbox/crypto';
+import {
+  deriveIpnsName,
+  parseIpnsRecord,
+  publicKeyFromIpnsName,
+  verifyIpnsRecordSignature,
+} from '@cipherbox/crypto';
 import { parseIpnsRecordBytes, parseCachedRecord, type SeqFloor } from './ipns-record.codec';
 import { ipnsVerifyCache } from './ipns-verify-cache';
 
@@ -558,6 +563,24 @@ export class IpnsService {
         const recordBytes = await this.delegatedRouting.resolve(ipnsName);
         if (recordBytes) {
           result = await parseIpnsRecordBytes(recordBytes, this.logger);
+          // Ed25519 identity records omit the embedded pubKey (the name encodes the key —
+          // see parse-record.ts), so a network-resolved record carries signatureV2/data but
+          // no pubKey. The strict client and the controller's all-or-nothing signature bundle
+          // need pubKey to verify, so supplement it from the requested name — the same trust
+          // model the DB-cached path uses (ipns-record.codec.ts), since the name cryptographically
+          // commits to the key. This makes the §6.5 seqFloor shared-folder serve path (and any
+          // network-ahead serve) client-verifiable instead of failing closed.
+          if (result && result.signatureV2 && result.data && !result.pubKey) {
+            try {
+              result.pubKey = Buffer.from(publicKeyFromIpnsName(ipnsName)).toString('base64');
+            } catch (e) {
+              this.logger.warn(
+                `Could not recover pubKey from name ${ipnsName} for network record: ${
+                  e instanceof Error ? e.message : String(e)
+                }`
+              );
+            }
+          }
           this.logger.debug(`IPNS name resolved successfully: ${ipnsName} -> ${result.cid}`);
         }
       } catch (error) {

@@ -1058,9 +1058,12 @@ describe('IpnsService', () => {
       expect(result!.sequenceNumber).toBe('10');
     });
 
-    it('should return network result without pubKey enrichment when DB signedRecord is null (D-06)', async () => {
-      // D-06: withCachedPublicKey enrich removed. Network result with sig fields but no pubKey
-      // is returned as-is; DB row with null signedRecord yields null from parseCachedRecord.
+    it('should supplement pubKey from the IPNS name for a signature-bearing network record when DB signedRecord is null', async () => {
+      // Phase 66 (§6.5 seqFloor serve): Ed25519 identity records omit the embedded pubKey
+      // (the name encodes the key), so a network-resolved record carries signatureV2/data but
+      // no pubKey. resolveRecord supplements pubKey from the requested name (publicKeyFromIpnsName) —
+      // the same trust model as the DB-cached path — so a shared-folder (null signedRecord) row
+      // still yields a client-verifiable record instead of failing the strict client closed.
       const mockRecordBytes = new Uint8Array([1, 2, 3]);
       const sigBytes = new Uint8Array(64).fill(0x12);
       const dataBytes = new Uint8Array(48).fill(0x34);
@@ -1084,8 +1087,9 @@ describe('IpnsService', () => {
 
       expect(result).not.toBeNull();
       expect(result!.cid).toBe('bafyNETWORK');
-      // No pubKey enrichment from DB — network result returned as-is
-      expect(result!.pubKey).toBeUndefined();
+      // pubKey supplemented from the name (identity records omit it) so the all-or-nothing
+      // signature bundle is complete and the strict client can verify.
+      expect(result!.pubKey).toBe(Buffer.from(testPublicKeyBytes).toString('base64'));
       expect(result!.signatureV2).toBe(Buffer.from(sigBytes).toString('base64'));
       expect(result!.data).toBe(Buffer.from(dataBytes).toString('base64'));
     });
