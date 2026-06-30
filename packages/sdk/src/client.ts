@@ -1843,8 +1843,15 @@ export class CipherBoxClient {
 
   /**
    * Delete an item from a write-shared folder (REQ-3).
+   *
+   * @param args.itemId - IPNS name of the item (read-body key).
+   * @param args.childNodeId - UUID of the child node (write-body key; minted at
+   *   creation time by uploadToSharedFolder / createSharedSubfolder).
    */
-  async deleteFromSharedFolder(shareId: string, args: { itemId: string }): Promise<void> {
+  async deleteFromSharedFolder(
+    shareId: string,
+    args: { itemId: string; childNodeId: string }
+  ): Promise<void> {
     return this.withOperation('deleteFromSharedFolder', async () => {
       const state = this.requireSharedFolder(shareId);
       const result = await shareOps.deleteFromSharedFolder(

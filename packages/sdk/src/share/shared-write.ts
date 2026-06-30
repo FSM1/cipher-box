@@ -16,8 +16,8 @@
  *
  * WriteChildRef.childId is a UUID (crypto.randomUUID()) matching the child's Node.id.
  * deleteFromSharedFolder/moveInSharedFolder match write-body entries by UUID childId;
- * callers must pass the UUID (or the child's UUID at creation time) as itemId when
- * they need write-body cleanup. Phase 66 will surface childId in the public API.
+ * callers must supply childNodeId (the UUID) alongside itemId (the IPNS name) so that
+ * read-body and write-body deletions use the correct key type each.
  */
 
 import type { SdkContext } from '@cipherbox/sdk-core';
@@ -588,16 +588,18 @@ export async function renameInSharedFolder(
 /**
  * Delete an item from a write-shared folder.
  *
- * Removes the item from the parent's read-body children AND the corresponding
- * WriteChildRef from the write-body (matched by Phase-65 childId=ipnsName
- * convention). Re-publishes the parent. addShareKeysFn is NEVER called (D-02).
+ * Removes the item from the parent's read-body children (matched by IPNS name)
+ * AND the corresponding WriteChildRef from the write-body (matched by child UUID).
+ * Re-publishes the parent. addShareKeysFn is NEVER called (D-02).
  *
- * @param params.itemId - IPNS name for read-body match; for write-body cleanup, pass the
- *   child UUID (same as WriteChildRef.childId from the creation result).
+ * @param params.itemId - IPNS name of the item to remove from the read-body children.
+ * @param params.childNodeId - UUID of the child node (WriteChildRef.childId, minted at
+ *   creation time via createSharedSubfolder/uploadToSharedFolder). Mirrors
+ *   moveInSharedFolder's childNodeId param.
  */
 export async function deleteFromSharedFolder(
   swCtx: SharedWriteContext,
-  params: { itemId: string }
+  params: { itemId: string; childNodeId: string }
 ): Promise<{
   publishedChildren: SealedChildRef[];
   newSequenceNumber: bigint;
@@ -613,8 +615,9 @@ export async function deleteFromSharedFolder(
   // Remove from read-body children by IPNS name
   const newChildren = swCtx.children.filter((c) => c.ipnsName !== params.itemId);
 
-  // Remove from write-body writeChildren (Phase-65 convention: childId === ipnsName)
-  const newWriteChildren = parentWriteChildren.filter((wc) => wc.childId !== params.itemId);
+  // Remove from write-body writeChildren by UUID (WriteChildRef.childId is a UUID,
+  // never an IPNS name — using itemId here would never match and leave a stale entry)
+  const newWriteChildren = parentWriteChildren.filter((wc) => wc.childId !== params.childNodeId);
 
   return resealAndPublishParent(
     swCtx,
@@ -657,6 +660,18 @@ export async function updateSharedFile(
     newData: Uint8Array;
     /** MIME type for the updated content (optional) */
     mimeType?: string;
+    /**
+     * Original creation timestamp of the file node (ms since epoch).
+     * When supplied, preserved on the rebuilt node; otherwise defaults to now.
+     * Phase-68 callers unseal the prior file node and forward this value.
+     */
+    originalCreatedAt?: number;
+    /**
+     * Prior version history to carry forward on the rebuilt node.
+     * When supplied, preserved on the rebuilt node; otherwise defaults to [].
+     * Phase-68 callers unseal the prior file node and forward this value.
+     */
+    originalVersions?: NodeContent['versions'];
   }
 ): Promise<void> {
   if (params.fileReadKey.length !== 32) {
@@ -690,7 +705,8 @@ export async function updateSharedFile(
     // Upload encrypted content to IPFS
     const { cid } = await swCtx.addToIpfsFn(encryptedContent);
 
-    // Build updated NodeContent
+    // Build updated NodeContent — preserve version history when caller supplies it.
+    // Phase-68 callers unseal the prior file node to obtain originalVersions.
     const nodeContent: NodeContent = {
       cid,
       fileIv: ivBase64,
@@ -698,17 +714,18 @@ export async function updateSharedFile(
       mimeType,
       encryptionMode: 'GCM',
       fileKey: newFileKey,
-      versions: [],
+      versions: params.originalVersions ?? [],
     };
 
     // Build updated file node — reuse caller-supplied fileNodeId so Node.id
     // stays aligned with WriteChildRef.childId in the parent's write-body.
+    // Preserve original createdAt when caller supplies it (Phase-68 passes prior value).
     const fileNode: Node = {
       schema: 'node/v3',
       kind: 'file',
       id: params.fileNodeId,
       generation: params.fileRef.generation,
-      createdAt: now,
+      createdAt: params.originalCreatedAt ?? now,
       modifiedAt: now,
       content: nodeContent,
       writeBody: {
