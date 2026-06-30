@@ -22,6 +22,40 @@
     "output_tokens": 14589,
     "api_call_count": 5
   },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01Q4HbiupYnfNAzfjnRp7yXi",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "696d3bb20dee",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 547,
+        "end": 548,
+        "entry_ids": [
+          "1f2ceacf-3b90-42bb-a350-c79edc9e549f"
+        ],
+        "tool_use_id": "toolu_01Q4HbiupYnfNAzfjnRp7yXi"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Q4HbiupYnfNAzfjnRp7yXi"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ship-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
   "session_metrics": {
     "turn_count": 6
   },
