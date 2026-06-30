@@ -1,0 +1,5 @@
+/gsd-discuss-phase 66
+
+---
+
+Is there any point in keeping that audit record though, especially given that ECIES encrypted key material is unnecessarily stored in the database.

@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "efeb5372447b",
+  "strategy": "manual-commit",
+  "branch": "feat/api-schema-cutover-publish-gate-and-tombstone",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/66-api-schema-cutover-publish-gate-and-tombstone/66-CONTEXT.md",
+    ".planning/phases/66-api-schema-cutover-publish-gate-and-tombstone/66-DISCUSSION-LOG.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ef/eb5372447b/0/metadata.json",
+      "transcript": "/ef/eb5372447b/0/full.jsonl",
+      "content_hash": "/ef/eb5372447b/0/content_hash.txt",
+      "prompt": "/ef/eb5372447b/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 11931,
+    "cache_creation_tokens": 175682,
+    "cache_read_tokens": 4830297,
+    "output_tokens": 60357,
+    "api_call_count": 37
+  }
+}

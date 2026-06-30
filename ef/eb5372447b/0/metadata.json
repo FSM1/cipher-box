@@ -1,0 +1,122 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "efeb5372447b",
+  "session_id": "9e85b04f-206a-4b39-9d27-448984820df9",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-30T13:45:08.261046Z",
+  "branch": "feat/api-schema-cutover-publish-gate-and-tombstone",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/66-api-schema-cutover-publish-gate-and-tombstone/66-CONTEXT.md",
+    ".planning/phases/66-api-schema-cutover-publish-gate-and-tombstone/66-DISCUSSION-LOG.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "df182d2dc0dc",
+  "token_usage": {
+    "input_tokens": 11931,
+    "cache_creation_tokens": 175682,
+    "cache_read_tokens": 4830297,
+    "output_tokens": 60357,
+    "api_call_count": 37
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-discuss-phase-2026-06-30T13:11:33.54351Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-discuss-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "e23634e4c5f5",
+      "timestamp": "2026-06-30T13:11:33.54351Z",
+      "native": {
+        "command": "/gsd-discuss-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-discuss-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Run the GSD 'discuss phase' workflow for Phase 66 (API Schema Cutover, Publish Gate, and Tombstone) to surface and resolve implementation gray areas, then produce a CONTEXT.md that downstream research/planning agents can act on without re-asking the user.",
+    "outcome": "Eleven decisions were locked across schema migration strategy, column shape, CAS publish gate, tombstone/resolve semantics, invite slimming, grant uniqueness, permission column, TEE column boundary, revoke semantics, and test proof approach; 66-CONTEXT.md and 66-DISCUSSION-LOG.md were written and committed.",
+    "learnings": {
+      "repo": [
+        "share_invites carries encrypted_child_keys jsonb that must be dropped; encrypted_key becomes the single ephemeral-wrapped root readKey",
+        "shares entity currently has (sharer_id, recipient_id, ipns_name) partial-unique with encrypted_key/encrypted_ipns_key; root_node_id/root_ipns_name/root_generation and readDescriptorRef/writeDescriptorRef need to be added",
+        "Ed25519 pubkey must be recovered from k51 IPNS name via publicKeyFromIpnsName — the public_key column on ipns_records must not be retained (caused two Phase-60 regressions)",
+        "ipns_records rename from folder_ipns is part of this cutover; share_keys table and addShareKeys logic are deleted outright",
+        "apps/api already has a supertest e2e harness at apps/api/test/*.e2e-spec.ts",
+        "Tombstoned publish returns 410 with structured body { error: 'IPNS_TOMBSTONED', ipnsName } flowing through pnpm api:generate into @cipherbox/api-client",
+        "Hard-delete on revoke preferred over soft-delete: revoked_at column dropped entirely; stale ECIES key material at rest has no consumer post-rotation and conflicts with zero-DB-crypto direction",
+        "permission column on shares dropped in this phase; TEE columns on ipns_records stay as-is (Phase 67 boundary)",
+        "Concurrent-CAS race test requires a deterministic forcing mechanism through the real client path (barrier or temp axios interceptor) — all sdk-e2e proofs go through real client→API round-trip"
+      ],
+      "code": [
+        {
+          "path": ".planning/phases/66-api-schema-cutover-publish-gate-and-tombstone/66-CONTEXT.md",
+          "line": 1,
+          "finding": "Newly created CONTEXT.md capturing all 11 locked decisions for Phase 66"
+        },
+        {
+          "path": ".planning/phases/66-api-schema-cutover-publish-gate-and-tombstone/66-DISCUSSION-LOG.md",
+          "line": 1,
+          "finding": "Discussion log written alongside CONTEXT.md per GSD workflow convention"
+        }
+      ],
+      "workflow": [
+        "GSD discuss-phase workflow: init phase-op first, scout codebase, surface gray areas interactively, deep-dive selected ones, write CONTEXT.md from template, write discussion log, then commit",
+        "Decisions that override the AI recommendation should be noted explicitly so planners see the delta",
+        "DATABASE_EVOLUTION_PROTOCOL reversibility discipline is explicitly accepted-to-waive in greenfield/staging-wipe contexts; this must be documented in CONTEXT.md not just assumed",
+        "Memory writes during a session (feedback on DB crypto minimization / hard-delete preference) should update both the memory file and MEMORY.md index atomically"
+      ]
+    },
+    "friction": [
+      "todo cross-reference matches were mostly keyword noise — only one item (rotation grant-threading follow-up) was genuinely Phase-66-relevant, requiring manual filtering",
+      "The MEMORY.md edit required two sequential Edit calls because the initial edit needed to be verified against the current file state before appending"
+    ],
+    "open_items": [
+      "Phase 67: schedule column collapse (TEE-03) and TEE lease-renewer",
+      "Phase 67: richer ipns_records status enum beyond tombstoned_at + generation",
+      "Phase 68: durable client-side high-water mark (ROT-07)",
+      "Phase 68/69: live rotation→grant re-mint/revoke caller flow (DATA-04 caller side deferred)",
+      "Q3 split-authority: writeDescriptorRef nullable path deferred to Q3",
+      "Planner must own: deterministic forcing mechanism for concurrent-CAS race in sdk-e2e (barrier or axios interceptor pattern)"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-30T13:44:39.567618Z",
+    "agent_lines": 319,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 319,
+    "total_lines_changed": 319,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
