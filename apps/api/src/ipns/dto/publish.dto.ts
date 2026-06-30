@@ -104,6 +104,17 @@ export class PublishIpnsDto {
   @IsString()
   @Matches(/^\d+$/, { message: 'expectedSequenceNumber must be a numeric string' })
   expectedSequenceNumber?: string;
+
+  @ApiProperty({
+    description:
+      'Content generation for this IPNS name (bigint as string). When provided, the server rejects publishes with a lower generation number (forward-only gate TEE-07). Omit for non-rotation publishes.',
+    required: false,
+    example: '0',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/, { message: 'generation must be a numeric string' })
+  generation?: string;
 }
 
 export class PublishIpnsResponseDto {
@@ -213,6 +224,17 @@ export class PublishIpnsEntryDto {
   @IsString()
   @Matches(/^\d+$/, { message: 'expectedSequenceNumber must be a numeric string' })
   expectedSequenceNumber?: string;
+
+  @ApiProperty({
+    description:
+      'Content generation for this IPNS name (bigint as string). When provided, the server rejects publishes with a lower generation number (forward-only gate TEE-07). Omit for non-rotation publishes.',
+    required: false,
+    example: '0',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/, { message: 'generation must be a numeric string' })
+  generation?: string;
 }
 
 /**
