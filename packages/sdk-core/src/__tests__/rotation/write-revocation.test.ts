@@ -522,6 +522,25 @@ describe('rotateWriteFromNode', () => {
     // The write-body's writeChildren must reference the new child write key sealed
     // under the new parent write key (via sealChildWriteKey)
     expect(mockFns.sealChildWriteKey).toHaveBeenCalledTimes(1);
+
+    // Verify sealChildWriteKey received the correct arguments.
+    // arg[0]: child's new write key (NEW_CHILD_WRITE_KEY — not zeroed by engine)
+    // arg[1]: parent's new write key (32-byte Uint8Array — zeroed at end of rotateWriteFromNode)
+    // arg[2..4]: child id / kind / generation for AAD binding
+    const sealChildArgs = mockFns.sealChildWriteKey.mock.calls[0] as [
+      Uint8Array,
+      Uint8Array,
+      string,
+      string,
+      number,
+    ];
+    expect(sealChildArgs[0]).toEqual(NEW_CHILD_WRITE_KEY); // child write key sealed under parent
+    expect(sealChildArgs[1]).toBeInstanceOf(Uint8Array);
+    expect(sealChildArgs[1].length).toBe(32); // parent write key (zeroed after use)
+    expect(sealChildArgs[2]).toBe(CHILD_ID);
+    expect(sealChildArgs[3]).toBe(CHILD_NODE.kind);
+    expect(sealChildArgs[4]).toBe(CHILD_NODE.generation);
+
     // The sealed write key must appear in the root's writeBody.writeChildren
     expect(sealedRoot.writeBody?.writeChildren[0]?.writeKeySealed).toBe(
       SEALED_CHILD_WRITE_KEY_UNDER_NEW_ROOT

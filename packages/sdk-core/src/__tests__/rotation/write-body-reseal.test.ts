@@ -41,6 +41,8 @@ const mockFns = vi.hoisted(() => ({
   sealNode: vi.fn(),
   sealChildReadKey: vi.fn(),
   unsealChildReadKey: vi.fn(),
+  sealChildWriteKey: vi.fn(),
+  unsealChildWriteKey: vi.fn(),
 }));
 
 vi.mock('../../ipns', () => ({
@@ -65,6 +67,8 @@ vi.mock('@cipherbox/core', () => ({
   sealNode: mockFns.sealNode,
   sealChildReadKey: mockFns.sealChildReadKey,
   unsealChildReadKey: mockFns.unsealChildReadKey,
+  sealChildWriteKey: mockFns.sealChildWriteKey,
+  unsealChildWriteKey: mockFns.unsealChildWriteKey,
   CryptoError: class CryptoError extends Error {
     code: string;
     constructor(msg: string, code: string) {
@@ -488,11 +492,12 @@ describe('rotateReadFromNode — nodeKeySource.writeKey threaded to rotateOne (P
     const capturedSealWriteKeys: Uint8Array[] = [];
     mockFns.sealNode.mockImplementation(
       async (_node: import('@cipherbox/core').Node, _readKey: Uint8Array, writeKey: Uint8Array) => {
-        capturedSealWriteKeys.push(new Uint8Array(writeKey));
+        capturedSealWriteKeys.push(new Uint8Array(writeKey)); // copy before any zeroing
         return makePublishedNodeWithWriteSealed(_node.id, _node.generation + 1);
       }
     );
 
+    // No .catch(): in GREEN, rotateReadFromNode must complete without throwing.
     await rotateReadFromNode({
       rootNodeId: NODE_ID,
       rootNodeIpnsName: NODE_IPNS,
@@ -520,16 +525,15 @@ describe('rotateReadFromNode — nodeKeySource.writeKey threaded to rotateOne (P
         }
         return undefined;
       },
-    }).catch(() => {
-      // In RED: if the engine throws for writeSealed-without-writeKey, catch here
     });
 
-    // Must have at least one sealNode call
-    expect(capturedSealWriteKeys.length).toBeGreaterThan(0);
+    // Must have captured one sealNode call per BFS node (root + child = 2).
+    expect(capturedSealWriteKeys.length).toBeGreaterThanOrEqual(2);
 
-    // RED: all sealNode calls use PLACEHOLDER_WRITE_KEY (all-zeros) → fails.
-    // GREEN: at least one call uses a non-zero key matching NODE_WRITE_KEY or CHILD_WRITE_KEY.
-    const hasNonZeroWriteKey = capturedSealWriteKeys.some((k) => k.some((b) => b !== 0));
-    expect(hasNonZeroWriteKey).toBe(true);
+    // GREEN: each captured write key matches the node-specific key supplied by nodeKeySource.
+    // capturedSealWriteKeys contains COPIES made at call time, so zeroing originals won't affect them.
+    expect(capturedSealWriteKeys).toEqual(
+      expect.arrayContaining([NODE_WRITE_KEY, CHILD_WRITE_KEY])
+    );
   });
 });
