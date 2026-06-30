@@ -1,0 +1,313 @@
+/gsd-plan-phase 66
+
+---
+
+<task-notification>
+<task-id>ac4f25dabee0f01c7</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/13524ecf-de1b-47de-bf59-e080a2ed8848/tasks/ac4f25dabee0f01c7.output</output-file>
+<status>completed</status>
+<summary>Agent "Research Phase 66" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## RESEARCH COMPLETE
+
+**Phase:** 66 - api-schema-cutover-publish-gate-and-tombstone
+**Confidence:** HIGH
+
+### Key Findings
+
+- **FK map (D-01):** `folder_ipns` has zero SQL FK dependents from other tables. `shares.ipns_name`, `vaults.root_ipns_name`, and `ipns_republish_schedule.ipns_name` are all plain `varchar(255)` columns — not FK constraints. The migration drop-recreate order is straightforward: `DROP TABLE share_keys CASCADE` → `DROP TABLE shares CASCADE` → `CREATE TABLE shares` (new schema) → `DROP TABLE folder_ipns CASCADE` → `CREATE TABLE ipns_records`.
+
+- **Current publish path is non-atomic (confirmed TOCTOU):** `upsertFolderIpns` (L214–L406 of `ipns.service.ts`) is a `findOne → gate → save` sequence. Two concurrent writers both at `dbSeq = N` both pass the in-memory CAS check, and the second `save` silently overwrites the first. The atomic replacement must use `createQueryBuilder().update().where('ipns_name = :n AND sequence_number = :expected AND generation &lt;= :incoming AND tombstoned_at IS NULL').execute()` and check `result.affected === 0`.
+
+- **`parseCachedRecord` case-split (Test 15):** Current code at L64 returns `null` for both expected-null `signedRecord` (shared-folder rows) and CID-mismatch corruption, treating both as undifferentiated "fail closed." §6.5 requires differentiating: null `signedRecord` shared-folder rows should apply a `seq ≥ storedSeq` floor against the network record, not unconditionally 404.
+
+- **NestJS 410 wiring:** `HttpStatus.GONE = 410` confirmed in installed NestJS ^11.0.0. `throw new HttpException({ error: 'IPNS_TOMBSTONED', ipnsName }, HttpStatus.GONE)` emits a typed JSON body that Swagger picks up and `pnpm api:generate` propagates into `@cipherbox/api-client`.
+
+- **SDK-E2E concurrent-CAS forcing mechanism:** Phase 64/65 used a `persistCallback` hook injection (`rotation-crash-safety.test.ts` ~L628) to interpose a concurrent publish between rotation steps. Tests 16/17 use `Promise.allSettled` with two simultaneous `publishWithCas` calls at the same `expectedSequenceNumber`, then assert exactly one 409 and one 200 (test 16), and that `latestCid` is never regressed by a stale renewal (test 17).
+
+- **`shares` data-minimization:** `permission` column dropped (derive from `writeDescriptorRef IS NOT NULL`), `revoked_at` dropped (hard-delete revoke), `encrypted_key`/`encrypted_ipns_key` dropped (replaced by descriptor refs). Unique constraint changes from partial (`WHERE revoked_at IS NULL`) on `(sharer_id, recipient_id, ipns_name)` to plain `UNIQUE (sharer_id, recipient_id, root_node_id)`.
+
+### File Created
+
+`/Users/myankelev/Code/random/cipher-box/.planning/phases/66-api-schema-cutover-publish-gate-and-tombstone/66-RESEARCH.md`
+
+### Confidence Assessment
+
+| Area | Level | Reason |
+|------|-------|--------|
+| FK map | HIGH | All migration SQL + entity files read directly |
+| Current publish path | HIGH | Full `ipns.service.ts` read |
+| Atomic CAS pattern | MEDIUM | TypeORM `createQueryBuilder().update()` + `result.affected` is standard; verify against TypeORM docs in plan |
+| 410 NestJS wiring | HIGH | `HttpStatus.GONE = 410` verified via node module introspection |
+| Test forcing mechanism | HIGH | `persistCallback` pattern directly observed in rotation-crash-safety test |
+| Shares reshape | HIGH | Current entity columns verified directly from source |
+
+### Open Questions
+
+1. **`parseCachedRecord` return type change** — adding a `seqFloor` discriminant breaks the existing `IpnsRecordFields | null` return type; the planner must update `resolveRecord` to handle both shapes in one step.
+2. **First-publish CAS INSERT path** — whether to use `INSERT … ON CONFLICT DO NOTHING` with a subsequent check, or keep the existing `findOne` + `create` path for the first-publish only. The atomic CAS UPDATE only applies to forward-publishes where an existing row must exist.
+3. **`tombstoneRecord` authorization** — who may call `POST /ipns/tombstone`: the original creator (`user_id` on the row), or any authenticated user who proves key possession? The design says tombstone fires via the write-rotation callback path (client-side initiated); the endpoint should check `ipns_records.user_id = req.user.id`.
+
+### Ready for Planning
+
+Research complete. Planner can now create PLAN.md files.</result>
+<usage><subagent_tokens>153439</subagent_tokens><tool_uses>100</tool_uses><duration_ms>815353</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a71590bb89d8f013e</task-id>
+<tool-use-id>toolu_01HoVsuhCUuxEfStsTBpqBaU</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/13524ecf-de1b-47de-bf59-e080a2ed8848/tasks/a71590bb89d8f013e.output</output-file>
+<status>completed</status>
+<summary>Agent "Pattern map Phase 66" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PATTERN MAPPING COMPLETE
+
+**Phase:** 66 - api-schema-cutover-publish-gate-and-tombstone
+**Files classified:** 11
+**Analogs found:** 11 / 11
+
+### Coverage
+- Files with exact analog: 11
+- Files with role-match analog: 0
+- Files with no analog: 0
+
+### Key Patterns Identified
+
+1. **Migration class:** `1749300000000-IpnsCacheKeyedByName.ts` + `1700000000000-FullSchema.ts` together give the complete idiom — `queryRunner.query()` SQL template literals, inline `CONSTRAINT` in CREATE TABLE, FKs and indexes in separate subsequent calls, `IF EXISTS`/`IF NOT EXISTS` guards. The `down()` for Phase 66 throws (greenfield waiver D-01).
+
+2. **Entity decorators:** `folder-ipns.entity.ts` is the direct source for `IpnsRecord` — copy as-is, drop `publicKey`, add `tombstonedAt` (timestamptz nullable) and `generation` (bigint → string, matching `sequenceNumber` pattern). `Share` entity follows the same decorator conventions; the new `@Unique(['sharerId', 'recipientId', 'rootNodeId'])` replaces the partial-index comment (no migration-managed partial index needed under D-11 hard-delete).
+
+3. **Atomic CAS + `result.affected`:** No `createQueryBuilder().update().execute()` exists yet in apps/api services — the closest existing `result.affected` usage is `auth.service.ts:246` (`repository.delete`) and `republish.service.ts:258`. The atomic UPDATE itself must be written fresh following RESEARCH.md Pattern 1. `result.affected === 0` → follow-up `findOne` → 410 vs 409 disambiguation.
+
+4. **410 exception wiring:** Use `HttpException({ error: 'IPNS_TOMBSTONED', ipnsName }, HttpStatus.GONE)` (NOT `GoneException`) so the structured body flows through Swagger/`api:generate`. Add `@ApiResponse({ status: 410, schema: { ... } })` on `publishRecord`, `resolveRecord`, and the new `tombstone` endpoint.
+
+5. **sdk-e2e test scaffold:** `rotation-crash-safety.test.ts` provides the `persistCallback`-injection race-forcing pattern (lines 627-683), the `MultiAccountFixture` setup convention, and the docblock prerequisites format. Test 16 uses `Promise.allSettled` for concurrent publishes; Test 20 hits a live `POST /ipns/tombstone` endpoint then asserts 410 on subsequent publish and resolve.
+
+### File Created
+`/Users/myankelev/Code/random/cipher-box/.planning/phases/66-api-schema-cutover-publish-gate-and-tombstone/66-PATTERNS.md`
+
+### Ready for Planning
+Pattern mapping complete. Planner can reference analog patterns with file paths and line numbers in PLAN.md files.</result>
+<usage><subagent_tokens>66127</subagent_tokens><tool_uses>21</tool_uses><duration_ms>206836</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>afd31accb1856b295</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/13524ecf-de1b-47de-bf59-e080a2ed8848/tasks/afd31accb1856b295.output</output-file>
+<status>completed</status>
+<summary>Agent "Plan Phase 66" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The commit landed cleanly. Phase 66 planning is complete.
+
+## PLANNING COMPLETE
+
+**Phase 66: API Schema Cutover, Publish Gate, and Tombstone** — 9 plans across 5 waves, committed to `feat/api-schema-cutover-publish-gate-and-tombstone` (`c0883138e`). All plans pass frontmatter + structure validation (0 errors, 0 warnings).
+
+### Wave structure (parallel-optimized)
+
+| Wave | Plans | Concern |
+|------|-------|---------|
+| 1 | **66-01** (IPNS entity rename + propagation), **66-03** (shares entities + DTOs reshape) | disjoint file sets — parallel |
+| 2 | **66-02** (atomic CAS + generation gate + tombstone + resolve case-split), **66-04** (shares service/controller + invite-claim), **66-05** (drop-recreate migration) | parallel; 02→01, 04→03, 05→01+03 |
+| 3 | **66-06** (`pnpm api:generate` + commit client) | depends 02+04 |
+| 4 | **66-07** (sdk-core `generation` threading), **66-08** (web compile-gate stubs) | parallel; both depend 06 |
+| 5 | **66-09** ([BLOCKING] `migration:run` + sdk-e2e `ipns-publish-gate` proof suite) | depends 05+07+02+04 |
+
+### Coverage
+- **Requirements:** every phase ID covered — DATA-01 (03/04/05/08/09), DATA-02 (03/04/05/06/08/09), DATA-03 (01/05/09), DATA-04 (03/04/06/09), TEE-04 (02/06/09), TEE-05 (02/06/09), TEE-07 (02/06/07/09).
+- **Decisions:** all 11 locked decisions (D-01..D-11) cited in their implementing plans.
+- **Multi-source audit:** GOAL, all 6 ROADMAP success criteria, REQUIREMENTS, RESEARCH features, and CONTEXT decisions all map to plans — no unplanned items, no phase split needed.
+
+### Key planning calls made
+- **Open research questions resolved in 66-02:** `parseCachedRecord` returns a 3-way union with a `{ seqFloor }` discriminant; first-publish stays an INSERT (CAS UPDATE only when a row exists); tombstone authz defaults to `user_id = req.user.id`.
+- **[BLOCKING] schema-push** is the first task of 66-09 (`pnpm --filter @cipherbox/api migration:run`), sequenced after all schema edits and before the sdk-e2e proof — exactly as the schema_push contract requires (build/typecheck pass without it, so it cannot be skipped).
+- **api:generate + commit** (success criterion 6) is plan 66-06, gated by `scripts/check-api-client.sh`.
+- **TDD/D-08 reconciliation:** the behavioral RED tests live in the sdk-e2e suite (66-09, tests 15/16/17/20 + a generation-regression case); 66-02 tasks carry `&lt;behavior&gt;` contracts and verify via `nest build` (static); the heavy e2e RUN is flagged as the **orchestrator/human gate**, never a checker subagent (RAM).
+- **Critical consumer-breakage handling (66-08):** root `pnpm typecheck` includes `@cipherbox/web exec tsc -b`, and the cutover deletes 6 share endpoints that `apps/web/src/services/share.service.ts` imports. 66-08 is a **compile-gate-stub-only** plan (throw-stubs + dead-import removal, mirroring the 62-08/63-65 precedent) — the real `rotateReadFromNode`/durable-state/`reWrapForRecipients` rework stays in Phase 68, explicitly not pulled forward.
+
+### Scope boundary honored
+No Phase 67 (schedule collapse / TEE enclave), Phase 68 (durable client high-water, live rotation caller), or Phase 69 (FUSE) work is in these plans. The app stays intentionally non-runnable mid-milestone: `apps/api` is red between waves 1→2 (66-03 reshapes types before 66-04 wires logic) and goes green at 66-04; the full monorepo typecheck is restored at wave 4.
+
+**Plan files:** `/Users/myankelev/Code/random/cipher-box/.planning/phases/66-api-schema-cutover-publish-gate-and-tombstone/66-0{1..9}-PLAN.md`
+
+**Next step:** `/gsd-execute-phase 66` (Wave 1 dispatches 66-01 + 66-03 in parallel).
+
+One thing worth your eye before execution: **66-08's web-stub scope**. It's the one plan that touches `apps/web` outside the api boundary — included solely to keep `pnpm typecheck` green. If you'd rather let web typecheck break mid-milestone and fold all web stubbing into Phase 68, I can drop 66-08 and relax the wave-merge typecheck gate to api/sdk/sdk-core only. Flag it if you want that.</result>
+<usage><subagent_tokens>323605</subagent_tokens><tool_uses>75</tool_uses><duration_ms>1744964</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a9928b9f33af7bbec</task-id>
+<tool-use-id>toolu_01Wbmoe15bKt4ZEPHxpbSuRf</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/13524ecf-de1b-47de-bf59-e080a2ed8848/tasks/a9928b9f33af7bbec.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify Phase 66 plans" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## VERIFICATION PASSED
+
+**Phase:** 66-api-schema-cutover-publish-gate-and-tombstone
+**Plans verified:** 9
+**Issues:** 0 blockers, 1 warning
+
+---
+
+### Coverage Summary
+
+| Requirement | Plans | Status |
+|-------------|-------|--------|
+| DATA-01 | 66-03, 66-04, 66-05, 66-08, 66-09 | Covered |
+| DATA-02 | 66-03, 66-04, 66-05, 66-06, 66-08, 66-09 | Covered |
+| DATA-03 | 66-01, 66-05, 66-09 | Covered |
+| DATA-04 | 66-03, 66-04, 66-06, 66-08, 66-09 | Covered |
+| TEE-04 | 66-02, 66-06, 66-09 | Covered |
+| TEE-05 | 66-02, 66-06, 66-09 | Covered |
+| TEE-07 | 66-02, 66-06, 66-07, 66-09 | Covered |
+
+---
+
+### Plan Summary
+
+| Plan | Tasks | Files | Wave | Status |
+|------|-------|-------|------|--------|
+| 66-01 | 2 | 11 | 1 | Valid |
+| 66-02 | 3 | 6 | 2 | Valid |
+| 66-03 | 2 | 13 | 1 | Valid (see warning) |
+| 66-04 | 3 | 6 | 2 | Valid |
+| 66-05 | 1 | 1 | 2 | Valid |
+| 66-06 | 1 | 3 | 3 | Valid |
+| 66-07 | 1 | 2 | 4 | Valid |
+| 66-08 | 1 | 3 | 4 | Valid |
+| 66-09 | 2 | 1 | 5 | Valid |
+
+---
+
+### Dimension Findings
+
+**Dimension 1: Requirement Coverage — PASS**
+
+All seven requirement IDs appear in at least one plan's `requirements` frontmatter field and have corresponding tasks with concrete actions.
+
+**Dimension 2: Task Completeness — PASS**
+
+All tasks carry `&lt;files&gt;`, `&lt;action&gt;`, `&lt;verify&gt;`, and `&lt;done&gt;`. Every `&lt;automated&gt;` block contains a runnable command. Behavioral proofs explicitly deferred to sdk-e2e (66-09) with the orchestrator/human gate noted per D-08 — this is correct, not a gap.
+
+**Dimension 3: Dependency Correctness — PASS**
+
+The dependency graph is acyclic. Two apparent gaps are harmless under wave-based execution:
+
+- 66-06 (`depends_on: ["66-02","66-04"]`) does not list 66-05, but 66-05 is Wave 2 and 66-06 is Wave 3 — the executor blocks Wave 3 until all Wave 2 completes.
+- 66-09 (`depends_on: ["66-02","66-04","66-05","66-07"]`) does not list 66-08, but 66-08 is Wave 4 and 66-09 is Wave 5 — same guarantee. 66-09 has no artifact dependency on 66-08's outputs.
+
+**Dimension 4: Key Links — PASS**
+
+Critical wiring verified:
+
+- Atomic CAS WHERE clause: `ipns_name = :n AND sequence_number = :expected AND generation &lt;= :incoming AND tombstoned_at IS NULL` — explicitly stated in 66-02 Task 1 action AND acceptance criteria. Correct.
+- 0-row disambiguation: single follow-up `findOne` → `tombstonedAt` set → 410, else → 409. No TOCTOU.
+- EOL renewal guard: the same unified WHERE covers renewal (tombstoned names get rejected at the atomic UPDATE; no separate code branch needed). Correct per §5.5.
+- Resolve-410 typed body `{ error: 'IPNS_TOMBSTONED', ipnsName }` wired through `api:generate` → generated client (D-07). ✅
+- Tombstone removes from republish batch: `tombstoneRecord` calls `republishService.unenrollIpns`. ✅
+- `parseCachedRecord` 3-way union (null-signedRecord → `{ seqFloor }` discriminant; CID mismatch → fail closed). ✅
+- `publicKeyFromIpnsName` as sole pubkey recovery (dropped column usages in both service and codec). ✅
+- `migration:run` [BLOCKING] task placed in 66-09 Task 1 before the sdk-e2e proof. ✅
+- `pnpm api:generate` + staged commit in 66-06; `check-api-client.sh` explicit in acceptance criteria. ✅
+
+**Dimension 5: Scope Sanity — 1 WARNING**
+
+```yaml
+issue:
+  plan: "66-03"
+  dimension: scope_sanity
+  severity: warning
+  description: "Plan 66-03 modifies 13 files — above the 10-file warning threshold"
+  metrics:
+    tasks: 2
+    files: 13
+  fix_hint: &gt;
+    Acceptable as-is given that 10 of the 13 are DTOs/entity files with no logic
+    (pure reshaping). The plan explicitly acknowledges apps/api will not build until
+    66-04 lands, which limits the risk. Consider splitting dto reshaping into its
+    own plan if execution struggles with context, but this is not a blocker.
+```
+
+**Dimension 6: Verification Derivation — PASS**
+
+Truths are behavioral and measurable (single atomic UPDATE, 0-row disambiguation, typed 410, hard-delete revoke, compile-green). Not implementation-trivia like "library installed."
+
+**Dimension 7: Context Compliance — PASS**
+
+All 11 decisions (D-01..D-11) have implementing tasks. No deferred ideas pulled forward:
+
+- `ipns_republish_schedule` column collapse: absent from all plans.
+- TEE lease-renewer contract: absent.
+- Durable client-side high-water: 66-07 acceptance criteria explicitly verify `grep -ci "indexeddb|highWater|high-water"` returns 0.
+- Live rotation→grant caller: 66-08 explicitly stubs with Phase-68 deferral throws.
+
+**Dimension 7b: Scope Reduction — PASS**
+
+No D-XX is delivered as a "v1/static" shadow. The one area using scope-limiting language (66-08 compile stubs) is within the D-04 locked boundary: the web live caller is explicitly deferred to Phase 68.
+
+**Dimension 7c: Architectural Tier Compliance — PASS**
+
+The Architectural Responsibility Map in RESEARCH.md assigns all Phase-66 capabilities (publish CAS, tombstone state, shares grants, 410 marker) to API/Backend. All plan tasks target `apps/api/src/` and `packages/api-client/` — no capability is placed in a lower-trust tier.
+
+**Dimension 8: Nyquist Compliance — PASS**
+
+VALIDATION.md exists. All tasks carry `&lt;automated&gt;` commands. No watch-mode flags. No full-E2E commands on implementation tasks (the 66-09 sdk-e2e run is correctly deferred to orchestrator/human per D-08 and [[feedback-gsd-subagents-no-test-runs]]).
+
+**Dimension 9: Cross-Plan Data Contracts — PASS**
+
+The `IpnsRecord` entity column set flows 66-01 → 66-02 (CAS uses entity) → 66-05 (migration must match). The 66-05 action text explicitly enumerates every column and the executor is instructed to read the entity files first. `signed_record`, `encrypted_ipns_private_key`, `key_epoch` all present in migration DDL — no silent column omission.
+
+**Dimension 10: CLAUDE.md Compliance — PASS**
+
+- `pnpm api:generate` + commit of generated files: fulfilled by 66-06 with `check-api-client.sh` explicit in acceptance criteria.
+- camelCase API fields / snake_case DB columns: consistent throughout (e.g., `rootNodeId` / `root_node_id`, `tombstonedAt` / `tombstoned_at`).
+- No new TypeScript enums introduced (D-09 uses `writeDescriptorRef IS NOT NULL` derivation instead of a status enum; D-02's `tombstoned_at` is a nullable timestamp, not an enum).
+- Conventional commit format: commit hooks not explicitly planned here but GSD workflow handles.
+
+**Dimension 11: Research Resolution — PASS**
+
+RESEARCH.md has no `## Open Questions` section. All open questions called out in 66-02's objective ("resolves open research questions") are addressed within that plan's action text.
+
+**Dimension 12: Pattern Compliance — PASS**
+
+PATTERNS.md exists for this phase. Plans reference it in their `read_first` lists: 66-01 cites "66-PATTERNS.md 'IpnsRecord entity' section"; 66-02 cites "66-PATTERNS.md 'ipns.service.ts publishRecord'"; 66-09 cites "66-PATTERNS.md 'ipns-publish-gate.test.ts'". Pattern references are plan-specific rather than incidental.
+
+**Dimension: Verify Command Format Sanity — PASS**
+
+No `^` anchors on package-manager tree output, no `2&gt;/dev/null || echo "0"` swallowed errors feeding comparisons, no hard-coded test counts asserted.
+
+**Dimension: Numeric/Factual Claim Authority — PASS**
+
+No numeric claims in plans conflict with RESEARCH.md. The FK Map findings (zero SQL FKs to `folder_ipns`) are RESEARCH.md-sourced and directly drive the migration's decision not to drop dependent constraints — consistent with the migration action text.
+
+---
+
+### 66-08 Scope Assessment (explicitly requested)
+
+66-08 stays within compile-gate-stub scope. It:
+- Removes dead imports of the 6 deleted api-client functions
+- Replaces affected call bodies with `throw new Error('deferred to Phase 68...')`
+- For surviving-but-reshaped calls, either updates field access mechanically (e.g., drops `permission`, reads `readDescriptorRef`) or stubs with the Phase-68 throw where crypto is needed
+
+The acceptance criteria explicitly verify no `rotateReadFromNode`, `indexedDB`, or `IDBDatabase` references in `share.service.ts`. The action text prohibits touching `folderTree` reconcile, `reWrapForRecipients`/`addShareKeysFn` types, and durable IndexedDB high-water. This aligns exactly with D-04's scope boundary and the CONTEXT.md domain note ("Do not pull later-phase apps/web or crates/fuse deletions forward").
+
+Classification: **no overreach detected — WARNING not applicable**.
+
+---
+
+### Recommendation
+
+One warning, zero blockers. Execution may proceed as planned.</result>
+<usage><subagent_tokens>90195</subagent_tokens><tool_uses>21</tool_uses><duration_ms>268317</duration_ms></usage>
+</task-notification>

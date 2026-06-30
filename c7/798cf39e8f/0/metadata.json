@@ -1,0 +1,105 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "c7798cf39e8f",
+  "session_id": "dda78467-98d8-444f-a74c-4762636fe3dc",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-30T14:55:16.240956Z",
+  "branch": "feat/api-schema-cutover-publish-gate-and-tombstone",
+  "checkpoints_count": 3,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "5d8ca27de978",
+  "token_usage": {
+    "input_tokens": 13814,
+    "cache_creation_tokens": 260963,
+    "cache_read_tokens": 3698506,
+    "output_tokens": 54911,
+    "api_call_count": 30
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Run the GSD plan-phase workflow for Phase 66 (api-schema-cutover-publish-gate-and-tombstone), producing executable PLAN.md files via the full research → pattern-map → plan → verify pipeline.",
+    "outcome": "Planning completed successfully: 9 plans across 5 waves committed at c0883138e, all 7 requirements and 11 decisions covered, verification passed with 0 blockers. User opted to stop after planning and execute in a separate session.",
+    "learnings": {
+      "repo": [
+        "folder_ipns has zero real SQL FK dependents — shares.ipns_name, vaults.root_ipns_name, and ipns_republish_schedule.ipns_name are plain varchar(255) columns, not FK constraints. Drop-recreate migration order is straightforward without constraint cascading.",
+        "upsertFolderIpns in ipns.service.ts is a findOne → gate → save sequence with a confirmed TOCTOU race: two concurrent writers at dbSeq=N both pass the in-memory CAS check, and the second save silently overwrites the first.",
+        "No createQueryBuilder().update().execute() pattern exists anywhere in apps/api services yet; it must be written fresh for the atomic CAS path.",
+        "Use HttpException({ error: 'IPNS_TOMBSTONED', ipnsName }, HttpStatus.GONE) — NOT GoneException — so the structured body flows through Swagger and pnpm api:generate propagates it into @cipherbox/api-client.",
+        "parseCachedRecord (ipns.service.ts L64) treats both expected-null shared-folder rows and CID-mismatch corruption as undifferentiated null, losing the seq-floor behavior required for shared folders.",
+        "shares.permission column should be derived from writeDescriptorRef IS NOT NULL rather than stored; unique constraint changes from partial index on (sharer_id, recipient_id, ipns_name) WHERE revoked_at IS NULL to plain UNIQUE (sharer_id, recipient_id, root_node_id).",
+        "tombstoneRecord must call republishService.unenrollIpns to remove the name from the republish batch.",
+        "API-SURFACE.md intel extraction returns 0 symbols for this repo — it's a no-op; the planner relies on CONTEXT/RESEARCH/PATTERNS instead.",
+        "Migration command is: pnpm --filter @cipherbox/api migration:run (runs typeorm migration:run -d src/data-source.ts); migrations live in apps/api/src/migrations/."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 214,
+          "end_line": 406,
+          "finding": "upsertFolderIpns implements a non-atomic findOne → gate → save CAS sequence; concurrent writers at the same dbSeq both pass the in-memory check, causing silent overwrites."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 64,
+          "end_line": 64,
+          "finding": "parseCachedRecord returns null for both expected-null signedRecord (shared-folder rows) and CID-mismatch corruption, collapsing two semantically different cases into one undifferentiated fail-closed path."
+        },
+        {
+          "path": "apps/api/src/auth/auth.service.ts",
+          "line": 246,
+          "end_line": 246,
+          "finding": "Existing result.affected usage pattern (repository.delete) — reference for the atomic CAS UPDATE result.affected === 0 check to be written in 66-02."
+        },
+        {
+          "path": "apps/api/src/ipns/republish.service.ts",
+          "line": 258,
+          "end_line": 258,
+          "finding": "Second existing result.affected usage pattern in the codebase."
+        },
+        {
+          "path": "packages/sdk-e2e/src/rotation-crash-safety.test.ts",
+          "line": 627,
+          "end_line": 683,
+          "finding": "persistCallback hook injection is the race-forcing pattern for concurrent CAS tests; used in Phase 64/65 and referenced as the template for Phase 66 tests 16/17."
+        }
+      ],
+      "workflow": [
+        "GSD commit helper can emit commit_failed as a false-negative even when git confirms the commit landed — verify with git log rather than retrying the commit.",
+        "Wave-based execution provides implicit dependency ordering: if plan A is Wave N and plan B is Wave N+1, B need not explicitly list A in depends_on since the executor blocks the wave.",
+        "The plan-checker independently resolved an open scope question (66-08 web stubs) without a planner revision loop — verification agents can be used to settle scope ambiguity, not just catch errors.",
+        "Drift pre-check results referencing .learnings/, .husky/, landing/, and config files are reliable noise when the phase scope is apps/api only — non-blocking classification is correct in that context.",
+        "Pattern mapper with 11/11 analogs found confirms the phase is building on well-trodden patterns; a 0-analog result would have flagged a greenfield risk requiring more detailed spec."
+      ]
+    },
+    "friction": [
+      "GSD commit helper reported commit_failed false-negative for VALIDATION.md even though git confirmed the commit landed at 5a70cfa09; required manual verification with git log.",
+      "auto_advance: true was configured globally and had to be explicitly addressed mid-workflow before finalizing — it wasn't surfaced until step 15 of the orchestrator."
+    ],
+    "open_items": [
+      "Phase 66 execution (9 plans / 5 waves) deferred to a fresh session — Wave 1 dispatches 66-01 + 66-03 in parallel.",
+      "66-08 (apps/web compile-gate stubs): real rotateReadFromNode, durable-state, and reWrapForRecipients rework explicitly deferred to Phase 68.",
+      "parseCachedRecord return type change to a 3-way union with { seqFloor } discriminant breaks the existing IpnsRecordFields | null return type; resolveRecord must be updated in 66-02 to handle both shapes.",
+      "First-publish CAS INSERT path kept as findOne + create (atomic CAS UPDATE only applies to forward-publishes where a row already exists) — decision made by planner, may need revisiting if races surface on first-publish.",
+      "Tombstone authorization defaulted to user_id = req.user.id (original creator); key-possession-proof authorization model not implemented.",
+      "Phases 67 (schedule collapse / TEE enclave), 68 (durable client high-water / live rotation caller), and 69 (FUSE) not started.",
+      "ipns_republish_schedule column collapse and TEE lease-renewer contract explicitly deferred out of Phase 66 scope."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
