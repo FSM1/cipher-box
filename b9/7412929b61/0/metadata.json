@@ -1,0 +1,198 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "b97412929b61",
+  "session_id": "3a6781af-f138-4624-9282-008e4a4f85ee",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-30T18:47:12.109083Z",
+  "branch": "feat/api-schema-cutover-publish-gate-and-tombstone",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "d5e92927e411",
+  "token_usage": {
+    "input_tokens": 24796,
+    "cache_creation_tokens": 579784,
+    "cache_read_tokens": 29335359,
+    "output_tokens": 154618,
+    "api_call_count": 149
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-ship-phase-2026-06-30T17:43:21.996672Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "313c42cba7d5",
+      "timestamp": "2026-06-30T17:43:21.996672Z",
+      "native": {
+        "command": "/ship-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/ship-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_015hnviiBjJefSJag3vhEWWk",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-secure-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d5e92927e411",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 94,
+        "end": 95,
+        "entry_ids": [
+          "91b663a4-ddcb-449c-9146-b30ed488bcc4"
+        ],
+        "tool_use_id": "toolu_015hnviiBjJefSJag3vhEWWk"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015hnviiBjJefSJag3vhEWWk"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-secure-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01W9vTebF5NW7EcKbA996zxF",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-validate-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d5e92927e411",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 583,
+        "end": 584,
+        "entry_ids": [
+          "041ee225-2240-42de-b3d6-9dff6c495437"
+        ],
+        "tool_use_id": "toolu_01W9vTebF5NW7EcKbA996zxF"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01W9vTebF5NW7EcKbA996zxF"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-validate-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Run the full post-execute-phase ship loop for Phase 66 (API schema cutover / publish-gate / tombstone) autonomously through all gates: verify → secure → validate (Nyquist) → simplify → SDK E2E → CodeRabbit CLI → PR creation → review resolution.",
+    "outcome": "All gates passed and PR #584 was created and pushed. Five fix/hardening commits were added during review (T-66-E1 security fix, tombstone 404 + republish guard, throttle + DTO regex hardening, dead-code cleanup, psql timeouts). Both greptile review threads were resolved. Session ended mid-flow while pushing a CI-required prettier fix for the migration file after the Lint job failed.",
+    "learnings": {
+      "repo": [
+        "Phase 66 deleted all 5 shares spec files (share-invite, share, etc.) without replacing them for the new descriptor-ref model, leaving security-critical claim logic with zero unit coverage post-cutover.",
+        "GSD enforcement hooks (verify:post, validate-phase) are disabled in config — gates must be run manually when the ship-phase flow requires them.",
+        "Automated GSD executor commits bypass the pre-commit prettier hook; violations surface only in CI `eslint .` (caught the migration file drift).",
+        "The 89 sdk-e2e `describe.skip` quarantines carry a `D-01` marker ('SDK runtime stubbed mid-milestone, re-enable at phase 63-65') and predate the branch — any phase touching shares should verify these aren't regressions via `git log` on the test file.",
+        "`api:generate` reformats `openapi.json` (single-line → multi-line array expansion) even when the semantic surface is unchanged, producing a cosmetic diff that triggers the api-client pre-commit hook — revert the churn to unblock commits.",
+        "The `tombstone` endpoint is the only IPNS controller endpoint missing `@Throttle`; all siblings (publish, batch, unenroll, resolve) have it.",
+        "Sibling IPNS DTOs (resolve, tombstone) use the strict `/^k51qzi5uqu5...|bafzaa.../` regex but `create-share.dto` and `create-invite.dto` used the loose `/^k[a-z0-9]+$/` — inconsistency that CodeRabbit flagged.",
+        "CodeRabbit CLI false-positives on deleted entities: it reported `FolderIpns` consumers as critical findings because mock-variable names in test files still contained the string, even though the entity symbol was fully removed and the API built and booted cleanly."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/shares/share-invite.service.ts",
+          "line": 178,
+          "end_line": 186,
+          "finding": "T-66-E1 security bug: comment claimed 'Write grant is presence-derived from writeDescriptorRef' but code set Share.writeDescriptorRef from dto.writeDescriptorRef without first gating on invite.writeDescriptorRef — a read-only invite could yield a write grant if the claimer supplied the field."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "finding": "tombstoneRecord discarded the UPDATE's affected-row count and always returned 200, making non-existent, unowned, and already-tombstoned records indistinguishable from successful tombstones (greptile P1)."
+        },
+        {
+          "path": "apps/api/src/republish/republish.service.ts",
+          "finding": "syncIpnsRecordSequence lacked a tombstonedAt: IsNull() guard in its UPDATE criteria, allowing the republish race window to bump a tombstoned row's sequence (greptile P2)."
+        },
+        {
+          "path": "apps/api/src/republish/republish.service.spec.ts",
+          "line": 205,
+          "end_line": 205,
+          "finding": "Spec asserted exact TypeORM update criteria — must be kept in sync when WHERE clause changes (e.g., adding IsNull guards). Required importing IsNull and updating the assertion when the guard was added."
+        },
+        {
+          "path": "apps/api/src/shares/dto/create-share.dto.ts",
+          "line": 62,
+          "end_line": 62,
+          "finding": "rootIpnsName used loose /^k[a-z0-9]+$/ instead of the canonical strict IPNS-name regex used in sibling DTOs."
+        },
+        {
+          "path": "apps/api/src/shares/dto/create-invite.dto.ts",
+          "line": 17,
+          "end_line": 17,
+          "finding": "Same loose IPNS-name regex as create-share.dto — both needed tightening to match the canonical pattern used by resolve/tombstone DTOs."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.spec.ts",
+          "line": 1886,
+          "end_line": 1886,
+          "finding": "Tombstone behavioral tests (404 for unowned/non-existent, 409 for already-tombstoned, success path) were absent and could be inserted after the unenrollBatch describe block using the existing QB mock + mockFolderIpnsRepo.findOne harness."
+        },
+        {
+          "path": "tests/sdk-e2e/src/suites/ipns-publish-gate.test.ts",
+          "finding": "psql DB-helper functions lacked connection timeouts — CodeRabbit flagged this; adding connect_timeout and statement_timeout to psql invocations prevents silent hangs in CI."
+        }
+      ],
+      "workflow": [
+        "Adversarially verify subagent results: run the authored spec yourself and confirm no impl files were touched before trusting the GAPS FILLED report.",
+        "After gh pr create, the release bot pushes a chore(release) commit; always git fetch + rebase before the next push or it will be rejected.",
+        "GitHub GraphQL reply mutations (addPullRequestReviewThreadReply) can timeout silently while the corresponding resolveReviewThread mutation succeeds — re-query reviewThreads afterward and check comment bodies separately to confirm replies actually landed.",
+        "CodeRabbit CLI requires a retry on service connection errors; the exit-code-0 result on retry is authoritative — check the full finding count since findings stream incrementally and early reads may be incomplete.",
+        "The api:generate semantic-diff check (canonicalized JSON comparison) is the reliable signal for whether a spec actually changed — file-level diff is misleading due to formatting churn.",
+        "When CI Lint fails on a committed file, check whether the violation was introduced by an automated commit (GSD executor, release bot) that bypassed local hooks rather than assuming it came from hand-written changes."
+      ]
+    },
+    "friction": [
+      "GSD verify:post and validate-phase enforcement hooks are disabled in project config — gates must be run manually, adding cognitive overhead to the ship loop.",
+      "CodeRabbit CLI hit a service connection error on first run and produced no output; required a blind retry with no indication of which step failed.",
+      "OpenAPI generator (api:generate) reformats openapi.json cosmetically even when no surface change occurred, triggering the api-client pre-commit hook and requiring an explicit revert step.",
+      "Automated GSD executor commit bypassed the local pre-commit prettier hook, causing a CI Lint failure on the migration file that only surfaced after the PR was pushed.",
+      "Background build-chain command timed out on the final git log step, causing a false-negative exit signal — required manual verification via git log.",
+      "GitHub GraphQL reply mutations timed out asymmetrically (resolve succeeded, reply did not), requiring a separate re-query and re-post step to confirm thread replies actually landed.",
+      "gh pr edit is blocked on this repo by Projects-classic GraphQL; every PR body update requires gh api -X PATCH with a temp file.",
+      "The shares module had zero unit specs post-cutover (all 5 deleted, none replaced) — this was a silent gap not caught by any gate until Nyquist ran."
+    ],
+    "open_items": [
+      "Restore full shares module unit coverage: create-share, claim-share, revoke-share, list-shares, and bin operations for the new descriptor-ref model (todo: .planning/todos/pending/2026-06-30-restore-shares-module-unit-coverage.md).",
+      "Add partial-unique index on ipns_records (userId) WHERE is_root to enforce the root-record invariant at the DB layer (todo: 2026-06-30-ipns-records-root-uniqueness-index.md).",
+      "Fix first-publish insert race in IPNS service: concurrent creates for the same (userId, ipnsName) can both pass the initial findOne check (todo: 2026-06-30-ipns-first-publish-insert-race.md).",
+      "Add CHECK constraint on share_invites.claim_count to enforce the non-negative invariant at the DB layer (todo: 2026-06-30-share-invites-claim-count-check-constraint.md).",
+      "89 sdk-e2e suites remain quarantined under D-01 (share-operations, invite-link, folder-crud, file-operations, etc.) — planned for phases 63-65 but still skipped; need re-enabling and any stub replacement.",
+      "CodeRabbit's GitHub PR-level review had not yet landed at the end of the transcript — its findings (beyond the CLI pre-ship review) still need triage and thread resolution.",
+      "Session ended before confirming the prettier-fix push succeeded and all CI checks settled — final green status and thread count not yet confirmed."
+    ]
+  }
+}
