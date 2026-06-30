@@ -1170,8 +1170,6 @@ type WriteRotationResult = {
   oldIpnsName: string;
   /** Newly minted k51 IPNS name (first-published at sequenceNumber 1n). */
   newIpnsName: string;
-  /** Freshly minted Ed25519 private key for the new k51 (stored in new write-body). */
-  newIpnsPrivateKey: Uint8Array;
   /** Freshly minted Ed25519 public key for the new k51 (used to derive newIpnsName). */
   newIpnsPublicKey: Uint8Array;
   /** Freshly minted 32-byte write key for this node. */
@@ -1203,7 +1201,8 @@ async function rotateWriteSubtree(
   readKey: Uint8Array,
   writeKey: Uint8Array,
   ctx: SdkContext,
-  callbacks: WriteRevocationCallbacks
+  callbacks: WriteRevocationCallbacks,
+  pendingTombstones: string[]
 ): Promise<WriteRotationResult> {
   // Step 1: Resolve old IPNS name → fetch → parse published envelope.
   const resolved = await resolveIpnsRecord(oldIpnsName, ctx);
@@ -1252,41 +1251,44 @@ async function rotateWriteSubtree(
       );
     }
 
-    // Derive child read key (needed to re-seal the child's read-body unchanged).
-    // NEVER zeroed here — caller (this function) is the terminal owner; we zero it
-    // on failure paths at the end of this scope block (D-09).
-    const childReadKey = await unsealChildReadKey(
-      matchedChildRef.readKeySealed,
-      readKey,
-      childPub.id,
-      childPub.kind,
-      matchedChildRef.generation
-    );
-
-    // Derive child write key (needed to unseal the child's write-body).
-    const childWriteKey = await unsealChildWriteKey(
-      writeChildRef.writeKeySealed,
-      writeKey,
-      writeChildRef.childId,
-      childPub.kind,
-      matchedChildRef.generation
-    );
-
+    // Derive child read and write keys; zero both in finally regardless of which step
+    // throws. If unsealChildWriteKey throws, childReadKey is already derived and must
+    // be zeroed (D-09 terminal ownership).
     let childResult: WriteRotationResult;
+    let childReadKey: Uint8Array | undefined;
+    let childWriteKey: Uint8Array | undefined;
     try {
+      childReadKey = await unsealChildReadKey(
+        matchedChildRef.readKeySealed,
+        readKey,
+        childPub.id,
+        childPub.kind,
+        matchedChildRef.generation
+      );
+
+      // Derive child write key (needed to unseal the child's write-body).
+      childWriteKey = await unsealChildWriteKey(
+        writeChildRef.writeKeySealed,
+        writeKey,
+        writeChildRef.childId,
+        childPub.kind,
+        matchedChildRef.generation
+      );
+
       // Recurse into the child subtree BEFORE processing this node (child-first).
       childResult = await rotateWriteSubtree(
         matchedChildRef.ipnsName,
         childReadKey,
         childWriteKey,
         ctx,
-        callbacks
+        callbacks,
+        pendingTombstones
       );
     } finally {
       // Zero derived child keys when this scope exits (success or failure).
       // These were derived by this function — it is their terminal owner (D-09).
-      childReadKey.fill(0);
-      childWriteKey.fill(0);
+      childReadKey?.fill(0);
+      childWriteKey?.fill(0);
     }
 
     ipnsToChildResult.set(matchedChildRef.ipnsName, childResult);
@@ -1368,15 +1370,21 @@ async function rotateWriteSubtree(
       ctx,
     });
 
-    // Step 12: Tombstone-intent — remove old name from the TEE republish batch.
-    // Fired AFTER the new name is published (atomicity: new record exists before
-    // the old one is retired from the batch — §5.5).
-    await callbacks.teeUnenrollFn(oldIpnsName);
+    // Zero the Ed25519 private key immediately after publish — it has been both
+    // sealed into the write-body (Step 9) and used to sign the IPNS record (Step 11).
+    // It is no longer needed and is the terminal owner here (D-09).
+    newKeypair.privateKey.fill(0);
+
+    // Step 12: Deferred tombstone-intent — enqueue the old name for removal from
+    // the TEE republish batch. The actual unenroll is fired by rotateWriteFromNode
+    // AFTER the entire subtree is successfully published, so a failed ancestor
+    // publish cannot leave the TEE with a unenrolled child it still references
+    // via the old parent pointer (§5.5 ordering guarantee).
+    pendingTombstones.push(oldIpnsName);
 
     return {
       oldIpnsName,
       newIpnsName,
-      newIpnsPrivateKey: newKeypair.privateKey,
       newIpnsPublicKey: newKeypair.publicKey,
       newWriteKey,
       nodeId: node.id,
@@ -1421,8 +1429,13 @@ export async function rotateWriteFromNode(params: {
   rootWriteKey: Uint8Array;
   ctx: SdkContext;
   callbacks: WriteRevocationCallbacks;
-}): Promise<void> {
+}): Promise<{ newRootIpnsName: string }> {
   const { rootNodeId, rootIpnsName, rootReadKey, rootWriteKey, ctx, callbacks } = params;
+
+  // Collect old IPNS names for deferred tombstone-intent. We fire teeUnenrollFn for
+  // each name AFTER the entire subtree is published so a failed ancestor publish
+  // cannot leave live parents pointing at already-unenrolled child names (§5.5).
+  const pendingTombstones: string[] = [];
 
   // Perform the child-first recursive rotation for the entire subtree.
   // rootReadKey and rootWriteKey are caller-supplied — NEVER zeroed here (D-09).
@@ -1431,8 +1444,15 @@ export async function rotateWriteFromNode(params: {
     rootReadKey,
     rootWriteKey,
     ctx,
-    callbacks
+    callbacks,
+    pendingTombstones
   );
+
+  // Fire deferred tombstones now that the entire subtree is successfully published.
+  // Old names are removed from the TEE republish batch only once all new names are live.
+  for (const oldName of pendingTombstones) {
+    await callbacks.teeUnenrollFn(oldName);
+  }
 
   // Re-wrap the new root write key for each surviving co-writer and drop revoked grants.
   // queryWriteGrantsFn is called AFTER the new root name is published so the new
@@ -1454,4 +1474,10 @@ export async function rotateWriteFromNode(params: {
       await callbacks.writeDescriptorRefPersistFn(grant.shareId, writeDescriptorRef);
     }
   }
+
+  // Zero the root's new write key after all uses (grants loop above is the last consumer).
+  // This key was minted by rotateWriteSubtree; rotateWriteFromNode is its terminal owner (D-09).
+  rootResult.newWriteKey.fill(0);
+
+  return { newRootIpnsName: rootResult.newIpnsName };
 }
