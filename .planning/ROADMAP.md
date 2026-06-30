@@ -310,7 +310,32 @@ Plans:
 5. A tombstoned `ipns_records` row is rejected at the publish gate (403/410) and at the EOL-only renewal; resolve returns a 410 marker for tombstoned names; server-side `generation` gate enforces forward-only per node, mirroring the sequence CAS
 6. `pnpm api:generate` is run and the regenerated `packages/api-client/src/generated/` is committed alongside the migration; the `check-api-client.sh` pre-commit hook passes
 
-**Plans**: TBD
+**Plans**: 9 plans
+
+Plans:
+**Wave 1**
+
+- [ ] 66-01-PLAN.md — IPNS entity rename (`folder_ipns`→`ipns_records`, drop `public_key`, +`tombstoned_at`/`generation`) + import-site propagation [DATA-03]
+- [ ] 66-03-PLAN.md — Shares entities + DTOs reshape (descriptor refs; delete `share_keys`; slim `share_invites`) [DATA-01, DATA-02, DATA-04]
+
+**Wave 2** *(blocked on Wave 1)*
+
+- [ ] 66-02-PLAN.md — IPNS atomic CAS publish + generation gate + tombstone + resolve case-split + 410 marker [TEE-04, TEE-05, TEE-07]
+- [ ] 66-04-PLAN.md — Shares service/controller + invite-claim rewrite (hard-delete revoke; single-`readKey` grant) [DATA-01, DATA-02, DATA-04]
+- [ ] 66-05-PLAN.md — Forward drop-recreate migration `1750000000000-ApiSchemaCutover` [DATA-01, DATA-02, DATA-03]
+
+**Wave 3** *(blocked on Wave 2)*
+
+- [ ] 66-06-PLAN.md — `pnpm api:generate` + commit regenerated `@cipherbox/api-client` (success criterion 6)
+
+**Wave 4** *(blocked on Wave 3)*
+
+- [ ] 66-07-PLAN.md — sdk-core `generation` param threading (publish primitives) [TEE-07]
+- [ ] 66-08-PLAN.md — web compile-gate stubs for deleted/reshaped share+invite endpoints (real rework defers to Phase 68)
+
+**Wave 5** *(blocked on Wave 4)*
+
+- [ ] 66-09-PLAN.md — [BLOCKING] `migration:run` + sdk-e2e `ipns-publish-gate` proof suite (tests 15/16/17/20 + TEE-07) [TEE-04, TEE-05, TEE-07, DATA-01..04]
 
 ---
 
@@ -392,7 +417,7 @@ Plans:
 | 63 | Read-Chain Navigation and Rotation Core | 7/7 | Complete    | 2026-06-29 |
 | 64 | Rotation Soundness — Revocation Guarantees | 8/8 | Complete   | 2026-06-29 |
 | 65 | SDK Write-Chain, Bin Re-link, and Invite Claim | 7/7 | Complete    | 2026-06-30 |
-| 66 | API Schema Cutover, Publish Gate, and Tombstone | 0/? | Not started | - |
+| 66 | API Schema Cutover, Publish Gate, and Tombstone | 0/9 | Planned | - |
 | 67 | TEE Lease-Renewer Contract Rewrite | 0/? | Not started | - |
 | 68 | Web Integration — Rotation UX and Durable Client State | 0/? | Not started | - |
 | 69 | FUSE and WinFsp — Rust Integration and Grant-Root Awareness | 0/? | Not started | - |
