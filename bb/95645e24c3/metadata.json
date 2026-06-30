@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "bb95645e24c3",
+  "strategy": "manual-commit",
+  "branch": "feat/api-schema-cutover-publish-gate-and-tombstone",
+  "checkpoints_count": 5,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/bb/95645e24c3/0/metadata.json",
+      "transcript": "/bb/95645e24c3/0/full.jsonl",
+      "content_hash": "/bb/95645e24c3/0/content_hash.txt",
+      "prompt": "/bb/95645e24c3/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 79539,
+    "cache_creation_tokens": 1115657,
+    "cache_read_tokens": 91889864,
+    "output_tokens": 470342,
+    "api_call_count": 361
+  }
+}
