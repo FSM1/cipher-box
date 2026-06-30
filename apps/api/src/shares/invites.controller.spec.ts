@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { InvitesController } from './invites.controller';
 import { ShareInviteService } from './share-invite.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -139,11 +139,14 @@ describe('InvitesController', () => {
       expect(result).toEqual({ shareId: 'share-uuid-999' });
     });
 
-    it('propagates service errors (e.g. already claimed / self-claim)', async () => {
-      shareInviteService.claimInvite.mockRejectedValue(new NotFoundException());
+    it('propagates service errors (e.g. already claimed / self-claim → 409)', async () => {
+      // The service throws ConflictException for both the self-claim and the
+      // already-claimed/expired/revoked contention paths (share-invite.service.ts),
+      // and the controller propagates it unchanged.
+      shareInviteService.claimInvite.mockRejectedValue(new ConflictException());
 
       await expect(controller.claimInvite(mockRequest, 'tok-claim', dto)).rejects.toThrow(
-        NotFoundException
+        ConflictException
       );
     });
   });

@@ -39,3 +39,16 @@ for scaffolding:
 ```
 git show <pre-cutover-sha>:apps/api/src/shares/share-invite.service.spec.ts
 ```
+
+## Also — contract-valid fixtures in shares.controller.spec.ts (CodeRabbit NIT3)
+
+`shares.controller.spec.ts` fixtures (`fullShare`/`minimalShare`, ids,
+`rootIpnsName`, `recipientPublicKey` at ~lines 23-55, 88-96, 141-142, 260-286)
+use placeholder strings — non-UUID ids like `'share-uuid-1'`, truncated IPNS
+stubs like `'k51qzi5uqu5full'`, and short public keys like `'04sharerkey'`.
+Because these controller tests mock the service and bypass Nest pipes, invalid
+fixtures can mask API-contract drift. Swap them to contract-valid values: real
+UUIDs, full `k51qzi5uqu5...` (~62-char) IPNS names, and `0x04` + 128 hex public
+keys. The `lookupUser` test in the same file already models a valid key as
+`` `0x04${'a'.repeat(128)}` `` — reuse that rigor. Behavior-only; no production
+code touched.

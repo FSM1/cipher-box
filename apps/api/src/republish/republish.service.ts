@@ -376,11 +376,20 @@ export class RepublishService {
     signedRecordBase64: string
   ): Promise<void> {
     try {
-      // Guard on tombstoned_at IS NULL: in the TEE race window (the batch picked
-      // up this entry before tombstoneRecord ran and unenrolled it) the row may
-      // already be tombstoned — never resurrect its sequenceNumber/signedRecord.
+      // Two guards on the sync UPDATE criteria:
+      //  - tombstoned_at IS NULL: in the TEE race window (the batch picked up this
+      //    entry before tombstoneRecord ran and unenrolled it) the row may already
+      //    be tombstoned — never resurrect its sequenceNumber/signedRecord.
+      //  - sequence_number <= newSequenceNumber (forward-only): a user publish may
+      //    have already advanced this row past the TEE's batch sequence — never let
+      //    a stale TEE result regress the sequenceNumber/signedRecord.
       await this.ipnsRecordRepository.update(
-        { userId, ipnsName, tombstonedAt: IsNull() },
+        {
+          userId,
+          ipnsName,
+          tombstonedAt: IsNull(),
+          sequenceNumber: LessThanOrEqual(newSequenceNumber),
+        },
         {
           sequenceNumber: newSequenceNumber,
           signedRecord: Buffer.from(signedRecordBase64, 'base64'),

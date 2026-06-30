@@ -36,6 +36,16 @@ compile-time placeholder.
   no-ops — a no-op permission change would mislead the user into thinking access
   changed when it did not.
 
+## Specific symptom — ShareDialog fake empty state (CodeRabbit OD3)
+
+`ShareDialog.tsx` (~line 104-119) fetches sent shares in an async effect that now
+`throw`s (deferred to Phase 68). The `.catch` only logs, but the `.finally` still
+runs `setRecipientsFetched(true)` (and clears loading), so the dialog renders the
+"no recipients yet" empty state on every open — hiding the fact that recipient
+management is unavailable. Fix as part of the gating: on failure, set an explicit
+unavailable/error state and do NOT mark `recipientsFetched = true`, so the UI shows
+"unavailable" rather than a misleading empty list.
+
 ## Before doing this
 
 Confirm whether the permission-downgrade and lazy-rotation entry points are

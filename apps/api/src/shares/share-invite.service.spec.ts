@@ -233,6 +233,23 @@ describe('ShareInviteService — claimInvite security invariants', () => {
     });
   });
 
+  // ------------------------------------------------------------------ Atomic claim race
+  describe('atomic single-claim contention', () => {
+    it('throws ConflictException when the atomic claim UPDATE affects no rows', async () => {
+      // The invite passes every preflight check, but the transactional UPDATE
+      // (status = active AND claim_count < max_claims AND not expired) matches 0
+      // rows because a concurrent claimer already won the race. The single-claim
+      // guard must reject rather than mint a second Share.
+      mockInviteRepo.findOne.mockResolvedValue(makeInvite());
+      mockQb.execute.mockResolvedValue({ affected: 0 });
+
+      const dto: ClaimInviteDto = { readDescriptorRef: READ_HEX };
+
+      await expect(service.claimInvite(token, claimerId, dto)).rejects.toThrow(ConflictException);
+      expect(mockManager.create).not.toHaveBeenCalled();
+    });
+  });
+
   // ------------------------------------------------------------------ Idempotent re-claim
   describe('idempotent re-claim', () => {
     it('returns the existing shareId without minting a duplicate when a Share already exists', async () => {

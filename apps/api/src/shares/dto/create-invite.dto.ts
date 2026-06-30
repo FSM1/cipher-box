@@ -81,7 +81,9 @@ export class CreateInviteDto {
       'Server never sees the ephemeral private key — it lives only in the URL fragment.',
   })
   @IsString()
-  @Matches(/^[0-9a-fA-F]+$/, { message: 'encryptedKey must be a hex string' })
+  @Matches(/^(?:[0-9a-fA-F]{2})+$/, {
+    message: 'encryptedKey must be an even-length hex string',
+  })
   @MinLength(258)
   @MaxLength(2048)
   encryptedKey!: string;
