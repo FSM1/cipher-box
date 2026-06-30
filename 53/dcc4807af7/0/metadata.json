@@ -1,0 +1,49 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "53dcc4807af7",
+  "session_id": "15792aca-8a5d-46a6-aafa-f0b7991dd37b",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-30T17:30:01.712345Z",
+  "branch": "feat/api-schema-cutover-publish-gate-and-tombstone",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "ff131bc035c8",
+  "token_usage": {
+    "input_tokens": 16481,
+    "cache_creation_tokens": 517617,
+    "cache_read_tokens": 34169278,
+    "output_tokens": 223411,
+    "api_call_count": 126
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-execute-phase-2026-06-30T15:00:11.889631Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "cf38f50fcc68",
+      "timestamp": "2026-06-30T15:00:11.889631Z",
+      "native": {
+        "command": "/gsd-execute-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 10
+  }
+}
