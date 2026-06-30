@@ -7,7 +7,7 @@ import { VaultService, QUOTA_LIMIT_BYTES } from './vault.service';
 import { Vault } from './entities/vault.entity';
 import { PinnedCid } from './entities/pinned-cid.entity';
 import { PendingUnpin } from './entities/pending-unpin.entity';
-import { FolderIpns } from '../ipns/entities/folder-ipns.entity';
+import { IpnsRecord } from '../ipns/entities/ipns-record.entity';
 import { User } from '../auth/entities/user.entity';
 import { TeeKeyStateService } from '../tee/tee-key-state.service';
 import { MetricsService } from '../metrics/metrics.service';
@@ -225,7 +225,7 @@ describe('VaultService', () => {
           useValue: mockPinnedCidRepo,
         },
         {
-          provide: getRepositoryToken(FolderIpns),
+          provide: getRepositoryToken(IpnsRecord),
           useValue: mockFolderIpnsRepo,
         },
         {

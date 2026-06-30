@@ -1,6 +1,6 @@
 import { HttpException, HttpStatus, Logger } from '@nestjs/common';
 import { parseIpnsRecord, publicKeyFromIpnsName } from '@cipherbox/crypto';
-import type { FolderIpns } from './entities/folder-ipns.entity';
+import type { IpnsRecord } from './entities/ipns-record.entity';
 
 export interface IpnsRecordFields {
   cid: string;
@@ -51,7 +51,7 @@ export async function parseIpnsRecordBytes(
 }
 
 export async function parseCachedRecord(
-  cached: FolderIpns | null,
+  cached: IpnsRecord | null,
   logger: Logger
 ): Promise<IpnsRecordFields | null> {
   if (!cached?.latestCid) {
@@ -76,21 +76,15 @@ export async function parseCachedRecord(
       );
       return null;
     }
-    // DB columns are authoritative for sequenceNumber (upsertFolderIpns always
+    // DB columns are authoritative for sequenceNumber (upsertIpnsRecord always
     // increments it, while the embedded bytes reflect the client's pre-increment value).
     //
-    // The Ed25519 IPNS record's pubKey is not re-extractable from the signed bytes by
-    // parseIpnsRecordBytes, so supply it for the strict client. Precedence:
-    //   1. the validated publicKey column — fast path, populated at publish time
-    //      (publish enforced deriveIpnsName(publicKey) === ipnsName), then
-    //   2. recover it from the ipnsName itself. For Ed25519 the k51... name encodes the
-    //      public key, so it is the AUTHORITATIVE source and is always available even when
-    //      the nullable publicKey column was never populated for this row — e.g.
-    //      shared-folder records, whose column is null but whose signed record is valid.
-    // The strict client re-checks deriveIpnsName(pubKey) === ipnsName, so deriving from the
-    // name stays fail-closed.
-    let pubKey =
-      parsed.pubKey ?? (cached.publicKey ? cached.publicKey.toString('base64') : undefined);
+    // D-03: public_key column dropped — publicKeyFromIpnsName is the sole recovery path.
+    // For Ed25519 the k51... name encodes the public key, so it is the AUTHORITATIVE
+    // source and is always available (shared-folder rows, regular rows, all rows).
+    // The strict client re-checks deriveIpnsName(pubKey) === ipnsName, so deriving from
+    // the name stays fail-closed.
+    let pubKey = parsed.pubKey;
     if (!pubKey) {
       try {
         pubKey = Buffer.from(publicKeyFromIpnsName(cached.ipnsName)).toString('base64');

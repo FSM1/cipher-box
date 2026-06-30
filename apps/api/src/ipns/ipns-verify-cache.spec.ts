@@ -21,7 +21,7 @@ import { IpnsVerifyCache, CACHE_TTL_MS, ipnsVerifyCache } from './ipns-verify-ca
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { IpnsService } from './ipns.service';
-import { FolderIpns } from './entities/folder-ipns.entity';
+import { IpnsRecord } from './entities/ipns-record.entity';
 import { PublishIpnsDto } from './dto';
 import { RepublishService } from '../republish/republish.service';
 import { DelegatedRoutingClient } from './delegated-routing.client';
@@ -150,17 +150,18 @@ describe('IpnsService with IpnsVerifyCache', () => {
     ipnsPublishDuration: { observe: jest.Mock };
   };
 
-  const mockFolderEntity: FolderIpns = {
+  const mockFolderEntity: IpnsRecord = {
     id: 'folder-id-1',
     userId: testUserId,
     ipnsName: testIpnsName,
     latestCid: testMetadataCid,
     sequenceNumber: '1',
     signedRecord: null,
-    publicKey: testPublicKeyBytes,
     encryptedIpnsPrivateKey: null,
     keyEpoch: null,
     isRoot: false,
+    tombstonedAt: null,
+    generation: '0',
     createdAt: new Date('2026-01-20T12:00:00.000Z'),
     updatedAt: new Date('2026-01-20T12:00:00.000Z'),
     user: {} as import('../auth/entities/user.entity').User,
@@ -203,7 +204,7 @@ describe('IpnsService with IpnsVerifyCache', () => {
       providers: [
         IpnsService,
         {
-          provide: getRepositoryToken(FolderIpns),
+          provide: getRepositoryToken(IpnsRecord),
           useValue: mockFolderIpnsRepo,
         },
         {
