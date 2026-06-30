@@ -1,0 +1,141 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "fab0bbe63d27",
+  "session_id": "15792aca-8a5d-46a6-aafa-f0b7991dd37b",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-30T17:40:12.652543Z",
+  "branch": "feat/api-schema-cutover-publish-gate-and-tombstone",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "88111b01510e",
+  "token_usage": {
+    "input_tokens": 16626,
+    "cache_creation_tokens": 529411,
+    "cache_read_tokens": 37604384,
+    "output_tokens": 231794,
+    "api_call_count": 134
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-execute-phase-2026-06-30T15:00:11.889631Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "cf38f50fcc68",
+      "timestamp": "2026-06-30T15:00:11.889631Z",
+      "native": {
+        "command": "/gsd-execute-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 11
+  },
+  "summary": {
+    "intent": "Execute Phase 66 ('API Schema Cutover, Publish Gate & Tombstone') of the CipherBox GSD workflow — 9 plans across 5 waves implementing atomic CAS/tombstone IPNS publish, share descriptor-ref model cutover, schema migration, API client regeneration, and sdk-core/web compile fixes.",
+    "outcome": "All 9 plans executed and committed across 5 waves; all gates passed (API build green, full monorepo typecheck exit 0, API jest 767/0, e2e 5/5); verification scored 6/6 must-haves with all 7 requirement IDs satisfied; phase 66 marked complete, next phase 67.",
+    "learnings": {
+      "repo": [
+        "worktree.baseRef='head' means worktrees fork from live HEAD — no base-mismatch halts after inter-wave merges advance HEAD past origin/HEAD",
+        "Wave 1→2 is intentionally an intermediate-red API build by design (type foundation lands before logic rewrite); post-merge gate should run targeted typecheck, not full build, in this window",
+        "API uses DB 'cipherbox_test' (apps/api/.env DB_DATABASE), not 'cipherbox'; psql helpers seeding test preconditions must target 'cipherbox_test'",
+        "API TEST_LOGIN_SECRET='e2e-test-secret-ci-only'; sdk-e2e harness SDK_E2E_SECRET defaults to 'e2e-test-secret-do-not-use-in-production' — they must be aligned before e2e runs",
+        "Ed25519 identity IPNS records do not embed pubKey in the wire format (the name IS the key); the API controller's hasSigData gate on signatureV2 && data && pubKey silently fails closed for all network-sourced records unless pubKey is supplemented from the ipnsName",
+        "The DB path for IPNS resolve already supplements pubKey via publicKeyFromIpnsName (codec); the network/seqFloor path did not, causing TEE-05 at-floor-serve to fail closed even with correct seq floor logic",
+        "TypeORM 0.3.28 compares migration row count (DB) vs file count (code) to detect pending migrations; a duplicate row causes a false 'no pending migrations' — requires direct psql DDL + manual migration record insert",
+        "pnpm test:single in sdk-e2e uses --testPathPattern which vitest 3.x removed; use positional pattern argument to vitest directly instead",
+        "api:generate's trailing pnpm lint:fix runs eslint repo-wide; running it before Wave 4 (web/sdk-core still broken) would exit non-zero even though regeneration succeeds — executor must be briefed to treat lint failure as non-blocking",
+        "cipherbox-mock-ipns-routing (:3001) was unhealthy during the session; tests routing through it depend on it being available"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/app.module.ts",
+          "line": 32,
+          "end_line": 98,
+          "finding": "Orphaned ShareKey import (line 32) and entities array registration (line 98) not cleaned up by plan 66-03 which deleted the entity — required orchestrator post-merge fix"
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 587,
+          "end_line": 626,
+          "finding": "seqFloor gate for shared-folder resolve: gates on BigInt(networkSeq) >= BigInt(seqFloor), fail-closed branch when below floor — logic is correct per §6.5"
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.controller.ts",
+          "line": 226,
+          "end_line": 226,
+          "finding": "hasSigData = signatureV2 && data && pubKey gates whether sig fields are included in resolve response; Ed25519 network records lack embedded pubKey so gate always fails, causing fail-closed even on at-floor-serve"
+        },
+        {
+          "path": "packages/crypto/src/ipns/parse-record.ts",
+          "line": 21,
+          "end_line": 25,
+          "finding": "Ed25519 records intentionally omit pubKey from parse output (name IS the key); supplementing it from ipnsName in ipns.service.ts is the correct fix, mirroring the DB codec path"
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 127,
+          "end_line": 127,
+          "finding": "Publish PUTs signed record bytes to delegated routing (mock); mock returns them verbatim — mock itself doesn't strip signatures, stripping happened in controller gating"
+        },
+        {
+          "path": "apps/api/scripts/generate-openapi.ts",
+          "line": 1,
+          "end_line": 1,
+          "finding": "Second orphaned ShareKey import (deleted entity); not caught by 66-03 plan's files_modified list — executor auto-fixed it before running api:generate"
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.spec.ts",
+          "line": 1,
+          "end_line": 2233,
+          "finding": "After 66-02 replaced findOne/save with createQueryBuilder().update() (atomic CAS), 28 unit tests were stale (mock lacked createQueryBuilder); required a separate test-alignment subagent pass"
+        }
+      ],
+      "workflow": [
+        "Serialize git worktree add calls (one at a time per message) to avoid .git/config.lock races when dispatching parallel executor subagents",
+        "The worktree-safety.cjs deletion guard is unconditional (no override flag) — any branch with whole-file deletions forces manual merge even when deletions are correct and intended",
+        "cleanup-wave helper aborts the entire wave at the first deletion-flagged branch, so two legitimate-deletion waves both require manual merge of all branches",
+        "Single-plan waves should run sequentially on the main tree (no parallelism benefit; avoids worktree footguns for api:generate and live-DB operations)",
+        "api:generate must run on the main tree, not in a worktree — generated api-client output belongs in the main tree for Wave 4+ to consume",
+        "Concurrent sdk-e2e suite runs must be the orchestrator's gate, not a subagent's task — RAM starvation risk documented in D-08",
+        "Post-merge tracking updates should be deferred until the build is green after the relevant wave, not immediately after each plan marks complete",
+        "When a plan explicitly defers behavioral proof to a later e2e suite (66-02 → 66-09), the unit spec updates are also deferred — but CI-blocking stale mocks must be fixed before moving forward",
+        "Bash tool default 2-minute timeout is insufficient for full monorepo typecheck on large TypeScript repos — always pass explicit timeout_ms for typecheck/build steps"
+      ]
+    },
+    "friction": [
+      "Deletion guard in worktree-safety.cjs has no override flag — forced manual merge of Wave 1 and Wave 2 branches despite deletions being fully within declared plan scope",
+      "Two orphaned ShareKey references (app.module.ts, generate-openapi.ts) were not in any plan's files_modified, requiring unplanned orchestrator/executor fixes",
+      "28 stale ipns.service.spec.ts unit tests blocked the Wave 2 post-merge gate, requiring an unplanned test-alignment subagent before proceeding",
+      "TypeORM false 'no pending migrations' due to a duplicate WidenShareKeyType row forced direct psql DDL execution and manual migration record insertion",
+      "sdk-e2e auth secret mismatch (API uses 'e2e-test-secret-ci-only', harness defaults to a different value) caused all e2e tests to fail with 401 on first run",
+      "Test 15 psql seeding targeted the wrong database ('cipherbox' vs 'cipherbox_test'), seeding rows the API never read",
+      "Ed25519 IPNS records lack embedded pubKey in wire format, causing TEE-05 at-floor-serve to fail closed — required diagnosing through controller, parser, mock, and routing layers before identifying the supplement-from-name fix",
+      "pnpm test:single script is broken in vitest 3.x (removed --testPathPattern flag) — caused a silent no-op pass on first e2e run attempt",
+      "Bash 2-minute default timeout hit during post-completion typecheck, requiring a re-run with explicit timeout",
+      "mock-ipns-routing was unhealthy during execution, adding uncertainty to network-record routing behavior diagnosis"
+    ],
+    "open_items": [
+      "Phase 68: real web share/invite rework — 66-08 only added throw-stubs to share.service.ts, invite.service.ts, and ShareDialog.tsx as compile-gate hygiene",
+      "Phase 68: ROT-07 durable high-water mark for 'generation' in IndexedDB/journal — 66-07 only threads generation arg to the API, not persistence",
+      "Phase 67 is next (auto-advance triggered at phase completion)",
+      "mock-ipns-routing unhealthy state should be investigated — production delegated routing (e.g. someguy) also returns Ed25519 records without embedded pubKey, so the pubKey supplement fix in ipns.service.ts is load-bearing in production too",
+      "The cleanup-wave helper's unconditional deletion gate creates recurring friction for phases with intentional file deletions — worth adding a per-wave allow-list or a --allow-deletions flag"
+    ]
+  }
+}
