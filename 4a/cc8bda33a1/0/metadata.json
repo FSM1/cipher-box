@@ -1,0 +1,116 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "4acc8bda33a1",
+  "session_id": "15792aca-8a5d-46a6-aafa-f0b7991dd37b",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-30T16:14:37.01923Z",
+  "branch": "feat/api-schema-cutover-publish-gate-and-tombstone",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "76ea234713d8",
+  "token_usage": {
+    "input_tokens": 14245,
+    "cache_creation_tokens": 343223,
+    "cache_read_tokens": 9074627,
+    "output_tokens": 101621,
+    "api_call_count": 53
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-execute-phase-2026-06-30T15:00:11.889631Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "cf38f50fcc68",
+      "timestamp": "2026-06-30T15:00:11.889631Z",
+      "native": {
+        "command": "/gsd-execute-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "summary": {
+    "intent": "Execute all 9 plans in Phase 66 ('API Schema Cutover, Publish Gate & Tombstone') using wave-based parallel execution with subagents in isolated git worktrees, advancing the API from a legacy share_keys/folder_ipns model to a descriptor-ref/IpnsRecord node/v3 model.",
+    "outcome": "Completed Waves 1–3 (6 of 9 plans: 66-01 through 66-06). API build is green (exit 0), full API test suite passes (767/0), and the regenerated API client (109 files) reflects the new surface. Waves 4–5 (66-07, 66-08, 66-09) were not yet started at transcript end.",
+    "learnings": {
+      "repo": [
+        "worktree-safety.cjs deletion guard is unconditional — no override flag exists; any branch that deletes files requires manual verification and merge, bypassing the cleanup helper entirely.",
+        "worktree.baseRef='head' means worktrees fork from live HEAD, so inter-wave merges do not cause base-mismatch halts in subsequent waves.",
+        "pnpm install --prefer-offline inside a worktree does not build @cipherbox/crypto — the dist/ directory is absent and must be built explicitly before ipns module resolution works.",
+        "api:generate builds the OpenAPI doc in-process (no live DB or server required), but its trailing pnpm lint:fix runs repo-wide — it will exit non-zero if Wave 4 packages (web, sdk-core) are still broken.",
+        "66-02's plan explicitly defers behavioral proof (upsertIpnsRecord) to the sdk-e2e suite in 66-09; ipns.service.spec.ts was intentionally excluded from 66-02's files_modified scope.",
+        "The API build is intentionally red between Wave 1 and Wave 2 by design — type foundations (66-01/66-03) land before logic rewrites (66-02/66-04); the post-merge gate should be targeted, not a full monorepo build.",
+        "Parallel git worktree add calls cause .git/config.lock races; worktrees must be added sequentially even when executors run in parallel."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/app.module.ts",
+          "line": 32,
+          "end_line": 98,
+          "finding": "Had orphaned ShareKey import (line 32) and entity registration (line 98) after 66-03 deleted share-key.entity.ts — neither 66-01 nor 66-04 covered this; orchestrator fixed it as a post-merge cross-plan gap."
+        },
+        {
+          "path": "apps/api/src/scripts/generate-openapi.ts",
+          "line": 1,
+          "end_line": 1,
+          "finding": "Also imported the deleted ShareKey entity — a second orphan from 66-03's deletion discovered when 66-06 ran api:generate; executor applied Rule 3 auto-fix."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.spec.ts",
+          "line": 1,
+          "end_line": 2233,
+          "finding": "28 tests were stale against 66-02's atomic-CAS rewrite: mocks only had findOne/save, lacking createQueryBuilder. All 28 were adapted (not deleted) by adding a chainable createQueryBuilder mock with mockQbExecute override per test."
+        }
+      ],
+      "workflow": [
+        "When a service's repository access pattern changes fundamentally (findOne+save → createQueryBuilder+update), existing unit tests need mock adaptation, not deletion — behavioral coverage should be preserved.",
+        "Post-merge test gates for intermediate waves should target only the packages changed in that wave (e.g., pnpm --filter @cipherbox/api test) rather than the full monorepo, to avoid blocking on known downstream breakage that later waves will fix.",
+        "Orphaned import sites (module registrations, script imports) are a predictable cross-plan gap when entity files are deleted; a grep for the deleted symbol name across the repo should be part of any deletion plan's acceptance criteria.",
+        "The GSD orchestrator pattern of fixing post-merge cross-plan gaps directly (rather than creating a new gap-closure plan) is sanctioned and efficient for single-file orphans.",
+        "Dispatching worktree executors in separate sequential messages (not parallel tool calls) prevents git config lock races during worktree setup, even when the executors themselves run in parallel."
+      ]
+    },
+    "friction": [
+      "worktree-safety.cjs deletion guard has no override flag — required manual branch inspection and merge for both Wave 1 (66-03: 3 deleted files) and Wave 2 (66-04: 5 deleted spec files), each time abandoning the cleanup helper entirely.",
+      "app.module.ts and generate-openapi.ts were orphaned by 66-03's ShareKey deletion but not in any plan's files_modified — discovered only at post-merge build time, adding an unplanned orchestrator fix step.",
+      "28 ipns.service.spec.ts tests failed post-merge because 66-02 deliberately excluded them from scope — required dispatching an additional alignment subagent before the Wave 2 gate could pass, adding ~16 min of unplanned serial work.",
+      "pnpm install --prefer-offline in worktrees silently omits crypto dist/ build, causing module resolution failures deep in the executor run rather than at setup time.",
+      "api:generate's repo-wide lint:fix step makes Wave 3 execution fragile while Wave 4 packages are still broken — executor had to work around this rather than running the script cleanly end-to-end."
+    ],
+    "open_items": [
+      "Wave 4 not yet executed: 66-07 (sdk-core generation arg) and 66-08 (web compile-gate stubs) — depends on the regenerated API client from 66-06.",
+      "Wave 5 not yet executed: 66-09 (schema push + sdk-e2e publish-gate proof suite, including behavioral proof for 66-02's TEE-04/05/07 requirements deferred from the unit test layer).",
+      "Phase verification and completion not yet run — only happens after all 9 plans are done.",
+      "ROADMAP.md and STATE.md tracking committed only through Wave 2; Wave 3 (66-06) tracking update was initiated but the transcript ends before the commit is confirmed."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
