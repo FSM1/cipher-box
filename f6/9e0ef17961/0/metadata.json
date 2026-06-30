@@ -1,0 +1,93 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "f69e0ef17961",
+  "session_id": "13524ecf-de1b-47de-bf59-e080a2ed8848",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-30T01:08:24.92629Z",
+  "branch": "feat/sdk-write-chain-bin-re-link-and-invite-claim",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/todos/completed/2026-06-29-rotateone-placeholder-writekey-phase65.md",
+    ".planning/todos/pending/2026-06-29-rotateone-placeholder-writekey-phase65.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "696d3bb20dee",
+  "checkpoint_transcript_start": 485,
+  "transcript_lines_at_start": 485,
+  "token_usage": {
+    "input_tokens": 397,
+    "cache_creation_tokens": 11625,
+    "cache_read_tokens": 1603981,
+    "output_tokens": 14589,
+    "api_call_count": 5
+  },
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "summary": {
+    "intent": "Complete and close out CipherBox phase 65 (SDK write-chain bin re-link and invite claim) by verifying all success criteria, marking the phase complete, and cleaning up todos.",
+    "outcome": "Phase 65 verified passed (4/4 must-haves), marked complete with STATE advanced to phase 66, one resolved todo closed, and one mis-tagged bug todo flagged for human review rather than auto-closed.",
+    "learnings": {
+      "repo": [
+        "Phase 65 used a D-02 mock seam for the live publish-gate (403/410 on tombstoned IPNS names); the live cutover is explicitly deferred to Phase 66 SC.",
+        "Todo frontmatter field `resolves_phase` can be mis-tagged — a bug todo tagged `resolves_phase: 65` was never fixed in phase 65 because its target files (apps/api/src/shares/*) were prohibited by D-02.",
+        "Phase completion flow: verify → mark complete → commit artifacts (ROADMAP, STATE, REQUIREMENTS, VERIFICATION.md) → close resolved todos."
+      ],
+      "code": [
+        {
+          "path": "packages/core/src/node/seal.ts",
+          "finding": "sealChildWriteKey/unsealChildWriteKey use role byte 0x04 via buildNodeAad(..., 0x04); both are barrel-exported."
+        },
+        {
+          "path": "packages/core/src/shared-write.ts",
+          "line": 161,
+          "finding": "Definitive security assertion: expect(readOnlyNode.writeBody).toBeUndefined() — confirms read-only holders cannot reach write signing material."
+        },
+        {
+          "path": "packages/core/src/bin/types.ts",
+          "finding": "BinEntry.nodeReadKey field exists; restoreFromBin calls sealChildReadKey with no content re-encryption. grep for originalFolderKeyEncrypted and encryptedChildKeys returns 0."
+        }
+      ],
+      "workflow": [
+        "Only retire bug todos that are confirmed resolved; mis-tagged todos (resolves_phase pointing to a phase that didn't fix the bug) should be flagged for human review.",
+        "Phase completion commit should bundle ROADMAP, STATE, REQUIREMENTS, and VERIFICATION.md together.",
+        "TDD gate was advisory/non-blocking in this phase; the sequence of test(65-XX) RED before feat(65-XX) GREEN was tracked manually."
+      ]
+    },
+    "friction": [
+      "A todo was mis-tagged with resolves_phase: 65 for a bug (442 MB leaked pins in apps/api/src/shares/*) that phase 65 was explicitly prohibited from fixing — required manual disambiguation instead of auto-close."
+    ],
+    "open_items": [
+      "WRITE-04 live publish-gate (403/410 rejection on tombstoned IPNS names) — D-02 mock seam in phase 65, live cutover is a Phase 66 success criterion.",
+      "Bin delete / empty-bin pin leak bug (~442 MB leaked pins in apps/api/src/shares/*) — high severity, mis-tagged as phase 65, actually unresolved and pending human triage.",
+      "Subtree IPNS collect pin-collection stub remains unimplemented (noted during phase 65 bin work review).",
+      "Phase 66 (API schema cutover) is the next phase to begin."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-30T01:08:05.243606Z",
+    "agent_lines": 30,
+    "agent_removed": 30,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 30,
+    "total_lines_changed": 60,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 130,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/phases/65-sdk-write-chain-bin-re-link-and-invite-claim/65-VERIFICATION.md": 129
+      }
+    }
+  ]
+}

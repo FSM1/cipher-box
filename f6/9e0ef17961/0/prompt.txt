@@ -1,0 +1,26 @@
+<task-notification>
+<task-id>af81ccdab36fa828d</task-id>
+<tool-use-id>toolu_0134RPra5CZ9Uv533ivxR13G</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/13524ecf-de1b-47de-bf59-e080a2ed8848/tasks/af81ccdab36fa828d.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify phase 65 goal achievement" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Verification Complete
+
+**Status:** passed
+**Score:** 4/4 must-haves verified
+**Report:** `/Users/myankelev/Code/random/cipher-box/.planning/phases/65-sdk-write-chain-bin-re-link-and-invite-claim/65-VERIFICATION.md`
+
+All phase goal success criteria are verified by direct code reading. Summary by criterion:
+
+**SC#1 (WRITE-01)** — VERIFIED. `sealChildWriteKey`/`unsealChildWriteKey` in `packages/core/src/node/seal.ts` use role byte `0x04` via `buildNodeAad(..., 0x04)`. Both barrel exports confirmed. Cross-role rejection and AAD-mismatch tests confirmed in `seal-write-chain.test.ts`. The definitive security assertion — `expect(readOnlyNode.writeBody).toBeUndefined()` — is at `shared-write.test.ts:161`.
+
+**SC#2 (WRITE-02)** — VERIFIED. `rotateWriteFromNode` in `engine.ts` mints a new Ed25519 keypair + k51 name + writeKey per node in child-first order (leaves before parents), first-publishes at `sequenceNumber: 1n`, calls `teeUnenrollFn(oldIpnsName)` per rotated-out name, and re-points parent `SealedChildRef.ipnsName`. Unit tests cover child-first ordering (Test 3) and parent re-point (Test 8). D-04 e2e gate PASSED 2/2 against the live API. The live publish-gate reject/resolve-410 is a D-02 mock seam this phase, with live cutover in Phase 66 (matched by Phase 66 SC) — treated as deferred, not a gap.
+
+**SC#3 (WRITE-03)** — VERIFIED. `rotateWriteFromNode` calls `wrapKey(newWriteKey, recipientPublicKey)` for non-revoked grants via `writeDescriptorRefPersistFn`, and `deleteWriteGrantFn` for revoked. `CannotWriteUntilRefetchError` is exported from `shared-write.ts` and thrown by every write operation when the injected publish seam returns `{tombstoned: true}`. Tested across all six operations + confirmed in D-04 e2e gate.
+
+**SC#4 (WRITE-01 + DATA-04)** — VERIFIED. `BinEntry.nodeReadKey` field exists; `restoreFromBin` calls `sealChildReadKey(entry.nodeReadKey, destParentReadKey, ...)` with no content re-encryption. `grep` for `originalFolderKeyEncrypted` returns 0 in both `packages/core/src/bin/types.ts` and `packages/sdk/src/bin/index.ts`. Non-test sdk-core/sdk grep for `encryptedChildKeys` returns 0. `claimInvite` calls `claimInviteReadKey` once then `insertShareFn` once — no fan-out array built.
+
+One deferred item noted: WRITE-04 live publish gate (403/410 on tombstoned names) is a D-02 mock seam in Phase 65, addressed by Phase 66 success criteria.</result>
+<usage><subagent_tokens>114471</subagent_tokens><tool_uses>71</tool_uses><duration_ms>449220</duration_ms></usage>
+</task-notification>
