@@ -267,7 +267,7 @@ Plans:
 3. Surviving co-writers receive the rotated Ed25519 key re-wrapped into their `writeDescriptorRef`; an offline co-writer receives a clear "cannot write until re-fetch" error on next attempt
 4. `bin` restore is a pure re-link (`BinEntry` re-sealed under destination `readKey`); `originalFolderKeyEncrypted` and its re-encrypt-on-restore path are deleted from `packages/core/src/bin/types.ts` and `packages/sdk/src/bin/index.ts`; `encryptedChildKeys` JSONB fan-out is deleted from invite claim
 
-**Plans**: 5/7 plans executed
+**Plans**: 6/7 plans executed
 
 Plans:
 **Wave 1**
@@ -283,7 +283,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 65-06-PLAN.md — write-revocation driver rotateWriteFromNode (full Ed25519 rotation, child-first cascade, tombstone-intent, co-writer re-wrap) [wave 3]
+- [x] 65-06-PLAN.md — write-revocation driver rotateWriteFromNode (full Ed25519 rotation, child-first cascade, tombstone-intent, co-writer re-wrap) [wave 3]
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
@@ -391,7 +391,7 @@ Plans:
 | 62 | Unified Node Codec (Core Keystone) | 9/9 | Complete    | 2026-06-28 |
 | 63 | Read-Chain Navigation and Rotation Core | 7/7 | Complete    | 2026-06-29 |
 | 64 | Rotation Soundness — Revocation Guarantees | 8/8 | Complete   | 2026-06-29 |
-| 65 | SDK Write-Chain, Bin Re-link, and Invite Claim | 5/7 | In Progress|  |
+| 65 | SDK Write-Chain, Bin Re-link, and Invite Claim | 6/7 | In Progress|  |
 | 66 | API Schema Cutover, Publish Gate, and Tombstone | 0/? | Not started | - |
 | 67 | TEE Lease-Renewer Contract Rewrite | 0/? | Not started | - |
 | 68 | Web Integration — Rotation UX and Durable Client State | 0/? | Not started | - |
