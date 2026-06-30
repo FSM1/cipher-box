@@ -1100,6 +1100,72 @@ describe('IpnsService', () => {
       expect(result!.data).toBe(Buffer.from(dataBytes).toString('base64'));
     });
 
+    // seqFloor gate (§6.5 / TEE-05) — unit coverage for the shared-folder
+    // null-signedRecord rows previously exercised only by sdk-e2e Test 15.
+    it('seqFloor gate: fails closed (null) when the network record is below the stored floor', async () => {
+      // A shared-folder row has a null signedRecord and carries a sequence floor. A network
+      // record strictly BELOW that floor must not be served — serving it would expose a
+      // rolled-back CID for a shared name. Fail closed → null → 404.
+      mockDelegatedRoutingClient.resolve.mockResolvedValue(new Uint8Array([1, 2, 3]));
+      mockParseIpnsRecord.mockReturnValue({
+        value: '/ipfs/bafyNETWORK',
+        sequence: 1n, // network seq = 1
+        signatureV2: new Uint8Array(64).fill(0x12),
+        data: new Uint8Array(48).fill(0x34),
+      });
+      mockFolderIpnsRepo.findOne.mockResolvedValue({
+        ...mockFolderEntity,
+        latestCid: 'bafyDB',
+        sequenceNumber: '100', // floor = 100 > network seq = 1
+        signedRecord: null,
+      });
+
+      const result = await service.resolveRecord(testIpnsName);
+      expect(result).toBeNull();
+    });
+
+    it('seqFloor gate: serves the network record when it is at/above the stored floor', async () => {
+      // The at-floor counterpart to the below-floor case: network seq == floor → serve the
+      // network record (pubKey supplemented from the name so the strict client can verify).
+      mockDelegatedRoutingClient.resolve.mockResolvedValue(new Uint8Array([1, 2, 3]));
+      mockParseIpnsRecord.mockReturnValue({
+        value: '/ipfs/bafyNETWORK',
+        sequence: 5n, // network seq = 5
+        signatureV2: new Uint8Array(64).fill(0x12),
+        data: new Uint8Array(48).fill(0x34),
+      });
+      mockFolderIpnsRepo.findOne.mockResolvedValue({
+        ...mockFolderEntity,
+        latestCid: 'bafyDB',
+        sequenceNumber: '5', // floor = 5 == network seq = 5 → at floor → serves
+        signedRecord: null,
+      });
+
+      const result = await service.resolveRecord(testIpnsName);
+      expect(result).not.toBeNull();
+      expect(result!.cid).toBe('bafyNETWORK');
+      expect(result!.sequenceNumber).toBe('5');
+    });
+
+    it('fails closed (null) when the cached signedRecord is unparseable and there is no network record', async () => {
+      // A row with garbage signed_record bytes and no network record must fail closed.
+      // parseCachedRecord throws while parsing the bytes → returns null, so resolveRecord
+      // returns null → 404 (no ungated fallthrough).
+      mockDelegatedRoutingClient.resolve.mockResolvedValue(null);
+      mockParseIpnsRecord.mockImplementation(() => {
+        throw new Error('Invalid protobuf');
+      });
+      mockFolderIpnsRepo.findOne.mockResolvedValue({
+        ...mockFolderEntity,
+        latestCid: 'bafySTUB',
+        sequenceNumber: '1',
+        signedRecord: Buffer.from([1, 2, 3, 4]), // unparseable
+      });
+
+      const result = await service.resolveRecord(testIpnsName);
+      expect(result).toBeNull();
+    });
+
     it('should serve the authoritative DB record with full signature fields when sequences are equal (strict resolve verifiability)', async () => {
       // On equal sequence the DB-cached record is the authoritative, fully-signed record.
       // resolveRecord must serve it — with signatureV2/data from the signed bytes and pubKey

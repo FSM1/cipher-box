@@ -1,7 +1,7 @@
 /**
- * IPNS publish-gate suite (TEE-04/05/07, WRITE-04 phase gate) — Phase 66.
+ * IPNS publish-gate suite (TEE-04/07, WRITE-04 phase gate) — Phase 66.
  *
- * Five behavior cases exercised against the live API + migrated node/v3 schema:
+ * Four behavior cases exercised against the live API + migrated node/v3 schema:
  *   Test 16 (TEE-04): Two concurrent forward publishes from the same expected
  *     sequenceNumber='1' → exactly one 200 + one 409; follow-up resolve shows
  *     sequenceNumber=2n (one increment, zero lost updates).
@@ -11,13 +11,13 @@
  *     correct expected sequence → 409; served CID never regresses to the lower-gen value.
  *   Test 20 (WRITE-04 tombstone): POST /ipns/tombstone; subsequent publish returns
  *     HTTP 410 {error:'IPNS_TOMBSTONED'}; resolve of the tombstoned name → 410.
- *   Test 15 (TEE-05 seqFloor): Row with null signedRecord + stored sequenceNumber
- *     (expected-null shared-folder scenario, seeded via psql) — network record
- *     at/above the seq floor serves; below-floor fails closed (null → 404);
- *     an unparseable signedRecord also fails closed when there is no network fallback.
  *
- * Test 15 uses psql (via execFileSync) to seed preconditions that cannot be reached
- * through the public API, which is normal practice for live-stack e2e tests.
+ * These four cases need the live stack because they exercise real concurrency and the
+ * publish CAS / tombstone round-trip. The TEE-05 seqFloor gate (null-signedRecord
+ * shared-folder rows: at/above floor serves, below-floor and unparseable cached records
+ * fail closed) is pure resolve-decision logic and is covered by unit tests in
+ * apps/api/src/ipns/ipns.service.spec.ts ("seqFloor gate" / "unparseable" cases) — no
+ * direct DB seeding required.
  *
  * Prerequisites (live local stack):
  *   docker compose -f docker/docker-compose.yml up -d   (redis 6380, kubo, postgres)
@@ -25,10 +25,6 @@
  *   pnpm --filter @cipherbox/api migration:run          (ApiSchemaCutover1750000000000 applied)
  */
 
-import { execFileSync } from 'child_process';
-import { writeFileSync, unlinkSync, mkdtempSync, rmdirSync } from 'fs';
-import { tmpdir } from 'os';
-import { join } from 'path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   addToIpfs,
@@ -80,74 +76,6 @@ function dataOf(err: unknown): unknown {
   return (err as { response?: { data?: unknown } } | null)?.response?.data;
 }
 
-/**
- * Run a SQL statement against the local test database via psql.
- * Writes SQL to a temp file to avoid shell-quoting hazards.
- * Only used for seeding preconditions in Test 15.
- */
-// The API (apps/api/.env) uses DB_DATABASE=cipherbox_test, so Test 15's psql
-// seeding MUST target the same database or the API never sees the seeded rows.
-const PSQL_DB = process.env.SDK_E2E_DB ?? 'cipherbox_test';
-
-function psqlExec(sql: string): void {
-  const dir = mkdtempSync(join(tmpdir(), 'ipns-gate-'));
-  const file = join(dir, 'q.sql');
-  writeFileSync(file, sql + '\n');
-  try {
-    execFileSync('psql', ['-h', 'localhost', '-U', 'postgres', '-d', PSQL_DB, '-f', file], {
-      encoding: 'utf8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-      timeout: 15_000, // fail fast instead of hanging the Vitest worker on a stalled psql
-      // Pass psql args as an array and PGPASSWORD via env so PSQL_DB is never
-      // shell-interpolated into a command string (no injection via SDK_E2E_DB).
-      env: { ...process.env, PGPASSWORD: 'postgres' },
-    });
-  } finally {
-    try {
-      unlinkSync(file);
-    } catch {
-      /* ignore */
-    }
-    try {
-      rmdirSync(dir);
-    } catch {
-      /* ignore */
-    }
-  }
-}
-
-/**
- * Query a single text value from the test database.
- */
-function psqlQueryOne(sql: string): string {
-  const dir = mkdtempSync(join(tmpdir(), 'ipns-gate-'));
-  const file = join(dir, 'q.sql');
-  writeFileSync(file, sql + '\n');
-  try {
-    return execFileSync(
-      'psql',
-      ['-h', 'localhost', '-U', 'postgres', '-d', PSQL_DB, '-t', '-A', '-f', file],
-      {
-        encoding: 'utf8',
-        stdio: ['pipe', 'pipe', 'pipe'],
-        timeout: 15_000,
-        env: { ...process.env, PGPASSWORD: 'postgres' },
-      }
-    ).trim();
-  } finally {
-    try {
-      unlinkSync(file);
-    } catch {
-      /* ignore */
-    }
-    try {
-      rmdirSync(dir);
-    } catch {
-      /* ignore */
-    }
-  }
-}
-
 /** Upload a small unique blob to IPFS and return its CID. */
 async function uploadBlob(label: string, ctx: SdkContext): Promise<string> {
   const data = new TextEncoder().encode(
@@ -161,7 +89,7 @@ async function uploadBlob(label: string, ctx: SdkContext): Promise<string> {
 // Describe
 // ---------------------------------------------------------------------------
 
-describe('IPNS publish-gate suite (TEE-04/05/07, WRITE-04 phase gate)', () => {
+describe('IPNS publish-gate suite (TEE-04/07, WRITE-04 phase gate)', () => {
   // -------------------------------------------------------------------------
   // Test 16 — TEE-04: concurrent forward publishes → exactly one 200 + one 409
   // -------------------------------------------------------------------------
@@ -427,88 +355,5 @@ describe('IPNS publish-gate suite (TEE-04/05/07, WRITE-04 phase gate)', () => {
     expect(resolveError).toBeDefined();
     expect(statusOf(resolveError)).toBe(410);
     expect((dataOf(resolveError) as Record<string, unknown>)?.error).toBe('IPNS_TOMBSTONED');
-  }, 120_000);
-
-  // -------------------------------------------------------------------------
-  // Test 15 — TEE-05: null-signedRecord seq-floor split
-  // -------------------------------------------------------------------------
-  it('Test 15 (TEE-05): seqFloor — at/above floor serves; below-floor fails closed; malformed signedRecord fails closed', async () => {
-    const alice = fixture.accounts.get('alice')!;
-    const aliceCtx = alice.client.getContext();
-
-    // -----------------------------------------------------------------------
-    // Part A: null signedRecord + seq floor gating
-    // -----------------------------------------------------------------------
-
-    // Get Alice's DB user_id (needed for the psql INSERT / UPDATE below)
-    const alicePublicKeyHex = bytesToHex(alice.publicKey);
-    const aliceUserId = psqlQueryOne(
-      `SELECT id FROM users WHERE "publicKey" = '${alicePublicKeyHex}'`
-    );
-    expect(aliceUserId).toMatch(/^[0-9a-f-]{36}$/);
-
-    // Generate a fresh keypair and publish at seq=1 (establishes the row AND network record)
-    const kp = generateEd25519Keypair();
-    const pubKey = deriveEd25519PublicKey(kp.privateKey);
-    const ipnsName = await deriveIpnsName(pubKey);
-    const cid = await uploadBlob('t15-floor', aliceCtx);
-
-    await createAndPublishIpnsRecord({
-      ipnsPrivateKey: kp.privateKey,
-      ipnsPublicKey: pubKey,
-      ipnsName,
-      metadataCid: cid,
-      sequenceNumber: 1n,
-      ctx: aliceCtx,
-    });
-
-    // Seed: null out signedRecord and bump seq_floor to 100 (above network seq=1)
-    // This simulates a shared-folder row where signedRecord was never written.
-    psqlExec(
-      `UPDATE ipns_records SET signed_record = NULL, sequence_number = 100 WHERE ipns_name = '${ipnsName}'`
-    );
-
-    // Below-floor: network has seq=1, floor=100 → 1 < 100 → fail closed → null
-    const belowFloor = await resolveIpnsRecord(ipnsName, aliceCtx);
-    expect(belowFloor).toBeNull();
-
-    // Reset floor to 1 (= network seq) → at-floor → serves
-    psqlExec(`UPDATE ipns_records SET sequence_number = 1 WHERE ipns_name = '${ipnsName}'`);
-
-    // The network record is published to delegated routing fire-and-forget, so the
-    // DB write can return before the record is resolvable from the routing layer.
-    // Under slower CI this lands after the first resolve — poll until it propagates
-    // (the at-floor case is expected to serve, so a transient null is just latency,
-    // not the fail-closed behavior asserted below).
-    let atFloor = await resolveIpnsRecord(ipnsName, aliceCtx);
-    for (let attempt = 0; attempt < 20 && atFloor === null; attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      atFloor = await resolveIpnsRecord(ipnsName, aliceCtx);
-    }
-    expect(atFloor).not.toBeNull();
-    expect(atFloor!.cid).toBe(cid);
-
-    // -----------------------------------------------------------------------
-    // Part B: unparseable signedRecord → fail closed when no network fallback
-    // -----------------------------------------------------------------------
-
-    // Generate a fresh keypair that has never been published to the network.
-    // Seed a DB row with garbage signedRecord bytes and a latestCid — parseCachedRecord
-    // will throw during parseIpnsRecord → return null → resolver returns null → 404.
-    const kp2 = generateEd25519Keypair();
-    const pubKey2 = deriveEd25519PublicKey(kp2.privateKey);
-    const ipnsName2 = await deriveIpnsName(pubKey2);
-
-    psqlExec(`
-      INSERT INTO ipns_records
-        (user_id, ipns_name, latest_cid, sequence_number, signed_record, is_root, created_at, updated_at)
-      VALUES
-        ('${aliceUserId}', '${ipnsName2}', 'bafyteststub000', 1, E'\\\\x01020304', false, NOW(), NOW())
-    `);
-
-    // Network: no record (never published). Cached: parse fails → null.
-    // resolveIpnsRecord returns null (fail closed, no ungated fallthrough).
-    const mismatchResult = await resolveIpnsRecord(ipnsName2, aliceCtx);
-    expect(mismatchResult).toBeNull();
   }, 120_000);
 });
