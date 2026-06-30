@@ -1760,6 +1760,15 @@ export class CipherBoxClient {
           sequenceNumber,
           ctx: this.ctx,
         });
+        // A non-throwing rejection (2xx with success:false) still means the record
+        // was not committed. Fail closed — continuing would point the parent's
+        // SealedChildRef at an IPNS name that was never published. Mirrors the
+        // explicit guard in rotateWriteSubtree (engine.ts) for the same publish path.
+        if (!pubResult.success) {
+          throw new Error(
+            `publishNodeFn: IPNS publish rejected for ${ipnsName} (seq=${pubResult.sequenceNumber})`
+          );
+        }
         return { tombstoned: false, newSequenceNumber: pubResult.sequenceNumber };
       },
       addShareKeysFn: state.addShareKeysFn,
