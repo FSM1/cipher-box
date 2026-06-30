@@ -28,3 +28,32 @@
 <usage><subagent_tokens>86782</subagent_tokens><tool_uses>47</tool_uses><duration_ms>408458</duration_ms></usage>
 <worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a67fafa53dac42137</worktreePath><worktreeBranch>worktree-agent-a67fafa53dac42137</worktreeBranch></worktree>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a7f3935b816906799</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/13524ecf-de1b-47de-bf59-e080a2ed8848/tasks/a7f3935b816906799.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 66-01 of phase 66" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 66-01
+**Tasks:** 2/2
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a7f3935b816906799/.planning/phases/66-api-schema-cutover-publish-gate-and-tombstone/66-01-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"66-01","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a7f3935b816906799","branch":"worktree-agent-a7f3935b816906799","expected_base":"7f0fce295569ae1f02fe15d49f7f81953a470172"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `9349a1b60`: feat(api): add IpnsRecord entity replacing FolderIpns and register in modules
+- `f72029155`: refactor(api): propagate IpnsRecord rename across all import sites and remove public_key usages
+- `51c9a628b`: docs(66-01): complete IpnsRecord entity rename and public_key removal plan
+
+**Duration:** ~15 minutes</result>
+<usage><subagent_tokens>147507</subagent_tokens><tool_uses>139</tool_uses><duration_ms>917372</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a7f3935b816906799</worktreePath><worktreeBranch>worktree-agent-a7f3935b816906799</worktreeBranch></worktree>
+</task-notification>
