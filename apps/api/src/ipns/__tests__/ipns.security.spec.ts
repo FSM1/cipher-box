@@ -37,8 +37,8 @@ describe('IPNS API Security Tests', () => {
         cid: validCid,
         sequenceNumber: '5',
       }),
-      getFolderIpns: jest.fn(),
-      getAllFolderIpns: jest.fn(),
+      getIpnsRecord: jest.fn(),
+      getAllIpnsRecords: jest.fn(),
     };
 
     const mockMetricsService = {

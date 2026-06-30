@@ -1,6 +1,6 @@
 import { HttpException, HttpStatus, Logger } from '@nestjs/common';
 import { parseIpnsRecord, publicKeyFromIpnsName } from '@cipherbox/crypto';
-import type { FolderIpns } from './entities/folder-ipns.entity';
+import type { IpnsRecord } from './entities/ipns-record.entity';
 
 export interface IpnsRecordFields {
   cid: string;
@@ -8,6 +8,21 @@ export interface IpnsRecordFields {
   signatureV2?: string;
   data?: string;
   pubKey?: string;
+}
+
+/**
+ * Discriminant returned by parseCachedRecord when the cached row has a null
+ * signedRecord but a known latestCid — typical of shared-folder rows that were
+ * inserted by the sharing protocol and never had a signedRecord written.
+ *
+ * The caller (resolveRecord) must gate the network record against this floor:
+ *   networkSeq >= seqFloor  →  serve network record
+ *   networkSeq < seqFloor   →  fail closed (return null → 404)
+ *
+ * This prevents ungated network content from being served for shared names.
+ */
+export interface SeqFloor {
+  seqFloor: string;
 }
 
 /**
@@ -50,19 +65,29 @@ export async function parseIpnsRecordBytes(
   }
 }
 
+/**
+ * Parse a cached IpnsRecord row into a verifiable fields bundle.
+ *
+ * Returns a three-way discriminated union:
+ *   - IpnsRecordFields: full fields available (normal row with signedRecord)
+ *   - SeqFloor: shared-folder row (signedRecord is null, but latestCid exists)
+ *               → caller must gate network record against the floor sequence
+ *   - null: no latestCid, or CID mismatch, or malformed name → fail closed (→ 404)
+ */
 export async function parseCachedRecord(
-  cached: FolderIpns | null,
+  cached: IpnsRecord | null,
   logger: Logger
-): Promise<IpnsRecordFields | null> {
+): Promise<IpnsRecordFields | SeqFloor | null> {
   if (!cached?.latestCid) {
     return null;
   }
 
-  // D-06 (Plan 60-05): null signedRecord → return null (→ 404 to caller).
-  // A row without a signed record cannot be served as authoritative; the client
-  // cannot verify an unsigned CID and must not act on it.
+  // TEE-05 / §6.5 case-split: null signedRecord on a row with a known latestCid is
+  // expected for shared-folder rows (they are inserted by the sharing protocol and
+  // never have a signedRecord). Return a seq floor so the caller can gate network
+  // content without falling through unconditionally.
   if (!cached.signedRecord) {
-    return null;
+    return { seqFloor: cached.sequenceNumber };
   }
 
   try {
@@ -76,21 +101,15 @@ export async function parseCachedRecord(
       );
       return null;
     }
-    // DB columns are authoritative for sequenceNumber (upsertFolderIpns always
+    // DB columns are authoritative for sequenceNumber (upsertIpnsRecord always
     // increments it, while the embedded bytes reflect the client's pre-increment value).
     //
-    // The Ed25519 IPNS record's pubKey is not re-extractable from the signed bytes by
-    // parseIpnsRecordBytes, so supply it for the strict client. Precedence:
-    //   1. the validated publicKey column — fast path, populated at publish time
-    //      (publish enforced deriveIpnsName(publicKey) === ipnsName), then
-    //   2. recover it from the ipnsName itself. For Ed25519 the k51... name encodes the
-    //      public key, so it is the AUTHORITATIVE source and is always available even when
-    //      the nullable publicKey column was never populated for this row — e.g.
-    //      shared-folder records, whose column is null but whose signed record is valid.
-    // The strict client re-checks deriveIpnsName(pubKey) === ipnsName, so deriving from the
-    // name stays fail-closed.
-    let pubKey =
-      parsed.pubKey ?? (cached.publicKey ? cached.publicKey.toString('base64') : undefined);
+    // D-03: public_key column dropped — publicKeyFromIpnsName is the sole recovery path.
+    // For Ed25519 the k51... name encodes the public key, so it is the AUTHORITATIVE
+    // source and is always available (shared-folder rows, regular rows, all rows).
+    // The strict client re-checks deriveIpnsName(pubKey) === ipnsName, so deriving from
+    // the name stays fail-closed.
+    let pubKey = parsed.pubKey;
     if (!pubKey) {
       try {
         pubKey = Buffer.from(publicKeyFromIpnsName(cached.ipnsName)).toString('base64');

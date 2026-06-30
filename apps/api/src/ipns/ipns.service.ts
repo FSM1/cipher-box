@@ -4,13 +4,14 @@ import {
   HttpStatus,
   BadRequestException,
   ConflictException,
+  NotFoundException,
   Logger,
   Inject,
   forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { FolderIpns } from './entities/folder-ipns.entity';
+import { IpnsRecord } from './entities/ipns-record.entity';
 import {
   PublishIpnsDto,
   PublishIpnsEntryDto,
@@ -21,8 +22,13 @@ import {
 import { RepublishService } from '../republish/republish.service';
 import { DelegatedRoutingClient } from './delegated-routing.client';
 import { MetricsService } from '../metrics/metrics.service';
-import { deriveIpnsName, parseIpnsRecord, verifyIpnsRecordSignature } from '@cipherbox/crypto';
-import { parseIpnsRecordBytes, parseCachedRecord } from './ipns-record.codec';
+import {
+  deriveIpnsName,
+  parseIpnsRecord,
+  publicKeyFromIpnsName,
+  verifyIpnsRecordSignature,
+} from '@cipherbox/crypto';
+import { parseIpnsRecordBytes, parseCachedRecord, type SeqFloor } from './ipns-record.codec';
 import { ipnsVerifyCache } from './ipns-verify-cache';
 
 @Injectable()
@@ -30,8 +36,8 @@ export class IpnsService {
   private readonly logger = new Logger(IpnsService.name);
 
   constructor(
-    @InjectRepository(FolderIpns)
-    private readonly folderIpnsRepository: Repository<FolderIpns>,
+    @InjectRepository(IpnsRecord)
+    private readonly ipnsRecordRepository: Repository<IpnsRecord>,
     private readonly delegatedRouting: DelegatedRoutingClient,
     @Inject(forwardRef(() => RepublishService))
     private readonly republishService: RepublishService,
@@ -105,15 +111,15 @@ export class IpnsService {
 
       // Save to DB first so resolve always has a fallback, even if delegated
       // routing fails (e.g. rate-limited, network error, DHT propagation delay).
-      const folder = await this.upsertFolderIpns(
+      const folder = await this.upsertIpnsRecord(
         userId,
         dto.ipnsName,
         dto.metadataCid,
         recordBytes,
-        publicKeyBytes,
         dto.encryptedIpnsPrivateKey,
         dto.keyEpoch,
-        dto.expectedSequenceNumber
+        dto.expectedSequenceNumber,
+        dto.generation
       );
 
       // Publish to delegated routing API (fire-and-forget — DB is the reliable source).
@@ -190,6 +196,14 @@ export class IpnsService {
           if (reason instanceof ConflictException) {
             throw reason;
           }
+          // A tombstoned name (410 GONE) is permanently retired and can never publish
+          // again. Surface it by failing the batch instead of masking it as a transient
+          // per-record failure ({ success: false, sequenceNumber: '0' }) — otherwise a
+          // client retry loop or TEE rotation batch would re-attempt a dead name forever.
+          // Mirrors the ConflictException treatment above.
+          if (reason instanceof HttpException && reason.getStatus() === HttpStatus.GONE) {
+            throw reason;
+          }
           const ipnsName = batch[j]?.ipnsName ?? 'unknown';
           this.logger.warn(
             `Batch publish failed for ${ipnsName}: ${reason instanceof Error ? reason.message : String(reason)}`
@@ -209,23 +223,35 @@ export class IpnsService {
 
   /**
    * Create or update a folder/file IPNS entry.
-   * Handles both folder metadata and per-file metadata IPNS records.
+   *
+   * First-publish: INSERT with sequence_number=1, generation=0 (unchanged).
+   * Forward-publish: ONE atomic conditional UPDATE with fused seq CAS, generation gate,
+   * and tombstone gate — no TOCTOU (D-03/TEE-04/TEE-07).
    */
-  private async upsertFolderIpns(
+  private async upsertIpnsRecord(
     userId: string,
     ipnsName: string,
     metadataCid: string,
     signedRecord: Uint8Array,
-    publicKey?: Uint8Array,
     encryptedIpnsPrivateKey?: string,
     keyEpoch?: number,
-    expectedSequenceNumber?: string
-  ): Promise<FolderIpns> {
+    expectedSequenceNumber?: string,
+    generation?: string
+  ): Promise<IpnsRecord> {
     // The cache is keyed by ipnsName alone — there is one canonical row per name.
     // The caller's authority to update it was already proven by signature
     // verification in publishRecord (key possession), so no ownership/share check
     // is needed here: whoever holds the key updates the canonical record.
-    const existing = await this.folderIpnsRepository.findOne({ where: { ipnsName } });
+    const existing = await this.ipnsRecordRepository.findOne({ where: { ipnsName } });
+
+    // Tombstone is terminal: once a name is retired, every subsequent publish
+    // (stale or forward) must fail closed with 410. Short-circuit here, before the
+    // anti-rollback / embedded-sequence gates below, which would otherwise mask a
+    // tombstoned row as a 400/409 for a stale incoming record (the CAS tombstone
+    // gate only runs for the forward-update path).
+    if (existing?.tombstonedAt) {
+      throw new HttpException({ error: 'IPNS_TOMBSTONED', ipnsName }, HttpStatus.GONE);
+    }
 
     // Anti-rollback: the incoming record's EMBEDDED sequence (covered by the
     // signature, so tamper-evident) must not regress below the stored record's.
@@ -251,43 +277,27 @@ export class IpnsService {
       incomingParsed = incoming;
     }
 
-    // Conflict detection: when expectedSequenceNumber is provided, verify it matches
-    // the DB-stored sequence. This is an optimistic concurrency check (CAS) that fires
-    // before the S1 embedded-sequence check so that concurrent-modification 409s remain
-    // the authoritative signal for stale clients.
-    if (existing && expectedSequenceNumber !== undefined) {
-      const expected = BigInt(expectedSequenceNumber);
-      const current = BigInt(existing.sequenceNumber);
-      if (expected !== current) {
-        throw new ConflictException({
-          statusCode: 409,
-          message: 'Sequence number mismatch: folder was modified by another device',
-          currentSequenceNumber: existing.sequenceNumber,
-          expectedSequenceNumber,
-        });
-      }
-    }
-
-    // S1 (D-01): embedded-vs-DTO publish-time integrity gate. Runs after the CAS check
-    // so that concurrent-modification 409s take priority over tamper-detection 400s.
+    // S1 (D-01): embedded-vs-DTO publish-time integrity gate.
     // Parse the incoming record exactly once (reuse anti-rollback parse when available).
     if (incomingParsed === null) {
       incomingParsed = await parseIpnsRecord(signedRecord);
     }
+    // TypeScript narrowing: incomingParsed is guaranteed non-null here — either set in the
+    // anti-rollback path above (existing?.signedRecord branch) or assigned just above.
+    const resolvedParsed = incomingParsed;
     // S1 CID check: the FULL embedded signed-record value must strictly equal
     // `/ipfs/${metadataCid}`. Anchoring the whole value (not just the first CID
     // substring) prevents a record like `/ipfs/<metadataCid>/extra` from passing
     // a substring match while delegated routing publishes a divergent raw value.
     const expectedIpfsValue = `/ipfs/${metadataCid}`;
-    if (incomingParsed.value !== expectedIpfsValue) {
+    if (resolvedParsed.value !== expectedIpfsValue) {
       throw new BadRequestException(
-        `signedRecord value does not match metadataCid: embedded=${incomingParsed.value}, expected=${expectedIpfsValue}`
+        `signedRecord value does not match metadataCid: embedded=${resolvedParsed.value}, expected=${expectedIpfsValue}`
       );
     }
     // D-09 (Plan 58-02): unconditional embedded-sequence gate.
-    // Runs after the CAS 409 check so concurrent-modification keeps its 409 status.
-    // Reuses incomingParsed from the single-parse guard above (never calls parseIpnsRecord twice).
-    const embeddedSeq = incomingParsed.sequence; // bigint
+    // Reuses resolvedParsed from the single-parse guard above (never calls parseIpnsRecord twice).
+    const embeddedSeq = resolvedParsed.sequence; // bigint
     let isIdempotentRepublish = false;
     if (!existing) {
       // First publish: only embedded 1 accepted (D-03 strict — T-58-08, Plan 60-05).
@@ -318,43 +328,104 @@ export class IpnsService {
     }
 
     if (existing) {
-      if (publicKey && existing.publicKey && !existing.publicKey.equals(Buffer.from(publicKey))) {
-        throw new BadRequestException('publicKey does not match the existing IPNS entry');
-      }
+      // D-03 / TEE-04 / TEE-07: ONE atomic conditional UPDATE that fuses:
+      //   - sequence CAS (sequence_number = :expected)
+      //   - forward-only generation gate (generation <= CAST(:incoming AS bigint))
+      //   - tombstone gate (tombstoned_at IS NULL)
+      // No in-memory CAS comparison gates the write; result.affected drives the outcome.
 
-      // Update existing entry.
-      // D-09: skip sequence increment on idempotent republish (TEE re-sign path);
-      // still update latestCid and signedRecord (Pitfall 4 — must not skip CID update).
-      if (!isIdempotentRepublish) {
-        existing.sequenceNumber = (BigInt(existing.sequenceNumber) + 1n).toString();
-      }
-      existing.latestCid = metadataCid;
-      existing.signedRecord = Buffer.from(signedRecord);
-      existing.publicKey = publicKey ? Buffer.from(publicKey) : existing.publicKey;
-      existing.updatedAt = new Date();
-
-      // Only update encrypted key if provided (e.g., on key rotation).
       // Guard: only the owner can update TEE enrollment fields — write-share
       // recipients must not overwrite encryptedIpnsPrivateKey or keyEpoch.
-      if (encryptedIpnsPrivateKey && keyEpoch !== undefined && existing.userId === userId) {
-        existing.encryptedIpnsPrivateKey = Buffer.from(encryptedIpnsPrivateKey, 'hex');
-        existing.keyEpoch = keyEpoch;
+      const shouldUpdateKey = !!(
+        encryptedIpnsPrivateKey &&
+        keyEpoch !== undefined &&
+        existing.userId === userId
+      );
+
+      // Build SET clause conditionally (TypeORM-safe approach).
+      // sequenceNumber uses raw SQL so TypeORM doesn't double-encode it.
+      type CasSetClause = {
+        latestCid: string;
+        signedRecord: Buffer;
+        sequenceNumber: () => string;
+        updatedAt: Date;
+        generation?: string;
+        encryptedIpnsPrivateKey?: Buffer;
+        keyEpoch?: number;
+      };
+      const setClause: CasSetClause = {
+        latestCid: metadataCid,
+        signedRecord: Buffer.from(signedRecord),
+        // D-09: idempotent republish keeps sequence_number unchanged
+        sequenceNumber: () => (isIdempotentRepublish ? 'sequence_number' : 'sequence_number + 1'),
+        updatedAt: new Date(),
+      };
+      // Only update generation when explicitly provided (undefined = no-op, preserve stored value)
+      if (generation !== undefined) {
+        setClause.generation = generation;
+      }
+      if (shouldUpdateKey) {
+        setClause.encryptedIpnsPrivateKey = Buffer.from(encryptedIpnsPrivateKey!, 'hex');
+        setClause.keyEpoch = keyEpoch!;
       }
 
-      const saved = await this.folderIpnsRepository.save(existing);
+      // When generation is not provided, default to the stored generation so the
+      // WHERE gate is a no-op (generation <= existing.generation → always true).
+      const effectiveIncomingGeneration = generation ?? existing.generation;
+      // When expectedSequenceNumber is not provided, default to the stored sequence
+      // so the seq CAS passes for the current row (backward-compat unconditional publish).
+      const effectiveExpected = expectedSequenceNumber ?? existing.sequenceNumber;
+
+      const updateResult = await this.ipnsRecordRepository
+        .createQueryBuilder()
+        .update(IpnsRecord)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .set(setClause as any)
+        .where(
+          'ipns_name = :ipnsName AND sequence_number = :expected AND generation <= CAST(:incoming AS bigint) AND tombstoned_at IS NULL',
+          {
+            ipnsName,
+            expected: effectiveExpected,
+            incoming: effectiveIncomingGeneration,
+          }
+        )
+        .execute();
+
+      if (updateResult.affected === 0) {
+        // Single follow-up read to distinguish 409 (stale seq / generation regression)
+        // from 410 (record tombstoned). D-03: exactly one follow-up read.
+        const row = await this.ipnsRecordRepository.findOne({ where: { ipnsName } });
+        if (!row) {
+          throw new NotFoundException(`IPNS record not found: ${ipnsName}`);
+        }
+        if (row.tombstonedAt) {
+          throw new HttpException({ error: 'IPNS_TOMBSTONED', ipnsName }, HttpStatus.GONE);
+        }
+        throw new ConflictException({
+          statusCode: 409,
+          message: 'Sequence number mismatch or generation regression',
+          currentSequenceNumber: row.sequenceNumber,
+        });
+      }
+
+      // Compute the new sequence number for TEE enrollment and return.
+      // No follow-up findOne needed: affected===1 means the CAS succeeded.
+      const newSeq = isIdempotentRepublish
+        ? existing.sequenceNumber
+        : (BigInt(existing.sequenceNumber) + 1n).toString();
 
       // Auto-enroll for TEE republishing when encrypted key is provided.
-      // Use existing.userId (the FolderIpns owner) for enrollment, not the
+      // Use existing.userId (the IpnsRecord owner) for enrollment, not the
       // authenticated user — a write-share recipient publishes to the owner's record.
-      if (encryptedIpnsPrivateKey && keyEpoch !== undefined && existing.userId === userId) {
+      if (shouldUpdateKey) {
         this.republishService
           .enrollFolder(
             existing.userId,
             ipnsName,
-            Buffer.from(encryptedIpnsPrivateKey, 'hex'),
-            keyEpoch,
+            Buffer.from(encryptedIpnsPrivateKey!, 'hex'),
+            keyEpoch!,
             metadataCid,
-            saved.sequenceNumber
+            newSeq
           )
           .catch((err) =>
             this.logger.warn(
@@ -363,26 +434,29 @@ export class IpnsService {
           );
       }
 
-      return saved;
+      return { ...existing, sequenceNumber: newSeq, latestCid: metadataCid } as IpnsRecord;
     }
 
     // Create new entry — sequence starts at '1' to match the IPNS record
     // the client signed (clients compute newSeq = 0n + 1n = 1n for first publish).
-    const folder = this.folderIpnsRepository.create({
+    const folder = this.ipnsRecordRepository.create({
       userId,
       ipnsName,
       latestCid: metadataCid,
       sequenceNumber: '1',
       signedRecord: Buffer.from(signedRecord),
-      publicKey: publicKey ? Buffer.from(publicKey) : null,
       encryptedIpnsPrivateKey: encryptedIpnsPrivateKey
         ? Buffer.from(encryptedIpnsPrivateKey, 'hex')
         : null,
       keyEpoch: keyEpoch ?? null,
+      // Persist the incoming generation on first publish so the forward-only
+      // generation gate is anchored at the client's intended value. Defaulting to
+      // the stored 0 here would let later, lower generations pass the gate.
+      generation: generation ?? '0',
       isRoot: false, // Root folder is tracked in Vault entity
     });
 
-    const saved = await this.folderIpnsRepository.save(folder);
+    const saved = await this.ipnsRecordRepository.save(folder);
 
     // Auto-enroll for TEE republishing when encrypted key is provided
     if (encryptedIpnsPrivateKey && keyEpoch !== undefined) {
@@ -429,22 +503,61 @@ export class IpnsService {
   }
 
   /**
-   * Get a folder IPNS entry by user and IPNS name
+   * Get an IPNS record by user and IPNS name
    */
-  async getFolderIpns(userId: string, ipnsName: string): Promise<FolderIpns | null> {
-    return this.folderIpnsRepository.findOne({
+  async getIpnsRecord(userId: string, ipnsName: string): Promise<IpnsRecord | null> {
+    return this.ipnsRecordRepository.findOne({
       where: { userId, ipnsName },
     });
   }
 
   /**
-   * Get all folder IPNS entries for a user (for TEE republishing)
+   * Get all IPNS records for a user (for TEE republishing)
    */
-  async getAllFolderIpns(userId: string): Promise<FolderIpns[]> {
-    return this.folderIpnsRepository.find({
+  async getAllIpnsRecords(userId: string): Promise<IpnsRecord[]> {
+    return this.ipnsRecordRepository.find({
       where: { userId },
       order: { createdAt: 'ASC' },
     });
+  }
+
+  /**
+   * Tombstone an IPNS record owned by userId.
+   *
+   * Sets tombstoned_at = NOW() atomically, then removes the name from the
+   * TEE republish schedule. Subsequent publish attempts return HTTP 410 GONE
+   * via the unified CAS WHERE (tombstoned_at IS NULL). Subsequent resolves
+   * also return 410 (checked in resolveRecord before parseCachedRecord).
+   *
+   * V4 access control: tombstone is scoped to the owner (user_id = :userId).
+   * Write-share recipients cannot tombstone a record they do not own.
+   */
+  async tombstoneRecord(userId: string, ipnsName: string): Promise<void> {
+    const result = await this.ipnsRecordRepository
+      .createQueryBuilder()
+      .update(IpnsRecord)
+      .set({ tombstonedAt: new Date() })
+      .where('ipns_name = :ipnsName AND tombstoned_at IS NULL AND user_id = :userId', {
+        ipnsName,
+        userId,
+      })
+      .execute();
+
+    if (result.affected === 0) {
+      // affected === 0 is ambiguous: the row is either already tombstoned
+      // (idempotent success) or it does not exist / is not owned by the caller.
+      // Distinguish with an owner-scoped lookup so a mistyped or unowned name
+      // returns 404 instead of a misleading 200; an already-tombstoned row is a
+      // no-op success.
+      const owned = await this.ipnsRecordRepository.findOne({ where: { ipnsName, userId } });
+      if (!owned) {
+        throw new NotFoundException(`IPNS record not found: ${ipnsName}`);
+      }
+    }
+
+    // Unenroll from TEE republish schedule regardless of whether the UPDATE matched
+    // (idempotent: if already unenrolled, unenrollIpns returns 0 affected).
+    await this.republishService.unenrollIpns(userId, ipnsName);
   }
 
   /**
@@ -482,7 +595,31 @@ export class IpnsService {
         const recordBytes = await this.delegatedRouting.resolve(ipnsName);
         if (recordBytes) {
           result = await parseIpnsRecordBytes(recordBytes, this.logger);
-          this.logger.debug(`IPNS name resolved successfully: ${ipnsName} -> ${result.cid}`);
+          // Ed25519 identity records omit the embedded pubKey (the name encodes the key —
+          // see parse-record.ts), so a network-resolved record carries signatureV2/data but
+          // no pubKey. The strict client and the controller's all-or-nothing signature bundle
+          // need pubKey to verify, so supplement it from the requested name — the same trust
+          // model the DB-cached path uses (ipns-record.codec.ts), since the name cryptographically
+          // commits to the key. This makes the §6.5 seqFloor shared-folder serve path (and any
+          // network-ahead serve) client-verifiable instead of failing closed.
+          if (result && result.signatureV2 && result.data && !result.pubKey) {
+            try {
+              result.pubKey = Buffer.from(publicKeyFromIpnsName(ipnsName)).toString('base64');
+            } catch (e) {
+              this.logger.warn(
+                `Could not recover pubKey from name ${ipnsName} for network record: ${
+                  e instanceof Error ? e.message : String(e)
+                }`
+              );
+              // Fail closed: a network record we cannot make client-verifiable (no
+              // recoverable pubKey for the all-or-nothing signature bundle) must not be
+              // served as an unverifiable CID. Discard it and fall back to DB cache / 404.
+              result = null;
+            }
+          }
+          if (result) {
+            this.logger.debug(`IPNS name resolved successfully: ${ipnsName} -> ${result.cid}`);
+          }
         }
       } catch (error) {
         // Fall back to DB cache on BAD_GATEWAY (delegated routing failures)
@@ -498,15 +635,57 @@ export class IpnsService {
 
       // Always check DB cache — it's written synchronously during publish
       // and may be ahead of the network (delegated routing can serve stale records)
-      const cached = await this.folderIpnsRepository.findOne({
+      const cached = await this.ipnsRecordRepository.findOne({
         where: { ipnsName },
       });
+
+      // D-07: tombstoned name returns 410 before serving any cached or network CID.
+      // Checked here so both DB-only and network+DB paths are covered.
+      if (cached?.tombstonedAt) {
+        throw new HttpException({ error: 'IPNS_TOMBSTONED', ipnsName }, HttpStatus.GONE);
+      }
+
       const cachedResult = await parseCachedRecord(cached, this.logger);
+
+      // TEE-05 / §6.5: type-narrow cachedResult into the three-way discriminated union.
+      //
+      //  seqFloor discriminant → shared-folder row with no signedRecord.
+      //    Network record must have networkSeq >= seqFloor to be served.
+      //    If network record is below the floor (or absent), fail closed (→ 404).
+      //    Never serve a network record ungated when we have a known seq floor.
+      //
+      //  IpnsRecordFields → normal row: prefer DB when dbSeq >= networkSeq.
+      //
+      //  null → no cached row or CID mismatch: fall through to network-only (or 404).
+      const isSeqFloor = (r: typeof cachedResult): r is SeqFloor => r !== null && 'seqFloor' in r;
+
+      if (isSeqFloor(cachedResult)) {
+        // Shared-folder row: gate the network record against the stored seq floor.
+        if (result) {
+          const networkSeq = BigInt(result.sequenceNumber);
+          const floorSeq = BigInt(cachedResult.seqFloor);
+          if (networkSeq >= floorSeq) {
+            this.logger.debug(
+              `seqFloor gate passed for ${ipnsName}: networkSeq=${networkSeq} >= floor=${floorSeq}`
+            );
+            timerSource = 'network';
+            resolveFound = true;
+            return result;
+          }
+          // Network record below floor — fail closed to prevent ungated serve.
+          this.logger.warn(
+            `seqFloor gate REJECTED for ${ipnsName}: networkSeq=${networkSeq} < floor=${floorSeq} — failing closed`
+          );
+          return null;
+        }
+        // No network record and only a seqFloor discriminant — cannot serve.
+        return null;
+      }
 
       if (result && cachedResult) {
         // Both sources available. The DB-cached record is the authoritative, fully-signed
         // record the owner published — parseCachedRecord returns it complete, including the
-        // pubKey (supplied from the validated publicKey column). The network record parsed
+        // pubKey (recovered from the k51 ipnsName via publicKeyFromIpnsName). The network record parsed
         // from delegated routing does NOT carry the signature fields a strict client needs
         // to verify, so prefer the DB record whenever it is at the same or a higher
         // sequence; only defer to the network record when it is strictly ahead (a newer

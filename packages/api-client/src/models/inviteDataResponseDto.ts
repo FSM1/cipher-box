@@ -3,29 +3,28 @@
  * Do not edit manually.
  * CipherBox API
  * Zero-knowledge encrypted cloud storage API
- * OpenAPI spec version: 0.44.0
+ * OpenAPI spec version: 0.44.1
  */
 import type { InviteDataResponseDtoStatus } from './inviteDataResponseDtoStatus';
-import type { InviteChildKeyDto } from './inviteChildKeyDto';
-import type { InviteDataResponseDtoItemType } from './inviteDataResponseDtoItemType';
 
 export interface InviteDataResponseDto {
   /** Current status of the invite */
   status: InviteDataResponseDtoStatus;
-  /** Hex-encoded item key wrapped with ephemeral public key */
+  /** Hex-encoded root readKey wrapped with ephemeral public key */
   encryptedKey: string;
   /**
-   * Array of child keys wrapped with ephemeral public key, or null
+   * Hex-encoded ECIES descriptor ref for write access wrapped with ephemeral public key. Null for read-only invites.
    * @nullable
    */
-  encryptedChildKeys: InviteChildKeyDto[] | null;
-  itemType: InviteDataResponseDtoItemType;
-  /** IPNS name of the shared item */
-  ipnsName: string;
-  /** Display name of the shared item */
-  itemName: string;
+  writeDescriptorRef: string | null;
+  /** UUID of the root shared node */
+  rootNodeId: string;
+  /** IPNS name of the root shared node */
+  rootIpnsName: string;
+  /** Generation of the root node at invite creation (numeric string) */
+  rootGeneration: string;
   /**
-   * Hex-encoded ECIES ciphertext of the display name, or null for legacy invites
+   * Hex-encoded ECIES ciphertext of the display name, or null if not provided
    * @nullable
    */
   itemNameEncrypted: string | null;

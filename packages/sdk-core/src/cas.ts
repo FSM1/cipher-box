@@ -43,6 +43,8 @@ export async function publishWithCas<TData>(params: {
   ctx: SdkContext;
   encryptedIpnsPrivateKey?: string;
   keyEpoch?: number;
+  /** Content generation epoch (bigint as string). Forwarded to the server-side TEE-07 forward-only gate. Omit for non-rotation publishes. */
+  generation?: string;
   maxAttempts: number;
   backoff: boolean;
   /** Encode local state to IPFS and return the resulting CID. */
@@ -96,6 +98,7 @@ export async function publishWithCas<TData>(params: {
         encryptedIpnsPrivateKey: params.encryptedIpnsPrivateKey,
         keyEpoch: params.keyEpoch,
         expectedSequenceNumber: currentSeq.toString(),
+        generation: params.generation,
         ctx: params.ctx,
       });
       return { cid, newSequenceNumber: newSeq, publishedData: localData, prunedCids };

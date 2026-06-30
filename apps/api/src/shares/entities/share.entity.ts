@@ -5,16 +5,15 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   ManyToOne,
-  OneToMany,
   JoinColumn,
   Index,
+  Unique,
 } from 'typeorm';
 import { User } from '../../auth/entities/user.entity';
-import { ShareKey } from './share-key.entity';
 
-// Unique constraint is a partial index (WHERE revoked_at IS NULL) created via migration.
-// This allows revoked records to coexist with new active shares for the same triple.
+// Plain unique constraint — hard-delete on revoke means no revoked rows coexist (D-11)
 @Entity('shares')
+@Unique(['sharerId', 'recipientId', 'rootNodeId'])
 export class Share {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
@@ -35,68 +34,52 @@ export class Share {
   @JoinColumn({ name: 'recipient_id' })
   recipient!: User;
 
-  @Column({ type: 'varchar', length: 10, name: 'item_type' })
-  itemType!: 'folder' | 'file';
-
-  @Index()
-  @Column({ type: 'varchar', length: 255, name: 'ipns_name' })
-  ipnsName!: string;
-
   /**
-   * Display name of the shared item (plaintext).
-   * Privacy impact is minimal -- server already knows user IDs involved.
+   * ECIES descriptor ref for read access (wrapped root readKey + metadata).
+   * Server never sees plaintext (zero-knowledge, CLAUDE.md rule 6).
    */
-  @Column({ type: 'varchar', length: 255, name: 'item_name' })
-  itemName!: string;
+  @Column({ type: 'bytea', name: 'read_descriptor_ref' })
+  readDescriptorRef!: Buffer;
 
   /**
-   * ECIES-wrapped display name (itemName) for the recipient's secp256k1 pubkey.
-   * Nullable: legacy rows hold plaintext in item_name until a key-holding
-   * client lazily backfills this (decision A2, plan 48-06). The server never
-   * sees plaintext and never encrypts it (zero-knowledge, CLAUDE.md rule 6).
+   * ECIES descriptor ref for write access (wrapped root writeKey + metadata).
+   * NULL for read-only shares. Presence signals write grant (D-09).
+   */
+  @Column({ type: 'bytea', name: 'write_descriptor_ref', nullable: true })
+  writeDescriptorRef!: Buffer | null;
+
+  /**
+   * UUID of the root shared node (folder or file).
+   */
+  @Column({ type: 'uuid', name: 'root_node_id' })
+  rootNodeId!: string;
+
+  /**
+   * IPNS name (k51...) of the root shared node.
+   */
+  @Column({ type: 'varchar', length: 255, name: 'root_ipns_name' })
+  rootIpnsName!: string;
+
+  /**
+   * Generation of the root node at share creation.
+   * TypeORM returns bigint as string.
+   */
+  @Column({ type: 'bigint', name: 'root_generation', default: 0 })
+  rootGeneration!: string;
+
+  /**
+   * ECIES-wrapped display name for the recipient's secp256k1 pubkey.
+   * Nullable: not required if recipient can derive the name from their filesystem.
+   * Server never sees plaintext (CLAUDE.md rule 6).
    */
   @Column({ type: 'bytea', name: 'item_name_encrypted', nullable: true })
   itemNameEncrypted!: Buffer | null;
-
-  /**
-   * The shared item's key (folderKey or parent folderKey) wrapped
-   * with the recipient's secp256k1 public key via ECIES.
-   * Server never sees the plaintext key.
-   */
-  @Column({ type: 'bytea', name: 'encrypted_key' })
-  encryptedKey!: Buffer;
-
-  /**
-   * Permission level for the share: 'read' (default) or 'write'.
-   * Defaults to 'read' for backward compatibility with existing shares.
-   */
-  @Column({ type: 'varchar', length: 10, default: 'read' })
-  permission!: 'read' | 'write';
-
-  /**
-   * ECIES-wrapped IPNS private key for write shares, allowing
-   * recipients to publish to the shared IPNS name.
-   * NULL for read-only shares.
-   */
-  @Column({ type: 'bytea', name: 'encrypted_ipns_key', nullable: true })
-  encryptedIpnsKey!: Buffer | null;
 
   /**
    * Recipient has hidden/dismissed this share from their view.
    */
   @Column({ type: 'boolean', name: 'hidden_by_recipient', default: false })
   hiddenByRecipient!: boolean;
-
-  /**
-   * Soft-delete timestamp for lazy key rotation.
-   * null = active share, timestamp = revoked pending rotation.
-   * On next folder modification, sharer rotates folderKey and hard-deletes.
-   */
-  @Column({ type: 'timestamp', name: 'revoked_at', nullable: true })
-  revokedAt!: Date | null;
-
-  @OneToMany(() => ShareKey, (shareKey) => shareKey.share, { cascade: true })
-  shareKeys!: ShareKey[];
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;

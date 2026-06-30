@@ -28,15 +28,15 @@ Phase number: `$ARGUMENTS` (e.g. `51`). If empty, infer it from the current bran
 
 ### 1. Verify
 
-Invoke `/gsd:verify-work $ARGUMENTS`. Must reach a PASS verdict (`<phase>-VERIFICATION.md`). Fix real gaps; re-run.
+Invoke `/gsd-verify-work $ARGUMENTS`. Must reach a PASS verdict (`<phase>-VERIFICATION.md`). Fix real gaps; re-run.
 
 ### 2. Secure
 
-Invoke `/gsd:secure-phase $ARGUMENTS`. Must reach SECURED (`<phase>-SECURITY.md`). If the auditor writes to repo-root `SECURITY.md`, `git restore` it and write the phase doc instead.
+Invoke `/gsd-secure-phase $ARGUMENTS`. Must reach SECURED (`<phase>-SECURITY.md`). If the auditor writes to repo-root `SECURITY.md`, `git restore` it and write the phase doc instead.
 
 ### 3. Validate (Nyquist)
 
-Invoke `/gsd:validate-phase $ARGUMENTS`. Must be compliant, 0 gaps (`<phase>-VALIDATION.md`).
+Invoke `/gsd-validate-phase $ARGUMENTS`. Must be compliant, 0 gaps (`<phase>-VALIDATION.md`).
 
 ### 4. Simplify
 
@@ -84,7 +84,7 @@ git filter-branch --msg-filter 'sed -E "1 s/^([a-z]+) [0-9][0-9A-Za-z.-]*: /\1: 
 
 ### 8. Ship
 
-Invoke `/gsd:ship $ARGUMENTS`, but:
+Invoke `/gsd-ship $ARGUMENTS`, but:
 
 - Override the default PR title (GSD's `Phase N: <slug>` is non-conventional) with a conventional, paren-free subject, e.g. `fix: <concise phase summary>`.
 - Write the PR body to a temp file (escape `#NN`, end with the Claude Code attribution line) and set it via `gh api -X PATCH` (not `gh pr edit`).

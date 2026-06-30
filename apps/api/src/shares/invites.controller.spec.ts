@@ -1,50 +1,36 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { InvitesController } from './invites.controller';
-import { BypassableThrottlerGuard } from '../common/guards/throttler-bypass.guard';
 import { ShareInviteService } from './share-invite.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { BypassableThrottlerGuard } from '../common/guards/throttler-bypass.guard';
+import { ClaimInviteDto } from './dto/claim-invite.dto';
 import { ShareInvite } from './entities/share-invite.entity';
-import { User } from '../auth/entities/user.entity';
 import { RequestWithUser } from '../common/types';
-import { ParseTokenPipe } from '../common/pipes/parse-token.pipe';
 
 describe('InvitesController', () => {
   let controller: InvitesController;
-  let mockSharesService: {
-    getInviteStatus: jest.Mock;
-    getInviteForClaim: jest.Mock;
-    claimInvite: jest.Mock;
-  };
+  let shareInviteService: jest.Mocked<ShareInviteService>;
 
-  const userId = '550e8400-e29b-41d4-a716-446655440000';
-  const testToken = 'abc123-url-safe-token';
-  const testEncryptedKey = 'cc'.repeat(64);
-  const testEncryptedNameHex = 'ab'.repeat(40);
+  const mockRequest = {
+    user: { id: 'claimer-uuid-123' },
+  } as unknown as RequestWithUser;
 
-  const mockReq: { user: { id: string } } = { user: { id: userId } };
-
-  const mockInvite: ShareInvite = {
-    id: '770e8400-e29b-41d4-a716-446655440002',
-    token: testToken,
-    sharerId: '660e8400-e29b-41d4-a716-446655440001',
-    sharer: {} as User,
-    itemType: 'folder',
-    ipnsName: 'k51qzi5uqu5dg12345',
-    itemName: 'My Folder',
-    itemNameEncrypted: null,
-    encryptedKey: Buffer.from(testEncryptedKey, 'hex'),
-    encryptedChildKeys: [{ keyType: 'file', itemId: 'f1', encryptedKey: 'dd'.repeat(32) }],
-    status: 'active',
-    maxClaims: 1,
-    claimCount: 0,
-    claimedBy: null,
-    expiresAt: new Date('2026-03-01T00:00:00Z'),
-    createdAt: new Date('2026-02-22T00:00:00Z'),
-  };
+  /** Build a ShareInvite-shaped row for getInviteForClaim mocks. */
+  const buildInvite = (overrides: Partial<ShareInvite> = {}): ShareInvite =>
+    ({
+      status: 'active',
+      encryptedKey: Buffer.from('deadbeef', 'hex'),
+      writeDescriptorRef: Buffer.from('cafe', 'hex'),
+      rootNodeId: 'root-node-uuid',
+      rootIpnsName: 'k51qzi5uqu5test',
+      rootGeneration: '7',
+      itemNameEncrypted: Buffer.from('0011', 'hex'),
+      ...overrides,
+    }) as ShareInvite;
 
   beforeEach(async () => {
-    mockSharesService = {
+    const mockShareInviteService = {
       getInviteStatus: jest.fn(),
       getInviteForClaim: jest.fn(),
       claimInvite: jest.fn(),
@@ -52,7 +38,12 @@ describe('InvitesController', () => {
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [InvitesController],
-      providers: [{ provide: ShareInviteService, useValue: mockSharesService }],
+      providers: [
+        {
+          provide: ShareInviteService,
+          useValue: mockShareInviteService,
+        },
+      ],
     })
       .overrideGuard(JwtAuthGuard)
       .useValue({ canActivate: () => true })
@@ -61,133 +52,102 @@ describe('InvitesController', () => {
       .compile();
 
     controller = module.get<InvitesController>(InvitesController);
+    shareInviteService = module.get(ShareInviteService);
   });
 
   afterEach(() => {
-    jest.clearAllMocks();
+    jest.resetAllMocks();
   });
 
   describe('getInviteStatus', () => {
-    it('should return status from service when invite exists', async () => {
-      mockSharesService.getInviteStatus.mockResolvedValue({ status: 'active' });
+    it('returns active status and delegates to the service with the token', async () => {
+      shareInviteService.getInviteStatus.mockResolvedValue({ status: 'active' });
 
-      const result = await controller.getInviteStatus(testToken);
+      const result = await controller.getInviteStatus('tok-123');
 
+      expect(shareInviteService.getInviteStatus).toHaveBeenCalledWith('tok-123');
       expect(result).toEqual({ status: 'active' });
-      expect(mockSharesService.getInviteStatus).toHaveBeenCalledWith(testToken);
     });
 
-    it('should throw NotFoundException when service returns null (expired/not found)', async () => {
-      mockSharesService.getInviteStatus.mockResolvedValue(null);
+    it('throws NotFoundException when the service returns null (not found / expired)', async () => {
+      shareInviteService.getInviteStatus.mockResolvedValue(null);
 
-      await expect(controller.getInviteStatus(testToken)).rejects.toThrow(NotFoundException);
+      await expect(controller.getInviteStatus('tok-missing')).rejects.toThrow(NotFoundException);
     });
 
-    it('should throw NotFoundException for non-active status (prevents token-existence oracle)', async () => {
-      mockSharesService.getInviteStatus.mockResolvedValue({ status: 'claimed' });
+    it('throws NotFoundException when status is not active (oracle protection)', async () => {
+      shareInviteService.getInviteStatus.mockResolvedValue({ status: 'claimed' });
 
-      await expect(controller.getInviteStatus(testToken)).rejects.toThrow(NotFoundException);
-    });
-
-    it('should throw NotFoundException for revoked status', async () => {
-      mockSharesService.getInviteStatus.mockResolvedValue({ status: 'revoked' });
-
-      await expect(controller.getInviteStatus(testToken)).rejects.toThrow(NotFoundException);
-    });
-  });
-
-  describe('ParseTokenPipe (applied to all endpoints)', () => {
-    const pipe = new ParseTokenPipe();
-
-    it('should accept valid base64url tokens', () => {
-      expect(pipe.transform('abcdefghijklmnopqrstuv')).toBe('abcdefghijklmnopqrstuv');
-    });
-
-    it('should reject tokens with invalid characters', () => {
-      expect(() => pipe.transform("'; DROP TABLE--")).toThrow(BadRequestException);
-    });
-
-    it('should reject overly long tokens', () => {
-      expect(() => pipe.transform('a'.repeat(100))).toThrow(BadRequestException);
-    });
-
-    it('should reject empty tokens', () => {
-      expect(() => pipe.transform('')).toThrow(BadRequestException);
+      await expect(controller.getInviteStatus('tok-claimed')).rejects.toThrow(NotFoundException);
     });
   });
 
   describe('getInviteData', () => {
-    it('should return full invite data with hex-encoded encrypted key', async () => {
-      mockSharesService.getInviteForClaim.mockResolvedValue(mockInvite);
+    it('throws NotFoundException when the invite is null', async () => {
+      shareInviteService.getInviteForClaim.mockResolvedValue(null);
 
-      const result = await controller.getInviteData(testToken);
-
-      expect(result.status).toBe('active');
-      expect(result.encryptedKey).toBe(testEncryptedKey);
-      expect(result.encryptedChildKeys).toEqual(mockInvite.encryptedChildKeys);
-      expect(result.itemType).toBe('folder');
-      expect(result.ipnsName).toBe('k51qzi5uqu5dg12345');
-      expect(result.itemName).toBe('My Folder');
-      expect(result.itemNameEncrypted).toBeNull();
-      expect(mockSharesService.getInviteForClaim).toHaveBeenCalledWith(testToken);
-    });
-
-    it('should return hex-encoded itemNameEncrypted when present', async () => {
-      mockSharesService.getInviteForClaim.mockResolvedValue({
-        ...mockInvite,
-        itemNameEncrypted: Buffer.from(testEncryptedNameHex, 'hex'),
-      });
-
-      const result = await controller.getInviteData(testToken);
-
-      expect(result.itemNameEncrypted).toBe(testEncryptedNameHex);
-    });
-
-    it('should throw NotFoundException when service returns null', async () => {
-      mockSharesService.getInviteForClaim.mockResolvedValue(null);
-
-      await expect(controller.getInviteData(testToken)).rejects.toThrow(NotFoundException);
-      await expect(controller.getInviteData(testToken)).rejects.toThrow(
-        'Invite not found or expired'
+      await expect(controller.getInviteData('tok-missing')).rejects.toThrow(
+        new NotFoundException('Invite not found or expired')
       );
+      expect(shareInviteService.getInviteForClaim).toHaveBeenCalledWith('tok-missing');
     });
 
-    it('should return null encryptedChildKeys when invite has none', async () => {
-      const inviteNoChildren = { ...mockInvite, encryptedChildKeys: null };
-      mockSharesService.getInviteForClaim.mockResolvedValue(inviteNoChildren);
+    it('maps a full invite to hex-encoded fields (write + name present)', async () => {
+      shareInviteService.getInviteForClaim.mockResolvedValue(buildInvite());
 
-      const result = await controller.getInviteData(testToken);
+      const result = await controller.getInviteData('tok-full');
 
-      expect(result.encryptedChildKeys).toBeNull();
+      expect(result).toEqual({
+        status: 'active',
+        encryptedKey: 'deadbeef',
+        writeDescriptorRef: 'cafe',
+        rootNodeId: 'root-node-uuid',
+        rootIpnsName: 'k51qzi5uqu5test',
+        rootGeneration: '7',
+        itemNameEncrypted: '0011',
+      });
+    });
+
+    it('returns null for writeDescriptorRef and itemNameEncrypted when absent (read-only invite)', async () => {
+      shareInviteService.getInviteForClaim.mockResolvedValue(
+        buildInvite({ writeDescriptorRef: null, itemNameEncrypted: null })
+      );
+
+      const result = await controller.getInviteData('tok-readonly');
+
+      expect(result.writeDescriptorRef).toBeNull();
+      expect(result.itemNameEncrypted).toBeNull();
+      expect(result.encryptedKey).toBe('deadbeef');
     });
   });
 
   describe('claimInvite', () => {
-    it('should delegate to service and return shareId', async () => {
-      const shareId = '880e8400-e29b-41d4-a716-446655440003';
-      mockSharesService.claimInvite.mockResolvedValue({ shareId });
+    const dto: ClaimInviteDto = {
+      readDescriptorRef: 'aa'.repeat(40),
+    };
 
-      const dto = {
-        encryptedKey: 'ff'.repeat(64),
-        childKeys: [{ keyType: 'file' as const, itemId: 'f1', encryptedKey: 'ee'.repeat(32) }],
-      };
+    it('delegates to the service with token, the authenticated user id, and dto', async () => {
+      shareInviteService.claimInvite.mockResolvedValue({ shareId: 'share-uuid-999' });
 
-      const result = await controller.claimInvite(mockReq as RequestWithUser, testToken, dto);
+      const result = await controller.claimInvite(mockRequest, 'tok-claim', dto);
 
-      expect(result).toEqual({ shareId });
-      expect(mockSharesService.claimInvite).toHaveBeenCalledWith(testToken, userId, dto);
+      expect(shareInviteService.claimInvite).toHaveBeenCalledWith(
+        'tok-claim',
+        'claimer-uuid-123',
+        dto
+      );
+      expect(result).toEqual({ shareId: 'share-uuid-999' });
     });
 
-    it('should pass through service exceptions', async () => {
-      mockSharesService.claimInvite.mockRejectedValue(
-        new NotFoundException('Invite not found or expired')
+    it('propagates service errors (e.g. already claimed / self-claim → 409)', async () => {
+      // The service throws ConflictException for both the self-claim and the
+      // already-claimed/expired/revoked contention paths (share-invite.service.ts),
+      // and the controller propagates it unchanged.
+      shareInviteService.claimInvite.mockRejectedValue(new ConflictException());
+
+      await expect(controller.claimInvite(mockRequest, 'tok-claim', dto)).rejects.toThrow(
+        ConflictException
       );
-
-      const dto = { encryptedKey: 'ff'.repeat(64) };
-
-      await expect(
-        controller.claimInvite(mockReq as RequestWithUser, testToken, dto)
-      ).rejects.toThrow(NotFoundException);
     });
   });
 });

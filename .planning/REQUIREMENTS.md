@@ -54,17 +54,17 @@ Requirements for v2.0. Each maps to exactly one roadmap phase. Categories: CRYPT
 - [ ] **TEE-01**: The TEE is a record-lease-renewer — it receives the marshaled `signedRecord`, verifies its signature, and re-emits the same CID and same sequence with only a later EOL; it cannot originate or repoint a CID
 - [ ] **TEE-02**: Republish never increments the sequence (the `+ 1n` republisher path is unified to no-increment); sequence-increment policy lives in the relay
 - [ ] **TEE-03**: The canonical `ipns_records` row is the sole source of the TEE's signing inputs; `ipns_republish_schedule`'s duplicated `latestCid`/`sequenceNumber`/`encryptedIpnsKey`/`keyEpoch` columns are collapsed
-- [ ] **TEE-04**: Publish is an atomic compare-and-set (`UPDATE … WHERE ipnsName = :n AND sequenceNumber = :expected`; 0 rows ⇒ 409); the EOL-only renewal is guarded identically so it can never regress `latestCid`/`sequenceNumber`
-- [ ] **TEE-05**: Resolve anti-rollback uses `generation` as the authority plus a durable per-node seq high-water and `versionFloor`; DB is canonical with a case-split fail-closed fall-through (expected-null shared-folder rows apply the seq floor; signedRecord-CID ≠ latestCid fails closed)
+- [x] **TEE-04**: Publish is an atomic compare-and-set (`UPDATE … WHERE ipnsName = :n AND sequenceNumber = :expected`; 0 rows ⇒ 409); the EOL-only renewal is guarded identically so it can never regress `latestCid`/`sequenceNumber`
+- [x] **TEE-05**: Resolve anti-rollback uses `generation` as the authority plus a durable per-node seq high-water and `versionFloor`; DB is canonical with a case-split fail-closed fall-through (expected-null shared-folder rows apply the seq floor; signedRecord-CID ≠ latestCid fails closed)
 - [ ] **TEE-06**: Enclave bindings are hardened — internal epoch self-derivation (never the relay's scalars), name↔key binding asserted before emit, and migration durability via a client recovery path
-- [ ] **TEE-07**: The publish gate enforces forward-only `generation` per node server-side (defence-in-depth, mirroring the sequence anti-rollback)
+- [x] **TEE-07**: The publish gate enforces forward-only `generation` per node server-side (defence-in-depth, mirroring the sequence anti-rollback)
 
 ### DATA — schema/DB cutover and bin
 
-- [ ] **DATA-01**: The `share_keys` table and entity are deleted outright (no dual-codec, no `version`-discriminator bridge)
-- [ ] **DATA-02**: `shares` is slimmed to one grant row per recipient carrying `readDescriptorRef`/`writeDescriptorRef` (legacy `readKeyEcies`/`ShareGrant` retired)
-- [ ] **DATA-03**: `folder_ipns` is renamed to `ipns_records` (entity `IpnsRecord`) and `folder_ipns.public_key` is dropped — the Ed25519 pubkey is always recovered from the k51 name via `publicKeyFromIpnsName`
-- [ ] **DATA-04**: A `BinEntry` is a `readKey`-sealed re-link; restore is a pure re-link (the `originalFolderKeyEncrypted` re-encrypt-on-restore path is deleted), a private delete is unlink + `BinEntry` (no rotation), and a shared delete rotates the departing subtree + revokes the grant rows
+- [x] **DATA-01**: The `share_keys` table and entity are deleted outright (no dual-codec, no `version`-discriminator bridge)
+- [x] **DATA-02**: `shares` is slimmed to one grant row per recipient carrying `readDescriptorRef`/`writeDescriptorRef` (legacy `readKeyEcies`/`ShareGrant` retired)
+- [x] **DATA-03**: `folder_ipns` is renamed to `ipns_records` (entity `IpnsRecord`) and `folder_ipns.public_key` is dropped — the Ed25519 pubkey is always recovered from the k51 name via `publicKeyFromIpnsName`
+- [x] **DATA-04**: A `BinEntry` is a `readKey`-sealed re-link; restore is a pure re-link (the `originalFolderKeyEncrypted` re-encrypt-on-restore path is deleted), a private delete is unlink + `BinEntry` (no rotation), and a shared delete rotates the departing subtree + revokes the grant rows
 
 ### TEST — cross-cutting verification infrastructure
 
@@ -131,13 +131,13 @@ Which phases cover which requirements. Populated during roadmap creation.
 | WRITE-02 | Phase 65 | Complete |
 | WRITE-03 | Phase 65 | Complete |
 | WRITE-04 | Phase 65 | Complete |
-| DATA-01 | Phase 66 | Pending |
-| DATA-02 | Phase 66 | Pending |
-| DATA-03 | Phase 66 | Pending |
-| DATA-04 | Phase 66 | Pending |
-| TEE-04 | Phase 66 | Pending |
-| TEE-05 | Phase 66 | Pending |
-| TEE-07 | Phase 66 | Pending |
+| DATA-01 | Phase 66 | Complete |
+| DATA-02 | Phase 66 | Complete |
+| DATA-03 | Phase 66 | Complete |
+| DATA-04 | Phase 66 | Complete |
+| TEE-04 | Phase 66 | Complete |
+| TEE-05 | Phase 66 | Complete |
+| TEE-07 | Phase 66 | Complete |
 | TEE-01 | Phase 67 | Pending |
 | TEE-02 | Phase 67 | Pending |
 | TEE-03 | Phase 67 | Pending |

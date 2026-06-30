@@ -1,50 +1,46 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { NotFoundException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { ShareInvitesController } from './share-invites.controller';
-import { BypassableThrottlerGuard } from '../common/guards/throttler-bypass.guard';
 import { ShareInviteService } from './share-invite.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { BypassableThrottlerGuard } from '../common/guards/throttler-bypass.guard';
+import { CreateInviteDto } from './dto/create-invite.dto';
 import { ShareInvite } from './entities/share-invite.entity';
-import { User } from '../auth/entities/user.entity';
 import { RequestWithUser } from '../common/types';
 
 describe('ShareInvitesController', () => {
   let controller: ShareInvitesController;
-  let mockSharesService: {
-    createInvite: jest.Mock;
-    getInvitesForItem: jest.Mock;
-    revokeInvite: jest.Mock;
-  };
+  let shareInviteService: jest.Mocked<
+    Pick<ShareInviteService, 'createInvite' | 'getInvitesForItem' | 'revokeInvite'>
+  >;
 
-  const userId = '550e8400-e29b-41d4-a716-446655440000';
-  const inviteId = '770e8400-e29b-41d4-a716-446655440002';
-  const testToken = 'abc123-url-safe-token';
-  const testEncryptedKey = 'cc'.repeat(64);
-  const testEncryptedNameHex = 'ab'.repeat(40);
+  const mockUser = { id: 'sharer-uuid-1' };
+  const mockRequest = { user: mockUser } as unknown as RequestWithUser;
 
-  const mockReq: { user: { id: string } } = { user: { id: userId } };
-
-  const mockInvite: ShareInvite = {
-    id: inviteId,
-    token: testToken,
-    sharerId: userId,
-    sharer: {} as User,
-    itemType: 'folder',
-    ipnsName: 'k51qzi5uqu5dg12345',
-    itemName: 'My Folder',
-    itemNameEncrypted: null,
-    encryptedKey: Buffer.from(testEncryptedKey, 'hex'),
-    encryptedChildKeys: null,
-    status: 'active',
-    maxClaims: 1,
-    claimCount: 0,
-    claimedBy: null,
-    expiresAt: new Date('2026-03-01T00:00:00Z'),
-    createdAt: new Date('2026-02-22T00:00:00Z'),
-  };
+  /** Build a ShareInvite entity stub with sensible defaults. */
+  const makeInvite = (overrides: Partial<ShareInvite> = {}): ShareInvite =>
+    ({
+      id: 'invite-uuid-1',
+      token: 'tok_abc123',
+      sharerId: mockUser.id,
+      sharer: undefined as never,
+      rootIpnsName: 'k51qzi5uqu5testrootipnsname',
+      rootNodeId: 'node-uuid-1',
+      rootGeneration: '0',
+      itemNameEncrypted: Buffer.from('deadbeef', 'hex'),
+      encryptedKey: Buffer.from('cafe', 'hex'),
+      writeDescriptorRef: null,
+      status: 'active',
+      maxClaims: 1,
+      claimCount: 0,
+      claimedBy: null,
+      expiresAt: new Date('2026-07-07T00:00:00Z'),
+      createdAt: new Date('2026-06-30T00:00:00Z'),
+      ...overrides,
+    }) as ShareInvite;
 
   beforeEach(async () => {
-    mockSharesService = {
+    const mockShareInviteService = {
       createInvite: jest.fn(),
       getInvitesForItem: jest.fn(),
       revokeInvite: jest.fn(),
@@ -52,7 +48,12 @@ describe('ShareInvitesController', () => {
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [ShareInvitesController],
-      providers: [{ provide: ShareInviteService, useValue: mockSharesService }],
+      providers: [
+        {
+          provide: ShareInviteService,
+          useValue: mockShareInviteService,
+        },
+      ],
     })
       .overrideGuard(JwtAuthGuard)
       .useValue({ canActivate: () => true })
@@ -61,165 +62,136 @@ describe('ShareInvitesController', () => {
       .compile();
 
     controller = module.get<ShareInvitesController>(ShareInvitesController);
+    shareInviteService = module.get(ShareInviteService);
   });
 
   afterEach(() => {
-    jest.clearAllMocks();
+    jest.resetAllMocks();
   });
 
   describe('createInvite', () => {
-    it('should return mapped invite response from service', async () => {
-      mockSharesService.createInvite.mockResolvedValue(mockInvite);
+    const dto: CreateInviteDto = {
+      rootIpnsName: 'k51qzi5uqu5testrootipnsname',
+      rootNodeId: 'node-uuid-1',
+      rootGeneration: '3',
+      itemNameEncrypted: 'deadbeef',
+      encryptedKey: 'a'.repeat(260),
+    };
 
-      const dto = {
-        itemType: 'folder' as const,
-        ipnsName: 'k51qzi5uqu5dg12345',
-        itemName: 'My Folder',
-        encryptedKey: testEncryptedKey,
-      };
+    it('forwards req.user.id and dto to the service', async () => {
+      shareInviteService.createInvite.mockResolvedValue(makeInvite());
 
-      const result = await controller.createInvite(mockReq as RequestWithUser, dto);
+      await controller.createInvite(mockRequest, dto);
 
-      expect(result.id).toBe(inviteId);
-      expect(result.token).toBe(testToken);
-      expect(result.itemType).toBe('folder');
-      expect(result.ipnsName).toBe('k51qzi5uqu5dg12345');
-      expect(result.itemName).toBe('My Folder');
-      expect(result.status).toBe('active');
-      expect(result.expiresAt).toBe(mockInvite.expiresAt);
-      expect(result.createdAt).toBe(mockInvite.createdAt);
-      expect(mockSharesService.createInvite).toHaveBeenCalledWith(userId, dto);
+      expect(shareInviteService.createInvite).toHaveBeenCalledWith('sharer-uuid-1', dto);
     });
 
-    it('should map itemNameEncrypted to a hex string when present', async () => {
-      mockSharesService.createInvite.mockResolvedValue({
-        ...mockInvite,
-        itemNameEncrypted: Buffer.from(testEncryptedNameHex, 'hex'),
+    it('maps the entity to a response with itemNameEncrypted hex-encoded', async () => {
+      const invite = makeInvite({
+        id: 'invite-uuid-9',
+        token: 'tok_xyz',
+        rootGeneration: '5',
+        itemNameEncrypted: Buffer.from('deadbeef', 'hex'),
+        status: 'active',
       });
+      shareInviteService.createInvite.mockResolvedValue(invite);
 
-      const dto = {
-        itemType: 'folder' as const,
-        ipnsName: 'k51qzi5uqu5dg12345',
-        itemName: 'My Folder',
-        encryptedKey: testEncryptedKey,
-      };
+      const result = await controller.createInvite(mockRequest, dto);
 
-      const result = await controller.createInvite(mockReq as RequestWithUser, dto);
-
-      expect(result.itemNameEncrypted).toBe(testEncryptedNameHex);
+      expect(result).toEqual({
+        id: 'invite-uuid-9',
+        token: 'tok_xyz',
+        rootIpnsName: invite.rootIpnsName,
+        rootNodeId: invite.rootNodeId,
+        rootGeneration: '5',
+        itemNameEncrypted: 'deadbeef',
+        status: 'active',
+        expiresAt: invite.expiresAt,
+        createdAt: invite.createdAt,
+      });
     });
 
-    it('should map itemNameEncrypted to null when absent', async () => {
-      mockSharesService.createInvite.mockResolvedValue({
-        ...mockInvite,
-        itemNameEncrypted: null,
-      });
+    it('maps a null itemNameEncrypted to null (no hex conversion)', async () => {
+      shareInviteService.createInvite.mockResolvedValue(makeInvite({ itemNameEncrypted: null }));
 
-      const dto = {
-        itemType: 'folder' as const,
-        ipnsName: 'k51qzi5uqu5dg12345',
-        itemName: 'My Folder',
-        encryptedKey: testEncryptedKey,
-      };
-
-      const result = await controller.createInvite(mockReq as RequestWithUser, dto);
+      const result = await controller.createInvite(mockRequest, dto);
 
       expect(result.itemNameEncrypted).toBeNull();
     });
 
-    it('should not expose internal fields like encryptedKey or sharerId', async () => {
-      mockSharesService.createInvite.mockResolvedValue(mockInvite);
+    it('propagates errors thrown by the service', async () => {
+      shareInviteService.createInvite.mockRejectedValue(new Error('db down'));
 
-      const dto = {
-        itemType: 'folder' as const,
-        ipnsName: 'k51qzi5uqu5dg12345',
-        itemName: 'My Folder',
-        encryptedKey: testEncryptedKey,
-      };
-
-      const result = await controller.createInvite(mockReq as RequestWithUser, dto);
-
-      expect('encryptedKey' in result).toBe(false);
-      expect('sharerId' in result).toBe(false);
-      expect('encryptedChildKeys' in result).toBe(false);
+      await expect(controller.createInvite(mockRequest, dto)).rejects.toThrow('db down');
     });
   });
 
   describe('listInvites', () => {
-    it('should return mapped array from service', async () => {
-      const invite2: ShareInvite = {
-        ...mockInvite,
-        id: '880e8400-e29b-41d4-a716-446655440003',
-        token: 'second-token',
-        itemName: 'Another Folder',
-      };
-      mockSharesService.getInvitesForItem.mockResolvedValue([mockInvite, invite2]);
+    const rootIpnsName = 'k51qzi5uqu5testrootipnsname';
 
-      const result = await controller.listInvites(mockReq as RequestWithUser, 'k51qzi5uqu5dg12345');
+    it('forwards req.user.id and rootIpnsName to the service', async () => {
+      shareInviteService.getInvitesForItem.mockResolvedValue([]);
 
-      expect(result).toHaveLength(2);
-      expect(result[0].id).toBe(inviteId);
-      expect(result[0].token).toBe(testToken);
-      expect(result[0].status).toBe('active');
-      expect(result[1].id).toBe('880e8400-e29b-41d4-a716-446655440003');
-      expect(result[1].token).toBe('second-token');
-      expect(mockSharesService.getInvitesForItem).toHaveBeenCalledWith(
-        userId,
-        'k51qzi5uqu5dg12345'
+      await controller.listInvites(mockRequest, { rootIpnsName });
+
+      expect(shareInviteService.getInvitesForItem).toHaveBeenCalledWith(
+        'sharer-uuid-1',
+        rootIpnsName
       );
     });
 
-    it('should map itemNameEncrypted to hex or null per invite', async () => {
-      const inviteWithName: ShareInvite = {
-        ...mockInvite,
-        itemNameEncrypted: Buffer.from(testEncryptedNameHex, 'hex'),
-      };
-      const inviteWithoutName: ShareInvite = {
-        ...mockInvite,
-        id: '880e8400-e29b-41d4-a716-446655440003',
-        itemNameEncrypted: null,
-      };
-      mockSharesService.getInvitesForItem.mockResolvedValue([inviteWithName, inviteWithoutName]);
+    it('returns an empty array when there are no active invites', async () => {
+      shareInviteService.getInvitesForItem.mockResolvedValue([]);
 
-      const result = await controller.listInvites(mockReq as RequestWithUser, 'k51qzi5uqu5dg12345');
-
-      expect(result[0].itemNameEncrypted).toBe(testEncryptedNameHex);
-      expect(result[1].itemNameEncrypted).toBeNull();
-    });
-
-    it('should return empty array when no invites exist', async () => {
-      mockSharesService.getInvitesForItem.mockResolvedValue([]);
-
-      const result = await controller.listInvites(mockReq as RequestWithUser, 'k51qzi5uqu5dg12345');
+      const result = await controller.listInvites(mockRequest, { rootIpnsName });
 
       expect(result).toEqual([]);
     });
 
-    it('should not expose internal fields in list results', async () => {
-      mockSharesService.getInvitesForItem.mockResolvedValue([mockInvite]);
+    it('maps each invite, covering both hex and null itemNameEncrypted branches', async () => {
+      const withName = makeInvite({
+        id: 'invite-uuid-a',
+        itemNameEncrypted: Buffer.from('00ff', 'hex'),
+      });
+      const withoutName = makeInvite({
+        id: 'invite-uuid-b',
+        itemNameEncrypted: null,
+      });
+      shareInviteService.getInvitesForItem.mockResolvedValue([withName, withoutName]);
 
-      const result = await controller.listInvites(mockReq as RequestWithUser, 'k51qzi5uqu5dg12345');
+      const result = await controller.listInvites(mockRequest, { rootIpnsName });
 
-      expect('encryptedKey' in result[0]).toBe(false);
-      expect('sharerId' in result[0]).toBe(false);
-      expect('encryptedChildKeys' in result[0]).toBe(false);
+      expect(result).toHaveLength(2);
+      expect(result[0]).toMatchObject({ id: 'invite-uuid-a', itemNameEncrypted: '00ff' });
+      expect(result[1]).toMatchObject({ id: 'invite-uuid-b', itemNameEncrypted: null });
     });
   });
 
   describe('revokeInvite', () => {
-    it('should delegate to service with inviteId and userId', async () => {
-      mockSharesService.revokeInvite.mockResolvedValue(undefined);
+    const inviteId = 'invite-uuid-1';
 
-      await controller.revokeInvite(mockReq as RequestWithUser, inviteId);
+    it('forwards inviteId and req.user.id to the service', async () => {
+      shareInviteService.revokeInvite.mockResolvedValue(undefined);
 
-      expect(mockSharesService.revokeInvite).toHaveBeenCalledWith(inviteId, userId);
+      await expect(controller.revokeInvite(mockRequest, inviteId)).resolves.toBeUndefined();
+      expect(shareInviteService.revokeInvite).toHaveBeenCalledWith(inviteId, 'sharer-uuid-1');
     });
 
-    it('should pass through service exceptions', async () => {
-      mockSharesService.revokeInvite.mockRejectedValue(new NotFoundException('Invite not found'));
+    it('propagates NotFoundException when the invite does not exist', async () => {
+      shareInviteService.revokeInvite.mockRejectedValue(new NotFoundException('Invite not found'));
 
-      await expect(controller.revokeInvite(mockReq as RequestWithUser, inviteId)).rejects.toThrow(
+      await expect(controller.revokeInvite(mockRequest, inviteId)).rejects.toThrow(
         NotFoundException
+      );
+    });
+
+    it('propagates ForbiddenException when a non-sharer attempts revoke', async () => {
+      shareInviteService.revokeInvite.mockRejectedValue(
+        new ForbiddenException('Only the sharer can revoke an invite')
+      );
+
+      await expect(controller.revokeInvite(mockRequest, inviteId)).rejects.toThrow(
+        ForbiddenException
       );
     });
   });

@@ -1,110 +1,99 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { NotFoundException, ForbiddenException, ConflictException } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import {
-  BadRequestException,
-  ConflictException,
-  ForbiddenException,
-  NotFoundException,
-} from '@nestjs/common';
+import { DataSource, In } from 'typeorm';
 import { SharesService } from './shares.service';
 import { Share } from './entities/share.entity';
-import { ShareKey } from './entities/share-key.entity';
 import { ShareInvite } from './entities/share-invite.entity';
 import { User } from '../auth/entities/user.entity';
 import { CreateShareDto } from './dto/create-share.dto';
-import { AddShareKeysDto } from './dto/share-key.dto';
-import { DataSource, In } from 'typeorm';
+
+type RepoMock = jest.Mocked<Record<string, jest.Mock>>;
+
+// A valid uncompressed secp256k1 pubkey: 04 + 128 hex chars (DTO shape, stored bare).
+const BARE_PUBKEY = '04' + 'ab'.repeat(64);
+const SHARER_ID = 'sharer-uuid-1';
+const RECIPIENT_ID = 'recipient-uuid-1';
+
+function createMockShare(overrides: Partial<Share> = {}): Share {
+  return {
+    id: 'share-uuid-1',
+    sharerId: SHARER_ID,
+    recipientId: RECIPIENT_ID,
+    readDescriptorRef: Buffer.from('aa'.repeat(32), 'hex'),
+    writeDescriptorRef: null,
+    rootNodeId: 'root-node-uuid-1',
+    rootIpnsName: 'k51qzi5uqu5test',
+    rootGeneration: '0',
+    itemNameEncrypted: null,
+    hiddenByRecipient: false,
+    createdAt: new Date('2026-01-01'),
+    updatedAt: new Date('2026-01-01'),
+    ...overrides,
+  } as Share;
+}
+
+function createDto(overrides: Partial<CreateShareDto> = {}): CreateShareDto {
+  return {
+    recipientPublicKey: BARE_PUBKEY,
+    readDescriptorRef: 'aa'.repeat(32),
+    rootNodeId: 'root-node-uuid-1',
+    rootIpnsName: 'k51qzi5uqu5test',
+    ...overrides,
+  } as CreateShareDto;
+}
 
 describe('SharesService', () => {
   let service: SharesService;
-  let mockShareRepo: {
-    findOne: jest.Mock;
+  let shareRepo: RepoMock;
+  let userRepo: RepoMock;
+  let dataSource: { transaction: jest.Mock };
+  let manager: {
     find: jest.Mock;
-    findAndCount: jest.Mock;
-    create: jest.Mock;
-    save: jest.Mock;
     remove: jest.Mock;
+    createQueryBuilder: jest.Mock;
   };
-  let mockShareKeyRepo: {
-    findOne: jest.Mock;
-    find: jest.Mock;
-    create: jest.Mock;
-    save: jest.Mock;
-    delete: jest.Mock;
-  };
-  let mockUserRepo: {
-    findOne: jest.Mock;
-  };
-  let mockDataSource: { transaction: jest.Mock };
-
-  // Test data
-  const sharerId = '550e8400-e29b-41d4-a716-446655440000';
-  const recipientId = '660e8400-e29b-41d4-a716-446655440001';
-  const shareId = '770e8400-e29b-41d4-a716-446655440002';
-  const recipientPublicKey = '04' + 'ab'.repeat(64);
-  const testEncryptedKey = 'cc'.repeat(64);
-  const testIpnsName = 'k51qzi5uqu5dg12345';
-
-  const mockRecipient = { id: recipientId, publicKey: recipientPublicKey } as User;
-
-  const mockShare: Share = {
-    id: shareId,
-    sharerId,
-    recipientId,
-    itemType: 'folder',
-    ipnsName: testIpnsName,
-    itemName: 'My Folder',
-    itemNameEncrypted: null,
-    encryptedKey: Buffer.from(testEncryptedKey, 'hex'),
-    permission: 'read',
-    encryptedIpnsKey: null,
-    hiddenByRecipient: false,
-    revokedAt: null,
-    shareKeys: [],
-    sharer: {} as User,
-    recipient: mockRecipient,
-    createdAt: new Date('2026-02-20T12:00:00Z'),
-    updatedAt: new Date('2026-02-20T12:00:00Z'),
-  };
-
-  const testCreateDto: CreateShareDto = {
-    recipientPublicKey,
-    itemType: 'folder',
-    ipnsName: testIpnsName,
-    itemName: 'My Folder',
-    encryptedKey: testEncryptedKey,
-  };
+  let queryBuilder: RepoMock;
 
   beforeEach(async () => {
-    mockShareRepo = {
+    shareRepo = {
       findOne: jest.fn(),
-      find: jest.fn(),
       findAndCount: jest.fn(),
       create: jest.fn(),
       save: jest.fn(),
       remove: jest.fn(),
     };
-    mockShareKeyRepo = {
+
+    userRepo = {
       findOne: jest.fn(),
+    };
+
+    queryBuilder = {
+      update: jest.fn().mockReturnThis(),
+      set: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      execute: jest.fn(),
+    };
+
+    manager = {
       find: jest.fn(),
-      create: jest.fn(),
-      save: jest.fn(),
-      delete: jest.fn(),
+      remove: jest.fn(),
+      createQueryBuilder: jest.fn().mockReturnValue(queryBuilder),
     };
-    mockUserRepo = {
-      findOne: jest.fn(),
-    };
-    mockDataSource = {
-      transaction: jest.fn(),
+
+    dataSource = {
+      transaction: jest
+        .fn()
+        .mockImplementation(async (cb: (m: typeof manager) => unknown) => cb(manager)),
     };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         SharesService,
-        { provide: getRepositoryToken(Share), useValue: mockShareRepo },
-        { provide: getRepositoryToken(ShareKey), useValue: mockShareKeyRepo },
-        { provide: getRepositoryToken(User), useValue: mockUserRepo },
-        { provide: DataSource, useValue: mockDataSource },
+        { provide: getRepositoryToken(Share), useValue: shareRepo },
+        { provide: getRepositoryToken(User), useValue: userRepo },
+        { provide: DataSource, useValue: dataSource },
       ],
     }).compile();
 
@@ -115,948 +104,337 @@ describe('SharesService', () => {
     jest.clearAllMocks();
   });
 
+  // ===========================================================================
+  // createShare()
+  // ===========================================================================
   describe('createShare', () => {
-    it('should create a share for a valid recipient', async () => {
-      mockUserRepo.findOne.mockResolvedValue(mockRecipient);
-      mockShareRepo.findOne.mockResolvedValue(null); // no existing active share
-      mockShareRepo.find.mockResolvedValue([]); // no revoked shares
-      mockShareRepo.create.mockReturnValue(mockShare);
-      mockShareRepo.save.mockResolvedValue(mockShare);
+    it('creates a read-only share for a valid recipient (happy path)', async () => {
+      userRepo.findOne.mockResolvedValue({ id: RECIPIENT_ID, publicKey: BARE_PUBKEY });
+      shareRepo.findOne.mockResolvedValue(null);
+      const built = createMockShare();
+      shareRepo.create.mockReturnValue(built);
+      shareRepo.save.mockResolvedValue(built);
 
-      const result = await service.createShare(sharerId, testCreateDto);
+      const result = await service.createShare(SHARER_ID, createDto());
 
-      expect(result.id).toBe(shareId);
-      expect(mockUserRepo.findOne).toHaveBeenCalledWith({
-        where: { publicKey: recipientPublicKey },
-      });
-      expect(mockShareRepo.create).toHaveBeenCalledWith(
+      expect(result).toBe(built);
+      // Recipient looked up by bare hex pubkey
+      expect(userRepo.findOne).toHaveBeenCalledWith({ where: { publicKey: BARE_PUBKEY } });
+      // Read-only: writeDescriptorRef null, itemNameEncrypted null, rootGeneration defaulted
+      expect(shareRepo.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          sharerId,
-          recipientId,
-          itemType: 'folder',
-          ipnsName: testIpnsName,
-          itemName: 'My Folder',
+          sharerId: SHARER_ID,
+          recipientId: RECIPIENT_ID,
+          readDescriptorRef: Buffer.from('aa'.repeat(32), 'hex'),
+          writeDescriptorRef: null,
+          rootGeneration: '0',
+          itemNameEncrypted: null,
+          hiddenByRecipient: false,
+        })
+      );
+      expect(shareRepo.save).toHaveBeenCalledWith(built);
+    });
+
+    it('strips a 0x prefix from the recipient public key before lookup', async () => {
+      userRepo.findOne.mockResolvedValue({ id: RECIPIENT_ID, publicKey: BARE_PUBKEY });
+      shareRepo.findOne.mockResolvedValue(null);
+      const built = createMockShare();
+      shareRepo.create.mockReturnValue(built);
+      shareRepo.save.mockResolvedValue(built);
+
+      await service.createShare(SHARER_ID, createDto({ recipientPublicKey: '0x' + BARE_PUBKEY }));
+
+      expect(userRepo.findOne).toHaveBeenCalledWith({ where: { publicKey: BARE_PUBKEY } });
+    });
+
+    it('persists a write grant, custom generation and encrypted item name when provided', async () => {
+      userRepo.findOne.mockResolvedValue({ id: RECIPIENT_ID, publicKey: BARE_PUBKEY });
+      shareRepo.findOne.mockResolvedValue(null);
+      const built = createMockShare();
+      shareRepo.create.mockReturnValue(built);
+      shareRepo.save.mockResolvedValue(built);
+
+      await service.createShare(
+        SHARER_ID,
+        createDto({
+          writeDescriptorRef: 'bb'.repeat(32),
+          rootGeneration: '7',
+          itemNameEncrypted: 'cc'.repeat(8),
+        })
+      );
+
+      expect(shareRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          writeDescriptorRef: Buffer.from('bb'.repeat(32), 'hex'),
+          rootGeneration: '7',
+          itemNameEncrypted: Buffer.from('cc'.repeat(8), 'hex'),
         })
       );
     });
 
-    it('should store encryptedKey as Buffer from hex', async () => {
-      mockUserRepo.findOne.mockResolvedValue(mockRecipient);
-      mockShareRepo.findOne.mockResolvedValue(null);
-      mockShareRepo.find.mockResolvedValue([]);
-      mockShareRepo.create.mockReturnValue(mockShare);
-      mockShareRepo.save.mockResolvedValue(mockShare);
+    it('throws NotFoundException when the recipient does not exist', async () => {
+      userRepo.findOne.mockResolvedValue(null);
 
-      await service.createShare(sharerId, testCreateDto);
-
-      const createCall = mockShareRepo.create.mock.calls[0][0];
-      expect(Buffer.isBuffer(createCall.encryptedKey)).toBe(true);
-      expect(createCall.encryptedKey.toString('hex')).toBe(testEncryptedKey);
+      await expect(service.createShare(SHARER_ID, createDto())).rejects.toThrow(NotFoundException);
+      expect(shareRepo.create).not.toHaveBeenCalled();
     });
 
-    it('should persist itemNameEncrypted ciphertext as Buffer and never encrypt server-side', async () => {
-      // REQ-4 / T-48-12: the server stores client-supplied ciphertext only and
-      // never re-encrypts plaintext (it has no recipient private key).
-      const itemNameEncrypted = 'ab'.repeat(80); // 160 hex chars, even-length
-      const dtoWithEncrypted: CreateShareDto = { ...testCreateDto, itemNameEncrypted };
+    it('throws ConflictException when sharing with yourself', async () => {
+      userRepo.findOne.mockResolvedValue({ id: SHARER_ID, publicKey: BARE_PUBKEY });
 
-      mockUserRepo.findOne.mockResolvedValue(mockRecipient);
-      mockShareRepo.findOne.mockResolvedValue(null);
-      mockShareRepo.find.mockResolvedValue([]);
-      mockShareRepo.create.mockReturnValue(mockShare);
-      mockShareRepo.save.mockResolvedValue(mockShare);
-
-      await service.createShare(sharerId, dtoWithEncrypted);
-
-      const createCall = mockShareRepo.create.mock.calls[0][0];
-      expect(Buffer.isBuffer(createCall.itemNameEncrypted)).toBe(true);
-      expect(createCall.itemNameEncrypted.toString('hex')).toBe(itemNameEncrypted);
-      // The persisted ciphertext is exactly the client-supplied bytes — no
-      // server-side encryption (the only crypto path is Buffer.from on the
-      // already-ciphertext hex).
-      expect(createCall.itemNameEncrypted).toEqual(Buffer.from(itemNameEncrypted, 'hex'));
-    });
-
-    it('should persist null itemNameEncrypted for legacy plaintext clients', async () => {
-      // Backward compatibility: clients that omit itemNameEncrypted still
-      // succeed (plaintext itemName remains during rollout, decision A2).
-      mockUserRepo.findOne.mockResolvedValue(mockRecipient);
-      mockShareRepo.findOne.mockResolvedValue(null);
-      mockShareRepo.find.mockResolvedValue([]);
-      mockShareRepo.create.mockReturnValue(mockShare);
-      mockShareRepo.save.mockResolvedValue(mockShare);
-
-      await service.createShare(sharerId, testCreateDto);
-
-      const createCall = mockShareRepo.create.mock.calls[0][0];
-      expect(createCall.itemNameEncrypted).toBeNull();
-    });
-
-    it('should create child keys when provided', async () => {
-      const dtoWithChildren: CreateShareDto = {
-        ...testCreateDto,
-        childKeys: [
-          {
-            keyType: 'file',
-            itemId: '880e8400-e29b-41d4-a716-446655440003',
-            encryptedKey: 'dd'.repeat(32),
-          },
-          {
-            keyType: 'folder',
-            itemId: '990e8400-e29b-41d4-a716-446655440004',
-            encryptedKey: 'ee'.repeat(32),
-          },
-        ],
-      };
-
-      mockUserRepo.findOne.mockResolvedValue(mockRecipient);
-      mockShareRepo.findOne.mockResolvedValue(null);
-      mockShareRepo.find.mockResolvedValue([]);
-      mockShareRepo.create.mockReturnValue(mockShare);
-      mockShareRepo.save.mockResolvedValue(mockShare);
-      mockShareKeyRepo.create.mockImplementation((data) => data);
-      mockShareKeyRepo.save.mockResolvedValue([]);
-
-      await service.createShare(sharerId, dtoWithChildren);
-
-      expect(mockShareKeyRepo.create).toHaveBeenCalledTimes(2);
-      expect(mockShareKeyRepo.save).toHaveBeenCalledWith(
-        expect.arrayContaining([
-          expect.objectContaining({ keyType: 'file', shareId }),
-          expect.objectContaining({ keyType: 'folder', shareId }),
-        ])
-      );
-    });
-
-    it('should skip child key creation when childKeys is empty', async () => {
-      const dtoNoChildren: CreateShareDto = { ...testCreateDto, childKeys: [] };
-
-      mockUserRepo.findOne.mockResolvedValue(mockRecipient);
-      mockShareRepo.findOne.mockResolvedValue(null);
-      mockShareRepo.find.mockResolvedValue([]);
-      mockShareRepo.create.mockReturnValue(mockShare);
-      mockShareRepo.save.mockResolvedValue(mockShare);
-
-      await service.createShare(sharerId, dtoNoChildren);
-
-      expect(mockShareKeyRepo.create).not.toHaveBeenCalled();
-      expect(mockShareKeyRepo.save).not.toHaveBeenCalled();
-    });
-
-    it('should throw NotFoundException when recipient not found', async () => {
-      mockUserRepo.findOne.mockResolvedValue(null);
-
-      await expect(service.createShare(sharerId, testCreateDto)).rejects.toThrow(NotFoundException);
-      await expect(service.createShare(sharerId, testCreateDto)).rejects.toThrow(
-        'Recipient not found'
-      );
-    });
-
-    it('should throw ConflictException for self-share', async () => {
-      const selfUser = { id: sharerId, publicKey: recipientPublicKey } as User;
-      mockUserRepo.findOne.mockResolvedValue(selfUser);
-
-      await expect(service.createShare(sharerId, testCreateDto)).rejects.toThrow(ConflictException);
-      await expect(service.createShare(sharerId, testCreateDto)).rejects.toThrow(
+      await expect(service.createShare(SHARER_ID, createDto())).rejects.toThrow(
         'Cannot share with yourself'
       );
+      expect(shareRepo.findOne).not.toHaveBeenCalled();
     });
 
-    it('should throw ConflictException for duplicate active share', async () => {
-      mockUserRepo.findOne.mockResolvedValue(mockRecipient);
-      mockShareRepo.findOne.mockResolvedValue(mockShare); // existing active share
+    it('throws ConflictException when a share already exists for the triple', async () => {
+      userRepo.findOne.mockResolvedValue({ id: RECIPIENT_ID, publicKey: BARE_PUBKEY });
+      shareRepo.findOne.mockResolvedValue(createMockShare());
 
-      await expect(service.createShare(sharerId, testCreateDto)).rejects.toThrow(ConflictException);
-      await expect(service.createShare(sharerId, testCreateDto)).rejects.toThrow(
+      await expect(service.createShare(SHARER_ID, createDto())).rejects.toThrow(
         'Share already exists for this item and recipient'
       );
+      expect(shareRepo.save).not.toHaveBeenCalled();
     });
 
-    it('should clean up revoked records before creating new share', async () => {
-      const revokedShare = { ...mockShare, revokedAt: new Date() };
-      mockUserRepo.findOne.mockResolvedValue(mockRecipient);
-      mockShareRepo.findOne.mockResolvedValue(null); // no active share
-      mockShareRepo.find.mockResolvedValue([revokedShare]); // one revoked share
-      mockShareRepo.create.mockReturnValue(mockShare);
-      mockShareRepo.save.mockResolvedValue(mockShare);
-
-      await service.createShare(sharerId, testCreateDto);
-
-      expect(mockShareRepo.remove).toHaveBeenCalledWith([revokedShare]);
-    });
-
-    it('should not call remove when no revoked records exist', async () => {
-      mockUserRepo.findOne.mockResolvedValue(mockRecipient);
-      mockShareRepo.findOne.mockResolvedValue(null);
-      mockShareRepo.find.mockResolvedValue([]); // no revoked shares
-      mockShareRepo.create.mockReturnValue(mockShare);
-      mockShareRepo.save.mockResolvedValue(mockShare);
-
-      await service.createShare(sharerId, testCreateDto);
-
-      expect(mockShareRepo.remove).not.toHaveBeenCalled();
-    });
-
-    it('should strip 0x prefix from recipientPublicKey before lookup', async () => {
-      mockUserRepo.findOne.mockResolvedValue(mockRecipient);
-      mockShareRepo.findOne.mockResolvedValue(null);
-      mockShareRepo.find.mockResolvedValue([]);
-      mockShareRepo.create.mockReturnValue(mockShare);
-      mockShareRepo.save.mockResolvedValue(mockShare);
-
-      const dto = { ...testCreateDto, recipientPublicKey: '0x' + recipientPublicKey };
-      await service.createShare(sharerId, dto);
-
-      expect(mockUserRepo.findOne).toHaveBeenCalledWith({
-        where: { publicKey: recipientPublicKey },
+    it('maps a duplicate-key DB race to ConflictException', async () => {
+      userRepo.findOne.mockResolvedValue({ id: RECIPIENT_ID, publicKey: BARE_PUBKEY });
+      shareRepo.findOne.mockResolvedValue(null);
+      shareRepo.create.mockReturnValue(createMockShare());
+      // Postgres surfaces a unique violation as SQLSTATE 23505; the service maps
+      // on the error code, not a brittle message substring.
+      const dupErr = Object.assign(new Error('duplicate key value violates unique constraint'), {
+        code: '23505',
       });
+      shareRepo.save.mockRejectedValue(dupErr);
+
+      await expect(service.createShare(SHARER_ID, createDto())).rejects.toThrow(ConflictException);
     });
 
-    it('should accept recipientPublicKey without 0x prefix', async () => {
-      mockUserRepo.findOne.mockResolvedValue(mockRecipient);
-      mockShareRepo.findOne.mockResolvedValue(null);
-      mockShareRepo.find.mockResolvedValue([]);
-      mockShareRepo.create.mockReturnValue(mockShare);
-      mockShareRepo.save.mockResolvedValue(mockShare);
+    it('rethrows non-duplicate save errors unchanged', async () => {
+      userRepo.findOne.mockResolvedValue({ id: RECIPIENT_ID, publicKey: BARE_PUBKEY });
+      shareRepo.findOne.mockResolvedValue(null);
+      shareRepo.create.mockReturnValue(createMockShare());
+      shareRepo.save.mockRejectedValue(new Error('connection terminated'));
 
-      // Key without 0x prefix -- should be used as-is
-      const dto = { ...testCreateDto, recipientPublicKey };
-      await service.createShare(sharerId, dto);
-
-      expect(mockUserRepo.findOne).toHaveBeenCalledWith({
-        where: { publicKey: recipientPublicKey },
-      });
-    });
-
-    it('should throw ConflictException on duplicate key race condition', async () => {
-      mockUserRepo.findOne.mockResolvedValue(mockRecipient);
-      mockShareRepo.findOne.mockResolvedValue(null);
-      mockShareRepo.find.mockResolvedValue([]);
-      mockShareRepo.create.mockReturnValue(mockShare);
-      mockShareRepo.save.mockRejectedValue(
-        new Error('duplicate key value violates unique constraint')
-      );
-
-      await expect(service.createShare(sharerId, testCreateDto)).rejects.toThrow(ConflictException);
-      await expect(service.createShare(sharerId, testCreateDto)).rejects.toThrow(
-        'Share already exists for this item and recipient'
-      );
-    });
-
-    it('should rethrow non-duplicate-key save errors', async () => {
-      mockUserRepo.findOne.mockResolvedValue(mockRecipient);
-      mockShareRepo.findOne.mockResolvedValue(null);
-      mockShareRepo.find.mockResolvedValue([]);
-      mockShareRepo.create.mockReturnValue(mockShare);
-      mockShareRepo.save.mockRejectedValue(new Error('connection failed'));
-
-      await expect(service.createShare(sharerId, testCreateDto)).rejects.toThrow(
-        'connection failed'
+      await expect(service.createShare(SHARER_ID, createDto())).rejects.toThrow(
+        'connection terminated'
       );
     });
   });
 
+  // ===========================================================================
+  // getReceivedShares()
+  // ===========================================================================
   describe('getReceivedShares', () => {
-    it('should return paginated active non-hidden shares with sharer relation', async () => {
-      const shares = [mockShare];
-      mockShareRepo.findAndCount.mockResolvedValue([shares, 1]);
+    it('returns non-hidden received shares with total, paginated', async () => {
+      const shares = [createMockShare()];
+      shareRepo.findAndCount.mockResolvedValue([shares, 1]);
 
-      const result = await service.getReceivedShares(recipientId, 50, 0);
+      const result = await service.getReceivedShares(RECIPIENT_ID, 10, 20);
 
       expect(result).toEqual({ shares, total: 1 });
-      expect(mockShareRepo.findAndCount).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: expect.objectContaining({
-            recipientId,
-            hiddenByRecipient: false,
-          }),
-          relations: ['sharer'],
-          order: { createdAt: 'DESC' },
-          take: 50,
-          skip: 0,
-        })
-      );
-    });
-
-    it('should return empty array when no shares exist', async () => {
-      mockShareRepo.findAndCount.mockResolvedValue([[], 0]);
-
-      const result = await service.getReceivedShares(recipientId, 50, 0);
-
-      expect(result).toEqual({ shares: [], total: 0 });
+      expect(shareRepo.findAndCount).toHaveBeenCalledWith({
+        where: { recipientId: RECIPIENT_ID, hiddenByRecipient: false },
+        relations: ['sharer'],
+        order: { createdAt: 'DESC' },
+        take: 10,
+        skip: 20,
+      });
     });
   });
 
+  // ===========================================================================
+  // getSentShares()
+  // ===========================================================================
   describe('getSentShares', () => {
-    it('should return paginated active shares with recipient relation', async () => {
-      const shares = [mockShare];
-      mockShareRepo.findAndCount.mockResolvedValue([shares, 1]);
+    it('returns sent shares with total, paginated', async () => {
+      const shares = [createMockShare(), createMockShare({ id: 'share-uuid-2' })];
+      shareRepo.findAndCount.mockResolvedValue([shares, 2]);
 
-      const result = await service.getSentShares(sharerId, 50, 0);
+      const result = await service.getSentShares(SHARER_ID, 5, 0);
 
-      expect(result).toEqual({ shares, total: 1 });
-      expect(mockShareRepo.findAndCount).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: expect.objectContaining({ sharerId }),
-          relations: ['recipient'],
-          order: { createdAt: 'DESC' },
-          take: 50,
-          skip: 0,
-        })
-      );
+      expect(result).toEqual({ shares, total: 2 });
+      expect(shareRepo.findAndCount).toHaveBeenCalledWith({
+        where: { sharerId: SHARER_ID },
+        relations: ['recipient'],
+        order: { createdAt: 'DESC' },
+        take: 5,
+        skip: 0,
+      });
     });
   });
 
-  describe('getShareKeys', () => {
-    it('should return keys when user is sharer', async () => {
-      const mockKeys = [
-        {
-          id: 'k1',
-          shareId,
-          keyType: 'file',
-          itemId: 'f1',
-          encryptedKey: Buffer.from('aa', 'hex'),
-          createdAt: new Date(),
-        },
-      ] as ShareKey[];
-      mockShareRepo.findOne.mockResolvedValue(mockShare);
-      mockShareKeyRepo.find.mockResolvedValue(mockKeys);
-
-      const result = await service.getShareKeys(shareId, sharerId);
-
-      expect(result).toEqual(mockKeys);
-    });
-
-    it('should return keys when user is recipient', async () => {
-      const mockKeys = [] as ShareKey[];
-      mockShareRepo.findOne.mockResolvedValue(mockShare);
-      mockShareKeyRepo.find.mockResolvedValue(mockKeys);
-
-      const result = await service.getShareKeys(shareId, recipientId);
-
-      expect(result).toEqual(mockKeys);
-    });
-
-    it('should throw NotFoundException when share not found', async () => {
-      mockShareRepo.findOne.mockResolvedValue(null);
-
-      await expect(service.getShareKeys(shareId, sharerId)).rejects.toThrow(NotFoundException);
-      await expect(service.getShareKeys(shareId, sharerId)).rejects.toThrow('Share not found');
-    });
-
-    it('should throw ForbiddenException for unauthorized user', async () => {
-      mockShareRepo.findOne.mockResolvedValue(mockShare);
-      const otherId = 'aa0e8400-e29b-41d4-a716-446655440099';
-
-      await expect(service.getShareKeys(shareId, otherId)).rejects.toThrow(ForbiddenException);
-      await expect(service.getShareKeys(shareId, otherId)).rejects.toThrow(
-        'Not authorized to access this share'
-      );
-    });
-  });
-
-  describe('addShareKeys', () => {
-    const addKeysDto: AddShareKeysDto = {
-      keys: [
-        {
-          keyType: 'file',
-          itemId: '880e8400-e29b-41d4-a716-446655440003',
-          encryptedKey: 'dd'.repeat(32),
-        },
-      ],
-    };
-
-    it('should insert new keys when they do not exist', async () => {
-      mockShareRepo.findOne.mockResolvedValue(mockShare);
-      mockShareKeyRepo.findOne.mockResolvedValue(null); // no existing key
-      mockShareKeyRepo.create.mockImplementation((data) => data);
-      mockShareKeyRepo.save.mockResolvedValue({});
-
-      await service.addShareKeys(shareId, sharerId, addKeysDto);
-
-      expect(mockShareKeyRepo.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          shareId,
-          keyType: 'file',
-          itemId: '880e8400-e29b-41d4-a716-446655440003',
-        })
-      );
-    });
-
-    it('should update existing keys (upsert)', async () => {
-      const existingKey = {
-        id: 'k1',
-        shareId,
-        keyType: 'file',
-        itemId: '880e8400-e29b-41d4-a716-446655440003',
-        encryptedKey: Buffer.from('aa'.repeat(32), 'hex'),
-      };
-      mockShareRepo.findOne.mockResolvedValue(mockShare);
-      mockShareKeyRepo.findOne.mockResolvedValue(existingKey);
-      mockShareKeyRepo.save.mockResolvedValue({});
-
-      await service.addShareKeys(shareId, sharerId, addKeysDto);
-
-      expect(mockShareKeyRepo.create).not.toHaveBeenCalled();
-      expect(mockShareKeyRepo.save).toHaveBeenCalledWith(
-        expect.objectContaining({
-          encryptedKey: Buffer.from('dd'.repeat(32), 'hex'),
-        })
-      );
-    });
-
-    it('should throw NotFoundException when share not found', async () => {
-      mockShareRepo.findOne.mockResolvedValue(null);
-
-      await expect(service.addShareKeys(shareId, sharerId, addKeysDto)).rejects.toThrow(
-        NotFoundException
-      );
-    });
-
-    it('should throw ForbiddenException when user is not sharer or write-recipient', async () => {
-      // mockShare has permission: 'read', so recipient is not a write-recipient
-      mockShareRepo.findOne.mockResolvedValue(mockShare);
-      const otherId = '990e8400-e29b-41d4-a716-446655440009';
-
-      await expect(service.addShareKeys(shareId, otherId, addKeysDto)).rejects.toThrow(
-        ForbiddenException
-      );
-    });
-  });
-
+  // ===========================================================================
+  // revokeShare()
+  // ===========================================================================
   describe('revokeShare', () => {
-    it('should set revokedAt timestamp', async () => {
-      mockShareRepo.findOne.mockResolvedValue({ ...mockShare });
-      mockShareRepo.save.mockResolvedValue({});
+    it('hard-deletes the share when the caller is the sharer', async () => {
+      const share = createMockShare();
+      shareRepo.findOne.mockResolvedValue(share);
 
-      const before = new Date();
-      await service.revokeShare(shareId, sharerId);
-      const after = new Date();
+      await service.revokeShare('share-uuid-1', SHARER_ID);
 
-      const saved = mockShareRepo.save.mock.calls[0][0];
-      expect(saved.revokedAt).toBeInstanceOf(Date);
-      expect(saved.revokedAt.getTime()).toBeGreaterThanOrEqual(before.getTime());
-      expect(saved.revokedAt.getTime()).toBeLessThanOrEqual(after.getTime());
+      expect(shareRepo.remove).toHaveBeenCalledWith(share);
     });
 
-    it('should throw NotFoundException when share not found', async () => {
-      mockShareRepo.findOne.mockResolvedValue(null);
+    it('throws NotFoundException when the share is missing', async () => {
+      shareRepo.findOne.mockResolvedValue(null);
 
-      await expect(service.revokeShare(shareId, sharerId)).rejects.toThrow(NotFoundException);
+      await expect(service.revokeShare('missing', SHARER_ID)).rejects.toThrow(NotFoundException);
+      expect(shareRepo.remove).not.toHaveBeenCalled();
     });
 
-    it('should throw ForbiddenException when user is not sharer', async () => {
-      mockShareRepo.findOne.mockResolvedValue(mockShare);
+    it('throws ForbiddenException when a non-sharer attempts to revoke', async () => {
+      shareRepo.findOne.mockResolvedValue(createMockShare());
 
-      await expect(service.revokeShare(shareId, recipientId)).rejects.toThrow(ForbiddenException);
-      await expect(service.revokeShare(shareId, recipientId)).rejects.toThrow(
-        'Only the sharer can revoke a share'
-      );
-    });
-  });
-
-  describe('hideShare', () => {
-    it('should set hiddenByRecipient to true', async () => {
-      mockShareRepo.findOne.mockResolvedValue({ ...mockShare });
-      mockShareRepo.save.mockResolvedValue({});
-
-      await service.hideShare(shareId, recipientId);
-
-      const saved = mockShareRepo.save.mock.calls[0][0];
-      expect(saved.hiddenByRecipient).toBe(true);
-    });
-
-    it('should throw NotFoundException when share not found', async () => {
-      mockShareRepo.findOne.mockResolvedValue(null);
-
-      await expect(service.hideShare(shareId, recipientId)).rejects.toThrow(NotFoundException);
-    });
-
-    it('should throw ForbiddenException when user is not recipient', async () => {
-      mockShareRepo.findOne.mockResolvedValue(mockShare);
-
-      await expect(service.hideShare(shareId, sharerId)).rejects.toThrow(ForbiddenException);
-      await expect(service.hideShare(shareId, sharerId)).rejects.toThrow(
-        'Only the recipient can hide a share'
-      );
-    });
-  });
-
-  describe('lookupUserByPublicKey', () => {
-    it('should return true when user exists', async () => {
-      mockUserRepo.findOne.mockResolvedValue({ id: recipientId });
-
-      const result = await service.lookupUserByPublicKey(recipientPublicKey);
-
-      expect(result).toBe(true);
-      expect(mockUserRepo.findOne).toHaveBeenCalledWith({
-        where: { publicKey: recipientPublicKey },
-        select: ['id'],
-      });
-    });
-
-    it('should return false when user does not exist', async () => {
-      mockUserRepo.findOne.mockResolvedValue(null);
-
-      const result = await service.lookupUserByPublicKey(recipientPublicKey);
-
-      expect(result).toBe(false);
-    });
-
-    it('should strip 0x prefix from publicKey before lookup', async () => {
-      mockUserRepo.findOne.mockResolvedValue({ id: recipientId });
-
-      const result = await service.lookupUserByPublicKey('0x' + recipientPublicKey);
-
-      expect(result).toBe(true);
-      expect(mockUserRepo.findOne).toHaveBeenCalledWith({
-        where: { publicKey: recipientPublicKey },
-        select: ['id'],
-      });
-    });
-  });
-
-  describe('getPendingRotations', () => {
-    it('should return revoked shares with recipient relation', async () => {
-      const revokedShare = { ...mockShare, revokedAt: new Date() };
-      mockShareRepo.find.mockResolvedValue([revokedShare]);
-
-      const result = await service.getPendingRotations(sharerId);
-
-      expect(result).toEqual([revokedShare]);
-      expect(mockShareRepo.find).toHaveBeenCalledWith(
-        expect.objectContaining({
-          relations: ['recipient'],
-          order: { revokedAt: 'ASC' },
-        })
-      );
-    });
-
-    it('should return empty array when no pending rotations', async () => {
-      mockShareRepo.find.mockResolvedValue([]);
-
-      const result = await service.getPendingRotations(sharerId);
-
-      expect(result).toEqual([]);
-    });
-  });
-
-  describe('completeRotation', () => {
-    const revokedShare = { ...mockShare, revokedAt: new Date() };
-
-    it('should hard-delete a revoked share', async () => {
-      mockShareRepo.findOne.mockResolvedValue(revokedShare);
-      mockShareRepo.remove.mockResolvedValue(revokedShare);
-
-      await service.completeRotation(shareId, sharerId);
-
-      expect(mockShareRepo.remove).toHaveBeenCalledWith(revokedShare);
-    });
-
-    it('should throw NotFoundException when share not found', async () => {
-      mockShareRepo.findOne.mockResolvedValue(null);
-
-      await expect(service.completeRotation(shareId, sharerId)).rejects.toThrow(NotFoundException);
-    });
-
-    it('should throw ForbiddenException when user is not sharer', async () => {
-      mockShareRepo.findOne.mockResolvedValue(revokedShare);
-
-      await expect(service.completeRotation(shareId, recipientId)).rejects.toThrow(
+      await expect(service.revokeShare('share-uuid-1', 'someone-else')).rejects.toThrow(
         ForbiddenException
       );
-      await expect(service.completeRotation(shareId, recipientId)).rejects.toThrow(
-        'Only the sharer can complete rotation'
-      );
-    });
-
-    it('should throw ConflictException when share is not revoked', async () => {
-      mockShareRepo.findOne.mockResolvedValue(mockShare); // revokedAt is null
-
-      await expect(service.completeRotation(shareId, sharerId)).rejects.toThrow(ConflictException);
-      await expect(service.completeRotation(shareId, sharerId)).rejects.toThrow(
-        'Cannot complete rotation for a non-revoked share'
-      );
+      expect(shareRepo.remove).not.toHaveBeenCalled();
     });
   });
 
-  describe('updateShareEncryptedKey', () => {
-    it('should update the encrypted key', async () => {
-      const newKey = 'ff'.repeat(64);
-      mockShareRepo.findOne.mockResolvedValue({ ...mockShare });
-      mockShareRepo.save.mockResolvedValue({});
-
-      await service.updateShareEncryptedKey(shareId, sharerId, newKey);
-
-      const saved = mockShareRepo.save.mock.calls[0][0];
-      expect(Buffer.isBuffer(saved.encryptedKey)).toBe(true);
-      expect(saved.encryptedKey.toString('hex')).toBe(newKey);
-    });
-
-    it('should throw NotFoundException when share not found', async () => {
-      mockShareRepo.findOne.mockResolvedValue(null);
-
-      await expect(
-        service.updateShareEncryptedKey(shareId, sharerId, 'ff'.repeat(64))
-      ).rejects.toThrow(NotFoundException);
-    });
-
-    it('should throw ForbiddenException when user is not sharer', async () => {
-      mockShareRepo.findOne.mockResolvedValue(mockShare);
-
-      await expect(
-        service.updateShareEncryptedKey(shareId, recipientId, 'ff'.repeat(64))
-      ).rejects.toThrow(ForbiddenException);
-      await expect(
-        service.updateShareEncryptedKey(shareId, recipientId, 'ff'.repeat(64))
-      ).rejects.toThrow('Only the sharer can update share keys');
-    });
-  });
-
-  describe('updateShareItemName', () => {
-    it('should persist client-supplied ciphertext as a Buffer without encrypting', async () => {
-      const itemNameEncrypted = 'ab'.repeat(80);
-      mockShareRepo.findOne.mockResolvedValue({ ...mockShare });
-      mockShareRepo.save.mockResolvedValue({});
-
-      await service.updateShareItemName(shareId, sharerId, itemNameEncrypted);
-
-      const saved = mockShareRepo.save.mock.calls[0][0];
-      expect(Buffer.isBuffer(saved.itemNameEncrypted)).toBe(true);
-      expect(saved.itemNameEncrypted.toString('hex')).toBe(itemNameEncrypted);
-    });
-
-    it('should throw NotFoundException when share not found', async () => {
-      mockShareRepo.findOne.mockResolvedValue(null);
-
-      await expect(service.updateShareItemName(shareId, sharerId, 'ab'.repeat(80))).rejects.toThrow(
-        NotFoundException
-      );
-    });
-
-    it('should throw ForbiddenException when user is not the sharer', async () => {
-      mockShareRepo.findOne.mockResolvedValue(mockShare);
-
-      await expect(
-        service.updateShareItemName(shareId, recipientId, 'ab'.repeat(80))
-      ).rejects.toThrow('Only the sharer can update the item name');
-    });
-  });
-
-  // =========================================================================
-  // Security: Phase 27 writable shares fixes
-  // =========================================================================
-
-  describe('addShareKeys - write-share recipient authorization (M-02)', () => {
-    const writeShare: Share = {
-      ...mockShare,
-      permission: 'write',
-      encryptedIpnsKey: Buffer.from('ee'.repeat(64), 'hex'),
-    };
-
-    it('should allow write-share recipient to add file keys', async () => {
-      mockShareRepo.findOne.mockResolvedValue(writeShare);
-      mockShareKeyRepo.findOne.mockResolvedValue(null);
-      mockShareKeyRepo.create.mockImplementation((data) => data);
-      mockShareKeyRepo.save.mockResolvedValue({});
-
-      const dto: AddShareKeysDto = {
-        keys: [
-          {
-            keyType: 'file',
-            itemId: '880e8400-e29b-41d4-a716-446655440003',
-            encryptedKey: 'dd'.repeat(64),
-          },
-        ],
-      };
-
-      await service.addShareKeys(shareId, recipientId, dto);
-      expect(mockShareKeyRepo.save).toHaveBeenCalled();
-    });
-
-    it('should allow write-share recipient to add file-ipns keys', async () => {
-      mockShareRepo.findOne.mockResolvedValue(writeShare);
-      mockShareKeyRepo.findOne.mockResolvedValue(null);
-      mockShareKeyRepo.create.mockImplementation((data) => data);
-      mockShareKeyRepo.save.mockResolvedValue({});
-
-      const dto: AddShareKeysDto = {
-        keys: [
-          {
-            keyType: 'file-ipns',
-            itemId: '880e8400-e29b-41d4-a716-446655440003',
-            encryptedKey: 'dd'.repeat(64),
-          },
-        ],
-      };
-
-      await service.addShareKeys(shareId, recipientId, dto);
-      expect(mockShareKeyRepo.save).toHaveBeenCalled();
-    });
-
-    it('should allow write-share recipient to add folder keys (subfolder access)', async () => {
-      mockShareRepo.findOne.mockResolvedValue(writeShare);
-      mockShareKeyRepo.findOne.mockResolvedValue(null);
-      mockShareKeyRepo.create.mockImplementation((data) => data);
-      mockShareKeyRepo.save.mockResolvedValue({});
-
-      const dto: AddShareKeysDto = {
-        keys: [
-          {
-            keyType: 'folder',
-            itemId: '880e8400-e29b-41d4-a716-446655440003',
-            encryptedKey: 'dd'.repeat(64),
-          },
-        ],
-      };
-
-      await service.addShareKeys(shareId, recipientId, dto);
-      expect(mockShareKeyRepo.save).toHaveBeenCalled();
-    });
-
-    it('should allow write-share recipient to add folder-ipns keys (subfolder write access)', async () => {
-      mockShareRepo.findOne.mockResolvedValue(writeShare);
-      mockShareKeyRepo.findOne.mockResolvedValue(null);
-      mockShareKeyRepo.create.mockImplementation((data) => data);
-      mockShareKeyRepo.save.mockResolvedValue({});
-
-      const dto: AddShareKeysDto = {
-        keys: [
-          {
-            keyType: 'folder-ipns',
-            itemId: '880e8400-e29b-41d4-a716-446655440003',
-            encryptedKey: 'dd'.repeat(64),
-          },
-        ],
-      };
-
-      await service.addShareKeys(shareId, recipientId, dto);
-      expect(mockShareKeyRepo.save).toHaveBeenCalled();
-    });
-
-    it('should reject read-only recipient from adding any keys', async () => {
-      mockShareRepo.findOne.mockResolvedValue(mockShare); // permission: 'read'
-
-      const dto: AddShareKeysDto = {
-        keys: [
-          {
-            keyType: 'file',
-            itemId: '880e8400-e29b-41d4-a716-446655440003',
-            encryptedKey: 'dd'.repeat(64),
-          },
-        ],
-      };
-
-      await expect(service.addShareKeys(shareId, recipientId, dto)).rejects.toThrow(
-        ForbiddenException
-      );
-    });
-  });
-
-  describe('updatePermission - security checks', () => {
-    it('should reject permission change on revoked share (L-01)', async () => {
-      const revokedShare = { ...mockShare, revokedAt: new Date() };
-      mockShareRepo.findOne.mockResolvedValue(revokedShare);
-
-      await expect(
-        service.updatePermission(shareId, sharerId, 'write', 'ee'.repeat(64))
-      ).rejects.toThrow(ConflictException);
-    });
-
-    it('should clean up file-ipns share_keys on downgrade (H-03)', async () => {
-      const writeShare = {
-        ...mockShare,
-        permission: 'write' as const,
-        encryptedIpnsKey: Buffer.from('ee'.repeat(64), 'hex'),
-      };
-      mockShareRepo.findOne.mockResolvedValue(writeShare);
-
-      // Mock the transaction manager used for atomic downgrade
-      const txSave = jest.fn().mockResolvedValue({});
-      const txDelete = jest.fn().mockResolvedValue({ affected: 2 });
-      (mockShareRepo as unknown as { manager: unknown }).manager = {
-        transaction: jest
-          .fn()
-          .mockImplementation(
-            async (cb: (mgr: { save: jest.Mock; delete: jest.Mock }) => Promise<void>) => {
-              await cb({ save: txSave, delete: txDelete });
-            }
-          ),
-      };
-
-      await service.updatePermission(shareId, sharerId, 'read');
-
-      // Verify permission changed via transaction
-      expect(txSave).toHaveBeenCalledWith(
-        expect.objectContaining({ permission: 'read', encryptedIpnsKey: null })
-      );
-
-      // Verify all write-enabling keys were deleted in the same transaction
-      expect(txDelete).toHaveBeenCalledWith(ShareKey, {
-        shareId,
-        keyType: In(['file-ipns', 'folder-ipns']),
-      });
-    });
-
-    it('should not delete share_keys on upgrade to write', async () => {
-      mockShareRepo.findOne.mockResolvedValue({ ...mockShare });
-      mockShareRepo.save.mockResolvedValue({});
-
-      await service.updatePermission(shareId, sharerId, 'write', 'ee'.repeat(64));
-
-      // Should NOT delete any share_keys
-      expect(mockShareKeyRepo.delete).not.toHaveBeenCalled();
-    });
-
-    it('should throw NotFoundException when share not found', async () => {
-      mockShareRepo.findOne.mockResolvedValue(null);
-
-      await expect(
-        service.updatePermission(shareId, sharerId, 'write', 'ee'.repeat(64))
-      ).rejects.toThrow(NotFoundException);
-    });
-
-    it('should throw ForbiddenException when caller is not the sharer', async () => {
-      mockShareRepo.findOne.mockResolvedValue(mockShare);
-
-      await expect(
-        service.updatePermission(shareId, recipientId, 'write', 'ee'.repeat(64))
-      ).rejects.toThrow(ForbiddenException);
-    });
-
-    it('should throw BadRequestException when upgrading without IPNS key', async () => {
-      mockShareRepo.findOne.mockResolvedValue({ ...mockShare });
-
-      await expect(service.updatePermission(shareId, sharerId, 'write')).rejects.toThrow(
-        BadRequestException
-      );
-    });
-
-    it('should upgrade to write and save encryptedIpnsKey', async () => {
-      mockShareRepo.findOne.mockResolvedValue({ ...mockShare });
-      mockShareRepo.save.mockResolvedValue({});
-
-      await service.updatePermission(shareId, sharerId, 'write', 'ee'.repeat(64));
-
-      const saved = mockShareRepo.save.mock.calls[0][0];
-      expect(saved.permission).toBe('write');
-      expect(saved.encryptedIpnsKey).toEqual(Buffer.from('ee'.repeat(64), 'hex'));
-    });
-  });
-
-  describe('findActiveWriteShare', () => {
-    it('should return a write share for valid recipient and IPNS name', async () => {
-      const writeShare = {
-        ...mockShare,
-        permission: 'write',
-        encryptedIpnsKey: Buffer.from('ee'.repeat(64), 'hex'),
-      };
-      mockShareRepo.findOne.mockResolvedValue(writeShare);
-
-      const result = await service.findActiveWriteShare(recipientId, testIpnsName);
-
-      expect(result).toEqual(writeShare);
-      expect(mockShareRepo.findOne).toHaveBeenCalledWith({
-        where: expect.objectContaining({
-          recipientId,
-          ipnsName: testIpnsName,
-          permission: 'write',
-        }),
-      });
-    });
-
-    it('should return null when no active write share exists', async () => {
-      mockShareRepo.findOne.mockResolvedValue(null);
-
-      const result = await service.findActiveWriteShare(recipientId, testIpnsName);
-
-      expect(result).toBeNull();
-    });
-  });
-
+  // ===========================================================================
+  // revokeForItems()
+  // ===========================================================================
   describe('revokeForItems', () => {
-    let mockManager: {
-      find: jest.Mock;
-      remove: jest.Mock;
-      createQueryBuilder: jest.Mock;
-    };
-    let mockQb: {
-      update: jest.Mock;
-      set: jest.Mock;
-      where: jest.Mock;
-      andWhere: jest.Mock;
-      execute: jest.Mock;
-    };
-
-    beforeEach(() => {
-      mockQb = {
-        update: jest.fn().mockReturnThis(),
-        set: jest.fn().mockReturnThis(),
-        where: jest.fn().mockReturnThis(),
-        andWhere: jest.fn().mockReturnThis(),
-        execute: jest.fn().mockResolvedValue({ affected: 0 }),
-      };
-      mockManager = {
-        find: jest.fn().mockResolvedValue([]),
-        remove: jest.fn().mockResolvedValue(undefined),
-        createQueryBuilder: jest.fn().mockReturnValue(mockQb),
-      };
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      mockDataSource.transaction.mockImplementation((cb: any) => cb(mockManager));
-    });
-
-    it('hard-deletes matching shares and revokes active invites for the caller', async () => {
-      const matched = [
-        { ...mockShare, id: 's1', ipnsName: 'k51a' },
-        { ...mockShare, id: 's2', ipnsName: 'k51b' },
-      ];
-      mockManager.find.mockResolvedValue(matched);
-      mockQb.execute.mockResolvedValue({ affected: 3 });
-
-      const result = await service.revokeForItems(sharerId, ['k51a', 'k51b', 'k51c']);
-
-      // Shares loaded scoped to the caller + IN(names), then removed (CASCADE drops keys).
-      expect(mockManager.find).toHaveBeenCalledWith(Share, {
-        where: { sharerId, ipnsName: In(['k51a', 'k51b', 'k51c']) },
-      });
-      expect(mockManager.remove).toHaveBeenCalledWith(matched);
-
-      // Invites updated to 'revoked' for the caller, the names, and status='active'.
-      expect(mockManager.createQueryBuilder).toHaveBeenCalled();
-      expect(mockQb.update).toHaveBeenCalledWith(ShareInvite);
-      expect(mockQb.set).toHaveBeenCalledWith({ status: 'revoked' });
-      // The sharer_id scope is what stops a caller from revoking another user's
-      // invites — assert it explicitly so a refactor of the QueryBuilder chain
-      // can't silently drop it.
-      expect(mockQb.where).toHaveBeenCalledWith('sharer_id = :sharerId', { sharerId });
-      expect(mockQb.andWhere).toHaveBeenCalledWith('status = :status', { status: 'active' });
-
-      expect(result).toEqual({ revokedShares: 2, revokedInvites: 3 });
-    });
-
-    it('de-duplicates ipnsNames before the IN clause', async () => {
-      await service.revokeForItems(sharerId, ['k51a', 'k51a', 'k51b']);
-
-      expect(mockManager.find).toHaveBeenCalledWith(Share, {
-        where: { sharerId, ipnsName: In(['k51a', 'k51b']) },
-      });
-    });
-
-    it('no-ops (no transaction) on an empty list', async () => {
-      const result = await service.revokeForItems(sharerId, []);
+    it('returns zero counts and skips the transaction for an empty name list', async () => {
+      const result = await service.revokeForItems(SHARER_ID, []);
 
       expect(result).toEqual({ revokedShares: 0, revokedInvites: 0 });
-      expect(mockDataSource.transaction).not.toHaveBeenCalled();
+      expect(dataSource.transaction).not.toHaveBeenCalled();
     });
 
-    it('skips the share remove when nothing matches but still revokes invites', async () => {
-      mockManager.find.mockResolvedValue([]);
-      mockQb.execute.mockResolvedValue({ affected: 1 });
+    it('hard-deletes matching shares and revokes active invites in a transaction', async () => {
+      const shares = [createMockShare(), createMockShare({ id: 'share-uuid-2' })];
+      manager.find.mockResolvedValue(shares);
+      queryBuilder.execute.mockResolvedValue({ affected: 3 });
 
-      const result = await service.revokeForItems(sharerId, ['k51x']);
+      const result = await service.revokeForItems(SHARER_ID, ['k51a', 'k51b', 'k51a']);
 
-      expect(mockManager.remove).not.toHaveBeenCalled();
+      expect(result).toEqual({ revokedShares: 2, revokedInvites: 3 });
+      // De-duped names threaded into both the share query and the invite update
+      expect(manager.find).toHaveBeenCalledWith(Share, {
+        where: { sharerId: SHARER_ID, rootIpnsName: In(['k51a', 'k51b']) },
+      });
+      expect(manager.remove).toHaveBeenCalledWith(shares);
+      expect(queryBuilder.update).toHaveBeenCalledWith(ShareInvite);
+      expect(queryBuilder.set).toHaveBeenCalledWith({ status: 'revoked' });
+      expect(queryBuilder.andWhere).toHaveBeenCalledWith('status = :status', { status: 'active' });
+    });
+
+    it('skips manager.remove when no shares match but still revokes invites', async () => {
+      manager.find.mockResolvedValue([]);
+      queryBuilder.execute.mockResolvedValue({ affected: 1 });
+
+      const result = await service.revokeForItems(SHARER_ID, ['k51a']);
+
       expect(result).toEqual({ revokedShares: 0, revokedInvites: 1 });
+      expect(manager.remove).not.toHaveBeenCalled();
+    });
+
+    it('treats an undefined affected count as zero revoked invites', async () => {
+      manager.find.mockResolvedValue([]);
+      queryBuilder.execute.mockResolvedValue({});
+
+      const result = await service.revokeForItems(SHARER_ID, ['k51a']);
+
+      expect(result).toEqual({ revokedShares: 0, revokedInvites: 0 });
+    });
+  });
+
+  // ===========================================================================
+  // hideShare()
+  // ===========================================================================
+  describe('hideShare', () => {
+    it('sets hiddenByRecipient and saves when the caller is the recipient', async () => {
+      const share = createMockShare({ hiddenByRecipient: false });
+      shareRepo.findOne.mockResolvedValue(share);
+
+      await service.hideShare('share-uuid-1', RECIPIENT_ID);
+
+      expect(share.hiddenByRecipient).toBe(true);
+      expect(shareRepo.save).toHaveBeenCalledWith(share);
+    });
+
+    it('throws NotFoundException when the share is missing', async () => {
+      shareRepo.findOne.mockResolvedValue(null);
+
+      await expect(service.hideShare('missing', RECIPIENT_ID)).rejects.toThrow(NotFoundException);
+      expect(shareRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('throws ForbiddenException when a non-recipient attempts to hide', async () => {
+      shareRepo.findOne.mockResolvedValue(createMockShare());
+
+      await expect(service.hideShare('share-uuid-1', 'not-the-recipient')).rejects.toThrow(
+        ForbiddenException
+      );
+      expect(shareRepo.save).not.toHaveBeenCalled();
+    });
+  });
+
+  // ===========================================================================
+  // lookupUserByPublicKey()
+  // ===========================================================================
+  describe('lookupUserByPublicKey', () => {
+    it('returns true when a user exists for the bare pubkey', async () => {
+      userRepo.findOne.mockResolvedValue({ id: RECIPIENT_ID });
+
+      const result = await service.lookupUserByPublicKey(BARE_PUBKEY);
+
+      expect(result).toBe(true);
+      expect(userRepo.findOne).toHaveBeenCalledWith({
+        where: { publicKey: BARE_PUBKEY },
+        select: ['id'],
+      });
+    });
+
+    it('strips a 0x prefix before lookup and returns false when absent', async () => {
+      userRepo.findOne.mockResolvedValue(null);
+
+      const result = await service.lookupUserByPublicKey('0x' + BARE_PUBKEY);
+
+      expect(result).toBe(false);
+      expect(userRepo.findOne).toHaveBeenCalledWith({
+        where: { publicKey: BARE_PUBKEY },
+        select: ['id'],
+      });
+    });
+  });
+
+  // ===========================================================================
+  // updateShareItemName()
+  // ===========================================================================
+  describe('updateShareItemName', () => {
+    it('persists the client-supplied ciphertext when the caller is the sharer', async () => {
+      const share = createMockShare();
+      shareRepo.findOne.mockResolvedValue(share);
+
+      await service.updateShareItemName('share-uuid-1', SHARER_ID, 'dd'.repeat(8));
+
+      expect(share.itemNameEncrypted).toEqual(Buffer.from('dd'.repeat(8), 'hex'));
+      expect(shareRepo.save).toHaveBeenCalledWith(share);
+    });
+
+    it('throws NotFoundException when the share is missing', async () => {
+      shareRepo.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.updateShareItemName('missing', SHARER_ID, 'dd'.repeat(8))
+      ).rejects.toThrow(NotFoundException);
+      expect(shareRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('throws ForbiddenException when a non-sharer attempts the update', async () => {
+      shareRepo.findOne.mockResolvedValue(createMockShare());
+
+      await expect(
+        service.updateShareItemName('share-uuid-1', 'not-the-sharer', 'dd'.repeat(8))
+      ).rejects.toThrow(ForbiddenException);
+      expect(shareRepo.save).not.toHaveBeenCalled();
     });
   });
 });

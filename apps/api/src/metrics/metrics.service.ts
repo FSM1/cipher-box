@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as client from 'prom-client';
 import { PinnedCid } from '../vault/entities/pinned-cid.entity';
-import { FolderIpns } from '../ipns/entities/folder-ipns.entity';
+import { IpnsRecord } from '../ipns/entities/ipns-record.entity';
 import { User } from '../auth/entities/user.entity';
 import { IpnsRepublishSchedule } from '../republish/republish-schedule.entity';
 
@@ -57,8 +57,8 @@ export class MetricsService implements OnModuleInit {
   constructor(
     @InjectRepository(PinnedCid)
     private readonly pinnedCidRepository: Repository<PinnedCid>,
-    @InjectRepository(FolderIpns)
-    private readonly folderIpnsRepository: Repository<FolderIpns>,
+    @InjectRepository(IpnsRecord)
+    private readonly ipnsRecordRepository: Repository<IpnsRecord>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     @InjectRepository(IpnsRepublishSchedule)
@@ -274,7 +274,7 @@ export class MetricsService implements OnModuleInit {
         .select('COUNT(*)', 'count')
         .addSelect('COALESCE(SUM(pin.size_bytes), 0)', 'totalBytes')
         .getRawOne<{ count: string; totalBytes: string }>(),
-      this.folderIpnsRepository.count(),
+      this.ipnsRecordRepository.count(),
       this.republishScheduleRepository
         .createQueryBuilder('sched')
         .select('sched.status', 'status')

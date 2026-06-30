@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
-current_phase: 66
-current_phase_name: API Schema Cutover, Publish Gate, and Tombstone
+current_phase: 67
+current_phase_name: TEE Lease-Renewer Contract Rewrite
 status: executing
-stopped_at: Phase 65 context gathered
-last_updated: "2026-06-30T01:05:42.404Z"
+stopped_at: Phase 66 context gathered
+last_updated: "2026-06-30T17:37:47.789Z"
 last_activity: 2026-06-30
-last_activity_desc: Phase 65 complete, transitioned to Phase 66
+last_activity_desc: Phase 66 complete, transitioned to Phase 67
 progress:
   total_phases: 9
-  completed_phases: 5
-  total_plans: 36
-  completed_plans: 36
-  percent: 56
+  completed_phases: 6
+  total_plans: 45
+  completed_plans: 45
+  percent: 67
 ---
 
 # Project State
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-27)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 65 — sdk-write-chain-bin-re-link-and-invite-claim
+**Current focus:** Phase 66 — api-schema-cutover-publish-gate-and-tombstone
 
 ## Current Position
 
-Phase: 66 — API Schema Cutover, Publish Gate, and Tombstone
+Phase: 67 — TEE Lease-Renewer Contract Rewrite
 Plan: Not started
-Status: Executing Phase 65
-Last activity: 2026-06-30 — Phase 65 complete, transitioned to Phase 66
+Status: Executing Phase 66
+Last activity: 2026-06-30 — Phase 66 complete, transitioned to Phase 67
 
 Progress: `░░░░░░░░░░` 0 / 9 phases (0%)
 
@@ -434,6 +434,6 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-06-29T21:53:19.782Z
-**Stopped at:** Phase 65 context gathered
-**Resume file:** .planning/phases/65-sdk-write-chain-bin-re-link-and-invite-claim/65-CONTEXT.md
+**Last session:** 2026-06-30T13:44:56.801Z
+**Stopped at:** Phase 66 context gathered
+**Resume file:** .planning/phases/66-api-schema-cutover-publish-gate-and-tombstone/66-CONTEXT.md

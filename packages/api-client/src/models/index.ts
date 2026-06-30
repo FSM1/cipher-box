@@ -3,7 +3,7 @@
  * Do not edit manually.
  * CipherBox API
  * Zero-knowledge encrypted cloud storage API
- * OpenAPI spec version: 0.44.0
+ * OpenAPI spec version: 0.44.1
  */
 
 export * from './addShareKeysDto';
@@ -66,6 +66,9 @@ export * from './inviteResponseDtoStatus';
 export * from './inviteStatusResponseDto';
 export * from './inviteStatusResponseDtoStatus';
 export * from './ipfsControllerUploadBody';
+export * from './ipnsControllerPublishBatch410';
+export * from './ipnsControllerPublishRecord410';
+export * from './ipnsControllerResolveRecord410';
 export * from './ipnsControllerResolveRecordParams';
 export * from './linkMethodDto';
 export * from './linkMethodDtoLoginType';
@@ -118,6 +121,7 @@ export * from './teeKeysDtoPreviousPublicKey';
 export * from './testLoginDto';
 export * from './testLoginResponseDto';
 export * from './tokenResponseDto';
+export * from './tombstoneIpnsDto';
 export * from './unlinkMethodDto';
 export * from './unlinkMethodResponseDto';
 export * from './unpinDto';

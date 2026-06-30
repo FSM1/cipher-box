@@ -4,27 +4,36 @@ export class CreateShareResponseDto {
   @ApiProperty({ description: 'UUID of the created share' })
   shareId!: string;
 
-  @ApiProperty({ enum: ['folder', 'file'] })
-  itemType!: string;
-
-  @ApiProperty({ description: 'IPNS name of the shared item' })
-  ipnsName!: string;
-
-  @ApiProperty({ description: 'Display name of the shared item' })
-  itemName!: string;
+  @ApiProperty({ description: 'Recipient secp256k1 public key (0x04...)' })
+  recipientPublicKey!: string;
 
   @ApiProperty({
-    description: 'Hex-encoded ECIES ciphertext of the display name, or null for legacy rows',
+    description: 'Hex-encoded ECIES descriptor ref for read access',
+  })
+  readDescriptorRef!: string;
+
+  @ApiProperty({
+    description: 'Hex-encoded ECIES descriptor ref for write access, or null for read-only shares',
+    type: String,
+    nullable: true,
+  })
+  writeDescriptorRef!: string | null;
+
+  @ApiProperty({ description: 'UUID of the root shared node' })
+  rootNodeId!: string;
+
+  @ApiProperty({ description: 'IPNS name (k51...) of the root shared node' })
+  rootIpnsName!: string;
+
+  @ApiProperty({ description: 'Generation of the root node at share creation (numeric string)' })
+  rootGeneration!: string;
+
+  @ApiProperty({
+    description: 'Hex-encoded ECIES ciphertext of the display name, or null if not provided',
     type: String,
     nullable: true,
   })
   itemNameEncrypted!: string | null;
-
-  @ApiProperty({ description: 'Hex-encoded ECIES-wrapped key for recipient' })
-  encryptedKey!: string;
-
-  @ApiProperty({ description: 'Permission level', enum: ['read', 'write'] })
-  permission!: string;
 
   @ApiProperty({ description: 'When the share was created' })
   createdAt!: Date;
@@ -37,34 +46,33 @@ export class ReceivedShareResponseDto {
   @ApiProperty({ description: 'Sharer secp256k1 public key (0x04...)' })
   sharerPublicKey!: string;
 
-  @ApiProperty({ enum: ['folder', 'file'] })
-  itemType!: string;
-
-  @ApiProperty()
-  ipnsName!: string;
-
-  @ApiProperty()
-  itemName!: string;
+  @ApiProperty({
+    description: 'Hex-encoded ECIES descriptor ref for read access',
+  })
+  readDescriptorRef!: string;
 
   @ApiProperty({
-    description: 'Hex-encoded ECIES ciphertext of the display name, or null for legacy rows',
+    description: 'Hex-encoded ECIES descriptor ref for write access, or null for read-only shares',
+    type: String,
+    nullable: true,
+  })
+  writeDescriptorRef!: string | null;
+
+  @ApiProperty({ description: 'UUID of the root shared node' })
+  rootNodeId!: string;
+
+  @ApiProperty({ description: 'IPNS name (k51...) of the root shared node' })
+  rootIpnsName!: string;
+
+  @ApiProperty({ description: 'Generation of the root node at share creation (numeric string)' })
+  rootGeneration!: string;
+
+  @ApiProperty({
+    description: 'Hex-encoded ECIES ciphertext of the display name, or null if not provided',
     type: String,
     nullable: true,
   })
   itemNameEncrypted!: string | null;
-
-  @ApiProperty({ description: 'Hex-encoded ECIES-wrapped key for recipient' })
-  encryptedKey!: string;
-
-  @ApiProperty({ description: 'Permission level', enum: ['read', 'write'] })
-  permission!: string;
-
-  @ApiProperty({
-    description: 'Hex-encoded ECIES-wrapped IPNS private key for write shares',
-    type: String,
-    nullable: true,
-  })
-  encryptedIpnsKey!: string | null;
 
   @ApiProperty()
   createdAt!: Date;
@@ -77,63 +85,41 @@ export class SentShareResponseDto {
   @ApiProperty({ description: 'Recipient secp256k1 public key (0x04...)' })
   recipientPublicKey!: string;
 
-  @ApiProperty({ enum: ['folder', 'file'] })
-  itemType!: string;
-
-  @ApiProperty()
-  ipnsName!: string;
-
-  @ApiProperty()
-  itemName!: string;
+  @ApiProperty({
+    description: 'Hex-encoded ECIES descriptor ref for read access',
+  })
+  readDescriptorRef!: string;
 
   @ApiProperty({
-    description: 'Hex-encoded ECIES ciphertext of the display name, or null for legacy rows',
+    description: 'Hex-encoded ECIES descriptor ref for write access, or null for read-only shares',
+    type: String,
+    nullable: true,
+  })
+  writeDescriptorRef!: string | null;
+
+  @ApiProperty({ description: 'UUID of the root shared node' })
+  rootNodeId!: string;
+
+  @ApiProperty({ description: 'IPNS name (k51...) of the root shared node' })
+  rootIpnsName!: string;
+
+  @ApiProperty({ description: 'Generation of the root node at share creation (numeric string)' })
+  rootGeneration!: string;
+
+  @ApiProperty({
+    description: 'Hex-encoded ECIES ciphertext of the display name, or null if not provided',
     type: String,
     nullable: true,
   })
   itemNameEncrypted!: string | null;
 
-  @ApiProperty({ description: 'Permission level', enum: ['read', 'write'] })
-  permission!: string;
-
   @ApiProperty()
   createdAt!: Date;
 }
 
-export class PendingRotationResponseDto {
-  @ApiProperty()
-  shareId!: string;
-
-  @ApiProperty({ description: 'Recipient secp256k1 public key (0x04...)' })
-  recipientPublicKey!: string;
-
-  @ApiProperty({ enum: ['folder', 'file'] })
-  itemType!: string;
-
-  @ApiProperty()
-  ipnsName!: string;
-
-  @ApiProperty()
-  itemName!: string;
-
-  @ApiProperty()
-  revokedAt!: Date;
-}
-
-export class ShareKeyResponseDto {
-  @ApiProperty({ enum: ['file', 'folder', 'file-ipns', 'folder-ipns'] })
-  keyType!: string;
-
-  @ApiProperty({ description: 'UUID of the file or folder' })
-  itemId!: string;
-
-  @ApiProperty({ description: 'Hex-encoded ECIES-wrapped key for recipient' })
-  encryptedKey!: string;
-}
-
 export class RevokeForItemsResponseDto {
   @ApiProperty({
-    description: 'Number of Share rows hard-deleted (their ShareKeys cascade-deleted)',
+    description: 'Number of Share rows hard-deleted',
   })
   revokedShares!: number;
 

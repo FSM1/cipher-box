@@ -39,8 +39,8 @@ describe('IPNS Integration Tests', () => {
             sequenceNumber: String(requestCount),
           });
         }),
-        getFolderIpns: jest.fn(),
-        getAllFolderIpns: jest.fn(),
+        getIpnsRecord: jest.fn(),
+        getAllIpnsRecords: jest.fn(),
       };
 
       const mockMetricsService = {
@@ -167,8 +167,8 @@ describe('IPNS Integration Tests', () => {
           ipnsName: validIpnsName,
           sequenceNumber: '1',
         }),
-        getFolderIpns: jest.fn(),
-        getAllFolderIpns: jest.fn(),
+        getIpnsRecord: jest.fn(),
+        getAllIpnsRecords: jest.fn(),
       };
 
       const mockMetricsService2 = {
@@ -331,8 +331,8 @@ describe('Attack Scenario Tests', () => {
           ipnsName: validIpnsName,
           sequenceNumber: '1',
         }),
-        getFolderIpns: jest.fn(),
-        getAllFolderIpns: jest.fn(),
+        getIpnsRecord: jest.fn(),
+        getAllIpnsRecords: jest.fn(),
       };
 
       const mockMetricsService3 = {

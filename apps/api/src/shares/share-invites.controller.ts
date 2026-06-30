@@ -17,6 +17,7 @@ import { BypassableThrottlerGuard as ThrottlerGuard } from '../common/guards/thr
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ShareInviteService } from './share-invite.service';
 import { CreateInviteDto } from './dto/create-invite.dto';
+import { GetInvitesForItemQueryDto } from './dto/get-invites-for-item-query.dto';
 import { InviteResponseDto } from './dto/invite-response.dto';
 import { RequestWithUser } from '../common/types';
 
@@ -39,7 +40,7 @@ export class ShareInvitesController {
   @ApiOperation({
     summary: 'Create an invite link',
     description:
-      'Create a new invite link with the item key wrapped by an ephemeral public key. ' +
+      'Create a new invite link with the root readKey wrapped by an ephemeral public key. ' +
       'Returns the invite token for URL construction. Default expiry: 7 days.',
   })
   @ApiResponse({
@@ -51,24 +52,14 @@ export class ShareInvitesController {
   async createInvite(
     @Request() req: RequestWithUser,
     @Body() dto: CreateInviteDto
-  ): Promise<{
-    id: string;
-    token: string;
-    itemType: string;
-    ipnsName: string;
-    itemName: string;
-    itemNameEncrypted: string | null;
-    status: string;
-    expiresAt: Date;
-    createdAt: Date;
-  }> {
+  ): Promise<InviteResponseDto> {
     const invite = await this.shareInviteService.createInvite(req.user.id, dto);
     return {
       id: invite.id,
       token: invite.token,
-      itemType: invite.itemType,
-      ipnsName: invite.ipnsName,
-      itemName: invite.itemName,
+      rootIpnsName: invite.rootIpnsName,
+      rootNodeId: invite.rootNodeId,
+      rootGeneration: invite.rootGeneration,
       itemNameEncrypted: invite.itemNameEncrypted ? invite.itemNameEncrypted.toString('hex') : null,
       status: invite.status,
       expiresAt: invite.expiresAt,
@@ -78,7 +69,7 @@ export class ShareInvitesController {
 
   /**
    * List active (unclaimed, unexpired) invites for a specific item.
-   * Requires ipnsName query parameter.
+   * Requires rootIpnsName query parameter.
    */
   @Get()
   @ApiOperation({
@@ -88,8 +79,8 @@ export class ShareInvitesController {
       'for the specified item. Expired invites are auto-cleaned.',
   })
   @ApiQuery({
-    name: 'ipnsName',
-    description: 'IPNS name of the item to list invites for',
+    name: 'rootIpnsName',
+    description: 'IPNS name of the root shared node',
     required: true,
   })
   @ApiResponse({
@@ -100,27 +91,18 @@ export class ShareInvitesController {
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   async listInvites(
     @Request() req: RequestWithUser,
-    @Query('ipnsName') ipnsName: string
-  ): Promise<
-    Array<{
-      id: string;
-      token: string;
-      itemType: string;
-      ipnsName: string;
-      itemName: string;
-      itemNameEncrypted: string | null;
-      status: string;
-      expiresAt: Date;
-      createdAt: Date;
-    }>
-  > {
-    const invites = await this.shareInviteService.getInvitesForItem(req.user.id, ipnsName);
+    @Query() query: GetInvitesForItemQueryDto
+  ): Promise<InviteResponseDto[]> {
+    const invites = await this.shareInviteService.getInvitesForItem(
+      req.user.id,
+      query.rootIpnsName
+    );
     return invites.map((inv) => ({
       id: inv.id,
       token: inv.token,
-      itemType: inv.itemType,
-      ipnsName: inv.ipnsName,
-      itemName: inv.itemName,
+      rootIpnsName: inv.rootIpnsName,
+      rootNodeId: inv.rootNodeId,
+      rootGeneration: inv.rootGeneration,
       itemNameEncrypted: inv.itemNameEncrypted ? inv.itemNameEncrypted.toString('hex') : null,
       status: inv.status,
       expiresAt: inv.expiresAt,

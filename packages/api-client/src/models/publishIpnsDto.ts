@@ -3,7 +3,7 @@
  * Do not edit manually.
  * CipherBox API
  * Zero-knowledge encrypted cloud storage API
- * OpenAPI spec version: 0.44.0
+ * OpenAPI spec version: 0.44.1
  */
 
 export interface PublishIpnsDto {
@@ -21,4 +21,6 @@ export interface PublishIpnsDto {
   keyEpoch?: number;
   /** Expected sequence number for conflict detection. When present, the API validates against the stored value and rejects with 409 if mismatched. Omit for backward-compatible unconditional publish. */
   expectedSequenceNumber?: string;
+  /** Content generation for this IPNS name (bigint as string). When provided, the server rejects publishes with a lower generation number (forward-only gate TEE-07). Omit for non-rotation publishes. */
+  generation?: string;
 }

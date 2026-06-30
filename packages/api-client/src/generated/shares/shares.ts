@@ -3,25 +3,20 @@
  * Do not edit manually.
  * CipherBox API
  * Zero-knowledge encrypted cloud storage API
- * OpenAPI spec version: 0.44.0
+ * OpenAPI spec version: 0.44.1
  */
 import type {
-  AddShareKeysDto,
   CreateShareDto,
   CreateShareResponseDto,
   LookupUserResponseDto,
   PaginatedReceivedSharesDto,
   PaginatedSentSharesDto,
-  PendingRotationResponseDto,
   RevokeForItemsDto,
   RevokeForItemsResponseDto,
-  ShareKeyResponseDto,
   SharesControllerGetReceivedSharesParams,
   SharesControllerGetSentSharesParams,
   SharesControllerLookupUserParams,
-  UpdateEncryptedKeyDto,
   UpdateItemNameDto,
-  UpdatePermissionDto,
 } from '../../models';
 
 import { customInstance } from '../../instance';
@@ -30,7 +25,7 @@ import type { BodyType } from '../../instance';
 type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
 
 /**
- * Share an encrypted folder or file with another user. The encryptedKey is the item key re-wrapped for the recipient via ECIES.
+ * Share an encrypted folder or file with another user. The readDescriptorRef is the root readKey + metadata wrapped for the recipient via ECIES.
  * @summary Create a share
  */
 export const sharesControllerCreateShare = (
@@ -48,8 +43,8 @@ export const sharesControllerCreateShare = (
   );
 };
 /**
- * Hard-revoke every share/invite the authenticated user created for any of the given IPNS names, atomically. Called when an owner deletes a file or folder subtree to the recycle bin so the access cutoff precedes the unpin. Shares are hard-deleted (keys cascade); active invites are marked revoked. IPNS names that were never shared are ignored.
- * @summary Bulk hard-revoke shares for deleted items
+ * Hard-delete every share/invite the authenticated user created for any of the given IPNS names, atomically. Called when an owner deletes a file or folder subtree to the recycle bin so the access cutoff precedes the unpin. Shares are hard-deleted; active invites are marked revoked. IPNS names that were never shared are ignored.
+ * @summary Bulk hard-delete share grants for deleted items
  */
 export const sharesControllerRevokeForItems = (
   revokeForItemsDto: BodyType<RevokeForItemsDto>,
@@ -66,7 +61,7 @@ export const sharesControllerRevokeForItems = (
   );
 };
 /**
- * Get active, non-hidden shares received by the authenticated user (paginated).
+ * Get non-hidden shares received by the authenticated user (paginated).
  * @summary List received shares
  */
 export const sharesControllerGetReceivedShares = (
@@ -79,7 +74,7 @@ export const sharesControllerGetReceivedShares = (
   );
 };
 /**
- * Get active shares created by the authenticated user (paginated).
+ * Get shares created by the authenticated user (paginated).
  * @summary List sent shares
  */
 export const sharesControllerGetSentShares = (
@@ -105,70 +100,7 @@ export const sharesControllerLookupUser = (
   );
 };
 /**
- * Get shares that have been revoked but not yet key-rotated. Used by the client to detect lazy rotation needs before folder modification.
- * @summary Get pending rotations
- */
-export const sharesControllerGetPendingRotations = (
-  options?: SecondParameter<typeof customInstance<PendingRotationResponseDto[]>>
-) => {
-  return customInstance<PendingRotationResponseDto[]>(
-    { url: `/shares/pending-rotations`, method: 'GET' },
-    options
-  );
-};
-/**
- * Get all re-wrapped child keys for a share. Accessible by sharer or recipient.
- * @summary Get share keys
- */
-export const sharesControllerGetShareKeys = (
-  shareId: string,
-  options?: SecondParameter<typeof customInstance<ShareKeyResponseDto[]>>
-) => {
-  return customInstance<ShareKeyResponseDto[]>(
-    { url: `/shares/${shareId}/keys`, method: 'GET' },
-    options
-  );
-};
-/**
- * Add re-wrapped child keys to an existing share. Allowed for the sharer or write-share recipients.
- * @summary Add share keys
- */
-export const sharesControllerAddShareKeys = (
-  shareId: string,
-  addShareKeysDto: BodyType<AddShareKeysDto>,
-  options?: SecondParameter<typeof customInstance<void>>
-) => {
-  return customInstance<void>(
-    {
-      url: `/shares/${shareId}/keys`,
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      data: addShareKeysDto,
-    },
-    options
-  );
-};
-/**
- * Upgrade or downgrade permission level. Only the sharer can change permission. Upgrading to write requires an ECIES-wrapped IPNS private key.
- * @summary Update share permission
- */
-export const sharesControllerUpdatePermission = (
-  shareId: string,
-  updatePermissionDto: BodyType<UpdatePermissionDto>,
-  options?: SecondParameter<typeof customInstance<void>>
-) => {
-  return customInstance<void>(
-    {
-      url: `/shares/${shareId}/permission`,
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      data: updatePermissionDto,
-    },
-    options
-  );
-};
-/**
- * Soft-delete a share by setting revokedAt. Only the sharer can revoke. Keys are kept for lazy rotation.
+ * Hard-delete the grant row (D-11 forward-only revocation). Only the sharer can revoke.
  * @summary Revoke a share
  */
 export const sharesControllerRevokeShare = (
@@ -188,26 +120,7 @@ export const sharesControllerHideShare = (
   return customInstance<void>({ url: `/shares/${shareId}/hide`, method: 'PATCH' }, options);
 };
 /**
- * Update the encrypted key on an existing share after lazy key rotation. Only the sharer can update the key.
- * @summary Update share encrypted key
- */
-export const sharesControllerUpdateShareEncryptedKey = (
-  shareId: string,
-  updateEncryptedKeyDto: BodyType<UpdateEncryptedKeyDto>,
-  options?: SecondParameter<typeof customInstance<void>>
-) => {
-  return customInstance<void>(
-    {
-      url: `/shares/${shareId}/encrypted-key`,
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      data: updateEncryptedKeyDto,
-    },
-    options
-  );
-};
-/**
- * Persist the at-rest itemNameEncrypted ciphertext on a legacy share that predates at-rest encryption. Only the sharer can update it; the server never encrypts and stores the client-supplied ciphertext as-is.
+ * Persist the at-rest itemNameEncrypted ciphertext on a share. Only the sharer can update it; the server never encrypts and stores the client-supplied ciphertext as-is.
  * @summary Backfill share encrypted item name
  */
 export const sharesControllerUpdateShareItemName = (
@@ -222,19 +135,6 @@ export const sharesControllerUpdateShareItemName = (
       headers: { 'Content-Type': 'application/json' },
       data: updateItemNameDto,
     },
-    options
-  );
-};
-/**
- * Hard-delete a revoked share after the sharer has rotated the folder key. Called after the client performs lazy key rotation.
- * @summary Complete key rotation
- */
-export const sharesControllerCompleteRotation = (
-  shareId: string,
-  options?: SecondParameter<typeof customInstance<void>>
-) => {
-  return customInstance<void>(
-    { url: `/shares/${shareId}/complete-rotation`, method: 'DELETE' },
     options
   );
 };
@@ -253,30 +153,12 @@ export type SharesControllerGetSentSharesResult = NonNullable<
 export type SharesControllerLookupUserResult = NonNullable<
   Awaited<ReturnType<typeof sharesControllerLookupUser>>
 >;
-export type SharesControllerGetPendingRotationsResult = NonNullable<
-  Awaited<ReturnType<typeof sharesControllerGetPendingRotations>>
->;
-export type SharesControllerGetShareKeysResult = NonNullable<
-  Awaited<ReturnType<typeof sharesControllerGetShareKeys>>
->;
-export type SharesControllerAddShareKeysResult = NonNullable<
-  Awaited<ReturnType<typeof sharesControllerAddShareKeys>>
->;
-export type SharesControllerUpdatePermissionResult = NonNullable<
-  Awaited<ReturnType<typeof sharesControllerUpdatePermission>>
->;
 export type SharesControllerRevokeShareResult = NonNullable<
   Awaited<ReturnType<typeof sharesControllerRevokeShare>>
 >;
 export type SharesControllerHideShareResult = NonNullable<
   Awaited<ReturnType<typeof sharesControllerHideShare>>
 >;
-export type SharesControllerUpdateShareEncryptedKeyResult = NonNullable<
-  Awaited<ReturnType<typeof sharesControllerUpdateShareEncryptedKey>>
->;
 export type SharesControllerUpdateShareItemNameResult = NonNullable<
   Awaited<ReturnType<typeof sharesControllerUpdateShareItemName>>
->;
-export type SharesControllerCompleteRotationResult = NonNullable<
-  Awaited<ReturnType<typeof sharesControllerCompleteRotation>>
 >;

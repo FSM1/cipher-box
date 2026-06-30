@@ -3,12 +3,12 @@
  * Do not edit manually.
  * CipherBox API
  * Zero-knowledge encrypted cloud storage API
- * OpenAPI spec version: 0.44.0
+ * OpenAPI spec version: 0.44.1
  */
 
 export type ShareInvitesControllerListInvitesParams = {
   /**
-   * IPNS name of the item to list invites for
+   * IPNS name of the root shared node
    */
-  ipnsName: string;
+  rootIpnsName: string;
 };

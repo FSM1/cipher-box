@@ -1,8 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { IsNull, LessThanOrEqual } from 'typeorm';
 import { RepublishService } from './republish.service';
 import { IpnsRepublishSchedule } from './republish-schedule.entity';
-import { FolderIpns } from '../ipns/entities/folder-ipns.entity';
+import { IpnsRecord } from '../ipns/entities/ipns-record.entity';
 import { TeeService, RepublishResult } from '../tee/tee.service';
 import { TeeKeyStateService } from '../tee/tee-key-state.service';
 import { DelegatedRoutingClient } from '../ipns/delegated-routing.client';
@@ -84,7 +85,7 @@ describe('RepublishService', () => {
       providers: [
         RepublishService,
         { provide: getRepositoryToken(IpnsRepublishSchedule), useValue: mockScheduleRepo },
-        { provide: getRepositoryToken(FolderIpns), useValue: mockFolderIpnsRepo },
+        { provide: getRepositoryToken(IpnsRecord), useValue: mockFolderIpnsRepo },
         { provide: TeeService, useValue: mockTeeService },
         { provide: TeeKeyStateService, useValue: mockTeeKeyStateService },
         { provide: DelegatedRoutingClient, useValue: mockDelegatedRoutingClient },
@@ -93,7 +94,7 @@ describe('RepublishService', () => {
 
     service = module.get<RepublishService>(RepublishService);
     scheduleRepository = module.get(getRepositoryToken(IpnsRepublishSchedule));
-    folderIpnsRepository = module.get(getRepositoryToken(FolderIpns));
+    folderIpnsRepository = module.get(getRepositoryToken(IpnsRecord));
     teeService = module.get(TeeService) as unknown as typeof teeService;
     teeKeyStateService = module.get(TeeKeyStateService) as unknown as typeof teeKeyStateService;
   });
@@ -201,9 +202,15 @@ describe('RepublishService', () => {
           lastError: null,
         })
       );
-      // Verify FolderIpns sync
+      // Verify IpnsRecord sync — guarded on tombstoned_at IS NULL (no resurrection)
+      // and sequence_number <= new (forward-only, never regress a newer user publish).
       expect(folderIpnsRepository.update).toHaveBeenCalledWith(
-        { userId: 'user-uuid-1', ipnsName: 'k51test123' },
+        {
+          userId: 'user-uuid-1',
+          ipnsName: 'k51test123',
+          tombstonedAt: IsNull(),
+          sequenceNumber: LessThanOrEqual('6'),
+        },
         {
           sequenceNumber: '6',
           signedRecord: Buffer.from('signed-record-bytes'),

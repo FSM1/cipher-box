@@ -1,58 +1,40 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { CHILD_KEY_TYPES, type ChildKeyType } from '../types';
-import {
-  IsString,
-  IsIn,
-  IsArray,
-  IsUUID,
-  ValidateNested,
-  IsOptional,
-  Matches,
-  MaxLength,
-  MinLength,
-} from 'class-validator';
-import { Type } from 'class-transformer';
-
-class ClaimChildKeyDto {
-  @ApiProperty({
-    description: 'Type of key: file, folder, or file-ipns',
-    enum: [...CHILD_KEY_TYPES],
-  })
-  @IsString()
-  @IsIn(CHILD_KEY_TYPES)
-  keyType!: ChildKeyType;
-
-  @ApiProperty({
-    description: 'UUID of the file or subfolder',
-  })
-  @IsString()
-  @IsUUID()
-  itemId!: string;
-
-  @ApiProperty({
-    description: 'Hex-encoded ECIES ciphertext of the key re-wrapped for recipient',
-  })
-  @IsString()
-  @Matches(/^[0-9a-fA-F]+$/, { message: 'encryptedKey must be a hex string' })
-  @MinLength(258)
-  @MaxLength(2048)
-  encryptedKey!: string;
-}
+import { IsString, IsOptional, Matches, MaxLength, MinLength } from 'class-validator';
 
 export class ClaimInviteDto {
   @ApiProperty({
-    description: 'Hex-encoded item key re-wrapped for the recipient via ECIES',
+    description:
+      'Hex-encoded ECIES descriptor ref for read access re-wrapped for the recipient ' +
+      '(claimer re-wraps the root readKey from the ephemeral key to their own pubkey). ' +
+      'Server never sees plaintext (zero-knowledge).',
   })
   @IsString()
-  @Matches(/^[0-9a-fA-F]+$/, { message: 'encryptedKey must be a hex string' })
-  @MinLength(258)
-  @MaxLength(2048)
-  encryptedKey!: string;
+  @Matches(/^(?:[0-9a-fA-F]{2})+$/, {
+    message: 'readDescriptorRef must be an even-length hex string',
+  })
+  @MinLength(64)
+  @MaxLength(4096)
+  readDescriptorRef!: string;
+
+  @ApiProperty({
+    description:
+      'Hex-encoded ECIES descriptor ref for write access re-wrapped for the recipient. ' +
+      'Omit for read-only claim.',
+    required: false,
+  })
+  @IsString()
+  @Matches(/^(?:[0-9a-fA-F]{2})+$/, {
+    message: 'writeDescriptorRef must be an even-length hex string',
+  })
+  @MinLength(64)
+  @MaxLength(4096)
+  @IsOptional()
+  writeDescriptorRef?: string;
 
   @ApiProperty({
     description:
       'Hex-encoded ECIES ciphertext of the display name re-wrapped for the recipient. ' +
-      'Optional during rollout: legacy clients carry plaintext itemName from the invite.',
+      'Optional: omit if recipient can derive the name from their filesystem.',
     required: false,
   })
   @IsString()
@@ -62,15 +44,4 @@ export class ClaimInviteDto {
   @MaxLength(2500)
   @IsOptional()
   itemNameEncrypted?: string;
-
-  @ApiProperty({
-    description: 'Re-wrapped child keys for subfolders/files',
-    required: false,
-    type: [ClaimChildKeyDto],
-  })
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => ClaimChildKeyDto)
-  @IsOptional()
-  childKeys?: ClaimChildKeyDto[];
 }

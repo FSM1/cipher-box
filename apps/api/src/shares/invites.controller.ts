@@ -13,7 +13,6 @@ import { BypassableThrottlerGuard as ThrottlerGuard } from '../common/guards/thr
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ShareInviteService } from './share-invite.service';
 import { ClaimInviteDto } from './dto/claim-invite.dto';
-import type { ChildKeyType } from './types';
 import {
   InviteStatusResponseDto,
   InviteDataResponseDto,
@@ -72,7 +71,7 @@ export class InvitesController {
   @ApiOperation({
     summary: 'Get invite data for claim flow (authenticated)',
     description:
-      'Fetch full invite data including encrypted key ciphertext. ' +
+      'Fetch full invite data including encrypted key ciphertext and root identity. ' +
       'Requires authentication. Used by the client claim flow.',
   })
   @ApiParam({ name: 'token', description: 'Invite token (URL-safe base64)' })
@@ -83,19 +82,9 @@ export class InvitesController {
   })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 404, description: 'Invite not found or expired' })
-  async getInviteData(@Param('token', ParseTokenPipe) token: string): Promise<{
-    status: string;
-    encryptedKey: string;
-    encryptedChildKeys: Array<{
-      keyType: ChildKeyType;
-      itemId: string;
-      encryptedKey: string;
-    }> | null;
-    itemType: string;
-    ipnsName: string;
-    itemName: string;
-    itemNameEncrypted: string | null;
-  }> {
+  async getInviteData(
+    @Param('token', ParseTokenPipe) token: string
+  ): Promise<InviteDataResponseDto> {
     const invite = await this.shareInviteService.getInviteForClaim(token);
 
     if (!invite) {
@@ -105,17 +94,19 @@ export class InvitesController {
     return {
       status: invite.status,
       encryptedKey: invite.encryptedKey.toString('hex'),
-      encryptedChildKeys: invite.encryptedChildKeys,
-      itemType: invite.itemType,
-      ipnsName: invite.ipnsName,
-      itemName: invite.itemName,
+      writeDescriptorRef: invite.writeDescriptorRef
+        ? invite.writeDescriptorRef.toString('hex')
+        : null,
+      rootNodeId: invite.rootNodeId,
+      rootIpnsName: invite.rootIpnsName,
+      rootGeneration: invite.rootGeneration,
       itemNameEncrypted: invite.itemNameEncrypted ? invite.itemNameEncrypted.toString('hex') : null,
     };
   }
 
   /**
-   * AUTHENTICATED: Claim an invite by providing re-wrapped keys.
-   * Creates Share + ShareKey records via the existing sharing infrastructure.
+   * AUTHENTICATED: Claim an invite by providing re-wrapped descriptor refs.
+   * Creates a single descriptor-ref Share via the sharing infrastructure (D-05).
    */
   @Post(':token/claim')
   @UseGuards(JwtAuthGuard, ThrottlerGuard)
@@ -123,8 +114,8 @@ export class InvitesController {
   @ApiOperation({
     summary: 'Claim an invite link',
     description:
-      'Claim an invite by providing the item key re-wrapped for the recipient. ' +
-      'Creates Share and ShareKey records. Single-claim enforced atomically.',
+      'Claim an invite by providing the descriptor ref re-wrapped for the recipient. ' +
+      'Creates a single Share row. Single-claim enforced atomically.',
   })
   @ApiParam({ name: 'token', description: 'Invite token (URL-safe base64)' })
   @ApiResponse({

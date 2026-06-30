@@ -31,75 +31,103 @@ describe('BypassableThrottlerGuard', () => {
     process.env = originalEnv;
   });
 
-  it('should bypass when secret matches and NODE_ENV is not production', async () => {
-    process.env.THROTTLE_BYPASS_SECRET = 'test-secret';
-    process.env.NODE_ENV = 'test';
+  describe('test environment (NODE_ENV=test)', () => {
+    it('disables rate limiting entirely — no header or secret needed', async () => {
+      process.env.NODE_ENV = 'test';
+      delete process.env.THROTTLE_BYPASS_SECRET;
 
-    const ctx = createMockContext({ 'x-throttle-bypass': 'test-secret' });
-    const result = await guard.canActivate(ctx);
+      const result = await guard.canActivate(createMockContext({}));
 
-    expect(result).toBe(true);
-    expect(superCanActivate).not.toHaveBeenCalled();
+      expect(result).toBe(true);
+      expect(superCanActivate).not.toHaveBeenCalled();
+    });
+
+    it('disables rate limiting even when a (mismatched) header is present', async () => {
+      process.env.NODE_ENV = 'test';
+      process.env.THROTTLE_BYPASS_SECRET = 'test-secret';
+
+      const result = await guard.canActivate(
+        createMockContext({ 'x-throttle-bypass': 'wrong-secret' })
+      );
+
+      expect(result).toBe(true);
+      expect(superCanActivate).not.toHaveBeenCalled();
+    });
   });
 
-  it('should fall through to parent when secret does not match', async () => {
-    process.env.THROTTLE_BYPASS_SECRET = 'test-secret';
-    process.env.NODE_ENV = 'test';
+  describe('staging header bypass (NODE_ENV not test/production)', () => {
+    it('should bypass when secret matches', async () => {
+      process.env.THROTTLE_BYPASS_SECRET = 'test-secret';
+      process.env.NODE_ENV = 'staging';
 
-    const ctx = createMockContext({ 'x-throttle-bypass': 'wrong-secret' });
-    await guard.canActivate(ctx);
+      const ctx = createMockContext({ 'x-throttle-bypass': 'test-secret' });
+      const result = await guard.canActivate(ctx);
 
-    expect(superCanActivate).toHaveBeenCalledWith(ctx);
+      expect(result).toBe(true);
+      expect(superCanActivate).not.toHaveBeenCalled();
+    });
+
+    it('should fall through to parent when secret does not match', async () => {
+      process.env.THROTTLE_BYPASS_SECRET = 'test-secret';
+      process.env.NODE_ENV = 'staging';
+
+      const ctx = createMockContext({ 'x-throttle-bypass': 'wrong-secret' });
+      await guard.canActivate(ctx);
+
+      expect(superCanActivate).toHaveBeenCalledWith(ctx);
+    });
+
+    it('should fall through to parent when header is missing', async () => {
+      process.env.THROTTLE_BYPASS_SECRET = 'test-secret';
+      process.env.NODE_ENV = 'staging';
+
+      const ctx = createMockContext({});
+      await guard.canActivate(ctx);
+
+      expect(superCanActivate).toHaveBeenCalledWith(ctx);
+    });
+
+    it('should fall through to parent when THROTTLE_BYPASS_SECRET is not set', async () => {
+      delete process.env.THROTTLE_BYPASS_SECRET;
+      process.env.NODE_ENV = 'staging';
+
+      const ctx = createMockContext({ 'x-throttle-bypass': 'anything' });
+      await guard.canActivate(ctx);
+
+      expect(superCanActivate).toHaveBeenCalledWith(ctx);
+    });
+
+    it('should handle array header values (first element)', async () => {
+      process.env.THROTTLE_BYPASS_SECRET = 'test-secret';
+      process.env.NODE_ENV = 'staging';
+
+      const ctx = createMockContext({ 'x-throttle-bypass': ['test-secret', 'other'] });
+      const result = await guard.canActivate(ctx);
+
+      expect(result).toBe(true);
+      expect(superCanActivate).not.toHaveBeenCalled();
+    });
+
+    it('should reject when secret lengths differ (timing-safe)', async () => {
+      process.env.THROTTLE_BYPASS_SECRET = 'short';
+      process.env.NODE_ENV = 'staging';
+
+      const ctx = createMockContext({ 'x-throttle-bypass': 'a-much-longer-secret' });
+      await guard.canActivate(ctx);
+
+      expect(superCanActivate).toHaveBeenCalledWith(ctx);
+    });
   });
 
-  it('should fall through to parent when header is missing', async () => {
-    process.env.THROTTLE_BYPASS_SECRET = 'test-secret';
-    process.env.NODE_ENV = 'test';
+  describe('production (NODE_ENV=production)', () => {
+    it('should fall through to parent even with a valid header', async () => {
+      process.env.THROTTLE_BYPASS_SECRET = 'test-secret';
+      process.env.NODE_ENV = 'production';
 
-    const ctx = createMockContext({});
-    await guard.canActivate(ctx);
+      const ctx = createMockContext({ 'x-throttle-bypass': 'test-secret' });
+      await guard.canActivate(ctx);
 
-    expect(superCanActivate).toHaveBeenCalledWith(ctx);
-  });
-
-  it('should fall through to parent in production even with valid header', async () => {
-    process.env.THROTTLE_BYPASS_SECRET = 'test-secret';
-    process.env.NODE_ENV = 'production';
-
-    const ctx = createMockContext({ 'x-throttle-bypass': 'test-secret' });
-    await guard.canActivate(ctx);
-
-    expect(superCanActivate).toHaveBeenCalledWith(ctx);
-  });
-
-  it('should fall through to parent when THROTTLE_BYPASS_SECRET is not set', async () => {
-    delete process.env.THROTTLE_BYPASS_SECRET;
-    process.env.NODE_ENV = 'test';
-
-    const ctx = createMockContext({ 'x-throttle-bypass': 'anything' });
-    await guard.canActivate(ctx);
-
-    expect(superCanActivate).toHaveBeenCalledWith(ctx);
-  });
-
-  it('should handle array header values (first element)', async () => {
-    process.env.THROTTLE_BYPASS_SECRET = 'test-secret';
-    process.env.NODE_ENV = 'test';
-
-    const ctx = createMockContext({ 'x-throttle-bypass': ['test-secret', 'other'] });
-    const result = await guard.canActivate(ctx);
-
-    expect(result).toBe(true);
-    expect(superCanActivate).not.toHaveBeenCalled();
-  });
-
-  it('should reject when secret lengths differ (timing-safe)', async () => {
-    process.env.THROTTLE_BYPASS_SECRET = 'short';
-    process.env.NODE_ENV = 'test';
-
-    const ctx = createMockContext({ 'x-throttle-bypass': 'a-much-longer-secret' });
-    await guard.canActivate(ctx);
-
-    expect(superCanActivate).toHaveBeenCalledWith(ctx);
+      expect(superCanActivate).toHaveBeenCalledWith(ctx);
+    });
   });
 });
