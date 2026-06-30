@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
-current_phase: 65
-current_phase_name: sdk-write-chain-bin-re-link-and-invite-claim
+current_phase: 66
+current_phase_name: API Schema Cutover, Publish Gate, and Tombstone
 status: executing
 stopped_at: Phase 65 context gathered
-last_updated: "2026-06-29T22:57:39.117Z"
-last_activity: 2026-06-29
-last_activity_desc: Phase 65 execution started
+last_updated: "2026-06-30T01:05:42.404Z"
+last_activity: 2026-06-30
+last_activity_desc: Phase 65 complete, transitioned to Phase 66
 progress:
   total_phases: 9
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 36
-  completed_plans: 29
-  percent: 44
+  completed_plans: 36
+  percent: 56
 ---
 
 # Project State
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 
 ## Current Position
 
-Phase: 65 (sdk-write-chain-bin-re-link-and-invite-claim) — EXECUTING
-Plan: 1 of 7
+Phase: 66 — API Schema Cutover, Publish Gate, and Tombstone
+Plan: Not started
 Status: Executing Phase 65
-Last activity: 2026-06-29 — Phase 65 execution started
+Last activity: 2026-06-30 — Phase 65 complete, transitioned to Phase 66
 
 Progress: `░░░░░░░░░░` 0 / 9 phases (0%)
 
