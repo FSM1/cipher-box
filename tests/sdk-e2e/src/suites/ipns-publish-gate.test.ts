@@ -97,6 +97,7 @@ function psqlExec(sql: string): void {
     execSync(`PGPASSWORD=postgres psql -h localhost -U postgres -d ${PSQL_DB} -f "${file}"`, {
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: 15_000, // fail fast instead of hanging the Vitest worker on a stalled psql
     });
   } finally {
     try {
@@ -122,7 +123,7 @@ function psqlQueryOne(sql: string): string {
   try {
     return execSync(
       `PGPASSWORD=postgres psql -h localhost -U postgres -d ${PSQL_DB} -t -A -f "${file}"`,
-      { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }
+      { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 15_000 }
     ).trim();
   } finally {
     try {
