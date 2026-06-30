@@ -465,7 +465,16 @@ describe('IPNS publish-gate suite (TEE-04/05/07, WRITE-04 phase gate)', () => {
     // Reset floor to 1 (= network seq) → at-floor → serves
     psqlExec(`UPDATE ipns_records SET sequence_number = 1 WHERE ipns_name = '${ipnsName}'`);
 
-    const atFloor = await resolveIpnsRecord(ipnsName, aliceCtx);
+    // The network record is published to delegated routing fire-and-forget, so the
+    // DB write can return before the record is resolvable from the routing layer.
+    // Under slower CI this lands after the first resolve — poll until it propagates
+    // (the at-floor case is expected to serve, so a transient null is just latency,
+    // not the fail-closed behavior asserted below).
+    let atFloor = await resolveIpnsRecord(ipnsName, aliceCtx);
+    for (let attempt = 0; attempt < 20 && atFloor === null; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      atFloor = await resolveIpnsRecord(ipnsName, aliceCtx);
+    }
     expect(atFloor).not.toBeNull();
     expect(atFloor!.cid).toBe(cid);
 
