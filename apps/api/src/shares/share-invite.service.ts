@@ -175,15 +175,21 @@ export class ShareInviteService {
 
       // Mint exactly one descriptor-ref Share (D-05).
       // Root identity is sourced from the invite row to prevent spoofing (T-66-S1).
-      // Write grant is presence-derived from writeDescriptorRef (T-66-E1).
+      // Write grant is presence-derived from the INVITE, not claimer input (T-66-E1):
+      // a read-only invite (invite.writeDescriptorRef === null) can never yield a
+      // write grant even if the claimer supplies a writeDescriptorRef in the claim
+      // body. The stored value is still the claimer's re-wrapped ref (wrapped for the
+      // recipient's pubkey); the invite only gates whether write authority exists.
       // itemNameEncrypted is re-wrapped client-side for the recipient's real pubkey.
+      const inviteGrantsWrite = invite.writeDescriptorRef !== null;
       const share = manager.create(Share, {
         sharerId: invite.sharerId,
         recipientId: claimerId,
         readDescriptorRef: Buffer.from(dto.readDescriptorRef, 'hex'),
-        writeDescriptorRef: dto.writeDescriptorRef
-          ? Buffer.from(dto.writeDescriptorRef, 'hex')
-          : null,
+        writeDescriptorRef:
+          inviteGrantsWrite && dto.writeDescriptorRef
+            ? Buffer.from(dto.writeDescriptorRef, 'hex')
+            : null,
         rootNodeId: invite.rootNodeId,
         rootIpnsName: invite.rootIpnsName,
         rootGeneration: invite.rootGeneration,
