@@ -267,7 +267,7 @@ async function resealAndPublishParent(
     newParentPublished,
     swCtx.ipnsName,
     ipnsPrivateKey,
-    swCtx.sequenceNumber
+    swCtx.sequenceNumber + 1n
   );
   return { publishedChildren: newChildren, newSequenceNumber: newSeq };
 }
@@ -380,9 +380,12 @@ export async function createSharedSubfolder(
       now
     );
 
-    // Null minted keys so catch block doesn't zero them on the success path
+    // Zero and null minted keys on the success path (clear sensitive bytes before GC)
+    childReadKey.fill(0);
     childReadKey = null;
+    childWriteKey.fill(0);
     childWriteKey = null;
+    childIpnsPrivateKey.fill(0);
     childIpnsPrivateKey = null;
 
     return { publishedChildren, newSequenceNumber, folderEntry };
@@ -519,10 +522,14 @@ export async function uploadToSharedFolder(
       now
     );
 
-    // Null minted keys on success path
+    // Zero and null minted keys on the success path (clear sensitive bytes before GC)
+    fileKey.fill(0);
     fileKey = null;
+    fileReadKey.fill(0);
     fileReadKey = null;
+    fileWriteKey.fill(0);
     fileWriteKey = null;
+    fileIpnsPrivateKey.fill(0);
     fileIpnsPrivateKey = null;
 
     return { publishedChildren, newSequenceNumber, filePointer };
@@ -632,6 +639,12 @@ export async function updateSharedFile(
   params: {
     /** SealedChildRef of the file in the parent's read-body */
     fileRef: SealedChildRef;
+    /**
+     * UUID of the file node — must match WriteChildRef.childId in the parent's write-body.
+     * Callers obtain this from the creation result (uploadToSharedFolder returns the childId
+     * via the WriteChildRef stored in the parent write-body at upload time).
+     */
+    fileNodeId: string;
     /** 32-byte AES key for the file node's read-body */
     fileReadKey: Uint8Array;
     /** 32-byte AES key for the file node's write-body */
@@ -688,11 +701,12 @@ export async function updateSharedFile(
       versions: [],
     };
 
-    // Build updated file node (use a fresh UUID — content revision)
+    // Build updated file node — reuse caller-supplied fileNodeId so Node.id
+    // stays aligned with WriteChildRef.childId in the parent's write-body.
     const fileNode: Node = {
       schema: 'node/v3',
       kind: 'file',
-      id: crypto.randomUUID(),
+      id: params.fileNodeId,
       generation: params.fileRef.generation,
       createdAt: now,
       modifiedAt: now,
@@ -715,6 +729,7 @@ export async function updateSharedFile(
       params.fileSequenceNumber + 1n
     );
 
+    newFileKey.fill(0);
     newFileKey = null;
   } catch (err) {
     newFileKey?.fill(0);
@@ -796,14 +811,26 @@ export async function moveInSharedFolder(params: {
   const srcNewWriteChildren = srcWriteChildren.filter((wc) => wc.childId !== childNodeId);
   let destNewWriteChildren = destWriteChildren;
 
-  // Derive child writeKey: prefer caller-supplied; fall back to walking the src write-body
-  const resolvedChildWriteKey =
-    params.childWriteKey ??
-    (srcWriteChild
-      ? await walkChildWriteKey(srcCtx.writeKey, srcWriteChild, childKind, childGeneration)
-      : undefined);
+  // Derive child writeKey: prefer caller-supplied; fall back to walking the src write-body.
+  // Track whether we derived the key so we can zero it after use (D-09: never zero caller-supplied).
+  let resolvedChildWriteKey: Uint8Array | undefined = params.childWriteKey;
+  let didDeriveWriteKey = false;
+  if (!resolvedChildWriteKey && srcWriteChild) {
+    resolvedChildWriteKey = await walkChildWriteKey(
+      srcCtx.writeKey,
+      srcWriteChild,
+      childKind,
+      childGeneration
+    );
+    didDeriveWriteKey = true;
+  }
+  if (!resolvedChildWriteKey) {
+    throw new Error(
+      `moveInSharedFolder: write link not found for child ${childNodeId} — cannot build destination write link`
+    );
+  }
 
-  if (resolvedChildWriteKey) {
+  try {
     // Re-seal the child's writeKey under the destination parent's writeKey
     const destWriteChildRef = await buildChildWriteLink(
       resolvedChildWriteKey,
@@ -813,25 +840,31 @@ export async function moveInSharedFolder(params: {
       childGeneration
     );
     destNewWriteChildren = [...destWriteChildren, destWriteChildRef];
+  } finally {
+    // Zero derived key immediately after use; never zero caller-supplied key (D-09)
+    if (didDeriveWriteKey) {
+      resolvedChildWriteKey.fill(0);
+    }
   }
 
-  // Re-seal and re-publish src
-  const srcResult = await resealAndPublishParent(
-    srcCtx,
-    srcParentNode,
-    srcNewChildren,
-    srcIpnsPrivateKey,
-    srcNewWriteChildren,
-    now
-  );
-
-  // Re-seal and re-publish dest
+  // Publish destination first — if src removal subsequently fails, the item is
+  // duplicated (recoverable) rather than orphaned (unrecoverable).
   const destResult = await resealAndPublishParent(
     destCtx,
     destParentNode,
     destNewChildren,
     destIpnsPrivateKey,
     destNewWriteChildren,
+    now
+  );
+
+  // Remove from source only after destination is confirmed published.
+  const srcResult = await resealAndPublishParent(
+    srcCtx,
+    srcParentNode,
+    srcNewChildren,
+    srcIpnsPrivateKey,
+    srcNewWriteChildren,
     now
   );
 
