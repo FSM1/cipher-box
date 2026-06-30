@@ -23,7 +23,7 @@ import { RepublishService } from '../republish/republish.service';
 import { DelegatedRoutingClient } from './delegated-routing.client';
 import { MetricsService } from '../metrics/metrics.service';
 import { deriveIpnsName, parseIpnsRecord, verifyIpnsRecordSignature } from '@cipherbox/crypto';
-import { parseIpnsRecordBytes, parseCachedRecord } from './ipns-record.codec';
+import { parseIpnsRecordBytes, parseCachedRecord, type SeqFloor } from './ipns-record.codec';
 import { ipnsVerifyCache } from './ipns-verify-cache';
 
 @Injectable()
@@ -585,6 +585,41 @@ export class IpnsService {
       }
 
       const cachedResult = await parseCachedRecord(cached, this.logger);
+
+      // TEE-05 / §6.5: type-narrow cachedResult into the three-way discriminated union.
+      //
+      //  seqFloor discriminant → shared-folder row with no signedRecord.
+      //    Network record must have networkSeq >= seqFloor to be served.
+      //    If network record is below the floor (or absent), fail closed (→ 404).
+      //    Never serve a network record ungated when we have a known seq floor.
+      //
+      //  IpnsRecordFields → normal row: prefer DB when dbSeq >= networkSeq.
+      //
+      //  null → no cached row or CID mismatch: fall through to network-only (or 404).
+      const isSeqFloor = (r: typeof cachedResult): r is SeqFloor => r !== null && 'seqFloor' in r;
+
+      if (isSeqFloor(cachedResult)) {
+        // Shared-folder row: gate the network record against the stored seq floor.
+        if (result) {
+          const networkSeq = BigInt(result.sequenceNumber);
+          const floorSeq = BigInt(cachedResult.seqFloor);
+          if (networkSeq >= floorSeq) {
+            this.logger.debug(
+              `seqFloor gate passed for ${ipnsName}: networkSeq=${networkSeq} >= floor=${floorSeq}`
+            );
+            timerSource = 'network';
+            resolveFound = true;
+            return result;
+          }
+          // Network record below floor — fail closed to prevent ungated serve.
+          this.logger.warn(
+            `seqFloor gate REJECTED for ${ipnsName}: networkSeq=${networkSeq} < floor=${floorSeq} — failing closed`
+          );
+          return null;
+        }
+        // No network record and only a seqFloor discriminant — cannot serve.
+        return null;
+      }
 
       if (result && cachedResult) {
         // Both sources available. The DB-cached record is the authoritative, fully-signed

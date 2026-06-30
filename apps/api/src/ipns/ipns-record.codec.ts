@@ -11,6 +11,21 @@ export interface IpnsRecordFields {
 }
 
 /**
+ * Discriminant returned by parseCachedRecord when the cached row has a null
+ * signedRecord but a known latestCid — typical of shared-folder rows that were
+ * inserted by the sharing protocol and never had a signedRecord written.
+ *
+ * The caller (resolveRecord) must gate the network record against this floor:
+ *   networkSeq >= seqFloor  →  serve network record
+ *   networkSeq < seqFloor   →  fail closed (return null → 404)
+ *
+ * This prevents ungated network content from being served for shared names.
+ */
+export interface SeqFloor {
+  seqFloor: string;
+}
+
+/**
  * Parse an IPNS record to extract CID and sequence number.
  * Backed by the `ipns` package via @cipherbox/crypto (parseIpnsRecord).
  */
@@ -50,19 +65,29 @@ export async function parseIpnsRecordBytes(
   }
 }
 
+/**
+ * Parse a cached IpnsRecord row into a verifiable fields bundle.
+ *
+ * Returns a three-way discriminated union:
+ *   - IpnsRecordFields: full fields available (normal row with signedRecord)
+ *   - SeqFloor: shared-folder row (signedRecord is null, but latestCid exists)
+ *               → caller must gate network record against the floor sequence
+ *   - null: no latestCid, or CID mismatch, or malformed name → fail closed (→ 404)
+ */
 export async function parseCachedRecord(
   cached: IpnsRecord | null,
   logger: Logger
-): Promise<IpnsRecordFields | null> {
+): Promise<IpnsRecordFields | SeqFloor | null> {
   if (!cached?.latestCid) {
     return null;
   }
 
-  // D-06 (Plan 60-05): null signedRecord → return null (→ 404 to caller).
-  // A row without a signed record cannot be served as authoritative; the client
-  // cannot verify an unsigned CID and must not act on it.
+  // TEE-05 / §6.5 case-split: null signedRecord on a row with a known latestCid is
+  // expected for shared-folder rows (they are inserted by the sharing protocol and
+  // never have a signedRecord). Return a seq floor so the caller can gate network
+  // content without falling through unconditionally.
   if (!cached.signedRecord) {
-    return null;
+    return { seqFloor: cached.sequenceNumber };
   }
 
   try {
