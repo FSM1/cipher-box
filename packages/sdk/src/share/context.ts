@@ -4,9 +4,9 @@
  * Takes explicit params to construct a SharedWriteContext for write operations.
  */
 
-import type { SealedChildRef } from '@cipherbox/core';
+import type { SealedChildRef, PublishedNode } from '@cipherbox/core';
 import type { SdkContext } from '@cipherbox/sdk-core';
-import type { SharedWriteContext, ShareKeyType } from './shared-write';
+import type { SharedWriteContext, ShareKeyType, PublishNodeResult } from './shared-write';
 
 /**
  * Parameters for building a SharedWriteContext.
@@ -14,14 +14,25 @@ import type { SharedWriteContext, ShareKeyType } from './shared-write';
  */
 export type SharedWriteContextParams = {
   ctx: SdkContext;
-  folderKey: Uint8Array;
-  ipnsPrivateKey: Uint8Array;
+  /** 32-byte AES key for sealing/unsealing the node's read-body (maps from folderKey) */
+  readKey: Uint8Array;
+  /** 32-byte AES key for sealing/unsealing the node's write-body */
+  writeKey: Uint8Array;
+  /** Current on-wire published envelope */
+  publishedNode: PublishedNode;
   ipnsName: string;
   sequenceNumber: bigint;
   children: SealedChildRef[];
   ownerPublicKey: Uint8Array;
   recipientPublicKey: Uint8Array;
   shareId: string;
+  publishNodeFn: (params: {
+    published: PublishedNode;
+    ipnsName: string;
+    ipnsPrivateKey: Uint8Array;
+    sequenceNumber: bigint;
+  }) => Promise<PublishNodeResult>;
+  addToIpfsFn: (data: Uint8Array) => Promise<{ cid: string }>;
   addShareKeysFn: (
     shareId: string,
     keys: Array<{ keyType: ShareKeyType; itemId: string; encryptedKey: string }>
@@ -40,14 +51,17 @@ export type SharedWriteContextParams = {
 export function buildSharedWriteContext(params: SharedWriteContextParams): SharedWriteContext {
   return {
     ctx: params.ctx,
-    folderKey: params.folderKey,
-    ipnsPrivateKey: params.ipnsPrivateKey,
+    readKey: params.readKey,
+    writeKey: params.writeKey,
+    publishedNode: params.publishedNode,
     ipnsName: params.ipnsName,
     sequenceNumber: params.sequenceNumber,
     children: params.children,
     ownerPublicKey: params.ownerPublicKey,
     recipientPublicKey: params.recipientPublicKey,
     shareId: params.shareId,
+    publishNodeFn: params.publishNodeFn,
+    addToIpfsFn: params.addToIpfsFn,
     addShareKeysFn: params.addShareKeysFn,
   };
 }

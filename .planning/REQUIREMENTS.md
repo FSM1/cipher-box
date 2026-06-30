@@ -44,10 +44,10 @@ Requirements for v2.0. Each maps to exactly one roadmap phase. Categories: CRYPT
 
 ### WRITE — write-revocation (Tier 2, ADR 0001)
 
-- [ ] **WRITE-01**: The write-body holds the node's Ed25519 signing material sealed under a separate `writeKey` as a structured recursive write chain (parent seals child `writeKey`, role `0x04`); a read-only holder can never reach signing material
-- [ ] **WRITE-02**: Write-revocation performs (c) full Ed25519 rotation — new keypair + k51 name per node, cascading parent re-points to the share root, re-pointing co-grants and owner devices
-- [ ] **WRITE-03**: Surviving co-writers receive the rotated Ed25519 key re-wrapped into their `writeDescriptorRef`; an offline co-writer cannot write until re-fetch (explicit)
-- [ ] **WRITE-04**: A rotated-out IPNS name is tombstoned (row kept) — the publish gate rejects all writes to it including the EOL-only renewal, resolve returns a tombstone/410, and the name is removed from the TEE republish batch
+- [x] **WRITE-01**: The write-body holds the node's Ed25519 signing material sealed under a separate `writeKey` as a structured recursive write chain (parent seals child `writeKey`, role `0x04`); a read-only holder can never reach signing material
+- [x] **WRITE-02**: Write-revocation performs (c) full Ed25519 rotation — new keypair + k51 name per node, cascading parent re-points to the share root, re-pointing co-grants and owner devices
+- [x] **WRITE-03**: Surviving co-writers receive the rotated Ed25519 key re-wrapped into their `writeDescriptorRef`; an offline co-writer cannot write until re-fetch (explicit)
+- [x] **WRITE-04**: A rotated-out IPNS name is tombstoned (row kept) — the publish gate rejects all writes to it including the EOL-only renewal, resolve returns a tombstone/410, and the name is removed from the TEE republish batch
 
 ### TEE — resolve, republish, and the TEE signing contract (Tier 2)
 
@@ -127,10 +127,10 @@ Which phases cover which requirements. Populated during roadmap creation.
 | ROT-05 | Phase 64 | Complete |
 | ROT-06 | Phase 64 | Complete |
 | TEST-01 | Phase 64 | Complete |
-| WRITE-01 | Phase 65 | Pending |
-| WRITE-02 | Phase 65 | Pending |
-| WRITE-03 | Phase 65 | Pending |
-| WRITE-04 | Phase 65 | Pending |
+| WRITE-01 | Phase 65 | Complete |
+| WRITE-02 | Phase 65 | Complete |
+| WRITE-03 | Phase 65 | Complete |
+| WRITE-04 | Phase 65 | Complete |
 | DATA-01 | Phase 66 | Pending |
 | DATA-02 | Phase 66 | Pending |
 | DATA-03 | Phase 66 | Pending |

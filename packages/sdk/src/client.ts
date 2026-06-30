@@ -1716,20 +1716,61 @@ export class CipherBoxClient {
    * Build a SharedWriteContext from the current shared-folder state.
    * The state's per-share owner/recipient pubkeys, IPNS key, and addShareKeys
    * callback are carried into the context — no cross-share bleed (T-48-07).
+   *
+   * addToIpfsFn: uploads encrypted content via pinWithMode so the configured
+   * pinning mode (BYO/external) is honored — encrypted bytes never route through
+   * CipherBox when the user opted external. Returns the resulting CID.
+   *
+   * publishNodeFn: uploads the sealed PublishedNode JSON to IPFS then calls
+   * createAndPublishIpnsRecord with the supplied sequenceNumber (callers in
+   * shared-write.ts supply the target new sequence directly). The node-metadata
+   * blob intentionally goes via sdkCore.addToIpfs (CipherBox), NOT pinWithMode:
+   * it is the IPNS resolution target and must remain reachable by CipherBox's
+   * relay — mirrors the non-shared metadata-publish path. Returns the new
+   * sequence number echoed from the API response.
    */
   private buildSharedWriteContextFromState(
     state: SharedFolderState
   ): ReturnType<typeof shareOps.buildSharedWriteContext> {
     return shareOps.buildSharedWriteContext({
       ctx: this.ctx,
-      folderKey: state.folderKey,
-      ipnsPrivateKey: state.ipnsPrivateKey,
+      readKey: state.folderKey,
+      writeKey: state.writeKey,
+      publishedNode: state.publishedNode,
       ipnsName: state.ipnsName,
       sequenceNumber: state.sequenceNumber,
       children: state.children,
       ownerPublicKey: state.ownerPublicKey,
       recipientPublicKey: state.recipientPublicKey,
       shareId: state.shareId,
+      addToIpfsFn: async (data) => {
+        // Encrypted content must honor the configured pinning mode (BYO/external),
+        // exactly like the non-shared upload path (pinWithMode at L784/966) — never
+        // route shared-write content through CipherBox when the user opted external.
+        const result = await this.pinWithMode(data, this.ctx);
+        return { cid: result.cid };
+      },
+      publishNodeFn: async ({ published, ipnsName, ipnsPrivateKey, sequenceNumber }) => {
+        const bytes = new TextEncoder().encode(JSON.stringify(published));
+        const ipfsResult = await sdkCore.addToIpfs(this.ctx, bytes);
+        const pubResult = await sdkCore.createAndPublishIpnsRecord({
+          ipnsPrivateKey,
+          ipnsName,
+          metadataCid: ipfsResult.cid,
+          sequenceNumber,
+          ctx: this.ctx,
+        });
+        // A non-throwing rejection (2xx with success:false) still means the record
+        // was not committed. Fail closed — continuing would point the parent's
+        // SealedChildRef at an IPNS name that was never published. Mirrors the
+        // explicit guard in rotateWriteSubtree (engine.ts) for the same publish path.
+        if (!pubResult.success) {
+          throw new Error(
+            `publishNodeFn: IPNS publish rejected for ${ipnsName} (seq=${pubResult.sequenceNumber})`
+          );
+        }
+        return { tombstoned: false, newSequenceNumber: pubResult.sequenceNumber };
+      },
       addShareKeysFn: state.addShareKeysFn,
     });
   }
@@ -1818,9 +1859,22 @@ export class CipherBoxClient {
 
   /**
    * Delete an item from a write-shared folder (REQ-3).
+   *
+   * @param args.itemId - IPNS name of the item (read-body key).
+   * @param args.childNodeId - UUID of the child node (write-body key; minted at
+   *   creation time by uploadToSharedFolder / createSharedSubfolder).
    */
-  async deleteFromSharedFolder(shareId: string, args: { itemId: string }): Promise<void> {
+  async deleteFromSharedFolder(
+    shareId: string,
+    args: { itemId: string; childNodeId: string }
+  ): Promise<void> {
     return this.withOperation('deleteFromSharedFolder', async () => {
+      // Public SDK boundary: a missing childNodeId would remove the read-body item
+      // while leaving the write-body WriteChildRef stale, which later breaks
+      // rotateWriteFromNode — fail closed before delegating.
+      if (typeof args.childNodeId !== 'string' || args.childNodeId.trim().length === 0) {
+        throw new TypeError('deleteFromSharedFolder: childNodeId is required');
+      }
       const state = this.requireSharedFolder(shareId);
       const result = await shareOps.deleteFromSharedFolder(
         this.buildSharedWriteContextFromState(state),

@@ -7,9 +7,11 @@ export {
   reMintGrantsRootedAt,
   mergeConcurrentChildren,
   verifySubtreeClean,
+  rotateWriteFromNode,
   type RotationJobRecord,
   type RotationStatus,
   type RotationParams,
+  type WriteRevocationCallbacks,
 } from './engine';
 
 export {

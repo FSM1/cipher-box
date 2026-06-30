@@ -21,6 +21,8 @@ export {
   unsealNode,
   sealChildReadKey,
   unsealChildReadKey,
+  sealChildWriteKey,
+  unsealChildWriteKey,
   sealContent,
   unsealContent,
   type Node,

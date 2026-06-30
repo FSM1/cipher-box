@@ -2,4 +2,4 @@
 
 export { navigateReadChain, type NavigateResult } from './navigate';
 
-export { issueReadGrant, claimInviteReadKey, type ReadGrantPayload } from './grant';
+export { issueReadGrant, claimInviteReadKey, claimInvite, type ReadGrantPayload } from './grant';

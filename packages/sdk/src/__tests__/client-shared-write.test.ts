@@ -14,7 +14,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CipherBoxClient } from '../client';
 import type { SdkEvent } from '../events';
 import type { SharedFolderState } from '../types';
-import type { FolderChild } from '@cipherbox/core';
+import type { FolderChild, PublishedNode } from '@cipherbox/core';
 import { createTestConfig } from './helpers';
 
 vi.mock('@cipherbox/crypto', () => ({
@@ -62,11 +62,21 @@ function seedSharedFolder(
   client: CipherBoxClient,
   overrides?: Partial<SharedFolderState>
 ): SharedFolderState {
+  const stubPublishedNode: PublishedNode = {
+    schema: 'node/v3',
+    kind: 'folder',
+    id: 'stub-node-id',
+    generation: 0,
+    aeadVersion: 1,
+    readSealed: 'dGVzdA==',
+  };
   const state: SharedFolderState = {
     shareId: 'share-1',
     ipnsName: 'k51shared',
     folderKey: new Uint8Array(32).fill(1),
     ipnsPrivateKey: new Uint8Array(64).fill(2),
+    writeKey: new Uint8Array(32).fill(5),
+    publishedNode: stubPublishedNode,
     sequenceNumber: 3n,
     children: [],
     ownerPublicKey: new Uint8Array(33).fill(3),

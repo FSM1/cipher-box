@@ -224,6 +224,61 @@ export async function unsealChildReadKey(
 }
 
 /**
+ * Seals a child node's writeKey under the parent node's writeKey.
+ *
+ * Used to build the WriteChildRef.writeKeySealed field (role 0x04 child-writekey).
+ * The AAD binds the child's id, kind, and generation so the sealed key can only
+ * be unwrapped by a holder of the parent writeKey presenting the correct child metadata.
+ *
+ * Does NOT zero childWriteKey — the caller is the terminal owner (D-09).
+ *
+ * @param childWriteKey    - 32-byte AES key of the child node to seal
+ * @param parentWriteKey   - 32-byte AES key of the parent node (wrapping key)
+ * @param childId          - Hyphenated UUID of the child node
+ * @param childKind        - NodeKind of the child
+ * @param childGeneration  - Current generation of the child node
+ * @returns Base64 of IV ‖ ciphertext ‖ tag (WriteChildRef.writeKeySealed value)
+ */
+export async function sealChildWriteKey(
+  childWriteKey: Uint8Array,
+  parentWriteKey: Uint8Array,
+  childId: string,
+  childKind: NodeKind,
+  childGeneration: number
+): Promise<string> {
+  const kb = kindByte(childKind);
+  const aad = buildNodeAad(childId, kb, childGeneration, 0x04 /* child-writekey */);
+  const sealed = await sealAesGcmAad(childWriteKey, parentWriteKey, aad);
+  // Do NOT zero childWriteKey: caller is terminal owner (D-09)
+  return uint8ArrayToBase64(sealed);
+}
+
+/**
+ * Unseals a child node's writeKey from WriteChildRef.writeKeySealed.
+ *
+ * Inverse of sealChildWriteKey. The AAD is rebuilt identically; any mismatch throws.
+ *
+ * @param sealedBase64     - Base64 sealed blob from WriteChildRef.writeKeySealed
+ * @param parentWriteKey   - 32-byte AES key of the parent node (unwrapping key)
+ * @param childId          - Hyphenated UUID of the child node (must match sealing metadata)
+ * @param childKind        - NodeKind of the child (must match sealing metadata)
+ * @param childGeneration  - Current generation of the child (must match sealing metadata)
+ * @returns Raw 32-byte AES writeKey of the child node
+ */
+export async function unsealChildWriteKey(
+  sealedBase64: string,
+  parentWriteKey: Uint8Array,
+  childId: string,
+  childKind: NodeKind,
+  childGeneration: number
+): Promise<Uint8Array> {
+  const kb = kindByte(childKind);
+  const aad = buildNodeAad(childId, kb, childGeneration, 0x04 /* child-writekey */);
+  const sealedBytes = base64ToUint8Array(sealedBase64);
+  return unsealAesGcmAad(sealedBytes, parentWriteKey, aad);
+}
+
+/**
  * Seals a file node's content descriptor under the file node's own readKey.
  *
  * The content (including the raw 32-byte fileKey) is sealed under the file node's

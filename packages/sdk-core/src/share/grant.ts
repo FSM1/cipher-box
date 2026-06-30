@@ -1,7 +1,8 @@
 /**
  * Read-grant issuance and invite-claim re-wrap crypto primitives.
  *
- * Implements READ-01 (issueReadGrant) and READ-05 / D-07 (claimInviteReadKey).
+ * Implements READ-01 (issueReadGrant), READ-05 / D-07 (claimInviteReadKey),
+ * and D-06 (claimInvite — the full invite-claim service flow).
  *
  * issueReadGrant: ONE ECIES wrap of the share-root readKey → readDescriptorRef.
  *   - ZERO node resolves, ZERO seal/unseal, ZERO IPNS publishes (READ-01 / §3.2).
@@ -10,8 +11,14 @@
  *
  * claimInviteReadKey: unwrap readKey with URL-fragment ephemeral private key,
  *   re-wrap to claimer's public key → standard grant readDescriptorRef (READ-05 / §3.11).
- *   - Crypto primitive only; full service wiring deferred to Phase 65 (D-07).
+ *   - Crypto primitive only.
  *   - Emits ONE re-wrapped root readKey — no per-child key fan-out (D-07).
+ *
+ * claimInvite: full service-flow wrapper around claimInviteReadKey (D-06 / §3.11).
+ *   - Fetches invite data via injected getInviteDataFn callback.
+ *   - Calls claimInviteReadKey to produce the claimer-wrapped readDescriptorRef.
+ *   - Persists ONE standard grant row via injected insertShareFn (D-02 transport seam).
+ *   - ONE re-wrapped root readKey per claimer — no per-child key fan-out (D-06).
  */
 
 import { wrapKey, reWrapKey } from '@cipherbox/crypto';
@@ -221,4 +228,119 @@ export async function claimInviteReadKey(params: {
   }
 
   return bytesToBase64(claimerWrapped);
+}
+
+// ---------------------------------------------------------------------------
+// claimInvite — D-06 / §3.11 full service flow
+// ---------------------------------------------------------------------------
+
+/**
+ * Invite-claim service flow.
+ *
+ * Fetches invite data via an injected callback, re-wraps the share-root readKey
+ * to the claimer's public key using the existing `claimInviteReadKey` primitive,
+ * and persists a single standard grant row via an injected `insertShareFn`.
+ *
+ * Per D-06: ONE re-wrapped root readKey per claimer; a multi-claim invite mints
+ * one standard grant per claimer of the same readKey. Revocation is achieved by
+ * rotating the readKey (Plan 06 / ADR 0002), not by link invalidation.
+ *
+ * All transport is injected as callbacks (D-02 mock seam):
+ * - `getInviteDataFn` is called once with `inviteToken` to obtain the invite's
+ *   readDescriptorRef (ECIES-wrapped to the URL-fragment ephemeral public key).
+ * - `insertShareFn` is called exactly once to persist the claimer's grant row.
+ *   It is NEVER called on crypto failure.
+ *
+ * Emits ONE re-wrapped root readKey — no per-child key fan-out (D-06 / §3.11).
+ * The generated api-client models retain the legacy column for Phase 66 cutover only.
+ *
+ * @param params.inviteToken - Opaque invite token (passed to getInviteDataFn)
+ * @param params.ephemeralPrivateKey - 32-byte secp256k1 private key from URL fragment;
+ *   caller-owned, NOT zeroed here (D-09)
+ * @param params.claimerPublicKey - 65-byte uncompressed secp256k1 public key of the claimer;
+ *   caller-owned, NOT zeroed here (D-09)
+ * @param params.rootNodeId - UUID of the grant root node
+ * @param params.rootIpnsName - IPNS k51 name of the grant root node
+ * @param params.rootGeneration - Node generation at which this grant is anchored
+ * @param params.getInviteDataFn - Injected callback: receives inviteToken, returns { readDescriptorRef }
+ * @param params.insertShareFn - Injected callback: persists the standard grant row, returns { shareId }
+ *
+ * @returns `{ shareId, readDescriptorRef }` — the assigned share identifier and the
+ *   base64 ECIES-wrapped grant descriptor re-encrypted to the claimer's public key.
+ */
+export async function claimInvite(params: {
+  inviteToken: string;
+  ephemeralPrivateKey: Uint8Array;
+  claimerPublicKey: Uint8Array;
+  rootNodeId: string;
+  rootIpnsName: string;
+  rootGeneration: number;
+  getInviteDataFn: (token: string) => Promise<{ readDescriptorRef: string }>;
+  insertShareFn: (payload: ReadGrantPayload) => Promise<{ shareId: string }>;
+}): Promise<{ shareId: string; readDescriptorRef: string }> {
+  // Input validation — reject malformed keys before any I/O or crypto work.
+  if (params.ephemeralPrivateKey.length !== 32) {
+    throw new Error(
+      `claimInvite: ephemeralPrivateKey must be 32 bytes (secp256k1 private key), got ${params.ephemeralPrivateKey.length}`
+    );
+  }
+  if (params.claimerPublicKey.length !== 65) {
+    throw new Error(
+      `claimInvite: claimerPublicKey must be 65 bytes (uncompressed secp256k1), got ${params.claimerPublicKey.length}`
+    );
+  }
+  if (!Number.isInteger(params.rootGeneration) || params.rootGeneration < 0) {
+    throw new Error(
+      `claimInvite: rootGeneration must be a non-negative integer, got ${params.rootGeneration}`
+    );
+  }
+  if (params.inviteToken.trim().length === 0) {
+    throw new Error('claimInvite: inviteToken must be non-empty');
+  }
+  if (params.rootNodeId.trim().length === 0) {
+    throw new Error('claimInvite: rootNodeId must be non-empty');
+  }
+  if (params.rootIpnsName.trim().length === 0) {
+    throw new Error('claimInvite: rootIpnsName must be non-empty');
+  }
+
+  // Snapshot trimmed root identifiers (FIX #12: persist trimmed, not raw whitespace-padded input).
+  const rootNodeId = params.rootNodeId.trim();
+  const rootIpnsName = params.rootIpnsName.trim();
+
+  // Snapshot key buffers BEFORE the first await so a caller that reuses or zeroes
+  // these Uint8Arrays mid-await cannot corrupt the subsequent re-wrap (FIX #11).
+  // We own the copies; ephemeralPrivateKeyCopy is zeroed in the finally block below.
+  const ephemeralPrivateKeyCopy = params.ephemeralPrivateKey.slice();
+  const claimerPublicKeyCopy = params.claimerPublicKey.slice();
+
+  try {
+    // Step 1: Fetch invite data via the injected transport callback (D-02).
+    const inviteData = await params.getInviteDataFn(params.inviteToken);
+
+    // Step 2: Re-wrap using snapshotted buffers (not caller-owned params).
+    // Delegates to the existing claimInviteReadKey primitive — NOT reimplemented here (D-07).
+    // The intermediate readKey buffer is zeroed inside reWrapKey (T-63-05).
+    const claimerReadDescriptorRef = await claimInviteReadKey({
+      readDescriptorRef: inviteData.readDescriptorRef,
+      ephemeralPrivateKey: ephemeralPrivateKeyCopy,
+      claimerPublicKey: claimerPublicKeyCopy,
+    });
+
+    // Step 3: Persist ONE standard grant row via the injected callback (D-02).
+    // The payload shape is identical to issueReadGrant's output — ONE root readKey only.
+    const result = await params.insertShareFn({
+      recipientPublicKey: claimerPublicKeyCopy,
+      rootNodeId,
+      rootIpnsName,
+      rootGeneration: params.rootGeneration,
+      readDescriptorRef: claimerReadDescriptorRef,
+    });
+
+    return { shareId: result.shareId, readDescriptorRef: claimerReadDescriptorRef };
+  } finally {
+    // Zero our owned copy of the ephemeral private key (caller-owned params.ephemeralPrivateKey
+    // is NOT zeroed here per D-09 — we only zero the copy minted above).
+    ephemeralPrivateKeyCopy.fill(0);
+  }
 }

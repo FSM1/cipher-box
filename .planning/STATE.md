@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
-current_phase: 64
-current_phase_name: rotation-soundness-revocation-guarantees
-status: verifying
-stopped_at: "Completed 64-08: rotation crash-safety E2E suite (TEST-01 phase gate)"
-last_updated: "2026-06-29T18:04:43.484Z"
-last_activity: 2026-06-29
-last_activity_desc: Phase 64 execution started
+current_phase: 66
+current_phase_name: API Schema Cutover, Publish Gate, and Tombstone
+status: executing
+stopped_at: Phase 65 context gathered
+last_updated: "2026-06-30T01:05:42.404Z"
+last_activity: 2026-06-30
+last_activity_desc: Phase 65 complete, transitioned to Phase 66
 progress:
   total_phases: 9
-  completed_phases: 4
-  total_plans: 29
-  completed_plans: 29
-  percent: 44
+  completed_phases: 5
+  total_plans: 36
+  completed_plans: 36
+  percent: 56
 ---
 
 # Project State
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-27)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 64 — rotation-soundness-revocation-guarantees
+**Current focus:** Phase 65 — sdk-write-chain-bin-re-link-and-invite-claim
 
 ## Current Position
 
-Phase: 64 (rotation-soundness-revocation-guarantees) — EXECUTING
-Plan: 8 of 8
-Status: Phase complete — ready for verification
-Last activity: 2026-06-29 — Phase 64 execution started
+Phase: 66 — API Schema Cutover, Publish Gate, and Tombstone
+Plan: Not started
+Status: Executing Phase 65
+Last activity: 2026-06-30 — Phase 65 complete, transitioned to Phase 66
 
 Progress: `░░░░░░░░░░` 0 / 9 phases (0%)
 
@@ -434,6 +434,6 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-06-29T18:04:43.479Z
-**Stopped at:** Completed 64-08: rotation crash-safety E2E suite (TEST-01 phase gate)
-**Resume file:** None
+**Last session:** 2026-06-29T21:53:19.782Z
+**Stopped at:** Phase 65 context gathered
+**Resume file:** .planning/phases/65-sdk-write-chain-bin-re-link-and-invite-claim/65-CONTEXT.md
