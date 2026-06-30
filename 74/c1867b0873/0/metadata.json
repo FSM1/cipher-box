@@ -1,0 +1,122 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "74c1867b0873",
+  "session_id": "15792aca-8a5d-46a6-aafa-f0b7991dd37b",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-30T17:27:47.492642Z",
+  "branch": "feat/api-schema-cutover-publish-gate-and-tombstone",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "ff131bc035c8",
+  "token_usage": {
+    "input_tokens": 16350,
+    "cache_creation_tokens": 516214,
+    "cache_read_tokens": 33745592,
+    "output_tokens": 222454,
+    "api_call_count": 125
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-execute-phase-2026-06-30T15:00:11.889631Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "cf38f50fcc68",
+      "timestamp": "2026-06-30T15:00:11.889631Z",
+      "native": {
+        "command": "/gsd-execute-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 10
+  },
+  "summary": {
+    "intent": "Execute all 9 plans in phase 66 (API Schema Cutover, Publish Gate & Tombstone) using wave-based parallel worktree execution across 5 waves, implementing atomic CAS/tombstone IPNS publish, shares descriptor-ref model cutover, schema migration, API client regen, sdk-core/web compile gates, and an e2e proof suite.",
+    "outcome": "All 9 plans executed and merged; full API build green (767/0 jest), monorepo typecheck passing end-to-end, live schema migrated, and the sdk-e2e proof suite achieved 5/5 after fixing a pubKey supplement gap in the API's network-resolve path and correcting wrong DB name in test seeding helpers.",
+    "learnings": {
+      "repo": [
+        "worktree.baseRef='head' means worktrees fork from live HEAD so inter-wave merges never hit base-mismatch halts",
+        "The deletion safety guard in bin/lib/worktree-safety.cjs is unconditional — no override flag; any branch with file deletions must be merged manually",
+        "app.module.ts and apps/api/scripts/generate-openapi.ts both imported the deleted ShareKey entity — orphans not covered by any plan's files_modified",
+        "users.publicKey stores the 130-char uncompressed secp256k1 auth key; sdk-e2e must look it up in cipherbox_test (apps/api/.env DB_DATABASE), not cipherbox",
+        "A duplicate WidenShareKeyType1743100000000 row in the migrations table caused TypeORM 0.3.28 to falsely report 'No migrations are pending'; workaround was direct psql DDL + manual migration row insert",
+        "Ed25519 IPNS identity records from delegated routing omit pubKey by design (name IS the key); the DB-cached resolve path supplements it via publicKeyFromIpnsName but the seqFloor network-serve path did not — causing the strict sdk-core client to always fail closed on at-floor serves",
+        "cipherbox-mock-ipns-routing stores and returns raw protobuf bytes verbatim — it does not strip signature fields; missing pubKey on network records is a wire-format property, not mock behavior",
+        "The sdk-e2e test:single script uses --testPathPattern (removed in vitest 3.x); direct vitest positional filter is needed instead",
+        "pnpm api:generate's trailing && pnpm lint:fix runs eslint repo-wide, so it exits non-zero whenever web/sdk-core have errors — the meaningful deliverable is the regenerated client, not lint exit code",
+        "@cipherbox/crypto has no dist/ in fresh worktrees after pnpm install --prefer-offline; must build crypto first to unblock ipns module resolution"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 587,
+          "end_line": 626,
+          "finding": "resolveRecord seqFloor gate: shared-folder rows with null signedRecord apply a seq floor against the network record; gate-pass serves the network record but previously didn't supplement pubKey"
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 627,
+          "end_line": 628,
+          "finding": "Code comment acknowledges network records 'do NOT carry the signature fields a strict client needs to verify' — the fix supplements pubKey from publicKeyFromIpnsName(name) when signatureV2+data are present"
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.controller.ts",
+          "line": 226,
+          "end_line": 226,
+          "finding": "hasSigData gates on signatureV2 && data && pubKey; missing pubKey from network records caused sig fields to be stripped from the resolve response before the fix"
+        },
+        {
+          "path": "packages/crypto/src/ipns/parse-record.ts",
+          "line": 21,
+          "end_line": 25,
+          "finding": "pubKey is intentionally omitted from parsed Ed25519 identity IPNS records (name is the key); downstream consumers that need pubKey must reconstruct it from the ipnsName"
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.spec.ts",
+          "finding": "After 66-02's atomic CAS rewrite, upsertIpnsRecord uses createQueryBuilder().update() not findOne/save; the spec mock needed a chainable createQueryBuilder mock with mockQbExecute defaulting to { affected: 1 }"
+        }
+      ],
+      "workflow": [
+        "Serialize git worktree add calls (one per message) to avoid .git/config.lock races when dispatching parallel wave agents",
+        "Run targeted per-package builds for post-merge gates during intentional intermediate-red states rather than the full monorepo, to avoid drowning signal in known breakage",
+        "When the cleanup-wave helper aborts at the first deletion, inspect each branch's diffstat independently to validate scope before manual merge — faster than fighting the helper",
+        "Deferred spec updates (e.g., ipns.service.spec.ts excluded from 66-02) must be caught and fixed at the orchestrator post-merge test gate, not carried forward",
+        "The at-floor e2e scenario requires psql seeding of null signedRecord rows; psql helpers must target DB_DATABASE from api/.env (cipherbox_test), not the default postgres DB name",
+        "SDK_E2E_SECRET in the test harness defaults to a different value than TEST_LOGIN_SECRET in apps/api/.env; always pass the env var explicitly when running sdk-e2e locally"
+      ]
+    },
+    "friction": [
+      "Unconditional deletion guard in cleanup-wave helper required manual git merge for both Wave 1 (66-03 deleted share_keys DTOs) and Wave 2 (66-04 deleted obsolete spec files) — the guard provides no override path",
+      "Two orphaned ShareKey imports (app.module.ts and generate-openapi.ts) not covered by any plan's files_modified caused post-merge failures and a deviated 66-06 auto-fix",
+      "Duplicate WidenShareKeyType migration row caused TypeORM false 'no pending migrations'; required direct psql DDL workaround instead of standard migration:run",
+      "Test 15's psql seeding helpers hardcoded -d cipherbox instead of the API's actual cipherbox_test database — caused user lookup to return empty and Test 15 to fail even after the main bug was fixed",
+      "SDK_E2E_SECRET mismatch (harness default vs api/.env) caused 401 at e2e fixture setup on first run",
+      "sdk-e2e test:single script uses removed --testPathPattern jest flag; had to discover the correct vitest positional filter invocation",
+      "The running API process had a process manager auto-restarting it, complicating manual pid management when restarting after dist rebuild",
+      "pubKey supplement gap in the network-resolve path was not caught during plan execution — only surfaced during the orchestrator's e2e gate, requiring an unplanned fix + spec update + API rebuild + restart cycle"
+    ],
+    "open_items": [
+      "Phase 68: full web share/invite consumer rewrite (66-08 only added Phase-68 throw-stubs matching the 62-08/63-65 precedent)",
+      "Phase 68: durable high-water mark (ROT-07) for sdk-core — 66-07 only wired the optional generation argument to the publish primitives, no IndexedDB/journal persistence",
+      "cipherbox-mock-ipns-routing (:3001) was unhealthy during the session — its health should be verified before relying on the seqFloor at-floor network-serve path in future e2e runs",
+      "sdk-e2e test:single script uses a removed vitest flag and should be updated to the correct vitest positional invocation",
+      "The TypeORM duplicate migration row (WidenShareKeyType1743100000000) in the migrations table was worked around but not removed — the root cause of the duplicate entry is unresolved"
+    ]
+  }
+}
