@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "1af3242d5c34",
+  "strategy": "manual-commit",
+  "branch": "feat/sdk-write-chain-bin-re-link-and-invite-claim",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/sdk/src/bin/index.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/1a/f3242d5c34/0/metadata.json",
+      "transcript": "/1a/f3242d5c34/0/full.jsonl",
+      "content_hash": "/1a/f3242d5c34/0/content_hash.txt",
+      "prompt": "/1a/f3242d5c34/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 426,
+    "cache_creation_tokens": 29680,
+    "cache_read_tokens": 1578498,
+    "output_tokens": 12782,
+    "api_call_count": 20
+  }
+}
