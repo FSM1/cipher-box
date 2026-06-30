@@ -1,0 +1,163 @@
+/gsd-discuss-phase 67
+
+---
+
+<task-notification>
+<task-id>a94901c9d3143ffd3</task-id>
+<tool-use-id>toolu_01XvRo339qWWVgFnVFQYCArQ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/13524ecf-de1b-47de-bf59-e080a2ed8848/tasks/a94901c9d3143ffd3.output</output-file>
+<status>completed</status>
+<summary>Agent "Scout TEE worker code and spec" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have everything needed. Let me compile the structured report.
+
+---
+
+# TEE Lease-Renewer Rewrite — Codebase Map
+
+All paths absolute. Line references are current as of this read.
+
+## 1. TEE worker republish route
+
+File: `/Users/myankelev/Code/random/cipher-box/apps/tee-worker/src/routes/republish.ts` (the only route handler; helpers: `services/key-manager.ts`, `services/ipns-signer.ts`, `services/tee-keys.ts`).
+
+**Sequence increment + re-signed record construction** (`republish.ts:78-102`):
+```ts
+// 3. Sign IPNS record with incremented sequence number
+const newSequenceNumber = BigInt(entry.sequenceNumber) + 1n;          // :79  ← the roadmap "+ 1n"
+const signedRecord = await signIpnsRecord(ipnsPrivateKey, entry.latestCid, newSequenceNumber); // :80
+```
+The re-signed record carries: **value/CID** = `entry.latestCid` (relay-supplied, passed as `'/ipfs/' + cid` inside `ipns-signer.ts:31`), **sequenceNumber** = `entry.sequenceNumber + 1n`, **EOL/validity** = fixed 48h (see below). There is **no `record.pubkey` field handled and no parse/verify of an incoming marshaled record** — the TEE *originates* a brand-new record from scalars rather than extending a supplied one. The returned `RepublishResult` (`:96-102`) reports `signedRecord` (base64) and `newSequenceNumber`.
+
+So today's contract is the exact opposite of the spec's §6.4 "lease-renewer": it signs a supplied CID scalar and increments the sequence.
+
+**Signing inputs source — schedule snapshot, NOT canonical `ipns_records`.** The TEE handler reads everything from the request body `RepublishEntry` (`republish.ts:25-32`): `encryptedIpnsKey`, `ipnsName`, `latestCid`, `sequenceNumber`, `currentEpoch`, `previousEpoch`. The relay builds that body from the **schedule snapshot row**, not the canonical record — `republish.service.ts:97-105`:
+```ts
+const teeEntries: RepublishEntry[] = batch.map((entry) =&gt; ({
+  encryptedIpnsKey: entry.encryptedIpnsKey.toString('base64'),   // schedule col
+  keyEpoch: entry.keyEpoch,                                       // schedule col
+  ipnsName: entry.ipnsName,
+  latestCid: entry.latestCid,                                     // schedule col (stale on content write)
+  sequenceNumber: entry.sequenceNumber,                           // schedule col
+  currentEpoch, previousEpoch,
+}));
+```
+`entry` here is an `IpnsRepublishSchedule` from `getDueEntries()` (`republish.service.ts:43-52`, `scheduleRepository.find(...)`). The canonical `ipns_records` row is only touched *afterward*, on success, by `syncIpnsRecordSequence` (`republish.service.ts:158-163`, `:372-403`) — it is a write-back, never the signing source. This is precisely the §6.3 dual-source staleness the rewrite targets.
+
+**`currentEpoch` / keyEpoch derivation — relay-supplied, not the enclave's own clock.** The TEE handler trusts `entry.currentEpoch` / `entry.previousEpoch` verbatim and feeds them straight into decryption/re-encryption (`republish.ts:71-90`). The values originate on the relay from `teeKeyStateService.getCurrentState()` (`republish.service.ts:80-87` → `currentEpoch`/`previousEpoch`). The enclave never consults its own clock or an epoch schedule. (`tee-keys.ts` derives a *keypair per epoch number* but accepts whatever epoch integer it's handed; `MIN_EPOCH`/`MAX_EPOCH` at `tee-keys.ts:18-19` are the only bound.) This is the §6.7-item-1 gap.
+
+**Name↔key binding — ABSENT.** There is no `publicKeyFromIpnsName(ipnsName) == pubkey(decryptedKey) == record.pubkey` assertion anywhere in the TEE worker. A targeted grep for `publicKeyFromIpnsName|deriveIpnsName|pubkey|verifyIpns|parseIpnsRecord` across `apps/tee-worker/src` returns only an unrelated test hit. The handler decrypts `entry.encryptedIpnsKey`, signs `entry.latestCid` for `entry.ipnsName`, and never checks that the decrypted key actually derives to `ipnsName`. This is the §6.7-item-2 / test-18 gap.
+
+**Tombstone / revoked-CID check — ABSENT in the TEE path.** The TEE worker does no tombstone or revocation check. The relay's `getDueEntries()` (`republish.service.ts:43-52`) selects on `status IN ('active','retrying')` and `nextRepublishAt` only — it does **not** join `ipns_records.tombstoned_at`. The only tombstone protection is reactive and downstream: `syncIpnsRecordSequence` adds `tombstonedAt: IsNull()` to its write-back UPDATE (`republish.service.ts:386-397`), and tombstoning calls `unenrollIpns` which merely *deletes the schedule row* (`ipns.service.ts:560`, `republish.service.ts:256-267`). The spec (`design …:491`) explicitly flags that schedule-row deletion alone is "not sufficient" and that the renewal CAS must also reject tombstoned names.
+
+**IPNS key decryption flow (enclave) + EOL location.**
+- Decryption: `republish.ts:67-76` base64-decodes `encryptedIpnsKey`, then `decryptWithFallback(...)` (`key-manager.ts:47-71`) tries `currentEpoch` then `previousEpoch`. Each attempt calls `decryptIpnsKey` (`key-manager.ts:23-33`) → `getKeypair(epoch)` (`tee-keys.ts:30-85`) → ECIES `unwrapKey(...)` from `@cipherbox/crypto`. The enclave private key is derived per epoch: simulator = HKDF-SHA256 from a fixed seed (`tee-keys.ts:66-71`); CVM/production = Phala `DstackClient.getKey('cipherbox/ipns-republish', 'epoch-${epoch}')` (`tee-keys.ts:47-65`). Keys are zeroed in `finally` (`key-manager.ts:30-32`) and again in the route (`republish.ts:92-94`, `:112-116`).
+- Epoch upgrade/re-wrap: if `usedEpoch !== entry.currentEpoch`, `reEncryptForEpoch(ipnsPrivateKey, entry.currentEpoch)` (`republish.ts:86-90` → `key-manager.ts:84-90`) re-wraps under the relay-named `currentEpoch` pubkey and returns `upgradedEncryptedKey`/`upgradedKeyEpoch`. Note the re-wrap target epoch is **relay-chosen** (the §6.7-item-1 offline-forgery concern).
+- EOL/validity: hardcoded in `ipns-signer.ts:11-12`, `TEE_RECORD_LIFETIME_MS = 48 * 60 * 60 * 1000` (48h), passed as the 4th arg to `createIpnsRecord(...)` at `ipns-signer.ts:30-36`. This is the only place lifetime is set; there is no "extend EOL on an existing record" path.
+
+## 2. Publish path / CAS guard
+
+The TEE renewal path does **not** itself run a compare-and-set. After the TEE returns a signed record, the relay's `RepublishService` publishes to delegated routing (`republish.service.ts:136`, `publishSignedRecord` at `:201-205`) and writes back the canonical row via `syncIpnsRecordSequence` (`:372-403`). That write-back is a forward-only/tombstone-gated UPDATE, **not** a sequence CAS:
+```ts
+await this.ipnsRecordRepository.update(
+  { userId, ipnsName, tombstonedAt: IsNull(), sequenceNumber: LessThanOrEqual(newSequenceNumber) },
+  { sequenceNumber: newSequenceNumber, signedRecord: Buffer.from(signedRecordBase64,'base64') }
+); // republish.service.ts:386-397
+```
+
+The Phase-66 atomic compare-and-set lives in the **client publish path only**, `IpnsService.upsertIpnsRecord` (`/Users/myankelev/Code/random/cipher-box/apps/api/src/ipns/ipns.service.ts:379-392`):
+```ts
+.where(
+  'ipns_name = :ipnsName AND sequence_number = :expected AND generation &lt;= CAST(:incoming AS bigint) AND tombstoned_at IS NULL',
+  { ipnsName, expected: effectiveExpected, incoming: effectiveIncomingGeneration }
+).execute();
+// if (updateResult.affected === 0) → 409 / 410 disambiguation (ipns.service.ts:394-409)
+```
+This is the fused seq-CAS + generation gate + tombstone gate the spec §6.6 describes (matches the `WHERE sequenceNumber = :loaded` / `WHERE ipnsName = :n AND sequenceNumber = :expected` form). It also has an idempotent (equal-sequence) branch for the client re-sign path at `ipns.service.ts:311-317` and `:359-360`.
+
+**Conclusion:** the relay client-publish path uses the Phase-66 CAS; the **TEE renewal path uses a different, weaker guard** (`LessThanOrEqual` write-back, not equality CAS) and routes the TEE's signed record straight to delegated routing without going through `upsertIpnsRecord`. Unifying these (TEE renewal hitting the same idempotent CAS branch) is exactly §6.6's "renewal write is guarded identically" requirement.
+
+## 3. Schema
+
+**`ipns_records`** — `/Users/myankelev/Code/random/cipher-box/apps/api/src/ipns/entities/ipns-record.entity.ts` (entity `IpnsRecord`, `@Unique(['ipnsName'])` at `:19`):
+- `id` uuid PK (`:21-22`)
+- `userId` `user_id` uuid, indexed; denormalized creator marker only (`:24-26`, comment `:15-18`)
+- `ipnsName` `ipns_name` varchar(255) (`:35-36`)
+- `latestCid` `latest_cid` varchar(255) nullable (`:42-43`)
+- `sequenceNumber` `sequence_number` bigint default 0, string-typed (`:49-50`)
+- **`signedRecord` `signed_record` bytea nullable** (`:56-57`)
+- **`encryptedIpnsPrivateKey` `encrypted_ipns_private_key` bytea nullable** (`:64-65`)
+- **`keyEpoch` `key_epoch` int nullable** (`:72-73`)
+- `isRoot` `is_root` boolean default false (`:78-79`)
+- **`tombstonedAt` `tombstoned_at` timestamptz nullable** — 410 Gone on publish (`:86-87`)
+- **`generation` `generation` bigint default 0, string-typed** — bumps on key rotation (`:94-95`)
+- `createdAt`/`updatedAt` (`:97-101`)
+
+**`ipns_republish_schedule`** — `/Users/myankelev/Code/random/cipher-box/apps/api/src/republish/republish-schedule.entity.ts` (entity `IpnsRepublishSchedule`, `@Unique(['userId','ipnsName'])` `:15`, `@Index(['status','nextRepublishAt'])` `:16`):
+- `id` uuid PK (`:18-19`)
+- `userId` `user_id` uuid indexed (`:21-23`)
+- `ipnsName` `ipns_name` varchar(255) (`:32-33`)
+- **`encryptedIpnsKey` `encrypted_ipns_key` bytea — DUPLICATE of records' `encrypted_ipns_private_key`** (`:39-40`)
+- **`keyEpoch` `key_epoch` int — DUPLICATE** (`:46-47`)
+- **`latestCid` `latest_cid` varchar(255) — DUPLICATE; goes stale on content write** (`:52-53`)
+- **`sequenceNumber` `sequence_number` bigint default 0, string — DUPLICATE** (`:59-60`)
+- `nextRepublishAt` `next_republish_at` timestamp (`:65-66`)
+- `lastRepublishAt` `last_republish_at` timestamp nullable (`:71-72`)
+- `consecutiveFailures` `consecutive_failures` int default 0 (`:78-79`)
+- `status` varchar(20) default 'active' — `active`/`retrying`/`stale` (`:87-88`)
+- `lastError` `last_error` text nullable (`:94-95`)
+- `createdAt`/`updatedAt` (`:97-101`)
+
+The four duplicated columns (`encryptedIpnsKey`, `keyEpoch`, `latestCid`, `sequenceNumber`) are the §6.3 "dual-source record state" the rewrite collapses into `ipns_records`. Note also the entity file is still named `republish-schedule.entity.ts`/table `ipns_republish_schedule`, and the spec (§7.1 `:578`, `:581`) plans to rename `folder_ipns` → `ipns_records` and drop a `public_key` column — the current entity already uses `ipns_records` and has **no** `public_key` column, so that rename appears partly done already.
+
+## 4. Spec doc — TEE lease-renewer extracts
+
+File: `/Users/myankelev/Code/random/cipher-box/.planning/design/2026-06-26-sharing-read-keychaining-design.md`.
+
+**Test 12 (§7.3), verbatim (`:609`):**
+&gt; 12. **Republisher stale-CID.** Republisher re-signs mid-rotation → assert the revoked CID is never re-signed and never served; assert republish does **not** increment the sequence.
+
+**Other TEE-relevant tests in the §7.3 list:**
+- `:614` — **17. Lease-renewal racing a forward publish.** Renewal never regresses `latestCid`/`sequenceNumber`.
+- `:615` — **18. TEE name↔key binding.** Swapped wrapped key / wrong-name slot → enclave refuses to emit.
+- `:616` — **19. TEE epoch self-derivation.** Attacker-supplied `currentEpoch` ignored; re-wrap only targets an enclave-valid epoch.
+- `:617` — **20. Tombstoned name.** Writes to a tombstoned name rejected; resolve returns the tombstone, not stale content. (TEE-adjacent: depends on TEE unenroll + publish-gate.)
+- (Context: `:613` test 16 concurrent forward publishes, `:610` test 13 within-generation rollback are CAS-adjacent.)
+
+**TEE-relevant section numbers + one-line summaries:**
+- **§4.6 (`:399-413`)** — The 6-hour republisher is NOT orthogonal; a stale-snapshot re-sign of a pre-rotation CID at a forward sequence is a read-revocation bypass; fix deferred to §6.
+- **§4.7 (`:415`)** — TEE only renews record leases (write plane), never decrypts read content.
+- **§5.5 (`:485-491`)** — Tombstone rotated-out names; TEE-unenroll = *remove from the republish batch* (schedule-row delete is "not sufficient"); the EOL-only renewal CAS must also reject tombstoned names.
+- **§6.2 (`:507-511`)** — Sequence advances iff CID changes; republish never increments. Names the live offender: `apps/tee-worker/src/routes/republish.ts:79`'s `+ 1n` must move to the no-increment path; increment policy moves out of the enclave into the relay.
+- **§6.3 (`:513-517`)** — Collapse the dual-source state; make `ipns_records` the sole signing-input source; reduce schedule to scheduling metadata. Cites `republish-schedule.entity.ts:39-60` and `republish.service.ts:101-102`.
+- **§6.4 (`:519-527`)** — **The TEE is a record-lease-renewer, not a signer of supplied scalars.** New contract: relay sends the marshaled existing `signedRecord`; TEE parses + verifies signature + re-emits same CID + same sequence, later EOL only; cannot originate/repoint a CID.
+- **§6.6 (`:541-551`)** — Atomic publish CAS; idempotent/renewal write guarded identically (`WHERE sequenceNumber = :loaded`) so an EOL-only renewal can never regress `latestCid`/`sequenceNumber`.
+- **§6.7 (`:553-559`)** — Three enclave bindings: (1) internal epoch derivation from the TEE's own clock + schedule (never relay scalars), re-wrap targets enclave-enumerated; (2) name↔key binding `publicKeyFromIpnsName(ipnsName) == pubkey(decryptedKey) == record.pubkey`; (3) migration durability (client re-enroll recovery, or refuse to renew keys older than `currentEpoch − 1`).
+- **§6.8 (`:561-565`)** — Residuals: compromised enclave / leaked epoch key = total loss (bounded only by Phala attestation + epoch-rotation cadence); equal-seq EOL selection is freshness-only.
+- **§7.1 (`:575`, `:578`, `:581`)** — Blast radius: `apps/tee-worker` + `packages/core/src/ipns` = "TEE enclave contract rewrite" (High); `apps/api` collapses the schedule's duplicated columns + atomic CAS + tombstone wiring.
+- **§7.2 step 6 (`:590`)** — Cutover: `apps/tee-worker` lease-renewer contract (verify marshaled record, extend EOL, no increment) + internal epoch derivation + name↔key binding; round-trip the TEE/republish E2E.
+- **§9.1 (`:642`)** — Decision summary line re-stating: republish never increments; TEE is a lease-renewer; atomic publish CAS; tombstone rotated-out names.
+
+Related companion file: `/Users/myankelev/Code/random/cipher-box/.planning/design/2026-06-26-sharing-flows-walkthrough.md` (not required for the above, but it is the walkthrough sibling of this design).
+
+## 5. Tests — how TEE republish is exercised today
+
+**TEE worker unit tests** (`/Users/myankelev/Code/random/cipher-box/apps/tee-worker/src/__tests__/`): `republish.test.ts`, `key-manager.test.ts`, `tee-keys.test.ts`, `auth.test.ts`, `ssrf-validation.test.ts`. They run under **Vitest** against the Express app in-process (`republish.test.ts:34-49` spins up `app.listen(0)` and hits it over `node:http`). They use **real ECIES crypto** (`wrapKey` from `@cipherbox/crypto`, real `getKeypair` in `TEE_MODE=simulator`) but **mock the IPNS signer** (`republish.test.ts:20-22`, `vi.mock('../services/ipns-signer.js')`), so the actual record marshaling/EOL/signature is not exercised here. Coverage is batch processing, epoch-upgrade re-encryption, validation, base64 — not name binding, not tombstones.
+
+**Relay-side orchestration tests**: `/Users/myankelev/Code/random/cipher-box/apps/api/src/republish/republish.service.spec.ts` and `republish.processor.spec.ts` run under **Jest** and fully **mock `TeeService.republish`** (`republish.service.spec.ts:70-75`, `:18`) plus the delegated-routing client and repos — there is no real HTTP call to the TEE worker in these.
+
+**E2E / round-trip**: there is **no dedicated tee-worker e2e** — a grep of `/tests` and `apps/api/test` for `tee-worker`/`/republish`/`TEE_WORKER_URL` finds nothing. The closest real client→API IPNS round-trips are in `/Users/myankelev/Code/random/cipher-box/tests/sdk-e2e/` (e.g. `suites/rotation-crash-safety.test.ts`, `suites/ipns-publish-gate.test.ts`) and `tests/desktop-e2e/` (`scripts/test-conflict-detection.{sh,ps1}`, `scripts/bump-ipns-sequence.ts`) — these exercise the client publish/CAS path, not the TEE signing path. (§7.3 test 1 at spec `:598` explicitly notes `tests/sdk-e2e` is "the only real client→API IPNS publish/resolve round-trip" and must be extended; step 6 at `:590` calls for a TEE/republish E2E that does not yet exist.)
+
+**Runtime mode / docker**:
+- Simulator mode is the default and the only non-prod path (`tee-keys.ts:33` `TEE_MODE || 'simulator'`; production guard at `:35-43`).
+- **Local dev `docker/docker-compose.yml` does NOT run the tee-worker** — its services are postgres, ipfs, redis, someguy, `mock-ipns-routing` (the `:3001` mapping at `docker-compose.yml:104-120` belongs to `mock-ipns-routing`, not the TEE).
+- The tee-worker runs in **staging** via `docker/docker-compose.staging.yml:96-115` with `TEE_MODE: simulator`, `PORT: 3001`.
+- The tee-worker's own `apps/tee-worker/docker-compose.yml` is the **production CVM** config (`TEE_MODE=cvm`, mounts `/var/run/dstack.sock`); `apps/tee-worker/docker-compose.phala.yml` is the Phala deployment variant.
+
+So today the TEE republish is exercised by in-process Vitest unit tests (signer mocked) and by mocked relay specs; there is no full client→relay→TEE→resolve E2E, and local docker dev does not even start the worker.</result>
+<usage><subagent_tokens>76470</subagent_tokens><tool_uses>24</tool_uses><duration_ms>171606</duration_ms></usage>
+</task-notification>
+
+---
+
+lock in the sdk + docker e2e test.

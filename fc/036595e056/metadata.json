@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "fc036595e056",
+  "strategy": "manual-commit",
+  "branch": "feat/tee-lease-renewer-contract-rewrite",
+  "checkpoints_count": 3,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/fc/036595e056/0/metadata.json",
+      "transcript": "/fc/036595e056/0/full.jsonl",
+      "content_hash": "/fc/036595e056/0/content_hash.txt",
+      "prompt": "/fc/036595e056/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 11607,
+    "cache_creation_tokens": 163804,
+    "cache_read_tokens": 2722750,
+    "output_tokens": 59464,
+    "api_call_count": 24
+  }
+}
