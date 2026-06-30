@@ -304,11 +304,9 @@ describe('bin operations', () => {
     });
 
     it('aborts without folder publish when share revocation fails', async () => {
-      // deleteFromFolder must still be set up for the mock to not error
-      vi.mocked(sdkCore.deleteFromFolder).mockReturnValue({
-        updatedChildren: [],
-        removedItem: fileRef,
-      });
+      // Self-contained: set up all upstream mocks so the flow reaches revocation
+      // independently of test execution order.
+      setupAddToBinMocks();
 
       const folderTree = new FolderTree();
       folderTree.set('folder-ipns', {

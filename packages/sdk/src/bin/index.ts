@@ -266,13 +266,16 @@ export async function loadBin(params: { binCtx: BinOperationContext }): Promise<
  * Removes the item from the folder metadata (via deleteFromFolder),
  * creates a BinEntry, appends to bin metadata, and publishes both.
  *
- * Ordering is fail-closed and CRITICAL (locked design):
- *   walk subtree → revoke shares for every collected ipnsName → mutate folder +
- *   publish → build bin entry (with captured CIDs) → publish bin.
+ * Ordering is fail-closed and CRITICAL:
+ *   walk subtree → revoke shares for every collected ipnsName → build bin entry →
+ *   publish bin → mutate folder + publish.
  * Revoke MUST precede the destructive folder mutation: the only acceptable
  * residual bad state is "shares revoked but item still present" (recoverable);
  * "item deleted but shares still active" would orphan sharees on the eventual
  * empty-bin unpin and is NEVER allowed.
+ * Bin save MUST precede the destructive folder publish: if bin save fails, the
+ * item remains in the folder and is recoverable. The converse (folder publish
+ * then bin save fails) would orphan the item with no restore key.
  *
  * The subtree walk (folder deletes) is fail-closed on structure: if a descendant
  * folder's metadata can't be enumerated, the whole delete aborts BEFORE the
@@ -338,20 +341,7 @@ export async function addToBin(params: {
     childId,
   });
 
-  // 8. Publish updated folder (destructive — must succeed after revoke)
-  await sdkCore.updateFolderMetadataAndPublish({
-    children: updatedChildren,
-    folderKey: folderState.folderKey,
-    ipnsPrivateKey: folderState.ipnsKeypair.privateKey,
-    ipnsPublicKey: folderState.ipnsKeypair.publicKey,
-    ipnsName: folderIpnsName,
-    sequenceNumber: folderState.sequenceNumber,
-    ctx: binCtx.ctx,
-    nodeId: folderState.nodeId,
-    nodeGeneration: folderState.nodeGeneration,
-  });
-
-  // 9. Build BinEntry with captured nodeReadKey and nodeIpnsName for restore
+  // 8. Build BinEntry with captured nodeReadKey and nodeIpnsName for restore
   const newEntry: BinEntry = {
     id: crypto.randomUUID(),
     itemType: publishedNode.kind === 'folder' ? 'folder' : 'file',
@@ -373,7 +363,9 @@ export async function addToBin(params: {
     },
   };
 
-  // 10. Publish updated bin metadata
+  // 9. Persist bin metadata BEFORE the destructive source-folder publish.
+  //    If the bin save fails we have not yet deleted the item from the folder,
+  //    so the item remains visible and fully recoverable (fail-safe ordering).
   const newBinSeq = binState.sequenceNumber + 1;
   const newEntries = [...binState.entries, newEntry];
   const metadata: RecycleBinMetadata = {
@@ -382,6 +374,19 @@ export async function addToBin(params: {
     entries: newEntries,
   };
   await saveBinMetadata({ metadata, binCtx });
+
+  // 10. Publish updated folder (destructive — must happen after the restore key is durable)
+  await sdkCore.updateFolderMetadataAndPublish({
+    children: updatedChildren,
+    folderKey: folderState.folderKey,
+    ipnsPrivateKey: folderState.ipnsKeypair.privateKey,
+    ipnsPublicKey: folderState.ipnsKeypair.publicKey,
+    ipnsName: folderIpnsName,
+    sequenceNumber: folderState.sequenceNumber,
+    ctx: binCtx.ctx,
+    nodeId: folderState.nodeId,
+    nodeGeneration: folderState.nodeGeneration,
+  });
 
   return {
     removedItem,
@@ -426,10 +431,19 @@ export async function restoreFromBin(params: {
   const targetFolder = folderTree.get(targetFolderIpnsName);
   if (!targetFolder) throw new Error('Folder not loaded');
 
+  // 3b. Fail closed on missing re-link anchors — defaulting to '' or 0 would bind
+  //     sealChildReadKey to the wrong AAD and produce an unrestorable sealed key.
+  if (!entry.nodeIpnsName) {
+    throw new Error(`nodeIpnsName is missing on bin entry ${entryId} — cannot restore`);
+  }
+  if (!entry.nodeRef?.id || !entry.nodeRef.kind || entry.nodeRef.generation == null) {
+    throw new Error(`nodeRef is missing or incomplete on bin entry ${entryId} — cannot restore`);
+  }
+
   const nodeRef = entry.nodeRef;
-  const generation = nodeRef?.generation ?? 0;
-  const nodeId = nodeRef?.id ?? '';
-  const nodeKind = nodeRef?.kind ?? 'file';
+  const generation = nodeRef.generation;
+  const nodeId = nodeRef.id;
+  const nodeKind = nodeRef.kind;
 
   // 4. Re-seal the node's own readKey under the destination parent's folderKey
   //    (pure re-link: sealChildReadKey role 0x02 — no content re-encryption)
@@ -444,7 +458,7 @@ export async function restoreFromBin(params: {
   // 5. Build the restored SealedChildRef
   const restoredItem: SealedChildRef = {
     name: entry.name,
-    ipnsName: entry.nodeIpnsName ?? '',
+    ipnsName: entry.nodeIpnsName,
     generation,
     versionFloor: 0n,
     readKeySealed,

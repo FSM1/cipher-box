@@ -294,6 +294,15 @@ export async function claimInvite(params: {
       `claimInvite: rootGeneration must be a non-negative integer, got ${params.rootGeneration}`
     );
   }
+  if (params.inviteToken.trim().length === 0) {
+    throw new Error('claimInvite: inviteToken must be non-empty');
+  }
+  if (params.rootNodeId.trim().length === 0) {
+    throw new Error('claimInvite: rootNodeId must be non-empty');
+  }
+  if (params.rootIpnsName.trim().length === 0) {
+    throw new Error('claimInvite: rootIpnsName must be non-empty');
+  }
 
   // Step 1: Fetch invite data via the injected transport callback (D-02).
   const inviteData = await params.getInviteDataFn(params.inviteToken);
