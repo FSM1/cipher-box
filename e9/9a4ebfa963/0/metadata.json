@@ -1,0 +1,157 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "e99a4ebfa963",
+  "session_id": "13524ecf-de1b-47de-bf59-e080a2ed8848",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-30T12:27:46.501648Z",
+  "branch": "feat/sdk-write-chain-bin-re-link-and-invite-claim",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "e04ccc7c5d76",
+  "token_usage": {
+    "input_tokens": 25793,
+    "cache_creation_tokens": 1128357,
+    "cache_read_tokens": 72328935,
+    "output_tokens": 364265,
+    "api_call_count": 194
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01Q4HbiupYnfNAzfjnRp7yXi",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "e04ccc7c5d76",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 547,
+        "end": 548,
+        "entry_ids": [
+          "1f2ceacf-3b90-42bb-a350-c79edc9e549f"
+        ],
+        "tool_use_id": "toolu_01Q4HbiupYnfNAzfjnRp7yXi"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Q4HbiupYnfNAzfjnRp7yXi"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ship-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 19
+  },
+  "summary": {
+    "intent": "Execute all 7 plans in Phase 65 (SDK write-chain, bin re-link, and invite claim) using wave-based parallel worktree execution, then run the full ship-phase loop autonomously to get a reviewed, green PR ready to merge.",
+    "outcome": "All 7 plans executed across 4 waves with all gates green; PR #583 opened at final SHA 92ee561f5 (after addressing greptile's serialization bug) with all CI green, 20 original review threads resolved, and a real runtime bug in bin serialization caught and fixed by greptile post-ship.",
+    "learnings": {
+      "repo": [
+        "Write plane is keyed by node UUID (childId), read plane by IPNS name — shared-write ops that filter children must use the right key per plane or silently skip/corrupt entries (the deleteFromSharedFolder bug)",
+        "encryptBinMetadata/decryptBinMetadata are documented to handle Uint8Array ↔ hex conversion but didn't — Uint8Array fields JSON.stringify to {\"0\":..} object form, making restoreFromBin throw at sealChildReadKey at runtime; fixed by hex-encoding at the encrypt seam",
+        "The sdk-e2e TEST_LOGIN_SECRET is 'e2e-test-secret-ci-only' (apps/api/.env), not the default 'e2e-test-secret-do-not-use-in-production' — mismatch causes 401 on first live run",
+        "pnpm typecheck runs the full build chain (crypto→core→api-client→sdk-core→sdk→web→scripts) and catches cross-package consumer breakage that per-plan worktree tests miss",
+        "rotateWriteFromNode tombstone ordering bug: child tombstones were being fired before the parent was re-pointed; fix collects pendingTombstones[] in rotateWriteSubtree and fires them only after the full subtree publishes",
+        "publishNodeFn seam in client.ts must use addToIpfs directly for IPNS node metadata (not pinWithMode) because BYO/external pinning mode skips cipherbox pinning, which would break IPNS resolution; only encrypted content goes through pinWithMode",
+        "Pre-existing sdk-e2e type errors exist in other suites (batch-upload, ipns-consistency, file-operations) from a prior metadata refactor removing FolderChild/FilePointer/SealedChildRef.id/.type — not phase-65 regressions",
+        "rotateWriteFromNode was added to rotation/index.ts by 65-06 but not re-exported from the sdk-core top-level barrel (src/index.ts) — caught when the e2e suite couldn't import it; the 65-07 executor added the 2-line barrel fix as a Rule-3 deviation",
+        "husky pre-commit hook is slow enough (45+ seconds) to cause commands to timeout at exit 143 while the commit actually lands — always verify with git log --oneline -1 before retrying",
+        "gh pr edit is broken on this repo (Projects-classic GraphQL) — patch PR body via 'gh api -X PATCH repos/FSM1/cipher-box/pulls/<N> -F body=@file' instead"
+      ],
+      "code": [
+        {
+          "path": "packages/core/src/bin/encrypt.ts",
+          "line": 53,
+          "end_line": 53,
+          "finding": "fromBinWireForm decoded hex without length validation — a wrong-length hex still yielded a Uint8Array reaching key-sealing; added 32-byte length check after decode"
+        },
+        {
+          "path": "packages/core/src/bin/encrypt.ts",
+          "line": 1,
+          "end_line": 60,
+          "finding": "encryptBinMetadata/decryptBinMetadata did plain JSON.stringify/parse, serializing Uint8Array nodeReadKey to {\"0\":..} object form; fixed to hex-encode on write and hex-decode+validate on read using bytesToHex/hexToBytes from @cipherbox/crypto"
+        },
+        {
+          "path": "packages/sdk/src/share/shared-write.ts",
+          "line": 238,
+          "end_line": 487,
+          "finding": "CannotWriteUntilRefetchError thrown at lines 238, 348, 487 when publishNodeFn returns {tombstoned: true} — proves WRITE-03; also deleteFromSharedFolder was filtering write-body by ipnsName (IPNS string) instead of childId (UUID), so the WriteChildRef stale entry was never removed and would crash rotateWriteFromNode"
+        },
+        {
+          "path": "packages/sdk-core/src/rotation/engine.ts",
+          "line": 1221,
+          "end_line": 1390,
+          "finding": "rotateWriteSubtree collected pendingTombstones[] instead of firing inline; rotateWriteFromNode fires them after full subtree is published (child-first ordering, parent re-pointed first). newKeypair.privateKey zeroed at line 1389, rootResult.newWriteKey zeroed at 1390 after grants loop"
+        },
+        {
+          "path": "packages/sdk/src/share/context.ts",
+          "line": 43,
+          "end_line": 43,
+          "finding": "buildSharedWriteContext still used old folderKey/ipnsPrivateKey shape after 65-04 reshaped SharedWriteContext to readKey/writeKey/publishedNode/publishNodeFn/addToIpfsFn — caught by post-merge typecheck, not by the per-plan worktree tests"
+        },
+        {
+          "path": "apps/web/src/hooks/shared-folder-projection.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "Added optional writeKey?/publishedNode? to SeedSharedFolderArgs with PLACEHOLDER_PUBLISHED_NODE sentinel so existing web callers typecheck without Phase-68 wiring changes"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 1735,
+          "end_line": 1756,
+          "finding": "buildSharedWriteContextFromState wires addToIpfsFn via this.sdkCore.addToIpfs (not pinWithMode) for published node metadata — metadata must stay on cipherbox IPFS for IPNS resolution; only content uses pinWithMode for BYO pinning support"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 1854,
+          "end_line": 1854,
+          "finding": "deleteFromSharedFolder is a public boundary — omitting childNodeId would remove the read-body entry but leave WriteChildRef stale in the write-body; added guard to throw if childNodeId is missing"
+        }
+      ],
+      "workflow": [
+        "Post-merge build gate (full typecheck) is essential after parallel worktree waves — per-plan worktrees build only their package and miss consumer breakage across the monorepo",
+        "Mock-heavy test suites hide real serialization bugs — add unmocked integration tests at the layer where serialization happens, not just at the SDK mock boundary",
+        "CodeRabbit CLI review and PR-level review are complementary passes — the CLI caught 23 issues before the PR; the PR review caught 20 more (including the critical tombstone ordering bug) after reviewing the fixes",
+        "greptile's confidence score is a meaningful signal — 3/5 indicated a specific, verifiable concern (the Uint8Array serialization bug); worth investigating the named code paths rather than dismissing",
+        "When a worktree agent reports a 'pre-existing' test failure due to an unbuilt dependency, verify it's genuinely pre-existing before accepting the result — some failures require building the full chain",
+        "The cleanup-wave merge helper validates branch identity and base SHA before removing each worktree, catching base-mismatch issues before destructive removal",
+        "For single-plan waves, running directly on the main tree (no worktree) saves the pnpm install overhead with zero parallelism benefit lost",
+        "Re-run the live e2e gate after any change to rotation engine or tombstone ordering — mocked unit tests cannot catch publish-sequence bugs against the real API",
+        "When the release bot does NOT push chore(release) after Release Preview passes, the version bump may self-heal via the preview workflow's recompute — check before merge but don't block"
+      ]
+    },
+    "friction": [
+      "husky pre-commit hook timed out multiple commits (exit 143) requiring git log verification each time to confirm the commit actually landed",
+      "SDK_E2E_SECRET mismatch caused 401 on first live D-04 run — had to discover the actual secret from apps/api/.env",
+      "65-04's SharedWriteContext reshape under-scoped its consumer surface (context.ts, client.ts, SharedFolderState, web bridge) requiring a separate integration fix agent after the post-merge gate caught the break",
+      "CodeRabbit CLI and PR-level review together required two parallel fix waves (6 worktree agents total) before threads were clean",
+      "SCRATCH shell variable not exported to Node.js environment when using $() subshell — required inline path substitution instead of variable reference",
+      "gh pr edit blocked on Projects-classic GraphQL — required gh api -X PATCH workaround for PR body updates",
+      "Background poll exited 1 due to a transient GitHub API blip, creating a false alarm requiring manual check re-fetch",
+      "pnpm typecheck does not cover the sdk-e2e package, so pre-existing type errors there required manual investigation to confirm they were not phase-65 regressions",
+      "greptile's bin serialization bug was found only after the PR was opened and CI was green — unmocked core round-trip test should have been part of the plan's acceptance criteria"
+    ],
+    "open_items": [
+      "Phase 68: wire real publishedNode and writeKey values into SharedFolderState and web shared-folder-projection.ts (currently PLACEHOLDER_PUBLISHED_NODE sentinel); also make resealAndPublishParent return the updated parent envelope for SDK callers (PR threads #9/#10/#15/#17, todo: phase68-shared-write-context-publishednode-wiring.md)",
+      "Phase 66: bin-delete pin-leak — deleteFromFolder does not revoke pinned content/version CIDs (442 MB leaked); fix requires apps/api/src/shares/* which was D-02-prohibited in phase 65 (todo: 2026-06-23-bin-delete-and-empty-bin-leak-content-and-version-cid-pins.md)",
+      "Phase 66: WRITE-04 live publish-gate — 403/410 rejection of tombstoned IPNS names is currently a D-02 mock seam; the live API cutover is a Phase 66 success criterion",
+      "Test debt: e2e seed index-stability — capturedKeys[0/2] for write-chain-rotation seed identification is brittle if ECIES wrapping emits extra 32-byte randoms; fix requires a spy on generateEd25519Keypair or live IPNS probing (todo: write-chain-e2e-seed-index-stability.md)",
+      "client.ts subtree-IPNS-collect stub at lines 205/216 — non-fatal 'not implemented — phase 65 (bin re-link: subtree IPNS collect)' log; out of phase-65 scope",
+      "Pre-existing sdk-e2e type errors in batch-upload, ipns-consistency, file-operations suites from prior metadata refactor removing FolderChild/FilePointer/SealedChildRef — tracked by existing todos (remigrate-filepointer-era-e2e-helper-scripts, upload-batch-test-mock-type-drift)",
+      "32-byte input validation on sealChildWriteKey/unsealChildWriteKey (role 0x04) skipped to maintain verbatim parity with the 0x02 twin which has no guards — a broader primitives-layer validation pass would address both twins consistently"
+    ]
+  }
+}
