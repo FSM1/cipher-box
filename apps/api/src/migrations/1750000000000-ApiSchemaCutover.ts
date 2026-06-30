@@ -166,13 +166,15 @@ export class ApiSchemaCutover1750000000000 implements MigrationInterface {
       )
     `);
 
-    await queryRunner.query(`CREATE INDEX "IDX_ipns_records_user_id" ON "ipns_records" ("user_id")`);
+    await queryRunner.query(
+      `CREATE INDEX "IDX_ipns_records_user_id" ON "ipns_records" ("user_id")`
+    );
   }
 
   public async down(_queryRunner: QueryRunner): Promise<void> {
     throw new Error(
       'down() not implemented: greenfield drop-recreate migration (D-01). ' +
-        'No rollback target — staging DB is wiped on each deploy.',
+        'No rollback target — staging DB is wiped on each deploy.'
     );
   }
 }
