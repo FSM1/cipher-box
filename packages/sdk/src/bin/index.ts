@@ -464,9 +464,15 @@ export async function restoreFromBin(params: {
     readKeySealed,
   };
 
-  // 6. Add restored ref to target folder and publish
+  // 6. Add restored ref to target folder and publish.
+  //    Idempotent: if the item is already present by ipnsName (retry after saveBinMetadata
+  //    failure), reuse the existing children list to avoid duplicating the child ref.
+  const alreadyInFolder = targetFolder.children.some((c) => c.ipnsName === entry.nodeIpnsName);
+  const childrenForPublish = alreadyInFolder
+    ? targetFolder.children
+    : [...targetFolder.children, restoredItem];
   await sdkCore.updateFolderMetadataAndPublish({
-    children: [...targetFolder.children, restoredItem],
+    children: childrenForPublish,
     folderKey: targetFolder.folderKey,
     ipnsPrivateKey: targetFolder.ipnsKeypair.privateKey,
     ipnsPublicKey: targetFolder.ipnsKeypair.publicKey,

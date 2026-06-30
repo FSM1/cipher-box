@@ -535,6 +535,49 @@ describe('bin operations', () => {
       ).rejects.toThrow(/nodeReadKey/);
     });
 
+    it('is idempotent on retry — does not duplicate restored child if already present in target folder', async () => {
+      // Simulates: folder publish succeeded, then saveBinMetadata failed.
+      // On retry the item is already in the target folder; restore must NOT append a duplicate.
+      setupRestoreMocks();
+      const fakeSealedKey = 'c2VhbGVkLWtleS1iYXNlNjQ=';
+      const coreModule = await import('@cipherbox/core');
+      const sealSpy = vi.spyOn(coreModule, 'sealChildReadKey').mockResolvedValue(fakeSealedKey);
+
+      const existingRef: import('@cipherbox/core').SealedChildRef = {
+        name: 'doc.txt',
+        ipnsName: 'k51child', // same ipnsName as entry.nodeIpnsName
+        generation: 0,
+        versionFloor: 0n,
+        readKeySealed: 'already-sealed-key',
+      };
+
+      const folderTree = new FolderTree();
+      folderTree.set('target-ipns', {
+        ...PLACEHOLDER_TARGET,
+        children: [existingRef], // item already in folder
+      });
+
+      const result = await restoreFromBin({
+        entryId: 'e1',
+        targetFolderIpnsName: 'target-ipns',
+        folderTree,
+        binState: makeBasicBinState(),
+        binCtx,
+      });
+
+      // Publish was still called (may need to complete the CAS / sequence bump)
+      expect(sdkCore.updateFolderMetadataAndPublish).toHaveBeenCalledOnce();
+      // Children passed to publish contain exactly ONE entry for this ipnsName (no duplicate)
+      const [publishCall] = vi.mocked(sdkCore.updateFolderMetadataAndPublish).mock.calls;
+      const published = publishCall[0].children;
+      expect(published.filter((c) => c.ipnsName === 'k51child')).toHaveLength(1);
+
+      // Bin cleanup still ran — entry removed from bin state
+      expect(result.updatedBinState.entries).toHaveLength(0);
+
+      sealSpy.mockRestore();
+    });
+
     // Legacy placeholder block kept for reference — these tests remain
     it('throws when bin entry not found', async () => {
       const folderTree = new FolderTree();
