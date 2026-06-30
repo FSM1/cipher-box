@@ -1,0 +1,127 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "d06d7033c863",
+  "session_id": "15792aca-8a5d-46a6-aafa-f0b7991dd37b",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-30T17:09:17.813802Z",
+  "branch": "feat/api-schema-cutover-publish-gate-and-tombstone",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "ff131bc035c8",
+  "token_usage": {
+    "input_tokens": 15224,
+    "cache_creation_tokens": 448458,
+    "cache_read_tokens": 20311898,
+    "output_tokens": 177179,
+    "api_call_count": 91
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-execute-phase-2026-06-30T15:00:11.889631Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "cf38f50fcc68",
+      "timestamp": "2026-06-30T15:00:11.889631Z",
+      "native": {
+        "command": "/gsd-execute-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 10
+  },
+  "summary": {
+    "intent": "Execute all 9 plans in Phase 66 (API Schema Cutover, Publish Gate & Tombstone) using wave-based parallel subagents across 5 waves, validating TEE-04/05/07, DATA-01/02/03/04, and WRITE-04 requirements.",
+    "outcome": "8/9 plans fully completed with green API build and full monorepo typecheck. Migration applied to live DB and 4/5 e2e proof tests pass; Test 15 (TEE-05 seqFloor serve path) exposed a genuine gap where the at-floor resolve path can't produce a client-verifiable record.",
+    "learnings": {
+      "repo": [
+        "worktree.baseRef is set to 'head' — worktrees fork from live HEAD, so inter-wave merges don't cause base-mismatch halts",
+        "The deletion guard in worktree-safety.cjs is unconditional with no override flag; any branch containing file deletions requires a manual merge",
+        "api:generate's trailing lint:fix runs eslint repo-wide, so it exits non-zero when web/sdk-core are in a known-broken intermediate state (expected between waves)",
+        "apps/api/.env sets DB_DATABASE=cipherbox_test — the test database name is NOT 'cipherbox'",
+        "users.publicKey stores the 130-char uncompressed secp256k1 auth key (04... prefix), not a shorter or compressed form",
+        "TEST_LOGIN_SECRET in apps/api/.env is 'e2e-test-secret-ci-only', not the sdk-e2e harness default 'e2e-test-secret-do-not-use-in-production'",
+        "TypeORM 0.3.28 has a duplicate-row false no-op bug: a duplicate WidenShareKeyType1743100000000 row in the migrations table caused it to report 'no pending migrations' despite ApiSchemaCutover never having run",
+        "The sdk-e2e test:single script uses --testPathPattern (a jest flag) which was removed in vitest 3.x; it is silently broken",
+        "API seqFloor-serve path (resolve) returns the delegated-routing network record, which per design is stripped of signature fields — the strict sdk-core client always rejects it"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/app.module.ts",
+          "line": 32,
+          "end_line": 98,
+          "finding": "Orphaned ShareKey import and entity registration — not cleaned up by 66-01 (which handled IpnsRecord rename) or 66-03 (which deleted the entity). Required an orchestrator-level post-merge fix."
+        },
+        {
+          "path": "apps/api/scripts/generate-openapi.ts",
+          "line": 1,
+          "end_line": 1,
+          "finding": "Also imported the deleted ShareKey entity; a second orphan from 66-03's deletion not covered by any plan's files_modified list."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 587,
+          "end_line": 628,
+          "finding": "seqFloor resolve path: when signedRecord IS NULL and networkSeq >= storedSeq, serves the delegated-routing network record. The code's own comment at 627-628 acknowledges these records 'do NOT carry the signature fields a strict client needs to verify', meaning TEE-05's availability direction (at-floor → serve) silently fails closed on every sdk-core client."
+        },
+        {
+          "path": "tests/sdk-e2e/src/suites/ipns-publish-gate.test.ts",
+          "line": 1,
+          "end_line": 1,
+          "finding": "psqlExec/psqlQueryOne helpers hardcoded '-d cipherbox' instead of the API's actual test database 'cipherbox_test', causing Test 15 precondition seeding to write to the wrong DB and the user-lookup to return empty."
+        }
+      ],
+      "workflow": [
+        "When a post-merge build is intentionally red (intermediate type-foundation state), run a targeted package build and extract unique error file paths to confirm errors are confined to the next wave's declared files_modified scope — don't run the full monorepo build",
+        "Stale unit tests after a behavioral rewrite (mock lacks new query builder methods) are best fixed by a focused sub-agent with an explicit 'production code is authoritative' guardrail rather than inline orchestrator edits",
+        "D-08 pattern: subagents must not run concurrent e2e suites to avoid RAM starvation; the orchestrator runs them centrally after all wave executors complete",
+        "For vitest-based e2e suites, invoke vitest directly with a positional pattern (e.g., vitest ipns-publish-gate) rather than using package.json scripts that may have stale jest flags",
+        "When applying migrations fails via TypeORM, applying DDL directly in a psql BEGIN...COMMIT transaction and inserting the migration record manually is a valid workaround — but the duplicate row that triggered the false no-op should be cleaned up separately"
+      ]
+    },
+    "friction": [
+      "Worktree deletion guard has no override flag, forcing manual merge for any wave where plans delete files (happened in both Wave 1 and Wave 2)",
+      "Two orphaned ShareKey references (app.module.ts, generate-openapi.ts) were missed by all plans — discovered only during post-merge build gates, requiring ad-hoc orchestrator fixes",
+      "sdk-e2e test:single script is silently broken (jest flag removed in vitest 3.x) with no error message indicating the cause",
+      "e2e test-login secret mismatch between harness default and API .env required debugging a 401 mid-gate-run",
+      "TypeORM duplicate migration row caused false 'no pending migrations' report, requiring DDL applied directly via psql — obscure failure mode with no obvious diagnostic in the TypeORM output",
+      "66-09's psql helpers hardcoded the wrong database name, requiring an orchestrator-level diagnosis and fix to unblock Test 15",
+      "28 unit tests in ipns.service.spec became stale after 66-02 replaced findOne/save with createQueryBuilder atomic UPDATE — required a separate sub-agent dispatch to realign them"
+    ],
+    "open_items": [
+      "TEE-05 genuine gap: the seqFloor-serve path at apps/api/src/ipns/ipns.service.ts:587-628 returns a network record without signature fields; the strict sdk-core client always fails closed on shared-folder at-floor resolves. Design spec §6.5 says it should serve — this needs a follow-up fix before Phase 66 can be fully verified.",
+      "Test 15 (seqFloor resolve case-split) remains failing pending the TEE-05 gap fix; the full 5/5 e2e proof suite is not yet achieved",
+      "Duplicate WidenShareKeyType1743100000000 row in the migrations table should be cleaned up to prevent future TypeORM false no-op reports",
+      "Web Phase 68: 66-08 placed compile-gate throw-stubs in share.service.ts, invite.service.ts, and ShareDialog.tsx — real web share/invite rework explicitly deferred",
+      "ROT-07 (durable high-water mark via IndexedDB/journal for generation tracking): explicitly deferred to Phase 68, not in Phase 66 scope"
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
