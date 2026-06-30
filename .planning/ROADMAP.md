@@ -65,7 +65,7 @@
 - [x] **Phase 63: Read-Chain Navigation and Rotation Core** — Read key-chain walk, `rotateReadFromNode`/`rotateOne` engine, scope-exit predicate, and invite re-wrap in `packages/sdk-core` (completed 2026-06-29)
 - [x] **Phase 64: Rotation Soundness — Revocation Guarantees** — CRIT-1 content-key rotation, HIGH-3 inner grant re-mint, HIGH-4 concurrent-add merge, crash-safe resume, and the `tests/sdk-e2e` crash-safety suite (completed 2026-06-29)
 - [x] **Phase 65: SDK Write-Chain, Bin Re-link, and Invite Claim** — Structured write-body, (c) full Ed25519 write-revocation, bin restore as pure re-link, invite claim re-wrap; delete `addShareKeys`/`reWrapForRecipients`/`encryptedChildKeys` (completed 2026-06-30)
-- [ ] **Phase 66: API Schema Cutover, Publish Gate, and Tombstone** — Delete `share_keys`, slim `shares`, rename `folder_ipns` → `ipns_records`, drop `public_key`, atomic CAS publish, tombstone state, resolve case-split, server-side generation gate; run `pnpm api:generate`
+- [x] **Phase 66: API Schema Cutover, Publish Gate, and Tombstone** — Delete `share_keys`, slim `shares`, rename `folder_ipns` → `ipns_records`, drop `public_key`, atomic CAS publish, tombstone state, resolve case-split, server-side generation gate; run `pnpm api:generate` (completed 2026-06-30)
 - [ ] **Phase 67: TEE Lease-Renewer Contract Rewrite** — TEE becomes a record-lease-renewer (no CID origination, no sequence increment), internal epoch derivation, name↔key binding, tombstone guard
 - [ ] **Phase 68: Web Integration — Rotation UX and Durable Client State** — Replace `executeLazyRotation` with `rotateReadFromNode`, durable IndexedDB generation + seq high-water (M1 defense, survives restart), `folderTree` reconcile-before-rotate
 - [ ] **Phase 69: FUSE and WinFsp — Rust Integration and Grant-Root Awareness** — Symmetric child-key unwrap, `spawn_file_meta_reencrypt` deletion from both callers, grant-root scope computation, durable client floors, `Node` Rust enum, Windows CI gate
@@ -310,7 +310,7 @@ Plans:
 5. A tombstoned `ipns_records` row is rejected at the publish gate (403/410) and at the EOL-only renewal; resolve returns a 410 marker for tombstoned names; server-side `generation` gate enforces forward-only per node, mirroring the sequence CAS
 6. `pnpm api:generate` is run and the regenerated `packages/api-client/src/generated/` is committed alongside the migration; the `check-api-client.sh` pre-commit hook passes
 
-**Plans**: 8/9 plans executed
+**Plans**: 9/9 plans complete
 
 Plans:
 **Wave 1**
@@ -335,7 +335,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4)*
 
-- [ ] 66-09-PLAN.md — [BLOCKING] `migration:run` + sdk-e2e `ipns-publish-gate` proof suite (tests 15/16/17/20 + TEE-07) [TEE-04, TEE-05, TEE-07, DATA-01..04]
+- [x] 66-09-PLAN.md — [BLOCKING] `migration:run` + sdk-e2e `ipns-publish-gate` proof suite (tests 15/16/17/20 + TEE-07) [TEE-04, TEE-05, TEE-07, DATA-01..04]
 
 ---
 
@@ -417,7 +417,7 @@ Plans:
 | 63 | Read-Chain Navigation and Rotation Core | 7/7 | Complete    | 2026-06-29 |
 | 64 | Rotation Soundness — Revocation Guarantees | 8/8 | Complete   | 2026-06-29 |
 | 65 | SDK Write-Chain, Bin Re-link, and Invite Claim | 7/7 | Complete    | 2026-06-30 |
-| 66 | API Schema Cutover, Publish Gate, and Tombstone | 8/9 | In Progress|  |
+| 66 | API Schema Cutover, Publish Gate, and Tombstone | 9/9 | Complete   | 2026-06-30 |
 | 67 | TEE Lease-Renewer Contract Rewrite | 0/? | Not started | - |
 | 68 | Web Integration — Rotation UX and Durable Client State | 0/? | Not started | - |
 | 69 | FUSE and WinFsp — Rust Integration and Grant-Root Awareness | 0/? | Not started | - |
