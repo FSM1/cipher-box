@@ -116,7 +116,6 @@ export class IpnsService {
         dto.ipnsName,
         dto.metadataCid,
         recordBytes,
-        publicKeyBytes,
         dto.encryptedIpnsPrivateKey,
         dto.keyEpoch,
         dto.expectedSequenceNumber,
@@ -226,7 +225,6 @@ export class IpnsService {
     ipnsName: string,
     metadataCid: string,
     signedRecord: Uint8Array,
-    _publicKey?: Uint8Array,
     encryptedIpnsPrivateKey?: string,
     keyEpoch?: number,
     expectedSequenceNumber?: string,
@@ -647,7 +645,7 @@ export class IpnsService {
       if (result && cachedResult) {
         // Both sources available. The DB-cached record is the authoritative, fully-signed
         // record the owner published — parseCachedRecord returns it complete, including the
-        // pubKey (supplied from the validated publicKey column). The network record parsed
+        // pubKey (recovered from the k51 ipnsName via publicKeyFromIpnsName). The network record parsed
         // from delegated routing does NOT carry the signature fields a strict client needs
         // to verify, so prefer the DB record whenever it is at the same or a higher
         // sequence; only defer to the network record when it is strictly ahead (a newer
