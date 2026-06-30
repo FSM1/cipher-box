@@ -1,0 +1,95 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "4720913b0ac4",
+  "session_id": "3a6781af-f138-4624-9282-008e4a4f85ee",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-30T18:17:30.336983Z",
+  "branch": "feat/api-schema-cutover-publish-gate-and-tombstone",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/66-api-schema-cutover-publish-gate-and-tombstone/66-SECURITY.md",
+    ".planning/todos/pending/2026-06-30-ipns-first-publish-insert-race.md",
+    ".planning/todos/pending/2026-06-30-ipns-records-root-uniqueness-index.md",
+    ".planning/todos/pending/2026-06-30-share-invites-claim-count-check-constraint.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "313c42cba7d5",
+  "checkpoint_transcript_start": 569,
+  "transcript_lines_at_start": 569,
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-ship-phase-2026-06-30T17:43:21.996672Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "313c42cba7d5",
+      "timestamp": "2026-06-30T17:43:21.996672Z",
+      "native": {
+        "command": "/ship-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/ship-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_015hnviiBjJefSJag3vhEWWk",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-secure-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "313c42cba7d5",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 94,
+        "end": 95,
+        "entry_ids": [
+          "91b663a4-ddcb-449c-9146-b30ed488bcc4"
+        ],
+        "tool_use_id": "toolu_015hnviiBjJefSJag3vhEWWk"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015hnviiBjJefSJag3vhEWWk"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-secure-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "initial_attribution": {
+    "calculated_at": "2026-06-30T18:17:30.3215Z",
+    "agent_lines": 224,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 224,
+    "total_lines_changed": 224,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "4720913b0ac4",
+  "strategy": "manual-commit",
+  "branch": "feat/api-schema-cutover-publish-gate-and-tombstone",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/66-api-schema-cutover-publish-gate-and-tombstone/66-SECURITY.md",
+    ".planning/todos/pending/2026-06-30-ipns-first-publish-insert-race.md",
+    ".planning/todos/pending/2026-06-30-ipns-records-root-uniqueness-index.md",
+    ".planning/todos/pending/2026-06-30-share-invites-claim-count-check-constraint.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/47/20913b0ac4/0/metadata.json",
+      "transcript": "/47/20913b0ac4/0/full.jsonl",
+      "content_hash": "/47/20913b0ac4/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  }
+}
