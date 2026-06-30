@@ -1,0 +1,97 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "ac1ea4365a4f",
+  "session_id": "fbd17674-5430-418c-aebc-91949e271095",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-30T23:16:26.690808Z",
+  "branch": "feat/tee-lease-renewer-contract-rewrite",
+  "checkpoints_count": 2,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "14485b103a7b",
+  "token_usage": {
+    "input_tokens": 13687,
+    "cache_creation_tokens": 277323,
+    "cache_read_tokens": 4248400,
+    "output_tokens": 54978,
+    "api_call_count": 32
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Run the GSD plan-phase workflow for Phase 67 (TEE Lease-Renewer Contract Rewrite), producing researched, pattern-mapped, and checker-verified PLAN.md files for a security-critical TEE worker rewrite.",
+    "outcome": "Completed the full workflow: researcher, pattern-mapper, planner (8 plans across 3 waves covering all 4 requirements and locked decisions), and plan-checker (VERIFICATION PASSED with 3 advisory warnings, 2 of which were fixed inline). STATE.md updated, all artifacts committed.",
+    "learnings": {
+      "repo": [
+        "BullMQ E2E trigger uses `new Queue('republish', { connection: { host: 'localhost', port: 6380 } }).add('republish-batch', {})` — no dev HTTP endpoint exists or is needed",
+        "mock-ipns-routing already occupies 127.0.0.1:3001; new local tee-worker must bind to 127.0.0.1:3002:3001 with TEE_WORKER_URL=http://localhost:3002",
+        "`record.pubKey` from `parseIpnsRecord` is `undefined` for Ed25519 identity records — must derive pubkey from decrypted key, never from `parsed.pubKey`",
+        "`EPOCH_ZERO_TIMESTAMP_MS` is undefined in the codebase; epoch derivation must use `entry.keyEpoch` from `ipns_records.key_epoch` as ECIES hint and `getInternalCurrentEpoch()` for floor/re-encrypt target",
+        "`bullmq` is absent from `tests/sdk-e2e/package.json` and must be added as a devDep (already in apps/api lockfile, not a new-to-repo package)",
+        "`apps/tee-worker/Dockerfile` exists and compose can use a `build` context",
+        "Intel API-surface regen returned 0 symbols (stale: true) — the hook is a HINT-only artifact; verified file:line refs from CONTEXT/RESEARCH are the authoritative source",
+        "The gsd commit helper's `commit_failed` output is a known false-negative; always confirm via `git log`"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/republish/republish.ts",
+          "line": 79,
+          "end_line": 79,
+          "finding": "The `+ 1n` sequence-increment offender identified in CONTEXT — must be removed as part of the no-increment contract"
+        },
+        {
+          "path": "apps/api/src/republish/republish.service.ts",
+          "line": 386,
+          "end_line": 397,
+          "finding": "Weak `LessThanOrEqual` write-back must be replaced with equality CAS (`WHERE sequence_number = :loaded AND tombstoned_at IS NULL`) to prevent races"
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 379,
+          "end_line": 392,
+          "finding": "Canonical TypeORM equality CAS pattern: `createQueryBuilder().update().set({...}).where('sequence_number = :expected AND tombstoned_at IS NULL').execute()`, check `affected === 0` to discard silently"
+        },
+        {
+          "path": "apps/api/src/republish/republish-schedule.entity.ts",
+          "line": 1,
+          "finding": "Entity has 11 `@Column` decorators pre-migration; dropping 4 crypto/signing columns leaves 7 retained (userId, ipnsName, nextRepublishAt, lastRepublishAt, consecutiveFailures, status, lastError)"
+        }
+      ],
+      "workflow": [
+        "Verify commands that pipe `tsc --noEmit` through `grep | || echo clean` always exit 0 when tsc emits unrelated errors from intentionally broken callers — use direct file-content greps on the modified file instead",
+        "When writing `@Column` count assertions in plans, count the retained columns after the change, not the dropped columns — these are easy to confuse when the numbers are close",
+        "Plan-checker suggested `@Column` count of 6 but the actual retained count was 7 — always read the entity file to verify before applying checker suggestions",
+        "VALIDATION.md is scaffolded as frontmatter-fill at creation time; its per-task verification map must be populated from RESEARCH.md's Validation Architecture section before execution begins",
+        "api:generate is not required for internal service-to-service TEE surfaces; guard with a `git status --porcelain` check on `*.controller.ts`/`*.dto.ts` to confirm no public API changed"
+      ]
+    },
+    "friction": [
+      "gsd commit helper emits `commit_failed` as a false-negative on successful commits signed via 1Password — requires manual `git log` confirmation after every commit",
+      "Intel API-surface regen returned 0 symbols (stale: true) on a non-trivial codebase — the hook provided no useful output for the planner",
+      "Plan-checker's suggested `@Column` fix was itself incorrect (said 6, actual is 7) — required reading the entity file to catch the error before applying",
+      "VALIDATION.md was left as an unfilled template by the orchestrator; the plan-checker flagged it as a warning"
+    ],
+    "open_items": [
+      "Populate 67-VALIDATION.md from RESEARCH.md's Validation Architecture table before execution begins (checker warning 3)",
+      "67-08 is a BLOCKING human-verify gate — requires manual `migration:run` + sdk-e2e round-trip confirmation before the wave 3 plan can complete",
+      "Client re-enroll consumer (requiresReEnroll signal consumer) deferred to Phase 68/69",
+      "Broader ValidityType Rust/TS verify-stack hardening (cross-layer lockstep) deferred to a future phase",
+      "Codebase drift map is stale (143 elements, mostly unrelated paths) — the intel API-surface hook needs a regen trigger"
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
