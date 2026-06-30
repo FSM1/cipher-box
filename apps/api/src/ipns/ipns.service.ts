@@ -10,7 +10,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { FolderIpns } from './entities/folder-ipns.entity';
+import { IpnsRecord } from './entities/ipns-record.entity';
 import {
   PublishIpnsDto,
   PublishIpnsEntryDto,
@@ -30,8 +30,8 @@ export class IpnsService {
   private readonly logger = new Logger(IpnsService.name);
 
   constructor(
-    @InjectRepository(FolderIpns)
-    private readonly folderIpnsRepository: Repository<FolderIpns>,
+    @InjectRepository(IpnsRecord)
+    private readonly ipnsRecordRepository: Repository<IpnsRecord>,
     private readonly delegatedRouting: DelegatedRoutingClient,
     @Inject(forwardRef(() => RepublishService))
     private readonly republishService: RepublishService,
@@ -105,7 +105,7 @@ export class IpnsService {
 
       // Save to DB first so resolve always has a fallback, even if delegated
       // routing fails (e.g. rate-limited, network error, DHT propagation delay).
-      const folder = await this.upsertFolderIpns(
+      const folder = await this.upsertIpnsRecord(
         userId,
         dto.ipnsName,
         dto.metadataCid,
@@ -211,21 +211,21 @@ export class IpnsService {
    * Create or update a folder/file IPNS entry.
    * Handles both folder metadata and per-file metadata IPNS records.
    */
-  private async upsertFolderIpns(
+  private async upsertIpnsRecord(
     userId: string,
     ipnsName: string,
     metadataCid: string,
     signedRecord: Uint8Array,
-    publicKey?: Uint8Array,
+    _publicKey?: Uint8Array,
     encryptedIpnsPrivateKey?: string,
     keyEpoch?: number,
     expectedSequenceNumber?: string
-  ): Promise<FolderIpns> {
+  ): Promise<IpnsRecord> {
     // The cache is keyed by ipnsName alone — there is one canonical row per name.
     // The caller's authority to update it was already proven by signature
     // verification in publishRecord (key possession), so no ownership/share check
     // is needed here: whoever holds the key updates the canonical record.
-    const existing = await this.folderIpnsRepository.findOne({ where: { ipnsName } });
+    const existing = await this.ipnsRecordRepository.findOne({ where: { ipnsName } });
 
     // Anti-rollback: the incoming record's EMBEDDED sequence (covered by the
     // signature, so tamper-evident) must not regress below the stored record's.
@@ -318,10 +318,6 @@ export class IpnsService {
     }
 
     if (existing) {
-      if (publicKey && existing.publicKey && !existing.publicKey.equals(Buffer.from(publicKey))) {
-        throw new BadRequestException('publicKey does not match the existing IPNS entry');
-      }
-
       // Update existing entry.
       // D-09: skip sequence increment on idempotent republish (TEE re-sign path);
       // still update latestCid and signedRecord (Pitfall 4 — must not skip CID update).
@@ -330,7 +326,6 @@ export class IpnsService {
       }
       existing.latestCid = metadataCid;
       existing.signedRecord = Buffer.from(signedRecord);
-      existing.publicKey = publicKey ? Buffer.from(publicKey) : existing.publicKey;
       existing.updatedAt = new Date();
 
       // Only update encrypted key if provided (e.g., on key rotation).
@@ -341,10 +336,10 @@ export class IpnsService {
         existing.keyEpoch = keyEpoch;
       }
 
-      const saved = await this.folderIpnsRepository.save(existing);
+      const saved = await this.ipnsRecordRepository.save(existing);
 
       // Auto-enroll for TEE republishing when encrypted key is provided.
-      // Use existing.userId (the FolderIpns owner) for enrollment, not the
+      // Use existing.userId (the IpnsRecord owner) for enrollment, not the
       // authenticated user — a write-share recipient publishes to the owner's record.
       if (encryptedIpnsPrivateKey && keyEpoch !== undefined && existing.userId === userId) {
         this.republishService
@@ -368,13 +363,12 @@ export class IpnsService {
 
     // Create new entry — sequence starts at '1' to match the IPNS record
     // the client signed (clients compute newSeq = 0n + 1n = 1n for first publish).
-    const folder = this.folderIpnsRepository.create({
+    const folder = this.ipnsRecordRepository.create({
       userId,
       ipnsName,
       latestCid: metadataCid,
       sequenceNumber: '1',
       signedRecord: Buffer.from(signedRecord),
-      publicKey: publicKey ? Buffer.from(publicKey) : null,
       encryptedIpnsPrivateKey: encryptedIpnsPrivateKey
         ? Buffer.from(encryptedIpnsPrivateKey, 'hex')
         : null,
@@ -382,7 +376,7 @@ export class IpnsService {
       isRoot: false, // Root folder is tracked in Vault entity
     });
 
-    const saved = await this.folderIpnsRepository.save(folder);
+    const saved = await this.ipnsRecordRepository.save(folder);
 
     // Auto-enroll for TEE republishing when encrypted key is provided
     if (encryptedIpnsPrivateKey && keyEpoch !== undefined) {
@@ -429,19 +423,19 @@ export class IpnsService {
   }
 
   /**
-   * Get a folder IPNS entry by user and IPNS name
+   * Get an IPNS record by user and IPNS name
    */
-  async getFolderIpns(userId: string, ipnsName: string): Promise<FolderIpns | null> {
-    return this.folderIpnsRepository.findOne({
+  async getIpnsRecord(userId: string, ipnsName: string): Promise<IpnsRecord | null> {
+    return this.ipnsRecordRepository.findOne({
       where: { userId, ipnsName },
     });
   }
 
   /**
-   * Get all folder IPNS entries for a user (for TEE republishing)
+   * Get all IPNS records for a user (for TEE republishing)
    */
-  async getAllFolderIpns(userId: string): Promise<FolderIpns[]> {
-    return this.folderIpnsRepository.find({
+  async getAllIpnsRecords(userId: string): Promise<IpnsRecord[]> {
+    return this.ipnsRecordRepository.find({
       where: { userId },
       order: { createdAt: 'ASC' },
     });
@@ -498,7 +492,7 @@ export class IpnsService {
 
       // Always check DB cache — it's written synchronously during publish
       // and may be ahead of the network (delegated routing can serve stale records)
-      const cached = await this.folderIpnsRepository.findOne({
+      const cached = await this.ipnsRecordRepository.findOne({
         where: { ipnsName },
       });
       const cachedResult = await parseCachedRecord(cached, this.logger);

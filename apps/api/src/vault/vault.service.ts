@@ -5,7 +5,7 @@ import { DataSource, Repository } from 'typeorm';
 import { Vault } from './entities/vault.entity';
 import { PinnedCid } from './entities/pinned-cid.entity';
 import { PendingUnpin } from './entities/pending-unpin.entity';
-import { FolderIpns } from '../ipns/entities/folder-ipns.entity';
+import { IpnsRecord } from '../ipns/entities/ipns-record.entity';
 import { User } from '../auth/entities/user.entity';
 import { InitVaultDto, VaultResponseDto } from './dto/init-vault.dto';
 import { VaultExportDto } from './dto/vault-export.dto';
@@ -31,8 +31,8 @@ export class VaultService {
     private readonly vaultRepository: Repository<Vault>,
     @InjectRepository(PinnedCid)
     private readonly pinnedCidRepository: Repository<PinnedCid>,
-    @InjectRepository(FolderIpns)
-    private readonly folderIpnsRepository: Repository<FolderIpns>,
+    @InjectRepository(IpnsRecord)
+    private readonly ipnsRecordRepository: Repository<IpnsRecord>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     private readonly teeKeyStateService: TeeKeyStateService,
@@ -88,7 +88,7 @@ export class VaultService {
     // publish the root folder IPNS record before calling /vault/init).
     // Try insert first; on duplicate key, update isRoot instead.
     try {
-      const rootFolderIpns = this.folderIpnsRepository.create({
+      const rootIpnsRecord = this.ipnsRecordRepository.create({
         userId,
         ipnsName: dto.rootIpnsName,
         latestCid: null,
@@ -97,11 +97,11 @@ export class VaultService {
         keyEpoch: null,
         isRoot: true,
       });
-      await this.folderIpnsRepository.save(rootFolderIpns);
+      await this.ipnsRecordRepository.save(rootIpnsRecord);
     } catch (error) {
       // Row already exists (from IPNS publish endpoint) — mark as root
       if ((error as { code?: string }).code === '23505') {
-        await this.folderIpnsRepository.update(
+        await this.ipnsRecordRepository.update(
           { userId, ipnsName: dto.rootIpnsName },
           { isRoot: true }
         );

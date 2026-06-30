@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, LessThanOrEqual } from 'typeorm';
 import { IpnsRepublishSchedule } from './republish-schedule.entity';
-import { FolderIpns } from '../ipns/entities/folder-ipns.entity';
+import { IpnsRecord } from '../ipns/entities/ipns-record.entity';
 import { TeeService, RepublishEntry, RepublishResult } from '../tee/tee.service';
 import { TeeKeyStateService } from '../tee/tee-key-state.service';
 import { DelegatedRoutingClient } from '../ipns/delegated-routing.client';
@@ -29,8 +29,8 @@ export class RepublishService {
   constructor(
     @InjectRepository(IpnsRepublishSchedule)
     private readonly scheduleRepository: Repository<IpnsRepublishSchedule>,
-    @InjectRepository(FolderIpns)
-    private readonly folderIpnsRepository: Repository<FolderIpns>,
+    @InjectRepository(IpnsRecord)
+    private readonly ipnsRecordRepository: Repository<IpnsRecord>,
     private readonly teeService: TeeService,
     private readonly teeKeyStateService: TeeKeyStateService,
     private readonly delegatedRouting: DelegatedRoutingClient
@@ -154,8 +154,8 @@ export class RepublishService {
 
             await this.scheduleRepository.save(entry);
 
-            // Keep FolderIpns sequence number in sync
-            await this.syncFolderIpnsSequence(
+            // Keep IpnsRecord sequence number in sync
+            await this.syncIpnsRecordSequence(
               entry.userId,
               entry.ipnsName,
               result.newSequenceNumber,
@@ -366,17 +366,17 @@ export class RepublishService {
   }
 
   /**
-   * Sync the FolderIpns sequence number after successful republish.
+   * Sync the IpnsRecord sequence number after successful republish.
    * Handles both folder and per-file IPNS records (keyed by userId + ipnsName).
    */
-  private async syncFolderIpnsSequence(
+  private async syncIpnsRecordSequence(
     userId: string,
     ipnsName: string,
     newSequenceNumber: string,
     signedRecordBase64: string
   ): Promise<void> {
     try {
-      await this.folderIpnsRepository.update(
+      await this.ipnsRecordRepository.update(
         { userId, ipnsName },
         {
           sequenceNumber: newSequenceNumber,
@@ -386,7 +386,7 @@ export class RepublishService {
     } catch (error) {
       // Non-fatal: log and continue
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.warn(`Failed to sync FolderIpns sequence for ${ipnsName}: ${message}`);
+      this.logger.warn(`Failed to sync IpnsRecord sequence for ${ipnsName}: ${message}`);
     }
   }
 

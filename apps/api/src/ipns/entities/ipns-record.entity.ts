@@ -11,13 +11,13 @@ import {
 } from 'typeorm';
 import { User } from '../../auth/entities/user.entity';
 
-@Entity('folder_ipns')
+@Entity('ipns_records')
 // Keyed by ipnsName alone: there is one canonical record per IPNS name, and any
 // holder of the name's key may update it (authority is proven by the record's
 // signature, not by row ownership). `userId` is retained as a denormalized
 // creator marker for listing / TEE enrollment / cleanup only.
 @Unique(['ipnsName'])
-export class FolderIpns {
+export class IpnsRecord {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
 
@@ -57,13 +57,6 @@ export class FolderIpns {
   signedRecord!: Buffer | null;
 
   /**
-   * Raw 32-byte Ed25519 public key for this IPNS name.
-   * Used to complete signature verification when published records omit field 7.
-   */
-  @Column({ type: 'bytea', name: 'public_key', nullable: true })
-  publicKey!: Buffer | null;
-
-  /**
    * ECIES-wrapped Ed25519 private key for TEE republishing
    * Encrypted with TEE public key, only decryptable by TEE
    * Nullable until TEE integration is implemented (Phase 7+)
@@ -84,6 +77,22 @@ export class FolderIpns {
    */
   @Column({ type: 'boolean', name: 'is_root', default: false })
   isRoot!: boolean;
+
+  /**
+   * When set, this IPNS name has been tombstoned (rotated out).
+   * Publish requests on tombstoned records are rejected with 410 Gone.
+   * Recovery requires creating a new IPNS name.
+   */
+  @Column({ type: 'timestamptz', name: 'tombstoned_at', nullable: true })
+  tombstonedAt!: Date | null;
+
+  /**
+   * Generation counter for the current key-epoch binding.
+   * Incremented on key rotation (write-key rotation increments this).
+   * TypeORM returns bigint as string — compare with BigInt(row.generation).
+   */
+  @Column({ type: 'bigint', name: 'generation', default: 0 })
+  generation!: string; // TypeORM returns bigint as string
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;

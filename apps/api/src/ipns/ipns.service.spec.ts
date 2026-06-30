@@ -2,7 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { BadRequestException, ConflictException, HttpException, HttpStatus } from '@nestjs/common';
 import { IpnsService } from './ipns.service';
-import { FolderIpns } from './entities/folder-ipns.entity';
+import { IpnsRecord } from './entities/ipns-record.entity';
 import { PublishIpnsDto, BatchPublishIpnsDto } from './dto';
 import { User } from '../auth/entities/user.entity';
 import { RepublishService } from '../republish/republish.service';
@@ -56,17 +56,18 @@ describe('IpnsService', () => {
   const testEncryptedIpnsPrivateKey = 'a'.repeat(128); // 64 bytes hex
   const testKeyEpoch = 1;
 
-  const mockFolderEntity: FolderIpns = {
+  const mockFolderEntity: IpnsRecord = {
     id: 'folder-id-1',
     userId: testUserId,
     ipnsName: testIpnsName,
     latestCid: testMetadataCid,
     sequenceNumber: '5',
     signedRecord: null,
-    publicKey: testPublicKeyBytes,
     encryptedIpnsPrivateKey: Buffer.from(testEncryptedIpnsPrivateKey, 'hex'),
     keyEpoch: testKeyEpoch,
     isRoot: false,
+    tombstonedAt: null,
+    generation: '0',
     createdAt: new Date('2026-01-20T12:00:00.000Z'),
     updatedAt: new Date('2026-01-20T12:00:00.000Z'),
     user: {} as User,
@@ -97,7 +98,7 @@ describe('IpnsService', () => {
       providers: [
         IpnsService,
         {
-          provide: getRepositoryToken(FolderIpns),
+          provide: getRepositoryToken(IpnsRecord),
           useValue: mockFolderIpnsRepo,
         },
         {
@@ -346,11 +347,11 @@ describe('IpnsService', () => {
     });
   });
 
-  describe('getFolderIpns', () => {
+  describe('getIpnsRecord', () => {
     it('should return folder entry when found', async () => {
       mockFolderIpnsRepo.findOne.mockResolvedValue(mockFolderEntity);
 
-      const result = await service.getFolderIpns(testUserId, testIpnsName);
+      const result = await service.getIpnsRecord(testUserId, testIpnsName);
 
       expect(mockFolderIpnsRepo.findOne).toHaveBeenCalledWith({
         where: { userId: testUserId, ipnsName: testIpnsName },
@@ -361,13 +362,13 @@ describe('IpnsService', () => {
     it('should return null when folder not found', async () => {
       mockFolderIpnsRepo.findOne.mockResolvedValue(null);
 
-      const result = await service.getFolderIpns(testUserId, testIpnsName);
+      const result = await service.getIpnsRecord(testUserId, testIpnsName);
 
       expect(result).toBeNull();
     });
   });
 
-  describe('getAllFolderIpns', () => {
+  describe('getAllIpnsRecords', () => {
     it('should return all folder entries for user', async () => {
       const folders = [
         mockFolderEntity,
@@ -375,7 +376,7 @@ describe('IpnsService', () => {
       ];
       mockFolderIpnsRepo.find.mockResolvedValue(folders);
 
-      const result = await service.getAllFolderIpns(testUserId);
+      const result = await service.getAllIpnsRecords(testUserId);
 
       expect(mockFolderIpnsRepo.find).toHaveBeenCalledWith({
         where: { userId: testUserId },
@@ -388,7 +389,7 @@ describe('IpnsService', () => {
     it('should return empty array when user has no folders', async () => {
       mockFolderIpnsRepo.find.mockResolvedValue([]);
 
-      const result = await service.getAllFolderIpns(testUserId);
+      const result = await service.getAllIpnsRecords(testUserId);
 
       expect(result).toEqual([]);
     });

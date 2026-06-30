@@ -3,13 +3,13 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { IpnsController } from './ipns.controller';
 import { IpnsService } from './ipns.service';
 import { DelegatedRoutingModule } from './delegated-routing.module';
-import { FolderIpns } from './entities/folder-ipns.entity';
+import { IpnsRecord } from './entities/ipns-record.entity';
 import { RepublishModule } from '../republish/republish.module';
 
 @Module({
   imports: [
     DelegatedRoutingModule,
-    TypeOrmModule.forFeature([FolderIpns]),
+    TypeOrmModule.forFeature([IpnsRecord]),
     forwardRef(() => RepublishModule),
   ],
   controllers: [IpnsController],

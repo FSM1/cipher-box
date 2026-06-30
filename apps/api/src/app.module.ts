@@ -24,7 +24,7 @@ import { User } from './auth/entities/user.entity';
 import { RefreshToken } from './auth/entities/refresh-token.entity';
 import { AuthMethod } from './auth/entities/auth-method.entity';
 import { Vault, PinnedCid, PendingUnpin } from './vault/entities';
-import { FolderIpns } from './ipns/entities';
+import { IpnsRecord } from './ipns/entities';
 import { TeeKeyState } from './tee/tee-key-state.entity';
 import { TeeKeyRotationLog } from './tee/tee-key-rotation-log.entity';
 import { IpnsRepublishSchedule } from './republish/republish-schedule.entity';
@@ -89,7 +89,7 @@ import { PinMigration } from './migration/migration.entity';
           AuthMethod,
           Vault,
           PinnedCid,
-          FolderIpns,
+          IpnsRecord,
           TeeKeyState,
           TeeKeyRotationLog,
           IpnsRepublishSchedule,
