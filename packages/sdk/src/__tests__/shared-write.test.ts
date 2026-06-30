@@ -14,7 +14,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // via vi.importActual inside individual tests so module-level mocks do not
 // interfere. Only types are imported here.
 
-import { sealNode } from '@cipherbox/core';
+import { sealNode, unsealNode } from '@cipherbox/core';
 import type { Node, PublishedNode, SealedChildRef, WriteChildRef } from '@cipherbox/core';
 import { generateRandomBytes, generateEd25519Keypair } from '@cipherbox/crypto';
 
@@ -64,6 +64,7 @@ import {
 /** Build a real sealed parent node for use in operation tests. */
 async function buildSealedParent(opts?: {
   extraChildren?: SealedChildRef[];
+  writeChildren?: WriteChildRef[];
   ipnsPrivKey?: Uint8Array;
 }): Promise<{
   publishedNode: PublishedNode;
@@ -84,7 +85,7 @@ async function buildSealedParent(opts?: {
     children: opts?.extraChildren ?? [],
     writeBody: {
       ipnsPrivateKey: opts?.ipnsPrivKey ?? ipnsPrivateKey,
-      writeChildren: [],
+      writeChildren: opts?.writeChildren ?? [],
     },
   };
   const publishedNode = await sealNode(parent, readKey, writeKey);
@@ -414,6 +415,8 @@ describe('deleteFromSharedFolder', () => {
     vi.clearAllMocks();
   });
 
+  const CHILD_UUID = 'cccccccc-dddd-eeee-ffff-000000000001';
+
   it('removes the item and republishes the parent', async () => {
     const child: SealedChildRef = {
       name: 'doomed.txt',
@@ -431,10 +434,68 @@ describe('deleteFromSharedFolder', () => {
     });
     const swCtx = await makeSWCtx({ publishedNode: pn, readKey, writeKey, children: [child] });
 
-    const result = await deleteFromSharedFolder(swCtx, { itemId: 'k51child' });
+    const result = await deleteFromSharedFolder(swCtx, {
+      itemId: 'k51child',
+      childNodeId: CHILD_UUID,
+    });
 
     expect(result.publishedChildren).toHaveLength(0);
     expect(result.newSequenceNumber).toBe(2n);
+  });
+
+  it('removes the WriteChildRef from the write-body on delete', async () => {
+    const child: SealedChildRef = {
+      name: 'doomed.txt',
+      ipnsName: 'k51child',
+      generation: 0,
+      versionFloor: 1n,
+      readKeySealed: 'fakebase64sealed',
+    };
+    // Seed the parent write-body with a WriteChildRef whose childId is the UUID
+    const writeChild: WriteChildRef = {
+      childId: CHILD_UUID,
+      writeKeySealed: 'fakewritekeysealed',
+    };
+    const {
+      publishedNode: pn,
+      readKey,
+      writeKey,
+    } = await buildSealedParent({
+      extraChildren: [child],
+      writeChildren: [writeChild],
+    });
+
+    // Capture the PublishedNode passed to publishNodeFn so we can unseal it.
+    let capturedPublished: PublishedNode | undefined;
+    const publishFn = vi
+      .fn()
+      .mockImplementation(
+        async (p: {
+          published: PublishedNode;
+          ipnsName: string;
+          ipnsPrivateKey: Uint8Array;
+          sequenceNumber: bigint;
+        }) => {
+          capturedPublished = p.published;
+          return { tombstoned: false, newSequenceNumber: 2n };
+        }
+      );
+
+    const swCtx = await makeSWCtx({
+      publishedNode: pn,
+      readKey,
+      writeKey,
+      children: [child],
+      publishNodeFn: publishFn,
+    });
+
+    await deleteFromSharedFolder(swCtx, { itemId: 'k51child', childNodeId: CHILD_UUID });
+
+    // Unseal the republished parent and verify write-body has no stale WriteChildRef.
+    expect(capturedPublished).toBeDefined();
+    const unsealed = await unsealNode(capturedPublished!, readKey, writeKey);
+    expect(unsealed.writeBody).toBeDefined();
+    expect(unsealed.writeBody!.writeChildren).toHaveLength(0);
   });
 
   it('never calls addShareKeysFn', async () => {
@@ -453,7 +514,7 @@ describe('deleteFromSharedFolder', () => {
       extraChildren: [child],
     });
     const swCtx = await makeSWCtx({ publishedNode: pn, readKey, writeKey, children: [child] });
-    await deleteFromSharedFolder(swCtx, { itemId: 'k51child' });
+    await deleteFromSharedFolder(swCtx, { itemId: 'k51child', childNodeId: CHILD_UUID });
     expect(swCtx.addShareKeysFn).not.toHaveBeenCalled();
   });
 });
