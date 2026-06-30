@@ -1,0 +1,84 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "1669fd50ff58",
+  "session_id": "13524ecf-de1b-47de-bf59-e080a2ed8848",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-30T00:34:41.796481Z",
+  "branch": "feat/sdk-write-chain-bin-re-link-and-invite-claim",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/ROADMAP.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "f595367f5675",
+  "checkpoint_transcript_start": 375,
+  "transcript_lines_at_start": 375,
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 4640,
+    "cache_read_tokens": 837472,
+    "output_tokens": 2599,
+    "api_call_count": 3
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Complete plan 65-06 of phase 65 (sdk-write-chain-bin-re-link-and-invite-claim) by implementing write-revocation cascade logic with a child-first rotation strategy.",
+    "outcome": "Successfully implemented `rotateWriteFromNode` and `rotateWriteSubtree` with `WriteRevocationCallbacks` type in the rotation engine; 8 new tests added, 70/70 rotation suite green, sdk-core 318 passed/22 skipped, build clean.",
+    "learnings": {
+      "repo": [
+        "Phase 65 uses a wave-based plan structure; wave 3 covered plans up to 65-06 (6/7 done), with plan 65-07 remaining as wave 4.",
+        "Write-revocation cascade is child-first — children are rotated before their parent node.",
+        "The rotation engine is in `packages/sdk-core/src/rotation/engine.ts` with a barrel re-export via `rotation/index.ts`.",
+        "Pre-commit hooks are slow enough to warrant extra time allocation when updating tracking files like ROADMAP.md."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/rotation/engine.ts",
+          "finding": "Added `WriteRevocationCallbacks` type, `rotateWriteFromNode` function, and `rotateWriteSubtree` function implementing child-first write-revocation cascade."
+        },
+        {
+          "path": "packages/sdk-core/src/__tests__/rotation/write-revocation.test.ts",
+          "finding": "New 530-line test file with 8 tests covering the write-revocation driver contract."
+        }
+      ],
+      "workflow": [
+        "Wave-based plan execution uses a build gate (typecheck) followed by a test gate before updating tracking; both gates must pass before committing to ROADMAP.md.",
+        "Executor is expected to stay out of STATE/ROADMAP files during plan execution — those are updated only by the orchestrator after gate checks pass.",
+        "Plans run on the main tree when no parallel file conflicts exist, avoiding worktree setup overhead."
+      ]
+    },
+    "friction": [
+      "Slow pre-commit hooks required explicit extra time allowance when updating tracking files."
+    ],
+    "open_items": [
+      "Plan 65-07 (wave 4, the final plan of phase 65) remains to be executed."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-30T00:34:29.210828Z",
+    "agent_lines": 3,
+    "agent_removed": 3,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 3,
+    "total_lines_changed": 6,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}

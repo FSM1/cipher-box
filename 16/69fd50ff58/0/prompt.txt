@@ -1,0 +1,32 @@
+<task-notification>
+<task-id>a8dda7d08ae5dbbf6</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/13524ecf-de1b-47de-bf59-e080a2ed8848/tasks/a8dda7d08ae5dbbf6.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 06 of phase 65" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 65-06
+**Tasks:** 2/2
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.planning/phases/65-sdk-write-chain-bin-re-link-and-invite-claim/65-06-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"65-06","worktree_path":"","branch":"","expected_base":""}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `df04c5bea`: test(65-06): add failing write-revocation driver contract test
+- `9794aba05`: feat(65-06): implement rotateWriteFromNode with child-first write-revocation cascade
+- `0e3e6331d`: docs(65-06): complete write-revocation plan summary
+
+**Duration:** ~20min
+
+**Key files:**
+- `/Users/myankelev/Code/random/cipher-box/packages/sdk-core/src/__tests__/rotation/write-revocation.test.ts` (new — 530 lines, 8 tests)
+- `/Users/myankelev/Code/random/cipher-box/packages/sdk-core/src/rotation/engine.ts` (modified — added `WriteRevocationCallbacks` type + `rotateWriteFromNode` + `rotateWriteSubtree` + new imports)
+- `/Users/myankelev/Code/random/cipher-box/packages/sdk-core/src/rotation/index.ts` (modified — barrel re-exports)
+
+**Test result:** 70/70 rotation suite tests green, sdk-core dist build clean.</result>
+<usage><subagent_tokens>145898</subagent_tokens><tool_uses>60</tool_uses><duration_ms>765225</duration_ms></usage>
+</task-notification>
