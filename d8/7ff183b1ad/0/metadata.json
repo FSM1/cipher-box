@@ -1,0 +1,128 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "d87ff183b1ad",
+  "session_id": "15792aca-8a5d-46a6-aafa-f0b7991dd37b",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-30T17:38:32.622279Z",
+  "branch": "feat/api-schema-cutover-publish-gate-and-tombstone",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "88111b01510e",
+  "checkpoint_transcript_start": 675,
+  "transcript_lines_at_start": 675,
+  "token_usage": {
+    "input_tokens": 143,
+    "cache_creation_tokens": 9811,
+    "cache_read_tokens": 3000206,
+    "output_tokens": 7364,
+    "api_call_count": 7
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-execute-phase-2026-06-30T15:00:11.889631Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "cf38f50fcc68",
+      "timestamp": "2026-06-30T15:00:11.889631Z",
+      "native": {
+        "command": "/gsd-execute-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 11
+  },
+  "summary": {
+    "intent": "Complete and verify phase 66 (api-schema-cutover-publish-gate-and-tombstone) of the CipherBox project, ensuring all 9 implementation plans and 7 requirement IDs were satisfied before advancing to phase 67.",
+    "outcome": "Phase 66 was successfully verified (6/6 must-haves, all 7 requirement IDs confirmed via static analysis) and finalized via `phase.complete`, with completion artifacts committed and todos closed.",
+    "learnings": {
+      "repo": [
+        "Phase 66 schema changes: share_keys table deleted; shares table gained read_descriptor_ref, write_descriptor_ref, root_node_id, root_ipns_name, root_generation columns with @Unique(['sharerId','recipientId','rootNodeId'])",
+        "folder_ipns entity renamed to ipns_records (IpnsRecord class); publicKey field dropped in favor of publicKeyFromIpnsName recovery; tombstoned_at and generation columns added",
+        "Atomic CAS publish uses a 4-predicate WHERE on ipns_name, sequence_number, generation, and tombstoned_at IS NULL; result.affected === 0 drives disambiguation",
+        "parseCachedRecord returns { seqFloor } on null signedRecord; resolveRecord type-narrows on discriminant and fails closed when networkSeq < seqFloor",
+        "Tombstone returns HTTP 410 GONE; authz via user_id predicate; unenrollIpns called on tombstone",
+        "Both sdk-core publish primitives (cas.ts, ipns/index.ts) forward optional generation field to API",
+        "Generated openapi.json includes /ipns/tombstone path, generation in publish schema, and 410 IPNS_TOMBSTONED on publish and resolve; generated shares client has zero references to deleted operations"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/share-key.entity.ts",
+          "finding": "File is absent — share_keys entity fully deleted as part of DATA-01/02"
+        },
+        {
+          "path": "apps/api/src/share.entity.ts",
+          "finding": "Now carries five new descriptor-ref columns and a composite unique constraint"
+        },
+        {
+          "path": "apps/api/src/shares.service.ts",
+          "finding": "Zero references to ShareKey, revokedAt, or deleted methods; revokeShare uses hard-delete via shareRepo.remove()"
+        },
+        {
+          "path": "apps/api/src/folder-ipns.entity.ts",
+          "finding": "File is absent — replaced by ipns-record.entity.ts"
+        },
+        {
+          "path": "apps/api/src/ipns-record.entity.ts",
+          "finding": "Class IpnsRecord on @Entity('ipns_records'); no publicKey field; has tombstoned_at and generation"
+        },
+        {
+          "path": "apps/api/src/ipns-record.codec.ts",
+          "finding": "Uses publicKeyFromIpnsName as sole pubkey recovery path"
+        },
+        {
+          "path": "packages/sdk-core/src/ipns/cas.ts",
+          "finding": "Forwards optional generation field to API publish endpoint"
+        },
+        {
+          "path": "packages/sdk-core/src/ipns/index.ts",
+          "finding": "Forwards optional generation field to API publish endpoint"
+        },
+        {
+          "path": "apps/api/openapi.json",
+          "finding": "Includes /ipns/tombstone path, generation in publish schema, 410 IPNS_TOMBSTONED responses"
+        }
+      ],
+      "workflow": [
+        "Phase checkbox auto-flips to [x] when all constituent plans reach complete status; running phase.complete afterward is still required to produce VERIFICATION.md and advance the phase counter",
+        "Verifier agent should be run static-analysis only when a prior orchestrator gate (e2e run) already covered dynamic tests — avoids redundant test execution",
+        "Combined Bash commands that include typecheck can hit the 2-minute default timeout; always set an explicit extended timeout for monorepo typechecks"
+      ]
+    },
+    "friction": [
+      "Combined Bash command hit the 2-minute default timeout mid-typecheck, requiring a retry with an explicit extended timeout"
+    ],
+    "open_items": [
+      "Background API server on :3000 was left running after phase completion — may need cleanup",
+      "Phase 67 work not yet started"
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 126,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/phases/66-api-schema-cutover-publish-gate-and-tombstone/66-VERIFICATION.md": 125
+      }
+    }
+  ]
+}
