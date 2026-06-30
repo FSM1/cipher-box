@@ -1217,6 +1217,24 @@ async function rotateWriteSubtree(
   // writeKey is caller-supplied — NEVER zeroed here (D-09).
   const node = await unsealNode(pub, readKey, writeKey);
 
+  // Fail closed: refuse to rotate a node that has no recoverable write body.
+  // Creating a fresh write body here would mint a new write-capable node from a
+  // read-only or unrecoverable envelope without proving possession of the old write
+  // key — a security violation. Throw if the envelope carries no writeSealed field,
+  // if unsealNode returned no writeBody, or if the stored ipnsPrivateKey is absent
+  // or all-zero (zeroed seed = unrecoverable).
+  if (
+    !pub.writeSealed ||
+    !node.writeBody ||
+    !(node.writeBody.ipnsPrivateKey instanceof Uint8Array) ||
+    node.writeBody.ipnsPrivateKey.length !== 32 ||
+    node.writeBody.ipnsPrivateKey.every((byte) => byte === 0)
+  ) {
+    throw new Error(
+      `rotateWriteSubtree: node ${pub.id ?? oldIpnsName} has no recoverable write body — cannot rotate a read-only node`
+    );
+  }
+
   // Step 3: Process write children recursively FIRST (child-first / bottom-up).
   // For each write child, derive its readKey (from SealedChildRef) and writeKey
   // (from WriteChildRef) so we can unseal the child and recurse.
@@ -1309,8 +1327,12 @@ async function rotateWriteSubtree(
     //   - re-sealed writeChildren pointing to each child's NEW write key, sealed
     //     under THIS node's NEW write key with updated AAD (child-first: children
     //     already have their newWriteKey from the recursive calls above).
+    //
+    // Collect child results BEFORE the map so the defensive sweep below can zero
+    // any surviving newWriteKey buffers (D-09 / #7 terminal-owner rule).
+    const childResultsToZero = Array.from(new Set(idToChildResult.values()));
     const newWriteChildren = await Promise.all(
-      (node.writeBody?.writeChildren ?? []).map(async (writeChildRef) => {
+      node.writeBody.writeChildren.map(async (writeChildRef) => {
         const childResult = idToChildResult.get(writeChildRef.childId);
         if (!childResult) {
           throw new Error(
@@ -1324,9 +1346,17 @@ async function rotateWriteSubtree(
           childResult.kind,
           childResult.generation
         );
+        // Zero child's minted writeKey immediately after sealing — this scope is
+        // the terminal owner once sealChildWriteKey has consumed it (D-09 / #2).
+        childResult.newWriteKey.fill(0);
         return { childId: writeChildRef.childId, writeKeySealed };
       })
     );
+    // Defensive sweep: zero any child write keys that were not consumed above
+    // (e.g. idToChildResult entries with no matching writeChildren ref). D-09 / #7.
+    for (const cr of childResultsToZero) {
+      cr.newWriteKey.fill(0);
+    }
 
     // Step 7: Rebuild read-body children — update ipnsName for rotated children.
     // readKeySealed is NOT re-sealed (read plane invariant — D-06 / ADR 0001).
@@ -1361,7 +1391,10 @@ async function rotateWriteSubtree(
     // Step 11: First-publish to the NEW k51 name at sequenceNumber 1n.
     // Strict gate: new k51 names MUST be published at exactly 1n (project memory
     // ipns-first-publish-embed-seq-1; server rejects any other value).
-    await createAndPublishIpnsRecord({
+    // Check the returned success flag — a non-throwing rejection still signals that
+    // the record was not accepted; continuing to tombstone or rewrap grants under
+    // an unpublished name would leave the write plane in an inconsistent state (#8).
+    const publishResult = await createAndPublishIpnsRecord({
       ipnsPrivateKey: newKeypair.privateKey,
       ipnsPublicKey: newKeypair.publicKey,
       ipnsName: newIpnsName,
@@ -1369,6 +1402,11 @@ async function rotateWriteSubtree(
       sequenceNumber: 1n,
       ctx,
     });
+    if (!publishResult.success) {
+      throw new Error(
+        `rotateWriteSubtree: first-publish rejected for ${newIpnsName} (seq=${publishResult.sequenceNumber})`
+      );
+    }
 
     // Zero the Ed25519 private key immediately after publish — it has been both
     // sealed into the write-body (Step 9) and used to sign the IPNS record (Step 11).
@@ -1448,36 +1486,54 @@ export async function rotateWriteFromNode(params: {
     pendingTombstones
   );
 
-  // Fire deferred tombstones now that the entire subtree is successfully published.
-  // Old names are removed from the TEE republish batch only once all new names are live.
-  for (const oldName of pendingTombstones) {
-    await callbacks.teeUnenrollFn(oldName);
+  // Guard: verify the unsealed root's node.id matches the caller-supplied rootNodeId
+  // before mutating grants. A mismatch would rewrap/delete grants for a different node
+  // than the one whose write plane was actually rotated (WRITE-03 / #9).
+  // Zero the minted root write key before throwing if the check fails (D-09).
+  if (rootResult.nodeId !== rootNodeId) {
+    rootResult.newWriteKey.fill(0);
+    throw new Error(
+      `rotateWriteFromNode: rootNodeId mismatch — expected ${rootNodeId}, got ${rootResult.nodeId}`
+    );
   }
 
-  // Re-wrap the new root write key for each surviving co-writer and drop revoked grants.
-  // queryWriteGrantsFn is called AFTER the new root name is published so the new
-  // writeKey is stable (no partial re-wrap if publish fails — WRITE-03).
-  const grants = await callbacks.queryWriteGrantsFn(rootNodeId);
-  for (const grant of grants) {
-    if (grant.isRevoked) {
-      // Revoked recipient: drop their grant row — do NOT re-wrap (WRITE-03).
-      await callbacks.deleteWriteGrantFn(grant.shareId);
-    } else {
-      // Surviving co-writer: ECIES-wrap the new root write key under their public key.
-      let wrapped: Uint8Array;
-      try {
-        wrapped = await wrapKey(rootResult.newWriteKey, grant.recipientPublicKey);
-      } catch (err) {
-        throw new Error('rotateWriteFromNode: wrapKey for co-writer failed', { cause: err });
-      }
-      const writeDescriptorRef = bytesToBase64(wrapped);
-      await callbacks.writeDescriptorRefPersistFn(grant.shareId, writeDescriptorRef);
+  // Wrap tombstones + grant mutations in try/finally so the minted root write key is
+  // zeroed even when a callback throws (D-09 / #10). The key is the terminal owner here —
+  // rotateWriteSubtree transferred ownership on success.
+  try {
+    // Fire deferred tombstones now that the entire subtree is successfully published.
+    // Old names are removed from the TEE republish batch only once all new names are live.
+    for (const oldName of pendingTombstones) {
+      await callbacks.teeUnenrollFn(oldName);
     }
-  }
 
-  // Zero the root's new write key after all uses (grants loop above is the last consumer).
-  // This key was minted by rotateWriteSubtree; rotateWriteFromNode is its terminal owner (D-09).
-  rootResult.newWriteKey.fill(0);
+    // Re-wrap the new root write key for each surviving co-writer and drop revoked grants.
+    // queryWriteGrantsFn is called AFTER the new root name is published so the new
+    // writeKey is stable (no partial re-wrap if publish fails — WRITE-03).
+    const grants = await callbacks.queryWriteGrantsFn(rootNodeId);
+    for (const grant of grants) {
+      if (grant.isRevoked) {
+        // Revoked recipient: drop their grant row — do NOT re-wrap (WRITE-03).
+        await callbacks.deleteWriteGrantFn(grant.shareId);
+      } else {
+        // Surviving co-writer: ECIES-wrap the new root write key under their public key.
+        let wrapped: Uint8Array;
+        try {
+          wrapped = await wrapKey(rootResult.newWriteKey, grant.recipientPublicKey);
+        } catch (err) {
+          throw new Error('rotateWriteFromNode: wrapKey for co-writer failed', { cause: err });
+        }
+        const writeDescriptorRef = bytesToBase64(wrapped);
+        await callbacks.writeDescriptorRefPersistFn(grant.shareId, writeDescriptorRef);
+      }
+    }
+  } finally {
+    // Zero the root's new write key regardless of whether callbacks succeeded or threw.
+    // This key was minted by rotateWriteSubtree; rotateWriteFromNode is its terminal
+    // owner (D-09). Zeroing twice is harmless — fill(0) on an already-zeroed buffer
+    // is a no-op at the byte level.
+    rootResult.newWriteKey.fill(0);
+  }
 
   return { newRootIpnsName: rootResult.newIpnsName };
 }
