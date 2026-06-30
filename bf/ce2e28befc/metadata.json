@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "bfce2e28befc",
+  "strategy": "manual-commit",
+  "branch": "feat/api-schema-cutover-publish-gate-and-tombstone",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/todos/pending/2026-06-30-restore-shares-module-unit-coverage.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/bf/ce2e28befc/0/metadata.json",
+      "transcript": "/bf/ce2e28befc/0/full.jsonl",
+      "content_hash": "/bf/ce2e28befc/0/content_hash.txt",
+      "prompt": "/bf/ce2e28befc/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 22672,
+    "cache_creation_tokens": 528046,
+    "cache_read_tokens": 17010521,
+    "output_tokens": 117001,
+    "api_call_count": 107
+  }
+}
