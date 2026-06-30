@@ -85,12 +85,16 @@ function dataOf(err: unknown): unknown {
  * Writes SQL to a temp file to avoid shell-quoting hazards.
  * Only used for seeding preconditions in Test 15.
  */
+// The API (apps/api/.env) uses DB_DATABASE=cipherbox_test, so Test 15's psql
+// seeding MUST target the same database or the API never sees the seeded rows.
+const PSQL_DB = process.env.SDK_E2E_DB ?? 'cipherbox_test';
+
 function psqlExec(sql: string): void {
   const dir = mkdtempSync(join(tmpdir(), 'ipns-gate-'));
   const file = join(dir, 'q.sql');
   writeFileSync(file, sql + '\n');
   try {
-    execSync(`PGPASSWORD=postgres psql -h localhost -U postgres -d cipherbox -f "${file}"`, {
+    execSync(`PGPASSWORD=postgres psql -h localhost -U postgres -d ${PSQL_DB} -f "${file}"`, {
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -117,7 +121,7 @@ function psqlQueryOne(sql: string): string {
   writeFileSync(file, sql + '\n');
   try {
     return execSync(
-      `PGPASSWORD=postgres psql -h localhost -U postgres -d cipherbox -t -A -f "${file}"`,
+      `PGPASSWORD=postgres psql -h localhost -U postgres -d ${PSQL_DB} -t -A -f "${file}"`,
       { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }
     ).trim();
   } finally {
