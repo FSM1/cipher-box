@@ -8,7 +8,6 @@ import {
   Index,
 } from 'typeorm';
 import { User } from '../../auth/entities/user.entity';
-import type { ChildKeyType } from '../types';
 
 @Entity('share_invites')
 export class ShareInvite {
@@ -26,41 +25,45 @@ export class ShareInvite {
   @JoinColumn({ name: 'sharer_id' })
   sharer!: User;
 
-  @Column({ type: 'varchar', length: 10, name: 'item_type' })
-  itemType!: 'folder' | 'file';
-
-  @Column({ type: 'varchar', length: 255, name: 'ipns_name' })
-  ipnsName!: string;
-
-  @Column({ type: 'varchar', length: 255, name: 'item_name' })
-  itemName!: string;
+  /**
+   * IPNS name (k51...) of the root shared node.
+   */
+  @Column({ type: 'varchar', length: 255, name: 'root_ipns_name' })
+  rootIpnsName!: string;
 
   /**
-   * ECIES-wrapped display name (itemName) for the invite's EPHEMERAL public key.
-   * Nullable: legacy/plaintext-client invites hold plaintext in item_name until
-   * the web ships the encrypt path (plan 48-06). Server never sees plaintext
-   * and never encrypts it (zero-knowledge, CLAUDE.md rule 6).
+   * UUID of the root shared node.
+   */
+  @Column({ type: 'uuid', name: 'root_node_id' })
+  rootNodeId!: string;
+
+  /**
+   * Generation of the root node at invite creation.
+   * TypeORM returns bigint as string.
+   */
+  @Column({ type: 'bigint', name: 'root_generation', default: 0 })
+  rootGeneration!: string;
+
+  /**
+   * ECIES-wrapped display name for the invite's EPHEMERAL public key.
+   * Server never sees plaintext (CLAUDE.md rule 6).
    */
   @Column({ type: 'bytea', name: 'item_name_encrypted', nullable: true })
   itemNameEncrypted!: Buffer | null;
 
   /**
-   * The item key wrapped with the EPHEMERAL public key (not recipient's key).
-   * Server never sees the ephemeral private key -- it lives only in the URL fragment.
+   * The root readKey wrapped with the EPHEMERAL public key.
+   * Server never sees the ephemeral private key — it lives only in the URL fragment.
    */
   @Column({ type: 'bytea', name: 'encrypted_key' })
   encryptedKey!: Buffer;
 
   /**
-   * Child keys (subfolder/file keys) wrapped with ephemeral public key.
-   * Stored as JSONB for simplicity -- invites are short-lived (7 days).
+   * ECIES descriptor ref for write access wrapped with EPHEMERAL public key.
+   * NULL for read-only invites.
    */
-  @Column({ type: 'jsonb', name: 'encrypted_child_keys', nullable: true })
-  encryptedChildKeys!: Array<{
-    keyType: ChildKeyType;
-    itemId: string;
-    encryptedKey: string; // hex
-  }> | null;
+  @Column({ type: 'bytea', name: 'write_descriptor_ref', nullable: true })
+  writeDescriptorRef!: Buffer | null;
 
   @Column({ type: 'varchar', length: 20, default: 'active' })
   status!: 'active' | 'claimed' | 'revoked';

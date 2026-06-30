@@ -1,72 +1,42 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { CHILD_KEY_TYPES, type ChildKeyType } from '../types';
 import {
   IsString,
-  IsIn,
-  IsArray,
   IsUUID,
-  ValidateNested,
   IsOptional,
+  IsNumberString,
   Matches,
   MaxLength,
   MinLength,
 } from 'class-validator';
-import { Type } from 'class-transformer';
-
-export class InviteChildKeyDto {
-  @ApiProperty({
-    description: 'Type of key: file, folder, or file-ipns',
-    enum: [...CHILD_KEY_TYPES],
-  })
-  @IsString()
-  @IsIn(CHILD_KEY_TYPES)
-  keyType!: ChildKeyType;
-
-  @ApiProperty({
-    description: 'UUID of the file or subfolder',
-  })
-  @IsString()
-  @IsUUID()
-  itemId!: string;
-
-  @ApiProperty({
-    description: 'Hex-encoded ECIES ciphertext of the key wrapped with ephemeral public key',
-  })
-  @IsString()
-  @Matches(/^[0-9a-fA-F]+$/, { message: 'encryptedKey must be a hex string' })
-  @MinLength(258)
-  @MaxLength(2048)
-  encryptedKey!: string;
-}
 
 export class CreateInviteDto {
   @ApiProperty({
-    description: 'Type of shared item',
-    enum: ['folder', 'file'],
+    description: 'IPNS name (k51...) of the root shared node',
   })
   @IsString()
-  @IsIn(['folder', 'file'])
-  itemType!: 'folder' | 'file';
+  @Matches(/^k[a-z0-9]+$/, { message: 'rootIpnsName must be a valid IPNS name' })
+  @MaxLength(255)
+  rootIpnsName!: string;
 
   @ApiProperty({
-    description: 'IPNS name of the shared item',
+    description: 'UUID of the root shared node',
   })
-  @IsString()
-  @MinLength(1)
-  @MaxLength(255)
-  ipnsName!: string;
+  @IsUUID()
+  rootNodeId!: string;
 
   @ApiProperty({
-    description: 'Display name of the shared item',
+    description: 'Generation of the root node at invite creation (numeric string)',
+    required: false,
+    default: '0',
   })
-  @IsString()
-  @MaxLength(255)
-  itemName!: string;
+  @IsNumberString()
+  @IsOptional()
+  rootGeneration?: string;
 
   @ApiProperty({
     description:
-      'Hex-encoded ECIES ciphertext of the display name wrapped with the ephemeral ' +
-      'public key. Optional during rollout: legacy clients still send plaintext itemName.',
+      'Hex-encoded ECIES ciphertext of the display name wrapped with the ephemeral public key. ' +
+      'Server never sees plaintext (zero-knowledge).',
     required: false,
   })
   @IsString()
@@ -78,7 +48,9 @@ export class CreateInviteDto {
   itemNameEncrypted?: string;
 
   @ApiProperty({
-    description: 'Hex-encoded item key wrapped with ephemeral public key via ECIES',
+    description:
+      'Hex-encoded root readKey wrapped with the EPHEMERAL public key via ECIES. ' +
+      'Server never sees the ephemeral private key — it lives only in the URL fragment.',
   })
   @IsString()
   @Matches(/^[0-9a-fA-F]+$/, { message: 'encryptedKey must be a hex string' })
@@ -87,13 +59,17 @@ export class CreateInviteDto {
   encryptedKey!: string;
 
   @ApiProperty({
-    description: 'Re-wrapped descendant keys (subfolder/file keys) with ephemeral public key',
+    description:
+      'Hex-encoded ECIES descriptor ref for write access wrapped with the EPHEMERAL public key. ' +
+      'Omit for read-only invites.',
     required: false,
-    type: [InviteChildKeyDto],
   })
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => InviteChildKeyDto)
+  @IsString()
+  @Matches(/^(?:[0-9a-fA-F]{2})+$/, {
+    message: 'writeDescriptorRef must be an even-length hex string',
+  })
+  @MinLength(64)
+  @MaxLength(4096)
   @IsOptional()
-  encryptedChildKeys?: InviteChildKeyDto[];
+  writeDescriptorRef?: string;
 }
