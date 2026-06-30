@@ -37,3 +37,7 @@ Phase 68 (Web Integration). Two CodeRabbit findings flag the current bridge stat
 - In `client.ts`, persist the published envelope back into `SharedFolderState.publishedNode`
   inside `adoptSharedFolderResult` (alongside `children` + `sequenceNumber`) so consecutive
   shared writes see the current node.
+- SDK-side enablers (CodeRabbit PR #583 threads #15, #17): have the shared-write ops /
+  `resealAndPublishParent` **return the updated parent `PublishedNode` envelope**, and have
+  `bin` delete/restore **propagate the published folder snapshot back to the caller**, so the
+  client has the fresh envelope to persist (above) instead of re-resolving.
