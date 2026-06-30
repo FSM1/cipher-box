@@ -14,7 +14,7 @@
  * owned-path `folder.store` projection tests).
  */
 
-import type { SealedChildRef } from '@cipherbox/core';
+import type { SealedChildRef, PublishedNode } from '@cipherbox/core';
 import { hexToBytes } from '@cipherbox/crypto';
 import type { CipherBoxClient, SharedFolderState, ShareKeyType } from '@cipherbox/sdk';
 
@@ -39,6 +39,21 @@ export type SharedFolderClient = Pick<
   | 'enumerateSharedSubtree' // REQ-1
 >;
 
+/**
+ * Placeholder PublishedNode used when Phase-68 wiring has not yet supplied the
+ * real published envelope. The write-body operations in Phase 65 are not yet
+ * exercised through real navigation paths; Phase 68 will replace this with the
+ * actual resolved node.
+ */
+const PLACEHOLDER_PUBLISHED_NODE: PublishedNode = {
+  schema: 'node/v3',
+  kind: 'folder',
+  id: '00000000-0000-0000-0000-000000000000',
+  generation: 0,
+  aeadVersion: 1,
+  readSealed: '',
+};
+
 /** Inputs needed to seed (or re-seed) the SDK for the active shared folder. */
 export type SeedSharedFolderArgs = {
   shareId: string;
@@ -53,6 +68,16 @@ export type SeedSharedFolderArgs = {
     shareId: string,
     keys: Array<{ keyType: ShareKeyType; itemId: string; encryptedKey: string }>
   ) => Promise<void>;
+  /**
+   * 32-byte AES key for unsealing the write-body (Phase 65 write-body model).
+   * Supplied by Phase-68 wiring; defaults to a zero key placeholder until then.
+   */
+  writeKey?: Uint8Array;
+  /**
+   * Current on-wire published envelope for unsealing the write-body.
+   * Supplied by Phase-68 wiring; defaults to a sentinel placeholder until then.
+   */
+  publishedNode?: PublishedNode;
 };
 
 /**
@@ -73,6 +98,8 @@ export function seedSharedFolder(client: SharedFolderClient, args: SeedSharedFol
     ipnsName: args.ipnsName,
     folderKey: args.folderKey,
     ipnsPrivateKey: args.ipnsPrivateKey,
+    writeKey: args.writeKey ?? new Uint8Array(32),
+    publishedNode: args.publishedNode ?? PLACEHOLDER_PUBLISHED_NODE,
     sequenceNumber: args.sequenceNumber,
     children: args.children,
     ownerPublicKey: args.ownerPublicKey,

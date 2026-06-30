@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { buildSharedWriteContext, type SharedWriteContextParams } from '../share/context';
 import type { SdkContext } from '@cipherbox/sdk-core';
-import type { FolderChild, FolderEntry } from '@cipherbox/core';
+import type { FolderChild, FolderEntry, PublishedNode } from '@cipherbox/core';
 
 const makeSdkContext = (): SdkContext => ({
   apiUrl: 'http://localhost:3000',
@@ -19,16 +19,28 @@ const makeFolderEntry = (id: string, name: string): FolderEntry => ({
   modifiedAt: 1000,
 });
 
+const stubPublishedNode: PublishedNode = {
+  schema: 'node/v3',
+  kind: 'folder',
+  id: 'stub-node-id',
+  generation: 0,
+  aeadVersion: 1,
+  readSealed: 'dGVzdA==',
+};
+
 const makeParams = (overrides?: Partial<SharedWriteContextParams>): SharedWriteContextParams => ({
   ctx: makeSdkContext(),
-  folderKey: new Uint8Array(32).fill(1),
-  ipnsPrivateKey: new Uint8Array(64).fill(2),
+  readKey: new Uint8Array(32).fill(1),
+  writeKey: new Uint8Array(32).fill(2),
+  publishedNode: stubPublishedNode,
   ipnsName: 'k51-test-folder',
   sequenceNumber: 42n,
   children: [makeFolderEntry('child-1', 'Documents')] as FolderChild[],
   ownerPublicKey: new Uint8Array(33).fill(3),
   recipientPublicKey: new Uint8Array(33).fill(4),
   shareId: 'share-abc-123',
+  publishNodeFn: vi.fn().mockResolvedValue({ tombstoned: false, newSequenceNumber: 2n }),
+  addToIpfsFn: vi.fn().mockResolvedValue({ cid: 'QmMock' }),
   addShareKeysFn: vi.fn().mockResolvedValue(undefined),
   ...overrides,
 });
@@ -39,14 +51,17 @@ describe('buildSharedWriteContext', () => {
     const ctx = buildSharedWriteContext(params);
 
     expect(ctx.ctx).toBe(params.ctx);
-    expect(ctx.folderKey).toBe(params.folderKey);
-    expect(ctx.ipnsPrivateKey).toBe(params.ipnsPrivateKey);
+    expect(ctx.readKey).toBe(params.readKey);
+    expect(ctx.writeKey).toBe(params.writeKey);
+    expect(ctx.publishedNode).toBe(params.publishedNode);
     expect(ctx.ipnsName).toBe(params.ipnsName);
     expect(ctx.sequenceNumber).toBe(42n);
     expect(ctx.children).toBe(params.children);
     expect(ctx.ownerPublicKey).toBe(params.ownerPublicKey);
     expect(ctx.recipientPublicKey).toBe(params.recipientPublicKey);
     expect(ctx.shareId).toBe('share-abc-123');
+    expect(ctx.publishNodeFn).toBe(params.publishNodeFn);
+    expect(ctx.addToIpfsFn).toBe(params.addToIpfsFn);
     expect(ctx.addShareKeysFn).toBe(params.addShareKeysFn);
   });
 
@@ -55,7 +70,9 @@ describe('buildSharedWriteContext', () => {
     const ctx = buildSharedWriteContext(params);
 
     // Should be the same references, not copies
-    expect(ctx.folderKey).toBe(params.folderKey);
+    expect(ctx.readKey).toBe(params.readKey);
+    expect(ctx.writeKey).toBe(params.writeKey);
+    expect(ctx.publishedNode).toBe(params.publishedNode);
     expect(ctx.children).toBe(params.children);
   });
 
@@ -88,5 +105,23 @@ describe('buildSharedWriteContext', () => {
     expect(addFn).toHaveBeenCalledWith('share-1', [
       { keyType: 'file', itemId: 'f1', encryptedKey: 'abc' },
     ]);
+  });
+
+  it('preserves publishNodeFn and addToIpfsFn as callable', async () => {
+    const publishFn = vi.fn().mockResolvedValue({ tombstoned: false, newSequenceNumber: 5n });
+    const ipfsFn = vi.fn().mockResolvedValue({ cid: 'QmTest' });
+    const params = makeParams({ publishNodeFn: publishFn, addToIpfsFn: ipfsFn });
+    const ctx = buildSharedWriteContext(params);
+
+    const publishResult = await ctx.publishNodeFn({
+      published: stubPublishedNode,
+      ipnsName: 'k51-test',
+      ipnsPrivateKey: new Uint8Array(32),
+      sequenceNumber: 4n,
+    });
+    expect(publishResult).toEqual({ tombstoned: false, newSequenceNumber: 5n });
+
+    const ipfsResult = await ctx.addToIpfsFn(new Uint8Array([1, 2, 3]));
+    expect(ipfsResult).toEqual({ cid: 'QmTest' });
   });
 });

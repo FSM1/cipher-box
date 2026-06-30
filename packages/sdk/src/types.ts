@@ -7,7 +7,7 @@
 
 import type { TeeKeys, PinningMode, ExternalProviderConfig } from '@cipherbox/sdk-core';
 import type { AxiosInstance } from '@cipherbox/api-client';
-import type { SealedChildRef, Node } from '@cipherbox/core';
+import type { SealedChildRef, Node, PublishedNode } from '@cipherbox/core';
 import type { SentShareInfo, ShareKeyType } from './share';
 
 /**
@@ -153,10 +153,14 @@ export type SharedFolderState = {
   shareId: string;
   /** IPNS name of the shared folder */
   ipnsName: string;
-  /** Decrypted AES-256 folder key for the shared folder */
+  /** Decrypted AES-256 folder key for the shared folder (also used as readKey) */
   folderKey: Uint8Array;
   /** Ed25519 IPNS private key for signing publishes of this shared folder */
   ipnsPrivateKey: Uint8Array;
+  /** 32-byte AES key for unsealing the write-body (Phase 65 write-body model) */
+  writeKey: Uint8Array;
+  /** Current on-wire published envelope for unsealing the write-body */
+  publishedNode: PublishedNode;
   /** Current IPNS sequence number (monotonically increasing) */
   sequenceNumber: bigint;
   /** Current folder children (sealed child refs — phase 63 populates via read-chain navigation) */

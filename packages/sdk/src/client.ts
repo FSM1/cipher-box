@@ -1716,20 +1716,45 @@ export class CipherBoxClient {
    * Build a SharedWriteContext from the current shared-folder state.
    * The state's per-share owner/recipient pubkeys, IPNS key, and addShareKeys
    * callback are carried into the context — no cross-share bleed (T-48-07).
+   *
+   * addToIpfsFn: thin wrapper over sdkCore.addToIpfs — uploads raw bytes and
+   * returns the resulting CID. Used by write-body ops to upload encrypted content.
+   *
+   * publishNodeFn: uploads the sealed PublishedNode JSON to IPFS then calls
+   * createAndPublishIpnsRecord with the supplied sequenceNumber (callers in
+   * shared-write.ts supply the target new sequence directly). Returns the
+   * new sequence number echoed from the API response.
    */
   private buildSharedWriteContextFromState(
     state: SharedFolderState
   ): ReturnType<typeof shareOps.buildSharedWriteContext> {
     return shareOps.buildSharedWriteContext({
       ctx: this.ctx,
-      folderKey: state.folderKey,
-      ipnsPrivateKey: state.ipnsPrivateKey,
+      readKey: state.folderKey,
+      writeKey: state.writeKey,
+      publishedNode: state.publishedNode,
       ipnsName: state.ipnsName,
       sequenceNumber: state.sequenceNumber,
       children: state.children,
       ownerPublicKey: state.ownerPublicKey,
       recipientPublicKey: state.recipientPublicKey,
       shareId: state.shareId,
+      addToIpfsFn: async (data) => {
+        const result = await sdkCore.addToIpfs(this.ctx, data);
+        return { cid: result.cid };
+      },
+      publishNodeFn: async ({ published, ipnsName, ipnsPrivateKey, sequenceNumber }) => {
+        const bytes = new TextEncoder().encode(JSON.stringify(published));
+        const ipfsResult = await sdkCore.addToIpfs(this.ctx, bytes);
+        const pubResult = await sdkCore.createAndPublishIpnsRecord({
+          ipnsPrivateKey,
+          ipnsName,
+          metadataCid: ipfsResult.cid,
+          sequenceNumber,
+          ctx: this.ctx,
+        });
+        return { tombstoned: false, newSequenceNumber: pubResult.sequenceNumber };
+      },
       addShareKeysFn: state.addShareKeysFn,
     });
   }
