@@ -1,6 +1,4 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { InviteChildKeyDto } from './create-invite.dto';
-import type { ChildKeyType } from '../types';
 
 /**
  * Response for creating or listing invites (sharer's view).
@@ -12,17 +10,17 @@ export class InviteResponseDto {
   @ApiProperty({ description: 'Invite token (URL-safe base64)' })
   token!: string;
 
-  @ApiProperty({ enum: ['folder', 'file'] })
-  itemType!: string;
+  @ApiProperty({ description: 'IPNS name of the root shared node' })
+  rootIpnsName!: string;
 
-  @ApiProperty({ description: 'IPNS name of the shared item' })
-  ipnsName!: string;
+  @ApiProperty({ description: 'UUID of the root shared node' })
+  rootNodeId!: string;
 
-  @ApiProperty({ description: 'Display name of the shared item' })
-  itemName!: string;
+  @ApiProperty({ description: 'Generation of the root node at invite creation (numeric string)' })
+  rootGeneration!: string;
 
   @ApiProperty({
-    description: 'Hex-encoded ECIES ciphertext of the display name, or null for legacy invites',
+    description: 'Hex-encoded ECIES ciphertext of the display name, or null if not provided',
     type: String,
     nullable: true,
   })
@@ -54,7 +52,7 @@ export class InviteStatusResponseDto {
 
 /**
  * Response for the authenticated invite data fetch (claim flow).
- * Returns the encrypted key ciphertext needed by the client to unwrap and re-wrap.
+ * Returns the encrypted key ciphertext and root identity needed by the client.
  */
 export class InviteDataResponseDto {
   @ApiProperty({
@@ -64,32 +62,30 @@ export class InviteDataResponseDto {
   status!: string;
 
   @ApiProperty({
-    description: 'Hex-encoded item key wrapped with ephemeral public key',
+    description: 'Hex-encoded root readKey wrapped with ephemeral public key',
   })
   encryptedKey!: string;
 
   @ApiProperty({
-    description: 'Array of child keys wrapped with ephemeral public key, or null',
-    type: [InviteChildKeyDto],
+    description:
+      'Hex-encoded ECIES descriptor ref for write access wrapped with ephemeral public key. ' +
+      'Null for read-only invites.',
+    type: String,
     nullable: true,
   })
-  encryptedChildKeys!: Array<{
-    keyType: ChildKeyType;
-    itemId: string;
-    encryptedKey: string;
-  }> | null;
+  writeDescriptorRef!: string | null;
 
-  @ApiProperty({ enum: ['folder', 'file'] })
-  itemType!: string;
+  @ApiProperty({ description: 'UUID of the root shared node' })
+  rootNodeId!: string;
 
-  @ApiProperty({ description: 'IPNS name of the shared item' })
-  ipnsName!: string;
+  @ApiProperty({ description: 'IPNS name of the root shared node' })
+  rootIpnsName!: string;
 
-  @ApiProperty({ description: 'Display name of the shared item' })
-  itemName!: string;
+  @ApiProperty({ description: 'Generation of the root node at invite creation (numeric string)' })
+  rootGeneration!: string;
 
   @ApiProperty({
-    description: 'Hex-encoded ECIES ciphertext of the display name, or null for legacy invites',
+    description: 'Hex-encoded ECIES ciphertext of the display name, or null if not provided',
     type: String,
     nullable: true,
   })

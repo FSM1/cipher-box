@@ -6,10 +6,9 @@ import {
   Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource, IsNull, Not } from 'typeorm';
+import { Repository, DataSource } from 'typeorm';
 import { randomBytes } from 'crypto';
 import { Share } from './entities/share.entity';
-import { ShareKey } from './entities/share-key.entity';
 import { ShareInvite } from './entities/share-invite.entity';
 import { CreateInviteDto } from './dto/create-invite.dto';
 import { ClaimInviteDto } from './dto/claim-invite.dto';
@@ -29,7 +28,7 @@ export class ShareInviteService {
 
   /**
    * Create an invite record with a random token and 7-day expiry.
-   * The encryptedKey is the item key wrapped with an ephemeral public key.
+   * The encryptedKey is the root readKey wrapped with an ephemeral public key.
    */
   async createInvite(sharerId: string, dto: CreateInviteDto): Promise<ShareInvite> {
     const token = randomBytes(16).toString('base64url');
@@ -38,15 +37,16 @@ export class ShareInviteService {
     const invite = this.inviteRepo.create({
       token,
       sharerId,
-      itemType: dto.itemType,
-      ipnsName: dto.ipnsName,
-      itemName: dto.itemName,
-      // Client-supplied ECIES ciphertext (wrapped with the ephemeral pubkey)
-      // only. Server never encrypts plaintext (zero-knowledge). Legacy clients
-      // omit this and still send plaintext itemName.
+      rootIpnsName: dto.rootIpnsName,
+      rootNodeId: dto.rootNodeId,
+      rootGeneration: dto.rootGeneration ?? '0',
+      // Client-supplied ECIES ciphertext (wrapped with the ephemeral pubkey).
+      // Server never encrypts plaintext (zero-knowledge).
       itemNameEncrypted: dto.itemNameEncrypted ? Buffer.from(dto.itemNameEncrypted, 'hex') : null,
       encryptedKey: Buffer.from(dto.encryptedKey, 'hex'),
-      encryptedChildKeys: dto.encryptedChildKeys ?? null,
+      writeDescriptorRef: dto.writeDescriptorRef
+        ? Buffer.from(dto.writeDescriptorRef, 'hex')
+        : null,
       status: 'active',
       maxClaims: 1,
       claimCount: 0,
@@ -77,7 +77,7 @@ export class ShareInviteService {
 
   /**
    * Get full invite data for the claim flow (authenticated).
-   * Returns encryptedKey, encryptedChildKeys, itemType, ipnsName, itemName.
+   * Returns encryptedKey, writeDescriptorRef, rootNodeId, rootIpnsName, rootGeneration.
    * Auto-expires and returns null if past TTL.
    */
   async getInviteForClaim(token: string): Promise<ShareInvite | null> {
@@ -98,11 +98,12 @@ export class ShareInviteService {
   }
 
   /**
-   * Claim an invite: atomic single-claim with Share + ShareKey creation.
+   * Claim an invite: atomic single-claim that mints one descriptor-ref Share (D-05).
    *
    * Uses UPDATE ... WHERE to prevent race conditions on concurrent claims.
    * Self-claim prevention: sharer cannot claim their own invite.
-   * Creates standard Phase 14 Share + ShareKey records from re-wrapped keys.
+   * Root identity is copied from the invite row, not from claimer input.
+   * Single descriptor-ref grant — no fan-out (DATA-01/DATA-02).
    */
   async claimInvite(
     token: string,
@@ -117,8 +118,7 @@ export class ShareInviteService {
     }
 
     // Pre-transaction expiry / status check so expired/revoked invites
-    // return 404 instead of leaking through to the atomic UPDATE (which
-    // would throw 409 and signal that the token exists).
+    // return 404 instead of leaking through to the atomic UPDATE
     if (invite.expiresAt < new Date()) {
       if (invite.status === 'active') {
         await this.inviteRepo.remove(invite);
@@ -135,8 +135,7 @@ export class ShareInviteService {
       throw new ConflictException('Cannot claim your own invite');
     }
 
-    // Run atomic claim + Share creation inside a transaction so that
-    // a failure after marking the invite as claimed is rolled back.
+    // Run atomic claim + Share creation inside a transaction
     return this.dataSource.transaction(async (manager) => {
       // Atomic UPDATE to prevent race condition on single-claim
       const result = await manager
@@ -157,66 +156,42 @@ export class ShareInviteService {
         throw new ConflictException('Invite already claimed, expired, or revoked');
       }
 
-      // Check for existing active share (same sharer, recipient, ipnsName)
+      // Check for existing share (same sharer, recipient, rootNodeId — hard-delete means
+      // no revoked rows remain, so plain triple lookup suffices)
       const existingShare = await manager.findOne(Share, {
         where: {
           sharerId: invite.sharerId,
           recipientId: claimerId,
-          ipnsName: invite.ipnsName,
-          revokedAt: IsNull(),
+          rootNodeId: invite.rootNodeId,
         },
       });
 
       if (existingShare) {
         this.logger.warn(
-          `Invite claim for ${invite.ipnsName}: share already exists between ${invite.sharerId} and ${claimerId}`
+          `Invite claim for ${invite.rootIpnsName}: share already exists between ${invite.sharerId} and ${claimerId}`
         );
         return { shareId: existingShare.id };
       }
 
-      // Clean up any revoked-but-not-yet-rotated records for this triple
-      const revoked = await manager.find(Share, {
-        where: {
-          sharerId: invite.sharerId,
-          recipientId: claimerId,
-          ipnsName: invite.ipnsName,
-          revokedAt: Not(IsNull()),
-        },
-      });
-      if (revoked.length > 0) {
-        await manager.remove(revoked);
-      }
-
-      // Create Share record with re-wrapped keys from the claim DTO.
-      // itemNameEncrypted is re-wrapped client-side for the recipient's real
-      // secp256k1 key (the invite held it wrapped with the ephemeral key).
-      // Server never sees plaintext and never encrypts (zero-knowledge).
+      // Mint exactly one descriptor-ref Share (D-05).
+      // Root identity is sourced from the invite row to prevent spoofing (T-66-S1).
+      // Write grant is presence-derived from writeDescriptorRef (T-66-E1).
+      // itemNameEncrypted is re-wrapped client-side for the recipient's real pubkey.
       const share = manager.create(Share, {
         sharerId: invite.sharerId,
         recipientId: claimerId,
-        itemType: invite.itemType,
-        ipnsName: invite.ipnsName,
-        itemName: invite.itemName,
+        readDescriptorRef: Buffer.from(dto.readDescriptorRef, 'hex'),
+        writeDescriptorRef: dto.writeDescriptorRef
+          ? Buffer.from(dto.writeDescriptorRef, 'hex')
+          : null,
+        rootNodeId: invite.rootNodeId,
+        rootIpnsName: invite.rootIpnsName,
+        rootGeneration: invite.rootGeneration,
         itemNameEncrypted: dto.itemNameEncrypted ? Buffer.from(dto.itemNameEncrypted, 'hex') : null,
-        encryptedKey: Buffer.from(dto.encryptedKey, 'hex'),
         hiddenByRecipient: false,
-        revokedAt: null,
       });
 
       const savedShare = await manager.save(share);
-
-      // Create ShareKey records from re-wrapped child keys
-      if (dto.childKeys && dto.childKeys.length > 0) {
-        const shareKeys = dto.childKeys.map((ck) =>
-          manager.create(ShareKey, {
-            shareId: savedShare.id,
-            keyType: ck.keyType,
-            itemId: ck.itemId,
-            encryptedKey: Buffer.from(ck.encryptedKey, 'hex'),
-          })
-        );
-        await manager.save(shareKeys);
-      }
 
       return { shareId: savedShare.id };
     });
@@ -226,11 +201,11 @@ export class ShareInviteService {
    * Get active invites for a specific item created by a sharer.
    * Auto-cleans expired invites during the query.
    */
-  async getInvitesForItem(sharerId: string, ipnsName: string): Promise<ShareInvite[]> {
+  async getInvitesForItem(sharerId: string, rootIpnsName: string): Promise<ShareInvite[]> {
     const invites = await this.inviteRepo.find({
       where: {
         sharerId,
-        ipnsName,
+        rootIpnsName,
         status: 'active',
       },
       order: { createdAt: 'DESC' },
