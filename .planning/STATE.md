@@ -3,16 +3,16 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
 current_phase: 66
-current_phase_name: API Schema Cutover, Publish Gate, and Tombstone
+current_phase_name: api-schema-cutover-publish-gate-and-tombstone
 status: executing
 stopped_at: Phase 66 context gathered
-last_updated: "2026-06-30T14:53:55.978Z"
+last_updated: "2026-06-30T15:02:13.594Z"
 last_activity: 2026-06-30
-last_activity_desc: Phase 65 complete, transitioned to Phase 66
+last_activity_desc: Phase 66 execution started
 progress:
   total_phases: 9
   completed_phases: 5
-  total_plans: 36
+  total_plans: 45
   completed_plans: 36
   percent: 56
 ---
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-27)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 65 — sdk-write-chain-bin-re-link-and-invite-claim
+**Current focus:** Phase 66 — api-schema-cutover-publish-gate-and-tombstone
 
 ## Current Position
 
-Phase: 66 — API Schema Cutover, Publish Gate, and Tombstone
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-06-30 — Phase 65 complete, transitioned to Phase 66
+Phase: 66 (api-schema-cutover-publish-gate-and-tombstone) — EXECUTING
+Plan: 1 of 9
+Status: Executing Phase 66
+Last activity: 2026-06-30 — Phase 66 execution started
 
 Progress: `░░░░░░░░░░` 0 / 9 phases (0%)
 

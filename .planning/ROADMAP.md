@@ -310,19 +310,19 @@ Plans:
 5. A tombstoned `ipns_records` row is rejected at the publish gate (403/410) and at the EOL-only renewal; resolve returns a 410 marker for tombstoned names; server-side `generation` gate enforces forward-only per node, mirroring the sequence CAS
 6. `pnpm api:generate` is run and the regenerated `packages/api-client/src/generated/` is committed alongside the migration; the `check-api-client.sh` pre-commit hook passes
 
-**Plans**: 9 plans
+**Plans**: 5/9 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 66-01-PLAN.md — IPNS entity rename (`folder_ipns`→`ipns_records`, drop `public_key`, +`tombstoned_at`/`generation`) + import-site propagation [DATA-03]
-- [ ] 66-03-PLAN.md — Shares entities + DTOs reshape (descriptor refs; delete `share_keys`; slim `share_invites`) [DATA-01, DATA-02, DATA-04]
+- [x] 66-01-PLAN.md — IPNS entity rename (`folder_ipns`→`ipns_records`, drop `public_key`, +`tombstoned_at`/`generation`) + import-site propagation [DATA-03]
+- [x] 66-03-PLAN.md — Shares entities + DTOs reshape (descriptor refs; delete `share_keys`; slim `share_invites`) [DATA-01, DATA-02, DATA-04]
 
 **Wave 2** *(blocked on Wave 1)*
 
-- [ ] 66-02-PLAN.md — IPNS atomic CAS publish + generation gate + tombstone + resolve case-split + 410 marker [TEE-04, TEE-05, TEE-07]
-- [ ] 66-04-PLAN.md — Shares service/controller + invite-claim rewrite (hard-delete revoke; single-`readKey` grant) [DATA-01, DATA-02, DATA-04]
-- [ ] 66-05-PLAN.md — Forward drop-recreate migration `1750000000000-ApiSchemaCutover` [DATA-01, DATA-02, DATA-03]
+- [x] 66-02-PLAN.md — IPNS atomic CAS publish + generation gate + tombstone + resolve case-split + 410 marker [TEE-04, TEE-05, TEE-07]
+- [x] 66-04-PLAN.md — Shares service/controller + invite-claim rewrite (hard-delete revoke; single-`readKey` grant) [DATA-01, DATA-02, DATA-04]
+- [x] 66-05-PLAN.md — Forward drop-recreate migration `1750000000000-ApiSchemaCutover` [DATA-01, DATA-02, DATA-03]
 
 **Wave 3** *(blocked on Wave 2)*
 
@@ -417,7 +417,7 @@ Plans:
 | 63 | Read-Chain Navigation and Rotation Core | 7/7 | Complete    | 2026-06-29 |
 | 64 | Rotation Soundness — Revocation Guarantees | 8/8 | Complete   | 2026-06-29 |
 | 65 | SDK Write-Chain, Bin Re-link, and Invite Claim | 7/7 | Complete    | 2026-06-30 |
-| 66 | API Schema Cutover, Publish Gate, and Tombstone | 0/9 | Planned | - |
+| 66 | API Schema Cutover, Publish Gate, and Tombstone | 5/9 | In Progress|  |
 | 67 | TEE Lease-Renewer Contract Rewrite | 0/? | Not started | - |
 | 68 | Web Integration — Rotation UX and Durable Client State | 0/? | Not started | - |
 | 69 | FUSE and WinFsp — Rust Integration and Grant-Root Awareness | 0/? | Not started | - |
