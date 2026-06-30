@@ -481,6 +481,7 @@ describe('updateSharedFile', () => {
 
     await updateSharedFile(swCtx, {
       fileRef,
+      fileNodeId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
       fileReadKey,
       fileWriteKey,
       fileIpnsPrivateKey,
@@ -504,6 +505,7 @@ describe('updateSharedFile', () => {
     };
     await updateSharedFile(swCtx, {
       fileRef,
+      fileNodeId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
       fileReadKey: new Uint8Array(32).fill(0xaa),
       fileWriteKey: new Uint8Array(32).fill(0xbb),
       fileIpnsPrivateKey: new Uint8Array(32).fill(0xcc),
@@ -565,11 +567,64 @@ describe('moveInSharedFolder', () => {
       childKind: 'folder',
       childGeneration: 0,
       childReadKey: new Uint8Array(32).fill(0xdd),
+      // Supply childWriteKey so the write link is re-sealed for the destination.
+      childWriteKey: new Uint8Array(32).fill(0xee),
     });
 
     expect(result.srcResult.publishedChildren).toHaveLength(0);
     expect(result.destResult.publishedChildren).toHaveLength(1);
     expect(result.destResult.publishedChildren[0].name).toBe('tomove.txt');
+  });
+
+  it('throws when no write key can be resolved for the child', async () => {
+    const CHILD_UUID = '33333333-4444-5555-6666-777777777777';
+    const child: SealedChildRef = {
+      name: 'tomove.txt',
+      ipnsName: 'k51child',
+      generation: 0,
+      versionFloor: 1n,
+      readKeySealed: 'fakebase64sealed',
+    };
+
+    const {
+      publishedNode: srcPn,
+      readKey: srcReadKey,
+      writeKey: srcWriteKey,
+    } = await buildSealedParent({ extraChildren: [child] });
+    const {
+      publishedNode: destPn,
+      readKey: destReadKey,
+      writeKey: destWriteKey,
+    } = await buildSealedParent();
+
+    const srcCtx = await makeSWCtx({
+      publishedNode: srcPn,
+      readKey: srcReadKey,
+      writeKey: srcWriteKey,
+      ipnsName: 'k51src',
+      children: [child],
+    });
+    const destCtx = await makeSWCtx({
+      publishedNode: destPn,
+      readKey: destReadKey,
+      writeKey: destWriteKey,
+      ipnsName: 'k51dest',
+      children: [],
+    });
+
+    // Neither childWriteKey supplied nor a write-body entry exists in src — must throw.
+    await expect(
+      moveInSharedFolder({
+        srcCtx,
+        destCtx,
+        itemId: 'k51child',
+        childNodeId: CHILD_UUID,
+        childKind: 'folder',
+        childGeneration: 0,
+        childReadKey: new Uint8Array(32).fill(0xdd),
+        // childWriteKey intentionally omitted
+      })
+    ).rejects.toThrow('write link not found for child');
   });
 });
 
