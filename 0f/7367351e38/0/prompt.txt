@@ -1,0 +1,90 @@
+/gsd-plan-phase 67
+
+---
+
+<task-notification>
+<task-id>a202333f3739da9c6</task-id>
+<tool-use-id>toolu_015Dxqsm2KE4KsLsukfNVxrP</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/13524ecf-de1b-47de-bf59-e080a2ed8848/tasks/a202333f3739da9c6.output</output-file>
+<status>completed</status>
+<summary>Agent "Research Phase 67" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## RESEARCH COMPLETE
+
+**Phase:** 67 - TEE Lease-Renewer Contract Rewrite
+**Confidence:** HIGH
+
+### Key Findings
+
+- No new dependencies needed — `@cipherbox/crypto` (verify/parse/publicKeyFromIpnsName) and `@cipherbox/core` (createIpnsRecord/marshalIpnsRecord) are already in `apps/tee-worker/package.json:13-14`. The `+ 1n` offender is at `republish.ts:79` exactly as CONTEXT cited.
+- BullMQ E2E trigger: `new Queue('republish', { connection: { host: 'localhost', port: 6380 } }).add('republish-batch', {})` — no dev HTTP endpoint exists or is needed. The processor picks up any job on the `republish` queue regardless of source.
+- Port conflict: `mock-ipns-routing` already occupies `127.0.0.1:3001`. New local tee-worker service must use `127.0.0.1:3002:3001` + `TEE_WORKER_URL=http://localhost:3002` in API env.
+- Verify-in-enclave chain: `parseIpnsRecord` → `verifyIpnsRecordSignature` → `publicKeyFromIpnsName(ipnsName)` binding check → `createIpnsRecord(decryptedKey, parsed.value, parsed.sequence, lifetime)` → `marshalIpnsRecord`. `record.pubKey` from `parseIpnsRecord` is `undefined` for Ed25519 identity records — never use it for binding.
+- Weak write-back (`LessThanOrEqual`) at `republish.service.ts:386-397` must be replaced with an equality CAS (`WHERE sequence_number = :loaded AND tombstoned_at IS NULL`) on `signed_record` only.
+- `EPOCH_ZERO_TIMESTAMP_MS` is undefined in the codebase — TEE cannot do pure clock-based epoch derivation without an anchor. Recommended: retain `entry.keyEpoch` (from `ipns_records.key_epoch`) as the ECIES epoch hint; the re-encryption target is always `getInternalCurrentEpoch()` from clock.
+
+### File Created
+
+`/Users/myankelev/Code/random/cipher-box/.planning/phases/67-tee-lease-renewer-contract-rewrite/67-RESEARCH.md`
+
+### Confidence Assessment
+
+| Area | Level | Reason |
+|------|-------|--------|
+| Standard Stack | HIGH | All primitives verified against live files with line numbers |
+| Architecture | HIGH | All CONTEXT file:line refs validated; minor drift documented |
+| Pitfalls | HIGH | Derived from actual code behavior (port conflict, pubKey=undefined, LessThanOrEqual weakness) |
+| Open Questions | LOW | Epoch anchor and Dockerfile existence unresolved — flagged explicitly |
+
+### Open Questions
+
+1. `EPOCH_ZERO_TIMESTAMP_MS` — planner must choose: (a) define a new constant, (b) use `entry.keyEpoch` as hint (recommended), or (c) retain `currentEpoch` as a single floor-check scalar.
+2. Does `bullmq` exist in `tests/sdk-e2e/package.json`? Planner must verify before Wave 6.
+3. Does `apps/tee-worker/Dockerfile` exist for local compose build? Planner must inspect.
+4. Does `createAndPublishIpnsRecord` pass through `encryptedIpnsPrivateKey`/`keyEpoch` to the API? Must trace before fixing `createSubfolder`.
+
+### Ready for Planning
+
+Research complete. Planner can now create PLAN.md files.</result>
+<usage><subagent_tokens>60981</subagent_tokens><tool_uses>50</tool_uses><duration_ms>913144</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>afd8ffd023b5958f1</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/13524ecf-de1b-47de-bf59-e080a2ed8848/tasks/afd8ffd023b5958f1.output</output-file>
+<status>completed</status>
+<summary>Agent "Pattern map Phase 67" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PATTERN MAPPING COMPLETE
+
+**Phase:** 67 - TEE Lease-Renewer Contract Rewrite
+**Files classified:** 9
+**Analogs found:** 9 / 9
+
+### Coverage
+- Files with exact analog (self-rewrites): 7
+- Files with role-match analog: 2 (migration → Phase-66 migration; sdk-e2e test → ipns-publish-gate test)
+- Files with no analog: 0
+
+### Key Patterns Identified
+
+1. **TEE route pattern:** `republish.ts` keeps the per-entry `try/catch` + key-zeroing loop structure but replaces steps 2-4 with parse→verify→name-key-bind→renewIpnsRecord; `RepublishEntry` loses `latestCid/sequenceNumber/currentEpoch/previousEpoch`, gains `signedRecord`.
+
+2. **Equality CAS shape:** `renewIpnsRecordEol` must use `createQueryBuilder().update().set({ signedRecord, updatedAt }).where('sequence_number = :expected AND tombstoned_at IS NULL').execute()` — same TypeORM idiom as `upsertIpnsRecord` at `ipns.service.ts:379-392`; check `affected === 0` and discard (not error).
+
+3. **getDueEntries JOIN:** `createQueryBuilder` `.innerJoin(IpnsRecord, 'r', '...tombstoned_at IS NULL AND encrypted_ipns_private_key IS NOT NULL')` is the pre-batch tombstone gate (layer 1); the renewal CAS `WHERE tombstoned_at IS NULL` is layer 2.
+
+4. **Migration greenfield waiver pattern:** `up()` raw SQL `ALTER TABLE ... DROP COLUMN IF EXISTS`; `down()` throws — exact shape from `1750000000000-ApiSchemaCutover.ts`.
+
+5. **sdk-e2e trigger pattern:** `queue.add('republish-batch', {})` on redis:6380 (not `upsertJobScheduler`); DB `UPDATE ... SET next_republish_at = NOW() - interval '1 second'` to make-due; poll `ipns_records.signed_record` for change rather than waiting on timers.
+
+### File Created
+`/Users/myankelev/Code/random/cipher-box/.planning/phases/67-tee-lease-renewer-contract-rewrite/67-PATTERNS.md`
+
+### Ready for Planning
+Pattern mapping complete. Planner can reference concrete file:line excerpts for every action in PLAN.md files.</result>
+<usage><subagent_tokens>84536</subagent_tokens><tool_uses>21</tool_uses><duration_ms>270359</duration_ms></usage>
+</task-notification>
