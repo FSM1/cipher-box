@@ -1717,13 +1717,17 @@ export class CipherBoxClient {
    * The state's per-share owner/recipient pubkeys, IPNS key, and addShareKeys
    * callback are carried into the context — no cross-share bleed (T-48-07).
    *
-   * addToIpfsFn: thin wrapper over sdkCore.addToIpfs — uploads raw bytes and
-   * returns the resulting CID. Used by write-body ops to upload encrypted content.
+   * addToIpfsFn: uploads encrypted content via pinWithMode so the configured
+   * pinning mode (BYO/external) is honored — encrypted bytes never route through
+   * CipherBox when the user opted external. Returns the resulting CID.
    *
    * publishNodeFn: uploads the sealed PublishedNode JSON to IPFS then calls
    * createAndPublishIpnsRecord with the supplied sequenceNumber (callers in
-   * shared-write.ts supply the target new sequence directly). Returns the
-   * new sequence number echoed from the API response.
+   * shared-write.ts supply the target new sequence directly). The node-metadata
+   * blob intentionally goes via sdkCore.addToIpfs (CipherBox), NOT pinWithMode:
+   * it is the IPNS resolution target and must remain reachable by CipherBox's
+   * relay — mirrors the non-shared metadata-publish path. Returns the new
+   * sequence number echoed from the API response.
    */
   private buildSharedWriteContextFromState(
     state: SharedFolderState
@@ -1740,7 +1744,10 @@ export class CipherBoxClient {
       recipientPublicKey: state.recipientPublicKey,
       shareId: state.shareId,
       addToIpfsFn: async (data) => {
-        const result = await sdkCore.addToIpfs(this.ctx, data);
+        // Encrypted content must honor the configured pinning mode (BYO/external),
+        // exactly like the non-shared upload path (pinWithMode at L784/966) — never
+        // route shared-write content through CipherBox when the user opted external.
+        const result = await this.pinWithMode(data, this.ctx);
         return { cid: result.cid };
       },
       publishNodeFn: async ({ published, ipnsName, ipnsPrivateKey, sequenceNumber }) => {
