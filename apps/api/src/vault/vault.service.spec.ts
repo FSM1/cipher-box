@@ -373,6 +373,30 @@ describe('VaultService', () => {
       expect(result.id).toBe(testVaultId);
     });
 
+    it('throws ConflictException when the 23505 recovery update affects no rows', async () => {
+      mockVaultRepo.findOne.mockResolvedValue(null);
+      mockVaultRepo.create.mockReturnValue(mockVaultEntity);
+      mockVaultRepo.save.mockResolvedValue(mockVaultEntity);
+
+      // Duplicate key on save, but the recovery update matches 0 rows because the
+      // globally-unique ipns_name belongs to a different user. Initialization must
+      // fail closed instead of succeeding without a root folder_ipns row.
+      mockFolderIpnsRepo.save.mockRejectedValueOnce(
+        Object.assign(new Error('duplicate key value violates unique constraint'), {
+          code: '23505',
+        })
+      );
+      mockFolderIpnsRepo.update.mockResolvedValueOnce({ affected: 0 });
+
+      await expect(service.initializeVault(testUserId, testInitVaultDto)).rejects.toBeInstanceOf(
+        ConflictException
+      );
+      expect(mockFolderIpnsRepo.update).toHaveBeenCalledWith(
+        { userId: testUserId, ipnsName: testRootIpnsName },
+        { isRoot: true }
+      );
+    });
+
     it('should rethrow non-duplicate-key errors from folder_ipns save', async () => {
       mockVaultRepo.findOne.mockResolvedValue(null);
       mockVaultRepo.create.mockReturnValue(mockVaultEntity);

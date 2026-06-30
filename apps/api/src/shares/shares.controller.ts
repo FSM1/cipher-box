@@ -55,7 +55,9 @@ export class SharesController {
     const share = await this.sharesService.createShare(req.user.id, dto);
     return {
       shareId: share.id,
-      recipientPublicKey: dto.recipientPublicKey,
+      recipientPublicKey: dto.recipientPublicKey.startsWith('0x')
+        ? dto.recipientPublicKey
+        : `0x${dto.recipientPublicKey}`,
       readDescriptorRef: share.readDescriptorRef.toString('hex'),
       writeDescriptorRef: share.writeDescriptorRef
         ? share.writeDescriptorRef.toString('hex')

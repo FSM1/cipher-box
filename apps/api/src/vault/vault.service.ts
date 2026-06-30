@@ -101,10 +101,17 @@ export class VaultService {
     } catch (error) {
       // Row already exists (from IPNS publish endpoint) — mark as root
       if ((error as { code?: string }).code === '23505') {
-        await this.ipnsRecordRepository.update(
+        // ipns_name is globally unique (not per-user), so the conflicting row
+        // may belong to another user. If the update touches no rows, the name
+        // is taken elsewhere and initialization must not silently succeed
+        // without a root IpnsRecord.
+        const updateResult = await this.ipnsRecordRepository.update(
           { userId, ipnsName: dto.rootIpnsName },
           { isRoot: true }
         );
+        if ((updateResult.affected ?? 0) === 0) {
+          throw new ConflictException('Root IPNS name is already associated with another record');
+        }
       } else {
         throw error;
       }

@@ -16,7 +16,7 @@
  *     at/above the seq floor serves; below-floor fails closed (null → 404);
  *     an unparseable signedRecord also fails closed when there is no network fallback.
  *
- * Test 15 uses psql (via execSync) to seed preconditions that cannot be reached
+ * Test 15 uses psql (via execFileSync) to seed preconditions that cannot be reached
  * through the public API, which is normal practice for live-stack e2e tests.
  *
  * Prerequisites (live local stack):
@@ -25,7 +25,7 @@
  *   pnpm --filter @cipherbox/api migration:run          (ApiSchemaCutover1750000000000 applied)
  */
 
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { writeFileSync, unlinkSync, mkdtempSync, rmdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -94,10 +94,13 @@ function psqlExec(sql: string): void {
   const file = join(dir, 'q.sql');
   writeFileSync(file, sql + '\n');
   try {
-    execSync(`PGPASSWORD=postgres psql -h localhost -U postgres -d ${PSQL_DB} -f "${file}"`, {
+    execFileSync('psql', ['-h', 'localhost', '-U', 'postgres', '-d', PSQL_DB, '-f', file], {
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
       timeout: 15_000, // fail fast instead of hanging the Vitest worker on a stalled psql
+      // Pass psql args as an array and PGPASSWORD via env so PSQL_DB is never
+      // shell-interpolated into a command string (no injection via SDK_E2E_DB).
+      env: { ...process.env, PGPASSWORD: 'postgres' },
     });
   } finally {
     try {
@@ -121,9 +124,15 @@ function psqlQueryOne(sql: string): string {
   const file = join(dir, 'q.sql');
   writeFileSync(file, sql + '\n');
   try {
-    return execSync(
-      `PGPASSWORD=postgres psql -h localhost -U postgres -d ${PSQL_DB} -t -A -f "${file}"`,
-      { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 15_000 }
+    return execFileSync(
+      'psql',
+      ['-h', 'localhost', '-U', 'postgres', '-d', PSQL_DB, '-t', '-A', '-f', file],
+      {
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+        timeout: 15_000,
+        env: { ...process.env, PGPASSWORD: 'postgres' },
+      }
     ).trim();
   } finally {
     try {
@@ -255,8 +264,9 @@ describe('IPNS publish-gate suite (TEE-04/05/07, WRITE-04 phase gate)', () => {
     });
 
     // Simulated renewal: a lease renewer that read expected='1' before the forward
-    // publish completed now re-submits the old signed bytes (seq=1, expected='1').
-    // The DB now has sequence_number=2, so the CAS WHERE clause finds 0 rows → 409.
+    // publish completed now re-submits its OLD signed bytes (embedded seq=1). The DB
+    // is already at sequence_number=2, so the embedded sequence (1) is below the
+    // stored sequence and the anti-rollback gate fails it closed with 409 (not 410).
     let renewalError: unknown;
     try {
       await createAndPublishIpnsRecord({
@@ -264,7 +274,7 @@ describe('IPNS publish-gate suite (TEE-04/05/07, WRITE-04 phase gate)', () => {
         ipnsPublicKey: pubKey,
         ipnsName,
         metadataCid: cidRenewal,
-        sequenceNumber: 2n, // renewal signs seq=2 but expects DB to be at 1
+        sequenceNumber: 1n, // renewal replays the stale signed seq=1 bytes
         expectedSequenceNumber: '1', // stale expected — DB is already at 2
         ctx: aliceCtx,
       });

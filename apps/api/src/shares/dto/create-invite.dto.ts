@@ -7,7 +7,30 @@ import {
   Matches,
   MaxLength,
   MinLength,
+  Validate,
+  ValidatorConstraint,
+  ValidatorConstraintInterface,
 } from 'class-validator';
+
+// Signed 64-bit upper bound of the bigint "generation" column.
+const BIGINT_MAX = 9223372036854775807n;
+
+@ValidatorConstraint({ name: 'isNonNegativeBigInt', async: false })
+class IsNonNegativeBigIntConstraint implements ValidatorConstraintInterface {
+  validate(value: unknown): boolean {
+    if (typeof value !== 'string') return false;
+    try {
+      const parsed = BigInt(value);
+      return parsed >= 0n && parsed <= BIGINT_MAX;
+    } catch {
+      return false;
+    }
+  }
+
+  defaultMessage(): string {
+    return 'rootGeneration must be an integer between 0 and 9223372036854775807 (signed 64-bit range)';
+  }
+}
 
 export class CreateInviteDto {
   @ApiProperty({
@@ -34,6 +57,7 @@ export class CreateInviteDto {
     default: '0',
   })
   @IsNumberString()
+  @Validate(IsNonNegativeBigIntConstraint)
   @IsOptional()
   rootGeneration?: string;
 

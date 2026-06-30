@@ -74,8 +74,12 @@ export class SharesService {
     try {
       return await this.shareRepo.save(share);
     } catch (err: unknown) {
-      // Handle race condition: concurrent createShare for the same triple
-      if (err instanceof Error && err.message?.includes('duplicate key')) {
+      // Handle race condition: concurrent createShare for the same triple.
+      // Detect Postgres unique-violation (SQLSTATE 23505) on the error code,
+      // not a brittle message substring.
+      const code = (err as { code?: string; driverError?: { code?: string } }).code;
+      const driverCode = (err as { driverError?: { code?: string } }).driverError?.code;
+      if (code === '23505' || driverCode === '23505') {
         throw new ConflictException('Share already exists for this item and recipient');
       }
       throw err;

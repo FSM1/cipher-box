@@ -202,7 +202,12 @@ describe('SharesService', () => {
       userRepo.findOne.mockResolvedValue({ id: RECIPIENT_ID, publicKey: BARE_PUBKEY });
       shareRepo.findOne.mockResolvedValue(null);
       shareRepo.create.mockReturnValue(createMockShare());
-      shareRepo.save.mockRejectedValue(new Error('duplicate key value violates unique constraint'));
+      // Postgres surfaces a unique violation as SQLSTATE 23505; the service maps
+      // on the error code, not a brittle message substring.
+      const dupErr = Object.assign(new Error('duplicate key value violates unique constraint'), {
+        code: '23505',
+      });
+      shareRepo.save.mockRejectedValue(dupErr);
 
       await expect(service.createShare(SHARER_ID, createDto())).rejects.toThrow(ConflictException);
     });

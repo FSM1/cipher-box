@@ -17,6 +17,7 @@ import { BypassableThrottlerGuard as ThrottlerGuard } from '../common/guards/thr
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ShareInviteService } from './share-invite.service';
 import { CreateInviteDto } from './dto/create-invite.dto';
+import { GetInvitesForItemQueryDto } from './dto/get-invites-for-item-query.dto';
 import { InviteResponseDto } from './dto/invite-response.dto';
 import { RequestWithUser } from '../common/types';
 
@@ -90,9 +91,12 @@ export class ShareInvitesController {
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   async listInvites(
     @Request() req: RequestWithUser,
-    @Query('rootIpnsName') rootIpnsName: string
+    @Query() query: GetInvitesForItemQueryDto
   ): Promise<InviteResponseDto[]> {
-    const invites = await this.shareInviteService.getInvitesForItem(req.user.id, rootIpnsName);
+    const invites = await this.shareInviteService.getInvitesForItem(
+      req.user.id,
+      query.rootIpnsName
+    );
     return invites.map((inv) => ({
       id: inv.id,
       token: inv.token,

@@ -145,7 +145,7 @@ export class ApiSchemaCutover1750000000000 implements MigrationInterface {
     // FK: user_id → users(id) ON DELETE CASCADE
     // ──────────────────────────────────────────────────────────────────────────
     await queryRunner.query(`
-      CREATE TABLE "ipns_records" (
+      CREATE TABLE IF NOT EXISTS "ipns_records" (
         "id"                         uuid NOT NULL DEFAULT uuid_generate_v4(),
         "user_id"                    uuid NOT NULL,
         "ipns_name"                  varchar(255) NOT NULL,
@@ -167,7 +167,7 @@ export class ApiSchemaCutover1750000000000 implements MigrationInterface {
     `);
 
     await queryRunner.query(
-      `CREATE INDEX "IDX_ipns_records_user_id" ON "ipns_records" ("user_id")`
+      `CREATE INDEX IF NOT EXISTS "IDX_ipns_records_user_id" ON "ipns_records" ("user_id")`
     );
   }
 

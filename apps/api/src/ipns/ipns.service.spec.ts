@@ -1967,6 +1967,29 @@ describe('IpnsService', () => {
 
       expect(getRepublishMock().unenrollIpns).not.toHaveBeenCalled();
     });
+
+    it('scopes both the UPDATE and the disambiguation lookup to the caller (owner-only contract)', async () => {
+      // A name owned by another user must never be tombstoned by this caller. The
+      // UPDATE WHERE is user-scoped, so it matches 0 rows, and the disambiguation
+      // findOne is likewise user-scoped, so it returns null → NotFound. Pin both so
+      // a regression that drops userId from either the CAS WHERE or the lookup is
+      // caught (without the scoping a foreign row would be tombstoned or surface a
+      // false 200).
+      mockQbExecute.mockResolvedValue({ affected: 0 });
+      mockFolderIpnsRepo.findOne.mockResolvedValue(null);
+
+      await expect(service.tombstoneRecord(OWNER, NAME)).rejects.toBeInstanceOf(NotFoundException);
+
+      // UPDATE is owner-scoped (user_id = :userId, bound to the caller's id).
+      expect(mockQbWhere).toHaveBeenCalledWith(
+        expect.stringContaining('user_id = :userId'),
+        expect.objectContaining({ ipnsName: NAME, userId: OWNER })
+      );
+      // Disambiguation lookup is owner-scoped (never a bare ipnsName match).
+      expect(mockFolderIpnsRepo.findOne).toHaveBeenCalledWith({
+        where: { ipnsName: NAME, userId: OWNER },
+      });
+    });
   });
 
   // =========================================================================

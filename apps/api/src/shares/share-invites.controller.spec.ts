@@ -132,7 +132,7 @@ describe('ShareInvitesController', () => {
     it('forwards req.user.id and rootIpnsName to the service', async () => {
       shareInviteService.getInvitesForItem.mockResolvedValue([]);
 
-      await controller.listInvites(mockRequest, rootIpnsName);
+      await controller.listInvites(mockRequest, { rootIpnsName });
 
       expect(shareInviteService.getInvitesForItem).toHaveBeenCalledWith(
         'sharer-uuid-1',
@@ -143,7 +143,7 @@ describe('ShareInvitesController', () => {
     it('returns an empty array when there are no active invites', async () => {
       shareInviteService.getInvitesForItem.mockResolvedValue([]);
 
-      const result = await controller.listInvites(mockRequest, rootIpnsName);
+      const result = await controller.listInvites(mockRequest, { rootIpnsName });
 
       expect(result).toEqual([]);
     });
@@ -159,7 +159,7 @@ describe('ShareInvitesController', () => {
       });
       shareInviteService.getInvitesForItem.mockResolvedValue([withName, withoutName]);
 
-      const result = await controller.listInvites(mockRequest, rootIpnsName);
+      const result = await controller.listInvites(mockRequest, { rootIpnsName });
 
       expect(result).toHaveLength(2);
       expect(result[0]).toMatchObject({ id: 'invite-uuid-a', itemNameEncrypted: '00ff' });

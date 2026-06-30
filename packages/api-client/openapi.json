@@ -963,6 +963,25 @@
           "409": {
             "description": "Conflict - a folder record in the batch has an expectedSequenceNumber that does not match the current server sequence number. The entire batch is rejected."
           },
+          "410": {
+            "description": "Gone - a record in the batch targets an IPNS name that has been tombstoned (rotated out; no longer publishable). The entire batch is rejected.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "IPNS_TOMBSTONED"
+                    },
+                    "ipnsName": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
           "502": {
             "description": "Bad Gateway - Delegated routing failures (partial results may be returned)"
           }
@@ -1110,6 +1129,9 @@
           },
           "401": {
             "description": "Unauthorized - JWT token required"
+          },
+          "404": {
+            "description": "Not Found - IPNS name not found or not owned by the caller"
           }
         },
         "security": [

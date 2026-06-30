@@ -122,6 +122,19 @@ export class IpnsController {
       'the current server sequence number. The entire batch is rejected.',
   })
   @ApiResponse({
+    status: 410,
+    description:
+      'Gone - a record in the batch targets an IPNS name that has been tombstoned ' +
+      '(rotated out; no longer publishable). The entire batch is rejected.',
+    schema: {
+      type: 'object',
+      properties: {
+        error: { type: 'string', example: 'IPNS_TOMBSTONED' },
+        ipnsName: { type: 'string' },
+      },
+    },
+  })
+  @ApiResponse({
     status: 502,
     description: 'Bad Gateway - Delegated routing failures (partial results may be returned)',
   })
@@ -252,6 +265,10 @@ export class IpnsController {
     description: 'Bad Request - Invalid IPNS name format',
   })
   @ApiResponse({ status: 401, description: 'Unauthorized - JWT token required' })
+  @ApiResponse({
+    status: 404,
+    description: 'Not Found - IPNS name not found or not owned by the caller',
+  })
   async tombstoneRecord(
     @Request() req: RequestWithUser,
     @Body() dto: TombstoneIpnsDto

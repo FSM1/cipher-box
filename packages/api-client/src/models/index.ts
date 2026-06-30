@@ -66,6 +66,7 @@ export * from './inviteResponseDtoStatus';
 export * from './inviteStatusResponseDto';
 export * from './inviteStatusResponseDtoStatus';
 export * from './ipfsControllerUploadBody';
+export * from './ipnsControllerPublishBatch410';
 export * from './ipnsControllerPublishRecord410';
 export * from './ipnsControllerResolveRecord410';
 export * from './ipnsControllerResolveRecordParams';

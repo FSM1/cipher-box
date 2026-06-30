@@ -244,6 +244,15 @@ export class IpnsService {
     // is needed here: whoever holds the key updates the canonical record.
     const existing = await this.ipnsRecordRepository.findOne({ where: { ipnsName } });
 
+    // Tombstone is terminal: once a name is retired, every subsequent publish
+    // (stale or forward) must fail closed with 410. Short-circuit here, before the
+    // anti-rollback / embedded-sequence gates below, which would otherwise mask a
+    // tombstoned row as a 400/409 for a stale incoming record (the CAS tombstone
+    // gate only runs for the forward-update path).
+    if (existing?.tombstonedAt) {
+      throw new HttpException({ error: 'IPNS_TOMBSTONED', ipnsName }, HttpStatus.GONE);
+    }
+
     // Anti-rollback: the incoming record's EMBEDDED sequence (covered by the
     // signature, so tamper-evident) must not regress below the stored record's.
     // Without this, anyone who observes the public IPNS record could replay an
@@ -440,6 +449,10 @@ export class IpnsService {
         ? Buffer.from(encryptedIpnsPrivateKey, 'hex')
         : null,
       keyEpoch: keyEpoch ?? null,
+      // Persist the incoming generation on first publish so the forward-only
+      // generation gate is anchored at the client's intended value. Defaulting to
+      // the stored 0 here would let later, lower generations pass the gate.
+      generation: generation ?? '0',
       isRoot: false, // Root folder is tracked in Vault entity
     });
 
@@ -598,9 +611,15 @@ export class IpnsService {
                   e instanceof Error ? e.message : String(e)
                 }`
               );
+              // Fail closed: a network record we cannot make client-verifiable (no
+              // recoverable pubKey for the all-or-nothing signature bundle) must not be
+              // served as an unverifiable CID. Discard it and fall back to DB cache / 404.
+              result = null;
             }
           }
-          this.logger.debug(`IPNS name resolved successfully: ${ipnsName} -> ${result.cid}`);
+          if (result) {
+            this.logger.debug(`IPNS name resolved successfully: ${ipnsName} -> ${result.cid}`);
+          }
         }
       } catch (error) {
         // Fall back to DB cache on BAD_GATEWAY (delegated routing failures)
