@@ -498,6 +498,32 @@ export class IpnsService {
   }
 
   /**
+   * Tombstone an IPNS record owned by userId.
+   *
+   * Sets tombstoned_at = NOW() atomically, then removes the name from the
+   * TEE republish schedule. Subsequent publish attempts return HTTP 410 GONE
+   * via the unified CAS WHERE (tombstoned_at IS NULL). Subsequent resolves
+   * also return 410 (checked in resolveRecord before parseCachedRecord).
+   *
+   * V4 access control: tombstone is scoped to the owner (user_id = :userId).
+   * Write-share recipients cannot tombstone a record they do not own.
+   */
+  async tombstoneRecord(userId: string, ipnsName: string): Promise<void> {
+    await this.ipnsRecordRepository
+      .createQueryBuilder()
+      .update(IpnsRecord)
+      .set({ tombstonedAt: new Date() })
+      .where('ipns_name = :ipnsName AND tombstoned_at IS NULL AND user_id = :userId', {
+        ipnsName,
+        userId,
+      })
+      .execute();
+    // Unenroll from TEE republish schedule regardless of whether the UPDATE matched
+    // (idempotent: if already unenrolled, unenrollIpns returns 0 affected).
+    await this.republishService.unenrollIpns(userId, ipnsName);
+  }
+
+  /**
    * Resolve an IPNS name to its current CID via delegated routing,
    * falling back to the DB-cached CID when delegated routing is unavailable
    * or when the record is not found in the DHT.
@@ -551,6 +577,13 @@ export class IpnsService {
       const cached = await this.ipnsRecordRepository.findOne({
         where: { ipnsName },
       });
+
+      // D-07: tombstoned name returns 410 before serving any cached or network CID.
+      // Checked here so both DB-only and network+DB paths are covered.
+      if (cached?.tombstonedAt) {
+        throw new HttpException({ error: 'IPNS_TOMBSTONED', ipnsName }, HttpStatus.GONE);
+      }
+
       const cachedResult = await parseCachedRecord(cached, this.logger);
 
       if (result && cachedResult) {

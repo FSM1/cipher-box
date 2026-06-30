@@ -23,6 +23,7 @@ import {
   ResolveIpnsResponseDto,
   BatchUnenrollIpnsDto,
   BatchUnenrollIpnsResponseDto,
+  TombstoneIpnsDto,
 } from './dto';
 import { MetricsService } from '../metrics/metrics.service';
 import { RequestWithUser } from '../common/types';
@@ -66,6 +67,17 @@ export class IpnsController {
     description:
       'Conflict - expectedSequenceNumber does not match current server sequence number. ' +
       'Response body includes currentSequenceNumber for client re-sync.',
+  })
+  @ApiResponse({
+    status: 410,
+    description: 'Gone - IPNS name has been tombstoned (rotated out; no longer publishable)',
+    schema: {
+      type: 'object',
+      properties: {
+        error: { type: 'string', example: 'IPNS_TOMBSTONED' },
+        ipnsName: { type: 'string' },
+      },
+    },
   })
   @ApiResponse({
     status: 502,
@@ -185,6 +197,17 @@ export class IpnsController {
     description: 'Not Found - IPNS name not published or not found in routing network',
   })
   @ApiResponse({
+    status: 410,
+    description: 'Gone - IPNS name has been tombstoned (rotated out; name is permanently retired)',
+    schema: {
+      type: 'object',
+      properties: {
+        error: { type: 'string', example: 'IPNS_TOMBSTONED' },
+        ipnsName: { type: 'string' },
+      },
+    },
+  })
+  @ApiResponse({
     status: 502,
     description: 'Bad Gateway - Failed to resolve from delegated routing',
   })
@@ -211,5 +234,27 @@ export class IpnsController {
         pubKey: result.pubKey,
       }),
     };
+  }
+
+  @Post('tombstone')
+  @HttpCode(200)
+  @ApiOperation({
+    summary: 'Tombstone an IPNS record',
+    description:
+      'Permanently retire an IPNS name owned by the caller. ' +
+      'Sets tombstoned_at and removes the name from the TEE republish schedule. ' +
+      'Subsequent publish and resolve calls for this name return HTTP 410 Gone.',
+  })
+  @ApiResponse({ status: 200, description: 'Record tombstoned and unenrolled from republishing' })
+  @ApiResponse({
+    status: 400,
+    description: 'Bad Request - Invalid IPNS name format',
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized - JWT token required' })
+  async tombstoneRecord(
+    @Request() req: RequestWithUser,
+    @Body() dto: TombstoneIpnsDto
+  ): Promise<void> {
+    await this.ipnsService.tombstoneRecord(req.user.id, dto.ipnsName);
   }
 }
