@@ -1,0 +1,109 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "0c43e1d2e603",
+  "session_id": "13524ecf-de1b-47de-bf59-e080a2ed8848",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-30T00:17:54.433501Z",
+  "branch": "feat/sdk-write-chain-bin-re-link-and-invite-claim",
+  "checkpoints_count": 3,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "d0122e471f3a",
+  "token_usage": {
+    "input_tokens": 17068,
+    "cache_creation_tokens": 477141,
+    "cache_read_tokens": 7919157,
+    "output_tokens": 107225,
+    "api_call_count": 48
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Execute Phase 65 of the GSD workflow for cipher-box, implementing SDK write-chain, bin re-link, and invite-claim features across 7 plans in 4 waves using parallel git worktree execution. The user also requested that /ship-phase be launched after all waves complete.",
+    "outcome": "Waves 1 and 2 completed (5/7 plans), with all plans merged to the phase branch (HEAD cb3fb36cc). A post-merge build failure from Wave 2 was caught by the typecheck gate and resolved by a focused fix agent. Waves 3 and 4 (65-06, 65-07) were not yet started when the transcript ends.",
+    "learnings": {
+      "repo": [
+        "Phase 65 monorepo build chain order is: crypto→core→api-client→sdk-core→sdk→web→scripts; `pnpm typecheck` drives all of it in dependency order and is the correct post-merge gate",
+        "commit.gpgsign is false in this repo — no 1Password SSH signing hang risk for automated executor agents",
+        "SharedWriteContext was reshaped in 65-04 (writeKey + readKey + publishedNode replaced folderKey/ipnsPrivateKey) but the plan's files_modified only listed shared-write.ts, missing consumers context.ts and client.ts — the per-plan vitest+targeted-build gate passed, the strict full typecheck failed",
+        "SharedFolderState (packages/sdk/src/types.ts) did not carry writeKey or publishedNode before this phase; callers like useSharedNavigation.ts must supply them — Phase 68 owns that wiring",
+        "apps/web/src/hooks/shared-folder-projection.ts bridges the type gap with optional writeKey?/publishedNode? + PLACEHOLDER_PUBLISHED_NODE sentinel until Phase 68; seedSharedFolder is reachable from live navigation but the write path was already non-functional pre-phase-65",
+        "packages/sdk/src/client.ts has subtree IPNS collect stubs at lines 205 and 216 tagged 'phase 65' in their error strings but are not in any phase-65 plan's files_modified — carry-forward out-of-scope stubs, non-fatal, flagged for verifier",
+        "65-02 added nodeIpnsName? to BinEntry to satisfy SealedChildRef.ipnsName on restore; also fixed vi.restoreAllMocks() → sealSpy.mockRestore() to avoid resetting module-level vi.fn() mocks across tests",
+        "publishNodeFn wiring: JSON-serializes PublishedNode, uploads via addToIpfs for CID, then calls sdkCore.createAndPublishIpnsRecord — same path as registration.ts for new folders"
+      ],
+      "code": [
+        {
+          "path": "packages/core/src/node/seal.ts",
+          "finding": "sealChildWriteKey and unsealChildWriteKey (role 0x04) added — verbatim copy of the role-0x02 pair with the role byte changed; exported from node/index.ts and src/index.ts"
+        },
+        {
+          "path": "packages/sdk-core/src/rotation/engine.ts",
+          "finding": "rotateOne now threads the real writeKey through via unseal/sealChildWriteKey; three PLACEHOLDER_WRITE_KEY sites removed, preventing write-body corruption during read-rotation"
+        },
+        {
+          "path": "packages/sdk/src/share/context.ts",
+          "finding": "SharedWriteContextParams dropped folderKey/ipnsPrivateKey; now carries readKey, writeKey, publishedNode, publishNodeFn, addToIpfsFn matching the new SharedWriteContext shape"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 43,
+          "finding": "buildSharedWriteContextFromState updated: maps folderKey→readKey, passes state.writeKey and state.publishedNode, wires addToIpfsFn and publishNodeFn transport seams"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 205,
+          "end_line": 216,
+          "finding": "Subtree IPNS collect stubs tagged 'phase 65' in error strings but not in any plan's files_modified — out-of-scope carry-forward, tolerated non-fatally by tests"
+        },
+        {
+          "path": "apps/web/src/hooks/shared-folder-projection.ts",
+          "finding": "Added optional writeKey? and publishedNode? to SeedSharedFolderArgs with PLACEHOLDER_PUBLISHED_NODE defaults; reachable from useSharedNavigation.ts:199 but write path is dormant until Phase 68"
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigation.ts",
+          "line": 199,
+          "finding": "Calls seedSharedFolder — the live entry point that will need Phase 68 to supply real writeKey and publishedNode to make the write path functional"
+        }
+      ],
+      "workflow": [
+        "Post-merge typecheck gate catches cross-plan consumer surface mismatches that per-plan builds miss — per-plan agents run vitest + targeted tsc, which can pass even when strict project typecheck fails due to unchecked consumers",
+        "Fixer agent pattern: when a gate fails, delegate to a focused foreground agent with an objective bar (typecheck exit 0 + tests green + committed) rather than fixing inline in the orchestrator context",
+        "Wave 1 manifest records worktree metadata (path, branch, base SHA) as plans complete, enabling ordered merge sequencing after all workers finish",
+        "Bash pipe through tail can silently consume exit codes; use explicit exit code capture (e.g., PIPESTATUS or separate exit capture) for gate commands",
+        "Full monorepo test suite is RAM-heavy — run sequentially per affected package rather than concurrently from parallel subagents",
+        "Single-plan waves (Waves 3–4) skip worktree overhead and run on the main tree; multi-plan waves use worktrees only when plans have no file overlap"
+      ]
+    },
+    "friction": [
+      "65-04 plan under-scoped files_modified to only shared-write.ts, but SharedWriteContext reshape broke context.ts, client.ts, types.ts, and the web projection hook — post-merge typecheck caught it but required a separate fix agent and added significant latency",
+      "Bash pipe through tail ate the typecheck exit code on the first Wave 2 gate run, requiring a re-run with explicit exit capture",
+      "65-02 (bin re-link) required 131 tool uses and ~45 minutes — significantly heavier than the other Wave 1 plans (65-01: 32 tool uses, 65-03: 40 tool uses), suggesting the bin re-link model was more ambiguous than planned",
+      "The fixer agent also had to bridge apps/web (not in 65-04's plan scope at all), extending the blast radius of the scope gap"
+    ],
+    "open_items": [
+      "Wave 3 (65-06: rotateWriteFromNode full Ed25519 write-revocation, WRITE-02/03/04) not yet executed",
+      "Wave 4 (65-07: live docker API e2e write-chain rotation round-trip, D-04 phase gate) not yet executed — may need docker stack up",
+      "/ship-phase workflow pending all waves + verification + phase completion",
+      "apps/web/src/hooks/shared-folder-projection.ts PLACEHOLDER_PUBLISHED_NODE sentinel must be replaced with real values in Phase 68",
+      "packages/sdk/src/client.ts:205,216 subtree IPNS collect stubs (tagged 'phase 65') are out-of-scope for this phase and carry forward to a future phase",
+      "Phase verifier (gsd-verifier) and verification/completion steps not yet run — WRITE-01..04 traceability against REQUIREMENTS.md pending",
+      "sdk shared-write.test.ts had 15 skipped tests during Wave 1 gate (65-04 stubs) — need to confirm those are now passing after Wave 2 merge"
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
