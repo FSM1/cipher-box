@@ -101,4 +101,8 @@ When CodeRabbit's PR-level review lands (poll `gh pr checks <N>` until the `Code
 
 ### 10. Confirm green & report
 
-Poll `env -u GITHUB_TOKEN gh pr checks <N>` until all checks settle. Report: final commit SHA, CI status (all green / which failed), threads resolved (`N/N`), and the list of deferred todos created. Leave the merge decision to the user. Run `/extract-learnings` if the phase surfaced anything non-obvious.
+Poll `env -u GITHUB_TOKEN gh pr checks <N>` until all checks settle. Report: final commit SHA, CI status (all green / which failed), threads resolved (`N/N`), and the list of deferred todos created. Leave the merge decision to the user.
+
+### 11. Extract learnings
+
+Invoke `/gsd-extract-learnings $ARGUMENTS` to mine the completed phase artifacts for decisions, lessons, patterns, and surprises (writes `<phase>-LEARNINGS.md`). Commit the resulting file on the phase branch alongside the rest of the work — `.planning/` bookkeeping rides the same PR, never a separate docs-only PR.
