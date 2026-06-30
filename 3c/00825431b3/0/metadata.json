@@ -1,0 +1,98 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "3c00825431b3",
+  "session_id": "fbd17674-5430-418c-aebc-91949e271095",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-30T22:41:57.28439Z",
+  "branch": "feat/tee-lease-renewer-contract-rewrite",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/67-tee-lease-renewer-contract-rewrite/67-VALIDATION.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "378cf8647661",
+  "token_usage": {
+    "input_tokens": 13268,
+    "cache_creation_tokens": 227786,
+    "cache_read_tokens": 1602159,
+    "output_tokens": 23158,
+    "api_call_count": 16
+  },
+  "summary": {
+    "intent": "Run the GSD plan-phase workflow for Phase 67 (TEE Lease-Renewer Contract Rewrite), executing research, validation artifact creation, and planning setup.",
+    "outcome": "Research completed and RESEARCH.md written; VALIDATION.md created and committed; intel API-surface regeneration returned stale/empty but was non-blocking; workflow paused before planner spawn.",
+    "learnings": {
+      "repo": [
+        "Port 3001 is already occupied by mock-ipns-routing; TEE worker local compose must use 127.0.0.1:3002:3001 with TEE_WORKER_URL=http://localhost:3002",
+        "BullMQ republish trigger requires no HTTP endpoint — any job added to the 'republish' queue is picked up by the processor",
+        "record.pubKey from parseIpnsRecord is undefined for Ed25519 identity records and must never be used for binding checks",
+        "Weak write-back using LessThanOrEqual at republish.service.ts:386-397 must be replaced with equality CAS on signed_record",
+        "EPOCH_ZERO_TIMESTAMP_MS constant does not exist in the codebase; TEE epoch derivation needs an anchor or must fall back to entry.keyEpoch",
+        "@cipherbox/crypto and @cipherbox/core with all needed primitives are already in apps/tee-worker/package.json:13-14 — no new dependencies needed",
+        "The + 1n sequence offender is at republish.ts:79 exactly as CONTEXT cited"
+      ],
+      "code": [
+        {
+          "path": "apps/tee-worker/republish.ts",
+          "line": 79,
+          "end_line": 79,
+          "finding": "Incorrect sequence increment (+1n) that needs to be fixed as part of the TEE contract rewrite"
+        },
+        {
+          "path": "apps/tee-worker/republish.service.ts",
+          "line": 386,
+          "end_line": 397,
+          "finding": "Weak write-back using LessThanOrEqual instead of equality CAS — must be replaced with WHERE sequence_number = :loaded AND tombstoned_at IS NULL on signed_record only"
+        },
+        {
+          "path": "apps/tee-worker/package.json",
+          "line": 13,
+          "end_line": 14,
+          "finding": "@cipherbox/crypto and @cipherbox/core already present — verify/parse/publicKeyFromIpnsName and createIpnsRecord/marshalIpnsRecord available without new deps"
+        }
+      ],
+      "workflow": [
+        "GSD intel API-surface regen can return 0 symbols (stale: true) and is treated as a HINT-only artifact; planner falls back to verified CONTEXT/RESEARCH file:line refs",
+        "Drift gate is non-blocking; stale codebase map doesn't block planning when CONTEXT/RESEARCH refs have been adversarially verified against live tree",
+        "gsd-phase-researcher subagent commits RESEARCH.md itself; orchestrator only needs to commit artifacts it creates directly (e.g. VALIDATION.md)",
+        "VALIDATION.md is frontmatter-fill only at creation time; body is fleshed out downstream by the planner"
+      ]
+    },
+    "friction": [
+      "Intel API-surface regeneration returned stale/empty (0 symbols) — non-blocking but the artifact provided no value for this phase",
+      "Drift gate reported a stale codebase map (143 elements, mostly unrelated files) — adds noise without actionable signal for this phase"
+    ],
+    "open_items": [
+      "Whether bullmq exists in tests/sdk-e2e/package.json — planner must verify before Wave 6",
+      "Whether apps/tee-worker/Dockerfile exists for local compose build — planner must inspect",
+      "Whether createAndPublishIpnsRecord passes encryptedIpnsPrivateKey/keyEpoch to the API — must trace before fixing createSubfolder",
+      "Epoch anchor decision: define EPOCH_ZERO_TIMESTAMP_MS constant, use entry.keyEpoch as hint (recommended), or retain currentEpoch as floor-check scalar",
+      "Planner spawn (gsd-planner), plan verification loop, and PLAN.md files not yet created — workflow paused after research/validation phase"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-30T22:41:33.263604Z",
+    "agent_lines": 76,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 76,
+    "total_lines_changed": 76,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
