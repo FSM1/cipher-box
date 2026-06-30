@@ -49,7 +49,13 @@ function fromBinWireForm(metadata: RecycleBinMetadata): RecycleBinMetadata {
     ...metadata,
     entries: metadata.entries.map((entry) => {
       const wire = entry.nodeReadKey as unknown;
-      return typeof wire === 'string' ? { ...entry, nodeReadKey: hexToBytes(wire) } : entry;
+      if (typeof wire !== 'string') return entry;
+      const decoded = hexToBytes(wire);
+      // Fail closed: a valid-hex but wrong-length value must not reach sealChildReadKey.
+      if (decoded.length !== 32) {
+        throw new CryptoError('Bin metadata nodeReadKey must be 32 bytes', 'DECRYPTION_FAILED');
+      }
+      return { ...entry, nodeReadKey: decoded };
     }),
   };
 }

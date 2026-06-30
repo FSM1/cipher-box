@@ -1853,6 +1853,12 @@ export class CipherBoxClient {
     args: { itemId: string; childNodeId: string }
   ): Promise<void> {
     return this.withOperation('deleteFromSharedFolder', async () => {
+      // Public SDK boundary: a missing childNodeId would remove the read-body item
+      // while leaving the write-body WriteChildRef stale, which later breaks
+      // rotateWriteFromNode — fail closed before delegating.
+      if (typeof args.childNodeId !== 'string' || args.childNodeId.trim().length === 0) {
+        throw new TypeError('deleteFromSharedFolder: childNodeId is required');
+      }
       const state = this.requireSharedFolder(shareId);
       const result = await shareOps.deleteFromSharedFolder(
         this.buildSharedWriteContextFromState(state),
