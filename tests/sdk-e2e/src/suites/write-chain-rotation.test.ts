@@ -131,7 +131,7 @@ async function publishWriteCapableNode(
   readKey: Uint8Array,
   writeKey: Uint8Array,
   ctx: SdkContext
-): Promise<{ ipnsName: string; keypair: { privateKey: Uint8Array; publicKey: Uint8Array } }> {
+): Promise<{ ipnsName: string }> {
   const keypair = generateEd25519Keypair(); // synchronous
   const ipnsName = await deriveIpnsName(keypair.publicKey);
   const nodeWithWriteBody: Node = {
@@ -143,15 +143,21 @@ async function publishWriteCapableNode(
   };
   const pub = await sealNode(nodeWithWriteBody, readKey, writeKey);
   const { cid } = await addToIpfs(ctx, new TextEncoder().encode(JSON.stringify(pub)));
-  await createAndPublishIpnsRecord({
-    ipnsPrivateKey: keypair.privateKey,
-    ipnsPublicKey: keypair.publicKey,
-    ipnsName,
-    metadataCid: cid,
-    sequenceNumber: 1n, // MUST be 1n — strict gate rejects any other value for new names
-    ctx,
-  });
-  return { ipnsName, keypair };
+  try {
+    await createAndPublishIpnsRecord({
+      ipnsPrivateKey: keypair.privateKey,
+      ipnsPublicKey: keypair.publicKey,
+      ipnsName,
+      metadataCid: cid,
+      sequenceNumber: 1n, // MUST be 1n — strict gate rejects any other value for new names
+      ctx,
+    });
+  } finally {
+    // Zero the plaintext Ed25519 seed immediately after publish — callers only need
+    // the ipnsName, not the raw private key material (#20 / D-09 terminal-owner rule).
+    keypair.privateKey.fill(0);
+  }
+  return { ipnsName };
 }
 
 // ---------------------------------------------------------------------------

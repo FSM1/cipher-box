@@ -210,8 +210,6 @@ describe('rotateOne — write-body node: unsealNode receives nodeWriteKey (Plan 
       ctx: createMockContext(),
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ...({ nodeWriteKey: NODE_WRITE_KEY } as any),
-    }).catch(() => {
-      // May throw in RED — that is acceptable; we inspect captured args below.
     });
 
     // At least one unsealNode call occurred
@@ -248,7 +246,7 @@ describe('rotateOne — write-body node: unsealNode receives nodeWriteKey (Plan 
       ctx: createMockContext(),
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ...({ nodeWriteKey: NODE_WRITE_KEY } as any),
-    }).catch(() => {});
+    });
 
     expect(capturedSealWriteKeys.length).toBeGreaterThan(0);
     const sealWriteKey = capturedSealWriteKeys[0];
@@ -297,7 +295,7 @@ describe('rotateOne — write-body node: unsealNode receives nodeWriteKey (Plan 
       ctx: createMockContext(),
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ...({ nodeWriteKey: NODE_WRITE_KEY } as any),
-    }).catch(() => {});
+    });
 
     expect(capturedSealNodes.length).toBeGreaterThan(0);
     const sealedNode = capturedSealNodes[0];

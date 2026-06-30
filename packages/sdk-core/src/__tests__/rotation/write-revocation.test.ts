@@ -253,18 +253,27 @@ beforeEach(() => {
   // unsealChildWriteKey: returns child's write key (used to traverse child's write-body)
   mockFns.unsealChildWriteKey.mockResolvedValue(CHILD_WRITE_KEY);
 
-  // generateEd25519Keypair: child first (bottom-up), then root
+  // generateEd25519Keypair: child first (bottom-up), then root.
+  // Return fresh copies so the engine's fill(0) zeroisation of minted private keys
+  // does not mutate the shared fixture constants and pollute subsequent tests (#5).
   mockFns.generateEd25519Keypair
-    .mockReturnValueOnce({ privateKey: NEW_CHILD_IPNS_PRIV, publicKey: NEW_CHILD_IPNS_PUB })
-    .mockReturnValueOnce({ privateKey: NEW_ROOT_IPNS_PRIV, publicKey: NEW_ROOT_IPNS_PUB });
+    .mockReturnValueOnce({
+      privateKey: new Uint8Array(NEW_CHILD_IPNS_PRIV),
+      publicKey: new Uint8Array(NEW_CHILD_IPNS_PUB),
+    })
+    .mockReturnValueOnce({
+      privateKey: new Uint8Array(NEW_ROOT_IPNS_PRIV),
+      publicKey: new Uint8Array(NEW_ROOT_IPNS_PUB),
+    });
 
   // deriveIpnsName: new k51 names from new public keys (child first, then root)
   mockFns.deriveIpnsName.mockResolvedValueOnce(NEW_CHILD_IPNS).mockResolvedValueOnce(NEW_ROOT_IPNS);
 
-  // generateRandomBytes: new write keys (child first, then root)
+  // generateRandomBytes: new write keys (child first, then root).
+  // Return fresh copies so the engine's fill(0) does not corrupt the fixture constants (#5).
   mockFns.generateRandomBytes
-    .mockReturnValueOnce(NEW_CHILD_WRITE_KEY)
-    .mockReturnValueOnce(NEW_ROOT_WRITE_KEY);
+    .mockReturnValueOnce(new Uint8Array(NEW_CHILD_WRITE_KEY))
+    .mockReturnValueOnce(new Uint8Array(NEW_ROOT_WRITE_KEY));
 
   // sealNode: returns minimal sealed envelopes (content not checked here)
   mockFns.sealNode.mockResolvedValue({
@@ -491,6 +500,29 @@ describe('rotateWriteFromNode', () => {
     const ctx = createMockContext();
     const callbacks = makeCallbacks();
 
+    // Capture fresh copies of sealChildWriteKey arguments — the engine zeroes the child
+    // write key buffer after sealing (D-09 / #2), so mock.calls[0][0] would be all-zeros
+    // by the time assertions run if we read the reference directly.
+    const capturedSealChildArgs: [Uint8Array, Uint8Array, string, string, number][] = [];
+    mockFns.sealChildWriteKey.mockImplementation(
+      async (
+        childWriteKey: Uint8Array,
+        parentWriteKey: Uint8Array,
+        childId: string,
+        kind: string,
+        generation: number
+      ) => {
+        capturedSealChildArgs.push([
+          new Uint8Array(childWriteKey),
+          new Uint8Array(parentWriteKey),
+          childId,
+          kind,
+          generation,
+        ]);
+        return SEALED_CHILD_WRITE_KEY_UNDER_NEW_ROOT;
+      }
+    );
+
     await rotateWriteFromNode({
       rootNodeId: ROOT_ID,
       rootIpnsName: OLD_ROOT_IPNS,
@@ -521,22 +553,16 @@ describe('rotateWriteFromNode', () => {
 
     // The write-body's writeChildren must reference the new child write key sealed
     // under the new parent write key (via sealChildWriteKey)
-    expect(mockFns.sealChildWriteKey).toHaveBeenCalledTimes(1);
+    expect(capturedSealChildArgs.length).toBe(1);
 
     // Verify sealChildWriteKey received the correct arguments.
-    // arg[0]: child's new write key (NEW_CHILD_WRITE_KEY — not zeroed by engine)
-    // arg[1]: parent's new write key (32-byte Uint8Array — zeroed at end of rotateWriteFromNode)
+    // arg[0]: child's new write key — captured before engine's fill(0) (D-09 / #2)
+    // arg[1]: parent's new write key (32-byte Uint8Array — also zeroed after use)
     // arg[2..4]: child id / kind / generation for AAD binding
-    const sealChildArgs = mockFns.sealChildWriteKey.mock.calls[0] as [
-      Uint8Array,
-      Uint8Array,
-      string,
-      string,
-      number,
-    ];
+    const sealChildArgs = capturedSealChildArgs[0]!;
     expect(sealChildArgs[0]).toEqual(NEW_CHILD_WRITE_KEY); // child write key sealed under parent
     expect(sealChildArgs[1]).toBeInstanceOf(Uint8Array);
-    expect(sealChildArgs[1].length).toBe(32); // parent write key (zeroed after use)
+    expect(sealChildArgs[1].length).toBe(32); // parent write key
     expect(sealChildArgs[2]).toBe(CHILD_ID);
     expect(sealChildArgs[3]).toBe(CHILD_NODE.kind);
     expect(sealChildArgs[4]).toBe(CHILD_NODE.generation);
