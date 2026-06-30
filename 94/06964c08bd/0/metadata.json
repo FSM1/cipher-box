@@ -1,0 +1,208 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "9406964c08bd",
+  "session_id": "13524ecf-de1b-47de-bf59-e080a2ed8848",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-30T10:32:11.721673Z",
+  "branch": "feat/sdk-write-chain-bin-re-link-and-invite-claim",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "5257e516fbdc",
+  "checkpoint_transcript_start": 531,
+  "transcript_lines_at_start": 531,
+  "token_usage": {
+    "input_tokens": 1564,
+    "cache_creation_tokens": 66774,
+    "cache_read_tokens": 7376980,
+    "output_tokens": 49118,
+    "api_call_count": 20
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01Q4HbiupYnfNAzfjnRp7yXi",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "5257e516fbdc",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 547,
+        "end": 548,
+        "entry_ids": [
+          "1f2ceacf-3b90-42bb-a350-c79edc9e549f"
+        ],
+        "tool_use_id": "toolu_01Q4HbiupYnfNAzfjnRp7yXi"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Q4HbiupYnfNAzfjnRp7yXi"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ship-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "summary": {
+    "intent": "Ship Phase 65 (SDK Write-Chain, Bin Re-link, and Invite Claim) through the full post-execute loop: verify → secure → validate → simplify → SDK E2E gate → CodeRabbit CLI → PR creation → resolve PR reviews.",
+    "outcome": "Completed through Step 6 (CodeRabbit CLI produced 23 findings, triaged into clusters A/B/C + 2 deferred to Phase 68); parallel fix-wave worktree agents were being set up at transcript end. PR not yet opened.",
+    "learnings": {
+      "repo": [
+        "Phase 65 commit subjects use `feat(65-01):` style (not GSD's non-conventional `feat 65-01:` style), so the Step 7 filter-branch reword was unnecessary — commitlint runs on PR title only, not individual commits.",
+        "The security auditor has a known gotcha of writing to repo-root SECURITY.md instead of the phase doc; must verify it wrote `.planning/phases/<N>-*/65-SECURITY.md` after it commits.",
+        "CodeRabbit CLI findings for crypto phases are substantive: 23 findings (1 critical, 17 major, 5 minor) concentrated on zeroization gaps, fail-closed guards, input validation, tombstone-ordering, and test strengthening.",
+        "The sdk-e2e suite has pre-existing metadata-refactor type errors in non-phase-65 suites (tracked by `remigrate-filepointer-era-e2e-helper-scripts` and `upload-batch-test-mock-type-drift` todos) — these are not phase-65 regressions.",
+        "WRITE-04 live publish gate (403/410 enforcement) is intentionally deferred to Phase 66 per D-02 design; the mock seam is the designed boundary, not a gap.",
+        "65-04's `SharedWriteContext` reshape under-scoped its consumers and required a post-merge `fix(65-04)` commit touching `context.ts`, `client.ts`, `SharedFolderState`, and a Phase-68-marked web bridge."
+      ],
+      "code": [
+        {
+          "path": "packages/crypto/src/seal.ts",
+          "line": 250,
+          "end_line": 252,
+          "finding": "buildNodeAad binds childId/kind/generation with role 0x04; D-09 comment guards denial-of-service surface."
+        },
+        {
+          "path": "packages/core/src/bin/index.ts",
+          "line": 95,
+          "end_line": 95,
+          "finding": "encryptBinMetadata encrypts BinEntry metadata using nodeReadKey (types.ts:72)."
+        },
+        {
+          "path": "packages/core/src/bin/index.ts",
+          "line": 436,
+          "end_line": 436,
+          "finding": "sealChildReadKey seals the child read key inside bin entries."
+        },
+        {
+          "path": "packages/core/src/grant.ts",
+          "line": 189,
+          "end_line": 189,
+          "finding": "D-09 guard; reWrapKey zeros intermediate key material."
+        },
+        {
+          "path": "packages/core/src/shared-write.ts",
+          "line": 238,
+          "end_line": 238,
+          "finding": "CannotWriteUntilRefetchError thrown on all write ops when stale — covers tombstoned-target case too (also lines 348, 487)."
+        },
+        {
+          "path": "packages/core/src/shared-write.ts",
+          "line": 390,
+          "end_line": 390,
+          "finding": "Minted keys zeroed in catch block to prevent information disclosure on error paths."
+        },
+        {
+          "path": "packages/sdk/src/engine.ts",
+          "line": 563,
+          "end_line": 563,
+          "finding": "unsealNode called with nodeWriteKey for write-body reseal; write-body-reseal tests verify this path."
+        },
+        {
+          "path": "packages/sdk/src/engine.ts",
+          "line": 582,
+          "end_line": 582,
+          "finding": "IPNS guard 'no valid IPNS private key' retained — fail-closed against spoofing."
+        },
+        {
+          "path": "packages/sdk/src/engine.ts",
+          "line": 590,
+          "end_line": 590,
+          "finding": "Fail-closed guard for PLACEHOLDER_WRITE_KEY; zero occurrences of PLACEHOLDER_WRITE_KEY in source confirmed by grep."
+        },
+        {
+          "path": "packages/sdk/src/engine.ts",
+          "line": 1221,
+          "end_line": 1221,
+          "finding": "Child-first ordering in rotateWriteFromNode: child published before parent re-points (prevents orphan window)."
+        },
+        {
+          "path": "packages/sdk/src/engine.ts",
+          "line": 1298,
+          "end_line": 1298,
+          "finding": "generateEd25519Keypair called per-node (not reused) for fresh write key on rotation."
+        },
+        {
+          "path": "packages/sdk/src/engine.ts",
+          "line": 1367,
+          "end_line": 1367,
+          "finding": "sequenceNumber: 1n set on rotation to prevent IPNS replay/spoofing."
+        },
+        {
+          "path": "packages/sdk/src/engine.ts",
+          "line": 1374,
+          "end_line": 1374,
+          "finding": "teeUnenrollFn called to unenroll revoked writer from TEE during rotation."
+        },
+        {
+          "path": "packages/sdk/src/engine.ts",
+          "line": 1389,
+          "end_line": 1390,
+          "finding": "newWriteKey.fill(0) and privateKey.fill(0) called after rotation to zero key material."
+        },
+        {
+          "path": "packages/sdk/src/engine.ts",
+          "line": 1444,
+          "end_line": 1449,
+          "finding": "Revoked holder gets deleteWriteGrantFn; surviving co-writers get wrapKey re-wrap."
+        },
+        {
+          "path": "packages/sdk/src/engine.ts",
+          "line": 212,
+          "end_line": 259,
+          "finding": "NEVER-zeroed-by-rotateOne comment guards callerFolderKey against premature zeroization DOS."
+        }
+      ],
+      "workflow": [
+        "Security auditor and CodeRabbit CLI can be run in parallel (both read-only relative to each other); Nyquist audit must be held until the security auditor commits to avoid git index.lock race.",
+        "The `SCRATCH` shell variable does not export into node subshells spawned via Bash tool — must pass paths inline or as argv rather than via env vars.",
+        "CodeRabbit CLI findings cluster naturally by code coupling (rotation domain / shared-write / primitives+bin); dispatching fix-agents per cluster avoids merge conflicts in parallel worktrees.",
+        "Deferred Phase-68 wiring items (client.ts publishedNode writeback, web bridge placeholder) should be captured as todos in `.planning/todos/pending/` before opening the PR so they appear in the PR body.",
+        "GSD ship-phase loop ordering: security commit → nyquist audit → coderabbit triage → fix-wave → PR open; skipping the ordering causes index races or premature PR with unfixed findings."
+      ]
+    },
+    "friction": [
+      "The `SCRATCH` shell env variable was not visible inside node subprocesses spawned by the Bash tool, requiring two retries of the finding-parse and cluster-split commands before using inline paths.",
+      "CodeRabbit CLI review is slow (several minutes for a large diff) and must be backgrounded; no progress signal until it completes, so the assistant polled via tail of the log.",
+      "The Nyquist validation had to be deliberately delayed until the security auditor's commit landed to avoid a git index.lock race on the main worktree — adds latency to the pipeline.",
+      "The known `gh pr edit` failure on this repo (Projects-classic GraphQL) requires a workaround via `gh api -X PATCH` with a body file — easy to forget and causes a silent failure if not applied.",
+      "65-04's SharedWriteContext reshape under-scoped consumers and required a post-merge fix commit, adding complexity to the wave-2 integration."
+    ],
+    "open_items": [
+      "Fix-wave for 23 CodeRabbit findings (clusters A/B/C) not yet applied — fix-agent dispatch was being set up at transcript end.",
+      "PR not yet opened — pending fix-wave completion and push with sandbox disabled.",
+      "Phase-68 deferred: `client.ts` publishedNode writeback wiring and web bridge SharedWriteContext placeholder (tracked in `.planning/todos/pending/2026-06-30-phase68-shared-write-context-publishednode-wiring.md`).",
+      "Phase-66 deferred: live IPNS publish gate enforcement (403/410) for WRITE-04 — designed mock seam per D-02.",
+      "Phase-66 deferred: bin pin-leak todo re-tagged from Phase 65.",
+      "Pre-existing sdk-e2e type errors in metadata-refactor suites tracked by `remigrate-filepointer-era-e2e-helper-scripts` and `upload-batch-test-mock-type-drift` todos.",
+      "CodeRabbit PR-level review not yet polled — step 9 (resolve PR review threads) not yet started.",
+      "client.ts subtree-IPNS-collect stub remains (out of Phase 65 scope, carry-forward flagged).",
+      "CodeRabbit CLI thread resolution and final CI green confirmation not yet done — PR merge left to user."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
