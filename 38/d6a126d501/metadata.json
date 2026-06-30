@@ -3,7 +3,7 @@
   "checkpoint_id": "38d6a126d501",
   "strategy": "manual-commit",
   "branch": "feat/tee-lease-renewer-contract-rewrite",
-  "checkpoints_count": 7,
+  "checkpoints_count": 8,
   "files_touched": [
     ".planning/STATE.md"
   ],
@@ -19,13 +19,19 @@
       "transcript": "/38/d6a126d501/1/full.jsonl",
       "content_hash": "/38/d6a126d501/1/content_hash.txt",
       "prompt": "/38/d6a126d501/1/prompt.txt"
+    },
+    {
+      "metadata": "/38/d6a126d501/2/metadata.json",
+      "transcript": "/38/d6a126d501/2/full.jsonl",
+      "content_hash": "/38/d6a126d501/2/content_hash.txt",
+      "prompt": "/38/d6a126d501/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 106034,
-    "cache_creation_tokens": 1304911,
-    "cache_read_tokens": 119142868,
-    "output_tokens": 561577,
-    "api_call_count": 430
+    "input_tokens": 117778,
+    "cache_creation_tokens": 1473697,
+    "cache_read_tokens": 122624877,
+    "output_tokens": 623978,
+    "api_call_count": 458
   }
 }
