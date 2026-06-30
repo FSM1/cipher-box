@@ -1670,6 +1670,43 @@ describe('IpnsService', () => {
       await expect(service.publishBatch(testUserId, batchDto)).rejects.toThrow(ConflictException);
     });
 
+    it('fails the entire batch with 410 GONE when a record is tombstoned (signal not masked)', async () => {
+      // A tombstoned row: CAS WHERE (tombstoned_at IS NULL) never matches → affected=0 →
+      // disambiguation read finds tombstonedAt set → publishRecord throws 410 GONE. The
+      // batch must surface that, not mask it as { success: false, sequenceNumber: '0' }.
+      mockFolderIpnsRepo.findOne.mockImplementation(
+        async ({ where }: { where: { ipnsName: string } }) => {
+          if (where.ipnsName === testIpnsName) {
+            return { ...mockFolderEntity, sequenceNumber: '5', tombstonedAt: new Date() };
+          }
+          return null;
+        }
+      );
+      mockParseIpnsRecord.mockResolvedValue({ value: `/ipfs/${testMetadataCid}`, sequence: 6n });
+      mockQbExecute.mockResolvedValue({ affected: 0 });
+
+      const batchDto: BatchPublishIpnsDto = {
+        records: [
+          {
+            ipnsName: 'k51qzi5uqu5dg12345abcdef00001',
+            record: testRecord,
+            metadataCid: testMetadataCid,
+          },
+          {
+            ipnsName: testIpnsName,
+            record: testRecord,
+            metadataCid: testMetadataCid,
+            expectedSequenceNumber: '5',
+          },
+        ],
+      };
+
+      const err = await service.publishBatch(testUserId, batchDto).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(HttpException);
+      expect((err as HttpException).getStatus()).toBe(HttpStatus.GONE);
+      expect((err as HttpException).getResponse()).toMatchObject({ error: 'IPNS_TOMBSTONED' });
+    });
+
     it('batch succeeds when folder record has matching sequence', async () => {
       // All records have an existing row at seq 5 so that a uniform embedded sequence
       // of 6n satisfies D-09's forward-publish rule for every entry.

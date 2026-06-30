@@ -196,6 +196,14 @@ export class IpnsService {
           if (reason instanceof ConflictException) {
             throw reason;
           }
+          // A tombstoned name (410 GONE) is permanently retired and can never publish
+          // again. Surface it by failing the batch instead of masking it as a transient
+          // per-record failure ({ success: false, sequenceNumber: '0' }) — otherwise a
+          // client retry loop or TEE rotation batch would re-attempt a dead name forever.
+          // Mirrors the ConflictException treatment above.
+          if (reason instanceof HttpException && reason.getStatus() === HttpStatus.GONE) {
+            throw reason;
+          }
           const ipnsName = batch[j]?.ipnsName ?? 'unknown';
           this.logger.warn(
             `Batch publish failed for ${ipnsName}: ${reason instanceof Error ? reason.message : String(reason)}`
