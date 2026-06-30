@@ -29,7 +29,7 @@ import { TeeKeyState } from './tee/tee-key-state.entity';
 import { TeeKeyRotationLog } from './tee/tee-key-rotation-log.entity';
 import { IpnsRepublishSchedule } from './republish/republish-schedule.entity';
 import { DeviceApproval } from './device-approval/device-approval.entity';
-import { Share, ShareKey, ShareInvite } from './shares/entities';
+import { Share, ShareInvite } from './shares/entities';
 import { PinMigration } from './migration/migration.entity';
 
 @Module({
@@ -95,7 +95,6 @@ import { PinMigration } from './migration/migration.entity';
           IpnsRepublishSchedule,
           DeviceApproval,
           Share,
-          ShareKey,
           ShareInvite,
           PinMigration,
           PendingUnpin,
