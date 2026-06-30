@@ -56,7 +56,7 @@ Requirements for v2.0. Each maps to exactly one roadmap phase. Categories: CRYPT
 - [x] **TEE-03**: The canonical `ipns_records` row is the sole source of the TEE's signing inputs; `ipns_republish_schedule`'s duplicated `latestCid`/`sequenceNumber`/`encryptedIpnsKey`/`keyEpoch` columns are collapsed
 - [x] **TEE-04**: Publish is an atomic compare-and-set (`UPDATE … WHERE ipnsName = :n AND sequenceNumber = :expected`; 0 rows ⇒ 409); the EOL-only renewal is guarded identically so it can never regress `latestCid`/`sequenceNumber`
 - [x] **TEE-05**: Resolve anti-rollback uses `generation` as the authority plus a durable per-node seq high-water and `versionFloor`; DB is canonical with a case-split fail-closed fall-through (expected-null shared-folder rows apply the seq floor; signedRecord-CID ≠ latestCid fails closed)
-- [ ] **TEE-06**: Enclave bindings are hardened — internal epoch self-derivation (never the relay's scalars), name↔key binding asserted before emit, and migration durability via a client recovery path
+- [x] **TEE-06**: Enclave bindings are hardened — internal epoch self-derivation (never the relay's scalars), name↔key binding asserted before emit, and migration durability via a client recovery path
 - [x] **TEE-07**: The publish gate enforces forward-only `generation` per node server-side (defence-in-depth, mirroring the sequence anti-rollback)
 
 ### DATA — schema/DB cutover and bin
@@ -141,7 +141,7 @@ Which phases cover which requirements. Populated during roadmap creation.
 | TEE-01 | Phase 67 | Pending |
 | TEE-02 | Phase 67 | Pending |
 | TEE-03 | Phase 67 | Complete |
-| TEE-06 | Phase 67 | Pending |
+| TEE-06 | Phase 67 | Complete |
 | ROT-07 | Phase 68 | Pending |
 | TEST-03 | Phase 69 | Pending |
 

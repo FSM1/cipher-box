@@ -354,14 +354,14 @@ Plans:
 3. The canonical `ipns_records` row is the sole source of the TEE's signing inputs; `ipns_republish_schedule`'s duplicated `latestCid`/`sequenceNumber`/`encryptedIpnsKey`/`keyEpoch` columns are collapsed; no signing inputs are sourced from the schedule snapshot
 4. The EOL-only renewal uses the same atomic CAS guard (`WHERE sequenceNumber = :loaded`), so it can never regress `latestCid`/`sequenceNumber`; a TEE republish E2E round-trip (staging or local stack) confirms the new contract end-to-end
 
-**Plans**: 1/8 plans executed
+**Plans**: 2/8 plans executed
 
 Plans:
 
 **Wave 1**
 
 - [x] 67-01-PLAN.md — Schedule collapse: drop 4 signing-input columns from the entity + forward migration [TEE-03]
-- [ ] 67-02-PLAN.md — TEE internal epoch self-derivation + refuse-stale guard + ReEnrollRequiredError [TEE-06]
+- [x] 67-02-PLAN.md — TEE internal epoch self-derivation + refuse-stale guard + ReEnrollRequiredError [TEE-06]
 - [ ] 67-03-PLAN.md — TEE renewIpnsRecord lease transform (same CID + same seq + later EOL) [TEE-01, TEE-02]
 - [ ] 67-04-PLAN.md — createSubfolder teeKeys wiring (ECIES-wrap + enroll new subfolders) [TEE-03]
 - [ ] 67-05-PLAN.md — Local docker tee-worker service + API env + sdk-e2e bullmq/pg deps [TEE-01]
@@ -437,7 +437,7 @@ Plans:
 | 64 | Rotation Soundness — Revocation Guarantees | 8/8 | Complete   | 2026-06-29 |
 | 65 | SDK Write-Chain, Bin Re-link, and Invite Claim | 7/7 | Complete    | 2026-06-30 |
 | 66 | API Schema Cutover, Publish Gate, and Tombstone | 9/9 | Complete    | 2026-06-30 |
-| 67 | TEE Lease-Renewer Contract Rewrite | 1/8 | In Progress|  |
+| 67 | TEE Lease-Renewer Contract Rewrite | 2/8 | In Progress|  |
 | 68 | Web Integration — Rotation UX and Durable Client State | 0/? | Not started | - |
 | 69 | FUSE and WinFsp — Rust Integration and Grant-Root Awareness | 0/? | Not started | - |
 
