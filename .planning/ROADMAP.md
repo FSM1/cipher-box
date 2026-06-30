@@ -310,7 +310,7 @@ Plans:
 5. A tombstoned `ipns_records` row is rejected at the publish gate (403/410) and at the EOL-only renewal; resolve returns a 410 marker for tombstoned names; server-side `generation` gate enforces forward-only per node, mirroring the sequence CAS
 6. `pnpm api:generate` is run and the regenerated `packages/api-client/src/generated/` is committed alongside the migration; the `check-api-client.sh` pre-commit hook passes
 
-**Plans**: 6/9 plans executed
+**Plans**: 8/9 plans executed
 
 Plans:
 **Wave 1**
@@ -330,8 +330,8 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3)*
 
-- [ ] 66-07-PLAN.md — sdk-core `generation` param threading (publish primitives) [TEE-07]
-- [ ] 66-08-PLAN.md — web compile-gate stubs for deleted/reshaped share+invite endpoints (real rework defers to Phase 68)
+- [x] 66-07-PLAN.md — sdk-core `generation` param threading (publish primitives) [TEE-07]
+- [x] 66-08-PLAN.md — web compile-gate stubs for deleted/reshaped share+invite endpoints (real rework defers to Phase 68)
 
 **Wave 5** *(blocked on Wave 4)*
 
@@ -417,7 +417,7 @@ Plans:
 | 63 | Read-Chain Navigation and Rotation Core | 7/7 | Complete    | 2026-06-29 |
 | 64 | Rotation Soundness — Revocation Guarantees | 8/8 | Complete   | 2026-06-29 |
 | 65 | SDK Write-Chain, Bin Re-link, and Invite Claim | 7/7 | Complete    | 2026-06-30 |
-| 66 | API Schema Cutover, Publish Gate, and Tombstone | 6/9 | In Progress|  |
+| 66 | API Schema Cutover, Publish Gate, and Tombstone | 8/9 | In Progress|  |
 | 67 | TEE Lease-Renewer Contract Rewrite | 0/? | Not started | - |
 | 68 | Web Integration — Rotation UX and Durable Client State | 0/? | Not started | - |
 | 69 | FUSE and WinFsp — Rust Integration and Grant-Root Awareness | 0/? | Not started | - |
