@@ -1,0 +1,156 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "4d64cdfdddbc",
+  "session_id": "3a6781af-f138-4624-9282-008e4a4f85ee",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-30T18:15:27.90296Z",
+  "branch": "feat/api-schema-cutover-publish-gate-and-tombstone",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "313c42cba7d5",
+  "token_usage": {
+    "input_tokens": 21618,
+    "cache_creation_tokens": 254747,
+    "cache_read_tokens": 12993042,
+    "output_tokens": 94576,
+    "api_call_count": 90
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-ship-phase-2026-06-30T17:43:21.996672Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "313c42cba7d5",
+      "timestamp": "2026-06-30T17:43:21.996672Z",
+      "native": {
+        "command": "/ship-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/ship-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_015hnviiBjJefSJag3vhEWWk",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-secure-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "313c42cba7d5",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 94,
+        "end": 95,
+        "entry_ids": [
+          "91b663a4-ddcb-449c-9146-b30ed488bcc4"
+        ],
+        "tool_use_id": "toolu_015hnviiBjJefSJag3vhEWWk"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015hnviiBjJefSJag3vhEWWk"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-secure-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "summary": {
+    "intent": "Run the full post-execute-phase loop for GSD Phase 66 (api-schema-cutover-publish-gate-and-tombstone) autonomously: verify → secure → validate → simplify → SDK E2E gate → CodeRabbit CLI → ship → resolve PR reviews.",
+    "outcome": "Steps 1–6 completed: verification confirmed passing, security audit found and fixed a real write-privilege escalation (T-66-E1), SDK E2E gate green, simplify removed dead code and stale comment, CodeRabbit CLI triaged 15 findings (2 fixed in-scope, 3 deferred as todos, 9 false positives/already-handled), 66-SECURITY.md written as SECURED. Two commits landed; Steps 7–10 (ship, PR reviews, CI confirmation) not yet reached.",
+    "learnings": {
+      "repo": [
+        "89 SDK E2E tests across 11 suites are pre-existing `D-01` milestone quarantines (`describe.skip` with comment 're-enable at phase 63-65'), not Phase 66 regressions — safe to ignore in this gate.",
+        "Phase 66 deleted all 5 shares spec files (including share-invite.service.spec.ts) without rewriting them for the new descriptor-ref model, leaving reshared shares logic with zero unit coverage.",
+        "The pre-commit api-client hook only blocks when openapi.json has real semantic changes; `@Matches` DTO validators do NOT surface regex patterns into the OpenAPI spec.",
+        "`pnpm api:generate` runs repo-wide `eslint .` at the end and fails on a pre-existing triple-slash-reference error in `landing/.astro/types.d.ts` (generated Astro file) — unrelated to code changes.",
+        "All IPNS controller endpoints (publish/batch/unenroll/resolve) carry `@Throttle` decorators; the phase-new `tombstone` endpoint was missing one.",
+        "Sibling IPNS DTOs (`resolve`, `tombstone`) use a strict `k51qzi5uqu5…|bafzaa…` regex; `create-share.dto` and `create-invite.dto` used the loose `/^k[a-z0-9]+$/` — inconsistency left by this phase.",
+        "GSD security enforcement step hook was toggled off in config (`workflow.security_block_on` present but no active `verify:post` hook), requiring the secure-phase workflow to be run explicitly rather than auto-gated.",
+        "The `ApiSchemaCutover` migration was already applied to `cipherbox_test` (no pending migrations) — suite only needs `migration:run` as a precondition check, not a fresh apply."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/shares/share-invite.service.ts",
+          "line": 178,
+          "end_line": 186,
+          "finding": "T-66-E1 write-privilege escalation: claim path stored `dto.writeDescriptorRef` (claimer-supplied) on the minted Share without gating on `invite.writeDescriptorRef` (sharer's granted authority), allowing a read-only invite to yield a write grant. Comment at 178 claimed the gate existed but the code didn't implement it."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 1630,
+          "end_line": 1637,
+          "finding": "Private `upsertIpnsRecord` method had an unused `_publicKey?` parameter (underscore-flagged); single call site passed `undefined`. Safe to remove — all 174 IPNS unit tests confirmed behavior-neutral after removal."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.controller.ts",
+          "line": 226,
+          "end_line": 226,
+          "finding": "`hasSigData` guard (`result.pubKey && …`) already fails-closed on pubKey recovery failure — CodeRabbit finding #14 about partial sig bundles was a false positive."
+        },
+        {
+          "path": "apps/api/src/shares/dto/create-share.dto.ts",
+          "line": 62,
+          "end_line": 62,
+          "finding": "Used loose `/^k[a-z0-9]+$/` for `rootIpnsName` instead of the canonical strict pattern used by all sibling IPNS DTOs."
+        },
+        {
+          "path": "apps/api/src/shares/dto/create-invite.dto.ts",
+          "line": 17,
+          "end_line": 17,
+          "finding": "Same loose IPNS regex as create-share.dto — both tightened to canonical pattern in this session."
+        },
+        {
+          "path": "tests/sdk-e2e/src/suites/ipns-publish-gate.test.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "psql helper calls in both assertion helpers had no statement timeouts, making the suite susceptible to hanging on DB stalls (CodeRabbit F4; timeouts added)."
+        }
+      ],
+      "workflow": [
+        "The GSD security auditor and CodeRabbit CLI independently corroborated the same vulnerability (T-66-E1 write-descriptor gating) — running both provides adversarial cross-validation.",
+        "After `pnpm api:generate`, diff the output with `git diff --stat` and do a canonicalized semantic comparison (`jq -S . | diff`) before staging — formatting-only churn (trailing commas, line wraps) should be reverted to avoid noisy commits.",
+        "CodeRabbit CLI streams findings incrementally; the count grew from 3 → 9 → 15 across polling intervals. Always wait for exit 0 and extract the full deduplicated set before triaging.",
+        "A clean API boot (health check passes = DI resolves) conclusively disproves 'entity still injected' false positives without needing further grep — proved FolderIpns removal was complete despite 4 CodeRabbit 'criticals'.",
+        "Prettier/eslint reformatting via `api:generate` can silently touch unrelated files (migration timestamps, migration class formatting) — always inspect `git diff --stat` after generation and revert anything outside intended scope before committing.",
+        "Build → restart API → re-run E2E cycle after each batch of edits is necessary; skipping the restart means testing against a stale dist that doesn't reflect the latest changes."
+      ]
+    },
+    "friction": [
+      "CodeRabbit CLI failed on first attempt with a service connection error, requiring a retry.",
+      "`pnpm api:generate` fails at the final `eslint .` step on a pre-existing error in `landing/.astro/types.d.ts` (generated Astro file) — prevents clean generation runs and produces misleading exit codes.",
+      "CodeRabbit emitted 15 findings incrementally over multiple polling rounds (3 → 9 → 15), requiring repeated output checks to get the complete triage set.",
+      "`pnpm api:generate` reformatted `openapi.json` (cosmetic array wrapping) and `ApiSchemaCutover.ts` migration (trailing commas) with zero semantic change, requiring explicit `git restore` to avoid committing noise.",
+      "GSD's `api:generate` eslint-failure path doesn't distinguish pre-existing errors from new ones — looks like a real failure even when caused by an unrelated gitignored generated file.",
+      "Phase 66 deleted all 5 shares spec files without replacement, surfacing a coverage gap only at the simplify/validate step rather than being caught during execution."
+    ],
+    "open_items": [
+      "Shares spec files: all 5 deleted (share-invite.service.spec.ts, share.service.spec.ts, etc.) need rewriting for the new descriptor-ref model — zero unit coverage for reshaped shares/invite claim path currently.",
+      "89 SDK E2E tests (11 suites) quarantined with D-01 marker need to be re-enabled post Phase 63-65 (share-operations, invite-link, folder-crud, file-operations, etc.).",
+      "ipns_records `isRoot` partial-unique index `(userId) WHERE is_root` deferred: needs invariant analysis of whether multiple root records per user are possible (todo: .planning/todos/pending/2026-06-30-ipns-records-root-uniqueness-index.md).",
+      "First-publish insert race on IPNS records deferred: concurrent creates can both pass uniqueness check before either commits (todo: .planning/todos/pending/2026-06-30-ipns-first-publish-insert-race.md).",
+      "`share_invites.claim_count` CHECK constraint deferred: DB-level enforcement that count never exceeds `max_claims` (todo: .planning/todos/pending/2026-06-30-share-invites-claim-count-check-constraint.md).",
+      "Pre-existing `landing/.astro/types.d.ts` triple-slash-reference lint error blocks clean `pnpm api:generate` runs — needs fixing independently.",
+      "Steps 8–10 (conventional-commit reword verification, ship PR, resolve CodeRabbit PR-level review threads, CI confirmation) not yet executed in this session."
+    ]
+  }
+}
