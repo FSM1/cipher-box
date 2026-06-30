@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "78e36f78ac7e",
+  "strategy": "manual-commit",
+  "branch": "feat/api-schema-cutover-publish-gate-and-tombstone",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/src/shares/share-invite.service.spec.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/78/e36f78ac7e/0/metadata.json",
+      "transcript": "/78/e36f78ac7e/0/full.jsonl",
+      "content_hash": "/78/e36f78ac7e/0/content_hash.txt",
+      "prompt": "/78/e36f78ac7e/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 710,
+    "cache_creation_tokens": 270510,
+    "cache_read_tokens": 3549093,
+    "output_tokens": 20932,
+    "api_call_count": 15
+  }
+}
