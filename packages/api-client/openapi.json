@@ -896,6 +896,25 @@
           "409": {
             "description": "Conflict - expectedSequenceNumber does not match current server sequence number. Response body includes currentSequenceNumber for client re-sync."
           },
+          "410": {
+            "description": "Gone - IPNS name has been tombstoned (rotated out; no longer publishable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "IPNS_TOMBSTONED"
+                    },
+                    "ipnsName": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
           "502": {
             "description": "Bad Gateway - Failed to publish to delegated routing"
           }
@@ -1035,6 +1054,25 @@
           "404": {
             "description": "Not Found - IPNS name not published or not found in routing network"
           },
+          "410": {
+            "description": "Gone - IPNS name has been tombstoned (rotated out; name is permanently retired)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "IPNS_TOMBSTONED"
+                    },
+                    "ipnsName": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
           "502": {
             "description": "Bad Gateway - Failed to resolve from delegated routing"
           }
@@ -1045,6 +1083,41 @@
           }
         ],
         "summary": "Resolve IPNS name",
+        "tags": ["IPNS"]
+      }
+    },
+    "/ipns/tombstone": {
+      "post": {
+        "description": "Permanently retire an IPNS name owned by the caller. Sets tombstoned_at and removes the name from the TEE republish schedule. Subsequent publish and resolve calls for this name return HTTP 410 Gone.",
+        "operationId": "IpnsController_tombstoneRecord",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TombstoneIpnsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Record tombstoned and unenrolled from republishing"
+          },
+          "400": {
+            "description": "Bad Request - Invalid IPNS name format"
+          },
+          "401": {
+            "description": "Unauthorized - JWT token required"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Tombstone an IPNS record",
         "tags": ["IPNS"]
       }
     },
@@ -1280,7 +1353,7 @@
     },
     "/shares": {
       "post": {
-        "description": "Share an encrypted folder or file with another user. The encryptedKey is the item key re-wrapped for the recipient via ECIES.",
+        "description": "Share an encrypted folder or file with another user. The readDescriptorRef is the root readKey + metadata wrapped for the recipient via ECIES.",
         "operationId": "SharesController_createShare",
         "parameters": [],
         "requestBody": {
@@ -1325,7 +1398,7 @@
     },
     "/shares/revoke-for-items": {
       "post": {
-        "description": "Hard-revoke every share/invite the authenticated user created for any of the given IPNS names, atomically. Called when an owner deletes a file or folder subtree to the recycle bin so the access cutoff precedes the unpin. Shares are hard-deleted (keys cascade); active invites are marked revoked. IPNS names that were never shared are ignored.",
+        "description": "Hard-delete every share/invite the authenticated user created for any of the given IPNS names, atomically. Called when an owner deletes a file or folder subtree to the recycle bin so the access cutoff precedes the unpin. Shares are hard-deleted; active invites are marked revoked. IPNS names that were never shared are ignored.",
         "operationId": "SharesController_revokeForItems",
         "parameters": [],
         "requestBody": {
@@ -1361,13 +1434,13 @@
             "bearer": []
           }
         ],
-        "summary": "Bulk hard-revoke shares for deleted items",
+        "summary": "Bulk hard-delete share grants for deleted items",
         "tags": ["shares"]
       }
     },
     "/shares/received": {
       "get": {
-        "description": "Get active, non-hidden shares received by the authenticated user (paginated).",
+        "description": "Get non-hidden shares received by the authenticated user (paginated).",
         "operationId": "SharesController_getReceivedShares",
         "parameters": [
           {
@@ -1420,7 +1493,7 @@
     },
     "/shares/sent": {
       "get": {
-        "description": "Get active shares created by the authenticated user (paginated).",
+        "description": "Get shares created by the authenticated user (paginated).",
         "operationId": "SharesController_getSentShares",
         "parameters": [
           {
@@ -1513,186 +1586,9 @@
         "tags": ["shares"]
       }
     },
-    "/shares/pending-rotations": {
-      "get": {
-        "description": "Get shares that have been revoked but not yet key-rotated. Used by the client to detect lazy rotation needs before folder modification.",
-        "operationId": "SharesController_getPendingRotations",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "List of revoked shares pending rotation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/PendingRotationResponseDto"
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ],
-        "summary": "Get pending rotations",
-        "tags": ["shares"]
-      }
-    },
-    "/shares/{shareId}/keys": {
-      "get": {
-        "description": "Get all re-wrapped child keys for a share. Accessible by sharer or recipient.",
-        "operationId": "SharesController_getShareKeys",
-        "parameters": [
-          {
-            "name": "shareId",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "List of share keys",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/ShareKeyResponseDto"
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "403": {
-            "description": "Not authorized to access this share"
-          },
-          "404": {
-            "description": "Share not found"
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ],
-        "summary": "Get share keys",
-        "tags": ["shares"]
-      },
-      "post": {
-        "description": "Add re-wrapped child keys to an existing share. Allowed for the sharer or write-share recipients.",
-        "operationId": "SharesController_addShareKeys",
-        "parameters": [
-          {
-            "name": "shareId",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AddShareKeysDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Keys added"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "403": {
-            "description": "Not authorized to add keys to this share"
-          },
-          "404": {
-            "description": "Share not found"
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ],
-        "summary": "Add share keys",
-        "tags": ["shares"]
-      }
-    },
-    "/shares/{shareId}/permission": {
-      "patch": {
-        "description": "Upgrade or downgrade permission level. Only the sharer can change permission. Upgrading to write requires an ECIES-wrapped IPNS private key.",
-        "operationId": "SharesController_updatePermission",
-        "parameters": [
-          {
-            "name": "shareId",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UpdatePermissionDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "204": {
-            "description": "Permission updated"
-          },
-          "400": {
-            "description": "encryptedIpnsKey required for write permission"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "403": {
-            "description": "Only the sharer can change permission"
-          },
-          "404": {
-            "description": "Share not found"
-          },
-          "409": {
-            "description": "Cannot change permission on a revoked share"
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ],
-        "summary": "Update share permission",
-        "tags": ["shares"]
-      }
-    },
     "/shares/{shareId}": {
       "delete": {
-        "description": "Soft-delete a share by setting revokedAt. Only the sharer can revoke. Keys are kept for lazy rotation.",
+        "description": "Hard-delete the grant row (D-11 forward-only revocation). Only the sharer can revoke.",
         "operationId": "SharesController_revokeShare",
         "parameters": [
           {
@@ -1706,7 +1602,7 @@
         ],
         "responses": {
           "204": {
-            "description": "Share revoked"
+            "description": "Share hard-deleted"
           },
           "401": {
             "description": "Unauthorized"
@@ -1764,56 +1660,9 @@
         "tags": ["shares"]
       }
     },
-    "/shares/{shareId}/encrypted-key": {
-      "patch": {
-        "description": "Update the encrypted key on an existing share after lazy key rotation. Only the sharer can update the key.",
-        "operationId": "SharesController_updateShareEncryptedKey",
-        "parameters": [
-          {
-            "name": "shareId",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UpdateEncryptedKeyDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "204": {
-            "description": "Encrypted key updated"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "403": {
-            "description": "Only the sharer can update"
-          },
-          "404": {
-            "description": "Share not found"
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ],
-        "summary": "Update share encrypted key",
-        "tags": ["shares"]
-      }
-    },
     "/shares/{shareId}/item-name": {
       "patch": {
-        "description": "Persist the at-rest itemNameEncrypted ciphertext on a legacy share that predates at-rest encryption. Only the sharer can update it; the server never encrypts and stores the client-supplied ciphertext as-is.",
+        "description": "Persist the at-rest itemNameEncrypted ciphertext on a share. Only the sharer can update it; the server never encrypts and stores the client-supplied ciphertext as-is.",
         "operationId": "SharesController_updateShareItemName",
         "parameters": [
           {
@@ -1858,46 +1707,6 @@
         "tags": ["shares"]
       }
     },
-    "/shares/{shareId}/complete-rotation": {
-      "delete": {
-        "description": "Hard-delete a revoked share after the sharer has rotated the folder key. Called after the client performs lazy key rotation.",
-        "operationId": "SharesController_completeRotation",
-        "parameters": [
-          {
-            "name": "shareId",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Share hard-deleted after rotation"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "403": {
-            "description": "Only the sharer can complete rotation"
-          },
-          "404": {
-            "description": "Share not found"
-          },
-          "409": {
-            "description": "Share has not been revoked"
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ],
-        "summary": "Complete key rotation",
-        "tags": ["shares"]
-      }
-    },
     "/invites/{token}": {
       "get": {
         "description": "Check the status of an invite link. Returns only status -- no file name or sharer identity is revealed before authentication.",
@@ -1934,7 +1743,7 @@
     },
     "/invites/{token}/data": {
       "get": {
-        "description": "Fetch full invite data including encrypted key ciphertext. Requires authentication. Used by the client claim flow.",
+        "description": "Fetch full invite data including encrypted key ciphertext and root identity. Requires authentication. Used by the client claim flow.",
         "operationId": "InvitesController_getInviteData",
         "parameters": [
           {
@@ -1976,7 +1785,7 @@
     },
     "/invites/{token}/claim": {
       "post": {
-        "description": "Claim an invite by providing the item key re-wrapped for the recipient. Creates Share and ShareKey records. Single-claim enforced atomically.",
+        "description": "Claim an invite by providing the descriptor ref re-wrapped for the recipient. Creates a single Share row. Single-claim enforced atomically.",
         "operationId": "InvitesController_claimInvite",
         "parameters": [
           {
@@ -2031,7 +1840,7 @@
     },
     "/shares/invites": {
       "post": {
-        "description": "Create a new invite link with the item key wrapped by an ephemeral public key. Returns the invite token for URL construction. Default expiry: 7 days.",
+        "description": "Create a new invite link with the root readKey wrapped by an ephemeral public key. Returns the invite token for URL construction. Default expiry: 7 days.",
         "operationId": "ShareInvitesController_createInvite",
         "parameters": [],
         "requestBody": {
@@ -2072,10 +1881,10 @@
         "operationId": "ShareInvitesController_listInvites",
         "parameters": [
           {
-            "name": "ipnsName",
+            "name": "rootIpnsName",
             "required": true,
             "in": "query",
-            "description": "IPNS name of the item to list invites for",
+            "description": "IPNS name of the root shared node",
             "schema": {
               "type": "string"
             }
@@ -2250,7 +2059,7 @@
   "info": {
     "title": "CipherBox API",
     "description": "Zero-knowledge encrypted cloud storage API",
-    "version": "0.44.0",
+    "version": "0.44.1",
     "contact": {}
   },
   "tags": [
@@ -2924,6 +2733,11 @@
             "type": "string",
             "description": "Expected sequence number for conflict detection. When present, the API validates against the stored value and rejects with 409 if mismatched. Omit for backward-compatible unconditional publish.",
             "example": "5"
+          },
+          "generation": {
+            "type": "string",
+            "description": "Content generation for this IPNS name (bigint as string). When provided, the server rejects publishes with a lower generation number (forward-only gate TEE-07). Omit for non-rotation publishes.",
+            "example": "0"
           }
         },
         "required": ["ipnsName", "record", "metadataCid"]
@@ -2986,6 +2800,11 @@
             "type": "string",
             "description": "Expected sequence number for conflict detection. When present, the API validates against the stored value and rejects with 409 if mismatched. Omit for backward-compatible unconditional publish.",
             "example": "5"
+          },
+          "generation": {
+            "type": "string",
+            "description": "Content generation for this IPNS name (bigint as string). When provided, the server rejects publishes with a lower generation number (forward-only gate TEE-07). Omit for non-rotation publishes.",
+            "example": "0"
           }
         },
         "required": ["ipnsName", "record", "metadataCid"]
@@ -3089,6 +2908,17 @@
         },
         "required": ["success", "cid", "sequenceNumber"]
       },
+      "TombstoneIpnsDto": {
+        "type": "object",
+        "properties": {
+          "ipnsName": {
+            "type": "string",
+            "description": "IPNS name to tombstone (k51... CIDv1 format)",
+            "example": "k51qzi5uqu5dkkciu33khkzbcmxtyhn2hgdqyp6rv7s5egjlsdj6a2xpz9lxvz"
+          }
+        },
+        "required": ["ipnsName"]
+      },
       "CreateApprovalDto": {
         "type": "object",
         "properties": {
@@ -3132,25 +2962,6 @@
         },
         "required": ["action", "respondedByDeviceId"]
       },
-      "ChildKeyDto": {
-        "type": "object",
-        "properties": {
-          "keyType": {
-            "type": "string",
-            "description": "Type of key: file, folder, or file-ipns",
-            "enum": ["file", "folder", "file-ipns", "folder-ipns"]
-          },
-          "itemId": {
-            "type": "string",
-            "description": "UUID of the file or subfolder"
-          },
-          "encryptedKey": {
-            "type": "string",
-            "description": "Hex-encoded ECIES ciphertext of the key wrapped for recipient"
-          }
-        },
-        "required": ["keyType", "itemId", "encryptedKey"]
-      },
       "CreateShareDto": {
         "type": "object",
         "properties": {
@@ -3159,46 +2970,33 @@
             "description": "Recipient secp256k1 public key (uncompressed, 0x04... format)",
             "example": "04abc123..."
           },
-          "itemType": {
+          "readDescriptorRef": {
             "type": "string",
-            "description": "Type of shared item",
-            "enum": ["folder", "file"]
+            "description": "Hex-encoded ECIES descriptor ref for read access (wrapped root readKey + metadata). Server never sees plaintext (zero-knowledge)."
           },
-          "ipnsName": {
+          "writeDescriptorRef": {
             "type": "string",
-            "description": "IPNS name (k51...) of the shared item"
+            "description": "Hex-encoded ECIES descriptor ref for write access. Presence signals a write grant (D-09). Omit for read-only shares."
           },
-          "itemName": {
+          "rootNodeId": {
             "type": "string",
-            "description": "Display name of the shared item"
+            "description": "UUID of the root shared node (folder or file)"
+          },
+          "rootIpnsName": {
+            "type": "string",
+            "description": "IPNS name (k51...) of the root shared node"
+          },
+          "rootGeneration": {
+            "type": "string",
+            "description": "Generation of the root node at share time (numeric string)",
+            "default": "0"
           },
           "itemNameEncrypted": {
             "type": "string",
-            "description": "Hex-encoded ECIES ciphertext of the display name wrapped for recipient. Optional during rollout: legacy clients still send plaintext itemName."
-          },
-          "encryptedKey": {
-            "type": "string",
-            "description": "Hex-encoded root key wrapped for recipient via ECIES"
-          },
-          "permission": {
-            "type": "string",
-            "description": "Permission level for the share",
-            "enum": ["read", "write"],
-            "default": "read"
-          },
-          "encryptedIpnsKey": {
-            "type": "string",
-            "description": "Hex-encoded ECIES ciphertext of IPNS private key for write shares"
-          },
-          "childKeys": {
-            "description": "Re-wrapped descendant keys (subfolder/file keys)",
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ChildKeyDto"
-            }
+            "description": "Hex-encoded ECIES ciphertext of the display name wrapped for recipient. Optional: omit if recipient can derive the name from their filesystem."
           }
         },
-        "required": ["recipientPublicKey", "itemType", "ipnsName", "itemName", "encryptedKey"]
+        "required": ["recipientPublicKey", "readDescriptorRef", "rootNodeId", "rootIpnsName"]
       },
       "CreateShareResponseDto": {
         "type": "object",
@@ -3207,31 +3005,35 @@
             "type": "string",
             "description": "UUID of the created share"
           },
-          "itemType": {
+          "recipientPublicKey": {
             "type": "string",
-            "enum": ["folder", "file"]
+            "description": "Recipient secp256k1 public key (0x04...)"
           },
-          "ipnsName": {
+          "readDescriptorRef": {
             "type": "string",
-            "description": "IPNS name of the shared item"
+            "description": "Hex-encoded ECIES descriptor ref for read access"
           },
-          "itemName": {
+          "writeDescriptorRef": {
             "type": "string",
-            "description": "Display name of the shared item"
+            "description": "Hex-encoded ECIES descriptor ref for write access, or null for read-only shares",
+            "nullable": true
+          },
+          "rootNodeId": {
+            "type": "string",
+            "description": "UUID of the root shared node"
+          },
+          "rootIpnsName": {
+            "type": "string",
+            "description": "IPNS name (k51...) of the root shared node"
+          },
+          "rootGeneration": {
+            "type": "string",
+            "description": "Generation of the root node at share creation (numeric string)"
           },
           "itemNameEncrypted": {
             "type": "string",
-            "description": "Hex-encoded ECIES ciphertext of the display name, or null for legacy rows",
+            "description": "Hex-encoded ECIES ciphertext of the display name, or null if not provided",
             "nullable": true
-          },
-          "encryptedKey": {
-            "type": "string",
-            "description": "Hex-encoded ECIES-wrapped key for recipient"
-          },
-          "permission": {
-            "type": "string",
-            "description": "Permission level",
-            "enum": ["read", "write"]
           },
           "createdAt": {
             "format": "date-time",
@@ -3241,12 +3043,13 @@
         },
         "required": [
           "shareId",
-          "itemType",
-          "ipnsName",
-          "itemName",
+          "recipientPublicKey",
+          "readDescriptorRef",
+          "writeDescriptorRef",
+          "rootNodeId",
+          "rootIpnsName",
+          "rootGeneration",
           "itemNameEncrypted",
-          "encryptedKey",
-          "permission",
           "createdAt"
         ]
       },
@@ -3269,7 +3072,7 @@
         "properties": {
           "revokedShares": {
             "type": "number",
-            "description": "Number of Share rows hard-deleted (their ShareKeys cascade-deleted)"
+            "description": "Number of Share rows hard-deleted"
           },
           "revokedInvites": {
             "type": "number",
@@ -3288,33 +3091,30 @@
             "type": "string",
             "description": "Sharer secp256k1 public key (0x04...)"
           },
-          "itemType": {
+          "readDescriptorRef": {
             "type": "string",
-            "enum": ["folder", "file"]
+            "description": "Hex-encoded ECIES descriptor ref for read access"
           },
-          "ipnsName": {
-            "type": "string"
+          "writeDescriptorRef": {
+            "type": "string",
+            "description": "Hex-encoded ECIES descriptor ref for write access, or null for read-only shares",
+            "nullable": true
           },
-          "itemName": {
-            "type": "string"
+          "rootNodeId": {
+            "type": "string",
+            "description": "UUID of the root shared node"
+          },
+          "rootIpnsName": {
+            "type": "string",
+            "description": "IPNS name (k51...) of the root shared node"
+          },
+          "rootGeneration": {
+            "type": "string",
+            "description": "Generation of the root node at share creation (numeric string)"
           },
           "itemNameEncrypted": {
             "type": "string",
-            "description": "Hex-encoded ECIES ciphertext of the display name, or null for legacy rows",
-            "nullable": true
-          },
-          "encryptedKey": {
-            "type": "string",
-            "description": "Hex-encoded ECIES-wrapped key for recipient"
-          },
-          "permission": {
-            "type": "string",
-            "description": "Permission level",
-            "enum": ["read", "write"]
-          },
-          "encryptedIpnsKey": {
-            "type": "string",
-            "description": "Hex-encoded ECIES-wrapped IPNS private key for write shares",
+            "description": "Hex-encoded ECIES ciphertext of the display name, or null if not provided",
             "nullable": true
           },
           "createdAt": {
@@ -3325,13 +3125,12 @@
         "required": [
           "shareId",
           "sharerPublicKey",
-          "itemType",
-          "ipnsName",
-          "itemName",
+          "readDescriptorRef",
+          "writeDescriptorRef",
+          "rootNodeId",
+          "rootIpnsName",
+          "rootGeneration",
           "itemNameEncrypted",
-          "encryptedKey",
-          "permission",
-          "encryptedIpnsKey",
           "createdAt"
         ]
       },
@@ -3362,25 +3161,31 @@
             "type": "string",
             "description": "Recipient secp256k1 public key (0x04...)"
           },
-          "itemType": {
+          "readDescriptorRef": {
             "type": "string",
-            "enum": ["folder", "file"]
+            "description": "Hex-encoded ECIES descriptor ref for read access"
           },
-          "ipnsName": {
-            "type": "string"
+          "writeDescriptorRef": {
+            "type": "string",
+            "description": "Hex-encoded ECIES descriptor ref for write access, or null for read-only shares",
+            "nullable": true
           },
-          "itemName": {
-            "type": "string"
+          "rootNodeId": {
+            "type": "string",
+            "description": "UUID of the root shared node"
+          },
+          "rootIpnsName": {
+            "type": "string",
+            "description": "IPNS name (k51...) of the root shared node"
+          },
+          "rootGeneration": {
+            "type": "string",
+            "description": "Generation of the root node at share creation (numeric string)"
           },
           "itemNameEncrypted": {
             "type": "string",
-            "description": "Hex-encoded ECIES ciphertext of the display name, or null for legacy rows",
+            "description": "Hex-encoded ECIES ciphertext of the display name, or null if not provided",
             "nullable": true
-          },
-          "permission": {
-            "type": "string",
-            "description": "Permission level",
-            "enum": ["read", "write"]
           },
           "createdAt": {
             "format": "date-time",
@@ -3390,11 +3195,12 @@
         "required": [
           "shareId",
           "recipientPublicKey",
-          "itemType",
-          "ipnsName",
-          "itemName",
+          "readDescriptorRef",
+          "writeDescriptorRef",
+          "rootNodeId",
+          "rootIpnsName",
+          "rootGeneration",
           "itemNameEncrypted",
-          "permission",
           "createdAt"
         ]
       },
@@ -3425,115 +3231,6 @@
         },
         "required": ["exists"]
       },
-      "PendingRotationResponseDto": {
-        "type": "object",
-        "properties": {
-          "shareId": {
-            "type": "string"
-          },
-          "recipientPublicKey": {
-            "type": "string",
-            "description": "Recipient secp256k1 public key (0x04...)"
-          },
-          "itemType": {
-            "type": "string",
-            "enum": ["folder", "file"]
-          },
-          "ipnsName": {
-            "type": "string"
-          },
-          "itemName": {
-            "type": "string"
-          },
-          "revokedAt": {
-            "format": "date-time",
-            "type": "string"
-          }
-        },
-        "required": [
-          "shareId",
-          "recipientPublicKey",
-          "itemType",
-          "ipnsName",
-          "itemName",
-          "revokedAt"
-        ]
-      },
-      "ShareKeyResponseDto": {
-        "type": "object",
-        "properties": {
-          "keyType": {
-            "type": "string",
-            "enum": ["file", "folder", "file-ipns", "folder-ipns"]
-          },
-          "itemId": {
-            "type": "string",
-            "description": "UUID of the file or folder"
-          },
-          "encryptedKey": {
-            "type": "string",
-            "description": "Hex-encoded ECIES-wrapped key for recipient"
-          }
-        },
-        "required": ["keyType", "itemId", "encryptedKey"]
-      },
-      "ShareKeyEntryDto": {
-        "type": "object",
-        "properties": {
-          "keyType": {
-            "type": "string",
-            "description": "Type of key: file, folder, file-ipns, or folder-ipns",
-            "enum": ["file", "folder", "file-ipns", "folder-ipns"]
-          },
-          "itemId": {
-            "type": "string",
-            "description": "UUID of the file or subfolder"
-          },
-          "encryptedKey": {
-            "type": "string",
-            "description": "Hex-encoded ECIES ciphertext of the key wrapped for recipient"
-          }
-        },
-        "required": ["keyType", "itemId", "encryptedKey"]
-      },
-      "AddShareKeysDto": {
-        "type": "object",
-        "properties": {
-          "keys": {
-            "description": "Array of re-wrapped keys to add to the share",
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ShareKeyEntryDto"
-            }
-          }
-        },
-        "required": ["keys"]
-      },
-      "UpdatePermissionDto": {
-        "type": "object",
-        "properties": {
-          "permission": {
-            "type": "string",
-            "description": "Permission level for the share",
-            "enum": ["read", "write"]
-          },
-          "encryptedIpnsKey": {
-            "type": "string",
-            "description": "Hex-encoded ECIES ciphertext of IPNS private key. Required when upgrading to write, omitted when downgrading to read."
-          }
-        },
-        "required": ["permission"]
-      },
-      "UpdateEncryptedKeyDto": {
-        "type": "object",
-        "properties": {
-          "encryptedKey": {
-            "type": "string",
-            "description": "Hex-encoded ECIES ciphertext of the new key wrapped for recipient"
-          }
-        },
-        "required": ["encryptedKey"]
-      },
       "UpdateItemNameDto": {
         "type": "object",
         "properties": {
@@ -3555,25 +3252,6 @@
         },
         "required": ["status"]
       },
-      "InviteChildKeyDto": {
-        "type": "object",
-        "properties": {
-          "keyType": {
-            "type": "string",
-            "description": "Type of key: file, folder, or file-ipns",
-            "enum": ["file", "folder", "file-ipns", "folder-ipns"]
-          },
-          "itemId": {
-            "type": "string",
-            "description": "UUID of the file or subfolder"
-          },
-          "encryptedKey": {
-            "type": "string",
-            "description": "Hex-encoded ECIES ciphertext of the key wrapped with ephemeral public key"
-          }
-        },
-        "required": ["keyType", "itemId", "encryptedKey"]
-      },
       "InviteDataResponseDto": {
         "type": "object",
         "properties": {
@@ -3584,83 +3262,58 @@
           },
           "encryptedKey": {
             "type": "string",
-            "description": "Hex-encoded item key wrapped with ephemeral public key"
+            "description": "Hex-encoded root readKey wrapped with ephemeral public key"
           },
-          "encryptedChildKeys": {
-            "description": "Array of child keys wrapped with ephemeral public key, or null",
-            "nullable": true,
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/InviteChildKeyDto"
-            }
-          },
-          "itemType": {
+          "writeDescriptorRef": {
             "type": "string",
-            "enum": ["folder", "file"]
+            "description": "Hex-encoded ECIES descriptor ref for write access wrapped with ephemeral public key. Null for read-only invites.",
+            "nullable": true
           },
-          "ipnsName": {
+          "rootNodeId": {
             "type": "string",
-            "description": "IPNS name of the shared item"
+            "description": "UUID of the root shared node"
           },
-          "itemName": {
+          "rootIpnsName": {
             "type": "string",
-            "description": "Display name of the shared item"
+            "description": "IPNS name of the root shared node"
+          },
+          "rootGeneration": {
+            "type": "string",
+            "description": "Generation of the root node at invite creation (numeric string)"
           },
           "itemNameEncrypted": {
             "type": "string",
-            "description": "Hex-encoded ECIES ciphertext of the display name, or null for legacy invites",
+            "description": "Hex-encoded ECIES ciphertext of the display name, or null if not provided",
             "nullable": true
           }
         },
         "required": [
           "status",
           "encryptedKey",
-          "encryptedChildKeys",
-          "itemType",
-          "ipnsName",
-          "itemName",
+          "writeDescriptorRef",
+          "rootNodeId",
+          "rootIpnsName",
+          "rootGeneration",
           "itemNameEncrypted"
         ]
-      },
-      "ClaimChildKeyDto": {
-        "type": "object",
-        "properties": {
-          "keyType": {
-            "type": "string",
-            "description": "Type of key: file, folder, or file-ipns",
-            "enum": ["file", "folder", "file-ipns", "folder-ipns"]
-          },
-          "itemId": {
-            "type": "string",
-            "description": "UUID of the file or subfolder"
-          },
-          "encryptedKey": {
-            "type": "string",
-            "description": "Hex-encoded ECIES ciphertext of the key re-wrapped for recipient"
-          }
-        },
-        "required": ["keyType", "itemId", "encryptedKey"]
       },
       "ClaimInviteDto": {
         "type": "object",
         "properties": {
-          "encryptedKey": {
+          "readDescriptorRef": {
             "type": "string",
-            "description": "Hex-encoded item key re-wrapped for the recipient via ECIES"
+            "description": "Hex-encoded ECIES descriptor ref for read access re-wrapped for the recipient (claimer re-wraps the root readKey from the ephemeral key to their own pubkey). Server never sees plaintext (zero-knowledge)."
+          },
+          "writeDescriptorRef": {
+            "type": "string",
+            "description": "Hex-encoded ECIES descriptor ref for write access re-wrapped for the recipient. Omit for read-only claim."
           },
           "itemNameEncrypted": {
             "type": "string",
-            "description": "Hex-encoded ECIES ciphertext of the display name re-wrapped for the recipient. Optional during rollout: legacy clients carry plaintext itemName from the invite."
-          },
-          "childKeys": {
-            "description": "Re-wrapped child keys for subfolders/files",
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ClaimChildKeyDto"
-            }
+            "description": "Hex-encoded ECIES ciphertext of the display name re-wrapped for the recipient. Optional: omit if recipient can derive the name from their filesystem."
           }
         },
-        "required": ["encryptedKey"]
+        "required": ["readDescriptorRef"]
       },
       "ClaimInviteResponseDto": {
         "type": "object",
@@ -3675,36 +3328,33 @@
       "CreateInviteDto": {
         "type": "object",
         "properties": {
-          "itemType": {
+          "rootIpnsName": {
             "type": "string",
-            "description": "Type of shared item",
-            "enum": ["folder", "file"]
+            "description": "IPNS name (k51...) of the root shared node"
           },
-          "ipnsName": {
+          "rootNodeId": {
             "type": "string",
-            "description": "IPNS name of the shared item"
+            "description": "UUID of the root shared node"
           },
-          "itemName": {
+          "rootGeneration": {
             "type": "string",
-            "description": "Display name of the shared item"
+            "description": "Generation of the root node at invite creation (numeric string)",
+            "default": "0"
           },
           "itemNameEncrypted": {
             "type": "string",
-            "description": "Hex-encoded ECIES ciphertext of the display name wrapped with the ephemeral public key. Optional during rollout: legacy clients still send plaintext itemName."
+            "description": "Hex-encoded ECIES ciphertext of the display name wrapped with the ephemeral public key. Server never sees plaintext (zero-knowledge)."
           },
           "encryptedKey": {
             "type": "string",
-            "description": "Hex-encoded item key wrapped with ephemeral public key via ECIES"
+            "description": "Hex-encoded root readKey wrapped with the EPHEMERAL public key via ECIES. Server never sees the ephemeral private key — it lives only in the URL fragment."
           },
-          "encryptedChildKeys": {
-            "description": "Re-wrapped descendant keys (subfolder/file keys) with ephemeral public key",
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/InviteChildKeyDto"
-            }
+          "writeDescriptorRef": {
+            "type": "string",
+            "description": "Hex-encoded ECIES descriptor ref for write access wrapped with the EPHEMERAL public key. Omit for read-only invites."
           }
         },
-        "required": ["itemType", "ipnsName", "itemName", "encryptedKey"]
+        "required": ["rootIpnsName", "rootNodeId", "encryptedKey"]
       },
       "InviteResponseDto": {
         "type": "object",
@@ -3717,21 +3367,21 @@
             "type": "string",
             "description": "Invite token (URL-safe base64)"
           },
-          "itemType": {
+          "rootIpnsName": {
             "type": "string",
-            "enum": ["folder", "file"]
+            "description": "IPNS name of the root shared node"
           },
-          "ipnsName": {
+          "rootNodeId": {
             "type": "string",
-            "description": "IPNS name of the shared item"
+            "description": "UUID of the root shared node"
           },
-          "itemName": {
+          "rootGeneration": {
             "type": "string",
-            "description": "Display name of the shared item"
+            "description": "Generation of the root node at invite creation (numeric string)"
           },
           "itemNameEncrypted": {
             "type": "string",
-            "description": "Hex-encoded ECIES ciphertext of the display name, or null for legacy invites",
+            "description": "Hex-encoded ECIES ciphertext of the display name, or null if not provided",
             "nullable": true
           },
           "status": {
@@ -3752,9 +3402,9 @@
         "required": [
           "id",
           "token",
-          "itemType",
-          "ipnsName",
-          "itemName",
+          "rootIpnsName",
+          "rootNodeId",
+          "rootGeneration",
           "itemNameEncrypted",
           "status",
           "expiresAt",

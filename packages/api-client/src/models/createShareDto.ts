@@ -3,29 +3,22 @@
  * Do not edit manually.
  * CipherBox API
  * Zero-knowledge encrypted cloud storage API
- * OpenAPI spec version: 0.44.0
+ * OpenAPI spec version: 0.44.1
  */
-import type { CreateShareDtoItemType } from './createShareDtoItemType';
-import type { CreateShareDtoPermission } from './createShareDtoPermission';
-import type { ChildKeyDto } from './childKeyDto';
 
 export interface CreateShareDto {
   /** Recipient secp256k1 public key (uncompressed, 0x04... format) */
   recipientPublicKey: string;
-  /** Type of shared item */
-  itemType: CreateShareDtoItemType;
-  /** IPNS name (k51...) of the shared item */
-  ipnsName: string;
-  /** Display name of the shared item */
-  itemName: string;
-  /** Hex-encoded ECIES ciphertext of the display name wrapped for recipient. Optional during rollout: legacy clients still send plaintext itemName. */
+  /** Hex-encoded ECIES descriptor ref for read access (wrapped root readKey + metadata). Server never sees plaintext (zero-knowledge). */
+  readDescriptorRef: string;
+  /** Hex-encoded ECIES descriptor ref for write access. Presence signals a write grant (D-09). Omit for read-only shares. */
+  writeDescriptorRef?: string;
+  /** UUID of the root shared node (folder or file) */
+  rootNodeId: string;
+  /** IPNS name (k51...) of the root shared node */
+  rootIpnsName: string;
+  /** Generation of the root node at share time (numeric string) */
+  rootGeneration?: string;
+  /** Hex-encoded ECIES ciphertext of the display name wrapped for recipient. Optional: omit if recipient can derive the name from their filesystem. */
   itemNameEncrypted?: string;
-  /** Hex-encoded root key wrapped for recipient via ECIES */
-  encryptedKey: string;
-  /** Permission level for the share */
-  permission?: CreateShareDtoPermission;
-  /** Hex-encoded ECIES ciphertext of IPNS private key for write shares */
-  encryptedIpnsKey?: string;
-  /** Re-wrapped descendant keys (subfolder/file keys) */
-  childKeys?: ChildKeyDto[];
 }

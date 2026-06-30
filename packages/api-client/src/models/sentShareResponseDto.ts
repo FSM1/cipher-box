@@ -3,24 +3,30 @@
  * Do not edit manually.
  * CipherBox API
  * Zero-knowledge encrypted cloud storage API
- * OpenAPI spec version: 0.44.0
+ * OpenAPI spec version: 0.44.1
  */
-import type { SentShareResponseDtoItemType } from './sentShareResponseDtoItemType';
-import type { SentShareResponseDtoPermission } from './sentShareResponseDtoPermission';
 
 export interface SentShareResponseDto {
   shareId: string;
   /** Recipient secp256k1 public key (0x04...) */
   recipientPublicKey: string;
-  itemType: SentShareResponseDtoItemType;
-  ipnsName: string;
-  itemName: string;
+  /** Hex-encoded ECIES descriptor ref for read access */
+  readDescriptorRef: string;
   /**
-   * Hex-encoded ECIES ciphertext of the display name, or null for legacy rows
+   * Hex-encoded ECIES descriptor ref for write access, or null for read-only shares
+   * @nullable
+   */
+  writeDescriptorRef: string | null;
+  /** UUID of the root shared node */
+  rootNodeId: string;
+  /** IPNS name (k51...) of the root shared node */
+  rootIpnsName: string;
+  /** Generation of the root node at share creation (numeric string) */
+  rootGeneration: string;
+  /**
+   * Hex-encoded ECIES ciphertext of the display name, or null if not provided
    * @nullable
    */
   itemNameEncrypted: string | null;
-  /** Permission level */
-  permission: SentShareResponseDtoPermission;
   createdAt: string;
 }

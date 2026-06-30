@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.44.1
  */
 
-export type DeviceApprovalControllerCreateRequest201 = {
-  requestId?: string;
-};
+export interface TombstoneIpnsDto {
+  /** IPNS name to tombstone (k51... CIDv1 format) */
+  ipnsName: string;
+}

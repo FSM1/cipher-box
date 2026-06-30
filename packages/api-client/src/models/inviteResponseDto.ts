@@ -3,9 +3,8 @@
  * Do not edit manually.
  * CipherBox API
  * Zero-knowledge encrypted cloud storage API
- * OpenAPI spec version: 0.44.0
+ * OpenAPI spec version: 0.44.1
  */
-import type { InviteResponseDtoItemType } from './inviteResponseDtoItemType';
 import type { InviteResponseDtoStatus } from './inviteResponseDtoStatus';
 
 export interface InviteResponseDto {
@@ -13,13 +12,14 @@ export interface InviteResponseDto {
   id: string;
   /** Invite token (URL-safe base64) */
   token: string;
-  itemType: InviteResponseDtoItemType;
-  /** IPNS name of the shared item */
-  ipnsName: string;
-  /** Display name of the shared item */
-  itemName: string;
+  /** IPNS name of the root shared node */
+  rootIpnsName: string;
+  /** UUID of the root shared node */
+  rootNodeId: string;
+  /** Generation of the root node at invite creation (numeric string) */
+  rootGeneration: string;
   /**
-   * Hex-encoded ECIES ciphertext of the display name, or null for legacy invites
+   * Hex-encoded ECIES ciphertext of the display name, or null if not provided
    * @nullable
    */
   itemNameEncrypted: string | null;

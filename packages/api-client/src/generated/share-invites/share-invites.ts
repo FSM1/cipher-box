@@ -3,7 +3,7 @@
  * Do not edit manually.
  * CipherBox API
  * Zero-knowledge encrypted cloud storage API
- * OpenAPI spec version: 0.44.0
+ * OpenAPI spec version: 0.44.1
  */
 import type {
   CreateInviteDto,
@@ -17,7 +17,7 @@ import type { BodyType } from '../../instance';
 type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
 
 /**
- * Create a new invite link with the item key wrapped by an ephemeral public key. Returns the invite token for URL construction. Default expiry: 7 days.
+ * Create a new invite link with the root readKey wrapped by an ephemeral public key. Returns the invite token for URL construction. Default expiry: 7 days.
  * @summary Create an invite link
  */
 export const shareInvitesControllerCreateInvite = (

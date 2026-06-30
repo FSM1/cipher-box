@@ -3,7 +3,7 @@
  * Do not edit manually.
  * CipherBox API
  * Zero-knowledge encrypted cloud storage API
- * OpenAPI spec version: 0.44.0
+ * OpenAPI spec version: 0.44.1
  */
 import type {
   BatchPublishIpnsDto,
@@ -14,6 +14,7 @@ import type {
   PublishIpnsDto,
   PublishIpnsResponseDto,
   ResolveIpnsResponseDto,
+  TombstoneIpnsDto,
 } from '../../models';
 
 import { customInstance } from '../../instance';
@@ -88,6 +89,24 @@ export const ipnsControllerResolveRecord = (
     options
   );
 };
+/**
+ * Permanently retire an IPNS name owned by the caller. Sets tombstoned_at and removes the name from the TEE republish schedule. Subsequent publish and resolve calls for this name return HTTP 410 Gone.
+ * @summary Tombstone an IPNS record
+ */
+export const ipnsControllerTombstoneRecord = (
+  tombstoneIpnsDto: BodyType<TombstoneIpnsDto>,
+  options?: SecondParameter<typeof customInstance<void>>
+) => {
+  return customInstance<void>(
+    {
+      url: `/ipns/tombstone`,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      data: tombstoneIpnsDto,
+    },
+    options
+  );
+};
 export type IpnsControllerPublishRecordResult = NonNullable<
   Awaited<ReturnType<typeof ipnsControllerPublishRecord>>
 >;
@@ -99,4 +118,7 @@ export type IpnsControllerUnenrollBatchResult = NonNullable<
 >;
 export type IpnsControllerResolveRecordResult = NonNullable<
   Awaited<ReturnType<typeof ipnsControllerResolveRecord>>
+>;
+export type IpnsControllerTombstoneRecordResult = NonNullable<
+  Awaited<ReturnType<typeof ipnsControllerTombstoneRecord>>
 >;

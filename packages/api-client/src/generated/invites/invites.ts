@@ -3,7 +3,7 @@
  * Do not edit manually.
  * CipherBox API
  * Zero-knowledge encrypted cloud storage API
- * OpenAPI spec version: 0.44.0
+ * OpenAPI spec version: 0.44.1
  */
 import type {
   ClaimInviteDto,
@@ -31,7 +31,7 @@ export const invitesControllerGetInviteStatus = (
   );
 };
 /**
- * Fetch full invite data including encrypted key ciphertext. Requires authentication. Used by the client claim flow.
+ * Fetch full invite data including encrypted key ciphertext and root identity. Requires authentication. Used by the client claim flow.
  * @summary Get invite data for claim flow (authenticated)
  */
 export const invitesControllerGetInviteData = (
@@ -44,7 +44,7 @@ export const invitesControllerGetInviteData = (
   );
 };
 /**
- * Claim an invite by providing the item key re-wrapped for the recipient. Creates Share and ShareKey records. Single-claim enforced atomically.
+ * Claim an invite by providing the descriptor ref re-wrapped for the recipient. Creates a single Share row. Single-claim enforced atomically.
  * @summary Claim an invite link
  */
 export const invitesControllerClaimInvite = (

@@ -3,22 +3,20 @@
  * Do not edit manually.
  * CipherBox API
  * Zero-knowledge encrypted cloud storage API
- * OpenAPI spec version: 0.44.0
+ * OpenAPI spec version: 0.44.1
  */
-import type { CreateInviteDtoItemType } from './createInviteDtoItemType';
-import type { InviteChildKeyDto } from './inviteChildKeyDto';
 
 export interface CreateInviteDto {
-  /** Type of shared item */
-  itemType: CreateInviteDtoItemType;
-  /** IPNS name of the shared item */
-  ipnsName: string;
-  /** Display name of the shared item */
-  itemName: string;
-  /** Hex-encoded ECIES ciphertext of the display name wrapped with the ephemeral public key. Optional during rollout: legacy clients still send plaintext itemName. */
+  /** IPNS name (k51...) of the root shared node */
+  rootIpnsName: string;
+  /** UUID of the root shared node */
+  rootNodeId: string;
+  /** Generation of the root node at invite creation (numeric string) */
+  rootGeneration?: string;
+  /** Hex-encoded ECIES ciphertext of the display name wrapped with the ephemeral public key. Server never sees plaintext (zero-knowledge). */
   itemNameEncrypted?: string;
-  /** Hex-encoded item key wrapped with ephemeral public key via ECIES */
+  /** Hex-encoded root readKey wrapped with the EPHEMERAL public key via ECIES. Server never sees the ephemeral private key — it lives only in the URL fragment. */
   encryptedKey: string;
-  /** Re-wrapped descendant keys (subfolder/file keys) with ephemeral public key */
-  encryptedChildKeys?: InviteChildKeyDto[];
+  /** Hex-encoded ECIES descriptor ref for write access wrapped with the EPHEMERAL public key. Omit for read-only invites. */
+  writeDescriptorRef?: string;
 }

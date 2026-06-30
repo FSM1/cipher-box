@@ -3,11 +3,11 @@
  * Do not edit manually.
  * CipherBox API
  * Zero-knowledge encrypted cloud storage API
- * OpenAPI spec version: 0.44.0
+ * OpenAPI spec version: 0.44.1
  */
 
 export interface RevokeForItemsResponseDto {
-  /** Number of Share rows hard-deleted (their ShareKeys cascade-deleted) */
+  /** Number of Share rows hard-deleted */
   revokedShares: number;
   /** Number of active ShareInvite rows marked 'revoked' */
   revokedInvites: number;

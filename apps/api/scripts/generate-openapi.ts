@@ -40,7 +40,6 @@ import { ShareInvitesController } from '../src/shares/share-invites.controller';
 import { SharesService } from '../src/shares/shares.service';
 import { ShareInviteService } from '../src/shares/share-invite.service';
 import { Share } from '../src/shares/entities/share.entity';
-import { ShareKey } from '../src/shares/entities/share-key.entity';
 import { ShareInvite } from '../src/shares/entities/share-invite.entity';
 import { MetricsService } from '../src/metrics/metrics.service';
 import { TeeController } from '../src/tee/tee.controller';
@@ -70,11 +69,6 @@ const mockRefreshTokenRepository = {
 
 const mockShareRepository = {
   provide: getRepositoryToken(Share),
-  useValue: {},
-};
-
-const mockShareKeyRepository = {
-  provide: getRepositoryToken(ShareKey),
   useValue: {},
 };
 
@@ -186,7 +180,6 @@ const mockConfigService = {
     mockAuthMethodRepository,
     mockRefreshTokenRepository,
     mockShareRepository,
-    mockShareKeyRepository,
     mockShareInviteRepository,
     mockJwtService,
     mockConfigService,

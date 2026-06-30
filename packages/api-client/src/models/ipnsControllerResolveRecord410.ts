@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.44.1
  */
 
-export type DeviceApprovalControllerCreateRequest201 = {
-  requestId?: string;
+export type IpnsControllerResolveRecord410 = {
+  error?: string;
+  ipnsName?: string;
 };
