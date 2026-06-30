@@ -1,46 +1,13 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { CHILD_KEY_TYPES, type ChildKeyType } from '../types';
 import {
   IsString,
-  IsIn,
-  IsArray,
-  ValidateNested,
   IsOptional,
+  IsUUID,
+  IsNumberString,
   Matches,
   MaxLength,
   MinLength,
 } from 'class-validator';
-import { Type } from 'class-transformer';
-
-class ChildKeyDto {
-  @ApiProperty({
-    description: 'Type of key: file, folder, or file-ipns',
-    enum: [...CHILD_KEY_TYPES],
-  })
-  @IsString()
-  @IsIn(CHILD_KEY_TYPES)
-  keyType!: ChildKeyType;
-
-  @ApiProperty({
-    description: 'UUID of the file or subfolder',
-  })
-  @IsString()
-  @Matches(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, {
-    message: 'itemId must be a valid UUID',
-  })
-  itemId!: string;
-
-  @ApiProperty({
-    description: 'Hex-encoded ECIES ciphertext of the key wrapped for recipient',
-  })
-  @IsString()
-  @Matches(/^(?:[0-9a-fA-F]{2})+$/, {
-    message: 'encryptedKey must be an even-length hex string',
-  })
-  @MinLength(64)
-  @MaxLength(1024)
-  encryptedKey!: string;
-}
 
 export class CreateShareDto {
   @ApiProperty({
@@ -55,32 +22,60 @@ export class CreateShareDto {
   recipientPublicKey!: string;
 
   @ApiProperty({
-    description: 'Type of shared item',
-    enum: ['folder', 'file'],
+    description:
+      'Hex-encoded ECIES descriptor ref for read access (wrapped root readKey + metadata). ' +
+      'Server never sees plaintext (zero-knowledge).',
   })
   @IsString()
-  @IsIn(['folder', 'file'])
-  itemType!: 'folder' | 'file';
+  @Matches(/^(?:[0-9a-fA-F]{2})+$/, {
+    message: 'readDescriptorRef must be an even-length hex string',
+  })
+  @MinLength(64)
+  @MaxLength(4096)
+  readDescriptorRef!: string;
 
   @ApiProperty({
-    description: 'IPNS name (k51...) of the shared item',
+    description:
+      'Hex-encoded ECIES descriptor ref for write access. ' +
+      'Presence signals a write grant (D-09). Omit for read-only shares.',
+    required: false,
   })
   @IsString()
-  @Matches(/^k[a-z0-9]+$/, { message: 'ipnsName must be a valid IPNS name' })
-  @MaxLength(255)
-  ipnsName!: string;
+  @Matches(/^(?:[0-9a-fA-F]{2})+$/, {
+    message: 'writeDescriptorRef must be an even-length hex string',
+  })
+  @MinLength(64)
+  @MaxLength(4096)
+  @IsOptional()
+  writeDescriptorRef?: string;
 
   @ApiProperty({
-    description: 'Display name of the shared item',
+    description: 'UUID of the root shared node (folder or file)',
+  })
+  @IsUUID()
+  rootNodeId!: string;
+
+  @ApiProperty({
+    description: 'IPNS name (k51...) of the root shared node',
   })
   @IsString()
+  @Matches(/^k[a-z0-9]+$/, { message: 'rootIpnsName must be a valid IPNS name' })
   @MaxLength(255)
-  itemName!: string;
+  rootIpnsName!: string;
+
+  @ApiProperty({
+    description: 'Generation of the root node at share time (numeric string)',
+    required: false,
+    default: '0',
+  })
+  @IsNumberString()
+  @IsOptional()
+  rootGeneration?: string;
 
   @ApiProperty({
     description:
       'Hex-encoded ECIES ciphertext of the display name wrapped for recipient. ' +
-      'Optional during rollout: legacy clients still send plaintext itemName.',
+      'Optional: omit if recipient can derive the name from their filesystem.',
     required: false,
   })
   @IsString()
@@ -90,50 +85,4 @@ export class CreateShareDto {
   @MaxLength(2500)
   @IsOptional()
   itemNameEncrypted?: string;
-
-  @ApiProperty({
-    description: 'Hex-encoded root key wrapped for recipient via ECIES',
-  })
-  @IsString()
-  @Matches(/^(?:[0-9a-fA-F]{2})+$/, {
-    message: 'encryptedKey must be an even-length hex string',
-  })
-  @MinLength(64)
-  @MaxLength(1024)
-  encryptedKey!: string;
-
-  @ApiProperty({
-    description: 'Permission level for the share',
-    enum: ['read', 'write'],
-    default: 'read',
-    required: false,
-  })
-  @IsString()
-  @IsIn(['read', 'write'])
-  @IsOptional()
-  permission?: 'read' | 'write';
-
-  @ApiProperty({
-    description: 'Hex-encoded ECIES ciphertext of IPNS private key for write shares',
-    required: false,
-  })
-  @IsString()
-  @Matches(/^(?:[0-9a-fA-F]{2})+$/, {
-    message: 'encryptedIpnsKey must be an even-length hex string',
-  })
-  @MinLength(64)
-  @MaxLength(2048)
-  @IsOptional()
-  encryptedIpnsKey?: string;
-
-  @ApiProperty({
-    description: 'Re-wrapped descendant keys (subfolder/file keys)',
-    required: false,
-    type: [ChildKeyDto],
-  })
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => ChildKeyDto)
-  @IsOptional()
-  childKeys?: ChildKeyDto[];
 }
