@@ -322,6 +322,17 @@ describe('claimInvite', () => {
   });
 
   it('calls reWrapKey exactly once with invite-wrapped bytes, ephemeralPrivateKey, claimerPublicKey', async () => {
+    // claimInvite zeroes its owned ephemeral-key copy in a finally block, which means
+    // mock.calls[] holds a reference to the now-zeroed buffer after the await resolves.
+    // Capture the argument values at call time via mockImplementation to bypass this.
+    let capturedArgs: [Uint8Array, Uint8Array, Uint8Array] | undefined;
+    mockFns.reWrapKey.mockImplementation(
+      async (wrapped: Uint8Array, ephKey: Uint8Array, clKey: Uint8Array) => {
+        capturedArgs = [new Uint8Array(wrapped), new Uint8Array(ephKey), new Uint8Array(clKey)];
+        return CLAIMER_WRAPPED_BYTES;
+      }
+    );
+
     await claimInvite({
       inviteToken: 'tok-abc',
       ephemeralPrivateKey: EPHEMERAL_PRIV_KEY,
@@ -334,11 +345,63 @@ describe('claimInvite', () => {
     });
 
     expect(mockFns.reWrapKey).toHaveBeenCalledOnce();
-    expect(mockFns.reWrapKey).toHaveBeenCalledWith(
-      INVITE_WRAPPED_BYTES,
-      EPHEMERAL_PRIV_KEY,
-      CLAIMER_PUBLIC_KEY
+    expect(capturedArgs![0]).toEqual(INVITE_WRAPPED_BYTES);
+    expect(capturedArgs![1]).toEqual(EPHEMERAL_PRIV_KEY);
+    expect(capturedArgs![2]).toEqual(CLAIMER_PUBLIC_KEY);
+  });
+
+  it('persists trimmed rootNodeId and rootIpnsName — not raw whitespace-padded input', async () => {
+    await claimInvite({
+      inviteToken: 'tok-abc',
+      ephemeralPrivateKey: EPHEMERAL_PRIV_KEY,
+      claimerPublicKey: CLAIMER_PUBLIC_KEY,
+      rootNodeId: '  node-root-1  ',
+      rootIpnsName: '  k51inviteroot  ',
+      rootGeneration: 0,
+      getInviteDataFn,
+      insertShareFn,
+    });
+
+    const [payload] = insertShareFn.mock.calls[0];
+    expect(payload.rootNodeId).toBe('node-root-1');
+    expect(payload.rootIpnsName).toBe('k51inviteroot');
+  });
+
+  it('snapshots key buffers before getInviteDataFn so a mid-await caller zeroing cannot corrupt the re-wrap', async () => {
+    const mutableEphemeralKey = new Uint8Array(32).fill(0x11);
+    const mutableClaimerKey = new Uint8Array(65).fill(0x04);
+
+    let capturedEphemeral: Uint8Array | undefined;
+    let capturedClaimer: Uint8Array | undefined;
+    mockFns.reWrapKey.mockImplementation(
+      async (wrapped: Uint8Array, ephKey: Uint8Array, clKey: Uint8Array) => {
+        capturedEphemeral = new Uint8Array(ephKey);
+        capturedClaimer = new Uint8Array(clKey);
+        return CLAIMER_WRAPPED_BYTES;
+      }
     );
+
+    // Simulate caller zeroing both input buffers while getInviteDataFn is in-flight
+    const zeroingGetFn = vi.fn().mockImplementation(async () => {
+      mutableEphemeralKey.fill(0);
+      mutableClaimerKey.fill(0);
+      return { readDescriptorRef: INVITE_DESCRIPTOR_REF };
+    });
+
+    await claimInvite({
+      inviteToken: 'tok-abc',
+      ephemeralPrivateKey: mutableEphemeralKey,
+      claimerPublicKey: mutableClaimerKey,
+      rootNodeId: 'node-root-1',
+      rootIpnsName: 'k51inviteroot',
+      rootGeneration: 0,
+      getInviteDataFn: zeroingGetFn,
+      insertShareFn,
+    });
+
+    // Snapshotted copies preserve the original bytes despite the caller zeroing them mid-await
+    expect(capturedEphemeral).toEqual(new Uint8Array(32).fill(0x11));
+    expect(capturedClaimer).toEqual(new Uint8Array(65).fill(0x04));
   });
 
   it('calls insertShareFn exactly once per claim with correct standard grant payload — no encryptedChildKeys (D-06)', async () => {
@@ -355,7 +418,8 @@ describe('claimInvite', () => {
 
     expect(insertShareFn).toHaveBeenCalledOnce();
     const [payload] = insertShareFn.mock.calls[0];
-    expect(payload.recipientPublicKey).toBe(CLAIMER_PUBLIC_KEY);
+    // claimInvite passes a snapshotted copy of claimerPublicKey — use toStrictEqual, not toBe.
+    expect(payload.recipientPublicKey).toStrictEqual(CLAIMER_PUBLIC_KEY);
     expect(payload.rootNodeId).toBe('node-root-1');
     expect(payload.rootIpnsName).toBe('k51inviteroot');
     expect(payload.rootGeneration).toBe(2);
