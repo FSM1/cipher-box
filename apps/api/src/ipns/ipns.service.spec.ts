@@ -1,6 +1,12 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { BadRequestException, ConflictException, HttpException, HttpStatus } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  HttpException,
+  HttpStatus,
+  NotFoundException,
+} from '@nestjs/common';
 import { IpnsService } from './ipns.service';
 import { IpnsRecord } from './entities/ipns-record.entity';
 import { PublishIpnsDto, BatchPublishIpnsDto } from './dto';
@@ -1882,6 +1888,47 @@ describe('IpnsService', () => {
     it('should handle empty array', async () => {
       const result = await service.unenrollBatch('user-1', []);
       expect(result.totalUnenrolled).toBe(0);
+    });
+  });
+
+  describe('tombstoneRecord', () => {
+    function getRepublishMock() {
+      return (service as unknown as Record<string, unknown>).republishService as {
+        unenrollIpns: jest.Mock;
+      };
+    }
+    const OWNER = 'user-uuid-1';
+    const NAME = 'k51qzi5uqu5dkkciu33khkzbcmxtyhn2hgdqyp6rv7s5egjlsdj6a2xpz9lxvz';
+
+    it('tombstones an owned active record and unenrolls it (no disambiguating lookup)', async () => {
+      mockQbExecute.mockResolvedValue({ affected: 1 });
+
+      await expect(service.tombstoneRecord(OWNER, NAME)).resolves.toBeUndefined();
+
+      expect(mockFolderIpnsRepo.findOne).not.toHaveBeenCalled();
+      expect(getRepublishMock().unenrollIpns).toHaveBeenCalledWith(OWNER, NAME);
+    });
+
+    it('is idempotent for an already-tombstoned owned record (no throw)', async () => {
+      mockQbExecute.mockResolvedValue({ affected: 0 });
+      mockFolderIpnsRepo.findOne.mockResolvedValue({
+        ipnsName: NAME,
+        userId: OWNER,
+        tombstonedAt: new Date(),
+      });
+
+      await expect(service.tombstoneRecord(OWNER, NAME)).resolves.toBeUndefined();
+
+      expect(getRepublishMock().unenrollIpns).toHaveBeenCalledWith(OWNER, NAME);
+    });
+
+    it('throws NotFoundException for a non-existent or unowned name (no false 200)', async () => {
+      mockQbExecute.mockResolvedValue({ affected: 0 });
+      mockFolderIpnsRepo.findOne.mockResolvedValue(null);
+
+      await expect(service.tombstoneRecord(OWNER, NAME)).rejects.toBeInstanceOf(NotFoundException);
+
+      expect(getRepublishMock().unenrollIpns).not.toHaveBeenCalled();
     });
   });
 

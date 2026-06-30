@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In, LessThanOrEqual } from 'typeorm';
+import { Repository, In, LessThanOrEqual, IsNull } from 'typeorm';
 import { IpnsRepublishSchedule } from './republish-schedule.entity';
 import { IpnsRecord } from '../ipns/entities/ipns-record.entity';
 import { TeeService, RepublishEntry, RepublishResult } from '../tee/tee.service';
@@ -376,8 +376,11 @@ export class RepublishService {
     signedRecordBase64: string
   ): Promise<void> {
     try {
+      // Guard on tombstoned_at IS NULL: in the TEE race window (the batch picked
+      // up this entry before tombstoneRecord ran and unenrolled it) the row may
+      // already be tombstoned — never resurrect its sequenceNumber/signedRecord.
       await this.ipnsRecordRepository.update(
-        { userId, ipnsName },
+        { userId, ipnsName, tombstonedAt: IsNull() },
         {
           sequenceNumber: newSequenceNumber,
           signedRecord: Buffer.from(signedRecordBase64, 'base64'),

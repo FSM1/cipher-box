@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { IsNull } from 'typeorm';
 import { RepublishService } from './republish.service';
 import { IpnsRepublishSchedule } from './republish-schedule.entity';
 import { IpnsRecord } from '../ipns/entities/ipns-record.entity';
@@ -201,9 +202,10 @@ describe('RepublishService', () => {
           lastError: null,
         })
       );
-      // Verify FolderIpns sync
+      // Verify IpnsRecord sync — guarded on tombstoned_at IS NULL so the republish
+      // race window can never resurrect a tombstoned row.
       expect(folderIpnsRepository.update).toHaveBeenCalledWith(
-        { userId: 'user-uuid-1', ipnsName: 'k51test123' },
+        { userId: 'user-uuid-1', ipnsName: 'k51test123', tombstonedAt: IsNull() },
         {
           sequenceNumber: '6',
           signedRecord: Buffer.from('signed-record-bytes'),

@@ -512,7 +512,7 @@ export class IpnsService {
    * Write-share recipients cannot tombstone a record they do not own.
    */
   async tombstoneRecord(userId: string, ipnsName: string): Promise<void> {
-    await this.ipnsRecordRepository
+    const result = await this.ipnsRecordRepository
       .createQueryBuilder()
       .update(IpnsRecord)
       .set({ tombstonedAt: new Date() })
@@ -521,6 +521,19 @@ export class IpnsService {
         userId,
       })
       .execute();
+
+    if (result.affected === 0) {
+      // affected === 0 is ambiguous: the row is either already tombstoned
+      // (idempotent success) or it does not exist / is not owned by the caller.
+      // Distinguish with an owner-scoped lookup so a mistyped or unowned name
+      // returns 404 instead of a misleading 200; an already-tombstoned row is a
+      // no-op success.
+      const owned = await this.ipnsRecordRepository.findOne({ where: { ipnsName, userId } });
+      if (!owned) {
+        throw new NotFoundException(`IPNS record not found: ${ipnsName}`);
+      }
+    }
+
     // Unenroll from TEE republish schedule regardless of whether the UPDATE matched
     // (idempotent: if already unenrolled, unenrollIpns returns 0 affected).
     await this.republishService.unenrollIpns(userId, ipnsName);
