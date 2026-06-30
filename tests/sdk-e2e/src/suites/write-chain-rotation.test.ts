@@ -348,6 +348,9 @@ describe('Write-chain rotation suite (D-04 phase gate)', () => {
     const newChildIpnsName = await deriveIpnsName(newChildIpnsPublicKey);
     const newRootIpnsPublicKey = deriveEd25519PublicKey(capturedKeys[2]);
     const newRootIpnsName = await deriveIpnsName(newRootIpnsPublicKey);
+    // Zero the captured seeds immediately after derivation — they are Ed25519 private key
+    // material and must not linger in capturedKeys until afterAll (D-09 terminal ownership).
+    clearCapturedKeys();
 
     // -----------------------------------------------------------------------
     // WRITE-02: Each node gets a new k51 name; parent re-points to new child name.
@@ -393,11 +396,18 @@ describe('Write-chain rotation suite (D-04 phase gate)', () => {
     ];
     expect(persistedShareId).toBe(SURVIVOR_SHARE_ID);
 
-    // Verify the descriptor: unwrapping it with bob's private key must yield a 32-byte key.
+    // Verify the descriptor: unwrapping it with bob's private key must yield the new root
+    // write key — confirmed by using it to unseal the new root's write-body.
     const wrappedBytes = Uint8Array.from(atob(writeDescriptorRef), (c) => c.charCodeAt(0));
     const unwrappedKey = await unwrapKey(wrappedBytes, bob.privateKey);
     expect(unwrappedKey).toBeInstanceOf(Uint8Array);
     expect(unwrappedKey.length).toBe(32);
+    // Use the unwrapped key to open the new root's write-body; proves it is the actual
+    // new root write key, not just any 32-byte value (WRITE-03 correctness gate).
+    const survivorView = await unsealNode(newRootPub, rootReadKey, unwrappedKey);
+    expect(survivorView.writeBody).toBeDefined();
+    expect(survivorView.writeBody!.ipnsPrivateKey).toBeInstanceOf(Uint8Array);
+    expect(survivorView.writeBody!.ipnsPrivateKey.length).toBe(32);
     unwrappedKey.fill(0); // zero after verification
 
     // Revoked recipient: deleteWriteGrantFn called; writeDescriptorRefPersistFn NOT called for them.
