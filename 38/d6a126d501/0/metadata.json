@@ -1,0 +1,77 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "38d6a126d501",
+  "session_id": "24423f40-1322-479c-b929-a0ffa9eb7320",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-30T22:16:16.606905Z",
+  "branch": "feat/tee-lease-renewer-contract-rewrite",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    ".planning/STATE.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "037df0da3892",
+  "token_usage": {
+    "input_tokens": 14401,
+    "cache_creation_tokens": 30656,
+    "cache_read_tokens": 55580,
+    "output_tokens": 1777,
+    "api_call_count": 2
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Add a dedicated `/gsd-extract-learnings` step to the ship-phase.md workflow command.",
+    "outcome": "Step 11 was added to ship-phase.md, replacing a trailing mention of `/extract-learnings` with a proper dedicated step invoking `/gsd-extract-learnings $ARGUMENTS` and noting the convention that the resulting `.planning/` file commits on the phase branch/PR.",
+    "learnings": {
+      "repo": [
+        "The correct GSD command name is `/gsd-extract-learnings`, not `/extract-learnings`.",
+        "Learnings artifacts follow the `<phase>-LEARNINGS.md` naming convention and live in `.planning/`.",
+        "Learnings files should be committed on the same phase branch/PR, not a separate docs-only PR."
+      ],
+      "code": [
+        {
+          "path": ".claude/commands/ship-phase.md",
+          "finding": "Previously had `/extract-learnings` as an afterthought at the end of step 10; now has a dedicated step 11 with the correct command."
+        }
+      ],
+      "workflow": [
+        "Workflow command files should give each distinct action its own numbered step rather than appending it as a trailing note to an unrelated step."
+      ]
+    },
+    "friction": [],
+    "open_items": []
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-30T22:16:09.236831Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 5,
+    "human_removed": 3,
+    "total_committed": 0,
+    "total_lines_changed": 8,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 492,
+      "user_lines_removed": 3,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/STATE.md": 2,
+        ".planning/phases/66-api-schema-cutover-publish-gate-and-tombstone/66-LEARNINGS.md": 489
+      },
+      "user_removed_per_file": {
+        ".planning/STATE.md": 3
+      }
+    }
+  ]
+}

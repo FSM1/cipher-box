@@ -1,0 +1,1 @@
+add a `/gsd-extract-learnings` to the @.claude/commands/ship-phase.md workflow
