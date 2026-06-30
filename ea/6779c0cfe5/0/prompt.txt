@@ -160,3 +160,38 @@ The migration implements the five-step ordered drop-recreate in a single forward
 <usage><subagent_tokens>155039</subagent_tokens><tool_uses>73</tool_uses><duration_ms>1041101</duration_ms></usage>
 <worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-ab1739f201c150868</worktreePath><worktreeBranch>worktree-agent-ab1739f201c150868</worktreeBranch></worktree>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a51dea0226fe3d5ea</task-id>
+<tool-use-id>toolu_01FtZH5MsWoCzVixDbV6J63x</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/13524ecf-de1b-47de-bf59-e080a2ed8848/tasks/a51dea0226fe3d5ea.output</output-file>
+<status>completed</status>
+<summary>Agent "Align ipns.service spec with atomic CAS" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. Here's the summary:
+
+**Commit:** `9649323b1`
+
+**Final test counts:** 767 passed / 0 failed (full API suite)
+
+**ipns.service.spec counts:** 98 passed / 0 failed (was 70 passed / 28 failed)
+
+**All 28 adapted:**
+
+1. Added a chainable `createQueryBuilder` mock (`.update()/.set()/.where()/.execute()`) with a `mockQbExecute` that defaults to `{ affected: 1 }` and is overrideable per-test.
+
+2. Adapted each of the 28 failing tests:
+   - First-publish test: removed stale `publicKey` assertion from `create` call (not in production code)
+   - All existing-row success paths: swapped `save.toHaveBeenCalled/CalledWith` → `mockQbExecute.toHaveBeenCalled` and `mockQbSet.toHaveBeenCalledWith`; sequence number assertions moved to the return value (`result.sequenceNumber`) since the SQL expression is now computed by the DB
+   - Timestamp test: reads `updatedAt` from `mockQbSet.mock.calls[0][0]` (the setClause) instead of `save` args
+   - Key rotation / no-key-update tests: assert via `mockQbSet` args; non-update case checks `not.toHaveProperty`
+   - Stale CAS 409 test: added `mockParseIpnsRecord` with forward-publish seq (`6n`) so D-09 passes, `mockQbExecute` with `{ affected: 0 }` to trigger disambiguation, removed the `expectedSequenceNumber` field from the 409 response assertion (no longer in the response body)
+   - Batch stale CAS test: same pattern; non-testIpnsName records fail D-03 (BadRequest, swallowed by batch), testIpnsName fails CAS → ConflictException rethrown
+   - "CAS-409 takes precedence" test: renamed and re-arranged to reflect that D-09 now fires before the CAS query; test verifies stale CAS still raises 409 when D-09 passes
+   - Idempotent republish: asserts the `sequenceNumber` function in setClause returns `'sequence_number'` (SQL no-op); forward publish asserts `'sequence_number + 1'`
+
+**Suspected production issues deliberately not fixed:** None observed. The production code is correct; the only issue was the test layer not reflecting the new atomic-CAS mechanism.</result>
+<usage><subagent_tokens>153373</subagent_tokens><tool_uses>38</tool_uses><duration_ms>973656</duration_ms></usage>
+</task-notification>
