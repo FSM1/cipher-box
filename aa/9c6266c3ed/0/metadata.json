@@ -1,0 +1,221 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "aa9c6266c3ed",
+  "session_id": "3a6781af-f138-4624-9282-008e4a4f85ee",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-30T19:15:14.718319Z",
+  "branch": "feat/api-schema-cutover-publish-gate-and-tombstone",
+  "checkpoints_count": 2,
+  "save_step_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "65addc12a3cc",
+  "token_usage": {
+    "input_tokens": 27500,
+    "cache_creation_tokens": 655946,
+    "cache_read_tokens": 39503224,
+    "output_tokens": 206973,
+    "api_call_count": 177
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-ship-phase-2026-06-30T17:43:21.996672Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "313c42cba7d5",
+      "timestamp": "2026-06-30T17:43:21.996672Z",
+      "native": {
+        "command": "/ship-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/ship-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_015hnviiBjJefSJag3vhEWWk",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-secure-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "65addc12a3cc",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 94,
+        "end": 95,
+        "entry_ids": [
+          "91b663a4-ddcb-449c-9146-b30ed488bcc4"
+        ],
+        "tool_use_id": "toolu_015hnviiBjJefSJag3vhEWWk"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015hnviiBjJefSJag3vhEWWk"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-secure-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01W9vTebF5NW7EcKbA996zxF",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-validate-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "65addc12a3cc",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 583,
+        "end": 584,
+        "entry_ids": [
+          "041ee225-2240-42de-b3d6-9dff6c495437"
+        ],
+        "tool_use_id": "toolu_01W9vTebF5NW7EcKbA996zxF"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01W9vTebF5NW7EcKbA996zxF"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-validate-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Run the full post-execute-phase ship loop for Phase 66 (API schema cutover, publish gate, tombstone) autonomously: verify → secure → validate → simplify → SDK E2E → CodeRabbit CLI → ship → resolve PR reviews.",
+    "outcome": "PR #584 opened, all audit gates passed (SECURED 17/17, Nyquist-compliant, SDK E2E green), greptile review threads resolved, and two CI failures (coverage-threshold regressions + SDK E2E timing flake) diagnosed and fixed; coverage workflow restored 75 deleted specs across 5 files before transcript end.",
+    "learnings": {
+      "repo": [
+        "The Phase 66 cutover deleted all 5 shares spec files without rewriting them, leaving shares.controller.ts / share-invites.controller.ts / invites.controller.ts / shares.service.ts at 0% coverage and dropping global branches below the 78% jest threshold — a pattern to watch on any module-reshaping cutover.",
+        "jest's global coverageThreshold excludes per-file-path entries from the global computation, so individual controller-threshold failures don't necessarily drag the global number — but leaving large modules at 0% does.",
+        "`api:generate` reformats openapi.json from single-line to multi-line arrays with no semantic change; always diff-and-revert to avoid noise commits (the pre-commit hook only blocks on real surface changes).",
+        "Migration files can get prettier-reformatted as a side effect of the api:generate lint pass; reverting that reformatting locally is correct, but automated commits can slip it through, causing CI Lint failures on the next run.",
+        "The mock-ipns-routing at-floor serve is fire-and-forget (publish to delegated routing is async); SDK E2E Test 15 needs a bounded poll for eventual consistency rather than an immediate assert — this caused a CI-only flake.",
+        "The `verify:post` hooks for `secure-phase` and `validate-phase` were not enabled in the local GSD config, so the audit gates had to be run directly without the enforcement wrapper.",
+        "`gh pr edit` fails on this repo due to Projects-classic GraphQL; PR body must be patched via `env -u GITHUB_TOKEN gh api -X PATCH repos/FSM1/cipher-box/pulls/<N> -F body=@file`.",
+        "After `gh pr create`, the release bot pushes a `chore(release)` commit to the branch; always `git fetch` + rebase before the next push or it will be rejected.",
+        "All 9 Phase 66 PLANs contained parseable `<threat_model>` blocks (`register_authored_at_plan_time: true`), enabling the short-circuit rule at ASVS L1 — but a real open threat (T-66-E1) required a full auditor pass regardless."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/shares/share-invite.service.ts",
+          "line": 184,
+          "end_line": 186,
+          "finding": "T-66-E1: claim path checked dto.writeDescriptorRef without gating on invite.writeDescriptorRef; a read-only invite could be exploited to obtain a write grant by supplying writeDescriptorRef in the claim payload. Fixed by nulling out the claimer value when invite.writeDescriptorRef is null."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 1630,
+          "end_line": 1637,
+          "finding": "tombstoneRecord discarded the TypeORM update's `affected` count and always returned 200, making non-existent/unowned/already-tombstoned record requests indistinguishable from success. Fixed to throw NotFoundException when affected === 0."
+        },
+        {
+          "path": "apps/api/src/republish/republish.service.ts",
+          "finding": "syncIpnsRecordSequence lacked a tombstonedAt: IsNull() guard, creating a race window where a tombstoned record could have its sequence bumped by the republish job. Fixed by adding the guard; the corresponding spec assertion also needed updating to reflect the new criteria."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.controller.ts",
+          "finding": "The new tombstone endpoint was the only handler in the controller without a @Throttle decorator; all sibling endpoints (publish, publish-batch, unenroll, resolve) had one. Added @Throttle to close the inconsistency on a phase-new destructive endpoint."
+        },
+        {
+          "path": "apps/api/src/shares/dto/create-share.dto.ts",
+          "line": 62,
+          "end_line": 62,
+          "finding": "rootIpnsName used the loose /^k[a-z0-9]+$/ regex instead of the canonical strict IPNS name validator used by sibling DTOs (resolve, tombstone). Tightened to the canonical pattern; same fix applied to create-invite.dto.ts:17."
+        },
+        {
+          "path": "tests/sdk-e2e/src/suites/ipns-publish-gate.test.ts",
+          "line": 469,
+          "end_line": 469,
+          "finding": "Test 15 at-floor serve asserted immediately after network-record publish, which is fire-and-forget; the resolve can return null if delegated routing hasn't propagated yet. Fixed with a bounded poll (6s, 500ms interval) for eventual consistency."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "finding": "_publicKey? param was unused (underscore-flagged) in a private upsertIpnsRecord method with a single caller; safe to remove. The publicKeyBytes variable used for sig verification is a separate binding at a different layer."
+        }
+      ],
+      "workflow": [
+        "Always adversarially verify subagent results: run the authored spec yourself, confirm only spec files were created (no impl touched), and check the T-66-E1 assertion would actually fail against the pre-fix code before trusting the GAPS FILLED report.",
+        "When a coverage failure is reported in CI, read the full log tail — early lines show only passing tests; the threshold violation lines appear at the very end and are easy to miss when grepping for FAIL.",
+        "A workflow fan-out (5 parallel spec-authoring agents) with a subsequent authoritative full jest --coverage run is the right pattern for restoring deleted coverage across multiple files — but the authoritative run is mandatory; scoped per-file runs can mask cross-file interactions.",
+        "Prettier auto-formatting issues in new spec files will be caught by CI Lint but not by ts-jest (which only type-checks); always run eslint --fix on generated specs before committing.",
+        "The commit helper can report success while the pre-commit hook's final step times out; verify with git log --oneline -1 before retrying, or you risk an amend on the wrong commit.",
+        "GitHub thread reply mutations are occasionally flaky (timeouts); always re-query reviewThreads after mutations to confirm resolved=true and reply presence before marking step done.",
+        "For e2e CI flakes caused by fire-and-forget async operations, reproduce locally 3x before concluding it's a flake vs. regression — a 3/3 local pass with a mechanistic explanation (async propagation) is sufficient evidence."
+      ]
+    },
+    "friction": [
+      "CodeRabbit CLI hit a service connection error on the first invocation; required a retry with no code change.",
+      "api:generate reformatted openapi.json with no semantic change, then failed on a pre-existing eslint error in a gitignored Astro generated file — required a careful diff + revert to avoid committing noise.",
+      "Pre-existing prettier drift in a migration file slipped through local pre-commit hooks via an automated commit, causing CI Lint to fail only after pushing — required a separate format-fix commit.",
+      "The GSD secure-phase and validate-phase enforcement hooks were not enabled in config, so the full workflow process had to be manually interpreted and driven rather than using the hook-gated automation.",
+      "GitHub thread reply mutations timed out on P1, requiring a separate re-post step after confirming P2's reply landed.",
+      "The CI Test failure was a coverage-threshold failure (not a test failure), making it look like passing tests at first glance; the actual threshold violation lines only appeared at the log tail.",
+      "The republish.service.spec.ts assertion on the update criteria needed to be updated to match the new tombstone guard — a legitimate but subtle test-maintenance burden from the security fix.",
+      "89 SDK E2E tests remain in pre-existing describe.skip quarantine (D-01 milestone flag) — these are not regressions but make the suite look incomplete and require careful annotation to distinguish from real failures."
+    ],
+    "open_items": [
+      "isRoot partial-unique index on (userId) WHERE is_root: needs invariant analysis before adding the DB constraint (deferred todo: .planning/todos/pending/2026-06-30-ipns-records-root-uniqueness-index.md).",
+      "IPNS first-publish insert race between concurrent publishers for the same name: requires serialization or optimistic-lock analysis (deferred todo: .planning/todos/pending/2026-06-30-ipns-first-publish-insert-race.md).",
+      "share_invites.claim_count CHECK constraint: formal DB-level enforcement of the claim limit (deferred todo: .planning/todos/pending/2026-06-30-share-invites-claim-count-check-constraint.md).",
+      "Restore remaining share-invite.service lifecycle coverage (full invite lifecycle including revoke flows, expiry pruning, and edge cases beyond the claim-path spec authored this phase): deferred todo .planning/todos/pending/2026-06-30-restore-shares-module-unit-coverage.md.",
+      "Web stubs intentionally left as Phase 68 placeholders — flagged by simplify review but deferred as out-of-scope for this phase.",
+      "89 SDK E2E tests in pre-existing describe.skip D-01 quarantine (share-operations, invite-link, folder-crud, file-operations, etc.) — milestone re-enable was targeted for phases 63-65 but remains pending.",
+      "PR #584 merge decision left to user; CI status not yet fully confirmed green at transcript end (coverage + e2e fixes pushed, awaiting final CI run)."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 1352,
+      "user_lines_removed": 0,
+      "agent_lines_added": 10,
+      "agent_lines_removed": 1,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        "apps/api/src/ipns/ipns.controller.spec.ts": 238,
+        "apps/api/src/shares/invites.controller.spec.ts": 150,
+        "apps/api/src/shares/share-invites.controller.spec.ts": 199,
+        "apps/api/src/shares/shares.controller.spec.ts": 325,
+        "apps/api/src/shares/shares.service.spec.ts": 439
+      }
+    }
+  ]
+}
