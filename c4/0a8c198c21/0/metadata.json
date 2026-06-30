@@ -1,0 +1,87 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "c40a8c198c21",
+  "session_id": "13524ecf-de1b-47de-bf59-e080a2ed8848",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-30T00:55:11.399921Z",
+  "branch": "feat/sdk-write-chain-bin-re-link-and-invite-claim",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/ROADMAP.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "050b9e2ce636",
+  "checkpoint_transcript_start": 420,
+  "transcript_lines_at_start": 420,
+  "token_usage": {
+    "input_tokens": 401,
+    "cache_creation_tokens": 16254,
+    "cache_read_tokens": 2096406,
+    "output_tokens": 12820,
+    "api_call_count": 7
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "summary": {
+    "intent": "Complete phase 65 wave 4/4 (plan 65-07): add the D-04 write-chain rotation E2E test suite and fix a missing sdk-core barrel export so the suite's imports resolve.",
+    "outcome": "All 7 phase-65 plans implemented and verified; D-04 live gate passed (2 tests, 524ms) against the real API, confirming WRITE-02/03/04 write-revocation and rotation flows end-to-end.",
+    "learnings": {
+      "repo": [
+        "65-06 added rotateWriteFromNode/WriteRevocationCallbacks to rotation/index.ts but did not re-export them from the sdk-core top-level barrel (packages/sdk-core/src/index.ts); the omission only surfaces when E2E tests import from the package root.",
+        "The sdk-e2e test suite has pre-existing TypeScript errors in batch-upload, ipns-consistency, and file-operations suites caused by removed types (FolderChild, FilePointer, SealedChildRef.id/.type) from an earlier metadata refactor — these are tech debt unrelated to phase 65.",
+        "The running API TEST_LOGIN_SECRET (apps/api/.env) is 'e2e-test-secret-ci-only', but the sdk-e2e default SDK_E2E_SECRET is 'e2e-test-secret-do-not-use-in-production'; these must be matched manually when running E2E suites locally.",
+        "Vitest file-pattern filtering (-- write-chain-rotation) isolates the target suite so broken sibling suites do not block the gate.",
+        "The API health endpoint returns 200 and can be probed before running E2E suites to confirm the docker stack is live."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/index.ts",
+          "finding": "Two lines added to re-export rotateWriteFromNode and WriteRevocationCallbacks at the package root — required for E2E imports to resolve after 65-06 added them only to rotation/index.ts."
+        },
+        {
+          "path": "tests/sdk-e2e/src/suites/write-chain-rotation.test.ts",
+          "finding": "New D-04 gate suite covering write-revocation (new k51 name minting), parent re-point cascade, tombstone-intent firing, and surviving co-writer re-wrap. Zero type errors at time of commit."
+        }
+      ],
+      "workflow": [
+        "When an E2E executor consolidates two tasks into one commit because they write to the same file atomically, this is acceptable as a minor process deviation — document it in the summary rather than splitting artificially.",
+        "pnpm typecheck does not cover sdk-e2e; a separate tsc invocation on that package is needed to verify E2E suite types.",
+        "Pre-existing type errors in unrelated E2E suites should be confirmed as pre-existing via git log before being flagged, to avoid blocking a phase gate on unrelated debt."
+      ]
+    },
+    "friction": [
+      "Live D-04 gate initially failed with 401 due to SDK_E2E_SECRET mismatch between apps/api/.env ('e2e-test-secret-ci-only') and the sdk-e2e default — required manual discovery and re-run.",
+      "Phase 65-06 silently omitted the sdk-core barrel export for rotateWriteFromNode; the gap was only caught when 65-07 tried to write an E2E import against the package root."
+    ],
+    "open_items": [
+      "Pre-existing TypeScript errors in sdk-e2e suites (batch-upload, ipns-consistency, file-operations) referencing removed types FolderChild/FilePointer/SealedChildRef.id/.type — tech debt from earlier metadata refactor, not yet addressed.",
+      "Live E2E gate for D-04 requires docker stack and correct SDK_E2E_SECRET; CI configuration should ensure these are aligned so the gate is not environment-dependent."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-30T00:54:50.65609Z",
+    "agent_lines": 4,
+    "agent_removed": 4,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 4,
+    "total_lines_changed": 8,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
