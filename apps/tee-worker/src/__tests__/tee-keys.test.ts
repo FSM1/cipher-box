@@ -8,8 +8,8 @@
  * The underlying secp256k1 math is not our concern.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { getKeypair, getPublicKey } from '../services/tee-keys.js';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { getKeypair, getPublicKey, getInternalCurrentEpoch } from '../services/tee-keys.js';
 
 describe('tee-keys', () => {
   beforeEach(() => {
@@ -17,6 +17,7 @@ describe('tee-keys', () => {
     process.env.TEE_MODE = 'simulator';
     delete process.env.CIPHERBOX_ENVIRONMENT;
     delete process.env.NODE_ENV;
+    delete process.env.EPOCH_ZERO_TIMESTAMP_MS;
   });
 
   describe('getKeypair', () => {
@@ -101,6 +102,35 @@ describe('tee-keys', () => {
       const pk2 = await getPublicKey(20);
 
       expect(Buffer.from(pk1).toString('hex')).not.toBe(Buffer.from(pk2).toString('hex'));
+    });
+  });
+
+  describe('getInternalCurrentEpoch', () => {
+    /** 4-week epoch duration in ms (must match the implementation constant) */
+    const FOUR_WEEKS_MS = 4 * 7 * 24 * 60 * 60 * 1000;
+    /** 5 weeks in ms — one full 4-week epoch elapsed past the anchor */
+    const FIVE_WEEKS_MS = 5 * 7 * 24 * 60 * 60 * 1000;
+
+    afterEach(() => {
+      delete process.env.EPOCH_ZERO_TIMESTAMP_MS;
+    });
+
+    it('returns 1 (MIN_EPOCH) when EPOCH_ZERO_TIMESTAMP_MS is unset', () => {
+      // process.env.EPOCH_ZERO_TIMESTAMP_MS already deleted by outer beforeEach
+      expect(getInternalCurrentEpoch()).toBe(1);
+    });
+
+    it('returns 2 when anchor is 5 weeks ago and EPOCH_DURATION_MS is 4 weeks', () => {
+      // 5 weeks elapsed / 4-week epoch = 1.25 → Math.floor(1.25) + 1 = 2
+      const anchor = Date.now() - FIVE_WEEKS_MS;
+      process.env.EPOCH_ZERO_TIMESTAMP_MS = String(anchor);
+      expect(getInternalCurrentEpoch()).toBe(2);
+    });
+
+    it('clamps to MIN_EPOCH (1) when anchor is in the future', () => {
+      // Future anchor: elapsed is negative → Math.floor(negative) + 1 ≤ 0 → clamp to 1
+      process.env.EPOCH_ZERO_TIMESTAMP_MS = String(Date.now() + FOUR_WEEKS_MS);
+      expect(getInternalCurrentEpoch()).toBe(1);
     });
   });
 });
