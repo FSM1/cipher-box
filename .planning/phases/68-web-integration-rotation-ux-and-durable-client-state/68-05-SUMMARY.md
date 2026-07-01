@@ -167,6 +167,14 @@ None - no external service configuration required.
 - Open follow-up (not blocking, flagged for a future plan): `FolderTree` does not track parent chains, so `maybeRotateOnScopeExit`'s ancestry check only detects a grant rooted directly at the mutated node, not at an ancestor several levels up. Extending `FolderTree` with parent tracking would close this gap.
 - The descendant-enumeration walk (`enumerateMoveDescendants`) has no consumer yet; its readable/unreadable results are currently only logged via `console.warn`. A future plan (likely 68-08 or later) should decide whether/how to surface `unreadableIpnsNames` to the UI or feed them into a rotation follow-up job.
 
+## Self-Check: PASSED
+
+- `packages/sdk/src/client.ts` - FOUND
+- `packages/sdk/src/types.ts` - FOUND
+- `packages/sdk/src/__tests__/client-rotation.test.ts` - FOUND
+- `.planning/phases/68-web-integration-rotation-ux-and-durable-client-state/68-05-SUMMARY.md` - FOUND
+- Commits `05d9ee4d4`, `441cfbda9`, `a244952c3`, `975bff8bf`, `2d88438c9`, `414f0f7d5`, `ea5148acf` - all FOUND in git log
+
 ---
 *Phase: 68-web-integration-rotation-ux-and-durable-client-state*
 *Plan: 05*
