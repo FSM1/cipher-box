@@ -675,40 +675,44 @@ export class CipherBoxClient {
       if (!current) break;
       processed++;
 
-      let node: CoreNode;
       try {
-        const record = await sdkCore.resolveIpnsRecord(current.ipnsName, this.ctx);
-        if (!record) continue;
-        const raw = await sdkCore.fetchFromIpfs(this.ctx, record.cid);
-        const published = JSON.parse(new TextDecoder().decode(raw)) as PublishedNode;
-        node = await unsealNode(published, current.readKey);
-      } catch {
-        continue;
-      } finally {
-        if (!current.isRoot) current.readKey.fill(0);
-      }
-
-      for (const child of node.children ?? []) {
-        if (visited.has(child.ipnsName)) continue;
-        visited.add(child.ipnsName);
-
+        let node: CoreNode;
         try {
-          const childRecord = await sdkCore.resolveIpnsRecord(child.ipnsName, this.ctx);
-          if (!childRecord) throw new Error('child IPNS record not found');
-          const rawChild = await sdkCore.fetchFromIpfs(this.ctx, childRecord.cid);
-          const childPublished = JSON.parse(new TextDecoder().decode(rawChild)) as PublishedNode;
-          const childReadKey = await unsealChildReadKey(
-            child.readKeySealed,
-            current.readKey,
-            childPublished.id,
-            childPublished.kind,
-            child.generation
-          );
-          readableIpnsNames.push(child.ipnsName);
-          queue.push({ ipnsName: child.ipnsName, readKey: childReadKey, isRoot: false });
+          const record = await sdkCore.resolveIpnsRecord(current.ipnsName, this.ctx);
+          if (!record) continue;
+          const raw = await sdkCore.fetchFromIpfs(this.ctx, record.cid);
+          const published = JSON.parse(new TextDecoder().decode(raw)) as PublishedNode;
+          node = await unsealNode(published, current.readKey);
         } catch {
-          unreadableIpnsNames.push(child.ipnsName);
+          continue;
         }
+
+        for (const child of node.children ?? []) {
+          if (visited.has(child.ipnsName)) continue;
+          visited.add(child.ipnsName);
+
+          try {
+            const childRecord = await sdkCore.resolveIpnsRecord(child.ipnsName, this.ctx);
+            if (!childRecord) throw new Error('child IPNS record not found');
+            const rawChild = await sdkCore.fetchFromIpfs(this.ctx, childRecord.cid);
+            const childPublished = JSON.parse(new TextDecoder().decode(rawChild)) as PublishedNode;
+            const childReadKey = await unsealChildReadKey(
+              child.readKeySealed,
+              current.readKey,
+              childPublished.id,
+              childPublished.kind,
+              child.generation
+            );
+            readableIpnsNames.push(child.ipnsName);
+            queue.push({ ipnsName: child.ipnsName, readKey: childReadKey, isRoot: false });
+          } catch {
+            unreadableIpnsNames.push(child.ipnsName);
+          }
+        }
+      } finally {
+        // The children loop unseals with this key, so it may only be zeroed
+        // after the loop (this queue entry is the key's terminal owner).
+        if (!current.isRoot) current.readKey.fill(0);
       }
     }
 
