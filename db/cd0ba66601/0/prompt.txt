@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b9qpgyxch</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/13524ecf-de1b-47de-bf59-e080a2ed8848/tasks/b9qpgyxch.output</output-file>
+<status>failed</status>
+<summary>Background command "Poll for CodeRabbit + Greptile reviews to complete" failed with exit code 1</summary>
+</task-notification>
