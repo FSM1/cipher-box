@@ -34,7 +34,7 @@
  */
 
 // Main client
-export { CipherBoxClient, BinNotLoadedError } from './client';
+export { CipherBoxClient, BinNotLoadedError, ReconcileStaleError } from './client';
 
 // Types
 export type {
@@ -90,6 +90,7 @@ export {
   updateSharePermission,
   buildSharedWriteContext,
   ShareKeyCache,
+  CannotWriteUntilRefetchError,
 } from './share';
 
 // Owner-reconcile driver (D-10/D-11) -- drives sdk-core's reMintGrantsRootedAt

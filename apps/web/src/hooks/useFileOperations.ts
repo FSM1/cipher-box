@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import type { FolderOperationState } from './folder-helpers';
+import { runWithFailureUx } from './useMutationFailureUx';
 
 /**
  * React hook for file add/update operations.
@@ -19,7 +20,9 @@ export function useFileOperations() {
 
   /**
    * Update a file's content in-place.
-   * @stub phase 65 — requires NodeContent + write-chain key
+   * @stub phase 65 — requires NodeContent + write-chain key. The eventual
+   * SDK mutation call belongs inside runWithFailureUx (68-09) alongside
+   * every other client.X() invocation in this hook set.
    */
   const handleUpdateFile = useCallback(
     async (
@@ -34,9 +37,11 @@ export function useFileOperations() {
         forceVersion?: boolean;
       }
     ): Promise<void> => {
-      throw new Error(
-        'not implemented — phase 65 (file update requires Node read-chain + write-chain)'
-      );
+      await runWithFailureUx(async () => {
+        throw new Error(
+          'not implemented — phase 65 (file update requires Node read-chain + write-chain)'
+        );
+      });
     },
     []
   );
