@@ -210,3 +210,167 @@ The **low-level Node codec is complete** in `packages/core/src/node/`: `sealNode
 **Not phase-63 (do not pull in):** all `file/index.ts` and `folder/registration.ts` `addFile*`/`replaceFile*`/`createFileMetadata`/`updateFileMetadata` stubs are **phase 65 (write-chain)**; `shouldCreateVersion`/version helpers in `file-metadata.service.ts` are phase 65 too. Read-path work should not touch them.</result>
 <usage><subagent_tokens>145044</subagent_tokens><tool_uses>36</tool_uses><duration_ms>275684</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a0a0e8fd54bfd9d4c</task-id>
+<tool-use-id>toolu_01FUD6JxuooKv6eFJ7Rf6r5A</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/d2e29299-7c93-4d80-935c-636a76495b24/tasks/a0a0e8fd54bfd9d4c.output</output-file>
+<status>completed</status>
+<summary>Agent "Inventory write-chain stubs vs sdk-core" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have a complete picture. Let me compile the structured report.
+
+---
+
+# WRITE-Chain (Phase 65) Scope Map — CipherBox v2.0
+
+**Branch:** `feat/web-integration-rotation-ux-and-durable-client-state`
+
+## Executive summary (read this first)
+
+The single most important finding: **the write-chain runtime largely EXISTS and is fully implemented in `packages/sdk/src/share/shared-write.ts`** (7 ops, ~920 LOC) using the `@cipherbox/core` node codec — which is also complete. The codebase has two divergent models:
+
+- **Shared path** (`SharedFolderState`, `packages/sdk/src/types.ts:205`) — carries the **full write-body model** (`writeKey`, `publishedNode`) and is wired end-to-end for upload + create-folder.
+- **Owned path** (`FolderState`, `packages/sdk/src/types.ts:164`) — is **read-chain-only** (no `writeKey`, no `publishedNode`; `ipnsKeypair` used directly). Owned rename/move/delete work via read-chain re-seal, but owned **file create/update/versions are genuinely MISSING in sdk-core** (`packages/sdk-core/src/file/index.ts` is stubbed).
+
+So the work splits cleanly: **(f) shared ops + parts of (e) = tractable wiring** to existing symbols; **(a)(b)(c) owned files = build the file-node write-chain in sdk-core** (heavily copyable from `shared-write.ts`), then wire; **(d) bin re-link + parts of (e) = blocked on the read-chain (phase 63)**.
+
+---
+
+## 1. Write-stub inventory
+
+### (a) Owned file create / upload
+| file:line | symbol | must do |
+|---|---|---|
+| `packages/sdk-core/src/file/index.ts:119` | `createFileMetadata` | Create file Node, seal content under fresh fileReadKey, publish file Node to its IPNS name; return ipnsName + record. **Root blocker.** |
+| `packages/sdk-core/src/folder/registration.ts:278` | `addFileToFolder` | Create file Node + seal child readKey under parent + batch-publish both IPNS. |
+| `packages/sdk-core/src/folder/registration.ts:303` | `addFilesToFolder` | Batch variant of above. |
+| `packages/sdk-core/src/upload/index.ts:168` | `uploadFile` (calls `createFileMetadata`) | Currently IMPLEMENTED but throws at runtime because it calls the stubbed `createFileMetadata`. |
+| `apps/web/src/services/file-metadata.service.ts:35` | `createFileMetadata` (web) | Web-tier mirror stub. |
+| `packages/sdk/src/client.ts:1101 / :1276` | `uploadFile` / `uploadFiles` | WIRED (calls `sdkCore.uploadFile`, `addFilePointerToFolder`, `updateFolderMetadataAndPublish`) — throws only because of the sdk-core stub beneath it. |
+
+### (b) Owned file replace / update / owner save
+| file:line | symbol | must do |
+|---|---|---|
+| `packages/sdk-core/src/file/index.ts:163` | `updateFileMetadata` | Update NodeContent, re-seal read-body, CAS-republish file Node. **Root blocker for (b)+(c).** |
+| `packages/sdk/src/client.ts:1549` | `replaceFile` | Publish file metadata via `updateFileMetadata` + touch parent FilePointer. |
+| `apps/web/src/services/file-metadata.service.ts:89` | `updateFileMetadata` (web) | Web mirror. |
+| `apps/web/src/hooks/useFileOperations.ts:27` | `handleUpdateFile` | Route to `client.replaceFile`/`updateFile`. |
+| `apps/web/src/components/file-browser/TextEditorDialog.tsx:166` | owner save branch of `handleSave` | Owner text-file save (shared branch already works via `onSaveSharedFile`). |
+| `packages/sdk/src/reencrypt.ts:20` | `reencryptFileMetadataForFolderChange` | **DEAD/obsolete** — no callers; docstring says content self-seal removes re-encrypt-on-move. Delete, don't implement. |
+
+### (c) File versions
+| file:line | symbol | must do |
+|---|---|---|
+| `packages/sdk/src/client.ts:1599` | `restoreFileVersion` | Unseal VersionEntry from NodeContent, publish updated Node. |
+| `packages/sdk/src/client.ts:1645` | `deleteFileVersion` | Remove VersionEntry, publish updated Node. |
+| `packages/sdk/src/client.ts:1694` | `downloadFromIpns` | **Read-chain** (resolve file Node, unseal NodeContent, decrypt) — really a phase-63 dependency. |
+| `apps/web/src/hooks/useFileVersions.ts:24,:37` | `handleRestoreVersion`, `handleDeleteVersion` | Route to client methods. |
+| `apps/web/src/services/file-metadata.service.ts:78,:107,:118` | `shouldCreateVersion`, `computeRestoreVersionUpdate`, `computeDeleteVersionUpdate` | Pure transforms over `NodeContent.versions`. |
+| `apps/web/src/components/file-browser/details/VersionHistory.tsx:32` | `handleDownloadVersion` | Read-chain download of a historical version. |
+
+Note: `packages/sdk-core/src/file/index.ts:88` `mergeVersions` is a **working** pure utility (dedupe/sort/cap) — reuse it.
+
+### (d) Delete → bin re-link (subtree IPNS collect) + move re-encrypt
+| file:line | symbol | must do |
+|---|---|---|
+| `packages/sdk/src/client.ts:241` | `collectRemovedItemIpnsNames` | Walk a removed `SealedChildRef` subtree via read-chain → list IPNS names (for unenroll/revoke). |
+| `packages/sdk/src/client.ts:252` | `collectBinEntryIpnsNames` | Same, from a `BinEntry.nodeRef`. |
+| `packages/sdk/src/bin/index.ts:171` | NOTE (no symbol) | Phase-65 helpers to enumerate Node children + collect `NodeContent` versionCids (replaces removed `captureFileCids`/`walkDeletedSubtree`). |
+| `packages/sdk/src/reencrypt.ts:20` | (see (b)) | Obsolete. |
+
+Bin core lifecycle (`deleteToBin` :1795, `restoreFromBin` :1864, `permanentDelete` :1902, `emptyBin` :1928) is **implemented**; only the subtree-IPNS collectors used by fire-and-forget unenroll are stubbed.
+
+### (e) Share creation / permission upgrade / invite creation (write side)
+| file:line | symbol | must do |
+|---|---|---|
+| `apps/web/src/lib/crypto/key-wrapping.ts:21` | `collectChildKeys` | Traverse subtree via read-chain, re-wrap descendant keys for a target pubkey. **Core blocker for share+invite create.** |
+| `apps/web/src/components/file-browser/ShareDialog.tsx:128` | `handleShare` | Create share (unwrap readKeySealed, re-wrap for recipient). |
+| `apps/web/src/components/file-browser/ShareDialog.tsx:152` | `handleUpgrade` | Permission upgrade (read→write) via write-chain re-grant. |
+| `apps/web/src/services/invite.service.ts:84` | `createInviteLink` | Ephemeral-keypair invite creation + child-key collection. |
+| `apps/web/src/services/invite.service.ts:41` | (comment) `generateEphemeralKeypair` | Restore when `createInviteLink` implemented. |
+
+Downgrade path (`ShareDialog.tsx:158+` `handleDowngradeConfirm`) and invite **claim** already work.
+
+### (f) Shared-folder write ops
+| file:line | symbol | state |
+|---|---|---|
+| `packages/sdk/src/client.ts:2268` | `updateSharedFile` (client wrapper) | STUB — but underlying `shareOps.updateSharedFile` EXISTS. Comment "stubbed in shared-write.ts" is **STALE**. |
+| `packages/sdk/src/client.ts:2360` | `moveInSharedFolder` (client wrapper) | STUB (tagged phase 63) — underlying `shareOps.moveInSharedFolder` EXISTS; needs dest-key read-chain resolution. |
+| `apps/web/src/hooks/useSharedWriteOps.ts:106` | `renameItemHandler` | STUB — but `client.renameInSharedFolder` (:2209) is **implemented**. Pure wiring. |
+| `apps/web/src/hooks/useSharedWriteOps.ts:127` | `deleteItemHandler` | STUB — `client.deleteFromSharedFolder` (:2230) implemented; needs `childNodeId` (UUID) resolution from read-chain. |
+| `apps/web/src/hooks/useSharedWriteOps.ts:117` | `updateSharedFileHandler` | STUB — needs client `updateSharedFile` wiring. |
+| `apps/web/src/hooks/useSharedWriteOps.ts:138,:152` | `moveItemHandler`, `batchMoveItemsHandler` | STUB — needs client `moveInSharedFolder`. |
+
+Already wired &amp; working: `useSharedWriteOps.uploadFile`/`createFolder` → `client.uploadToSharedFolder` (:2178) / `createSharedSubfolder` (:2195).
+
+Also owned `createFolder` (`client.ts:760`) throws — but it's tagged **phase 63** (read fan-out), not 65, despite `sdkCore.createSubfolder` existing.
+
+---
+
+## 2. Does the write-chain RUNTIME already exist? (verdicts per capability)
+
+Codec layer `@cipherbox/core/node` is **COMPLETE**: `sealNode`, `unsealNode`, `sealChildReadKey`, `sealChildWriteKey`, `unsealChildWriteKey`, `sealContent` (`packages/core/src/node/index.ts`); types `Node`, `NodeContent`, `WriteChildRef`, `NodeWriteBody`, `SealedChildRef`, `VersionEntry` (`packages/core/src/node/types.ts`).
+
+| Cap | Verdict | Evidence |
+|---|---|---|
+| **(a) owned file create/upload** | **MISSING in sdk-core** | `createFileMetadata` (`file/index.ts:119`) throws; `uploadFile` (`upload/index.ts:168`) calls it → owned upload broken at runtime. No owned file-node builder exists. Full reference: `uploadToSharedFolder` (`shared-write.ts:409`). |
+| **(b) owned replace/update** | **MISSING in sdk-core** | `updateFileMetadata` (`file/index.ts:163`) throws. Reference: `updateSharedFile` (`shared-write.ts:640`). |
+| **(c) versions** | **MISSING (write)** / read blocked on 63 | Depends on (b) + `NodeContent.versions`. `mergeVersions` (`file/index.ts:88`) works. Version-carry pattern: `updateSharedFile` `originalVersions` param (`shared-write.ts:684,:727`). |
+| **(d) bin re-link collect** | **MISSING**, needs read-chain | `collectRemovedItemIpnsNames`/`collectBinEntryIpnsNames` (`client.ts:241,:252`) throw. Reference for subtree walk: `enumerateSharedSubtree`/`rotateWriteSubtree`. Move re-encrypt = obsolete. |
+| **(e) share/invite create** | **PARTIAL** | Grant issuance EXISTS: `issueReadGrant`, `claimInvite`, `claimInviteReadKey` (`sdk-core/share/grant.ts`, exported). `updateSharePermission` EXISTS (`shared-write.ts:900`). MISSING: `collectChildKeys` subtree re-wrap (`key-wrapping.ts:21`) — needs read-chain. |
+| **(f) shared write ops** | **EXISTS** (runtime) | All 7 ops implemented in `shared-write.ts`: `createSharedSubfolder`:298, `uploadToSharedFolder`:409, `renameInSharedFolder`:555, `deleteFromSharedFolder`:600, `updateSharedFile`:640, `moveInSharedFolder`:772, `updateSharePermission`:900. Gap is **client + web wiring** + read-chain key resolution for move/update/delete-childId. |
+
+Rotation write-chain re-seal reference: `rotateWriteFromNode` (`sdk-core/rotation/engine.ts:1505`) + internal `rotateWriteSubtree` (:1241) — recursively re-points `SealedChildRef.ipnsName` and `WriteChildRef.writeKeySealed`, mints keys, republishes.
+
+---
+
+## 3. Reference implementations to copy
+
+All in `packages/sdk/src/share/shared-write.ts` (the canonical write-chain, uses codec + injected `publishNodeFn`/`addToIpfsFn` seams):
+
+- **`uploadToSharedFolder`** (:409) — mint fileKey/fileReadKey/fileWriteKey/Ed25519 keypair → `encryptAesGcm` content → `addToIpfsFn` → build `NodeContent` (raw fileKey inside sealed body) + file `Node` with `writeBody` → `sealNode` → publish seq `1n` → `sealChildReadKey` + `buildChildWriteLink` → `resealAndPublishParent`. **Copy for (a).**
+- **`createSharedSubfolder`** (:298) — same pattern for folders. **Reference for owned createFolder.**
+- **`updateSharedFile`** (:640) — mint new fileKey, re-encrypt, rebuild file Node preserving `id`/`generation`/`createdAt`/`originalVersions`, `sealNode`, `publishOrThrow` at `seq+1`. **Copy for (b) and (c).**
+- **`moveInSharedFolder`** (:772) — `unsealParentWriteBody` both sides, `sealChildReadKey` under dest, `walkChildWriteKey`→`buildChildWriteLink` under dest, **publish dest before src** (dup-not-orphan). **Reference for (d) move + (f) move.**
+- **`deleteFromSharedFolder`** (:600) — remove read-body by ipnsName, write-body by UUID `childId`.
+- Helpers: `buildChildWriteLink` (:155), `walkChildWriteKey` (:183), `unsealParentWriteBody` (:202), `publishOrThrow` (:224), `resealAndPublishParent` (:247).
+
+Seal/publish/CAS patterns:
+- Owned read-chain re-seal on move already done: `client.ts moveItem` (:851) via `unsealChildReadKey`→`sealChildReadKey` — the read-chain analog to copy.
+- CAS retry engine: `updateFolderMetadataAndPublish` (`sdk-core/folder/registration.ts:159`) + `publishWithCas` (`sdk-core/cas.ts`). First-publish must embed `sequenceNumber: 1n` (strict gate; `createSubfolder`:119).
+- Client seam wiring for shared ops: `buildSharedWriteContextFromState` (`client.ts:2095`) — honors BYO/external pinning via `pinWithMode` for content, routes node metadata through CipherBox.
+
+Zeroization discipline (consistent D-09): mint keys as `let x: Uint8Array | null`; `.fill(0)` + null on success AND in `catch`/`finally`; **never zero caller-supplied buffers**; a derived key (e.g. `walkChildWriteKey` output) is zeroed by the deriver, a caller-supplied one is not (see `moveInSharedFolder` `didDeriveWriteKey`, :843-864).
+
+---
+
+## 4. Rough size estimate
+
+| Cap | Files touched | Wiring vs new logic | Notes / dependency flags |
+|---|---|---|---|
+| **(a) owned upload** | `sdk-core/file/index.ts`, `sdk-core/upload/index.ts`, `sdk-core/folder/registration.ts` (addFile*), web `file-metadata.service.ts`; client already wired | **Genuine new logic** (build file-node write-chain), but ~80% copyable from `uploadToSharedFolder`. **Multi-day.** | **Architectural decision required:** owned `FolderState` has NO `writeKey`/`publishedNode` (types.ts:164). Either (i) extend owned model to the write-body model like shared, or (ii) keep read-chain-only + store file `ipnsPrivateKey` somewhere. This blocks a clean copy and is the biggest open question. |
+| **(b) owned replace/update** | `sdk-core/file/index.ts` (`updateFileMetadata`), `client.ts:1549`, web `useFileOperations.ts`, `TextEditorDialog.tsx`, web `file-metadata.service.ts` | New logic in sdk-core (copy `updateSharedFile`); rest wiring. **~1-2 days**, after (a) model decision. | Same owned-model dependency as (a). |
+| **(c) versions** | `client.ts:1599/1645`, web `useFileVersions.ts`, `file-metadata.service.ts` (3 pure fns), `VersionHistory.tsx` | Mostly wiring + pure transforms; reuse `mergeVersions`. **~1 day** once (b) lands. | `downloadFromIpns` (:1694) + `handleDownloadVersion` are **read-chain (phase 63)**, not truly 65. |
+| **(d) bin re-link** | `client.ts:241/252`, `bin/index.ts` helpers | New subtree-walk logic (small), delete `reencrypt.ts`. **~1 day.** | **Depends on read-chain (phase 63)** for subtree traversal. Bin core already works; this is cleanup-path only. |
+| **(e) share/invite create** | `key-wrapping.ts`, `ShareDialog.tsx` (share+upgrade), `invite.service.ts` | `collectChildKeys` = new subtree re-wrap (moderate); grant primitives exist. **~1-2 days.** | **Depends on read-chain (phase 63)** for subtree walk; upgrade needs write-chain re-grant. |
+| **(f) shared write ops** | web `useSharedWriteOps.ts` (5 handlers), `client.ts:2268/2360` (2 wrappers) | **Mostly mechanical wiring** to existing `shared-write.ts` symbols. **~1-2 days.** | `renameItemHandler` = trivial wiring (client method exists). `deleteItemHandler`/`updateSharedFile`/`move` need read-chain to resolve `childNodeId`/file-keys/dest-keys → partially **phase-63-gated**. `client.ts:2360` explicitly tagged phase 63. |
+
+**Cross-cutting flags:**
+- Many "phase 65" labels are actually **read-chain (phase 63) dependencies**: `downloadFromIpns`, version download, `collectChildKeys`, bin subtree collect, shared move/delete-childId/file-key resolution, and owned `createFolder` (:760, explicitly phase 63). Sequence phase-63 read-chain landing first for these.
+- Several client.ts comments are **stale** (claim `updateSharedFile`/`moveInSharedFolder` are "stubbed in shared-write.ts" — they are fully implemented). Don't take the comments at face value; the stubs are the client wrappers/web handlers, not the sdk primitives.
+- Lowest-effort quick wins: wire `useSharedWriteOps.renameItemHandler`/`deleteItemHandler` and `client.updateSharedFile` to the already-built `shared-write.ts` ops.
+- Highest-risk/largest: (a)/(b) owned file-node write-chain, gated on the owned-vs-shared write-body model decision.
+
+Key files (all absolute):
+- `/Users/myankelev/Code/random/cipher-box/packages/sdk/src/share/shared-write.ts` (reference runtime)
+- `/Users/myankelev/Code/random/cipher-box/packages/sdk-core/src/file/index.ts` (stubbed owned file write-chain)
+- `/Users/myankelev/Code/random/cipher-box/packages/sdk-core/src/folder/registration.ts` (addFile* stubs + working folder ops)
+- `/Users/myankelev/Code/random/cipher-box/packages/sdk-core/src/rotation/engine.ts` (write-chain re-seal reference)
+- `/Users/myankelev/Code/random/cipher-box/packages/sdk/src/client.ts` (owned + shared wrappers)
+- `/Users/myankelev/Code/random/cipher-box/packages/sdk/src/types.ts` (FolderState vs SharedFolderState divergence)
+- `/Users/myankelev/Code/random/cipher-box/packages/core/src/node/{types,seal,index}.ts` (complete codec)</result>
+<usage><subagent_tokens>146486</subagent_tokens><tool_uses>30</tool_uses><duration_ms>444750</duration_ms></usage>
+</task-notification>
