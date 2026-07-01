@@ -449,7 +449,7 @@ Plans:
 4. Shared flows work end-to-end: shared-folder read navigation + shared-file download (`navigateReadChain`), shared-folder write ops (rename/delete/move/batch, shared file update), share creation, permission upgrade, and invite create+claim
 5. The full `tests/web-e2e` Playwright suite passes locally against the standard stack (all specs, not a subset); `find apps/web/src -name "*.spec.ts"` stays empty (logic in SDK, UI via web-e2e — SC#5 doctrine)
 
-**Plans**: 13 plans
+**Plans**: 14 plans
 
 Plans:
 
@@ -465,6 +465,7 @@ Plans:
 - [ ] 68.1-10-PLAN.md — Shared-folder write ops web wiring: rename/update/delete/move/batch (useSharedWriteOps) [wave 4]
 - [ ] 68.1-11-PLAN.md — Sharing create + invite: collectChildKeys + ShareDialog share/upgrade + createInviteLink/claimInvite [wave 4]
 - [ ] 68.1-12-PLAN.md — Owned file write + versions web wiring: service transforms + editor save + versions + download UI [wave 5]
+- [ ] 68.1-14-PLAN.md — D-02 kind-cache population: call resolveKinds on owned (useFolderNavigation + folder.store) and shared (useSharedNavigationActions + useSharedNavigation) folder-load/nav render paths so files render as file rows [wave 4]
 - [ ] 68.1-13-PLAN.md — web-e2e enablement + triage: SC#1/SC#5 assertions + full Playwright suite green (exit gate, WEB-04) [wave 6]
 
 ### Phase 69: FUSE and WinFsp — Rust Integration and Grant-Root Awareness
