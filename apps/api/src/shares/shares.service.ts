@@ -272,6 +272,15 @@ export class SharesService {
       throw new ForbiddenException('Only the sharer can update the grant');
     }
 
+    // Anti-rollback: the grant's rootGeneration seeds the recipient's durable
+    // generation floor on first contact, so a replayed/duplicate PATCH must
+    // never regress it below the stored value.
+    if (BigInt(rootGeneration) < BigInt(share.rootGeneration)) {
+      throw new ConflictException(
+        'rootGeneration regression rejected: grants only advance the generation'
+      );
+    }
+
     share.readDescriptorRef = Buffer.from(readDescriptorRef, 'hex');
     share.rootGeneration = rootGeneration;
     await this.shareRepo.save(share);
