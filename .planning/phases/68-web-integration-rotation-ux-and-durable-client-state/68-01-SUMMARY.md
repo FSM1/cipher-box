@@ -149,3 +149,12 @@ None - no external service configuration required.
 ---
 *Phase: 68-web-integration-rotation-ux-and-durable-client-state*
 *Completed: 2026-07-01*
+
+## Self-Check: PASSED
+
+All created files and task commits were verified present on disk and in git history:
+
+- `packages/sdk/src/state/rotation-high-water.ts` - FOUND
+- `packages/sdk/src/__tests__/rotation-high-water.test.ts` - FOUND
+- `.planning/phases/68-web-integration-rotation-ux-and-durable-client-state/68-01-SUMMARY.md` - FOUND
+- `1bc1db80e`, `10c38eafb`, `f81a6d64e`, `34dad965a`, `7afc0c113` - all FOUND in git log
