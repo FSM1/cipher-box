@@ -1,0 +1,122 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "47c7d1c18846",
+  "session_id": "4ac302c1-20dd-43cd-ab2b-3e9d7a7c0606",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-01T22:04:55.323798Z",
+  "branch": "feat/web-client-runtime-integration",
+  "checkpoints_count": 7,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "931e9a812e63",
+  "token_usage": {
+    "input_tokens": 17767,
+    "cache_creation_tokens": 887965,
+    "cache_read_tokens": 28234338,
+    "output_tokens": 206351,
+    "api_call_count": 102
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_0171KjMabYcFbM8uXLisF4PG",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "931e9a812e63",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 162,
+        "end": 163,
+        "entry_ids": [
+          "ea1325f8-8db8-4cfa-bc29-bd77d5925d25"
+        ],
+        "tool_use_id": "toolu_0171KjMabYcFbM8uXLisF4PG"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_0171KjMabYcFbM8uXLisF4PG"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "summary": {
+    "intent": "Run the GSD (Get Shit Done) roadmap workflow for cipher-box: gap-close Phase 68's rotation VERIFICATION findings (plan → execute → verify), then, per user follow-up, actually stand up the local stack and run the full web-e2e suite to prove Phase 68 end-to-end rather than relying on unit tests.",
+    "outcome": "Phase 68 gap closure (68-11, 68-12) was planned, executed, and verified clean (14/14 must-haves, SDK tests green). The full local web-e2e run then exposed that login→browse flow is broken by ~46 'not implemented — phase 63/65' stubs (read-chain + write-chain wiring never done for the web app), which predate Phase 68. User directed a full fix rather than deferral, so a new combined Phase 68.1 'Web Client Runtime Integration' was scoped (read+write wiring, ~1 week+ effort) and scaffolded (ROADMAP, REQUIREMENTS, RESEARCH, CONTEXT, VALIDATION committed), with planning in progress at transcript end.",
+    "learnings": {
+      "repo": [
+        "cipher-box v2.0 web app has ~46 'not implemented — phase 63/65' stub throws across packages/sdk/src/client.ts and apps/web/src — the read-chain (phase 63) and write-chain (phase 65) runtime primitives exist in sdk-core/core but were never wired into the web app/client, so full web-e2e cannot pass on the v2.0 branch until that wiring lands",
+        "Owned FolderState (packages/sdk/src/types.ts:164) is read-chain-only (no writeKey/publishedNode) while SharedFolderState (types.ts:205) carries the full write-body model — owned file create/update/versions are genuinely missing in sdk-core (packages/sdk-core/src/file/index.ts createFileMetadata/updateFileMetadata throw) and must be built by copying packages/sdk/src/share/shared-write.ts patterns, not just wired",
+        "packages/sdk/src/client.ts ensureFolderLoaded (~line 478/518) is a dead phase-63 stub that throws 'not implemented' — the real live pre-mutation resolve chokepoint is reconcileFolderSequence, called before every rename/delete/deleteToBin/move (5 call sites)",
+        "Several client.ts stub comments claiming underlying shared-write.ts functions are 'also stubbed' are stale — updateSharedFile and moveInSharedFolder are fully implemented in shared-write.ts; only the client.ts wrappers/web handlers are stubbed",
+        "rotateReadFromNode in packages/sdk-core/src/rotation/engine.ts previously returned void, discarding the root's rotated {readKey, generation, sequenceNumber}; its only production caller is client.ts performScopeExitRotation",
+        "SealedChildRef schema has no 'kind' field, so the web file browser cannot distinguish file vs folder without a network hop per child — a genuine open architecture decision for the read-chain wiring work",
+        "tests/web-e2e Playwright config auto-starts mock-ipns-routing (:3001), API dev (:3000), and web dev (:5173) via webServer, but requires Postgres, Kubo, and Redis to already be running externally, plus BASE_URL=localhost:5173 in .env or it skips starting app servers entirely",
+        "apps/api dev server runs `nest start --watch` with migrationsRun:true (synchronize off) — a fresh start auto-applies migrations, no manual migration step needed",
+        "gsd-tools has a `phase insert`/`phase add` and `next-decimal` subcommand that cleanly inserts a decimal phase (e.g. 68.1) between existing phases without renumbering downstream phases — safer than hand-editing ROADMAP.md"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 478,
+          "finding": "ensureFolderLoaded is a dead phase-63 stub throwing 'not implemented — phase 63'; reconcileFolderSequence (also client.ts, ~line 518) is the real live chokepoint gating rename/delete/deleteToBin/move"
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 210,
+          "finding": "New-user login branch throws 'not implemented — phase 63 (root Node initialization via Node codec)' — introduced by commit b2dba554a (Phase 62, unified Node codec, #578), predates Phase 68; blocks the entire web-e2e login→vault flow"
+        },
+        {
+          "path": "packages/sdk-core/src/file/index.ts",
+          "line": 119,
+          "finding": "createFileMetadata (owned file create) and updateFileMetadata (~line 163) are stubbed/throw — owned file upload/update path has no working sdk-core primitive, unlike the shared-folder path which is fully implemented in shared-write.ts"
+        },
+        {
+          "path": "packages/sdk/src/share/shared-write.ts",
+          "line": 409,
+          "finding": "uploadToSharedFolder is the canonical reference implementation for the write-chain (mint keys, encrypt, seal Node with writeBody, publish, reseal parent) — copyable template for building the missing owned-file write-chain"
+        }
+      ],
+      "workflow": [
+        "GSD orchestrator protocol: when a subagent is running, avoid touching files it's editing; wait for its return, then spot-check (SUMMARY presence, commit count, 'Self-Check: PASSED') before proceeding to the next wave",
+        "For single-plan sequential waves that share a modified file (e.g. two plans both touching client.ts across dependent waves), prefer running executors sequentially on the main working tree rather than isolated worktrees — avoids merge risk and worktree/pnpm-install overhead with zero parallelism benefit",
+        "GSD's commit-helper has a known false-negative: it can report 'commit_failed' when the commit actually landed — verify via `git log`/`git status` rather than retrying the commit",
+        "Before reusing a running dev server (e.g. `nest --watch` on :3000) instead of restarting it, verify it's serving current code (e.g. curl a route added in a recent commit) rather than assuming freshness from process age",
+        "When Playwright/e2e wrapper scripts echo a fixed exit message, check the actual test summary in the log rather than trusting the shell wrapper's own exit code — the wrapper's `exit 0` can mask a failed test run",
+        "Reading a page's error-context.md snapshot at the moment of Playwright timeout is an effective way to pinpoint root cause (found an alert/error text directly on the stalled page) rather than only reading stack traces",
+        "Use `git blame` on a newly-discovered stub/throw to confirm whether it predates the current work before treating it as caused by the current phase",
+        "Spawning a dedicated inventory/scope-mapping subagent before sizing a large deferred-work phase (read-chain stubs, then write-chain stubs) surfaced a second stub family (write-chain) that would have been missed if only the first inventory was trusted"
+      ]
+    },
+    "friction": [
+      "User's initial phase completion report presented gap-closure verification (unit-test tier) as sufficient, but the actual web UI flow was fundamentally broken — the SDK-tier 'passed' verification gave false confidence about end-to-end correctness",
+      "Full web-e2e suite run took ~23 minutes and only then revealed the root cause was unrelated to Phase 68 (pre-existing phase-63/65 stubs), a significant time cost to discover scope was far larger than assumed",
+      "Local environment state was messy before the e2e run: stale API process on :3000 from an 18h-old build, an 'unhealthy'-flagged but actually-healthy mock-ipns docker container, and conflicting watch processes on the same port, requiring manual triage before tests could run meaningfully",
+      "Scope estimate grew twice during the session: first from 'run web-e2e' to '17 read-chain stubs need wiring (~1 week)', then to '46 total stubs (read+write), roughly 2-3 weeks' after the write-chain inventory came back"
+    ],
+    "open_items": [
+      "Phase 68.1 'Web Client Runtime Integration' (read-chain + write-chain wiring, full web-e2e-green as exit gate) is scaffolded (ROADMAP, REQUIREMENTS WEB-01..04, RESEARCH, CONTEXT, VALIDATION committed at 3c775ba6d) but planner had not yet been spawned/completed at end of transcript",
+      "Two architecture decisions deferred to the Phase 68.1 planner: (1) file-vs-folder kind discrimination given SealedChildRef has no kind field; (2) whether to extend owned FolderState to the write-body model like SharedFolderState, or keep it read-chain-only with an alternate key-storage approach for owned file writes",
+      "4 pending todos tagged resolves_phase:68 were intentionally left open (not auto-closed) because they were out of scope for the gap closure: rotation-concurrent-add-merge-downgrades-rotated-child-readkey, rotation-fresh-record-resume-and-sc4-double-bump, rotation-coderabbit-followups-deferred, and phase68-shared-write-context-publishednode-wiring — user said they may want retagging to a rotation-hardening/write-plane phase",
+      "packages/sdk/src/reencrypt.ts reencryptFileMetadataForFolderChange (~line 20) identified as dead/obsolete code with no callers — flagged for deletion, not yet acted on",
+      "packages/sdk/src/client.ts createFolder (owned, ~line 766) throws and is tagged phase-63 despite sdkCore.createSubfolder already existing — needs wiring as part of Phase 68.1",
+      "PROJECT.md 'Current State' narrative confirmed ~5 phases stale (still says 'Next: Phase 63') — left untouched as pre-existing milestone-level drift, not fixed",
+      "Branch feat/web-integration-rotation-ux-and-durable-client-state not yet pushed — user's call per assistant's final Phase 68 report"
+    ]
+  }
+}
