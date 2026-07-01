@@ -5,11 +5,16 @@ export type Notification = {
   type: 'info' | 'warning' | 'error';
   message: string;
   createdAt: number;
+  action?: { label: string; onClick: () => void };
 };
 
 type NotificationState = {
   notifications: Notification[];
-  addNotification: (type: Notification['type'], message: string) => void;
+  addNotification: (
+    type: Notification['type'],
+    message: string,
+    action?: Notification['action']
+  ) => void;
   dismissNotification: (id: string) => void;
   clearNotifications: () => void;
 };
@@ -17,7 +22,7 @@ type NotificationState = {
 export const useNotificationStore = create<NotificationState>((set) => ({
   notifications: [],
 
-  addNotification: (type, message) =>
+  addNotification: (type, message, action) =>
     set((state) => ({
       notifications: [
         ...state.notifications,
@@ -26,6 +31,7 @@ export const useNotificationStore = create<NotificationState>((set) => ({
           type,
           message,
           createdAt: Date.now(),
+          action,
         },
       ],
     })),

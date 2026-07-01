@@ -1,3 +1,4 @@
+import { RotationStatusBadge } from './RotationStatusBadge';
 import { UserMenu } from './UserMenu';
 
 interface AppHeaderProps {
@@ -30,6 +31,7 @@ export function AppHeader({ onSearchClick }: AppHeaderProps) {
             {'>_'} <kbd>{shortcutLabel}</kbd>
           </button>
         )}
+        <RotationStatusBadge />
         <UserMenu />
       </div>
     </header>
