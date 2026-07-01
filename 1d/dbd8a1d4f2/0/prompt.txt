@@ -1,0 +1,562 @@
+<task-notification>
+<task-id>afc3c9bc5bada2d94</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/d2e29299-7c93-4d80-935c-636a76495b24/tasks/afc3c9bc5bada2d94.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 68-12 of phase 68" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Clean working tree, all commits verified. Plan 68-12 is complete.
+
+## PLAN COMPLETE
+
+**Plan:** 68-12
+**Tasks:** 2/2
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.planning/phases/68-web-integration-rotation-ux-and-durable-client-state/68-12-SUMMARY.md`
+
+| Task | Name | Commits | Files |
+|---|---|---|---|
+| 1 | `rotateReadFromNode` returns root's post-rotation readKey/generation/sequenceNumber | `36f82dc86` (test, RED) → `c5457b3bf` (feat, GREEN) | `packages/sdk-core/src/rotation/engine.ts`, `packages/sdk-core/src/rotation/index.ts`, `packages/sdk-core/src/index.ts`, `packages/sdk-core/src/__tests__/rotation/engine.test.ts` |
+| 2 | `performScopeExitRotation` refreshes `folderTree` with rotated key/generation/sequence | `88d6c7a4f` (test, RED) → `dc21fe356` (feat, GREEN) | `packages/sdk/src/client.ts`, `packages/sdk/src/__tests__/client-rotation.test.ts` |
+| — | Docs/state | `51c3df81c` | `68-12-SUMMARY.md`, `STATE.md`, `ROADMAP.md` |
+
+**Verification:**
+- sdk-core: `pnpm --filter @cipherbox/sdk-core exec vitest run src/__tests__/rotation/engine.test.ts` → 38/38 pass; `tsc -b --force` → 50 errors (all pre-existing, confirmed identical via stash-diff baseline)
+- sdk: `pnpm --filter @cipherbox/sdk exec vitest run src/__tests__/client-rotation.test.ts` → 24/24 pass; `tsc -b --force` → 69 errors (all pre-existing, confirmed identical via stash-diff baseline)
+- Full repo grep confirmed no other production caller of `rotateReadFromNode` is stranded (only `client.ts` and 5 `await`-and-ignore sdk-e2e call sites)
+
+**Deviation (documented in SUMMARY, not a Rule 1-4 issue):** updated one pre-existing `engine.test.ts` assertion (`resolves.toBeUndefined` → `toBeDefined`) that encoded the old `void`-return contract — a direct, anticipated consequence of the additive signature change, not an unplanned bug.
+
+Phase 68 is now 12/12 plans complete (both VERIFICATION gaps closed: Gap 1 by 68-11, Gap 2 by this plan). ROT-07 was already marked complete in REQUIREMENTS.md. Recommend a phase-level re-verification pass before shipping.
+
+**Duration:** ~4 min (task work) + wrap-up</result>
+<usage><subagent_tokens>274708</subagent_tokens><tool_uses>121</tool_uses><duration_ms>909984</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aedacfdbebcde777d</task-id>
+<tool-use-id>toolu_0196rM3RF3NrXTC13AporZBc</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/d2e29299-7c93-4d80-935c-636a76495b24/tasks/aedacfdbebcde777d.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify phase 68 goal achievement" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Verification Complete
+
+**Status:** passed
+**Score:** 14/14 must-haves verified
+**Report:** `/Users/myankelev/Code/random/cipher-box/.planning/phases/68-web-integration-rotation-ux-and-durable-client-state/68-VERIFICATION.md`
+
+Both previously-failed truths are now confirmed as live system properties, verified by direct source inspection (not SUMMARY trust):
+
+**Gap 1 (BLOCKER) — closed by 68-11, confirmed:**
+- `packages/sdk/src/client.ts` `reconcileFolderSequence` (the real chokepoint called before `renameItem`/`moveItem`/`deleteItem`/`deleteToBin`) now gates its resolve through `this.config.rotationHighWater?.enforceResolved(...)`, placed outside the resolve try/catch so `SequenceRegressionError`/`GenerationRegressionError` propagate rather than being swallowed.
+- Confirmed `ensureFolderLoaded` (the method the original VERIFICATION named) is genuinely dead code — `throw new Error('not implemented — phase 63...')` — so the executor's substitution to `reconcileFolderSequence` is the correct fix, not a downgrade.
+- `useAuth.ts` injects the real IndexedDB-backed `rotationHighWater`; `useFileBrowserActions.ts#handleSync` threads a real `ResolveRotationContext`.
+- Live test run: `client-rotation.test.ts` 24/24 passed (18 prior + 6 new).
+
+**Gap 2 (should-fix) — closed by 68-12, confirmed:**
+- `packages/sdk-core/src/rotation/engine.ts` `rotateReadFromNode` now returns `RotateReadResult | undefined` instead of `void`.
+- `performScopeExitRotation` captures this and calls `this.folderTree.set(...)` with the rotated key/generation/sequence, only when a rotation occurred; zeroization discipline preserved (old key zeroed post-swap, not mid-flight).
+- Live test run: `engine.test.ts` 38/38, `client-rotation.test.ts` includes dedicated refresh/self-heal/uncovered-no-op cases, all passing.
+
+No regressions: `sdk-core`/`sdk` `tsc -b --force` error counts (50/69) exactly match the pre-existing quarantined-test baseline; `apps/web` typecheck clean; 0 apps/web spec files (SC#5 preserved); web-e2e durability spec re-authored (stale scope note removed), typecheck-clean, and registered (3 tests).
+
+The `CannotWriteUntilRefetchError` finding (pre-existing Phase 65/66 gap) is carried forward as `deferred`, not a new gap, per your re-verification context instructions.
+
+Phase 68 goal is achieved. ROT-07 is genuinely live. Ready to proceed.</result>
+<usage><subagent_tokens>126034</subagent_tokens><tool_uses>36</tool_uses><duration_ms>279261</duration_ms></usage>
+</task-notification>
+
+---
+
+have you run the full web-e2e suite locally?
+
+---
+
+I would like the full web-e2e suite running and passing locally - not only the rotation suite.
+
+---
+
+<task-notification>
+<task-id>bgj9jr59f</task-id>
+<tool-use-id>toolu_014U7QfEn9NfohwZcCceZNej</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/d2e29299-7c93-4d80-935c-636a76495b24/tasks/bgj9jr59f.output</output-file>
+<status>completed</status>
+<summary>Background command "Build lib packages so API/web dev servers use current dist" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bkst2eul6</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/d2e29299-7c93-4d80-935c-636a76495b24/tasks/bkst2eul6.output</output-file>
+<status>completed</status>
+<summary>Background command "Peek at web-e2e startup log" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b1lglgdcx</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/d2e29299-7c93-4d80-935c-636a76495b24/tasks/b1lglgdcx.output</output-file>
+<status>completed</status>
+<summary>Background command "Run full web-e2e suite in background" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ad0051c54ea2a3a18</task-id>
+<tool-use-id>toolu_01D6dnmBX1coJXxLihETiWuY</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/d2e29299-7c93-4d80-935c-636a76495b24/tasks/ad0051c54ea2a3a18.output</output-file>
+<status>completed</status>
+<summary>Agent "Inventory read-chain stubs vs sdk-core" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have a complete picture. Let me compile the structured report.
+
+---
+
+# Scope Map: Replacing the Phase-63 Read-Chain Stubs
+
+**Bottom line:** The read-chain **runtime primitives already exist** in `packages/core` (Node codec) and `packages/sdk-core` (`loadFolderMetadata`, `navigateReadChain`, rotation BFS walk) and `packages/sdk` (`shared-write.ts` full read+write chain ops). The phase-63 work is **overwhelmingly "wire existing primitives into the web app + client.ts," not "build the read-chain."** Two small new sdk-core-level primitives are needed (empty **root** Node publish; a raw-`fileKey` file download), plus one genuine design decision (file-vs-folder discrimination). This is **tractable web/client wiring**, not a from-scratch read-chain build.
+
+---
+
+## 1. Stub inventory
+
+All 18 `not implemented — phase 63` sites (tests/specs excluded). Grouped by capability. "throw" = throws immediately; "error-state" = sets React error state instead of throwing.
+
+### (a) auth / root-Node-init
+| file:line | fn/hook | Intended job | mode |
+|---|---|---|---|
+| `apps/web/src/hooks/useAuth.ts:210` | `useAuth` new-user branch | After publishing the v3 key blob: **publish an empty root Node** (`kind:'root'`) to the derived `rootIpnsName` via the Node codec, then register vault with API + set vault keys (comments at :181, :207-209). Existing-user login path above it already works (`loadVaultKeyBlob`-style). | throw |
+
+### (b) navigation / read fan-out
+| file:line | fn | Intended job | mode |
+|---|---|---|---|
+| `packages/sdk/src/client.ts:478` | `ensureFolderLoaded(targetIpnsName)` | DFS from root through `folderTree`, unsealing each child's readKey from `SealedChildRef.readKeySealed` (and write-body for `ipnsPrivateKey`/writeKey) until target is registered. The self-heal chokepoint `requireFolder` (:492) depends on it. | throw |
+| `packages/sdk/src/client.ts:766` | `createFolder(parentIpnsName, name)` | Mint subfolder Node + keys, seal under parent write-body, emit `SealedChildRef` into parent children, publish both. | throw |
+| `apps/web/src/utils/fileTypes.ts:137,145` | `isFileRef` / `isFilePointer` | Discriminate file vs folder from a `SealedChildRef` (which has **no kind field**). | throw |
+
+### (c) file read: metadata / download / preview / streaming
+| file:line | fn/hook | Intended job | mode |
+|---|---|---|---|
+| `apps/web/src/services/file-metadata.service.ts:71` | `resolveFileMetadata(fileIpnsName, folderKey)` | Read-chain hop: unseal child readKey → fetch file Node → unseal `NodeContent` (cid, fileIv, size, mime, versions). | throw |
+| `apps/web/src/services/download.service.ts:110` | `downloadFileFromIpns` | Resolve `NodeContent`, fetch CID, decrypt with the raw `fileKey` inside content. | throw |
+| `apps/web/src/hooks/useFilePreview.ts:53` | `useFilePreview` | Unseal Node → fetch/decrypt → object URL for preview. | error-state |
+| `apps/web/src/hooks/useStreamingPreview.ts:46,50` | `useStreamingPreview` | Recover `NodeContent` (cid/fileKey/mode) to wire SW streaming (:46 error-state, :50 handleDownload throw). | mixed |
+| `apps/web/src/components/file-browser/DetailsDialog.tsx:104` | `DetailsDialog` | Calls `resolveFileMetadata` (TODO comment; inherits the service throw). | (inherits) |
+
+### (d) shared-folder navigation / download
+| file:line | fn | Intended job | mode |
+|---|---|---|---|
+| `packages/sdk/src/client.ts:2374` | `moveInSharedFolder` | Wire to the **already-implemented** `moveInSharedFolder` in `share/shared-write.ts:772` (the stub's comment claiming that fn is "also stubbed" is **stale**). | throw |
+| `apps/web/src/hooks/useSharedNavigationActions.ts:78,88,126,136,145` | `navigateToShare`, `navigateToSubfolder`, `navigateUp`, `navigateToBreadcrumb`, `downloadSharedFile` | Read-chain navigation of shared folders + shared file download. `navigateToRoot` (:95) and `hideSharedItem` (:151) are already implemented. | throw |
+
+---
+
+## 2. Does the read-chain RUNTIME already exist in sdk-core? (verdicts)
+
+The **low-level Node codec is complete** in `packages/core/src/node/`: `sealNode`/`unsealNode`, `sealChildReadKey`/`unsealChildReadKey`, `sealChildWriteKey`/`unsealChildWriteKey`, `sealContent`/`unsealContent` (`seal.ts:96-331`), plus encode/decode. Types in `types.ts` (`Node`, `SealedChildRef`, `NodeContent`, `NodeWriteBody`, `PublishedNode`).
+
+### (a) auth/root-Node-init — **PARTIAL**
+- EXISTS: `initializeVault` (`packages/core/src/vault/init.ts:43`) mints rootReadKey/rootWriteKey/rootIpnsKeypair; `publishVaultKeyBlob`/`loadVaultKeyBlob` (`packages/sdk-core/src/vault/index.ts:30,74`); login unwrap path fully works.
+- MISSING: a primitive that **publishes an empty `kind:'root'` Node to the deterministic root IPNS keypair**. `createSubfolder` (`folder/registration.ts:49`) is ~90% the template but mints a *fresh* Ed25519 keypair and uses `kind:'folder'` with no write-body. A root variant (accept the vault's root keypair + `kind:'root'` + `writeBody{ipnsPrivateKey, writeChildren:[]}`) must be added (or inlined in `useAuth`). ~40 lines composing existing `sealNode`+`addToIpfs`+`createAndPublishIpnsRecord`+`deriveIpnsName`.
+
+### (b) navigation / read fan-out — **EXISTS (primitives)** → wiring
+- `loadFolderMetadata` (`folder/load.ts:54`) and `fetchAndDecryptMetadata` (:29) resolve IPNS→fetch→`unsealNode`. `client.loadFolder` (`client.ts:393`) **already works** and builds `FolderState`.
+- The DFS/BFS walk pattern (`ensureFolderLoaded`) exists twice as reference: `rotateReadFromNode` (`engine.ts:990-1014`, resolveAndFetch + `unsealChildReadKey`) and `navigateReadChain`. **Caveat:** owned `ensureFolderLoaded` must also recover each folder's `ipnsPrivateKey`/writeKey from the **write-body** (`unsealChildWriteKey` walk) to populate `FolderState.ipnsKeypair` for later writes — primitives exist (`shared-write.ts` `unsealParentWriteBody`/`walkChildWriteKey`).
+- `createFolder`: `createSharedSubfolder` (`shared-write.ts:288`) is the near-exact template (builds child node w/ write-body + parent `SealedChildRef` + `WriteChildRef`, publishes both).
+
+### (c) file read — **PARTIAL** (primitives exist, thin composition + one adapter missing)
+- Metadata resolution: no dedicated owned-file resolver, but it is a **single read-chain hop** composing existing `resolveIpnsRecord`+`fetchFromIpfs`+`unsealChildReadKey`+`unsealNode` → `node.content`. Exact pattern lives in `navigate.ts:145-171` and `client.ts:892-912`.
+- Download: `downloadAndDecrypt` (`download/index.ts:29`) **uses the legacy ECIES model** (`fileKeyEncrypted` hex + `userPrivateKey` unwrap). v3 stores the **raw** `fileKey` inside `NodeContent`. Need a raw-key variant: `fetchFromIpfs(content.cid)` + `decryptAesGcm`/`decryptAesCtr(ct, content.fileKey, iv)`. Note `NodeContent.fileIv` is **base64** (see `shared-write.ts:448,703`), not hex — format detail to get right.
+- `isFileRef` kind discrimination: **MISSING cheap primitive.** `SealedChildRef` has no `kind` (schema frozen, `types.ts:83-104`); kind lives only on the child's `PublishedNode.kind`, requiring a network hop per child. Genuine design decision (resolve+cache kind at folder-load time, or carry kind in `FolderState`).
+
+### (d) shared-folder navigation/download — **EXISTS** → pure wiring
+- `navigateReadChain` (`share/navigate.ts:106`) is the canonical multi-hop walk root→file leaf returning `NodeContent` (with `behind-retry`/`revoked` states).
+- `client.enumerateSharedSubtree` (`client.ts:2394`) **already implemented** (uses `loadFolderMetadata`).
+- sdk-core `moveInSharedFolder` (`shared-write.ts:772`) **fully implemented**; the `client.ts:2360` wrapper just needs to build src/dest `SharedWriteContext` and call it.
+
+---
+
+## 3. Reference implementations to copy
+
+- `packages/sdk-core/src/share/navigate.ts:106-189` — `navigateReadChain`: the canonical read-chain walk (resolve → `unsealChildReadKey` using **parent-mirror** `childRef.generation` → `unsealNode` → leaf `content`). Direct model for owned file read + shared nav.
+- `packages/sdk-core/src/rotation/engine.ts:990-1014` (and resume path :938-964) — child readKey derivation from parent's readKey via `resolveAndFetch`+`unsealChildReadKey`; the BFS/DFS template for `ensureFolderLoaded`.
+- `packages/sdk-core/src/folder/load.ts:54` — `loadFolderMetadata`: single-hop resolve+unseal (already used by working `client.loadFolder`).
+- `packages/sdk/src/client.ts:892-923` — `moveItem`'s re-seal block: resolves child `PublishedNode` for id/kind, then `unsealChildReadKey`+`sealChildReadKey` — the exact child-key pattern in *client* context (already imports these from `@cipherbox/core` at `client.ts:29`).
+- `packages/sdk/src/share/shared-write.ts:288-399` — `createSharedSubfolder`: full "mint node w/ write-body + parent read+write link + publish" — template for owned `createFolder`.
+- `packages/sdk/src/share/shared-write.ts:772-889` — `moveInSharedFolder`: implemented target for the `client.ts:2360` wrapper.
+- `packages/sdk/src/share/shared-write.ts:183-218` — `walkChildWriteKey`/`unsealParentWriteBody`: write-chain unseal recovering `ipnsPrivateKey`+child writeKeys (needed by owned `ensureFolderLoaded`/`createFolder`).
+- `packages/core/src/node/seal.ts:187-331` — `unsealChildReadKey`/`unsealContent` (+ AAD role bytes) — the crypto floor every path calls.
+
+---
+
+## 4. Rough size estimate
+
+| Capability | Files touched | Nature | Effort |
+|---|---|---|---|
+| **(a) auth/root-init** | `useAuth.ts` + 1 new sdk-core root-publish helper (or reuse `createSubfolder` shape) | Mostly mechanical; small new "publish empty root Node" primitive | **~0.5–1 day** |
+| **(b) navigation/read fan-out** | `client.ts` (`ensureFolderLoaded`, `createFolder`) + `fileTypes.ts` + minor web nav wiring (`useFolderNavigation.ts` already calls `ensureFolderLoaded`) | `ensureFolderLoaded` is genuine logic: dual **read+write** chain DFS from root, populating `FolderState` incl. signing keys. `createFolder` = adapt `createSharedSubfolder`. `isFileRef` needs a design decision (kind resolution/caching). | **Multi-day** — the largest/most load-bearing item; every folder mutation self-heals through it |
+| **(c) file read** | `file-metadata.service.ts`, `download.service.ts`, `useFilePreview.ts`, `useStreamingPreview.ts`, `DetailsDialog.tsx` + 1 raw-fileKey download variant in sdk-core | Thin composition (resolve = one read-chain hop) + one download adapter (raw key, base64 IV). Preview/streaming hooks are wiring on top. | **~1–2 days** (gated on the resolver + kind discrimination from (b)) |
+| **(d) shared nav/download** | `client.ts` `moveInSharedFolder` wrapper + `useSharedNavigationActions.ts` (5 handlers) | Pure wiring to existing `navigateReadChain` / `enumerateSharedSubtree` / `shared-write.moveInSharedFolder`. | **~1–2 days** |
+
+**Multi-day flags:** `ensureFolderLoaded` (b) is the critical path — it's real logic (recursive read+write chain walk, key lifecycle/zeroization, IPNS-lag retry already scaffolded in `useFolderNavigation.ts:237-248`) and unblocks nearly everything else. The `isFileRef` kind-discrimination design choice (b/c) is small in code but needs an architecture decision because `SealedChildRef` deliberately omits `kind`.
+
+**Not phase-63 (do not pull in):** all `file/index.ts` and `folder/registration.ts` `addFile*`/`replaceFile*`/`createFileMetadata`/`updateFileMetadata` stubs are **phase 65 (write-chain)**; `shouldCreateVersion`/version helpers in `file-metadata.service.ts` are phase 65 too. Read-path work should not touch them.</result>
+<usage><subagent_tokens>145044</subagent_tokens><tool_uses>36</tool_uses><duration_ms>275684</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0a0e8fd54bfd9d4c</task-id>
+<tool-use-id>toolu_01FUD6JxuooKv6eFJ7Rf6r5A</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/d2e29299-7c93-4d80-935c-636a76495b24/tasks/a0a0e8fd54bfd9d4c.output</output-file>
+<status>completed</status>
+<summary>Agent "Inventory write-chain stubs vs sdk-core" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have a complete picture. Let me compile the structured report.
+
+---
+
+# WRITE-Chain (Phase 65) Scope Map — CipherBox v2.0
+
+**Branch:** `feat/web-integration-rotation-ux-and-durable-client-state`
+
+## Executive summary (read this first)
+
+The single most important finding: **the write-chain runtime largely EXISTS and is fully implemented in `packages/sdk/src/share/shared-write.ts`** (7 ops, ~920 LOC) using the `@cipherbox/core` node codec — which is also complete. The codebase has two divergent models:
+
+- **Shared path** (`SharedFolderState`, `packages/sdk/src/types.ts:205`) — carries the **full write-body model** (`writeKey`, `publishedNode`) and is wired end-to-end for upload + create-folder.
+- **Owned path** (`FolderState`, `packages/sdk/src/types.ts:164`) — is **read-chain-only** (no `writeKey`, no `publishedNode`; `ipnsKeypair` used directly). Owned rename/move/delete work via read-chain re-seal, but owned **file create/update/versions are genuinely MISSING in sdk-core** (`packages/sdk-core/src/file/index.ts` is stubbed).
+
+So the work splits cleanly: **(f) shared ops + parts of (e) = tractable wiring** to existing symbols; **(a)(b)(c) owned files = build the file-node write-chain in sdk-core** (heavily copyable from `shared-write.ts`), then wire; **(d) bin re-link + parts of (e) = blocked on the read-chain (phase 63)**.
+
+---
+
+## 1. Write-stub inventory
+
+### (a) Owned file create / upload
+| file:line | symbol | must do |
+|---|---|---|
+| `packages/sdk-core/src/file/index.ts:119` | `createFileMetadata` | Create file Node, seal content under fresh fileReadKey, publish file Node to its IPNS name; return ipnsName + record. **Root blocker.** |
+| `packages/sdk-core/src/folder/registration.ts:278` | `addFileToFolder` | Create file Node + seal child readKey under parent + batch-publish both IPNS. |
+| `packages/sdk-core/src/folder/registration.ts:303` | `addFilesToFolder` | Batch variant of above. |
+| `packages/sdk-core/src/upload/index.ts:168` | `uploadFile` (calls `createFileMetadata`) | Currently IMPLEMENTED but throws at runtime because it calls the stubbed `createFileMetadata`. |
+| `apps/web/src/services/file-metadata.service.ts:35` | `createFileMetadata` (web) | Web-tier mirror stub. |
+| `packages/sdk/src/client.ts:1101 / :1276` | `uploadFile` / `uploadFiles` | WIRED (calls `sdkCore.uploadFile`, `addFilePointerToFolder`, `updateFolderMetadataAndPublish`) — throws only because of the sdk-core stub beneath it. |
+
+### (b) Owned file replace / update / owner save
+| file:line | symbol | must do |
+|---|---|---|
+| `packages/sdk-core/src/file/index.ts:163` | `updateFileMetadata` | Update NodeContent, re-seal read-body, CAS-republish file Node. **Root blocker for (b)+(c).** |
+| `packages/sdk/src/client.ts:1549` | `replaceFile` | Publish file metadata via `updateFileMetadata` + touch parent FilePointer. |
+| `apps/web/src/services/file-metadata.service.ts:89` | `updateFileMetadata` (web) | Web mirror. |
+| `apps/web/src/hooks/useFileOperations.ts:27` | `handleUpdateFile` | Route to `client.replaceFile`/`updateFile`. |
+| `apps/web/src/components/file-browser/TextEditorDialog.tsx:166` | owner save branch of `handleSave` | Owner text-file save (shared branch already works via `onSaveSharedFile`). |
+| `packages/sdk/src/reencrypt.ts:20` | `reencryptFileMetadataForFolderChange` | **DEAD/obsolete** — no callers; docstring says content self-seal removes re-encrypt-on-move. Delete, don't implement. |
+
+### (c) File versions
+| file:line | symbol | must do |
+|---|---|---|
+| `packages/sdk/src/client.ts:1599` | `restoreFileVersion` | Unseal VersionEntry from NodeContent, publish updated Node. |
+| `packages/sdk/src/client.ts:1645` | `deleteFileVersion` | Remove VersionEntry, publish updated Node. |
+| `packages/sdk/src/client.ts:1694` | `downloadFromIpns` | **Read-chain** (resolve file Node, unseal NodeContent, decrypt) — really a phase-63 dependency. |
+| `apps/web/src/hooks/useFileVersions.ts:24,:37` | `handleRestoreVersion`, `handleDeleteVersion` | Route to client methods. |
+| `apps/web/src/services/file-metadata.service.ts:78,:107,:118` | `shouldCreateVersion`, `computeRestoreVersionUpdate`, `computeDeleteVersionUpdate` | Pure transforms over `NodeContent.versions`. |
+| `apps/web/src/components/file-browser/details/VersionHistory.tsx:32` | `handleDownloadVersion` | Read-chain download of a historical version. |
+
+Note: `packages/sdk-core/src/file/index.ts:88` `mergeVersions` is a **working** pure utility (dedupe/sort/cap) — reuse it.
+
+### (d) Delete → bin re-link (subtree IPNS collect) + move re-encrypt
+| file:line | symbol | must do |
+|---|---|---|
+| `packages/sdk/src/client.ts:241` | `collectRemovedItemIpnsNames` | Walk a removed `SealedChildRef` subtree via read-chain → list IPNS names (for unenroll/revoke). |
+| `packages/sdk/src/client.ts:252` | `collectBinEntryIpnsNames` | Same, from a `BinEntry.nodeRef`. |
+| `packages/sdk/src/bin/index.ts:171` | NOTE (no symbol) | Phase-65 helpers to enumerate Node children + collect `NodeContent` versionCids (replaces removed `captureFileCids`/`walkDeletedSubtree`). |
+| `packages/sdk/src/reencrypt.ts:20` | (see (b)) | Obsolete. |
+
+Bin core lifecycle (`deleteToBin` :1795, `restoreFromBin` :1864, `permanentDelete` :1902, `emptyBin` :1928) is **implemented**; only the subtree-IPNS collectors used by fire-and-forget unenroll are stubbed.
+
+### (e) Share creation / permission upgrade / invite creation (write side)
+| file:line | symbol | must do |
+|---|---|---|
+| `apps/web/src/lib/crypto/key-wrapping.ts:21` | `collectChildKeys` | Traverse subtree via read-chain, re-wrap descendant keys for a target pubkey. **Core blocker for share+invite create.** |
+| `apps/web/src/components/file-browser/ShareDialog.tsx:128` | `handleShare` | Create share (unwrap readKeySealed, re-wrap for recipient). |
+| `apps/web/src/components/file-browser/ShareDialog.tsx:152` | `handleUpgrade` | Permission upgrade (read→write) via write-chain re-grant. |
+| `apps/web/src/services/invite.service.ts:84` | `createInviteLink` | Ephemeral-keypair invite creation + child-key collection. |
+| `apps/web/src/services/invite.service.ts:41` | (comment) `generateEphemeralKeypair` | Restore when `createInviteLink` implemented. |
+
+Downgrade path (`ShareDialog.tsx:158+` `handleDowngradeConfirm`) and invite **claim** already work.
+
+### (f) Shared-folder write ops
+| file:line | symbol | state |
+|---|---|---|
+| `packages/sdk/src/client.ts:2268` | `updateSharedFile` (client wrapper) | STUB — but underlying `shareOps.updateSharedFile` EXISTS. Comment "stubbed in shared-write.ts" is **STALE**. |
+| `packages/sdk/src/client.ts:2360` | `moveInSharedFolder` (client wrapper) | STUB (tagged phase 63) — underlying `shareOps.moveInSharedFolder` EXISTS; needs dest-key read-chain resolution. |
+| `apps/web/src/hooks/useSharedWriteOps.ts:106` | `renameItemHandler` | STUB — but `client.renameInSharedFolder` (:2209) is **implemented**. Pure wiring. |
+| `apps/web/src/hooks/useSharedWriteOps.ts:127` | `deleteItemHandler` | STUB — `client.deleteFromSharedFolder` (:2230) implemented; needs `childNodeId` (UUID) resolution from read-chain. |
+| `apps/web/src/hooks/useSharedWriteOps.ts:117` | `updateSharedFileHandler` | STUB — needs client `updateSharedFile` wiring. |
+| `apps/web/src/hooks/useSharedWriteOps.ts:138,:152` | `moveItemHandler`, `batchMoveItemsHandler` | STUB — needs client `moveInSharedFolder`. |
+
+Already wired &amp; working: `useSharedWriteOps.uploadFile`/`createFolder` → `client.uploadToSharedFolder` (:2178) / `createSharedSubfolder` (:2195).
+
+Also owned `createFolder` (`client.ts:760`) throws — but it's tagged **phase 63** (read fan-out), not 65, despite `sdkCore.createSubfolder` existing.
+
+---
+
+## 2. Does the write-chain RUNTIME already exist? (verdicts per capability)
+
+Codec layer `@cipherbox/core/node` is **COMPLETE**: `sealNode`, `unsealNode`, `sealChildReadKey`, `sealChildWriteKey`, `unsealChildWriteKey`, `sealContent` (`packages/core/src/node/index.ts`); types `Node`, `NodeContent`, `WriteChildRef`, `NodeWriteBody`, `SealedChildRef`, `VersionEntry` (`packages/core/src/node/types.ts`).
+
+| Cap | Verdict | Evidence |
+|---|---|---|
+| **(a) owned file create/upload** | **MISSING in sdk-core** | `createFileMetadata` (`file/index.ts:119`) throws; `uploadFile` (`upload/index.ts:168`) calls it → owned upload broken at runtime. No owned file-node builder exists. Full reference: `uploadToSharedFolder` (`shared-write.ts:409`). |
+| **(b) owned replace/update** | **MISSING in sdk-core** | `updateFileMetadata` (`file/index.ts:163`) throws. Reference: `updateSharedFile` (`shared-write.ts:640`). |
+| **(c) versions** | **MISSING (write)** / read blocked on 63 | Depends on (b) + `NodeContent.versions`. `mergeVersions` (`file/index.ts:88`) works. Version-carry pattern: `updateSharedFile` `originalVersions` param (`shared-write.ts:684,:727`). |
+| **(d) bin re-link collect** | **MISSING**, needs read-chain | `collectRemovedItemIpnsNames`/`collectBinEntryIpnsNames` (`client.ts:241,:252`) throw. Reference for subtree walk: `enumerateSharedSubtree`/`rotateWriteSubtree`. Move re-encrypt = obsolete. |
+| **(e) share/invite create** | **PARTIAL** | Grant issuance EXISTS: `issueReadGrant`, `claimInvite`, `claimInviteReadKey` (`sdk-core/share/grant.ts`, exported). `updateSharePermission` EXISTS (`shared-write.ts:900`). MISSING: `collectChildKeys` subtree re-wrap (`key-wrapping.ts:21`) — needs read-chain. |
+| **(f) shared write ops** | **EXISTS** (runtime) | All 7 ops implemented in `shared-write.ts`: `createSharedSubfolder`:298, `uploadToSharedFolder`:409, `renameInSharedFolder`:555, `deleteFromSharedFolder`:600, `updateSharedFile`:640, `moveInSharedFolder`:772, `updateSharePermission`:900. Gap is **client + web wiring** + read-chain key resolution for move/update/delete-childId. |
+
+Rotation write-chain re-seal reference: `rotateWriteFromNode` (`sdk-core/rotation/engine.ts:1505`) + internal `rotateWriteSubtree` (:1241) — recursively re-points `SealedChildRef.ipnsName` and `WriteChildRef.writeKeySealed`, mints keys, republishes.
+
+---
+
+## 3. Reference implementations to copy
+
+All in `packages/sdk/src/share/shared-write.ts` (the canonical write-chain, uses codec + injected `publishNodeFn`/`addToIpfsFn` seams):
+
+- **`uploadToSharedFolder`** (:409) — mint fileKey/fileReadKey/fileWriteKey/Ed25519 keypair → `encryptAesGcm` content → `addToIpfsFn` → build `NodeContent` (raw fileKey inside sealed body) + file `Node` with `writeBody` → `sealNode` → publish seq `1n` → `sealChildReadKey` + `buildChildWriteLink` → `resealAndPublishParent`. **Copy for (a).**
+- **`createSharedSubfolder`** (:298) — same pattern for folders. **Reference for owned createFolder.**
+- **`updateSharedFile`** (:640) — mint new fileKey, re-encrypt, rebuild file Node preserving `id`/`generation`/`createdAt`/`originalVersions`, `sealNode`, `publishOrThrow` at `seq+1`. **Copy for (b) and (c).**
+- **`moveInSharedFolder`** (:772) — `unsealParentWriteBody` both sides, `sealChildReadKey` under dest, `walkChildWriteKey`→`buildChildWriteLink` under dest, **publish dest before src** (dup-not-orphan). **Reference for (d) move + (f) move.**
+- **`deleteFromSharedFolder`** (:600) — remove read-body by ipnsName, write-body by UUID `childId`.
+- Helpers: `buildChildWriteLink` (:155), `walkChildWriteKey` (:183), `unsealParentWriteBody` (:202), `publishOrThrow` (:224), `resealAndPublishParent` (:247).
+
+Seal/publish/CAS patterns:
+- Owned read-chain re-seal on move already done: `client.ts moveItem` (:851) via `unsealChildReadKey`→`sealChildReadKey` — the read-chain analog to copy.
+- CAS retry engine: `updateFolderMetadataAndPublish` (`sdk-core/folder/registration.ts:159`) + `publishWithCas` (`sdk-core/cas.ts`). First-publish must embed `sequenceNumber: 1n` (strict gate; `createSubfolder`:119).
+- Client seam wiring for shared ops: `buildSharedWriteContextFromState` (`client.ts:2095`) — honors BYO/external pinning via `pinWithMode` for content, routes node metadata through CipherBox.
+
+Zeroization discipline (consistent D-09): mint keys as `let x: Uint8Array | null`; `.fill(0)` + null on success AND in `catch`/`finally`; **never zero caller-supplied buffers**; a derived key (e.g. `walkChildWriteKey` output) is zeroed by the deriver, a caller-supplied one is not (see `moveInSharedFolder` `didDeriveWriteKey`, :843-864).
+
+---
+
+## 4. Rough size estimate
+
+| Cap | Files touched | Wiring vs new logic | Notes / dependency flags |
+|---|---|---|---|
+| **(a) owned upload** | `sdk-core/file/index.ts`, `sdk-core/upload/index.ts`, `sdk-core/folder/registration.ts` (addFile*), web `file-metadata.service.ts`; client already wired | **Genuine new logic** (build file-node write-chain), but ~80% copyable from `uploadToSharedFolder`. **Multi-day.** | **Architectural decision required:** owned `FolderState` has NO `writeKey`/`publishedNode` (types.ts:164). Either (i) extend owned model to the write-body model like shared, or (ii) keep read-chain-only + store file `ipnsPrivateKey` somewhere. This blocks a clean copy and is the biggest open question. |
+| **(b) owned replace/update** | `sdk-core/file/index.ts` (`updateFileMetadata`), `client.ts:1549`, web `useFileOperations.ts`, `TextEditorDialog.tsx`, web `file-metadata.service.ts` | New logic in sdk-core (copy `updateSharedFile`); rest wiring. **~1-2 days**, after (a) model decision. | Same owned-model dependency as (a). |
+| **(c) versions** | `client.ts:1599/1645`, web `useFileVersions.ts`, `file-metadata.service.ts` (3 pure fns), `VersionHistory.tsx` | Mostly wiring + pure transforms; reuse `mergeVersions`. **~1 day** once (b) lands. | `downloadFromIpns` (:1694) + `handleDownloadVersion` are **read-chain (phase 63)**, not truly 65. |
+| **(d) bin re-link** | `client.ts:241/252`, `bin/index.ts` helpers | New subtree-walk logic (small), delete `reencrypt.ts`. **~1 day.** | **Depends on read-chain (phase 63)** for subtree traversal. Bin core already works; this is cleanup-path only. |
+| **(e) share/invite create** | `key-wrapping.ts`, `ShareDialog.tsx` (share+upgrade), `invite.service.ts` | `collectChildKeys` = new subtree re-wrap (moderate); grant primitives exist. **~1-2 days.** | **Depends on read-chain (phase 63)** for subtree walk; upgrade needs write-chain re-grant. |
+| **(f) shared write ops** | web `useSharedWriteOps.ts` (5 handlers), `client.ts:2268/2360` (2 wrappers) | **Mostly mechanical wiring** to existing `shared-write.ts` symbols. **~1-2 days.** | `renameItemHandler` = trivial wiring (client method exists). `deleteItemHandler`/`updateSharedFile`/`move` need read-chain to resolve `childNodeId`/file-keys/dest-keys → partially **phase-63-gated**. `client.ts:2360` explicitly tagged phase 63. |
+
+**Cross-cutting flags:**
+- Many "phase 65" labels are actually **read-chain (phase 63) dependencies**: `downloadFromIpns`, version download, `collectChildKeys`, bin subtree collect, shared move/delete-childId/file-key resolution, and owned `createFolder` (:760, explicitly phase 63). Sequence phase-63 read-chain landing first for these.
+- Several client.ts comments are **stale** (claim `updateSharedFile`/`moveInSharedFolder` are "stubbed in shared-write.ts" — they are fully implemented). Don't take the comments at face value; the stubs are the client wrappers/web handlers, not the sdk primitives.
+- Lowest-effort quick wins: wire `useSharedWriteOps.renameItemHandler`/`deleteItemHandler` and `client.updateSharedFile` to the already-built `shared-write.ts` ops.
+- Highest-risk/largest: (a)/(b) owned file-node write-chain, gated on the owned-vs-shared write-body model decision.
+
+Key files (all absolute):
+- `/Users/myankelev/Code/random/cipher-box/packages/sdk/src/share/shared-write.ts` (reference runtime)
+- `/Users/myankelev/Code/random/cipher-box/packages/sdk-core/src/file/index.ts` (stubbed owned file write-chain)
+- `/Users/myankelev/Code/random/cipher-box/packages/sdk-core/src/folder/registration.ts` (addFile* stubs + working folder ops)
+- `/Users/myankelev/Code/random/cipher-box/packages/sdk-core/src/rotation/engine.ts` (write-chain re-seal reference)
+- `/Users/myankelev/Code/random/cipher-box/packages/sdk/src/client.ts` (owned + shared wrappers)
+- `/Users/myankelev/Code/random/cipher-box/packages/sdk/src/types.ts` (FolderState vs SharedFolderState divergence)
+- `/Users/myankelev/Code/random/cipher-box/packages/core/src/node/{types,seal,index}.ts` (complete codec)</result>
+<usage><subagent_tokens>146486</subagent_tokens><tool_uses>30</tool_uses><duration_ms>444750</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a017f07b66d8c41fb</task-id>
+<tool-use-id>toolu_01Qy1b5yK1V5epUZ9zJdQtpb</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/d2e29299-7c93-4d80-935c-636a76495b24/tasks/a017f07b66d8c41fb.output</output-file>
+<status>completed</status>
+<summary>Agent "Plan phase 68.1 web runtime integration" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All 13 plans + the ROADMAP update are committed cleanly (`47472c1f2`). Planning is complete.
+
+## PLANNING COMPLETE
+
+**Phase 68.1 — Web Client Runtime Integration** | 13 plans, 6 waves, replacing 46 `phase 63/65` runtime stubs. Exit gate: full `tests/web-e2e` suite green.
+
+| Plan | Objective | Wave | Requirements |
+|------|-----------|------|--------------|
+| 68.1-01 | Owned write-body foundation: sdk-core `publishEmptyRootNode` + write-body in `updateFolderMetadataAndPublish` + client `ensureFolderLoaded` recovery + `FolderState.writeKey`/`config.rootWriteKey` (**resolves D-03**) | 1 | WEB-01, WEB-02 |
+| 68.1-02 | client `createFolder` (owned subfolder + write-body) + bin subtree-collectors + delete obsolete `reencrypt.ts` (**D-05**) | 2 | WEB-01, WEB-02 |
+| 68.1-03 | Login root-Node init wiring: new-user publishes empty root Node + registers vault (**SC#2**) | 2 | WEB-01 |
+| 68.1-04 | Owned file read services (`resolveFileMetadata` + raw-fileKey download) + kind-cache discrimination (**resolves D-02**) | 3 | WEB-01 |
+| 68.1-05 | Shared read navigation via `navigateReadChain` (5 handlers) | 2 | WEB-03 |
+| 68.1-06 | Owned read UI: preview + AES-CTR streaming + DetailsDialog | 4 | WEB-01 |
+| 68.1-07 | **[TDD] the one genuine build** — sdk-core owned file-Node chain (`createFileMetadata`/`resolveFileMetadata`/`updateFileMetadata` + raw-fileKey helper + registration wrappers) | 2 | WEB-02 |
+| 68.1-08 | client shared-write wrappers: `updateSharedFile` + `moveInSharedFolder` (primitives already exist) | 3 | WEB-03 |
+| 68.1-09 | client owned file write: `uploadFile` rewire + `replaceFile` + restore/deleteFileVersion + `downloadFromIpns` | 4 | WEB-02 |
+| 68.1-10 | Shared-folder write ops web wiring (rename/update/delete/move/batch) | 4 | WEB-03 |
+| 68.1-11 | Sharing create + invite: `collectChildKeys` + ShareDialog share/upgrade + createInviteLink/claimInvite | 4 | WEB-03 |
+| 68.1-12 | Owned file write + versions web wiring (service transforms + editor save + versions + download UI) | 5 | WEB-02 |
+| 68.1-13 | web-e2e enablement + triage: SC#1/SC#5 assertions + full Playwright suite green (**exit gate**) | 6 | WEB-04 |
+
+**Two design decisions resolved (flagged for your review):**
+
+- **D-02 (kind discrimination) → plan 04:** resolve-and-cache kind at folder-load into an in-memory `kind-cache.ts`; `isFileRef`/`isFilePointer` read it *synchronously*. Keeps type guards sync (no async ripple through render), no change to the frozen `SealedChildRef`, and the read-chain already fetches child nodes on navigation.
+- **D-03 (owned FolderState write model) → plan 01:** **Approach A — extend the owned model to carry a write-body**, mirroring `SharedFolderState`. Forced by architecture: in node/v3 the only schema-legal place to store a recoverable subfolder `ipnsPrivateKey`/`writeKey` is the sealed write-body (`SealedChildRef` dropped `ipnsPrivateKeyEncrypted` in the v3 cutover), so `ensureFolderLoaded`'s reload self-heal is impossible without it. Blast radius scoped in the plan (FolderState/config fields, `updateFolderMetadataAndPublish` write-body, owned publish call sites).
+
+**Wave sequencing** honors D-04 (read → owned-write-build → write-wiring → e2e). `client.ts` is serialized one-plan-per-wave (waves 1/2/3/4); `sdk-core/file/index.ts` and `folder/registration.ts` never collide within a wave — verified programmatically (zero same-wave `files_modified` overlap). All 4 requirement IDs covered; all 13 plans pass `frontmatter.validate` + `verify.plan-structure`.
+
+**Note on SC#1 scope:** the `grep -rn "not implemented — phase 6"` gate scans `packages/sdk/src apps/web/src` only — it does **not** cover `packages/sdk-core/src`, so the plan-07 sdk-core file-chain build is gated by WEB-04 (full suite green), not SC#1.
+
+Plan files: `/Users/myankelev/Code/random/cipher-box/.planning/phases/68.1-web-client-runtime-integration/68.1-01-PLAN.md` … `68.1-13-PLAN.md`. Committed as `47472c1f2`.
+
+Next: `/gsd-execute-phase 68.1` (or run the plan-checker first).</result>
+<usage><subagent_tokens>314709</subagent_tokens><tool_uses>57</tool_uses><duration_ms>1773116</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aef0516a05308dbf3</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/d2e29299-7c93-4d80-935c-636a76495b24/tasks/aef0516a05308dbf3.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify phase 68.1 plans" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## ISSUES FOUND
+
+**Phase:** 68.1-web-client-runtime-integration
+**Plans checked:** 13
+**Issues:** 1 blocker, 1 warning
+
+### Blockers (must fix)
+
+**1. [key_links_planned] D-02 kind-cache is defined but never wired into any folder-load/navigation path — every file will render as a folder**
+
+- Plan: `68.1-04`
+- Task: 1
+- Detail: D-02 (resolved in CONTEXT.md and restated in this plan's objective) explicitly commits to: *"the owned folder-load / navigation path calls `resolveKinds(children)` to populate it before rendering."* Plan 04 Task 1 implements `kind-cache.ts` with `getKind`/`setKind`/`resolveKinds` and rewires `isFileRef`/`isFilePointer` to read the cache, defaulting to `false` (folder) on a cache miss. But **no task in any of the 13 plans calls `resolveKinds()`** from `ensureFolderLoaded` (68.1-01), `createFolder` (68.1-02), the owned folder-navigation code, or anywhere else that fetches a folder's children before render. I grepped all 13 plans for `resolveKinds` — the only occurrences are in plan 04's own objective/action/artifacts list, describing what *should* happen, never an actual wiring task.
+- Consequence: the kind cache stays permanently empty for every folder listing. `isFileRef`/`isFilePointer` will return `false` (folder-safe default) for literally every child, so files are never recognized as files — no preview, no download, no streaming, no file context menu — anywhere in the app. This breaks WEB-01 ("owned file read... resolves via the Node read-chain") and cascades into failing nearly every file-touching spec in the exit-gate `tests/web-e2e` suite (WEB-04), since the browser will never distinguish a file row from a folder row.
+- Fix: add an explicit task (either amend 68.1-04, or add it to 68.1-01/wherever folder children are rendered — e.g., the owned folder-navigation hook/`ensureFolderLoaded` consumer in the web layer) that calls `resolveKinds(children)` on every folder-load/navigation render path before the file browser lists children. This must be a concrete `&lt;action&gt;` item with its own `&lt;verify&gt;`, not an implied consequence of the objective prose.
+
+### Warnings (should fix)
+
+**1. [nyquist_compliance] Plan 68.1-13 Task 2's only automated verify is the full Playwright E2E suite**
+
+- Plan: `68.1-13`, Task 2
+- `&lt;automated&gt;pnpm test:web-e2e&lt;/automated&gt;` runs the entire ~20-25 min E2E suite with no faster smoke/unit check as an interim signal. This is acceptable here because Task 2 *is* the phase's exit gate (D-07 mandates the full suite as the acceptance bar, not a subset), so a fast substitute would defeat the purpose — but flagging per Dimension 8b since it's a slow-feedback pattern that could mask earlier per-plan wiring gaps (like the Blocker above) until very late in execution. No fix required before execution; consider a targeted smoke pass per wave in a future phase to catch wiring gaps sooner.
+
+### Recommendation
+
+1 blocker requires revision before execution. All other dimensions checked out clean:
+- Requirement coverage (WEB-01..04) is complete across all 13 plans' frontmatter.
+- All 46 RESEARCH-inventoried stubs trace to an owning plan — no coverage gaps.
+- Dependency graph is acyclic; no same-wave `files_modified` collisions on any shared file (`client.ts`, `sdk-core/src/file/index.ts`, `sdk-core/src/folder/registration.ts` all confirmed serialized across distinct waves).
+- D-03 (owned FolderState write-body) rationale and blast radius are concretely scoped and covered by tasks in 68.1-01.
+- SC#1's grep gate correctly excludes `sdk-core/src`, but sdk-core's `createFileMetadata`/`updateFileMetadata` completion is nonetheless gated by the full web-e2e suite in 68.1-13 (WEB-04), not falsely provable by the grep alone.
+- SC#5 doctrine upheld: no plan adds `apps/web/src/**/*.spec.ts`; plan-07 is TDD with targeted (not full-suite) Vitest.
+- Scope fences respected: `reencrypt.ts` deletion (68.1-02), no new codec/crypto, frozen read schema untouched, FUSE/WinFsp untouched.
+- Task quality: every task has `&lt;read_first&gt;`, concrete `&lt;action&gt;`, checkable `&lt;verify&gt;`/`&lt;acceptance&gt;`, and an "Artifacts this phase produces" section; frontmatter valid.
+- CLAUDE.md compliance: string-literal kinds, `Uint8Array`, terminal-owner zeroization discipline, terminology all honored throughout.
+
+Returning to planner: add the missing `resolveKinds` wiring task before this phase can be executed.</result>
+<usage><subagent_tokens>119884</subagent_tokens><tool_uses>19</tool_uses><duration_ms>94902</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a061c5c17ec79adde</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/d2e29299-7c93-4d80-935c-636a76495b24/tasks/a061c5c17ec79adde.output</output-file>
+<status>completed</status>
+<summary>Agent "Revise phase 68.1 plans — kind wiring" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>ROADMAP intact (10 phase headers, 14 plan lines for 68.1), tree clean.
+
+## PLANNING COMPLETE
+
+**Mode:** revision (targeted) — Phase 68.1
+
+**Checker BLOCKER fixed:** `resolveKinds` (the D-02 kind cache built in plan 04) was never invoked on any folder-load/navigation path, so the cache stayed empty, every child defaulted to "folder", and files were never recognized — breaking WEB-01 and cascading across all file-touching web-e2e specs.
+
+**Root cause confirmed in code:** No existing plan owned the owned-folder render path. `apps/web/src/hooks/useFolderNavigation.ts` (subfolder navigate via `ensureFolderLoaded`) and `apps/web/src/stores/folder.store.ts` (root load + resync via the `folder:loaded`/`folder:updated` SDK subscription) are untouched by plans 01–13. Plan 04's own blast-radius text asserts "the owned folder-load / navigation path calls `resolveKinds(children)`" but shipped no task doing it. The shared browser (`SharedFileBrowser.tsx`) renders `folderChildren` through the same `isFileRef` guards, and `navigateReadChain` only carries `kind` for the hop it descends into (AAD), not for listed children — so the shared listing path needs it too.
+
+**What changed:**
+
+1. **New plan `68.1-14-PLAN.md`** — wave 4, `depends_on: [68.1-01, 68.1-04, 68.1-05]`, `requirements: [WEB-01, WEB-03]`, autonomous, 2 tasks:
+   - **Task 1 (owned):** `await resolveKinds(state.children)` in `useFolderNavigation.navigateTo` before `setFolder` (with the existing stale-target re-check preserved), and populate + re-render on the `folder.store.ts` `subscribeToSdk` `folder:loaded`/`folder:updated` path (covers root load + resync). Files: `useFolderNavigation.ts`, `folder.store.ts`.
+   - **Task 2 (shared):** `resolveKinds` on the four listing handlers in `useSharedNavigationActions.ts` and on the `subscribeSharedFolderProjection` callback in `useSharedNavigation.ts`. Files: `useSharedNavigationActions.ts`, `useSharedNavigation.ts`.
+   - Concrete ACs: each `&lt;verify&gt;` greps that `resolveKinds(` is invoked from the specific render-path file(s) + `tsc` clean; downstream web-e2e proof (uploaded/shared file renders as a file row) sits in 68.1-13.
+
+2. **`68.1-13-PLAN.md`** — added `68.1-14` to `depends_on`; added the kind-discrimination triage mapping; added the one-line note that the single full-suite verify is the intentional D-07 exit gate and a per-wave smoke pass is a deliberate future improvement (no code change).
+
+3. **`ROADMAP.md`** — plan count 13 → 14; added the 68.1-14 plan line.
+
+**Invariants preserved:**
+- Frontmatter valid (`frontmatter.validate` ✓) and structure valid (`verify.plan-structure`: 2 tasks, no errors/warnings ✓).
+- No same-wave file collision (verified across all 14 plans — none). Wave 14 (=4) shares files with no wave-4 plan (06/09/10/11); its cross-wave reuse of `useSharedNavigationActions.ts` is correctly ordered after plan 05 (wave 2) via `depends_on`.
+- Wave ordering correct: plan 14 (wave 4) runs after `resolveKinds` lands (04, wave 3) and after both nav paths exist (01 wave 1 owned; 05 wave 2 shared); plan 13 (wave 6) now depends on 14.
+- No other plans modified; ROADMAP not truncated (10 phase headers, 14 plan lines intact).
+
+Committed as `c99bf641b`. New/changed files:
+- `/Users/myankelev/Code/random/cipher-box/.planning/phases/68.1-web-client-runtime-integration/68.1-14-PLAN.md`
+- `/Users/myankelev/Code/random/cipher-box/.planning/phases/68.1-web-client-runtime-integration/68.1-13-PLAN.md`
+- `/Users/myankelev/Code/random/cipher-box/.planning/ROADMAP.md`</result>
+<usage><subagent_tokens>138981</subagent_tokens><tool_uses>29</tool_uses><duration_ms>485337</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a7fe21a2bb5f16678</task-id>
+<tool-use-id>toolu_01L8ocLiMzZQCdaeqoTVxMKz</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/d2e29299-7c93-4d80-935c-636a76495b24/tasks/a7fe21a2bb5f16678.output</output-file>
+<status>completed</status>
+<summary>Agent "Re-verify phase 68.1 plans" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All checks pass. The blocker is closed and no regressions introduced.
+
+## VERIFICATION PASSED
+
+**Phase:** 68.1 — Web Client Runtime Integration (re-verification)
+**Plans verified:** 14
+**Status:** Prior blocker (D-02 kind-cache wiring gap) is closed; no regressions found
+
+### Blocker closure confirmed
+
+Plan `68.1-14-PLAN.md` now invokes `resolveKinds(children)` on all owned and shared folder-load/navigation render paths:
+- Task 1: `useFolderNavigation.ts` (navigateTo, before `setFolder`, with stale-completion guard) + `folder.store.ts` (`folder:loaded`/`folder:updated` subscription, with best-effort async re-render via idempotent `updateFolderChildren` re-invocation)
+- Task 2: `useSharedNavigationActions.ts` (all 4 listing handlers: navigateToShare/navigateToSubfolder/navigateUp/navigateToBreadcrumb) + `useSharedNavigation.ts` (`sharedFolder:updated` projection callback)
+- `&lt;verify&gt;` is concrete and checkable: greps for `resolveKinds(` in all 4 named files + `tsc -b` clean
+- `must_haves.truths` correctly frame cache population as preceding render (owned: before `setFolder`; shared: before/after `setFolderChildren` with re-render trigger)
+- Threat model addresses DoS (bounded/memoized resolveKinds from 68.1-04) and key-material handling (D-09) appropriately for this capability
+
+### Regression checks
+
+| Check | Result |
+|---|---|
+| Wave-4 file collisions (06, 09, 10, 11, 14) | None — 14 exclusively owns `useFolderNavigation.ts`, `folder.store.ts`, `useSharedNavigationActions.ts`, `useSharedNavigation.ts`; no other plan (any wave) modifies these files |
+| depends_on validity | `["68.1-01","68.1-04","68.1-05"]` — wave1 + wave3 + wave2 → wave 4 = max(deps)+1. Correct. |
+| Acyclic | Confirmed — 13 depends on 14, 14 depends on 01/04/05, no cycle |
+| 68.1-13 depends_on updated | Yes — includes `"68.1-14"` |
+| ROADMAP.md reflects 14 plans | Confirmed — 68.1-01 through 68.1-14 all listed (line 456-469), including 68.1-14 entry |
+| WEB-01..04 coverage | All four requirement IDs present across plan frontmatter (`requirements` fields); WEB-04 exit gate is 68.1-13 |
+| Prior WARNING (68.1-13 sole full-suite verify) | Accepted per instruction — not re-raised |
+
+No blockers or new warnings. Plans are ready for execution.
+
+Files reviewed (absolute paths):
+- `/Users/myankelev/Code/random/cipher-box/.planning/phases/68.1-web-client-runtime-integration/68.1-14-PLAN.md`
+- `/Users/myankelev/Code/random/cipher-box/.planning/phases/68.1-web-client-runtime-integration/68.1-{01,02,03,04,05,06,07,08,09,10,11,12,13}-PLAN.md`
+- `/Users/myankelev/Code/random/cipher-box/.planning/ROADMAP.md`
+- `/Users/myankelev/Code/random/cipher-box/.planning/REQUIREMENTS.md`</result>
+<usage><subagent_tokens>62002</subagent_tokens><tool_uses>3</tool_uses><duration_ms>32306</duration_ms></usage>
+</task-notification>
