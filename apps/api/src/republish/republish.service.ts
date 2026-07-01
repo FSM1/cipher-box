@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, IsNull, LessThanOrEqual, Not, Repository } from 'typeorm';
 import { IpnsRepublishSchedule } from './republish-schedule.entity';
 import { IpnsRecord } from '../ipns/entities/ipns-record.entity';
 import { TeeService, RepublishEntry, RepublishResult } from '../tee/tee.service';
@@ -52,33 +52,33 @@ export class RepublishService {
    * Returns an array of { schedule, record } pairs for each due entry.
    */
   async getDueEntries(): Promise<DueEntryPair[]> {
-    // Step 1: inner-join schedules with ipns_records (tombstone + key filter).
-    // The JOIN condition enforces D-02: tombstoned or key-less records never enter.
-    const schedules = await this.scheduleRepository
-      .createQueryBuilder('s')
-      .innerJoin(
-        IpnsRecord,
-        'r',
-        's.ipns_name = r.ipns_name AND r.tombstoned_at IS NULL AND r.encrypted_ipns_private_key IS NOT NULL'
-      )
-      .where('s.status IN (:...statuses)', { statuses: ['active', 'retrying'] })
-      .andWhere('s.next_republish_at <= :now', { now: new Date() })
-      .orderBy('s.next_republish_at', 'ASC')
-      .take(2000)
-      .getMany();
+    // Step 1: due schedules via the find-options API (property names; robust
+    // take-pagination — the query-builder + raw-column + take path trips a TypeORM
+    // metadata error). LessThanOrEqual here selects rows due by time; it is NOT the
+    // sequence write-back (that remains an equality CAS in renewIpnsRecordEol).
+    const schedules = await this.scheduleRepository.find({
+      where: {
+        status: In(['active', 'retrying']),
+        nextRepublishAt: LessThanOrEqual(new Date()),
+      },
+      order: { nextRepublishAt: 'ASC' },
+      take: 2000,
+    });
 
     if (schedules.length === 0) return [];
 
-    // Step 2: fetch the matching ipns_records for pairing.
-    // Re-apply tombstone + key filter here to guard against the rare race where
-    // a record is tombstoned between the two queries.
+    // Step 2: fetch the matching ipns_records with the tombstone + key filter
+    // (D-02 / TEE-03). A tombstoned or key-less record is excluded here, so its
+    // schedule drops out of the paired result below — a tombstoned name never
+    // enters the batch (defense layer 1; the renewal CAS is defense layer 2).
     const ipnsNames = schedules.map((s) => s.ipnsName);
-    const records = await this.ipnsRecordRepository
-      .createQueryBuilder('r')
-      .where('r.ipns_name IN (:...names)', { names: ipnsNames })
-      .andWhere('r.tombstoned_at IS NULL')
-      .andWhere('r.encrypted_ipns_private_key IS NOT NULL')
-      .getMany();
+    const records = await this.ipnsRecordRepository.find({
+      where: {
+        ipnsName: In(ipnsNames),
+        tombstonedAt: IsNull(),
+        encryptedIpnsPrivateKey: Not(IsNull()),
+      },
+    });
 
     const recordMap = new Map(records.map((r) => [r.ipnsName, r]));
 

@@ -126,6 +126,7 @@ describe('RepublishService', () => {
 
     const mockScheduleRepo = {
       createQueryBuilder: jest.fn().mockReturnValue(scheduleQBMock),
+      find: jest.fn().mockResolvedValue([]),
       findOne: jest.fn(),
       save: jest.fn(),
       create: jest.fn(),
@@ -139,6 +140,7 @@ describe('RepublishService', () => {
       createQueryBuilder: jest
         .fn()
         .mockImplementation((alias?: string) => (alias ? recordSelectQBMock : recordUpdateQBMock)),
+      find: jest.fn().mockResolvedValue([]),
       update: jest.fn(),
     };
 
@@ -183,36 +185,36 @@ describe('RepublishService', () => {
   // ===========================================================================
   describe('getDueEntries', () => {
     it('should return empty array when no schedule entries are due', async () => {
-      scheduleQBMock.getMany.mockResolvedValue([]);
+      scheduleRepository.find.mockResolvedValue([]);
 
       const result = await service.getDueEntries();
 
       expect(result).toEqual([]);
     });
 
-    it('should inner-join ipns_records with tombstone + key filter in getDueEntries', async () => {
-      scheduleQBMock.getMany.mockResolvedValue([]);
+    it('should query ipns_records with the tombstone + key filter', async () => {
+      const schedule = createMockSchedule();
+      scheduleRepository.find.mockResolvedValue([schedule]);
+      ipnsRecordRepository.find.mockResolvedValue([]);
 
       await service.getDueEntries();
 
-      expect(scheduleRepository.createQueryBuilder).toHaveBeenCalledWith('s');
-      expect(scheduleQBMock.innerJoin).toHaveBeenCalledWith(
-        IpnsRecord,
-        'r',
-        expect.stringContaining('tombstoned_at IS NULL')
-      );
-      expect(scheduleQBMock.innerJoin).toHaveBeenCalledWith(
-        IpnsRecord,
-        'r',
-        expect.stringContaining('encrypted_ipns_private_key IS NOT NULL')
+      expect(ipnsRecordRepository.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            ipnsName: expect.anything(),
+            tombstonedAt: expect.anything(),
+            encryptedIpnsPrivateKey: expect.anything(),
+          }),
+        })
       );
     });
 
     it('should return paired { schedule, record } for each due entry', async () => {
       const schedule = createMockSchedule();
       const record = createMockRecord();
-      scheduleQBMock.getMany.mockResolvedValue([schedule]);
-      recordSelectQBMock.getMany.mockResolvedValue([record]);
+      scheduleRepository.find.mockResolvedValue([schedule]);
+      ipnsRecordRepository.find.mockResolvedValue([record]);
 
       const result = await service.getDueEntries();
 
@@ -220,13 +222,13 @@ describe('RepublishService', () => {
       expect(result[0]).toMatchObject({ schedule, record });
     });
 
-    it('should exclude tombstoned names (join filter) — tombstoned record yields no pair', async () => {
-      // Schedule exists and is due, but the corresponding ipns_record is tombstoned.
-      // The innerJoin filters it out → scheduleQB.getMany returns no rows because
-      // there is no matching record row satisfying tombstoned_at IS NULL.
-      scheduleQBMock.getMany.mockResolvedValue([]);
-      // recordSelectQBMock is never called when no schedules survive the join
-      recordSelectQBMock.getMany.mockResolvedValue([]);
+    it('should exclude tombstoned names — a tombstoned record yields no pair', async () => {
+      // Schedule is due, but the ipns_records filter (tombstonedAt IS NULL) excludes
+      // the record, so it never enters the record map → the schedule drops out of the
+      // paired result (defense layer 1).
+      const schedule = createMockSchedule();
+      scheduleRepository.find.mockResolvedValue([schedule]);
+      ipnsRecordRepository.find.mockResolvedValue([]);
 
       const result = await service.getDueEntries();
 
@@ -234,25 +236,27 @@ describe('RepublishService', () => {
     });
 
     it('should filter to active/retrying statuses and next_republish_at <= now', async () => {
-      scheduleQBMock.getMany.mockResolvedValue([]);
+      scheduleRepository.find.mockResolvedValue([]);
 
       await service.getDueEntries();
 
-      expect(scheduleQBMock.where).toHaveBeenCalledWith(
-        expect.stringContaining('status'),
-        expect.objectContaining({ statuses: ['active', 'retrying'] })
-      );
-      expect(scheduleQBMock.andWhere).toHaveBeenCalledWith(
-        expect.stringContaining('next_republish_at'),
-        expect.objectContaining({ now: expect.any(Date) })
+      expect(scheduleRepository.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            status: expect.anything(),
+            nextRepublishAt: expect.anything(),
+          }),
+          order: { nextRepublishAt: 'ASC' },
+          take: 2000,
+        })
       );
     });
 
     it('should skip races: schedules returned but record not found → excluded from pairs', async () => {
       const schedule = createMockSchedule({ ipnsName: 'k51testRaceWindow' });
-      scheduleQBMock.getMany.mockResolvedValue([schedule]);
-      // Record was tombstoned between the two queries (race window)
-      recordSelectQBMock.getMany.mockResolvedValue([]);
+      scheduleRepository.find.mockResolvedValue([schedule]);
+      // Record was tombstoned/removed between the two queries (race window)
+      ipnsRecordRepository.find.mockResolvedValue([]);
 
       const result = await service.getDueEntries();
 
