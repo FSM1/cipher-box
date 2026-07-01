@@ -397,16 +397,16 @@ Plans:
 4. A durable per-node `{nodeId → highestSeq}` seq high-water is wired into `resolveIpnsRecord` in the web resolve path; a generation or seq regression from the relay causes a fail-closed error, not silent acceptance
 5. Per docs/TESTING.md, this phase adds ZERO `apps/web` test files: core logic is hoisted to the SDK and unit-tested with Vitest, and the UI + durability are covered by Web E2E (Playwright, `tests/web-e2e/`); `find apps/web/src -name "*.spec.ts"` returns empty
 
-**Plans**: 10 plans
+**Plans**: 5/10 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 68-01-PLAN.md — SDK durable high-water state machine + resolve enforcement over an injected HighWaterStore seam, Vitest (ROT-07/SC#1/SC#4/D-05)
-- [ ] 68-02-PLAN.md — share.service modernization: real grant fetch + type extension + delete legacy fan-out (SC#2/D-12)
-- [ ] 68-03-PLAN.md — apps/api PATCH :shareId/grant + DTO + service + api:generate, Jest (D-10 endpoint gap)
-- [ ] 68-04-PLAN.md — rotation UI primitives: notification action, toast, rotation.store, header badge (D-02/D-03)
-- [ ] 68-05-PLAN.md — client.ts rotation integration: scope-exit rotate + reconcile-defer + move-durability, Vitest (SC#2/SC#3/D-04/D-12)
+- [x] 68-01-PLAN.md — SDK durable high-water state machine + resolve enforcement over an injected HighWaterStore seam, Vitest (ROT-07/SC#1/SC#4/D-05)
+- [x] 68-02-PLAN.md — share.service modernization: real grant fetch + type extension + delete legacy fan-out (SC#2/D-12)
+- [x] 68-03-PLAN.md — apps/api PATCH :shareId/grant + DTO + service + api:generate, Jest (D-10 endpoint gap)
+- [x] 68-04-PLAN.md — rotation UI primitives: notification action, toast, rotation.store, header badge (D-02/D-03)
+- [x] 68-05-PLAN.md — client.ts rotation integration: scope-exit rotate + reconcile-defer + move-durability, Vitest (SC#2/SC#3/D-04/D-12)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -461,7 +461,7 @@ Plans:
 | 65 | SDK Write-Chain, Bin Re-link, and Invite Claim | 7/7 | Complete    | 2026-06-30 |
 | 66 | API Schema Cutover, Publish Gate, and Tombstone | 9/9 | Complete    | 2026-06-30 |
 | 67 | TEE Lease-Renewer Contract Rewrite | 8/8 | Complete    | 2026-07-01 |
-| 68 | Web Integration — Rotation UX and Durable Client State | 0/9 | Not started | - |
+| 68 | Web Integration — Rotation UX and Durable Client State | 5/10 | In Progress|  |
 | 69 | FUSE and WinFsp — Rust Integration and Grant-Root Awareness | 0/? | Not started | - |
 
 v1.1 history: 45 phases complete (198 plans). See `milestones/v1.1-ROADMAP.md` for full detail.
