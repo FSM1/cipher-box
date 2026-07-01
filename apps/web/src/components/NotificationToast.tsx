@@ -23,7 +23,10 @@ export function NotificationToast() {
   useEffect(() => {
     const timers = timersRef.current;
     for (const n of notifications) {
-      if (!timers.has(n.id)) {
+      // Terminal error toasts carrying an action (D-06 exhaustion) require an
+      // explicit user decision (Retry) and must never auto-dismiss.
+      const skipAutoDismiss = n.type === 'error' && !!n.action;
+      if (!timers.has(n.id) && !skipAutoDismiss) {
         const timer = setTimeout(() => {
           dismissNotification(n.id);
           timers.delete(n.id);
@@ -88,6 +91,23 @@ export function NotificationToast() {
         >
           <span style={{ color: typeColors[n.type], flexShrink: 0 }}>{labels[n.type]}</span>
           <span style={{ flex: 1 }}>{n.message}</span>
+          {n.action && (
+            <button
+              onClick={n.action.onClick}
+              className="notification-action-btn"
+              style={{
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                padding: 0,
+                fontFamily: 'var(--font-family-mono)',
+                fontSize: 'var(--font-size-sm)',
+                flexShrink: 0,
+              }}
+            >
+              {`[${n.action.label}]`}
+            </button>
+          )}
           <button
             onClick={() => dismissNotification(n.id)}
             style={{

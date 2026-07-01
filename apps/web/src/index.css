@@ -112,3 +112,15 @@ a:hover {
   background-color: var(--color-green-primary);
   color: var(--color-black);
 }
+
+/* ==========================================================================
+   Notification Toast Action Button
+   ========================================================================== */
+
+.notification-action-btn {
+  color: var(--color-text-muted);
+}
+
+.notification-action-btn:hover {
+  color: var(--color-green-primary);
+}
