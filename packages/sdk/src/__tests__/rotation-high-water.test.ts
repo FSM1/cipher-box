@@ -1,14 +1,21 @@
 /**
  * Tests for state/rotation-high-water.ts
  *
- * TDD RED phase — tests written before implementation (68-01 Task 1).
+ * TDD RED phase — tests written before implementation (68-01 Task 1/2).
  *
  * SC#1 / ROT-07: durable monotonic-max generation + seq floors over an
  * injected HighWaterStore seam, proven at the logic tier without a browser.
+ * SC#4 / D-05: enforceResolved fail-closed regression gate. §7.3 test 13
+ * (within-generation seq rollback) and test 14 (cold-device first-contact).
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { createRotationHighWater, type HighWaterStore } from '../state/rotation-high-water';
+import {
+  createRotationHighWater,
+  GenerationRegressionError,
+  SequenceRegressionError,
+  type HighWaterStore,
+} from '../state/rotation-high-water';
 
 /** Simple Map-backed HighWaterStore fake for injection. */
 function createMapStore(): HighWaterStore & { map: Map<string, number> } {
@@ -172,5 +179,93 @@ describe('createRotationHighWater — malformed stored value treated as absent (
     const hw = createRotationHighWater(generationStore, seqStore);
     await hw.bumpGeneration('node-a', 1);
     expect(await hw.getGenerationFloor('node-a')).toBe(1);
+  });
+});
+
+describe('enforceResolved — fail-closed regression gate (SC#4 / D-05 / §7.3 test 13/14)', () => {
+  let generationStore: ReturnType<typeof createMapStore>;
+  let seqStore: ReturnType<typeof createMapStore>;
+
+  beforeEach(() => {
+    generationStore = createMapStore();
+    seqStore = createMapStore();
+  });
+
+  it('§7.3 test 13: a seq below the stored seq floor throws SequenceRegressionError and does not bump', async () => {
+    const hw = createRotationHighWater(generationStore, seqStore);
+    await hw.bumpGeneration('node-a', 1);
+    await hw.bumpSeq('node-a', 10);
+
+    await expect(
+      hw.enforceResolved({ nodeId: 'node-a', seq: 5, generation: 1, versionFloor: 0 })
+    ).rejects.toThrow(SequenceRegressionError);
+
+    // Must NOT bump on rejection.
+    expect(await hw.getSeqFloor('node-a')).toBe(10);
+  });
+
+  it('a generation below the stored generation floor throws GenerationRegressionError and does not bump', async () => {
+    const hw = createRotationHighWater(generationStore, seqStore);
+    await hw.bumpGeneration('node-a', 5);
+    await hw.bumpSeq('node-a', 10);
+
+    await expect(
+      hw.enforceResolved({ nodeId: 'node-a', seq: 20, generation: 2, versionFloor: 0 })
+    ).rejects.toThrow(GenerationRegressionError);
+
+    // Must NOT bump generation OR seq on rejection.
+    expect(await hw.getGenerationFloor('node-a')).toBe(5);
+    expect(await hw.getSeqFloor('node-a')).toBe(10);
+  });
+
+  it('non-regressing values bump both floors monotonic-max and resolve normally', async () => {
+    const hw = createRotationHighWater(generationStore, seqStore);
+    await hw.bumpGeneration('node-a', 1);
+    await hw.bumpSeq('node-a', 10);
+
+    await expect(
+      hw.enforceResolved({ nodeId: 'node-a', seq: 15, generation: 2, versionFloor: 0 })
+    ).resolves.not.toThrow();
+
+    expect(await hw.getGenerationFloor('node-a')).toBe(2);
+    expect(await hw.getSeqFloor('node-a')).toBe(15);
+  });
+
+  it('§7.3 test 14 cold-device: first contact (no local seq floor) with seq below versionFloor throws SequenceRegressionError', async () => {
+    const hw = createRotationHighWater(generationStore, seqStore);
+    // No prior bumpSeq/bumpGeneration call -- this is a cold device.
+
+    await expect(
+      hw.enforceResolved({ nodeId: 'node-a', seq: 3, generation: 1, versionFloor: 10 })
+    ).rejects.toThrow(SequenceRegressionError);
+
+    // Must not seed a floor from the rejected first-contact attempt.
+    expect(await hw.getSeqFloor('node-a')).toBeUndefined();
+  });
+
+  it('cold-device first contact at or above versionFloor seeds and passes', async () => {
+    const hw = createRotationHighWater(generationStore, seqStore);
+
+    await expect(
+      hw.enforceResolved({ nodeId: 'node-a', seq: 10, generation: 1, versionFloor: 10 })
+    ).resolves.not.toThrow();
+
+    expect(await hw.getSeqFloor('node-a')).toBe(10);
+    expect(await hw.getGenerationFloor('node-a')).toBe(1);
+  });
+
+  it('GenerationRegressionError and SequenceRegressionError are instanceof-distinguishable with stable names', () => {
+    const genErr = new GenerationRegressionError('node-a', 1, 2);
+    const seqErr = new SequenceRegressionError('node-a', 1, 2);
+
+    expect(genErr).toBeInstanceOf(Error);
+    expect(genErr).toBeInstanceOf(GenerationRegressionError);
+    expect(genErr).not.toBeInstanceOf(SequenceRegressionError);
+    expect(genErr.name).toBe('GenerationRegressionError');
+
+    expect(seqErr).toBeInstanceOf(Error);
+    expect(seqErr).toBeInstanceOf(SequenceRegressionError);
+    expect(seqErr).not.toBeInstanceOf(GenerationRegressionError);
+    expect(seqErr.name).toBe('SequenceRegressionError');
   });
 });
