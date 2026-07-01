@@ -49,14 +49,3 @@ dereferences `entry.ipnsName` — throwing again and crashing the whole batch (5
 The relay is trusted and never sends null entries, so this is defense-in-depth: validate
 each `entry` is a non-null object at the top of the loop and skip/serialize invalid
 items safely in the failure path.
-
-### 4. Rename the `encryptedIpnsKey` wire field to `encryptedIpnsPrivateKey` (nitpick)
-
-CodeRabbit (PR #585, 2026-07-01): `RepublishEntry` sends the encrypted IPNS private key
-as `encryptedIpnsKey` (`republish.service.ts` ~135), but the repo terminology standard is
-`encryptedIpnsPrivateKey`. This is a **cross-package wire contract** — the same field name
-is read by the TEE worker (`apps/tee-worker/src/routes/republish.ts:58,121`) and referenced
-across ~15 worker test sites (`apps/tee-worker/src/__tests__/republish.test.ts`). Deferred
-because it's a trivial-importance rename that must change the API sender, the worker
-consumer, and all worker tests in one lockstep commit; not worth risking a wire-contract
-touch inside review resolution. Do it as its own scoped change with the worker tests.
