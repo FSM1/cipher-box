@@ -45,6 +45,7 @@ import {
   buildRotationClientCallbacks,
   resumeInterruptedRotation,
 } from '../services/rotation-driver.service';
+import { rotationHighWater } from '../services/rotation-state.service';
 import { logger } from '../lib/logger';
 
 // Module-level deduplication for vault init/load.
@@ -314,6 +315,10 @@ export function useAuth() {
           // (68-05): durable job checkpoint + D-02/D-03 progress badge +
           // D-09 multi-tab leader election (68-08).
           rotationCallbacks: buildRotationClientCallbacks(),
+          // Durable ROT-07 anti-rollback gate (Gap 1 / SC#4): the IndexedDB-backed
+          // rotationHighWater makes the SDK's reconcileFolderSequence enforceResolved
+          // check live for every revocation-triggering mutation in this client.
+          rotationHighWater,
         });
 
         // Subscribe folder store to SDK events
