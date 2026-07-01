@@ -1,0 +1,69 @@
+<task-notification>
+<task-id>afc3c9bc5bada2d94</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/d2e29299-7c93-4d80-935c-636a76495b24/tasks/afc3c9bc5bada2d94.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 68-12 of phase 68" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Clean working tree, all commits verified. Plan 68-12 is complete.
+
+## PLAN COMPLETE
+
+**Plan:** 68-12
+**Tasks:** 2/2
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.planning/phases/68-web-integration-rotation-ux-and-durable-client-state/68-12-SUMMARY.md`
+
+| Task | Name | Commits | Files |
+|---|---|---|---|
+| 1 | `rotateReadFromNode` returns root's post-rotation readKey/generation/sequenceNumber | `36f82dc86` (test, RED) → `c5457b3bf` (feat, GREEN) | `packages/sdk-core/src/rotation/engine.ts`, `packages/sdk-core/src/rotation/index.ts`, `packages/sdk-core/src/index.ts`, `packages/sdk-core/src/__tests__/rotation/engine.test.ts` |
+| 2 | `performScopeExitRotation` refreshes `folderTree` with rotated key/generation/sequence | `88d6c7a4f` (test, RED) → `dc21fe356` (feat, GREEN) | `packages/sdk/src/client.ts`, `packages/sdk/src/__tests__/client-rotation.test.ts` |
+| — | Docs/state | `51c3df81c` | `68-12-SUMMARY.md`, `STATE.md`, `ROADMAP.md` |
+
+**Verification:**
+- sdk-core: `pnpm --filter @cipherbox/sdk-core exec vitest run src/__tests__/rotation/engine.test.ts` → 38/38 pass; `tsc -b --force` → 50 errors (all pre-existing, confirmed identical via stash-diff baseline)
+- sdk: `pnpm --filter @cipherbox/sdk exec vitest run src/__tests__/client-rotation.test.ts` → 24/24 pass; `tsc -b --force` → 69 errors (all pre-existing, confirmed identical via stash-diff baseline)
+- Full repo grep confirmed no other production caller of `rotateReadFromNode` is stranded (only `client.ts` and 5 `await`-and-ignore sdk-e2e call sites)
+
+**Deviation (documented in SUMMARY, not a Rule 1-4 issue):** updated one pre-existing `engine.test.ts` assertion (`resolves.toBeUndefined` → `toBeDefined`) that encoded the old `void`-return contract — a direct, anticipated consequence of the additive signature change, not an unplanned bug.
+
+Phase 68 is now 12/12 plans complete (both VERIFICATION gaps closed: Gap 1 by 68-11, Gap 2 by this plan). ROT-07 was already marked complete in REQUIREMENTS.md. Recommend a phase-level re-verification pass before shipping.
+
+**Duration:** ~4 min (task work) + wrap-up</result>
+<usage><subagent_tokens>274708</subagent_tokens><tool_uses>121</tool_uses><duration_ms>909984</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aedacfdbebcde777d</task-id>
+<tool-use-id>toolu_0196rM3RF3NrXTC13AporZBc</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/d2e29299-7c93-4d80-935c-636a76495b24/tasks/aedacfdbebcde777d.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify phase 68 goal achievement" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Verification Complete
+
+**Status:** passed
+**Score:** 14/14 must-haves verified
+**Report:** `/Users/myankelev/Code/random/cipher-box/.planning/phases/68-web-integration-rotation-ux-and-durable-client-state/68-VERIFICATION.md`
+
+Both previously-failed truths are now confirmed as live system properties, verified by direct source inspection (not SUMMARY trust):
+
+**Gap 1 (BLOCKER) — closed by 68-11, confirmed:**
+- `packages/sdk/src/client.ts` `reconcileFolderSequence` (the real chokepoint called before `renameItem`/`moveItem`/`deleteItem`/`deleteToBin`) now gates its resolve through `this.config.rotationHighWater?.enforceResolved(...)`, placed outside the resolve try/catch so `SequenceRegressionError`/`GenerationRegressionError` propagate rather than being swallowed.
+- Confirmed `ensureFolderLoaded` (the method the original VERIFICATION named) is genuinely dead code — `throw new Error('not implemented — phase 63...')` — so the executor's substitution to `reconcileFolderSequence` is the correct fix, not a downgrade.
+- `useAuth.ts` injects the real IndexedDB-backed `rotationHighWater`; `useFileBrowserActions.ts#handleSync` threads a real `ResolveRotationContext`.
+- Live test run: `client-rotation.test.ts` 24/24 passed (18 prior + 6 new).
+
+**Gap 2 (should-fix) — closed by 68-12, confirmed:**
+- `packages/sdk-core/src/rotation/engine.ts` `rotateReadFromNode` now returns `RotateReadResult | undefined` instead of `void`.
+- `performScopeExitRotation` captures this and calls `this.folderTree.set(...)` with the rotated key/generation/sequence, only when a rotation occurred; zeroization discipline preserved (old key zeroed post-swap, not mid-flight).
+- Live test run: `engine.test.ts` 38/38, `client-rotation.test.ts` includes dedicated refresh/self-heal/uncovered-no-op cases, all passing.
+
+No regressions: `sdk-core`/`sdk` `tsc -b --force` error counts (50/69) exactly match the pre-existing quarantined-test baseline; `apps/web` typecheck clean; 0 apps/web spec files (SC#5 preserved); web-e2e durability spec re-authored (stale scope note removed), typecheck-clean, and registered (3 tests).
+
+The `CannotWriteUntilRefetchError` finding (pre-existing Phase 65/66 gap) is carried forward as `deferred`, not a new gap, per your re-verification context instructions.
+
+Phase 68 goal is achieved. ROT-07 is genuinely live. Ready to proceed.</result>
+<usage><subagent_tokens>126034</subagent_tokens><tool_uses>36</tool_uses><duration_ms>279261</duration_ms></usage>
+</task-notification>

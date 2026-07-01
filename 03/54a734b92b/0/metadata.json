@@ -1,0 +1,144 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "0354a734b92b",
+  "session_id": "4ac302c1-20dd-43cd-ab2b-3e9d7a7c0606",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-01T20:15:26.384005Z",
+  "branch": "feat/web-integration-rotation-ux-and-durable-client-state",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/STATE.md",
+    ".planning/phases/68-web-integration-rotation-ux-and-durable-client-state/68-VERIFICATION.md",
+    ".planning/ROADMAP.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "651689ff57ca",
+  "token_usage": {
+    "input_tokens": 14762,
+    "cache_creation_tokens": 698237,
+    "cache_read_tokens": 6412225,
+    "output_tokens": 69616,
+    "api_call_count": 40
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_0171KjMabYcFbM8uXLisF4PG",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "651689ff57ca",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 162,
+        "end": 163,
+        "entry_ids": [
+          "ea1325f8-8db8-4cfa-bc29-bd77d5925d25"
+        ],
+        "tool_use_id": "toolu_0171KjMabYcFbM8uXLisF4PG"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_0171KjMabYcFbM8uXLisF4PG"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Close two ROT-07 gaps identified in Phase 68's VERIFICATION.md (an inert fail-closed rotation gate and a stale folderTree after scope-exit rotation) via GSD's gap-closure planning flow, then execute the resulting plans and re-verify the phase goal.",
+    "outcome": "Both gaps were planned (68-11, 68-12), verified by plan-checker, executed sequentially via subagents with TDD, and confirmed closed by a phase-goal re-verifier (14/14 must-haves passed); Phase 68 was marked complete with ROT-07 genuinely live and no regressions.",
+    "learnings": {
+      "repo": [
+        "SC#5 doctrine: apps/web must have zero unit spec files (`*.spec.ts`); web-side behavior is proven via SDK Vitest tests or Playwright web-e2e specs instead.",
+        "The GSD commit-helper has a known false-negative: it can report `commit_failed` while the commit actually lands — always verify with `git log`/`git status` rather than retrying.",
+        "The gap-analysis `plan:post` gate requires the correct subcommand; the first invocation attempt failed and had to be retried with the right form.",
+        "API-SURFACE.md regeneration can return 0 symbols for some phases — when uninformative, omit it from planner context rather than feeding noise.",
+        "CipherBox planning docs distinguish `deferred` (out-of-scope, carried forward) findings from newly discovered gaps — VERIFICATION.md re-runs must preserve that distinction rather than re-flagging deferred items."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 478,
+          "finding": "`ensureFolderLoaded` is dead code from phase 63 — it unconditionally throws 'not implemented — phase 63...' and has zero live callers, despite VERIFICATION.md naming it as the resolve chokepoint."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 518,
+          "finding": "`reconcileFolderSequence` is the real live pre-mutation resolve gate, invoked before all four revocation-triggering mutations (rename ~742, delete ~823-824, deleteToBin ~985, move ~1765); this is where `enforceResolved`/`RotationHighWater` needed to be wired, not `ensureFolderLoaded`."
+        },
+        {
+          "path": "apps/web/src/components/file-browser/useFileBrowserActions.ts",
+          "line": 107,
+          "end_line": 121,
+          "finding": "`handleSync` had a TODO leaving the background-sync path without a real `ResolveRotationContext`, a secondary bypass of the fail-closed gate alongside the SDK-internal one."
+        },
+        {
+          "path": "packages/sdk-core/src/rotation/engine.ts",
+          "finding": "`rotateReadFromNode` previously returned `Promise<void>`, discarding the root `rotateOne` result (`childReadKey`/`newGeneration`/`newSequenceNumber`); its only production caller is `client.ts` `performScopeExitRotation`, so changing the signature to return `RotateReadResult | undefined` was backward-compatible and let `folderTree` self-heal without a page reload."
+        }
+      ],
+      "workflow": [
+        "GSD gap-closure mode reads VERIFICATION.md's `status: failed` truths, skips research, and appends new numbered plans (68-11+) rather than mutating already-shipped plans (68-01..68-10).",
+        "When two gap-closure plans touch the same shared file (`client.ts`) in different functions, GSD sequences them into separate waves with `depends_on` rather than parallelizing, avoiding merge collisions.",
+        "Per stored feedback ([[feedback-gsd-concurrent-suites-ram]] and prior worktree guidance), single-plan sequential waves that both touch one shared file should run on the main working tree without worktree isolation, even when the worktree base-check reports no degrade needed.",
+        "Orchestrator subagents (planner, plan-checker, executor, verifier) each return a canonical marker (`## PLANNING COMPLETE`, `## VERIFICATION PASSED`, `## PLAN COMPLETE`, verifier `status: passed`) that the orchestrator polls for via task-notifications instead of touching files mid-run.",
+        "Post-execution regression checks used targeted test runs on the rotation surface (not the full suite) plus `tsc -b --force` diffed against a `git stash` baseline to confirm zero new type errors, rather than a full-repo regression pass."
+      ]
+    },
+    "friction": [
+      "Config had `auto_advance: true` and `mode: interactive` in conflict, forcing an explicit AskUserQuestion checkpoint before auto-advancing into execution of security-sensitive fail-closed crypto code.",
+      "GSD commit-helper false-negative recurred, requiring manual git log verification instead of trusting the tool's own status output.",
+      "First attempt at the post-planning gap-analysis check used the wrong subcommand and had to be corrected.",
+      "API-SURFACE.md regeneration returned 0 symbols, adding a wasted step before being excluded from planner context.",
+      "VERIFICATION.md's originally-named Gap 1 target (`ensureFolderLoaded`) turned out to be dead stub code, requiring the planner and checker to independently re-derive the correct live chokepoint (`reconcileFolderSequence`) from source rather than trusting the verification doc's line reference."
+    ],
+    "open_items": [
+      "The `CannotWriteUntilRefetchError` finding (Phase 65/66 WRITE-03/04) remains explicitly deferred/out of scope — not addressed by this gap-closure round.",
+      "Next roadmap phase is 69, pending kickoff (execution stopped after phase 68 completion per `--no-transition`)."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-01T20:14:44.323615Z",
+    "agent_lines": 0,
+    "agent_removed": 9,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 106,
+    "total_committed": 9,
+    "total_lines_changed": 115,
+    "agent_percentage": 7.82608695652174,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 79,
+      "user_lines_removed": 106,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/phases/68-web-integration-rotation-ux-and-durable-client-state/68-VERIFICATION.md": 76,
+        "packages/sdk-core/tsconfig.tsbuildinfo": 1,
+        "packages/sdk/tsconfig.tsbuildinfo": 1
+      },
+      "user_removed_per_file": {
+        ".planning/phases/68-web-integration-rotation-ux-and-durable-client-state/68-VERIFICATION.md": 106
+      }
+    }
+  ]
+}
