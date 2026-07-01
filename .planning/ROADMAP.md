@@ -452,20 +452,36 @@ Plans:
 **Plans**: 14 plans
 
 Plans:
+**Wave 1**
 
 - [ ] 68.1-01-PLAN.md — Owned write-body foundation: sdk-core publishEmptyRootNode + write-body in updateFolderMetadataAndPublish + client ensureFolderLoaded recovery + FolderState/config keys (resolves D-03) [wave 1]
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 68.1-02-PLAN.md — client createFolder (owned subfolder + write-body) + bin subtree-collectors + delete obsolete reencrypt.ts (D-05) [wave 2]
 - [ ] 68.1-03-PLAN.md — Login root-Node init wiring: new-user publishes empty root Node + registers vault; existing-user unchanged (SC#2) [wave 2]
-- [ ] 68.1-04-PLAN.md — Owned file read services (resolveFileMetadata + raw-fileKey download) + D-02 kind-cache discrimination [wave 3]
 - [ ] 68.1-05-PLAN.md — Shared read navigation (navigateToShare/subfolder/up/breadcrumb/downloadSharedFile) via navigateReadChain [wave 2]
-- [ ] 68.1-06-PLAN.md — Owned read UI wiring: preview + AES-CTR streaming + DetailsDialog [wave 4]
 - [ ] 68.1-07-PLAN.md — [TDD] sdk-core owned file-Node chain (createFileMetadata/resolveFileMetadata/updateFileMetadata + raw-fileKey helper + registration wrappers) — the one genuine build [wave 2]
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 68.1-04-PLAN.md — Owned file read services (resolveFileMetadata + raw-fileKey download) + D-02 kind-cache discrimination [wave 3]
 - [ ] 68.1-08-PLAN.md — client shared-write wrappers: updateSharedFile + moveInSharedFolder (primitives already exist) [wave 3]
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 68.1-06-PLAN.md — Owned read UI wiring: preview + AES-CTR streaming + DetailsDialog [wave 4]
 - [ ] 68.1-09-PLAN.md — client owned file write: uploadFile rewire + replaceFile + restore/deleteFileVersion + downloadFromIpns [wave 4]
 - [ ] 68.1-10-PLAN.md — Shared-folder write ops web wiring: rename/update/delete/move/batch (useSharedWriteOps) [wave 4]
 - [ ] 68.1-11-PLAN.md — Sharing create + invite: collectChildKeys + ShareDialog share/upgrade + createInviteLink/claimInvite [wave 4]
-- [ ] 68.1-12-PLAN.md — Owned file write + versions web wiring: service transforms + editor save + versions + download UI [wave 5]
 - [ ] 68.1-14-PLAN.md — D-02 kind-cache population: call resolveKinds on owned (useFolderNavigation + folder.store) and shared (useSharedNavigationActions + useSharedNavigation) folder-load/nav render paths so files render as file rows [wave 4]
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 68.1-12-PLAN.md — Owned file write + versions web wiring: service transforms + editor save + versions + download UI [wave 5]
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
 - [ ] 68.1-13-PLAN.md — web-e2e enablement + triage: SC#1/SC#5 assertions + full Playwright suite green (exit gate, WEB-04) [wave 6]
 
 ### Phase 69: FUSE and WinFsp — Rust Integration and Grant-Root Awareness
