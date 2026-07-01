@@ -520,6 +520,24 @@ export class CipherBoxClient {
       return;
     }
     if (resolved == null || typeof resolved.sequenceNumber !== 'bigint') return;
+
+    // Durable ROT-07 anti-rollback gate (Gap 1 / SC#4): when a RotationHighWater
+    // is injected, gate the freshly-resolved seq/generation through it BEFORE
+    // the ReconcileStaleError equality check below. This call is deliberately
+    // OUTSIDE the resolve try/catch above so a SequenceRegressionError /
+    // GenerationRegressionError propagates to the mutation caller (and thence
+    // to useMutationFailureUx's D-05 classifier) rather than being silenced.
+    // Omitted when unconfigured -- zero enforcement, matching prior behavior.
+    if (this.config.rotationHighWater) {
+      const nodeGeneration = this.folderTree.get(ipnsName)?.nodeGeneration ?? 0;
+      await this.config.rotationHighWater.enforceResolved({
+        nodeId: ipnsName,
+        seq: Number(resolved.sequenceNumber),
+        generation: nodeGeneration,
+        versionFloor: Number(expectedSequence),
+      });
+    }
+
     if (resolved.sequenceNumber !== expectedSequence) {
       throw new ReconcileStaleError(ipnsName, expectedSequence, resolved.sequenceNumber);
     }

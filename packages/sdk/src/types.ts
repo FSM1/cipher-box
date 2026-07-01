@@ -14,6 +14,7 @@ import type {
 import type { AxiosInstance } from '@cipherbox/api-client';
 import type { SealedChildRef, Node, PublishedNode } from '@cipherbox/core';
 import type { SentShareInfo, ShareKeyType } from './share';
+import type { RotationHighWater } from './state/rotation-high-water';
 
 /**
  * Pinning configuration for BYO-IPFS support.
@@ -142,6 +143,16 @@ export type CipherBoxClientConfig = {
    * unconfigured client performs zero rotation (unchanged pre-Phase-68 behavior).
    */
   rotationCallbacks?: RotationClientCallbacks;
+  /**
+   * Injection seam for the durable ROT-07 anti-rollback gate (Gap 1 /
+   * VERIFICATION Gap 1). When provided, `reconcileFolderSequence` routes its
+   * resolve through `rotationHighWater.enforceResolved` before its own
+   * ReconcileStaleError equality check, so a relay-served generation/seq
+   * regression throws fail-closed instead of being silently accepted.
+   * Optional -- when omitted, the client performs zero enforcement (matches
+   * pre-Phase-68-11 behavior, backward-compatible).
+   */
+  rotationHighWater?: RotationHighWater;
 };
 
 /**
