@@ -524,3 +524,34 @@ Plans are ready for execution. Run `/gsd-execute-phase 67` to proceed.</result>
 ---
 
 why am I doing this when you can execute everything ?
+
+---
+
+<task-notification>
+<task-id>a42832a42fc79a50c</task-id>
+<tool-use-id>toolu_01JAWQQFqATJxpgTBKJCfR4X</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/13524ecf-de1b-47de-bf59-e080a2ed8848/tasks/a42832a42fc79a50c.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify phase 67 goal" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Verification Complete
+
+**Status:** passed
+**Score:** 8/8 must-haves verified
+**Report:** `/Users/myankelev/Code/random/cipher-box/.planning/phases/67-tee-lease-renewer-contract-rewrite/67-VERIFICATION.md`
+
+All 4 roadmap success criteria and all plan-level must-have truths are verified in the codebase. Phase goal achieved.
+
+---
+
+### Key findings by requirement:
+
+**TEE-01 / TEE-02** (`apps/tee-worker/src/services/ipns-signer.ts`, `apps/tee-worker/src/routes/republish.ts`): `renewIpnsRecord` takes only `(privateKey, marshaledRecord, lifetimeMs)` — no CID or sequence arg. It parses `parsed.value + parsed.sequence` from the existing record and re-creates the record with those exact values. No `+1n` anywhere in the route. `newSequenceNumber` is set to `parsed.sequence.toString()` (line 173). Unit tests and the orchestrator-confirmed E2E both prove equal-seq + equal-CID + later-EOL.
+
+**TEE-03** (`apps/api/src/republish/republish-schedule.entity.ts`, `apps/api/src/migrations/1751000000000-ScheduleCollapse.ts`, `apps/api/src/republish/republish.service.ts`): Entity has exactly 7 `@Column` fields (scheduling metadata only). Migration drops all 4 columns with `DROP COLUMN IF EXISTS` and adds the JOIN index. `getDueEntries` sources from `ipns_records` with `tombstonedAt IS NULL AND encryptedIpnsPrivateKey NOT NULL` filter (two-query paired find — the query-builder innerJoin form was reverted due to a TypeORM take-pagination metadata error, but the tombstone/key filter guarantee is preserved). `enrollFolder` is 2-arg.
+
+**TEE-06** (`apps/tee-worker/src/services/tee-keys.ts`, `apps/tee-worker/src/services/key-manager.ts`, `apps/tee-worker/src/routes/republish.ts`): `getInternalCurrentEpoch()` reads `EPOCH_ZERO_TIMESTAMP_MS` at call time (never relay scalar). `decryptWithFallback(encryptedIpnsKey, keyEpoch)` is 2-arg and throws `ReEnrollRequiredError` at line 86 before any unwrap when `keyEpoch &lt; internalCurrentEpoch - 1`. Binding in the route uses `deriveEd25519PublicKey(decryptedKey)` vs `publicKeyFromIpnsName(entry.ipnsName)` — `parsed.pubKey` appears only in comments, never in actual code.
+
+**Notable non-issue:** `LessThanOrEqual` remains in `republish.service.ts` but solely for the time-based schedule query (`nextRepublishAt &lt;= now`) — not the sequence write-back. The renewal write (`renewIpnsRecordEol`) uses an equality CAS with `sequence_number = :expected AND tombstoned_at IS NULL`. The code comment at line 57 explicitly documents this distinction.</result>
+<usage><subagent_tokens>106498</subagent_tokens><tool_uses>67</tool_uses><duration_ms>444448</duration_ms></usage>
+</task-notification>
