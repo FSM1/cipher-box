@@ -281,8 +281,8 @@ describe('republish route', () => {
     expect(results[0].success).toBe(false);
     expect(results[0].signedRecord).toBeUndefined();
     expect(results[0].ipnsName).toBe(ipnsName);
-    // Key material must not appear in error
-    expect(results[0].error).not.toContain('key');
+    // Exact safe error message — no raw key bytes encoded in the string
+    expect(results[0].error).toBe('Name-key binding violation');
   });
 
   // ─────────────────────────────────────────────────────────────────────────

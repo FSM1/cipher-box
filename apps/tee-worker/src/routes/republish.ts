@@ -1,44 +1,75 @@
 /**
  * Republish Route
  *
- * POST /republish - Batch IPNS record signing endpoint.
+ * POST /republish - Verify-in-enclave IPNS lease-renewer (TEE-01 / TEE-02 / TEE-06).
  *
- * Receives encrypted IPNS private keys, decrypts with epoch-derived keys,
- * signs IPNS records, and returns signed records. Each entry is processed
- * independently -- one failure does not block others.
+ * Contract (D-01): the relay sends the marshaled existing signedRecord and the encrypted
+ * IPNS private key. The TEE:
+ *   1. Parses the signedRecord bytes.
+ *   2. Verifies the Ed25519 signature against publicKeyFromIpnsName(ipnsName) — BEFORE decryption.
+ *   3. Decrypts the key via the internal-epoch fallback (D-03 / 67-02).
+ *   4. Asserts the name↔key binding: deriveEd25519PublicKey(decryptedKey) must equal
+ *      publicKeyFromIpnsName(ipnsName). NEVER uses parsed.pubKey (undefined for Ed25519
+ *      identity records — RESEARCH Pitfall 1).
+ *   5. Re-signs the SAME value (CID) + SAME sequence with only a later EOL via renewIpnsRecord.
+ *      newSequenceNumber == parsedSequence — no increment (TEE-02 / §7.3 test 12).
+ *   6. Optionally re-encrypts the key for the current internal epoch (D-03).
+ *   7. Zeros the decrypted key on EVERY path (success, binding-fail, re-enroll, error).
+ *
+ * REMOVED from request body: latestCid, sequenceNumber, currentEpoch, previousEpoch.
+ * The relay MUST NOT send those fields; the TEE MUST NOT read them.
+ *
+ * Each entry is processed independently — one failure does not block others.
  *
  * SECURITY:
- * - IPNS private keys are zeroed immediately after signing
+ * - IPNS private keys are zeroed immediately after their last use (T-67-06-I)
  * - No key material appears in logs or error messages
- * - Per-entry error handling with safe error messages
+ * - Signature verification precedes decryption (T-67-06-T)
+ * - Binding check uses name-derived key, never parsed.pubKey (T-67-06-T2)
+ * - Epoch upgrade uses TEE-internal clock, never relay scalars (T-67-06-E)
  */
 
 import { Router, type Request, type Response } from 'express';
-import { decryptWithFallback, reEncryptForEpoch } from '../services/key-manager.js';
-import { signIpnsRecord } from '../services/ipns-signer.js';
+import {
+  parseIpnsRecord,
+  verifyIpnsRecordSignature,
+  publicKeyFromIpnsName,
+  deriveEd25519PublicKey,
+} from '@cipherbox/crypto';
+import {
+  decryptWithFallback,
+  reEncryptForEpoch,
+  ReEnrollRequiredError,
+} from '../services/key-manager.js';
+import { renewIpnsRecord } from '../services/ipns-signer.js';
+import { getInternalCurrentEpoch } from '../services/tee-keys.js';
 import { republishEntries } from '../middleware/metrics.js';
 import { logger } from '../services/logger.js';
 
 const router = Router();
 
-/** Shape of each entry in the republish request */
+/**
+ * Shape of each entry in the republish request (D-01 / D-02 / D-03 contract).
+ *
+ * Removed from v1: latestCid, sequenceNumber, currentEpoch, previousEpoch.
+ * All signing inputs come from the marshaled signedRecord; epoch is self-derived.
+ */
 interface RepublishEntry {
-  encryptedIpnsKey: string; // base64-encoded ECIES ciphertext
-  ipnsName: string;
-  latestCid: string;
-  sequenceNumber: string; // bigint as string
-  currentEpoch: number;
-  previousEpoch: number | null;
+  encryptedIpnsKey: string; // base64-encoded ECIES ciphertext of the IPNS Ed25519 private key
+  keyEpoch: number; // epoch the key is recorded as encrypted for (from ipns_records.key_epoch)
+  ipnsName: string; // IPNS name (CIDv1 base36)
+  signedRecord: string; // base64-encoded marshaled existing IPNS record
 }
 
 /** Shape of each result in the republish response */
 interface RepublishResult {
   ipnsName: string;
   success: boolean;
-  signedRecord?: string; // base64-encoded marshaled IPNS record
-  newSequenceNumber?: string;
-  upgradedEncryptedKey?: string; // base64, present if re-encrypted for current epoch
+  signedRecord?: string; // base64-encoded marshaled renewed IPNS record (same CID + seq, later EOL)
+  newSequenceNumber?: string; // equals the parsed input sequence (no increment)
+  upgradedEncryptedKey?: string; // base64, present if key was re-encrypted for current epoch
   upgradedKeyEpoch?: number;
+  requiresReEnroll?: true; // present when ReEnrollRequiredError thrown (T-67-06-I)
   error?: string;
 }
 
@@ -64,43 +95,83 @@ router.post('/republish', async (req: Request, res: Response) => {
     let ipnsPrivateKey: Uint8Array | null = null;
 
     try {
-      // 1. Decode encrypted IPNS key from base64
-      const encryptedIpnsKey = new Uint8Array(Buffer.from(entry.encryptedIpnsKey, 'base64'));
+      // ── Step 1: Decode the marshaled IPNS record ────────────────────────────
+      const signedRecordBytes = Buffer.from(entry.signedRecord, 'base64');
 
-      // 2. Decrypt with epoch fallback
+      // ── Step 2: Parse the record to extract value (CID) + sequence ──────────
+      // Must succeed BEFORE any signature check or decryption.
+      const parsed = await parseIpnsRecord(signedRecordBytes);
+
+      // ── Step 3: Verify Ed25519 signature against publicKeyFromIpnsName ───────
+      // T-67-06-T: relay cannot forge a signed record; verification PRECEDES decryption.
+      // verifyIpnsRecordSignature returns false on any error — never throws.
+      const isValid = await verifyIpnsRecordSignature(entry.ipnsName, signedRecordBytes);
+      if (!isValid) {
+        // Reject before any decryption — decrypt spy MUST be uncalled (§7.3 test 18)
+        results.push({
+          ipnsName: entry.ipnsName,
+          success: false,
+          error: 'IPNS signature verification failed',
+        });
+        republishEntries.inc({ result: 'failure' });
+        continue;
+      }
+
+      // ── Step 4: Decrypt IPNS key using internal-epoch authority (D-03 / 67-02) ─
+      const encryptedIpnsKey = new Uint8Array(Buffer.from(entry.encryptedIpnsKey, 'base64'));
       const { ipnsPrivateKey: decryptedKey, usedEpoch } = await decryptWithFallback(
         encryptedIpnsKey,
-        entry.currentEpoch,
-        entry.previousEpoch
+        entry.keyEpoch
       );
       ipnsPrivateKey = decryptedKey;
 
-      // 3. Sign IPNS record with incremented sequence number
-      const newSequenceNumber = BigInt(entry.sequenceNumber) + 1n;
-      const signedRecord = await signIpnsRecord(ipnsPrivateKey, entry.latestCid, newSequenceNumber);
-
-      // 4. Check if re-encryption needed (used previous epoch, not current)
-      let upgradedEncryptedKey: string | undefined;
-      let upgradedKeyEpoch: number | undefined;
-
-      if (usedEpoch !== entry.currentEpoch) {
-        const reEncrypted = await reEncryptForEpoch(ipnsPrivateKey, entry.currentEpoch);
-        upgradedEncryptedKey = Buffer.from(reEncrypted).toString('base64');
-        upgradedKeyEpoch = entry.currentEpoch;
+      // ── Step 5: Name↔key binding assertion (§6.7-2 / T-67-06-S / T-67-06-T2) ─
+      // Derive the Ed25519 public key from the DECRYPTED key — NEVER from parsed.pubKey
+      // (which is undefined for Ed25519 identity records — RESEARCH Pitfall 1).
+      const derivedPubkey = deriveEd25519PublicKey(ipnsPrivateKey);
+      const namePubkey = publicKeyFromIpnsName(entry.ipnsName);
+      if (!derivedPubkey.every((b, i) => b === namePubkey[i])) {
+        // Zero key before rejecting — T-67-06-I
+        ipnsPrivateKey.fill(0);
+        ipnsPrivateKey = null;
+        results.push({
+          ipnsName: entry.ipnsName,
+          success: false,
+          error: 'Name-key binding violation',
+        });
+        republishEntries.inc({ result: 'failure' });
+        continue;
       }
 
-      // 5. IMMEDIATELY zero the IPNS private key
+      // ── Step 6: Re-sign — SAME value (CID) + SAME sequence + later EOL ──────
+      // renewIpnsRecord parses value+sequence from the existing record internally;
+      // the relay cannot inject a different CID or sequence (TEE-01 / TEE-02).
+      const renewedBytes = await renewIpnsRecord(ipnsPrivateKey, signedRecordBytes);
+
+      // ── Step 7: Epoch upgrade (T-67-06-E / D-03) ────────────────────────────
+      // Target is the TEE-internal current epoch — NEVER a relay-supplied scalar.
+      // Re-encrypt BEFORE zeroing so the key is still available for wrapKey.
+      let upgradedEncryptedKey: string | undefined;
+      let upgradedKeyEpoch: number | undefined;
+      const internalCurrentEpoch = getInternalCurrentEpoch();
+      if (usedEpoch !== internalCurrentEpoch) {
+        const reEncrypted = await reEncryptForEpoch(ipnsPrivateKey, internalCurrentEpoch);
+        upgradedEncryptedKey = Buffer.from(reEncrypted).toString('base64');
+        upgradedKeyEpoch = internalCurrentEpoch;
+      }
+
+      // ── Step 8: Zero the key immediately after last use (T-67-06-I) ─────────
       ipnsPrivateKey.fill(0);
       ipnsPrivateKey = null;
 
-      // 6. Build success result
+      // ── Step 9: Build success result ─────────────────────────────────────────
+      // newSequenceNumber == parsed.sequence (no +1) — §7.3 test 12
       const result: RepublishResult = {
         ipnsName: entry.ipnsName,
         success: true,
-        signedRecord: Buffer.from(signedRecord).toString('base64'),
-        newSequenceNumber: newSequenceNumber.toString(),
+        signedRecord: Buffer.from(renewedBytes).toString('base64'),
+        newSequenceNumber: parsed.sequence.toString(),
       };
-
       if (upgradedEncryptedKey) {
         result.upgradedEncryptedKey = upgradedEncryptedKey;
         result.upgradedKeyEpoch = upgradedKeyEpoch;
@@ -109,18 +180,27 @@ router.post('/republish', async (req: Request, res: Response) => {
       results.push(result);
       republishEntries.inc({ result: 'success' });
     } catch (error) {
-      // Ensure key is zeroed even on error
+      // Ensure key is zeroed even on unexpected error (T-67-06-I)
       if (ipnsPrivateKey) {
         ipnsPrivateKey.fill(0);
         ipnsPrivateKey = null;
       }
 
-      // Never include key material in error messages
-      results.push({
+      // ReEnrollRequiredError → structured flag, no key material (§7.3 test 19)
+      const isReEnroll = error instanceof ReEnrollRequiredError;
+      const result: RepublishResult = {
         ipnsName: entry.ipnsName,
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
-      });
+        error: isReEnroll
+          ? 'RE_ENROLL_REQUIRED'
+          : error instanceof Error
+            ? error.message
+            : 'Unknown error',
+      };
+      if (isReEnroll) {
+        result.requiresReEnroll = true;
+      }
+      results.push(result);
       republishEntries.inc({ result: 'failure' });
     }
   }
