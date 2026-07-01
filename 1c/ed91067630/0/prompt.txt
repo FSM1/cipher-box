@@ -44,3 +44,37 @@
 Research complete. Planner can now create PLAN.md files.</result>
 <usage><subagent_tokens>228511</subagent_tokens><tool_uses>52</tool_uses><duration_ms>488585</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a8f9e8d9e31b5bbf5</task-id>
+<tool-use-id>toolu_015W3u7RtW3jAJxr8UZoMTie</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/cd0c465c-4874-497a-8bf3-d4ec2501d18c/tasks/a8f9e8d9e31b5bbf5.output</output-file>
+<status>completed</status>
+<summary>Agent "Map patterns Phase 68" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PATTERN MAPPING COMPLETE
+
+**Phase:** 68 - web-integration-rotation-ux-and-durable-client-state
+**Files classified:** 13
+**Analogs found:** 11 exact/role-match / 13 (2 no-analog, explicitly flagged)
+
+### Coverage
+- Exact/self-analog: 8
+- Role-match: 3
+- No analog found: 2 (IndexedDB test-env shim gap; first-ever `navigator.locks` use)
+
+### Key Patterns Identified
+- All new IndexedDB stores must follow the hand-rolled raw `indexedDB` Promise-wrapping pattern from `apps/web/src/lib/device/identity.ts` / `search-index.service.ts` — no `idb` package.
+- Rotation wiring belongs in `packages/sdk/src/client.ts` mutation methods (not web hooks), using the `ScopeExitDeps.rotate` injection seam from `packages/sdk-core/src/rotation/scope.ts`, and reusing the existing anti-clobber `sequenceNumber` guard already in `client.ts:369-381` (inverted polarity for D-04).
+- New `apps/api` PATCH route + DTO should mirror `updateShareItemName`/`UpdateItemNameDto` exactly (ownership check via `sharerId`, `class-validator` decorators, `HttpCode(204)`) — and requires `pnpm api:generate` per CLAUDE.md.
+- Notification/badge UI extends existing Zustand stores (`notification.store.ts`) and component early-return idioms (`NotificationToast.tsx`), string-literal unions only (explicit project convention, confirmed in `scope.ts` docblock).
+
+### File Created
+`/Users/myankelev/Code/random/cipher-box/.planning/phases/68-web-integration-rotation-ux-and-durable-client-state/68-PATTERNS.md`
+
+### Ready for Planning
+Pattern mapping complete. Note two flagged gaps for the planner to size as explicit prerequisite tasks: (1) `apps/web` vitest has no IndexedDB test-env shim (`environment: 'node'`, no `fake-indexeddb` found) — needed before `rotation-state.test.ts` can be written; (2) `navigator.locks` (D-09) is a first-time use in this codebase with no existing analog.</result>
+<usage><subagent_tokens>89139</subagent_tokens><tool_uses>19</tool_uses><duration_ms>129920</duration_ms></usage>
+</task-notification>
