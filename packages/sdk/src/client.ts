@@ -55,6 +55,24 @@ export class BinNotLoadedError extends Error {
   }
 }
 
+/**
+ * Thrown when a mutation's reconcile-before-publish check (SC#3 / D-04) finds
+ * the freshly-resolved network `sequenceNumber` disagrees with the in-memory
+ * `FolderTree` entry -- in EITHER direction (network ahead OR local ahead).
+ * The mutation defers (throws) rather than publishing a metadata update or a
+ * rotation against possibly-superseded state. "Defer, never skip" -- callers
+ * should re-load the folder and retry.
+ */
+export class ReconcileStaleError extends Error {
+  constructor(ipnsName: string, localSequence: bigint, networkSequence: bigint) {
+    super(
+      `Reconcile stale: folder ${ipnsName} local sequenceNumber ${localSequence} does not match ` +
+        `network sequenceNumber ${networkSequence} -- deferring mutation (SC#3 / D-04)`
+    );
+    this.name = 'ReconcileStaleError';
+  }
+}
+
 export class CipherBoxClient {
   private config: CipherBoxClientConfig;
   private ctx: SdkContext;
@@ -458,6 +476,36 @@ export class CipherBoxClient {
   }
 
   /**
+   * Reconcile-before-publish guard (SC#3 / D-04).
+   *
+   * Re-resolves `ipnsName`'s CURRENT network `sequenceNumber` and compares it
+   * against `expectedSequence` -- the in-memory `FolderTree` value the caller
+   * is about to publish against. ANY mismatch (network ahead OR local ahead)
+   * throws {@link ReconcileStaleError} so the caller defers instead of
+   * publishing a metadata update or a rotation against possibly-superseded
+   * state ("defer, never skip").
+   *
+   * A null resolve (record not found -- e.g. a genuinely first publish) or a
+   * resolve without a usable `sequenceNumber` is treated as "nothing to
+   * reconcile against" and the check is skipped. A resolve() failure (network
+   * error) is likewise treated as inconclusive rather than blocking the
+   * mutation on a transient check -- the underlying CAS-guarded publish
+   * remains the authoritative conflict detector.
+   */
+  private async reconcileFolderSequence(ipnsName: string, expectedSequence: bigint): Promise<void> {
+    let resolved: { sequenceNumber: bigint } | null;
+    try {
+      resolved = await sdkCore.resolveIpnsRecord(ipnsName, this.ctx);
+    } catch {
+      return;
+    }
+    if (resolved == null || typeof resolved.sequenceNumber !== 'bigint') return;
+    if (resolved.sequenceNumber !== expectedSequence) {
+      throw new ReconcileStaleError(ipnsName, expectedSequence, resolved.sequenceNumber);
+    }
+  }
+
+  /**
    * Create a new subfolder inside an existing folder.
    *
    * Generates IPNS keypair and folder key, wraps with user's public key,
@@ -503,6 +551,10 @@ export class CipherBoxClient {
         childId,
         newName,
       });
+
+      // 1b. Reconcile-before-publish (SC#3 / D-04): defer on any sequence
+      // mismatch, never publish (metadata OR rotation) against possibly-superseded state.
+      await this.reconcileFolderSequence(folderIpnsName, folder.sequenceNumber);
 
       // 2. Publish updated metadata
       const { newSequenceNumber, publishedChildren } = await sdkCore.updateFolderMetadataAndPublish(
@@ -569,6 +621,12 @@ export class CipherBoxClient {
         destChildren: destFolder.children,
         childId,
       });
+
+      // Reconcile-before-publish (SC#3 / D-04): both folders are about to be
+      // published; defer on ANY mismatch (source OR dest) rather than
+      // publishing (metadata OR rotation) against possibly-superseded state.
+      await this.reconcileFolderSequence(sourceIpnsName, sourceFolder.sequenceNumber);
+      await this.reconcileFolderSequence(destIpnsName, destFolder.sequenceNumber);
 
       // FLAG-63-U2: Re-seal the moved child's readKeySealed under the DEST parent readKey.
       // sdkCore.moveItem() is a pure link rewrite — the moved ref still carries a
@@ -699,6 +757,10 @@ export class CipherBoxClient {
         children: folder.children,
         childId,
       });
+
+      // 1b. Reconcile-before-publish (SC#3 / D-04): defer on any sequence
+      // mismatch, never publish (metadata OR rotation) against possibly-superseded state.
+      await this.reconcileFolderSequence(folderIpnsName, folder.sequenceNumber);
 
       // 2. Publish updated metadata
       const { newSequenceNumber, publishedChildren } = await sdkCore.updateFolderMetadataAndPublish(
@@ -1462,7 +1524,13 @@ export class CipherBoxClient {
 
       // Self-bootstrap the folder if it isn't loaded (e.g. after a reload), so
       // addToBin can read its keys to republish the parent.
-      await this.requireFolder(folderIpnsName);
+      const folder = await this.requireFolder(folderIpnsName);
+
+      // Reconcile-before-publish (SC#3 / D-04): addToBin publishes the parent
+      // folder internally, so the check must run BEFORE calling it -- defer on
+      // any sequence mismatch rather than publishing (metadata OR rotation)
+      // against possibly-superseded state.
+      await this.reconcileFolderSequence(folderIpnsName, folder.sequenceNumber);
 
       const { updatedBinState } = await binOps.addToBin({
         folderIpnsName,
