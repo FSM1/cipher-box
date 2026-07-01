@@ -1,0 +1,140 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "95c3b45b9d0c",
+  "session_id": "4ac302c1-20dd-43cd-ab2b-3e9d7a7c0606",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-01T19:50:15.746539Z",
+  "branch": "feat/web-integration-rotation-ux-and-durable-client-state",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    ".planning/ROADMAP.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "e3ae467017e0",
+  "token_usage": {
+    "input_tokens": 14239,
+    "cache_creation_tokens": 456604,
+    "cache_read_tokens": 3484093,
+    "output_tokens": 50663,
+    "api_call_count": 27
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-plan-phase-2026-07-01T19:04:56.371775Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "272e11e79a96",
+      "timestamp": "2026-07-01T19:04:56.371775Z",
+      "native": {
+        "command": "/gsd-plan-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_0171KjMabYcFbM8uXLisF4PG",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "e3ae467017e0",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 162,
+        "end": 163,
+        "entry_ids": [
+          "ea1325f8-8db8-4cfa-bc29-bd77d5925d25"
+        ],
+        "tool_use_id": "toolu_0171KjMabYcFbM8uXLisF4PG"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_0171KjMabYcFbM8uXLisF4PG"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Run the GSD plan-phase workflow in gap-closure mode for Phase 68 (ROT-07) of cipher-box, then execute the resulting plans via the execute-phase workflow.",
+    "outcome": "Planner produced two gap-closure plans (68-11 blocker, 68-12) closing the 2 real gaps from 68-VERIFICATION.md, committed as 566f20455, and plan-checker passed with 0 blockers/warnings; execution then began with Wave 1 (68-11) dispatched to a subagent, with Wave 2 (68-12) still pending when the transcript ends.",
+    "learnings": {
+      "repo": [
+        "cipher-box GSD gap-closure mode reads VERIFICATION.md as the gap source, skips research entirely, and instructs the planner to append new plan numbers (e.g. 68-11+) rather than overwrite existing plans 68-01..68-10",
+        "Plans that touch the same shared file across waves (e.g. packages/sdk/src/client.ts) are serialized via depends_on so the wave scheduler never runs them in parallel",
+        "SC#5 doctrine: apps/web must stay test-free (no *.spec.ts in apps/web/src); UI/durability behavior is proven via Playwright web-e2e instead",
+        "The plan:post gap-analysis hook is advisory/non-blocking and requires the correct subcommand form to invoke (first invocation attempt used wrong form)"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 478,
+          "finding": "ensureFolderLoaded is a dead phase-63 stub that throws 'not implemented — phase 63' — it is NOT a live code path despite VERIFICATION.md naming it as the gap-1 target"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 518,
+          "finding": "reconcileFolderSequence is the actual live pre-mutation resolve chokepoint, invoked before every rename/delete/deleteToBin/move (call sites at lines 742, 823-824, 985, 1765) — this is where the fail-closed enforceResolved gate needed to be wired instead of ensureFolderLoaded"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 569,
+          "finding": "performScopeExitRotation is the sole production caller of rotateReadFromNode, which discards the root's rotated {readKey, generation, sequenceNumber} behind a void return — changing the return type to RotateReadResult|undefined is backward compatible"
+        }
+      ],
+      "workflow": [
+        "GSD orchestrators must wait for a spawned subagent (planner/checker/executor) to return rather than touching the same files it's editing, per orchestrator protocol",
+        "task-notification can fire more than once for the same task-id since the agent can be resumed — don't assume first notification is final without checking",
+        "When config has conflicting auto_advance:true and mode:interactive and the plans touch security-sensitive fail-closed crypto code, GSD should stop and confirm via AskUserQuestion rather than silently auto-advancing",
+        "GSD's commit-helper can report commit_failed as a false negative when the commit actually landed — verify via git log/git status rather than retrying the commit"
+      ]
+    },
+    "friction": [
+      "Config conflict between auto_advance:true and mode:interactive required pausing for an explicit user decision before launching execution on security-sensitive crypto code",
+      "Regenerated API-SURFACE.md hint came back with 0 symbols (uninformative) and had to be omitted from the planner's read list",
+      "First attempt at the post-planning gap-analysis check used the wrong subcommand and had to be re-run with the correct one",
+      "GSD commit-helper reported a false-negative commit_failed status requiring manual git log/status verification to confirm the commit actually landed"
+    ],
+    "open_items": [
+      "Wave 2 (68-12, folderTree refresh after scope-exit rotation) still pending execution after Wave 1 (68-11) completes",
+      "Deferred cross-phase finding CannotWriteUntilRefetchError (Phase 65/66 WRITE-03/04) intentionally left out of Phase 68 scope, still unaddressed",
+      "Spot-check of 68-11 executor output (SUMMARY, commits, no Self-Check FAILED) still needs to happen once the subagent returns"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-01T19:49:46.914246Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 6,
+    "human_modified": 3,
+    "human_removed": 0,
+    "total_committed": 6,
+    "total_lines_changed": 11,
+    "agent_percentage": 0,
+    "metric_version": 2
+  }
+}

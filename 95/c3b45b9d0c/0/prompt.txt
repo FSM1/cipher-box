@@ -1,0 +1,90 @@
+/gsd-plan-phase 68 --gaps
+
+---
+
+<task-notification>
+<task-id>a54b68eadf94e409a</task-id>
+<tool-use-id>toolu_01WuqWQCLUmNEBQvFaBLEWAV</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/d2e29299-7c93-4d80-935c-636a76495b24/tasks/a54b68eadf94e409a.output</output-file>
+<status>completed</status>
+<summary>Agent "Plan Phase 68 gap closure" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLANNING COMPLETE
+
+Gap-closure planning for Phase 68 (ROT-07) is done. Two new plans (68-11, 68-12) close exactly the two `status: failed` truths in 68-VERIFICATION.md. Existing plans 68-01..68-10 were untouched. Commit: `566f20455`.
+
+| Plan | Objective | Wave | Requirements |
+|------|-----------|------|--------------|
+| 68-11 | **Gap 1 (BLOCKER)** — make the fail-closed anti-rollback gate live: inject `RotationHighWater` into `CipherBoxClient`, gate SDK-internal `reconcileFolderSequence` via `enforceResolved`, thread a real `ResolveRotationContext` into `handleSync`, and re-author `rotation-durability.spec.ts` to prove rejection via a genuine UI mutation | 1 | ROT-07 |
+| 68-12 | **Gap 2** — refresh `folderTree` after scope-exit rotation: `rotateReadFromNode` returns the root's rotated `{readKey, generation, sequenceNumber}` (currently discarded behind `void`), and `performScopeExitRotation` writes it back so a same-session retry self-heals without a page reload | 2 (depends on 68-11) | ROT-07 |
+
+### Key design decisions grounded in source (not the VERIFICATION line numbers)
+- **Gap 1 target corrected:** VERIFICATION named `ensureFolderLoaded` (line 518) as the SDK-internal resolve, but that function is a **stub that throws "not implemented — phase 63"**. The real live, frequently-exercised SDK-internal chokepoint is `reconcileFolderSequence` (client.ts:518), which runs before every rename/delete/deleteToBin/move. Gating it there covers all revocation-triggering mutations and closes the `sdkCore.resolveIpnsRecord` bypass directly. Plus the `handleSync` TODO (the verifier's named secondary target).
+- **Gap 2 mechanism:** `rotateReadFromNode` returns `Promise&lt;void&gt;`, discarding `rootResult` (from the root `rotateOne`, which carries `childReadKey`/`newGeneration`/`newSequenceNumber`). Its **only** production caller is client.ts:569, so an additive `RotateReadResult | undefined` return is backward-compatible. That is the minimal way to surface the rotated key the folderTree refresh needs.
+
+### Shared-file serialization
+Both plans edit `packages/sdk/src/client.ts` (Gap 1 → `reconcileFolderSequence`; Gap 2 → `performScopeExitRotation`), in different functions. They are split across **sequential waves** (68-11 wave 1, 68-12 wave 2, `depends_on: ["68-11"]`) with accurate `files_modified`, so the wave scheduler serializes them and the executor never runs them in parallel.
+
+### Constraints honored
+- TDD applied to all SDK-eligible tasks (`type: tdd` with `&lt;behavior&gt;` + RED/GREEN): 68-11 Task 1, 68-12 Tasks 1–2.
+- SC#5 preserved — zero `apps/web` unit tests; web behavior covered via the web-e2e Playwright spec (authored/typecheck-clean/registered tier).
+- `deferred` item (`CannotWriteUntilRefetchError`, a Phase 65/66 WRITE-03/04 gap) left out of scope.
+- Both plans validate clean (`frontmatter.validate` valid, `verify.plan-structure` 0 errors / 0 warnings).
+
+Both plans have no SUMMARY, so `/gsd-execute-phase 68` will pick up only 68-11 and 68-12.
+
+Plan files:
+- `/Users/myankelev/Code/random/cipher-box/.planning/phases/68-web-integration-rotation-ux-and-durable-client-state/68-11-PLAN.md`
+- `/Users/myankelev/Code/random/cipher-box/.planning/phases/68-web-integration-rotation-ux-and-durable-client-state/68-12-PLAN.md`</result>
+<usage><subagent_tokens>188175</subagent_tokens><tool_uses>44</tool_uses><duration_ms>879809</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a89e5fdf02cf61169</task-id>
+<tool-use-id>toolu_01P1pDN3qMMpDUzZTDQpBe3X</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/d2e29299-7c93-4d80-935c-636a76495b24/tasks/a89e5fdf02cf61169.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify Phase 68 gap-closure plans" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>No scope-reduction language found. Both plans fully deliver the gap-closure decisions with no hedging.
+
+## VERIFICATION PASSED
+
+**Phase:** 68 (gap-closure: 68-11, 68-12)
+**Plans verified:** 2
+**Status:** All checks passed
+
+### Coverage Summary
+
+| Gap | Plan | Coverage |
+|-----|------|----------|
+| Gap 1 (BLOCKER — fail-closed gate unreachable) | 68-11 | Covered: injects `RotationHighWater` into `CipherBoxClient`, gates `reconcileFolderSequence` (verified as the correct live-reachability target — `ensureFolderLoaded` is confirmed a dead phase-63 stub throwing `not implemented`, line 478; `reconcileFolderSequence` is called at 5 live sites covering rename/delete/deleteToBin/move, lines 742/823-824/985/1765), wires `handleSync`'s TODO (confirmed matches live code at lines 107-121), upgrades durability e2e proof to UI-driven |
+| Gap 2 (should-fix — folderTree staleness) | 68-12 | Covered: `rotateReadFromNode` return type changed to surface `RotateReadResult`, `performScopeExitRotation` refreshes `folderTree` |
+
+### Verification Notes
+
+- **Substitution soundness (explicit check requested):** Confirmed via `grep` that `ensureFolderLoaded` is unreachable dead code (`throw new Error('not implemented — phase 63...')`, `packages/sdk/src/client.ts:478`). `reconcileFolderSequence` is the only live pre-mutation resolve gate, called before every one of the 4 revocation-triggering mutation methods (5 call sites). Gating it plus `handleSync` gives full live reachability for ROT-07/SC#4 — arguably stronger coverage than the VERIFICATION-suggested target. Not a blocker.
+- **Wave/dependency ordering:** 68-11 wave 1 (`depends_on: []`), 68-12 wave 2 (`depends_on: ["68-11"]`) — correctly sequential; both modify `packages/sdk/src/client.ts`, no parallel-edit collision risk.
+- **SC#5 doctrine:** Both plans explicitly forbid new `apps/web/src/*.spec.ts` files and include a verify command asserting this (`find apps/web/src -name '*.spec.ts'` empty). Testable logic hoisted to SDK Vitest; UI/durability proof goes to Playwright web-e2e.
+- **Backward compat:** `rotateReadFromNode`'s only production caller is confirmed to be `performScopeExitRotation` itself (line 569) — the same plan updates both sides of the signature change in the same task, no other caller left stale.
+- **Frontmatter:** `requirements: [ROT-07]` present in both; `wave`, `depends_on`, `files_modified`, `autonomous` all present and correct.
+- **Task completeness:** All tasks have `&lt;read_first&gt;` (including the modified file), concrete identifiers (`RotationHighWater`, `EnforceResolvedParams`, `ResolveRotationContext`, `RotateReadResult`, exact field names verified against actual source), and checkable `&lt;acceptance_criteria&gt;` (grep assertions, test pass/fail, tsc clean) — no subjective language.
+- **must_haves.truths:** Observable live-system properties (e.g., "A relay-served seq/generation regression... throws a fail-closed error... surfaced as the D-05 toast — not silent acceptance"), correctly goal-backward mapped to the two failed gaps, not implementation-detail claims.
+- **CLAUDE.md compliance:** No TS enums introduced, camelCase field names (`nodeId`, `generation`, `versionFloor`), `Uint8Array` for binary key material, no privateKey/localStorage violations, zeroization discipline explicitly addressed (terminal-owner rule per project memory).
+- **Scope-reduction scan (7b):** No "v1/v2/stub/placeholder/future enhancement/hardcoded" language found in either plan — full delivery, no silent reduction.
+- **Dimension 8 (Nyquist):** Both plans' tasks carry `&lt;automated&gt;` verify commands (vitest/tsc/playwright --list) at every task; no watch-mode flags; no consecutive-3 gap.
+
+No blockers or warnings. Plans are ready for execution.
+
+Files reviewed:
+- `.planning/phases/68-web-integration-rotation-ux-and-durable-client-state/68-11-PLAN.md`
+- `.planning/phases/68-web-integration-rotation-ux-and-durable-client-state/68-12-PLAN.md`
+- `.planning/phases/68-web-integration-rotation-ux-and-durable-client-state/68-VERIFICATION.md`
+- `packages/sdk/src/client.ts` (spot-checked `ensureFolderLoaded`/`reconcileFolderSequence` line numbers)
+- `packages/sdk/src/state/rotation-high-water.ts` (spot-checked `EnforceResolvedParams`)
+- `apps/web/src/components/file-browser/useFileBrowserActions.ts` (spot-checked `handleSync` TODO)
+- `apps/web/src/services/ipns.service.ts` (spot-checked `ResolveRotationContext`)</result>
+<usage><subagent_tokens>80460</subagent_tokens><tool_uses>9</tool_uses><duration_ms>57055</duration_ms></usage>
+</task-notification>
