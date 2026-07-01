@@ -16,7 +16,14 @@
 
 import { sealNode, unsealNode } from '@cipherbox/core';
 import type { Node, PublishedNode, SealedChildRef } from '@cipherbox/core';
-import { generateEd25519Keypair, generateRandomBytes, deriveIpnsName } from '@cipherbox/crypto';
+import {
+  generateEd25519Keypair,
+  generateRandomBytes,
+  deriveIpnsName,
+  wrapKey,
+  bytesToHex,
+  hexToBytes,
+} from '@cipherbox/crypto';
 import type { SdkContext, TeeKeys } from '../types';
 import type { FileIpnsRecordPayload } from '../file';
 import { addToIpfs, fetchFromIpfs } from '../ipfs';
@@ -82,22 +89,49 @@ export async function createSubfolder(params: {
     new TextEncoder().encode(JSON.stringify(publishedNode))
   );
 
-  // 7. Publish first IPNS record — sequenceNumber MUST be 1n (Phase-60 strict gate)
+  // 7. Compute TEE enrollment fields (if teeKeys supplied) — fail closed on incomplete config
+  let encryptedIpnsPrivateKey: string | undefined;
+  let keyEpoch: number | undefined;
+  if (params.teeKeys) {
+    const { currentPublicKey, currentEpoch } = params.teeKeys;
+    if (!currentPublicKey) {
+      throw new Error(
+        'createSubfolder: teeKeys.currentPublicKey is missing or empty — refusing to publish un-enrolled subfolder'
+      );
+    }
+    if (!Number.isFinite(currentEpoch)) {
+      throw new Error(
+        'createSubfolder: teeKeys.currentEpoch is not a finite number — refusing to publish un-enrolled subfolder'
+      );
+    }
+    // ECIES-wrap the generated IPNS private key under the TEE public key.
+    // Do NOT zero ipnsPrivateKey here — wrapKey reads but does not consume the buffer;
+    // the caller is the terminal owner (D-09).
+    const teePublicKeyBytes = hexToBytes(currentPublicKey);
+    const wrappedBytes = await wrapKey(ipnsPrivateKey, teePublicKeyBytes);
+    encryptedIpnsPrivateKey = bytesToHex(wrappedBytes);
+    keyEpoch = currentEpoch;
+  }
+
+  // 8. Publish first IPNS record — sequenceNumber MUST be 1n (Phase-60 strict gate)
   await createAndPublishIpnsRecord({
     ipnsPrivateKey,
     ipnsName,
     metadataCid: cid,
     sequenceNumber: 1n,
     ctx: params.ctx,
+    encryptedIpnsPrivateKey,
+    keyEpoch,
   });
 
-  // 8. Return keys to caller — do NOT zero (caller is terminal owner, D-09)
+  // 9. Return keys to caller — do NOT zero (caller is terminal owner, D-09)
   return {
     node,
     ipnsPrivateKey,
     rootReadKey: readKey,
     rootWriteKey: writeKey,
-    // TEE republishing (phase 65): encryptedIpnsPrivateKey and keyEpoch not wired yet
+    encryptedIpnsPrivateKey,
+    keyEpoch,
   };
 }
 
