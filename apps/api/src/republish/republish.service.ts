@@ -71,9 +71,15 @@ export class RepublishService {
     // (D-02 / TEE-03). A tombstoned or key-less record is excluded here, so its
     // schedule drops out of the paired result below — a tombstoned name never
     // enters the batch (defense layer 1; the renewal CAS is defense layer 2).
-    const ipnsNames = schedules.map((s) => s.ipnsName);
+    // Pair schedule rows to ipns_records by BOTH userId and ipnsName. ipnsName
+    // uniqueness is app-level, not a DB constraint (see the epoch-upgrade write
+    // below), so keying the pairing on ipnsName alone could pair one user's schedule
+    // with another user's record if two rows ever share a name. Scope by userId.
+    const ipnsNames = [...new Set(schedules.map((s) => s.ipnsName))];
+    const userIds = [...new Set(schedules.map((s) => s.userId))];
     const records = await this.ipnsRecordRepository.find({
       where: {
+        userId: In(userIds),
         ipnsName: In(ipnsNames),
         tombstonedAt: IsNull(),
         encryptedIpnsPrivateKey: Not(IsNull()),
@@ -85,11 +91,12 @@ export class RepublishService {
       },
     });
 
-    const recordMap = new Map(records.map((r) => [r.ipnsName, r]));
+    const pairKey = (userId: string, ipnsName: string) => `${userId}:${ipnsName}`;
+    const recordMap = new Map(records.map((r) => [pairKey(r.userId, r.ipnsName), r]));
 
     return schedules
       .map((schedule) => {
-        const record = recordMap.get(schedule.ipnsName);
+        const record = recordMap.get(pairKey(schedule.userId, schedule.ipnsName));
         if (!record) return null; // race: tombstoned or key removed between the two queries
         return { schedule, record };
       })
@@ -208,6 +215,7 @@ export class RepublishService {
             // §6.6 / TEE-04: WHERE sequence_number = :loaded AND tombstoned_at IS NULL
             await this.renewIpnsRecordEol(
               schedule.ipnsName,
+              record.userId, // scope the CAS to the owner (ipnsName is not globally unique)
               record.sequenceNumber, // loaded seq from the batch
               Buffer.from(result.signedRecord, 'base64')
             );
@@ -438,9 +446,11 @@ export class RepublishService {
    * EOL-only renewal write for the signed_record in ipns_records.
    *
    * §6.6 / TEE-04 carryover: uses the same equality-CAS shape as the
-   * Phase-66 publish gate (sequence_number = :expected AND tombstoned_at IS NULL)
-   * but does NOT change sequence_number — only signed_record and updatedAt are
-   * updated (lease-renewer: same CID, same seq, later EOL bytes).
+   * Phase-66 publish gate (sequence_number = :expected AND tombstoned_at IS NULL),
+   * additionally scoped by user_id (ipnsName uniqueness is app-level, not a DB
+   * constraint — so the CAS must pin the owner), but does NOT change sequence_number
+   * — only signed_record and updatedAt are updated (lease-renewer: same CID, same
+   * seq, later EOL bytes).
    *
    * On affected === 0: a forward publish raced the batch and already advanced
    * the sequence (or the row was tombstoned at the write level). Either way
@@ -448,6 +458,7 @@ export class RepublishService {
    */
   private async renewIpnsRecordEol(
     ipnsName: string,
+    userId: string,
     loadedSequenceNumber: string,
     renewedSignedRecord: Buffer
   ): Promise<void> {
@@ -456,10 +467,14 @@ export class RepublishService {
         .createQueryBuilder()
         .update(IpnsRecord)
         .set({ signedRecord: renewedSignedRecord, updatedAt: new Date() })
-        .where('ipns_name = :ipnsName AND sequence_number = :expected AND tombstoned_at IS NULL', {
-          ipnsName,
-          expected: loadedSequenceNumber,
-        })
+        .where(
+          'ipns_name = :ipnsName AND user_id = :userId AND sequence_number = :expected AND tombstoned_at IS NULL',
+          {
+            ipnsName,
+            userId,
+            expected: loadedSequenceNumber,
+          }
+        )
         .execute();
 
       if (result.affected === 0) {

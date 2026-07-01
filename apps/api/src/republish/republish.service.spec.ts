@@ -222,6 +222,20 @@ describe('RepublishService', () => {
       expect(result[0]).toMatchObject({ schedule, record });
     });
 
+    it('should NOT pair a record owned by a different user (userId scoping)', async () => {
+      // Same ipnsName, different owner. ipnsName uniqueness is app-level, not a DB
+      // constraint, so the pairing must key on (userId, ipnsName) — a cross-user
+      // record must never pair with this schedule.
+      const schedule = createMockSchedule({ userId: 'user-A' });
+      const record = createMockRecord({ userId: 'user-B' });
+      scheduleRepository.find.mockResolvedValue([schedule]);
+      ipnsRecordRepository.find.mockResolvedValue([record]);
+
+      const result = await service.getDueEntries();
+
+      expect(result).toHaveLength(0);
+    });
+
     it('should exclude tombstoned names — a tombstoned record yields no pair', async () => {
       // Schedule is due, but the ipns_records filter (tombstonedAt IS NULL) excludes
       // the record, so it never enters the record map → the schedule drops out of the
@@ -627,6 +641,11 @@ describe('RepublishService', () => {
       expect(recordUpdateQBMock.where).toHaveBeenCalledWith(
         expect.stringContaining('sequence_number = :expected'),
         expect.objectContaining({ expected: '5' })
+      );
+      // The renewal CAS is scoped to the owning user (ipnsName is not globally unique).
+      expect(recordUpdateQBMock.where).toHaveBeenCalledWith(
+        expect.stringContaining('user_id = :userId'),
+        expect.objectContaining({ userId: 'user-uuid-1' })
       );
     });
 
