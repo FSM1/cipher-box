@@ -132,6 +132,15 @@ None - no external service configuration required.
 - `packages/sdk` build (`tsup && tsc`) and the full non-integration Vitest suite (252 passed, 46 skipped) are green with these changes; `apps/web` `tsc --noEmit` is clean.
 - No blockers. The eager login sweep's "unloaded root is skipped" limitation is a known, documented best-effort gap (not a stub in the Known Stubs sense -- it degrades gracefully to "reconcile happens on next opportunistic post-mutation trigger" rather than rendering broken/empty UI).
 
+## Self-Check: PASSED
+
+All created files and task commit hashes verified present on disk / in git history:
+- `packages/sdk/src/share/owner-reconcile.ts` - FOUND
+- `packages/sdk/src/__tests__/owner-reconcile.test.ts` - FOUND
+- `apps/web/src/services/owner-reconcile.service.ts` - FOUND
+- `.planning/phases/68-web-integration-rotation-ux-and-durable-client-state/68-07-SUMMARY.md` - FOUND
+- `d14844ff8` (test RED), `a383133f3` (feat GREEN), `9476cbb8c` (feat web wrapper) - all FOUND in git log
+
 ---
 *Phase: 68-web-integration-rotation-ux-and-durable-client-state*
 *Completed: 2026-07-01*
