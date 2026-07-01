@@ -3,7 +3,7 @@
   "checkpoint_id": "3b7c7f468480",
   "strategy": "manual-commit",
   "branch": "feat/web-integration-rotation-ux-and-durable-client-state",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     ".planning/STATE.md"
   ],
@@ -13,13 +13,19 @@
       "transcript": "/3b/7c7f468480/0/full.jsonl",
       "content_hash": "/3b/7c7f468480/0/content_hash.txt",
       "prompt": "/3b/7c7f468480/0/prompt.txt"
+    },
+    {
+      "metadata": "/3b/7c7f468480/1/metadata.json",
+      "transcript": "/3b/7c7f468480/1/full.jsonl",
+      "content_hash": "/3b/7c7f468480/1/content_hash.txt",
+      "prompt": "/3b/7c7f468480/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 14591,
-    "cache_creation_tokens": 381727,
-    "cache_read_tokens": 4474323,
-    "output_tokens": 42758,
-    "api_call_count": 37
+    "input_tokens": 28532,
+    "cache_creation_tokens": 613620,
+    "cache_read_tokens": 7004643,
+    "output_tokens": 74519,
+    "api_call_count": 61
   }
 }
