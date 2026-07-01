@@ -43,6 +43,8 @@ export type {
   SharedFolderState,
   ShareCallbacks,
   PinningConfig,
+  RotationClientCallbacks,
+  LocalGrantRecord,
 } from './types';
 
 // Shared-folder state (sibling tree keyed by shareId)
