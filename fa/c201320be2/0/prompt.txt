@@ -157,3 +157,46 @@ Please take a look at the @docs/TESTING.md docs - UI is not unit tested - all co
 Plan files: `/Users/myankelev/Code/random/cipher-box/.planning/phases/68-web-integration-rotation-ux-and-durable-client-state/68-01-PLAN.md` … `68-10-PLAN.md`</result>
 <usage><subagent_tokens>258030</subagent_tokens><tool_uses>79</tool_uses><duration_ms>1618646</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>aae990efc4174b76c</task-id>
+<tool-use-id>toolu_018y5RWnEuZZw11Q1pcbZqat</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/d2e29299-7c93-4d80-935c-636a76495b24/tasks/aae990efc4174b76c.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify revised Phase 68 plans" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## VERIFICATION PASSED
+
+**Phase:** 68 — Web Integration, Rotation UX and Durable Client State
+**Plans verified:** 10 (`68-01` through `68-10`)
+**Mode:** Re-verification after test-strategy doctrine correction
+
+### Primary focus — doctrine correction
+
+1. **No `apps/web/src` unit tests / no `fake-indexeddb`:** Confirmed across all 10 plans. Every plan that touches `apps/web` (02, 04, 06, 07, 08, 09) explicitly states "do NOT add an apps/web test file" and its acceptance criteria includes `find apps/web/src -name "*.spec.ts"` empty. No plan adds `fake-indexeddb` as a dependency or an IndexedDB vitest shim.
+2. **Core logic hoisted to SDK, Vitest-tested:** `68-01` builds `createRotationHighWater`/`enforceResolved` (monotonic-max + fail-closed) in `packages/sdk/src/state/rotation-high-water.ts` behind an injected `HighWaterStore` seam, Vitest-tested (RED→GREEN). `68-07` builds `owner-reconcile.ts` in `packages/sdk/src/share/` behind an injected transport seam, Vitest-tested. `68-06` (the web IndexedDB adapter) is explicitly a thin wrapper delegating to the SDK, with no unit test — confirmed via its own text and verify gates (`grep` for `createRotationHighWater` delegation, no re-implementation).
+3. **UI + durability in web-e2e:** `68-10` creates `tests/web-e2e/tests/rotation-durability.spec.ts` (real reload + fail-closed toast, SC#1/SC#4) and `rotation-ux.spec.ts` (badge lifecycle + co-writer/defer UX, D-01/D-02/D-03/D-06). Both live under `tests/web-e2e/tests/`, outside `apps/web/src`, so the SC#5 static check (`find apps/web/src -name "*.spec.ts"`) stays empty.
+4. **Automated verify at correct tier for every SC path:** SDK behaviors verified via `pnpm --filter @cipherbox/sdk test -- &lt;file&gt;`; API route via `pnpm --filter @cipherbox/api test -- shares.controller.spec.ts` (68-03); UI/durability via `pnpm test:web-e2e -- &lt;spec&gt;` (68-10). No SC left with zero automated coverage across both tiers.
+
+### Standard goal-backward checks
+
+- **Fail-closed invariants as `must_haves.truths`:** D-04 (defer-never-skip) in 68-05; D-05 (hard regression fail-closed) in 68-01/68-06; SC#1 durability (real IndexedDB, not in-memory-only) explicitly called out in 68-01's truths (logic tier) and proven in 68-10 (real tier) — the plan text is careful to distinguish the two and never conflates them.
+- **SC#2:** `executeLazyRotation` deletion + `addShareKeys`/`reWrapForRecipients` fan-out removal with live-caller rerouting (`useAuth.ts`, `useSharedNavigation.ts`) is in 68-02; `rotateReadFromNode` wiring in `packages/sdk/client.ts` is in 68-05.
+- **Research scope gaps:** `share.service.ts` real-data seeding (D-07) in 68-02 Task 1; new `PATCH :shareId/grant` route with `pnpm api:generate` + committed regenerated client (CLAUDE.md hook) explicitly in 68-03 Task 2.
+- **Task structure:** every task across all 10 plans has `&lt;read_first&gt;`, `&lt;action&gt;`, `&lt;verify&gt;&lt;automated&gt;`, `&lt;acceptance_criteria&gt;`, `&lt;done&gt;`. No code fences inside actions; acceptance criteria are grep/tsc/test-exit-code based, not subjective.
+- **Waves/dependencies:** Wave assignments are consistent with `depends_on` (checked: 06→wave2, 07→wave2, 08→wave3 depends on 02/04/05/06/07, 09→wave3, 10→wave4 depends on 02/04/05/06/08/09). No cycles. No same-wave file conflicts (verified file lists per wave).
+- **Requirements/must_haves traceability:** ROT-07 present in every plan's `requirements` frontmatter. All 5 SCs + WRITE-03 trace to `must_haves.truths` in at least one plan. Every plan has an "Artifacts this phase produces" equivalent section.
+
+### CLAUDE.md compliance
+
+String-literal unions enforced explicitly in multiple plans (`grep -c "enum"` returns 0 gates in 68-01, 68-04); `pnpm api:generate` + committed client staged in 68-03; terminology (`generation`/`keyEpoch`/`sequenceNumber`) not conflated in any plan text reviewed; client-side-only crypto respected (no server decrypt in 68-03's DTO).
+
+### Minor observation (non-blocking)
+
+- **WARNING** — `68-VALIDATION.md` frontmatter still reads `nyquist_compliant: false` and its Sign-Off checklist is unchecked/pending, even though checks 8a–8d (automated-verify presence, sampling continuity, Wave-0 completeness) pass on inspection of the actual plans. Recommend flipping `nyquist_compliant: true` and checking off the sign-off boxes in `68-VALIDATION.md` before/при execution — cosmetic, does not block since the plans themselves carry correct per-task automated verifies.
+
+Plans verified. Run `/gsd-execute-phase 68` to proceed.</result>
+<usage><subagent_tokens>125784</subagent_tokens><tool_uses>18</tool_uses><duration_ms>77228</duration_ms></usage>
+</task-notification>
