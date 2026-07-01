@@ -5,15 +5,15 @@ milestone_name: Metadata and Sharing Refactor
 current_phase: 68
 current_phase_name: web-integration-rotation-ux-and-durable-client-state
 status: executing
-stopped_at: Phase 68 verification gaps_found — 2 gaps blocking ROT-07
-last_updated: "2026-07-01T19:33:14.115Z"
+stopped_at: Completed 68-11-PLAN.md (ROT-07 Gap 1 closure)
+last_updated: "2026-07-01T19:49:09.026Z"
 last_activity: 2026-07-01
 last_activity_desc: Phase 68 execution started
 progress:
   total_phases: 9
   completed_phases: 7
   total_plans: 65
-  completed_plans: 63
+  completed_plans: 64
   percent: 78
 ---
 
@@ -29,8 +29,8 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 ## Current Position
 
 Phase: 68 (web-integration-rotation-ux-and-durable-client-state) — EXECUTING
-Plan: 1 of 12
-Status: Executing Phase 68
+Plan: 2 of 12
+Status: Ready to execute
 Last activity: 2026-07-01 — Phase 68 execution started
 
 Progress: `████████░░` 7 / 9 phases (78%)
@@ -222,6 +222,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 67-tee-lease-renewer-contract-rewrite P04 | 140 | 1 tasks | 2 files |
 | Phase 67 P05 | 171 | 2 tasks | 4 files |
 | Phase 67 P06 | 20m | 1 tasks | 2 files |
+| Phase 68 P11 | 25min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -439,6 +440,9 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: tee-worker build context is repo root not apps/tee-worker dir
 - [Phase ?]: TEE_WORKER_URL=http://localhost:3002 active not commented in .env.example
 - [Phase ?]: TEE route is verify-in-enclave lease renewer: parse→verify→decrypt→bind→re-sign same CID+seq→zero (D-01/TEE-01/TEE-02/TEE-06)
+- [Phase 68-11]: reconcileFolderSequence sources enforceResolved's generation param from the in-memory folderTree nodeGeneration (never the resolved envelope's own generation)
+- [Phase 68-11]: handleSync's ResolveRotationContext.generation hardcoded to 0 (useFolderStore carries no root generation field), matching the SDK client's own default
+- [Phase 68-11]: rotation-durability.spec.ts SC#4 proof now drives two real UI renames (seed+bump, then a rejected rename after stale-bytes replay) instead of direct module invocation; RenameDialog does not close on a failed mutation so the spec drives the form fields directly for the rejection step
 
 ## Operator Next Steps
 
@@ -446,6 +450,6 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-01T14:32:27.455Z
-**Stopped at:** Phase 68 UI-SPEC approved
-**Resume file:** .planning/phases/68-web-integration-rotation-ux-and-durable-client-state/68-UI-SPEC.md
+**Last session:** 2026-07-01T19:49:09.020Z
+**Stopped at:** Completed 68-11-PLAN.md (ROT-07 Gap 1 closure)
+**Resume file:** None

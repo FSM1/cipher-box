@@ -138,3 +138,7 @@ None - no external service configuration required.
 
 *Phase: 68-web-integration-rotation-ux-and-durable-client-state*
 *Completed: 2026-07-01*
+
+## Self-Check: PASSED
+
+All 6 modified/created source files verified present on disk; all 4 task commits (`cf01a92ff`, `0b5929c45`, `97a527b2a`, `5f0cfaa7e`) plus this SUMMARY's own commit (`01d5b01d2`) verified present in `git log`.
