@@ -569,6 +569,12 @@ export class CipherBoxClient {
     const activeGrantRootIpnsNames = await callbacks.getActiveGrantRootIpnsNames();
     const localGrantRecord = callbacks.getLocalGrantRecord(params.rootNodeIpnsName);
 
+    // VERIFICATION Gap 2: capture rotateReadFromNode's return so the folderTree
+    // entry can be refreshed after a successful rotation below. Stays undefined
+    // when maybeRotateOnScopeExit never invokes deps.rotate (uncovered) OR when
+    // rotateReadFromNode itself resolves undefined (resume/skip path).
+    let rotationResult: sdkCore.RotateReadResult | undefined;
+
     await sdkCore.maybeRotateOnScopeExit(
       {
         nodeAncestorIpnsNames: params.ancestorIpnsNames,
@@ -584,7 +590,7 @@ export class CipherBoxClient {
             frontier: [],
             persistCallback: callbacks.persistJob,
           };
-          await sdkCore.rotateReadFromNode({
+          rotationResult = await sdkCore.rotateReadFromNode({
             rootNodeId: params.rootNodeId,
             rootNodeIpnsName: params.rootNodeIpnsName,
             rootReadKey: params.rootReadKey,
@@ -597,6 +603,32 @@ export class CipherBoxClient {
         },
       }
     );
+
+    // VERIFICATION Gap 2 (T-68-12-01/03): refresh the in-memory folderTree entry
+    // with the ROOT's rotated readKey/generation/sequenceNumber so the next
+    // same-session mutation on this folder reconciles cleanly instead of
+    // permanently deferring (ReconcileStaleError) until a full page reload.
+    // Skipped entirely when rotationResult is undefined (uncovered / resume) --
+    // no spurious folderTree write in that case.
+    if (rotationResult) {
+      const existing = this.folderTree.get(params.rootNodeIpnsName);
+      if (existing) {
+        // T-68-12-02 / D-09: folderTree is the terminal owner of its OLD
+        // folderKey copy -- capture it to zero AFTER the swap below. Never zero
+        // rotationResult.readKey (now owned via the defensive copy) nor
+        // params.rootReadKey (caller-owned; rotateReadFromNode has already
+        // returned, so this is safe post-flight, not mid-flight).
+        const oldFolderKey = existing.folderKey;
+        this.folderTree.set(params.rootNodeIpnsName, {
+          ...existing,
+          folderKey: new Uint8Array(rotationResult.readKey),
+          sequenceNumber: rotationResult.sequenceNumber,
+          nodeGeneration: rotationResult.generation,
+          lastLoadedAt: Date.now(),
+        });
+        oldFolderKey.fill(0);
+      }
+    }
   }
 
   /**
