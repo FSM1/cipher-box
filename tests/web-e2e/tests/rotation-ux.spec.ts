@@ -166,6 +166,25 @@ test.describe.serial('Rotation UX: badge lifecycle + failure-UX toasts', () => {
     await expect(badge).toHaveText('Resuming revocation…');
     await expect(badge).toHaveClass(/rotation-status-badge--background/);
     expect(await badge.getAttribute('role')).toBe('status');
+
+    // Clean up the seeded checkpoint so it does not leak into later tests
+    // (mirrors the seeding block's DB/store names and keyPath).
+    await page.evaluate(
+      ({ rootNodeId }) => {
+        return new Promise<void>((resolve, reject) => {
+          const req = indexedDB.open('cipherbox-rotation-jobs', 1);
+          req.onerror = () => reject(req.error);
+          req.onsuccess = () => {
+            const db = req.result;
+            const tx = db.transaction('jobs', 'readwrite');
+            tx.objectStore('jobs').delete(rootNodeId);
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+          };
+        });
+      },
+      { rootNodeId }
+    );
   });
 
   test('a stale co-writer write surfaces Refresh access, escalating to a terminal Write access revoked with no action (D-01/WRITE-03)', async () => {

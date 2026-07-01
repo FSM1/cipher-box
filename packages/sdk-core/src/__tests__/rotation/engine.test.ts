@@ -666,16 +666,19 @@ describe('rotateReadFromNode — root-first BFS ordering (§4.2)', () => {
       });
 
     const jobRecord = makeJobRecord({ rootNodeId: NODE_ID });
-    const result = await rotateReadFromNode({
-      rootNodeId: NODE_ID,
-      rootNodeIpnsName: NODE_IPNS,
-      rootReadKey: new Uint8Array(32).fill(0x55),
-      rootIpnsPrivateKey: TASK1_ROOT_IPNS_PRIVATE_KEY, // D-01 fail-closed requires a key
-      jobRecord,
-      ctx: createMockContext(),
-    });
-
-    getRandomValuesSpy.mockRestore();
+    let result;
+    try {
+      result = await rotateReadFromNode({
+        rootNodeId: NODE_ID,
+        rootNodeIpnsName: NODE_IPNS,
+        rootReadKey: new Uint8Array(32).fill(0x55),
+        rootIpnsPrivateKey: TASK1_ROOT_IPNS_PRIVATE_KEY, // D-01 fail-closed requires a key
+        jobRecord,
+        ctx: createMockContext(),
+      });
+    } finally {
+      getRandomValuesSpy.mockRestore();
+    }
 
     expect(result).toBeDefined();
     expect(result?.readKey).toEqual(mintedRootReadKey);

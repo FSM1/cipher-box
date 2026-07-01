@@ -56,16 +56,30 @@ async function readDurableFloors(
           req.onerror = () => reject(req.error);
           req.onsuccess = () => {
             const db = req.result;
-            const tx = db.transaction(['generation-high-water', 'seq-high-water'], 'readonly');
-            const genReq = tx.objectStore('generation-high-water').get(nodeId);
-            const seqReq = tx.objectStore('seq-high-water').get(nodeId);
-            tx.oncomplete = () => {
-              resolve({
-                generation: genReq.result as number | undefined,
-                seq: seqReq.result as number | undefined,
-              });
-            };
-            tx.onerror = () => reject(tx.error);
+            // The DB (or its stores) may not exist yet — e.g. a fresh profile
+            // where rotation-state.service.ts has never written. Treat that as
+            // "no floors recorded" instead of throwing synchronously.
+            if (
+              !db.objectStoreNames.contains('generation-high-water') ||
+              !db.objectStoreNames.contains('seq-high-water')
+            ) {
+              resolve({ generation: undefined, seq: undefined });
+              return;
+            }
+            try {
+              const tx = db.transaction(['generation-high-water', 'seq-high-water'], 'readonly');
+              const genReq = tx.objectStore('generation-high-water').get(nodeId);
+              const seqReq = tx.objectStore('seq-high-water').get(nodeId);
+              tx.oncomplete = () => {
+                resolve({
+                  generation: genReq.result as number | undefined,
+                  seq: seqReq.result as number | undefined,
+                });
+              };
+              tx.onerror = () => reject(tx.error);
+            } catch (err) {
+              reject(err);
+            }
           };
         }
       );
