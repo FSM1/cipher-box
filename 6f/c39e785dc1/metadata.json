@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "6fc39e785dc1",
+  "strategy": "manual-commit",
+  "branch": "feat/web-integration-rotation-ux-and-durable-client-state",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/68-web-integration-rotation-ux-and-durable-client-state/68-SECURITY.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/6f/c39e785dc1/0/metadata.json",
+      "transcript": "/6f/c39e785dc1/0/full.jsonl",
+      "content_hash": "/6f/c39e785dc1/0/content_hash.txt",
+      "prompt": "/6f/c39e785dc1/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 16084,
+    "cache_creation_tokens": 318434,
+    "cache_read_tokens": 3759040,
+    "output_tokens": 31385,
+    "api_call_count": 41
+  }
+}
