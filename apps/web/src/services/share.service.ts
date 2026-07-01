@@ -100,9 +100,11 @@ export function shouldBackfill(row: ItemNameBearingRow, hasRecipientPubKey: bool
  * floor downstream must never seed from a forged/garbled low generation.
  */
 function parseRootGeneration(value: string | undefined | null): number | undefined {
-  if (value === undefined || value === null) return undefined;
+  // Strict digits-only: Number('') / Number(' ') coerce to 0, and negative or
+  // fractional strings pass isFinite — all of which would seed a forged floor.
+  if (value === undefined || value === null || !/^\d+$/.test(value)) return undefined;
   const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
 }
 
 /** Reshape a received-share grant DTO row into the web store's ReceivedShare shape. */

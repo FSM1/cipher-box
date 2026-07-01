@@ -110,25 +110,25 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
     const rootFolder = useFolderStore.getState().folders['root'];
     if (!rootFolder) return;
 
-    // Background sync's own resolve is a mutation-adjacent fail-closed surface
-    // (SequenceRegressionError/GenerationRegressionError, D-05). It is now wired
-    // through the same durable anti-rollback gate as the folder mutations
-    // (Gap 1 / SC#4), routed through the same classifier so a rejection
-    // surfaces the D-05 toast instead of failing silently. The folder store
-    // carries no generation field for root, so 0 is passed (matching the
-    // SDK client's own default when a folder's nodeGeneration is unknown).
-    const resolved = await runWithFailureUx(() =>
-      resolveIpnsRecord(rootIpnsName, {
-        nodeId: rootIpnsName,
-        generation: 0,
-        versionFloor: Number(rootFolder.sequenceNumber),
-      })
-    );
-    if (!resolved) return;
-
-    if (resolved.sequenceNumber <= rootFolder.sequenceNumber) return;
-
     try {
+      // Background sync's own resolve is a mutation-adjacent fail-closed surface
+      // (SequenceRegressionError/GenerationRegressionError, D-05). It is now wired
+      // through the same durable anti-rollback gate as the folder mutations
+      // (Gap 1 / SC#4), routed through the same classifier so a rejection
+      // surfaces the D-05 toast instead of failing silently. The folder store
+      // carries no generation field for root, so 0 is passed (matching the
+      // SDK client's own default when a folder's nodeGeneration is unknown).
+      const resolved = await runWithFailureUx(() =>
+        resolveIpnsRecord(rootIpnsName, {
+          nodeId: rootIpnsName,
+          generation: 0,
+          versionFloor: Number(rootFolder.sequenceNumber),
+        })
+      );
+      if (!resolved) return;
+
+      if (resolved.sequenceNumber <= rootFolder.sequenceNumber) return;
+
       const metadata = await fetchAndDecryptMetadata(
         resolved.cid,
         rootFolder.folderKey,

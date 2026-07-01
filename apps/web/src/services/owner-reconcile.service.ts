@@ -43,13 +43,30 @@ type DecodedSentGrant = GrantRow & { rootIpnsName: string };
  */
 async function decodeSentGrants(): Promise<DecodedSentGrant[]> {
   const { shares } = await sharesControllerGetSentShares();
-  return shares.map((share) => ({
-    shareId: share.shareId,
-    recipientPublicKey: hexToBytes(share.recipientPublicKey),
-    isRevoked: false,
-    rootNodeId: share.rootNodeId,
-    rootIpnsName: share.rootIpnsName,
-  }));
+  const decoded: DecodedSentGrant[] = [];
+  for (const share of shares) {
+    try {
+      // Wire format is bare hex, but normalize a 0x prefix defensively --
+      // hexToBytes would otherwise choke and one bad row must not abort the
+      // whole reconcile sweep.
+      const bareHex = share.recipientPublicKey.startsWith('0x')
+        ? share.recipientPublicKey.slice(2)
+        : share.recipientPublicKey;
+      decoded.push({
+        shareId: share.shareId,
+        recipientPublicKey: hexToBytes(bareHex),
+        isRevoked: false,
+        rootNodeId: share.rootNodeId,
+        rootIpnsName: share.rootIpnsName,
+      });
+    } catch (error) {
+      logger.error(
+        `[owner-reconcile] Skipping sent grant ${share.shareId}: recipientPublicKey decode failed:`,
+        safeError(error)
+      );
+    }
+  }
+  return decoded;
 }
 
 async function listSentGrants(): Promise<GrantRow[]> {
@@ -82,6 +99,15 @@ const webOwnerReconcileTransport: OwnerReconcileTransport = {
   updateGrant,
   deleteGrant,
 };
+
+/**
+ * Reduce a caught error to name+message before logging: raw Axios/SDK errors
+ * carry request config (auth headers) and crypto-path details that must not
+ * reach the log sink.
+ */
+function safeError(error: unknown): string {
+  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+}
 
 function buildReconcileCtx(): SdkContext {
   return {
@@ -124,9 +150,15 @@ export async function triggerOwnerReconcileOnLogin(): Promise<void> {
   try {
     decoded = await decodeSentGrants();
   } catch (error) {
-    logger.error('[owner-reconcile] Failed to fetch sent grants for eager login sweep:', error);
+    logger.error(
+      '[owner-reconcile] Failed to fetch sent grants for eager login sweep:',
+      safeError(error)
+    );
     return;
   }
+
+  // The client can be torn down (logout) while the fetch above was in flight.
+  if (!hasSdkClient()) return;
 
   const distinctRoots = new Map<string, string>(); // rootNodeId -> rootIpnsName
   for (const grant of decoded) {
@@ -154,7 +186,10 @@ export async function triggerOwnerReconcileOnLogin(): Promise<void> {
         webOwnerReconcileTransport
       );
     } catch (error) {
-      logger.error(`[owner-reconcile] Eager login reconcile failed for root ${rootNodeId}:`, error);
+      logger.error(
+        `[owner-reconcile] Eager login reconcile failed for root ${rootNodeId}:`,
+        safeError(error)
+      );
     }
   }
 }
@@ -182,10 +217,13 @@ export async function runOwnerReconcileForFolder(rootIpnsName: string): Promise<
   } catch (error) {
     logger.error(
       `[owner-reconcile] Failed to fetch sent grants for opportunistic reconcile of ${rootIpnsName}:`,
-      error
+      safeError(error)
     );
     return;
   }
+
+  // The client can be torn down (logout) while the fetch above was in flight.
+  if (!hasSdkClient()) return;
 
   const grant = decoded.find((candidate) => candidate.rootIpnsName === rootIpnsName);
   if (!grant) return; // not a grant root -- nothing to reconcile
@@ -206,7 +244,7 @@ export async function runOwnerReconcileForFolder(rootIpnsName: string): Promise<
   } catch (error) {
     logger.error(
       `[owner-reconcile] Opportunistic reconcile failed for root ${grant.rootNodeId}:`,
-      error
+      safeError(error)
     );
   }
 }

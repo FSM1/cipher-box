@@ -81,9 +81,17 @@ function dispatchDeferExhausted<T>(mutationFn: () => Promise<T>): void {
   useNotificationStore.getState().addNotification('error', "Couldn't complete securely — retry.", {
     label: 'Retry',
     onClick: () => {
-      void runWithFailureUx(mutationFn);
+      void retryAfterExhaustion(mutationFn);
     },
   });
+}
+
+async function retryAfterExhaustion<T>(mutationFn: () => Promise<T>): Promise<void> {
+  try {
+    await runWithFailureUx(mutationFn);
+  } catch {
+    // The retried run dispatches its own notice for any repeat failure.
+  }
 }
 
 /**
@@ -152,9 +160,16 @@ async function retryAfterRefresh<T>(
 ): Promise<void> {
   try {
     await opts.refreshWriteAccess!();
+  } catch {
+    useNotificationStore
+      .getState()
+      .addNotification('error', 'Write access could not be refreshed.');
+    return;
+  }
+  try {
     await runWithFailureUx(mutationFn, { ...opts, _afterRefresh: true });
   } catch {
-    // The retried run (or the refresh itself) dispatches its own terminal notice.
+    // The retried run dispatches its own terminal notice.
   }
 }
 

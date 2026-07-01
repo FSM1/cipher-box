@@ -124,3 +124,9 @@ a:hover {
 .notification-action-btn:hover {
   color: var(--color-green-primary);
 }
+
+.notification-action-btn:focus-visible {
+  color: var(--color-green-primary);
+  outline: 1px solid var(--color-green-primary);
+  outline-offset: 1px;
+}

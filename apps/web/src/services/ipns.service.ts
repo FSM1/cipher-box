@@ -198,6 +198,24 @@ export async function resolveIpnsRecord(
     return resolved;
   }
 
+  // Fail closed BEFORE any floor mutation: an absent-signature record
+  // (signatureVerified=false, tolerated by D-03 for legacy names) must never
+  // seed or bump a durable floor — a relay could otherwise forge a huge seq
+  // and permanently DoS the node. Rotation-participating nodes are always
+  // published signed, so an unverified record here is itself a red flag.
+  if (!resolved.signatureVerified) {
+    throw new Error(
+      `IPNS resolve for rotation-participating node ${ipnsName} returned an unverified record — refusing to gate floors on it`
+    );
+  }
+  // The durable floor stores JS numbers; a sequence beyond MAX_SAFE_INTEGER
+  // would silently truncate through Number() and corrupt the floor.
+  if (resolved.sequenceNumber > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error(
+      `IPNS sequence number for ${ipnsName} exceeds Number.MAX_SAFE_INTEGER — refusing lossy floor conversion`
+    );
+  }
+
   if (rotation.rootGeneration !== undefined) {
     await seedFromGrant(rotation.nodeId, rotation.rootGeneration);
   }

@@ -93,7 +93,17 @@ function idbPut(storeName: string, nodeId: string, value: number): Promise<void>
       new Promise<void>((resolve, reject) => {
         const tx = db.transaction(storeName, 'readwrite');
         const store = tx.objectStore(storeName);
-        store.put(value, nodeId);
+        // Max-preserving write inside ONE readwrite transaction: the SDK's
+        // bumpFloor maxes against its own read, but another tab may have
+        // raised the floor since — a blind put would regress it (T-68-82's
+        // safety claim holds only if the write itself is monotonic).
+        const readBack = store.get(nodeId);
+        readBack.onsuccess = () => {
+          const existing = readBack.result as unknown;
+          const floor = isValidFloorValue(existing) ? Math.max(existing, value) : value;
+          store.put(floor, nodeId);
+        };
+        readBack.onerror = () => reject(readBack.error);
         tx.oncomplete = () => resolve();
         tx.onerror = () => reject(tx.error);
       })
@@ -138,8 +148,12 @@ function createDegradableHighWaterStore(storeName: string): HighWaterStore {
       }
     },
     async put(nodeId, value) {
+      const maxIntoSession = () => {
+        const existing = sessionFloor.get(nodeId);
+        sessionFloor.set(nodeId, existing !== undefined ? Math.max(existing, value) : value);
+      };
       if (degraded) {
-        sessionFloor.set(nodeId, value);
+        maxIntoSession();
         return;
       }
       try {
@@ -147,7 +161,7 @@ function createDegradableHighWaterStore(storeName: string): HighWaterStore {
       } catch {
         degraded = true;
         warnedOnce = true;
-        sessionFloor.set(nodeId, value);
+        maxIntoSession();
       }
     },
   };

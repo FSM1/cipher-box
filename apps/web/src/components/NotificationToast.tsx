@@ -23,9 +23,9 @@ export function NotificationToast() {
   useEffect(() => {
     const timers = timersRef.current;
     for (const n of notifications) {
-      // Terminal error toasts carrying an action (D-06 exhaustion) require an
-      // explicit user decision (Retry) and must never auto-dismiss.
-      const skipAutoDismiss = n.type === 'error' && !!n.action;
+      // Toasts carrying an action (e.g. D-06 exhaustion Retry) require an
+      // explicit user decision and must never auto-dismiss.
+      const skipAutoDismiss = !!n.action;
       if (!timers.has(n.id) && !skipAutoDismiss) {
         const timer = setTimeout(() => {
           dismissNotification(n.id);
