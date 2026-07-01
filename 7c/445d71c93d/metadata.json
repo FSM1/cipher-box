@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "7c445d71c93d",
+  "strategy": "manual-commit",
+  "branch": "feat/web-integration-rotation-ux-and-durable-client-state",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/hooks/useMutationFailureUx.ts",
+    "apps/web/src/services/share.service.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7c/445d71c93d/0/metadata.json",
+      "transcript": "/7c/445d71c93d/0/full.jsonl",
+      "content_hash": "/7c/445d71c93d/0/content_hash.txt",
+      "prompt": "/7c/445d71c93d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 38939,
+    "cache_creation_tokens": 502477,
+    "cache_read_tokens": 33356382,
+    "output_tokens": 124294,
+    "api_call_count": 168
+  }
+}

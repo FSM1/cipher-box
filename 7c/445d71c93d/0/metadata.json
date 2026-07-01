@@ -1,0 +1,179 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "7c445d71c93d",
+  "session_id": "85a26432-c908-42fd-b330-ccdbcff237de",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-01T23:55:21.033655Z",
+  "branch": "feat/web-integration-rotation-ux-and-durable-client-state",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "apps/web/src/hooks/useMutationFailureUx.ts",
+    "apps/web/src/services/share.service.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "4e3979c92958",
+  "token_usage": {
+    "input_tokens": 38939,
+    "cache_creation_tokens": 502477,
+    "cache_read_tokens": 33356382,
+    "output_tokens": 124294,
+    "api_call_count": 168
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-ship-phase-2026-07-01T22:58:47.220411Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "f0c28e598242",
+      "timestamp": "2026-07-01T22:58:47.220411Z",
+      "native": {
+        "command": "/ship-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/ship-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01PgzfX1YfmnUp1rK8BmUbQA",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-secure-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "4e3979c92958",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 103,
+        "end": 104,
+        "entry_ids": [
+          "ce8a41ef-337e-48f8-a250-f1e557563f5e"
+        ],
+        "tool_use_id": "toolu_01PgzfX1YfmnUp1rK8BmUbQA"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01PgzfX1YfmnUp1rK8BmUbQA"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-secure-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_0151E7BZVs1WRQYiBYs3FgmT",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-validate-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "4e3979c92958",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 159,
+        "end": 160,
+        "entry_ids": [
+          "8054fe6b-99cb-464b-8eec-c76dd0e56a05"
+        ],
+        "tool_use_id": "toolu_0151E7BZVs1WRQYiBYs3FgmT"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_0151E7BZVs1WRQYiBYs3FgmT"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-validate-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Autonomously run the full post-execute-phase ship pipeline for GSD phase 68 (verify → secure → validate → simplify → SDK E2E gate → CodeRabbit review → ship → resolve PR reviews), triaging every finding without stopping to ask the user.",
+    "outcome": "Completed verify (accepted existing PASS), secure and validate audits, a simplify pass that found and fixed a real zeroization-order bug plus removed dead code, got the SDK E2E gate fully green after diagnosing two environment issues, and applied/committed all in-scope fixes from a local CodeRabbit review across SDK, API, and web services; the transcript ends before the PR was actually opened (steps 8-11 not reached).",
+    "learnings": {
+      "repo": [
+        "apps/api's TEE_WORKER_URL config defaults to :3001 locally, which is actually the mock-ipns-routing service, not the real tee-worker (on :3002) — causes silent misrouting during SDK E2E runs, not a code regression",
+        "The local tee-worker container can be running a stale pre-phase contract; must be rebuilt from current source before trusting SDK E2E TEE-path results",
+        "Conventional-commit paren rule only forbids parens in the description part — scope parens like `feat(sdk):` are valid and don't need rewording",
+        "apps/web's vitest suite (including ipns.service.test.ts) is not wired into CI at all — a pre-existing broken test there won't be caught by CI and is not a regression from any given phase",
+        "markdownlint excludes .planning/ on commit but prettier still runs against it"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "enumerateMoveDescendants zeroed a parent readKey before the children loop unsealed with it, misclassifying every depth-2+ move descendant as unreadable — real bug, fixed with a red-green-verified regression test (client-move-enumerate.test.ts)"
+        },
+        {
+          "path": "apps/api/src/shares/shares.service.ts",
+          "finding": "updateGrant lacked a monotonic guard on rootGeneration, allowing a stale/lower generation value to overwrite a newer one — added guard plus a new spec case since no service-level updateGrant tests existed"
+        },
+        {
+          "path": "apps/web/src/services/share.service.ts",
+          "finding": "Contained dead functions (including ensureFreshSentShares-related code) orphaned by the rotation cutover; removed after confirming zero external references"
+        },
+        {
+          "path": "apps/web/src/hooks/useMutationFailureUx.ts",
+          "finding": "Contained an unused exported constant/dead code path removed during the simplify pass"
+        },
+        {
+          "path": "apps/web/src/services/owner-reconcile.service.ts",
+          "finding": "Multiple CodeRabbit findings applied here — raw error logs replaced with structured logging in several call sites"
+        }
+      ],
+      "workflow": [
+        "Running independent long steps (security audit, simplify agent, SDK E2E client-chain build) as concurrent background jobs and polling for completion kept the pipeline moving without idle waiting",
+        "When a suite fails, diagnose environment vs. code cause before treating it as a regression — here two 'failures' were stale-container and misconfigured-URL issues, not bugs",
+        "For a claimed bug fix, prove the regression test actually catches the bug by temporarily reverting the fix and confirming the test goes red, then re-applying and confirming green",
+        "CodeRabbit re-reviews the phase's own fix commits and can surface new findings on them — expect and triage a second round"
+      ]
+    },
+    "friction": [
+      "SDK E2E gate failed on first run for environment reasons (stale tee-worker container running a pre-Phase-67 contract, and TEE_WORKER_URL defaulting to the wrong port/service) — required substantial log-diving and container rebuilding before getting a clean green run",
+      "A web vitest failure (ipns.service.test.ts) took a long diagnostic detour — diffing against main, swapping in main's version of the file, tracing import chains — before concluding it was pre-existing and not covered by CI at all",
+      "No existing service-level test coverage for shares.service.ts updateGrant, requiring a new test to be authored from scratch to cover the monotonic-guard fix"
+    ],
+    "open_items": [
+      "PR not yet opened — steps 8 (ship), 9 (resolve PR reviews), 10 (confirm green), and 11 (extract learnings) were not reached in this transcript",
+      "Todo: web vitest suite is absent from CI and ipns.service.test.ts is broken pre-existing (2026-07-02-web-vitest-not-in-ci-and-ipns-service-test-broken.md)",
+      "Todo: WRITE-03 refresh-access path has no live trigger (2026-07-02-write03-refresh-access-path-has-no-live-trigger.md)",
+      "Todo: retire dead SDK share scaffolding (2026-07-02-retire-dead-sdk-share-scaffolding.md)",
+      "Todo: rotation hardening followups captured from PR review findings (2026-07-02-rotation-hardening-followups-from-pr-review.md)"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-01T23:54:41.361918Z",
+    "agent_lines": 21,
+    "agent_removed": 4,
+    "human_added": 110,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 131,
+    "total_lines_changed": 169,
+    "agent_percentage": 14.792899408284024,
+    "metric_version": 2
+  }
+}

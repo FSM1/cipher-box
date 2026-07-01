@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bh1836001</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/d2e29299-7c93-4d80-935c-636a76495b24/tasks/bh1836001.output</output-file>
+<status>completed</status>
+<summary>Background command "Run CodeRabbit CLI review of committed branch changes" completed (exit code 0)</summary>
+</task-notification>
