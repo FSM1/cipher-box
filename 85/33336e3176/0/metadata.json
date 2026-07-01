@@ -1,0 +1,146 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "8533336e3176",
+  "session_id": "4ac302c1-20dd-43cd-ab2b-3e9d7a7c0606",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-01T22:45:15.186221Z",
+  "branch": "feat/web-client-runtime-integration",
+  "checkpoints_count": 2,
+  "save_step_count": 1,
+  "files_touched": [
+    ".planning/ROADMAP.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "2b8d7bcf9a75",
+  "token_usage": {
+    "input_tokens": 22142,
+    "cache_creation_tokens": 908055,
+    "cache_read_tokens": 31037776,
+    "output_tokens": 216408,
+    "api_call_count": 108
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_0171KjMabYcFbM8uXLisF4PG",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "2b8d7bcf9a75",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 162,
+        "end": 163,
+        "entry_ids": [
+          "ea1325f8-8db8-4cfa-bc29-bd77d5925d25"
+        ],
+        "tool_use_id": "toolu_0171KjMabYcFbM8uXLisF4PG"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_0171KjMabYcFbM8uXLisF4PG"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 11
+  },
+  "summary": {
+    "intent": "Run the GSD gap-closure workflow to plan and execute fixes for Phase 68's two ROT-07 verification gaps, then, after the user demanded a full local web-e2e run (not just the rotation suite), diagnose why it fails and scope the follow-up work needed to make it pass.",
+    "outcome": "Phase 68 gap closure (plans 68-11, 68-12) was planned, verified, executed, and re-verified clean (14/14 must-haves, ROT-07 live). The full web-e2e suite was run locally and failed structurally (6/208 passed) because the v2.0 web app's read/write runtime is stubbed since Phase 62/63/65 (46 'not implemented' stubs); a new Phase 68.1 was scoped, researched, and planned (13 plans across 6 waves) to wire the web app to the existing sdk-core read/write chain, with the plan-checker finding one blocker (kind-cache never wired) currently being revised before execution.",
+    "learnings": {
+      "repo": [
+        "GSD gap-closure mode (`--gaps`) reads VERIFICATION.md 'failed' truths, skips research, and appends new plan numbers (e.g. 68-11+) without touching existing plans.",
+        "GSD's commit-helper tool has a known false-negative: it can report `commit_failed` while the commit actually lands — always verify with `git log`, never blindly retry.",
+        "For single-plan sequential waves that share a modified file (e.g. both touching client.ts), skip worktree isolation and run executors sequentially on the main branch — avoids merge risk and matches prior user feedback that worktrees give no benefit there.",
+        "GSD's `close_phase_todos` step will retire ALL todos tagged `resolves_phase: N` on phase completion, even ones NOT actually resolved by a gap-closure run — must inspect each todo's frontmatter/content before letting it auto-close.",
+        "`gsd-tools phase insert <N>` / `next-decimal <N>` cleanly inserts a decimal phase (e.g. 68.1) between existing phases without renumbering later phases — safer than hand-editing ROADMAP.md.",
+        "Playwright's `webServer` config auto-starts the mock-IPNS-routing (:3001), API dev (:3000), and web dev (:5173) servers itself; external infra (Postgres :5432, Kubo :5001/8080, Redis) must already be running, and `tests/web-e2e/.env`'s `BASE_URL` must point to localhost or Playwright skips starting servers entirely.",
+        "A running `nest start --watch` API process respawns instantly on the port it was watching — env vars are loaded at process boot and not refreshed on source-only file changes, so a long-running watch process can hold stale config even though on-disk .env files are correct.",
+        "SC#5 doctrine in this repo: zero unit tests under `apps/web/src/**/*.spec.ts` — web behavior must be proven via Playwright web-e2e specs, with SDK-level logic covered by Vitest.",
+        "The v2.0 milestone was built plumbing-first: entire behavioral paths (login/root-init, navigation, file preview/download/streaming, shared-folder read, most write ops) are deliberately stubbed with `not implemented — phase 63` / `phase 65` throws until their owning integration phase lands — this is expected architecture, not a bug, per PROJECT.md's stated approach (D-01).",
+        "`SealedChildRef` (the v3 read-chain schema) deliberately has no `kind` field, so the web app cannot distinguish file vs. folder children without either a network hop per child or a load-time kind cache — a real architecture decision, not an oversight.",
+        "Owned `FolderState` (packages/sdk/src/types.ts) lacks the `writeKey`/`publishedNode` fields that `SharedFolderState` carries — owned subfolder/file write-chain support requires extending the owned model to mirror the shared write-body model, since v3 dropped `SealedChildRef.ipnsPrivateKeyEncrypted`."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 210,
+          "finding": "New-user login throws 'not implemented — phase 63' before publishing the root Node, blocking the entire login→vault flow; introduced by commit b2dba554a (Phase 62, 'unified Node codec and two-key vault v3 blob'), predates Phase 68."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 478,
+          "finding": "`ensureFolderLoaded` is dead code (throws 'not implemented — phase 63'); the real live pre-mutation resolve gate is `reconcileFolderSequence`, called before every rename/delete/deleteToBin/move — this is where the fail-closed `enforceResolved` gate was actually wired (plan 68-11)."
+        },
+        {
+          "path": "packages/sdk-core/src/rotation/engine.ts",
+          "line": 990,
+          "finding": "`rotateReadFromNode` previously returned void, discarding the root's rotated {readKey, generation, sequenceNumber}; its only production caller is `performScopeExitRotation` at client.ts:569, so changing the return type to `RotateReadResult | undefined` was backward-compatible (plan 68-12) and let folderTree self-heal after scope-exit rotation."
+        },
+        {
+          "path": "packages/sdk/src/share/shared-write.ts",
+          "line": 288,
+          "finding": "Canonical, fully-implemented write-chain reference (createSharedSubfolder, uploadToSharedFolder, updateSharedFile, moveInSharedFolder, deleteFromSharedFolder, updateSharePermission) — the template the Phase 68.1 planner copied from to build the missing owned-file write-chain and wire shared-write client/web handlers."
+        }
+      ],
+      "workflow": [
+        "When re-verifying a phase after gap closure, distinguish 'proven by live test execution' from 'proven by spec authored + registered' — Playwright specs passing `--list` and typecheck is not the same as the suite actually running green; state this distinction explicitly rather than letting a passed verification imply full runtime coverage.",
+        "Before declaring a stale process/port a blocker, check whether a dev watcher (nest --watch, vite, etc.) is already serving current source — reusing a live, verified-current dev server is lower-risk than killing someone's watch setup.",
+        "When a big scope gap is discovered mid-task (e.g. web-e2e failing due to unrelated stubbed runtime), pause to research/inventory before proposing a new phase — dispatch parallel inventory agents (read-chain vs write-chain) to establish whether the gap is 'wire to existing primitives' (tractable) vs 'build from scratch' before committing to a plan size."
+      ]
+    },
+    "friction": [
+      "Config conflict between `auto_advance: true` and `mode: interactive` required an explicit user confirmation before launching the execute-phase run, since the plans touched security-sensitive fail-closed crypto code.",
+      "GSD's commit-helper reported a false `commit_failed` twice during this session, requiring manual `git log` verification each time to confirm the commit actually landed.",
+      "Docker reported the mock-ipns-routing container as 'unhealthy' even though it was actually serving correctly (records:20) — the health flag was misleading.",
+      "A stale API process (18h old, pre-dating today's Phase 68 API route) occupied :3000; killing it caused a `nest --watch` parent to instantly respawn a new process on the same port, requiring extra investigation to confirm it was current before reuse.",
+      "The full web-e2e suite run took ~22.7 minutes and returned exit code 0 from the wrapper script despite the underlying Playwright run failing (`EXIT=1`) — the wrapper's own final echo masked the real failure, requiring a second read of the log to catch it.",
+      "Discovered mid-session that making the full web-e2e suite pass is not a Phase 68 gap at all but requires an entirely new phase of work (46 stubbed runtime call sites across read + write chains) — a scope surprise that expanded the task substantially beyond the original gap-closure request.",
+      "Plan-checker caught a blocker in the newly-planned Phase 68.1 (13 plans): the D-02 kind-cache (`resolveKinds`) was defined but never actually wired into any folder-load/navigation path, meaning every file would render as a folder — required a revision iteration before execution can proceed."
+    ],
+    "open_items": [
+      "Phase 68.1 plan revision (iteration 1/3) is in progress to add the missing `resolveKinds` wiring task before the plan-checker can re-verify and execution can begin.",
+      "4 todos tagged `resolves_phase: 68` were deliberately NOT auto-closed because they were not resolved by the Phase 68 gap closure — they need user retriage/retagging to a rotation-hardening or write-plane phase (rotation-concurrent-add-merge-downgrades-rotated-child-readkey, rotation-fresh-record-resume-and-sc4-double-bump, rotation-coderabbit-followups-deferred, phase68-shared-write-context-publishednode-wiring).",
+      "`.planning/PROJECT.md`'s 'Current State' narrative is ~5 phases stale (still references 'Next: Phase 63') — left untouched as pre-existing milestone-level drift, not addressed this session.",
+      "The full local web-e2e suite still does not pass — that is now the explicit exit gate for the newly created Phase 68.1, not yet executed.",
+      "Phase 68.1's two architecture decisions (D-02 kind discrimination via load-time cache, D-03 extending owned FolderState with a write-body) were resolved by the planner with recommendations but still await explicit user review/approval before execution proceeds."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-01T22:44:18.608145Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 147,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 147,
+    "total_lines_changed": 150,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
