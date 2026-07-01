@@ -1,0 +1,79 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "dca1506d8ca7",
+  "session_id": "b29c555a-a6b7-43a2-8951-f2fd3da239c8",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-01T18:37:50.433278Z",
+  "branch": "feat/web-integration-rotation-ux-and-durable-client-state",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "942c5d13b9eb",
+  "token_usage": {
+    "input_tokens": 19263,
+    "cache_creation_tokens": 596123,
+    "cache_read_tokens": 16889993,
+    "output_tokens": 138353,
+    "api_call_count": 78
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Execute all 10 plans of Phase 68 (rotation UX and durable client state) using wave-based parallel execution with isolated git worktrees, then verify the phase goal (ROT-07) was actually achieved.",
+    "outcome": "All 4 waves (10 plans) executed successfully in parallel worktrees, merged cleanly, typecheck/test gates passed at each wave boundary, but the goal-backward verifier returned gaps_found (12/14 must-haves) — two real integration gaps (rotation context never threaded into live resolve calls, folderTree not updated post-rotation) block marking Phase 68 complete, so the orchestrator corrected the prematurely-flipped ROADMAP checkbox and routed to gap closure instead of completion.",
+    "learnings": {
+      "repo": [
+        "`pnpm test` = `pnpm --parallel -r run test` runs integration tests needing a live API and web-e2e needing a running stack — must never be used as the post-merge gate; use `pnpm typecheck` (builds packages in dependency order then typechecks) plus scoped Vitest suites instead",
+        "Worktree-based wave execution: Agent tool `isolation=\"worktree\"` forks from HEAD, executors commit + write SUMMARY.md inside the worktree and return `<worktree_metadata>`; orchestrator records each in a manifest and `worktree.cleanup-wave` merges/removes them",
+        "Dispatch worktree agents one Agent-tool call per message (not batched in parallel) to avoid `.git/config.lock` races during `git worktree add`",
+        "Undeclared additive edits to shared barrel files (e.g. `packages/sdk/src/index.ts`) by multiple parallel plans aren't caught by pre-dispatch `files_modified` overlap checks but usually merge cleanly via git 3-way merge if hunks don't overlap",
+        "git commit with signing (1Password-SSH) can appear to hang/timeout in background/subagent context past ~2min even though the commit actually lands — verify via `git log` before retrying rather than assuming failure",
+        "`config.js`/gate config: `execute:wave:post` only wires schema-drift (blocking) and codebase-drift (advisory) checks in this repo, not a UI safety gate, despite `ui_safety_gate: true` capability being configured elsewhere",
+        "Cross-package dist staleness is a known recurring gotcha in fresh worktrees — `pnpm --filter <pkg> exec tsc --noEmit` fails standalone until deps are built; root `pnpm typecheck` handles it correctly",
+        "gsd-verifier independently re-verifies against the actual merged codebase (grepping every call site, running targeted tests live) rather than trusting subagent SUMMARY claims — this caught the ROT-07 reachability gap that 3 separate executors had each individually flagged but none blocked on"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "ensureFolderLoaded calls sdkCore.resolveIpnsRecord directly, bypassing the enforceResolved anti-rollback gate entirely — a live rollback vulnerability path found by the verifier, not any executor"
+        },
+        {
+          "path": "apps/web/src/services/ipns.service.ts",
+          "finding": "resolveIpnsRecord's rotation context param (nodeId/generation/versionFloor/rootGeneration) was made optional in 68-06 to preserve backward-compat with 3 non-rotation callers, but as of Wave 4 zero live call sites in apps/web actually pass a rotation context — the fail-closed gate is unreachable from any UI action"
+        }
+      ],
+      "workflow": null
+    },
+    "friction": [
+      "68-08 and 68-09 both made undeclared additive edits to `packages/sdk/src/index.ts` in the same wave, requiring manual diff inspection to predict merge safety before running cleanup-wave (non-overlapping hunks made it safe but this wasn't guaranteed by the overlap-check tooling)",
+      "git commit signing timed out (false negative) during Wave 2 tracking commit, requiring manual verification that the commit actually landed before deciding not to retry",
+      "typecheck gate output was truncated mid-run on first Wave 1 attempt, losing the exit code and requiring a re-run",
+      "Three separate executors (68-06, 68-08, 68-09) each independently flagged pieces of the same underlying integration gap (rotation context not live-wired) but none treated it as blocking — only the dedicated goal-backward verifier caught the full picture and prevented premature phase completion",
+      "ROADMAP plan-progress tracking got updated to 10/10 complete during wave execution before goal verification ran, requiring a manual correction/edit after gaps_found came back"
+    ],
+    "open_items": [
+      "Blocking gap: rotation context never threaded into any live apps/web call site (and client.ts's ensureFolderLoaded bypasses the gate directly) — fail-closed anti-rollback check is built/tested but not reachable in production, needs a follow-up plan",
+      "Should-fix gap: folderTree in-memory cache not updated after performScopeExitRotation — next same-session mutation on that folder hits ReconcileStaleError until a full page reload",
+      "Deferred cross-phase gap: CannotWriteUntilRefetchError has no live producer (SDK publishNodeFn never returns tombstoned, API's 410 never translated) — pre-existing Phase 65/66 WRITE-03/WRITE-04 wiring gap, not Phase 68's responsibility",
+      "Pre-existing broken web unit test `ipns.service.test.ts` fails at import time on both base and HEAD (confirmed unrelated to Phase 68 via git-stash A/B) — flagged but left untouched, needs separate triage",
+      "Recommended `/gsd-code-review` for this crypto-touching phase was noted as advisable but no active code-review step hook fired automatically — deep review still needs to be run manually",
+      "Session ended mid-completion-sequence: verification artifact + corrected tracking commit was in flight when transcript ends; gap-closure plans for the 2 blocking/should-fix items still need to be authored and executed"
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 177,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/phases/68-web-integration-rotation-ux-and-durable-client-state/68-VERIFICATION.md": 176
+      }
+    }
+  ]
+}
