@@ -175,19 +175,13 @@ describe('TeeService', () => {
         encryptedIpnsKey: 'base64-encrypted-key-1',
         keyEpoch: 1,
         ipnsName: 'k51qzi5uqu5abc',
-        latestCid: 'bafybeiabc',
-        sequenceNumber: '10',
-        currentEpoch: 1,
-        previousEpoch: null,
+        signedRecord: 'base64-signed-record-input-1',
       },
       {
         encryptedIpnsKey: 'base64-encrypted-key-2',
         keyEpoch: 1,
         ipnsName: 'k51qzi5uqu5def',
-        latestCid: 'bafybeighi',
-        sequenceNumber: '5',
-        currentEpoch: 1,
-        previousEpoch: null,
+        signedRecord: 'base64-signed-record-input-2',
       },
     ];
 

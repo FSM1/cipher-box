@@ -417,16 +417,10 @@ export class IpnsService {
       // Auto-enroll for TEE republishing when encrypted key is provided.
       // Use existing.userId (the IpnsRecord owner) for enrollment, not the
       // authenticated user — a write-share recipient publishes to the owner's record.
+      // enrollFolder is scheduling-only (2 args): signing columns live in ipns_records.
       if (shouldUpdateKey) {
         this.republishService
-          .enrollFolder(
-            existing.userId,
-            ipnsName,
-            Buffer.from(encryptedIpnsPrivateKey!, 'hex'),
-            keyEpoch!,
-            metadataCid,
-            newSeq
-          )
+          .enrollFolder(existing.userId, ipnsName)
           .catch((err) =>
             this.logger.warn(
               `Failed to enroll ${ipnsName} for republishing: ${err instanceof Error ? err.message : String(err)}`
@@ -458,17 +452,11 @@ export class IpnsService {
 
     const saved = await this.ipnsRecordRepository.save(folder);
 
-    // Auto-enroll for TEE republishing when encrypted key is provided
+    // Auto-enroll for TEE republishing when encrypted key is provided.
+    // enrollFolder is scheduling-only (2 args): signing columns live in ipns_records.
     if (encryptedIpnsPrivateKey && keyEpoch !== undefined) {
       this.republishService
-        .enrollFolder(
-          userId,
-          ipnsName,
-          Buffer.from(encryptedIpnsPrivateKey, 'hex'),
-          keyEpoch,
-          metadataCid,
-          saved.sequenceNumber
-        )
+        .enrollFolder(userId, ipnsName)
         .catch((err) =>
           this.logger.warn(
             `Failed to enroll ${ipnsName} for republishing: ${err instanceof Error ? err.message : String(err)}`
