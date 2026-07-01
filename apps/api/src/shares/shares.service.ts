@@ -249,4 +249,31 @@ export class SharesService {
     share.itemNameEncrypted = Buffer.from(itemNameEncrypted, 'hex');
     await this.shareRepo.save(share);
   }
+
+  /**
+   * Persist a rotated readDescriptorRef and rootGeneration on an existing share.
+   * Only the sharer (owner) can update it — the owner drives grant re-mint on
+   * key rotation (D-10/D-11, 68-07 owner reconcile). The server never
+   * re-encrypts — it persists the client-supplied ciphertext as-is.
+   */
+  async updateGrant(
+    shareId: string,
+    sharerId: string,
+    readDescriptorRef: string,
+    rootGeneration: string
+  ): Promise<void> {
+    const share = await this.shareRepo.findOne({ where: { id: shareId } });
+
+    if (!share) {
+      throw new NotFoundException('Share not found');
+    }
+
+    if (share.sharerId !== sharerId) {
+      throw new ForbiddenException('Only the sharer can update the grant');
+    }
+
+    share.readDescriptorRef = Buffer.from(readDescriptorRef, 'hex');
+    share.rootGeneration = rootGeneration;
+    await this.shareRepo.save(share);
+  }
 }
