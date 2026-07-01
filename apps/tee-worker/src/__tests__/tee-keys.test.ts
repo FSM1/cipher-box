@@ -132,5 +132,19 @@ describe('tee-keys', () => {
       process.env.EPOCH_ZERO_TIMESTAMP_MS = String(Date.now() + FOUR_WEEKS_MS);
       expect(getInternalCurrentEpoch()).toBe(1);
     });
+
+    it('returns MIN_EPOCH (1) for a malformed non-numeric anchor (never NaN)', () => {
+      // parseInt('not-a-number') → NaN; the guard must treat it like an unset
+      // anchor and never propagate a NaN epoch into the stale-key check.
+      process.env.EPOCH_ZERO_TIMESTAMP_MS = 'not-a-number';
+      const epoch = getInternalCurrentEpoch();
+      expect(epoch).toBe(1);
+      expect(Number.isNaN(epoch)).toBe(false);
+    });
+
+    it('returns MIN_EPOCH (1) for a non-positive anchor', () => {
+      process.env.EPOCH_ZERO_TIMESTAMP_MS = '-1000';
+      expect(getInternalCurrentEpoch()).toBe(1);
+    });
   });
 });

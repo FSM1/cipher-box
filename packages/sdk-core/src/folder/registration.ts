@@ -99,9 +99,9 @@ export async function createSubfolder(params: {
         'createSubfolder: teeKeys.currentPublicKey is missing or empty — refusing to publish un-enrolled subfolder'
       );
     }
-    if (!Number.isFinite(currentEpoch)) {
+    if (!Number.isInteger(currentEpoch) || currentEpoch < 1) {
       throw new Error(
-        'createSubfolder: teeKeys.currentEpoch is not a finite number — refusing to publish un-enrolled subfolder'
+        'createSubfolder: teeKeys.currentEpoch must be a positive integer (>= 1) — refusing to publish un-enrolled subfolder'
       );
     }
     // ECIES-wrap the generated IPNS private key under the TEE public key.

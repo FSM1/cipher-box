@@ -39,8 +39,11 @@ export const EPOCH_DURATION_MS = 4 * 7 * 24 * 60 * 60 * 1000;
  */
 export function getInternalCurrentEpoch(): number {
   const anchor = parseInt(process.env.EPOCH_ZERO_TIMESTAMP_MS ?? '0', 10);
-  if (anchor === 0) {
-    return MIN_EPOCH; // Safe fallback: no anchor configured → epoch 1
+  // Treat unset (0), malformed (NaN), and non-positive anchors identically: fall
+  // back to MIN_EPOCH before any Date.now() math so a bad env var can never
+  // propagate a NaN epoch into the stale-key guard.
+  if (!Number.isFinite(anchor) || anchor <= 0) {
+    return MIN_EPOCH; // Safe fallback: no valid anchor configured → epoch 1
   }
   return Math.max(MIN_EPOCH, Math.floor((Date.now() - anchor) / EPOCH_DURATION_MS) + 1);
 }
