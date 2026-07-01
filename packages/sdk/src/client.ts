@@ -25,8 +25,8 @@ import {
 } from '@cipherbox/api-client';
 import { clearBytes, unwrapKey, hexToBytes } from '@cipherbox/crypto';
 import pLimit from 'p-limit';
-import type { BinEntry, SealedChildRef, PublishedNode } from '@cipherbox/core';
-import { sealChildReadKey, unsealChildReadKey } from '@cipherbox/core';
+import type { BinEntry, SealedChildRef, PublishedNode, Node as CoreNode } from '@cipherbox/core';
+import { sealChildReadKey, unsealChildReadKey, unsealNode } from '@cipherbox/core';
 import type {
   CipherBoxClientConfig,
   FolderState,
@@ -582,6 +582,115 @@ export class CipherBoxClient {
   }
 
   /**
+   * Best-effort, non-blocking BFS enumeration of a moved folder's descendants
+   * (D-12), distinguishing readable descendants (child readKey successfully
+   * recovered) from unreadable ones (unseal failed -- key mismatch,
+   * generation drift, or a corrupted seal). A moved FILE has no descendants
+   * and is a no-op. Failures on a single node do not abort the walk: an
+   * unreadable node is recorded and NOT expanded further (its own children
+   * cannot be discovered without its key).
+   *
+   * This is read-only observability -- it does not re-key or mutate
+   * anything. It exists so a move does not silently drop or mis-rotate
+   * descendants it cannot read; the actual re-rotation of an unreadable
+   * subtree remains the rotation engine's job, not this helper.
+   *
+   * `rootReadKey` MUST be a copy the caller does not otherwise mutate --
+   * this method zeroes every key it itself derives while walking (D-09
+   * terminal-owner rule for its own minted keys), but never zeroes
+   * `rootReadKey` (caller-owned).
+   */
+  private async enumerateMoveDescendants(
+    rootIpnsName: string,
+    rootReadKey: Uint8Array,
+    rootKind: PublishedNode['kind']
+  ): Promise<{ readableIpnsNames: string[]; unreadableIpnsNames: string[] }> {
+    const readableIpnsNames: string[] = [];
+    const unreadableIpnsNames: string[] = [];
+
+    if (rootKind !== 'folder' && rootKind !== 'root') {
+      return { readableIpnsNames, unreadableIpnsNames };
+    }
+
+    const visited = new Set<string>([rootIpnsName]);
+    const queue: Array<{ ipnsName: string; readKey: Uint8Array; isRoot: boolean }> = [
+      { ipnsName: rootIpnsName, readKey: rootReadKey, isRoot: true },
+    ];
+    // Bound the walk so a pathological/corrupted tree can't hang the move.
+    const MAX_NODES = 2000;
+    let processed = 0;
+
+    while (queue.length > 0 && processed < MAX_NODES) {
+      const current = queue.shift();
+      if (!current) break;
+      processed++;
+
+      let node: CoreNode;
+      try {
+        const record = await sdkCore.resolveIpnsRecord(current.ipnsName, this.ctx);
+        if (!record) continue;
+        const raw = await sdkCore.fetchFromIpfs(this.ctx, record.cid);
+        const published = JSON.parse(new TextDecoder().decode(raw)) as PublishedNode;
+        node = await unsealNode(published, current.readKey);
+      } catch {
+        continue;
+      } finally {
+        if (!current.isRoot) current.readKey.fill(0);
+      }
+
+      for (const child of node.children ?? []) {
+        if (visited.has(child.ipnsName)) continue;
+        visited.add(child.ipnsName);
+
+        try {
+          const childRecord = await sdkCore.resolveIpnsRecord(child.ipnsName, this.ctx);
+          if (!childRecord) throw new Error('child IPNS record not found');
+          const rawChild = await sdkCore.fetchFromIpfs(this.ctx, childRecord.cid);
+          const childPublished = JSON.parse(new TextDecoder().decode(rawChild)) as PublishedNode;
+          const childReadKey = await unsealChildReadKey(
+            child.readKeySealed,
+            current.readKey,
+            childPublished.id,
+            childPublished.kind,
+            child.generation
+          );
+          readableIpnsNames.push(child.ipnsName);
+          queue.push({ ipnsName: child.ipnsName, readKey: childReadKey, isRoot: false });
+        } catch {
+          unreadableIpnsNames.push(child.ipnsName);
+        }
+      }
+    }
+
+    return { readableIpnsNames, unreadableIpnsNames };
+  }
+
+  /**
+   * Fire-and-forget wrapper around {@link enumerateMoveDescendants}. Never
+   * blocks the caller (mirrors `fireAndForgetUnenroll`'s philosophy) and
+   * never throws -- failures are logged, matching the non-critical warning
+   * pattern used elsewhere in this file.
+   */
+  private enumerateMoveDescendantsFireAndForget(
+    rootIpnsName: string,
+    rootReadKey: Uint8Array,
+    rootKind: PublishedNode['kind']
+  ): void {
+    if (rootKind !== 'folder' && rootKind !== 'root') return;
+    this.enumerateMoveDescendants(rootIpnsName, rootReadKey, rootKind)
+      .then(({ unreadableIpnsNames }) => {
+        if (unreadableIpnsNames.length > 0) {
+          console.warn(
+            `[CipherBox] moveItem: ${unreadableIpnsNames.length} descendant(s) of ${rootIpnsName} ` +
+              `could not be read after move (D-12):`,
+            unreadableIpnsNames
+          );
+        }
+      })
+      .catch((err) => console.warn('[CipherBox] moveItem: descendant enumeration failed:', err));
+  }
+
+  /**
    * Create a new subfolder inside an existing folder.
    *
    * Generates IPNS keypair and folder key, wraps with user's public key,
@@ -762,11 +871,50 @@ export class CipherBoxClient {
           childPub.kind,
           destEntry.generation // generation unchanged — no content re-encryption, no bump
         );
+
+        // D-12: best-effort, non-blocking enumeration of the moved subtree's
+        // descendants so an unreadable one is surfaced (logged) instead of
+        // silently dropped or mis-rotated. Never blocks the move itself. Pass
+        // a defensive copy — the `finally` below zeroes the ORIGINAL
+        // `childReadKey` before this fire-and-forget walk necessarily finishes.
+        this.enumerateMoveDescendantsFireAndForget(
+          movedRef.ipnsName,
+          new Uint8Array(childReadKey),
+          childPub.kind
+        );
       } finally {
         // Zero the recovered child readKey on every exit path — engine-derived,
         // terminal-owned (D-09).
         childReadKey.fill(0);
       }
+
+      // D-12: publish DESTINATION before SOURCE (dest-before-source) so a
+      // crash between publishes never orphans the moved node out of both
+      // folders — folds the Phase-64 OUT-tagged
+      // sdk-client-move-publish-durability work into this cutover.
+      const { newSequenceNumber: dstSeq, publishedChildren: dstChildren } =
+        await sdkCore.updateFolderMetadataAndPublish({
+          children: updatedDest,
+          baseChildren: baseDestChildren,
+          readKey: destFolder.folderKey,
+          ipnsPrivateKey: destFolder.ipnsKeypair.privateKey,
+          ipnsName: destIpnsName,
+          sequenceNumber: destFolder.sequenceNumber,
+          ctx: this.ctx,
+          nodeId: destFolder.nodeId,
+          nodeGeneration: destFolder.nodeGeneration,
+        });
+
+      destFolder.children = dstChildren;
+      destFolder.sequenceNumber = dstSeq;
+      this.folderTree.set(destIpnsName, destFolder);
+      this.emitter.emit({
+        type: 'folder:updated',
+        folderId: destIpnsName,
+        ipnsName: destIpnsName,
+        children: dstChildren,
+        sequenceNumber: dstSeq,
+      });
 
       // Publish updated source folder
       const { newSequenceNumber: srcSeq, publishedChildren: srcChildren } =
@@ -791,31 +939,6 @@ export class CipherBoxClient {
         ipnsName: sourceIpnsName,
         children: srcChildren,
         sequenceNumber: srcSeq,
-      });
-
-      // Publish updated destination folder
-      const { newSequenceNumber: dstSeq, publishedChildren: dstChildren } =
-        await sdkCore.updateFolderMetadataAndPublish({
-          children: updatedDest,
-          baseChildren: baseDestChildren,
-          readKey: destFolder.folderKey,
-          ipnsPrivateKey: destFolder.ipnsKeypair.privateKey,
-          ipnsName: destIpnsName,
-          sequenceNumber: destFolder.sequenceNumber,
-          ctx: this.ctx,
-          nodeId: destFolder.nodeId,
-          nodeGeneration: destFolder.nodeGeneration,
-        });
-
-      destFolder.children = dstChildren;
-      destFolder.sequenceNumber = dstSeq;
-      this.folderTree.set(destIpnsName, destFolder);
-      this.emitter.emit({
-        type: 'folder:updated',
-        folderId: destIpnsName,
-        ipnsName: destIpnsName,
-        children: dstChildren,
-        sequenceNumber: dstSeq,
       });
 
       // Scope-exit rotation (SC#2/SC#4): the moved child exits the SOURCE
