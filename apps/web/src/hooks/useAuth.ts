@@ -298,20 +298,10 @@ export function useAuth() {
           rootIpnsKeypair: vaultState.rootIpnsKeypair,
           teeKeys: authState.teeKeys ?? undefined,
           pinningConfig,
-          shareCallbacks: {
-            getCoveringShares: async (folderIpnsName: string) => {
-              const { findCoveringShares } = await import('../services/share.service');
-              const folders = useFolderStore.getState().folders;
-              // Find the folder ID from IPNS name for ancestor traversal
-              const folderId =
-                Object.keys(folders).find((id) => folders[id].ipnsName === folderIpnsName) ?? null;
-              return findCoveringShares(folderIpnsName, folders, folderId);
-            },
-            addShareKeys: async (shareId, keys) => {
-              const { addShareKeys } = await import('../services/share.service');
-              await addShareKeys(shareId, keys);
-            },
-          },
+          // shareCallbacks (getCoveringShares/addShareKeys) removed: the SDK's
+          // per-recipient key fan-out is dead code (D-03 already skips it at
+          // upload time) and the web `addShareKeys` fan-out it called into is
+          // deleted (SC#2 / D-12) — descriptor refs replace it.
         });
 
         // Subscribe folder store to SDK events
