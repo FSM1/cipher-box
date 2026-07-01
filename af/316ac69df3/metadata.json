@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "af316ac69df3",
+  "strategy": "manual-commit",
+  "branch": "feat/tee-lease-renewer-contract-rewrite",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/tee-worker/src/services/ipns-signer.ts",
+    "tests/sdk-e2e/src/suites/tee-republish.test.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/af/316ac69df3/0/metadata.json",
+      "transcript": "/af/316ac69df3/0/full.jsonl",
+      "content_hash": "/af/316ac69df3/0/content_hash.txt",
+      "prompt": "/af/316ac69df3/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 16633,
+    "cache_creation_tokens": 157584,
+    "cache_read_tokens": 6172750,
+    "output_tokens": 65937,
+    "api_call_count": 52
+  }
+}
