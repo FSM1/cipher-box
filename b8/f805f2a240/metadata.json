@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "b8f805f2a240",
+  "strategy": "manual-commit",
+  "branch": "feat/web-client-runtime-integration",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/ROADMAP.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/b8/f805f2a240/0/metadata.json",
+      "transcript": "/b8/f805f2a240/0/full.jsonl",
+      "content_hash": "/b8/f805f2a240/0/content_hash.txt",
+      "prompt": "/b8/f805f2a240/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 17947,
+    "cache_creation_tokens": 892872,
+    "cache_read_tokens": 29154197,
+    "output_tokens": 210168,
+    "api_call_count": 104
+  }
+}
