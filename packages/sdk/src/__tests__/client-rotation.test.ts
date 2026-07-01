@@ -234,3 +234,205 @@ describe('CipherBoxClient — reconcile-before-publish (SC#3 / D-04, Task 1)', (
     expect(sdkCore.updateFolderMetadataAndPublish).not.toHaveBeenCalled();
   });
 });
+
+describe('CipherBoxClient — scope-exit rotation wiring (SC#2 / SC#4, Task 2)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockResolveMatching(1n); // reconcile always agrees in these tests
+  });
+
+  it('renameItem rotates exactly once when the folder has a covering grant', async () => {
+    const client = new CipherBoxClient(
+      createTestConfig({
+        rotationCallbacks: {
+          getActiveGrantRootIpnsNames: async () => new Set([FOLDER_IPNS]),
+          getLocalGrantRecord: () => null,
+          persistJob: vi.fn(),
+        },
+      })
+    );
+    setupFolder(client, FOLDER_IPNS);
+    vi.mocked(sdkCore.renameInFolder).mockReturnValue({
+      updatedChildren: [],
+      renamedChild: {} as never,
+    });
+    vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
+      cid: 'bafynew',
+      newSequenceNumber: 2n,
+      publishedChildren: [],
+    });
+    vi.mocked(sdkCore.rotateReadFromNode).mockResolvedValue(undefined);
+
+    await client.renameItem(FOLDER_IPNS, 'file1', 'new.txt');
+
+    expect(sdkCore.rotateReadFromNode).toHaveBeenCalledTimes(1);
+  });
+
+  it('renameItem performs zero rotation when uncovered (default no-op callbacks)', async () => {
+    const client = new CipherBoxClient(createTestConfig());
+    setupFolder(client, FOLDER_IPNS);
+    vi.mocked(sdkCore.renameInFolder).mockReturnValue({
+      updatedChildren: [],
+      renamedChild: {} as never,
+    });
+    vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
+      cid: 'bafynew',
+      newSequenceNumber: 2n,
+      publishedChildren: [],
+    });
+
+    await client.renameItem(FOLDER_IPNS, 'file1', 'new.txt');
+
+    expect(sdkCore.rotateReadFromNode).not.toHaveBeenCalled();
+  });
+
+  it('renameItem rotates when covered via the local grant record cross-check alone (T-63-17)', async () => {
+    const client = new CipherBoxClient(
+      createTestConfig({
+        rotationCallbacks: {
+          getActiveGrantRootIpnsNames: async () => new Set(), // relay omits it
+          getLocalGrantRecord: (ipnsName) =>
+            ipnsName === FOLDER_IPNS ? { rootIpnsName: FOLDER_IPNS } : null,
+          persistJob: vi.fn(),
+        },
+      })
+    );
+    setupFolder(client, FOLDER_IPNS);
+    vi.mocked(sdkCore.renameInFolder).mockReturnValue({
+      updatedChildren: [],
+      renamedChild: {} as never,
+    });
+    vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
+      cid: 'bafynew',
+      newSequenceNumber: 2n,
+      publishedChildren: [],
+    });
+    vi.mocked(sdkCore.rotateReadFromNode).mockResolvedValue(undefined);
+
+    await client.renameItem(FOLDER_IPNS, 'file1', 'new.txt');
+
+    expect(sdkCore.rotateReadFromNode).toHaveBeenCalledTimes(1);
+  });
+
+  it('deleteItem rotates exactly once when covered', async () => {
+    const client = new CipherBoxClient(
+      createTestConfig({
+        rotationCallbacks: {
+          getActiveGrantRootIpnsNames: async () => new Set([FOLDER_IPNS]),
+          getLocalGrantRecord: () => null,
+          persistJob: vi.fn(),
+        },
+      })
+    );
+    const child = setupFolder(client, FOLDER_IPNS);
+    vi.mocked(sdkCore.deleteFromFolder).mockReturnValue({
+      updatedChildren: [],
+      removedItem: child,
+    });
+    vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
+      cid: 'bafynew',
+      newSequenceNumber: 2n,
+      publishedChildren: [],
+    });
+    vi.mocked(sdkCore.rotateReadFromNode).mockResolvedValue(undefined);
+
+    await client.deleteItem(FOLDER_IPNS, 'file1');
+
+    expect(sdkCore.rotateReadFromNode).toHaveBeenCalledTimes(1);
+  });
+
+  it('deleteToBin performs zero rotation when uncovered', async () => {
+    const client = new CipherBoxClient(createTestConfig());
+    setupFolder(client, FOLDER_IPNS);
+    vi.mocked(binOps.loadBin).mockResolvedValue({
+      entries: [],
+      sequenceNumber: 0,
+      ipnsName: 'k51bin',
+    });
+    vi.mocked(binOps.addToBin).mockResolvedValue({
+      removedItem: {
+        name: 'x',
+        ipnsName: 'k51file',
+        generation: 0,
+        versionFloor: 0n,
+        readKeySealed: 'x',
+      },
+      updatedBinState: { entries: [], sequenceNumber: 1, ipnsName: 'k51bin' },
+    });
+
+    await client.deleteToBin(FOLDER_IPNS, 'file1', 'My Vault');
+
+    expect(sdkCore.rotateReadFromNode).not.toHaveBeenCalled();
+  });
+
+  it('moveItem rotates the SOURCE folder exactly once when the source has a covering grant', async () => {
+    const client = new CipherBoxClient(
+      createTestConfig({
+        rotationCallbacks: {
+          getActiveGrantRootIpnsNames: async () => new Set([SRC_IPNS]),
+          getLocalGrantRecord: () => null,
+          persistJob: vi.fn(),
+        },
+      })
+    );
+    setupFolder(client, SRC_IPNS);
+    setupFolder(client, DEST_IPNS);
+    vi.mocked(sdkCore.moveItem).mockReturnValue({
+      updatedSource: [],
+      updatedDest: [
+        { name: 'x', ipnsName: 'k51file', generation: 0, versionFloor: 0n, readKeySealed: 'x' },
+      ],
+      movedRef: {
+        name: 'x',
+        ipnsName: 'k51file',
+        generation: 0,
+        versionFloor: 0n,
+        readKeySealed: 'x',
+      },
+    });
+    vi.mocked(sdkCore.fetchFromIpfs).mockResolvedValue(
+      new TextEncoder().encode(JSON.stringify({ id: 'file1', kind: 'file' }))
+    );
+    vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
+      cid: 'bafynew',
+      newSequenceNumber: 2n,
+      publishedChildren: [],
+    });
+    vi.mocked(sdkCore.rotateReadFromNode).mockResolvedValue(undefined);
+
+    await client.moveItem(SRC_IPNS, DEST_IPNS, 'file1');
+
+    expect(sdkCore.rotateReadFromNode).toHaveBeenCalledTimes(1);
+  });
+
+  it('moveItem performs zero rotation when uncovered', async () => {
+    const client = new CipherBoxClient(createTestConfig());
+    setupFolder(client, SRC_IPNS);
+    setupFolder(client, DEST_IPNS);
+    vi.mocked(sdkCore.moveItem).mockReturnValue({
+      updatedSource: [],
+      updatedDest: [
+        { name: 'x', ipnsName: 'k51file', generation: 0, versionFloor: 0n, readKeySealed: 'x' },
+      ],
+      movedRef: {
+        name: 'x',
+        ipnsName: 'k51file',
+        generation: 0,
+        versionFloor: 0n,
+        readKeySealed: 'x',
+      },
+    });
+    vi.mocked(sdkCore.fetchFromIpfs).mockResolvedValue(
+      new TextEncoder().encode(JSON.stringify({ id: 'file1', kind: 'file' }))
+    );
+    vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
+      cid: 'bafynew',
+      newSequenceNumber: 2n,
+      publishedChildren: [],
+    });
+
+    await client.moveItem(SRC_IPNS, DEST_IPNS, 'file1');
+
+    expect(sdkCore.rotateReadFromNode).not.toHaveBeenCalled();
+  });
+});
