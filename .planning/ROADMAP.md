@@ -67,7 +67,7 @@
 - [x] **Phase 65: SDK Write-Chain, Bin Re-link, and Invite Claim** — Structured write-body, (c) full Ed25519 write-revocation, bin restore as pure re-link, invite claim re-wrap; delete `addShareKeys`/`reWrapForRecipients`/`encryptedChildKeys` (completed 2026-06-30)
 - [x] **Phase 66: API Schema Cutover, Publish Gate, and Tombstone** — Delete `share_keys`, slim `shares`, rename `folder_ipns` → `ipns_records`, drop `public_key`, atomic CAS publish, tombstone state, resolve case-split, server-side generation gate; run `pnpm api:generate` (completed 2026-06-30)
 - [x] **Phase 67: TEE Lease-Renewer Contract Rewrite** — TEE becomes a record-lease-renewer (no CID origination, no sequence increment), internal epoch derivation, name↔key binding, tombstone guard (completed 2026-07-01)
-- [x] **Phase 68: Web Integration — Rotation UX and Durable Client State** — Replace `executeLazyRotation` with `rotateReadFromNode`, durable IndexedDB generation + seq high-water (M1 defense, survives restart), `folderTree` reconcile-before-rotate (completed 2026-07-01)
+- [ ] **Phase 68: Web Integration — Rotation UX and Durable Client State** — Replace `executeLazyRotation` with `rotateReadFromNode`, durable IndexedDB generation + seq high-water (M1 defense, survives restart), `folderTree` reconcile-before-rotate (all 10 plans executed 2026-07-01; verification `gaps_found` — 2 gaps blocking ROT-07, see 68-VERIFICATION.md)
 - [ ] **Phase 69: FUSE and WinFsp — Rust Integration and Grant-Root Awareness** — Symmetric child-key unwrap, `spawn_file_meta_reencrypt` deletion from both callers, grant-root scope computation, durable client floors, `Node` Rust enum, Windows CI gate
 
 ## Phase Details
