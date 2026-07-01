@@ -88,6 +88,7 @@ export {
   type RotationJobRecord,
   type RotationStatus,
   type RotationParams,
+  type RotateReadResult,
   type WriteRevocationCallbacks,
   hasCoveringGrant,
   maybeRotateOnScopeExit,

@@ -261,6 +261,26 @@ type RotateOneParams = {
   nodeWriteKey?: Uint8Array;
 };
 
+/**
+ * Return shape for a successful (fresh, non-resume-skip) `rotateReadFromNode` run:
+ * the ROOT node's post-rotation readKey/generation/sequenceNumber (ROT-07 Gap 2).
+ *
+ * Callers (e.g. `performScopeExitRotation`) use this to refresh their own
+ * in-memory folder cache after a rotation so a same-session retry does not
+ * operate on stale pre-rotation state.
+ *
+ * @security The `readKey` buffer is NOT zeroed by `rotateReadFromNode` — the
+ * caller becomes the terminal owner (D-09).
+ */
+export type RotateReadResult = {
+  /** The root's freshly minted readKey (readKeyPrime from the root's rotateOne call). */
+  readKey: Uint8Array;
+  /** The root's new generation number (node.generation + 1). */
+  generation: number;
+  /** The root's new IPNS sequence number after its rotation publish. */
+  sequenceNumber: bigint;
+};
+
 /** Parameters for the resumable frontier walk. */
 export type RotationParams = {
   rootNodeId: string;
@@ -749,8 +769,15 @@ export async function rotateOne(
  * Host-agnostic (D-02): no FUSE / Tauri / web import.
  *
  * @security Does NOT zero `rootReadKey` — caller is terminal owner (D-09).
+ *
+ * @returns {@link RotateReadResult} — the root's post-rotation readKey/
+ * generation/sequenceNumber — when a fresh rotation actually occurred this
+ * run. Returns `undefined` on the resume/skip path (root already completed
+ * in a prior run; there is no freshly-minted root key to hand back).
  */
-export async function rotateReadFromNode(params: RotationParams): Promise<void> {
+export async function rotateReadFromNode(
+  params: RotationParams
+): Promise<RotateReadResult | undefined> {
   const {
     rootNodeId,
     rootNodeIpnsName,
@@ -869,7 +896,8 @@ export async function rotateReadFromNode(params: RotationParams): Promise<void> 
       // Subtree fully converged — no dirty edges to process.
       jobRecord.status = 'complete';
       if (jobRecord.persistCallback) await jobRecord.persistCallback(jobRecord);
-      return;
+      // Resume/skip path: root did not rotate THIS run — no fresh key to return.
+      return undefined;
     }
 
     // Dirty resume: re-fetch root's current state and seed BFS from dirty frontier nodes.
@@ -1155,6 +1183,20 @@ export async function rotateReadFromNode(params: RotationParams): Promise<void> 
   // in verifySubtreeClean relies on the persisted status being accurate).
   jobRecord.status = 'complete';
   if (jobRecord.persistCallback) await jobRecord.persistCallback(jobRecord);
+
+  // ROT-07 Gap 2: surface the root's post-rotation state to the caller so it can
+  // refresh its own folder cache (e.g. performScopeExitRotation → folderTree.set).
+  // `rootResult.skipped` covers BOTH the dirty-resume fall-through (root rotated
+  // in a PRIOR run) and any other path where the root itself did not freshly
+  // rotate this call — no fresh readKey exists to hand back in that case.
+  if (rootResult.skipped) {
+    return undefined;
+  }
+  return {
+    readKey: rootResult.childReadKey,
+    generation: rootResult.newGeneration,
+    sequenceNumber: rootResult.newSequenceNumber,
+  };
 }
 
 // ---------------------------------------------------------------------------

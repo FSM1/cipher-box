@@ -776,7 +776,9 @@ describe('rotateReadFromNode — root-first BFS ordering (§4.2)', () => {
       prunedCids: [],
     });
 
-    // A fresh run should complete without error (verifySubtreeClean not called)
+    // A fresh run should complete without error (verifySubtreeClean not called).
+    // Gap 2: a fresh (non-skip) rotation now resolves to a defined RotateReadResult
+    // (was `undefined`/void pre-68-12) — this assertion tracks that additive change.
     await expect(
       rotateReadFromNode({
         rootNodeId: NODE_ID,
@@ -786,7 +788,7 @@ describe('rotateReadFromNode — root-first BFS ordering (§4.2)', () => {
         jobRecord: makeJobRecord({ rootNodeId: NODE_ID }),
         ctx: createMockContext(),
       })
-    ).resolves.toBeUndefined();
+    ).resolves.toBeDefined();
   });
 
   it('completedNodeIds covers all nodes after a depth-2 rotation (root → child)', async () => {
