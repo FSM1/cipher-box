@@ -28,6 +28,7 @@ import { fetchAndDecryptMetadata } from '@cipherbox/sdk-core';
 import { getSdkClient } from '../../lib/sdk-provider';
 import { triggerSearchIndexRebuild } from '../../hooks/useSearch';
 import { logger } from '../../lib/logger';
+import { runWithFailureUx } from '../../hooks/useMutationFailureUx';
 
 export type FileBrowserActionsParams = {
   currentFolderId: string;
@@ -106,7 +107,11 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
   const handleSync = useCallback(async () => {
     if (!rootIpnsName) return;
 
-    const resolved = await resolveIpnsRecord(rootIpnsName);
+    // Background sync's own resolve is a mutation-adjacent fail-closed surface
+    // (SequenceRegressionError/GenerationRegressionError, D-05) once a rotation
+    // context is threaded through here -- route it through the same classifier
+    // as the folder mutations rather than letting it fail silently.
+    const resolved = await runWithFailureUx(() => resolveIpnsRecord(rootIpnsName));
     if (!resolved) return;
 
     const rootFolder = useFolderStore.getState().folders['root'];
