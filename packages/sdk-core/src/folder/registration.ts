@@ -80,16 +80,9 @@ export async function createSubfolder(params: {
     children: [],
   };
 
-  // 5. Seal the Node with the generated keys
-  const publishedNode = await sealNode(node, readKey, writeKey);
-
-  // 6. Upload sealed Node to IPFS
-  const { cid } = await addToIpfs(
-    params.ctx,
-    new TextEncoder().encode(JSON.stringify(publishedNode))
-  );
-
-  // 7. Compute TEE enrollment fields (if teeKeys supplied) — fail closed on incomplete config
+  // 5. Compute TEE enrollment fields (if teeKeys supplied) BEFORE any IPFS upload —
+  //    fail closed on incomplete config so a malformed teeKeys short-circuits before
+  //    the seal/upload side effects and never leaves an orphaned blob behind.
   let encryptedIpnsPrivateKey: string | undefined;
   let keyEpoch: number | undefined;
   if (params.teeKeys) {
@@ -112,6 +105,15 @@ export async function createSubfolder(params: {
     encryptedIpnsPrivateKey = bytesToHex(wrappedBytes);
     keyEpoch = currentEpoch;
   }
+
+  // 6. Seal the Node with the generated keys
+  const publishedNode = await sealNode(node, readKey, writeKey);
+
+  // 7. Upload sealed Node to IPFS
+  const { cid } = await addToIpfs(
+    params.ctx,
+    new TextEncoder().encode(JSON.stringify(publishedNode))
+  );
 
   // 8. Publish first IPNS record — sequenceNumber MUST be 1n (Phase-60 strict gate)
   await createAndPublishIpnsRecord({

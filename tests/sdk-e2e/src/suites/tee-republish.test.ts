@@ -144,8 +144,11 @@ async function makeScheduleDue(ipnsName: string): Promise<void> {
  */
 async function enqueueRepublishBatch(): Promise<void> {
   const queue = new Queue('republish', { connection: REDIS_CONFIG });
-  await queue.add('republish-batch', {});
-  await queue.close();
+  try {
+    await queue.add('republish-batch', {});
+  } finally {
+    await queue.close();
+  }
 }
 
 /**

@@ -166,4 +166,20 @@ describe('createSubfolder — TEE key wiring (67-04)', () => {
     // Must not reach publish
     expect(mockFns.createAndPublishIpnsRecord).not.toHaveBeenCalled();
   });
+
+  it('throws fail-closed for an invalid teeKeys.currentEpoch and does not publish (0/NaN/non-integer/negative)', async () => {
+    for (const badEpoch of [0, Number.NaN, 1.5, -1]) {
+      const malformedTeeKeys = {
+        currentPublicKey: validTeeKeys.currentPublicKey,
+        currentEpoch: badEpoch,
+      } as TeeKeys;
+
+      await expect(
+        createSubfolder({ name: 'test-folder', ctx: mockCtx, teeKeys: malformedTeeKeys })
+      ).rejects.toThrow();
+    }
+
+    // Must not reach publish for any of the invalid epochs
+    expect(mockFns.createAndPublishIpnsRecord).not.toHaveBeenCalled();
+  });
 });

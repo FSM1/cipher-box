@@ -176,6 +176,19 @@ export class RepublishService {
         }
 
         if (result.success && result.signedRecord && result.newSequenceNumber) {
+          // Defense-in-depth (TEE-02): the TEE must re-sign the SAME sequence. If it
+          // returned a different sequence, publishing would push delegated routing ahead
+          // of the canonical ipns_records row (whose renewal CAS only matches the loaded
+          // sequence), leaving the two out of sync. Reject instead of publishing.
+          if (result.newSequenceNumber !== record.sequenceNumber) {
+            await this.handleEntryFailure(
+              schedule,
+              `TEE returned unexpected sequence ${result.newSequenceNumber}; expected ${record.sequenceNumber}`
+            );
+            totalFailed++;
+            continue;
+          }
+
           // TEE signing succeeded -- now publish to delegated routing
           try {
             await this.publishSignedRecord(schedule.ipnsName, result.signedRecord);
@@ -281,8 +294,13 @@ export class RepublishService {
     });
 
     if (existing) {
-      // Refresh next republish time
+      // Refresh next republish time AND reactivate: a prior failure may have moved the
+      // row out of the ['active','retrying'] set that getDueEntries selects, which would
+      // leave a re-enrolled folder permanently excluded from the TEE batch.
       existing.nextRepublishAt = this.nextRepublishTime();
+      existing.status = 'active';
+      existing.consecutiveFailures = 0;
+      existing.lastError = null;
       await this.scheduleRepository.save(existing);
       this.logger.log(`Updated republish enrollment for ${ipnsName}`);
     } else {
