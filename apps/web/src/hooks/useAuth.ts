@@ -37,6 +37,7 @@ import { loadVaultSettings } from '../services/vault-settings.service';
 import { useVaultSettingsStore } from '../stores/vault-settings.store';
 import { createAndPublishIpnsRecord, resolveIpnsRecord } from '../services/ipns.service';
 import { addToIpfs, fetchFromIpfs } from '../lib/api/ipfs';
+import { triggerOwnerReconcileOnLogin } from '../services/owner-reconcile.service';
 import { logger } from '../lib/logger';
 
 // Module-level deduplication for vault init/load.
@@ -353,6 +354,15 @@ export function useAuth() {
           logger.error('[Auth] Bin initialization failed (non-blocking):', error);
         }
       })();
+
+      // Non-blocking owner-reconcile sweep (fire-and-forget, D-11 eager cadence)
+      // Re-mints/deletes any sent grants left dangling by a write-recipient's
+      // independent unlink+bin while this session was offline. Best-effort --
+      // errors are captured inside triggerOwnerReconcileOnLogin and never
+      // propagate here. The opportunistic post-mutation trigger is wired in 68-08.
+      void triggerOwnerReconcileOnLogin().catch((error) => {
+        logger.error('[Auth] Owner-reconcile eager sweep failed (non-blocking):', error);
+      });
 
       // Vault settings (retention, delete behavior, versioning) are loaded above
       // in parallel with BYO config and populated into useVaultSettingsStore.

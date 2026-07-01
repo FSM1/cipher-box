@@ -168,3 +168,13 @@ export { buildSharedWriteContext, type SharedWriteContextParams } from './contex
 
 // Share key cache
 export { ShareKeyCache, type CachedShareKey } from './key-cache';
+
+// Owner-reconcile driver (D-10/D-11) -- drives sdk-core's reMintGrantsRootedAt
+// with callbacks assembled from an injected transport. apps/web supplies the
+// concrete api-client transport (68-07 owner-reconcile.service.ts).
+export {
+  buildGrantRemintCallbacks,
+  runOwnerReconcile,
+  type OwnerReconcileTransport,
+  type GrantRow,
+} from './owner-reconcile';
