@@ -379,14 +379,16 @@ export async function resolveIpnsRecord(
 
 **If this table is empty:** N/A — see rows above.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Exact API route shape for D-10/D-11's grant re-mint persistence.**
+> Both questions resolved during planning (2026-07-01). Q1 → plan 68-03 implements the recommended `PATCH :shareId/grant` route. Q2 → no plan touches `ensureFolderLoaded`/`createFolder`, matching the recommendation to leave the pre-existing stub out of Phase-68 scope (executor sanity-checks via the phase's own tests).
+
+1. **Exact API route shape for D-10/D-11's grant re-mint persistence.** — RESOLVED (68-03)
    - What we know: `GrantRemintCallbacks.updateGrantFn(shareId, readDescriptorRef, newGeneration)` needs a backing mutation; `deleteGrantFn` already maps cleanly to the existing `DELETE /shares/:shareId`.
    - What's unclear: whether to add a single-grant `PATCH /shares/:shareId` (extend the existing hide/item-name PATCH family) or a purpose-built route; also whether `queryGrantsFn` should get a new `GET /shares/sent?rootNodeId=` filter param rather than client-side filtering of the full sent-shares list.
    - Recommendation: default to extending `PATCH /shares/:shareId` with optional `readDescriptorRef`/`rootGeneration` fields (smallest DTO/controller delta, consistent with the existing hide/item-name PATCH pattern) and defer the `rootNodeId` query-param filter unless the planner judges the O(all sent shares) client-side filter unacceptable for this milestone.
 
-2. **Whether `packages/sdk`'s `ensureFolderLoaded`/`createFolder` stub-throws (`'not implemented — phase 63'`) block any Phase-68 mutation path.**
+2. **Whether `packages/sdk`'s `ensureFolderLoaded`/`createFolder` stub-throws (`'not implemented — phase 63'`) block any Phase-68 mutation path.** — RESOLVED (out of scope; executor sanity-check)
    - What we know: `moveItem` explicitly does NOT call `ensureFolderLoaded` ("moveItem does not auto-load" per its own comment) and requires both folders pre-loaded via direct `FolderTree.get()`; `renameItem`/`deleteItem`/`deleteToBin` DO call `requireFolder`, which falls back to the throwing `ensureFolderLoaded` only when the folder isn't already in `FolderTree`.
    - What's unclear: whether the web app's existing navigation flow always pre-populates `FolderTree` before a rename/delete is possible (likely yes, since the file browser must have loaded the folder to show the delete button) — if so this stub-throw is a latent-but-unreachable path for Phase 68's flows and out of scope; if there is a reachable path (e.g., search-result delete without prior navigation) it could throw unrelated to rotation.
    - Recommendation: the planner should NOT scope fixing `ensureFolderLoaded`/`createFolder` into Phase 68 (out of the stated boundary and requirements) but should have the executor verify via a quick manual/E2E check that the phase's own new test coverage doesn't trip this pre-existing stub.

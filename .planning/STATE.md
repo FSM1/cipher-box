@@ -5,8 +5,8 @@ milestone_name: Metadata and Sharing Refactor
 current_phase: 68
 current_phase_name: Web Integration — Rotation UX and Durable Client State
 status: executing
-stopped_at: Phase 68 context gathered
-last_updated: "2026-07-01T14:26:44.134Z"
+stopped_at: Phase 68 UI-SPEC approved
+last_updated: "2026-07-01T14:32:27.461Z"
 last_activity: 2026-07-01
 last_activity_desc: Phase 67 complete, transitioned to Phase 68
 progress:
@@ -446,6 +446,6 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-01T14:26:44.128Z
-**Stopped at:** Phase 68 context gathered
-**Resume file:** .planning/phases/68-web-integration-rotation-ux-and-durable-client-state/68-CONTEXT.md
+**Last session:** 2026-07-01T14:32:27.455Z
+**Stopped at:** Phase 68 UI-SPEC approved
+**Resume file:** .planning/phases/68-web-integration-rotation-ux-and-durable-client-state/68-UI-SPEC.md

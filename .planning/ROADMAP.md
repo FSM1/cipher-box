@@ -400,13 +400,21 @@ Plans:
 **Plans**: 9 plans
 
 Plans:
+**Wave 1**
+
 - [ ] 68-01-PLAN.md — Wave-0 test infra: fake-indexeddb IndexedDB shim + smoke test (package-legitimacy gate)
 - [ ] 68-02-PLAN.md — share.service modernization: real grant fetch + type extension + delete legacy fan-out (SC#2)
 - [ ] 68-03-PLAN.md — apps/api PATCH :shareId/grant + DTO + service + api:generate (D-10 endpoint gap)
 - [ ] 68-04-PLAN.md — rotation UI primitives: notification action, toast, rotation.store, header badge (D-02/D-03)
 - [ ] 68-05-PLAN.md — client.ts rotation integration: scope-exit rotate + reconcile-defer + move-durability (SC#2/SC#3/D-04/D-12)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 68-06-PLAN.md — durable IndexedDB generation+seq high-water + resolveIpnsRecord enforcement (ROT-07/SC#1/SC#4/D-05/D-07/D-08)
 - [ ] 68-07-PLAN.md — owner reconcile web service: reMintGrantsRootedAt wiring, eager on login (D-10/D-11)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 68-08-PLAN.md — rotation tail-walk driver + navigator.locks multi-tab + badge lifecycle (D-02/D-03/D-09)
 - [ ] 68-09-PLAN.md — mutation-failure UX: defer-retry backoff + fail-closed toasts + co-writer refresh-access (D-01/D-05/D-06/WRITE-03)
 
