@@ -52,7 +52,15 @@ const REDIS_CONFIG = {
 let fixture: MultiAccountFixture;
 let pool: pg.Pool;
 
+// This suite drives the real relay→TEE→DB→BullMQ lease-renew round-trip, which needs the
+// LOCAL live stack: the TEE worker on :3002, the `cipherbox` DB, and redis. CI's sdk-e2e
+// job provisions none of those (it uses `cipherbox_test` and runs no TEE worker), so gate
+// the suite — and its module-level beforeAll DB query — to local runs. This is the
+// documented local publish gate (see project-tee-republish-e2e-stack-recipe).
+const SKIP_TEE_LIVE = !!process.env.CI;
+
 beforeAll(async () => {
+  if (SKIP_TEE_LIVE) return;
   fixture = await createMultiAccountFixture(['alice', 'bob']);
   pool = new pg.Pool(DB_CONFIG);
 
@@ -193,103 +201,106 @@ async function tombstoneName(accessToken: string, ipnsName: string): Promise<voi
 // Describe
 // ---------------------------------------------------------------------------
 
-describe('TEE lease-renewer round-trip suite (TEE-01, TEE-02, tombstone gate)', () => {
-  // -------------------------------------------------------------------------
-  // Test A — equal-seq / equal-CID / later-EOL
-  // -------------------------------------------------------------------------
-  it('Test A: republish re-signs same CID + same seq with later EOL (TEE-01, TEE-02)', async () => {
-    const alice = fixture.accounts.get('alice')!;
-    const aliceCtx = alice.client.getContext();
+describe.skipIf(SKIP_TEE_LIVE)(
+  'TEE lease-renewer round-trip suite (TEE-01, TEE-02, tombstone gate)',
+  () => {
+    // -------------------------------------------------------------------------
+    // Test A — equal-seq / equal-CID / later-EOL
+    // -------------------------------------------------------------------------
+    it('Test A: republish re-signs same CID + same seq with later EOL (TEE-01, TEE-02)', async () => {
+      const alice = fixture.accounts.get('alice')!;
+      const aliceCtx = alice.client.getContext();
 
-    // 1. Read TEE keys from the live DB
-    const teeKeys = await readTeeKeys();
+      // 1. Read TEE keys from the live DB
+      const teeKeys = await readTeeKeys();
 
-    // 2. Create a subfolder enrolled for TEE republishing
-    const { ipnsPrivateKey: subfolderKey } = await createSubfolder({
-      name: 'tee-republish-test-a',
-      ctx: aliceCtx,
-      teeKeys,
-    });
-    const ipnsName = await deriveIpnsName(deriveEd25519PublicKey(subfolderKey));
+      // 2. Create a subfolder enrolled for TEE republishing
+      const { ipnsPrivateKey: subfolderKey } = await createSubfolder({
+        name: 'tee-republish-test-a',
+        ctx: aliceCtx,
+        teeKeys,
+      });
+      const ipnsName = await deriveIpnsName(deriveEd25519PublicKey(subfolderKey));
 
-    // 3. Capture the original signed_record bytes + sequence
-    const originalBytes = await fetchSignedRecord(ipnsName);
-    expect(originalBytes).not.toBeNull();
-    const originalRecord = await parseIpnsRecord(new Uint8Array(originalBytes!));
+      // 3. Capture the original signed_record bytes + sequence
+      const originalBytes = await fetchSignedRecord(ipnsName);
+      expect(originalBytes).not.toBeNull();
+      const originalRecord = await parseIpnsRecord(new Uint8Array(originalBytes!));
 
-    // 4. Make the schedule row due immediately
-    await makeScheduleDue(ipnsName);
+      // 4. Make the schedule row due immediately
+      await makeScheduleDue(ipnsName);
 
-    // 5. Enqueue ONE republish-batch job (deterministic trigger, no scheduler wait)
-    await enqueueRepublishBatch();
+      // 5. Enqueue ONE republish-batch job (deterministic trigger, no scheduler wait)
+      await enqueueRepublishBatch();
 
-    // 6. Poll until ipns_records.signed_record changes
-    await waitFor(
-      async () => {
-        const current = await fetchSignedRecord(ipnsName);
-        if (!current) return false;
-        return !current.equals(originalBytes!);
-      },
-      { timeout: 15_000, label: 'wait for signed_record to be renewed' }
-    );
+      // 6. Poll until ipns_records.signed_record changes
+      await waitFor(
+        async () => {
+          const current = await fetchSignedRecord(ipnsName);
+          if (!current) return false;
+          return !current.equals(originalBytes!);
+        },
+        { timeout: 15_000, label: 'wait for signed_record to be renewed' }
+      );
 
-    // 7. Fetch renewed record and parse it
-    const renewedBytes = await fetchSignedRecord(ipnsName);
-    expect(renewedBytes).not.toBeNull();
-    const renewedRecord = await parseIpnsRecord(new Uint8Array(renewedBytes!));
+      // 7. Fetch renewed record and parse it
+      const renewedBytes = await fetchSignedRecord(ipnsName);
+      expect(renewedBytes).not.toBeNull();
+      const renewedRecord = await parseIpnsRecord(new Uint8Array(renewedBytes!));
 
-    // 8. Assert TEE-01 + TEE-02 invariants:
-    //    - same sequence (no increment — TEE-02)
-    //    - same CID (no repoint — TEE-01)
-    //    - bytes differ (later EOL was written — TEE-01)
-    expect(renewedRecord.sequence).toBe(originalRecord.sequence);
-    expect(renewedRecord.value).toBe(originalRecord.value);
-    expect(renewedBytes!.equals(originalBytes!)).toBe(false);
-  }, 120_000);
+      // 8. Assert TEE-01 + TEE-02 invariants:
+      //    - same sequence (no increment — TEE-02)
+      //    - same CID (no repoint — TEE-01)
+      //    - bytes differ (later EOL was written — TEE-01)
+      expect(renewedRecord.sequence).toBe(originalRecord.sequence);
+      expect(renewedRecord.value).toBe(originalRecord.value);
+      expect(renewedBytes!.equals(originalBytes!)).toBe(false);
+    }, 120_000);
 
-  // -------------------------------------------------------------------------
-  // Test B — tombstone never re-signed
-  // -------------------------------------------------------------------------
-  it('Test B: tombstoned name is never re-signed forward', async () => {
-    const bob = fixture.accounts.get('bob')!;
-    const bobCtx = bob.client.getContext();
+    // -------------------------------------------------------------------------
+    // Test B — tombstone never re-signed
+    // -------------------------------------------------------------------------
+    it('Test B: tombstoned name is never re-signed forward', async () => {
+      const bob = fixture.accounts.get('bob')!;
+      const bobCtx = bob.client.getContext();
 
-    // 1. Read TEE keys from the live DB
-    const teeKeys = await readTeeKeys();
+      // 1. Read TEE keys from the live DB
+      const teeKeys = await readTeeKeys();
 
-    // 2. Create a subfolder enrolled for TEE republishing
-    const { ipnsPrivateKey: subfolderKey } = await createSubfolder({
-      name: 'tee-republish-test-b',
-      ctx: bobCtx,
-      teeKeys,
-    });
-    const ipnsName = await deriveIpnsName(deriveEd25519PublicKey(subfolderKey));
+      // 2. Create a subfolder enrolled for TEE republishing
+      const { ipnsPrivateKey: subfolderKey } = await createSubfolder({
+        name: 'tee-republish-test-b',
+        ctx: bobCtx,
+        teeKeys,
+      });
+      const ipnsName = await deriveIpnsName(deriveEd25519PublicKey(subfolderKey));
 
-    // 3. Capture the original signed_record bytes before tombstoning
-    const originalBytes = await fetchSignedRecord(ipnsName);
-    expect(originalBytes).not.toBeNull();
+      // 3. Capture the original signed_record bytes before tombstoning
+      const originalBytes = await fetchSignedRecord(ipnsName);
+      expect(originalBytes).not.toBeNull();
 
-    // 4. Tombstone the name via the API (unenrolls from republish schedule)
-    await tombstoneName(bob.accessToken, ipnsName);
+      // 4. Tombstone the name via the API (unenrolls from republish schedule)
+      await tombstoneName(bob.accessToken, ipnsName);
 
-    // 5. Assert the schedule row is gone (tombstone handler calls unenrollIpns)
-    const rowExists = await scheduleRowExists(ipnsName);
-    expect(rowExists).toBe(false);
+      // 5. Assert the schedule row is gone (tombstone handler calls unenrollIpns)
+      const rowExists = await scheduleRowExists(ipnsName);
+      expect(rowExists).toBe(false);
 
-    // 6. Attempt to make the (now-absent) schedule row due — noop
-    await makeScheduleDue(ipnsName);
+      // 6. Attempt to make the (now-absent) schedule row due — noop
+      await makeScheduleDue(ipnsName);
 
-    // 7. Enqueue ONE republish-batch job
-    await enqueueRepublishBatch();
+      // 7. Enqueue ONE republish-batch job
+      await enqueueRepublishBatch();
 
-    // 8. Wait a moment for the batch to process
-    //    The tombstoned name should be absent from getDueEntries (tombstoned_at IS NULL filter)
-    //    so the signed_record should remain unchanged even after a full batch cycle.
-    await new Promise((resolve) => setTimeout(resolve, 3_000));
+      // 8. Wait a moment for the batch to process
+      //    The tombstoned name should be absent from getDueEntries (tombstoned_at IS NULL filter)
+      //    so the signed_record should remain unchanged even after a full batch cycle.
+      await new Promise((resolve) => setTimeout(resolve, 3_000));
 
-    // 9. Assert the signed_record is unchanged (tombstoned name was not re-signed)
-    const currentBytes = await fetchSignedRecord(ipnsName);
-    expect(currentBytes).not.toBeNull();
-    expect(currentBytes!.equals(originalBytes!)).toBe(true);
-  }, 120_000);
-});
+      // 9. Assert the signed_record is unchanged (tombstoned name was not re-signed)
+      const currentBytes = await fetchSignedRecord(ipnsName);
+      expect(currentBytes).not.toBeNull();
+      expect(currentBytes!.equals(originalBytes!)).toBe(true);
+    }, 120_000);
+  }
+);
