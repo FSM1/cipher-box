@@ -1,0 +1,46 @@
+/gsd-plan-phase 68
+
+---
+
+<task-notification>
+<task-id>ab001d8748df1cc6e</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/cd0c465c-4874-497a-8bf3-d4ec2501d18c/tasks/ab001d8748df1cc6e.output</output-file>
+<status>completed</status>
+<summary>Agent "Research Phase 68" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Research complete and committed.
+
+## RESEARCH COMPLETE
+
+**Phase:** 68 — Web Integration — Rotation UX and Durable Client State
+**Confidence:** HIGH (code surface verified directly against live repo); MEDIUM on the grant/API wiring gap (design-cited, not yet built)
+
+### Key Findings
+
+- **Rotation must be wired into `packages/sdk/src/client.ts`** (`renameItem` L495, `moveItem` L554, `deleteItem` L689, `deleteToBin` L1451) — not into the web React hooks, which are thin wrappers that already call these `client.X()` methods. None currently call `hasCoveringGrant`/`rotateReadFromNode`.
+- **`executeLazyRotation` has zero callers** in the live tree — deletion is nearly free. `addShareKeys`/`reWrapForRecipients` DO have callers (`useAuth.ts`, `useSharedNavigation.ts`) that need rerouting.
+- **Two scope gaps not in CONTEXT.md's code_context, both real Phase-68 work:**
+  1. `share.service.ts`'s `fetchReceivedShares`/`fetchSentShares` are stubs that unconditionally throw — D-07's `rootGeneration` seeding has no data path today, even though the API/generated client already expose `readDescriptorRef`/`rootGeneration`/`rootNodeId` via unused `sharesControllerGetReceivedShares`/`GetSentShares`.
+  2. `reMintGrantsRootedAt`'s `updateGrantFn` (D-10/D-11 owner reconcile) has **no backing API endpoint** — `shares.controller.ts` has no PATCH route for `readDescriptorRef`/`rootGeneration`. This requires a small `apps/api` addition + `pnpm api:generate`, expanding the phase's blast radius beyond `apps/web`.
+- No `idb` npm package in this repo — durable IndexedDB store must follow the hand-rolled raw-`indexedDB` pattern in `identity.ts`/`search-index.service.ts`. No new packages needed anywhere in this phase.
+- `apps/web/vitest.config.ts` confirms `include: ['src/**/*.test.ts']` only — no test-environment IndexedDB shim exists today (`environment: 'node'`), flagged as a Wave 0 gap for testing the durable store.
+
+### File Created
+`/Users/myankelev/Code/random/cipher-box/.planning/phases/68-web-integration-rotation-ux-and-durable-client-state/68-RESEARCH.md` (committed as `be114bbfb`)
+
+### Confidence Assessment
+| Area | Level | Reason |
+|------|-------|--------|
+| Standard Stack | HIGH | No new packages; native Web APIs only |
+| Architecture | HIGH | Every chokepoint read directly; two scope gaps confirmed via grep, not inferred |
+| Pitfalls | HIGH | Sourced from `@security` docblocks, verified configs, verified controller routes |
+
+### Open Questions
+1. Exact API route shape for D-10/D-11's grant re-mint persistence (single-grant PATCH vs. batch/indexed endpoint).
+2. Whether `ensureFolderLoaded`/`createFolder` stub-throws in `client.ts` are reachable from Phase 68's own flows (likely not, but worth an executor sanity check).
+
+### Ready for Planning
+Research complete. Planner can now create PLAN.md files.</result>
+<usage><subagent_tokens>228511</subagent_tokens><tool_uses>52</tool_uses><duration_ms>488585</duration_ms></usage>
+</task-notification>
