@@ -10,6 +10,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CipherBoxClient, ReconcileStaleError } from '../client';
 import { createTestConfig, setupFolder } from './helpers';
+import { SequenceRegressionError } from '../state/rotation-high-water';
+import type { RotationHighWater } from '../state/rotation-high-water';
 
 // ── crypto mock ──────────────────────────────────────────────────────────
 vi.mock('@cipherbox/crypto', () => ({
@@ -514,5 +516,89 @@ describe('CipherBoxClient.moveItem — dest-before-source publish ordering (D-12
     // own id/kind (FLAG-63-U2) plus the two reconcile calls (source, dest) --
     // no additional descendant-walk calls for a file-kind move.
     expect(sdkCore.fetchFromIpfs).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('CipherBoxClient — reconcile-time enforceResolved fail-closed (Gap 1 / SC#4)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /** A fake RotationHighWater whose enforceResolved is a controllable vi.fn(). */
+  function fakeRotationHighWater(enforceResolved: RotationHighWater['enforceResolved']) {
+    return {
+      getGenerationFloor: vi.fn(),
+      bumpGeneration: vi.fn(),
+      seedFromGrant: vi.fn(),
+      getSeqFloor: vi.fn(),
+      bumpSeq: vi.fn(),
+      enforceResolved: vi.fn(enforceResolved),
+    } satisfies RotationHighWater;
+  }
+
+  it('renameItem rejects with SequenceRegressionError when enforceResolved throws on a below-floor resolve, and rotateReadFromNode is NOT called', async () => {
+    const rotationHighWater = fakeRotationHighWater(async ({ nodeId, seq }) => {
+      throw new SequenceRegressionError(nodeId, 999, seq);
+    });
+    const client = new CipherBoxClient(createTestConfig({ rotationHighWater }));
+    setupFolder(client, FOLDER_IPNS); // sequenceNumber: 1n, nodeGeneration: 0
+    vi.mocked(sdkCore.renameInFolder).mockReturnValue({
+      updatedChildren: [],
+      renamedChild: {} as never,
+    });
+    mockResolveMatching(1n); // agrees with expectedSequence -- enforceResolved is the sole gate here
+
+    await expect(client.renameItem(FOLDER_IPNS, 'file1', 'new.txt')).rejects.toThrow(
+      SequenceRegressionError
+    );
+    expect(rotationHighWater.enforceResolved).toHaveBeenCalledTimes(1);
+    expect(sdkCore.rotateReadFromNode).not.toHaveBeenCalled();
+    expect(sdkCore.updateFolderMetadataAndPublish).not.toHaveBeenCalled();
+  });
+
+  it('renameItem proceeds to publish when enforceResolved resolves (above-floor resolve)', async () => {
+    const rotationHighWater = fakeRotationHighWater(async () => undefined);
+    const client = new CipherBoxClient(createTestConfig({ rotationHighWater }));
+    setupFolder(client, FOLDER_IPNS);
+    vi.mocked(sdkCore.renameInFolder).mockReturnValue({
+      updatedChildren: [],
+      renamedChild: {} as never,
+    });
+    mockResolveMatching(1n);
+    vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
+      cid: 'bafynew',
+      newSequenceNumber: 2n,
+      publishedChildren: [],
+    });
+
+    await expect(client.renameItem(FOLDER_IPNS, 'file1', 'new.txt')).resolves.toBeUndefined();
+    expect(rotationHighWater.enforceResolved).toHaveBeenCalledTimes(1);
+    expect(rotationHighWater.enforceResolved).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodeId: FOLDER_IPNS,
+        seq: 1,
+        generation: 0,
+        versionFloor: 1,
+      })
+    );
+    expect(sdkCore.updateFolderMetadataAndPublish).toHaveBeenCalledTimes(1);
+  });
+
+  it('renameItem never invokes enforceResolved when the client has no rotationHighWater configured (backward-compat)', async () => {
+    const client = new CipherBoxClient(createTestConfig()); // no rotationHighWater
+    setupFolder(client, FOLDER_IPNS);
+    vi.mocked(sdkCore.renameInFolder).mockReturnValue({
+      updatedChildren: [],
+      renamedChild: {} as never,
+    });
+    mockResolveMatching(1n);
+    vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
+      cid: 'bafynew',
+      newSequenceNumber: 2n,
+      publishedChildren: [],
+    });
+
+    await expect(client.renameItem(FOLDER_IPNS, 'file1', 'new.txt')).resolves.toBeUndefined();
+    expect(sdkCore.updateFolderMetadataAndPublish).toHaveBeenCalledTimes(1);
   });
 });
