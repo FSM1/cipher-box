@@ -20,6 +20,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { SharesService } from './shares.service';
 import { CreateShareDto } from './dto/create-share.dto';
 import { UpdateItemNameDto } from './dto/update-item-name.dto';
+import { UpdateGrantDto } from './dto/update-grant.dto';
 import { RevokeForItemsDto } from './dto/revoke-for-items.dto';
 import {
   PaginationQueryDto,
@@ -245,5 +246,31 @@ export class SharesController {
     @Body() dto: UpdateItemNameDto
   ): Promise<void> {
     await this.sharesService.updateShareItemName(shareId, req.user.id, dto.itemNameEncrypted);
+  }
+
+  @Patch(':shareId/grant')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: 'Update a share grant descriptor',
+    description:
+      'Persist a rotated readDescriptorRef and rootGeneration on an existing share. ' +
+      'Only the sharer can update it; the server never re-encrypts and stores ' +
+      'the client-supplied ciphertext as-is.',
+  })
+  @ApiResponse({ status: 204, description: 'Grant updated' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Only the sharer can update' })
+  @ApiResponse({ status: 404, description: 'Share not found' })
+  async updateGrant(
+    @Request() req: RequestWithUser,
+    @Param('shareId', ParseUUIDPipe) shareId: string,
+    @Body() dto: UpdateGrantDto
+  ): Promise<void> {
+    await this.sharesService.updateGrant(
+      shareId,
+      req.user.id,
+      dto.readDescriptorRef,
+      dto.rootGeneration
+    );
   }
 }
