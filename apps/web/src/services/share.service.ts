@@ -26,7 +26,6 @@ import {
 import { wrapKey, unwrapKey, bytesToHex, hexToBytes } from '@cipherbox/crypto';
 import type { ReceivedShare, SentShare } from '../stores/share.store';
 import { useShareStore } from '../stores/share.store';
-import type { FolderNode } from '../stores/folder.store';
 import { useAuthStore } from '../stores/auth.store';
 import { logger } from '../lib/logger';
 
@@ -300,16 +299,6 @@ export async function fetchShareKeys(_shareId: string): Promise<
   throw new Error('deferred to Phase 68 — descriptor-ref rotation/grant path not yet wired');
 }
 
-/**
- * Get sent shares for a specific item (by IPNS name).
- * Fetches all sent shares and filters by ipnsName.
- * Uses the store cache if available and fresh.
- */
-export async function getSentSharesForItem(ipnsName: string): Promise<SentShare[]> {
-  const shares = await ensureFreshSentShares();
-  return shares.filter((s) => s.ipnsName === ipnsName);
-}
-
 // ---------------------------------------------------------------------------
 // Post-upload / post-create share key propagation
 // ---------------------------------------------------------------------------
@@ -364,40 +353,6 @@ export async function hasActiveShares(folderIpnsName: string): Promise<boolean> 
   return shares.some((s) => s.ipnsName === folderIpnsName);
 }
 
-/**
- * Find active shares that cover a given folder, including ancestor shares.
- * A folder is "covered" if it or any of its ancestor folders is shared.
- *
- * Walks the ancestor chain and checks each folder's IPNS name against sent shares.
- *
- * @param folderIpnsName - IPNS name of the current folder
- * @param folders - Current folder tree from the folder store
- * @param currentFolderId - ID of the current folder in the tree
- * @returns Array of sent shares covering this folder (may be from ancestor)
- */
-export async function findCoveringShares(
-  folderIpnsName: string,
-  folders: Record<string, FolderNode>,
-  currentFolderId: string | null
-): Promise<SentShare[]> {
-  const shares = await ensureFreshSentShares();
-  if (shares.length === 0) return [];
-
-  // Collect all IPNS names from this folder up to root
-  const ipnsNames = new Set<string>();
-  ipnsNames.add(folderIpnsName);
-
-  let walkId = currentFolderId;
-  while (walkId) {
-    const node = folders[walkId];
-    if (!node) break;
-    ipnsNames.add(node.ipnsName);
-    walkId = node.parentId;
-  }
-
-  return shares.filter((s) => ipnsNames.has(s.ipnsName));
-}
-
 // ---------------------------------------------------------------------------
 // Lazy key rotation after revocation
 // ---------------------------------------------------------------------------
@@ -430,19 +385,4 @@ export async function fetchPendingRotations(): Promise<PendingRotation[]> {
 export async function checkPendingRotation(folderIpnsName: string): Promise<boolean> {
   const pendingRotations = await fetchPendingRotations();
   return pendingRotations.some((r) => r.ipnsName === folderIpnsName);
-}
-
-/**
- * Update the encrypted key on a share record after lazy key rotation.
- * Re-wraps the new folder key for a remaining (non-revoked) recipient.
- */
-export async function updateShareKey(_shareId: string, _encryptedKey: string): Promise<void> {
-  throw new Error('deferred to Phase 68 — descriptor-ref rotation/grant path not yet wired');
-}
-
-/**
- * Hard-delete a revoked share after rotation is complete.
- */
-export async function completeShareRotation(_shareId: string): Promise<void> {
-  throw new Error('deferred to Phase 68 — descriptor-ref rotation/grant path not yet wired');
 }

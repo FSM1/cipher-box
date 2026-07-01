@@ -45,9 +45,6 @@ import { isRotationStateDegraded } from '../services/rotation-state.service';
  */
 export const RECONCILE_RETRY_DELAYS_MS = [2000, 4000, 8000, 16000] as const;
 
-/** Total attempts (initial + retries) spent on a deferred mutation before it terminally fails (D-06). */
-export const RECONCILE_MAX_ATTEMPTS = RECONCILE_RETRY_DELAYS_MS.length + 1;
-
 export type RunWithFailureUxOptions = {
   /**
    * Re-resolves the write descriptor for a stale/rotated-out co-writer
