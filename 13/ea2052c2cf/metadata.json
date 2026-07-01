@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "13ea2052c2cf",
+  "strategy": "manual-commit",
+  "branch": "feat/tee-lease-renewer-contract-rewrite",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/tee-worker/src/__tests__/tee-keys.test.ts",
+    "apps/tee-worker/src/services/tee-keys.ts",
+    "packages/sdk-core/src/folder/registration.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/13/ea2052c2cf/0/metadata.json",
+      "transcript": "/13/ea2052c2cf/0/full.jsonl",
+      "content_hash": "/13/ea2052c2cf/0/content_hash.txt",
+      "prompt": "/13/ea2052c2cf/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 437,
+    "cache_creation_tokens": 214549,
+    "cache_read_tokens": 5233672,
+    "output_tokens": 30500,
+    "api_call_count": 25
+  }
+}

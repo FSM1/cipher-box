@@ -1,0 +1,180 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "13ea2052c2cf",
+  "session_id": "8b37b5c8-0c19-45da-85d4-e6a8c5d6b460",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-01T02:47:51.48144Z",
+  "branch": "feat/tee-lease-renewer-contract-rewrite",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/tee-worker/src/__tests__/tee-keys.test.ts",
+    "apps/tee-worker/src/services/tee-keys.ts",
+    "packages/sdk-core/src/folder/registration.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "f28195d0ceaf",
+  "checkpoint_transcript_start": 329,
+  "transcript_lines_at_start": 329,
+  "token_usage": {
+    "input_tokens": 437,
+    "cache_creation_tokens": 214549,
+    "cache_read_tokens": 5233672,
+    "output_tokens": 30500,
+    "api_call_count": 25
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-ship-phase-2026-07-01T02:09:06.302229Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "580fb1abc7cc",
+      "timestamp": "2026-07-01T02:09:06.302229Z",
+      "native": {
+        "command": "/ship-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/ship-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_018kwzLt8UKPrKtrD6M95Pf4",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-secure-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "f28195d0ceaf",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 54,
+        "end": 55,
+        "entry_ids": [
+          "1cc2177e-201c-4e38-9265-9ae84f0e9f21"
+        ],
+        "tool_use_id": "toolu_018kwzLt8UKPrKtrD6M95Pf4"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_018kwzLt8UKPrKtrD6M95Pf4"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-secure-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01NseeUoVX5Cg6jonyCRd96G",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-validate-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "f28195d0ceaf",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 162,
+        "end": 163,
+        "entry_ids": [
+          "0ffa1621-023d-4689-8d47-d9bba6feddd7"
+        ],
+        "tool_use_id": "toolu_01NseeUoVX5Cg6jonyCRd96G"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01NseeUoVX5Cg6jonyCRd96G"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-validate-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Triage and fix CodeRabbit CLI findings on the Phase 67/68 diff, deferring non-trivial or pre-existing issues as tracked todos.",
+    "outcome": "5 of 16 findings fixed (NaN epoch guard, epoch integer guard, 2 new tests, ROADMAP counter, STATE.md drift); 9 deferred as 3 todo files; 1 dismissed as false positive; 1 skipped as historical record. All affected test suites green (76 passed in tee-worker, 9 in sdk-core).",
+    "learnings": {
+      "repo": [
+        "ROADMAP.md can drift from actual plan completion state — '7/8' was showing while all 8 plans were marked [x] and phase 67-08 was done.",
+        "STATE.md has two sources of truth for phase/progress: YAML frontmatter (stayed accurate) and human-readable 'Current focus' + progress bar (drifted to stale Phase 67 / 0-of-9 values).",
+        "CodeRabbit finding on `parsed.value` round-trip `toBe` comparison is a false positive — the value is a string, so primitive equality holds across separately-parsed records."
+      ],
+      "code": [
+        {
+          "path": "apps/tee-worker/src/services/tee-keys.ts",
+          "finding": "Missing NaN guard on epoch input; added validation to reject NaN before downstream use."
+        },
+        {
+          "path": "packages/sdk-core/src/folder/registration.ts",
+          "finding": "Epoch validation only checked non-finite; tightened to also reject non-integer and negative values."
+        },
+        {
+          "path": "apps/tee-worker/src/__tests__/tee-keys.test.ts",
+          "finding": "Added 2 tests for malformed-anchor / NaN-epoch edge cases in getInternalCurrentEpoch, raising suite to 76 tests."
+        }
+      ],
+      "workflow": [
+        "CodeRabbit CLI exits 0 even with findings; exit code alone does not signal a clean review.",
+        "Triage order: verify each finding against live code before fixing — several were pre-existing naming issues or guaranteed-by-construction and would have been wasted effort to fix.",
+        "Grouping deferred findings into thematic todo files (error-handling, naming, invariant coverage) is cleaner than one-todo-per-finding when items share a fix context."
+      ]
+    },
+    "friction": [
+      "STATE.md human-readable section silently drifted from frontmatter — a known recurring regression requiring manual correction after each phase.",
+      "CodeRabbit produced 16 findings requiring per-item code verification before any fix, with a mix of real bugs, false positives, pre-existing issues, and design-level concerns that cannot be resolved mechanically."
+    ],
+    "open_items": [
+      "TEE republish write-path error handling hardening (concurrency and error propagation in core write path) — todo: 2026-07-01-tee-republish-writepath-error-handling-hardening.md",
+      "Rename encrypted IPNS key canonical field to remove naming inconsistency flagged by CodeRabbit — todo: 2026-07-01-rename-encrypted-ipns-key-canonical-field.md",
+      "Add IPNS record EOL invariant enforcement and tests — todo: 2026-07-01-renew-ipns-record-eol-invariant-and-tests.md",
+      "67-02-SUMMARY wording note skipped — historical execution record, deviation already self-documented."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-01T02:47:21.331817Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 17,
+    "human_modified": 4,
+    "human_removed": 0,
+    "total_committed": 17,
+    "total_lines_changed": 21,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
