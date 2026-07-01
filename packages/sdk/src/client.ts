@@ -25,9 +25,14 @@ import {
 } from '@cipherbox/api-client';
 import { clearBytes, unwrapKey, hexToBytes } from '@cipherbox/crypto';
 import pLimit from 'p-limit';
-import type { BinEntry, SealedChildRef, PublishedNode } from '@cipherbox/core';
-import { sealChildReadKey, unsealChildReadKey } from '@cipherbox/core';
-import type { CipherBoxClientConfig, FolderState, SharedFolderState } from './types';
+import type { BinEntry, SealedChildRef, PublishedNode, Node as CoreNode } from '@cipherbox/core';
+import { sealChildReadKey, unsealChildReadKey, unsealNode } from '@cipherbox/core';
+import type {
+  CipherBoxClientConfig,
+  FolderState,
+  SharedFolderState,
+  RotationClientCallbacks,
+} from './types';
 import { SdkEventEmitter, type SdkEvent, type SdkEventHandler } from './events';
 import { FolderTree } from './state/folder-tree';
 import { SharedFolderTree } from './state/shared-folder-tree';
@@ -54,6 +59,38 @@ export class BinNotLoadedError extends Error {
     this.name = 'BinNotLoadedError';
   }
 }
+
+/**
+ * Thrown when a mutation's reconcile-before-publish check (SC#3 / D-04) finds
+ * the freshly-resolved network `sequenceNumber` disagrees with the in-memory
+ * `FolderTree` entry -- in EITHER direction (network ahead OR local ahead).
+ * The mutation defers (throws) rather than publishing a metadata update or a
+ * rotation against possibly-superseded state. "Defer, never skip" -- callers
+ * should re-load the folder and retry.
+ */
+export class ReconcileStaleError extends Error {
+  constructor(ipnsName: string, localSequence: bigint, networkSequence: bigint) {
+    super(
+      `Reconcile stale: folder ${ipnsName} local sequenceNumber ${localSequence} does not match ` +
+        `network sequenceNumber ${networkSequence} -- deferring mutation (SC#3 / D-04)`
+    );
+    this.name = 'ReconcileStaleError';
+  }
+}
+
+/**
+ * Default rotation callbacks used when a `CipherBoxClient` is constructed
+ * without `config.rotationCallbacks`. Every callback is a safe no-op so
+ * `hasCoveringGrant` always finds zero coverage and `maybeRotateOnScopeExit`
+ * never invokes `deps.rotate` -- i.e. an unconfigured client performs zero
+ * rotation, identical to pre-Phase-68 behavior. Concrete web callbacks are
+ * wired in Phase 68-08.
+ */
+const NOOP_ROTATION_CALLBACKS: RotationClientCallbacks = {
+  getActiveGrantRootIpnsNames: async () => new Set<string>(),
+  getLocalGrantRecord: () => null,
+  persistJob: () => {},
+};
 
 export class CipherBoxClient {
   private config: CipherBoxClientConfig;
@@ -97,6 +134,7 @@ export class CipherBoxClient {
       vaultKeypair: this.internalVaultKeypair,
       rootFolderKey: this.internalRootFolderKey,
       rootIpnsKeypair: this.internalRootIpnsKeypair ?? undefined,
+      rotationCallbacks: config.rotationCallbacks ?? NOOP_ROTATION_CALLBACKS,
     };
     const axiosInstance =
       config.axiosInstance ??
@@ -458,6 +496,201 @@ export class CipherBoxClient {
   }
 
   /**
+   * Reconcile-before-publish guard (SC#3 / D-04).
+   *
+   * Re-resolves `ipnsName`'s CURRENT network `sequenceNumber` and compares it
+   * against `expectedSequence` -- the in-memory `FolderTree` value the caller
+   * is about to publish against. ANY mismatch (network ahead OR local ahead)
+   * throws {@link ReconcileStaleError} so the caller defers instead of
+   * publishing a metadata update or a rotation against possibly-superseded
+   * state ("defer, never skip").
+   *
+   * A null resolve (record not found -- e.g. a genuinely first publish) or a
+   * resolve without a usable `sequenceNumber` is treated as "nothing to
+   * reconcile against" and the check is skipped. A resolve() failure (network
+   * error) is likewise treated as inconclusive rather than blocking the
+   * mutation on a transient check -- the underlying CAS-guarded publish
+   * remains the authoritative conflict detector.
+   */
+  private async reconcileFolderSequence(ipnsName: string, expectedSequence: bigint): Promise<void> {
+    let resolved: { sequenceNumber: bigint } | null;
+    try {
+      resolved = await sdkCore.resolveIpnsRecord(ipnsName, this.ctx);
+    } catch {
+      return;
+    }
+    if (resolved == null || typeof resolved.sequenceNumber !== 'bigint') return;
+    if (resolved.sequenceNumber !== expectedSequence) {
+      throw new ReconcileStaleError(ipnsName, expectedSequence, resolved.sequenceNumber);
+    }
+  }
+
+  /**
+   * Scope-exit rotation trigger (SC#2 / SC#4), composed via the sdk-core
+   * `maybeRotateOnScopeExit` gate. Builds `CoverageParams` from the injected
+   * `rotationCallbacks` seam (defaulting to no-op / zero rotation when the
+   * host supplies none) and, when covered, invokes `rotateReadFromNode`
+   * exactly once via the injected `deps.rotate`.
+   *
+   * `ancestorIpnsNames` is leaf-first per `scope.ts`'s contract. This SDK does
+   * not currently track a full parent-chain in `FolderTree` (out of this
+   * plan's file scope), so callers pass the directly-mutated node's own IPNS
+   * name(s) -- the coverage check still correctly detects a grant rooted AT
+   * the mutated node itself. Extending to a full multi-level ancestor walk
+   * requires `FolderTree` parent tracking, deferred to a later plan.
+   */
+  private async performScopeExitRotation(params: {
+    ancestorIpnsNames: string[];
+    rootNodeIpnsName: string;
+    rootNodeId: string;
+    rootReadKey: Uint8Array;
+    rootIpnsPrivateKey: Uint8Array;
+    rootIpnsPublicKey: Uint8Array;
+  }): Promise<void> {
+    const callbacks = this.config.rotationCallbacks ?? NOOP_ROTATION_CALLBACKS;
+    const activeGrantRootIpnsNames = await callbacks.getActiveGrantRootIpnsNames();
+    const localGrantRecord = callbacks.getLocalGrantRecord(params.rootNodeIpnsName);
+
+    await sdkCore.maybeRotateOnScopeExit(
+      {
+        nodeAncestorIpnsNames: params.ancestorIpnsNames,
+        activeGrantRootIpnsNames,
+        localGrantRecord,
+      },
+      {
+        rotate: async () => {
+          const jobRecord: sdkCore.RotationJobRecord = {
+            rootNodeId: params.rootNodeId,
+            status: 'pending',
+            completedNodeIds: new Set(),
+            frontier: [],
+            persistCallback: callbacks.persistJob,
+          };
+          await sdkCore.rotateReadFromNode({
+            rootNodeId: params.rootNodeId,
+            rootNodeIpnsName: params.rootNodeIpnsName,
+            rootReadKey: params.rootReadKey,
+            rootIpnsPrivateKey: params.rootIpnsPrivateKey,
+            rootIpnsPublicKey: params.rootIpnsPublicKey,
+            jobRecord,
+            ctx: this.ctx,
+          });
+          callbacks.progress?.('rotated');
+        },
+      }
+    );
+  }
+
+  /**
+   * Best-effort, non-blocking BFS enumeration of a moved folder's descendants
+   * (D-12), distinguishing readable descendants (child readKey successfully
+   * recovered) from unreadable ones (unseal failed -- key mismatch,
+   * generation drift, or a corrupted seal). A moved FILE has no descendants
+   * and is a no-op. Failures on a single node do not abort the walk: an
+   * unreadable node is recorded and NOT expanded further (its own children
+   * cannot be discovered without its key).
+   *
+   * This is read-only observability -- it does not re-key or mutate
+   * anything. It exists so a move does not silently drop or mis-rotate
+   * descendants it cannot read; the actual re-rotation of an unreadable
+   * subtree remains the rotation engine's job, not this helper.
+   *
+   * `rootReadKey` MUST be a copy the caller does not otherwise mutate --
+   * this method zeroes every key it itself derives while walking (D-09
+   * terminal-owner rule for its own minted keys), but never zeroes
+   * `rootReadKey` (caller-owned).
+   */
+  private async enumerateMoveDescendants(
+    rootIpnsName: string,
+    rootReadKey: Uint8Array,
+    rootKind: PublishedNode['kind']
+  ): Promise<{ readableIpnsNames: string[]; unreadableIpnsNames: string[] }> {
+    const readableIpnsNames: string[] = [];
+    const unreadableIpnsNames: string[] = [];
+
+    if (rootKind !== 'folder' && rootKind !== 'root') {
+      return { readableIpnsNames, unreadableIpnsNames };
+    }
+
+    const visited = new Set<string>([rootIpnsName]);
+    const queue: Array<{ ipnsName: string; readKey: Uint8Array; isRoot: boolean }> = [
+      { ipnsName: rootIpnsName, readKey: rootReadKey, isRoot: true },
+    ];
+    // Bound the walk so a pathological/corrupted tree can't hang the move.
+    const MAX_NODES = 2000;
+    let processed = 0;
+
+    while (queue.length > 0 && processed < MAX_NODES) {
+      const current = queue.shift();
+      if (!current) break;
+      processed++;
+
+      let node: CoreNode;
+      try {
+        const record = await sdkCore.resolveIpnsRecord(current.ipnsName, this.ctx);
+        if (!record) continue;
+        const raw = await sdkCore.fetchFromIpfs(this.ctx, record.cid);
+        const published = JSON.parse(new TextDecoder().decode(raw)) as PublishedNode;
+        node = await unsealNode(published, current.readKey);
+      } catch {
+        continue;
+      } finally {
+        if (!current.isRoot) current.readKey.fill(0);
+      }
+
+      for (const child of node.children ?? []) {
+        if (visited.has(child.ipnsName)) continue;
+        visited.add(child.ipnsName);
+
+        try {
+          const childRecord = await sdkCore.resolveIpnsRecord(child.ipnsName, this.ctx);
+          if (!childRecord) throw new Error('child IPNS record not found');
+          const rawChild = await sdkCore.fetchFromIpfs(this.ctx, childRecord.cid);
+          const childPublished = JSON.parse(new TextDecoder().decode(rawChild)) as PublishedNode;
+          const childReadKey = await unsealChildReadKey(
+            child.readKeySealed,
+            current.readKey,
+            childPublished.id,
+            childPublished.kind,
+            child.generation
+          );
+          readableIpnsNames.push(child.ipnsName);
+          queue.push({ ipnsName: child.ipnsName, readKey: childReadKey, isRoot: false });
+        } catch {
+          unreadableIpnsNames.push(child.ipnsName);
+        }
+      }
+    }
+
+    return { readableIpnsNames, unreadableIpnsNames };
+  }
+
+  /**
+   * Fire-and-forget wrapper around {@link enumerateMoveDescendants}. Never
+   * blocks the caller (mirrors `fireAndForgetUnenroll`'s philosophy) and
+   * never throws -- failures are logged, matching the non-critical warning
+   * pattern used elsewhere in this file.
+   */
+  private enumerateMoveDescendantsFireAndForget(
+    rootIpnsName: string,
+    rootReadKey: Uint8Array,
+    rootKind: PublishedNode['kind']
+  ): void {
+    if (rootKind !== 'folder' && rootKind !== 'root') return;
+    this.enumerateMoveDescendants(rootIpnsName, rootReadKey, rootKind)
+      .then(({ unreadableIpnsNames }) => {
+        if (unreadableIpnsNames.length > 0) {
+          console.warn(
+            `[CipherBox] moveItem: ${unreadableIpnsNames.length} descendant(s) of ${rootIpnsName} ` +
+              `could not be read after move (D-12):`,
+            unreadableIpnsNames
+          );
+        }
+      })
+      .catch((err) => console.warn('[CipherBox] moveItem: descendant enumeration failed:', err));
+  }
+
+  /**
    * Create a new subfolder inside an existing folder.
    *
    * Generates IPNS keypair and folder key, wraps with user's public key,
@@ -504,6 +737,10 @@ export class CipherBoxClient {
         newName,
       });
 
+      // 1b. Reconcile-before-publish (SC#3 / D-04): defer on any sequence
+      // mismatch, never publish (metadata OR rotation) against possibly-superseded state.
+      await this.reconcileFolderSequence(folderIpnsName, folder.sequenceNumber);
+
       // 2. Publish updated metadata
       const { newSequenceNumber, publishedChildren } = await sdkCore.updateFolderMetadataAndPublish(
         {
@@ -532,6 +769,16 @@ export class CipherBoxClient {
         ipnsName: folderIpnsName,
         children: publishedChildren,
         sequenceNumber: newSequenceNumber,
+      });
+
+      // 5. Scope-exit rotation (SC#2/SC#4): rotate this folder's read chain when covered.
+      await this.performScopeExitRotation({
+        ancestorIpnsNames: [folderIpnsName],
+        rootNodeIpnsName: folderIpnsName,
+        rootNodeId: folder.nodeId,
+        rootReadKey: folder.folderKey,
+        rootIpnsPrivateKey: folder.ipnsKeypair.privateKey,
+        rootIpnsPublicKey: folder.ipnsKeypair.publicKey,
       });
     });
   }
@@ -569,6 +816,12 @@ export class CipherBoxClient {
         destChildren: destFolder.children,
         childId,
       });
+
+      // Reconcile-before-publish (SC#3 / D-04): both folders are about to be
+      // published; defer on ANY mismatch (source OR dest) rather than
+      // publishing (metadata OR rotation) against possibly-superseded state.
+      await this.reconcileFolderSequence(sourceIpnsName, sourceFolder.sequenceNumber);
+      await this.reconcileFolderSequence(destIpnsName, destFolder.sequenceNumber);
 
       // FLAG-63-U2: Re-seal the moved child's readKeySealed under the DEST parent readKey.
       // sdkCore.moveItem() is a pure link rewrite — the moved ref still carries a
@@ -618,11 +871,50 @@ export class CipherBoxClient {
           childPub.kind,
           destEntry.generation // generation unchanged — no content re-encryption, no bump
         );
+
+        // D-12: best-effort, non-blocking enumeration of the moved subtree's
+        // descendants so an unreadable one is surfaced (logged) instead of
+        // silently dropped or mis-rotated. Never blocks the move itself. Pass
+        // a defensive copy — the `finally` below zeroes the ORIGINAL
+        // `childReadKey` before this fire-and-forget walk necessarily finishes.
+        this.enumerateMoveDescendantsFireAndForget(
+          movedRef.ipnsName,
+          new Uint8Array(childReadKey),
+          childPub.kind
+        );
       } finally {
         // Zero the recovered child readKey on every exit path — engine-derived,
         // terminal-owned (D-09).
         childReadKey.fill(0);
       }
+
+      // D-12: publish DESTINATION before SOURCE (dest-before-source) so a
+      // crash between publishes never orphans the moved node out of both
+      // folders — folds the Phase-64 OUT-tagged
+      // sdk-client-move-publish-durability work into this cutover.
+      const { newSequenceNumber: dstSeq, publishedChildren: dstChildren } =
+        await sdkCore.updateFolderMetadataAndPublish({
+          children: updatedDest,
+          baseChildren: baseDestChildren,
+          readKey: destFolder.folderKey,
+          ipnsPrivateKey: destFolder.ipnsKeypair.privateKey,
+          ipnsName: destIpnsName,
+          sequenceNumber: destFolder.sequenceNumber,
+          ctx: this.ctx,
+          nodeId: destFolder.nodeId,
+          nodeGeneration: destFolder.nodeGeneration,
+        });
+
+      destFolder.children = dstChildren;
+      destFolder.sequenceNumber = dstSeq;
+      this.folderTree.set(destIpnsName, destFolder);
+      this.emitter.emit({
+        type: 'folder:updated',
+        folderId: destIpnsName,
+        ipnsName: destIpnsName,
+        children: dstChildren,
+        sequenceNumber: dstSeq,
+      });
 
       // Publish updated source folder
       const { newSequenceNumber: srcSeq, publishedChildren: srcChildren } =
@@ -649,29 +941,17 @@ export class CipherBoxClient {
         sequenceNumber: srcSeq,
       });
 
-      // Publish updated destination folder
-      const { newSequenceNumber: dstSeq, publishedChildren: dstChildren } =
-        await sdkCore.updateFolderMetadataAndPublish({
-          children: updatedDest,
-          baseChildren: baseDestChildren,
-          readKey: destFolder.folderKey,
-          ipnsPrivateKey: destFolder.ipnsKeypair.privateKey,
-          ipnsName: destIpnsName,
-          sequenceNumber: destFolder.sequenceNumber,
-          ctx: this.ctx,
-          nodeId: destFolder.nodeId,
-          nodeGeneration: destFolder.nodeGeneration,
-        });
-
-      destFolder.children = dstChildren;
-      destFolder.sequenceNumber = dstSeq;
-      this.folderTree.set(destIpnsName, destFolder);
-      this.emitter.emit({
-        type: 'folder:updated',
-        folderId: destIpnsName,
-        ipnsName: destIpnsName,
-        children: dstChildren,
-        sequenceNumber: dstSeq,
+      // Scope-exit rotation (SC#2/SC#4): the moved child exits the SOURCE
+      // folder's scope; rotate the source's read chain when covered. Moving
+      // INTO the destination is a scope ENTRY, not an exit — no rotation is
+      // needed there (the re-seal above already re-keys the moved node for dest).
+      await this.performScopeExitRotation({
+        ancestorIpnsNames: [sourceIpnsName],
+        rootNodeIpnsName: sourceIpnsName,
+        rootNodeId: sourceFolder.nodeId,
+        rootReadKey: sourceFolder.folderKey,
+        rootIpnsPrivateKey: sourceFolder.ipnsKeypair.privateKey,
+        rootIpnsPublicKey: sourceFolder.ipnsKeypair.publicKey,
       });
     });
   }
@@ -699,6 +979,10 @@ export class CipherBoxClient {
         children: folder.children,
         childId,
       });
+
+      // 1b. Reconcile-before-publish (SC#3 / D-04): defer on any sequence
+      // mismatch, never publish (metadata OR rotation) against possibly-superseded state.
+      await this.reconcileFolderSequence(folderIpnsName, folder.sequenceNumber);
 
       // 2. Publish updated metadata
       const { newSequenceNumber, publishedChildren } = await sdkCore.updateFolderMetadataAndPublish(
@@ -730,7 +1014,17 @@ export class CipherBoxClient {
         sequenceNumber: newSequenceNumber,
       });
 
-      // 5. Fire-and-forget IPNS unenrollment (resolve async collection then dispatch)
+      // 5. Scope-exit rotation (SC#2/SC#4): rotate this folder's read chain when covered.
+      await this.performScopeExitRotation({
+        ancestorIpnsNames: [folderIpnsName],
+        rootNodeIpnsName: folderIpnsName,
+        rootNodeId: folder.nodeId,
+        rootReadKey: folder.folderKey,
+        rootIpnsPrivateKey: folder.ipnsKeypair.privateKey,
+        rootIpnsPublicKey: folder.ipnsKeypair.publicKey,
+      });
+
+      // 6. Fire-and-forget IPNS unenrollment (resolve async collection then dispatch)
       this.collectRemovedItemIpnsNames(removedItem)
         .then((names) => this.fireAndForgetUnenroll(names))
         .catch((err) => console.warn('[CipherBox] IPNS unenroll collection failed:', err));
@@ -1462,7 +1756,13 @@ export class CipherBoxClient {
 
       // Self-bootstrap the folder if it isn't loaded (e.g. after a reload), so
       // addToBin can read its keys to republish the parent.
-      await this.requireFolder(folderIpnsName);
+      const folder = await this.requireFolder(folderIpnsName);
+
+      // Reconcile-before-publish (SC#3 / D-04): addToBin publishes the parent
+      // folder internally, so the check must run BEFORE calling it -- defer on
+      // any sequence mismatch rather than publishing (metadata OR rotation)
+      // against possibly-superseded state.
+      await this.reconcileFolderSequence(folderIpnsName, folder.sequenceNumber);
 
       const { updatedBinState } = await binOps.addToBin({
         folderIpnsName,
@@ -1486,6 +1786,19 @@ export class CipherBoxClient {
         sequenceNumber: folderState?.sequenceNumber ?? 0n,
       });
       this.emitter.emit({ type: 'bin:updated', entries: updatedBinState.entries });
+
+      // Scope-exit rotation (SC#2/SC#4): the deleted item exits this folder's
+      // scope; rotate its read chain when covered. folder.folderKey/nodeId/
+      // ipnsKeypair are unaffected by a bin delete (only children/sequenceNumber
+      // change), so the pre-addToBin snapshot remains valid here.
+      await this.performScopeExitRotation({
+        ancestorIpnsNames: [folderIpnsName],
+        rootNodeIpnsName: folderIpnsName,
+        rootNodeId: folder.nodeId,
+        rootReadKey: folder.folderKey,
+        rootIpnsPrivateKey: folder.ipnsKeypair.privateKey,
+        rootIpnsPublicKey: folder.ipnsKeypair.publicKey,
+      });
 
       // No IPNS unenrollment here — soft delete preserves items for restore.
       // Unenrollment happens on permanentDelete() or emptyBin().
