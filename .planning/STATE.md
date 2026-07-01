@@ -6,14 +6,14 @@ current_phase: 67
 current_phase_name: tee-lease-renewer-contract-rewrite
 status: executing
 stopped_at: Phase 67 context gathered
-last_updated: "2026-07-01T00:07:36.624Z"
+last_updated: "2026-07-01T00:14:27.576Z"
 last_activity: 2026-06-30
 last_activity_desc: Phase 67 execution started
 progress:
   total_phases: 9
   completed_phases: 6
   total_plans: 53
-  completed_plans: 49
+  completed_plans: 50
   percent: 67
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 ## Current Position
 
 Phase: 67 (tee-lease-renewer-contract-rewrite) — EXECUTING
-Plan: 5 of 8
+Plan: 6 of 8
 Status: Ready to execute
 Last activity: 2026-06-30 — Phase 67 execution started
 
@@ -220,6 +220,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 67 P02 | 8 | 2 tasks | 4 files |
 | Phase 67 P03 | 102 | 1 tasks | 2 files |
 | Phase 67-tee-lease-renewer-contract-rewrite P04 | 140 | 1 tasks | 2 files |
+| Phase 67 P05 | 171 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -434,6 +435,8 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: 67-02
 - [Phase ?]: renewIpnsRecord sources value and sequence exclusively from parseIpnsRecord — structurally prevents CID repoint and sequence increment (TEE-01/TEE-02)
 - [Phase ?]: ECIES-wrap done in createSubfolder itself, matching vault-settings.service.ts pattern
+- [Phase ?]: tee-worker build context is repo root not apps/tee-worker dir
+- [Phase ?]: TEE_WORKER_URL=http://localhost:3002 active not commented in .env.example
 
 ## Operator Next Steps
 
@@ -441,6 +444,6 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-01T00:07:28.998Z
+**Last session:** 2026-07-01T00:14:08.961Z
 **Stopped at:** Phase 67 context gathered
 **Resume file:** .planning/phases/67-tee-lease-renewer-contract-rewrite/67-CONTEXT.md
