@@ -53,17 +53,17 @@ created: 2026-07-01
 
 | Req / SC | Behavior | Tier | Automated Command | File Exists |
 |----------|----------|------|-------------------|-------------|
-| ROT-07 / SC#1 (logic) | high-water `{nodeId→highestGeneration}` monotonic-max; generation regression → fail-closed throw | SDK unit | `pnpm --filter @cipherbox/sdk test -- <high-water>.test.ts` | ❌ W0 (new) |
-| ROT-07 / SC#1 (durability) | map persists to real IndexedDB and rejects a downgrade AFTER a real page reload | web-e2e | `pnpm test:web-e2e -- rotation-durability` (new spec) | ❌ W0 (new) |
-| SC#2 | `executeLazyRotation` deleted; delete/move/rename-on-scope-exit call `rotateReadFromNode` in `packages/sdk/client.ts`; `addShareKeys`/`reWrapForRecipients` fan-out + callers rerouted | SDK unit | `pnpm --filter @cipherbox/sdk test -- client-rotation.test.ts` | ❌ W0 (new) |
-| SC#3 | `folderTree` reconciled vs current `sequenceNumber` before publish; reconcile failure defers (never skips) | SDK unit | `pnpm --filter @cipherbox/sdk test -- client-rotation.test.ts` | ❌ W0 (new) |
-| SC#4 / §7.3 test 13 | seq high-water enforcement in the resolve chokepoint; within-generation seq regression → fail-closed | SDK unit | `pnpm --filter @cipherbox/sdk test -- <resolve-enforce>.test.ts` | ❌ W0 (new) |
-| SC#4 (observable) | relay regression surfaces as the fail-closed toast, mutation not applied | web-e2e | `pnpm test:web-e2e -- rotation-durability` (assert toast) | ❌ W0 (new) |
-| §7.3 test 14 | first-contact/cold-device rollback rejected via `SealedChildRef.versionFloor` (no local high-water) | SDK unit | `pnpm --filter @cipherbox/sdk test -- <resolve-enforce>.test.ts` | ❌ W0 (new) |
-| D-01/D-06 (UX) | co-writer stale-write → `Refresh access` / revoked → terminal; defer-exhausted → `Retry` | web-e2e | `pnpm test:web-e2e -- rotation-ux` (new spec) | ❌ W0 (new) |
-| D-02/D-03 (UX) | badge: `Revoking access…` → `Finishing revocation…` → `Resuming revocation…` after reload | web-e2e | `pnpm test:web-e2e -- rotation-ux` | ❌ W0 (new) |
-| D-10/D-11 | new `PATCH :shareId/grant` owner-only; updates `readDescriptorRef`/`rootGeneration` | API unit | `pnpm --filter @cipherbox/api test -- shares.controller.spec.ts` | ❌ W0 (new) |
-| SC#5 | no `.spec.ts` under `apps/web/src` | static | `find apps/web/src -name "*.spec.ts"` (must be empty) | n/a |
+| ROT-07 / SC#1 (logic) | high-water `{nodeId→highestGeneration}` monotonic-max; generation regression → fail-closed throw | SDK unit | `pnpm --filter @cipherbox/sdk test -- <high-water>.test.ts` | ✅ `rotation-high-water.test.ts` — green (audit re-run 2026-07-02) |
+| ROT-07 / SC#1 (durability) | map persists to real IndexedDB and rejects a downgrade AFTER a real page reload | web-e2e | `pnpm test:web-e2e -- rotation-durability` (new spec) | ✅ authored+registered; executes on push-to-main CI (tier design) — `rotation-durability.spec.ts`, 3 tests registered, tsc clean |
+| SC#2 | `executeLazyRotation` deleted; delete/move/rename-on-scope-exit call `rotateReadFromNode` in `packages/sdk/client.ts`; `addShareKeys`/`reWrapForRecipients` fan-out + callers rerouted | SDK unit | `pnpm --filter @cipherbox/sdk test -- client-rotation.test.ts` | ✅ `client-rotation.test.ts` 24/24 — green (audit re-run 2026-07-02) |
+| SC#3 | `folderTree` reconciled vs current `sequenceNumber` before publish; reconcile failure defers (never skips) | SDK unit | `pnpm --filter @cipherbox/sdk test -- client-rotation.test.ts` | ✅ `client-rotation.test.ts` — green (audit re-run 2026-07-02) |
+| SC#4 / §7.3 test 13 | seq high-water enforcement in the resolve chokepoint; within-generation seq regression → fail-closed | SDK unit | `pnpm --filter @cipherbox/sdk test -- <resolve-enforce>.test.ts` | ✅ `rotation-high-water.test.ts` enforceResolved block — green |
+| SC#4 (observable) | relay regression surfaces as the fail-closed toast, mutation not applied | web-e2e | `pnpm test:web-e2e -- rotation-durability` (assert toast) | ✅ authored+registered; executes on push-to-main CI (tier design) |
+| §7.3 test 14 | first-contact/cold-device rollback rejected via `SealedChildRef.versionFloor` (no local high-water) | SDK unit | `pnpm --filter @cipherbox/sdk test -- <resolve-enforce>.test.ts` | ✅ `rotation-high-water.test.ts` cold-device cases — green |
+| D-01/D-06 (UX) | co-writer stale-write → `Refresh access` / revoked → terminal; defer-exhausted → `Retry` | web-e2e | `pnpm test:web-e2e -- rotation-ux` (new spec) | ✅ authored+registered; executes on push-to-main CI (tier design) — `rotation-ux.spec.ts`, 4 tests registered |
+| D-02/D-03 (UX) | badge: `Revoking access…` → `Finishing revocation…` → `Resuming revocation…` after reload | web-e2e | `pnpm test:web-e2e -- rotation-ux` | ✅ authored+registered; executes on push-to-main CI (tier design) |
+| D-10/D-11 | new `PATCH :shareId/grant` owner-only; updates `readDescriptorRef`/`rootGeneration` | API unit | `pnpm --filter @cipherbox/api test -- shares.controller.spec.ts` | ✅ `shares.controller.spec.ts` updateGrant describe — green (audit re-run 2026-07-02, 47/47 shares specs) |
+| SC#5 | no `.spec.ts` under `apps/web/src` | static | `find apps/web/src -name "*.spec.ts"` (must be empty) | ✅ 0 `.spec.ts` under `apps/web/src`; no new test files added by phase (audit 2026-07-02) |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -96,3 +96,13 @@ created: 2026-07-01
 - [x] `nyquist_compliant: true` set in frontmatter
 
 **Approval:** approved 2026-07-01 (plan-checker re-verification, revised 10-plan set)
+
+## Validation Audit 2026-07-02
+
+| Metric | Count |
+|--------|-------|
+| Gaps found | 0 |
+| Resolved | 0 |
+| Escalated | 0 |
+
+Retroactive Nyquist audit (post-execution, post-68-11/68-12 gap closure). All unit-tier rows re-run live and green: `packages/sdk` `rotation-high-water.test.ts` + `client-rotation.test.ts` → 44/44 passed; `apps/api` `shares.controller.spec.ts` + `shares.service.spec.ts` → 47/47 passed (includes the `updateGrant` D-10/D-11 describe block). Web-e2e rows (`rotation-durability.spec.ts` 3 tests, `rotation-ux.spec.ts` 4 tests) are authored, `tsc --noEmit` clean, and registered via `playwright test --list`; execution happens at the push-to-main CI gate — that is the tier this phase's own doctrine assigns them (web-e2e is not a per-commit/local gate), not a coverage gap. SC#5 static check: `find apps/web/src -name "*.spec.ts"` → empty; no new `apps/web/src` test files introduced by the phase. `nyquist_compliant: true` stands.
