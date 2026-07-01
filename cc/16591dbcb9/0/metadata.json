@@ -106,6 +106,37 @@
         "label": "Skill: gsd-validate-phase",
         "default_collapsed": true
       }
+    },
+    {
+      "id": "claude-skill-toolu_01ShLXV66nxBn8Kog2tjn9im",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-extract-learnings"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "4e3979c92958",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 1104,
+        "end": 1105,
+        "entry_ids": [
+          "0a050491-5324-4364-9238-ebf5617d57e5"
+        ],
+        "tool_use_id": "toolu_01ShLXV66nxBn8Kog2tjn9im"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01ShLXV66nxBn8Kog2tjn9im"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-extract-learnings",
+        "default_collapsed": true
+      }
     }
   ],
   "session_metrics": {
