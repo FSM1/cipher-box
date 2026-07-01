@@ -92,5 +92,16 @@ export {
   ShareKeyCache,
 } from './share';
 
+// Owner-reconcile driver (D-10/D-11) -- drives sdk-core's reMintGrantsRootedAt
+// with callbacks assembled from an injected transport (owner-reconcile.ts,
+// unit-tested here in packages/sdk). apps/web supplies the concrete
+// api-client transport as a thin, untested wrapper (68-07).
+export {
+  buildGrantRemintCallbacks,
+  runOwnerReconcile,
+  type OwnerReconcileTransport,
+  type GrantRow,
+} from './share';
+
 // Error handling and retry utilities
 export { isForbiddenError, isConflictError, withRevocationGuard, withConflictRetry } from './error';
