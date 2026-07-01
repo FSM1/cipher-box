@@ -1,0 +1,104 @@
+/gsd-ui-phase 68
+
+---
+
+<task-notification>
+<task-id>afa7211786fc9c1ba</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/cd0c465c-4874-497a-8bf3-d4ec2501d18c/tasks/afa7211786fc9c1ba.output</output-file>
+<status>completed</status>
+<summary>Agent "UI Design Contract Phase 68" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Committed successfully (hash `6430eaf5f`).
+
+## UI-SPEC COMPLETE
+
+**Phase:** 68 - Web Integration — Rotation UX and Durable Client State
+**Design System:** none (hand-rolled CSS custom properties, terminal/hacker aesthetic) — reused as-is, no shadcn introduced
+
+### Contract Summary
+- Spacing: existing 5-step scale (8/12/16/24/32px), no new values
+- Typography: existing scale, 1 size (11px) covers all new UI, 2 weights (400/600)
+- Color: existing 4-color semantic palette (green/error/warning + black/dark-green surfaces), no new hex values
+- Copywriting: 7 elements defined (1 badge with 3 states, 5 toast variants, 1 component extension for action buttons)
+- Registry: not applicable — project uses no component registry
+
+### File Created
+`/Users/myankelev/Code/random/cipher-box/.planning/phases/68-web-integration-rotation-ux-and-durable-client-state/68-UI-SPEC.md`
+
+### Pre-Populated From
+| Source | Decisions Used |
+|--------|---------------|
+| 68-CONTEXT.md | 8 (D-01 through D-08 relevant to UI) |
+| Codebase scan (`index.css`, `NotificationToast.tsx`, `notification.store.ts`, `AppHeader.tsx`, `layout.css`) | full design-system token set + reuse targets |
+| REQUIREMENTS.md / ROADMAP.md | phase boundary, "UI hint: yes" scoping |
+| Researcher discretion | exact badge/toast copy strings (explicitly deferred to this file per D-03) |
+
+### Key finding
+No `components.json`/shadcn anywhere in the repo — this is a hand-rolled CSS design system (terminal aesthetic, monospace, green-on-black, ASCII glyphs instead of icons). I did not run the shadcn init gate: a full, consistent design system already exists and introducing shadcn for a 5-state notification surface would be scope creep against an established pattern. The spec reuses `NotificationToast.tsx`/`notification.store.ts` (extended with an optional `action` field) and `AppHeader.tsx`'s `.header-right` slot rather than creating new components.
+
+### Ready for Verification
+UI-SPEC complete. Checker can now validate.</result>
+<usage><subagent_tokens>100159</subagent_tokens><tool_uses>21</tool_uses><duration_ms>129480</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a7a41c842b6ead9c4</task-id>
+<tool-use-id>toolu_01CEvZynbUySRnm1GYGi8G1D</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/cd0c465c-4874-497a-8bf3-d4ec2501d18c/tasks/a7a41c842b6ead9c4.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify UI-SPEC Phase 68" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Now evaluating against the 6 dimensions.
+
+**Dim 1 — Copywriting:** All CTAs specific ("Refresh access", "Retry" — both action+context, not bare "Submit/OK"). Error copy has solution path (D-06 "retry", D-01 "Refresh access"). No destructive actions in scope (confirmed N/A). PASS.
+
+**Dim 2 — Visuals:** Focal point declared for badge placement (header, before UserMenu) and toast hierarchy is clear (existing pattern). Icon-only actions: none — all text glyphs with inline labels. PASS.
+
+**Dim 3 — Color:** Accent (`--color-green-primary`) reserved list is specific (focus rings, borders, badge idle/in-progress states) — not "all interactive elements". Destructive color declared (`--color-error`) matching destructive-adjacent error toasts. 60/30/10 split explicitly declared. PASS.
+
+**Dim 4 — Typography:** 2 font sizes (11px, 14px) — well under 4. 2 weights (400, 600) — at the max but explicitly capped ("do not introduce a third"). Line height declared (1.5). PASS.
+
+**Dim 5 — Spacing:** Scale is xs(8) sm(12) md(16) lg(24) xl(32) — all multiples of 4. One exception noted: badge padding `4px 8px` — 4px is a multiple of 4, justified as copied from existing chrome. PASS.
+
+**Dim 6 — Registry Safety:** No registries in use, shadcn not initialized, but manual design system (existing terminal CSS token set) is explicitly declared and reused. Per dimension 6 FLAG criteria, this is fine since a manual design system is declared. PASS.
+
+## UI-SPEC Review — Phase 68
+
+```
+Dimension 1 — Copywriting:     PASS
+Dimension 2 — Visuals:         PASS
+Dimension 3 — Color:           PASS
+Dimension 4 — Typography:      PASS
+Dimension 5 — Spacing:         PASS
+Dimension 6 — Registry Safety: PASS
+
+Status: APPROVED
+```
+
+## UI-SPEC VERIFIED
+
+**Phase:** 68 - Web Integration — Rotation UX and Durable Client State
+**Status:** APPROVED
+
+### Dimension Results
+| Dimension | Verdict | Notes |
+|-----------|---------|-------|
+| 1 Copywriting | PASS | CTAs are specific ("Refresh access", "Retry"); no destructive actions in scope |
+| 2 Visuals | PASS | Badge placement + toast hierarchy declared; no icon-only actions |
+| 3 Color | PASS | Accent reserved list is specific, not blanket; destructive color scoped to errors |
+| 4 Typography | PASS | 2 sizes, 2 weights, line-height 1.5 declared |
+| 5 Spacing | PASS | All values multiples of 4; sole exception (4px badge padding) justified |
+| 6 Registry Safety | PASS | No shadcn/registries; existing manual design system explicitly reused |
+
+### Recommendations
+No recommendations.
+
+### Ready for Planning
+UI-SPEC approved. Planner can use as design context.
+
+File: `/Users/myankelev/Code/random/cipher-box/.planning/phases/68-web-integration-rotation-ux-and-durable-client-state/68-UI-SPEC.md` — note this agent is read-only; the researcher/orchestrator should update the frontmatter `status: approved` and check off the Checker Sign-Off boxes.</result>
+<usage><subagent_tokens>39751</subagent_tokens><tool_uses>2</tool_uses><duration_ms>17458</duration_ms></usage>
+</task-notification>
