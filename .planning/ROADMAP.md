@@ -354,7 +354,7 @@ Plans:
 3. The canonical `ipns_records` row is the sole source of the TEE's signing inputs; `ipns_republish_schedule`'s duplicated `latestCid`/`sequenceNumber`/`encryptedIpnsKey`/`keyEpoch` columns are collapsed; no signing inputs are sourced from the schedule snapshot
 4. The EOL-only renewal uses the same atomic CAS guard (`WHERE sequenceNumber = :loaded`), so it can never regress `latestCid`/`sequenceNumber`; a TEE republish E2E round-trip (staging or local stack) confirms the new contract end-to-end
 
-**Plans**: 5/8 plans executed
+**Plans**: 6/8 plans executed
 
 Plans:
 
@@ -368,7 +368,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1)*
 
-- [ ] 67-06-PLAN.md — TEE route verify-in-enclave rewrite: verify→name↔key binding→no-increment re-sign [TEE-01, TEE-02, TEE-06]
+- [x] 67-06-PLAN.md — TEE route verify-in-enclave rewrite: verify→name↔key binding→no-increment re-sign [TEE-01, TEE-02, TEE-06]
 - [ ] 67-07-PLAN.md — Relay reshape: ipns_records JOIN + marshaled-record contract + renewIpnsRecordEol equality CAS + 2-arg enrollFolder [TEE-03, TEE-06]
 
 **Wave 3** *(blocked on Wave 2)*
@@ -437,7 +437,7 @@ Plans:
 | 64 | Rotation Soundness — Revocation Guarantees | 8/8 | Complete   | 2026-06-29 |
 | 65 | SDK Write-Chain, Bin Re-link, and Invite Claim | 7/7 | Complete    | 2026-06-30 |
 | 66 | API Schema Cutover, Publish Gate, and Tombstone | 9/9 | Complete    | 2026-06-30 |
-| 67 | TEE Lease-Renewer Contract Rewrite | 5/8 | In Progress|  |
+| 67 | TEE Lease-Renewer Contract Rewrite | 6/8 | In Progress|  |
 | 68 | Web Integration — Rotation UX and Durable Client State | 0/? | Not started | - |
 | 69 | FUSE and WinFsp — Rust Integration and Grant-Root Awareness | 0/? | Not started | - |
 
