@@ -27,7 +27,12 @@ import { clearBytes, unwrapKey, hexToBytes } from '@cipherbox/crypto';
 import pLimit from 'p-limit';
 import type { BinEntry, SealedChildRef, PublishedNode } from '@cipherbox/core';
 import { sealChildReadKey, unsealChildReadKey } from '@cipherbox/core';
-import type { CipherBoxClientConfig, FolderState, SharedFolderState } from './types';
+import type {
+  CipherBoxClientConfig,
+  FolderState,
+  SharedFolderState,
+  RotationClientCallbacks,
+} from './types';
 import { SdkEventEmitter, type SdkEvent, type SdkEventHandler } from './events';
 import { FolderTree } from './state/folder-tree';
 import { SharedFolderTree } from './state/shared-folder-tree';
@@ -73,6 +78,20 @@ export class ReconcileStaleError extends Error {
   }
 }
 
+/**
+ * Default rotation callbacks used when a `CipherBoxClient` is constructed
+ * without `config.rotationCallbacks`. Every callback is a safe no-op so
+ * `hasCoveringGrant` always finds zero coverage and `maybeRotateOnScopeExit`
+ * never invokes `deps.rotate` -- i.e. an unconfigured client performs zero
+ * rotation, identical to pre-Phase-68 behavior. Concrete web callbacks are
+ * wired in Phase 68-08.
+ */
+const NOOP_ROTATION_CALLBACKS: RotationClientCallbacks = {
+  getActiveGrantRootIpnsNames: async () => new Set<string>(),
+  getLocalGrantRecord: () => null,
+  persistJob: () => {},
+};
+
 export class CipherBoxClient {
   private config: CipherBoxClientConfig;
   private ctx: SdkContext;
@@ -115,6 +134,7 @@ export class CipherBoxClient {
       vaultKeypair: this.internalVaultKeypair,
       rootFolderKey: this.internalRootFolderKey,
       rootIpnsKeypair: this.internalRootIpnsKeypair ?? undefined,
+      rotationCallbacks: config.rotationCallbacks ?? NOOP_ROTATION_CALLBACKS,
     };
     const axiosInstance =
       config.axiosInstance ??
@@ -506,6 +526,62 @@ export class CipherBoxClient {
   }
 
   /**
+   * Scope-exit rotation trigger (SC#2 / SC#4), composed via the sdk-core
+   * `maybeRotateOnScopeExit` gate. Builds `CoverageParams` from the injected
+   * `rotationCallbacks` seam (defaulting to no-op / zero rotation when the
+   * host supplies none) and, when covered, invokes `rotateReadFromNode`
+   * exactly once via the injected `deps.rotate`.
+   *
+   * `ancestorIpnsNames` is leaf-first per `scope.ts`'s contract. This SDK does
+   * not currently track a full parent-chain in `FolderTree` (out of this
+   * plan's file scope), so callers pass the directly-mutated node's own IPNS
+   * name(s) -- the coverage check still correctly detects a grant rooted AT
+   * the mutated node itself. Extending to a full multi-level ancestor walk
+   * requires `FolderTree` parent tracking, deferred to a later plan.
+   */
+  private async performScopeExitRotation(params: {
+    ancestorIpnsNames: string[];
+    rootNodeIpnsName: string;
+    rootNodeId: string;
+    rootReadKey: Uint8Array;
+    rootIpnsPrivateKey: Uint8Array;
+    rootIpnsPublicKey: Uint8Array;
+  }): Promise<void> {
+    const callbacks = this.config.rotationCallbacks ?? NOOP_ROTATION_CALLBACKS;
+    const activeGrantRootIpnsNames = await callbacks.getActiveGrantRootIpnsNames();
+    const localGrantRecord = callbacks.getLocalGrantRecord(params.rootNodeIpnsName);
+
+    await sdkCore.maybeRotateOnScopeExit(
+      {
+        nodeAncestorIpnsNames: params.ancestorIpnsNames,
+        activeGrantRootIpnsNames,
+        localGrantRecord,
+      },
+      {
+        rotate: async () => {
+          const jobRecord: sdkCore.RotationJobRecord = {
+            rootNodeId: params.rootNodeId,
+            status: 'pending',
+            completedNodeIds: new Set(),
+            frontier: [],
+            persistCallback: callbacks.persistJob,
+          };
+          await sdkCore.rotateReadFromNode({
+            rootNodeId: params.rootNodeId,
+            rootNodeIpnsName: params.rootNodeIpnsName,
+            rootReadKey: params.rootReadKey,
+            rootIpnsPrivateKey: params.rootIpnsPrivateKey,
+            rootIpnsPublicKey: params.rootIpnsPublicKey,
+            jobRecord,
+            ctx: this.ctx,
+          });
+          callbacks.progress?.('rotated');
+        },
+      }
+    );
+  }
+
+  /**
    * Create a new subfolder inside an existing folder.
    *
    * Generates IPNS keypair and folder key, wraps with user's public key,
@@ -584,6 +660,16 @@ export class CipherBoxClient {
         ipnsName: folderIpnsName,
         children: publishedChildren,
         sequenceNumber: newSequenceNumber,
+      });
+
+      // 5. Scope-exit rotation (SC#2/SC#4): rotate this folder's read chain when covered.
+      await this.performScopeExitRotation({
+        ancestorIpnsNames: [folderIpnsName],
+        rootNodeIpnsName: folderIpnsName,
+        rootNodeId: folder.nodeId,
+        rootReadKey: folder.folderKey,
+        rootIpnsPrivateKey: folder.ipnsKeypair.privateKey,
+        rootIpnsPublicKey: folder.ipnsKeypair.publicKey,
       });
     });
   }
@@ -731,6 +817,19 @@ export class CipherBoxClient {
         children: dstChildren,
         sequenceNumber: dstSeq,
       });
+
+      // Scope-exit rotation (SC#2/SC#4): the moved child exits the SOURCE
+      // folder's scope; rotate the source's read chain when covered. Moving
+      // INTO the destination is a scope ENTRY, not an exit — no rotation is
+      // needed there (the re-seal above already re-keys the moved node for dest).
+      await this.performScopeExitRotation({
+        ancestorIpnsNames: [sourceIpnsName],
+        rootNodeIpnsName: sourceIpnsName,
+        rootNodeId: sourceFolder.nodeId,
+        rootReadKey: sourceFolder.folderKey,
+        rootIpnsPrivateKey: sourceFolder.ipnsKeypair.privateKey,
+        rootIpnsPublicKey: sourceFolder.ipnsKeypair.publicKey,
+      });
     });
   }
 
@@ -792,7 +891,17 @@ export class CipherBoxClient {
         sequenceNumber: newSequenceNumber,
       });
 
-      // 5. Fire-and-forget IPNS unenrollment (resolve async collection then dispatch)
+      // 5. Scope-exit rotation (SC#2/SC#4): rotate this folder's read chain when covered.
+      await this.performScopeExitRotation({
+        ancestorIpnsNames: [folderIpnsName],
+        rootNodeIpnsName: folderIpnsName,
+        rootNodeId: folder.nodeId,
+        rootReadKey: folder.folderKey,
+        rootIpnsPrivateKey: folder.ipnsKeypair.privateKey,
+        rootIpnsPublicKey: folder.ipnsKeypair.publicKey,
+      });
+
+      // 6. Fire-and-forget IPNS unenrollment (resolve async collection then dispatch)
       this.collectRemovedItemIpnsNames(removedItem)
         .then((names) => this.fireAndForgetUnenroll(names))
         .catch((err) => console.warn('[CipherBox] IPNS unenroll collection failed:', err));
@@ -1554,6 +1663,19 @@ export class CipherBoxClient {
         sequenceNumber: folderState?.sequenceNumber ?? 0n,
       });
       this.emitter.emit({ type: 'bin:updated', entries: updatedBinState.entries });
+
+      // Scope-exit rotation (SC#2/SC#4): the deleted item exits this folder's
+      // scope; rotate its read chain when covered. folder.folderKey/nodeId/
+      // ipnsKeypair are unaffected by a bin delete (only children/sequenceNumber
+      // change), so the pre-addToBin snapshot remains valid here.
+      await this.performScopeExitRotation({
+        ancestorIpnsNames: [folderIpnsName],
+        rootNodeIpnsName: folderIpnsName,
+        rootNodeId: folder.nodeId,
+        rootReadKey: folder.folderKey,
+        rootIpnsPrivateKey: folder.ipnsKeypair.privateKey,
+        rootIpnsPublicKey: folder.ipnsKeypair.publicKey,
+      });
 
       // No IPNS unenrollment here — soft delete preserves items for restore.
       // Unenrollment happens on permanentDelete() or emptyBin().
