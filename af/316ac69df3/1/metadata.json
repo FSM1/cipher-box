@@ -1,0 +1,75 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "af316ac69df3",
+  "session_id": "fbd17674-5430-418c-aebc-91949e271095",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-01T02:28:07.703496Z",
+  "branch": "feat/tee-lease-renewer-contract-rewrite",
+  "checkpoints_count": 6,
+  "save_step_count": 1,
+  "files_touched": [
+    "tests/sdk-e2e/src/suites/tee-republish.test.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "819c7c0149e9",
+  "token_usage": {
+    "input_tokens": 49780,
+    "cache_creation_tokens": 932631,
+    "cache_read_tokens": 42779047,
+    "output_tokens": 309157,
+    "api_call_count": 166
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-execute-phase-2026-06-30T23:26:15.486782Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "a2ad41d1bc30",
+      "timestamp": "2026-06-30T23:26:15.486782Z",
+      "native": {
+        "command": "/gsd-execute-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 20
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-01T02:27:13.772324Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 17,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 17,
+    "total_lines_changed": 42,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
