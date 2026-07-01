@@ -55,6 +55,23 @@ let pool: pg.Pool;
 beforeAll(async () => {
   fixture = await createMultiAccountFixture(['alice', 'bob']);
   pool = new pg.Pool(DB_CONFIG);
+
+  // Guard (T-67-08-T): assert the schedule-collapse migration is applied — the four
+  // signing-input columns MUST be absent. The round-trip below would still pass against
+  // an un-migrated DB (the dropped columns would merely sit unused), so without this
+  // check the suite could green on a stale schema. Fail loudly instead.
+  const { rows } = await pool.query<{ column_name: string }>(
+    `SELECT column_name FROM information_schema.columns
+     WHERE table_name = 'ipns_republish_schedule'
+       AND column_name IN ('encrypted_ipns_key', 'key_epoch', 'latest_cid', 'sequence_number')`
+  );
+  if (rows.length > 0) {
+    throw new Error(
+      `ScheduleCollapse migration not applied — ipns_republish_schedule still has signing ` +
+        `columns: ${rows.map((r) => r.column_name).join(', ')}. ` +
+        `Run: DB_DATABASE=cipherbox pnpm --filter @cipherbox/api migration:run`
+    );
+  }
 });
 
 afterAll(async () => {
