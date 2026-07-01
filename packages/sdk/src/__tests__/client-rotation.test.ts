@@ -439,6 +439,120 @@ describe('CipherBoxClient — scope-exit rotation wiring (SC#2 / SC#4, Task 2)',
   });
 });
 
+describe('CipherBoxClient — folderTree refresh after scope-exit rotation (Gap 2)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockResolveMatching(1n); // reconcile always agrees unless a test overrides it
+  });
+
+  it('refreshes the folderTree entry with the rotated readKey/generation/sequenceNumber after a covered mutation', async () => {
+    const client = new CipherBoxClient(
+      createTestConfig({
+        rotationCallbacks: {
+          getActiveGrantRootIpnsNames: async () => new Set([FOLDER_IPNS]),
+          getLocalGrantRecord: () => null,
+          persistJob: vi.fn(),
+        },
+      })
+    );
+    setupFolder(client, FOLDER_IPNS); // sequenceNumber: 1n, nodeGeneration: 0
+    vi.mocked(sdkCore.renameInFolder).mockReturnValue({
+      updatedChildren: [],
+      renamedChild: {} as never,
+    });
+    vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
+      cid: 'bafynew',
+      newSequenceNumber: 2n,
+      publishedChildren: [],
+    });
+    const rotatedReadKey = new Uint8Array(32).fill(0x99);
+    vi.mocked(sdkCore.rotateReadFromNode).mockResolvedValue({
+      readKey: rotatedReadKey,
+      generation: 5,
+      sequenceNumber: 10n,
+    });
+
+    await client.renameItem(FOLDER_IPNS, 'file1', 'new.txt');
+
+    const state = client.getFolderTree().get(FOLDER_IPNS);
+    expect(state).toBeDefined();
+    expect(state?.folderKey).toEqual(rotatedReadKey);
+    expect(state?.sequenceNumber).toBe(10n);
+    expect(state?.nodeGeneration).toBe(5);
+  });
+
+  it('a second same-folder mutation after a covered rotation does NOT throw ReconcileStaleError (self-heals without a page reload)', async () => {
+    const client = new CipherBoxClient(
+      createTestConfig({
+        rotationCallbacks: {
+          getActiveGrantRootIpnsNames: async () => new Set([FOLDER_IPNS]),
+          getLocalGrantRecord: () => null,
+          persistJob: vi.fn(),
+        },
+      })
+    );
+    setupFolder(client, FOLDER_IPNS); // sequenceNumber: 1n
+    vi.mocked(sdkCore.renameInFolder).mockReturnValue({
+      updatedChildren: [],
+      renamedChild: {} as never,
+    });
+    vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
+      cid: 'bafynew',
+      newSequenceNumber: 2n,
+      publishedChildren: [],
+    });
+    // The rotation republish advances the REAL network sequence to 3n (root cut).
+    vi.mocked(sdkCore.rotateReadFromNode).mockResolvedValue({
+      readKey: new Uint8Array(32).fill(0x99),
+      generation: 1,
+      sequenceNumber: 3n,
+    });
+    mockResolveMatching(1n); // first mutation's reconcile agrees with pre-rotation state
+
+    await client.renameItem(FOLDER_IPNS, 'file1', 'new.txt');
+
+    // Second mutation: the network now resolves at the ROTATED sequence (3n).
+    // Pre-68-12 the in-memory folderTree would still read 2n (never refreshed
+    // by the rotation) and this reconcile would throw ReconcileStaleError.
+    mockResolveMatching(3n);
+    vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
+      cid: 'bafynew2',
+      newSequenceNumber: 4n,
+      publishedChildren: [],
+    });
+    vi.mocked(sdkCore.rotateReadFromNode).mockResolvedValue(undefined);
+
+    await client.renameItem(FOLDER_IPNS, 'file1', 'renamed-again.txt');
+
+    expect(client.getFolderTree().get(FOLDER_IPNS)?.sequenceNumber).toBe(4n);
+  });
+
+  it('leaves folderTree unchanged when the mutation is uncovered (rotateReadFromNode not invoked)', async () => {
+    const client = new CipherBoxClient(createTestConfig()); // no rotationCallbacks => NOOP => never covered
+    setupFolder(client, FOLDER_IPNS);
+    const before = client.getFolderTree().get(FOLDER_IPNS)!;
+    const beforeFolderKeyCopy = new Uint8Array(before.folderKey);
+
+    vi.mocked(sdkCore.renameInFolder).mockReturnValue({
+      updatedChildren: [],
+      renamedChild: {} as never,
+    });
+    vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
+      cid: 'bafynew',
+      newSequenceNumber: 2n,
+      publishedChildren: [],
+    });
+
+    await client.renameItem(FOLDER_IPNS, 'file1', 'new.txt');
+
+    expect(sdkCore.rotateReadFromNode).not.toHaveBeenCalled();
+    const after = client.getFolderTree().get(FOLDER_IPNS);
+    expect(after?.folderKey).toEqual(beforeFolderKeyCopy);
+    expect(after?.nodeGeneration).toBe(0);
+    expect(after?.sequenceNumber).toBe(2n); // advanced only by the mutation's own publish
+  });
+});
+
 describe('CipherBoxClient.moveItem — dest-before-source publish ordering (D-12, Task 3)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
