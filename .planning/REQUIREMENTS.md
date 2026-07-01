@@ -72,6 +72,15 @@ Requirements for v2.0. Each maps to exactly one roadmap phase. Categories: CRYPT
 - [x] **TEST-02**: The TS↔Rust AAD KAT is a single committed fixture asserted by both `packages/crypto/__tests__` and a Rust `#[test]` (a byte mismatch is silent total decryption failure)
 - [ ] **TEST-03**: The winfsp read-path is validated via `Cargo Check & Test (Windows)` (authoritative) and the dispatch-gated desktop E2E is triggered explicitly
 
+### WEB — client/web runtime integration
+
+The sdk-core read/write chains shipped in Phases 63/65 but the web app + `CipherBoxClient` runtime wiring was deferred as `not implemented — phase 63/65` stubs. These requirements cover that deferred integration (wiring to existing primitives), gated by the web-e2e suite.
+
+- [ ] **WEB-01**: The web app's read runtime is wired to the sdk-core read-chain — login initializes/loads the root Node and reaches the vault, owned folder navigation resolves via `ensureFolderLoaded` (read+write chain), subfolders create, and owned file read (metadata, raw-`fileKey` download, preview, AES-CTR streaming) resolves via the Node read-chain (replaces the 17 `phase 63` stubs)
+- [ ] **WEB-02**: The web app's owned-write runtime is wired to the sdk-core write-chain — file upload/create, replace/update/save, versions (restore/delete/download/check), delete→`readKey`-sealed bin re-link, and move (link-rewrite) work end-to-end (replaces the owned-write `phase 65` stubs)
+- [ ] **WEB-03**: The web app's shared + sharing runtime is wired — shared-folder read navigation + shared-file download via `navigateReadChain`, shared-folder write ops (rename/delete/move/batch move, shared file update), plus share creation, permission upgrade, and invite create+claim (replaces the shared `phase 63/65` stubs)
+- [ ] **WEB-04**: The full `tests/web-e2e` Playwright suite passes end-to-end against the standard local/CI stack (login→browse→upload→download→share→delete→versions→rotation UX), validating Phases 62–68 at runtime; `apps/web/src` adds zero `*.spec.ts` files (SC#5 doctrine — logic in SDK, UI via web-e2e)
+
 ## Future Requirements (deferred)
 
 ### Capability layer (Tier 3)
@@ -143,6 +152,10 @@ Which phases cover which requirements. Populated during roadmap creation.
 | TEE-03 | Phase 67 | Complete |
 | TEE-06 | Phase 67 | Complete |
 | ROT-07 | Phase 68 | Complete |
+| WEB-01 | Phase 68.1 | Pending |
+| WEB-02 | Phase 68.1 | Pending |
+| WEB-03 | Phase 68.1 | Pending |
+| WEB-04 | Phase 68.1 | Pending |
 | TEST-03 | Phase 69 | Pending |
 
 **Coverage:**

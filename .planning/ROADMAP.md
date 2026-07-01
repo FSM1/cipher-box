@@ -431,6 +431,30 @@ Plans:
 
 ---
 
+### Phase 68.1: Web Client Runtime Integration
+
+**Goal**: The v2.0 web app runs end-to-end on the `node/v3` read+write chain — login initializes/loads the root Node, folders navigate, files upload/download/preview/stream, versions and bin work, and sharing (grant/invite/shared-folder ops) functions — replacing all 46 `not implemented — phase 63/65` runtime stubs by wiring the web app + `CipherBoxClient` to the existing `packages/sdk-core` primitives. The full `tests/web-e2e` Playwright suite passes, finally validating Phases 62–68 at runtime.
+
+**Depends on**: Phase 63 (read-chain sdk-core), Phase 65 (write-chain sdk-core), Phase 66 (API/DB cutover), Phase 68 (rotation UX)
+
+**Requirements**: WEB-01, WEB-02, WEB-03, WEB-04
+
+**Context**: web-e2e has not run green since the start of Milestone 4 — the sdk-core read/write chains shipped (Phases 63/65) but the web + `client.ts` wiring was deferred as `not implemented — phase 63/65` stubs. This phase is the deferred integration, gated by the web-e2e suite. Scope is runtime wiring to existing primitives only; two small new sdk-core helpers are permitted (empty-root-Node publish; raw-`fileKey` download). No new crypto/codec design.
+
+**Success Criteria** (what must be TRUE):
+
+1. No `not implemented — phase 63` or `not implemented — phase 65` throw remains reachable from any live web/`client.ts` runtime path (`grep -rn "not implemented — phase 6" packages/sdk/src apps/web/src` returns only test/commented references, if any)
+2. A new user logs in, an empty root Node is published via the Node codec, and the app reaches `/files`; an existing user's root loads — the login→vault flow completes without throwing
+3. Owned flows work end-to-end in the browser: folder navigate/create, file upload/create, download, preview, AES-CTR streaming, replace/update/save, versions (restore/delete/download), delete→bin re-link, and move
+4. Shared flows work end-to-end: shared-folder read navigation + shared-file download (`navigateReadChain`), shared-folder write ops (rename/delete/move/batch, shared file update), share creation, permission upgrade, and invite create+claim
+5. The full `tests/web-e2e` Playwright suite passes locally against the standard stack (all specs, not a subset); `find apps/web/src -name "*.spec.ts"` stays empty (logic in SDK, UI via web-e2e — SC#5 doctrine)
+
+**Plans**: 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 68.1 to break down)
+
 ### Phase 69: FUSE and WinFsp — Rust Integration and Grant-Root Awareness
 
 **Goal**: The FUSE and WinFsp clients use symmetric key unwrap throughout, grant-root awareness gates scope-exit mutations, `Node` is a real Rust enum, and the Windows CI gate passes.
