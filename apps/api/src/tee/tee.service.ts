@@ -5,22 +5,20 @@ import type { ConnectionTestResponseDto } from './dto/connection-test.dto';
 
 /**
  * A single entry in a batch republish request to the TEE worker.
+ *
+ * D-02 / TEE-03: ALL signing inputs come from the canonical ipns_records row,
+ * never from the schedule snapshot. The TEE self-derives its epoch from the
+ * encrypted key — currentEpoch/previousEpoch are NOT sent (removed per D-03).
  */
 export interface RepublishEntry {
-  /** Base64-encoded ECIES-encrypted IPNS Ed25519 private key */
+  /** Base64-encoded ECIES-encrypted IPNS Ed25519 private key (from ipns_records) */
   encryptedIpnsKey: string;
-  /** TEE key epoch the IPNS key was encrypted for */
+  /** TEE key epoch the IPNS key was encrypted for (from ipns_records) */
   keyEpoch: number;
   /** IPNS name (k51... or bafzaa...) */
   ipnsName: string;
-  /** CID of the latest encrypted folder metadata */
-  latestCid: string;
-  /** Current IPNS sequence number (bigint as string) */
-  sequenceNumber: string;
-  /** Current active TEE epoch */
-  currentEpoch: number;
-  /** Previous TEE epoch (null if no grace period active) */
-  previousEpoch: number | null;
+  /** Base64-encoded canonical signed IPNS record (from ipns_records.signed_record) */
+  signedRecord: string;
 }
 
 /**
@@ -31,16 +29,19 @@ export interface RepublishResult {
   ipnsName: string;
   /** Whether the signing succeeded */
   success: boolean;
-  /** Base64-encoded signed IPNS record (present on success) */
+  /** Base64-encoded renewed signed IPNS record with later EOL (present on success) */
   signedRecord?: string;
-  /** New sequence number after signing (present on success) */
+  /** Sequence number (same as loaded — EOL-only renewal does not increment it) */
   newSequenceNumber?: string;
-  /** Base64-encoded re-encrypted IPNS key if epoch was upgraded (present if key epoch changed) */
+  /** Base64-encoded re-encrypted IPNS key if epoch was upgraded */
   upgradedEncryptedKey?: string;
-  /** New key epoch if the key was re-encrypted (present if key epoch changed) */
+  /** New key epoch if the key was re-encrypted */
   upgradedKeyEpoch?: number;
   /** Error message (present on failure) */
   error?: string;
+  /** When true, the IPNS key can no longer be decrypted by any known TEE epoch;
+   *  the folder must be re-enrolled (deferred to Phase 68/69). */
+  requiresReEnroll?: true;
 }
 
 /** Default timeout for TEE worker HTTP requests (30 seconds) */
