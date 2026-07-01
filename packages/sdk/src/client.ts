@@ -529,6 +529,16 @@ export class CipherBoxClient {
     // to useMutationFailureUx's D-05 classifier) rather than being silenced.
     // Omitted when unconfigured -- zero enforcement, matching prior behavior.
     if (this.config.rotationHighWater) {
+      // The durable floor stores JS numbers; sequences beyond MAX_SAFE_INTEGER
+      // would silently truncate through Number() and corrupt the floor.
+      if (
+        resolved.sequenceNumber > BigInt(Number.MAX_SAFE_INTEGER) ||
+        expectedSequence > BigInt(Number.MAX_SAFE_INTEGER)
+      ) {
+        throw new Error(
+          `IPNS sequence number for ${ipnsName} exceeds Number.MAX_SAFE_INTEGER -- refusing lossy floor conversion`
+        );
+      }
       const nodeGeneration = this.folderTree.get(ipnsName)?.nodeGeneration ?? 0;
       await this.config.rotationHighWater.enforceResolved({
         nodeId: ipnsName,
@@ -730,7 +740,14 @@ export class CipherBoxClient {
     rootReadKey: Uint8Array,
     rootKind: PublishedNode['kind']
   ): void {
-    if (rootKind !== 'folder' && rootKind !== 'root') return;
+    // This wrapper receives a dedicated copy of the read key (see the moveItem
+    // call site) and is its terminal owner (D-09) -- zero it on every exit
+    // path, including the non-folder short-circuit and after the async walk
+    // settles (the walk itself never zeroes its root key).
+    if (rootKind !== 'folder' && rootKind !== 'root') {
+      rootReadKey.fill(0);
+      return;
+    }
     this.enumerateMoveDescendants(rootIpnsName, rootReadKey, rootKind)
       .then(({ unreadableIpnsNames }) => {
         if (unreadableIpnsNames.length > 0) {
@@ -741,7 +758,8 @@ export class CipherBoxClient {
           );
         }
       })
-      .catch((err) => console.warn('[CipherBox] moveItem: descendant enumeration failed:', err));
+      .catch((err) => console.warn('[CipherBox] moveItem: descendant enumeration failed:', err))
+      .finally(() => rootReadKey.fill(0));
   }
 
   /**
