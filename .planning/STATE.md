@@ -5,16 +5,16 @@ milestone_name: Metadata and Sharing Refactor
 current_phase: 68
 current_phase_name: web-integration-rotation-ux-and-durable-client-state
 status: executing
-stopped_at: Completed 68-11-PLAN.md (ROT-07 Gap 1 closure)
-last_updated: "2026-07-01T19:49:09.026Z"
+stopped_at: Completed 68-12-PLAN.md (ROT-07 Gap 2 closure)
+last_updated: "2026-07-01T20:06:13.036Z"
 last_activity: 2026-07-01
-last_activity_desc: Phase 68 execution started
+last_activity_desc: Completed 68-12-PLAN.md (ROT-07 Gap 2 closure)
 progress:
   total_phases: 9
-  completed_phases: 7
+  completed_phases: 8
   total_plans: 65
-  completed_plans: 64
-  percent: 78
+  completed_plans: 65
+  percent: 89
 ---
 
 # Project State
@@ -28,12 +28,12 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 
 ## Current Position
 
-Phase: 68 (web-integration-rotation-ux-and-durable-client-state) — EXECUTING
-Plan: 2 of 12
-Status: Ready to execute
-Last activity: 2026-07-01 — Phase 68 execution started
+Phase: 68 (web-integration-rotation-ux-and-durable-client-state) — ALL PLANS COMPLETE
+Plan: 12 of 12
+Status: 68-12 executed (VERIFICATION Gap 2 closure); awaiting phase-level re-verification
+Last activity: 2026-07-01 — Completed 68-12-PLAN.md (ROT-07 Gap 2 closure)
 
-Progress: `████████░░` 7 / 9 phases (78%)
+Progress: `█████████░` 8 / 9 phases (89%)
 
 ## Deferred Items
 
@@ -223,6 +223,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 67 P05 | 171 | 2 tasks | 4 files |
 | Phase 67 P06 | 20m | 1 tasks | 2 files |
 | Phase 68 P11 | 25min | 3 tasks | 6 files |
+| Phase 68 P12 | 4min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -443,6 +444,8 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase 68-11]: reconcileFolderSequence sources enforceResolved's generation param from the in-memory folderTree nodeGeneration (never the resolved envelope's own generation)
 - [Phase 68-11]: handleSync's ResolveRotationContext.generation hardcoded to 0 (useFolderStore carries no root generation field), matching the SDK client's own default
 - [Phase 68-11]: rotation-durability.spec.ts SC#4 proof now drives two real UI renames (seed+bump, then a rejected rename after stale-bytes replay) instead of direct module invocation; RenameDialog does not close on a failed mutation so the spec drives the form fields directly for the rejection step
+- [Phase 68-12]: rotateReadFromNode returns are keyed off rootResult.skipped (checked once at the end), not job-record status; both clean-resume and dirty-resume paths correctly return undefined since neither mints a fresh root key
+- [Phase 68-12]: performScopeExitRotation zeroes the OLD folderTree folderKey only AFTER the Map.set() swap and only post-flight (rotateReadFromNode has already returned) -- never zeroes rotationResult.readKey or the caller-supplied rootReadKey mid-flight
 
 ## Operator Next Steps
 
@@ -450,6 +453,7 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-01T19:49:09.020Z
-**Stopped at:** Completed 68-11-PLAN.md (ROT-07 Gap 1 closure)
-**Resume file:** None
+**Last session:** 2026-07-01T20:06:13.030Z
+**Stopped at:** Completed 68-12-PLAN.md (ROT-07 Gap 2 closure)
+**Resume file:** 
+None

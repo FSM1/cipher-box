@@ -67,7 +67,7 @@
 - [x] **Phase 65: SDK Write-Chain, Bin Re-link, and Invite Claim** — Structured write-body, (c) full Ed25519 write-revocation, bin restore as pure re-link, invite claim re-wrap; delete `addShareKeys`/`reWrapForRecipients`/`encryptedChildKeys` (completed 2026-06-30)
 - [x] **Phase 66: API Schema Cutover, Publish Gate, and Tombstone** — Delete `share_keys`, slim `shares`, rename `folder_ipns` → `ipns_records`, drop `public_key`, atomic CAS publish, tombstone state, resolve case-split, server-side generation gate; run `pnpm api:generate` (completed 2026-06-30)
 - [x] **Phase 67: TEE Lease-Renewer Contract Rewrite** — TEE becomes a record-lease-renewer (no CID origination, no sequence increment), internal epoch derivation, name↔key binding, tombstone guard (completed 2026-07-01)
-- [ ] **Phase 68: Web Integration — Rotation UX and Durable Client State** — Replace `executeLazyRotation` with `rotateReadFromNode`, durable IndexedDB generation + seq high-water (M1 defense, survives restart), `folderTree` reconcile-before-rotate (all 10 plans executed 2026-07-01; verification `gaps_found` — 2 gaps blocking ROT-07, see 68-VERIFICATION.md)
+- [x] **Phase 68: Web Integration — Rotation UX and Durable Client State** — Replace `executeLazyRotation` with `rotateReadFromNode`, durable IndexedDB generation + seq high-water (M1 defense, survives restart), `folderTree` reconcile-before-rotate (all 10 plans executed 2026-07-01; verification `gaps_found` — 2 gaps blocking ROT-07, see 68-VERIFICATION.md) (completed 2026-07-01)
 - [ ] **Phase 69: FUSE and WinFsp — Rust Integration and Grant-Root Awareness** — Symmetric child-key unwrap, `spawn_file_meta_reencrypt` deletion from both callers, grant-root scope computation, durable client floors, `Node` Rust enum, Windows CI gate
 
 ## Phase Details
@@ -397,7 +397,7 @@ Plans:
 4. A durable per-node `{nodeId → highestSeq}` seq high-water is wired into `resolveIpnsRecord` in the web resolve path; a generation or seq regression from the relay causes a fail-closed error, not silent acceptance
 5. Per docs/TESTING.md, this phase adds ZERO `apps/web` test files: core logic is hoisted to the SDK and unit-tested with Vitest, and the UI + durability are covered by Web E2E (Playwright, `tests/web-e2e/`); `find apps/web/src -name "*.spec.ts"` returns empty
 
-**Plans**: 11/12 plans executed
+**Plans**: 12/12 plans complete
 
 Plans:
 **Wave 1**
@@ -425,7 +425,7 @@ Plans:
 **Gap closure** *(from 68-VERIFICATION.md — closes the 2 failed truths; client.ts shared-file serialized across two waves)*
 
 - [x] 68-11-PLAN.md — Gap 1 (BLOCKER): make the fail-closed anti-rollback gate live — inject RotationHighWater into CipherBoxClient, gate reconcileFolderSequence via enforceResolved, thread ResolveRotationContext into handleSync, UI-driven durability spec (ROT-07/SC#4) [wave 1]
-- [ ] 68-12-PLAN.md — Gap 2: refresh folderTree after scope-exit rotation — rotateReadFromNode returns the root's rotated key/generation/seq, performScopeExitRotation writes it back so a same-session retry self-heals without reload (ROT-07/SC#3) [wave 2, depends on 68-11]
+- [x] 68-12-PLAN.md — Gap 2: refresh folderTree after scope-exit rotation — rotateReadFromNode returns the root's rotated key/generation/seq, performScopeExitRotation writes it back so a same-session retry self-heals without reload (ROT-07/SC#3) [wave 2, depends on 68-11]
 
 **UI hint**: yes
 
@@ -466,7 +466,7 @@ Plans:
 | 65 | SDK Write-Chain, Bin Re-link, and Invite Claim | 7/7 | Complete    | 2026-06-30 |
 | 66 | API Schema Cutover, Publish Gate, and Tombstone | 9/9 | Complete    | 2026-06-30 |
 | 67 | TEE Lease-Renewer Contract Rewrite | 8/8 | Complete    | 2026-07-01 |
-| 68 | Web Integration — Rotation UX and Durable Client State | 11/12 | In Progress|  |
+| 68 | Web Integration — Rotation UX and Durable Client State | 12/12 | Complete   | 2026-07-01 |
 | 69 | FUSE and WinFsp — Rust Integration and Grant-Root Awareness | 0/? | Not started | - |
 
 v1.1 history: 45 phases complete (198 plans). See `milestones/v1.1-ROADMAP.md` for full detail.
