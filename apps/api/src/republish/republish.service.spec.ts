@@ -474,14 +474,22 @@ describe('RepublishService', () => {
 
       expect(result).toEqual({ processed: 1, succeeded: 1, failed: 0 });
 
-      // Epoch upgrade MUST go to ipns_records, not the schedule
+      // Epoch upgrade MUST go to ipns_records, not the schedule — and MUST be scoped
+      // to the owner's non-tombstoned row at the loaded epoch (tombstone immutability +
+      // userId scope + epoch CAS).
       expect(ipnsRecordRepository.update).toHaveBeenCalledWith(
-        { ipnsName: 'k51test123' },
+        expect.objectContaining({ ipnsName: 'k51test123', userId: 'user-uuid-1', keyEpoch: 1 }),
         {
           encryptedIpnsPrivateKey: Buffer.from(upgradedKeyBase64, 'base64'),
           keyEpoch: 2,
         }
       );
+      // The upgrade criteria carries a tombstone guard so a tombstoned row is never re-encrypted
+      const upgradeCriteria = ipnsRecordRepository.update.mock.calls[0][0] as Record<
+        string,
+        unknown
+      >;
+      expect(upgradeCriteria).toHaveProperty('tombstonedAt');
 
       // The schedule save MUST NOT carry crypto columns
       const savedSchedule = scheduleRepository.save.mock.calls.find(

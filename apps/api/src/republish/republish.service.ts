@@ -77,6 +77,11 @@ export class RepublishService {
         ipnsName: In(ipnsNames),
         tombstonedAt: IsNull(),
         encryptedIpnsPrivateKey: Not(IsNull()),
+        // Also require the signing inputs so the teeEntries map below cannot deref a
+        // null with `!`. A row missing either drops out here (re-picked next cycle)
+        // instead of throwing outside the inner try and aborting the whole batch.
+        signedRecord: Not(IsNull()),
+        keyEpoch: Not(IsNull()),
       },
     });
 
@@ -202,8 +207,18 @@ export class RepublishService {
               this.logger.log(
                 `Epoch upgrade for ${schedule.ipnsName}: epoch ${record.keyEpoch} -> ${result.upgradedKeyEpoch}`
               );
+              // Scope the upgrade to the owner's non-tombstoned row at the loaded epoch:
+              // - tombstonedAt: IsNull() preserves tombstone immutability (never re-encrypt
+              //   a tombstoned row, even if it was tombstoned after the batch loaded)
+              // - userId pins the owner (ipnsName uniqueness is app-level, not a DB constraint)
+              // - keyEpoch equality is a CAS so a concurrent key rotation is not clobbered
               await this.ipnsRecordRepository.update(
-                { ipnsName: schedule.ipnsName },
+                {
+                  ipnsName: schedule.ipnsName,
+                  userId: record.userId,
+                  tombstonedAt: IsNull(),
+                  keyEpoch: record.keyEpoch!, // non-null: getDueEntries filters keyEpoch IS NOT NULL
+                },
                 {
                   encryptedIpnsPrivateKey: Buffer.from(result.upgradedEncryptedKey, 'base64'),
                   keyEpoch: result.upgradedKeyEpoch,
