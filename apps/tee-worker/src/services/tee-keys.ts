@@ -19,6 +19,36 @@ export const MIN_EPOCH = 1;
 export const MAX_EPOCH = 10_000;
 
 /**
+ * 4-week epoch duration in milliseconds.
+ * Must match the relay's epoch schedule configuration.
+ */
+export const EPOCH_DURATION_MS = 4 * 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Derive the current epoch from the TEE's own clock.
+ *
+ * Reads EPOCH_ZERO_TIMESTAMP_MS from the environment at call time (not module
+ * load) so tests and staged rollouts can vary it without restarting the process.
+ * Returns MIN_EPOCH (1) when the anchor is absent or in the future — a safe
+ * fallback floor that never triggers the stale-key guard.
+ *
+ * This is the §6.7-1 internal-clock derivation — it never reads a relay-supplied
+ * currentEpoch/previousEpoch scalar.
+ *
+ * @returns Current epoch number (≥ MIN_EPOCH)
+ */
+export function getInternalCurrentEpoch(): number {
+  const anchor = parseInt(process.env.EPOCH_ZERO_TIMESTAMP_MS ?? '0', 10);
+  // Treat unset (0), malformed (NaN), and non-positive anchors identically: fall
+  // back to MIN_EPOCH before any Date.now() math so a bad env var can never
+  // propagate a NaN epoch into the stale-key guard.
+  if (!Number.isFinite(anchor) || anchor <= 0) {
+    return MIN_EPOCH; // Safe fallback: no valid anchor configured → epoch 1
+  }
+  return Math.max(MIN_EPOCH, Math.floor((Date.now() - anchor) / EPOCH_DURATION_MS) + 1);
+}
+
+/**
  * Derive a deterministic secp256k1 keypair for a given epoch.
  *
  * In simulator mode, uses HKDF-SHA256 with a fixed seed.

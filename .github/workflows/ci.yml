@@ -438,6 +438,8 @@ jobs:
           pnpm --filter @cipherbox/sdk-core build
           pnpm --filter @cipherbox/sdk build
           pnpm --filter @cipherbox/api build
+          # tee-worker powers the tee-republish suite's relay->TEE->DB round-trip
+          pnpm --filter cipherbox-tee-worker build
 
       - name: Create API .env
         run: |
@@ -458,6 +460,10 @@ jobs:
           echo "TEST_LOGIN_SECRET=e2e-test-secret-ci-only" >> apps/api/.env
           echo "IDENTITY_JWT_PRIVATE_KEY=${{ secrets.IDENTITY_JWT_PRIVATE_KEY }}" >> apps/api/.env
           echo "THROTTLE_BYPASS_SECRET=ci-throttle-bypass-secret" >> apps/api/.env
+          # TEE worker (simulator) — must match the tee-worker step's secret so the
+          # onModuleInit bootstrap can fetch the public key and populate tee_key_state.
+          echo "TEE_WORKER_URL=http://localhost:3002" >> apps/api/.env
+          echo "TEE_WORKER_SECRET=ci-tee-worker-secret" >> apps/api/.env
 
       - name: Start mock IPNS routing
         run: |
@@ -474,6 +480,31 @@ jobs:
             echo "Mock IPNS routing failed to start within 15s"
             exit 1
           fi
+
+      # Start the TEE worker (simulator mode) BEFORE the API. The API's TeeModule
+      # onModuleInit runs exactly once at boot and only populates tee_key_state if the
+      # worker is reachable AND the Bearer secret matches — so the worker must be up
+      # first, or current_public_key stays empty and the tee-republish suite fails.
+      # Simulator mode derives keys via HKDF (no dstack socket / CVM hardware needed).
+      - name: Start TEE worker (simulator)
+        run: |
+          pnpm --filter cipherbox-tee-worker start &
+          for i in $(seq 1 20); do
+            if curl -fsS http://localhost:3002/health > /dev/null 2>&1; then
+              echo "TEE worker is ready"
+              break
+            fi
+            sleep 1
+          done
+          if ! curl -fsS http://localhost:3002/health > /dev/null 2>&1; then
+            echo "TEE worker failed to start within 20s"
+            exit 1
+          fi
+        env:
+          PORT: 3002
+          TEE_MODE: simulator
+          CIPHERBOX_ENVIRONMENT: development
+          TEE_WORKER_SECRET: ci-tee-worker-secret
 
       - name: Start API server
         run: |
@@ -505,6 +536,8 @@ jobs:
           REDIS_HOST: localhost
           REDIS_PORT: 6379
           TEST_LOGIN_SECRET: e2e-test-secret-ci-only
+          TEE_WORKER_URL: http://localhost:3002
+          TEE_WORKER_SECRET: ci-tee-worker-secret
 
       - name: Run SDK E2E tests
         run: pnpm --filter @cipherbox/sdk-e2e test
@@ -512,6 +545,17 @@ jobs:
           SDK_E2E_API_URL: http://localhost:3000
           SDK_E2E_SECRET: e2e-test-secret-ci-only
           THROTTLE_BYPASS_SECRET: ci-throttle-bypass-secret
+          # tee-republish.test.ts talks to postgres + redis directly. Point its
+          # DB_CONFIG at the CI database (cipherbox_test) and its BullMQ connection at
+          # the CI redis (6379) so the enqueue lands on the same instance the in-process
+          # API worker consumes (its own default is 6380 for the local docker stack).
+          DB_HOST: localhost
+          DB_PORT: 5432
+          DB_USERNAME: postgres
+          DB_PASSWORD: postgres
+          DB_DATABASE: cipherbox_test
+          REDIS_HOST: localhost
+          REDIS_PORT: 6379
 
   build:
     name: Build

@@ -27,37 +27,11 @@ export class IpnsRepublishSchedule {
   user!: User;
 
   /**
-   * IPNS name being republished (k51... or bafzaa... format)
+   * IPNS name being republished (k51... or bafzaa... format).
+   * All signing inputs are sourced from ipns_records via JOIN on this field (D-02 / TEE-03).
    */
   @Column({ type: 'varchar', length: 255, name: 'ipns_name' })
   ipnsName!: string;
-
-  /**
-   * TEE-encrypted Ed25519 private key for IPNS signing.
-   * Only decryptable by the TEE worker.
-   */
-  @Column({ type: 'bytea', name: 'encrypted_ipns_key' })
-  encryptedIpnsKey!: Buffer;
-
-  /**
-   * TEE key epoch this encrypted key was created for.
-   * Used for grace period migration during epoch rotation.
-   */
-  @Column({ type: 'int', name: 'key_epoch' })
-  keyEpoch!: number;
-
-  /**
-   * Most recent metadata CID to republish
-   */
-  @Column({ type: 'varchar', length: 255, name: 'latest_cid' })
-  latestCid!: string;
-
-  /**
-   * Current IPNS sequence number.
-   * TypeORM returns bigint as string to avoid JavaScript precision issues.
-   */
-  @Column({ type: 'bigint', name: 'sequence_number', default: 0 })
-  sequenceNumber!: string;
 
   /**
    * When the next republish is due

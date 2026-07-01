@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
-current_phase: 67
-current_phase_name: TEE Lease-Renewer Contract Rewrite
+current_phase: 68
+current_phase_name: Web Integration — Rotation UX and Durable Client State
 status: executing
-stopped_at: Phase 66 context gathered
-last_updated: "2026-06-30T17:37:47.789Z"
-last_activity: 2026-06-30
-last_activity_desc: Phase 66 complete, transitioned to Phase 67
+stopped_at: Phase 67 context gathered
+last_updated: "2026-07-01T01:52:28.854Z"
+last_activity: 2026-07-01
+last_activity_desc: Phase 67 complete, transitioned to Phase 68
 progress:
   total_phases: 9
-  completed_phases: 6
-  total_plans: 45
-  completed_plans: 45
-  percent: 67
+  completed_phases: 7
+  total_plans: 53
+  completed_plans: 53
+  percent: 78
 ---
 
 # Project State
@@ -24,16 +24,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-27)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 66 — api-schema-cutover-publish-gate-and-tombstone
+**Current focus:** Phase 68 — Web Integration — Rotation UX and Durable Client State
 
 ## Current Position
 
-Phase: 67 — TEE Lease-Renewer Contract Rewrite
+Phase: 68 — Web Integration — Rotation UX and Durable Client State
 Plan: Not started
-Status: Executing Phase 66
-Last activity: 2026-06-30 — Phase 66 complete, transitioned to Phase 67
+Status: Ready to execute
+Last activity: 2026-07-01 — Phase 67 complete, transitioned to Phase 68
 
-Progress: `░░░░░░░░░░` 0 / 9 phases (0%)
+Progress: `████████░░` 7 / 9 phases (78%)
 
 ## Deferred Items
 
@@ -216,6 +216,12 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 64 P06 | 13 | 2 tasks | 3 files |
 | Phase 64 P07 | 40m | 4 tasks | 2 files |
 | Phase 64 P08 | 45 | 3 tasks | 1 files |
+| Phase 67 P01 | 5m | 2 tasks | 2 files |
+| Phase 67 P02 | 8 | 2 tasks | 4 files |
+| Phase 67 P03 | 102 | 1 tasks | 2 files |
+| Phase 67-tee-lease-renewer-contract-rewrite P04 | 140 | 1 tasks | 2 files |
+| Phase 67 P05 | 171 | 2 tasks | 4 files |
+| Phase 67 P06 | 20m | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -427,6 +433,12 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: cas.ts merge callback accepts sync|Promise union — backward-compat
 - [Phase ?]: Crash at call 4
 - [Phase ?]: Resume job seeded with crash-time completedNodeIds (not empty set) — empty set causes double-bump on the committed root node
+- [Phase ?]: 67-02
+- [Phase ?]: renewIpnsRecord sources value and sequence exclusively from parseIpnsRecord — structurally prevents CID repoint and sequence increment (TEE-01/TEE-02)
+- [Phase ?]: ECIES-wrap done in createSubfolder itself, matching vault-settings.service.ts pattern
+- [Phase ?]: tee-worker build context is repo root not apps/tee-worker dir
+- [Phase ?]: TEE_WORKER_URL=http://localhost:3002 active not commented in .env.example
+- [Phase ?]: TEE route is verify-in-enclave lease renewer: parse→verify→decrypt→bind→re-sign same CID+seq→zero (D-01/TEE-01/TEE-02/TEE-06)
 
 ## Operator Next Steps
 
@@ -434,6 +446,6 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-06-30T13:44:56.801Z
-**Stopped at:** Phase 66 context gathered
-**Resume file:** .planning/phases/66-api-schema-cutover-publish-gate-and-tombstone/66-CONTEXT.md
+**Last session:** 2026-07-01T00:56:41.829Z
+**Stopped at:** Phase 67 context gathered
+**Resume file:** .planning/phases/67-tee-lease-renewer-contract-rewrite/67-CONTEXT.md

@@ -14,6 +14,9 @@
     "@cipherbox/crypto": "workspace:*",
     "@cipherbox/sdk": "workspace:*",
     "@cipherbox/sdk-core": "workspace:*",
+    "@types/pg": "^8.11.14",
+    "bullmq": "^5.67.3",
+    "pg": "^8.14.1",
     "typescript": "^5.9.3",
     "vitest": "^3.0.5"
   }

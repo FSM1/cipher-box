@@ -2,15 +2,40 @@
  * Key Manager Service
  *
  * ECIES decryption of IPNS private keys with epoch fallback and re-encryption.
- * - Decrypts IPNS keys encrypted with TEE epoch public key
- * - Supports fallback to previous epoch during grace period
- * - Re-encrypts old-epoch keys with current epoch key
+ * - Derives the current epoch internally from the TEE clock (§6.7-1, D-03)
+ * - Refuses to decrypt keys older than currentEpoch − 1 (hard stale floor)
+ * - Emits ReEnrollRequiredError for stale keys (structured signal, no key material)
+ * - Tries keyEpoch hint first, then internalCurrentEpoch (mid-rotation fallback)
+ * - Re-encrypts old-epoch keys with the current epoch key
  *
  * SECURITY: Caller is responsible for zeroing returned IPNS private keys after use.
  */
 
 import { unwrapKey, wrapKey } from '@cipherbox/crypto';
-import { getKeypair, getPublicKey } from './tee-keys.js';
+import { getKeypair, getInternalCurrentEpoch, getPublicKey } from './tee-keys.js';
+
+/**
+ * Structured error emitted when a relay-supplied IPNS key is too old to renew.
+ *
+ * Thrown when keyEpoch < internalCurrentEpoch − 1. The client must re-enroll
+ * (re-encrypt its IPNS private key with the current TEE epoch public key)
+ * before republishing can continue.
+ *
+ * SECURITY: message names epoch integers ONLY — no key bytes or key material.
+ */
+export class ReEnrollRequiredError extends Error {
+  readonly requiresReEnroll = true;
+
+  constructor(
+    readonly keyEpoch: number,
+    readonly currentEpoch: number
+  ) {
+    super(
+      `IPNS key epoch ${keyEpoch} is older than grace floor ${currentEpoch - 1} (current epoch: ${currentEpoch}). Re-enrollment required.`
+    );
+    this.name = 'ReEnrollRequiredError';
+  }
+}
 
 /**
  * Decrypt an ECIES-encrypted IPNS private key using the specified epoch's private key.
@@ -33,49 +58,64 @@ export async function decryptIpnsKey(
 }
 
 /**
- * Decrypt an IPNS key with fallback from current to previous epoch.
+ * Decrypt an IPNS key with TEE-internal epoch authority.
  *
- * Tries the current epoch first. If decryption fails and a previous epoch
- * is provided, tries the previous epoch (grace period support).
+ * Derives the current epoch from the TEE's own clock (never from a relay scalar).
+ * Refuses keys older than currentEpoch − 1 by throwing ReEnrollRequiredError
+ * BEFORE any decryption attempt — the hard stale floor (D-03, §6.7-3).
+ *
+ * Trial order:
+ *  1. keyEpoch (the epoch the key is encrypted for, from ipns_records.key_epoch)
+ *  2. internalCurrentEpoch (mid-rotation fallback: key may have been re-encrypted)
  *
  * @param encryptedIpnsKey - ECIES ciphertext
- * @param currentEpoch - Current active epoch number
- * @param previousEpoch - Previous epoch number (null if no grace period active)
+ * @param keyEpoch - Epoch hint from ipns_records.key_epoch (never relay's currentEpoch)
  * @returns Object with decrypted key and which epoch succeeded
- * @throws Error if both epochs fail
+ * @throws ReEnrollRequiredError if keyEpoch < internalCurrentEpoch − 1 (stale)
+ * @throws Error if all decryption trials fail (corrupted or unknown key)
  */
 export async function decryptWithFallback(
   encryptedIpnsKey: Uint8Array,
-  currentEpoch: number,
-  previousEpoch: number | null
+  keyEpoch: number
 ): Promise<{ ipnsPrivateKey: Uint8Array; usedEpoch: number }> {
-  // Try current epoch first
-  try {
-    const ipnsPrivateKey = await decryptIpnsKey(encryptedIpnsKey, currentEpoch);
-    return { ipnsPrivateKey, usedEpoch: currentEpoch };
-  } catch {
-    // Current epoch failed -- try previous if available
+  const internalCurrentEpoch = getInternalCurrentEpoch();
+
+  // Hard stale floor (D-03, §6.7-3): refuse keys older than currentEpoch − 1
+  // BEFORE any unwrap attempt — a compromised relay cannot force re-encryption
+  // to a wrong epoch by sending stale keys.
+  if (keyEpoch < internalCurrentEpoch - 1) {
+    throw new ReEnrollRequiredError(keyEpoch, internalCurrentEpoch);
   }
 
-  // Try previous epoch (grace period)
-  if (previousEpoch !== null) {
+  // Trial 1: keyEpoch (the epoch the key is recorded as encrypted for)
+  try {
+    const ipnsPrivateKey = await decryptIpnsKey(encryptedIpnsKey, keyEpoch);
+    return { ipnsPrivateKey, usedEpoch: keyEpoch };
+  } catch {
+    // keyEpoch trial failed — try the internal-current epoch next
+  }
+
+  // Trial 2: internalCurrentEpoch (mid-rotation: key may have been re-encrypted
+  // to current epoch while keyEpoch still reflects the old DB value)
+  if (keyEpoch !== internalCurrentEpoch) {
     try {
-      const ipnsPrivateKey = await decryptIpnsKey(encryptedIpnsKey, previousEpoch);
-      return { ipnsPrivateKey, usedEpoch: previousEpoch };
+      const ipnsPrivateKey = await decryptIpnsKey(encryptedIpnsKey, internalCurrentEpoch);
+      return { ipnsPrivateKey, usedEpoch: internalCurrentEpoch };
     } catch {
-      // Previous epoch also failed
+      // internal-current epoch also failed
     }
   }
 
-  throw new Error('ECIES decryption failed for all available epochs');
+  throw new Error('ECIES decryption failed: key may be corrupted or from an unknown epoch');
 }
 
 /**
  * Re-encrypt an IPNS private key for a target epoch.
  *
  * Used during epoch migration: when a key was decrypted with the previous epoch,
- * it gets re-encrypted with the current epoch's public key so future republishes
- * use the current epoch directly.
+ * it gets re-encrypted with the target epoch's public key so future republishes
+ * use the current epoch directly. Callers (e.g. republish route after 67-06)
+ * should pass getInternalCurrentEpoch() as the targetEpoch.
  *
  * @param ipnsPrivateKey - Plaintext 32-byte Ed25519 IPNS private key
  * @param targetEpoch - The epoch to encrypt for

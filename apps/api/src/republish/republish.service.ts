@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In, LessThanOrEqual, IsNull } from 'typeorm';
+import { In, IsNull, LessThanOrEqual, Not, Repository } from 'typeorm';
 import { IpnsRepublishSchedule } from './republish-schedule.entity';
 import { IpnsRecord } from '../ipns/entities/ipns-record.entity';
 import { TeeService, RepublishEntry, RepublishResult } from '../tee/tee.service';
@@ -22,6 +22,12 @@ const MAX_BACKOFF_SECONDS = 3600;
 /** Base backoff in seconds */
 const BASE_BACKOFF_SECONDS = 30;
 
+/** Paired result from getDueEntries — canonical record sourced directly from ipns_records */
+export interface DueEntryPair {
+  schedule: IpnsRepublishSchedule;
+  record: IpnsRecord;
+}
+
 @Injectable()
 export class RepublishService {
   private readonly logger = new Logger(RepublishService.name);
@@ -37,11 +43,20 @@ export class RepublishService {
   ) {}
 
   /**
-   * Query entries that are due for republishing.
-   * Returns entries where status is 'active' or 'retrying' and next_republish_at <= now.
+   * Query entries that are due for republishing, inner-joining ipns_records.
+   *
+   * D-02 / TEE-03: only schedule rows with a matching ipns_records row that is
+   * NOT tombstoned AND has an encrypted IPNS key are returned. A tombstoned name
+   * never enters the batch at this layer (defense layer 1).
+   *
+   * Returns an array of { schedule, record } pairs for each due entry.
    */
-  async getDueEntries(): Promise<IpnsRepublishSchedule[]> {
-    return this.scheduleRepository.find({
+  async getDueEntries(): Promise<DueEntryPair[]> {
+    // Step 1: due schedules via the find-options API (property names; robust
+    // take-pagination — the query-builder + raw-column + take path trips a TypeORM
+    // metadata error). LessThanOrEqual here selects rows due by time; it is NOT the
+    // sequence write-back (that remains an equality CAS in renewIpnsRecordEol).
+    const schedules = await this.scheduleRepository.find({
       where: {
         status: In(['active', 'retrying']),
         nextRepublishAt: LessThanOrEqual(new Date()),
@@ -49,6 +64,43 @@ export class RepublishService {
       order: { nextRepublishAt: 'ASC' },
       take: 2000,
     });
+
+    if (schedules.length === 0) return [];
+
+    // Step 2: fetch the matching ipns_records with the tombstone + key filter
+    // (D-02 / TEE-03). A tombstoned or key-less record is excluded here, so its
+    // schedule drops out of the paired result below — a tombstoned name never
+    // enters the batch (defense layer 1; the renewal CAS is defense layer 2).
+    // Pair schedule rows to ipns_records by BOTH userId and ipnsName. ipnsName
+    // uniqueness is app-level, not a DB constraint (see the epoch-upgrade write
+    // below), so keying the pairing on ipnsName alone could pair one user's schedule
+    // with another user's record if two rows ever share a name. Scope by userId.
+    const ipnsNames = [...new Set(schedules.map((s) => s.ipnsName))];
+    const userIds = [...new Set(schedules.map((s) => s.userId))];
+    const records = await this.ipnsRecordRepository.find({
+      where: {
+        userId: In(userIds),
+        ipnsName: In(ipnsNames),
+        tombstonedAt: IsNull(),
+        encryptedIpnsPrivateKey: Not(IsNull()),
+        // Also require the signing inputs so the teeEntries map below cannot deref a
+        // null with `!`. A row missing either drops out here (re-picked next cycle)
+        // instead of throwing outside the inner try and aborting the whole batch.
+        signedRecord: Not(IsNull()),
+        keyEpoch: Not(IsNull()),
+      },
+    });
+
+    const pairKey = (userId: string, ipnsName: string) => `${userId}:${ipnsName}`;
+    const recordMap = new Map(records.map((r) => [pairKey(r.userId, r.ipnsName), r]));
+
+    return schedules
+      .map((schedule) => {
+        const record = recordMap.get(pairKey(schedule.userId, schedule.ipnsName));
+        if (!record) return null; // race: tombstoned or key removed between the two queries
+        return { schedule, record };
+      })
+      .filter((p): p is DueEntryPair => p !== null);
   }
 
   /**
@@ -60,48 +112,37 @@ export class RepublishService {
     succeeded: number;
     failed: number;
   }> {
-    const dueEntries = await this.getDueEntries();
+    const duePairs = await this.getDueEntries();
 
-    if (dueEntries.length === 0) {
+    if (duePairs.length === 0) {
       this.logger.debug('No entries due for republishing');
       return { processed: 0, succeeded: 0, failed: 0 };
     }
 
-    this.logger.log(`Processing ${dueEntries.length} due republish entries`);
+    this.logger.log(`Processing ${duePairs.length} due republish entries`);
 
     // Soft capacity warning for large vaults with many per-file IPNS records
-    if (dueEntries.length > 1000) {
+    if (duePairs.length > 1000) {
       this.logger.warn(
-        `High IPNS record count: ${dueEntries.length} entries due for republishing - approaching capacity limits`
+        `High IPNS record count: ${duePairs.length} entries due for republishing - approaching capacity limits`
       );
     }
-
-    // Fetch current TEE epoch state for the batch
-    const teeState = await this.teeKeyStateService.getCurrentState();
-    if (!teeState) {
-      this.logger.error('TEE key state not initialized, cannot process republish batch');
-      return { processed: dueEntries.length, succeeded: 0, failed: dueEntries.length };
-    }
-
-    const currentEpoch = teeState.currentEpoch;
-    const previousEpoch = teeState.previousEpoch;
 
     let totalSucceeded = 0;
     let totalFailed = 0;
 
     // Split into batches of BATCH_SIZE
-    for (let i = 0; i < dueEntries.length; i += BATCH_SIZE) {
-      const batch = dueEntries.slice(i, i + BATCH_SIZE);
+    for (let i = 0; i < duePairs.length; i += BATCH_SIZE) {
+      const batch = duePairs.slice(i, i + BATCH_SIZE);
 
-      // Build RepublishEntry payloads for TEE
-      const teeEntries: RepublishEntry[] = batch.map((entry) => ({
-        encryptedIpnsKey: entry.encryptedIpnsKey.toString('base64'),
-        keyEpoch: entry.keyEpoch,
-        ipnsName: entry.ipnsName,
-        latestCid: entry.latestCid,
-        sequenceNumber: entry.sequenceNumber,
-        currentEpoch,
-        previousEpoch,
+      // Build RepublishEntry payloads from the paired ipns_records row.
+      // D-02 / TEE-03: ALL signing inputs come from the canonical ipns_records row —
+      // no schedule snapshot fields, no relay-supplied epoch scalars (removed per D-03).
+      const teeEntries: RepublishEntry[] = batch.map(({ schedule, record }) => ({
+        encryptedIpnsKey: record.encryptedIpnsPrivateKey!.toString('base64'),
+        keyEpoch: record.keyEpoch!,
+        ipnsName: schedule.ipnsName,
+        signedRecord: record.signedRecord!.toString('base64'),
       }));
 
       let teeResults: RepublishResult[];
@@ -112,8 +153,8 @@ export class RepublishService {
         const message = error instanceof Error ? error.message : String(error);
         this.logger.error(`TEE worker unreachable: ${message}`);
 
-        for (const entry of batch) {
-          await this.handleEntryFailure(entry, `TEE unreachable: ${message}`);
+        for (const { schedule } of batch) {
+          await this.handleEntryFailure(schedule, `TEE unreachable: ${message}`);
         }
         totalFailed += batch.length;
         continue;
@@ -121,46 +162,90 @@ export class RepublishService {
 
       // Process results
       for (let j = 0; j < batch.length; j++) {
-        const entry = batch[j];
+        const { schedule, record } = batch[j];
         const result = teeResults[j];
 
         if (!result) {
-          await this.handleEntryFailure(entry, 'No result from TEE worker');
+          await this.handleEntryFailure(schedule, 'No result from TEE worker');
+          totalFailed++;
+          continue;
+        }
+
+        // requiresReEnroll: IPNS key can no longer be decrypted; log and route as failure
+        // (consumer surface deferred to Phase 68/69 — non-fatal here).
+        if (result.requiresReEnroll) {
+          this.logger.warn(
+            `TEE requires re-enrollment for ${schedule.ipnsName} — routing as failure (Phase 68/69)`
+          );
+          await this.handleEntryFailure(schedule, 'TEE requires re-enrollment');
           totalFailed++;
           continue;
         }
 
         if (result.success && result.signedRecord && result.newSequenceNumber) {
+          // Defense-in-depth (TEE-02): the TEE must re-sign the SAME sequence. If it
+          // returned a different sequence, publishing would push delegated routing ahead
+          // of the canonical ipns_records row (whose renewal CAS only matches the loaded
+          // sequence), leaving the two out of sync. Reject instead of publishing.
+          if (result.newSequenceNumber !== record.sequenceNumber) {
+            await this.handleEntryFailure(
+              schedule,
+              `TEE returned unexpected sequence ${result.newSequenceNumber}; expected ${record.sequenceNumber}`
+            );
+            totalFailed++;
+            continue;
+          }
+
           // TEE signing succeeded -- now publish to delegated routing
           try {
-            await this.publishSignedRecord(entry.ipnsName, result.signedRecord);
+            await this.publishSignedRecord(schedule.ipnsName, result.signedRecord);
 
-            // Update schedule entry on success
-            entry.sequenceNumber = result.newSequenceNumber;
-            entry.lastRepublishAt = new Date();
-            entry.consecutiveFailures = 0;
-            entry.status = 'active';
-            entry.lastError = null;
-            entry.nextRepublishAt = this.nextRepublishTime();
+            // Update schedule entry: ONLY scheduling fields survive (no crypto columns).
+            schedule.lastRepublishAt = new Date();
+            schedule.consecutiveFailures = 0;
+            schedule.status = 'active';
+            schedule.lastError = null;
+            schedule.nextRepublishAt = this.nextRepublishTime();
 
-            // Handle epoch upgrade if TEE re-encrypted with current epoch
-            if (result.upgradedEncryptedKey && result.upgradedKeyEpoch !== undefined) {
-              entry.encryptedIpnsKey = Buffer.from(result.upgradedEncryptedKey, 'base64');
-              entry.keyEpoch = result.upgradedKeyEpoch;
+            await this.scheduleRepository.save(schedule);
+
+            // EOL-only renewal write: update signed_record in ipns_records via
+            // equality CAS. Uses the sequence number carried from getDueEntries
+            // (NOT result.newSequenceNumber as a write target — seq is unchanged).
+            // §6.6 / TEE-04: WHERE sequence_number = :loaded AND tombstoned_at IS NULL
+            await this.renewIpnsRecordEol(
+              schedule.ipnsName,
+              record.userId, // scope the CAS to the owner (ipnsName is not globally unique)
+              record.sequenceNumber, // loaded seq from the batch
+              Buffer.from(result.signedRecord, 'base64')
+            );
+
+            // Epoch upgrade: re-encrypted key + new epoch go to ipns_records (not schedule).
+            if (
+              result.upgradedEncryptedKey !== undefined &&
+              result.upgradedKeyEpoch !== undefined
+            ) {
               this.logger.log(
-                `Epoch upgrade for ${entry.ipnsName}: epoch ${entry.keyEpoch} -> ${result.upgradedKeyEpoch}`
+                `Epoch upgrade for ${schedule.ipnsName}: epoch ${record.keyEpoch} -> ${result.upgradedKeyEpoch}`
+              );
+              // Scope the upgrade to the owner's non-tombstoned row at the loaded epoch:
+              // - tombstonedAt: IsNull() preserves tombstone immutability (never re-encrypt
+              //   a tombstoned row, even if it was tombstoned after the batch loaded)
+              // - userId pins the owner (ipnsName uniqueness is app-level, not a DB constraint)
+              // - keyEpoch equality is a CAS so a concurrent key rotation is not clobbered
+              await this.ipnsRecordRepository.update(
+                {
+                  ipnsName: schedule.ipnsName,
+                  userId: record.userId,
+                  tombstonedAt: IsNull(),
+                  keyEpoch: record.keyEpoch!, // non-null: getDueEntries filters keyEpoch IS NOT NULL
+                },
+                {
+                  encryptedIpnsPrivateKey: Buffer.from(result.upgradedEncryptedKey, 'base64'),
+                  keyEpoch: result.upgradedKeyEpoch,
+                }
               );
             }
-
-            await this.scheduleRepository.save(entry);
-
-            // Keep IpnsRecord sequence number in sync
-            await this.syncIpnsRecordSequence(
-              entry.userId,
-              entry.ipnsName,
-              result.newSequenceNumber,
-              result.signedRecord
-            );
 
             totalSucceeded++;
           } catch (publishError) {
@@ -168,28 +253,28 @@ export class RepublishService {
             const message =
               publishError instanceof Error ? publishError.message : String(publishError);
             this.logger.warn(
-              `Signing succeeded but publish failed for ${entry.ipnsName}: ${message}`
+              `Signing succeeded but publish failed for ${schedule.ipnsName}: ${message}`
             );
             await this.handleEntryFailure(
-              entry,
+              schedule,
               `Publish failed after successful signing: ${message}`
             );
             totalFailed++;
           }
         } else {
           // TEE signing failed
-          await this.handleEntryFailure(entry, result.error || 'Unknown TEE error');
+          await this.handleEntryFailure(schedule, result.error || 'Unknown TEE error');
           totalFailed++;
         }
       }
     }
 
     this.logger.log(
-      `Republish batch complete: processed=${dueEntries.length}, succeeded=${totalSucceeded}, failed=${totalFailed}`
+      `Republish batch complete: processed=${duePairs.length}, succeeded=${totalSucceeded}, failed=${totalFailed}`
     );
 
     return {
-      processed: dueEntries.length,
+      processed: duePairs.length,
       succeeded: totalSucceeded,
       failed: totalFailed,
     };
@@ -205,39 +290,31 @@ export class RepublishService {
   }
 
   /**
-   * Enroll or update a folder for TEE republishing.
-   * Called when a folder is published with TEE-encrypted IPNS key.
+   * Enroll or update a folder for TEE republishing (scheduling-only).
+   *
+   * After 67-01 the schedule no longer stores signing columns — those live in
+   * ipns_records. This method only manages the scheduling row: nextRepublishAt +
+   * status/consecutiveFailures defaults on create.
    */
-  async enrollFolder(
-    userId: string,
-    ipnsName: string,
-    encryptedIpnsKey: Buffer,
-    keyEpoch: number,
-    latestCid: string,
-    sequenceNumber: string
-  ): Promise<void> {
+  async enrollFolder(userId: string, ipnsName: string): Promise<void> {
     const existing = await this.scheduleRepository.findOne({
       where: { userId, ipnsName },
     });
 
     if (existing) {
-      // Update existing enrollment
-      existing.encryptedIpnsKey = encryptedIpnsKey;
-      existing.keyEpoch = keyEpoch;
-      existing.latestCid = latestCid;
-      existing.sequenceNumber = sequenceNumber;
+      // Refresh next republish time AND reactivate: a prior failure may have moved the
+      // row out of the ['active','retrying'] set that getDueEntries selects, which would
+      // leave a re-enrolled folder permanently excluded from the TEE batch.
       existing.nextRepublishAt = this.nextRepublishTime();
+      existing.status = 'active';
+      existing.consecutiveFailures = 0;
+      existing.lastError = null;
       await this.scheduleRepository.save(existing);
       this.logger.log(`Updated republish enrollment for ${ipnsName}`);
     } else {
-      // Create new enrollment
       const schedule = this.scheduleRepository.create({
         userId,
         ipnsName,
-        encryptedIpnsKey,
-        keyEpoch,
-        latestCid,
-        sequenceNumber,
         nextRepublishAt: this.nextRepublishTime(),
         status: 'active',
         consecutiveFailures: 0,
@@ -245,7 +322,7 @@ export class RepublishService {
         lastRepublishAt: null,
       });
       await this.scheduleRepository.save(schedule);
-      this.logger.log(`Enrolled ${ipnsName} for TEE republishing (epoch ${keyEpoch})`);
+      this.logger.log(`Enrolled ${ipnsName} for TEE republishing`);
     }
   }
 
@@ -366,39 +443,51 @@ export class RepublishService {
   }
 
   /**
-   * Sync the IpnsRecord sequence number after successful republish.
-   * Handles both folder and per-file IPNS records (keyed by userId + ipnsName).
+   * EOL-only renewal write for the signed_record in ipns_records.
+   *
+   * §6.6 / TEE-04 carryover: uses the same equality-CAS shape as the
+   * Phase-66 publish gate (sequence_number = :expected AND tombstoned_at IS NULL),
+   * additionally scoped by user_id (ipnsName uniqueness is app-level, not a DB
+   * constraint — so the CAS must pin the owner), but does NOT change sequence_number
+   * — only signed_record and updatedAt are updated (lease-renewer: same CID, same
+   * seq, later EOL bytes).
+   *
+   * On affected === 0: a forward publish raced the batch and already advanced
+   * the sequence (or the row was tombstoned at the write level). Either way
+   * the renewal is harmlessly discarded — the newer row already has a valid EOL.
    */
-  private async syncIpnsRecordSequence(
-    userId: string,
+  private async renewIpnsRecordEol(
     ipnsName: string,
-    newSequenceNumber: string,
-    signedRecordBase64: string
+    userId: string,
+    loadedSequenceNumber: string,
+    renewedSignedRecord: Buffer
   ): Promise<void> {
     try {
-      // Two guards on the sync UPDATE criteria:
-      //  - tombstoned_at IS NULL: in the TEE race window (the batch picked up this
-      //    entry before tombstoneRecord ran and unenrolled it) the row may already
-      //    be tombstoned — never resurrect its sequenceNumber/signedRecord.
-      //  - sequence_number <= newSequenceNumber (forward-only): a user publish may
-      //    have already advanced this row past the TEE's batch sequence — never let
-      //    a stale TEE result regress the sequenceNumber/signedRecord.
-      await this.ipnsRecordRepository.update(
-        {
-          userId,
-          ipnsName,
-          tombstonedAt: IsNull(),
-          sequenceNumber: LessThanOrEqual(newSequenceNumber),
-        },
-        {
-          sequenceNumber: newSequenceNumber,
-          signedRecord: Buffer.from(signedRecordBase64, 'base64'),
-        }
-      );
+      const result = await this.ipnsRecordRepository
+        .createQueryBuilder()
+        .update(IpnsRecord)
+        .set({ signedRecord: renewedSignedRecord, updatedAt: new Date() })
+        .where(
+          'ipns_name = :ipnsName AND user_id = :userId AND sequence_number = :expected AND tombstoned_at IS NULL',
+          {
+            ipnsName,
+            userId,
+            expected: loadedSequenceNumber,
+          }
+        )
+        .execute();
+
+      if (result.affected === 0) {
+        // Forward publish raced (seq advanced) OR tombstoned at the write level.
+        // Either case: the renewal is harmlessly discarded.
+        this.logger.debug(
+          `EOL renewal CAS miss for ${ipnsName} (seq advanced or tombstoned) — discarding`
+        );
+      }
     } catch (error) {
-      // Non-fatal: log and continue
+      // Non-fatal: log and continue. The IPNS publish already succeeded.
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.warn(`Failed to sync IpnsRecord sequence for ${ipnsName}: ${message}`);
+      this.logger.warn(`renewIpnsRecordEol failed for ${ipnsName}: ${message}`);
     }
   }
 

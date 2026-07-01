@@ -66,7 +66,7 @@
 - [x] **Phase 64: Rotation Soundness — Revocation Guarantees** — CRIT-1 content-key rotation, HIGH-3 inner grant re-mint, HIGH-4 concurrent-add merge, crash-safe resume, and the `tests/sdk-e2e` crash-safety suite (completed 2026-06-29)
 - [x] **Phase 65: SDK Write-Chain, Bin Re-link, and Invite Claim** — Structured write-body, (c) full Ed25519 write-revocation, bin restore as pure re-link, invite claim re-wrap; delete `addShareKeys`/`reWrapForRecipients`/`encryptedChildKeys` (completed 2026-06-30)
 - [x] **Phase 66: API Schema Cutover, Publish Gate, and Tombstone** — Delete `share_keys`, slim `shares`, rename `folder_ipns` → `ipns_records`, drop `public_key`, atomic CAS publish, tombstone state, resolve case-split, server-side generation gate; run `pnpm api:generate` (completed 2026-06-30)
-- [ ] **Phase 67: TEE Lease-Renewer Contract Rewrite** — TEE becomes a record-lease-renewer (no CID origination, no sequence increment), internal epoch derivation, name↔key binding, tombstone guard
+- [x] **Phase 67: TEE Lease-Renewer Contract Rewrite** — TEE becomes a record-lease-renewer (no CID origination, no sequence increment), internal epoch derivation, name↔key binding, tombstone guard (completed 2026-07-01)
 - [ ] **Phase 68: Web Integration — Rotation UX and Durable Client State** — Replace `executeLazyRotation` with `rotateReadFromNode`, durable IndexedDB generation + seq high-water (M1 defense, survives restart), `folderTree` reconcile-before-rotate
 - [ ] **Phase 69: FUSE and WinFsp — Rust Integration and Grant-Root Awareness** — Symmetric child-key unwrap, `spawn_file_meta_reencrypt` deletion from both callers, grant-root scope computation, durable client floors, `Node` Rust enum, Windows CI gate
 
@@ -354,7 +354,26 @@ Plans:
 3. The canonical `ipns_records` row is the sole source of the TEE's signing inputs; `ipns_republish_schedule`'s duplicated `latestCid`/`sequenceNumber`/`encryptedIpnsKey`/`keyEpoch` columns are collapsed; no signing inputs are sourced from the schedule snapshot
 4. The EOL-only renewal uses the same atomic CAS guard (`WHERE sequenceNumber = :loaded`), so it can never regress `latestCid`/`sequenceNumber`; a TEE republish E2E round-trip (staging or local stack) confirms the new contract end-to-end
 
-**Plans**: TBD
+**Plans**: 8/8 plans complete
+
+Plans:
+
+**Wave 1**
+
+- [x] 67-01-PLAN.md — Schedule collapse: drop 4 signing-input columns from the entity + forward migration [TEE-03]
+- [x] 67-02-PLAN.md — TEE internal epoch self-derivation + refuse-stale guard + ReEnrollRequiredError [TEE-06]
+- [x] 67-03-PLAN.md — TEE renewIpnsRecord lease transform (same CID + same seq + later EOL) [TEE-01, TEE-02]
+- [x] 67-04-PLAN.md — createSubfolder teeKeys wiring (ECIES-wrap + enroll new subfolders) [TEE-03]
+- [x] 67-05-PLAN.md — Local docker tee-worker service + API env + sdk-e2e bullmq/pg deps [TEE-01]
+
+**Wave 2** *(blocked on Wave 1)*
+
+- [x] 67-06-PLAN.md — TEE route verify-in-enclave rewrite: verify→name↔key binding→no-increment re-sign [TEE-01, TEE-02, TEE-06]
+- [x] 67-07-PLAN.md — Relay reshape: ipns_records JOIN + marshaled-record contract + renewIpnsRecordEol equality CAS + 2-arg enrollFolder [TEE-03, TEE-06]
+
+**Wave 3** *(blocked on Wave 2)*
+
+- [x] 67-08-PLAN.md — [BLOCKING] migration:run + sdk-e2e TEE round-trip suite + human-verify gate [TEE-01, TEE-02, TEE-03, TEE-06]
 
 ---
 
@@ -418,7 +437,7 @@ Plans:
 | 64 | Rotation Soundness — Revocation Guarantees | 8/8 | Complete   | 2026-06-29 |
 | 65 | SDK Write-Chain, Bin Re-link, and Invite Claim | 7/7 | Complete    | 2026-06-30 |
 | 66 | API Schema Cutover, Publish Gate, and Tombstone | 9/9 | Complete    | 2026-06-30 |
-| 67 | TEE Lease-Renewer Contract Rewrite | 0/? | Not started | - |
+| 67 | TEE Lease-Renewer Contract Rewrite | 8/8 | Complete    | 2026-07-01 |
 | 68 | Web Integration — Rotation UX and Durable Client State | 0/? | Not started | - |
 | 69 | FUSE and WinFsp — Rust Integration and Grant-Root Awareness | 0/? | Not started | - |
 
