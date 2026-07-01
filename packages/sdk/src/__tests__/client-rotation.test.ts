@@ -436,3 +436,83 @@ describe('CipherBoxClient — scope-exit rotation wiring (SC#2 / SC#4, Task 2)',
     expect(sdkCore.rotateReadFromNode).not.toHaveBeenCalled();
   });
 });
+
+describe('CipherBoxClient.moveItem — dest-before-source publish ordering (D-12, Task 3)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockResolveMatching(1n); // reconcile always agrees in these tests
+  });
+
+  it('publishes the DESTINATION folder before the SOURCE folder', async () => {
+    const client = new CipherBoxClient(createTestConfig());
+    setupFolder(client, SRC_IPNS);
+    setupFolder(client, DEST_IPNS);
+    vi.mocked(sdkCore.moveItem).mockReturnValue({
+      updatedSource: [],
+      updatedDest: [
+        { name: 'x', ipnsName: 'k51file', generation: 0, versionFloor: 0n, readKeySealed: 'x' },
+      ],
+      movedRef: {
+        name: 'x',
+        ipnsName: 'k51file',
+        generation: 0,
+        versionFloor: 0n,
+        readKeySealed: 'x',
+      },
+    });
+    vi.mocked(sdkCore.fetchFromIpfs).mockResolvedValue(
+      new TextEncoder().encode(JSON.stringify({ id: 'file1', kind: 'file' }))
+    );
+
+    const order: string[] = [];
+    vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockImplementation(async (params) => {
+      order.push(params.ipnsName === DEST_IPNS ? 'publish:dest' : 'publish:source');
+      return { cid: 'bafynew', newSequenceNumber: 2n, publishedChildren: [] };
+    });
+
+    await client.moveItem(SRC_IPNS, DEST_IPNS, 'file1');
+
+    expect(order).toEqual(['publish:dest', 'publish:source']);
+  });
+
+  it('does not invoke descendant enumeration for a moved FILE (kind !== folder/root)', async () => {
+    const client = new CipherBoxClient(createTestConfig());
+    setupFolder(client, SRC_IPNS);
+    setupFolder(client, DEST_IPNS);
+    vi.mocked(sdkCore.moveItem).mockReturnValue({
+      updatedSource: [],
+      updatedDest: [
+        { name: 'x', ipnsName: 'k51file', generation: 0, versionFloor: 0n, readKeySealed: 'x' },
+      ],
+      movedRef: {
+        name: 'x',
+        ipnsName: 'k51file',
+        generation: 0,
+        versionFloor: 0n,
+        readKeySealed: 'x',
+      },
+    });
+    // kind: 'file' -- enumerateMoveDescendants must short-circuit and never
+    // issue a SECOND resolveIpnsRecord/fetchFromIpfs round for descendants.
+    vi.mocked(sdkCore.fetchFromIpfs).mockResolvedValue(
+      new TextEncoder().encode(JSON.stringify({ id: 'file1', kind: 'file' }))
+    );
+    vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
+      cid: 'bafynew',
+      newSequenceNumber: 2n,
+      publishedChildren: [],
+    });
+
+    await client.moveItem(SRC_IPNS, DEST_IPNS, 'file1');
+    // Flush the fire-and-forget microtask queue so a would-be second call
+    // to fetchFromIpfs (if the file-kind short-circuit were missing) has a
+    // chance to happen before we assert.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Exactly one resolveIpnsRecord/fetchFromIpfs round for the moved child's
+    // own id/kind (FLAG-63-U2) plus the two reconcile calls (source, dest) --
+    // no additional descendant-walk calls for a file-kind move.
+    expect(sdkCore.fetchFromIpfs).toHaveBeenCalledTimes(1);
+  });
+});
