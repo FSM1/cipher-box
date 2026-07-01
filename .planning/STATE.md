@@ -24,7 +24,7 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-27)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 67 — tee-lease-renewer-contract-rewrite
+**Current focus:** Phase 68 — Web Integration — Rotation UX and Durable Client State
 
 ## Current Position
 
@@ -33,7 +33,7 @@ Plan: Not started
 Status: Ready to execute
 Last activity: 2026-07-01 — Phase 67 complete, transitioned to Phase 68
 
-Progress: `░░░░░░░░░░` 0 / 9 phases (0%)
+Progress: `████████░░` 7 / 9 phases (78%)
 
 ## Deferred Items
 
