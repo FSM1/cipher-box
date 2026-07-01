@@ -34,3 +34,25 @@ Either:
 
 Option 1 makes the round-trip a durable CI gate; option 2 keeps CI lean. Decide based on
 how often the TEE contract changes.
+
+## Resolution
+
+Implemented **option 1** — the `tee-republish` round-trip is now a durable CI gate.
+
+In `.github/workflows/ci.yml` (`sdk-e2e` job):
+
+- Build the tee-worker (`pnpm --filter cipherbox-tee-worker build`).
+- New "Start TEE worker (simulator)" step starts the worker on host `:3002` in
+  `TEE_MODE=simulator` / `CIPHERBOX_ENVIRONMENT=development` (HKDF key derivation, no dstack
+  socket) **before** the API — the API's `TeeModule.onModuleInit` runs once at boot and only
+  populates `tee_key_state` if the worker is reachable and the Bearer secret matches.
+- Wire `TEE_WORKER_URL=http://localhost:3002` + a shared `TEE_WORKER_SECRET` onto the API
+  (both the `.env` and the start step). The schedule-collapse migration is applied
+  automatically by the API's `migrationsRun: true` against `cipherbox_test`.
+- Export `DB_*` (→ `cipherbox_test`) and `REDIS_PORT=6379` onto the "Run SDK E2E tests" step
+  so the suite's `DB_CONFIG`/`REDIS_CONFIG` hit the CI stack instead of the local defaults
+  (`cipherbox` / `6380`).
+
+In `tests/sdk-e2e/src/suites/tee-republish.test.ts`: dropped the `SKIP_TEE_LIVE = !!CI`
+gate so the suite runs in CI (and still locally). The schedule-collapse migration guard is
+retained.
