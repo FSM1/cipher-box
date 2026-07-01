@@ -16,6 +16,7 @@ import type {
   SharesControllerGetReceivedSharesParams,
   SharesControllerGetSentSharesParams,
   SharesControllerLookupUserParams,
+  UpdateGrantDto,
   UpdateItemNameDto,
 } from '../../models';
 
@@ -138,6 +139,25 @@ export const sharesControllerUpdateShareItemName = (
     options
   );
 };
+/**
+ * Persist a rotated readDescriptorRef and rootGeneration on an existing share. Only the sharer can update it; the server never re-encrypts and stores the client-supplied ciphertext as-is.
+ * @summary Update a share grant descriptor
+ */
+export const sharesControllerUpdateGrant = (
+  shareId: string,
+  updateGrantDto: BodyType<UpdateGrantDto>,
+  options?: SecondParameter<typeof customInstance<void>>
+) => {
+  return customInstance<void>(
+    {
+      url: `/shares/${shareId}/grant`,
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      data: updateGrantDto,
+    },
+    options
+  );
+};
 export type SharesControllerCreateShareResult = NonNullable<
   Awaited<ReturnType<typeof sharesControllerCreateShare>>
 >;
@@ -161,4 +181,7 @@ export type SharesControllerHideShareResult = NonNullable<
 >;
 export type SharesControllerUpdateShareItemNameResult = NonNullable<
   Awaited<ReturnType<typeof sharesControllerUpdateShareItemName>>
+>;
+export type SharesControllerUpdateGrantResult = NonNullable<
+  Awaited<ReturnType<typeof sharesControllerUpdateGrant>>
 >;

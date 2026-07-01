@@ -1729,6 +1729,53 @@
         "tags": ["shares"]
       }
     },
+    "/shares/{shareId}/grant": {
+      "patch": {
+        "description": "Persist a rotated readDescriptorRef and rootGeneration on an existing share. Only the sharer can update it; the server never re-encrypts and stores the client-supplied ciphertext as-is.",
+        "operationId": "SharesController_updateGrant",
+        "parameters": [
+          {
+            "name": "shareId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateGrantDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Grant updated"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Only the sharer can update"
+          },
+          "404": {
+            "description": "Share not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Update a share grant descriptor",
+        "tags": ["shares"]
+      }
+    },
     "/invites/{token}": {
       "get": {
         "description": "Check the status of an invite link. Returns only status -- no file name or sharer identity is revealed before authentication.",
@@ -3262,6 +3309,20 @@
           }
         },
         "required": ["itemNameEncrypted"]
+      },
+      "UpdateGrantDto": {
+        "type": "object",
+        "properties": {
+          "readDescriptorRef": {
+            "type": "string",
+            "description": "Hex-encoded ECIES descriptor ref for read access, re-wrapped for the recipient after an owner rotation. The server stores the client-supplied ciphertext as-is."
+          },
+          "rootGeneration": {
+            "type": "string",
+            "description": "Generation of the root node the rotated descriptor is rooted at (numeric string)"
+          }
+        },
+        "required": ["readDescriptorRef", "rootGeneration"]
       },
       "InviteStatusResponseDto": {
         "type": "object",
