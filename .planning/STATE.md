@@ -24,13 +24,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-27)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 68 — web-integration-rotation-ux-and-durable-client-state
+**Current focus:** Phase 69 — FUSE and WinFsp — Rust Integration and Grant-Root Awareness
 
 ## Current Position
 
 Phase: 69 — FUSE and WinFsp — Rust Integration and Grant-Root Awareness
 Plan: Not started
-Status: 68-12 executed (VERIFICATION Gap 2 closure); awaiting phase-level re-verification
+Status: Phase 68 verified (14/14), secured (41/41), nyquist-compliant; shipping via PR
 Last activity: 2026-07-01 — Phase 68 complete, transitioned to Phase 69
 
 Progress: `█████████░` 8 / 9 phases (89%)
