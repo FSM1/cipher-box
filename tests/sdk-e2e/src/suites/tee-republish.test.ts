@@ -71,8 +71,8 @@ afterAll(async () => {
  * Returns an object compatible with the TeeKeys type expected by createSubfolder.
  */
 async function readTeeKeys(): Promise<{ currentPublicKey: string; currentEpoch: number }> {
-  const result = await pool.query<{ public_key: string; current_epoch: number }>(
-    'SELECT public_key, current_epoch FROM tee_key_state LIMIT 1'
+  const result = await pool.query<{ current_public_key: Buffer; current_epoch: number }>(
+    'SELECT current_public_key, current_epoch FROM tee_key_state LIMIT 1'
   );
   if (result.rows.length === 0) {
     throw new Error(
@@ -81,7 +81,9 @@ async function readTeeKeys(): Promise<{ currentPublicKey: string; currentEpoch: 
   }
   const row = result.rows[0];
   return {
-    currentPublicKey: row.public_key,
+    // current_public_key is a bytea (65-byte uncompressed secp256k1); createSubfolder
+    // passes teeKeys.currentPublicKey through hexToBytes, so hand it back as hex.
+    currentPublicKey: row.current_public_key.toString('hex'),
     currentEpoch: row.current_epoch,
   };
 }
