@@ -160,6 +160,7 @@ export {
   updateSharedFile,
   updateSharePermission,
   moveInSharedFolder,
+  CannotWriteUntilRefetchError,
   type SharedWriteContext,
 } from './shared-write';
 
