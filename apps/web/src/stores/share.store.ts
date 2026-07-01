@@ -2,42 +2,75 @@ import { create } from 'zustand';
 
 /**
  * A received share from another CipherBox user.
- * Contains the ECIES-wrapped item key for decryption.
+ *
+ * v2.0 grant shape (Phase 68 / ROT-07): the API now returns descriptor-ref +
+ * generation fields (`readDescriptorRef`, `rootGeneration`, `rootNodeId`)
+ * instead of the legacy per-share wrapped key (`encryptedKey`/
+ * `encryptedIpnsKey`). Those legacy fields are kept (optional, unpopulated)
+ * for back-compat since nothing in the web app reads them anymore — the
+ * descriptor-ref path replaces the per-mutation key fan-out entirely (SC#2).
+ * `itemType` has no source in the v2.0 DTO (the Node model no longer exposes
+ * a file/folder discriminant at the grant layer) and is left optional/
+ * undefined until a real data path exists.
  */
 export type ReceivedShare = {
   shareId: string;
   sharerPublicKey: string;
-  itemType: 'folder' | 'file';
+  /** @deprecated no source in the v2.0 grant DTO; undefined until re-derived */
+  itemType?: 'folder' | 'file';
   ipnsName: string;
   /** Decrypted display name (plaintext projection; never persisted in this form) */
   itemName: string;
   /** Hex-encoded ECIES ciphertext of the display name (wrapped for this recipient) */
   itemNameEncrypted?: string | null;
-  /** Hex-encoded ECIES ciphertext of the item key */
-  encryptedKey: string;
-  /** Permission level: read-only or read-write */
+  /** @deprecated legacy per-share wrapped key; superseded by readDescriptorRef (SC#2) */
+  encryptedKey?: string;
+  /** Permission level: read-only or read-write (derived from writeDescriptorRef presence) */
   permission: 'read' | 'write';
-  /** Hex-encoded ECIES ciphertext of IPNS private key (write shares only) */
-  encryptedIpnsKey: string | null;
+  /** @deprecated legacy per-share wrapped IPNS key; superseded by writeDescriptorRef (SC#2) */
+  encryptedIpnsKey?: string | null;
   createdAt: string;
+  /** Hex-encoded ECIES descriptor ref for read access (D-07 grant data path) */
+  readDescriptorRef: string;
+  /**
+   * Generation of the root node at share creation. Parsed from the DTO's
+   * numeric string with an isFinite guard — a non-numeric/absent value is
+   * `undefined`, never coerced to NaN/0 (V5 fail-closed floor seed, T-68-21).
+   */
+  rootGeneration?: number;
+  /** UUID of the root shared node (D-07 grant data path) */
+  rootNodeId: string;
 };
 
 /**
  * A share sent by the current user to another CipherBox user.
- * Does not contain the encrypted key (sharer already has access).
+ *
+ * v2.0 grant shape (Phase 68 / ROT-07) — see {@link ReceivedShare} doc for
+ * the legacy-field back-compat rationale.
  */
 export type SentShare = {
   shareId: string;
   recipientPublicKey: string;
-  itemType: 'folder' | 'file';
+  /** @deprecated no source in the v2.0 grant DTO; undefined until re-derived */
+  itemType?: 'folder' | 'file';
   ipnsName: string;
   /** Display name (plaintext projection for the owner's own list) */
   itemName: string;
   /** Hex-encoded ECIES ciphertext of the display name (wrapped for the recipient) */
   itemNameEncrypted?: string | null;
-  /** Permission level: read-only or read-write */
+  /** Permission level: read-only or read-write (derived from writeDescriptorRef presence) */
   permission: 'read' | 'write';
   createdAt: string;
+  /** Hex-encoded ECIES descriptor ref for read access (D-07 grant data path) */
+  readDescriptorRef: string;
+  /**
+   * Generation of the root node at share creation. Parsed from the DTO's
+   * numeric string with an isFinite guard — a non-numeric/absent value is
+   * `undefined`, never coerced to NaN/0 (V5 fail-closed floor seed, T-68-21).
+   */
+  rootGeneration?: number;
+  /** UUID of the root shared node (D-07 grant data path) */
+  rootNodeId: string;
 };
 
 type ShareState = {
