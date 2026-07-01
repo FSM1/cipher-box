@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "fac201320be2",
+  "strategy": "manual-commit",
+  "branch": "feat/web-integration-rotation-ux-and-durable-client-state",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/68-web-integration-rotation-ux-and-durable-client-state/68-VALIDATION.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/fa/c201320be2/0/metadata.json",
+      "transcript": "/fa/c201320be2/0/full.jsonl",
+      "content_hash": "/fa/c201320be2/0/content_hash.txt",
+      "prompt": "/fa/c201320be2/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 23807,
+    "cache_creation_tokens": 456401,
+    "cache_read_tokens": 9452831,
+    "output_tokens": 84422,
+    "api_call_count": 61
+  }
+}

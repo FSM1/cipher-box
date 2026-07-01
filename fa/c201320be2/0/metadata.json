@@ -1,0 +1,105 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "fac201320be2",
+  "session_id": "d2e29299-7c93-4d80-935c-636a76495b24",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-01T16:15:42.086799Z",
+  "branch": "feat/web-integration-rotation-ux-and-durable-client-state",
+  "checkpoints_count": 1,
+  "save_step_count": 2,
+  "files_touched": [
+    ".planning/phases/68-web-integration-rotation-ux-and-durable-client-state/68-VALIDATION.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "787b61676840",
+  "token_usage": {
+    "input_tokens": 23807,
+    "cache_creation_tokens": 456401,
+    "cache_read_tokens": 9452831,
+    "output_tokens": 84422,
+    "api_call_count": 61
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "summary": {
+    "intent": "Generate PLAN.md files for Phase 68 (Web Integration — Rotation UX and Durable Client State) of the GSD cipher-box roadmap via research → plan → verify workflow, then correct the plan set after the user flagged a testing-strategy violation.",
+    "outcome": "Produced and verified a 10-plan set across 4 waves (up from an initial 9-plan/3-wave set) that hoists rotation/reconcile logic into the SDK (Vitest-tested), keeps apps/web as thin untested adapters, and adds a new web-e2e Playwright wave (68-10); all coverage gates (ROT-07, 13 CONTEXT decisions, post-planning gap analysis) passed and VALIDATION.md/state/roadmap were finalized and committed.",
+    "learnings": {
+      "repo": [
+        "cipher-box docs/TESTING.md doctrine: apps/web has NO unit tests — core logic must live in packages/sdk (Vitest-tested via injected seams like HighWaterStore/transport) and UI/durability behavior is only verified through Playwright specs under tests/web-e2e/, never apps/web/src/*.test.ts",
+        "apps/web actually has a vitest config and ~10 existing *.test.ts files, but none are in the CI unit-test gate or coverage-threshold table — existence of a test file there doesn't mean it's doctrine-sanctioned",
+        "apps/api uses Jest with *.spec.ts (correct for that package); the '.spec.ts ban' in gsd plans applies only to apps/web, not apps/api",
+        "packages/sdk/src/client.ts is the correct chokepoint for wiring rotation into mutation methods (renameItem, moveItem, deleteItem, deleteToBin) — the web React hooks are thin wrappers and should not contain rotation logic",
+        "executeLazyRotation had zero live callers in the repo (dead code / free to delete); addShareKeys/reWrapForRecipients had real callers in useAuth.ts and useSharedNavigation.ts needing rerouting",
+        "share.service.ts's fetchReceivedShares/fetchSentShares were stub throws with no real data path, even though the generated API client already exposed the needed fields — a scope gap invisible from CONTEXT.md alone",
+        "No backing API endpoint existed for grant re-mint persistence (reMintGrantsRootedAt's updateGrantFn) — required a new apps/api PATCH route + pnpm api:generate, expanding blast radius beyond apps/web",
+        "No idb npm package used anywhere in repo — durable IndexedDB stores follow a hand-rolled raw indexedDB Promise-wrapping pattern (see identity.ts, search-index.service.ts)",
+        "navigator.locks has no prior usage in the codebase — first-time use pattern for D-09 multi-tab leader election",
+        "GSD plan-checker commit_failed messages during this session were repeatedly false negatives — lint-staged succeeded and commits landed each time; always verify actual git status/log before trusting the reported failure"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 369,
+          "end_line": 381,
+          "finding": "Existing anti-clobber sequenceNumber guard here can be reused with inverted polarity for D-04's rotation defer-never-skip logic"
+        }
+      ],
+      "workflow": [
+        "When a subagent research/verify pass surfaces scope gaps not in the original CONTEXT.md (e.g., missing API endpoints, stub data paths), plan them as explicit tasks rather than silently expanding scope or ignoring them",
+        "Plan-checker warnings should be triaged individually: cheap correctness fixes (missing depends_on edge) applied immediately, doc-hygiene items (RESEARCH.md open-questions marking) applied immediately, but frontmatter/status reconciliation tied to future execution steps left deferred as advised",
+        "When a domain doctrine document (like TESTING.md) contradicts an in-progress plan, verify actual on-the-ground repo state before rewriting (don't trust either the doc's stated landscape or your own prior assumption blindly) — the reality was more nuanced (apps/web has some test files but they're outside the enforced gates)",
+        "After being corrected on a non-obvious cross-cutting rule, save it to persistent memory immediately before applying the fix, so future sessions don't repeat the mistake",
+        "Re-verification after a significant replan should specifically target the changed dimension (test-strategy doctrine) in the checker prompt rather than a generic full re-check, to get focused confidence on what changed"
+      ]
+    },
+    "friction": [
+      "Initial plan set (9 plans) violated the project's core testing doctrine (apps/web must not have unit tests, logic must live in SDK) — this wasn't caught by the planner, pattern-mapper, or plan-checker in the first pass, only by the user referencing docs/TESTING.md directly, causing a full replan of all 9 plans plus a new e2e plan",
+      "Multiple 'commit_failed' false-negative messages during the session required manual git status verification each time to confirm commits actually landed",
+      "Decision-coverage gate produced no output on first run and had to be re-run to see the actual result",
+      "Post-planning gap-analysis gate initially appeared to parse-fail due to a stderr warning getting mixed into the output file, requiring a rerun to get clean JSON",
+      "Commit helper failed to stage 68-VALIDATION.md on the first attempt at session end, requiring a retry with an explicit path"
+    ],
+    "open_items": [
+      "VALIDATION.md's nyquist_compliant flag and sign-off checklist were flagged by the plan-checker as not yet reconciled after the original Wave-0 gap closure; this was later fixed but reflects a pattern where VALIDATION.md status fields lag behind the plan set",
+      "User has not yet decided whether to run /gsd-execute-phase 68 or seek cross-AI review (/gsd-review --phase 68 --all) before executing — both were offered as next steps",
+      "Two RESEARCH.md open questions (D-10/D-11 route shape API design; ensureFolderLoaded stub-throw reachability) were marked resolved via recommendation text but the actual API route shape choice was made by the planner without a dedicated design discussion"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-01T16:15:13.628055Z",
+    "agent_lines": 39,
+    "agent_removed": 33,
+    "human_added": 0,
+    "human_modified": 9,
+    "human_removed": 0,
+    "total_committed": 48,
+    "total_lines_changed": 81,
+    "agent_percentage": 88.88888888888889,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 48,
+      "agent_lines_removed": 33,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 48,
+      "agent_lines_removed": 33,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
