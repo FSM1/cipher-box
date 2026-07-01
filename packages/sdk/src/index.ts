@@ -48,6 +48,21 @@ export type {
 // Shared-folder state (sibling tree keyed by shareId)
 export { SharedFolderTree } from './state/shared-folder-tree';
 
+// Durable rotation high-water state machine (ROT-07) -- monotonic-max
+// generation + seq floors over an injected HighWaterStore seam, and the
+// enforceResolved fail-closed regression gate. apps/web supplies the
+// IndexedDB-backed HighWaterStore (68-06).
+export {
+  createRotationHighWater,
+  GenerationRegressionError,
+  SequenceRegressionError,
+} from './state/rotation-high-water';
+export type {
+  HighWaterStore,
+  RotationHighWater,
+  EnforceResolvedParams,
+} from './state/rotation-high-water';
+
 // Events
 export type { SdkEvent, SdkEventHandler } from './events';
 export { SdkEventEmitter } from './events';

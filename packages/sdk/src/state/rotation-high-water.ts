@@ -4,7 +4,7 @@
  * Hoists the durable anti-rollback CORE LOGIC (ROT-07) into the SDK so it is
  * unit-tested with Vitest -- apps/web supplies only a thin, untested
  * IndexedDB-backed HighWaterStore adapter (68-06) and calls enforceResolved
- * (added in a follow-up task) from resolveIpnsRecord.
+ * from resolveIpnsRecord.
  *
  * Maintains two independent monotonic-max floors per nodeId:
  *   - generation: the M1 cross-generation rollback defense (design §4.3)
@@ -14,12 +14,45 @@
  * access -- there is NO in-instance cache -- so a fresh state machine
  * constructed over the SAME backing store observes previously-written
  * floors (the restart/persistence semantics proven at the logic tier).
+ *
+ * enforceResolved is a pure pass/throw pre-unseal gate -- it never returns
+ * or computes any AAD/unseal parameter. The AAD generation is sourced from
+ * the parent mirror in the unrelated unseal path.
  */
 
 /** A durable key-value seam for a single high-water floor (generation or seq). */
 export interface HighWaterStore {
   get(nodeId: string): Promise<number | undefined>;
   put(nodeId: string, value: number): Promise<void>;
+}
+
+/** Parameters supplied to enforceResolved for a freshly-resolved IPNS record. */
+export interface EnforceResolvedParams {
+  nodeId: string;
+  seq: number;
+  generation: number;
+  /** Owner-vouched cold-device floor applied only on first contact (no local seq floor yet). */
+  versionFloor: number;
+}
+
+/** Thrown when a resolved generation regresses below the durable generation floor. */
+export class GenerationRegressionError extends Error {
+  constructor(nodeId: string, floor: number, attempted: number) {
+    super(
+      `Generation regression rejected for node ${nodeId}: floor=${floor}, attempted=${attempted}`
+    );
+    this.name = 'GenerationRegressionError';
+  }
+}
+
+/** Thrown when a resolved seq regresses below the durable seq floor (or cold-device versionFloor). */
+export class SequenceRegressionError extends Error {
+  constructor(nodeId: string, floor: number, attempted: number) {
+    super(
+      `Sequence regression rejected for node ${nodeId}: floor=${floor}, attempted=${attempted}`
+    );
+    this.name = 'SequenceRegressionError';
+  }
 }
 
 /**
@@ -71,6 +104,16 @@ export interface RotationHighWater {
   seedFromGrant(nodeId: string, rootGeneration: number): Promise<void>;
   getSeqFloor(nodeId: string): Promise<number | undefined>;
   bumpSeq(nodeId: string, seq: number): Promise<void>;
+  /**
+   * Fail-closed pre-unseal gate: compares a freshly-resolved seq/generation
+   * against the stored floors. Throws a distinguishable regression error on
+   * any regression; on first contact (no local seq floor) applies the
+   * cold-device versionFloor gate; otherwise bumps both floors monotonic-max.
+   *
+   * This is a pure pass/throw decision -- it never returns or computes any
+   * AAD/unseal parameter.
+   */
+  enforceResolved(params: EnforceResolvedParams): Promise<void>;
 }
 
 /**
@@ -101,6 +144,26 @@ export function createRotationHighWater(
     },
 
     async bumpSeq(nodeId, seq) {
+      await bumpFloor(seqStore, nodeId, seq);
+    },
+
+    async enforceResolved({ nodeId, seq, generation, versionFloor }) {
+      const generationFloor = await readFloor(generationStore, nodeId);
+      if (generationFloor !== undefined && generation < generationFloor) {
+        throw new GenerationRegressionError(nodeId, generationFloor, generation);
+      }
+
+      const seqFloor = await readFloor(seqStore, nodeId);
+      if (seqFloor === undefined) {
+        // Cold-device / first-contact: apply the owner-vouched versionFloor gate.
+        if (seq < versionFloor) {
+          throw new SequenceRegressionError(nodeId, versionFloor, seq);
+        }
+      } else if (seq < seqFloor) {
+        throw new SequenceRegressionError(nodeId, seqFloor, seq);
+      }
+
+      await bumpFloor(generationStore, nodeId, generation);
       await bumpFloor(seqStore, nodeId, seq);
     },
   };
