@@ -1,0 +1,78 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "de91c92602bf",
+  "session_id": "cd0c465c-4874-497a-8bf3-d4ec2501d18c",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-01T12:22:58.330445Z",
+  "branch": "feat/tee-lease-renewer-contract-rewrite",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/todos/pending/2026-07-01-tee-republish-writepath-error-handling-hardening.md",
+    "apps/api/src/republish/republish.service.spec.ts",
+    "apps/api/src/republish/republish.service.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "df68d85af32d",
+  "checkpoint_transcript_start": 445,
+  "transcript_lines_at_start": 445,
+  "token_usage": {
+    "input_tokens": 1291,
+    "cache_creation_tokens": 62963,
+    "cache_read_tokens": 5594011,
+    "output_tokens": 38164,
+    "api_call_count": 26
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-resolve-pr-reviews-2026-07-01T12:11:59.097774Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "resolve-pr-reviews"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "df68d85af32d",
+      "timestamp": "2026-07-01T12:11:59.097774Z",
+      "native": {
+        "command": "/resolve-pr-reviews"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/resolve-pr-reviews",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-01T12:22:08.292591Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 45,
+    "human_modified": 10,
+    "human_removed": 0,
+    "total_committed": 45,
+    "total_lines_changed": 55,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
