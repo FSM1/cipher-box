@@ -679,6 +679,15 @@ importers:
       '@cipherbox/sdk-core':
         specifier: workspace:*
         version: link:../../packages/sdk-core
+      '@types/pg':
+        specifier: ^8.11.14
+        version: 8.20.0
+      bullmq:
+        specifier: ^5.67.3
+        version: 5.67.3
+      pg:
+        specifier: ^8.14.1
+        version: 8.17.1
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -4661,6 +4670,12 @@ packages:
     resolution:
       {
         integrity: sha512-aciLyx+wDwT2t2/kJGJR2AEeBz0nJU4WuRX04Wu9Dqc5lSUtwu0WERPHYsLhF9PtseiAMPBGNUOtFjxZ56prsg==,
+      }
+
+  '@types/pg@8.20.0':
+    resolution:
+      {
+        integrity: sha512-bEPFOaMAHTEP1EzpvHTbmwR8UsFyHSKsRisLIHVMXnpNefSbGA1bD6CVy+qKjGSqmZqNqBDV2azOBo8TgkcVow==,
       }
 
   '@types/prop-types@15.7.15':
@@ -16248,6 +16263,12 @@ snapshots:
   '@types/passport@1.0.17':
     dependencies:
       '@types/express': 5.0.6
+
+  '@types/pg@8.20.0':
+    dependencies:
+      '@types/node': 22.19.7
+      pg-protocol: 1.11.0
+      pg-types: 2.2.0
 
   '@types/prop-types@15.7.15': {}
 
