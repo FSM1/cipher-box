@@ -397,7 +397,7 @@ Plans:
 4. A durable per-node `{nodeId → highestSeq}` seq high-water is wired into `resolveIpnsRecord` in the web resolve path; a generation or seq regression from the relay causes a fail-closed error, not silent acceptance
 5. Per docs/TESTING.md, this phase adds ZERO `apps/web` test files: core logic is hoisted to the SDK and unit-tested with Vitest, and the UI + durability are covered by Web E2E (Playwright, `tests/web-e2e/`); `find apps/web/src -name "*.spec.ts"` returns empty
 
-**Plans**: 7/10 plans executed
+**Plans**: 9/10 plans executed
 
 Plans:
 **Wave 1**
@@ -415,8 +415,8 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 68-08-PLAN.md — rotation tail-walk driver + navigator.locks multi-tab + badge lifecycle (D-02/D-03/D-09)
-- [ ] 68-09-PLAN.md — mutation-failure UX: defer-retry backoff + fail-closed toasts + co-writer refresh-access (D-01/D-05/D-06/WRITE-03)
+- [x] 68-08-PLAN.md — rotation tail-walk driver + navigator.locks multi-tab + badge lifecycle (D-02/D-03/D-09)
+- [x] 68-09-PLAN.md — mutation-failure UX: defer-retry backoff + fail-closed toasts + co-writer refresh-access (D-01/D-05/D-06/WRITE-03)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
@@ -461,7 +461,7 @@ Plans:
 | 65 | SDK Write-Chain, Bin Re-link, and Invite Claim | 7/7 | Complete    | 2026-06-30 |
 | 66 | API Schema Cutover, Publish Gate, and Tombstone | 9/9 | Complete    | 2026-06-30 |
 | 67 | TEE Lease-Renewer Contract Rewrite | 8/8 | Complete    | 2026-07-01 |
-| 68 | Web Integration — Rotation UX and Durable Client State | 7/10 | In Progress|  |
+| 68 | Web Integration — Rotation UX and Durable Client State | 9/10 | In Progress|  |
 | 69 | FUSE and WinFsp — Rust Integration and Grant-Root Awareness | 0/? | Not started | - |
 
 v1.1 history: 45 phases complete (198 plans). See `milestones/v1.1-ROADMAP.md` for full detail.
