@@ -627,6 +627,96 @@ describe('rotateReadFromNode — root-first BFS ordering (§4.2)', () => {
     expect(jobRecord.completedNodeIds.has(NODE_ID)).toBe(true);
   });
 
+  it('returns the root RotateReadResult (readKey/generation/sequenceNumber) on a fresh rotation (Gap 2)', async () => {
+    // Analog of "job record reaches status complete": a fresh, single-node
+    // (no children) rotation. Asserts rotateReadFromNode's return value
+    // matches the root's own rotateOne result instead of discarding it.
+    const rootNode = makeFolderNode({ generation: 0, children: [] });
+    const rootPublished = makePublishedNode(NODE_ID, 0);
+
+    mockFns.resolveIpnsRecord.mockResolvedValue({
+      cid: 'bafy-root',
+      sequenceNumber: 1n,
+      signatureVerified: true,
+    });
+    mockFns.fetchFromIpfs.mockResolvedValue(
+      new TextEncoder().encode(JSON.stringify(rootPublished))
+    );
+    mockFns.unsealNode.mockResolvedValue(rootNode);
+    mockFns.sealNode.mockResolvedValue(makePublishedNode(NODE_ID, 1));
+    mockFns.sealChildReadKey.mockResolvedValue('sealed==');
+    mockFns.publishWithCas.mockResolvedValue({
+      cid: 'bafy-new',
+      newSequenceNumber: 2n,
+      publishedData: [],
+      prunedCids: [],
+    });
+
+    // rotateOne mints readKeyPrime via the REAL crypto.getRandomValues (not mocked
+    // by this suite) — spy on it to capture the exact bytes minted for the root so
+    // the assertion below proves equality-by-value, not just shape.
+    let mintedRootReadKey: Uint8Array | undefined;
+    const getRandomValuesSpy = vi
+      .spyOn(globalThis.crypto, 'getRandomValues')
+      .mockImplementation(<T extends ArrayBufferView | null>(array: T): T => {
+        const bytes = array as unknown as Uint8Array;
+        bytes.fill(0x99);
+        mintedRootReadKey = new Uint8Array(bytes);
+        return array;
+      });
+
+    const jobRecord = makeJobRecord({ rootNodeId: NODE_ID });
+    const result = await rotateReadFromNode({
+      rootNodeId: NODE_ID,
+      rootNodeIpnsName: NODE_IPNS,
+      rootReadKey: new Uint8Array(32).fill(0x55),
+      rootIpnsPrivateKey: TASK1_ROOT_IPNS_PRIVATE_KEY, // D-01 fail-closed requires a key
+      jobRecord,
+      ctx: createMockContext(),
+    });
+
+    getRandomValuesSpy.mockRestore();
+
+    expect(result).toBeDefined();
+    expect(result?.readKey).toEqual(mintedRootReadKey);
+    expect(result?.generation).toBe(1);
+    expect(result?.sequenceNumber).toBe(2n);
+  });
+
+  it('returns undefined on the clean resume/skip path (root already committed in a prior run, Gap 2)', async () => {
+    // Analog of Test 4 ("clean resume") below: root already in completedNodeIds
+    // (rotateOne's fast-path idempotency skip returns { skipped: true }), and
+    // verifySubtreeClean reports no dirty edges — the early-return resume path.
+    // There is no fresh root key minted this run, so the return must be undefined.
+    const rootNode = makeFolderNode({ generation: 1, children: [] });
+
+    mockFns.resolveIpnsRecord.mockResolvedValue({
+      cid: 'bafy-root',
+      sequenceNumber: 2n,
+      signatureVerified: true,
+    });
+    mockFns.fetchFromIpfs.mockResolvedValue(
+      new TextEncoder().encode(JSON.stringify(makePublishedNode(NODE_ID, 1)))
+    );
+    mockFns.unsealNode.mockResolvedValue(rootNode);
+
+    const jobRecord = makeJobRecord({
+      rootNodeId: NODE_ID,
+      completedNodeIds: new Set([NODE_ID]),
+    });
+
+    const result = await rotateReadFromNode({
+      rootNodeId: NODE_ID,
+      rootNodeIpnsName: NODE_IPNS,
+      rootReadKey: new Uint8Array(32).fill(0x77),
+      jobRecord,
+      ctx: createMockContext(),
+    });
+
+    expect(result).toBeUndefined();
+    expect(jobRecord.status).toBe('complete');
+  });
+
   it('calls persistCallback after each per-node commit', async () => {
     const persistCallback = vi.fn();
     const rootNode = makeFolderNode({ generation: 0, children: [] });
