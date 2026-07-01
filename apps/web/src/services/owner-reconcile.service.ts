@@ -158,3 +158,55 @@ export async function triggerOwnerReconcileOnLogin(): Promise<void> {
     }
   }
 }
+
+/**
+ * Opportunistic post-mutation owner-reconcile trigger (D-11), scoped to a
+ * SINGLE root -- the folder the client just mutated -- rather than the full
+ * login sweep above. Wired from `useAuth.ts` after the client's
+ * `folder:updated` event so a re-mint/delete of any sent grant rooted at
+ * this folder happens immediately after the owner's own scope-exit
+ * rotation, without waiting for the next login sweep.
+ *
+ * Sourced the same way as the eager login sweep: the CURRENT
+ * `folderKey`/`nodeGeneration` from the SDK's in-memory `FolderTree`.
+ * Best-effort: skipped when `rootIpnsName` is not a known sent-grant root,
+ * or when the folder isn't currently loaded in-memory. Fire-and-forget;
+ * errors are captured and logged, never thrown to the caller.
+ */
+export async function runOwnerReconcileForFolder(rootIpnsName: string): Promise<void> {
+  if (!hasSdkClient()) return;
+
+  let decoded: DecodedSentGrant[];
+  try {
+    decoded = await decodeSentGrants();
+  } catch (error) {
+    logger.error(
+      `[owner-reconcile] Failed to fetch sent grants for opportunistic reconcile of ${rootIpnsName}:`,
+      error
+    );
+    return;
+  }
+
+  const grant = decoded.find((candidate) => candidate.rootIpnsName === rootIpnsName);
+  if (!grant) return; // not a grant root -- nothing to reconcile
+
+  const client = getSdkClient();
+  const folderState = client.getFolderTree().get(rootIpnsName);
+  if (!folderState) return; // best-effort skip, same as the eager login sweep
+
+  try {
+    await runOwnerReconcile(
+      grant.rootNodeId,
+      folderState.folderKey,
+      folderState.nodeGeneration,
+      makeReconcileJob(grant.rootNodeId),
+      buildReconcileCtx(),
+      webOwnerReconcileTransport
+    );
+  } catch (error) {
+    logger.error(
+      `[owner-reconcile] Opportunistic reconcile failed for root ${grant.rootNodeId}:`,
+      error
+    );
+  }
+}
