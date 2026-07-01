@@ -3,11 +3,13 @@ import type { PrivateKeyAccount } from 'viem/accounts';
 import { createTestAccount, setupMockWallet, loginViaWallet } from '../utils/wallet-login-helpers';
 import { deleteAccountViaPage } from '../utils/cleanup-helpers';
 import { FileListPage } from '../page-objects/file-browser/file-list.page';
+import { ContextMenuPage } from '../page-objects/file-browser/context-menu.page';
 import { CreateFolderDialogPage } from '../page-objects/dialogs/create-folder-dialog.page';
+import { RenameDialogPage } from '../page-objects/dialogs/rename-dialog.page';
 
 /**
  * Rotation Durability: real-reload IndexedDB persistence + fail-closed
- * relay-regression rejection (ROT-07 — SC#1 / SC#4 / D-05).
+ * relay-regression rejection (ROT-07 -- SC#1 / SC#4 / D-05).
  *
  * Per docs/TESTING.md, the web app is covered ONLY at this (Playwright)
  * tier. The SDK's monotonic-max/fail-closed comparison logic is already
@@ -15,26 +17,62 @@ import { CreateFolderDialogPage } from '../page-objects/dialogs/create-folder-di
  * module doc states it has NO unit test and relies on THIS spec to prove its
  * real-browser IndexedDB persistence. This spec is that proof.
  *
- * SCOPE NOTE (source-verified gap, not an oversight): as of this phase, NO
- * production call site threads a `rotation` context into
- * `ipns.service.ts#resolveIpnsRecord` (grep confirms zero call sites pass a
- * second argument) — `useFileBrowserActions.ts`'s own comment says "once a
- * rotation context is threaded through here" for its still-unwired sync
- * resolve. `enforceResolved`/`seedFromGrant` are therefore not yet reachable
- * from any UI click. To still prove the REAL, shipped adapter — real
- * IndexedDB, real browser reload, real network resolve, real notification
- * toast — this spec drives `ipns.service.ts#resolveIpnsRecord` and
- * `useMutationFailureUx.ts#runWithFailureUx` directly via the Vite dev
- * server's module graph (`page.evaluate` + dynamic `import('/src/...')`,
- * which Vite transforms identically to a statically-imported module — the
- * SAME module instance the running app already loaded). A synthetic `nodeId`
- * decouples the durable-floor key from any real node so this spec cannot
- * collide with the app's own (currently dormant) rotation state. The
- * underlying resolve target is the test account's own root IPNS name — always
- * resolvable, requiring no sharing setup for this specific proof.
+ * SCOPE NOTE (updated -- Gap 1 closure, 68-11): the SDK client's own
+ * `reconcileFolderSequence` (`packages/sdk/src/client.ts`) now gates its
+ * resolve through an injected `RotationHighWater.enforceResolved` whenever
+ * the client is constructed with one -- `useAuth.ts` injects the
+ * IndexedDB-backed `rotation-state.service.ts` instance for every login
+ * (68-11 Task 2). `useFileBrowserActions.ts`'s `handleSync` also now threads
+ * a real `ResolveRotationContext`. This spec drives that LIVE path via real
+ * UI mutations: renaming a root-level item triggers
+ * `CipherBoxClient.renameItem` -> `reconcileFolderSequence(rootIpnsName, ...)`
+ * -> `enforceResolved`, gated exactly as any real user's rename action would
+ * be -- no direct `page.evaluate` + dynamic-import invocation of
+ * `resolveIpnsRecord`/`enforceResolved` is needed to trigger the gate any
+ * more. `page.evaluate` is still used below, but ONLY for two narrowly-scoped,
+ * non-mechanism-invoking purposes: (a) reading the real IndexedDB high-water
+ * floor for assertions, and (b) reading `vaultStore.rootIpnsName` after a
+ * real login to identify the account's own root IPNS name for the mock-relay
+ * HTTP calls below -- neither reads/writes app rotation state, both are
+ * read-only observation of state the UI mutations below already produced.
  */
 
 const MOCK_ROUTING_URL = process.env.DELEGATED_ROUTING_URL?.trim() || 'http://localhost:3001';
+
+/**
+ * Reads the durable generation/seq high-water floors for `nodeId` directly
+ * from the real IndexedDB store `rotation-state.service.ts` writes to.
+ * Read-only observation -- does not invoke any app resolve/enforce logic.
+ */
+async function readDurableFloors(
+  page: Page,
+  nodeId: string
+): Promise<{ generation: number | undefined; seq: number | undefined }> {
+  return page.evaluate(
+    ({ nodeId }) => {
+      return new Promise<{ generation: number | undefined; seq: number | undefined }>(
+        (resolve, reject) => {
+          const req = indexedDB.open('cipherbox-rotation-state', 1);
+          req.onerror = () => reject(req.error);
+          req.onsuccess = () => {
+            const db = req.result;
+            const tx = db.transaction(['generation-high-water', 'seq-high-water'], 'readonly');
+            const genReq = tx.objectStore('generation-high-water').get(nodeId);
+            const seqReq = tx.objectStore('seq-high-water').get(nodeId);
+            tx.oncomplete = () => {
+              resolve({
+                generation: genReq.result as number | undefined,
+                seq: seqReq.result as number | undefined,
+              });
+            };
+            tx.onerror = () => reject(tx.error);
+          };
+        }
+      );
+    },
+    { nodeId }
+  );
+}
 
 test.describe
   .serial('Rotation Durability: real IndexedDB persistence + fail-closed rejection', () => {
@@ -43,10 +81,11 @@ test.describe
   let page: Page;
   let fileList: FileListPage;
   let createFolderDialog: CreateFolderDialogPage;
+  let contextMenu: ContextMenuPage;
+  let renameDialog: RenameDialogPage;
   let account: PrivateKeyAccount;
 
   const runId = Date.now().toString();
-  const nodeId = `e2e-durability-${runId}`;
 
   let rootIpnsName: string;
   let seededSeq: number;
@@ -63,6 +102,8 @@ test.describe
 
     fileList = new FileListPage(page);
     createFolderDialog = new CreateFolderDialogPage(page);
+    contextMenu = new ContextMenuPage(page);
+    renameDialog = new RenameDialogPage(page);
 
     await loginViaWallet(page, { timeout: 60_000 });
     await page.waitForURL('**/files', { timeout: 60000 });
@@ -70,6 +111,17 @@ test.describe
       fileList.fileListContainer().waitFor({ state: 'visible', timeout: 30000 }),
       page.locator('[data-testid="empty-state"]').waitFor({ state: 'visible', timeout: 30000 }),
     ]);
+
+    // Read-only: identify the account's own real root IPNS name post-login.
+    // Does not invoke resolveIpnsRecord/enforceResolved -- see SCOPE NOTE.
+    rootIpnsName = await page.evaluate(async () => {
+      const vaultModPath = '/src/stores/vault.store.ts';
+      const vaultMod = await import(vaultModPath);
+      const name = vaultMod.useVaultStore.getState().rootIpnsName as string | null;
+      if (!name) throw new Error('vault store has no rootIpnsName after login');
+      return name;
+    });
+    expect(rootIpnsName).toMatch(/^(k51|bafzaa)/);
   });
 
   test.afterAll(async () => {
@@ -81,77 +133,50 @@ test.describe
     }
   });
 
-  test('seeds the durable high-water floor via a real network resolve', async () => {
-    const result = await page.evaluate(
-      async ({ nodeId }) => {
-        const vaultModPath = '/src/stores/vault.store.ts';
-        const ipnsModPath = '/src/services/ipns.service.ts';
-        const vaultMod = await import(vaultModPath);
-        const ipnsMod = await import(ipnsModPath);
+  test('seeds the durable high-water floor via a real UI mutation (create + rename, SC#4 setup)', async () => {
+    // A create alone does not touch reconcileFolderSequence (createFolder has
+    // no reconcile-before-publish call). Renaming the created item is the
+    // real UI action that calls CipherBoxClient.renameItem ->
+    // reconcileFolderSequence(rootIpnsName, ...) -> the live enforceResolved
+    // gate (Gap 1 closure) -- this is the FIRST resolve this test run makes
+    // through that gate, seeding the durable floor for the account's real
+    // rootIpnsName.
+    const folderName = `durability-seed-${runId}`;
+    await page.locator('.file-browser-new-folder-button').click();
+    await createFolderDialog.waitForOpen();
+    await createFolderDialog.createFolder(folderName);
+    await fileList.waitForItemToAppear(folderName, { timeout: 30000 });
 
-        const rootIpnsName = vaultMod.useVaultStore.getState().rootIpnsName as string | null;
-        if (!rootIpnsName) throw new Error('vault store has no rootIpnsName after login');
+    const renamedName = `${folderName}-renamed`;
+    await fileList.rightClickItem(folderName);
+    await contextMenu.waitForOpen();
+    await contextMenu.clickRename();
+    await renameDialog.waitForOpen();
+    await renameDialog.rename(renamedName);
+    await fileList.waitForItemToAppear(renamedName, { timeout: 15000 });
 
-        const resolved = await ipnsMod.resolveIpnsRecord(rootIpnsName, {
-          nodeId,
-          generation: 1,
-          versionFloor: 0,
-        });
-        if (!resolved) throw new Error('root IPNS name did not resolve');
-
-        return { rootIpnsName, seq: Number(resolved.sequenceNumber) };
-      },
-      { nodeId }
-    );
-
-    expect(result.rootIpnsName).toMatch(/^(k51|bafzaa)/);
-    expect(Number.isInteger(result.seq)).toBe(true);
-    expect(result.seq).toBeGreaterThanOrEqual(0);
-
-    rootIpnsName = result.rootIpnsName;
-    seededSeq = result.seq;
+    const floors = await readDurableFloors(page, rootIpnsName);
+    expect(floors.generation).toBeDefined();
+    expect(floors.seq).toBeDefined();
+    seededSeq = floors.seq as number;
   });
 
   test('persists the floor to real IndexedDB across a real reload (SC#1)', async () => {
     // A real browser reload wipes every module-scope JS variable (the
-    // rotation-state.service.ts stores, the SDK client, everything) — only
+    // rotation-state.service.ts stores, the SDK client, everything) -- only
     // the wallet session and IndexedDB survive. Reading the floor back after
     // this reload is the durability proof; reading it from any in-memory
     // map (module variable, closure, cache) would be rejected at review.
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.locator('[data-testid="user-menu"]').waitFor({ state: 'visible', timeout: 120000 });
 
-    const floors = await page.evaluate(
-      ({ nodeId }) => {
-        return new Promise<{ generation: number | undefined; seq: number | undefined }>(
-          (resolve, reject) => {
-            const req = indexedDB.open('cipherbox-rotation-state', 1);
-            req.onerror = () => reject(req.error);
-            req.onsuccess = () => {
-              const db = req.result;
-              const tx = db.transaction(['generation-high-water', 'seq-high-water'], 'readonly');
-              const genReq = tx.objectStore('generation-high-water').get(nodeId);
-              const seqReq = tx.objectStore('seq-high-water').get(nodeId);
-              tx.oncomplete = () => {
-                resolve({
-                  generation: genReq.result as number | undefined,
-                  seq: seqReq.result as number | undefined,
-                });
-              };
-              tx.onerror = () => reject(tx.error);
-            };
-          }
-        );
-      },
-      { nodeId }
-    );
+    const floors = await readDurableFloors(page, rootIpnsName);
 
-    // Real-IndexedDB-after-real-reload assertion (SC#1) — not an in-memory claim.
-    expect(floors.generation).toBe(1);
+    // Real-IndexedDB-after-real-reload assertion (SC#1) -- not an in-memory claim.
     expect(floors.seq).toBe(seededSeq);
   });
 
-  test('rejects a relay-replayed stale record fail-closed with the D-05 toast and does not apply it (SC#4)', async ({
+  test('rejects a relay-replayed stale record fail-closed via a genuine UI mutation, with the D-05 toast, and does not apply it (SC#4)', async ({
     request,
   }) => {
     test.setTimeout(60_000);
@@ -167,32 +192,27 @@ test.describe
     expect(staleResponse.ok()).toBe(true);
     const staleBytes = await staleResponse.body();
 
-    // 2. Perform a REAL mutation (throwaway folder create) that republishes
-    //    root with a HIGHER sequence, then resolve again through the rotation
-    //    gate so the durable floor advances past the bytes captured above.
+    // 2. Perform a REAL bump mutation (create + rename another throwaway
+    //    folder) so root republishes with a HIGHER sequence, and the live
+    //    reconcileFolderSequence -> enforceResolved gate advances the durable
+    //    floor past the bytes captured above -- entirely via real UI actions.
+    const folderName = `durability-bump-${runId}`;
     await page.locator('.file-browser-new-folder-button').click();
     await createFolderDialog.waitForOpen();
-    const throwawayFolderName = `durability-bump-${runId}`;
-    await createFolderDialog.createFolder(throwawayFolderName);
-    await fileList.waitForItemToAppear(throwawayFolderName, { timeout: 30000 });
+    await createFolderDialog.createFolder(folderName);
+    await fileList.waitForItemToAppear(folderName, { timeout: 30000 });
 
-    const bumped = await page.evaluate(
-      async ({ nodeId, rootIpnsName }) => {
-        const ipnsModPath = '/src/services/ipns.service.ts';
-        const ipnsMod = await import(ipnsModPath);
-        const resolved = await ipnsMod.resolveIpnsRecord(rootIpnsName, {
-          nodeId,
-          generation: 1,
-          versionFloor: 0,
-        });
-        return resolved ? Number(resolved.sequenceNumber) : null;
-      },
-      { nodeId, rootIpnsName }
-    );
+    const renamedName = `${folderName}-renamed`;
+    await fileList.rightClickItem(folderName);
+    await contextMenu.waitForOpen();
+    await contextMenu.clickRename();
+    await renameDialog.waitForOpen();
+    await renameDialog.rename(renamedName);
+    await fileList.waitForItemToAppear(renamedName, { timeout: 15000 });
 
-    expect(bumped).not.toBeNull();
-    expect(bumped as number).toBeGreaterThan(seededSeq);
-    bumpedSeq = bumped as number;
+    const floorsAfterBump = await readDurableFloors(page, rootIpnsName);
+    bumpedSeq = floorsAfterBump.seq as number;
+    expect(bumpedSeq).toBeGreaterThan(seededSeq);
 
     // 3. Replay the captured stale bytes back into the mock relay -- this is
     //    the T-68-101 colluding/lagging relay scenario: a lower-sequence
@@ -203,56 +223,42 @@ test.describe
     });
     expect(putResponse.ok()).toBe(true);
 
-    // 4. Resolve through the SAME classifier the real mutation hooks use
-    //    (runWithFailureUx wrapping resolveIpnsRecord, exactly as
-    //    useFolderMutations.ts and useFileBrowserActions.ts do) -- the durable
-    //    floor now rejects the replayed record fail-closed.
-    const outcome = await page.evaluate(
-      async ({ nodeId, rootIpnsName }) => {
-        const failureUxModPath = '/src/hooks/useMutationFailureUx.ts';
-        const ipnsModPath = '/src/services/ipns.service.ts';
-        const failureUxMod = await import(failureUxModPath);
-        const ipnsMod = await import(ipnsModPath);
-        try {
-          await failureUxMod.runWithFailureUx(() =>
-            ipnsMod.resolveIpnsRecord(rootIpnsName, { nodeId, generation: 1, versionFloor: 0 })
-          );
-          return { threw: false, name: null as string | null };
-        } catch (err) {
-          return { threw: true, name: (err as Error).name };
-        }
-      },
-      { nodeId, rootIpnsName }
-    );
+    // 4. Perform a REAL revocation-triggering mutation on a root child --
+    //    renaming the same item again. CipherBoxClient.renameItem calls
+    //    reconcileFolderSequence(rootIpnsName, ...), which resolves the
+    //    NOW-STALE record from the relay above and gates it through
+    //    enforceResolved (live, Gap 1 closure) -- the durable floor rejects
+    //    it fail-closed. The dialog does NOT close on failure
+    //    (handleRenameConfirm only calls closeRenameDialog() on success), so
+    //    we drive the form directly rather than using the `.rename()`
+    //    convenience helper (which awaits a close that will not happen).
+    await fileList.rightClickItem(renamedName);
+    await contextMenu.waitForOpen();
+    await contextMenu.clickRename();
+    await renameDialog.waitForOpen();
+    await renameDialog.clearAndEnterName(`${renamedName}-rejected`);
+    await renameDialog.clickSave();
 
-    expect(outcome.threw).toBe(true);
-    expect(outcome.name).toBe('SequenceRegressionError');
-
-    // 5. D-05: the fail-closed toast is visible with the exact UI-SPEC copy.
+    // 5. D-05: the fail-closed toast is visible with the exact UI-SPEC copy,
+    //    surfaced by the SAME runWithFailureUx classifier real folder
+    //    mutations use (useFolderMutations.ts).
     await expect(
       page.locator('[role="alert"]', { hasText: 'Stale data from server rejected.' })
     ).toBeVisible({ timeout: 10000 });
 
+    // The rename dialog stays open (mutation threw) -- close it so it does
+    // not interfere with subsequent assertions or afterAll cleanup.
+    await renameDialog.clickCancel();
+
     // 6. "Not applied": re-read the durable seq floor directly from real
     //    IndexedDB -- it MUST still be the bumped value, never the replayed
     //    stale sequence (the regression is rejected, not silently accepted).
-    const floorAfterRejection = await page.evaluate(
-      ({ nodeId }) => {
-        return new Promise<number | undefined>((resolve, reject) => {
-          const req = indexedDB.open('cipherbox-rotation-state', 1);
-          req.onerror = () => reject(req.error);
-          req.onsuccess = () => {
-            const db = req.result;
-            const tx = db.transaction('seq-high-water', 'readonly');
-            const getReq = tx.objectStore('seq-high-water').get(nodeId);
-            getReq.onsuccess = () => resolve(getReq.result as number | undefined);
-            getReq.onerror = () => reject(getReq.error);
-          };
-        });
-      },
-      { nodeId }
-    );
+    const floorAfterRejection = await readDurableFloors(page, rootIpnsName);
+    expect(floorAfterRejection.seq).toBe(bumpedSeq);
 
-    expect(floorAfterRejection).toBe(bumpedSeq);
+    // The item's display name must also be unchanged (the rename itself was
+    // rejected, not silently applied against the stale record).
+    expect(await fileList.isItemVisible(renamedName)).toBe(true);
+    expect(await fileList.isItemVisible(`${renamedName}-rejected`)).toBe(false);
   });
 });
