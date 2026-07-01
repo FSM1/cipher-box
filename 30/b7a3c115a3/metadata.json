@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "30b7a3c115a3",
+  "strategy": "manual-commit",
+  "branch": "feat/tee-lease-renewer-contract-rewrite",
+  "checkpoints_count": 3,
+  "files_touched": [
+    ".planning/todos/pending/2026-07-01-ci-tee-worker-for-tee-republish-e2e.md",
+    "tests/sdk-e2e/src/suites/tee-republish.test.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/30/b7a3c115a3/0/metadata.json",
+      "transcript": "/30/b7a3c115a3/0/full.jsonl",
+      "content_hash": "/30/b7a3c115a3/0/content_hash.txt",
+      "prompt": "/30/b7a3c115a3/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 28293,
+    "cache_creation_tokens": 568104,
+    "cache_read_tokens": 45300145,
+    "output_tokens": 217554,
+    "api_call_count": 187
+  }
+}
