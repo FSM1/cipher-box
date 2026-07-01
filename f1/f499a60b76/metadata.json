@@ -3,8 +3,9 @@
   "checkpoint_id": "f1f499a60b76",
   "strategy": "manual-commit",
   "branch": "feat/web-integration-rotation-ux-and-durable-client-state",
-  "checkpoints_count": 3,
+  "checkpoints_count": 4,
   "files_touched": [
+    "packages/sdk/src/__tests__/client-move-enumerate.test.ts",
     "packages/sdk/src/client.ts"
   ],
   "sessions": [
@@ -13,13 +14,19 @@
       "transcript": "/f1/f499a60b76/0/full.jsonl",
       "content_hash": "/f1/f499a60b76/0/content_hash.txt",
       "prompt": "/f1/f499a60b76/0/prompt.txt"
+    },
+    {
+      "metadata": "/f1/f499a60b76/1/metadata.json",
+      "transcript": "/f1/f499a60b76/1/full.jsonl",
+      "content_hash": "/f1/f499a60b76/1/content_hash.txt",
+      "prompt": ""
     }
   ],
   "token_usage": {
-    "input_tokens": 26296,
-    "cache_creation_tokens": 1468214,
-    "cache_read_tokens": 38042853,
-    "output_tokens": 258329,
-    "api_call_count": 123
+    "input_tokens": 34358,
+    "cache_creation_tokens": 1550716,
+    "cache_read_tokens": 48222105,
+    "output_tokens": 302565,
+    "api_call_count": 179
   }
 }

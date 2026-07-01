@@ -1,0 +1,173 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "f1f499a60b76",
+  "session_id": "85a26432-c908-42fd-b330-ccdbcff237de",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-01T23:26:25.513718Z",
+  "branch": "feat/web-integration-rotation-ux-and-durable-client-state",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/sdk/src/client.ts",
+    "packages/sdk/src/__tests__/client-move-enumerate.test.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "c9c5131733db",
+  "checkpoint_transcript_start": 323,
+  "transcript_lines_at_start": 323,
+  "token_usage": {
+    "input_tokens": 8062,
+    "cache_creation_tokens": 82502,
+    "cache_read_tokens": 10179252,
+    "output_tokens": 44236,
+    "api_call_count": 56
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-ship-phase-2026-07-01T22:58:47.220411Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "f0c28e598242",
+      "timestamp": "2026-07-01T22:58:47.220411Z",
+      "native": {
+        "command": "/ship-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/ship-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01PgzfX1YfmnUp1rK8BmUbQA",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-secure-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "c9c5131733db",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 103,
+        "end": 104,
+        "entry_ids": [
+          "ce8a41ef-337e-48f8-a250-f1e557563f5e"
+        ],
+        "tool_use_id": "toolu_01PgzfX1YfmnUp1rK8BmUbQA"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01PgzfX1YfmnUp1rK8BmUbQA"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-secure-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_0151E7BZVs1WRQYiBYs3FgmT",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-validate-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "c9c5131733db",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 159,
+        "end": 160,
+        "entry_ids": [
+          "8054fe6b-99cb-464b-8eec-c76dd0e56a05"
+        ],
+        "tool_use_id": "toolu_0151E7BZVs1WRQYiBYs3FgmT"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_0151E7BZVs1WRQYiBYs3FgmT"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-validate-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Investigate TEE-worker/sdk-e2e test skip behavior and republish queue state, then clean up dead code and fix bugs found along the way in the cipher-box monorepo (packages/sdk and apps/web).",
+    "outcome": "Fixed a zeroization-order bug in enumerateMoveDescendants (packages/sdk/src/client.ts), added and red-green-verified a regression test, removed dead code from share.service.ts and useMutationFailureUx.ts, discovered web vitest isn't wired into CI and an ipns.service test failure that appears pre-existing on main, filed three todo files for deferred issues, and committed the SDK fix with its test.",
+    "learnings": {
+      "repo": [
+        "tee-worker's running container must be located via container labels to find its compose file, then rebuilt from current source to pick up code changes — it isn't auto-synced.",
+        "apps/web's vitest suite is not invoked anywhere in ci.yml, so failures there (e.g. ipns.service.test) can go unnoticed by CI.",
+        "share.service.ts and useMutationFailureUx.ts contained dead code (e.g. ensureFreshSentShares path) referenced only in comments with zero real importers.",
+        "ipns.service.test failure reproduces identically on main with the same file structure, suggesting it's a pre-existing/environmental issue unrelated to this session's changes rather than something introduced by the diff."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "enumerateMoveDescendants had an ordering bug around key zeroization; fixed and covered by a new regression test."
+        },
+        {
+          "path": "packages/sdk/src/__tests__/client-move-enumerate.test.ts",
+          "finding": "New regression test added for the moveItem/enumerateMoveDescendants zeroization-order bug; confirmed it fails against the unfixed code (red) and passes after the fix (green)."
+        },
+        {
+          "path": "apps/web/src/services/share.service.ts",
+          "finding": "Multiple dead code spans removed after confirming no external code references (only stale comments referenced them)."
+        },
+        {
+          "path": "apps/web/src/hooks/useMutationFailureUx.ts",
+          "finding": "Dead code removed after confirming no remaining usages."
+        }
+      ],
+      "workflow": [
+        "To validate a new regression test actually catches the bug, temporarily revert the fix and confirm the test goes red, then reapply and confirm green.",
+        "When a test failure looks suspicious, diff the suspect file against main and swap in main's version to isolate whether the failure predates the current changes.",
+        "Deferred/non-blocking issues get filed as dated markdown files in .planning/todos/pending/ rather than fixed inline."
+      ]
+    },
+    "friction": [
+      "Significant time spent chasing the ipns.service.test failure (comparing imports, mocks, and api-config module scope against main) without reaching a definitive root cause before concluding it's likely pre-existing.",
+      "Locating the tee-worker's compose definition required finding it via running container labels rather than a direct file path — not discoverable.",
+      "Tracing the TEE test renewal mechanism and republish queue state (BullMQ/redis) required multiple rounds of log and code inspection before the actual investigation could proceed to the dead-code and bug-fix work."
+    ],
+    "open_items": [
+      "web vitest is not run in CI, and the ipns.service.test failure remains unresolved — filed as .planning/todos/pending/2026-07-02-web-vitest-not-in-ci-and-ipns-service-test-broken.md",
+      "write03 refresh-access path has no live trigger — filed as .planning/todos/pending/2026-07-02-write03-refresh-access-path-has-no-live-trigger.md",
+      "Dead SDK share scaffolding should be retired — filed as .planning/todos/pending/2026-07-02-retire-dead-sdk-share-scaffolding.md",
+      "Only the SDK zeroization-order commit was confirmed executed in the transcript; the planned separate commits for the share.service.ts/useMutationFailureUx.ts dead-code removals were not shown as completed."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-01T23:25:52.826426Z",
+    "agent_lines": 236,
+    "agent_removed": 30,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 236,
+    "total_lines_changed": 266,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
