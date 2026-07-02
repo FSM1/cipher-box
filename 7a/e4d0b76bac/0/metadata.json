@@ -1,0 +1,75 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "7ae4d0b76bac",
+  "session_id": "064836b9-90e4-42d5-aabc-ed5fde831a57",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-02T18:51:06.474618Z",
+  "branch": "feat/web-client-runtime-integration",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docker/docker-compose.yml"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "d975e03e2a37",
+  "checkpoint_transcript_start": 593,
+  "transcript_lines_at_start": 593,
+  "token_usage": {
+    "input_tokens": 1247,
+    "cache_creation_tokens": 14115,
+    "cache_read_tokens": 5357677,
+    "output_tokens": 8142,
+    "api_call_count": 17
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "summary": {
+    "intent": "User asked to start up the full local CipherBox dev stack (Docker services, API, web dev server).",
+    "outcome": "Brought the stack fully up: started the missing web dev server on :5173, diagnosed and fixed a healthcheck bug in the mock-ipns-routing container definition, confirmed it now reports healthy, and committed the docker-compose.yml fix.",
+    "learnings": {
+      "repo": [
+        "mock-ipns-routing container was chronically 'unhealthy' due to its Docker healthcheck resolving 'localhost' to IPv6 inside the container, which failed to connect; fix required updating the healthcheck in docker/docker-compose.yml.",
+        "The container's healthcheck was also probing the wrong port — actual API port had to be cross-checked against main.ts before correcting the healthcheck command."
+      ],
+      "code": [
+        {
+          "path": "docker/docker-compose.yml",
+          "finding": "mock-ipns-routing service healthcheck needed updating to use the correct localhost form (avoid IPv6 resolution) and correct port matching the app's actual listen port from main.ts."
+        }
+      ],
+      "workflow": [
+        "When a compose-defined container reports unhealthy, check the healthcheck command directly (docker inspect) and probe the port from inside the container before assuming an app-level bug."
+      ]
+    },
+    "friction": [
+      "A Bash call to read/grep .env alongside the compose healthcheck lines was denied, requiring the check to be split into separate commands.",
+      "Diagnosing the unhealthy container took many sequential steps (inspect healthcheck, probe inside container, find compose file, cross-reference app port in main.ts) before the root cause (IPv6 localhost + wrong port) was confirmed."
+    ],
+    "open_items": []
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-02T18:50:47.390466Z",
+    "agent_lines": 1,
+    "agent_removed": 1,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 1,
+    "total_lines_changed": 2,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
