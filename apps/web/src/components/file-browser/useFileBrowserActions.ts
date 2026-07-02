@@ -120,7 +120,6 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
       // SDK client's own default when a folder's nodeGeneration is unknown).
       const resolved = await runWithFailureUx(() =>
         resolveIpnsRecord(rootIpnsName, {
-          nodeId: rootIpnsName,
           generation: 0,
           versionFloor: Number(rootFolder.sequenceNumber),
         })

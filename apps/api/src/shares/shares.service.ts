@@ -262,27 +262,34 @@ export class SharesService {
     readDescriptorRef: string,
     rootGeneration: string
   ): Promise<void> {
-    const share = await this.shareRepo.findOne({ where: { id: shareId } });
+    // Row-locked transaction: the anti-rollback check below must see the row
+    // a concurrent PATCH just committed, not a stale pre-race read (TOCTOU).
+    await this.dataSource.transaction(async (manager) => {
+      const share = await manager.findOne(Share, {
+        where: { id: shareId },
+        lock: { mode: 'pessimistic_write' },
+      });
 
-    if (!share) {
-      throw new NotFoundException('Share not found');
-    }
+      if (!share) {
+        throw new NotFoundException('Share not found');
+      }
 
-    if (share.sharerId !== sharerId) {
-      throw new ForbiddenException('Only the sharer can update the grant');
-    }
+      if (share.sharerId !== sharerId) {
+        throw new ForbiddenException('Only the sharer can update the grant');
+      }
 
-    // Anti-rollback: the grant's rootGeneration seeds the recipient's durable
-    // generation floor on first contact, so a replayed/duplicate PATCH must
-    // never regress it below the stored value.
-    if (BigInt(rootGeneration) < BigInt(share.rootGeneration)) {
-      throw new ConflictException(
-        'rootGeneration regression rejected: grants only advance the generation'
-      );
-    }
+      // Anti-rollback: the grant's rootGeneration seeds the recipient's durable
+      // generation floor on first contact, so a replayed/duplicate PATCH must
+      // never regress it below the stored value.
+      if (BigInt(rootGeneration) < BigInt(share.rootGeneration)) {
+        throw new ConflictException(
+          'rootGeneration regression rejected: grants only advance the generation'
+        );
+      }
 
-    share.readDescriptorRef = Buffer.from(readDescriptorRef, 'hex');
-    share.rootGeneration = rootGeneration;
-    await this.shareRepo.save(share);
+      share.readDescriptorRef = Buffer.from(readDescriptorRef, 'hex');
+      share.rootGeneration = rootGeneration;
+      await manager.save(share);
+    });
   }
 }

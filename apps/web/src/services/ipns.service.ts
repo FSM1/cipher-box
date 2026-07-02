@@ -33,8 +33,6 @@ import { enforceResolved, seedFromGrant } from './rotation-state.service';
  * are resolved without the enforceResolved gate.
  */
 export type ResolveRotationContext = {
-  /** Durable high-water key. Nodes are keyed by `ipnsName` (no separate node id — see SealedChildRef). */
-  nodeId: string;
   /**
    * The reader's expected `generation` for this node: the parent
    * `SealedChildRef.generation` mirror, or the grant's `rootGeneration` for
@@ -216,12 +214,15 @@ export async function resolveIpnsRecord(
     );
   }
 
+  // Durable floors are keyed by the resolved name itself (no separate node id
+  // in the read plane — see SealedChildRef), so the caller cannot key a floor
+  // under the wrong node.
   if (rotation.rootGeneration !== undefined) {
-    await seedFromGrant(rotation.nodeId, rotation.rootGeneration);
+    await seedFromGrant(ipnsName, rotation.rootGeneration);
   }
 
   await enforceResolved({
-    nodeId: rotation.nodeId,
+    nodeId: ipnsName,
     seq: Number(resolved.sequenceNumber),
     generation: rotation.generation,
     versionFloor: rotation.versionFloor,
