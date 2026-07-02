@@ -449,7 +449,7 @@ Plans:
 4. Shared flows work end-to-end: shared-folder read navigation + shared-file download (`navigateReadChain`), shared-folder write ops (rename/delete/move/batch, shared file update), share creation, permission upgrade, and invite create+claim
 5. The full `tests/web-e2e` Playwright suite passes locally against the standard stack (all specs, not a subset); `find apps/web/src -name "*.spec.ts"` stays empty (logic in SDK, UI via web-e2e — SC#5 doctrine)
 
-**Plans**: 14/14 plans complete
+**Plans**: 14 base plans complete + 8 gap-closure plans (68.1-15..22) pending
 
 Plans:
 **Wave 1**
@@ -483,6 +483,17 @@ Plans:
 **Wave 6** *(blocked on Wave 5 completion)*
 
 - [x] 68.1-13-PLAN.md — web-e2e enablement + triage: SC#1/SC#5 assertions hold; 5 real bugs fixed (createFolder retry+folder-store desync, details-dialog fields, batch-download UI, FileListItem/ContextMenu kind-cache wiring). **Full Playwright suite NOT re-confirmed green** — GAP-1 (resolveFileMetadata AEAD failure) and GAP-2 (cold-reload IPNS DFS timeout) surfaced; WEB-04 left unchecked pending a follow-up session. See 68.1-13-SUMMARY.md Known Gaps. [wave 6]
+
+**Gap closure** *(verification returned 2/5 SCs — plans address SC#3/GAP-1, SC#4, the durable-registration addendum, SHARE-WRITE-KEY/GAP-3, GAP-4, GAP-5, and the SC#5 exit gate)*
+
+- [ ] 68.1-15-PLAN.md — SC#4 shared-browse UI: wire SharedFolderRow + SharedFileBrowser to the D-02 kind cache (isFileRef); in-folder Download + kind-gated double-click [wave 1]
+- [ ] 68.1-16-PLAN.md — Durable child IPNS registration: createFolder TEE enrollment (addendum i, TDD) + confirm per-file mint enrolls + bin-restore hardening (addendum ii) [wave 1]
+- [ ] 68.1-21-PLAN.md — Triage: GAP-4 D-05 stale-data toast (role=alert) + GAP-5 share-itemname-backfill legacy-seed 400 (DTO drift) [wave 1]
+- [ ] 68.1-17-PLAN.md — SC#3/GAP-1: diagnose + fix resolveFileMetadata AEAD decrypt failure (CTR/streaming video + post-upload batch-download) [wave 2]
+- [ ] 68.1-18-PLAN.md — SHARE-WRITE-KEY foundation: SDK resolveShareWriteDescriptor (owned write-chain, TDD) + owner-side WRITE share/invite create [wave 3]
+- [ ] 68.1-19-PLAN.md — Write upgrade/downgrade via UpdateGrant + optional writeDescriptorRef API change + api:generate + ShareDialog wiring [wave 4]
+- [ ] 68.1-20-PLAN.md — fetchShareKeys fail-closed + recipient shared writeKey seeding (writeDescriptorRef) + shared-move dest-key sourcing via write-chain [wave 4]
+- [ ] 68.1-22-PLAN.md — WEB-04 exit gate: fresh FULL tests/web-e2e run (supersede stale .last-run.json) + GAP-2 re-triage; human sign-off (autonomous: false) [wave 5]
 
 ### Phase 69: FUSE and WinFsp — Rust Integration and Grant-Root Awareness
 
