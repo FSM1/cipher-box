@@ -19,9 +19,10 @@ type DetailsDialogProps = {
 /**
  * Details dialog for file/folder metadata (node/v3).
  *
- * Shows technical information about the selected item.
- * TODO(phase 63): wire read-chain navigation to discriminate file vs folder (Node.kind).
- * Until then, the item type is derived from whether folderStore has an entry for ipnsName.
+ * Shows technical information about the selected item. File metadata (size/mime/
+ * versions) is resolved via `resolveFileMetadata` (68.1-04/68.1-06); the file-vs-folder
+ * heuristic below (folderStore membership) stands until 68.1-14 wires `resolveKinds`
+ * into folder-load render paths for definitive Node.kind discrimination.
  */
 export function DetailsDialog({
   open,
@@ -37,7 +38,8 @@ export function DetailsDialog({
   const [metadataRefresh, setMetadataRefresh] = useState(0);
 
   // Heuristic: if the folder store has a node for this ipnsName, treat as folder.
-  // TODO(phase 63): replace with Node.kind discrimination via read-chain.
+  // Replace with definitive Node.kind discrimination once 68.1-14 wires resolveKinds
+  // into folder-load render paths (kind-cache.ts, D-02).
   const folderStoreEntry = useFolderStore((state) => {
     if (!item) return undefined;
     return Object.values(state.folders).find((f) => f.ipnsName === item.ipnsName);
