@@ -25,7 +25,13 @@ import {
 } from '@cipherbox/api-client';
 import { clearBytes, unwrapKey, hexToBytes, deriveEd25519PublicKey } from '@cipherbox/crypto';
 import pLimit from 'p-limit';
-import type { BinEntry, SealedChildRef, PublishedNode, Node as CoreNode } from '@cipherbox/core';
+import type {
+  BinEntry,
+  SealedChildRef,
+  WriteChildRef,
+  PublishedNode,
+  Node as CoreNode,
+} from '@cipherbox/core';
 import {
   sealChildReadKey,
   unsealChildReadKey,
@@ -490,6 +496,51 @@ export class CipherBoxClient {
     const raw = await sdkCore.fetchFromIpfs(this.ctx, resolved.cid);
     const published = JSON.parse(new TextDecoder().decode(raw)) as PublishedNode;
     return { published, sequenceNumber: resolved.sequenceNumber };
+  }
+
+  /**
+   * Resolve the write-body params (`writeKey` + current `writeChildren`) an owned
+   * publish call site must thread into `updateFolderMetadataAndPublish` so the
+   * republished folder PRESERVES its existing write chain (D-03).
+   *
+   * This plan only preserves existing writeChildren on republish — it never
+   * adds/removes WriteChildRef entries (insertion is owned by createFolder
+   * 68.1-02 and the owned-file-write plans 68.1-07/09).
+   *
+   * Sourcing order:
+   *   1. Legacy zero-fallback writeKey (registerFolder/loadFolder without a real
+   *      key) → return `{}` so the publish stays write-body-less, identical to
+   *      pre-D-03 behavior. Sealing under a zero key is exactly the
+   *      T-68.1-01-03 threat this avoids.
+   *   2. In-memory `folder.metadata.writeBody` (populated by ensureFolderLoaded,
+   *      which unseals with the real writeKey) → use its writeChildren directly.
+   *   3. Otherwise unseal the CURRENT on-wire node once per operation
+   *      (shared-write pattern: unsealNode with readKey+writeKey →
+   *      writeBody.writeChildren). An absent on-wire write-body (pre-D-03
+   *      publish) yields `[]` — the republish then seals a fresh empty
+   *      write-body going forward. A write-body that IS present but fails GCM
+   *      auth under folder.writeKey propagates as a throw (fail-closed,
+   *      T-68.1-01-03) rather than silently dropping entries.
+   *
+   * Never zeroes folder.folderKey / folder.writeKey (caller-owned, D-09).
+   */
+  private async getWriteBodyParams(
+    folder: FolderState
+  ): Promise<{ writeKey?: Uint8Array; writeChildren?: WriteChildRef[] }> {
+    const wk = folder.writeKey;
+    if (!wk || wk.length !== 32 || wk.every((b) => b === 0)) {
+      return {};
+    }
+    if (folder.metadata?.writeBody) {
+      return { writeKey: wk, writeChildren: folder.metadata.writeBody.writeChildren };
+    }
+    const resolved = await this.resolvePublishedNode(folder.ipnsName);
+    if (!resolved || !resolved.published.writeSealed) {
+      // Nothing published yet, or no write-body ever sealed — start with [].
+      return { writeKey: wk, writeChildren: [] };
+    }
+    const node = await unsealNode(resolved.published, folder.folderKey, wk);
+    return { writeKey: wk, writeChildren: node.writeBody?.writeChildren ?? [] };
   }
 
   /**
@@ -1032,12 +1083,16 @@ export class CipherBoxClient {
       // mismatch, never publish (metadata OR rotation) against possibly-superseded state.
       await this.reconcileFolderSequence(folderIpnsName, folder.sequenceNumber);
 
+      // 1c. Preserve the folder's existing write-body on republish (D-03).
+      const writeBodyParams = await this.getWriteBodyParams(folder);
+
       // 2. Publish updated metadata
       const { newSequenceNumber, publishedChildren } = await sdkCore.updateFolderMetadataAndPublish(
         {
           children: updatedChildren,
           baseChildren,
           folderKey: folder.folderKey,
+          ...writeBodyParams,
           ipnsPrivateKey: folder.ipnsKeypair.privateKey,
           ipnsName: folderIpnsName,
           sequenceNumber: folder.sequenceNumber,
@@ -1179,6 +1234,13 @@ export class CipherBoxClient {
         childReadKey.fill(0);
       }
 
+      // Preserve BOTH folders' existing write-bodies on republish (D-03). The
+      // moved child's WriteChildRef stays in the SOURCE write-body for now —
+      // write-link re-homing on move is owned by 68.1-02 (this plan only
+      // preserves existing entries verbatim).
+      const destWriteBodyParams = await this.getWriteBodyParams(destFolder);
+      const sourceWriteBodyParams = await this.getWriteBodyParams(sourceFolder);
+
       // D-12: publish DESTINATION before SOURCE (dest-before-source) so a
       // crash between publishes never orphans the moved node out of both
       // folders — folds the Phase-64 OUT-tagged
@@ -1188,6 +1250,7 @@ export class CipherBoxClient {
           children: updatedDest,
           baseChildren: baseDestChildren,
           readKey: destFolder.folderKey,
+          ...destWriteBodyParams,
           ipnsPrivateKey: destFolder.ipnsKeypair.privateKey,
           ipnsName: destIpnsName,
           sequenceNumber: destFolder.sequenceNumber,
@@ -1213,6 +1276,7 @@ export class CipherBoxClient {
           children: updatedSource,
           baseChildren: baseSourceChildren,
           readKey: sourceFolder.folderKey,
+          ...sourceWriteBodyParams,
           ipnsPrivateKey: sourceFolder.ipnsKeypair.privateKey,
           ipnsName: sourceIpnsName,
           sequenceNumber: sourceFolder.sequenceNumber,
@@ -1275,12 +1339,18 @@ export class CipherBoxClient {
       // mismatch, never publish (metadata OR rotation) against possibly-superseded state.
       await this.reconcileFolderSequence(folderIpnsName, folder.sequenceNumber);
 
+      // 1c. Preserve the folder's existing write-body on republish (D-03). The
+      // removed child's WriteChildRef is preserved verbatim — write-link removal
+      // is owned by 68.1-02 (this plan only preserves, never edits, the chain).
+      const writeBodyParams = await this.getWriteBodyParams(folder);
+
       // 2. Publish updated metadata
       const { newSequenceNumber, publishedChildren } = await sdkCore.updateFolderMetadataAndPublish(
         {
           children: updatedChildren,
           baseChildren,
           folderKey: folder.folderKey,
+          ...writeBodyParams,
           ipnsPrivateKey: folder.ipnsKeypair.privateKey,
           ipnsName: folderIpnsName,
           sequenceNumber: folder.sequenceNumber,
@@ -1401,6 +1471,11 @@ export class CipherBoxClient {
           versionFloor: 0n,
         });
 
+        // 2b. Preserve the folder's existing write-body on republish (D-03).
+        // The new file's WriteChildRef insertion is owned by 68.1-07/09 —
+        // this plan only preserves the existing chain verbatim.
+        const writeBodyParams = await this.getWriteBodyParams(folder);
+
         // 3. Concurrent: file IPNS batch publish + folder metadata update
         //    These two operations are independent -- no data dependency between them.
         //    Using Promise.allSettled to handle partial failures gracefully.
@@ -1410,6 +1485,7 @@ export class CipherBoxClient {
             children: updatedChildren,
             baseChildren,
             folderKey: folder.folderKey,
+            ...writeBodyParams,
             ipnsPrivateKey: folder.ipnsKeypair.privateKey,
             ipnsName: folderIpnsName,
             sequenceNumber: folder.sequenceNumber,
@@ -1664,6 +1740,10 @@ export class CipherBoxClient {
           return { successes: [], failures };
         }
 
+        // Preserve the folder's existing write-body on republish (D-03). New
+        // files' WriteChildRef insertion is owned by 68.1-07/09.
+        const writeBodyParams = await this.getWriteBodyParams(folder);
+
         // Single folder publish + batch IPNS publish (concurrent)
         const ipnsRecords = registeredSuccesses.map((s) => s.uploadResult.ipnsRecord);
         const [folderResult, batchResult] = await Promise.allSettled([
@@ -1671,6 +1751,7 @@ export class CipherBoxClient {
             children: mergedChildren,
             baseChildren,
             folderKey: folder.folderKey,
+            ...writeBodyParams,
             ipnsPrivateKey: folder.ipnsKeypair.privateKey,
             ipnsName: folderIpnsName,
             sequenceNumber: freshSeq,

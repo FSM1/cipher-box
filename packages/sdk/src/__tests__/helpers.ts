@@ -47,7 +47,9 @@ export function setupFolder(client: CipherBoxClient, ipnsName = 'folder-ipns', n
   client.getFolderTree().set(ipnsName, {
     ipnsName,
     folderKey: new Uint8Array(32).fill(1),
-    writeKey: new Uint8Array(32).fill(4),
+    // Zero writeKey = legacy registered-folder path: getWriteBodyParams returns {}
+    // (no write-body, no network round-trip) — matching pre-D-03 publish behavior.
+    writeKey: new Uint8Array(32),
     ipnsKeypair: {
       publicKey: new Uint8Array(32).fill(2),
       privateKey: new Uint8Array(64).fill(3),

@@ -22,12 +22,14 @@ import {
   deriveBinIpnsKeypair,
   sealChildReadKey,
   unsealChildReadKey,
+  unsealNode,
   type BinEntry,
   type RecycleBinMetadata,
 } from '@cipherbox/core';
-import type { SealedChildRef, Node } from '@cipherbox/core';
+import type { SealedChildRef, Node, PublishedNode, WriteChildRef } from '@cipherbox/core';
 import { bytesToHex, hexToBytes, wrapKey } from '@cipherbox/crypto';
 import type { FolderTree } from '../state/folder-tree';
+import type { FolderState } from '../types';
 
 /** Current bin metadata version. */
 const BIN_METADATA_VERSION = 'v1' as const;
@@ -51,6 +53,41 @@ export type BinState = {
   sequenceNumber: number;
   ipnsName: string;
 };
+
+// ---------------------------------------------------------------------------
+// Internal helpers: write-body preservation (D-03)
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the write-body params (`writeKey` + current `writeChildren`) the bin
+ * publish sites must thread into `updateFolderMetadataAndPublish` so the
+ * republished owned folder PRESERVES its existing write chain (D-03).
+ *
+ * Mirrors CipherBoxClient.getWriteBodyParams (client.ts): a legacy zero-fallback
+ * writeKey returns `{}` (write-body-less publish, pre-D-03 behavior); an
+ * in-memory `folder.metadata.writeBody` is preferred; otherwise the CURRENT
+ * on-wire node is unsealed once. A present-but-unopenable write-body throws
+ * fail-closed (T-68.1-01-03). Never zeroes folder keys (caller-owned, D-09).
+ */
+async function getWriteBodyParams(
+  folder: FolderState,
+  ctx: SdkContext
+): Promise<{ writeKey?: Uint8Array; writeChildren?: WriteChildRef[] }> {
+  const wk = folder.writeKey;
+  if (!wk || wk.length !== 32 || wk.every((b) => b === 0)) {
+    return {};
+  }
+  if (folder.metadata?.writeBody) {
+    return { writeKey: wk, writeChildren: folder.metadata.writeBody.writeChildren };
+  }
+  const resolved = await sdkCore.resolveIpnsRecord(folder.ipnsName, ctx);
+  if (!resolved) return { writeKey: wk, writeChildren: [] };
+  const raw = await sdkCore.fetchFromIpfs(ctx, resolved.cid);
+  const published = JSON.parse(new TextDecoder().decode(raw)) as PublishedNode;
+  if (!published.writeSealed) return { writeKey: wk, writeChildren: [] };
+  const node = await unsealNode(published, folder.folderKey, wk);
+  return { writeKey: wk, writeChildren: node.writeBody?.writeChildren ?? [] };
+}
 
 // ---------------------------------------------------------------------------
 // Internal helpers: load / save bin metadata
@@ -384,10 +421,14 @@ export async function addToBin(params: {
   };
   await saveBinMetadata({ metadata, binCtx });
 
-  // 10. Publish updated folder (destructive — must happen after the restore key is durable)
+  // 10. Publish updated folder (destructive — must happen after the restore key is durable).
+  //     Preserve the folder's existing write-body verbatim (D-03) — the removed
+  //     child's WriteChildRef removal is owned by 68.1-02, not this plan.
+  const writeBodyParams = await getWriteBodyParams(folderState, binCtx.ctx);
   await sdkCore.updateFolderMetadataAndPublish({
     children: updatedChildren,
     folderKey: folderState.folderKey,
+    ...writeBodyParams,
     ipnsPrivateKey: folderState.ipnsKeypair.privateKey,
     ipnsPublicKey: folderState.ipnsKeypair.publicKey,
     ipnsName: folderIpnsName,
@@ -480,9 +521,13 @@ export async function restoreFromBin(params: {
   const childrenForPublish = alreadyInFolder
     ? targetFolder.children
     : [...targetFolder.children, restoredItem];
+  // Preserve the target folder's existing write-body verbatim (D-03) — the
+  // restored child's WriteChildRef insertion is owned by 68.1-02, not this plan.
+  const writeBodyParams = await getWriteBodyParams(targetFolder, binCtx.ctx);
   await sdkCore.updateFolderMetadataAndPublish({
     children: childrenForPublish,
     folderKey: targetFolder.folderKey,
+    ...writeBodyParams,
     ipnsPrivateKey: targetFolder.ipnsKeypair.privateKey,
     ipnsPublicKey: targetFolder.ipnsKeypair.publicKey,
     ipnsName: targetFolderIpnsName,
