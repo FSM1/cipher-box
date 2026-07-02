@@ -66,7 +66,7 @@ export type FileBrowserActionsParams = {
   isOperating: boolean;
   isDownloading: boolean;
   downloadFromIpns: (params: {
-    fileMetaIpnsName: string;
+    fileRef: SealedChildRef;
     folderKey: Uint8Array;
     fileName: string;
   }) => Promise<void>;

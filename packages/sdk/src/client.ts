@@ -2810,27 +2810,59 @@ export class CipherBoxClient {
   /**
    * Download a file using its per-file IPNS metadata.
    *
-   * Resolves the file's per-file Node (`resolveFileMetadata`, 68.1-07) and
-   * decrypts the content descriptor's `NodeContent` with `fileReadKey`, then
-   * fetches + decrypts the encrypted content using the raw (non-ECIES-wrapped)
-   * `fileKey` recovered from that content descriptor (D-07/NODE-02 —
-   * `downloadFileContent`, GCM or CTR per `encryptionMode`). This is the v3
-   * download path (per-file Node, not a standalone FileMetadata IPNS record).
+   * Recovers the file's OWN readKey from its `SealedChildRef` (sealed under the
+   * parent folder's readKey — the generation-source rule uses `fileRef.
+   * generation`, the parent mirror), resolves the file Node
+   * (`resolveFileMetadata`, 68.1-07), decrypts its `NodeContent`, then fetches +
+   * decrypts the encrypted content with the raw (non-ECIES-wrapped) `fileKey`
+   * (D-07/NODE-02, GCM or CTR per `encryptionMode`).
    *
-   * @param fileMetaIpnsName - IPNS name of the file's Node
-   * @param folderKey - The file Node's own readKey (`fileReadKey` — despite
-   *   the legacy parameter name, this is NOT the parent folder's readKey;
-   *   preserved verbatim for API compatibility)
+   * 68.1-22 FIX: the previous signature took a bare `folderKey` and passed it
+   * straight to `sdkCore.resolveFileMetadata` as the file readKey. sdk-core
+   * unseals the file Node directly under that key, so passing the PARENT folder
+   * key (which every web call site did) always threw `CryptoError: Decryption
+   * failed`. The method now takes the file's `SealedChildRef` + the parent
+   * folderKey and recovers the file readKey the same way the web-native
+   * `resolveFileMetadata` (file-metadata.service.ts, 68.1-04) does.
+   *
+   * @param fileRef - The file's SealedChildRef from the parent folder's
+   *   read-body (carries `readKeySealed` + `generation`)
+   * @param folderKey - The PARENT folder's readKey (used to unseal the file's
+   *   own readKey from `fileRef.readKeySealed`)
    * @param onProgress - Optional download progress callback
    * @returns Decrypted file content
    */
   async downloadFromIpns(
-    fileMetaIpnsName: string,
+    fileRef: SealedChildRef,
     folderKey: Uint8Array,
     onProgress?: DownloadProgressCallback
   ): Promise<Uint8Array> {
     return this.withOperation('downloadFromIpns', async () => {
-      const { metadata } = await sdkCore.resolveFileMetadata(fileMetaIpnsName, folderKey, this.ctx);
+      // Resolve the file Node once to recover its plaintext `id` (the AAD input
+      // for unsealChildReadKey — matches the web-native resolveFileMetadata).
+      const resolvedNode = await this.resolvePublishedNode(fileRef.ipnsName);
+      if (!resolvedNode) {
+        throw new Error(`downloadFromIpns: IPNS record not found for ${fileRef.ipnsName}`);
+      }
+
+      // Recover the file's OWN readKey from the parent-sealed SealedChildRef.
+      // Terminal owner (D-09): zeroed after resolveFileMetadata unseals with it.
+      let fileReadKey: Uint8Array | null = await unsealChildReadKey(
+        fileRef.readKeySealed,
+        folderKey,
+        resolvedNode.published.id,
+        'file',
+        fileRef.generation
+      );
+
+      let metadata: NodeContent;
+      try {
+        ({ metadata } = await sdkCore.resolveFileMetadata(fileRef.ipnsName, fileReadKey, this.ctx));
+      } finally {
+        fileReadKey.fill(0);
+        fileReadKey = null;
+      }
+
       try {
         return await sdkCore.downloadFileContent({
           cid: metadata.cid,

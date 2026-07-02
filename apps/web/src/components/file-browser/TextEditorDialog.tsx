@@ -125,7 +125,7 @@ export function TextEditorDialog({
           // Owner path via SDK: resolves IPNS, decrypts metadata, downloads + decrypts content
           // TODO(phase 63): SealedChildRef.ipnsName replaces FilePointer.fileMetaIpnsName
           const client = getSdkClient();
-          plaintext = await client.downloadFromIpns(item.ipnsName, folderKey!);
+          plaintext = await client.downloadFromIpns(item, folderKey!);
         } else {
           throw new Error('SDK not initialized — please log in again');
         }
