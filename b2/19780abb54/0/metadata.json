@@ -1,0 +1,158 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "b219780abb54",
+  "session_id": "064836b9-90e4-42d5-aabc-ed5fde831a57",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-02T20:36:46.494213Z",
+  "branch": "feat/web-client-runtime-integration",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "c3465dc769c3",
+  "token_usage": {
+    "input_tokens": 49718,
+    "cache_creation_tokens": 1991183,
+    "cache_read_tokens": 53171483,
+    "output_tokens": 204739,
+    "api_call_count": 190
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-plan-phase-2026-07-02T19:11:49.468219Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "6a32dc56abb1",
+      "timestamp": "2026-07-02T19:11:49.468219Z",
+      "native": {
+        "command": "/gsd-plan-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01Uae4oXZcmbjYJcb6Ru4Pef",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "c3465dc769c3",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 966,
+        "end": 967,
+        "entry_ids": [
+          "87bcf7d3-6ab6-4d0c-85a4-392200647a8f"
+        ],
+        "tool_use_id": "toolu_01Uae4oXZcmbjYJcb6Ru4Pef"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Uae4oXZcmbjYJcb6Ru4Pef"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 11
+  },
+  "summary": {
+    "intent": "Execute a wave-based orchestrated implementation phase (68.1: web client runtime integration) end-to-end via GSD workflows — first full execution of 14 plans across 5 waves, then gap-closure planning and execution after verification surfaced failures in real-world e2e testing and live user testing.",
+    "outcome": "14 initial plans executed and merged (58 commits), but phase verification found only 2/5 success criteria met; e2e went from 6/208 to ~190/208 passing but with real bugs (folder-store UUID/ipnsName desync, kind-cache never consulted in file list/context menu/shared browser, missing TEE republish enrollment causing dead IPNS records). User live-tested and found subfolder navigation broken after logout, confirming a durability gap; gap-closure planning produced 8 more plans (68.1-15 through 68.1-22), of which several were executed (kind-cache shared-browser wiring, TDD durable registration, GAP-4/5/6 triage) with one fixture regression caught and repaired before wave 3 could proceed.",
+    "learnings": {
+      "repo": [
+        "Web app has no SdkContext bridge, so web-native primitives (ipns.service.ts's resolveIpnsRecord, ctx-free fetchFromIpfs) must be used instead of sdk-core's ctx-based helpers — this also preserves an anti-rollback (ROT-07) floor sdk-core's raw resolveIpnsRecord lacks",
+        "resolveFileMetadata needs the full SealedChildRef (not just fileIpnsName) because readKeySealed/generation live only on the parent's SealedChildRef and aren't derivable from ipnsName alone",
+        "The live /shares and /shares/invites REST API grants an entire subtree via one ECIES wrap of the root readKey — there is no server-side per-child-key field, so the plan-specified collectChildKeys/ChildKeyDto design is dead code; ShareDialog/invite.service.ts call resolveChildNodeIdentity directly instead",
+        "sdk-core's issueReadGrant/claimInvite (grant.ts) produce base64 payloads but the live DTOs are hex-only — web code calls wrapKey/unwrapKey directly with hex encoding instead of routing through sdk-core's grant primitives",
+        "Write-permission share/invite creation requires the parent folder's writeKey, which only exists inside CipherBoxClient's private FolderState — no web UI layer has it threaded through (SHARE-WRITE-KEY gap), and there's no backend upgrade-permission endpoint (would need revoke+recreate)",
+        "sdk-core's updateFileMetadata claimed via doc comment to zero fileIpnsPrivateKey but never actually did — a latent bug (T-47-01) found and fixed during 68.1-12",
+        "createFolder published child IPNS records without encryptedIpnsPrivateKey/keyEpoch, so nothing enrolled in ipns_republish_schedule — every subfolder record would die at the 48h IPNS TTL in production; fixed in 68.1-16",
+        "mock-ipns-routing keeps IPNS records in an in-memory Map — every container restart wipes unpublished-to-DB records permanently, manufacturing false 'propagation timeout' failures in dev",
+        "mock-ipns-routing's healthcheck used `wget localhost` which resolves to ::1 (IPv6) while the app binds IPv4-only, causing perpetual unhealthy status unrelated to actual service health — fixed by pinning to 127.0.0.1 in docker-compose.yml",
+        "API runs on :3000, not :3001 — :3001 is the delegated-routing mock (DELEGATED_ROUTING_URL target for web-e2e), a common source of confused health probes",
+        "Migration 1750000000000-ApiSchemaCutover dropped the shares table's plaintext item_name column entirely (not renamed); share.service.ts hardcodes itemName: '', making the REQ-4 backfill feature permanently dead code — reviving it would require plaintext server-side name storage, which violates the project's zero-knowledge rule (documented as GAP-6, left as a decision rather than unilaterally fixed)",
+        "D-05 stale-record rejection toast bug: the ROT-07 sequence floor bumps pre-publish, one step behind the client's own subsequent publish, so a relay replay from just before that publish exactly matches the floor and slips through enforceResolved as a plain ReconcileStaleError, retried uniformly for ~30s regardless of direction — fixed by adding localSequence/networkSequence to the error and making retry only fire when network is ahead of local",
+        "gsd-tools decision-coverage gate requires the informational tag placed inside the bold ID group — `- **D-04 [informational]:**` — not appended after it, or the tag doesn't register"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/components/file-browser/SharedFolderRow.tsx",
+          "line": 63,
+          "finding": "Hardcoded isFolder = true meant the D-02 kind cache populated in 68.1-14 was never consulted in the shared browser, so files rendered as folders and per-item download was wired to undefined — fixed in 68.1-15"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "createFolder now enrolls new subfolders in TEE republish (encryptedIpnsPrivateKey/keyEpoch) fail-closed before any addToIpfs side effect (68.1-16); ReconcileStaleError gained localSequence/networkSequence fields (68.1-21) to make retry direction-aware"
+        },
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "finding": "restoreFromBin hardened to warn (non-throwing) when a restored child's own IPNS record fails to resolve post-relink, rather than silently succeeding with a dead link (68.1-16)"
+        }
+      ],
+      "workflow": [
+        "gsd execute-phase wave orchestration: worktree-isolated parallel subagents per plan within a wave, orchestrator records worktree metadata as each returns, merges the whole wave at once, then runs post-merge build/test/drift gates before advancing",
+        "Subagent-reported worktree_metadata.expected_base can be wrong (agent misreports its own HEAD/docs-commit instead of the true fork point) — orchestrator verified the true fork base via git before recording/merging in the 68.1-21 case",
+        "A background agent's completion signal can be lost (session evicted) even after the underlying long-running command (e.g., a 208-spec Playwright suite) finishes — orchestrator had to detect this via process-liveness + log inspection and resume the agent manually via SendMessage with the recovered results",
+        "Headed Playwright runs are useful for building direct user confidence and often reveal that serial spec suites abort at first failure, making raw pass/fail counts overstate coverage since most failing groups die in setup, leaving real test bodies unexecuted",
+        "TDD review-checkpoint advisory gate and post-planning gap-analysis advisory gate are separate non-blocking hooks run explicitly by the orchestrator after commits, not automatic"
+      ]
+    },
+    "friction": [
+      "Wave 1 agent for plan 68.1-01 stalled mid-stream after 119 tool calls (~23 min); orchestrator had to spot-check filesystem/git state and resume it in the background per the workflow's completion-signal fallback",
+      "Wave 5 exit-gate agent's completion signal was lost after the 208-spec Playwright suite (~23 min) finished — no re-invocation occurred until the user pushed back with 'its been way too long', forcing manual liveness/log investigation and agent resumption",
+      "Decision-coverage gate initially failed on D-04's informational tag placement; required reading the parser's tag-matching logic to discover the tag must sit inside the bold ID group",
+      "git index.lock transient contention during Wave 3 tracking commit required a retry after confirming no live git process held it",
+      "A `tail`-piped test command masked a real non-zero exit code during the gap-wave-2 post-merge gate, hiding an actual sdk test failure until re-run with direct capture",
+      "68.1-17 subagent mistakenly ran a prohibited `git stash push` on bin/index.ts mid-task; recovered correctly via manual reapply (not stash pop) but left a stray stash entry the orchestrator had to identify and drop separately from the user's own pre-existing stashes",
+      "Task list (TaskCreate/TaskUpdate state) did not survive a session hand-off after the exit-gate triage agent's long continuation run, forcing the orchestrator to proceed without it",
+      "Bash permission denial when trying to read .env-adjacent compose config required splitting the command to work around it"
+    ],
+    "open_items": [
+      "GAP-1: resolveFileMetadata AEAD decrypt failure breaks CTR/streaming video preview and batch-download — undiagnosed at phase-verification time",
+      "GAP-2 (reframed): what looked like IPNS propagation timeout was actually mock-ipns-routing's in-memory store being wiped by container restarts, compounded by records with no ipns_records DB row dying permanently — needs durable child-record registration + republish enrollment as a systemic fix beyond 68.1-16's createFolder-only patch",
+      "GAP-6: REQ-4 itemName backfill is dead code since migration 1750000000000-ApiSchemaCutover dropped shares.item_name — needs a deliberate feature-retirement or redesign decision (reviving plaintext storage would violate zero-knowledge), explicitly left undecided by the 68.1-21 agent",
+      "SHARE-WRITE-KEY web-wiring gap: write-permission share/invite creation is fail-closed in the UI because parent folder writeKey isn't threaded to any web UI layer; also no backend upgrade-permission endpoint exists at all",
+      "fetchShareKeys remains a deferred stub causing shared move/update-fallback to fail closed on four live paths",
+      "Full web-e2e suite was not re-confirmed green after the 5 triage fixes in 68.1-13 (folder-store id-desync fix included) — a re-run was expected to clear a chunk of the original 17 failures but had not been executed as of phase verification",
+      "WEB-04 deliberately left unmarked in REQUIREMENTS.md/ROADMAP.md pending gap closure",
+      "Commits 17e4319a6/7209e8777 have parens in their subjects — flagged to keep out of the eventual PR title",
+      "Gap-closure wave execution (68.1-15/16/17/18/21/...) still in progress at transcript end — wave 3 (68.1-18) just dispatched after the wave 2 fixture regression was resolved; waves 4-5 (including a fresh exit-gate full web-e2e run) not yet reached",
+      "User's specific stale subfolder (…t02xl, created pre-triage-fix) is permanently dead as linked and needs manual recreation (dev data) rather than a code fix",
+      "Considered but not yet decided: persisting the mock-ipns-routing store so dev container restarts stop manufacturing false failures"
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
