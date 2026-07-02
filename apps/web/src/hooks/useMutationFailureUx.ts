@@ -12,11 +12,17 @@
  * `runWithFailureUx` wraps a single mutation call (the SDK client
  * invocation, not the surrounding hook logic -- callers stay thin wrappers
  * per RESEARCH.md Pitfall 1) and:
- *   - retries a `ReconcileStaleError` (SC#3/D-04) with bounded backoff,
- *     surfacing an info notice while retrying and a terminal, manually
- *     retryable error notice on exhaustion -- never a durable queue (D-06).
- *   - surfaces a `SequenceRegressionError`/`GenerationRegressionError`
- *     (D-05) immediately as a per-mutation error notice, no retry.
+ *   - retries a `ReconcileStaleError` whose network sequence is AHEAD of the
+ *     local one (SC#3/D-04, a genuine concurrent update elsewhere) with
+ *     bounded backoff, surfacing an info notice while retrying and a
+ *     terminal, manually retryable error notice on exhaustion -- never a
+ *     durable queue (D-06).
+ *   - surfaces a `SequenceRegressionError`/`GenerationRegressionError`, or a
+ *     `ReconcileStaleError` whose network sequence is BEHIND the local one
+ *     (a stale/relay-replayed record the durable ROT-07 floor may not catch
+ *     when the replayed seq exactly matches its last-recorded floor -- Gap 4
+ *     / 68.1-21), (D-05) immediately as a per-mutation error notice, no
+ *     retry.
  *   - surfaces a stale/rotated-out write-descriptor failure (D-01/WRITE-03)
  *     with a one-tap re-resolve action, escalating to a terminal notice with
  *     no action if the re-resolve still fails.
@@ -126,6 +132,18 @@ async function runReconcileRetryLoop<T>(
     } catch (err) {
       if (!(err instanceof ReconcileStaleError)) throw err;
 
+      // A ReconcileStaleError with the network sequence BEHIND the local one
+      // is not a legitimate defer-and-retry (D-04) scenario -- it means the
+      // resolve returned a record older than what this client already knows
+      // to be true, i.e. a stale/relay-replayed record (T-68-101). The
+      // durable ROT-07 floor (rotation-high-water.ts) only rejects a resolve
+      // BELOW its last-recorded floor; a replay that exactly matches the
+      // floor (because the floor is only bumped pre-publish, one step behind
+      // this client's own already-published state) sails through that gate
+      // and lands here instead. Reject it immediately, fail-closed, via the
+      // outer D-05 classifier -- never retry a rollback.
+      if (err.networkSequence < err.localSequence) throw err;
+
       if (attempt >= RECONCILE_RETRY_DELAYS_MS.length) {
         dispatchDeferExhausted(mutationFn, opts);
         throw err;
@@ -205,7 +223,16 @@ export async function runWithFailureUx<T>(
   try {
     return await runReconcileRetryLoop(mutationFn, opts);
   } catch (err) {
-    if (err instanceof SequenceRegressionError || err instanceof GenerationRegressionError) {
+    if (
+      err instanceof SequenceRegressionError ||
+      err instanceof GenerationRegressionError ||
+      // A ReconcileStaleError reaches here (rather than being retried by
+      // runReconcileRetryLoop) only when its networkSequence is BEHIND its
+      // localSequence -- see that loop's early-rethrow. That direction is a
+      // stale/relay-replayed record, not a legitimate concurrent-update
+      // defer, so it gets the same immediate D-05 rejection notice.
+      (err instanceof ReconcileStaleError && err.networkSequence < err.localSequence)
+    ) {
       dispatchRegressionRejected();
       throw err;
     }

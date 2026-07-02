@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { test, expect, type Browser } from '@playwright/test';
 import {
   createWalletTestAccount,
@@ -139,14 +140,25 @@ test.describe.serial('Share itemName lazy backfill (REQ-4 / decision A2)', () =>
   let aliceUploadZone: UploadZonePage;
   let bobShared: SharedFileBrowserPage;
 
-  // Unique per run. ipnsName must match /^k[a-z0-9]+$/ (lowercase + digits only).
+  // Unique per run.
   const runId = Date.now().toString(36).toLowerCase();
   const legacyItemName = `legacy share ${runId}`;
-  const legacyIpnsName = `k51legacy${runId}${Math.random().toString(36).slice(2, 10)}`;
-  // Dummy ECIES key: even-length hex, >= 64 chars (CreateShareDto MinLength(64)).
-  // The recipient never OPENS this share, so the content key need not be a real
-  // wrap — only the display-name path is under test.
-  const dummyEncryptedKey = 'ab'.repeat(64);
+  // rootIpnsName must be a valid CIDv1 libp2p-key per the current CreateShareDto:
+  // /^(k51qzi5uqu5[a-z0-9]{40,60}|bafzaa[a-z2-7]{50,70})$/ — build a unique,
+  // well-formed k51 name from runId + random lowercase/digit padding.
+  const legacyIpnsName = `k51qzi5uqu5${(
+    runId +
+    Math.random().toString(36).slice(2) +
+    Math.random().toString(36).slice(2)
+  )
+    .padEnd(44, '0')
+    .slice(0, 44)}`;
+  // Dummy hex descriptor: even-length hex, >= 64 chars (CreateShareDto
+  // MinLength(64)) reused for readDescriptorRef. The recipient never OPENS
+  // this share, so the wrapped bytes need not be a real ECIES envelope --
+  // only the display-name path is under test.
+  const dummyReadDescriptorRef = 'ab'.repeat(64);
+  const legacyRootNodeId = randomUUID();
   const legacyItemNameHex = Buffer.from(legacyItemName, 'utf8').toString('hex');
 
   test.beforeAll(async ({ browser: testBrowser }) => {
@@ -178,13 +190,29 @@ test.describe.serial('Share itemName lazy backfill (REQ-4 / decision A2)', () =>
     // directly with itemNameEncrypted OMITTED — the shape a pre-encryption client
     // produced. CreateShareDto marks itemNameEncrypted @IsOptional and the service
     // stores NULL when absent (apps/api/src/shares/shares.service.ts).
+    //
+    // GAP-5 (68.1-21): the current CreateShareDto (post node/v3 schema cutover,
+    // apps/api/src/shares/dto/create-share.dto.ts) requires the descriptor-ref
+    // shape (readDescriptorRef/rootNodeId/rootIpnsName) and has no plaintext
+    // display-name field at all anymore -- the OLD body shape below 400'd
+    // outright, both from the stale field names AND because the server's
+    // whitelist:true/forbidNonWhitelisted:true ValidationPipe rejects any
+    // unrecognized property (including a plaintext `itemName`, which is no
+    // longer a DTO field). See 68.1-21-SUMMARY.md "Known Gaps" for the deeper
+    // finding this surfaced: the `shares` table's plaintext `item_name`
+    // column itself was DROPPED by migration 1750000000000-ApiSchemaCutover,
+    // not merely renamed -- the server can never return it again. The
+    // assertions below that still reference `itemName` are retained
+    // UNMODIFIED (not weakened) as an accurate record of the now-impossible
+    // REQ-4 legacy-backfill scenario; they are expected to keep failing until
+    // a follow-up plan resolves that gap.
     const res = await callApi(alice.page, 'POST', '/shares', {
       recipientPublicKey: bob.publicKey,
-      itemType: 'file',
-      ipnsName: legacyIpnsName,
-      itemName: legacyItemName,
-      encryptedKey: dummyEncryptedKey,
-      // itemNameEncrypted intentionally omitted -> legacy row
+      readDescriptorRef: dummyReadDescriptorRef,
+      rootNodeId: legacyRootNodeId,
+      rootIpnsName: legacyIpnsName,
+      // itemName intentionally omitted -- not a valid DTO field post-cutover
+      // itemNameEncrypted intentionally omitted -> legacy (backfill-pending) row
     });
     expect(
       res.ok,
