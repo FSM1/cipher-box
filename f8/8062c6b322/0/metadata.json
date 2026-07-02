@@ -1,0 +1,64 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "f88062c6b322",
+  "session_id": "861dbcb7-8d4e-4ad5-840b-8fe8eebad3b0",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-02T14:15:29.801613Z",
+  "branch": "feat/web-client-runtime-integration",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/sdk-core/src/file/index.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "2079bc34f02f",
+  "checkpoint_transcript_start": 192,
+  "transcript_lines_at_start": 192,
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-execute-phase-2026-07-02T12:08:11.579092Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "c28245299139",
+      "timestamp": "2026-07-02T12:08:11.579092Z",
+      "native": {
+        "command": "/gsd-execute-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-02T14:15:29.788337Z",
+    "agent_lines": 65,
+    "agent_removed": 14,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 65,
+    "total_lines_changed": 79,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
