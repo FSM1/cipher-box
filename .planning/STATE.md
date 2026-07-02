@@ -6,14 +6,14 @@ current_phase: 68.1
 current_phase_name: web-client-runtime-integration
 status: executing
 stopped_at: Completed 68.1-02-PLAN.md (createFolder + bin-relink subtree collectors)
-last_updated: "2026-07-02T13:10:43.889Z"
+last_updated: "2026-07-02T13:19:51.690Z"
 last_activity: 2026-07-02
 last_activity_desc: Phase 68.1 execution started
 progress:
   total_phases: 10
   completed_phases: 8
   total_plans: 79
-  completed_plans: 67
+  completed_plans: 68
   percent: 80
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 ## Current Position
 
 Phase: 68.1 (web-client-runtime-integration) — EXECUTING
-Plan: 3 of 14
+Plan: 4 of 14
 Status: Ready to execute
 Last activity: 2026-07-02 — Phase 68.1 execution started
 
@@ -226,6 +226,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 68 P12 | 4min | 2 tasks | 6 files |
 | Phase 68.1 P01 | 28min | 3 tasks | 10 files |
 | Phase 68.1 P02 | 35min | 3 tasks | 2 files |
+| Phase 68.1 P03 | 10min | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -453,6 +454,8 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: [Phase 68.1-01]: deleteToBin/restoreFromBin write-body threading lives in bin/index.ts where the actual updateFolderMetadataAndPublish calls are
 - [Phase 68.1-02]: createFolder throws when the parent has no real writeKey — fail-closed instead of sealing WriteChildRef under a zero key
 - [Phase 68.1-02]: collectRemovedItemIpnsNames gained a required parentReadKey parameter to unseal the removed item's readKeySealed (deleteItem passes folder.folderKey)
+- [Phase ?]: [Phase 68.1-03]: publishEmptyRootNode derives+returns rootIpnsName internally -- useAuth consumes the returned name instead of a separate deriveIpnsName call
+- [Phase ?]: [Phase 68.1-03]: new-user publishEmptyRootNode call omits teeKeys (undefined) -- brand-new users have no TEE enrollment state yet
 
 ## Operator Next Steps
 
@@ -460,7 +463,7 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-02T13:10:43.883Z
+**Last session:** 2026-07-02T13:19:31.370Z
 **Stopped at:** Completed 68.1-02-PLAN.md (createFolder + bin-relink subtree collectors)
 **Resume file:** 
 None
