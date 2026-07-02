@@ -13,7 +13,10 @@
  *     new file Node, uploads it, and builds (but does NOT publish) the file's IPNS
  *     record — the caller batch-publishes it (matches the pre-existing UploadResult
  *     contract: client.ts already calls `batchPublishIpnsRecords([uploadResult.ipnsRecord])`).
- *   - resolveFileMetadata / updateFileMetadata: implemented in 68.1-07 Tasks 2/3.
+ *   - resolveFileMetadata resolves + fetches + unseals a file Node's content (read-only).
+ *   - updateFileMetadata rebuilds the file Node in place and republishes it directly
+ *     (single-shot, matches shared-write.ts updateSharedFile — no CAS retry/merge; the
+ *     legacy CAS+merge behaviour in the quarantined file.test.ts is out of scope here).
  *
  * Security invariants (D-09):
  *   - createFileMetadata mints fileReadKey/fileWriteKey and returns them RAW to the
@@ -24,7 +27,13 @@
  */
 
 import { createIpnsRecord, marshalIpnsRecord, sealNode, unsealNode } from '@cipherbox/core';
-import type { Node, NodeContent, PublishedNode, EncryptionMode } from '@cipherbox/core';
+import type {
+  Node,
+  NodeContent,
+  PublishedNode,
+  EncryptionMode,
+  VersionEntry,
+} from '@cipherbox/core';
 import {
   generateRandomBytes,
   generateEd25519Keypair,
@@ -37,17 +46,13 @@ import {
 } from '@cipherbox/crypto';
 import type { SdkContext, TeeKeys, DownloadProgressCallback } from '../types';
 import { addToIpfs, fetchFromIpfs } from '../ipfs';
-import { resolveIpnsRecord } from '../ipns';
+import { resolveIpnsRecord, createAndPublishIpnsRecord } from '../ipns';
 
 /** IPNS record lifetime: 24 hours in milliseconds */
 const IPNS_LIFETIME_MS = 24 * 60 * 60 * 1000;
 
 /** Maximum number of past versions retained per file (VER-04) */
 const MAX_VERSIONS_PER_FILE = 10;
-
-// Suppress unused const warning — consumed by Task 3 (updateFileMetadata) implemented
-// later in this plan.
-void MAX_VERSIONS_PER_FILE;
 
 // ---------------------------------------------------------------------------
 // Base64 helpers (safe — avoid call-stack overflow from spread operator, MEDIUM-08)
@@ -135,6 +140,51 @@ export function mergeVersions(
 
   const versions = deduped.slice(0, maxVersions);
   const prunedCids = deduped.slice(maxVersions).map((v) => v.cid);
+
+  return { versions, prunedCids };
+}
+
+/**
+ * Cap a file's version history at `maxVersions`, folding in one new incoming
+ * version entry (the content descriptor just superseded by this update).
+ *
+ * Delegates dedupe/sort/cap to the existing `mergeVersions` utility by mapping
+ * v3 `VersionEntry` (NODE-02: `createdAt` + raw `fileKey`) to the legacy
+ * `FileVersionEntry` shape it operates on (`timestamp`), then resolving the
+ * returned cids back to their original `VersionEntry` objects via a cid lookup
+ * (mergeVersions never transforms elements, so the lookup is exact). This keeps
+ * `mergeVersions` itself untouched (D-03: reuse the working utility as-is).
+ */
+function capVersions(
+  existing: VersionEntry[],
+  incoming: VersionEntry,
+  maxVersions: number
+): { versions: VersionEntry[]; prunedCids: string[] } {
+  const byCid = new Map<string, VersionEntry>();
+  for (const v of existing) byCid.set(v.cid, v);
+  byCid.set(incoming.cid, incoming);
+
+  const toLegacy = (v: VersionEntry): FileVersionEntry => ({
+    cid: v.cid,
+    fileIv: v.fileIv,
+    size: v.size,
+    timestamp: v.createdAt,
+    encryptionMode: v.encryptionMode,
+  });
+
+  const { versions: mergedLegacy, prunedCids } = mergeVersions(
+    existing.map(toLegacy),
+    [toLegacy(incoming)],
+    maxVersions
+  );
+
+  const versions = mergedLegacy.map((lv) => {
+    const original = byCid.get(lv.cid);
+    if (!original) {
+      throw new Error(`capVersions: no original VersionEntry found for cid ${lv.cid}`);
+    }
+    return original;
+  });
 
   return { versions, prunedCids };
 }
@@ -348,18 +398,48 @@ export async function downloadFileContent(params: {
     : decryptAesGcm(ciphertext, params.fileKey, iv);
 }
 
+/** New content fields supplied for a file content update (versions managed internally). */
+export type UpdateFileContentParams = {
+  cid: string;
+  /** Raw 32-byte AES-256 file key for the new content revision */
+  fileKey: Uint8Array;
+  /** Raw IV bytes used to encrypt the new content (base64-encoded for the wire) */
+  fileIv: Uint8Array;
+  size: number;
+  mimeType: string;
+  encryptionMode?: EncryptionMode;
+};
+
 /**
  * Update an existing file's per-IPNS metadata record.
  *
- * @stub 68.1-07 Task 3 — will update the file Node content descriptor, optionally
- * fold the superseded descriptor into version history, and republish the file Node.
+ * Rebuilds the file Node preserving id/generation/createdAt, optionally folding the
+ * superseded content descriptor into version history (capped at
+ * maxVersionsPerFile/MAX_VERSIONS_PER_FILE via `capVersions`), and republishes
+ * directly at fileSequenceNumber+1 (single-shot — mirrors
+ * packages/sdk/src/share/shared-write.ts updateSharedFile; no CAS retry/merge).
+ *
+ * @security Does NOT zero fileReadKey, fileWriteKey, fileIpnsPrivateKey, or any
+ *   fileKey embedded in currentMetadata/updates — all are caller-supplied and the
+ *   caller remains the terminal owner (D-09).
  */
 export async function updateFileMetadata(params: {
+  /** Ed25519 seed recovered from the file node's write-body (WRITE-01) */
   fileIpnsPrivateKey: Uint8Array;
+  fileReadKey: Uint8Array;
+  fileWriteKey: Uint8Array;
   fileMetaIpnsName: string;
-  folderKey: Uint8Array;
-  currentMetadata: unknown;
-  updates: unknown;
+  fileSequenceNumber: bigint;
+  /** UUID of the file Node — must match WriteChildRef.childId in the parent's write-body */
+  nodeId: string;
+  /** Current generation of the file Node — preserved verbatim (no rotation on content update) */
+  nodeGeneration: number;
+  /** Original createdAt of the file Node — preserved verbatim */
+  originalCreatedAt: number;
+  /** Content descriptor being replaced (folded into version history when createVersion) */
+  currentMetadata: NodeContent;
+  /** New content fields for this update */
+  updates: UpdateFileContentParams;
   createVersion: boolean;
   maxVersionsPerFile?: number;
   ctx: SdkContext;
@@ -369,6 +449,74 @@ export async function updateFileMetadata(params: {
   newSequenceNumber: bigint;
   prunedCids: string[];
 }> {
-  void params;
-  throw new Error('not implemented — 68.1-07 Task 3 (write-chain file node seal)');
+  const maxVersions = params.maxVersionsPerFile ?? MAX_VERSIONS_PER_FILE;
+  const now = Date.now();
+
+  let versions = params.currentMetadata.versions;
+  let prunedCids: string[] = [];
+
+  if (params.createVersion) {
+    const priorAsVersion: VersionEntry = {
+      versionId: crypto.randomUUID(),
+      cid: params.currentMetadata.cid,
+      fileIv: params.currentMetadata.fileIv,
+      size: params.currentMetadata.size,
+      createdAt: now,
+      encryptionMode: params.currentMetadata.encryptionMode,
+      fileKey: params.currentMetadata.fileKey,
+    };
+    const capped = capVersions(params.currentMetadata.versions, priorAsVersion, maxVersions);
+    versions = capped.versions;
+    prunedCids = capped.prunedCids;
+  }
+
+  const newContent: NodeContent = {
+    cid: params.updates.cid,
+    fileIv: bytesToBase64(params.updates.fileIv),
+    size: params.updates.size,
+    mimeType: params.updates.mimeType,
+    encryptionMode: params.updates.encryptionMode ?? params.currentMetadata.encryptionMode,
+    fileKey: params.updates.fileKey,
+    versions,
+  };
+
+  const fileNode: Node = {
+    schema: 'node/v3',
+    kind: 'file',
+    id: params.nodeId,
+    generation: params.nodeGeneration,
+    createdAt: params.originalCreatedAt,
+    modifiedAt: now,
+    content: newContent,
+    writeBody: {
+      ipnsPrivateKey: params.fileIpnsPrivateKey,
+      writeChildren: [],
+    },
+  };
+
+  const publishedNode: PublishedNode = await sealNode(
+    fileNode,
+    params.fileReadKey,
+    params.fileWriteKey
+  );
+  const { cid: metadataCid } = await addToIpfs(
+    params.ctx,
+    new TextEncoder().encode(JSON.stringify(publishedNode))
+  );
+
+  const newSequenceNumber = params.fileSequenceNumber + 1n;
+  await createAndPublishIpnsRecord({
+    ipnsPrivateKey: params.fileIpnsPrivateKey,
+    ipnsName: params.fileMetaIpnsName,
+    metadataCid,
+    sequenceNumber: newSequenceNumber,
+    ctx: params.ctx,
+  });
+
+  return {
+    ipnsName: params.fileMetaIpnsName,
+    metadataCid,
+    newSequenceNumber,
+    prunedCids,
+  };
 }

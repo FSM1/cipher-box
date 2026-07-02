@@ -4,7 +4,8 @@
  * Phase 63 implementation: un-stubbed createSubfolder and updateFolderMetadataAndPublish
  * using the Phase-62 node/v3 codec (sealNode) and the CAS-retry helper (publishWithCas).
  *
- * Phase 65 stubs are preserved: addFileToFolder, addFilesToFolder, replaceFileInFolder.
+ * Phase 68.1-07: addFileToFolder, addFilesToFolder, replaceFileInFolder implemented
+ * (write-body-aware — seal file read/write child refs, republish parent, batch-publish).
  *
  * Security invariants:
  *   - createSubfolder mints new Ed25519 keypair + readKey/writeKey and does NOT zero them
@@ -14,7 +15,7 @@
  *   - mergeChildren is a Phase-64 stub; conflict path throws until phase 64 wires the merge.
  */
 
-import { sealNode, unsealNode } from '@cipherbox/core';
+import { sealNode, unsealNode, sealChildReadKey, sealChildWriteKey } from '@cipherbox/core';
 import type { Node, PublishedNode, SealedChildRef, WriteChildRef } from '@cipherbox/core';
 import {
   generateEd25519Keypair,
@@ -26,8 +27,9 @@ import {
 } from '@cipherbox/crypto';
 import type { SdkContext, TeeKeys } from '../types';
 import type { FileIpnsRecordPayload } from '../file';
+import { updateFileMetadata } from '../file';
 import { addToIpfs, fetchFromIpfs } from '../ipfs';
-import { createAndPublishIpnsRecord } from '../ipns';
+import { createAndPublishIpnsRecord, batchPublishIpnsRecords } from '../ipns';
 import { publishWithCas } from '../cas';
 import { mergeChildren } from './merge';
 
@@ -292,69 +294,211 @@ export async function updateFolderMetadataAndPublish(params: {
 }
 
 /**
- * Add a single file to a folder and batch-publish both IPNS records.
+ * Add a single file to a folder: seals the file's readKey into the parent's
+ * read-body (SealedChildRef, role 0x02) AND its writeKey into the parent's
+ * write-body (WriteChildRef, role 0x04 — write-body-aware per 68.1-01), then
+ * republishes the parent (write chain intact) and batch-publishes the file's
+ * already-built IPNS record (from `createFileMetadata`) alongside it.
  *
- * @stub phase 65 — will create a file Node, seal its readKey under the parent folder
- * readKey as a SealedChildRef, and batch-publish both IPNS records.
+ * @security Does NOT zero any parameter — all keys are caller-supplied and the
+ *   caller remains the terminal owner (D-09).
  */
 export async function addFileToFolder(params: {
+  /** Current parent read-body children */
   children: SealedChildRef[];
-  folderKey: Uint8Array;
+  /** Current parent write-body writeChildren (write-body-aware per 68.1-01) */
+  writeChildren: WriteChildRef[];
+  /** Parent folder readKey */
+  readKey: Uint8Array;
+  /** Parent folder writeKey */
+  writeKey: Uint8Array;
+  /** Parent folder ipnsPrivateKey (recovered from the parent's unsealed write-body) */
   ipnsPrivateKey: Uint8Array;
   ipnsPublicKey?: Uint8Array;
   ipnsName: string;
   sequenceNumber: bigint;
-  fileId: string;
+  nodeId: string;
+  nodeGeneration: number;
+  /** New file's Node id (UUID) — matches createFileMetadata's returned fileNodeId */
+  fileNodeId: string;
+  /** New file's display name */
   name: string;
+  /** New file's readKey — sealed into the parent's read-body */
+  fileReadKey: Uint8Array;
+  /** New file's writeKey — sealed into the parent's write-body */
+  fileWriteKey: Uint8Array;
+  /** File's already-built IPNS record payload (from createFileMetadata) */
   fileIpnsRecord: FileIpnsRecordPayload;
-  ipnsPrivateKeyEncrypted: string;
   ctx: SdkContext;
-}): Promise<{ fileNode: Node; newSequenceNumber: bigint }> {
-  void params;
-  throw new Error(
-    'not implemented — phase 65 (add file Node + seal child readKey + batch-publish)'
+}): Promise<{
+  updatedChildren: SealedChildRef[];
+  updatedWriteChildren: WriteChildRef[];
+  newSequenceNumber: bigint;
+  fileRef: SealedChildRef;
+}> {
+  const readKeySealed = await sealChildReadKey(
+    params.fileReadKey,
+    params.readKey,
+    params.fileNodeId,
+    'file',
+    0
   );
+  const fileRef: SealedChildRef = {
+    name: params.name,
+    ipnsName: params.fileIpnsRecord.ipnsName,
+    generation: 0,
+    versionFloor: 1n,
+    readKeySealed,
+  };
+
+  const writeKeySealed = await sealChildWriteKey(
+    params.fileWriteKey,
+    params.writeKey,
+    params.fileNodeId,
+    'file',
+    0
+  );
+  const writeChildRef: WriteChildRef = { childId: params.fileNodeId, writeKeySealed };
+
+  const newChildren = [...params.children, fileRef];
+  const newWriteChildren = [...params.writeChildren, writeChildRef];
+
+  const [publishResult] = await Promise.all([
+    updateFolderMetadataAndPublish({
+      children: newChildren,
+      readKey: params.readKey,
+      writeKey: params.writeKey,
+      writeChildren: newWriteChildren,
+      ipnsPrivateKey: params.ipnsPrivateKey,
+      ipnsPublicKey: params.ipnsPublicKey,
+      ipnsName: params.ipnsName,
+      sequenceNumber: params.sequenceNumber,
+      nodeId: params.nodeId,
+      nodeGeneration: params.nodeGeneration,
+      ctx: params.ctx,
+    }),
+    batchPublishIpnsRecords([params.fileIpnsRecord], params.ctx),
+  ]);
+
+  return {
+    updatedChildren: publishResult.publishedChildren,
+    updatedWriteChildren: newWriteChildren,
+    newSequenceNumber: publishResult.newSequenceNumber,
+    fileRef,
+  };
 }
 
 /**
- * Add multiple files to a folder and batch-publish all IPNS records.
+ * Add multiple files to a folder in one parent republish, batch-publishing all
+ * file IPNS records in a single API call. Mirrors `addFileToFolder` but seals
+ * N read/write child refs before the single parent republish.
  *
- * @stub phase 65 — will create file Nodes, seal their readKeys under the parent folder
- * readKey, and batch-publish all records in a single API call.
+ * @security Does NOT zero any parameter — all keys are caller-supplied and the
+ *   caller remains the terminal owner (D-09).
  */
 export async function addFilesToFolder(params: {
   children: SealedChildRef[];
-  folderKey: Uint8Array;
+  writeChildren: WriteChildRef[];
+  readKey: Uint8Array;
+  writeKey: Uint8Array;
   ipnsPrivateKey: Uint8Array;
   ipnsPublicKey?: Uint8Array;
   ipnsName: string;
   sequenceNumber: bigint;
+  nodeId: string;
+  nodeGeneration: number;
   files: Array<{
-    fileId: string;
+    fileNodeId: string;
     name: string;
+    fileReadKey: Uint8Array;
+    fileWriteKey: Uint8Array;
     fileIpnsRecord: FileIpnsRecordPayload;
-    ipnsPrivateKeyEncrypted: string;
   }>;
   ctx: SdkContext;
-}): Promise<{ fileNodes: Node[]; newSequenceNumber: bigint }> {
-  void params;
-  throw new Error(
-    'not implemented — phase 65 (add file Nodes + seal child readKeys + batch-publish)'
-  );
+}): Promise<{
+  updatedChildren: SealedChildRef[];
+  updatedWriteChildren: WriteChildRef[];
+  newSequenceNumber: bigint;
+  fileRefs: SealedChildRef[];
+}> {
+  const fileRefs: SealedChildRef[] = [];
+  const writeRefs: WriteChildRef[] = [];
+
+  for (const file of params.files) {
+    const readKeySealed = await sealChildReadKey(
+      file.fileReadKey,
+      params.readKey,
+      file.fileNodeId,
+      'file',
+      0
+    );
+    fileRefs.push({
+      name: file.name,
+      ipnsName: file.fileIpnsRecord.ipnsName,
+      generation: 0,
+      versionFloor: 1n,
+      readKeySealed,
+    });
+
+    const writeKeySealed = await sealChildWriteKey(
+      file.fileWriteKey,
+      params.writeKey,
+      file.fileNodeId,
+      'file',
+      0
+    );
+    writeRefs.push({ childId: file.fileNodeId, writeKeySealed });
+  }
+
+  const newChildren = [...params.children, ...fileRefs];
+  const newWriteChildren = [...params.writeChildren, ...writeRefs];
+
+  const [publishResult] = await Promise.all([
+    updateFolderMetadataAndPublish({
+      children: newChildren,
+      readKey: params.readKey,
+      writeKey: params.writeKey,
+      writeChildren: newWriteChildren,
+      ipnsPrivateKey: params.ipnsPrivateKey,
+      ipnsPublicKey: params.ipnsPublicKey,
+      ipnsName: params.ipnsName,
+      sequenceNumber: params.sequenceNumber,
+      nodeId: params.nodeId,
+      nodeGeneration: params.nodeGeneration,
+      ctx: params.ctx,
+    }),
+    batchPublishIpnsRecords(
+      params.files.map((f) => f.fileIpnsRecord),
+      params.ctx
+    ),
+  ]);
+
+  return {
+    updatedChildren: publishResult.publishedChildren,
+    updatedWriteChildren: newWriteChildren,
+    newSequenceNumber: publishResult.newSequenceNumber,
+    fileRefs,
+  };
 }
 
 /**
- * Replace file content in folder (content update — folder IPNS record unchanged).
+ * Replace an existing file's content (folder untouched — the parent's SealedChildRef
+ * still points to the same file IPNS name; only the file Node's own IPNS record
+ * advances). Thin folder-registration-layer entry point delegating to the file-node
+ * primitive `updateFileMetadata` (packages/sdk-core/src/file/index.ts), kept here for
+ * symmetry with addFileToFolder/addFilesToFolder (both live in the folder-registration
+ * namespace).
  *
- * @stub phase 65 — will publish only the file Node IPNS record; folder is untouched
- * because the SealedChildRef still points to the same file IPNS name.
+ * @security Does NOT zero any parameter — all keys are caller-supplied and the
+ *   caller remains the terminal owner (D-09).
  */
-export async function replaceFileInFolder(params: {
-  children: SealedChildRef[];
-  fileId: string;
-  fileIpnsRecord: FileIpnsRecordPayload;
-  ctx: SdkContext;
-}): Promise<void> {
-  void params;
-  throw new Error('not implemented — phase 65 (replace file Node content + publish file IPNS)');
+export async function replaceFileInFolder(
+  params: Parameters<typeof updateFileMetadata>[0]
+): Promise<{
+  ipnsName: string;
+  metadataCid: string;
+  newSequenceNumber: bigint;
+  prunedCids: string[];
+}> {
+  return updateFileMetadata(params);
 }

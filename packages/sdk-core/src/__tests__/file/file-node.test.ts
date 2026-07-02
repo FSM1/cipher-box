@@ -354,7 +354,7 @@ describe('updateFileMetadata', () => {
       fileWriteKey,
       fileMetaIpnsName: 'k51-file-update',
       fileSequenceNumber: 5n,
-      nodeId: 'file-node-id-x',
+      nodeId: '11111111-1111-1111-1111-111111111111',
       nodeGeneration: 3,
       originalCreatedAt: 12345,
       currentMetadata,
@@ -378,7 +378,7 @@ describe('updateFileMetadata', () => {
 
     expect(capturedBytes).not.toBeNull();
     const published = JSON.parse(new TextDecoder().decode(capturedBytes!)) as PublishedNode;
-    expect(published.id).toBe('file-node-id-x');
+    expect(published.id).toBe('11111111-1111-1111-1111-111111111111');
     expect(published.generation).toBe(3);
 
     const unsealed = await unsealNode(published, fileReadKey, fileWriteKey);
@@ -411,7 +411,7 @@ describe('updateFileMetadata', () => {
       fileWriteKey,
       fileMetaIpnsName: 'k51-file-update-2',
       fileSequenceNumber: 1n,
-      nodeId: 'file-node-id-y',
+      nodeId: '22222222-2222-2222-2222-222222222222',
       nodeGeneration: 0,
       originalCreatedAt: 500,
       currentMetadata,
@@ -444,7 +444,7 @@ describe('addFileToFolder (registration.ts write-body-aware)', () => {
     const parentIpnsPrivateKey = new Uint8Array(32).fill(0x03);
     const fileReadKey = new Uint8Array(32).fill(0x04);
     const fileWriteKey = new Uint8Array(32).fill(0x05);
-    const fileNodeId = 'file-uuid-1';
+    const fileNodeId = '33333333-3333-3333-3333-333333333333';
     const fileIpnsRecord = {
       ipnsName: 'k51-file',
       recordBase64: 'recbase64',
@@ -465,7 +465,7 @@ describe('addFileToFolder (registration.ts write-body-aware)', () => {
       ipnsPrivateKey: parentIpnsPrivateKey,
       ipnsName: 'k51-parent',
       sequenceNumber: 1n,
-      nodeId: 'parent-uuid',
+      nodeId: '44444444-4444-4444-4444-444444444444',
       nodeGeneration: 0,
       fileNodeId,
       name: 'photo.png',
@@ -515,14 +515,14 @@ describe('addFilesToFolder (registration.ts write-body-aware, batch)', () => {
 
     const files = [
       {
-        fileNodeId: 'file-uuid-a',
+        fileNodeId: '55555555-5555-5555-5555-555555555555',
         name: 'a.png',
         fileReadKey: new Uint8Array(32).fill(0x21),
         fileWriteKey: new Uint8Array(32).fill(0x22),
         fileIpnsRecord: { ipnsName: 'k51-file-a', recordBase64: 'rec-a', metadataCid: 'QmA' },
       },
       {
-        fileNodeId: 'file-uuid-b',
+        fileNodeId: '66666666-6666-6666-6666-666666666666',
         name: 'b.png',
         fileReadKey: new Uint8Array(32).fill(0x31),
         fileWriteKey: new Uint8Array(32).fill(0x32),
@@ -538,7 +538,7 @@ describe('addFilesToFolder (registration.ts write-body-aware, batch)', () => {
       ipnsPrivateKey: parentIpnsPrivateKey,
       ipnsName: 'k51-parent-batch',
       sequenceNumber: 1n,
-      nodeId: 'parent-uuid-batch',
+      nodeId: '77777777-7777-7777-7777-777777777777',
       nodeGeneration: 0,
       files,
       ctx,
@@ -583,7 +583,7 @@ describe('replaceFileInFolder', () => {
       fileWriteKey,
       fileMetaIpnsName: 'k51-file-replace',
       fileSequenceNumber: 1n,
-      nodeId: 'file-node-id-replace',
+      nodeId: '88888888-8888-8888-8888-888888888888',
       nodeGeneration: 0,
       originalCreatedAt: 1000,
       currentMetadata,
