@@ -1,11 +1,16 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-// TODO(phase 65): ShareDialog share creation deferred — FolderEntry/FilePointer removed
-// Behavioral crypto (decryptFolderMetadata, reWrapEncryptedKey, collectChildKeys) stubbed
 import type { SealedChildRef } from '@cipherbox/core';
 import { Modal } from '../ui/Modal';
-import { sharesControllerRevokeShare } from '@cipherbox/api-client';
+import {
+  sharesControllerRevokeShare,
+  sharesControllerCreateShare,
+  sharesControllerGetSentShares,
+} from '@cipherbox/api-client';
+import { wrapKey, hexToBytes, bytesToHex } from '@cipherbox/crypto';
 import { useShareStore } from '../../stores/share.store';
+import type { SentShare } from '../../stores/share.store';
 import { updateSharePermission } from '../../services/share.service';
+import { resolveChildNodeIdentity } from '../../lib/crypto/key-wrapping';
 import { InviteLinkTab } from './InviteLinkTab';
 import '../../styles/share-dialog.css';
 import { logger } from '../../lib/logger';
@@ -13,22 +18,11 @@ import { logger } from '../../lib/logger';
 type ShareDialogProps = {
   isOpen: boolean;
   onClose: () => void;
-  /** The item to share (node/v3 SealedChildRef). TODO(phase 65): use for key re-wrapping */
+  /** The item to share (node/v3 SealedChildRef). */
   item: SealedChildRef;
   folderKey: Uint8Array;
   ipnsName: string;
   parentFolderId: string;
-};
-
-/** Sent share record from the API */
-type SentShare = {
-  shareId: string;
-  recipientPublicKey: string;
-  itemType: string;
-  ipnsName: string;
-  itemName: string;
-  permission: 'read' | 'write';
-  createdAt: string;
 };
 
 /**
@@ -38,6 +32,17 @@ function truncateKey(key: string): string {
   if (key.length < 12) return key;
   const hex = key.startsWith('0x') ? key.slice(2) : key;
   return `0x${hex.slice(0, 4)}...${hex.slice(-4)}`;
+}
+
+/**
+ * Parse a grant's `rootGeneration` (numeric string from the DTO) into a number.
+ * Fail-closed (V5, T-68-21): a non-numeric/absent value is `undefined`, never
+ * coerced to NaN/0 -- mirrors share.service.ts's parseRootGeneration.
+ */
+function parseRootGeneration(value: string | undefined | null): number | undefined {
+  if (value === undefined || value === null || !/^\d+$/.test(value)) return undefined;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
 }
 
 /**
@@ -105,8 +110,34 @@ export function ShareDialog({
     setRecipientsLoading(true);
 
     (async () => {
-      // deferred to Phase 68 — descriptor-ref rotation/grant path not yet wired
-      throw new Error('deferred to Phase 68 — descriptor-ref rotation/grant path not yet wired');
+      // The API has no server-side ipnsName filter on /shares/sent -- page
+      // through the full sent-share list and filter client-side to this item
+      // (mirrors share.service.ts's fetchAllSentShares pagination pattern).
+      const pageSize = 100;
+      let offset = 0;
+      const matches: SentShare[] = [];
+      let hasMore = true;
+      while (hasMore) {
+        const result = await sharesControllerGetSentShares({ limit: pageSize, offset });
+        for (const s of result.shares) {
+          if (s.rootIpnsName !== ipnsName) continue;
+          matches.push({
+            shareId: s.shareId,
+            recipientPublicKey: s.recipientPublicKey,
+            ipnsName: s.rootIpnsName,
+            itemName: item.name,
+            itemNameEncrypted: s.itemNameEncrypted,
+            permission: s.writeDescriptorRef !== null ? 'write' : 'read',
+            createdAt: s.createdAt,
+            readDescriptorRef: s.readDescriptorRef,
+            rootGeneration: parseRootGeneration(s.rootGeneration),
+            rootNodeId: s.rootNodeId,
+          });
+        }
+        offset += result.shares.length;
+        hasMore = offset < result.total && result.shares.length > 0;
+      }
+      if (!cancelled) setRecipients(matches);
     })()
       .catch((err) => {
         if (cancelled) return;
@@ -122,15 +153,84 @@ export function ShareDialog({
     return () => {
       cancelled = true;
     };
-  }, [isOpen, ipnsName]);
+  }, [isOpen, ipnsName, item.name]);
 
   const handleShare = useCallback(async () => {
-    // TODO(phase 65): share creation via Node read-chain (SealedChildRef.readKeySealed unwrap
-    // + re-wrap for recipient) not yet implemented. The legacy FolderEntry.folderKeyEncrypted /
-    // FilePointer.fileMetaIpnsName paths have been removed with the FolderChild → SealedChildRef
-    // type migration. Phase 65 will re-implement using Node.writeBody key-wrapping.
-    throw new Error('not implemented — phase 65 (share creation via Node write-chain)');
-  }, [pubKeyInput, item, folderKey, ipnsName, parentFolderId, permission]);
+    setError(null);
+    setSuccess(null);
+
+    const trimmed = pubKeyInput.trim();
+    if (!trimmed) return;
+
+    if (permission === 'write') {
+      // Write grants require the shared item's own writeKey, which is sealed
+      // inside the PARENT folder's write-body (WriteChildRef.writeKeySealed,
+      // unsealed under the parent writeKey). ShareDialog is only handed the
+      // parent's READ key (`folderKey`) -- the write-chain is not currently
+      // threaded to this component. See 68.1-11 SUMMARY "Known Gaps".
+      setError('> write access is not yet available for this item -- read-only sharing only');
+      return;
+    }
+
+    setIsSharing(true);
+
+    let recipientPublicKey: Uint8Array | null = null;
+    let itemReadKey: Uint8Array | null = null;
+
+    try {
+      const hex = trimmed.startsWith('0x') ? trimmed.slice(2) : trimmed;
+      if (!/^04[0-9a-fA-F]{128}$/.test(hex)) {
+        throw new Error('invalid public key format');
+      }
+      recipientPublicKey = hexToBytes(hex);
+
+      const identity = await resolveChildNodeIdentity(item, folderKey);
+      itemReadKey = identity.readKey;
+
+      const readDescriptorRef = bytesToHex(await wrapKey(itemReadKey, recipientPublicKey));
+
+      let itemNameEncrypted: string | undefined;
+      try {
+        const nameBytes = new TextEncoder().encode(item.name);
+        itemNameEncrypted = bytesToHex(await wrapKey(nameBytes, recipientPublicKey));
+      } catch (err) {
+        logger.warn('[Share] Failed to wrap item name, continuing without it:', err);
+      }
+
+      const result = await sharesControllerCreateShare({
+        recipientPublicKey: trimmed.startsWith('0x') ? trimmed : `0x${trimmed}`,
+        readDescriptorRef,
+        rootNodeId: identity.nodeId,
+        rootIpnsName: item.ipnsName,
+        rootGeneration: String(identity.generation),
+        itemNameEncrypted,
+      });
+
+      const newShare: SentShare = {
+        shareId: result.shareId,
+        recipientPublicKey: result.recipientPublicKey,
+        ipnsName: item.ipnsName,
+        itemName: item.name,
+        itemNameEncrypted: result.itemNameEncrypted,
+        permission: 'read',
+        createdAt: result.createdAt,
+        readDescriptorRef: result.readDescriptorRef,
+        rootGeneration: parseRootGeneration(result.rootGeneration),
+        rootNodeId: result.rootNodeId,
+      };
+      setRecipients((prev) => [...prev, newShare]);
+      useShareStore.getState().addSentShare(newShare);
+      setPubKeyInput('');
+      setSuccess('> share created');
+    } catch (err) {
+      logger.error('[Share] Share creation failed:', err);
+      const message = err instanceof Error ? err.message : 'share failed';
+      setError(`> ${message}`);
+    } finally {
+      setIsSharing(false);
+      itemReadKey?.fill(0);
+    }
+  }, [pubKeyInput, item, folderKey, permission]);
 
   const handleRevoke = useCallback(async (shareId: string) => {
     setRevokingId(shareId);
@@ -147,13 +247,28 @@ export function ShareDialog({
     }
   }, []);
 
-  const handleUpgrade = useCallback(
-    async (_share: SentShare) => {
-      // TODO(phase 65): permission upgrade via Node write-chain not yet implemented
-      throw new Error('not implemented — phase 65 (permission upgrade via Node write-chain)');
-    },
-    [item]
-  );
+  const handleUpgrade = useCallback(async (share: SentShare) => {
+    setError(null);
+    setSuccess(null);
+    setUpgradingId(share.shareId);
+
+    try {
+      // Upgrading read -> write requires the shared item's own writeKey
+      // (sealed inside the parent folder's write-body, unsealed under the
+      // parent writeKey) to mint a writeDescriptorRef -- the same write-chain
+      // gap as handleShare's write-permission path above. `updateSharePermission`
+      // (packages/sdk/src/share/shared-write.ts:900) is the SDK-level thin
+      // callback wrapper this would route through once the writeKey is
+      // available; there is currently no way to reach it correctly from
+      // this component. See 68.1-11 SUMMARY "Known Gaps".
+      await updateSharePermission(share.shareId, 'write', undefined);
+    } catch (err) {
+      logger.error('[Share] Permission upgrade failed:', err);
+      setError('> write access is not yet available for this item');
+    } finally {
+      setUpgradingId(null);
+    }
+  }, []);
 
   const handleDowngradeConfirm = useCallback(async (share: SentShare) => {
     setError(null);
