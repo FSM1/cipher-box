@@ -513,7 +513,7 @@ export class CipherBoxClient {
    * remains the authoritative conflict detector.
    */
   private async reconcileFolderSequence(ipnsName: string, expectedSequence: bigint): Promise<void> {
-    let resolved: { sequenceNumber: bigint } | null;
+    let resolved: { sequenceNumber: bigint; signatureVerified: boolean } | null;
     try {
       resolved = await sdkCore.resolveIpnsRecord(ipnsName, this.ctx);
     } catch {
@@ -529,6 +529,17 @@ export class CipherBoxClient {
     // to useMutationFailureUx's D-05 classifier) rather than being silenced.
     // Omitted when unconfigured -- zero enforcement, matching prior behavior.
     if (this.config.rotationHighWater) {
+      // Fail closed BEFORE any floor mutation, symmetric with the read-path
+      // gate in apps/web ipns.service: an unverified record must never bump a
+      // durable floor -- a relay could otherwise forge a huge seq and
+      // permanently wedge every future mutation on this node behind
+      // SequenceRegressionError. Rotation-participating nodes are always
+      // published signed, so an unverified record here is itself a red flag.
+      if (!resolved.signatureVerified) {
+        throw new Error(
+          `IPNS resolve for ${ipnsName} returned an unverified record -- refusing to gate durable floors on it`
+        );
+      }
       // The durable floor stores JS numbers; sequences beyond MAX_SAFE_INTEGER
       // would silently truncate through Number() and corrupt the floor.
       if (

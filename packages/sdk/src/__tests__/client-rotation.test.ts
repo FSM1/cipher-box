@@ -698,6 +698,30 @@ describe('CipherBoxClient — reconcile-time enforceResolved fail-closed (Gap 1 
     expect(sdkCore.updateFolderMetadataAndPublish).toHaveBeenCalledTimes(1);
   });
 
+  it('renameItem refuses to gate floors on an UNVERIFIED resolve — throws before enforceResolved is ever called', async () => {
+    const rotationHighWater = fakeRotationHighWater(async () => undefined);
+    const client = new CipherBoxClient(createTestConfig({ rotationHighWater }));
+    setupFolder(client, FOLDER_IPNS);
+    vi.mocked(sdkCore.renameInFolder).mockReturnValue({
+      updatedChildren: [],
+      renamedChild: {} as never,
+    });
+    // A relay returning an unverified record with a forged, inflated seq must
+    // never reach enforceResolved -- it would bump the durable floor and
+    // permanently wedge every future mutation behind SequenceRegressionError.
+    vi.mocked(sdkCore.resolveIpnsRecord).mockResolvedValue({
+      cid: 'bafyforged',
+      sequenceNumber: 999999n,
+      signatureVerified: false,
+    });
+
+    await expect(client.renameItem(FOLDER_IPNS, 'file1', 'new.txt')).rejects.toThrow(
+      /unverified record/
+    );
+    expect(rotationHighWater.enforceResolved).not.toHaveBeenCalled();
+    expect(sdkCore.updateFolderMetadataAndPublish).not.toHaveBeenCalled();
+  });
+
   it('renameItem never invokes enforceResolved when the client has no rotationHighWater configured (backward-compat)', async () => {
     const client = new CipherBoxClient(createTestConfig()); // no rotationHighWater
     setupFolder(client, FOLDER_IPNS);
