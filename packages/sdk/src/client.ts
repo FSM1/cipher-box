@@ -23,10 +23,15 @@ import {
   ipnsControllerUnenrollBatch,
   sharesControllerRevokeForItems,
 } from '@cipherbox/api-client';
-import { clearBytes, unwrapKey, hexToBytes } from '@cipherbox/crypto';
+import { clearBytes, unwrapKey, hexToBytes, deriveEd25519PublicKey } from '@cipherbox/crypto';
 import pLimit from 'p-limit';
 import type { BinEntry, SealedChildRef, PublishedNode, Node as CoreNode } from '@cipherbox/core';
-import { sealChildReadKey, unsealChildReadKey, unsealNode } from '@cipherbox/core';
+import {
+  sealChildReadKey,
+  unsealChildReadKey,
+  unsealChildWriteKey,
+  unsealNode,
+} from '@cipherbox/core';
 import type {
   CipherBoxClientConfig,
   FolderState,
@@ -111,6 +116,13 @@ export class CipherBoxClient {
   private internalVaultKeypair: { publicKey: Uint8Array; privateKey: Uint8Array };
   private internalRootFolderKey: Uint8Array;
   /**
+   * Internal copy of the root write key, or null when not configured (D-03).
+   * Required alongside internalRootIpnsKeypair for ensureFolderLoaded self-bootstrap
+   * to recover owned write-bodies; absent when the host hasn't wired rootWriteKey yet
+   * (Phase 68.1-03).
+   */
+  private internalRootWriteKey: Uint8Array | null = null;
+  /**
    * Internal copy of the root IPNS signing keypair, or null when not configured.
    * Enables self-bootstrapping the folder tree from root (see ensureFolderLoaded).
    */
@@ -123,6 +135,9 @@ export class CipherBoxClient {
       privateKey: new Uint8Array(config.vaultKeypair.privateKey),
     };
     this.internalRootFolderKey = new Uint8Array(config.rootFolderKey);
+    if (config.rootWriteKey) {
+      this.internalRootWriteKey = new Uint8Array(config.rootWriteKey);
+    }
     if (config.rootIpnsKeypair) {
       this.internalRootIpnsKeypair = {
         publicKey: new Uint8Array(config.rootIpnsKeypair.publicKey),
@@ -133,6 +148,7 @@ export class CipherBoxClient {
       ...config,
       vaultKeypair: this.internalVaultKeypair,
       rootFolderKey: this.internalRootFolderKey,
+      rootWriteKey: this.internalRootWriteKey ?? undefined,
       rootIpnsKeypair: this.internalRootIpnsKeypair ?? undefined,
       rotationCallbacks: config.rotationCallbacks ?? NOOP_ROTATION_CALLBACKS,
     };
@@ -268,6 +284,9 @@ export class CipherBoxClient {
     this.internalVaultKeypair.privateKey.fill(0);
     this.internalVaultKeypair.publicKey.fill(0);
     this.internalRootFolderKey.fill(0);
+    if (this.internalRootWriteKey) {
+      this.internalRootWriteKey.fill(0);
+    }
     if (this.internalRootIpnsKeypair) {
       this.internalRootIpnsKeypair.privateKey.fill(0);
       this.internalRootIpnsKeypair.publicKey.fill(0);
@@ -326,6 +345,10 @@ export class CipherBoxClient {
    *   placeholder that will be filled by loadFolder; CRUD operations called before
    *   loadFolder will throw 'nodeId is required'.
    * @param nodeGeneration - Rotation counter of the folder's Node (D-06).
+   * @param writeKey - Optional 32-byte AES-256 write key (D-03). Omitting falls back
+   *   to a zero-filled key (legacy compatibility) — callers that need write-body
+   *   preservation on republish (rename/move/delete/restore) should supply the real
+   *   writeKey recovered via ensureFolderLoaded or createSubfolder.
    */
   registerFolder(
     ipnsName: string,
@@ -334,12 +357,14 @@ export class CipherBoxClient {
     children: SealedChildRef[],
     sequenceNumber: bigint,
     nodeId?: string,
-    nodeGeneration?: number
+    nodeGeneration?: number,
+    writeKey?: Uint8Array
   ): void {
     // Defensive copy so destroy() -> folderTree.clear() doesn't zero caller buffers
     this.folderTree.set(ipnsName, {
       ipnsName,
       folderKey: new Uint8Array(folderKey),
+      writeKey: new Uint8Array(writeKey ?? new Uint8Array(32)),
       ipnsKeypair: {
         publicKey: new Uint8Array(ipnsKeypair.publicKey),
         privateKey: new Uint8Array(ipnsKeypair.privateKey),
@@ -388,12 +413,16 @@ export class CipherBoxClient {
    * @param ipnsName - Folder's IPNS name
    * @param folderKey - Decrypted AES-256 folder key
    * @param ipnsKeypair - Ed25519 keypair for IPNS signing
+   * @param writeKey - Optional 32-byte AES-256 write key (D-03). Omitting falls back to
+   *   a zero-filled key (legacy compatibility, matching registerFolder) unless an
+   *   already-loaded folderTree entry carries a real writeKey, which is preserved.
    * @returns The loaded folder state, or null if IPNS record not found
    */
   async loadFolder(
     ipnsName: string,
     folderKey: Uint8Array,
-    ipnsKeypair: { publicKey: Uint8Array; privateKey: Uint8Array }
+    ipnsKeypair: { publicKey: Uint8Array; privateKey: Uint8Array },
+    writeKey?: Uint8Array
   ): Promise<FolderState | null> {
     return this.withOperation('loadFolder', async () => {
       const result = await sdkCore.loadFolderMetadata({
@@ -420,6 +449,9 @@ export class CipherBoxClient {
 
       const state: FolderState = {
         ipnsName,
+        // Preserve an already-recovered real writeKey across a reload rather than
+        // clobbering it with the zero-fallback (D-03).
+        writeKey: new Uint8Array(writeKey ?? existing?.writeKey ?? new Uint8Array(32)),
         folderKey,
         ipnsKeypair,
         sequenceNumber: result.sequenceNumber,
@@ -446,20 +478,190 @@ export class CipherBoxClient {
   }
 
   /**
+   * Resolve an IPNS name to its raw PublishedNode envelope + current sequenceNumber.
+   * Returns null when the IPNS record is absent (structurally unresolvable hop) —
+   * NOT when a crypto/AEAD verification subsequently fails on the caller side.
+   */
+  private async resolvePublishedNode(
+    ipnsName: string
+  ): Promise<{ published: PublishedNode; sequenceNumber: bigint } | null> {
+    const resolved = await sdkCore.resolveIpnsRecord(ipnsName, this.ctx);
+    if (!resolved) return null;
+    const raw = await sdkCore.fetchFromIpfs(this.ctx, resolved.cid);
+    const published = JSON.parse(new TextDecoder().decode(raw)) as PublishedNode;
+    return { published, sequenceNumber: resolved.sequenceNumber };
+  }
+
+  /**
+   * Seed (or return the cached) root FolderState from config, unsealing the root
+   * Node's write-body so DFS descent has the root's writeChildren available (D-03).
+   *
+   * Returns null when self-bootstrap is unavailable (no rootIpnsKeypair or
+   * rootWriteKey configured — Phase 68.1-03 wires these at the host layer) or the
+   * root IPNS record itself cannot be resolved (structurally unresolvable hop).
+   */
+  private async ensureRootFolderState(): Promise<FolderState | null> {
+    const existingRoot = this.folderTree.get(this.config.rootIpnsName);
+    if (existingRoot) return existingRoot;
+
+    if (!this.internalRootIpnsKeypair || !this.internalRootWriteKey) return null;
+
+    const resolvedRoot = await this.resolvePublishedNode(this.config.rootIpnsName);
+    if (!resolvedRoot) return null;
+
+    // Fail closed on a wrong/corrupted root key — a genuine crypto/config error,
+    // not a structurally-unresolvable hop, so this is intentionally NOT caught.
+    const rootNode = await unsealNode(
+      resolvedRoot.published,
+      this.internalRootFolderKey,
+      this.internalRootWriteKey
+    );
+
+    const rootState: FolderState = {
+      ipnsName: this.config.rootIpnsName,
+      folderKey: new Uint8Array(this.internalRootFolderKey),
+      writeKey: new Uint8Array(this.internalRootWriteKey),
+      ipnsKeypair: {
+        publicKey: new Uint8Array(this.internalRootIpnsKeypair.publicKey),
+        privateKey: new Uint8Array(this.internalRootIpnsKeypair.privateKey),
+      },
+      sequenceNumber: resolvedRoot.sequenceNumber,
+      children: rootNode.children ?? [],
+      metadata: rootNode,
+      lastLoadedAt: Date.now(),
+      nodeId: rootNode.id,
+      nodeGeneration: rootNode.generation,
+    };
+    this.folderTree.set(this.config.rootIpnsName, rootState);
+    return rootState;
+  }
+
+  /**
+   * DFS descent from `parentState` searching for `targetIpnsName`, recovering
+   * each visited folder's readKey + writeKey + ipnsPrivateKey from the write
+   * chain and registering it into folderTree along the way (early-exit once
+   * the target is found).
+   *
+   * Per-hop crypto derivation follows the generation-source rule (§2.6, matching
+   * navigateReadChain): `childRef.generation` (the PARENT MIRROR) is the AAD
+   * input for both unsealChildReadKey and unsealChildWriteKey — NEVER the
+   * child's own envelope generation. A stale-CID relay serve fails GCM auth
+   * closed (T-68.1-01-02) and propagates as a throw, matching navigateReadChain's
+   * documented "AEAD auth failure propagates as a throw, not silent success"
+   * contract. Only structurally-absent hops (missing IPNS record, missing write
+   * link) are soft failures that skip to the next sibling.
+   *
+   * `visited` guards against a cyclic/malicious tree hanging the walk.
+   */
+  private async dfsFindFolder(
+    parentState: FolderState,
+    targetIpnsName: string,
+    visited: Set<string>
+  ): Promise<FolderState | null> {
+    if (visited.has(parentState.ipnsName)) return null;
+    visited.add(parentState.ipnsName);
+
+    const parentNode = parentState.metadata;
+    if (!parentNode) return null;
+
+    for (const childRef of parentNode.children ?? []) {
+      const childResolved = await this.resolvePublishedNode(childRef.ipnsName);
+      if (!childResolved) continue; // structurally unresolvable hop — try siblings
+
+      let childReadKey: Uint8Array | null = null;
+      let childWriteKey: Uint8Array | null = null;
+      try {
+        // Generation-source rule: childRef.generation (parent mirror), NEVER
+        // childResolved.published.generation (child's own envelope generation).
+        childReadKey = await unsealChildReadKey(
+          childRef.readKeySealed,
+          parentState.folderKey,
+          childResolved.published.id,
+          childResolved.published.kind,
+          childRef.generation
+        );
+
+        // Only folder/root kinds can carry a write-body and be descended into
+        // further — a file leaf is never a FolderState target.
+        if (childResolved.published.kind !== 'folder' && childResolved.published.kind !== 'root') {
+          continue;
+        }
+
+        const writeChildRef = parentNode.writeBody?.writeChildren.find(
+          (wc) => wc.childId === childResolved.published.id
+        );
+        if (!writeChildRef) {
+          // No write link recorded for this child (e.g. pre-D-03 folder never
+          // republished with a write-body) — not self-writable, skip.
+          continue;
+        }
+        childWriteKey = await unsealChildWriteKey(
+          writeChildRef.writeKeySealed,
+          parentState.writeKey,
+          childResolved.published.id,
+          childResolved.published.kind,
+          childRef.generation
+        );
+
+        // T-68.1-01-03: unsealNode validates the recovered writeKey (throws on
+        // wrong key) BEFORE the recovered ipnsPrivateKey is ever trusted —
+        // intentionally not caught here (fail closed).
+        const childNode = await unsealNode(childResolved.published, childReadKey, childWriteKey);
+        if (!childNode.writeBody) continue;
+
+        const childState: FolderState = {
+          ipnsName: childRef.ipnsName,
+          folderKey: new Uint8Array(childReadKey),
+          writeKey: new Uint8Array(childWriteKey),
+          ipnsKeypair: {
+            publicKey: deriveEd25519PublicKey(childNode.writeBody.ipnsPrivateKey),
+            privateKey: new Uint8Array(childNode.writeBody.ipnsPrivateKey),
+          },
+          sequenceNumber: childResolved.sequenceNumber,
+          children: childNode.children ?? [],
+          metadata: childNode,
+          lastLoadedAt: Date.now(),
+          nodeId: childNode.id,
+          nodeGeneration: childNode.generation,
+        };
+        // folderTree.set() makes its own defensive copy (D-09), so the local
+        // childReadKey/childWriteKey buffers below are always safe to zero.
+        this.folderTree.set(childRef.ipnsName, childState);
+
+        if (childRef.ipnsName === targetIpnsName) return childState;
+
+        const found = await this.dfsFindFolder(childState, targetIpnsName, visited);
+        if (found) return found;
+      } finally {
+        // T-68.1-01-01: zero navigate-minted intermediates not retained beyond
+        // this local scope. NEVER zero parentState.folderKey/writeKey (D-09 —
+        // caller/folderTree-owned) or config root keys.
+        childReadKey?.fill(0);
+        childWriteKey?.fill(0);
+      }
+    }
+
+    return null;
+  }
+
+  /**
    * Ensure a folder is present in the internal folderTree, self-bootstrapping
    * from root if necessary.
    *
    * If the target is already loaded, returns it immediately. Otherwise — when a
-   * root IPNS keypair was configured — walks the folder tree from root (DFS with
-   * early exit), resolving each folder's metadata and unwrapping each subfolder's
-   * `folderKeyEncrypted` / `ipnsPrivateKeyEncrypted` with the vault keypair, until
-   * the target is registered. Every folder visited along the way is cached, so
-   * later calls are cheap.
+   * root IPNS keypair AND root write key were configured — walks the folder tree
+   * from root (DFS with early exit), resolving each folder's Node and recovering
+   * each subfolder's readKey + writeKey + ipnsPrivateKey from the write chain
+   * (SealedChildRef.readKeySealed + WriteChildRef.writeKeySealed — D-03; the
+   * legacy `folderKeyEncrypted`/`ipnsPrivateKeyEncrypted` fields no longer exist
+   * on SealedChildRef, NODE-03), until the target is registered. Every folder
+   * visited along the way is cached, so later calls are cheap.
    *
-   * Returns null when the client cannot self-bootstrap (no `rootIpnsKeypair`
-   * configured) or the target is not reachable from root. Callers fall back to
-   * their existing 'Folder not loaded' error on null, so behavior is unchanged
-   * when self-bootstrap is unavailable. This dissolves the "Folder not loaded"
+   * Returns null when the client cannot self-bootstrap (no `rootIpnsKeypair` or
+   * `rootWriteKey` configured, or the root IPNS record itself is unresolvable)
+   * or the target is not reachable from root. Callers fall back to their
+   * existing 'Folder not loaded' error on null, so behavior is unchanged when
+   * self-bootstrap is unavailable. This dissolves the "Folder not loaded"
    * failure class that previously required consumers to pre-seed folderTree
    * before every folderTree-dependent operation.
    *
@@ -467,15 +669,15 @@ export class CipherBoxClient {
    * @returns The loaded FolderState, or null if it cannot be bootstrapped
    * @internal
    */
-  /**
-   * @stub phase 63 (navigation/read fan-out): SealedChildRef has no
-   * folderKeyEncrypted / ipnsPrivateKeyEncrypted fields; the phase-63 DFS will
-   * unseal the child readKey from SealedChildRef.readKeySealed using the parent
-   * Node's readKey chain to derive per-folder keys.
-   */
   async ensureFolderLoaded(targetIpnsName: string): Promise<FolderState | null> {
-    void targetIpnsName;
-    throw new Error('not implemented — phase 63 (navigation/read fan-out)');
+    const existing = this.folderTree.get(targetIpnsName);
+    if (existing) return existing;
+
+    const rootState = await this.ensureRootFolderState();
+    if (!rootState) return null;
+    if (targetIpnsName === this.config.rootIpnsName) return rootState;
+
+    return this.dfsFindFolder(rootState, targetIpnsName, new Set<string>());
   }
 
   /**

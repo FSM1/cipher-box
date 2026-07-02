@@ -91,6 +91,16 @@ export type CipherBoxClientConfig = {
   /** Root folder key (AES-256, decrypted on login) */
   rootFolderKey: Uint8Array;
   /**
+   * Root folder write key (AES-256, decrypted on login — vault-derived alongside
+   * rootFolderKey, see apps/web/src/hooks/useAuth.ts). Used by `ensureFolderLoaded`
+   * to seed the root `FolderState.writeKey` and recover subfolder write-bodies (D-03).
+   *
+   * Optional for backward compatibility (mirrors `rootIpnsKeypair`): when absent,
+   * `ensureFolderLoaded` self-bootstrap is unavailable and returns null, matching
+   * pre-Phase-68.1 behavior. Host wiring lands in Phase 68.1-03.
+   */
+  rootWriteKey?: Uint8Array;
+  /**
    * Root folder IPNS signing keypair (Ed25519).
    *
    * When provided, the client can self-bootstrap and lazy-load the folder tree
@@ -164,8 +174,16 @@ export type CipherBoxClientConfig = {
 export type FolderState = {
   /** IPNS name identifying this folder */
   ipnsName: string;
-  /** Decrypted AES-256 folder key */
+  /** Decrypted AES-256 folder key (read-body key) */
   folderKey: Uint8Array;
+  /**
+   * 32-byte AES-256 write key (unseals/seals the folder's write-body — D-03).
+   * Populated for owned folders reachable via `registerFolder`/`loadFolder` (legacy
+   * zero-fallback until callers migrate) or `ensureFolderLoaded` (recovered from the
+   * write chain). Required so mutation call sites can pass it through to
+   * `updateFolderMetadataAndPublish` for write-body preservation.
+   */
+  writeKey: Uint8Array;
   /** Ed25519 IPNS keypair for signing updates */
   ipnsKeypair: { publicKey: Uint8Array; privateKey: Uint8Array };
   /** Current IPNS sequence number (monotonically increasing) */

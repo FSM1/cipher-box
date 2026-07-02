@@ -30,6 +30,7 @@ export class FolderTree {
     this.folders.set(ipnsName, {
       ...state,
       folderKey: new Uint8Array(state.folderKey),
+      writeKey: new Uint8Array(state.writeKey),
       ipnsKeypair: {
         publicKey: new Uint8Array(state.ipnsKeypair.publicKey),
         privateKey: new Uint8Array(state.ipnsKeypair.privateKey),
@@ -43,6 +44,7 @@ export class FolderTree {
     if (state) {
       // Clear sensitive key material before removing
       if (state.folderKey) state.folderKey.fill(0);
+      if (state.writeKey) state.writeKey.fill(0);
       if (state.ipnsKeypair?.privateKey) state.ipnsKeypair.privateKey.fill(0);
     }
     this.folders.delete(ipnsName);
@@ -60,6 +62,7 @@ export class FolderTree {
   clear(): void {
     for (const state of this.folders.values()) {
       if (state.folderKey) state.folderKey.fill(0);
+      if (state.writeKey) state.writeKey.fill(0);
       if (state.ipnsKeypair?.privateKey) state.ipnsKeypair.privateKey.fill(0);
     }
     this.folders.clear();
