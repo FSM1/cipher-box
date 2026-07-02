@@ -2362,6 +2362,98 @@ export class CipherBoxClient {
   }
 
   /**
+   * Mint an ECIES-wrapped `writeDescriptorRef` for a WRITE-permission share or
+   * invite of an OWNED item (68.1-18, SHARE-WRITE-KEY / WEB-03 / GAP-3).
+   *
+   * Under the node/v3 write-chain, an item's own writeKey is sealed inside its
+   * PARENT's write-body (`WriteChildRef.writeKeySealed`, under the parent's
+   * writeKey) — there is no way to derive it from the parent's readKey alone
+   * (68.1-11's documented gap). This is the SDK-boundary primitive that closes
+   * that gap: it walks the owned write-chain the same way
+   * {@link resolveFileWriteChainKeys} does (parent writeKey ->
+   * `WriteChildRef.writeKeySealed` -> item's own writeKey, keyed by the
+   * item's plaintext `PublishedNode.id`/`kind`, NODE-03, and the PARENT-MIRROR
+   * `SealedChildRef.generation` — generation-source rule, mirrors
+   * `resolveChildNodeIdentity`'s readKey analog in
+   * `apps/web/src/lib/crypto/key-wrapping.ts`), then ECIES-wraps the raw
+   * writeKey for `recipientPublicKey` and returns only the wrapped hex — the
+   * item's raw writeKey never crosses the SDK boundary into the web layer
+   * (T-68.1-18-02).
+   *
+   * Fails closed (throws, never returns an empty/zero descriptor) when the
+   * parent has no write-capable `writeKey` or the item has no `WriteChildRef`
+   * in the parent's write-body (T-68.1-18-01).
+   *
+   * @param parentIpnsName - IPNS name of the folder that owns `itemIpnsName`
+   *   (i.e. the item is one of `parent.children`)
+   * @param itemIpnsName - IPNS name of the shared item (file or folder)
+   * @param recipientPublicKey - 65-byte uncompressed secp256k1 public key to
+   *   wrap the item's writeKey for (the real recipient for a direct share, or
+   *   an ephemeral keypair's public key for an invite link)
+   * @returns Hex-encoded ECIES ciphertext (the live REST DTOs are hex-only,
+   *   mirroring 68.1-11's `readDescriptorRef` convention — not base64)
+   * @security The derived item writeKey is zeroed in `finally` immediately
+   *   after wrapping (terminal owner, D-09) — it never survives past this
+   *   call's own stack frame.
+   */
+  async resolveShareWriteDescriptor(
+    parentIpnsName: string,
+    itemIpnsName: string,
+    recipientPublicKey: Uint8Array
+  ): Promise<string> {
+    return this.withOperation('resolveShareWriteDescriptor', async () => {
+      const parent = await this.requireFolder(parentIpnsName, 'Parent folder');
+
+      const writeBodyParams = await this.getWriteBodyParams(parent);
+      if (!writeBodyParams.writeKey) {
+        throw new Error(
+          `resolveShareWriteDescriptor: parent folder ${parentIpnsName} has no writeKey — cannot mint a write grant without a write-capable parent`
+        );
+      }
+      const parentWriteKey = writeBodyParams.writeKey;
+
+      const childRef = parent.children.find((c) => c.ipnsName === itemIpnsName);
+      if (!childRef) {
+        throw new Error(
+          `resolveShareWriteDescriptor: item ${itemIpnsName} not found in parent folder ${parentIpnsName}`
+        );
+      }
+
+      const itemPub = await this.resolvePublishedNode(itemIpnsName);
+      if (!itemPub) {
+        throw new Error(`resolveShareWriteDescriptor: cannot resolve item IPNS ${itemIpnsName}`);
+      }
+      const itemNodeId = itemPub.published.id;
+      const itemKind = itemPub.published.kind;
+
+      const writeChildRef = writeBodyParams.writeChildren?.find((wc) => wc.childId === itemNodeId);
+      if (!writeChildRef) {
+        throw new Error(
+          `resolveShareWriteDescriptor: item ${itemIpnsName} has no WriteChildRef in the parent write-body — cannot mint a write grant for an item with no write-chain entry`
+        );
+      }
+
+      // Derived item writeKey — this call is its terminal owner (D-09), zeroed
+      // in `finally` regardless of the wrapKey outcome.
+      let itemWriteKey: Uint8Array | null = await unsealChildWriteKey(
+        writeChildRef.writeKeySealed,
+        parentWriteKey,
+        itemNodeId,
+        itemKind,
+        childRef.generation
+      );
+
+      try {
+        const wrapped = await wrapKey(itemWriteKey, recipientPublicKey);
+        return bytesToHex(wrapped);
+      } finally {
+        itemWriteKey?.fill(0);
+        itemWriteKey = null;
+      }
+    });
+  }
+
+  /**
    * Conditional folder re-publish for lazy IPNS-key migration (TEE key-epoch
    * rotation).
    *
