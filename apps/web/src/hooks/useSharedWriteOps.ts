@@ -210,10 +210,22 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
    * zero it here (matches the established pattern; T-49-10 accepted).
    */
   const moveItemHandler = useCallback(
-    async (_item: SealedChildRef, _destFolderId: string, _destIpnsName: string) => {
-      throw new Error('not implemented — phase 65 (shared folder move requires Node write-chain)');
+    async (item: SealedChildRef, destFolderId: string, destIpnsName: string) => {
+      await runWrite(async (shareId) => {
+        const vaultPrivateKey = useAuthStore.getState().vaultKeypair?.privateKey;
+        if (!vaultPrivateKey) {
+          throw new Error('Not authenticated');
+        }
+        await getSdkClient().moveInSharedFolder(shareId, {
+          itemId: item.ipnsName,
+          destFolderId,
+          destIpnsName,
+          vaultPrivateKey,
+          getShareKeysFn: fetchShareKeys,
+        });
+      }, 'Shared folder move failed');
     },
-    []
+    [runWrite]
   );
 
   /**
@@ -225,16 +237,47 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
    */
   const batchMoveItemsHandler = useCallback(
     async (
-      _items: SealedChildRef[],
-      _destFolderId: string,
-      _destIpnsName: string,
-      _clearSelection: () => void
+      items: SealedChildRef[],
+      destFolderId: string,
+      destIpnsName: string,
+      clearSelection: () => void
     ) => {
-      throw new Error(
-        'not implemented — phase 65 (shared folder batch move requires Node write-chain)'
-      );
+      const shareId = p.currentShareId;
+      if (!shareId) {
+        p.setError('Write access not available');
+        return;
+      }
+      const vaultPrivateKey = useAuthStore.getState().vaultKeypair?.privateKey;
+      if (!vaultPrivateKey) {
+        p.setError('Not authenticated');
+        return;
+      }
+      p.setIsLoading(true);
+      p.setError(null);
+      try {
+        for (const item of items) {
+          await withRevocationGuard(() =>
+            getSdkClient().moveInSharedFolder(shareId, {
+              itemId: item.ipnsName,
+              destFolderId,
+              destIpnsName,
+              vaultPrivateKey,
+              getShareKeysFn: fetchShareKeys,
+            })
+          );
+        }
+        clearSelection();
+      } catch (err) {
+        const message = (err as Error).message || 'Shared folder batch move failed';
+        if (!message.includes('write access revoked')) {
+          p.setError(message);
+        }
+        logger.error('[SharedNav] Shared folder batch move failed:', err);
+      } finally {
+        p.setIsLoading(false);
+      }
     },
-    []
+    [p.currentShareId, p.setError, p.setIsLoading, withRevocationGuard]
   );
 
   return {
