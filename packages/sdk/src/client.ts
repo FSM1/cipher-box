@@ -23,7 +23,15 @@ import {
   ipnsControllerUnenrollBatch,
   sharesControllerRevokeForItems,
 } from '@cipherbox/api-client';
-import { clearBytes, unwrapKey, hexToBytes, deriveEd25519PublicKey } from '@cipherbox/crypto';
+import {
+  clearBytes,
+  unwrapKey,
+  hexToBytes,
+  deriveEd25519PublicKey,
+  generateEd25519Keypair,
+  generateRandomBytes,
+  deriveIpnsName,
+} from '@cipherbox/crypto';
 import pLimit from 'p-limit';
 import type {
   BinEntry,
@@ -34,6 +42,8 @@ import type {
 } from '@cipherbox/core';
 import {
   sealChildReadKey,
+  sealChildWriteKey,
+  sealNode,
   unsealChildReadKey,
   unsealChildWriteKey,
   unsealNode,
@@ -1033,29 +1043,189 @@ export class CipherBoxClient {
   }
 
   /**
-   * Create a new subfolder inside an existing folder.
+   * Create a new owned subfolder inside an existing folder.
    *
-   * Generates IPNS keypair and folder key, wraps with user's public key,
-   * adds folder entry to parent metadata, publishes parent IPNS record,
-   * and publishes empty folder metadata for the new subfolder.
+   * Mints an owned subfolder Node with its own write-body (ipnsPrivateKey +
+   * empty writeChildren), publishes it at seq 1n, then inserts a
+   * SealedChildRef into the parent read-body AND a WriteChildRef into the
+   * parent write-body and republishes the parent (D-03). Adapts the
+   * `createSharedSubfolder` build-path (shared-write.ts:288) to the owned
+   * (non-share) write chain.
    *
    * @param parentIpnsName - IPNS name of the parent folder
    * @param name - Name for the new subfolder
    * @returns Created folder's UUID, IPNS name, folder key, and IPNS private key
    */
-  /**
-   * @stub phase 63 (navigation/read fan-out): createSubfolder now returns
-   * { node: Node; ... } not { folder: FolderEntry; ... }. Phase 63 will seal
-   * the new Node under the parent's write-body and emit a SealedChildRef for
-   * the parent's updated children list.
-   */
   async createFolder(
     parentIpnsName: string,
     name: string
   ): Promise<{ id: string; ipnsName: string; folderKey: Uint8Array; ipnsPrivateKey: Uint8Array }> {
-    void parentIpnsName;
-    void name;
-    throw new Error('not implemented — phase 63 (create subfolder node)');
+    return this.withOperation('createFolder', async () => {
+      const parent = await this.requireFolder(parentIpnsName, 'Parent folder');
+
+      // Reconcile-before-publish (SC#3 / D-04): defer on any sequence mismatch.
+      await this.reconcileFolderSequence(parentIpnsName, parent.sequenceNumber);
+
+      // Preserve the parent's existing write chain — augmented below with the
+      // new child's WriteChildRef.
+      const parentWriteBodyParams = await this.getWriteBodyParams(parent);
+      if (!parentWriteBodyParams.writeKey) {
+        throw new Error(
+          `createFolder: parent folder ${parentIpnsName} has no writeKey — cannot mint an owned subfolder without a write-capable parent`
+        );
+      }
+      const parentWriteKey = parentWriteBodyParams.writeKey;
+      const parentWriteChildren = parentWriteBodyParams.writeChildren ?? [];
+
+      // Mint child keys — we own these until handed off to the caller / folderTree (D-09).
+      let childReadKey: Uint8Array | null = generateRandomBytes(32);
+      let childWriteKey: Uint8Array | null = generateRandomBytes(32);
+      const childKeypair = generateEd25519Keypair();
+      let childIpnsPrivateKey: Uint8Array | null = childKeypair.privateKey;
+
+      try {
+        const childIpnsName = await deriveIpnsName(childKeypair.publicKey);
+        const childId = crypto.randomUUID();
+        const now = Date.now();
+
+        const childNode: CoreNode = {
+          schema: 'node/v3',
+          kind: 'folder',
+          id: childId,
+          generation: 0,
+          createdAt: now,
+          modifiedAt: now,
+          children: [],
+          writeBody: {
+            ipnsPrivateKey: childIpnsPrivateKey,
+            writeChildren: [],
+          },
+        };
+
+        const childPublished = await sealNode(childNode, childReadKey, childWriteKey);
+
+        // First publish — sequenceNumber MUST be 1n (Phase-60 strict gate).
+        await sdkCore.createAndPublishIpnsRecord({
+          ipnsPrivateKey: childIpnsPrivateKey,
+          ipnsName: childIpnsName,
+          metadataCid: (
+            await sdkCore.addToIpfs(
+              this.ctx,
+              new TextEncoder().encode(JSON.stringify(childPublished))
+            )
+          ).cid,
+          sequenceNumber: 1n,
+          ctx: this.ctx,
+        });
+
+        // Build the parent's SealedChildRef (read-body — no write field, NODE-03).
+        const readKeySealed = await sealChildReadKey(
+          childReadKey,
+          parent.folderKey,
+          childId,
+          'folder',
+          0
+        );
+        const childEntry: SealedChildRef = {
+          name,
+          ipnsName: childIpnsName,
+          generation: 0,
+          versionFloor: 1n,
+          readKeySealed,
+        };
+
+        // Build the parent's WriteChildRef (write-body — role 0x04).
+        const writeKeySealed = await sealChildWriteKey(
+          childWriteKey,
+          parentWriteKey,
+          childId,
+          'folder',
+          0
+        );
+        const writeChildRef: WriteChildRef = { childId, writeKeySealed };
+
+        const baseChildren = [...parent.children];
+        const updatedChildren = [...parent.children, childEntry];
+        const updatedWriteChildren = [...parentWriteChildren, writeChildRef];
+
+        const { newSequenceNumber, publishedChildren } =
+          await sdkCore.updateFolderMetadataAndPublish({
+            children: updatedChildren,
+            baseChildren,
+            folderKey: parent.folderKey,
+            writeKey: parentWriteKey,
+            writeChildren: updatedWriteChildren,
+            ipnsPrivateKey: parent.ipnsKeypair.privateKey,
+            ipnsName: parentIpnsName,
+            sequenceNumber: parent.sequenceNumber,
+            ctx: this.ctx,
+            nodeId: parent.nodeId,
+            nodeGeneration: parent.nodeGeneration,
+          });
+
+        parent.children = publishedChildren;
+        parent.sequenceNumber = newSequenceNumber;
+        parent.lastLoadedAt = Date.now();
+        this.folderTree.set(parentIpnsName, parent);
+
+        // Register the new child so it is immediately usable (upload/rename/etc.)
+        // without a reload round-trip.
+        this.registerFolder(
+          childIpnsName,
+          childReadKey,
+          { publicKey: childKeypair.publicKey, privateKey: childIpnsPrivateKey },
+          [],
+          1n,
+          childId,
+          0,
+          childWriteKey
+        );
+
+        this.emitter.emit({
+          type: 'folder:updated',
+          folderId: parentIpnsName,
+          ipnsName: parentIpnsName,
+          children: publishedChildren,
+          sequenceNumber: newSequenceNumber,
+        });
+
+        // Scope-exit rotation (SC#2/SC#4): the parent's read chain may need
+        // rotation now that a new child scope has been entered under it.
+        await this.performScopeExitRotation({
+          ancestorIpnsNames: [parentIpnsName],
+          rootNodeIpnsName: parentIpnsName,
+          rootNodeId: parent.nodeId,
+          rootReadKey: parent.folderKey,
+          rootIpnsPrivateKey: parent.ipnsKeypair.privateKey,
+          rootIpnsPublicKey: parent.ipnsKeypair.publicKey,
+        });
+
+        // registerFolder() made its own defensive copies (D-09), so a copy
+        // handed back to the caller here is independent of the local buffers
+        // this function zeroes below.
+        const result = {
+          id: childId,
+          ipnsName: childIpnsName,
+          folderKey: new Uint8Array(childReadKey),
+          ipnsPrivateKey: new Uint8Array(childIpnsPrivateKey),
+        };
+
+        childReadKey.fill(0);
+        childReadKey = null;
+        childWriteKey.fill(0);
+        childWriteKey = null;
+        childIpnsPrivateKey.fill(0);
+        childIpnsPrivateKey = null;
+
+        return result;
+      } catch (err) {
+        // Zero minted keys on failure — never zero caller-supplied keys (D-09).
+        childReadKey?.fill(0);
+        childWriteKey?.fill(0);
+        childIpnsPrivateKey?.fill(0);
+        throw err;
+      }
+    });
   }
 
   /**
