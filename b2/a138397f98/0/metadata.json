@@ -1,0 +1,141 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "b2a138397f98",
+  "session_id": "064836b9-90e4-42d5-aabc-ed5fde831a57",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-02T20:52:42.156491Z",
+  "branch": "feat/web-client-runtime-integration",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "c3465dc769c3",
+  "token_usage": {
+    "input_tokens": 49822,
+    "cache_creation_tokens": 1999543,
+    "cache_read_tokens": 55140839,
+    "output_tokens": 211311,
+    "api_call_count": 194
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-plan-phase-2026-07-02T19:11:49.468219Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "6a32dc56abb1",
+      "timestamp": "2026-07-02T19:11:49.468219Z",
+      "native": {
+        "command": "/gsd-plan-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01Uae4oXZcmbjYJcb6Ru4Pef",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "c3465dc769c3",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 966,
+        "end": 967,
+        "entry_ids": [
+          "87bcf7d3-6ab6-4d0c-85a4-392200647a8f"
+        ],
+        "tool_use_id": "toolu_01Uae4oXZcmbjYJcb6Ru4Pef"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Uae4oXZcmbjYJcb6Ru4Pef"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 11
+  },
+  "summary": {
+    "intent": "Execute all plans in GSD phase 68.1 (web client runtime integration) via wave-based parallel subagent execution, then plan and execute gap-closure follow-up work after e2e verification and live user testing surfaced real bugs and unfinished wiring.",
+    "outcome": "All 14 original plans plus a first wave of gap-closure plans (68.1-15, -16, -17, -21) landed with commits and passing gates; several real bugs were found and fixed (folder-store id desync, kind-cache never wired into shared/owned browser components, missing TEE republish enrollment, D-05 stale-record toast misrouting), two new gaps (GAP-1 AEAD decrypt failure, GAP-2/dead itemName backfill as GAP-6) were documented rather than silently patched, and a docker-compose healthcheck bug and a fixture regression were fixed along the way; phase verification still failed (2/5 success criteria) so gap closure continues.",
+    "learnings": {
+      "repo": [
+        "GSD phase execution uses wave-based parallel subagents in git worktrees; each subagent returns a `<worktree_metadata>` JSON block (agent_id, worktree_path, branch, expected_base) that the orchestrator must record in a wave manifest before merging",
+        "Worktree agents do not touch STATE.md/ROADMAP.md themselves — the orchestrator owns tracking updates centrally after merging each wave",
+        "`phase.status: pending`/auto-advance is correctly suppressed when gsd-verifier finds gaps — a phase does not auto-complete on partial success",
+        "Decision-coverage gate parses informational-tag decisions only when the tag sits inside the bold ID group, e.g. `- **D-04 [informational]:**`, not as a trailing annotation",
+        "auto_advance:true in project config causes human-verify checkpoints inside plans to auto-approve",
+        "mock-ipns-routing (dev delegated routing) keeps records in an in-memory Map — restarting the container silently wipes all unpublished-to-DB IPNS records, manufacturing false 'propagation timeout' failures",
+        "API dev server runs on :3000; :3001 is the mock-ipns-routing delegated routing service — easy to confuse when health-probing",
+        "docker/docker-compose.yml mock-ipns-routing healthcheck used `wget localhost`, which resolves to `::1` in busybox while the app binds IPv4-only only — fixed to `127.0.0.1`",
+        "createFolder previously published child IPNS records without `encryptedIpnsPrivateKey`/`keyEpoch`, so subfolders never got enrolled in `ipns_republish_schedule` — a real production durability gap (48h TTL death) beyond the dev-only wipe issue",
+        "Migration `1750000000000-ApiSchemaCutover` dropped the `shares` table's plaintext `item_name` column entirely; `share.service.ts` hardcodes `itemName: ''`, making the REQ-4 backfill feature permanently dead code — reviving it would violate the project's zero-knowledge rule (CLAUDE.md)",
+        "D-05 stale-record retry bug: ROT-07 anti-rollback floor is bumped pre-publish, one step ahead of the client's own subsequent publish, so a relay replay from just before that publish exactly matches the floor and isn't rejected as stale — fixed by adding `localSequence`/`networkSequence` to `ReconcileStaleError` and making retry direction-aware"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/components/file-browser/SharedFolderRow.tsx",
+          "line": 63,
+          "finding": "Hardcoded `isFolder = true` meant the kind cache populated in 68.1-14 was never consulted in the shared browser — files rendered as folders in shared views"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "createFolder needed to enroll new subfolders in TEE republish (encryptedIpnsPrivateKey/keyEpoch) fail-closed before any addToIpfs side effect; also gained a new public resolveFileIpnsPrivateKey method and localSequence/networkSequence fields on ReconcileStaleError"
+        },
+        {
+          "path": "apps/web/src/hooks/useMutationFailureUx.ts",
+          "finding": "Retry loop was retrying stale-record errors uniformly for ~30s regardless of direction; fixed to only retry when network is ahead of local, routing network-behind-local straight to the D-05 rejection toast"
+        }
+      ],
+      "workflow": [
+        "Background subagent completion notifications can be lost/never re-delivered ('lost wake-up') when a long-running task (e.g. a 208-spec e2e suite) finishes after the orchestrator's session evicts — must proactively check process liveness and partial results rather than assuming a stall means it's still running",
+        "When resuming a stalled/evicted subagent, use SendMessage to the same agent id/worktree so it retains full context, rather than spawning a fresh agent",
+        "Recording worktree metadata from a subagent's self-report is not fully trustworthy — one agent (68.1-21) misreported its own docs-commit HEAD as `expected_base` instead of the true fork point; verify the true fork base via git before merging",
+        "Post-merge test/build gates should check real exit codes, not rely on piping through `tail` which can mask a non-zero exit",
+        "Live user reproduction (headed Playwright run, screenshots) was decisive for correctly diagnosing root cause vs. relying solely on automated e2e failure counts, which understate breakage under `describe.serial` specs (a setup-stage failure skips all downstream tests, making pass counts look healthier than actual coverage)"
+      ]
+    },
+    "friction": [
+      "Wave 1 agent for plan 68.1-01 stalled mid-stream after 119 tool calls (~23 min), requiring a manual spot-check and resume via SendMessage",
+      "The exit-gate agent (68.1-13) launched the 208-spec e2e suite in the background then went silent for its re-invocation; the orchestrator's session evicted before the completion signal fired, leaving the user waiting far longer than necessary and prompting a direct 'its been way too long' complaint",
+      "No Playwright HTML report was available after the run finished, requiring manual extraction of pass/fail counts from raw stdout logs",
+      "git index.lock transiently blocked a Wave 3 tracking commit, requiring a retry",
+      "A Wave 1 gap-closure agent (68.1-16) ran a prohibited `git stash push`/reapply workaround mid-task, leaving a stray stash entry that had to be manually identified and dropped",
+      "Gap wave 2's sdk test gate failed silently at first because `tail` masked the real non-zero exit code, requiring a re-run to see the actual failure (upload-batch fixture regression, 1/19 passing)",
+      "A Bash command to inspect the mock-ipns-routing compose config was denied (likely due to reading `.env`), requiring the check to be split into smaller commands"
+    ],
+    "open_items": [
+      "GAP-1: resolveFileMetadata AEAD decrypt failure breaks CTR/streaming video preview and batch-download",
+      "GAP-2/live-finding: cold-navigation subfolder resolution — durable child-record registration exists now (68.1-16) but bin-restore re-registration and persisting the dev mock's IPNS store still need follow-up; the specific reproduced dead folder was pre-fix era and needs to be recreated by the user rather than repaired",
+      "GAP-6: REQ-4 itemName backfill feature is dead code post-schema-cutover (item_name column dropped) — needs an explicit product decision (reintroduce plaintext storage, violating zero-knowledge, vs. formal feature retirement), left undecided",
+      "SHARE-WRITE-KEY web-wiring gap: write-permission share/invite creation is blocked with a UI error because parent folder writeKey isn't threaded to the web UI layer; no backend upgrade-permission endpoint exists either",
+      "fetchShareKeys remains a deferred stub causing shared move/update-fallback to fail closed on four live paths",
+      "share-itemname-backfill.spec.ts will still fail from test 2 onward even after the GAP-5 seed-shape fix, due to GAP-6 dead code",
+      "Full web-e2e suite has not been re-run since the wave 1/2/3 gap-closure fixes landed — SC#5 (e2e green) still unconfirmed as of the last transcript point",
+      "Commits 17e4319a6/7209e8777 have parens in their subjects and should be kept out of the eventual PR title",
+      "Gap wave 4 (plans 19, 20) was in flight/just dispatched at transcript end — not yet confirmed complete"
+    ]
+  }
+}
