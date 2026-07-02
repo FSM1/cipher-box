@@ -1,4 +1,5 @@
 import type { SealedChildRef } from '@cipherbox/core';
+import { getKind } from '../lib/kind-cache';
 
 /** Extensions recognized as editable text files. */
 const TEXT_EXTENSIONS = new Set([
@@ -128,19 +129,22 @@ export function isPreviewableFile(name: string): boolean {
 }
 
 /**
- * Type guard: narrows SealedChildRef to a "file-kind" ref by checking ipnsName presence.
- * In node/v3 all children are SealedChildRef — kind discrimination requires reading
- * the child Node itself (phase 63).
- * @stub phase 63 — file vs folder discrimination via Node.kind
+ * Type guard: narrows SealedChildRef to a "file-kind" ref (D-02).
+ *
+ * `SealedChildRef` carries no `kind` field (NODE-03) — kind discrimination reads
+ * the kind cache (kind-cache.ts), populated by `resolveKinds` from the child's own
+ * plaintext `PublishedNode.kind`. Synchronous by design (called in render-time list
+ * mapping across many components). A cache miss defaults to `false` (folder-safe —
+ * renders as a folder row rather than mis-opening a file preview); folder-load
+ * populates the cache before render, so a miss is a transient.
  */
-export function isFileRef(_item: SealedChildRef): boolean {
-  throw new Error('not implemented — phase 63 (file/folder kind discrimination via Node.kind)');
+export function isFileRef(item: SealedChildRef): boolean {
+  return getKind(item.ipnsName) === 'file';
 }
 
 /**
  * Alias for isFileRef — kept as isFilePointer for component-layer compile compatibility.
- * @stub phase 63 — file vs folder discrimination via Node.kind
  */
-export function isFilePointer(_item: SealedChildRef): boolean {
-  throw new Error('not implemented — phase 63 (file/folder kind discrimination via Node.kind)');
+export function isFilePointer(item: SealedChildRef): boolean {
+  return isFileRef(item);
 }
