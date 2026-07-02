@@ -23,7 +23,7 @@
  *   - Never logs key material (T-62-03).
  */
 
-import { createIpnsRecord, marshalIpnsRecord, sealNode } from '@cipherbox/core';
+import { createIpnsRecord, marshalIpnsRecord, sealNode, unsealNode } from '@cipherbox/core';
 import type { Node, NodeContent, PublishedNode, EncryptionMode } from '@cipherbox/core';
 import {
   generateRandomBytes,
@@ -32,9 +32,11 @@ import {
   wrapKey,
   bytesToHex,
   hexToBytes,
+  decryptAesGcm,
+  decryptAesCtr,
 } from '@cipherbox/crypto';
-import type { SdkContext, TeeKeys } from '../types';
-import { addToIpfs } from '../ipfs';
+import type { SdkContext, TeeKeys, DownloadProgressCallback } from '../types';
+import { addToIpfs, fetchFromIpfs } from '../ipfs';
 import { resolveIpnsRecord } from '../ipns';
 
 /** IPNS record lifetime: 24 hours in milliseconds */
@@ -43,9 +45,8 @@ const IPNS_LIFETIME_MS = 24 * 60 * 60 * 1000;
 /** Maximum number of past versions retained per file (VER-04) */
 const MAX_VERSIONS_PER_FILE = 10;
 
-// Suppress unused import/const warnings — consumed by Tasks 2/3 (resolveFileMetadata /
-// updateFileMetadata) implemented later in this plan.
-void resolveIpnsRecord;
+// Suppress unused const warning — consumed by Task 3 (updateFileMetadata) implemented
+// later in this plan.
 void MAX_VERSIONS_PER_FILE;
 
 // ---------------------------------------------------------------------------
@@ -60,6 +61,15 @@ function bytesToBase64(bytes: Uint8Array): string {
     result += String.fromCharCode(...chunk);
   }
   return btoa(result);
+}
+
+function base64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) {
+    bytes[i] = bin.charCodeAt(i);
+  }
+  return bytes;
 }
 
 /** Record payload ready for batch publish */
@@ -283,18 +293,59 @@ export async function createFileMetadata(params: {
 /**
  * Resolve a file's per-IPNS metadata record.
  *
- * @stub 68.1-07 Task 2 — will resolve the file Node IPNS name, fetch the
- * PublishedNode, and unseal the content under the file readKey.
+ * Resolves the file IPNS name, fetches the PublishedNode, and unseals the content
+ * under the file readKey (read-only — no writeKey needed).
+ *
+ * @security Does NOT zero fileReadKey — caller is the terminal owner (D-09). The
+ *   returned content.fileKey is caller-owned and NOT zeroed here.
  */
 export async function resolveFileMetadata(
   fileMetaIpnsName: string,
-  folderKey: Uint8Array,
+  fileReadKey: Uint8Array,
   ctx: SdkContext
-): Promise<{ metadata: unknown; metadataCid: string }> {
-  void fileMetaIpnsName;
-  void folderKey;
-  void ctx;
-  throw new Error('not implemented — 68.1-07 Task 2 (write-chain file node seal)');
+): Promise<{ metadata: NodeContent; metadataCid: string }> {
+  const resolved = await resolveIpnsRecord(fileMetaIpnsName, ctx);
+  if (!resolved) {
+    throw new Error(`resolveFileMetadata: IPNS record not found for ${fileMetaIpnsName}`);
+  }
+  const raw = await fetchFromIpfs(ctx, resolved.cid);
+  const publishedNode = JSON.parse(new TextDecoder().decode(raw)) as PublishedNode;
+  const node = await unsealNode(publishedNode, fileReadKey);
+
+  if (node.kind !== 'file' || !node.content) {
+    throw new Error(`resolveFileMetadata: node at ${fileMetaIpnsName} is not a file node`);
+  }
+
+  return { metadata: node.content, metadataCid: resolved.cid };
+}
+
+/**
+ * Download and decrypt a file's content using its raw (non-ECIES-wrapped) fileKey.
+ *
+ * Fetches the CID from IPFS and decrypts with the raw fileKey recovered from a
+ * resolved NodeContent (D-07/NODE-02 — the v3 model stores fileKey raw inside the
+ * sealed read-body, never ECIES-wrapped). `fileIv` is base64 (matches NodeContent.fileIv).
+ *
+ * @security Does NOT zero fileKey — it is caller-supplied (from a previously resolved
+ *   NodeContent); the caller remains the terminal owner (D-09), matching the web
+ *   layer's own downloadSharedFile pattern (useSharedNavigationActions.ts).
+ */
+export async function downloadFileContent(params: {
+  cid: string;
+  /** Raw 32-byte AES-256 file key (caller-owned — NOT zeroed here) */
+  fileKey: Uint8Array;
+  /** Base64 IV (matches NodeContent.fileIv) */
+  fileIv: string;
+  encryptionMode?: EncryptionMode;
+  ctx: SdkContext;
+  onProgress?: DownloadProgressCallback;
+}): Promise<Uint8Array> {
+  const ciphertext = await fetchFromIpfs(params.ctx, params.cid, params.onProgress);
+  const iv = base64ToBytes(params.fileIv);
+
+  return params.encryptionMode === 'CTR'
+    ? decryptAesCtr(ciphertext, params.fileKey, iv)
+    : decryptAesGcm(ciphertext, params.fileKey, iv);
 }
 
 /**
