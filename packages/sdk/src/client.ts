@@ -2068,9 +2068,17 @@ export class CipherBoxClient {
         const registeredSuccesses: FileResult[] = [];
         for (const success of successes) {
           try {
+            // v3 file Node read chain (D-07/NODE-02): the parent's SealedChildRef
+            // must wrap the file Node's OWN readKey (fileReadKey, used later by
+            // resolveFileMetadata's unsealChildReadKey + unsealNode to recover the
+            // file's PublishedNode). It must NOT wrap the content-encryption key
+            // (fileKey, used only to decrypt the file bytes themselves) -- these are
+            // two independently-minted 32-byte keys. uploadFile()'s single-shot path
+            // (above) already sealed fileReadKey correctly; this batch path had been
+            // left on the pre-node/v3 field name since 68.1-07 introduced the split.
             const { updatedChildren } = await sdkCore.addFilePointerToFolder({
               children: mergedChildren,
-              childReadKey: success.uploadResult.fileKey,
+              childReadKey: success.uploadResult.fileReadKey,
               parentReadKey: folder.folderKey,
               childId: success.fileId,
               childKind: 'file',
@@ -2189,9 +2197,17 @@ export class CipherBoxClient {
           failures,
         };
       } finally {
-        // Clear file keys for all uploads (including collision-failed ones)
+        // Clear file keys for all uploads (including collision-failed ones).
+        // fileReadKey is sealed into the parent's read-body above (this call
+        // site is its terminal owner, D-09); fileWriteKey is never consumed
+        // by this batch path (WriteChildRef insertion for uploadFiles is out
+        // of scope — matches the pre-existing comment above on
+        // getWriteBodyParams) but is zeroed here regardless rather than left
+        // to linger unzeroed in memory.
         for (const success of successes) {
           clearBytes(success.uploadResult.fileKey);
+          clearBytes(success.uploadResult.fileReadKey);
+          clearBytes(success.uploadResult.fileWriteKey);
         }
       }
     });
