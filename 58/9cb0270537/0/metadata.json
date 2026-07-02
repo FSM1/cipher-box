@@ -1,0 +1,260 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "589cb0270537",
+  "session_id": "85a26432-c908-42fd-b330-ccdbcff237de",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-02T12:51:55.726605Z",
+  "branch": "feat/web-client-runtime-integration",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    ".planning/ROADMAP.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-fable-5",
+  "turn_id": "9da3107e90d8",
+  "token_usage": {
+    "input_tokens": 73401,
+    "cache_creation_tokens": 1453063,
+    "cache_read_tokens": 60658002,
+    "output_tokens": 203637,
+    "api_call_count": 288
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-ship-phase-2026-07-01T22:58:47.220411Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "f0c28e598242",
+      "timestamp": "2026-07-01T22:58:47.220411Z",
+      "native": {
+        "command": "/ship-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/ship-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01PgzfX1YfmnUp1rK8BmUbQA",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-secure-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "9da3107e90d8",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 103,
+        "end": 104,
+        "entry_ids": [
+          "ce8a41ef-337e-48f8-a250-f1e557563f5e"
+        ],
+        "tool_use_id": "toolu_01PgzfX1YfmnUp1rK8BmUbQA"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01PgzfX1YfmnUp1rK8BmUbQA"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-secure-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_0151E7BZVs1WRQYiBYs3FgmT",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-validate-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "9da3107e90d8",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 159,
+        "end": 160,
+        "entry_ids": [
+          "8054fe6b-99cb-464b-8eec-c76dd0e56a05"
+        ],
+        "tool_use_id": "toolu_0151E7BZVs1WRQYiBYs3FgmT"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_0151E7BZVs1WRQYiBYs3FgmT"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-validate-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01ShLXV66nxBn8Kog2tjn9im",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-extract-learnings"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "9da3107e90d8",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 1104,
+        "end": 1105,
+        "entry_ids": [
+          "0a050491-5324-4364-9238-ebf5617d57e5"
+        ],
+        "tool_use_id": "toolu_01ShLXV66nxBn8Kog2tjn9im"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01ShLXV66nxBn8Kog2tjn9im"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-extract-learnings",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01Y7J1SjVBmg46uj61Mr9DkW",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-ship"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "9da3107e90d8",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 1228,
+        "end": 1229,
+        "entry_ids": [
+          "d729910e-91bb-412d-b872-8ac0651020ea"
+        ],
+        "tool_use_id": "toolu_01Y7J1SjVBmg46uj61Mr9DkW"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Y7J1SjVBmg46uj61Mr9DkW"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-ship",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 9
+  },
+  "summary": {
+    "intent": "Autonomously run the full post-execution ship pipeline for GSD Phase 68 (web rotation UX / durable anti-rollback client state) in cipher-box: verify, secure, validate, simplify, SDK E2E gate, CodeRabbit review, ship, resolve all PR review threads (CodeRabbit + Greptile), and extract learnings — without user babysitting.",
+    "outcome": "Shipped PR #587 with all gates passed (security 41/41 closed, validation 0 gaps, SDK E2E 12/12, CodeRabbit CLI 28→0 in-scope); fixed several real bugs (crypto zeroization-order bug, missing signature-verification guard, anti-rollback transaction gap, NaN/negative fail-closed validation); resolved 13+ PR review threads across multiple CodeRabbit/Greptile re-review rounds; work was interrupted by the user during a final late-thread sweep before the closing report (final SHA/CI status/merge decision) could be delivered.",
+    "learnings": {
+      "repo": [
+        "SDK E2E suite (`pnpm --filter @cipherbox/sdk-e2e test`) is the only suite exercising the real client→API IPNS publish/resolve round-trip; unit suites mock the boundary and miss integration regressions — never skip this gate when a phase touches IPNS publish/resolve, sequencing/CAS, or key lifecycle.",
+        "CI's Test job never runs apps/web vitest and root `pnpm typecheck` excludes apps/api tsc — pre-existing failures in those areas are not ship blockers but should still be captured as todos.",
+        "tee-worker is a separate Docker container with its own release cadence (Phase 67 lease-renewer contract); a stale container silently 404s on `/republish` and must be rebuilt (`docker compose build tee-worker && up -d`) when local SDK E2E fails on renewal tests.",
+        "Rotation floors/context (ResolveRotationContext, high-water marks) are keyed by `ipnsName`, not a separate node id — CodeRabbit repeatedly flagged this as a bug but it matches the documented SealedChildRef contract.",
+        "`gh` CLI calls inside the sandboxed Bash tool can hit `dial tcp i/o timeout`; the error string gets misparsed as an empty/'0 pending' result by naive polling loops, producing false 'all settled' positives — happened at least twice in this session.",
+        "CodeRabbit and Greptile both re-review new commits pushed to a PR, generating fresh findings each round; a ship pipeline needs to loop fix→push→reply/resolve→poll until a round produces zero new findings, not just once."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "enumerateMoveDescendants zeroed the parent readKey in a `finally` block before the children loop's `unsealChildReadKey` call finished using it, misclassifying every depth-2+ move descendant as unreadable — real bug found by the simplify pass, fixed with red-green-verified regression tests."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "reconcileFolderSequence called enforceResolved on a resolve without the `signatureVerified` guard the read path already had — a forged relay record with an inflated sequence could permanently wedge mutations by bumping the durable floor; fixed late in review (Greptile P1) with a regression test."
+        },
+        {
+          "path": "packages/sdk/src/state/rotation-high-water.ts",
+          "finding": "enforceResolved did not reject NaN/negative/fractional generation or sequence values, silently bypassing the anti-rollback regression gate; hardened to fail-closed on malformed input, including a malformed cold-device versionFloor."
+        },
+        {
+          "path": "apps/api/src/shares/shares.service.ts",
+          "finding": "updateGrant lacked a transaction/lock and an anti-rollback check on rootGeneration; wrapped in `dataSource.transaction` with `pessimistic_write` lock and a `ConflictException` when the new rootGeneration regresses."
+        },
+        {
+          "path": "apps/web/src/services/rotation-state.service.ts",
+          "finding": "idbPut wrote floors without max-preserving against the existing value inside one transaction; fixed to read-then-Math.max-then-put atomically to avoid regressing a durable floor under concurrent writes."
+        }
+      ],
+      "workflow": [
+        "A background command reporting exit code 0 can still mask a real failure if downstream reporting (e.g. `tail`) truncates output — always read the full output file, not just the exit-code notification.",
+        "Red-green verification (temporarily revert the fix, confirm the new test fails, restore the fix, confirm it passes) is a reliable way to prove a regression test actually catches the bug it targets, not just that it's green.",
+        "Triage rule that worked well: in-scope + low-risk findings get fixed immediately with a committed regression test; pre-existing/out-of-domain/risky findings get a dated todo file under `.planning/todos/pending/` with file refs, never silently dropped or silently fixed.",
+        "When polling GitHub check status via backgrounded/unsandboxed gh calls, harden the loop against transient network timeouts (verify with a direct unsandboxed re-check) before trusting a 'settled' signal."
+      ]
+    },
+    "friction": [
+      "First SDK E2E run appeared to pass (exit 0) but actually had a failing renewal test masked by truncated log output — required manual investigation to surface.",
+      "Local tee-worker container was running a stale pre-Phase-67 contract, causing spurious renewal test failures unrelated to the phase's code.",
+      "API's TEE_WORKER_URL defaulted to :3001 (mock-ipns-routing) instead of the real tee-worker at :3002, causing another false failure requiring diagnosis.",
+      "apps/web's ipns.service.test.ts failed locally with a confusing 'No createAxiosInstance export' mock error; took extensive diffing against main before concluding it was pre-existing and outside CI, not a phase regression.",
+      "Sandboxed Bash's gh calls timed out on network access, and the resulting error string was misinterpreted by a polling loop as 'reviews settled,' producing at least two false-positive completions that had to be caught and re-verified.",
+      "Edit tool repeatedly failed with 'File modified since read' because lint-staged/commit hooks rewrote files during the commit step, requiring re-reads and re-edits.",
+      "zsh quirks (bare `echo ===X===` interpreted as a command, working directory persisting into apps/api and breaking relative paths) caused minor command failures.",
+      "CodeRabbit and Greptile kept surfacing new findings after each fix-and-push cycle, extending the review-resolution loop across many rounds (28→2→0, then 7 more threads, then 2 more late Greptile findings) before it could close out.",
+      "Session hit its usage/session limit mid-pipeline, requiring a user 'continue' to resume, and was ultimately interrupted by the user during the final late-thread sweep before the closing report could be delivered."
+    ],
+    "open_items": [
+      "Deliver the final ship-phase report for PR #587: final commit SHA, CI status, thread-resolution count, and full deferred-todo list — was in progress when the user interrupted.",
+      "Todo: web vitest is not run in CI and packages/web ipns.service.test.ts is broken (pre-existing, fails on main too).",
+      "Todo: WRITE-03 refresh-access path has no live trigger.",
+      "Todo: retire dead SDK share scaffolding (incl. owner-reconcile fetch short-circuit).",
+      "Todo: rotation-hardening follow-ups — cross-store bump atomicity, RotateReadResult.readKey terminal ownership, IDB connection caching, per-root badge tracking, reconcile-gate generation sourced from cache instead of freshly-resolved record, engine's dirty-resume republish result being dropped.",
+      "Merge decision for PR #587 left to the user, per operating rules — not yet made as of the interruption."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-02T12:51:07.637663Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 249,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 249,
+    "total_lines_changed": 253,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
