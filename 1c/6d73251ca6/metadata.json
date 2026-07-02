@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "1c6d73251ca6",
+  "strategy": "manual-commit",
+  "branch": "feat/web-client-runtime-integration",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "apps/web/src/hooks/useFolderMutations.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/1c/6d73251ca6/0/metadata.json",
+      "transcript": "/1c/6d73251ca6/0/full.jsonl",
+      "content_hash": "/1c/6d73251ca6/0/content_hash.txt",
+      "prompt": "/1c/6d73251ca6/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 43350,
+    "cache_creation_tokens": 737588,
+    "cache_read_tokens": 16152077,
+    "output_tokens": 105068,
+    "api_call_count": 89
+  }
+}
