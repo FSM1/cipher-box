@@ -265,25 +265,142 @@ export class CipherBoxClient {
   }
 
   /**
+   * DFS walk of a resolved node's children, returning every descendant's own
+   * IPNS name (the node itself is NOT included — callers prepend it).
+   *
+   * Best-effort (T-68.1-02-01): an unreadable descendant is logged and
+   * skipped rather than throwing, so a bad hop never wedges the fire-and-forget
+   * unenroll/unpin flow on an otherwise-normal delete/empty-bin. A descendant
+   * that fails to resolve/unseal still contributes its own `childRef.ipnsName`
+   * to the result (best-effort unenroll of the leaf itself) but is not
+   * descended into further.
+   *
+   * Bounded to `UNENROLL_COLLECT_CONCURRENCY` concurrent hops (T-68.1-02-01).
+   * Zeroes every minted childReadKey; never zeroes `nodeReadKey` (caller-owned, D-09).
+   */
+  private async collectDescendantIpnsNames(
+    nodeReadKey: Uint8Array,
+    nodeChildren: SealedChildRef[]
+  ): Promise<string[]> {
+    const limit = pLimit(UNENROLL_COLLECT_CONCURRENCY);
+    const results = await Promise.all(
+      nodeChildren.map((childRef) =>
+        limit(async (): Promise<string[]> => {
+          try {
+            const childResolved = await this.resolvePublishedNode(childRef.ipnsName);
+            if (!childResolved) return [childRef.ipnsName];
+            if (
+              childResolved.published.kind !== 'folder' &&
+              childResolved.published.kind !== 'root'
+            ) {
+              return [childRef.ipnsName];
+            }
+
+            let childReadKey: Uint8Array | null = null;
+            try {
+              childReadKey = await unsealChildReadKey(
+                childRef.readKeySealed,
+                nodeReadKey,
+                childResolved.published.id,
+                childResolved.published.kind,
+                childRef.generation
+              );
+              const childNode = await unsealNode(childResolved.published, childReadKey);
+              const nested = await this.collectDescendantIpnsNames(
+                childReadKey,
+                childNode.children ?? []
+              );
+              return [childRef.ipnsName, ...nested];
+            } finally {
+              childReadKey?.fill(0);
+            }
+          } catch (err) {
+            console.warn(
+              `[CipherBox] subtree collect: unreadable descendant ${childRef.ipnsName}:`,
+              err
+            );
+            return [childRef.ipnsName];
+          }
+        })
+      )
+    );
+    return results.flat();
+  }
+
+  /**
    * Extract IPNS names from a removed SealedChildRef (file or folder subtree).
    *
-   * @stub phase 65 (bin re-link): SealedChildRef has no type discriminant; the
-   * phase-65 subtree walk will traverse Node children via the read-chain.
+   * Resolves the item's own PublishedNode to learn its plaintext id/kind, then
+   * (for a folder/root) recovers its readKey from `item.readKeySealed` under
+   * `parentReadKey` and walks its descendants. A file leaf contributes only
+   * its own ipnsName. Best-effort (T-68.1-02-01): an unresolvable/unreadable
+   * item still contributes its own ipnsName so unenroll/unpin proceeds.
+   *
+   * @param parentReadKey - readKey of the folder `item` was just removed from
+   *   (caller-owned — NOT zeroed here, D-09).
    */
-  private async collectRemovedItemIpnsNames(item: SealedChildRef): Promise<string[]> {
-    void item;
-    throw new Error('not implemented — phase 65 (bin re-link: subtree IPNS collect)');
+  private async collectRemovedItemIpnsNames(
+    item: SealedChildRef,
+    parentReadKey: Uint8Array
+  ): Promise<string[]> {
+    try {
+      const resolved = await this.resolvePublishedNode(item.ipnsName);
+      if (!resolved) return [item.ipnsName];
+      if (resolved.published.kind !== 'folder' && resolved.published.kind !== 'root') {
+        return [item.ipnsName];
+      }
+
+      let itemReadKey: Uint8Array | null = null;
+      try {
+        itemReadKey = await unsealChildReadKey(
+          item.readKeySealed,
+          parentReadKey,
+          resolved.published.id,
+          resolved.published.kind,
+          item.generation
+        );
+        const itemNode = await unsealNode(resolved.published, itemReadKey);
+        const descendants = await this.collectDescendantIpnsNames(
+          itemReadKey,
+          itemNode.children ?? []
+        );
+        return [item.ipnsName, ...descendants];
+      } finally {
+        itemReadKey?.fill(0);
+      }
+    } catch (err) {
+      console.warn(`[CipherBox] subtree collect: unreadable removed item ${item.ipnsName}:`, err);
+      return [item.ipnsName];
+    }
   }
 
   /**
    * Extract IPNS names from a BinEntry (node ref and/or folder subtree).
    *
-   * @stub phase 65 (bin re-link): BinEntry.filePointer / .folderEntry removed;
-   * phase-65 implementation reads from BinEntry.nodeRef instead.
+   * Reads from `entry.nodeRef` / `entry.nodeReadKey` / `entry.nodeIpnsName`
+   * (`filePointer`/`folderEntry` were removed — [62-05]). A folder/root entry
+   * is walked via `collectDescendantIpnsNames` using the node's own children
+   * (already plaintext inside `nodeRef`, since the bin blob itself is
+   * ECIES-encrypted to the owner) and its captured `nodeReadKey`. A file entry
+   * or an entry missing the required fields (legacy/incomplete row) contributes
+   * only its own ipnsName (or nothing, if even that is absent).
    */
   private async collectBinEntryIpnsNames(entry: BinEntry): Promise<string[]> {
-    void entry;
-    throw new Error('not implemented — phase 65 (bin re-link: subtree IPNS collect)');
+    if (!entry.nodeIpnsName) return [];
+    if (!entry.nodeRef || !entry.nodeReadKey) return [entry.nodeIpnsName];
+    if (entry.nodeRef.kind !== 'folder' && entry.nodeRef.kind !== 'root') {
+      return [entry.nodeIpnsName];
+    }
+    try {
+      const descendants = await this.collectDescendantIpnsNames(
+        entry.nodeReadKey,
+        entry.nodeRef.children ?? []
+      );
+      return [entry.nodeIpnsName, ...descendants];
+    } catch (err) {
+      console.warn(`[CipherBox] subtree collect: bin entry ${entry.id} descend failed:`, err);
+      return [entry.nodeIpnsName];
+    }
   }
 
   /**
@@ -1556,7 +1673,7 @@ export class CipherBoxClient {
       });
 
       // 6. Fire-and-forget IPNS unenrollment (resolve async collection then dispatch)
-      this.collectRemovedItemIpnsNames(removedItem)
+      this.collectRemovedItemIpnsNames(removedItem, folder.folderKey)
         .then((names) => this.fireAndForgetUnenroll(names))
         .catch((err) => console.warn('[CipherBox] IPNS unenroll collection failed:', err));
 
