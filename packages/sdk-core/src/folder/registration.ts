@@ -15,7 +15,7 @@
  */
 
 import { sealNode, unsealNode } from '@cipherbox/core';
-import type { Node, PublishedNode, SealedChildRef } from '@cipherbox/core';
+import type { Node, PublishedNode, SealedChildRef, WriteChildRef } from '@cipherbox/core';
 import {
   generateEd25519Keypair,
   generateRandomBytes,
@@ -148,13 +148,19 @@ export async function createSubfolder(params: {
  * @param params.baseChildren   - Base snapshot for three-way merge on conflict
  * @param params.readKey        - 32-byte AES-256 readKey (canonical; phase 63+)
  * @param params.folderKey      - 32-byte AES-256 readKey (backward-compat alias for readKey)
- * @param params.writeKey       - 32-byte AES-256 writeKey (optional; zero-fallback until phase 65)
+ * @param params.writeKey       - Optional 32-byte AES-256 writeKey. When supplied, the sealed
+ *   Node carries a real write-body (`{ ipnsPrivateKey, writeChildren }`) sealed under this key
+ *   (D-03). When omitted, no write-body is attached (legacy read-only-write compatibility) and
+ *   sealing falls back to an unused zero-filled writeKey (no writeSealed field is produced,
+ *   since sealNode only seals a write-body when node.writeBody is set).
+ * @param params.writeChildren  - Write-chain entries to persist inside the write-body (preserved
+ *   verbatim, order-stable). Defaults to an empty array. Only meaningful when writeKey is supplied.
  * @param params.ipnsPrivateKey - Ed25519 private key for IPNS signing
  * @param params.ipnsName       - IPNS k51 name of the folder
  * @param params.sequenceNumber - Current sequence number (CAS guard: next will be +1)
  * @param params.ctx            - SDK context for IPFS + IPNS access
  *
- * @security Does NOT zero readKey or ipnsPrivateKey — callers are terminal owners (D-09).
+ * @security Does NOT zero readKey, writeKey, or ipnsPrivateKey — callers are terminal owners (D-09).
  */
 export async function updateFolderMetadataAndPublish(params: {
   children: SealedChildRef[];
@@ -163,8 +169,10 @@ export async function updateFolderMetadataAndPublish(params: {
   readKey?: Uint8Array;
   /** @deprecated Backward-compat alias — use readKey. client.ts callers still pass folderKey. */
   folderKey?: Uint8Array;
-  /** Optional writeKey for sealing the write-body. Defaults to zero (write-body unprotected until phase 65). */
+  /** Optional writeKey — when supplied, seals a real write-body (D-03). */
   writeKey?: Uint8Array;
+  /** Write-chain entries to persist in the write-body (preserved verbatim). Defaults to []. */
+  writeChildren?: WriteChildRef[];
   ipnsPrivateKey: Uint8Array;
   ipnsPublicKey?: Uint8Array;
   ipnsName: string;
@@ -187,7 +195,10 @@ export async function updateFolderMetadataAndPublish(params: {
 }): Promise<{ cid: string; newSequenceNumber: bigint; publishedChildren: SealedChildRef[] }> {
   const key = params.readKey ?? params.folderKey;
   if (!key) throw new Error('updateFolderMetadataAndPublish: readKey or folderKey is required');
-  const writeKey = params.writeKey ?? new Uint8Array(32);
+  // Only used to seal when node.writeBody is absent (sealNode never produces a
+  // writeSealed field in that case), so the zero fallback is inert — it exists
+  // purely so sealNode's required writeKey parameter has a value (D-03).
+  const writeKeyForSeal = params.writeKey ?? new Uint8Array(32);
 
   const result = await publishWithCas<SealedChildRef[]>({
     ipnsName: params.ipnsName,
@@ -233,8 +244,19 @@ export async function updateFolderMetadataAndPublish(params: {
         createdAt: Date.now(),
         modifiedAt: Date.now(),
         children: localChildren,
+        // D-03: attach a real write-body only when the caller supplies a writeKey.
+        // Omitting writeKey preserves legacy read-only-write compatibility (no
+        // writeSealed field is produced by sealNode when writeBody is absent).
+        ...(params.writeKey
+          ? {
+              writeBody: {
+                ipnsPrivateKey: params.ipnsPrivateKey,
+                writeChildren: params.writeChildren ?? [],
+              },
+            }
+          : {}),
       };
-      const publishedNode: PublishedNode = await sealNode(node, key, writeKey);
+      const publishedNode: PublishedNode = await sealNode(node, key, writeKeyForSeal);
       const { cid } = await addToIpfs(
         params.ctx,
         new TextEncoder().encode(JSON.stringify(publishedNode))
