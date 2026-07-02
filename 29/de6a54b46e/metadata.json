@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "29de6a54b46e",
+  "strategy": "manual-commit",
+  "branch": "feat/web-client-runtime-integration",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/sdk-core/src/folder/registration.ts",
+    "packages/sdk-core/src/index.ts",
+    "packages/sdk-core/src/vault/index.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/29/de6a54b46e/0/metadata.json",
+      "transcript": "/29/de6a54b46e/0/full.jsonl",
+      "content_hash": "/29/de6a54b46e/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  }
+}
