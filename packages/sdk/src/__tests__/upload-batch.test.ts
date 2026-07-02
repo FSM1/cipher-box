@@ -67,6 +67,13 @@ function makeUploadResult(index: number): sdkCore.UploadResult {
     },
     ipnsPrivateKeyEncrypted: `enc-key-${index}`,
     fileKey: new Uint8Array(32).fill(0x42 + index),
+    // node/v3 contract (68.1-07/09): fileReadKey/fileWriteKey are independent,
+    // freshly-minted keys distinct from the content-encryption fileKey. The
+    // uploadFiles seal site consumes fileReadKey (68.1-17) and the finally
+    // block zeroes all three.
+    fileNodeId: `0000000${index}-0000-4000-8000-000000000000`,
+    fileReadKey: new Uint8Array(32).fill(0x52 + index),
+    fileWriteKey: new Uint8Array(32).fill(0x62 + index),
   };
 }
 
@@ -295,8 +302,13 @@ describe('CipherBoxClient.uploadFiles - batch upload orchestration', () => {
     const files = makeTestFiles(3);
     await client.uploadFiles('folder-ipns', files);
 
-    // clearBytes should be called for each successful upload's file key
-    expect(clearBytes).toHaveBeenCalledTimes(3);
+    // clearBytes should be called for each successful upload's three keys
+    // (fileKey content key + fileReadKey/fileWriteKey node keys, 68.1-17)
+    expect(clearBytes).toHaveBeenCalledTimes(9);
+    for (const [arg] of vi.mocked(clearBytes).mock.calls) {
+      expect(arg).toBeInstanceOf(Uint8Array);
+      expect((arg as Uint8Array).length).toBe(32);
+    }
   });
 
   it('fires onFileError callback for failed files', async () => {
