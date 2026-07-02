@@ -12,11 +12,17 @@
 import type { SealedChildRef } from '@cipherbox/core';
 import {
   invitesControllerGetInviteStatus,
+  invitesControllerGetInviteData,
+  invitesControllerClaimInvite,
+  shareInvitesControllerCreateInvite,
+  shareInvitesControllerListInvites,
   shareInvitesControllerRevokeInvite,
 } from '@cipherbox/api-client';
-// collectChildKeys stubbed — phase 65 (write-chain key distribution)
-// resolveFileMetadata stubbed — phase 63 (Node read-chain)
-// resolveIpnsRecord, fetchFromIpfs, decryptFolderMetadata — retired (phase 63+)
+import { getPublicKey, utils as secp256k1Utils } from '@noble/secp256k1';
+import { wrapKey, unwrapKey, hexToBytes, bytesToHex } from '@cipherbox/crypto';
+import { resolveChildNodeIdentity } from '../lib/crypto/key-wrapping';
+import { useAuthStore } from '../stores/auth.store';
+import { logger } from '../lib/logger';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -38,7 +44,18 @@ export type InviteInfo = {
 // Ephemeral keypair generation
 // ---------------------------------------------------------------------------
 
-// TODO(phase 65): restore generateEphemeralKeypair when createInviteLink is implemented
+/**
+ * Generate a fresh ephemeral secp256k1 keypair for the invite bridge.
+ *
+ * The private key lives ONLY in memory + the URL fragment (never sent to the
+ * server, never persisted) -- it is the one-time bridge the sharer uses to
+ * wrap the item key, and the sole decryption key for the recipient's claim.
+ */
+function generateEphemeralKeypair(): { privateKey: Uint8Array; publicKey: Uint8Array } {
+  const privateKey = secp256k1Utils.randomSecretKey();
+  const publicKey = getPublicKey(privateKey, false); // uncompressed, 65 bytes (0x04...)
+  return { privateKey, publicKey };
+}
 
 // ---------------------------------------------------------------------------
 // URL construction
@@ -65,31 +82,56 @@ export function buildInviteUrl(token: string, ephemeralPrivKeyHex: string): stri
 /**
  * Create an invite link for a file or folder.
  *
- * 1. Generates ephemeral secp256k1 keypair
- * 2. Wraps item key with ephemeral public key
- * 3. Collects and wraps child keys (for folders)
- * 4. Creates invite record on server
- * 5. Builds URL with ephemeral private key in fragment
- * 6. Zeros ephemeral private key from memory
+ * Read-only invites only (no write-permission toggle exists in the invite UI):
+ * mints an ephemeral secp256k1 keypair, wraps the item's own readKey (derived
+ * from `item`'s read-chain hop via `resolveChildNodeIdentity`) and display
+ * name for the ephemeral public key, creates the invite row on the server,
+ * and builds the URL with the ephemeral PRIVATE key in the fragment (never
+ * sent to the server).
  *
- * @returns The invite URL and token
+ * @security The ephemeral private key and the item's readKey are zeroed in
+ *   `finally` on every exit path (T-68.1-11-01/03).
  */
-/**
- * Create an invite link for a file or folder.
- *
- * @stub phase 65 — invite creation requires Node read-chain (to resolve NodeContent
- * for key collection) and write-chain (SealedChildRef has no folderKeyEncrypted or
- * fileMetaIpnsName — those are inside the sealed Node bodies).
- */
-export async function createInviteLink(_params: {
+export async function createInviteLink(params: {
   item: SealedChildRef;
   folderKey: Uint8Array;
   ipnsName: string;
   parentFolderId: string;
 }): Promise<{ url: string; token: string }> {
-  throw new Error(
-    'not implemented — phase 65 (invite creation requires Node read-chain + write-chain)'
-  );
+  let ephemeralPrivateKey: Uint8Array | null = null;
+  let itemReadKey: Uint8Array | null = null;
+
+  try {
+    const ephemeral = generateEphemeralKeypair();
+    ephemeralPrivateKey = ephemeral.privateKey;
+
+    const identity = await resolveChildNodeIdentity(params.item, params.folderKey);
+    itemReadKey = identity.readKey;
+
+    const encryptedKey = bytesToHex(await wrapKey(itemReadKey, ephemeral.publicKey));
+
+    let itemNameEncrypted: string | undefined;
+    try {
+      const nameBytes = new TextEncoder().encode(params.item.name);
+      itemNameEncrypted = bytesToHex(await wrapKey(nameBytes, ephemeral.publicKey));
+    } catch (err) {
+      logger.warn('[Invite] Failed to wrap item name, continuing without it:', err);
+    }
+
+    const invite = await shareInvitesControllerCreateInvite({
+      rootIpnsName: params.item.ipnsName,
+      rootNodeId: identity.nodeId,
+      rootGeneration: String(identity.generation),
+      encryptedKey,
+      itemNameEncrypted,
+    });
+
+    const url = buildInviteUrl(invite.token, bytesToHex(ephemeralPrivateKey));
+    return { url, token: invite.token };
+  } finally {
+    ephemeralPrivateKey?.fill(0);
+    itemReadKey?.fill(0);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -109,10 +151,51 @@ export async function createInviteLink(_params: {
  * @returns The share ID of the created share
  */
 export async function claimInvite(
-  _token: string,
-  _ephemeralPrivKeyHex: string
+  token: string,
+  ephemeralPrivKeyHex: string
 ): Promise<{ shareId: string }> {
-  throw new Error('deferred to Phase 68 — descriptor-ref rotation/grant path not yet wired');
+  const vaultKeypair = useAuthStore.getState().vaultKeypair;
+  if (!vaultKeypair) {
+    throw new Error('claimInvite: not authenticated (no vault keypair)');
+  }
+
+  let ephemeralPrivateKey: Uint8Array | null = null;
+  let rootReadKey: Uint8Array | null = null;
+
+  try {
+    ephemeralPrivateKey = hexToBytes(ephemeralPrivKeyHex);
+
+    const inviteData = await invitesControllerGetInviteData(token);
+
+    rootReadKey = await unwrapKey(hexToBytes(inviteData.encryptedKey), ephemeralPrivateKey);
+    const readDescriptorRef = bytesToHex(await wrapKey(rootReadKey, vaultKeypair.publicKey));
+
+    let itemNameEncrypted: string | undefined;
+    if (inviteData.itemNameEncrypted) {
+      let nameBytes: Uint8Array | null = null;
+      try {
+        nameBytes = await unwrapKey(hexToBytes(inviteData.itemNameEncrypted), ephemeralPrivateKey);
+        itemNameEncrypted = bytesToHex(await wrapKey(nameBytes, vaultKeypair.publicKey));
+      } catch (err) {
+        logger.warn(
+          '[Invite] Failed to re-wrap item name during claim, continuing without it:',
+          err
+        );
+      } finally {
+        nameBytes?.fill(0);
+      }
+    }
+
+    const result = await invitesControllerClaimInvite(token, {
+      readDescriptorRef,
+      itemNameEncrypted,
+    });
+
+    return { shareId: result.shareId };
+  } finally {
+    ephemeralPrivateKey?.fill(0);
+    rootReadKey?.fill(0);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -141,8 +224,22 @@ export async function checkInviteStatus(token: string): Promise<'active' | 'expi
  * Fetch all active invites for a specific item.
  * Uses the authenticated ShareInvitesController endpoint.
  */
-export async function fetchInvitesForItem(_ipnsName: string): Promise<InviteInfo[]> {
-  throw new Error('deferred to Phase 68 — descriptor-ref rotation/grant path not yet wired');
+export async function fetchInvitesForItem(ipnsName: string): Promise<InviteInfo[]> {
+  const invites = await shareInvitesControllerListInvites({ rootIpnsName: ipnsName });
+  return invites.map((invite) => ({
+    id: invite.id,
+    token: invite.token,
+    status: invite.status,
+    // TODO(phase 63): SealedChildRef has no .type; itemType has no source at the invite layer.
+    itemType: 'folder',
+    ipnsName: invite.rootIpnsName,
+    // itemNameEncrypted (if present) is wrapped for the EPHEMERAL public key, which the
+    // sharer never retains after creation (T-68.1-11-01) -- there is no plaintext name
+    // the sharer can recover for their own invite list.
+    itemName: '',
+    expiresAt: invite.expiresAt,
+    createdAt: invite.createdAt,
+  }));
 }
 
 /**
