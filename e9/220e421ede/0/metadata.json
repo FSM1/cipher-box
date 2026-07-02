@@ -1,0 +1,137 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "e9220e421ede",
+  "session_id": "064836b9-90e4-42d5-aabc-ed5fde831a57",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-02T20:25:43.70486Z",
+  "branch": "feat/web-client-runtime-integration",
+  "checkpoints_count": 3,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "f5147d3df453",
+  "token_usage": {
+    "input_tokens": 49458,
+    "cache_creation_tokens": 1981475,
+    "cache_read_tokens": 50264952,
+    "output_tokens": 198476,
+    "api_call_count": 184
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-plan-phase-2026-07-02T19:11:49.468219Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "6a32dc56abb1",
+      "timestamp": "2026-07-02T19:11:49.468219Z",
+      "native": {
+        "command": "/gsd-plan-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01Uae4oXZcmbjYJcb6Ru4Pef",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "f5147d3df453",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 966,
+        "end": 967,
+        "entry_ids": [
+          "87bcf7d3-6ab6-4d0c-85a4-392200647a8f"
+        ],
+        "tool_use_id": "toolu_01Uae4oXZcmbjYJcb6Ru4Pef"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Uae4oXZcmbjYJcb6Ru4Pef"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 10
+  },
+  "summary": {
+    "intent": "Execute all plans in GSD phase 68.1 (web client runtime integration) via wave-based parallel subagent orchestration, then diagnose user-reported runtime bugs, and plan/execute gap-closure work to fix them.",
+    "outcome": "All 14 original plans executed across 5 waves; phase verification found only 2/5 success criteria met (owned/shared flows and e2e still broken). Live debugging with the user uncovered a real IPNS durability gap (dev routing store volatility + missing TEE republish enrollment) and a healthcheck bug in docker-compose. A gap-closure phase (plans 15-22) was planned and began executing, fixing shared-browser kind-cache wiring, TEE enrollment for createFolder, and a stale-record replay/retry bug (GAP-4), with more gap plans still in flight when the transcript ends.",
+    "learnings": {
+      "repo": [
+        "gsd-tools decision-coverage gate requires informational tags placed inside the bold ID group exactly as `- **D-04 [informational]:**` — placing the tag outside the bold group silently fails to register",
+        "mock-ipns-routing keeps IPNS records in an in-memory Map; container restarts wipe all unpersisted records, causing cold-navigation 404s that look like propagation lag but are actually data loss",
+        "createFolder previously published child IPNS records without encryptedIpnsPrivateKey/keyEpoch, so subfolders were never enrolled in ipns_republish_schedule — a real production durability gap (48h TTL death) fixed in plan 68.1-16",
+        "docker/docker-compose.yml mock-ipns-routing healthcheck used `wget localhost` which resolves to ::1 (IPv6) while the app binds IPv4-only, causing perpetual false-unhealthy status — fixed by using 127.0.0.1",
+        "API runs on :3000; :3001 is the separate delegated-routing mock (DELEGATED_ROUTING_URL target for web-e2e) — easy to confuse when probing health",
+        "migration 1750000000000-ApiSchemaCutover dropped the shares table's plaintext item_name column entirely; share.service.ts now hardcodes itemName: '', making the REQ-4 backfill feature (shouldBackfill()) permanently dead code — reviving it would violate the project's zero-knowledge rule",
+        "D-05 stale-record rejection toast bug: ROT-07 anti-rollback floor bumps pre-publish, one step ahead of the client's own subsequent publish, so a relay replay from just before that publish exactly matches the floor and slips through enforceResolved as a plain ReconcileStaleError, retried uniformly regardless of direction instead of being rejected immediately",
+        "FileListItem and ContextMenu in apps/web never consulted the D-02 kind cache and hardcoded file items as folders — this was the user-visible 'PDF picked up as folder' bug and also broke media-preview/streaming-playback"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/components/file-browser/SharedFolderRow.tsx",
+          "line": 63,
+          "finding": "isFolder was hardcoded to true instead of deriving from the kind cache (!isFileRef(item)), causing files in shared folders to render/behave as folders"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "createFolder now enrolls new subfolders in TEE republish (encryptedIpnsPrivateKey/keyEpoch) before any addToIpfs side effect (plan 68.1-16, fail-closed); resolveFileMetadata added as a public method to expose write-chain key resolution to the web layer (plan 68.1-12); ReconcileStaleError gained localSequence/networkSequence fields for direction-aware retry (plan 68.1-21)"
+        },
+        {
+          "path": "packages/sdk-core/src/file/index.ts",
+          "finding": "updateFileMetadata had a latent bug where it never actually zeroed fileIpnsPrivateKey despite call-site doc comments claiming it did (T-47-01) — fixed in plan 68.1-12"
+        }
+      ],
+      "workflow": [
+        "Wave-based execution: each subagent runs in an isolated git worktree, returns worktree_metadata (path/branch/expected_base) in its result, and the orchestrator records it in a wave manifest before merging all worktrees back together after the whole wave completes",
+        "Background subagents can silently lose their wake-up signal after a long-running task (e.g. Playwright suite) finishes — process/output must be spot-checked directly rather than trusting that a completion notification will always fire",
+        "Post-wave gates run centrally in the orchestrator, not per-agent: post-merge build gate, scoped test gate (sdk-core/sdk), and wave:post drift gates",
+        "A subagent's self-reported expected_base/worktree_metadata can be wrong (e.g. 68.1-21 reported its own docs commit HEAD instead of the true fork base) — verify the true fork point via git before trusting agent-reported metadata",
+        "Serial (describe.serial) Playwright specs abort at first failure, so a raw pass/fail count overstates coverage — failures early in setup (e.g. nested folder creation) hide that many downstream 'never ran' tests aren't actually passing"
+      ]
+    },
+    "friction": [
+      "Wave 1 agent (plan 01) stalled mid-stream after 119 tool calls (~23 min) with no clear completion signal, requiring a spot-check of filesystem/git state and a manual resume via SendMessage",
+      "The Wave 5 exit-gate agent's background Playwright run (208 specs, ~23 min) finished but the executor was never re-woken due to a lost completion signal, leaving the orchestrator idle until the user complained the run was 'taking too long'",
+      "Decision-coverage gate initially rejected a valid informational tag due to nonobvious placement requirement (tag must be inside the bold ID group), requiring a source-code dig into the parser to find the exact matching rule",
+      "git index.lock contention transiently blocked a tracking commit during Wave 3 close, requiring a lock-state check and retry",
+      "A gap-closure subagent (68.1-16) mistakenly ran a prohibited `git stash push` mid-task, then correctly avoided the also-prohibited `git stash pop` by manually reapplying the edit — left a stray stash entry that had to be identified and dropped separately from the user's own pre-existing stashes",
+      "Bash tool call for `.env`-adjacent inspection was denied by the user, requiring the compose-file diagnosis to be split into narrower commands"
+    ],
+    "open_items": [
+      "GAP-1: resolveFileMetadata AEAD decrypt failure breaks CTR/streaming video preview and batch-download — not yet fixed as of transcript end",
+      "GAP-2 (reclassified): cold-state subfolder navigation failures were actually caused by mock-ipns-routing container restarts wiping unpersisted records, not propagation timeout — durable fix (TEE enrollment) landed in 68.1-16 but the dev routing store itself is still non-persistent across restarts",
+      "SC#4 shared flows: fetchShareKeys stub still throws on four live paths; SHARE-WRITE-KEY web-wiring gap (writable shares fail closed — parent folder writeKey never threaded to web UI layer) needs a dedicated plan",
+      "GAP-6: REQ-4 itemName backfill feature is dead code after the ApiSchemaCutover migration dropped the plaintext item_name column; needs a deliberate product decision (revive with zero-knowledge-compliant design vs. formally retire), left undecided",
+      "share-itemname-backfill.spec.ts will still fail from test 2 onward even after the seed-shape fix (expected per GAP-6, not a regression)",
+      "Full web-e2e suite (208 specs) has not been re-run since the 5 triage fixes (nested-createFolder id-desync, kind-cache wiring, etc.) landed — SC#5 unconfirmed",
+      "Commits 17e4319a6 and 7209e8777 have parens in their subjects and should be kept out of the eventual PR title",
+      "Gap-closure wave 1 of 5 completed (plans 15, 16, 21); remaining gap plans (17 and others) were still executing when the transcript ends",
+      "Dev-mode durability: consider persisting mock-ipns-routing's in-memory store so container restarts stop manufacturing false navigation failures during local dev/testing"
+    ]
+  }
+}
