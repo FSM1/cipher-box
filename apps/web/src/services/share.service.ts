@@ -18,7 +18,6 @@ import {
   sharesControllerGetReceivedShares,
   sharesControllerGetSentShares,
   type ShareKeyEntryDtoKeyType,
-  type ChildKeyDtoKeyType,
   type ReceivedShareResponseDto,
   type SentShareResponseDto,
 } from '@cipherbox/api-client';
@@ -118,6 +117,7 @@ function toReceivedShare(dto: ReceivedShareResponseDto): ReceivedShare {
     permission: dto.writeDescriptorRef !== null ? 'write' : 'read',
     createdAt: dto.createdAt,
     readDescriptorRef: dto.readDescriptorRef,
+    writeDescriptorRef: dto.writeDescriptorRef,
     rootGeneration: parseRootGeneration(dto.rootGeneration),
     rootNodeId: dto.rootNodeId,
   };
@@ -232,44 +232,25 @@ export async function lookupUser(publicKeyHex: string): Promise<boolean> {
 }
 
 /**
- * Create a new share, sharing an encrypted folder or file with another user.
+ * DEPRECATED no-op (68.1-20): the descriptor-ref grant model (`POST /shares`
+ * with `readDescriptorRef`/`writeDescriptorRef`) superseded this pre-node/v3
+ * shape entirely — no caller remains anywhere in the app (real share creation
+ * goes through `sharesControllerCreateShare` directly, see `ShareDialog.tsx`).
+ * Fails closed as a no-op rather than throwing so any stray/future import does
+ * not crash a live user flow; the descriptor-ref path never routes through here.
  *
- * @param params.recipientPublicKey - Recipient's secp256k1 public key
- * @param params.itemType - 'folder' or 'file'
- * @param params.ipnsName - IPNS name of the shared item
- * @param params.itemName - Display name of the shared item (legacy plaintext)
- * @param params.itemNameEncrypted - Hex ECIES ciphertext of the display name
- *   wrapped for the recipient. When supplied, no plaintext name is sent.
- * @param params.encryptedKey - Hex-encoded ECIES ciphertext of the item key
- * @param params.childKeys - Optional re-wrapped descendant keys
- */
-export async function createShare(_params: {
-  recipientPublicKey: string;
-  itemType: 'folder' | 'file';
-  ipnsName: string;
-  itemName: string;
-  itemNameEncrypted?: string;
-  encryptedKey: string;
-  childKeys?: Array<{ keyType: ChildKeyDtoKeyType; itemId: string; encryptedKey: string }>;
-}): Promise<{ shareId: string }> {
-  throw new Error('deferred to Phase 68 — descriptor-ref rotation/grant path not yet wired');
-}
-
-/**
- * Update the permission level of an existing share.
- * Only the sharer can change permission. Upgrading to write requires
- * an ECIES-wrapped IPNS private key for the recipient.
- *
- * @param shareId - ID of the share to update
- * @param permission - New permission level ('read' or 'write')
- * @param encryptedIpnsKey - ECIES-wrapped IPNS key (required for upgrade to write)
+ * Retained only until a follow-up plan deletes this file's dead pre-node/v3
+ * surface entirely.
  */
 export async function updateSharePermission(
   _shareId: string,
   _permission: 'read' | 'write',
   _encryptedIpnsKey?: string
 ): Promise<void> {
-  throw new Error('deferred to Phase 68 — descriptor-ref rotation/grant path not yet wired');
+  // No-op (fail-closed, not throwing). `ShareDialog.handleUpgrade`/
+  // `handleDowngradeConfirm` are being migrated to `sharesControllerUpdateGrant`
+  // (PATCH /shares/:id/grant, see 68.1-19) — there is no
+  // `PATCH /shares/:id/permission`-style endpoint this function could route to.
 }
 
 /**
@@ -288,8 +269,17 @@ export async function hideShare(shareId: string): Promise<void> {
 }
 
 /**
- * Get all re-wrapped child keys for a share.
- * Accessible by both sharer and recipient.
+ * Fail-closed (68.1-20): there is NO per-child `share_keys` fan-out endpoint
+ * under the descriptor-ref grant model — `sharesControllerGetShareKeys` does
+ * not exist server-side. A grant carries exactly one wrapped
+ * `readDescriptorRef` (and optionally `writeDescriptorRef`) for the shared
+ * item's OWN root; every descendant key is recovered on demand via the
+ * read/write-chain walk (`navigateReadChain`, `resolveShareWriteDescriptor`),
+ * never via a pre-fetched per-child key list.
+ *
+ * Always returns an empty array so every caller's existing empty-array/null
+ * fallback path is exercised (never throws) — see `useSharedNavigation.ts`,
+ * `useSharedWriteOps.ts`, `SharedMoveDialog.tsx`, `TextEditorDialog.tsx`.
  */
 export async function fetchShareKeys(_shareId: string): Promise<
   Array<{
@@ -298,7 +288,7 @@ export async function fetchShareKeys(_shareId: string): Promise<
     encryptedKey: string;
   }>
 > {
-  throw new Error('deferred to Phase 68 — descriptor-ref rotation/grant path not yet wired');
+  return [];
 }
 
 // ---------------------------------------------------------------------------
@@ -370,11 +360,14 @@ export type PendingRotation = {
 };
 
 /**
- * Fetch revoked shares that are pending key rotation from the server.
- * These are shares where revokedAt is set but the share has not been hard-deleted.
+ * Fail-closed (68.1-20): no live `GET /shares/pending-rotations`-style
+ * endpoint exists (`sharesControllerRevokeShare` hard-deletes; there is no
+ * server-side lazy-rotation-pending list under the descriptor-ref grant
+ * model). Always returns an empty array so `checkPendingRotation` reports
+ * `false` (non-throwing) rather than blocking any caller.
  */
 export async function fetchPendingRotations(): Promise<PendingRotation[]> {
-  throw new Error('deferred to Phase 68 — descriptor-ref rotation/grant path not yet wired');
+  return [];
 }
 
 /**
