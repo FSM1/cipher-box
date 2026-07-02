@@ -91,12 +91,24 @@ export class BinNotLoadedError extends Error {
  * should re-load the folder and retry.
  */
 export class ReconcileStaleError extends Error {
+  /** In-memory `FolderTree` sequenceNumber the mutation expected to publish against. */
+  readonly localSequence: bigint;
+  /** Freshly-resolved network sequenceNumber that disagreed with `localSequence`. */
+  readonly networkSequence: bigint;
+
   constructor(ipnsName: string, localSequence: bigint, networkSequence: bigint) {
     super(
       `Reconcile stale: folder ${ipnsName} local sequenceNumber ${localSequence} does not match ` +
         `network sequenceNumber ${networkSequence} -- deferring mutation (SC#3 / D-04)`
     );
     this.name = 'ReconcileStaleError';
+    // Exposed so callers (useMutationFailureUx's D-05 classifier) can tell a
+    // genuine concurrent-update defer (network AHEAD of local -- SC#3/D-04,
+    // retry) apart from a stale/relay-replayed record (network BEHIND local
+    // -- a rejection the durable ROT-07 floor may not catch when the replayed
+    // seq exactly matches the last-recorded floor; see Gap 4 / 68.1-21).
+    this.localSequence = localSequence;
+    this.networkSequence = networkSequence;
   }
 }
 
