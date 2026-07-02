@@ -9,9 +9,15 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createFileMetadata, resolveFileMetadata, downloadFileContent } from '../../file';
+import {
+  createFileMetadata,
+  resolveFileMetadata,
+  downloadFileContent,
+  updateFileMetadata,
+} from '../../file';
+import { addFileToFolder, addFilesToFolder, replaceFileInFolder } from '../../folder/registration';
 import { unsealNode, unmarshalIpnsRecord } from '@cipherbox/core';
-import type { PublishedNode } from '@cipherbox/core';
+import type { PublishedNode, NodeContent, VersionEntry } from '@cipherbox/core';
 import { encryptAesGcm, encryptAesCtr } from '@cipherbox/crypto';
 import { createMockContext } from '../helpers';
 
@@ -290,5 +296,315 @@ describe('downloadFileContent', () => {
     });
 
     expect(result).toEqual(plaintext);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 3: updateFileMetadata (versions) + registration.ts file wrappers
+// ---------------------------------------------------------------------------
+
+function makeVersion(cid: string, createdAt: number): VersionEntry {
+  return {
+    versionId: `v-${cid}`,
+    cid,
+    fileIv: btoa(String.fromCharCode(...new Uint8Array(12).fill(1))),
+    size: 5,
+    createdAt,
+    encryptionMode: 'GCM',
+    fileKey: new Uint8Array(32).fill(0x20),
+  };
+}
+
+describe('updateFileMetadata', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFns.createAndPublishIpnsRecord.mockResolvedValue({ success: true, sequenceNumber: 2n });
+    mockFns.addToIpfs.mockImplementation(async (_ctx: unknown, data: Uint8Array) => ({
+      cid: 'QmUpdated',
+      size: data.length,
+      recorded: true,
+    }));
+  });
+
+  it('createVersion:true pushes the prior content into versions, caps at maxVersionsPerFile, returns prunedCids, and republishes at fileSequenceNumber+1 preserving id/generation/createdAt', async () => {
+    const ctx = createMockContext();
+    const fileReadKey = new Uint8Array(32).fill(0x30);
+    const fileWriteKey = new Uint8Array(32).fill(0x31);
+    const fileIpnsPrivateKey = new Uint8Array(32).fill(0x32);
+
+    const currentMetadata: NodeContent = {
+      cid: 'QmPrior',
+      fileIv: btoa(String.fromCharCode(...new Uint8Array(12).fill(9))),
+      size: 111,
+      mimeType: 'text/plain',
+      encryptionMode: 'GCM',
+      fileKey: new Uint8Array(32).fill(0x33),
+      versions: [makeVersion('v-old-1', 1000), makeVersion('v-old-2', 2000)],
+    };
+
+    let capturedBytes: Uint8Array | null = null;
+    mockFns.addToIpfs.mockImplementation(async (_ctx: unknown, data: Uint8Array) => {
+      capturedBytes = data;
+      return { cid: 'QmUpdated', size: data.length, recorded: true };
+    });
+
+    const result = await updateFileMetadata({
+      fileIpnsPrivateKey,
+      fileReadKey,
+      fileWriteKey,
+      fileMetaIpnsName: 'k51-file-update',
+      fileSequenceNumber: 5n,
+      nodeId: 'file-node-id-x',
+      nodeGeneration: 3,
+      originalCreatedAt: 12345,
+      currentMetadata,
+      updates: {
+        cid: 'QmNext',
+        fileKey: new Uint8Array(32).fill(0x34),
+        fileIv: new Uint8Array(12).fill(8),
+        size: 222,
+        mimeType: 'text/plain',
+      },
+      createVersion: true,
+      maxVersionsPerFile: 2,
+      ctx,
+    });
+
+    expect(result.newSequenceNumber).toBe(6n);
+    expect(result.prunedCids).toHaveLength(1);
+    expect(mockFns.createAndPublishIpnsRecord).toHaveBeenCalledWith(
+      expect.objectContaining({ ipnsName: 'k51-file-update', sequenceNumber: 6n })
+    );
+
+    expect(capturedBytes).not.toBeNull();
+    const published = JSON.parse(new TextDecoder().decode(capturedBytes!)) as PublishedNode;
+    expect(published.id).toBe('file-node-id-x');
+    expect(published.generation).toBe(3);
+
+    const unsealed = await unsealNode(published, fileReadKey, fileWriteKey);
+    expect(unsealed.createdAt).toBe(12345);
+    expect(unsealed.content!.cid).toBe('QmNext');
+    expect(unsealed.content!.versions).toHaveLength(2);
+    const versionCids = unsealed.content!.versions.map((v) => v.cid);
+    expect(versionCids).toContain('QmPrior');
+  });
+
+  it('createVersion:false replaces content without growing versions', async () => {
+    const ctx = createMockContext();
+    const fileReadKey = new Uint8Array(32).fill(0x40);
+    const fileWriteKey = new Uint8Array(32).fill(0x41);
+    const fileIpnsPrivateKey = new Uint8Array(32).fill(0x42);
+
+    const currentMetadata: NodeContent = {
+      cid: 'QmPrior2',
+      fileIv: btoa(String.fromCharCode(...new Uint8Array(12).fill(9))),
+      size: 50,
+      mimeType: 'text/plain',
+      encryptionMode: 'GCM',
+      fileKey: new Uint8Array(32).fill(0x43),
+      versions: [makeVersion('v-old-1', 1000)],
+    };
+
+    const result = await updateFileMetadata({
+      fileIpnsPrivateKey,
+      fileReadKey,
+      fileWriteKey,
+      fileMetaIpnsName: 'k51-file-update-2',
+      fileSequenceNumber: 1n,
+      nodeId: 'file-node-id-y',
+      nodeGeneration: 0,
+      originalCreatedAt: 500,
+      currentMetadata,
+      updates: {
+        cid: 'QmNext2',
+        fileKey: new Uint8Array(32).fill(0x44),
+        fileIv: new Uint8Array(12).fill(7),
+        size: 60,
+        mimeType: 'text/plain',
+      },
+      createVersion: false,
+      ctx,
+    });
+
+    expect(result.prunedCids).toEqual([]);
+  });
+});
+
+describe('addFileToFolder (registration.ts write-body-aware)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFns.createAndPublishIpnsRecord.mockResolvedValue({ success: true, sequenceNumber: 2n });
+    mockFns.batchPublishIpnsRecords.mockResolvedValue({ totalSucceeded: 1, totalFailed: 0 });
+  });
+
+  it('seals the file readKey into the parent read-body AND writeKey into the parent write-body, republishes the parent, and batch-publishes the file record', async () => {
+    const ctx = createMockContext();
+    const parentReadKey = new Uint8Array(32).fill(0x01);
+    const parentWriteKey = new Uint8Array(32).fill(0x02);
+    const parentIpnsPrivateKey = new Uint8Array(32).fill(0x03);
+    const fileReadKey = new Uint8Array(32).fill(0x04);
+    const fileWriteKey = new Uint8Array(32).fill(0x05);
+    const fileNodeId = 'file-uuid-1';
+    const fileIpnsRecord = {
+      ipnsName: 'k51-file',
+      recordBase64: 'recbase64',
+      metadataCid: 'QmFileMeta',
+    };
+
+    let capturedParentBytes: Uint8Array | null = null;
+    mockFns.addToIpfs.mockImplementation(async (_ctx: unknown, data: Uint8Array) => {
+      capturedParentBytes = data;
+      return { cid: 'QmParent', size: data.length, recorded: true };
+    });
+
+    const result = await addFileToFolder({
+      children: [],
+      writeChildren: [],
+      readKey: parentReadKey,
+      writeKey: parentWriteKey,
+      ipnsPrivateKey: parentIpnsPrivateKey,
+      ipnsName: 'k51-parent',
+      sequenceNumber: 1n,
+      nodeId: 'parent-uuid',
+      nodeGeneration: 0,
+      fileNodeId,
+      name: 'photo.png',
+      fileReadKey,
+      fileWriteKey,
+      fileIpnsRecord,
+      ctx,
+    });
+
+    expect(mockFns.batchPublishIpnsRecords).toHaveBeenCalledWith([fileIpnsRecord], ctx);
+    expect(result.updatedChildren).toHaveLength(1);
+    expect(result.updatedChildren[0].ipnsName).toBe('k51-file');
+    expect(result.updatedChildren[0].name).toBe('photo.png');
+    expect(result.updatedWriteChildren).toHaveLength(1);
+    expect(result.updatedWriteChildren[0].childId).toBe(fileNodeId);
+    expect(result.fileRef.ipnsName).toBe('k51-file');
+
+    expect(capturedParentBytes).not.toBeNull();
+    const publishedParent = JSON.parse(
+      new TextDecoder().decode(capturedParentBytes!)
+    ) as PublishedNode;
+    const unsealedParent = await unsealNode(publishedParent, parentReadKey, parentWriteKey);
+    expect(unsealedParent.children).toHaveLength(1);
+    expect(unsealedParent.children![0].ipnsName).toBe('k51-file');
+    expect(unsealedParent.writeBody!.writeChildren).toHaveLength(1);
+    expect(unsealedParent.writeBody!.writeChildren[0].childId).toBe(fileNodeId);
+  });
+});
+
+describe('addFilesToFolder (registration.ts write-body-aware, batch)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFns.createAndPublishIpnsRecord.mockResolvedValue({ success: true, sequenceNumber: 2n });
+    mockFns.batchPublishIpnsRecords.mockResolvedValue({ totalSucceeded: 2, totalFailed: 0 });
+    mockFns.addToIpfs.mockImplementation(async (_ctx: unknown, data: Uint8Array) => ({
+      cid: 'QmParentBatch',
+      size: data.length,
+      recorded: true,
+    }));
+  });
+
+  it('seals N file read/write child refs in one parent republish and batch-publishes all file records', async () => {
+    const ctx = createMockContext();
+    const parentReadKey = new Uint8Array(32).fill(0x11);
+    const parentWriteKey = new Uint8Array(32).fill(0x12);
+    const parentIpnsPrivateKey = new Uint8Array(32).fill(0x13);
+
+    const files = [
+      {
+        fileNodeId: 'file-uuid-a',
+        name: 'a.png',
+        fileReadKey: new Uint8Array(32).fill(0x21),
+        fileWriteKey: new Uint8Array(32).fill(0x22),
+        fileIpnsRecord: { ipnsName: 'k51-file-a', recordBase64: 'rec-a', metadataCid: 'QmA' },
+      },
+      {
+        fileNodeId: 'file-uuid-b',
+        name: 'b.png',
+        fileReadKey: new Uint8Array(32).fill(0x31),
+        fileWriteKey: new Uint8Array(32).fill(0x32),
+        fileIpnsRecord: { ipnsName: 'k51-file-b', recordBase64: 'rec-b', metadataCid: 'QmB' },
+      },
+    ];
+
+    const result = await addFilesToFolder({
+      children: [],
+      writeChildren: [],
+      readKey: parentReadKey,
+      writeKey: parentWriteKey,
+      ipnsPrivateKey: parentIpnsPrivateKey,
+      ipnsName: 'k51-parent-batch',
+      sequenceNumber: 1n,
+      nodeId: 'parent-uuid-batch',
+      nodeGeneration: 0,
+      files,
+      ctx,
+    });
+
+    expect(mockFns.batchPublishIpnsRecords).toHaveBeenCalledWith(
+      [files[0].fileIpnsRecord, files[1].fileIpnsRecord],
+      ctx
+    );
+    expect(result.updatedChildren).toHaveLength(2);
+    expect(result.updatedWriteChildren).toHaveLength(2);
+    expect(result.fileRefs.map((r) => r.ipnsName)).toEqual(['k51-file-a', 'k51-file-b']);
+  });
+});
+
+describe('replaceFileInFolder', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('publishes only the file IPNS record (parent untouched)', async () => {
+    const ctx = createMockContext();
+    mockFns.createAndPublishIpnsRecord.mockResolvedValue({ success: true, sequenceNumber: 2n });
+    mockFns.addToIpfs.mockResolvedValue({ cid: 'QmReplaced', size: 10, recorded: true });
+
+    const fileReadKey = new Uint8Array(32).fill(0x50);
+    const fileWriteKey = new Uint8Array(32).fill(0x51);
+    const fileIpnsPrivateKey = new Uint8Array(32).fill(0x52);
+    const currentMetadata: NodeContent = {
+      cid: 'QmOld',
+      fileIv: btoa(String.fromCharCode(...new Uint8Array(12).fill(1))),
+      size: 10,
+      mimeType: 'text/plain',
+      encryptionMode: 'GCM',
+      fileKey: new Uint8Array(32).fill(0x53),
+      versions: [],
+    };
+
+    const result = await replaceFileInFolder({
+      fileIpnsPrivateKey,
+      fileReadKey,
+      fileWriteKey,
+      fileMetaIpnsName: 'k51-file-replace',
+      fileSequenceNumber: 1n,
+      nodeId: 'file-node-id-replace',
+      nodeGeneration: 0,
+      originalCreatedAt: 1000,
+      currentMetadata,
+      updates: {
+        cid: 'QmNew',
+        fileKey: new Uint8Array(32).fill(0x54),
+        fileIv: new Uint8Array(12).fill(2),
+        size: 20,
+        mimeType: 'text/plain',
+      },
+      createVersion: false,
+      ctx,
+    });
+
+    expect(result.ipnsName).toBe('k51-file-replace');
+    expect(result.newSequenceNumber).toBe(2n);
+    expect(mockFns.addToIpfs).toHaveBeenCalledTimes(1);
+    expect(mockFns.createAndPublishIpnsRecord).toHaveBeenCalledTimes(1);
+    expect(mockFns.createAndPublishIpnsRecord).toHaveBeenCalledWith(
+      expect.objectContaining({ ipnsName: 'k51-file-replace', sequenceNumber: 2n })
+    );
+    expect(mockFns.batchPublishIpnsRecords).not.toHaveBeenCalled();
   });
 });
