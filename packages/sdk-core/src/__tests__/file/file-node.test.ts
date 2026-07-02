@@ -9,9 +9,10 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createFileMetadata } from '../../file';
+import { createFileMetadata, resolveFileMetadata, downloadFileContent } from '../../file';
 import { unsealNode, unmarshalIpnsRecord } from '@cipherbox/core';
 import type { PublishedNode } from '@cipherbox/core';
+import { encryptAesGcm, encryptAesCtr } from '@cipherbox/crypto';
 import { createMockContext } from '../helpers';
 
 // ---------------------------------------------------------------------------
@@ -186,5 +187,108 @@ describe('createFileMetadata', () => {
         teeKeys: { currentPublicKey: '', currentEpoch: 1 },
       })
     ).rejects.toThrow(/refusing to publish un-enrolled file/);
+  });
+});
+
+describe('resolveFileMetadata', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('round-trips content published by createFileMetadata', async () => {
+    const ctx = createMockContext();
+    const cid = 'QmRoundTripCid';
+    const fileKey = new Uint8Array(32).fill(0x64);
+    const fileIv = new Uint8Array(12).fill(0x65);
+    let capturedBytes: Uint8Array | null = null;
+    mockFns.addToIpfs.mockImplementation(async (_ctx: unknown, data: Uint8Array) => {
+      capturedBytes = data;
+      return { cid: 'QmFileNodeCid', size: data.length, recorded: true };
+    });
+
+    const created = await createFileMetadata({
+      cid,
+      fileKey,
+      fileIv,
+      size: 999,
+      mimeType: 'image/png',
+      ctx,
+    });
+
+    expect(capturedBytes).not.toBeNull();
+    mockFns.resolveIpnsRecord.mockResolvedValue({
+      cid: 'QmFileNodeCid',
+      sequenceNumber: 1n,
+      signatureVerified: true,
+    });
+    mockFns.fetchFromIpfs.mockResolvedValue(capturedBytes!);
+
+    const { metadata, metadataCid } = await resolveFileMetadata(
+      created.fileMetaIpnsName,
+      created.fileReadKey,
+      ctx
+    );
+
+    expect(metadataCid).toBe('QmFileNodeCid');
+    expect(metadata.cid).toBe(cid);
+    expect(metadata.size).toBe(999);
+    expect(metadata.mimeType).toBe('image/png');
+    expect(metadata.fileKey).toEqual(fileKey);
+    expect(metadata.versions).toEqual([]);
+  });
+
+  it('throws when the IPNS record is not found', async () => {
+    const ctx = createMockContext();
+    mockFns.resolveIpnsRecord.mockResolvedValue(null);
+
+    await expect(resolveFileMetadata('k51-missing', new Uint8Array(32), ctx)).rejects.toThrow(
+      /IPNS record not found/
+    );
+  });
+});
+
+describe('downloadFileContent', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('decrypts GCM content encrypted with the raw fileKey (base64 iv)', async () => {
+    const ctx = createMockContext();
+    const fileKey = new Uint8Array(32).fill(0x21);
+    const iv = new Uint8Array(12).fill(0x09);
+    const plaintext = new TextEncoder().encode('hello gcm world');
+    const ciphertext = await encryptAesGcm(plaintext, fileKey, iv);
+    mockFns.fetchFromIpfs.mockResolvedValue(ciphertext);
+
+    const ivBase64 = btoa(String.fromCharCode(...iv));
+    const result = await downloadFileContent({
+      cid: 'QmGcmCid',
+      fileKey,
+      fileIv: ivBase64,
+      encryptionMode: 'GCM',
+      ctx,
+    });
+
+    expect(result).toEqual(plaintext);
+  });
+
+  it('decrypts CTR content encrypted with the raw fileKey (base64 iv)', async () => {
+    const ctx = createMockContext();
+    const fileKey = new Uint8Array(32).fill(0x31);
+    const iv = new Uint8Array(16).fill(0x08);
+    const plaintext = new TextEncoder().encode('hello ctr world, streaming media test payload');
+    const ciphertext = await encryptAesCtr(plaintext, fileKey, iv);
+    mockFns.fetchFromIpfs.mockResolvedValue(ciphertext);
+
+    const ivBase64 = btoa(String.fromCharCode(...iv));
+    const result = await downloadFileContent({
+      cid: 'QmCtrCid',
+      fileKey,
+      fileIv: ivBase64,
+      encryptionMode: 'CTR',
+      ctx,
+    });
+
+    expect(result).toEqual(plaintext);
   });
 });
