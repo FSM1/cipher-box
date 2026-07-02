@@ -686,6 +686,37 @@ export class CipherBoxClient {
   }
 
   /**
+   * Adopt a successful `updateFolderMetadataAndPublish` result into the
+   * in-memory FolderState, INCLUDING the unsealed `metadata` Node mirror when
+   * present (68.1-22).
+   *
+   * `getWriteBodyParams` prefers `metadata.writeBody.writeChildren` and
+   * `dfsFindFolder` walks `metadata.writeBody` directly, so leaving the mirror
+   * stale after a publish makes the NEXT mutation re-seal an OUTDATED write
+   * chain — silently dropping WriteChildRefs inserted by earlier mutations in
+   * the same session. That drop is what made cold-reload DFS descent unable to
+   * recover just-created subfolders (GAP-2 symptom) and made
+   * resolveShareWriteDescriptor fail closed on freshly-created items.
+   */
+  private adoptPublishedFolderState(
+    folder: FolderState,
+    publishedChildren: SealedChildRef[],
+    newSequenceNumber: bigint,
+    publishedWriteChildren?: WriteChildRef[]
+  ): void {
+    folder.children = publishedChildren;
+    folder.sequenceNumber = newSequenceNumber;
+    folder.lastLoadedAt = Date.now();
+    if (folder.metadata) {
+      folder.metadata.children = publishedChildren;
+      if (folder.metadata.writeBody && publishedWriteChildren) {
+        folder.metadata.writeBody.writeChildren = publishedWriteChildren;
+      }
+    }
+    this.folderTree.set(folder.ipnsName, folder);
+  }
+
+  /**
    * Seed (or return the cached) root FolderState from config, unsealing the root
    * Node's write-body so DFS descent has the root's writeChildren available (D-03).
    *
@@ -1325,10 +1356,12 @@ export class CipherBoxClient {
             nodeGeneration: parent.nodeGeneration,
           });
 
-        parent.children = publishedChildren;
-        parent.sequenceNumber = newSequenceNumber;
-        parent.lastLoadedAt = Date.now();
-        this.folderTree.set(parentIpnsName, parent);
+        this.adoptPublishedFolderState(
+          parent,
+          publishedChildren,
+          newSequenceNumber,
+          updatedWriteChildren
+        );
 
         // Register the new child so it is immediately usable (upload/rename/etc.)
         // without a reload round-trip.
@@ -1435,10 +1468,12 @@ export class CipherBoxClient {
       );
 
       // 3. Update internal state — adopt merged published set (CR-01)
-      folder.children = publishedChildren;
-      folder.sequenceNumber = newSequenceNumber;
-      folder.lastLoadedAt = Date.now();
-      this.folderTree.set(folderIpnsName, folder);
+      this.adoptPublishedFolderState(
+        folder,
+        publishedChildren,
+        newSequenceNumber,
+        writeBodyParams.writeChildren
+      );
 
       // 4. Emit update event
       this.emitter.emit({
@@ -1591,9 +1626,12 @@ export class CipherBoxClient {
           nodeGeneration: destFolder.nodeGeneration,
         });
 
-      destFolder.children = dstChildren;
-      destFolder.sequenceNumber = dstSeq;
-      this.folderTree.set(destIpnsName, destFolder);
+      this.adoptPublishedFolderState(
+        destFolder,
+        dstChildren,
+        dstSeq,
+        destWriteBodyParams.writeChildren
+      );
       this.emitter.emit({
         type: 'folder:updated',
         folderId: destIpnsName,
@@ -1617,9 +1655,12 @@ export class CipherBoxClient {
           nodeGeneration: sourceFolder.nodeGeneration,
         });
 
-      sourceFolder.children = srcChildren;
-      sourceFolder.sequenceNumber = srcSeq;
-      this.folderTree.set(sourceIpnsName, sourceFolder);
+      this.adoptPublishedFolderState(
+        sourceFolder,
+        srcChildren,
+        srcSeq,
+        sourceWriteBodyParams.writeChildren
+      );
       this.emitter.emit({
         type: 'folder:updated',
         folderId: sourceIpnsName,
@@ -1693,10 +1734,12 @@ export class CipherBoxClient {
       );
 
       // 3. Update internal state — adopt merged published set (CR-01)
-      folder.children = publishedChildren;
-      folder.sequenceNumber = newSequenceNumber;
-      folder.lastLoadedAt = Date.now();
-      this.folderTree.set(folderIpnsName, folder);
+      this.adoptPublishedFolderState(
+        folder,
+        publishedChildren,
+        newSequenceNumber,
+        writeBodyParams.writeChildren
+      );
 
       // 4. Emit update event
       this.emitter.emit({
@@ -1891,10 +1934,12 @@ export class CipherBoxClient {
         const { newSequenceNumber, publishedChildren } = folderResult.value;
 
         // 4. Update internal state — adopt merged published set (CR-01)
-        folder.children = publishedChildren;
-        folder.sequenceNumber = newSequenceNumber;
-        folder.lastLoadedAt = Date.now();
-        this.folderTree.set(folderIpnsName, folder);
+        this.adoptPublishedFolderState(
+          folder,
+          publishedChildren,
+          newSequenceNumber,
+          updatedWriteChildren
+        );
 
         // 5. Emit events
         this.emitter.emit({
@@ -2166,10 +2211,12 @@ export class CipherBoxClient {
         const { newSequenceNumber, publishedChildren } = folderResult.value;
 
         // Update internal state — adopt merged published set (CR-01)
-        folder.children = publishedChildren;
-        folder.sequenceNumber = newSequenceNumber;
-        folder.lastLoadedAt = Date.now();
-        this.folderTree.set(folderIpnsName, folder);
+        this.adoptPublishedFolderState(
+          folder,
+          publishedChildren,
+          newSequenceNumber,
+          writeBodyParams.writeChildren
+        );
 
         // Emit events
         this.emitter.emit({
@@ -2498,10 +2545,12 @@ export class CipherBoxClient {
         }
       );
 
-      folder.children = publishedChildren;
-      folder.sequenceNumber = newSequenceNumber;
-      folder.lastLoadedAt = Date.now();
-      this.folderTree.set(folderIpnsName, folder);
+      this.adoptPublishedFolderState(
+        folder,
+        publishedChildren,
+        newSequenceNumber,
+        writeBodyParams.writeChildren
+      );
     }
 
     const live = this.folderTree.get(folderIpnsName) ?? folder;

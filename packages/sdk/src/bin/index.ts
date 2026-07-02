@@ -89,6 +89,35 @@ async function getWriteBodyParams(
   return { writeKey: wk, writeChildren: node.writeBody?.writeChildren ?? [] };
 }
 
+/**
+ * Adopt a successful `updateFolderMetadataAndPublish` result into the
+ * in-memory FolderState, INCLUDING the unsealed `metadata` Node mirror
+ * (68.1-22 — mirrors CipherBoxClient.adoptPublishedFolderState).
+ *
+ * The bin publish sites previously discarded the publish result entirely,
+ * leaving `folderState.sequenceNumber` one step behind the wire — so the very
+ * next publish against the same folder (e.g. restoreFromBin right after
+ * deleteToBin) hit the server's anti-rollback gate with a 409 Conflict.
+ */
+function adoptPublishedFolderState(
+  folderTree: FolderTree,
+  folder: FolderState,
+  publishedChildren: SealedChildRef[],
+  newSequenceNumber: bigint,
+  publishedWriteChildren?: WriteChildRef[]
+): void {
+  folder.children = publishedChildren;
+  folder.sequenceNumber = newSequenceNumber;
+  folder.lastLoadedAt = Date.now();
+  if (folder.metadata) {
+    folder.metadata.children = publishedChildren;
+    if (folder.metadata.writeBody && publishedWriteChildren) {
+      folder.metadata.writeBody.writeChildren = publishedWriteChildren;
+    }
+  }
+  folderTree.set(folder.ipnsName, folder);
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers: load / save bin metadata
 // ---------------------------------------------------------------------------
@@ -425,7 +454,7 @@ export async function addToBin(params: {
   //     Preserve the folder's existing write-body verbatim (D-03) — the removed
   //     child's WriteChildRef removal is owned by 68.1-02, not this plan.
   const writeBodyParams = await getWriteBodyParams(folderState, binCtx.ctx);
-  await sdkCore.updateFolderMetadataAndPublish({
+  const { newSequenceNumber, publishedChildren } = await sdkCore.updateFolderMetadataAndPublish({
     children: updatedChildren,
     folderKey: folderState.folderKey,
     ...writeBodyParams,
@@ -437,6 +466,16 @@ export async function addToBin(params: {
     nodeId: folderState.nodeId,
     nodeGeneration: folderState.nodeGeneration,
   });
+
+  // Adopt the publish result so the next publish against this folder does not
+  // 409 on the server's anti-rollback sequence gate (68.1-22).
+  adoptPublishedFolderState(
+    folderTree,
+    folderState,
+    publishedChildren,
+    newSequenceNumber,
+    writeBodyParams.writeChildren
+  );
 
   return {
     removedItem,
@@ -524,7 +563,7 @@ export async function restoreFromBin(params: {
   // Preserve the target folder's existing write-body verbatim (D-03) — the
   // restored child's WriteChildRef insertion is owned by 68.1-02, not this plan.
   const writeBodyParams = await getWriteBodyParams(targetFolder, binCtx.ctx);
-  await sdkCore.updateFolderMetadataAndPublish({
+  const { newSequenceNumber, publishedChildren } = await sdkCore.updateFolderMetadataAndPublish({
     children: childrenForPublish,
     folderKey: targetFolder.folderKey,
     ...writeBodyParams,
@@ -536,6 +575,16 @@ export async function restoreFromBin(params: {
     nodeId: targetFolder.nodeId,
     nodeGeneration: targetFolder.nodeGeneration,
   });
+
+  // Adopt the publish result so the next publish against this folder does not
+  // 409 on the server's anti-rollback sequence gate (68.1-22).
+  adoptPublishedFolderState(
+    folderTree,
+    targetFolder,
+    publishedChildren,
+    newSequenceNumber,
+    writeBodyParams.writeChildren
+  );
 
   // 6b. Verify the restored child's OWN IPNS record still resolves.
   //     restoreFromBin only re-links the SealedChildRef into the parent (above) —
