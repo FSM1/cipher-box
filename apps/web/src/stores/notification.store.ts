@@ -14,7 +14,7 @@ type NotificationState = {
     type: Notification['type'],
     message: string,
     action?: Notification['action']
-  ) => void;
+  ) => string;
   dismissNotification: (id: string) => void;
   clearNotifications: () => void;
 };
@@ -22,19 +22,22 @@ type NotificationState = {
 export const useNotificationStore = create<NotificationState>((set) => ({
   notifications: [],
 
-  addNotification: (type, message, action) =>
+  addNotification: (type, message, action) => {
+    const id = crypto.randomUUID();
     set((state) => ({
       notifications: [
         ...state.notifications,
         {
-          id: crypto.randomUUID(),
+          id,
           type,
           message,
           createdAt: Date.now(),
           action,
         },
       ],
-    })),
+    }));
+    return id;
+  },
 
   dismissNotification: (id) =>
     set((state) => ({

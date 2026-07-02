@@ -18,6 +18,7 @@ Found during Phase 68 ship (simplify pass) — dead or superseded code that is p
 2. `seedSharedFolder`'s `addShareKeysFn` config field ("retained for Phase 68") is now permanently superseded by descriptor refs; web passes a no-op at `useSharedNavigation.ts` (~line 560).
 3. `apps/web/src/services/share.service.ts` pre-existing dead block: `checkPendingRotation`, `fetchPendingRotations`, `PendingRotation`, `hasActiveShares` — already dead on origin/main; the fetch stubs still throw stale `'deferred to Phase 68'` errors that are now misleading.
 4. Perf nit: `owner-reconcile.service.ts` issues `GET /shares/sent` twice per reconcile (once in `decodeSentGrants`, again via `buildGrantRemintCallbacks.queryGrantsFn`); thread the already-fetched rows through instead.
+5. Perf nit (greptile PR `#587` thread): `runOwnerReconcileForFolder` fires `GET /shares/sent` on EVERY `folder:updated` event before checking whether the folder is even a grant root. Short-circuit against the in-memory `useShareStore` sent-shares first (mirroring `getActiveGrantRootIpnsNames` in `rotation-driver.service.ts`) — but reason about store staleness (a grant created in another tab) before relying on it; the eager login sweep is the fallback either way.
 
 ## Solution
 

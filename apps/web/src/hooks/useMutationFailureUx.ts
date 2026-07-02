@@ -78,12 +78,17 @@ function maybeWarnDegradedCache(): void {
 
 /** D-06: dispatches the terminal defer-exhausted notice with a manual Retry action. */
 function dispatchDeferExhausted<T>(mutationFn: () => Promise<T>): void {
-  useNotificationStore.getState().addNotification('error', "Couldn't complete securely — retry.", {
-    label: 'Retry',
-    onClick: () => {
-      void retryAfterExhaustion(mutationFn);
-    },
-  });
+  const id = useNotificationStore
+    .getState()
+    .addNotification('error', "Couldn't complete securely — retry.", {
+      label: 'Retry',
+      onClick: () => {
+        // Replace, don't stack: a persistent failure re-dispatches a fresh
+        // exhaustion toast, so drop this one before re-running.
+        useNotificationStore.getState().dismissNotification(id);
+        void retryAfterExhaustion(mutationFn);
+      },
+    });
 }
 
 async function retryAfterExhaustion<T>(mutationFn: () => Promise<T>): Promise<void> {

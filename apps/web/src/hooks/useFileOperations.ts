@@ -1,6 +1,5 @@
 import { useState, useCallback } from 'react';
 import type { FolderOperationState } from './folder-helpers';
-import { runWithFailureUx } from './useMutationFailureUx';
 
 /**
  * React hook for file add/update operations.
@@ -37,11 +36,12 @@ export function useFileOperations() {
         forceVersion?: boolean;
       }
     ): Promise<void> => {
-      await runWithFailureUx(async () => {
-        throw new Error(
-          'not implemented — phase 65 (file update requires Node read-chain + write-chain)'
-        );
-      });
+      // Thrown directly (not via runWithFailureUx): the wrapper's finally
+      // would surface the degraded-cache notice for an operation that never
+      // reaches the rotation path. Re-wrap when the real SDK call lands.
+      throw new Error(
+        'not implemented — phase 65 (file update requires Node read-chain + write-chain)'
+      );
     },
     []
   );
