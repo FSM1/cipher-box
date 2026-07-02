@@ -2,18 +2,19 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
-current_phase: 69
-current_phase_name: FUSE and WinFsp — Rust Integration and Grant-Root Awareness
-status: "Phase 68 shipped - PR #587"
+current_phase: 68.1
+current_phase_name: web-client-runtime-integration
+status: executing
 stopped_at: Completed 68-12-PLAN.md (ROT-07 Gap 2 closure)
-last_updated: "2026-07-02T00:08:14.728Z"
+last_updated: "2026-07-02T12:50:41.267Z"
 last_activity: 2026-07-02
+last_activity_desc: Phase 68.1 execution started
 progress:
-  total_phases: 9
+  total_phases: 10
   completed_phases: 8
-  total_plans: 65
-  completed_plans: 65
-  percent: 89
+  total_plans: 79
+  completed_plans: 66
+  percent: 80
 ---
 
 # Project State
@@ -23,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-27)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 69 — FUSE and WinFsp — Rust Integration and Grant-Root Awareness
+**Current focus:** Phase 68.1 — web-client-runtime-integration
 
 ## Current Position
 
-Phase: 69 — FUSE and WinFsp — Rust Integration and Grant-Root Awareness
-Plan: Not started
-Status: Phase 68 shipped - PR #587
-Last activity: 2026-07-02
+Phase: 68.1 (web-client-runtime-integration) — EXECUTING
+Plan: 2 of 14
+Status: Ready to execute
+Last activity: 2026-07-02 — Phase 68.1 execution started
 
 Progress: `█████████░` 8 / 9 phases (89%)
 
@@ -223,6 +224,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 67 P06 | 20m | 1 tasks | 2 files |
 | Phase 68 P11 | 25min | 3 tasks | 6 files |
 | Phase 68 P12 | 4min | 2 tasks | 6 files |
+| Phase 68.1 P01 | 28min | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -445,6 +447,9 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase 68-11]: rotation-durability.spec.ts SC#4 proof now drives two real UI renames (seed+bump, then a rejected rename after stale-bytes replay) instead of direct module invocation; RenameDialog does not close on a failed mutation so the spec drives the form fields directly for the rejection step
 - [Phase 68-12]: rotateReadFromNode returns are keyed off rootResult.skipped (checked once at the end), not job-record status; both clean-resume and dirty-resume paths correctly return undefined since neither mints a fresh root key
 - [Phase 68-12]: performScopeExitRotation zeroes the OLD folderTree folderKey only AFTER the Map.set() swap and only post-flight (rotateReadFromNode has already returned) -- never zeroes rotationResult.readKey or the caller-supplied rootReadKey mid-flight
+- [Phase ?]: [Phase 68.1-01]: CipherBoxClientConfig.rootWriteKey optional — self-bootstrap requires rootIpnsKeypair AND rootWriteKey; host wiring lands 68.1-03
+- [Phase ?]: [Phase 68.1-01]: legacy zero-fallback writeKey publishes WITHOUT a write-body (never seal under zero key — T-68.1-01-03 structural mitigation)
+- [Phase ?]: [Phase 68.1-01]: deleteToBin/restoreFromBin write-body threading lives in bin/index.ts where the actual updateFolderMetadataAndPublish calls are
 
 ## Operator Next Steps
 
@@ -452,7 +457,7 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-01T20:06:13.030Z
+**Last session:** 2026-07-02T12:50:26.196Z
 **Stopped at:** Completed 68-12-PLAN.md (ROT-07 Gap 2 closure)
 **Resume file:** 
 None

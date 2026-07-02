@@ -449,12 +449,12 @@ Plans:
 4. Shared flows work end-to-end: shared-folder read navigation + shared-file download (`navigateReadChain`), shared-folder write ops (rename/delete/move/batch, shared file update), share creation, permission upgrade, and invite create+claim
 5. The full `tests/web-e2e` Playwright suite passes locally against the standard stack (all specs, not a subset); `find apps/web/src -name "*.spec.ts"` stays empty (logic in SDK, UI via web-e2e — SC#5 doctrine)
 
-**Plans**: 14 plans
+**Plans**: 1/14 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 68.1-01-PLAN.md — Owned write-body foundation: sdk-core publishEmptyRootNode + write-body in updateFolderMetadataAndPublish + client ensureFolderLoaded recovery + FolderState/config keys (resolves D-03) [wave 1]
+- [x] 68.1-01-PLAN.md — Owned write-body foundation: sdk-core publishEmptyRootNode + write-body in updateFolderMetadataAndPublish + client ensureFolderLoaded recovery + FolderState/config keys (resolves D-03) [wave 1]
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
