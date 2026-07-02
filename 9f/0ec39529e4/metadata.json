@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "9f0ec39529e4",
+  "strategy": "manual-commit",
+  "branch": "feat/web-integration-rotation-ux-and-durable-client-state",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/todos/pending/2026-07-02-rotation-hardening-followups-from-pr-review.md",
+    "apps/web/src/services/owner-reconcile.service.ts",
+    "packages/sdk/src/client.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/9f/0ec39529e4/0/metadata.json",
+      "transcript": "/9f/0ec39529e4/0/full.jsonl",
+      "content_hash": "/9f/0ec39529e4/0/content_hash.txt",
+      "prompt": "/9f/0ec39529e4/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 70565,
+    "cache_creation_tokens": 1415157,
+    "cache_read_tokens": 54685417,
+    "output_tokens": 181826,
+    "api_call_count": 248
+  }
+}
