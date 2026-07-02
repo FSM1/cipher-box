@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { SealedChildRef } from '@cipherbox/core';
 import type { CipherBoxClient } from '@cipherbox/sdk';
+import { resolveKinds } from '../lib/kind-cache';
 
 /**
  * A folder node in the in-memory folder tree.
@@ -213,6 +214,22 @@ export const useFolderStore = create<FolderState>((set, get) => ({
           if (matchingFolder) {
             get().updateFolderChildren(matchingFolder.id, event.children);
             get().updateFolderSequence(matchingFolder.id, event.sequenceNumber);
+
+            // D-02: this is a synchronous setter — the initial render reads a
+            // cache miss (folder-safe default). Populate the kind cache
+            // best-effort and, once it settles, re-invoke updateFolderChildren
+            // (idempotent, fresh object refs) so rows re-read the now-resolved
+            // kind. Never throw out of the subscription handler.
+            const folderId = matchingFolder.id;
+            void resolveKinds(event.children)
+              .then(() => {
+                // Re-lookup: the folder may have been removed while resolving.
+                if (!get().folders[folderId]) return;
+                get().updateFolderChildren(folderId, event.children);
+              })
+              .catch(() => {
+                // Best-effort — leave rows folder-safe on failure.
+              });
           }
           break;
         }
