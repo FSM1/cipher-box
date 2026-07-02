@@ -2870,10 +2870,6 @@ export class CipherBoxClient {
    * (share-key lookup with FilePointer fallback). `ctx`, `folderKey`,
    * owner/recipient pubkeys, `shareId`, and `addShareKeysFn` come from state.
    */
-  /**
-   * @stub phase 65 (write-chain): FilePointer replaced by SealedChildRef;
-   * updateSharedFile in share/shared-write.ts is stubbed for phase 65.
-   */
   async updateSharedFile(
     shareId: string,
     args: {
@@ -2882,9 +2878,110 @@ export class CipherBoxClient {
       getFileIpnsKeyFn: (itemId: string) => Promise<Uint8Array | null>;
     }
   ): Promise<void> {
-    void shareId;
-    void args;
-    throw new Error('not implemented — phase 65 (write-chain: updateSharedFile)');
+    return this.withOperation('updateSharedFile', async () => {
+      const state = this.requireSharedFolder(shareId);
+      const swCtx = this.buildSharedWriteContextFromState(state);
+
+      // Unseal the parent's write-body so the file's WriteChildRef (keyed by
+      // UUID) can be walked (mirrors shared-write.ts unsealParentWriteBody).
+      const parentNode = await unsealNode(state.publishedNode, state.folderKey, state.writeKey);
+      if (!parentNode.writeBody) {
+        throw new Error('updateSharedFile: shared folder has no write-body — not write-capable');
+      }
+
+      // Resolve the file's own PublishedNode envelope — id/kind are plaintext
+      // (NODE-03) and are the AAD inputs for unsealChildReadKey/unsealChildWriteKey.
+      const filePub = await this.resolvePublishedNode(args.filePointer.ipnsName);
+      if (!filePub) {
+        throw new Error(`updateSharedFile: cannot resolve file IPNS ${args.filePointer.ipnsName}`);
+      }
+      const fileNodeId = filePub.published.id;
+      const fileKind = filePub.published.kind;
+
+      // Recover the file's readKey from the parent read-body.
+      let fileReadKey: Uint8Array | null = await unsealChildReadKey(
+        args.filePointer.readKeySealed,
+        state.folderKey,
+        fileNodeId,
+        fileKind,
+        args.filePointer.generation
+      );
+      let fileWriteKey: Uint8Array | null = null;
+      let fileIpnsPrivateKey: Uint8Array | null = null;
+
+      try {
+        // Walk the parent write-body: find the WriteChildRef for this file (matched
+        // by UUID, never ipnsName), then recover the file's writeKey and, from the
+        // file's own write-body, its ipnsPrivateKey (shared-write.ts walkChildWriteKey
+        // + unsealParentWriteBody pattern, inlined here since both helpers are
+        // module-private to shared-write.ts).
+        const writeChildRef = parentNode.writeBody.writeChildren.find(
+          (wc) => wc.childId === fileNodeId
+        );
+        let currentFileNode: CoreNode | null = null;
+        if (writeChildRef) {
+          fileWriteKey = await unsealChildWriteKey(
+            writeChildRef.writeKeySealed,
+            state.writeKey,
+            fileNodeId,
+            fileKind,
+            args.filePointer.generation
+          );
+          currentFileNode = await unsealNode(filePub.published, fileReadKey, fileWriteKey);
+          fileIpnsPrivateKey = currentFileNode.writeBody?.ipnsPrivateKey ?? null;
+        }
+
+        // Share-key fallback (legacy path, kept per the existing signature): no
+        // write link was recorded for this file — fall back to the caller-supplied
+        // lookup for the ipnsPrivateKey. A missing writeKey still fails closed below
+        // (a write-body republish is impossible without one).
+        if (!fileIpnsPrivateKey) {
+          fileIpnsPrivateKey = await args.getFileIpnsKeyFn(args.filePointer.ipnsName);
+        }
+        if (!fileWriteKey || !fileIpnsPrivateKey) {
+          throw new Error(
+            `updateSharedFile: cannot resolve write key/ipnsPrivateKey for file ${args.filePointer.ipnsName}`
+          );
+        }
+        if (!currentFileNode || currentFileNode.kind !== 'file' || !currentFileNode.content) {
+          throw new Error(`updateSharedFile: node ${args.filePointer.ipnsName} is not a file node`);
+        }
+
+        await shareOps.updateSharedFile(swCtx, {
+          fileRef: args.filePointer,
+          fileNodeId,
+          fileReadKey,
+          fileWriteKey,
+          fileIpnsPrivateKey,
+          fileSequenceNumber: filePub.sequenceNumber,
+          newData: args.newContent,
+          originalCreatedAt: currentFileNode.createdAt,
+          originalVersions: currentFileNode.content.versions,
+        });
+
+        // File-only publish: the parent's children/sequence are unchanged — emit
+        // sharedFolder:updated with the current live snapshot so consumers
+        // re-resolve the file (mirrors refreshSharedFolder's file-only emission).
+        const live = this.sharedFolderTree.get(shareId);
+        if (live) {
+          this.emitter.emit({
+            type: 'sharedFolder:updated',
+            shareId,
+            ipnsName: live.ipnsName,
+            children: live.children,
+            sequenceNumber: live.sequenceNumber,
+          });
+        }
+      } finally {
+        // Zero all derived (never caller-owned) file keys on every exit path (D-09).
+        fileReadKey?.fill(0);
+        fileReadKey = null;
+        fileWriteKey?.fill(0);
+        fileWriteKey = null;
+        fileIpnsPrivateKey?.fill(0);
+        fileIpnsPrivateKey = null;
+      }
+    });
   }
 
   /**
