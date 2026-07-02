@@ -449,7 +449,7 @@ Plans:
 4. Shared flows work end-to-end: shared-folder read navigation + shared-file download (`navigateReadChain`), shared-folder write ops (rename/delete/move/batch, shared file update), share creation, permission upgrade, and invite create+claim
 5. The full `tests/web-e2e` Playwright suite passes locally against the standard stack (all specs, not a subset); `find apps/web/src -name "*.spec.ts"` stays empty (logic in SDK, UI via web-e2e — SC#5 doctrine)
 
-**Plans**: 3/14 plans executed
+**Plans**: 4/14 plans executed
 
 Plans:
 **Wave 1**
@@ -460,7 +460,7 @@ Plans:
 
 - [x] 68.1-02-PLAN.md — client createFolder (owned subfolder + write-body) + bin subtree-collectors + delete obsolete reencrypt.ts (D-05) [wave 2]
 - [x] 68.1-03-PLAN.md — Login root-Node init wiring: new-user publishes empty root Node + registers vault; existing-user unchanged (SC#2) [wave 2]
-- [ ] 68.1-05-PLAN.md — Shared read navigation (navigateToShare/subfolder/up/breadcrumb/downloadSharedFile) via navigateReadChain [wave 2]
+- [x] 68.1-05-PLAN.md — Shared read navigation (navigateToShare/subfolder/up/breadcrumb/downloadSharedFile) via navigateReadChain [wave 2]
 - [ ] 68.1-07-PLAN.md — [TDD] sdk-core owned file-Node chain (createFileMetadata/resolveFileMetadata/updateFileMetadata + raw-fileKey helper + registration wrappers) — the one genuine build [wave 2]
 
 **Wave 3** *(blocked on Wave 2 completion)*
