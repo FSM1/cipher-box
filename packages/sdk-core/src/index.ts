@@ -48,7 +48,9 @@ export {
   createFileMetadata,
   resolveFileMetadata,
   updateFileMetadata,
+  downloadFileContent,
   type FileIpnsRecordPayload,
+  type UpdateFileContentParams,
 } from './file';
 
 // Upload operations

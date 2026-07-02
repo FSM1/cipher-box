@@ -1,3 +1,13 @@
+/* eslint-disable @typescript-eslint/ban-ts-comment */
+// @ts-nocheck
+// 68.1-09 quarantine: the entire top-level describe below is already `.skip`'d
+// pending a full v3 rewrite (pre-v3 legacy `FileMetadata` + legacy `FolderChild`
+// fixtures — matches the file.test.ts/folder.test.ts precedent, 68.1-07). 68.1-09
+// typed replaceFile's currentMetadata/updates params from `unknown` to concrete
+// NodeContent/UpdateFileContentParams, which this file's loose legacy literals no
+// longer satisfy at compile time (runtime behavior unaffected — never executed).
+// TODO(phase 68.1): revive replaceFile/restoreFileVersion/deleteFileVersion tests
+// against v3 SealedChildRef/NodeContent fixtures.
 /**
  * Client file-op unit tests — covers replaceFile, restoreFileVersion, and
  * deleteFileVersion. These methods own the full publish + folderTree
