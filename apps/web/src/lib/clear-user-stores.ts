@@ -21,6 +21,7 @@ import { useNotificationStore } from '../stores/notification.store';
 import { useVaultSettingsStore } from '../stores/vault-settings.store';
 import { useAuthStore } from '../stores/auth.store';
 import { clearFileSizeCache } from '../hooks/useFileSize';
+import { clearKindCache } from './kind-cache';
 
 export function clearAllUserStores(): void {
   // 0. Destroy SDK client first (clears key caches, event subscriptions)
@@ -40,6 +41,7 @@ export function clearAllUserStores(): void {
   useNotificationStore.getState().clearNotifications();
   useVaultSettingsStore.getState().clearSettings();
   clearFileSizeCache();
+  clearKindCache();
 
   // 3. Clear auth state last (zeros keypair memory, sets isAuthenticated=false)
   useAuthStore.getState().logout();
