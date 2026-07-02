@@ -537,6 +537,34 @@ export async function restoreFromBin(params: {
     nodeGeneration: targetFolder.nodeGeneration,
   });
 
+  // 6b. Verify the restored child's OWN IPNS record still resolves.
+  //     restoreFromBin only re-links the SealedChildRef into the parent (above) —
+  //     it never re-publishes the child's own record, and the bin entry carries no
+  //     child ipnsPrivateKey, so re-minting here is impossible. deleteToBin does
+  //     NOT unenroll on soft-delete (comment at deleteToBin's IPNS-unenrollment
+  //     site), so the child record should normally still be TEE-republish-enrolled
+  //     and resolvable. If it is NOT resolvable (e.g. it fell out of TEE republish
+  //     before this fix, or the routing cache evicted it and republish hasn't run
+  //     yet), warn rather than silently re-linking a dead folder as if it were
+  //     navigable — this is a fail-closed signal to the caller/UI, not a throw,
+  //     since the re-link itself succeeded.
+  try {
+    const childResolved = await sdkCore.resolveIpnsRecord(entry.nodeIpnsName, binCtx.ctx);
+    if (!childResolved) {
+      console.warn(
+        `[CipherBox] restoreFromBin: restored child ${entry.nodeIpnsName} (bin entry ${entryId}) ` +
+          'does not resolve — its own IPNS record appears unavailable. The child was re-linked ' +
+          'into the parent folder, but navigating into it may fail until the record republishes. ' +
+          'No re-mint is possible here (bin entries do not carry the child ipnsPrivateKey).'
+      );
+    }
+  } catch (err) {
+    console.warn(
+      `[CipherBox] restoreFromBin: resolve check for restored child ${entry.nodeIpnsName} failed:`,
+      err
+    );
+  }
+
   // 7. Remove entry from bin and publish updated bin metadata
   const remainingEntries = binState.entries.filter((e) => e.id !== entryId);
   const newBinSeq = binState.sequenceNumber + 1;
