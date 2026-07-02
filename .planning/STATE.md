@@ -5,15 +5,15 @@ milestone_name: Metadata and Sharing Refactor
 current_phase: 68.1
 current_phase_name: web-client-runtime-integration
 status: executing
-stopped_at: Completed 68-12-PLAN.md (ROT-07 Gap 2 closure)
-last_updated: "2026-07-02T12:50:41.267Z"
+stopped_at: Completed 68.1-02-PLAN.md (createFolder + bin-relink subtree collectors)
+last_updated: "2026-07-02T13:10:43.889Z"
 last_activity: 2026-07-02
 last_activity_desc: Phase 68.1 execution started
 progress:
   total_phases: 10
   completed_phases: 8
   total_plans: 79
-  completed_plans: 66
+  completed_plans: 67
   percent: 80
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 ## Current Position
 
 Phase: 68.1 (web-client-runtime-integration) — EXECUTING
-Plan: 2 of 14
+Plan: 3 of 14
 Status: Ready to execute
 Last activity: 2026-07-02 — Phase 68.1 execution started
 
@@ -225,6 +225,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 68 P11 | 25min | 3 tasks | 6 files |
 | Phase 68 P12 | 4min | 2 tasks | 6 files |
 | Phase 68.1 P01 | 28min | 3 tasks | 10 files |
+| Phase 68.1 P02 | 35min | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -450,6 +451,8 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: [Phase 68.1-01]: CipherBoxClientConfig.rootWriteKey optional — self-bootstrap requires rootIpnsKeypair AND rootWriteKey; host wiring lands 68.1-03
 - [Phase ?]: [Phase 68.1-01]: legacy zero-fallback writeKey publishes WITHOUT a write-body (never seal under zero key — T-68.1-01-03 structural mitigation)
 - [Phase ?]: [Phase 68.1-01]: deleteToBin/restoreFromBin write-body threading lives in bin/index.ts where the actual updateFolderMetadataAndPublish calls are
+- [Phase 68.1-02]: createFolder throws when the parent has no real writeKey — fail-closed instead of sealing WriteChildRef under a zero key
+- [Phase 68.1-02]: collectRemovedItemIpnsNames gained a required parentReadKey parameter to unseal the removed item's readKeySealed (deleteItem passes folder.folderKey)
 
 ## Operator Next Steps
 
@@ -457,7 +460,7 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-02T12:50:26.196Z
-**Stopped at:** Completed 68-12-PLAN.md (ROT-07 Gap 2 closure)
+**Last session:** 2026-07-02T13:10:43.883Z
+**Stopped at:** Completed 68.1-02-PLAN.md (createFolder + bin-relink subtree collectors)
 **Resume file:** 
 None
