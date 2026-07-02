@@ -26,7 +26,9 @@ import {
 import {
   clearBytes,
   unwrapKey,
+  wrapKey,
   hexToBytes,
+  bytesToHex,
   deriveEd25519PublicKey,
   generateEd25519Keypair,
   generateRandomBytes,
@@ -1222,6 +1224,34 @@ export class CipherBoxClient {
 
         const childPublished = await sealNode(childNode, childReadKey, childWriteKey);
 
+        // Compute TEE enrollment fields (if teeKeys configured) BEFORE any IPFS
+        // upload — fail closed on incomplete config so a malformed teeKeys
+        // short-circuits before the addToIpfs side effect and never leaves an
+        // orphaned blob behind (mirrors createSubfolder, registration.ts:85-109).
+        let encryptedIpnsPrivateKey: string | undefined;
+        let keyEpoch: number | undefined;
+        if (this.config.teeKeys) {
+          const { currentPublicKey, currentEpoch } = this.config.teeKeys;
+          if (!currentPublicKey) {
+            throw new Error(
+              'createFolder: teeKeys.currentPublicKey is missing or empty — refusing to publish un-enrolled subfolder'
+            );
+          }
+          if (!Number.isInteger(currentEpoch) || currentEpoch < 1) {
+            throw new Error(
+              'createFolder: teeKeys.currentEpoch must be a positive integer (>= 1) — refusing to publish un-enrolled subfolder'
+            );
+          }
+          // ECIES-wrap the freshly-minted childIpnsPrivateKey under the TEE
+          // public key. Do NOT zero childIpnsPrivateKey here — wrapKey reads
+          // but does not consume the buffer; it is zeroed below at its
+          // existing terminal-owner site (D-09).
+          const teePublicKeyBytes = hexToBytes(currentPublicKey);
+          const wrappedBytes = await wrapKey(childIpnsPrivateKey, teePublicKeyBytes);
+          encryptedIpnsPrivateKey = bytesToHex(wrappedBytes);
+          keyEpoch = currentEpoch;
+        }
+
         // First publish — sequenceNumber MUST be 1n (Phase-60 strict gate).
         await sdkCore.createAndPublishIpnsRecord({
           ipnsPrivateKey: childIpnsPrivateKey,
@@ -1234,6 +1264,8 @@ export class CipherBoxClient {
           ).cid,
           sequenceNumber: 1n,
           ctx: this.ctx,
+          encryptedIpnsPrivateKey,
+          keyEpoch,
         });
 
         // Build the parent's SealedChildRef (read-body — no write field, NODE-03).
