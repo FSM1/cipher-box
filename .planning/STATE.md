@@ -5,15 +5,15 @@ milestone_name: Metadata and Sharing Refactor
 current_phase: 68.1
 current_phase_name: web-client-runtime-integration
 status: executing
-stopped_at: Completed 68.1-07-PLAN.md (owned per-file Node IPNS chain create/resolve/update + registration wrappers)
-last_updated: "2026-07-02T14:26:59.456Z"
+stopped_at: Completed 68.1-08-PLAN.md (updateSharedFile + moveInSharedFolder client wrappers wired via write-chain/share_keys)
+last_updated: "2026-07-02T14:43:02.979Z"
 last_activity: 2026-07-02
 last_activity_desc: Phase 68.1 execution started
 progress:
   total_phases: 10
   completed_phases: 8
   total_plans: 79
-  completed_plans: 70
+  completed_plans: 71
   percent: 80
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 ## Current Position
 
 Phase: 68.1 (web-client-runtime-integration) — EXECUTING
-Plan: 6 of 14
+Plan: 7 of 14
 Status: Ready to execute
 Last activity: 2026-07-02 — Phase 68.1 execution started
 
@@ -229,6 +229,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 68.1 P03 | 10min | 1 tasks | 1 files |
 | Phase 68.1 P05 | 40min | 2 tasks | 1 files |
 | Phase 68.1 P07 | 16min | 3 tasks | 6 files |
+| Phase 68.1 P08 | 25min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -464,6 +465,8 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: [Phase 68.1-07]: createFileMetadata builds but does not publish the file's first IPNS record (caller batch-publishes via batchPublishIpnsRecords) -- matches the pre-existing UploadResult.ipnsRecord contract already wired in client.ts
 - [Phase ?]: [Phase 68.1-07]: updateFileMetadata is a single-shot direct republish (no CAS retry/merge) -- mirrors shared-write.ts updateSharedFile, not the legacy quarantined CAS+merge flow
 - [Phase ?]: [Phase 68.1-07]: replaceFileInFolder is a thin registration.ts delegate to file/index.ts updateFileMetadata, kept for API symmetry with addFileToFolder/addFilesToFolder
+- [Phase ?]: [Phase 68.1-08]: getFileIpnsKeyFn is a fallback ONLY for fileIpnsPrivateKey in updateSharedFile — fileWriteKey always comes from the write-chain walk, fails closed if no WriteChildRef exists
+- [Phase ?]: [Phase 68.1-08]: moveInSharedFolder resolves destFolderKey/destIpnsPrivateKey from share_keys (folder + folder-ipns entries), passing the folder-ipns-wrapped value as SharedWriteContext.writeKey — fails closed via AEAD auth error if incompatible with the destination's actual write-body seal; 68.1-13 web-e2e is the empirical confirmation point
 
 ## Operator Next Steps
 
@@ -471,7 +474,7 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-02T14:26:59.450Z
-**Stopped at:** Completed 68.1-07-PLAN.md (owned per-file Node IPNS chain create/resolve/update + registration wrappers)
+**Last session:** 2026-07-02T14:43:02.972Z
+**Stopped at:** Completed 68.1-08-PLAN.md (updateSharedFile + moveInSharedFolder client wrappers wired via write-chain/share_keys)
 **Resume file:** 
 None
