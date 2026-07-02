@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "d89ac302a727",
+  "strategy": "manual-commit",
+  "branch": "feat/web-integration-rotation-ux-and-durable-client-state",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/src/shares/shares.service.spec.ts",
+    "apps/api/src/shares/shares.service.ts",
+    "apps/web/src/services/ipns.service.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d8/9ac302a727/0/metadata.json",
+      "transcript": "/d8/9ac302a727/0/full.jsonl",
+      "content_hash": "/d8/9ac302a727/0/content_hash.txt",
+      "prompt": "/d8/9ac302a727/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 44672,
+    "cache_creation_tokens": 544630,
+    "cache_read_tokens": 40113707,
+    "output_tokens": 138115,
+    "api_call_count": 188
+  }
+}
