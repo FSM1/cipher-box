@@ -19,13 +19,14 @@ import {
 } from 'react';
 import type { SealedChildRef } from '@cipherbox/core';
 import { useDialogState } from '../../hooks/useDialogState';
-import { isImageFile, isPdfFile, isAudioFile, isVideoFile } from '../../utils/fileTypes';
+import { isImageFile, isPdfFile, isAudioFile, isVideoFile, isFileRef } from '../../utils/fileTypes';
 import { useFolderStore } from '../../stores/folder.store';
 import { useSyncStore } from '../../stores/sync.store';
 import { isExternalFileDrag } from '../../hooks/useDropUpload';
 import { resolveIpnsRecord } from '../../services/ipns.service';
 import { fetchAndDecryptMetadata } from '@cipherbox/sdk-core';
 import { getSdkClient } from '../../lib/sdk-provider';
+import { downloadFileFromIpns, triggerBrowserDownload } from '../../services/download.service';
 import { triggerSearchIndexRebuild } from '../../hooks/useSearch';
 import { logger } from '../../lib/logger';
 import { runWithFailureUx } from '../../hooks/useMutationFailureUx';
@@ -381,10 +382,18 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
 
   const handleDownload = useCallback(async () => {
     const item = contextMenu.item;
-    if (!item) return;
-    // TODO(phase 63): SealedChildRef has no .type; download deferred to phase 65 (file read-chain)
-    logger.warn('[FileBrowser] Download not implemented — phase 65 (file read-chain)');
-  }, [contextMenu.item]);
+    if (!item || !currentFolder) return;
+    if (!isFileRef(item)) return; // No folder-archive download feature.
+    try {
+      const plaintext = await downloadFileFromIpns({
+        fileRef: item,
+        folderKey: currentFolder.folderKey,
+      });
+      triggerBrowserDownload(plaintext, item.name);
+    } catch (err) {
+      logger.error(`[FileBrowser] Download failed for ${item.name}:`, err);
+    }
+  }, [contextMenu.item, currentFolder]);
 
   const handleRenameClick = useCallback(() => {
     if (contextMenu.item) openRenameDialog(contextMenu.item);
@@ -438,9 +447,19 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
   }, [selectedItems]);
 
   const handleBatchDownload = useCallback(async () => {
-    // TODO(phase 65): batch download via Node read-chain not yet implemented
-    logger.warn('[FileBrowser] Batch download not implemented — phase 65 (file read-chain)');
-  }, []);
+    if (!currentFolder || selectedItems.length === 0) return;
+    for (const item of selectedItems.filter(isFileRef)) {
+      try {
+        const plaintext = await downloadFileFromIpns({
+          fileRef: item,
+          folderKey: currentFolder.folderKey,
+        });
+        triggerBrowserDownload(plaintext, item.name);
+      } catch (err) {
+        logger.error(`[FileBrowser] Batch download failed for ${item.name}:`, err);
+      }
+    }
+  }, [currentFolder, selectedItems]);
 
   const handleBatchDeleteConfirm = useCallback(async () => {
     const items = batchDeleteDialog.items;

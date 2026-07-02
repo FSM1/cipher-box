@@ -1,32 +1,47 @@
 import { useState, useCallback } from 'react';
+import { unwrapKey, hexToBytes } from '@cipherbox/crypto';
 import type { FolderOperationState } from './folder-helpers';
+import { getRootFolderState } from './folder-helpers';
+import { useAuthStore } from '../stores/auth.store';
+import { useFolderStore } from '../stores/folder.store';
+import { useVaultStore } from '../stores/vault.store';
+import { getSdkClient } from '../lib/sdk-provider';
+import { unpinFromIpfs } from '../lib/api/ipfs';
+import { resolveFileMetadata, shouldCreateVersion } from '../services/file-metadata.service';
+import { runWithFailureUx } from './useMutationFailureUx';
+import { logger } from '../lib/logger';
 
 /**
  * React hook for file add/update operations.
  *
- * @stub phase 65 — file update requires Node read-chain (to resolve current
- * NodeContent) and write-chain (file IPNS private key inside sealed write-body).
- * The per-file IPNS key and file key are no longer in FilePointer (retired);
- * they live inside the Node's sealed bodies (NodeContent / NodeWriteBody).
+ * `handleUpdateFile` (68.1-12) resolves the file's write-chain signing key via
+ * `client.resolveFileIpnsPrivateKey` (T-68.1-12-04) and the current `NodeContent`
+ * via the read-chain (`resolveFileMetadata`, 68.1-04), unwraps the caller-supplied
+ * ECIES-wrapped content key (`ReplaceFileDialog`'s upload pipeline still produces
+ * a wrapped hex key — out of this plan's scope to change), and publishes via
+ * `client.replaceFile` (68.1-09) inside `runWithFailureUx`.
  *
  * Returns loading/error state and operation callbacks.
  */
 export function useFileOperations() {
-  const [state] = useState<FolderOperationState>({
+  const [state, setState] = useState<FolderOperationState>({
     isLoading: false,
     error: null,
   });
 
   /**
    * Update a file's content in-place.
-   * @stub phase 65 — requires NodeContent + write-chain key. The eventual
-   * SDK mutation call belongs inside runWithFailureUx (68-09) alongside
-   * every other client.X() invocation in this hook set.
+   *
+   * @param parentId - Parent folder ID ('root' or folder UUID)
+   * @param fileData.fileId - IPNS name of the file (`SealedChildRef.ipnsName`)
+   * @param fileData.newFileKeyEncrypted - Hex-encoded ECIES-wrapped new content key
+   *   (wrapped under the user's own public key by the upload pipeline) — unwrapped
+   *   here with the user's private key to recover the raw fileKey the v3 model needs.
    */
   const handleUpdateFile = useCallback(
     async (
-      _parentId: string,
-      _fileData: {
+      parentId: string,
+      fileData: {
         fileId: string;
         newCid: string;
         newFileKeyEncrypted: string;
@@ -36,12 +51,84 @@ export function useFileOperations() {
         forceVersion?: boolean;
       }
     ): Promise<void> => {
-      // Thrown directly (not via runWithFailureUx): the wrapper's finally
-      // would surface the degraded-cache notice for an operation that never
-      // reaches the rotation path. Re-wrap when the real SDK call lands.
-      throw new Error(
-        'not implemented — phase 65 (file update requires Node read-chain + write-chain)'
-      );
+      setState({ isLoading: true, error: null });
+      try {
+        const auth = useAuthStore.getState();
+        if (!auth.vaultKeypair) {
+          throw new Error('No keypair available - please log in again');
+        }
+
+        const folders = useFolderStore.getState().folders;
+        const parentFolder =
+          parentId === 'root'
+            ? getRootFolderState(useVaultStore.getState(), folders)
+            : folders[parentId];
+        if (!parentFolder) {
+          throw new Error('Parent folder not found or vault not initialized');
+        }
+
+        const fileRef = parentFolder.children.find((c) => c.ipnsName === fileData.fileId);
+        if (!fileRef) {
+          throw new Error('File not found in folder');
+        }
+
+        const { metadata: currentMetadata } = await resolveFileMetadata(
+          fileRef,
+          parentFolder.folderKey
+        );
+
+        const createVersion = shouldCreateVersion(
+          currentMetadata.versions,
+          fileData.forceVersion ?? false
+        );
+
+        let newFileKey: Uint8Array | null = await unwrapKey(
+          hexToBytes(fileData.newFileKeyEncrypted),
+          auth.vaultKeypair.privateKey
+        );
+
+        const client = getSdkClient();
+        // T-68.1-12-04: the write-chain walk lives only inside CipherBoxClient
+        // (D-03) — this is the only way to pre-resolve the file's own IPNS
+        // signing key from the web layer. Do NOT zero it here — sdk-core
+        // updateFileMetadata is its terminal owner (T-47-01).
+        const fileIpnsPrivateKey = await client.resolveFileIpnsPrivateKey(
+          parentFolder.ipnsName,
+          fileData.fileId
+        );
+
+        let prunedCids: string[] = [];
+        try {
+          ({ prunedCids } = await runWithFailureUx(() =>
+            client.replaceFile(parentFolder.ipnsName, fileData.fileId, {
+              fileIpnsPrivateKey,
+              currentMetadata,
+              updates: {
+                cid: fileData.newCid,
+                fileKey: newFileKey!,
+                fileIv: hexToBytes(fileData.newFileIv),
+                size: fileData.newSize,
+                mimeType: currentMetadata.mimeType,
+                encryptionMode: fileData.newEncryptionMode ?? currentMetadata.encryptionMode,
+              },
+              createVersion,
+            })
+          ));
+        } finally {
+          newFileKey?.fill(0);
+          newFileKey = null;
+        }
+
+        for (const cid of prunedCids) {
+          unpinFromIpfs(cid).catch((err) => logger.warn('[FileOps] Unpin pruned CID failed:', err));
+        }
+
+        setState({ isLoading: false, error: null });
+      } catch (err) {
+        const error = err instanceof Error ? err.message : 'Failed to update file';
+        setState({ isLoading: false, error });
+        throw err;
+      }
     },
     []
   );
