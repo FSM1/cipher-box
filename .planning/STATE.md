@@ -5,15 +5,15 @@ milestone_name: Metadata and Sharing Refactor
 current_phase: 68.1
 current_phase_name: web-client-runtime-integration
 status: executing
-stopped_at: Completed 68.1-05-PLAN.md (shared-folder read navigation + file download)
-last_updated: "2026-07-02T13:48:28.460Z"
+stopped_at: Completed 68.1-07-PLAN.md (owned per-file Node IPNS chain create/resolve/update + registration wrappers)
+last_updated: "2026-07-02T14:26:59.456Z"
 last_activity: 2026-07-02
 last_activity_desc: Phase 68.1 execution started
 progress:
   total_phases: 10
   completed_phases: 8
   total_plans: 79
-  completed_plans: 69
+  completed_plans: 70
   percent: 80
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 ## Current Position
 
 Phase: 68.1 (web-client-runtime-integration) — EXECUTING
-Plan: 5 of 14
+Plan: 6 of 14
 Status: Ready to execute
 Last activity: 2026-07-02 — Phase 68.1 execution started
 
@@ -228,6 +228,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 68.1 P02 | 35min | 3 tasks | 2 files |
 | Phase 68.1 P03 | 10min | 1 tasks | 1 files |
 | Phase 68.1 P05 | 40min | 2 tasks | 1 files |
+| Phase 68.1 P07 | 16min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -460,6 +461,9 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase 68.1-05]: navigateReadChain cannot render an intermediate folder (forces kind:'file' leaf) -- folder nav uses a parallel low-level web-layer walk reusing the same sdk-core/core primitives
 - [Phase 68.1-05]: ReceivedShare.readDescriptorRef is hex on the API DTO wire; navigateReadChain expects base64 -- downloadSharedFile bridges hex-decoded bytes to base64 before calling it
 - [Phase 68.1-05]: single-file shares (root Node kind:'file') switch currentView to 'file', activating SharedFileBrowser's pre-existing synthetic-ref download effect for the first time
+- [Phase ?]: [Phase 68.1-07]: createFileMetadata builds but does not publish the file's first IPNS record (caller batch-publishes via batchPublishIpnsRecords) -- matches the pre-existing UploadResult.ipnsRecord contract already wired in client.ts
+- [Phase ?]: [Phase 68.1-07]: updateFileMetadata is a single-shot direct republish (no CAS retry/merge) -- mirrors shared-write.ts updateSharedFile, not the legacy quarantined CAS+merge flow
+- [Phase ?]: [Phase 68.1-07]: replaceFileInFolder is a thin registration.ts delegate to file/index.ts updateFileMetadata, kept for API symmetry with addFileToFolder/addFilesToFolder
 
 ## Operator Next Steps
 
@@ -467,6 +471,7 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-02T13:48:28.453Z
-**Stopped at:** Completed 68.1-05-PLAN.md (shared-folder read navigation + file download)
+**Last session:** 2026-07-02T14:26:59.450Z
+**Stopped at:** Completed 68.1-07-PLAN.md (owned per-file Node IPNS chain create/resolve/update + registration wrappers)
 **Resume file:** 
+None
