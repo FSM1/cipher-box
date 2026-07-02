@@ -156,6 +156,8 @@ export function DetailsDialog({
           metadataLoading={metadataLoading}
           sequenceNumber={folderStoreEntry?.sequenceNumber ?? null}
           childCount={folderStoreEntry ? folderStoreEntry.children.length : null}
+          folderKey={folderStoreEntry?.folderKey ?? null}
+          ipnsPrivateKey={folderStoreEntry?.ipnsPrivateKey ?? null}
         />
       )}
     </Modal>

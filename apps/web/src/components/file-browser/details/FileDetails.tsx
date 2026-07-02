@@ -41,7 +41,7 @@ export function FileDetails({
       <div className="details-section-header">{'// ipns'}</div>
 
       {/* TODO(phase 63): item.ipnsName is the child's IPNS k51 name (SealedChildRef) */}
-      <DetailRow label="File IPNS">
+      <DetailRow label="File Metadata IPNS">
         <CopyableValue value={item.ipnsName} />
       </DetailRow>
 

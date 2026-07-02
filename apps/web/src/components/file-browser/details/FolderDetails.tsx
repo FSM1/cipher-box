@@ -5,18 +5,32 @@ import { CopyableValue, DetailRow } from './DetailsPrimitives';
  * Folder details content (node/v3: SealedChildRef display).
  * TODO(phase 63): wire read-chain navigation to load Node for full metadata.
  */
+/** Redact a key's raw bytes to a short, copy-safe hex preview (never full material). */
+function redactKeyPreview(key: Uint8Array): string {
+  const hex = Array.from(key)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+  return `${hex.slice(0, 16)}...${hex.slice(-8)}`;
+}
+
 export function FolderDetails({
   item,
   metadataCid,
   metadataLoading,
   sequenceNumber,
   childCount,
+  folderKey,
+  ipnsPrivateKey,
 }: {
   item: SealedChildRef;
   metadataCid: string | null;
   metadataLoading: boolean;
   sequenceNumber: bigint | null;
   childCount: number | null;
+  /** Decrypted folder read key, if this folder is loaded in the SDK's folderTree. */
+  folderKey: Uint8Array | null;
+  /** Decrypted IPNS signing private key, if this folder is loaded in the SDK's folderTree. */
+  ipnsPrivateKey: Uint8Array | null;
 }) {
   return (
     <div className="details-rows">
@@ -70,6 +84,26 @@ export function FolderDetails({
           {item.readKeySealed.slice(0, 16)}...{item.readKeySealed.slice(-8)} (sealed under parent
           read-key)
         </span>
+      </DetailRow>
+
+      <DetailRow label="Folder Key">
+        {folderKey ? (
+          <span className="details-value details-value--redacted">
+            {redactKeyPreview(folderKey)}
+          </span>
+        ) : (
+          <span className="details-value details-value--dim">unavailable (not loaded)</span>
+        )}
+      </DetailRow>
+
+      <DetailRow label="IPNS Private Key">
+        {ipnsPrivateKey ? (
+          <span className="details-value details-value--redacted">
+            {redactKeyPreview(ipnsPrivateKey)}
+          </span>
+        ) : (
+          <span className="details-value details-value--dim">unavailable (not loaded)</span>
+        )}
       </DetailRow>
 
       {/* Timestamps */}
