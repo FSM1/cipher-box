@@ -1,0 +1,130 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "933b9e35f24c",
+  "session_id": "064836b9-90e4-42d5-aabc-ed5fde831a57",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-02T20:21:56.901776Z",
+  "branch": "feat/web-client-runtime-integration",
+  "checkpoints_count": 3,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "f5147d3df453",
+  "token_usage": {
+    "input_tokens": 49458,
+    "cache_creation_tokens": 1981475,
+    "cache_read_tokens": 50264952,
+    "output_tokens": 198476,
+    "api_call_count": 184
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-plan-phase-2026-07-02T19:11:49.468219Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "6a32dc56abb1",
+      "timestamp": "2026-07-02T19:11:49.468219Z",
+      "native": {
+        "command": "/gsd-plan-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01Uae4oXZcmbjYJcb6Ru4Pef",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "f5147d3df453",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 966,
+        "end": 967,
+        "entry_ids": [
+          "87bcf7d3-6ab6-4d0c-85a4-392200647a8f"
+        ],
+        "tool_use_id": "toolu_01Uae4oXZcmbjYJcb6Ru4Pef"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Uae4oXZcmbjYJcb6Ru4Pef"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 10
+  },
+  "summary": {
+    "intent": "Execute and then gap-close a large multi-wave GSD phase (68.1: web client runtime integration) that wires the web app's UI to the SDK's owned/shared read-write chains, and validate the result end-to-end via Playwright e2e and manual local-stack testing.",
+    "outcome": "All 14 primary plans plus a first wave of gap-closure plans executed and merged (fixing folder-store id desync, kind-cache wiring, TEE republish enrollment, and a stale-record retry bug), raising e2e pass rate from 6/208 to ~190/208, but phase verification still failed (2/5 success criteria) with newly surfaced gaps in shared-folder downloads, AEAD decrypt on streaming preview, dead itemName backfill code, and a volatile dev IPNS routing store causing cold-navigation failures the user reproduced live.",
+    "learnings": {
+      "repo": [
+        "GSD workflow: `phase uat-passed` is unimplemented but 'auto_advance: true' in project config auto-approves human-verify checkpoints inside execute-plan, which can mask incomplete verification if not watched",
+        "gsd-tools decision-coverage gate requires the informational tag placed inside the bold ID group exactly as `- **D-04 [informational]:**`, not appended after the closing bold",
+        "docker/mock-ipns-routing healthcheck used `wget localhost` which resolves to ::1 while the app binds IPv4-only, causing perpetual 'unhealthy' status unrelated to the app itself — fixed by pinning healthcheck to 127.0.0.1",
+        "mock-ipns-routing (dev delegated routing) stores records in an in-memory Map; any container restart wipes all unpublished-to-DB records permanently, which explains cold-navigation 404s after logout/login rather than propagation lag",
+        "API listens on :3000; :3001 is the mock-ipns-routing delegated-routing service — probing 3001 for API health silently checks the wrong service",
+        "createFolder previously published subfolder IPNS records without encryptedIpnsPrivateKey/keyEpoch, so ipns_republish_schedule never got rows for them — a real production durability gap beyond the dev-only wipe issue",
+        "migration 1750000000000-ApiSchemaCutover dropped the shares table's plaintext item_name column entirely; share.service.ts hardcodes itemName: '' now, making REQ-4's shouldBackfill() permanently false — reviving plaintext item names would violate the project's zero-knowledge design constraint (documented as GAP-6, left as a decision, not silently patched)"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/components/file-browser/SharedFolderRow.tsx",
+          "line": 63,
+          "finding": "Hardcoded isFolder = true stub meant the kind cache from 68.1-14 was never consulted in the shared browser, causing shared items to always render/behave as folders regardless of actual type"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "ReconcileStaleError needed localSequence/networkSequence fields added so useMutationFailureUx's retry loop can distinguish 'network ahead' (retry) from 'network behind' (route immediately to D-05 rejection toast) instead of retrying uniformly for ~30s regardless of direction"
+        }
+      ],
+      "workflow": [
+        "Wave-based parallel execution pattern: orchestrator spawns per-plan subagents in git worktrees, records each returned worktree_path/branch in a manifest as agents complete out of order, then merges all worktrees for a wave together before running post-merge build/test/drift gates",
+        "Background subagent completion signals can be lost when a session is evicted mid-wait; recovering requires manually checking process liveness/log files and resuming the agent via SendMessage with the recovered results rather than assuming it's still working",
+        "Serial (describe.serial) Playwright suites abort at first failure inside a describe block, so a raw pass/fail tally overstates real coverage — a single early-setup bug (e.g. nested folder creation) can hide dozens of untested downstream cases",
+        "Verifying a subagent's self-reported `expected_base`/worktree metadata is necessary — one agent misreported its own HEAD commit as the fork base, which was caught by an independent git merge-base check before recording it in the wave manifest"
+      ]
+    },
+    "friction": [
+      "Wave 1 executor agent stalled mid-stream after 119 tool calls / ~23 minutes, requiring a spot-check and manual resume via SendMessage rather than relying on the normal completion signal",
+      "git index.lock contention transiently blocked a tracking commit after Wave 3 merge, requiring a lock-state check and retry",
+      "A background e2e test run's completion notification never fired because the executor agent's session was evicted, leading to an extended false 'still running' status until the user pushed back ('its been way too long') and prompted a manual liveness check",
+      "Permission denial when trying to read a file that likely contained .env-derived port config, requiring the command to be split into non-.env-reading steps",
+      "A subagent doing gap-plan work performed a prohibited `git stash push`/reapply workaround mid-task (self-reported), leaving a stray stash entry that had to be identified and dropped during wave cleanup",
+      "mock-ipns-routing container falsely reported unhealthy for 39+ hours due to a healthcheck script bug unrelated to actual service health, consuming diagnostic effort before being traced to root cause"
+    ],
+    "open_items": [
+      "GAP-1: resolveFileMetadata AEAD decrypt failure breaks CTR/streaming video preview and batch-download",
+      "GAP-2 (reframed): cold-navigation IPNS 404s are actually caused by mock-ipns-routing's in-memory store being wiped on container restart, not propagation timeout — needs either persistence in dev or documentation of the limitation",
+      "GAP-6: REQ-4 itemName backfill feature is dead code post-schema-cutover (item_name column dropped); needs an explicit product decision (reintroduce storage vs. retire the feature) since current zero-knowledge design forbids plaintext server-side names",
+      "SHARE-WRITE-KEY gap: write-permission share/invite creation is blocked in the UI because parent folder writeKey isn't threaded through to ShareDialog.tsx; no backend upgrade-permission endpoint exists either (would need revoke+recreate)",
+      "fetchShareKeys remains a deferred stub causing shared move/update-fallback to fail closed on 4 live paths",
+      "Full web-e2e suite (208 specs) has not been re-run since the wave-1 gap-closure fixes landed — needed to confirm how many of the original 17 failures are resolved",
+      "commits 17e4319a6 and 7209e8777 have parens in their subjects and should be kept out of the eventual PR title per verifier note",
+      "Remaining gap-closure plan 68.1-17 was just kicked off (wave 2 of gap closure) when the transcript ends — waves 2-5 of gap closure and final phase re-verification are still pending"
+    ]
+  }
+}
