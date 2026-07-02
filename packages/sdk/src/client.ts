@@ -1744,24 +1744,45 @@ export class CipherBoxClient {
       });
 
       try {
-        // 2. Add FilePointer to folder's children (seals child readKey under parent readKey — READ-03)
+        // 2. Seal the v3 file Node's readKey (uploadResult.fileReadKey — NOT
+        // the content fileKey, D-07/NODE-02) into the parent's read-body —
+        // READ-03. childId is the file Node's own UUID (uploadResult.fileNodeId,
+        // matches WriteChildRef.childId below).
         const baseChildren = [...folder.children];
         const { updatedChildren } = await sdkCore.addFilePointerToFolder({
           children: folder.children,
-          childReadKey: uploadResult.fileKey,
+          childReadKey: uploadResult.fileReadKey,
           parentReadKey: folder.folderKey,
-          childId: fileId,
+          childId: uploadResult.fileNodeId,
           childKind: 'file',
           childGeneration: 0,
           name: fileName,
           ipnsName: uploadResult.fileMetaIpnsName,
-          versionFloor: 0n,
+          versionFloor: 1n,
         });
 
-        // 2b. Preserve the folder's existing write-body on republish (D-03).
-        // The new file's WriteChildRef insertion is owned by 68.1-07/09 —
-        // this plan only preserves the existing chain verbatim.
+        // 2b. Insert a WriteChildRef for the new file's writeKey into the
+        // parent's write-body (68.1-09 owns WriteChildRef insertion for
+        // owned uploads; 68.1-01's getWriteBodyParams sources the existing
+        // chain to preserve verbatim). No real writeKey (legacy zero-fallback
+        // parent, T-68.1-01-03) means the file cannot be write-linked — the
+        // upload still succeeds read-only, matching getWriteBodyParams'
+        // existing preservation-only contract at every other owned call site.
         const writeBodyParams = await this.getWriteBodyParams(folder);
+        let updatedWriteChildren = writeBodyParams.writeChildren;
+        if (writeBodyParams.writeKey) {
+          const writeKeySealed = await sealChildWriteKey(
+            uploadResult.fileWriteKey,
+            writeBodyParams.writeKey,
+            uploadResult.fileNodeId,
+            'file',
+            0
+          );
+          updatedWriteChildren = [
+            ...(writeBodyParams.writeChildren ?? []),
+            { childId: uploadResult.fileNodeId, writeKeySealed },
+          ];
+        }
 
         // 3. Concurrent: file IPNS batch publish + folder metadata update
         //    These two operations are independent -- no data dependency between them.
@@ -1772,7 +1793,8 @@ export class CipherBoxClient {
             children: updatedChildren,
             baseChildren,
             folderKey: folder.folderKey,
-            ...writeBodyParams,
+            writeKey: writeBodyParams.writeKey,
+            writeChildren: updatedWriteChildren,
             ipnsPrivateKey: folder.ipnsKeypair.privateKey,
             ipnsName: folderIpnsName,
             sequenceNumber: folder.sequenceNumber,
@@ -1858,6 +1880,12 @@ export class CipherBoxClient {
         return { cid: uploadResult.cid };
       } finally {
         clearBytes(uploadResult.fileKey);
+        // uploadResult.fileReadKey/fileWriteKey are caller-owned raw returns
+        // (D-09) — this call site is the terminal owner: both are sealed into
+        // the parent's read/write-body above and nothing downstream retains
+        // them, so zero the local copies once consumed.
+        clearBytes(uploadResult.fileReadKey);
+        clearBytes(uploadResult.fileWriteKey);
       }
     });
   }
