@@ -5,16 +5,16 @@ milestone_name: Metadata and Sharing Refactor
 current_phase: 68.1
 current_phase_name: web-client-runtime-integration
 status: executing
-stopped_at: Completed 68.1-08-PLAN.md (updateSharedFile + moveInSharedFolder client wrappers wired via write-chain/share_keys)
-last_updated: "2026-07-02T14:43:02.979Z"
+stopped_at: Completed 68.1-13-PLAN.md (web-e2e exit-gate triage: 5 bugs fixed -- createFolder retry+folder-store desync, details-dialog fields, batch-download UI, FileListItem/ContextMenu kind-cache wiring; full suite NOT re-confirmed green, GAP-1/GAP-2 surfaced)
+last_updated: "2026-07-02T18:22:37.227Z"
 last_activity: 2026-07-02
 last_activity_desc: Phase 68.1 execution started
 progress:
   total_phases: 10
-  completed_phases: 8
+  completed_phases: 9
   total_plans: 79
-  completed_plans: 71
-  percent: 80
+  completed_plans: 79
+  percent: 90
 ---
 
 # Project State
@@ -28,12 +28,12 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 
 ## Current Position
 
-Phase: 68.1 (web-client-runtime-integration) — EXECUTING
-Plan: 7 of 14
-Status: Ready to execute
-Last activity: 2026-07-02 — Phase 68.1 execution started
+Phase: 68.1 (web-client-runtime-integration) — 14/14 plans complete (all SUMMARY.md present on disk)
+Plan: 14 of 14
+Status: Phase plans complete — full web-e2e suite NOT yet re-confirmed green (68.1-13 surfaced GAP-1/GAP-2; see 68.1-13-SUMMARY.md Known Gaps)
+Last activity: 2026-07-02 — Completed 68.1-13-PLAN.md (web-e2e exit-gate triage: 5 bugs fixed, 2 new + 3 pre-existing gaps surfaced)
 
-Progress: `█████████░` 8 / 9 phases (89%)
+Progress: `██████████` 79 / 79 plans (100%)
 
 ## Deferred Items
 
@@ -230,6 +230,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 68.1 P05 | 40min | 2 tasks | 1 files |
 | Phase 68.1 P07 | 16min | 3 tasks | 6 files |
 | Phase 68.1 P08 | 25min | 2 tasks | 2 files |
+| Phase 68.1 P13 | 240min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -467,6 +468,9 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: [Phase 68.1-07]: replaceFileInFolder is a thin registration.ts delegate to file/index.ts updateFileMetadata, kept for API symmetry with addFileToFolder/addFilesToFolder
 - [Phase ?]: [Phase 68.1-08]: getFileIpnsKeyFn is a fallback ONLY for fileIpnsPrivateKey in updateSharedFile — fileWriteKey always comes from the write-chain walk, fails closed if no WriteChildRef exists
 - [Phase ?]: [Phase 68.1-08]: moveInSharedFolder resolves destFolderKey/destIpnsPrivateKey from share_keys (folder + folder-ipns entries), passing the folder-ipns-wrapped value as SharedWriteContext.writeKey — fails closed via AEAD auth error if incompatible with the destination's actual write-body seal; 68.1-13 web-e2e is the empirical confirmation point
+- [Phase 68.1-13]: createFolder wrapped in runWithFailureUx (was the only folder mutation missing retry-on-ReconcileStaleError)
+- [Phase 68.1-13]: useFolderMutations.handleCreate keys new FolderNode by ipnsName not write-body UUID -- fixes folder-store id desync that silently dropped folder:updated events on nested-folder-creation
+- [Phase 68.1-13]: FileListItem.isFolder and ContextMenu.isFile now read fileTypes.ts isFileRef(item) kind cache -- both were hardcoded phase-63 stubs
 
 ## Operator Next Steps
 
@@ -474,7 +478,12 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-02T14:43:02.972Z
+**Last session:** 2026-07-02T18:20:55.794Z
 **Stopped at:** Completed 68.1-08-PLAN.md (updateSharedFile + moveInSharedFolder client wrappers wired via write-chain/share_keys)
 **Resume file:** 
 None
+
+### Blockers
+
+- GAP-1 (68.1-13): resolveFileMetadata AEAD Decryption-failed for CTR/streaming video preview and post-upload batch-download -- needs dedicated crypto debugging
+- GAP-2 (68.1-13): full-workflow.spec.ts 3.8 cold-reload multi-level IPNS DFS resolve times out -- needs retry-budget tuning or propagation investigation

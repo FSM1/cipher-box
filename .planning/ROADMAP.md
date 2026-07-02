@@ -449,7 +449,7 @@ Plans:
 4. Shared flows work end-to-end: shared-folder read navigation + shared-file download (`navigateReadChain`), shared-folder write ops (rename/delete/move/batch, shared file update), share creation, permission upgrade, and invite create+claim
 5. The full `tests/web-e2e` Playwright suite passes locally against the standard stack (all specs, not a subset); `find apps/web/src -name "*.spec.ts"` stays empty (logic in SDK, UI via web-e2e — SC#5 doctrine)
 
-**Plans**: 13/14 plans executed
+**Plans**: 14/14 plans complete
 
 Plans:
 **Wave 1**
@@ -482,7 +482,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 68.1-13-PLAN.md — web-e2e enablement + triage: SC#1/SC#5 assertions + full Playwright suite green (exit gate, WEB-04) [wave 6]
+- [x] 68.1-13-PLAN.md — web-e2e enablement + triage: SC#1/SC#5 assertions hold; 5 real bugs fixed (createFolder retry+folder-store desync, details-dialog fields, batch-download UI, FileListItem/ContextMenu kind-cache wiring). **Full Playwright suite NOT re-confirmed green** — GAP-1 (resolveFileMetadata AEAD failure) and GAP-2 (cold-reload IPNS DFS timeout) surfaced; WEB-04 left unchecked pending a follow-up session. See 68.1-13-SUMMARY.md Known Gaps. [wave 6]
 
 ### Phase 69: FUSE and WinFsp — Rust Integration and Grant-Root Awareness
 
