@@ -12,54 +12,77 @@
  * anti-rollback floor sdk-core's raw resolveIpnsRecord does not) rather than the
  * sdk-core ctx-based helpers, since the web app has no `SdkContext` bridge.
  *
- * `createFileMetadata` / `updateFileMetadata` / version-transform helpers remain
- * stubs — file creation and update via the Node write-chain are owned by later
- * plans (68.1-09/68.1-12).
+ * `createFileMetadata` / `updateFileMetadata` (68.1-12) delegate straight to their
+ * sdk-core counterparts (packages/sdk-core/src/file/index.ts, 68.1-07) via
+ * `getSdkClient().getContext()` — unlike `resolveFileMetadata`/`downloadFileFromIpns`,
+ * these do not need the ROT-07 anti-rollback wrapper (write paths always publish a
+ * fresh, forward sequence number; there is no stale-read risk to guard against), so
+ * delegating avoids re-implementing sdk-core's Node-build/seal/publish logic here.
+ *
+ * `shouldCreateVersion` / `computeRestoreVersionUpdate` / `computeDeleteVersionUpdate`
+ * are pure, no-publish transforms over `NodeContent.versions` (68.1-12) — ported from
+ * the pre-v3 legacy implementation (commit b24e78e90) and adapted to node/v3's raw
+ * `Uint8Array` fileKey / base64 fileIv contract (NODE-02).
  */
 
 import type { SealedChildRef, VersionEntry, NodeContent, PublishedNode } from '@cipherbox/core';
 import { unsealNode, unsealChildReadKey } from '@cipherbox/core';
+import {
+  createFileMetadata as sdkCreateFileMetadata,
+  updateFileMetadata as sdkUpdateFileMetadata,
+  type FileIpnsRecordPayload,
+  type UpdateFileContentParams,
+} from '@cipherbox/sdk-core';
 import { resolveIpnsRecord } from './ipns.service';
 import { fetchFromIpfs } from '../lib/api/ipfs';
+import { getSdkClient } from '../lib/sdk-provider';
+import { useVaultSettingsStore } from '../stores/vault-settings.store';
 
-/** Record payload ready for batch publish */
-export type FileIpnsRecordPayload = {
-  ipnsName: string;
-  recordBase64: string;
-  metadataCid: string;
-  encryptedIpnsPrivateKey?: string;
-  keyEpoch?: number;
-};
+export type { FileIpnsRecordPayload };
 
 /** Content fields applied as `updates` when routing a file metadata write through the SDK client. */
-export type FileContentUpdates = {
-  cid?: string;
-  fileKeyEncrypted?: string;
-  fileIv?: string;
-  size?: number;
-  encryptionMode?: 'GCM' | 'CTR';
-};
+export type FileContentUpdates = UpdateFileContentParams;
+
+/** Decodes a base64 string to a Uint8Array (VersionEntry.fileIv is base64, v3 contract). */
+function base64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) {
+    bytes[i] = bin.charCodeAt(i);
+  }
+  return bytes;
+}
 
 /**
  * Create a per-file Node record.
- * @stub phase 65 — requires Node write-chain (NodeWriteBody sealing)
+ *
+ * Thin delegate to sdk-core's `createFileMetadata` (68.1-07) — mints
+ * fileReadKey/fileWriteKey/Ed25519 keypair, seals a v3 file Node, and builds
+ * (but does not publish) the file's first IPNS record.
+ *
+ * @security Returns fileReadKey/fileWriteKey RAW — the caller is the terminal
+ *   owner (D-09), matching sdk-core's own contract.
  */
-export async function createFileMetadata(_params: {
-  fileId: string;
+export async function createFileMetadata(params: {
   cid: string;
-  fileKeyEncrypted: string;
-  fileIv: string;
+  fileKey: Uint8Array;
+  fileIv: Uint8Array;
   size: number;
   mimeType: string;
-  folderKey: Uint8Array;
-  userPublicKey: Uint8Array;
   encryptionMode?: 'GCM' | 'CTR';
+  fileId?: string;
 }): Promise<{
   fileMetaIpnsName: string;
+  fileNodeId: string;
+  fileReadKey: Uint8Array;
+  fileWriteKey: Uint8Array;
   ipnsRecord: FileIpnsRecordPayload;
-  ipnsPrivateKeyEncrypted: string;
+  ipnsPrivateKeyEncrypted?: string;
 }> {
-  throw new Error('not implemented — phase 65 (file creation requires Node write-chain)');
+  return sdkCreateFileMetadata({
+    ...params,
+    ctx: getSdkClient().getContext(),
+  });
 }
 
 /**
@@ -125,51 +148,128 @@ export async function resolveFileMetadata(
 
 /**
  * Determine whether a file content update should create a new version entry.
- * @stub phase 65 — version logic moves to NodeContent.versions
+ *
+ * Ported from the pre-v3 policy (commit b24e78e90), adapted to `VersionEntry`'s
+ * `createdAt` field (NODE-02):
+ * - `forceVersion` (explicit re-upload, e.g. `ReplaceFileDialog`) always versions.
+ * - No existing versions → always version (first version always created).
+ * - Otherwise version only if the newest entry is older than the user-configurable
+ *   cooldown (`vault-settings.store`'s `versionCooldownMinutes`).
+ *
+ * @param currentVersions - Current file's version history (may be empty/undefined)
+ * @param forceVersion - Whether to force version creation regardless of cooldown
  */
 export function shouldCreateVersion(
-  _currentVersions: VersionEntry[] | undefined,
-  _forceVersion: boolean
+  currentVersions: VersionEntry[] | undefined,
+  forceVersion: boolean
 ): boolean {
-  throw new Error('not implemented — phase 65 (version check requires NodeContent.versions)');
+  if (forceVersion) return true;
+  if (!currentVersions || currentVersions.length === 0) return true;
+
+  const cooldownMs = useVaultSettingsStore.getState().settings.versionCooldownMinutes * 60 * 1000;
+  const newestCreatedAt = currentVersions[0].createdAt;
+  return Date.now() - newestCreatedAt >= cooldownMs;
 }
 
 /**
  * Update an existing file Node.
- * @stub phase 65 — requires Node write-chain
+ *
+ * Thin delegate to sdk-core's `updateFileMetadata` (68.1-07) — rebuilds the file
+ * Node preserving id/generation/createdAt, optionally folds the superseded content
+ * into version history, and republishes at fileSequenceNumber+1.
+ *
+ * @security Does NOT zero fileReadKey/fileWriteKey/fileIpnsPrivateKey or any
+ *   fileKey embedded in currentMetadata/updates — matches sdk-core's own contract
+ *   (D-09; sdk-core DOES zero fileIpnsPrivateKey on every exit path, T-47-01).
  */
-export async function updateFileMetadata(_params: {
+export async function updateFileMetadata(params: {
   fileIpnsPrivateKey: Uint8Array;
+  fileReadKey: Uint8Array;
+  fileWriteKey: Uint8Array;
   fileMetaIpnsName: string;
-  folderKey: Uint8Array;
+  fileSequenceNumber: bigint;
+  nodeId: string;
+  nodeGeneration: number;
+  originalCreatedAt: number;
+  currentMetadata: NodeContent;
   updates: FileContentUpdates;
-  currentVersions?: VersionEntry[];
   createVersion: boolean;
+  maxVersionsPerFile?: number;
 }): Promise<{
-  ipnsRecord: FileIpnsRecordPayload;
+  ipnsName: string;
+  metadataCid: string;
+  newSequenceNumber: bigint;
   prunedCids: string[];
 }> {
-  throw new Error('not implemented — phase 65 (file update requires Node write-chain)');
+  return sdkUpdateFileMetadata({
+    ...params,
+    ctx: getSdkClient().getContext(),
+  });
 }
 
 /**
  * Compute the metadata transform for restoring a previous version (pure, no publish).
- * @stub phase 65 — requires NodeContent.versions
+ *
+ * Picks `versions[versionIndex]` as the new live content (`updates`, decoding its
+ * base64 `fileIv` back to raw bytes for `UpdateFileContentParams`) and removes it
+ * from the retained history (`retainedVersions`) so it is not duplicated once the
+ * caller republishes. The caller is expected to pass `createVersion: true` to
+ * `client.restoreFileVersion` so sdk-core's `updateFileMetadata` folds the
+ * pre-restore live content into `retainedVersions` itself (capped, pruning as
+ * needed) — this function never needs to compute that fold or cap directly, since
+ * it only has `versions`, not the live content descriptor.
+ *
+ * @param versions - Current file's version history
+ * @param versionIndex - Index of the version to restore (0 = newest past version)
  */
 export function computeRestoreVersionUpdate(
-  _versions: VersionEntry[],
-  _versionIndex: number
-): { updates: FileContentUpdates; retainedVersions: VersionEntry[]; prunedCids: string[] } {
-  throw new Error('not implemented — phase 65 (version restore requires NodeContent.versions)');
+  versions: VersionEntry[],
+  versionIndex: number
+): {
+  updates: Omit<FileContentUpdates, 'mimeType'>;
+  retainedVersions: VersionEntry[];
+  prunedCids: string[];
+} {
+  if (versionIndex < 0 || versionIndex >= versions.length) {
+    throw new Error('Invalid version index');
+  }
+
+  const versionToRestore = versions[versionIndex];
+  const retainedVersions = versions.filter((_, i) => i !== versionIndex);
+
+  return {
+    updates: {
+      cid: versionToRestore.cid,
+      fileKey: versionToRestore.fileKey,
+      fileIv: base64ToBytes(versionToRestore.fileIv),
+      size: versionToRestore.size,
+      encryptionMode: versionToRestore.encryptionMode,
+    },
+    retainedVersions,
+    prunedCids: [],
+  };
 }
 
 /**
  * Compute the metadata transform for deleting a past version (pure, no publish).
- * @stub phase 65 — requires NodeContent.versions
+ *
+ * Removes the version at `versionIndex` from the history. The live content is
+ * untouched — the caller publishes the same content with a pruned version list
+ * (`createVersion: false`).
+ *
+ * @param versions - Current file's version history
+ * @param versionIndex - Index of the version to delete
  */
 export function computeDeleteVersionUpdate(
-  _versions: VersionEntry[],
-  _versionIndex: number
+  versions: VersionEntry[],
+  versionIndex: number
 ): { retainedVersions: VersionEntry[]; deletedCid: string } {
-  throw new Error('not implemented — phase 65 (version delete requires NodeContent.versions)');
+  if (versionIndex < 0 || versionIndex >= versions.length) {
+    throw new Error('Invalid version index');
+  }
+
+  const deletedCid = versions[versionIndex].cid;
+  const retainedVersions = versions.filter((_, i) => i !== versionIndex);
+
+  return { retainedVersions, deletedCid };
 }

@@ -1,11 +1,18 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { SealedChildRef } from '@cipherbox/core';
+import { generateFileKey, generateIv, encryptAesGcm } from '@cipherbox/crypto';
 import { Modal } from '../ui/Modal';
 import { useAuthStore } from '../../stores/auth.store';
+import { useFolderStore } from '../../stores/folder.store';
+import { useVaultStore } from '../../stores/vault.store';
+import { getRootFolderState } from '../../hooks/folder-helpers';
+import { runWithFailureUx } from '../../hooks/useMutationFailureUx';
 import { downloadFile, triggerBrowserDownload } from '../../services/download.service';
-import { resolveFileMetadata } from '../../services/file-metadata.service';
+import { resolveFileMetadata, shouldCreateVersion } from '../../services/file-metadata.service';
 import { fetchShareKeys } from '../../services/share.service';
+import { addToIpfs, unpinFromIpfs } from '../../lib/api/ipfs';
 import { getSdkClient, hasSdkClient } from '../../lib/sdk-provider';
+import { logger } from '../../lib/logger';
 import '../../styles/text-editor-dialog.css';
 
 type TextEditorDialogProps = {
@@ -161,8 +168,68 @@ export function TextEditorDialog({
         const encoded = new TextEncoder().encode(content);
         await onSaveSharedFile(item, encoded);
       } else {
-        // TODO(phase 65): owner save path — write-chain via Node.writeBody not yet implemented
-        throw new Error('not implemented — phase 65 (owner file save via Node write-chain)');
+        // Owner save path: encrypt the edited content fresh (no pre-existing
+        // IPFS upload for in-place text edits), then publish via the file
+        // write-chain (client.replaceFile, 68.1-09).
+        if (!folderKey) {
+          throw new Error('Folder key not available');
+        }
+
+        const folders = useFolderStore.getState().folders;
+        const parentFolder =
+          parentFolderId === 'root'
+            ? getRootFolderState(useVaultStore.getState(), folders)
+            : folders[parentFolderId];
+        if (!parentFolder) {
+          throw new Error('Parent folder not found or vault not initialized');
+        }
+
+        const { metadata: currentMetadata } = await resolveFileMetadata(item, folderKey);
+        const createVersion = shouldCreateVersion(currentMetadata.versions, false);
+
+        const encoded = new TextEncoder().encode(content);
+        let newFileKey: Uint8Array | null = generateFileKey();
+        const iv = generateIv();
+
+        let prunedCids: string[] = [];
+        try {
+          const ciphertext = await encryptAesGcm(encoded, newFileKey, iv);
+          const { cid } = await addToIpfs(new Blob([ciphertext as BlobPart]));
+
+          const client = getSdkClient();
+          // T-68.1-12-04: the write-chain walk lives only inside
+          // CipherBoxClient (D-03). Do NOT zero it here — sdk-core
+          // updateFileMetadata is its terminal owner (T-47-01).
+          const fileIpnsPrivateKey = await client.resolveFileIpnsPrivateKey(
+            parentFolder.ipnsName,
+            item.ipnsName
+          );
+
+          ({ prunedCids } = await runWithFailureUx(() =>
+            client.replaceFile(parentFolder.ipnsName, item.ipnsName, {
+              fileIpnsPrivateKey,
+              currentMetadata,
+              updates: {
+                cid,
+                fileKey: newFileKey!,
+                fileIv: iv,
+                size: encoded.length,
+                mimeType: currentMetadata.mimeType,
+                encryptionMode: 'GCM',
+              },
+              createVersion,
+            })
+          ));
+        } finally {
+          newFileKey?.fill(0);
+          newFileKey = null;
+        }
+
+        for (const prunedCid of prunedCids) {
+          unpinFromIpfs(prunedCid).catch((err) =>
+            logger.warn('[TextEditor] Unpin pruned CID failed:', err)
+          );
+        }
       }
 
       onClose();
@@ -170,7 +237,7 @@ export function TextEditorDialog({
       setError(err instanceof Error ? err.message : 'Failed to save file');
       setSaving(false);
     }
-  }, [item, content, isDirty, parentFolderId, onClose, shareId, onSaveSharedFile]);
+  }, [item, content, isDirty, folderKey, parentFolderId, onClose, shareId, onSaveSharedFile]);
 
   // Handle Ctrl/Cmd+S to save (edit mode only)
   useEffect(() => {

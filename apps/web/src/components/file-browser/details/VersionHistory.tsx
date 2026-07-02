@@ -1,8 +1,21 @@
 import { useState, useCallback } from 'react';
 import type { VersionEntry } from '@cipherbox/core';
+import { decryptAesGcm, decryptAesCtr } from '@cipherbox/crypto';
 import { useFolder } from '../../../hooks/useFolder';
 import { formatDate, formatBytes } from '../../../utils/format';
 import { formatDateWithTime } from './DetailsPrimitives';
+import { fetchFromIpfs } from '../../../lib/api/ipfs';
+import { triggerBrowserDownload } from '../../../services/download.service';
+
+/** Decodes a base64 string to a Uint8Array (VersionEntry.fileIv is base64, v3 contract). */
+function base64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) {
+    bytes[i] = bin.charCodeAt(i);
+  }
+  return bytes;
+}
 
 /**
  * Version history component for files with past versions.
@@ -10,7 +23,7 @@ import { formatDateWithTime } from './DetailsPrimitives';
  */
 export function VersionHistory({
   versions,
-  fileName: _fileName, // TODO(phase 65): used for download trigger stub
+  fileName,
   folderKey,
   parentFolderId,
   fileId,
@@ -29,11 +42,33 @@ export function VersionHistory({
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  const handleDownloadVersion = useCallback(async (_version: VersionEntry) => {
-    // TODO(phase 65): VersionEntry.fileKey is now a raw Uint8Array inside the sealed body;
-    // the download path needs the Node read-chain to obtain it (phase 63/65).
-    throw new Error('not implemented — phase 65 (version download via Node read-chain)');
-  }, []);
+  /**
+   * Download a specific past version.
+   *
+   * Each `VersionEntry` is self-contained (raw `fileKey`, base64 `fileIv`,
+   * `cid`, `encryptionMode` — NODE-02) — no read-chain resolve is needed
+   * beyond what the caller already provided via `versions`.
+   */
+  const handleDownloadVersion = useCallback(
+    async (version: VersionEntry) => {
+      setLoadingAction('download');
+      setActionError(null);
+      try {
+        const ciphertext = await fetchFromIpfs(version.cid);
+        const iv = base64ToBytes(version.fileIv);
+        const plaintext =
+          version.encryptionMode === 'CTR'
+            ? await decryptAesCtr(ciphertext, version.fileKey, iv)
+            : await decryptAesGcm(ciphertext, version.fileKey, iv);
+        triggerBrowserDownload(plaintext, fileName);
+      } catch {
+        setActionError('Failed to download version');
+      } finally {
+        setLoadingAction(null);
+      }
+    },
+    [fileName]
+  );
 
   const handleRestore = useCallback(
     async (versionIndex: number) => {
