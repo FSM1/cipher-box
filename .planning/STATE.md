@@ -6,15 +6,15 @@ current_phase: 68.1
 current_phase_name: web-client-runtime-integration
 status: executing
 stopped_at: "Completed 68.1-13-PLAN.md (web-e2e exit-gate triage: 5 bugs fixed -- createFolder retry+folder-store desync, details-dialog fields, batch-download UI, FileListItem/ContextMenu kind-cache wiring; full suite NOT re-confirmed green, GAP-1/GAP-2 surfaced)"
-last_updated: "2026-07-02T19:47:33.529Z"
+last_updated: "2026-07-02T19:50:19.995Z"
 last_activity: 2026-07-02
-last_activity_desc: "Completed 68.1-13-PLAN.md (web-e2e exit-gate triage: 5 bugs fixed, 2 new + 3 pre-existing gaps surfaced)"
+last_activity_desc: Phase 68.1 execution started
 progress:
   total_phases: 10
-  completed_phases: 9
-  total_plans: 79
+  completed_phases: 8
+  total_plans: 87
   completed_plans: 79
-  percent: 90
+  percent: 80
 ---
 
 # Project State
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 
 ## Current Position
 
-Phase: 68.1 (web-client-runtime-integration) — 14/14 plans complete (all SUMMARY.md present on disk)
-Plan: 14 of 14
-Status: Phase plans complete — full web-e2e suite NOT yet re-confirmed green (68.1-13 surfaced GAP-1/GAP-2; see 68.1-13-SUMMARY.md Known Gaps)
-Last activity: 2026-07-02 — Completed 68.1-13-PLAN.md (web-e2e exit-gate triage: 5 bugs fixed, 2 new + 3 pre-existing gaps surfaced)
+Phase: 68.1 (web-client-runtime-integration) — EXECUTING
+Plan: 1 of 22
+Status: Executing Phase 68.1
+Last activity: 2026-07-02 — Phase 68.1 execution started
 
 Progress: `██████████` 79 / 79 plans (100%)
 
