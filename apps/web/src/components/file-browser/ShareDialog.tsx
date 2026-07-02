@@ -230,7 +230,13 @@ export function ShareDialog({
       setRecipients((prev) => [...prev, newShare]);
       useShareStore.getState().addSentShare(newShare);
       setPubKeyInput('');
-      setSuccess('> share created');
+      // Include the truncated recipient key — pre-v2.0 message contract that
+      // sharing-workflow.spec.ts asserts on (68.1-22).
+      setSuccess(
+        permission === 'write'
+          ? `> shared (read-write) with ${truncateKey(result.recipientPublicKey)}`
+          : `> shared with ${truncateKey(result.recipientPublicKey)}`
+      );
     } catch (err) {
       logger.error('[Share] Share creation failed:', err);
       const message = err instanceof Error ? err.message : 'share failed';

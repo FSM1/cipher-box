@@ -13,7 +13,8 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { type SealedChildRef } from '@cipherbox/core';
 import { ShareKeyCache } from '@cipherbox/sdk';
 import { useShareStore, type ReceivedShare } from '../stores/share.store';
-import { fetchReceivedShares, fetchShareKeys } from '../services/share.service';
+import { fetchReceivedShares, fetchShareKeys, decryptItemName } from '../services/share.service';
+import { useAuthStore } from '../stores/auth.store';
 import { getSdkClient, hasSdkClient } from '../lib/sdk-provider';
 import { logger } from '../lib/logger';
 import { useSharedNavigationActions } from './useSharedNavigationActions';
@@ -231,6 +232,24 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
           shares.push(...page.shares);
           offset += page.shares.length;
           if (offset >= page.total || page.shares.length === 0) break;
+        }
+
+        // Decrypt itemNameEncrypted into the plaintext display projection
+        // (REQ-4 recipient-side decrypt — the v2.0 refactor dropped this
+        // wiring, leaving every received share rendered with an empty name;
+        // restored in 68.1-22). Per-share failures leave itemName as-is.
+        const vaultPrivateKey = useAuthStore.getState().vaultKeypair?.privateKey;
+        if (vaultPrivateKey) {
+          await Promise.all(
+            shares.map(async (share) => {
+              try {
+                share.itemName = await decryptItemName(share, vaultPrivateKey);
+              } catch {
+                // Ciphertext not decryptable with this key — keep the fallback.
+              }
+            })
+          );
+          if (cancelled) return;
         }
 
         useShareStore.getState().setReceivedShares(shares);
