@@ -254,6 +254,72 @@ describe('enforceResolved — fail-closed regression gate (SC#4 / D-05 / §7.3 t
     expect(await hw.getGenerationFloor('node-a')).toBe(1);
   });
 
+  it('a NaN live generation is rejected fail-closed, not silently passed', async () => {
+    const hw = createRotationHighWater(generationStore, seqStore);
+    await hw.bumpGeneration('node-a', 5);
+    await hw.bumpSeq('node-a', 10);
+
+    await expect(
+      hw.enforceResolved({ nodeId: 'node-a', seq: 20, generation: NaN, versionFloor: 0 })
+    ).rejects.toThrow(GenerationRegressionError);
+
+    // Must NOT bump either floor on rejection.
+    expect(await hw.getGenerationFloor('node-a')).toBe(5);
+    expect(await hw.getSeqFloor('node-a')).toBe(10);
+  });
+
+  it('a NaN live seq is rejected fail-closed, not silently passed', async () => {
+    const hw = createRotationHighWater(generationStore, seqStore);
+    await hw.bumpGeneration('node-a', 5);
+    await hw.bumpSeq('node-a', 10);
+
+    await expect(
+      hw.enforceResolved({ nodeId: 'node-a', seq: NaN, generation: 6, versionFloor: 0 })
+    ).rejects.toThrow(SequenceRegressionError);
+
+    expect(await hw.getGenerationFloor('node-a')).toBe(5);
+    expect(await hw.getSeqFloor('node-a')).toBe(10);
+  });
+
+  it('negative or fractional live values are rejected fail-closed', async () => {
+    const hw = createRotationHighWater(generationStore, seqStore);
+
+    await expect(
+      hw.enforceResolved({ nodeId: 'node-a', seq: 1, generation: -1, versionFloor: 0 })
+    ).rejects.toThrow(GenerationRegressionError);
+    await expect(
+      hw.enforceResolved({ nodeId: 'node-a', seq: 1.5, generation: 1, versionFloor: 0 })
+    ).rejects.toThrow(SequenceRegressionError);
+
+    // Nothing may be seeded by a rejected attempt.
+    expect(await hw.getGenerationFloor('node-a')).toBeUndefined();
+    expect(await hw.getSeqFloor('node-a')).toBeUndefined();
+  });
+
+  it('cold-device first contact with a malformed versionFloor is rejected, not treated as "no gate"', async () => {
+    const hw = createRotationHighWater(generationStore, seqStore);
+
+    await expect(
+      hw.enforceResolved({ nodeId: 'node-a', seq: 3, generation: 1, versionFloor: NaN })
+    ).rejects.toThrow(SequenceRegressionError);
+
+    expect(await hw.getSeqFloor('node-a')).toBeUndefined();
+  });
+
+  it('bumpGeneration/bumpSeq never persist a malformed live candidate', async () => {
+    const hw = createRotationHighWater(generationStore, seqStore);
+    await hw.bumpGeneration('node-a', 5);
+
+    await hw.bumpGeneration('node-a', NaN);
+    await hw.bumpSeq('node-a', NaN);
+
+    expect(await hw.getGenerationFloor('node-a')).toBe(5);
+    expect(await hw.getSeqFloor('node-a')).toBeUndefined();
+    // The raw backing stores must not have been polluted either.
+    expect(generationStore.map.get('node-a')).toBe(5);
+    expect(seqStore.map.has('node-a')).toBe(false);
+  });
+
   it('GenerationRegressionError and SequenceRegressionError are instanceof-distinguishable with stable names', () => {
     const genErr = new GenerationRegressionError('node-a', 1, 2);
     const seqErr = new SequenceRegressionError('node-a', 1, 2);

@@ -52,7 +52,9 @@ async function readDurableFloors(
     ({ nodeId }) => {
       return new Promise<{ generation: number | undefined; seq: number | undefined }>(
         (resolve, reject) => {
-          const req = indexedDB.open('cipherbox-rotation-state', 1);
+          // No version argument: open at whatever version the service created
+          // so this read-only probe never races a future DB_VERSION bump.
+          const req = indexedDB.open('cipherbox-rotation-state');
           req.onerror = () => reject(req.error);
           req.onsuccess = () => {
             const db = req.result;

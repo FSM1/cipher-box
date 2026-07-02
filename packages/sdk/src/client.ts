@@ -726,6 +726,12 @@ export class CipherBoxClient {
       }
     }
 
+    // The MAX_NODES cutoff can exit the loop with entries still queued --
+    // zero their (never-dequeued, therefore never-finally'd) keys too.
+    for (const remaining of queue) {
+      if (!remaining.isRoot) remaining.readKey.fill(0);
+    }
+
     return { readableIpnsNames, unreadableIpnsNames };
   }
 

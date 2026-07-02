@@ -42,29 +42,37 @@ type DecodedSentGrant = GrantRow & { rootIpnsName: string };
  * returned here is therefore an active (non-revoked) grant.
  */
 async function decodeSentGrants(): Promise<DecodedSentGrant[]> {
-  const { shares } = await sharesControllerGetSentShares();
   const decoded: DecodedSentGrant[] = [];
-  for (const share of shares) {
-    try {
-      // Wire format is bare hex, but normalize a 0x prefix defensively --
-      // hexToBytes would otherwise choke and one bad row must not abort the
-      // whole reconcile sweep.
-      const bareHex = share.recipientPublicKey.startsWith('0x')
-        ? share.recipientPublicKey.slice(2)
-        : share.recipientPublicKey;
-      decoded.push({
-        shareId: share.shareId,
-        recipientPublicKey: hexToBytes(bareHex),
-        isRevoked: false,
-        rootNodeId: share.rootNodeId,
-        rootIpnsName: share.rootIpnsName,
-      });
-    } catch (error) {
-      logger.error(
-        `[owner-reconcile] Skipping sent grant ${share.shareId}: recipientPublicKey decode failed:`,
-        safeError(error)
-      );
+  // Paginate through ALL sent shares (the API caps limit at 100 per page) --
+  // a first-page-only read would leave grants beyond page 1 unreconciled.
+  const pageSize = 100;
+  let offset = 0;
+  for (;;) {
+    const { shares, total } = await sharesControllerGetSentShares({ limit: pageSize, offset });
+    for (const share of shares) {
+      try {
+        // Wire format is bare hex, but normalize a 0x prefix defensively --
+        // hexToBytes would otherwise choke and one bad row must not abort the
+        // whole reconcile sweep.
+        const bareHex = share.recipientPublicKey.startsWith('0x')
+          ? share.recipientPublicKey.slice(2)
+          : share.recipientPublicKey;
+        decoded.push({
+          shareId: share.shareId,
+          recipientPublicKey: hexToBytes(bareHex),
+          isRevoked: false,
+          rootNodeId: share.rootNodeId,
+          rootIpnsName: share.rootIpnsName,
+        });
+      } catch (error) {
+        logger.error(
+          `[owner-reconcile] Skipping sent grant ${share.shareId}: recipientPublicKey decode failed:`,
+          safeError(error)
+        );
+      }
     }
+    offset += shares.length;
+    if (offset >= total || shares.length === 0) break;
   }
   return decoded;
 }

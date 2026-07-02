@@ -18,6 +18,11 @@ Four CodeRabbit findings from the Phase 68 ship review were real but too archite
 3. **Per-call IndexedDB connections** (`rotation-driver.service.ts`): `openJobDB` opens a fresh connection per checkpoint call and never closes it. Cache a shared open-promise (with invalidation on `onversionchange`/close-on-logout).
 4. **Single-root badge tracking** (`rotation-driver.service.ts#persistJob`): `activeRootNodeId` is module-global, so concurrent rotations on different roots misclassify each other's root-cut/tail-walk phases and a finishing root resets the badge while another is mid-walk. Durable checkpoints are unaffected (delete is keyed by the finished job's own rootNodeId) — badge-UX only. Track per-root (Set keyed by rootNodeId) and only reset the badge when the set drains.
 
+Two more from CodeRabbit's second-pass PR review (2026-07-02, PR `#587` re-review of the fix commit):
+
+5. **Reconcile gate uses a cached generation, not the freshly-resolved one** (`client.ts#reconcileFolderSequence`): `resolveIpnsRecord` only returns `cid`/`sequenceNumber`/`signatureVerified` — the generation lives inside the sealed node payload, so `enforceResolved` is fed `folderTree.get(ipnsName)?.nodeGeneration ?? 0` (cached local state). Safe direction-wise (floors are monotonic-max, a cached value can only under-bump), but the gate cannot detect a generation regression in the record it just resolved. Either thread the resolved generation through (requires fetching + unsealing inside the reconcile path) or make the cached-fallback contract explicit on `resolveIpnsRecord`/`reconcileFolderSequence`.
+6. **Dirty-resume republish result silently dropped** (`engine.ts#rotateReadFromNode` ~890–1199): on the resume path (`rootResult.skipped === true`) with a dirty subtree, the walk can republish the root (bumping the IPNS seq) yet the function still returns `undefined`, so `performScopeExitRotation` never refreshes `folderTree.sequenceNumber` — the exact stale-seq → permanent `ReconcileStaleError` class ROT-07 Gap 2 fixed for the normal path. Surface the republished sequence from the dirty-resume walk and return a truthy result when a real publish occurred.
+
 ## Solution
 
-One small hardening plan touching the four sites above; items 1–2 need sdk-e2e re-runs, items 3–4 are web-only. Related: the existing rotation-fresh-record-resume todo also touches the driver.
+One small hardening plan touching the sites above; items 1–2 and 5–6 need sdk-e2e re-runs, items 3–4 are web-only. Related: the existing rotation-fresh-record-resume todo also touches the driver.

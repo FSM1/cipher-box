@@ -77,7 +77,10 @@ function maybeWarnDegradedCache(): void {
 }
 
 /** D-06: dispatches the terminal defer-exhausted notice with a manual Retry action. */
-function dispatchDeferExhausted<T>(mutationFn: () => Promise<T>): void {
+function dispatchDeferExhausted<T>(
+  mutationFn: () => Promise<T>,
+  opts: RunWithFailureUxOptions
+): void {
   const id = useNotificationStore
     .getState()
     .addNotification('error', "Couldn't complete securely — retry.", {
@@ -86,14 +89,19 @@ function dispatchDeferExhausted<T>(mutationFn: () => Promise<T>): void {
         // Replace, don't stack: a persistent failure re-dispatches a fresh
         // exhaustion toast, so drop this one before re-running.
         useNotificationStore.getState().dismissNotification(id);
-        void retryAfterExhaustion(mutationFn);
+        void retryAfterExhaustion(mutationFn, opts);
       },
     });
 }
 
-async function retryAfterExhaustion<T>(mutationFn: () => Promise<T>): Promise<void> {
+async function retryAfterExhaustion<T>(
+  mutationFn: () => Promise<T>,
+  opts: RunWithFailureUxOptions
+): Promise<void> {
   try {
-    await runWithFailureUx(mutationFn);
+    // Thread the ORIGINAL opts through the manual retry so a subsequent
+    // stale-write failure still offers the refreshWriteAccess path.
+    await runWithFailureUx(mutationFn, opts);
   } catch {
     // The retried run dispatches its own notice for any repeat failure.
   }
@@ -105,7 +113,10 @@ async function retryAfterExhaustion<T>(mutationFn: () => Promise<T>): Promise<vo
  * exhaustion, which dispatches its own terminal notice here) is rethrown for
  * the outer classifier in `runWithFailureUx`.
  */
-async function runReconcileRetryLoop<T>(mutationFn: () => Promise<T>): Promise<T> {
+async function runReconcileRetryLoop<T>(
+  mutationFn: () => Promise<T>,
+  opts: RunWithFailureUxOptions
+): Promise<T> {
   let attempt = 0;
   let shownSyncingNotice = false;
 
@@ -116,7 +127,7 @@ async function runReconcileRetryLoop<T>(mutationFn: () => Promise<T>): Promise<T
       if (!(err instanceof ReconcileStaleError)) throw err;
 
       if (attempt >= RECONCILE_RETRY_DELAYS_MS.length) {
-        dispatchDeferExhausted(mutationFn);
+        dispatchDeferExhausted(mutationFn, opts);
         throw err;
       }
 
@@ -188,7 +199,7 @@ export async function runWithFailureUx<T>(
   opts: RunWithFailureUxOptions = {}
 ): Promise<T> {
   try {
-    return await runReconcileRetryLoop(mutationFn);
+    return await runReconcileRetryLoop(mutationFn, opts);
   } catch (err) {
     if (err instanceof SequenceRegressionError || err instanceof GenerationRegressionError) {
       dispatchRegressionRejected();

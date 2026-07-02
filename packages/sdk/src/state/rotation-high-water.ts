@@ -89,6 +89,11 @@ async function bumpFloor(
   candidate: number
 ): Promise<number> {
   const current = await readFloor(store, nodeId);
+  // V5 applies to writes too: never persist a malformed candidate (NaN,
+  // negative, fractional) -- the floor stays where it is.
+  if (!isValidFloorValue(candidate)) {
+    return current ?? 0;
+  }
   if (current === undefined || candidate > current) {
     await store.put(nodeId, candidate);
     return candidate;
@@ -148,6 +153,17 @@ export function createRotationHighWater(
     },
 
     async enforceResolved({ nodeId, seq, generation, versionFloor }) {
+      // Fail-closed on the LIVE inputs too, not just stored values: NaN
+      // compares false against everything in JS, so a malformed generation/
+      // seq would otherwise sail past both `<` regression checks below.
+      // floor=-1 marks "input itself invalid" (no valid floor was consulted).
+      if (!isValidFloorValue(generation)) {
+        throw new GenerationRegressionError(nodeId, -1, generation);
+      }
+      if (!isValidFloorValue(seq)) {
+        throw new SequenceRegressionError(nodeId, -1, seq);
+      }
+
       const generationFloor = await readFloor(generationStore, nodeId);
       if (generationFloor !== undefined && generation < generationFloor) {
         throw new GenerationRegressionError(nodeId, generationFloor, generation);
@@ -155,8 +171,10 @@ export function createRotationHighWater(
 
       const seqFloor = await readFloor(seqStore, nodeId);
       if (seqFloor === undefined) {
-        // Cold-device / first-contact: apply the owner-vouched versionFloor gate.
-        if (seq < versionFloor) {
+        // Cold-device / first-contact: apply the owner-vouched versionFloor
+        // gate. A malformed versionFloor is rejected rather than treated as
+        // "no gate" -- first contact is exactly when the gate matters most.
+        if (!isValidFloorValue(versionFloor) || seq < versionFloor) {
           throw new SequenceRegressionError(nodeId, versionFloor, seq);
         }
       } else if (seq < seqFloor) {
