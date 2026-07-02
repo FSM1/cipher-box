@@ -113,14 +113,29 @@ export function useFolderMutations() {
           throw new Error('Parent folder not found or vault not initialized');
         }
 
-        // Create folder via SDK (handles key gen, metadata update, IPNS publish)
+        // Create folder via SDK (handles key gen, metadata update, IPNS publish).
+        // Wrapped in runWithFailureUx so a stale local sequence (ReconcileStaleError,
+        // SC#3/D-04) retries with bounded backoff instead of failing closed on the
+        // first attempt -- matching rename/move/delete's existing retry wiring.
         const client = getSdkClient();
-        const result = await client.createFolder(parentFolder.ipnsName, name);
+        let result!: Awaited<ReturnType<typeof client.createFolder>>;
+        await runWithFailureUx(async () => {
+          result = await client.createFolder(parentFolder.ipnsName, name);
+        });
 
         // SDK emits folder:updated -> store subscription updates parent's children
-        // But we also need to add the new folder as a store node so navigation works
+        // But we also need to add the new folder as a store node so navigation works.
+        // Keyed by ipnsName (not the write-body UUID result.id) to match
+        // useFolderNavigation's navigateTo, which keys/looks up every FolderNode by
+        // ipnsName (route param `/files/:folderId` is always an ipnsName). Keying by
+        // UUID here created a second, orphaned store entry with the same ipnsName as
+        // the one navigateTo later creates on first navigation into this folder;
+        // folder.store's SDK event subscription (which resolves the target entry via
+        // `f.ipnsName === event.ipnsName`) could then match the orphaned UUID-keyed
+        // entry instead of the one FileBrowser actually reads from, silently dropping
+        // subsequent 'folder:updated' children updates (e.g. a grandchild create).
         const newFolderNode: FolderNode = {
-          id: result.id, // UUID from the FolderEntry in parent's children
+          id: result.ipnsName,
           name,
           ipnsName: result.ipnsName,
           parentId: actualParentId,
