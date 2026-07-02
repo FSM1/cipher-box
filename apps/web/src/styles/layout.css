@@ -106,6 +106,32 @@
   border-radius: 2px;
 }
 
+/* Rotation status badge (D-02/D-03) */
+.rotation-status-badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border: 1px solid var(--color-green-primary);
+  color: var(--color-green-primary);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.rotation-status-badge--background {
+  border-color: var(--color-warning);
+  color: var(--color-warning);
+}
+
+.rotation-status-badge__spinner {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: var(--color-green-primary);
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
 /* ==========================================================================
    Sidebar
    ========================================================================== */

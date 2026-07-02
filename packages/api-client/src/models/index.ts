@@ -127,6 +127,7 @@ export * from './unlinkMethodResponseDto';
 export * from './unpinDto';
 export * from './unpinResponseDto';
 export * from './updateEncryptedKeyDto';
+export * from './updateGrantDto';
 export * from './updateItemNameDto';
 export * from './updatePermissionDto';
 export * from './updatePermissionDtoPermission';

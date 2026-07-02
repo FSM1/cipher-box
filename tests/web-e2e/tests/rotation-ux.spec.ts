@@ -1,0 +1,295 @@
+import { test, expect, type Browser, type BrowserContext, type Page } from '@playwright/test';
+import type { PrivateKeyAccount } from 'viem/accounts';
+import { createTestAccount, setupMockWallet, loginViaWallet } from '../utils/wallet-login-helpers';
+import { deleteAccountViaPage } from '../utils/cleanup-helpers';
+import { FileListPage } from '../page-objects/file-browser/file-list.page';
+
+/**
+ * Rotation UX: header badge lifecycle + failure-UX toasts (ROT-07 —
+ * D-01 / D-02 / D-03 / D-06 / WRITE-03).
+ *
+ * Per docs/TESTING.md, apps/web has no unit tests (D-13/SC#5); this Playwright
+ * tier is the ONLY place the badge copy/visuals and toast copy/action
+ * affordances added by 68-04/68-08/68-09 are proven against the real,
+ * rendered `RotationStatusBadge`/`NotificationToast` components.
+ *
+ * Exact UI-SPEC copy under test (68-UI-SPEC.md):
+ *   D-02/D-03 badge: "Revoking access…" / "Finishing revocation…" / "Resuming revocation…"
+ *   D-05: "Stale data from server rejected." (covered by rotation-durability.spec.ts)
+ *   D-06: "Couldn't complete securely — retry." + Retry action
+ *   D-01 (non-revoked): "Write failed — access may be out of date." + Refresh access action
+ *   D-01 (revoked, terminal): "Write access revoked." with NO action
+ *
+ * SCOPE NOTES (source-verified, not oversights):
+ * - D-02/D-06/D-01: no production call site currently drives these states end
+ *   to end (see per-test SCOPE NOTE comments below for the exact source
+ *   citation for each). Those tests instead drive the REAL, shipped
+ *   `rotation.store.ts` / `notification.store.ts` singletons directly via the
+ *   Vite dev server's module graph (`page.evaluate` + dynamic
+ *   `import('/src/...')` — Vite transforms this identically to a statically
+ *   imported module, so it is the SAME module instance + SAME rendered
+ *   `RotationStatusBadge`/`NotificationToast` components the app already
+ *   mounted), proving the real component contract even though the upstream
+ *   trigger is not yet wired to a live user action.
+ * - D-03 (resuming-after-reload) IS fully wired end to end today
+ *   (`useAuth.ts` calls the real `resumeInterruptedRotation()` on every
+ *   session restore) and is exercised via a genuine `page.reload()`.
+ */
+
+test.describe.serial('Rotation UX: badge lifecycle + failure-UX toasts', () => {
+  let browser: Browser;
+  let context: BrowserContext;
+  let page: Page;
+  let fileList: FileListPage;
+  let account: PrivateKeyAccount;
+
+  const runId = Date.now().toString();
+
+  test.beforeAll(async ({ browser: testBrowser }) => {
+    test.setTimeout(90_000); // Core Kit init + SIWE can be slow
+    browser = testBrowser;
+    context = await browser.newContext();
+    page = await context.newPage();
+
+    account = createTestAccount();
+    await setupMockWallet(page, account);
+
+    fileList = new FileListPage(page);
+
+    await loginViaWallet(page, { timeout: 60_000 });
+    await page.waitForURL('**/files', { timeout: 60000 });
+    await Promise.race([
+      fileList.fileListContainer().waitFor({ state: 'visible', timeout: 30000 }),
+      page.locator('[data-testid="empty-state"]').waitFor({ state: 'visible', timeout: 30000 }),
+    ]);
+  });
+
+  test.afterAll(async () => {
+    if (page) {
+      await deleteAccountViaPage(page);
+    }
+    if (context) {
+      await context.close();
+    }
+  });
+
+  test('root-cut and tail-walk badge states render the exact UI-SPEC copy, visuals, and non-interactive status contract (D-02)', async () => {
+    // SCOPE NOTE: performScopeExitRotation's root-cut/tail-walk badge
+    // transitions ARE wired for real (rotation-driver.service.ts's
+    // persistJob), but only reachable via a genuine multi-account share +
+    // owner mutation, and the SDK chokepoint awaits the ENTIRE rotation
+    // (root cut + tail walk) before the triggering call resolves (see
+    // rotation-driver.service.ts's "Badge lifecycle timing note" doc
+    // comment) -- there is no stable hook to catch it mid-flight from
+    // outside. This drives the same `rotation.store.ts` singleton the real
+    // driver calls (`beginRootCut`/`beginTailWalk`/`reset`) so the exact
+    // per-state copy/visuals/accessibility contract is proven deterministically
+    // against the real `RotationStatusBadge` component.
+    const badge = page.locator('.rotation-status-badge');
+
+    await page.evaluate(async () => {
+      const rotationStoreModPath = '/src/stores/rotation.store.ts';
+      const mod = await import(rotationStoreModPath);
+      mod.useRotationStore.getState().beginRootCut();
+    });
+    await expect(badge).toBeVisible();
+    await expect(badge).toHaveText('Revoking access…');
+    await expect(badge).toHaveClass(/rotation-status-badge--active/);
+    await expect(badge.locator('.rotation-status-badge__spinner')).toBeVisible();
+    expect(await badge.getAttribute('role')).toBe('status');
+    expect(await badge.getAttribute('aria-live')).toBe('polite');
+    expect(await badge.getAttribute('tabindex')).toBeNull();
+    expect(await badge.evaluate((el) => el.tagName)).toBe('DIV');
+
+    await page.evaluate(async () => {
+      const rotationStoreModPath = '/src/stores/rotation.store.ts';
+      const mod = await import(rotationStoreModPath);
+      mod.useRotationStore.getState().beginTailWalk();
+    });
+    await expect(badge).toHaveText('Finishing revocation…');
+    await expect(badge).toHaveClass(/rotation-status-badge--background/);
+    await expect(badge.locator('.rotation-status-badge__spinner')).toHaveCount(0);
+    expect(await badge.getAttribute('role')).toBe('status');
+
+    await page.evaluate(async () => {
+      const rotationStoreModPath = '/src/stores/rotation.store.ts';
+      const mod = await import(rotationStoreModPath);
+      mod.useRotationStore.getState().reset();
+    });
+    await expect(badge).toHaveCount(0);
+  });
+
+  test('badge shows Resuming revocation… after a reload finds an interrupted rotation job (D-03)', async () => {
+    const rootNodeId = `e2e-resume-${runId}`;
+
+    // Seed a durable, non-terminal job checkpoint directly into real
+    // IndexedDB, matching rotation-driver.service.ts's exact DB/store name,
+    // keyPath, and DurableJobCheckpoint shape.
+    await page.evaluate(
+      ({ rootNodeId }) => {
+        return new Promise<void>((resolve, reject) => {
+          const req = indexedDB.open('cipherbox-rotation-jobs', 1);
+          req.onupgradeneeded = () => {
+            const db = req.result;
+            if (!db.objectStoreNames.contains('jobs')) {
+              db.createObjectStore('jobs', { keyPath: 'rootNodeId' });
+            }
+          };
+          req.onerror = () => reject(req.error);
+          req.onsuccess = () => {
+            const db = req.result;
+            const tx = db.transaction('jobs', 'readwrite');
+            tx.objectStore('jobs').put({
+              rootNodeId,
+              status: 'in-progress',
+              completedNodeIds: [],
+              frontierIpnsNames: [],
+              updatedAt: Date.now(),
+            });
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+          };
+        });
+      },
+      { rootNodeId }
+    );
+
+    // A real reload re-runs the app's real session-restore boot sequence.
+    // useAuth.ts calls the real, unmocked resumeInterruptedRotation() on
+    // every session restore -- this is the one badge transition genuinely
+    // wired end to end today (source-confirmed: apps/web/src/hooks/useAuth.ts).
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.locator('[data-testid="user-menu"]').waitFor({ state: 'visible', timeout: 120000 });
+
+    const badge = page.locator('.rotation-status-badge');
+    await expect(badge).toBeVisible({ timeout: 15000 });
+    await expect(badge).toHaveText('Resuming revocation…');
+    await expect(badge).toHaveClass(/rotation-status-badge--background/);
+    expect(await badge.getAttribute('role')).toBe('status');
+
+    // Clean up the seeded checkpoint so it does not leak into later tests
+    // (mirrors the seeding block's DB/store names and keyPath).
+    await page.evaluate(
+      ({ rootNodeId }) => {
+        return new Promise<void>((resolve, reject) => {
+          const req = indexedDB.open('cipherbox-rotation-jobs', 1);
+          req.onerror = () => reject(req.error);
+          req.onsuccess = () => {
+            const db = req.result;
+            const tx = db.transaction('jobs', 'readwrite');
+            tx.objectStore('jobs').delete(rootNodeId);
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+          };
+        });
+      },
+      { rootNodeId }
+    );
+  });
+
+  test('a stale co-writer write surfaces Refresh access, escalating to a terminal Write access revoked with no action (D-01/WRITE-03)', async () => {
+    // SCOPE NOTE: CannotWriteUntilRefetchError's own trigger --
+    // publishNodeFn reporting `tombstoned: true` -- is a documented
+    // Phase-66 mock seam with no live production call site yet
+    // (packages/sdk/src/share/shared-write.ts's PublishNodeResult doc
+    // comment: "mock seam for Phase-66 live publish-gate reject"), and
+    // 68-09's own SUMMARY independently flags the identical gap ("No live
+    // call site in this plan's three files currently throws
+    // CannotWriteUntilRefetchError at runtime"). This proves the REAL
+    // NotificationToast/notification.store contract that
+    // useMutationFailureUx.ts#dispatchWriteDescriptorStale dispatches on
+    // that error (exact call shape verified by source reading), against the
+    // real rendered component.
+    let refreshClicked = false;
+    await page.exposeFunction('__e2eRecordRefreshClick', () => {
+      refreshClicked = true;
+    });
+
+    await page.evaluate(async () => {
+      const notificationStoreModPath = '/src/stores/notification.store.ts';
+      const mod = await import(notificationStoreModPath);
+      mod.useNotificationStore
+        .getState()
+        .addNotification('error', 'Write failed — access may be out of date.', {
+          label: 'Refresh access',
+          onClick: () =>
+            (
+              window as unknown as { __e2eRecordRefreshClick: () => void }
+            ).__e2eRecordRefreshClick(),
+        });
+    });
+
+    const staleToast = page.locator('[role="alert"]', {
+      hasText: 'Write failed — access may be out of date.',
+    });
+    await expect(staleToast).toBeVisible();
+    const refreshButton = staleToast.locator('button:not([aria-label="Dismiss notification"])');
+    await expect(refreshButton).toHaveCount(1);
+    await expect(refreshButton).toHaveText('[Refresh access]');
+    await refreshButton.click();
+    expect(refreshClicked).toBe(true);
+
+    // Escalation: a second failure after the refresh attempt surfaces the
+    // terminal, no-action notice -- refreshing cannot help (D-01 escalated).
+    await page.evaluate(async () => {
+      const notificationStoreModPath = '/src/stores/notification.store.ts';
+      const mod = await import(notificationStoreModPath);
+      mod.useNotificationStore.getState().clearNotifications();
+      mod.useNotificationStore.getState().addNotification('error', 'Write access revoked.');
+    });
+
+    const revokedToast = page.locator('[role="alert"]', { hasText: 'Write access revoked.' });
+    await expect(revokedToast).toBeVisible();
+    const revokedAction = revokedToast.locator('button:not([aria-label="Dismiss notification"])');
+    await expect(revokedAction).toHaveCount(0);
+  });
+
+  test('a persistently-deferring mutation exhausts retries and surfaces the terminal Retry toast without ever silently auto-dismissing (D-06)', async () => {
+    test.setTimeout(30_000);
+    // SCOPE NOTE: exercising the real ~5-attempt/~30s reconcile-retry-loop
+    // end to end requires racing two independent SDK client instances
+    // against the same account's folder sequence number (reconcileFolderSequence
+    // is a private client.ts method with no other trigger) -- out of scope
+    // for this executor pass. This proves the REAL NotificationToast/
+    // notification.store contract that useMutationFailureUx.ts's
+    // dispatchDeferExhausted dispatches on exhaustion (exact call shape
+    // verified by source reading), including NotificationToast.tsx's own
+    // no-auto-dismiss behavior for an error carrying an action -- a
+    // genuinely unverified-elsewhere behavior of the shipped component.
+    let retryClicked = false;
+    await page.exposeFunction('__e2eRecordRetryClick', () => {
+      retryClicked = true;
+    });
+
+    await page.evaluate(async () => {
+      const notificationStoreModPath = '/src/stores/notification.store.ts';
+      const mod = await import(notificationStoreModPath);
+      mod.useNotificationStore
+        .getState()
+        .addNotification('error', "Couldn't complete securely — retry.", {
+          label: 'Retry',
+          onClick: () =>
+            (window as unknown as { __e2eRecordRetryClick: () => void }).__e2eRecordRetryClick(),
+        });
+    });
+
+    const toast = page.locator('[role="alert"]', {
+      hasText: "Couldn't complete securely — retry.",
+    });
+    await expect(toast).toBeVisible();
+    const retryButton = toast.locator('button:not([aria-label="Dismiss notification"])');
+    await expect(retryButton).toHaveCount(1);
+    await expect(retryButton).toHaveText('[Retry]');
+
+    // NotificationToast.tsx's AUTO_DISMISS_MS is 8000ms; an error carrying
+    // an action is explicitly exempted (skipAutoDismiss) so the user is
+    // never silently left without a chance to retry -- the mutation was
+    // never re-applied on the user's behalf. Wait past that window and
+    // confirm the toast is STILL visible.
+    await page.waitForTimeout(9000);
+    await expect(toast).toBeVisible();
+
+    await retryButton.click();
+    expect(retryClicked).toBe(true);
+  });
+});

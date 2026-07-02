@@ -11,6 +11,7 @@ export {
   type RotationJobRecord,
   type RotationStatus,
   type RotationParams,
+  type RotateReadResult,
   type WriteRevocationCallbacks,
 } from './engine';
 

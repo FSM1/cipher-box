@@ -67,7 +67,7 @@
 - [x] **Phase 65: SDK Write-Chain, Bin Re-link, and Invite Claim** — Structured write-body, (c) full Ed25519 write-revocation, bin restore as pure re-link, invite claim re-wrap; delete `addShareKeys`/`reWrapForRecipients`/`encryptedChildKeys` (completed 2026-06-30)
 - [x] **Phase 66: API Schema Cutover, Publish Gate, and Tombstone** — Delete `share_keys`, slim `shares`, rename `folder_ipns` → `ipns_records`, drop `public_key`, atomic CAS publish, tombstone state, resolve case-split, server-side generation gate; run `pnpm api:generate` (completed 2026-06-30)
 - [x] **Phase 67: TEE Lease-Renewer Contract Rewrite** — TEE becomes a record-lease-renewer (no CID origination, no sequence increment), internal epoch derivation, name↔key binding, tombstone guard (completed 2026-07-01)
-- [ ] **Phase 68: Web Integration — Rotation UX and Durable Client State** — Replace `executeLazyRotation` with `rotateReadFromNode`, durable IndexedDB generation + seq high-water (M1 defense, survives restart), `folderTree` reconcile-before-rotate
+- [x] **Phase 68: Web Integration — Rotation UX and Durable Client State** — Replace `executeLazyRotation` with `rotateReadFromNode`, durable IndexedDB generation + seq high-water (M1 defense, survives restart), `folderTree` reconcile-before-rotate (all 12 plans executed 2026-07-01; verification passed 14/14 after 68-11/68-12 gap closure, see 68-VERIFICATION.md) (completed 2026-07-01)
 - [ ] **Phase 69: FUSE and WinFsp — Rust Integration and Grant-Root Awareness** — Symmetric child-key unwrap, `spawn_file_meta_reencrypt` deletion from both callers, grant-root scope computation, durable client floors, `Node` Rust enum, Windows CI gate
 
 ## Phase Details
@@ -395,9 +395,37 @@ Plans:
 2. `executeLazyRotation` is deleted from `apps/web/src/services/share.service.ts`; all revocation-triggering paths (delete, move, rename when scope exit) call `rotateReadFromNode`; `addShareKeys` and `reWrapForRecipients` are deleted from per-mutation fan-out paths
 3. `folderTree` is reconciled against the current `sequenceNumber` before any rotation publish; if reconciliation fails the mutation defers rather than skipping rotation — the `#489`/`#494` desync class cannot produce a silent missed revocation
 4. A durable per-node `{nodeId → highestSeq}` seq high-water is wired into `resolveIpnsRecord` in the web resolve path; a generation or seq regression from the relay causes a fail-closed error, not silent acceptance
-5. All new web test files use the `.test.ts` extension (not `.spec.ts`); `find apps/web/src -name "*.spec.ts"` returns empty
+5. Per docs/TESTING.md, this phase adds ZERO `apps/web` test files: core logic is hoisted to the SDK and unit-tested with Vitest, and the UI + durability are covered by Web E2E (Playwright, `tests/web-e2e/`); `find apps/web/src -name "*.spec.ts"` returns empty
 
-**Plans**: TBD
+**Plans**: 12/12 plans complete
+
+Plans:
+**Wave 1**
+
+- [x] 68-01-PLAN.md — SDK durable high-water state machine + resolve enforcement over an injected HighWaterStore seam, Vitest (ROT-07/SC#1/SC#4/D-05)
+- [x] 68-02-PLAN.md — share.service modernization: real grant fetch + type extension + delete legacy fan-out (SC#2/D-12)
+- [x] 68-03-PLAN.md — apps/api PATCH :shareId/grant + DTO + service + api:generate, Jest (D-10 endpoint gap)
+- [x] 68-04-PLAN.md — rotation UI primitives: notification action, toast, rotation.store, header badge (D-02/D-03)
+- [x] 68-05-PLAN.md — client.ts rotation integration: scope-exit rotate + reconcile-defer + move-durability, Vitest (SC#2/SC#3/D-04/D-12)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 68-06-PLAN.md — thin web IndexedDB HighWaterStore adapter + resolveIpnsRecord enforcement wiring (ROT-07/SC#1/SC#4/D-05/D-07/D-08)
+- [x] 68-07-PLAN.md — owner reconcile: SDK driver (Vitest) + thin web api-client transport wrapper, eager on login (D-10/D-11)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 68-08-PLAN.md — rotation tail-walk driver + navigator.locks multi-tab + badge lifecycle (D-02/D-03/D-09)
+- [x] 68-09-PLAN.md — mutation-failure UX: defer-retry backoff + fail-closed toasts + co-writer refresh-access (D-01/D-05/D-06/WRITE-03)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 68-10-PLAN.md — Web E2E Playwright specs: rotation-durability (real-reload IndexedDB + fail-closed toast, SC#1/SC#4) + rotation-ux (badge lifecycle + failure UX, D-01/D-02/D-03/D-06/WRITE-03)
+
+**Gap closure** *(from 68-VERIFICATION.md — closes the 2 failed truths; client.ts shared-file serialized across two waves)*
+
+- [x] 68-11-PLAN.md — Gap 1 (BLOCKER): make the fail-closed anti-rollback gate live — inject RotationHighWater into CipherBoxClient, gate reconcileFolderSequence via enforceResolved, thread ResolveRotationContext into handleSync, UI-driven durability spec (ROT-07/SC#4) [wave 1]
+- [x] 68-12-PLAN.md — Gap 2: refresh folderTree after scope-exit rotation — rotateReadFromNode returns the root's rotated key/generation/seq, performScopeExitRotation writes it back so a same-session retry self-heals without reload (ROT-07/SC#3) [wave 2, depends on 68-11]
 
 **UI hint**: yes
 
@@ -438,7 +466,7 @@ Plans:
 | 65 | SDK Write-Chain, Bin Re-link, and Invite Claim | 7/7 | Complete    | 2026-06-30 |
 | 66 | API Schema Cutover, Publish Gate, and Tombstone | 9/9 | Complete    | 2026-06-30 |
 | 67 | TEE Lease-Renewer Contract Rewrite | 8/8 | Complete    | 2026-07-01 |
-| 68 | Web Integration — Rotation UX and Durable Client State | 0/? | Not started | - |
+| 68 | Web Integration — Rotation UX and Durable Client State | 12/12 | Complete    | 2026-07-01 |
 | 69 | FUSE and WinFsp — Rust Integration and Grant-Root Awareness | 0/? | Not started | - |
 
 v1.1 history: 45 phases complete (198 plans). See `milestones/v1.1-ROADMAP.md` for full detail.

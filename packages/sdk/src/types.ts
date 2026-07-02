@@ -5,10 +5,16 @@
  * These types define the contract between the SDK and its consumers.
  */
 
-import type { TeeKeys, PinningMode, ExternalProviderConfig } from '@cipherbox/sdk-core';
+import type {
+  TeeKeys,
+  PinningMode,
+  ExternalProviderConfig,
+  RotationJobRecord,
+} from '@cipherbox/sdk-core';
 import type { AxiosInstance } from '@cipherbox/api-client';
 import type { SealedChildRef, Node, PublishedNode } from '@cipherbox/core';
 import type { SentShareInfo, ShareKeyType } from './share';
+import type { RotationHighWater } from './state/rotation-high-water';
 
 /**
  * Pinning configuration for BYO-IPFS support.
@@ -33,6 +39,38 @@ export type ShareCallbacks = {
     shareId: string,
     keys: Array<{ keyType: 'file' | 'folder'; itemId: string; encryptedKey: string }>
   ) => Promise<void>;
+};
+
+/**
+ * Client-authoritative record that a grant rooted at `rootIpnsName` is held
+ * locally. Used as the anti-malicious-relay cross-check in `hasCoveringGrant`
+ * (T-63-17) -- independent of whatever `activeGrantRootIpnsNames` the relay
+ * reports for a given scope-exit mutation.
+ */
+export type LocalGrantRecord = {
+  rootIpnsName: string;
+};
+
+/**
+ * Injection seam for scope-exit read-key rotation (SC#2 / SC#3 / SC#4, Phase 68).
+ *
+ * The SDK chokepoint (`CipherBoxClient` mutation methods) never imports the
+ * shares API or a durable job store directly -- hosts (web, desktop, FUSE)
+ * inject concrete implementations here. When omitted, `CipherBoxClient`
+ * defaults every callback to a safe no-op so an unconfigured client performs
+ * zero rotation, identical to pre-Phase-68 behavior.
+ *
+ * Concrete web callbacks are wired in Phase 68-08.
+ */
+export type RotationClientCallbacks = {
+  /** Relay-supplied set of IPNS names known to be grant roots (completeness aid). */
+  getActiveGrantRootIpnsNames: () => Promise<Set<string>>;
+  /** Client-authoritative grant record for a node (anti-malicious-relay cross-check). */
+  getLocalGrantRecord: (ipnsName: string) => LocalGrantRecord | null;
+  /** Durable job-record checkpoint hook; wired to `RotationJobRecord.persistCallback`. */
+  persistJob: (job: RotationJobRecord) => void | Promise<void>;
+  /** Optional progress/status hook for UI badges and toasts. */
+  progress?: (status: string) => void;
 };
 
 /**
@@ -99,6 +137,22 @@ export type CipherBoxClientConfig = {
    * When omitted, all pins go through CipherBox infrastructure (default).
    */
   pinningConfig?: PinningConfig;
+  /**
+   * Injection seam for scope-exit read-key rotation (Phase 68 SC#2/SC#3/SC#4).
+   * Optional -- every callback defaults to a no-op when omitted, so an
+   * unconfigured client performs zero rotation (unchanged pre-Phase-68 behavior).
+   */
+  rotationCallbacks?: RotationClientCallbacks;
+  /**
+   * Injection seam for the durable ROT-07 anti-rollback gate (Gap 1 /
+   * VERIFICATION Gap 1). When provided, `reconcileFolderSequence` routes its
+   * resolve through `rotationHighWater.enforceResolved` before its own
+   * ReconcileStaleError equality check, so a relay-served generation/seq
+   * regression throws fail-closed instead of being silently accepted.
+   * Optional -- when omitted, the client performs zero enforcement (matches
+   * pre-Phase-68-11 behavior, backward-compatible).
+   */
+  rotationHighWater?: RotationHighWater;
 };
 
 /**

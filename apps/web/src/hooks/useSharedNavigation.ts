@@ -13,7 +13,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { type SealedChildRef } from '@cipherbox/core';
 import { ShareKeyCache } from '@cipherbox/sdk';
 import { useShareStore, type ReceivedShare } from '../stores/share.store';
-import { fetchReceivedShares, fetchShareKeys, addShareKeys } from '../services/share.service';
+import { fetchReceivedShares, fetchShareKeys } from '../services/share.service';
 import { getSdkClient, hasSdkClient } from '../lib/sdk-provider';
 import { logger } from '../lib/logger';
 import { useSharedNavigationActions } from './useSharedNavigationActions';
@@ -198,10 +198,11 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       if (!hasSdkClient()) return;
       seedSharedFolder(getSdkClient(), {
         ...args,
-        addShareKeysFn: async (sid, keys) => {
-          await addShareKeys(sid, keys);
-          shareKeysCacheRef.current.invalidate(sid);
-        },
+        // No-op: the web `addShareKeys` fan-out this called into is deleted
+        // (SC#2 / D-12) — it never worked (always threw the Phase-68-deferred
+        // stub), so this preserves the same effective behavior without the
+        // dead per-mutation key-wrap loop.
+        addShareKeysFn: async () => {},
       });
     },
     []

@@ -34,7 +34,7 @@
  */
 
 // Main client
-export { CipherBoxClient, BinNotLoadedError } from './client';
+export { CipherBoxClient, BinNotLoadedError, ReconcileStaleError } from './client';
 
 // Types
 export type {
@@ -43,10 +43,27 @@ export type {
   SharedFolderState,
   ShareCallbacks,
   PinningConfig,
+  RotationClientCallbacks,
+  LocalGrantRecord,
 } from './types';
 
 // Shared-folder state (sibling tree keyed by shareId)
 export { SharedFolderTree } from './state/shared-folder-tree';
+
+// Durable rotation high-water state machine (ROT-07) -- monotonic-max
+// generation + seq floors over an injected HighWaterStore seam, and the
+// enforceResolved fail-closed regression gate. apps/web supplies the
+// IndexedDB-backed HighWaterStore (68-06).
+export {
+  createRotationHighWater,
+  GenerationRegressionError,
+  SequenceRegressionError,
+} from './state/rotation-high-water';
+export type {
+  HighWaterStore,
+  RotationHighWater,
+  EnforceResolvedParams,
+} from './state/rotation-high-water';
 
 // Events
 export type { SdkEvent, SdkEventHandler } from './events';
@@ -75,6 +92,18 @@ export {
   updateSharePermission,
   buildSharedWriteContext,
   ShareKeyCache,
+  CannotWriteUntilRefetchError,
+} from './share';
+
+// Owner-reconcile driver (D-10/D-11) -- drives sdk-core's reMintGrantsRootedAt
+// with callbacks assembled from an injected transport (owner-reconcile.ts,
+// unit-tested here in packages/sdk). apps/web supplies the concrete
+// api-client transport as a thin, untested wrapper (68-07).
+export {
+  buildGrantRemintCallbacks,
+  runOwnerReconcile,
+  type OwnerReconcileTransport,
+  type GrantRow,
 } from './share';
 
 // Error handling and retry utilities

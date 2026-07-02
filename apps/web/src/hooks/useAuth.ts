@@ -37,6 +37,15 @@ import { loadVaultSettings } from '../services/vault-settings.service';
 import { useVaultSettingsStore } from '../stores/vault-settings.store';
 import { createAndPublishIpnsRecord, resolveIpnsRecord } from '../services/ipns.service';
 import { addToIpfs, fetchFromIpfs } from '../lib/api/ipfs';
+import {
+  triggerOwnerReconcileOnLogin,
+  runOwnerReconcileForFolder,
+} from '../services/owner-reconcile.service';
+import {
+  buildRotationClientCallbacks,
+  resumeInterruptedRotation,
+} from '../services/rotation-driver.service';
+import { rotationHighWater } from '../services/rotation-state.service';
 import { logger } from '../lib/logger';
 
 // Module-level deduplication for vault init/load.
@@ -298,20 +307,18 @@ export function useAuth() {
           rootIpnsKeypair: vaultState.rootIpnsKeypair,
           teeKeys: authState.teeKeys ?? undefined,
           pinningConfig,
-          shareCallbacks: {
-            getCoveringShares: async (folderIpnsName: string) => {
-              const { findCoveringShares } = await import('../services/share.service');
-              const folders = useFolderStore.getState().folders;
-              // Find the folder ID from IPNS name for ancestor traversal
-              const folderId =
-                Object.keys(folders).find((id) => folders[id].ipnsName === folderIpnsName) ?? null;
-              return findCoveringShares(folderIpnsName, folders, folderId);
-            },
-            addShareKeys: async (shareId, keys) => {
-              const { addShareKeys } = await import('../services/share.service');
-              await addShareKeys(shareId, keys);
-            },
-          },
+          // shareCallbacks (getCoveringShares/addShareKeys) removed: the SDK's
+          // per-recipient key fan-out is dead code (D-03 already skips it at
+          // upload time) and the web `addShareKeys` fan-out it called into is
+          // deleted (SC#2 / D-12) — descriptor refs replace it.
+          // Concrete web driver for the scope-exit rotation injection seam
+          // (68-05): durable job checkpoint + D-02/D-03 progress badge +
+          // D-09 multi-tab leader election (68-08).
+          rotationCallbacks: buildRotationClientCallbacks(),
+          // Durable ROT-07 anti-rollback gate (Gap 1 / SC#4): the IndexedDB-backed
+          // rotationHighWater makes the SDK's reconcileFolderSequence enforceResolved
+          // check live for every revocation-triggering mutation in this client.
+          rotationHighWater,
         });
 
         // Subscribe folder store to SDK events
@@ -319,6 +326,19 @@ export function useAuth() {
 
         // Subscribe bin store to SDK events
         useBinStore.getState().subscribeToSdk(sdkClient);
+
+        // D-11 opportunistic post-mutation owner-reconcile trigger: after the
+        // client emits a mutation-complete event for a folder, fire-and-forget
+        // a reconcile scoped to that folder alongside the eager login sweep
+        // below. Best-effort/idempotent -- errors are captured inside
+        // runOwnerReconcileForFolder and never thrown here.
+        sdkClient.on((event) => {
+          if (event.type === 'folder:updated') {
+            void runOwnerReconcileForFolder(event.ipnsName).catch((error) => {
+              logger.error('[Auth] Opportunistic owner-reconcile failed (non-blocking):', error);
+            });
+          }
+        });
       }
 
       // Non-blocking device registry initialization (fire-and-forget)
@@ -363,6 +383,22 @@ export function useAuth() {
           logger.error('[Auth] Bin initialization failed (non-blocking):', error);
         }
       })();
+
+      // Non-blocking rotation-resume check (fire-and-forget, once per app-open).
+      // Surfaces the 'resuming' badge (D-02/D-03) when a durable rotation job
+      // checkpoint was left over from a previous session/reload.
+      void resumeInterruptedRotation().catch((error) => {
+        logger.error('[Auth] Rotation resume check failed (non-blocking):', error);
+      });
+
+      // Non-blocking owner-reconcile sweep (fire-and-forget, D-11 eager cadence)
+      // Re-mints/deletes any sent grants left dangling by a write-recipient's
+      // independent unlink+bin while this session was offline. Best-effort --
+      // errors are captured inside triggerOwnerReconcileOnLogin and never
+      // propagate here. The opportunistic post-mutation trigger is wired in 68-08.
+      void triggerOwnerReconcileOnLogin().catch((error) => {
+        logger.error('[Auth] Owner-reconcile eager sweep failed (non-blocking):', error);
+      });
 
       // Vault settings (retention, delete behavior, versioning) are loaded above
       // in parallel with BYO config and populated into useVaultSettingsStore.

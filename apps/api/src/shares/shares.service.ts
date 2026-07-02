@@ -249,4 +249,47 @@ export class SharesService {
     share.itemNameEncrypted = Buffer.from(itemNameEncrypted, 'hex');
     await this.shareRepo.save(share);
   }
+
+  /**
+   * Persist a rotated readDescriptorRef and rootGeneration on an existing share.
+   * Only the sharer (owner) can update it — the owner drives grant re-mint on
+   * key rotation (D-10/D-11, 68-07 owner reconcile). The server never
+   * re-encrypts — it persists the client-supplied ciphertext as-is.
+   */
+  async updateGrant(
+    shareId: string,
+    sharerId: string,
+    readDescriptorRef: string,
+    rootGeneration: string
+  ): Promise<void> {
+    // Row-locked transaction: the anti-rollback check below must see the row
+    // a concurrent PATCH just committed, not a stale pre-race read (TOCTOU).
+    await this.dataSource.transaction(async (manager) => {
+      const share = await manager.findOne(Share, {
+        where: { id: shareId },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (!share) {
+        throw new NotFoundException('Share not found');
+      }
+
+      if (share.sharerId !== sharerId) {
+        throw new ForbiddenException('Only the sharer can update the grant');
+      }
+
+      // Anti-rollback: the grant's rootGeneration seeds the recipient's durable
+      // generation floor on first contact, so a replayed/duplicate PATCH must
+      // never regress it below the stored value.
+      if (BigInt(rootGeneration) < BigInt(share.rootGeneration)) {
+        throw new ConflictException(
+          'rootGeneration regression rejected: grants only advance the generation'
+        );
+      }
+
+      share.readDescriptorRef = Buffer.from(readDescriptorRef, 'hex');
+      share.rootGeneration = rootGeneration;
+      await manager.save(share);
+    });
+  }
 }

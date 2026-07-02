@@ -2,19 +2,18 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
-current_phase: 68
-current_phase_name: Web Integration — Rotation UX and Durable Client State
-status: executing
-stopped_at: Phase 67 context gathered
-last_updated: "2026-07-01T01:52:28.854Z"
-last_activity: 2026-07-01
-last_activity_desc: Phase 67 complete, transitioned to Phase 68
+current_phase: 69
+current_phase_name: FUSE and WinFsp — Rust Integration and Grant-Root Awareness
+status: "Phase 68 shipped - PR #587"
+stopped_at: Completed 68-12-PLAN.md (ROT-07 Gap 2 closure)
+last_updated: "2026-07-02T00:08:14.728Z"
+last_activity: 2026-07-02
 progress:
   total_phases: 9
-  completed_phases: 7
-  total_plans: 53
-  completed_plans: 53
-  percent: 78
+  completed_phases: 8
+  total_plans: 65
+  completed_plans: 65
+  percent: 89
 ---
 
 # Project State
@@ -24,16 +23,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-27)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 68 — Web Integration — Rotation UX and Durable Client State
+**Current focus:** Phase 69 — FUSE and WinFsp — Rust Integration and Grant-Root Awareness
 
 ## Current Position
 
-Phase: 68 — Web Integration — Rotation UX and Durable Client State
+Phase: 69 — FUSE and WinFsp — Rust Integration and Grant-Root Awareness
 Plan: Not started
-Status: Ready to execute
-Last activity: 2026-07-01 — Phase 67 complete, transitioned to Phase 68
+Status: Phase 68 shipped - PR #587
+Last activity: 2026-07-02
 
-Progress: `████████░░` 7 / 9 phases (78%)
+Progress: `█████████░` 8 / 9 phases (89%)
 
 ## Deferred Items
 
@@ -222,6 +221,8 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 67-tee-lease-renewer-contract-rewrite P04 | 140 | 1 tasks | 2 files |
 | Phase 67 P05 | 171 | 2 tasks | 4 files |
 | Phase 67 P06 | 20m | 1 tasks | 2 files |
+| Phase 68 P11 | 25min | 3 tasks | 6 files |
+| Phase 68 P12 | 4min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -439,6 +440,11 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: tee-worker build context is repo root not apps/tee-worker dir
 - [Phase ?]: TEE_WORKER_URL=http://localhost:3002 active not commented in .env.example
 - [Phase ?]: TEE route is verify-in-enclave lease renewer: parse→verify→decrypt→bind→re-sign same CID+seq→zero (D-01/TEE-01/TEE-02/TEE-06)
+- [Phase 68-11]: reconcileFolderSequence sources enforceResolved's generation param from the in-memory folderTree nodeGeneration (never the resolved envelope's own generation)
+- [Phase 68-11]: handleSync's ResolveRotationContext.generation hardcoded to 0 (useFolderStore carries no root generation field), matching the SDK client's own default
+- [Phase 68-11]: rotation-durability.spec.ts SC#4 proof now drives two real UI renames (seed+bump, then a rejected rename after stale-bytes replay) instead of direct module invocation; RenameDialog does not close on a failed mutation so the spec drives the form fields directly for the rejection step
+- [Phase 68-12]: rotateReadFromNode returns are keyed off rootResult.skipped (checked once at the end), not job-record status; both clean-resume and dirty-resume paths correctly return undefined since neither mints a fresh root key
+- [Phase 68-12]: performScopeExitRotation zeroes the OLD folderTree folderKey only AFTER the Map.set() swap and only post-flight (rotateReadFromNode has already returned) -- never zeroes rotationResult.readKey or the caller-supplied rootReadKey mid-flight
 
 ## Operator Next Steps
 
@@ -446,6 +452,7 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-01T00:56:41.829Z
-**Stopped at:** Phase 67 context gathered
-**Resume file:** .planning/phases/67-tee-lease-renewer-contract-rewrite/67-CONTEXT.md
+**Last session:** 2026-07-01T20:06:13.030Z
+**Stopped at:** Completed 68-12-PLAN.md (ROT-07 Gap 2 closure)
+**Resume file:** 
+None

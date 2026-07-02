@@ -8,6 +8,7 @@ import { Share } from './entities/share.entity';
 import { CreateShareDto } from './dto/create-share.dto';
 import { RevokeForItemsDto } from './dto/revoke-for-items.dto';
 import { UpdateItemNameDto } from './dto/update-item-name.dto';
+import { UpdateGrantDto } from './dto/update-grant.dto';
 import { PaginationQueryDto } from './dto/pagination.dto';
 import { RequestWithUser } from '../common/types';
 
@@ -64,6 +65,7 @@ describe('SharesController', () => {
       revokeShare: jest.fn(),
       hideShare: jest.fn(),
       updateShareItemName: jest.fn(),
+      updateGrant: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -316,6 +318,42 @@ describe('SharesController', () => {
       await expect(
         controller.updateShareItemName(mockRequest, 'share-uuid-1', dto)
       ).rejects.toThrow(ForbiddenException);
+    });
+  });
+
+  describe('updateGrant', () => {
+    const dto: UpdateGrantDto = { readDescriptorRef: 'aabbcc', rootGeneration: '4' };
+
+    it('delegates shareId, req.user.id, readDescriptorRef and rootGeneration to the service and returns 204', async () => {
+      sharesService.updateGrant.mockResolvedValue(undefined);
+
+      const result = await controller.updateGrant(mockRequest, 'share-uuid-1', dto);
+
+      expect(sharesService.updateGrant).toHaveBeenCalledWith(
+        'share-uuid-1',
+        'sharer-uuid-1',
+        'aabbcc',
+        '4'
+      );
+      expect(result).toBeUndefined();
+    });
+
+    it('propagates ForbiddenException when a non-sharer attempts the update', async () => {
+      sharesService.updateGrant.mockRejectedValue(
+        new ForbiddenException('Only the sharer can update the grant')
+      );
+
+      await expect(controller.updateGrant(mockRequest, 'share-uuid-1', dto)).rejects.toThrow(
+        ForbiddenException
+      );
+    });
+
+    it('propagates NotFoundException when the share is missing', async () => {
+      sharesService.updateGrant.mockRejectedValue(new NotFoundException('Share not found'));
+
+      await expect(controller.updateGrant(mockRequest, 'missing', dto)).rejects.toThrow(
+        NotFoundException
+      );
     });
   });
 });

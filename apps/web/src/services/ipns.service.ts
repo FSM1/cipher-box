@@ -8,6 +8,13 @@
  * the CBOR cid/sequence binding (D-07/D-08, 58-01) and partial-fields
  * fail-closed check (D-02/D-03). The web axios instance is threaded via
  * SdkContext so the sdk-core function uses the same authenticated client.
+ *
+ * ROT-07: for rotation-participating nodes, `resolveIpnsRecord` additionally
+ * gates the resolved seq/generation through the durable anti-rollback
+ * high-water floor (`rotation-state.service.ts`, 68-06) via the SDK's
+ * `enforceResolved` (68-01). This is strictly a pre-unseal pass/throw gate —
+ * the high-water value it reads/writes is never fed into the read-key
+ * unwrap's AAD generation input (Pitfall 5).
  */
 
 import { createIpnsRecord, marshalIpnsRecord } from '@cipherbox/core';
@@ -16,6 +23,30 @@ import { ipnsControllerPublishRecord, ipnsControllerPublishBatch } from '@cipher
 import { resolveIpnsRecord as resolveIpnsRecordCore } from '@cipherbox/sdk-core';
 import { apiAxios, apiUrl } from '../lib/api-config';
 import { useAuthStore } from '../stores/auth.store';
+import { enforceResolved, seedFromGrant } from './rotation-state.service';
+
+/**
+ * Rotation-anti-rollback context for a resolve of a rotation-participating
+ * node (a child reached via a `SealedChildRef`, or a share-root reached via
+ * a grant). Omit entirely for non-rotation IPNS names (e.g. the vault key
+ * blob, BYO-pinning config) — those have no `generation`/`versionFloor` and
+ * are resolved without the enforceResolved gate.
+ */
+export type ResolveRotationContext = {
+  /**
+   * The reader's expected `generation` for this node: the parent
+   * `SealedChildRef.generation` mirror, or the grant's `rootGeneration` for
+   * a share-root (design §2.6). Never the node's own envelope generation.
+   */
+  generation: number;
+  /** Owner-vouched seq floor from the `SealedChildRef.versionFloor` (or grant), applied on first contact. */
+  versionFloor: number;
+  /**
+   * Owner-vouched generation floor to seed on first contact (e.g. a grant's
+   * `rootGeneration`). Only raises the floor (monotonic-max) — never lowers it.
+   */
+  rootGeneration?: number;
+};
 
 /**
  * Create an IPNS record locally and publish via backend.
@@ -135,15 +166,67 @@ export async function batchPublishIpnsRecords(
  * calls use the same authenticated, token-refreshing client (D-13).
  * Perf instrumentation is provided by sdk-core's internal withPerf('ipns:resolve', …).
  *
+ * ROT-07 (SC#4/D-05): when `rotation` context is supplied, the resolved
+ * record is additionally gated through the durable anti-rollback high-water
+ * floor before being returned. On first contact, `rotation.rootGeneration`
+ * (if provided) seeds the generation floor from the owner-vouched grant
+ * value. The SDK's `enforceResolved` then compares the resolved sequence
+ * number and the caller-supplied `generation` against the durable floors and
+ * `versionFloor`, throwing `SequenceRegressionError`/`GenerationRegressionError`
+ * on any regression (never caught here — the caller/toast layer surfaces it)
+ * or bumping the monotonic-max floors on pass. This is a pre-unseal gate
+ * only: the high-water value is never threaded into the read-key unwrap's
+ * AAD generation input.
+ *
  * @param ipnsName - IPNS name to resolve (k51.../bafzaa... format)
+ * @param rotation - Optional anti-rollback context for a rotation-participating node
  * @returns Current CID, sequence number, and signature verification status, or null if not found
  */
 export async function resolveIpnsRecord(
-  ipnsName: string
+  ipnsName: string,
+  rotation?: ResolveRotationContext
 ): Promise<{ cid: string; sequenceNumber: bigint; signatureVerified: boolean } | null> {
-  return resolveIpnsRecordCore(ipnsName, {
+  const resolved = await resolveIpnsRecordCore(ipnsName, {
     apiUrl,
     getAccessToken: async () => useAuthStore.getState().accessToken || '',
     axiosInstance: apiAxios,
   });
+
+  if (!resolved || !rotation) {
+    return resolved;
+  }
+
+  // Fail closed BEFORE any floor mutation: an absent-signature record
+  // (signatureVerified=false, tolerated by D-03 for legacy names) must never
+  // seed or bump a durable floor — a relay could otherwise forge a huge seq
+  // and permanently DoS the node. Rotation-participating nodes are always
+  // published signed, so an unverified record here is itself a red flag.
+  if (!resolved.signatureVerified) {
+    throw new Error(
+      `IPNS resolve for rotation-participating node ${ipnsName} returned an unverified record — refusing to gate floors on it`
+    );
+  }
+  // The durable floor stores JS numbers; a sequence beyond MAX_SAFE_INTEGER
+  // would silently truncate through Number() and corrupt the floor.
+  if (resolved.sequenceNumber > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error(
+      `IPNS sequence number for ${ipnsName} exceeds Number.MAX_SAFE_INTEGER — refusing lossy floor conversion`
+    );
+  }
+
+  // Durable floors are keyed by the resolved name itself (no separate node id
+  // in the read plane — see SealedChildRef), so the caller cannot key a floor
+  // under the wrong node.
+  if (rotation.rootGeneration !== undefined) {
+    await seedFromGrant(ipnsName, rotation.rootGeneration);
+  }
+
+  await enforceResolved({
+    nodeId: ipnsName,
+    seq: Number(resolved.sequenceNumber),
+    generation: rotation.generation,
+    versionFloor: rotation.versionFloor,
+  });
+
+  return resolved;
 }

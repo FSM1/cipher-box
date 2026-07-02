@@ -5,11 +5,16 @@ export type Notification = {
   type: 'info' | 'warning' | 'error';
   message: string;
   createdAt: number;
+  action?: { label: string; onClick: () => void };
 };
 
 type NotificationState = {
   notifications: Notification[];
-  addNotification: (type: Notification['type'], message: string) => void;
+  addNotification: (
+    type: Notification['type'],
+    message: string,
+    action?: Notification['action']
+  ) => string;
   dismissNotification: (id: string) => void;
   clearNotifications: () => void;
 };
@@ -17,18 +22,22 @@ type NotificationState = {
 export const useNotificationStore = create<NotificationState>((set) => ({
   notifications: [],
 
-  addNotification: (type, message) =>
+  addNotification: (type, message, action) => {
+    const id = crypto.randomUUID();
     set((state) => ({
       notifications: [
         ...state.notifications,
         {
-          id: crypto.randomUUID(),
+          id,
           type,
           message,
           createdAt: Date.now(),
+          action,
         },
       ],
-    })),
+    }));
+    return id;
+  },
 
   dismissNotification: (id) =>
     set((state) => ({

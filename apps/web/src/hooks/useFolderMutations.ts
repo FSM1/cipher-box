@@ -8,6 +8,7 @@ import { BinNotLoadedError } from '@cipherbox/sdk';
 import { useVaultSettingsStore } from '../stores/vault-settings.store';
 import { MAX_FOLDER_DEPTH, getRootFolderState } from './folder-helpers';
 import type { FolderOperationState } from './folder-helpers';
+import { runWithFailureUx } from './useMutationFailureUx';
 
 /**
  * Delete an item using the user's preferred delete behavior.
@@ -22,19 +23,21 @@ async function deleteWithBehavior(
 ): Promise<void> {
   const { deleteBehavior } = useVaultSettingsStore.getState().settings;
 
-  if (deleteBehavior === 'permanent') {
-    await client.deleteItem(ipnsName, itemId);
-  } else {
-    try {
-      await client.deleteToBin(ipnsName, itemId, parentPath);
-    } catch (binErr) {
-      if (binErr instanceof BinNotLoadedError) {
-        await client.deleteItem(ipnsName, itemId);
-      } else {
-        throw binErr;
+  await runWithFailureUx(async () => {
+    if (deleteBehavior === 'permanent') {
+      await client.deleteItem(ipnsName, itemId);
+    } else {
+      try {
+        await client.deleteToBin(ipnsName, itemId, parentPath);
+      } catch (binErr) {
+        if (binErr instanceof BinNotLoadedError) {
+          await client.deleteItem(ipnsName, itemId);
+        } else {
+          throw binErr;
+        }
       }
     }
-  }
+  });
 }
 
 /**
@@ -166,7 +169,7 @@ export function useFolderMutations() {
 
         // Rename via SDK (handles metadata update, IPNS publish)
         const client = getSdkClient();
-        await client.renameItem(parentFolder.ipnsName, itemId, newName);
+        await runWithFailureUx(() => client.renameItem(parentFolder.ipnsName, itemId, newName));
 
         // SDK emits folder:updated -> store subscription updates children
         // Also update the folder name in the store if renaming a folder
@@ -209,7 +212,9 @@ export function useFolderMutations() {
 
         // Move via SDK (handles add-before-remove, both IPNS publishes)
         const client = getSdkClient();
-        await client.moveItem(sourceFolder.ipnsName, destFolder.ipnsName, itemId);
+        await runWithFailureUx(() =>
+          client.moveItem(sourceFolder.ipnsName, destFolder.ipnsName, itemId)
+        );
 
         // SDK emits folder:updated for both folders -> store subscription updates children
         // Also update parentId for moved folders
@@ -297,7 +302,9 @@ export function useFolderMutations() {
         // Move each item via SDK
         const client = getSdkClient();
         for (const item of items) {
-          await client.moveItem(sourceFolder.ipnsName, destFolder.ipnsName, item.id);
+          await runWithFailureUx(() =>
+            client.moveItem(sourceFolder.ipnsName, destFolder.ipnsName, item.id)
+          );
 
           if (item.type === 'folder') {
             const movedFolder = useFolderStore.getState().folders[item.id];

@@ -1,6 +1,5 @@
 // DEPRECATED: Use @cipherbox/sdk instead. Will be removed in 19.1-06.
 // Hooks now delegate to CipherBoxClient SDK methods for share operations.
-// Remaining usages: reWrapForRecipients (useFolderMutations, useFileOperations).
 /**
  * Share Service - API integration for user-to-user sharing
  *
@@ -16,14 +15,17 @@ import {
   sharesControllerRevokeShare,
   sharesControllerHideShare,
   sharesControllerUpdateShareItemName,
+  sharesControllerGetReceivedShares,
+  sharesControllerGetSentShares,
   type ShareKeyEntryDtoKeyType,
   type ChildKeyDtoKeyType,
+  type ReceivedShareResponseDto,
+  type SentShareResponseDto,
 } from '@cipherbox/api-client';
 
-import { wrapKey, unwrapKey, bytesToHex, hexToBytes, generateRandomBytes } from '@cipherbox/crypto';
+import { wrapKey, unwrapKey, bytesToHex, hexToBytes } from '@cipherbox/crypto';
 import type { ReceivedShare, SentShare } from '../stores/share.store';
 import { useShareStore } from '../stores/share.store';
-import type { FolderNode } from '../stores/folder.store';
 import { useAuthStore } from '../stores/auth.store';
 import { logger } from '../lib/logger';
 
@@ -91,23 +93,78 @@ export function shouldBackfill(row: ItemNameBearingRow, hasRecipientPubKey: bool
 }
 
 /**
+ * Parse a grant's `rootGeneration` (numeric string from the DTO) into a number.
+ *
+ * Fail-closed (V5, T-68-21): a non-numeric or absent value is treated as
+ * absent (`undefined`), never coerced to `NaN`/`0` — the durable rotation
+ * floor downstream must never seed from a forged/garbled low generation.
+ */
+function parseRootGeneration(value: string | undefined | null): number | undefined {
+  // Strict digits-only: Number('') / Number(' ') coerce to 0, and negative or
+  // fractional strings pass isFinite — all of which would seed a forged floor.
+  if (value === undefined || value === null || !/^\d+$/.test(value)) return undefined;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+
+/** Reshape a received-share grant DTO row into the web store's ReceivedShare shape. */
+function toReceivedShare(dto: ReceivedShareResponseDto): ReceivedShare {
+  return {
+    shareId: dto.shareId,
+    sharerPublicKey: dto.sharerPublicKey,
+    ipnsName: dto.rootIpnsName,
+    itemName: '',
+    itemNameEncrypted: dto.itemNameEncrypted,
+    permission: dto.writeDescriptorRef !== null ? 'write' : 'read',
+    createdAt: dto.createdAt,
+    readDescriptorRef: dto.readDescriptorRef,
+    rootGeneration: parseRootGeneration(dto.rootGeneration),
+    rootNodeId: dto.rootNodeId,
+  };
+}
+
+/** Reshape a sent-share grant DTO row into the web store's SentShare shape. */
+function toSentShare(dto: SentShareResponseDto): SentShare {
+  return {
+    shareId: dto.shareId,
+    recipientPublicKey: dto.recipientPublicKey,
+    ipnsName: dto.rootIpnsName,
+    itemName: '',
+    itemNameEncrypted: dto.itemNameEncrypted,
+    permission: dto.writeDescriptorRef !== null ? 'write' : 'read',
+    createdAt: dto.createdAt,
+    readDescriptorRef: dto.readDescriptorRef,
+    rootGeneration: parseRootGeneration(dto.rootGeneration),
+    rootNodeId: dto.rootNodeId,
+  };
+}
+
+/**
  * Fetch active, non-hidden shares received by the current user (paginated).
+ *
+ * Real grant rows (readDescriptorRef/rootGeneration/rootNodeId) — the data
+ * path D-07 seeds the durable rotation-floor from (ROT-07).
  */
 export async function fetchReceivedShares(
-  _limit = 50,
-  _offset = 0
+  limit = 50,
+  offset = 0
 ): Promise<{ shares: ReceivedShare[]; total: number }> {
-  throw new Error('deferred to Phase 68 — descriptor-ref rotation/grant path not yet wired');
+  const result = await sharesControllerGetReceivedShares({ limit, offset });
+  return { shares: result.shares.map(toReceivedShare), total: result.total };
 }
 
 /**
  * Fetch active shares sent by the current user (paginated).
+ *
+ * Real grant rows (readDescriptorRef/rootGeneration/rootNodeId) — the data
+ * path D-07 seeds the durable rotation-floor from (ROT-07).
  */
 export async function fetchSentShares(
-  _limit = 50,
-  _offset = 0
+  limit = 50,
+  offset = 0
 ): Promise<{ shares: SentShare[]; total: number }> {
-  throw new Error('deferred to Phase 68 — descriptor-ref rotation/grant path not yet wired');
+  const result = await sharesControllerGetSentShares({ limit, offset });
+  return { shares: result.shares.map(toSentShare), total: result.total };
 }
 
 /**
@@ -244,31 +301,6 @@ export async function fetchShareKeys(_shareId: string): Promise<
   throw new Error('deferred to Phase 68 — descriptor-ref rotation/grant path not yet wired');
 }
 
-/**
- * Add re-wrapped child keys to an existing share.
- * Allowed for the sharer (owner) or write-share recipients (file/file-ipns keys only).
- */
-export async function addShareKeys(
-  _shareId: string,
-  _keys: Array<{
-    keyType: ShareKeyEntryDtoKeyType;
-    itemId: string;
-    encryptedKey: string;
-  }>
-): Promise<void> {
-  throw new Error('deferred to Phase 68 — descriptor-ref rotation/grant path not yet wired');
-}
-
-/**
- * Get sent shares for a specific item (by IPNS name).
- * Fetches all sent shares and filters by ipnsName.
- * Uses the store cache if available and fresh.
- */
-export async function getSentSharesForItem(ipnsName: string): Promise<SentShare[]> {
-  const shares = await ensureFreshSentShares();
-  return shares.filter((s) => s.ipnsName === ipnsName);
-}
-
 // ---------------------------------------------------------------------------
 // Post-upload / post-create share key propagation
 // ---------------------------------------------------------------------------
@@ -323,115 +355,6 @@ export async function hasActiveShares(folderIpnsName: string): Promise<boolean> 
   return shares.some((s) => s.ipnsName === folderIpnsName);
 }
 
-/**
- * Find active shares that cover a given folder, including ancestor shares.
- * A folder is "covered" if it or any of its ancestor folders is shared.
- *
- * Walks the ancestor chain and checks each folder's IPNS name against sent shares.
- *
- * @param folderIpnsName - IPNS name of the current folder
- * @param folders - Current folder tree from the folder store
- * @param currentFolderId - ID of the current folder in the tree
- * @returns Array of sent shares covering this folder (may be from ancestor)
- */
-export async function findCoveringShares(
-  folderIpnsName: string,
-  folders: Record<string, FolderNode>,
-  currentFolderId: string | null
-): Promise<SentShare[]> {
-  const shares = await ensureFreshSentShares();
-  if (shares.length === 0) return [];
-
-  // Collect all IPNS names from this folder up to root
-  const ipnsNames = new Set<string>();
-  ipnsNames.add(folderIpnsName);
-
-  let walkId = currentFolderId;
-  while (walkId) {
-    const node = folders[walkId];
-    if (!node) break;
-    ipnsNames.add(node.ipnsName);
-    walkId = node.parentId;
-  }
-
-  return shares.filter((s) => ipnsNames.has(s.ipnsName));
-}
-
-/**
- * After adding a file or subfolder to a shared folder, re-wrap the new key
- * for all existing share recipients.
- *
- * This is a fire-and-forget operation -- failures are logged but don't block
- * the primary upload/create flow.
- *
- * IMPORTANT: Callers are responsible for zeroing `newItems[*].plaintextKey`
- * after this function completes. This function does NOT zero the keys because
- * some callers (e.g., subfolder creation) keep the key alive in the store.
- * Use a `finally` block to ensure zeroing even on errors.
- *
- * @param params.folderIpnsName - IPNS name of the folder being modified
- * @param params.folders - Current folder tree from the store
- * @param params.currentFolderId - ID of the current folder in the tree
- * @param params.newItems - New items whose keys need re-wrapping
- */
-export async function reWrapForRecipients(params: {
-  folderIpnsName: string;
-  folders: Record<string, FolderNode>;
-  currentFolderId: string | null;
-  newItems: Array<{
-    keyType: 'file' | 'folder';
-    itemId: string;
-    plaintextKey: Uint8Array;
-  }>;
-}): Promise<{ failedRecipients: string[] }> {
-  const coveringShares = await findCoveringShares(
-    params.folderIpnsName,
-    params.folders,
-    params.currentFolderId
-  );
-
-  if (coveringShares.length === 0) return { failedRecipients: [] };
-
-  const failedRecipients: string[] = [];
-
-  // For each share recipient, re-wrap all new item keys
-  for (const share of coveringShares) {
-    try {
-      const recipientPubKey = hexToBytes(
-        share.recipientPublicKey.startsWith('0x')
-          ? share.recipientPublicKey.slice(2)
-          : share.recipientPublicKey
-      );
-
-      const wrappedKeys: Array<{
-        keyType: 'file' | 'folder';
-        itemId: string;
-        encryptedKey: string;
-      }> = [];
-
-      for (const item of params.newItems) {
-        const wrapped = await wrapKey(item.plaintextKey, recipientPubKey);
-        wrappedKeys.push({
-          keyType: item.keyType,
-          itemId: item.itemId,
-          encryptedKey: bytesToHex(wrapped),
-        });
-      }
-
-      // Add the wrapped keys to this share via API
-      await addShareKeys(share.shareId, wrappedKeys);
-    } catch (err) {
-      logger.warn(
-        `[share] Failed to re-wrap keys for recipient ${share.recipientPublicKey.slice(0, 10)}...:`,
-        err
-      );
-      failedRecipients.push(share.recipientPublicKey);
-    }
-  }
-
-  return { failedRecipients };
-}
-
 // ---------------------------------------------------------------------------
 // Lazy key rotation after revocation
 // ---------------------------------------------------------------------------
@@ -464,99 +387,4 @@ export async function fetchPendingRotations(): Promise<PendingRotation[]> {
 export async function checkPendingRotation(folderIpnsName: string): Promise<boolean> {
   const pendingRotations = await fetchPendingRotations();
   return pendingRotations.some((r) => r.ipnsName === folderIpnsName);
-}
-
-/**
- * Update the encrypted key on a share record after lazy key rotation.
- * Re-wraps the new folder key for a remaining (non-revoked) recipient.
- */
-export async function updateShareKey(_shareId: string, _encryptedKey: string): Promise<void> {
-  throw new Error('deferred to Phase 68 — descriptor-ref rotation/grant path not yet wired');
-}
-
-/**
- * Hard-delete a revoked share after rotation is complete.
- */
-export async function completeShareRotation(_shareId: string): Promise<void> {
-  throw new Error('deferred to Phase 68 — descriptor-ref rotation/grant path not yet wired');
-}
-
-/**
- * Execute lazy key rotation for a folder.
- * Called when a folder modification is about to happen and pending rotations exist.
- *
- * Protocol:
- * 1. Generate new random folderKey
- * 2. Re-wrap new folderKey for each REMAINING (non-revoked) active recipient
- * 3. Update remaining shares with the new encrypted key
- * 4. Hard-delete revoked share records (rotation complete)
- * 5. Invalidate share cache
- *
- * NOTE: The actual folder metadata re-encryption (decrypt with old key, re-encrypt
- * with new key, re-publish IPNS) is handled by the caller (folder.service.ts)
- * since it has access to the folder's IPNS private key and publishing infrastructure.
- *
- * @returns The new folderKey for the caller to use
- */
-export async function executeLazyRotation(params: {
-  folderIpnsName: string;
-  oldFolderKey: Uint8Array;
-  ownerPublicKey: Uint8Array;
-}): Promise<{ newFolderKey: Uint8Array }> {
-  // 1. Generate new random 32-byte folderKey
-  const newFolderKey = generateRandomBytes(32);
-
-  // 2. Fetch pending rotations and active shares for this folder
-  const [pendingRotations, activeSentShares] = await Promise.all([
-    fetchPendingRotations(),
-    getSentSharesForItem(params.folderIpnsName),
-  ]);
-
-  const revokedForFolder = pendingRotations.filter((r) => r.ipnsName === params.folderIpnsName);
-  const revokedShareIds = new Set(revokedForFolder.map((r) => r.shareId));
-
-  // Active shares that are NOT revoked -- these recipients keep access
-  const remainingShares = activeSentShares.filter((s) => !revokedShareIds.has(s.shareId));
-
-  // 3. Re-wrap new folderKey for each remaining recipient
-  const reWrapFailures: string[] = [];
-  for (const share of remainingShares) {
-    try {
-      const recipientPubKey = hexToBytes(
-        share.recipientPublicKey.startsWith('0x')
-          ? share.recipientPublicKey.slice(2)
-          : share.recipientPublicKey
-      );
-      const wrapped = await wrapKey(newFolderKey, recipientPubKey);
-      await updateShareKey(share.shareId, bytesToHex(wrapped));
-    } catch (err) {
-      logger.warn(
-        `[share] Failed to update share key for remaining recipient ${share.recipientPublicKey.slice(0, 10)}...:`,
-        err
-      );
-      reWrapFailures.push(share.shareId);
-    }
-  }
-
-  if (reWrapFailures.length > 0) {
-    newFolderKey.fill(0);
-    throw new Error(
-      `Key rotation failed: could not re-wrap key for ${reWrapFailures.length} recipient(s). ` +
-        'Aborting to prevent inconsistent state.'
-    );
-  }
-
-  // 4. Hard-delete all revoked shares for this folder
-  for (const revoked of revokedForFolder) {
-    try {
-      await completeShareRotation(revoked.shareId);
-    } catch (err) {
-      logger.warn(`[share] Failed to complete rotation for share ${revoked.shareId}:`, err);
-    }
-  }
-
-  // 5. Invalidate the sent shares cache so next check fetches fresh state
-  useShareStore.getState().setSentShares([]);
-
-  return { newFolderKey };
 }

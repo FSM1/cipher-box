@@ -50,6 +50,8 @@ describe('SharesService', () => {
   let dataSource: { transaction: jest.Mock };
   let manager: {
     find: jest.Mock;
+    findOne: jest.Mock;
+    save: jest.Mock;
     remove: jest.Mock;
     createQueryBuilder: jest.Mock;
   };
@@ -78,6 +80,8 @@ describe('SharesService', () => {
 
     manager = {
       find: jest.fn(),
+      findOne: jest.fn(),
+      save: jest.fn(),
       remove: jest.fn(),
       createQueryBuilder: jest.fn().mockReturnValue(queryBuilder),
     };
@@ -435,6 +439,59 @@ describe('SharesService', () => {
         service.updateShareItemName('share-uuid-1', 'not-the-sharer', 'dd'.repeat(8))
       ).rejects.toThrow(ForbiddenException);
       expect(shareRepo.save).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('updateGrant', () => {
+    it('persists the rotated descriptor and advances rootGeneration for the sharer', async () => {
+      const share = createMockShare({ rootGeneration: '2' });
+      manager.findOne.mockResolvedValue(share);
+
+      await service.updateGrant('share-uuid-1', SHARER_ID, 'bb'.repeat(32), '3');
+
+      expect(manager.findOne).toHaveBeenCalledWith(Share, {
+        where: { id: 'share-uuid-1' },
+        lock: { mode: 'pessimistic_write' },
+      });
+      expect(share.readDescriptorRef).toEqual(Buffer.from('bb'.repeat(32), 'hex'));
+      expect(share.rootGeneration).toBe('3');
+      expect(manager.save).toHaveBeenCalledWith(share);
+    });
+
+    it('accepts an equal rootGeneration (idempotent re-mint retry)', async () => {
+      const share = createMockShare({ rootGeneration: '3' });
+      manager.findOne.mockResolvedValue(share);
+
+      await service.updateGrant('share-uuid-1', SHARER_ID, 'bb'.repeat(32), '3');
+
+      expect(manager.save).toHaveBeenCalledWith(share);
+    });
+
+    it('throws ConflictException when rootGeneration regresses below the stored value', async () => {
+      manager.findOne.mockResolvedValue(createMockShare({ rootGeneration: '5' }));
+
+      await expect(
+        service.updateGrant('share-uuid-1', SHARER_ID, 'bb'.repeat(32), '4')
+      ).rejects.toThrow(ConflictException);
+      expect(manager.save).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the share is missing', async () => {
+      manager.findOne.mockResolvedValue(null);
+
+      await expect(service.updateGrant('missing', SHARER_ID, 'bb'.repeat(32), '1')).rejects.toThrow(
+        NotFoundException
+      );
+      expect(manager.save).not.toHaveBeenCalled();
+    });
+
+    it('throws ForbiddenException when a non-sharer attempts the update', async () => {
+      manager.findOne.mockResolvedValue(createMockShare());
+
+      await expect(
+        service.updateGrant('share-uuid-1', 'not-the-sharer', 'bb'.repeat(32), '1')
+      ).rejects.toThrow(ForbiddenException);
+      expect(manager.save).not.toHaveBeenCalled();
     });
   });
 });

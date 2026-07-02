@@ -19,7 +19,9 @@ export function useFileOperations() {
 
   /**
    * Update a file's content in-place.
-   * @stub phase 65 — requires NodeContent + write-chain key
+   * @stub phase 65 — requires NodeContent + write-chain key. The eventual
+   * SDK mutation call belongs inside runWithFailureUx (68-09) alongside
+   * every other client.X() invocation in this hook set.
    */
   const handleUpdateFile = useCallback(
     async (
@@ -34,6 +36,9 @@ export function useFileOperations() {
         forceVersion?: boolean;
       }
     ): Promise<void> => {
+      // Thrown directly (not via runWithFailureUx): the wrapper's finally
+      // would surface the degraded-cache notice for an operation that never
+      // reaches the rotation path. Re-wrap when the real SDK call lands.
       throw new Error(
         'not implemented — phase 65 (file update requires Node read-chain + write-chain)'
       );

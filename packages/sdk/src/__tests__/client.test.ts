@@ -20,6 +20,9 @@ vi.mock('@cipherbox/sdk-core', async (importOriginal) => {
     downloadAndDecrypt: vi.fn(),
     batchPublishIpnsRecords: vi.fn(),
     createAndPublishIpnsRecord: vi.fn(),
+    // Phase 68 reconcile-before-publish (SC#3/D-04) now calls resolveIpnsRecord
+    // ahead of every publish; mock it so deleteItem doesn't hit the real network.
+    resolveIpnsRecord: vi.fn(),
   };
 });
 
