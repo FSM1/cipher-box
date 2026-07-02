@@ -5,11 +5,11 @@ import {
   sharesControllerRevokeShare,
   sharesControllerCreateShare,
   sharesControllerGetSentShares,
+  sharesControllerUpdateGrant,
 } from '@cipherbox/api-client';
 import { wrapKey, hexToBytes, bytesToHex } from '@cipherbox/crypto';
 import { useShareStore } from '../../stores/share.store';
 import type { SentShare } from '../../stores/share.store';
-import { updateSharePermission } from '../../services/share.service';
 import { resolveChildNodeIdentity } from '../../lib/crypto/key-wrapping';
 import { resolveParentIpnsName } from '../../services/invite.service';
 import { getSdkClient } from '../../lib/sdk-provider';
@@ -256,28 +256,56 @@ export function ShareDialog({
     }
   }, []);
 
-  const handleUpgrade = useCallback(async (share: SentShare) => {
-    setError(null);
-    setSuccess(null);
-    setUpgradingId(share.shareId);
+  const handleUpgrade = useCallback(
+    async (share: SentShare) => {
+      setError(null);
+      setSuccess(null);
+      setUpgradingId(share.shareId);
 
-    try {
-      // Upgrading read -> write requires the shared item's own writeKey
-      // (sealed inside the parent folder's write-body, unsealed under the
-      // parent writeKey) to mint a writeDescriptorRef -- the same write-chain
-      // gap as handleShare's write-permission path above. `updateSharePermission`
-      // (packages/sdk/src/share/shared-write.ts:900) is the SDK-level thin
-      // callback wrapper this would route through once the writeKey is
-      // available; there is currently no way to reach it correctly from
-      // this component. See 68.1-11 SUMMARY "Known Gaps".
-      await updateSharePermission(share.shareId, 'write', undefined);
-    } catch (err) {
-      logger.error('[Share] Permission upgrade failed:', err);
-      setError('> write access is not yet available for this item');
-    } finally {
-      setUpgradingId(null);
-    }
-  }, []);
+      let recipientPublicKey: Uint8Array | null = null;
+
+      try {
+        // Upgrading read -> write mints the shared item's own writeKey from
+        // the owned write-chain (parent writeKey -> WriteChildRef.writeKeySealed,
+        // 68.1-18's resolveShareWriteDescriptor) and PATCHes the SAME share row
+        // (no revoke/recreate, same shareId) via updateGrant -- the
+        // readDescriptorRef/rootGeneration are re-sent unchanged so this call
+        // only ever advances the write side.
+        const bareHex = share.recipientPublicKey.startsWith('0x')
+          ? share.recipientPublicKey.slice(2)
+          : share.recipientPublicKey;
+        recipientPublicKey = hexToBytes(bareHex);
+
+        const parentIpnsName = resolveParentIpnsName(parentFolderId);
+        const writeDescriptorRef = await getSdkClient().resolveShareWriteDescriptor(
+          parentIpnsName,
+          item.ipnsName,
+          recipientPublicKey
+        );
+
+        await sharesControllerUpdateGrant(share.shareId, {
+          readDescriptorRef: share.readDescriptorRef,
+          rootGeneration: String(share.rootGeneration ?? 0),
+          writeDescriptorRef,
+        });
+
+        setRecipients((prev) =>
+          prev.map((r) => (r.shareId === share.shareId ? { ...r, permission: 'write' } : r))
+        );
+        useShareStore.getState().updateSentSharePermission(share.shareId, 'write');
+        setSuccess('> upgraded to read-write');
+      } catch (err) {
+        logger.error('[Share] Permission upgrade failed:', err);
+        setError('> permission upgrade failed, please try again');
+      } finally {
+        setUpgradingId(null);
+        // recipientPublicKey is public key material (not sensitive), but
+        // clear the transient buffer reference regardless (D-09 discipline).
+        recipientPublicKey?.fill(0);
+      }
+    },
+    [item, parentFolderId]
+  );
 
   const handleDowngradeConfirm = useCallback(async (share: SentShare) => {
     setError(null);
@@ -286,7 +314,14 @@ export function ShareDialog({
     setConfirmDowngradeId(null);
 
     try {
-      await updateSharePermission(share.shareId, 'read');
+      // Downgrading write -> read clears the share's writeDescriptorRef via
+      // the explicit clearWriteDescriptor signal (68.1-19) -- the read side
+      // (readDescriptorRef/rootGeneration) is re-sent unchanged, same shareId.
+      await sharesControllerUpdateGrant(share.shareId, {
+        readDescriptorRef: share.readDescriptorRef,
+        rootGeneration: String(share.rootGeneration ?? 0),
+        clearWriteDescriptor: true,
+      });
 
       // Update local state
       setRecipients((prev) =>
