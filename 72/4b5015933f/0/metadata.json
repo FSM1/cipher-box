@@ -1,0 +1,101 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "724b5015933f",
+  "session_id": "064836b9-90e4-42d5-aabc-ed5fde831a57",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-02T19:49:52.006096Z",
+  "branch": "feat/web-client-runtime-integration",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "6a32dc56abb1",
+  "token_usage": {
+    "input_tokens": 48780,
+    "cache_creation_tokens": 1503107,
+    "cache_read_tokens": 41885105,
+    "output_tokens": 174342,
+    "api_call_count": 165
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-plan-phase-2026-07-02T19:11:49.468219Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "6a32dc56abb1",
+      "timestamp": "2026-07-02T19:11:49.468219Z",
+      "native": {
+        "command": "/gsd-plan-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-plan-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "summary": {
+    "intent": "Execute all 14 plans of phase 68.1 (web client runtime integration) via wave-based parallel subagent orchestration, then diagnose e2e/production issues surfaced during manual testing and kick off a gap-closure planning pass.",
+    "outcome": "All 14 plans executed across 5 waves (58 commits) raising e2e pass rate from 6/208 to ~190/208, but phase verification scored only 2/5 success criteria; live user testing found further real bugs (cold subfolder navigation failure), root-caused to a volatile in-memory IPNS routing store plus missing DB registration/republish enrollment, and a gap-closure plan set (68.1-16+) was generated via /gsd-plan-phase 68.1 --gaps.",
+    "learnings": {
+      "repo": [
+        "GSD execute-phase orchestrator runs wave-based parallel execution: each plan gets its own subagent/worktree, worktree metadata is recorded into a manifest as agents return, all worktrees in a wave merge together at the end, followed by post-merge build/test/drift gates.",
+        "mock-ipns-routing keeps IPNS records in an in-memory Map — any container restart wipes all records; only records published through the API (which also writes a DB row / republish enrollment) survive restarts.",
+        "The dev API listens on :3000, not :3001 — :3001 is the delegated-routing mock (mock-ipns-routing), and probing it directly is a common false 'API down' signal.",
+        "createFolder publishes child IPNS records without encryptedIpnsPrivateKey/keyEpoch, so ipns_republish_schedule gets zero rows for subfolders — a real production durability gap (records die at 48h TTL if never mutated again).",
+        "The kind cache introduced in 68.1-14 is wired into the owned-folder UI paths but never read by the shared-folder browser — apps/web/src/components/file-browser/SharedFolderRow.tsx:63 hardcodes isFolder = true, so shared files render/act as folders.",
+        "collectChildKeys was implemented to spec in 68.1-11 but has no live caller — the actual /shares API grants an entire subtree via one ECIES wrap of the root readKey, not per-child keys.",
+        "decision-coverage gate requires the informational tag placed inside the bold ID group itself, e.g. `- **D-04 [informational]:**`, not appended elsewhere in the line."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/components/file-browser/SharedFolderRow.tsx",
+          "line": 63,
+          "finding": "Hardcodes isFolder = true; never consults the kind cache populated by 68.1-14, so shared files are always treated as folders."
+        },
+        {
+          "path": "docker/docker-compose.yml",
+          "finding": "mock-ipns-routing healthcheck used `wget localhost`, which resolves to ::1 (IPv6) while the app binds IPv4-only — always reported unhealthy; fixed to 127.0.0.1."
+        }
+      ],
+      "workflow": [
+        "Background subagent completion notifications can silently fail to re-fire ('lost wake-up') — after a long-running task like a 208-spec e2e suite, verify process liveness/output directly rather than assuming the agent is still working, then resume it manually with SendMessage carrying the verified results.",
+        "describe.serial Playwright specs abort at first failure, so a raw pass/fail tally overstates health — a single early setup bug (e.g. nested folder creation) can mask dozens of untested downstream cases.",
+        "Running a failing e2e spec in headed mode is an effective way to get direct user confirmation of a bug before continuing automated triage.",
+        "When a Bash command combining multiple reads gets denied, split it into smaller single-purpose commands rather than retrying the same compound command."
+      ]
+    },
+    "friction": [
+      "Wave 1 executor agent stalled mid-stream after 119 tool calls (~23 min), requiring a filesystem/git spot-check and manual resume before the orchestrator could proceed.",
+      "Exit-gate (Wave 5) executor lost its wake-up after the 208-spec e2e suite finished at 18:13; the orchestrator had to detect the finished process independently and resume the agent with results.",
+      "Task list did not survive the session hand-off after the triage continuation agent returned, forcing the orchestrator to proceed without task tracking.",
+      "Transient git index.lock during the Wave 3 tracking commit required a retry.",
+      "Bash command combining a grep over docker-compose with an env read was denied by the permission system, requiring the command to be split.",
+      "Getting the decision-coverage gate to recognize an informational tag took multiple failed attempts before finding the correct bold-group placement.",
+      "mock-ipns-routing container had been unhealthy for 39 hours before anyone noticed, and its wipe-on-restart behavior masquerades as an IPNS 'propagation timeout' rather than data loss."
+    ],
+    "open_items": [
+      "GAP-1: resolveFileMetadata AEAD decrypt failure breaks CTR video streaming preview and batch-download.",
+      "GAP-2 (reframed): cold-state subfolder navigation fails because the child's IPNS record has no DB row / republish enrollment and the dev routing store is wiped on restart.",
+      "SHARE-WRITE-KEY web-wiring gap: write-permission share/invite creation is fail-closed; needs a dedicated cross-cutting gap-closure plan, and there's no backend upgrade-permission endpoint at all.",
+      "SC#4 shared flows still broken: SharedFolderRow hardcodes isFolder=true, shared per-item download wired to undefined, fetchShareKeys throws on four live paths.",
+      "Full web-e2e suite (SC#5) was not re-run/reconfirmed green after the 5 triage fixes landed.",
+      "Systemic durability gap: createFolder doesn't enroll new subfolder IPNS records for TEE republish, risking silent record death at the 48h TTL in production.",
+      "Commits 17e4319a6 and 7209e8777 have parentheses in their subjects — flagged to keep out of the eventual PR title.",
+      "mock-ipns-routing's dev routing store has no persistence across restarts — still an open dev-environment reliability issue.",
+      "Gap-closure plans (68.1-16 and others) were generated via /gsd-plan-phase 68.1 --gaps but not yet executed."
+    ]
+  }
+}
