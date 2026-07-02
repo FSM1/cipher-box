@@ -2171,8 +2171,16 @@ export class CipherBoxClient {
    * @throws if `fileId` has no matching child, the file IPNS is unresolvable,
    *   the file has no `WriteChildRef` in the parent's write-body (not
    *   write-capable), or the resolved node is not a file node.
-   * @security Returns `fileReadKey`/`fileWriteKey` RAW — the caller is the
-   *   terminal owner (D-09) and must zero them after use.
+   * @security Returns `fileReadKey`/`fileWriteKey`/`fileIpnsPrivateKey` RAW —
+   *   the caller is the terminal owner (D-09) and must zero them after use
+   *   (T-68.1-12-04: `fileIpnsPrivateKey` is recovered here from the current
+   *   file Node's write-body as a byproduct of resolving `nodeGeneration`/
+   *   `originalCreatedAt` — 68.1-09's `replaceFile`/`restoreFileVersion`/
+   *   `deleteFileVersion` receive it from the caller instead and zero this
+   *   copy unused; the new public `resolveFileIpnsPrivateKey` wrapper below
+   *   returns it directly for callers that need to pre-resolve it, since
+   *   NODE-03's frozen `SealedChildRef` schema gives the web layer no
+   *   independent way to derive it (Rule 3 deviation, 68.1-12)).
    */
   private async resolveFileWriteChainKeys(
     folder: FolderState,
@@ -2180,6 +2188,7 @@ export class CipherBoxClient {
   ): Promise<{
     fileReadKey: Uint8Array;
     fileWriteKey: Uint8Array;
+    fileIpnsPrivateKey: Uint8Array;
     fileMetaIpnsName: string;
     fileSequenceNumber: bigint;
     nodeId: string;
@@ -2221,8 +2230,12 @@ export class CipherBoxClient {
       );
 
       const currentFileNode = await unsealNode(filePub.published, fileReadKey, fileWriteKey);
-      if (currentFileNode.kind !== 'file' || !currentFileNode.content) {
-        throw new Error(`Node ${fileId} is not a file node`);
+      if (
+        currentFileNode.kind !== 'file' ||
+        !currentFileNode.content ||
+        !currentFileNode.writeBody
+      ) {
+        throw new Error(`Node ${fileId} is not a write-capable file node`);
       }
 
       const resultReadKey = fileReadKey;
@@ -2234,6 +2247,10 @@ export class CipherBoxClient {
       return {
         fileReadKey: resultReadKey,
         fileWriteKey: resultWriteKey,
+        // T-68.1-12-04: unsealed as a byproduct above (writeBody requires
+        // fileWriteKey to unseal) — see the docstring above for why this is
+        // now returned alongside the read/write keys.
+        fileIpnsPrivateKey: currentFileNode.writeBody.ipnsPrivateKey,
         fileMetaIpnsName: childRef.ipnsName,
         fileSequenceNumber: filePub.sequenceNumber,
         nodeId: fileNodeId,
@@ -2246,6 +2263,42 @@ export class CipherBoxClient {
       fileReadKey?.fill(0);
       fileWriteKey?.fill(0);
     }
+  }
+
+  /**
+   * Resolve an owned file's own IPNS signing key (write-body `ipnsPrivateKey`)
+   * so a caller can pre-resolve it before calling {@link replaceFile} /
+   * {@link restoreFileVersion} / {@link deleteFileVersion} (68.1-09's "the
+   * caller pre-resolves `fileIpnsPrivateKey`" contract — those three methods
+   * do not derive it themselves; they only resolve `fileReadKey`/
+   * `fileWriteKey` via {@link resolveFileWriteChainKeys}).
+   *
+   * The write-chain walk requires the parent folder's `writeKey`, which lives
+   * ONLY inside `CipherBoxClient`'s internal `FolderState` (D-03) — the web
+   * layer has no independent way to derive it (NODE-03's frozen
+   * `SealedChildRef` carries no `ipnsPrivateKeyEncrypted`-style field the
+   * pre-v3 model used to expose this through). This thin public wrapper over
+   * the existing private write-chain walk is the only way to satisfy that
+   * contract from `apps/web` (T-68.1-12-04, Rule 3 deviation).
+   *
+   * @param parentIpnsName - IPNS name of the folder containing the file
+   * @param fileId - IPNS name of the file (`SealedChildRef.ipnsName`)
+   * @security Returns `fileIpnsPrivateKey` RAW. When immediately passed into
+   *   `replaceFile`/`restoreFileVersion`/`deleteFileVersion`, sdk-core
+   *   `updateFileMetadata` becomes its terminal owner and zeroes it
+   *   (T-47-01) — the caller must NOT also zero it in that case. If the
+   *   caller does not pass it to one of those methods, the caller becomes
+   *   the terminal owner and must zero it itself. This method's own
+   *   `fileReadKey`/`fileWriteKey` derivations are zeroed here (D-09).
+   */
+  async resolveFileIpnsPrivateKey(parentIpnsName: string, fileId: string): Promise<Uint8Array> {
+    return this.withOperation('resolveFileIpnsPrivateKey', async () => {
+      const folder = await this.requireFolder(parentIpnsName);
+      const fileKeys = await this.resolveFileWriteChainKeys(folder, fileId);
+      fileKeys.fileReadKey.fill(0);
+      fileKeys.fileWriteKey.fill(0);
+      return fileKeys.fileIpnsPrivateKey;
+    });
   }
 
   /**
@@ -2381,6 +2434,9 @@ export class CipherBoxClient {
       } finally {
         fileKeys.fileReadKey.fill(0);
         fileKeys.fileWriteKey.fill(0);
+        // T-68.1-12-04: this walk's own fileIpnsPrivateKey is unused here —
+        // the caller supplies fileData.fileIpnsPrivateKey instead. Zero it.
+        fileKeys.fileIpnsPrivateKey.fill(0);
       }
     });
   }
@@ -2461,6 +2517,9 @@ export class CipherBoxClient {
       } finally {
         fileKeys.fileReadKey.fill(0);
         fileKeys.fileWriteKey.fill(0);
+        // T-68.1-12-04: this walk's own fileIpnsPrivateKey is unused here —
+        // the caller supplies params.fileIpnsPrivateKey instead. Zero it.
+        fileKeys.fileIpnsPrivateKey.fill(0);
       }
     });
   }
@@ -2540,6 +2599,9 @@ export class CipherBoxClient {
       } finally {
         fileKeys.fileReadKey.fill(0);
         fileKeys.fileWriteKey.fill(0);
+        // T-68.1-12-04: this walk's own fileIpnsPrivateKey is unused here —
+        // the caller supplies params.fileIpnsPrivateKey instead. Zero it.
+        fileKeys.fileIpnsPrivateKey.fill(0);
       }
     });
   }

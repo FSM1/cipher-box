@@ -419,9 +419,13 @@ export type UpdateFileContentParams = {
  * directly at fileSequenceNumber+1 (single-shot — mirrors
  * packages/sdk/src/share/shared-write.ts updateSharedFile; no CAS retry/merge).
  *
- * @security Does NOT zero fileReadKey, fileWriteKey, fileIpnsPrivateKey, or any
- *   fileKey embedded in currentMetadata/updates — all are caller-supplied and the
- *   caller remains the terminal owner (D-09).
+ * @security Does NOT zero fileReadKey, fileWriteKey, or any fileKey embedded in
+ *   currentMetadata/updates — all are caller-supplied and the caller remains the
+ *   terminal owner (D-09). DOES zero fileIpnsPrivateKey on every exit path
+ *   (T-47-01) — this function is its terminal owner (matches every client.ts
+ *   call site's doc comment, which already assumed this; T-68.1-12-04 fixed
+ *   the prior no-op gap where this docstring said otherwise and no `.fill(0)`
+ *   existed).
  */
 export async function updateFileMetadata(params: {
   /** Ed25519 seed recovered from the file node's write-body (WRITE-01) */
@@ -452,71 +456,80 @@ export async function updateFileMetadata(params: {
   const maxVersions = params.maxVersionsPerFile ?? MAX_VERSIONS_PER_FILE;
   const now = Date.now();
 
-  let versions = params.currentMetadata.versions;
-  let prunedCids: string[] = [];
+  try {
+    let versions = params.currentMetadata.versions;
+    let prunedCids: string[] = [];
 
-  if (params.createVersion) {
-    const priorAsVersion: VersionEntry = {
-      versionId: crypto.randomUUID(),
-      cid: params.currentMetadata.cid,
-      fileIv: params.currentMetadata.fileIv,
-      size: params.currentMetadata.size,
-      createdAt: now,
-      encryptionMode: params.currentMetadata.encryptionMode,
-      fileKey: params.currentMetadata.fileKey,
+    if (params.createVersion) {
+      const priorAsVersion: VersionEntry = {
+        versionId: crypto.randomUUID(),
+        cid: params.currentMetadata.cid,
+        fileIv: params.currentMetadata.fileIv,
+        size: params.currentMetadata.size,
+        createdAt: now,
+        encryptionMode: params.currentMetadata.encryptionMode,
+        fileKey: params.currentMetadata.fileKey,
+      };
+      const capped = capVersions(params.currentMetadata.versions, priorAsVersion, maxVersions);
+      versions = capped.versions;
+      prunedCids = capped.prunedCids;
+    }
+
+    const newContent: NodeContent = {
+      cid: params.updates.cid,
+      fileIv: bytesToBase64(params.updates.fileIv),
+      size: params.updates.size,
+      mimeType: params.updates.mimeType,
+      encryptionMode: params.updates.encryptionMode ?? params.currentMetadata.encryptionMode,
+      fileKey: params.updates.fileKey,
+      versions,
     };
-    const capped = capVersions(params.currentMetadata.versions, priorAsVersion, maxVersions);
-    versions = capped.versions;
-    prunedCids = capped.prunedCids;
-  }
 
-  const newContent: NodeContent = {
-    cid: params.updates.cid,
-    fileIv: bytesToBase64(params.updates.fileIv),
-    size: params.updates.size,
-    mimeType: params.updates.mimeType,
-    encryptionMode: params.updates.encryptionMode ?? params.currentMetadata.encryptionMode,
-    fileKey: params.updates.fileKey,
-    versions,
-  };
+    const fileNode: Node = {
+      schema: 'node/v3',
+      kind: 'file',
+      id: params.nodeId,
+      generation: params.nodeGeneration,
+      createdAt: params.originalCreatedAt,
+      modifiedAt: now,
+      content: newContent,
+      writeBody: {
+        ipnsPrivateKey: params.fileIpnsPrivateKey,
+        writeChildren: [],
+      },
+    };
 
-  const fileNode: Node = {
-    schema: 'node/v3',
-    kind: 'file',
-    id: params.nodeId,
-    generation: params.nodeGeneration,
-    createdAt: params.originalCreatedAt,
-    modifiedAt: now,
-    content: newContent,
-    writeBody: {
+    const publishedNode: PublishedNode = await sealNode(
+      fileNode,
+      params.fileReadKey,
+      params.fileWriteKey
+    );
+    const { cid: metadataCid } = await addToIpfs(
+      params.ctx,
+      new TextEncoder().encode(JSON.stringify(publishedNode))
+    );
+
+    const newSequenceNumber = params.fileSequenceNumber + 1n;
+    await createAndPublishIpnsRecord({
       ipnsPrivateKey: params.fileIpnsPrivateKey,
-      writeChildren: [],
-    },
-  };
+      ipnsName: params.fileMetaIpnsName,
+      metadataCid,
+      sequenceNumber: newSequenceNumber,
+      ctx: params.ctx,
+    });
 
-  const publishedNode: PublishedNode = await sealNode(
-    fileNode,
-    params.fileReadKey,
-    params.fileWriteKey
-  );
-  const { cid: metadataCid } = await addToIpfs(
-    params.ctx,
-    new TextEncoder().encode(JSON.stringify(publishedNode))
-  );
-
-  const newSequenceNumber = params.fileSequenceNumber + 1n;
-  await createAndPublishIpnsRecord({
-    ipnsPrivateKey: params.fileIpnsPrivateKey,
-    ipnsName: params.fileMetaIpnsName,
-    metadataCid,
-    sequenceNumber: newSequenceNumber,
-    ctx: params.ctx,
-  });
-
-  return {
-    ipnsName: params.fileMetaIpnsName,
-    metadataCid,
-    newSequenceNumber,
-    prunedCids,
-  };
+    return {
+      ipnsName: params.fileMetaIpnsName,
+      metadataCid,
+      newSequenceNumber,
+      prunedCids,
+    };
+  } finally {
+    // T-47-01: this function is the terminal owner of the caller-supplied
+    // fileIpnsPrivateKey once it reaches this call — zero it on every exit
+    // path so downstream callers (client.ts replaceFile/restoreFileVersion/
+    // deleteFileVersion) do not need to (matches their own doc comments,
+    // fixed by T-68.1-12-04 — this `.fill(0)` was previously missing).
+    params.fileIpnsPrivateKey.fill(0);
+  }
 }
