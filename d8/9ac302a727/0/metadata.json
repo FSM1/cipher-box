@@ -138,6 +138,37 @@
         "label": "Skill: gsd-extract-learnings",
         "default_collapsed": true
       }
+    },
+    {
+      "id": "claude-skill-toolu_01Y7J1SjVBmg46uj61Mr9DkW",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-ship"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "8a30e4ce991b",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 1228,
+        "end": 1229,
+        "entry_ids": [
+          "d729910e-91bb-412d-b872-8ac0651020ea"
+        ],
+        "tool_use_id": "toolu_01Y7J1SjVBmg46uj61Mr9DkW"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Y7J1SjVBmg46uj61Mr9DkW"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-ship",
+        "default_collapsed": true
+      }
     }
   ],
   "session_metrics": {
