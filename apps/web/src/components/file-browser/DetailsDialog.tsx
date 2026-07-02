@@ -101,8 +101,7 @@ export function DetailsDialog({
     setFileMetaLoading(true);
     setMetadataLoading(true);
 
-    // TODO(phase 63): resolveFileMetadata is stubbed — throws 'not implemented — phase 63'
-    resolveFileMetadata(item.ipnsName, folderKey)
+    resolveFileMetadata(item, folderKey)
       .then(({ metadata, metadataCid: cid }) => {
         if (!cancelled) {
           setFileMeta(metadata as unknown as NodeContent);

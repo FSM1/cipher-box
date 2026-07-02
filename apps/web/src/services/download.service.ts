@@ -1,7 +1,18 @@
 import { decryptAesGcm, decryptAesCtr, unwrapKey, hexToBytes, clearBytes } from '@cipherbox/crypto';
+import type { SealedChildRef } from '@cipherbox/core';
 import { fetchFromIpfs, DownloadProgressCallback } from '../lib/api/ipfs';
 import { UploadedFile } from './upload.service';
 import { resolveFileMetadata } from './file-metadata.service';
+
+/** Decodes a base64 string to a Uint8Array (NodeContent.fileIv is base64, v3 contract). */
+function base64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) {
+    bytes[i] = bin.charCodeAt(i);
+  }
+  return bytes;
+}
 
 /**
  * File metadata required for download and decryption.
@@ -92,20 +103,36 @@ export async function downloadAndSaveFile(
 }
 
 /**
- * Download a file using per-file Node content (phase 63 flow).
+ * Download and decrypt a file using its per-file Node content (node/v3 read-chain).
  *
- * @stub phase 63 — requires Node read-chain to unseal NodeContent (cid, fileKey, fileIv).
- * The per-file IPNS metadata (FileMetadata / EncryptedFileMetadata) is retired;
- * file content fields now live inside NodeContent sealed under the file's readKey.
+ * Resolves the file's `NodeContent` via `resolveFileMetadata` (readKey recovered
+ * from `fileRef.readKeySealed` under the parent `folderKey`), fetches the content
+ * CID, then decrypts with the RAW fileKey recovered inside `NodeContent.fileKey`
+ * — NOT the legacy ECIES `downloadAndDecrypt`/`unwrapKey` path. `NodeContent.fileIv`
+ * is base64-encoded (v3 contract; NOT hex like the legacy `FileMetadata.iv`).
+ *
+ * @security `metadata.fileKey` originates from `resolveFileMetadata`'s freshly
+ *   unsealed `NodeContent` — this function is its terminal consumer and zeroes it
+ *   after decrypt (D-09). Does NOT touch `folderKey` (caller-owned).
  */
-export async function downloadFileFromIpns(_params: {
-  fileMetaIpnsName: string;
+export async function downloadFileFromIpns(params: {
+  fileRef: SealedChildRef;
   folderKey: Uint8Array;
-  privateKey: Uint8Array;
-  fileName: string;
   onProgress?: DownloadProgressCallback;
 }): Promise<Uint8Array> {
-  // Keep reference to suppress unused-import lint on resolveFileMetadata
-  void resolveFileMetadata;
-  throw new Error('not implemented — phase 63 (file download requires Node read-chain)');
+  const { metadata } = await resolveFileMetadata(params.fileRef, params.folderKey);
+
+  const ciphertext = await fetchFromIpfs(metadata.cid, params.onProgress);
+  const iv = base64ToBytes(metadata.fileIv);
+  const fileKey = metadata.fileKey;
+
+  try {
+    return metadata.encryptionMode === 'CTR'
+      ? await decryptAesCtr(ciphertext, fileKey, iv)
+      : await decryptAesGcm(ciphertext, fileKey, iv);
+  } finally {
+    // metadata.fileKey is this function's terminal-consumption point (D-09) —
+    // zero it once decrypt completes on every exit path.
+    clearBytes(fileKey);
+  }
 }

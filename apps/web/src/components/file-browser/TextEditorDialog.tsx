@@ -89,15 +89,13 @@ export function TextEditorDialog({
 
         if (shareId) {
           // Shared file path: use re-wrapped file key from share_keys
-          // TODO(phase 63): SealedChildRef.ipnsName replaces FilePointer.fileMetaIpnsName
           const [{ metadata: fileMeta }, keys] = await Promise.all([
-            resolveFileMetadata(item.ipnsName, folderKey!),
+            resolveFileMetadata(item, folderKey!),
             fetchShareKeys(shareId),
           ]);
 
           // Exact match by itemId (folder share navigating to a specific file),
           // or fallback to first file key (standalone file share where id is shareId)
-          // TODO(phase 63): SealedChildRef.ipnsName replaces FilePointer.id
           const fileKeyRecord =
             keys.find((k) => k.keyType === 'file' && k.itemId === item.ipnsName) ||
             keys.find((k) => k.keyType === 'file');
