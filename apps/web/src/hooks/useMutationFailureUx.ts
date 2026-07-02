@@ -157,11 +157,15 @@ function dispatchWriteDescriptorStale<T>(
   opts: RunWithFailureUxOptions
 ): void {
   if (opts.refreshWriteAccess && !opts._afterRefresh) {
-    useNotificationStore
+    const id = useNotificationStore
       .getState()
       .addNotification('error', 'Write failed — access may be out of date.', {
         label: 'Refresh access',
         onClick: () => {
+          // Replace, don't stack: the refresh/retry path dispatches its own
+          // follow-up notice, so drop this one before re-running (same
+          // anti-stacking rule as the defer-exhausted Retry above).
+          useNotificationStore.getState().dismissNotification(id);
           void retryAfterRefresh(mutationFn, opts);
         },
       });
