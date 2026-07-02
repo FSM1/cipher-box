@@ -5,15 +5,15 @@ milestone_name: Metadata and Sharing Refactor
 current_phase: 68.1
 current_phase_name: web-client-runtime-integration
 status: executing
-stopped_at: "Completed 68.1-13-PLAN.md (web-e2e exit-gate triage: 5 bugs fixed -- createFolder retry+folder-store desync, details-dialog fields, batch-download UI, FileListItem/ContextMenu kind-cache wiring; full suite NOT re-confirmed green, GAP-1/GAP-2 surfaced)"
-last_updated: "2026-07-02T19:50:19.995Z"
+stopped_at: "Completed 68.1-17-PLAN.md (GAP-1 AEAD decrypt root-caused + fixed: uploadFiles sealed content fileKey instead of node fileReadKey)"
+last_updated: "2026-07-02T20:24:49.756Z"
 last_activity: 2026-07-02
 last_activity_desc: Phase 68.1 execution started
 progress:
   total_phases: 10
   completed_phases: 8
   total_plans: 87
-  completed_plans: 79
+  completed_plans: 83
   percent: 80
 ---
 
@@ -29,8 +29,8 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 ## Current Position
 
 Phase: 68.1 (web-client-runtime-integration) — EXECUTING
-Plan: 1 of 22
-Status: Executing Phase 68.1
+Plan: 2 of 22
+Status: Ready to execute
 Last activity: 2026-07-02 — Phase 68.1 execution started
 
 Progress: `██████████` 79 / 79 plans (100%)
@@ -231,6 +231,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 68.1 P07 | 16min | 3 tasks | 6 files |
 | Phase 68.1 P08 | 25min | 2 tasks | 2 files |
 | Phase 68.1 P13 | 240min | 2 tasks | 8 files |
+| Phase 68.1 P17 | 45min | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -471,6 +472,7 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase 68.1-13]: createFolder wrapped in runWithFailureUx (was the only folder mutation missing retry-on-ReconcileStaleError)
 - [Phase 68.1-13]: useFolderMutations.handleCreate keys new FolderNode by ipnsName not write-body UUID -- fixes folder-store id desync that silently dropped folder:updated events on nested-folder-creation
 - [Phase 68.1-13]: FileListItem.isFolder and ContextMenu.isFile now read fileTypes.ts isFileRef(item) kind cache -- both were hardcoded phase-63 stubs
+- [Phase 68.1-17]: GAP-1 root cause was a seal-side fileKey/fileReadKey field-confusion bug in uploadFiles, not an AAD/generation divergence -- fixed at the seal site only, read side untouched
 
 ## Operator Next Steps
 
@@ -478,8 +480,8 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-02T18:20:55.794Z
-**Stopped at:** Completed 68.1-08-PLAN.md (updateSharedFile + moveInSharedFolder client wrappers wired via write-chain/share_keys)
+**Last session:** 2026-07-02T20:24:49.749Z
+**Stopped at:** Completed 68.1-17-PLAN.md (GAP-1 AEAD decrypt root-caused + fixed: uploadFiles sealed content fileKey instead of node fileReadKey)
 **Resume file:** 
 None
 

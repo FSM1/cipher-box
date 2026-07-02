@@ -449,7 +449,7 @@ Plans:
 4. Shared flows work end-to-end: shared-folder read navigation + shared-file download (`navigateReadChain`), shared-folder write ops (rename/delete/move/batch, shared file update), share creation, permission upgrade, and invite create+claim
 5. The full `tests/web-e2e` Playwright suite passes locally against the standard stack (all specs, not a subset); `find apps/web/src -name "*.spec.ts"` stays empty (logic in SDK, UI via web-e2e — SC#5 doctrine)
 
-**Plans**: 17/22 plans executed
+**Plans**: 18/22 plans executed
 
 Plans:
 **Wave 1**
@@ -489,7 +489,7 @@ Plans:
 - [x] 68.1-15-PLAN.md — SC#4 shared-browse UI: wire SharedFolderRow + SharedFileBrowser to the D-02 kind cache (isFileRef); in-folder Download + kind-gated double-click [wave 1]
 - [x] 68.1-16-PLAN.md — Durable child IPNS registration: createFolder TEE enrollment (addendum i, TDD) + confirm per-file mint enrolls + bin-restore hardening (addendum ii) [wave 1]
 - [x] 68.1-21-PLAN.md — Triage: GAP-4 D-05 stale-data toast (role=alert) + GAP-5 share-itemname-backfill legacy-seed 400 (DTO drift) [wave 1]
-- [ ] 68.1-17-PLAN.md — SC#3/GAP-1: diagnose + fix resolveFileMetadata AEAD decrypt failure (CTR/streaming video + post-upload batch-download) [wave 2]
+- [x] 68.1-17-PLAN.md — SC#3/GAP-1: diagnose + fix resolveFileMetadata AEAD decrypt failure (CTR/streaming video + post-upload batch-download) [wave 2]
 - [ ] 68.1-18-PLAN.md — SHARE-WRITE-KEY foundation: SDK resolveShareWriteDescriptor (owned write-chain, TDD) + owner-side WRITE share/invite create [wave 3]
 - [ ] 68.1-19-PLAN.md — Write upgrade/downgrade via UpdateGrant + optional writeDescriptorRef API change + api:generate + ShareDialog wiring [wave 4]
 - [ ] 68.1-20-PLAN.md — fetchShareKeys fail-closed + recipient shared writeKey seeding (writeDescriptorRef) + shared-move dest-key sourcing via write-chain [wave 4]
