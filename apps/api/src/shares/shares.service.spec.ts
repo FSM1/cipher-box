@@ -1,5 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { NotFoundException, ForbiddenException, ConflictException } from '@nestjs/common';
+import {
+  NotFoundException,
+  ForbiddenException,
+  ConflictException,
+  BadRequestException,
+} from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource, In } from 'typeorm';
 import { SharesService } from './shares.service';
@@ -491,6 +496,48 @@ describe('SharesService', () => {
       await expect(
         service.updateGrant('share-uuid-1', 'not-the-sharer', 'bb'.repeat(32), '1')
       ).rejects.toThrow(ForbiddenException);
+      expect(manager.save).not.toHaveBeenCalled();
+    });
+
+    it('leaves writeDescriptorRef unchanged when neither writeDescriptorRef nor clearWriteDescriptor is supplied (read-only rotation, T-68.1-19-02)', async () => {
+      const existingWrite = Buffer.from('cc'.repeat(32), 'hex');
+      const share = createMockShare({ rootGeneration: '2', writeDescriptorRef: existingWrite });
+      manager.findOne.mockResolvedValue(share);
+
+      await service.updateGrant('share-uuid-1', SHARER_ID, 'bb'.repeat(32), '3');
+
+      expect(share.writeDescriptorRef).toBe(existingWrite);
+      expect(manager.save).toHaveBeenCalledWith(share);
+    });
+
+    it('sets writeDescriptorRef when supplied (read->write upgrade)', async () => {
+      const share = createMockShare({ rootGeneration: '2', writeDescriptorRef: null });
+      manager.findOne.mockResolvedValue(share);
+
+      await service.updateGrant('share-uuid-1', SHARER_ID, 'bb'.repeat(32), '3', 'dd'.repeat(32));
+
+      expect(share.writeDescriptorRef).toEqual(Buffer.from('dd'.repeat(32), 'hex'));
+      expect(manager.save).toHaveBeenCalledWith(share);
+    });
+
+    it('clears writeDescriptorRef to null when clearWriteDescriptor is true (write->read downgrade)', async () => {
+      const share = createMockShare({
+        rootGeneration: '2',
+        writeDescriptorRef: Buffer.from('cc'.repeat(32), 'hex'),
+      });
+      manager.findOne.mockResolvedValue(share);
+
+      await service.updateGrant('share-uuid-1', SHARER_ID, 'bb'.repeat(32), '3', undefined, true);
+
+      expect(share.writeDescriptorRef).toBeNull();
+      expect(manager.save).toHaveBeenCalledWith(share);
+    });
+
+    it('throws BadRequestException when both writeDescriptorRef and clearWriteDescriptor are supplied', async () => {
+      await expect(
+        service.updateGrant('share-uuid-1', SHARER_ID, 'bb'.repeat(32), '3', 'dd'.repeat(32), true)
+      ).rejects.toThrow(BadRequestException);
+      expect(manager.findOne).not.toHaveBeenCalled();
       expect(manager.save).not.toHaveBeenCalled();
     });
   });

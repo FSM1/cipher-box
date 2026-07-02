@@ -3,6 +3,7 @@ import {
   NotFoundException,
   ForbiddenException,
   ConflictException,
+  BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, In } from 'typeorm';
@@ -255,13 +256,30 @@ export class SharesService {
    * Only the sharer (owner) can update it — the owner drives grant re-mint on
    * key rotation (D-10/D-11, 68-07 owner reconcile). The server never
    * re-encrypts — it persists the client-supplied ciphertext as-is.
+   *
+   * `writeDescriptorRef`/`clearWriteDescriptor` additionally support the
+   * read->write upgrade / write->read downgrade paths (68.1-19): when
+   * `writeDescriptorRef` is supplied, it sets the share's write descriptor
+   * (upgrade). When `clearWriteDescriptor` is true, it clears the share's
+   * write descriptor to null (downgrade). When neither is supplied — the
+   * existing read-descriptor-rotation-only call shape (owner-reconcile,
+   * D-10/D-11) — `writeDescriptorRef` is left completely unchanged (T-68.1-19-02).
+   * The two are mutually exclusive.
    */
   async updateGrant(
     shareId: string,
     sharerId: string,
     readDescriptorRef: string,
-    rootGeneration: string
+    rootGeneration: string,
+    writeDescriptorRef?: string,
+    clearWriteDescriptor?: boolean
   ): Promise<void> {
+    if (writeDescriptorRef && clearWriteDescriptor) {
+      throw new BadRequestException(
+        'writeDescriptorRef and clearWriteDescriptor are mutually exclusive'
+      );
+    }
+
     // Row-locked transaction: the anti-rollback check below must see the row
     // a concurrent PATCH just committed, not a stale pre-race read (TOCTOU).
     await this.dataSource.transaction(async (manager) => {
@@ -289,6 +307,12 @@ export class SharesService {
 
       share.readDescriptorRef = Buffer.from(readDescriptorRef, 'hex');
       share.rootGeneration = rootGeneration;
+      if (clearWriteDescriptor) {
+        share.writeDescriptorRef = null;
+      } else if (writeDescriptorRef) {
+        share.writeDescriptorRef = Buffer.from(writeDescriptorRef, 'hex');
+      }
+      // else: leave share.writeDescriptorRef untouched (read-only rotation).
       await manager.save(share);
     });
   }

@@ -270,7 +270,9 @@ export class SharesController {
       shareId,
       req.user.id,
       dto.readDescriptorRef,
-      dto.rootGeneration
+      dto.rootGeneration,
+      dto.writeDescriptorRef,
+      dto.clearWriteDescriptor
     );
   }
 }

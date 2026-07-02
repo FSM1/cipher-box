@@ -1,6 +1,8 @@
 import { ApiProperty } from '@nestjs/swagger';
 import {
   IsString,
+  IsOptional,
+  IsBoolean,
   IsNumberString,
   Matches,
   MaxLength,
@@ -49,4 +51,30 @@ export class UpdateGrantDto {
   @Validate(IsNonNegativeBigIntConstraint)
   @MaxLength(20)
   rootGeneration!: string;
+
+  @ApiProperty({
+    description:
+      'Hex-encoded ECIES descriptor ref for write access, set to upgrade a read-only share ' +
+      'to write (read->write, D-09). Omit to leave any existing writeDescriptorRef unchanged ' +
+      '(e.g. a read-descriptor-rotation-only call). Mutually exclusive with clearWriteDescriptor.',
+    required: false,
+  })
+  @IsString()
+  @Matches(/^(?:[0-9a-fA-F]{2})+$/, {
+    message: 'writeDescriptorRef must be an even-length hex string',
+  })
+  @MaxLength(4096)
+  @IsOptional()
+  writeDescriptorRef?: string;
+
+  @ApiProperty({
+    description:
+      'When true, clears any existing writeDescriptorRef (write->read downgrade). Omit/false ' +
+      'to leave writeDescriptorRef unchanged. Mutually exclusive with writeDescriptorRef.',
+    required: false,
+    default: false,
+  })
+  @IsBoolean()
+  @IsOptional()
+  clearWriteDescriptor?: boolean;
 }
