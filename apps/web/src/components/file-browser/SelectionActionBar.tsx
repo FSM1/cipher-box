@@ -1,4 +1,5 @@
 import type { SealedChildRef } from '@cipherbox/core';
+import { isFileRef } from '../../utils/fileTypes';
 
 type SelectionActionBarProps = {
   /** Selected items */
@@ -23,14 +24,14 @@ export function SelectionActionBar({
   selectedItems,
   isLoading,
   onClearSelection,
-  onDownload: _onDownload, // TODO(phase 63): deferred until Node.kind discrimination
+  onDownload,
   onMove,
   onDelete,
 }: SelectionActionBarProps) {
-  // TODO(phase 63): SealedChildRef has no .type; kind discrimination deferred to Node.kind
-  // phase-63 stub: treat all selected as folders, no file-specific actions
-  const folderCount = selectedItems.length;
-  const description = folderCount === 1 ? '1 item' : `${folderCount} items`;
+  const itemCount = selectedItems.length;
+  const description = itemCount === 1 ? '1 item' : `${itemCount} items`;
+  // Download only makes sense when at least one selected item is a file (D-02 kind cache).
+  const hasFileSelected = selectedItems.some(isFileRef);
 
   return (
     <div className="selection-action-bar" role="toolbar" aria-label="Selection actions">
@@ -46,7 +47,17 @@ export function SelectionActionBar({
         </button>
       </div>
       <div className="selection-action-bar-actions">
-        {/* TODO(phase 63): download button deferred until Node.kind discrimination available */}
+        {onDownload && hasFileSelected && (
+          <button
+            type="button"
+            className="toolbar-btn toolbar-btn--secondary"
+            onClick={onDownload}
+            disabled={isLoading}
+            aria-label={`Download ${description}`}
+          >
+            &#8595; download
+          </button>
+        )}
         <button
           type="button"
           className="toolbar-btn toolbar-btn--secondary"

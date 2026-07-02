@@ -233,7 +233,7 @@ export function FileBrowser() {
           onShare={actions.handleShareClick}
           onDelete={actions.handleDeleteClick}
           onDetails={actions.handleDetailsClick}
-          onBatchDownload={undefined /* phase-63 stub: batch download deferred */}
+          onBatchDownload={actions.handleBatchDownload}
           onBatchMove={actions.selectedIds.size > 1 ? actions.handleBatchMoveClick : undefined}
           onBatchDelete={actions.selectedIds.size > 1 ? actions.handleBatchDeleteClick : undefined}
         />
