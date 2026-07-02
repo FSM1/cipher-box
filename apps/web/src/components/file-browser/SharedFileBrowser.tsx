@@ -30,6 +30,7 @@ import {
   isAudioFile,
   isVideoFile,
   isPreviewableFile,
+  isFileRef,
 } from '../../utils/fileTypes';
 import { ContextMenu } from './ContextMenu';
 import { DetailsDialog } from './DetailsDialog';
@@ -739,8 +740,11 @@ export function SharedFileBrowser() {
                 isSelected={selectedIds.has(item.ipnsName)}
                 onSelect={(e) => handleSelect(item.ipnsName, e)}
                 onDoubleClick={() => {
-                  // TODO(phase 63): SealedChildRef has no .type; treat all as folders for navigation
-                  navigateToSubfolder(item.ipnsName, item.name); // phase-63 stub: navigate as folder
+                  // D-02: kind cache read -- files no-op on double-click (open is a
+                  // context-menu action: Preview/Edit/Download), mirroring FileListItem.tsx.
+                  if (!isFileRef(item)) {
+                    navigateToSubfolder(item.ipnsName, item.name);
+                  }
                 }}
                 onMoveItemTo={
                   isWritable
@@ -795,8 +799,10 @@ export function SharedFileBrowser() {
           item={contextMenu.item}
           selectedCount={1}
           onClose={contextMenu.hide}
-          // TODO(phase 63): SealedChildRef has no .type; file-only actions use name extension
-          onDownload={undefined /* phase-63 stub */}
+          // D-02: kind cache read -- Download is a file-only action, gated on isFileRef
+          // (ContextMenu itself also gates on isFile, this mirrors the working top-level
+          // list context menu's onDownload={handleDownload} — Analog A).
+          onDownload={isFileRef(contextMenu.item) ? handleDownload : undefined}
           onEdit={isTextFile(contextMenu.item.name) ? handleEditClick : undefined}
           onPreview={isPreviewableFile(contextMenu.item.name) ? handlePreviewClick : undefined}
           onRename={isWritable ? handleRename : () => {}}
