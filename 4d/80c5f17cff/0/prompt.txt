@@ -1,0 +1,1 @@
+Still some major issues being noticed - once I log out and log back in, the folder tree is not navigable. I can see the subfolder i created, but navigation into the subfolder after logging out fails entirely.
