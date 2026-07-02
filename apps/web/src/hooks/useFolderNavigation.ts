@@ -6,6 +6,7 @@ import { useFolderStore, type FolderNode } from '../stores/folder.store';
 import { useVaultStore } from '../stores/vault.store';
 import { getSdkClient } from '../lib/sdk-provider';
 import { logger } from '../lib/logger';
+import { resolveKinds } from '../lib/kind-cache';
 
 /**
  * Breadcrumb entry for navigation.
@@ -253,6 +254,15 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
         if (!state) {
           throw new Error('Folder not loaded — IPNS propagation timed out');
         }
+
+        // D-02: populate the kind cache BEFORE the FolderNode lands in the
+        // store, so FileBrowser's synchronous isFileRef guards read the
+        // resolved kind on first render (no extra re-render needed here).
+        await resolveKinds(state.children);
+
+        // Re-check the stale-completion guard again — resolveKinds awaited,
+        // so the user may have navigated away while the cache was populating.
+        if (latestNavTarget.current !== targetFolderId) return;
 
         // Map FolderState -> FolderNode.
         // TODO(phase 63): use Node.id for the folder ID (not ipnsName).

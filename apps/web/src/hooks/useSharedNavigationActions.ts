@@ -32,6 +32,7 @@ import { hideShare } from '../services/share.service';
 import { triggerBrowserDownload } from '../services/download.service';
 import { getSdkClient } from '../lib/sdk-provider';
 import { logger } from '../lib/logger';
+import { resolveKinds } from '../lib/kind-cache';
 import { parsePublicKey, type SeedSharedFolderArgs } from './shared-folder-projection';
 import type { SharedListItem, SharedBreadcrumb } from './useSharedNavigation';
 
@@ -241,6 +242,11 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
           p.getShareKeys
         );
 
+        // D-02: populate the kind cache before setFolderChildren so
+        // SharedFileBrowser's synchronous isFileRef guards read the resolved
+        // kind on first render.
+        await resolveKinds(children);
+
         p.zeroIpnsKey();
         p.ipnsPrivateKeyRef.current = ipnsPrivateKey;
         p.setIpnsName(share.ipnsName);
@@ -339,6 +345,10 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
             vaultKeypair.privateKey,
             p.getShareKeys
           );
+
+          // D-02: populate the kind cache before setFolderChildren so the
+          // resolved kind is present on first render of this level.
+          await resolveKinds(children);
 
           // Push the CURRENT (pre-descent) level so navigateUp / navigateToBreadcrumb
           // can restore it without a network round-trip.
@@ -445,6 +455,10 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
     p.navStackRef.current = stack.slice(0, -1);
 
     p.setFolderChildren(parent.children);
+    // D-02: parent.children were already resolved on descent, so this is a
+    // memoized no-op in the common case — kept for consistency / defense in
+    // depth in case the cache was cleared (e.g. logout/login) in between.
+    await resolveKinds(parent.children);
     p.setFolderKey(parent.folderKey);
     p.setIpnsName(parent.ipnsName);
     p.setCurrentSequenceNumber(parent.sequenceNumber);
@@ -512,6 +526,10 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
       p.navStackRef.current = stack.slice(0, crumbIndex);
 
       p.setFolderChildren(target.children);
+      // D-02: target.children were already resolved on descent, so this is a
+      // memoized no-op in the common case — kept for consistency / defense in
+      // depth in case the cache was cleared (e.g. logout/login) in between.
+      await resolveKinds(target.children);
       p.setFolderKey(target.folderKey);
       p.setIpnsName(target.ipnsName);
       p.setCurrentSequenceNumber(target.sequenceNumber);

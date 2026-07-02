@@ -23,6 +23,7 @@ import {
   subscribeSharedFolderProjection,
   type SeedSharedFolderArgs,
 } from './shared-folder-projection';
+import { resolveKinds } from '../lib/kind-cache';
 
 /**
  * Breadcrumb entry for shared navigation.
@@ -288,6 +289,23 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
         sequenceNumberRef.current = sequenceNumber;
         setFolderChildren(children);
         setCurrentSequenceNumber(sequenceNumber);
+
+        // D-02: this projection callback is synchronous — the initial render
+        // reads a cache miss (folder-safe default). Populate the kind cache
+        // best-effort and, once it settles, re-set the same children
+        // reference so the shared rows re-read the resolved kind. Filtered
+        // by the active shareId (consistent with subscribeSharedFolderProjection's
+        // own filtering) so a stale resolve for a share the user has since
+        // navigated away from does not re-render.
+        const activeShareId = currentShareIdRef.current;
+        void resolveKinds(children)
+          .then(() => {
+            if (currentShareIdRef.current !== activeShareId) return;
+            setFolderChildren(children);
+          })
+          .catch(() => {
+            // Best-effort — never throw inside the subscription callback.
+          });
       }
     );
     return () => {
