@@ -11,6 +11,8 @@ import { useShareStore } from '../../stores/share.store';
 import type { SentShare } from '../../stores/share.store';
 import { updateSharePermission } from '../../services/share.service';
 import { resolveChildNodeIdentity } from '../../lib/crypto/key-wrapping';
+import { resolveParentIpnsName } from '../../services/invite.service';
+import { getSdkClient } from '../../lib/sdk-provider';
 import { InviteLinkTab } from './InviteLinkTab';
 import '../../styles/share-dialog.css';
 import { logger } from '../../lib/logger';
@@ -162,16 +164,6 @@ export function ShareDialog({
     const trimmed = pubKeyInput.trim();
     if (!trimmed) return;
 
-    if (permission === 'write') {
-      // Write grants require the shared item's own writeKey, which is sealed
-      // inside the PARENT folder's write-body (WriteChildRef.writeKeySealed,
-      // unsealed under the parent writeKey). ShareDialog is only handed the
-      // parent's READ key (`folderKey`) -- the write-chain is not currently
-      // threaded to this component. See 68.1-11 SUMMARY "Known Gaps".
-      setError('> write access is not yet available for this item -- read-only sharing only');
-      return;
-    }
-
     setIsSharing(true);
 
     let recipientPublicKey: Uint8Array | null = null;
@@ -189,6 +181,22 @@ export function ShareDialog({
 
       const readDescriptorRef = bytesToHex(await wrapKey(itemReadKey, recipientPublicKey));
 
+      // Write grants: resolve the item's OWN writeKey from the owned
+      // write-chain (parent writeKey -> WriteChildRef.writeKeySealed) and
+      // ECIES-wrap it for the recipient (68.1-18, SHARE-WRITE-KEY). Raw
+      // writeKey material never leaves the SDK -- resolveShareWriteDescriptor
+      // returns only the wrapped hex descriptor and zeroes its own derived
+      // key internally (D-09).
+      let writeDescriptorRef: string | undefined;
+      if (permission === 'write') {
+        const parentIpnsName = resolveParentIpnsName(parentFolderId);
+        writeDescriptorRef = await getSdkClient().resolveShareWriteDescriptor(
+          parentIpnsName,
+          item.ipnsName,
+          recipientPublicKey
+        );
+      }
+
       let itemNameEncrypted: string | undefined;
       try {
         const nameBytes = new TextEncoder().encode(item.name);
@@ -200,6 +208,7 @@ export function ShareDialog({
       const result = await sharesControllerCreateShare({
         recipientPublicKey: trimmed.startsWith('0x') ? trimmed : `0x${trimmed}`,
         readDescriptorRef,
+        writeDescriptorRef,
         rootNodeId: identity.nodeId,
         rootIpnsName: item.ipnsName,
         rootGeneration: String(identity.generation),
@@ -212,7 +221,7 @@ export function ShareDialog({
         ipnsName: item.ipnsName,
         itemName: item.name,
         itemNameEncrypted: result.itemNameEncrypted,
-        permission: 'read',
+        permission: result.writeDescriptorRef !== null ? 'write' : 'read',
         createdAt: result.createdAt,
         readDescriptorRef: result.readDescriptorRef,
         rootGeneration: parseRootGeneration(result.rootGeneration),
@@ -230,7 +239,7 @@ export function ShareDialog({
       setIsSharing(false);
       itemReadKey?.fill(0);
     }
-  }, [pubKeyInput, item, folderKey, permission]);
+  }, [pubKeyInput, item, folderKey, permission, parentFolderId]);
 
   const handleRevoke = useCallback(async (shareId: string) => {
     setRevokingId(shareId);

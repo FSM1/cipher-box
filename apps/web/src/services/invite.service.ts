@@ -21,8 +21,34 @@ import {
 import { getPublicKey, utils as secp256k1Utils } from '@noble/secp256k1';
 import { wrapKey, unwrapKey, hexToBytes, bytesToHex } from '@cipherbox/crypto';
 import { resolveChildNodeIdentity } from '../lib/crypto/key-wrapping';
+import { getSdkClient } from '../lib/sdk-provider';
 import { useAuthStore } from '../stores/auth.store';
+import { useVaultStore } from '../stores/vault.store';
 import { logger } from '../lib/logger';
+
+// ---------------------------------------------------------------------------
+// Parent IPNS name resolution (68.1-18)
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the client-side `'root'` folder-navigation sentinel to the real root
+ * IPNS name the SDK client's `FolderTree` is keyed by.
+ *
+ * `parentFolderId` (as threaded through `ShareDialog`/`InviteLinkTab`) is
+ * `useFolderNavigation`'s `currentFolderId`, which uses the literal string
+ * `'root'` for the vault root instead of a real IPNS name --
+ * `resolveShareWriteDescriptor`'s `parentIpnsName` argument must be a real
+ * IPNS name the SDK client can `requireFolder()` against (68.1-11's
+ * documented write-key gap; SHARE-WRITE-KEY foundation).
+ */
+export function resolveParentIpnsName(parentFolderId: string): string {
+  if (parentFolderId !== 'root') return parentFolderId;
+  const rootIpnsName = useVaultStore.getState().rootIpnsName;
+  if (!rootIpnsName) {
+    throw new Error('resolveParentIpnsName: root IPNS name not available (vault not loaded)');
+  }
+  return rootIpnsName;
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -82,21 +108,31 @@ export function buildInviteUrl(token: string, ephemeralPrivKeyHex: string): stri
 /**
  * Create an invite link for a file or folder.
  *
- * Read-only invites only (no write-permission toggle exists in the invite UI):
- * mints an ephemeral secp256k1 keypair, wraps the item's own readKey (derived
+ * Mints an ephemeral secp256k1 keypair, wraps the item's own readKey (derived
  * from `item`'s read-chain hop via `resolveChildNodeIdentity`) and display
  * name for the ephemeral public key, creates the invite row on the server,
  * and builds the URL with the ephemeral PRIVATE key in the fragment (never
  * sent to the server).
  *
+ * When `params.permission === 'write'`, additionally resolves the item's own
+ * writeKey from the owned write-chain (`resolveShareWriteDescriptor`, 68.1-18)
+ * and ECIES-wraps it for the SAME ephemeral public key used for the readKey --
+ * the recipient claims both from one ephemeral bridge. No caller currently
+ * requests `permission: 'write'` (the invite UI has no read/write toggle yet,
+ * 68.1-11's documented gap) -- this is the owner-side SDK/service wiring only;
+ * recipient-side write-claim + UI toggle are out of this plan's scope (68.1-19).
+ *
  * @security The ephemeral private key and the item's readKey are zeroed in
- *   `finally` on every exit path (T-68.1-11-01/03).
+ *   `finally` on every exit path (T-68.1-11-01/03). `resolveShareWriteDescriptor`
+ *   zeroes the derived item writeKey internally before returning (D-09) --
+ *   raw writeKey material never reaches this function.
  */
 export async function createInviteLink(params: {
   item: SealedChildRef;
   folderKey: Uint8Array;
   ipnsName: string;
   parentFolderId: string;
+  permission?: 'read' | 'write';
 }): Promise<{ url: string; token: string }> {
   let ephemeralPrivateKey: Uint8Array | null = null;
   let itemReadKey: Uint8Array | null = null;
@@ -109,6 +145,16 @@ export async function createInviteLink(params: {
     itemReadKey = identity.readKey;
 
     const encryptedKey = bytesToHex(await wrapKey(itemReadKey, ephemeral.publicKey));
+
+    let writeDescriptorRef: string | undefined;
+    if (params.permission === 'write') {
+      const parentIpnsName = resolveParentIpnsName(params.parentFolderId);
+      writeDescriptorRef = await getSdkClient().resolveShareWriteDescriptor(
+        parentIpnsName,
+        params.item.ipnsName,
+        ephemeral.publicKey
+      );
+    }
 
     let itemNameEncrypted: string | undefined;
     try {
@@ -123,6 +169,7 @@ export async function createInviteLink(params: {
       rootNodeId: identity.nodeId,
       rootGeneration: String(identity.generation),
       encryptedKey,
+      writeDescriptorRef,
       itemNameEncrypted,
     });
 
