@@ -148,6 +148,30 @@ async function fetchPublishedNode(
  * `writeKey ?? new Uint8Array(32)` convention -- write mutations remain
  * gated at the UI layer by `permission === 'write'`).
  */
+/**
+ * Unwrap a grant's `writeDescriptorRef` into the shared-root writeKey
+ * (68.1-20, SHARE-WRITE-KEY recipient side).
+ *
+ * Only meaningful for the share ROOT: a node's writeKey under the node/v3
+ * write-chain is sealed inside its PARENT's write-body (`WriteChildRef.
+ * writeKeySealed`), so the descriptor-ref grant only ever carries the
+ * shared item's OWN root writeKey -- there is no equivalent per-subfolder
+ * descriptor to unwrap deeper in the tree (that requires a write-chain walk
+ * from this root writeKey, out of this helper's scope -- see client.ts
+ * `moveInSharedFolder`, 68.1-20 Task 3).
+ *
+ * Returns `null` for read-only grants (no `writeDescriptorRef`) so callers
+ * preserve the existing zero-buffer `writeKey` seed default untouched
+ * (T-68.1-20-01: a read-only grant can never recover a usable writeKey).
+ */
+async function resolveSharedRootWriteKey(
+  writeDescriptorRef: string | null | undefined,
+  vaultPrivateKey: Uint8Array
+): Promise<Uint8Array | null> {
+  if (!writeDescriptorRef) return null;
+  return unwrapKey(hexToBytes(writeDescriptorRef), vaultPrivateKey);
+}
+
 async function resolveFolderIpnsPrivateKey(
   shareId: string,
   folderIpnsName: string,
@@ -257,17 +281,32 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
         p.setCurrentView('folder');
         committed = true;
 
-        p.seedActiveSharedFolder({
-          shareId,
-          ipnsName: share.ipnsName,
-          folderKey: shareRootReadKey,
-          ipnsPrivateKey,
-          sequenceNumber: rootSeq,
-          children,
-          ownerPublicKey: parsePublicKey(share.sharerPublicKey),
-          recipientPublicKey: vaultKeypair.publicKey,
-          publishedNode: rootPublished,
-        });
+        // T-68.1-20-01: recover the shared-root writeKey from the grant's
+        // writeDescriptorRef (write grants only) -- read-only grants keep the
+        // SDK's zero-buffer writeKey default (cannot unseal the write-body).
+        const shareRootWriteKey = await resolveSharedRootWriteKey(
+          share.writeDescriptorRef,
+          vaultKeypair.privateKey
+        );
+        try {
+          p.seedActiveSharedFolder({
+            shareId,
+            ipnsName: share.ipnsName,
+            folderKey: shareRootReadKey,
+            ipnsPrivateKey,
+            writeKey: shareRootWriteKey ?? undefined,
+            sequenceNumber: rootSeq,
+            children,
+            ownerPublicKey: parsePublicKey(share.sharerPublicKey),
+            recipientPublicKey: vaultKeypair.publicKey,
+            publishedNode: rootPublished,
+          });
+        } finally {
+          // D-09: seedSharedFolder clones the writeKey buffer internally
+          // (shared-folder-projection.ts) -- this call's own derived buffer
+          // is the terminal owner and must be zeroed here.
+          shareRootWriteKey?.fill(0);
+        }
       } catch (err) {
         logger.error('[SharedNav] Failed to navigate to share:', err);
         p.setError('Failed to open shared item');
@@ -480,16 +519,33 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
       );
       p.zeroIpnsKey();
       p.ipnsPrivateKeyRef.current = ipnsPrivateKey;
-      p.seedActiveSharedFolder({
-        shareId: currentShareId,
-        ipnsName: parent.ipnsName,
-        folderKey: parent.folderKey,
-        ipnsPrivateKey,
-        sequenceNumber: parent.sequenceNumber ?? 0n,
-        children: parent.children,
-        ownerPublicKey: parsePublicKey(shareEntry.share.sharerPublicKey),
-        recipientPublicKey: vaultKeypair.publicKey,
-      });
+
+      // T-68.1-20-01: re-derive the shared-root writeKey when this navigate-up
+      // restores the share ROOT depth (the only depth a writeDescriptorRef
+      // grant covers) -- a deeper subfolder restore keeps the zero-buffer
+      // writeKey default untouched (see resolveSharedRootWriteKey doc).
+      const isRootDepth = parent.ipnsName === shareEntry.share.ipnsName;
+      const rootWriteKey = isRootDepth
+        ? await resolveSharedRootWriteKey(
+            shareEntry.share.writeDescriptorRef,
+            vaultKeypair.privateKey
+          )
+        : null;
+      try {
+        p.seedActiveSharedFolder({
+          shareId: currentShareId,
+          ipnsName: parent.ipnsName,
+          folderKey: parent.folderKey,
+          ipnsPrivateKey,
+          writeKey: rootWriteKey ?? undefined,
+          sequenceNumber: parent.sequenceNumber ?? 0n,
+          children: parent.children,
+          ownerPublicKey: parsePublicKey(shareEntry.share.sharerPublicKey),
+          recipientPublicKey: vaultKeypair.publicKey,
+        });
+      } finally {
+        rootWriteKey?.fill(0);
+      }
     } catch (err) {
       logger.error('[SharedNav] Failed to re-seed after navigate-up:', err);
     }
@@ -551,16 +607,31 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
         );
         p.zeroIpnsKey();
         p.ipnsPrivateKeyRef.current = ipnsPrivateKey;
-        p.seedActiveSharedFolder({
-          shareId: currentShareId,
-          ipnsName: target.ipnsName,
-          folderKey: target.folderKey,
-          ipnsPrivateKey,
-          sequenceNumber: target.sequenceNumber ?? 0n,
-          children: target.children,
-          ownerPublicKey: parsePublicKey(shareEntry.share.sharerPublicKey),
-          recipientPublicKey: vaultKeypair.publicKey,
-        });
+
+        // T-68.1-20-01: same root-depth-only writeKey re-derivation as
+        // navigateUp -- see resolveSharedRootWriteKey doc.
+        const isRootDepth = target.ipnsName === shareEntry.share.ipnsName;
+        const rootWriteKey = isRootDepth
+          ? await resolveSharedRootWriteKey(
+              shareEntry.share.writeDescriptorRef,
+              vaultKeypair.privateKey
+            )
+          : null;
+        try {
+          p.seedActiveSharedFolder({
+            shareId: currentShareId,
+            ipnsName: target.ipnsName,
+            folderKey: target.folderKey,
+            ipnsPrivateKey,
+            writeKey: rootWriteKey ?? undefined,
+            sequenceNumber: target.sequenceNumber ?? 0n,
+            children: target.children,
+            ownerPublicKey: parsePublicKey(shareEntry.share.sharerPublicKey),
+            recipientPublicKey: vaultKeypair.publicKey,
+          });
+        } finally {
+          rootWriteKey?.fill(0);
+        }
       } catch (err) {
         logger.error('[SharedNav] Failed to re-seed after breadcrumb navigation:', err);
       }

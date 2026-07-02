@@ -117,6 +117,7 @@ function toReceivedShare(dto: ReceivedShareResponseDto): ReceivedShare {
     permission: dto.writeDescriptorRef !== null ? 'write' : 'read',
     createdAt: dto.createdAt,
     readDescriptorRef: dto.readDescriptorRef,
+    writeDescriptorRef: dto.writeDescriptorRef,
     rootGeneration: parseRootGeneration(dto.rootGeneration),
     rootNodeId: dto.rootNodeId,
   };
