@@ -28,10 +28,16 @@ export function SelectionActionBar({
   onMove,
   onDelete,
 }: SelectionActionBarProps) {
-  const itemCount = selectedItems.length;
-  const description = itemCount === 1 ? '1 item' : `${itemCount} items`;
+  // Kind-aware count copy (D-02 kind cache) — pre-v2.0 contract asserted by
+  // full-workflow.spec.ts 4.6: "2 files selected" / "2 files, 1 folder selected".
+  const fileCount = selectedItems.filter(isFileRef).length;
+  const folderCount = selectedItems.length - fileCount;
+  const parts: string[] = [];
+  if (fileCount > 0) parts.push(fileCount === 1 ? '1 file' : `${fileCount} files`);
+  if (folderCount > 0) parts.push(folderCount === 1 ? '1 folder' : `${folderCount} folders`);
+  const description = parts.join(', ') || '0 items';
   // Download only makes sense when at least one selected item is a file (D-02 kind cache).
-  const hasFileSelected = selectedItems.some(isFileRef);
+  const hasFileSelected = fileCount > 0;
 
   return (
     <div className="selection-action-bar" role="toolbar" aria-label="Selection actions">
