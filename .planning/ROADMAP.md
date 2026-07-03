@@ -449,7 +449,7 @@ Plans:
 4. Shared flows work end-to-end: shared-folder read navigation + shared-file download (`navigateReadChain`), shared-folder write ops (rename/delete/move/batch, shared file update), share creation, permission upgrade, and invite create+claim
 5. The full `tests/web-e2e` Playwright suite passes locally against the standard stack (all specs, not a subset); `find apps/web/src -name "*.spec.ts"` stays empty (logic in SDK, UI via web-e2e — SC#5 doctrine)
 
-**Plans**: 21/22 plans executed
+**Plans**: 22/22 plans complete
 
 Plans:
 **Wave 1**
@@ -493,7 +493,7 @@ Plans:
 - [x] 68.1-18-PLAN.md — SHARE-WRITE-KEY foundation: SDK resolveShareWriteDescriptor (owned write-chain, TDD) + owner-side WRITE share/invite create [wave 3]
 - [x] 68.1-19-PLAN.md — Write upgrade/downgrade via UpdateGrant + optional writeDescriptorRef API change + api:generate + ShareDialog wiring [wave 4]
 - [x] 68.1-20-PLAN.md — fetchShareKeys fail-closed + recipient shared writeKey seeding (writeDescriptorRef) + shared-move dest-key sourcing via write-chain [wave 4]
-- [ ] 68.1-22-PLAN.md — WEB-04 exit gate: fresh FULL tests/web-e2e run (supersede stale .last-run.json) + GAP-2 re-triage; human sign-off (autonomous: false) [wave 5]
+- [x] 68.1-22-PLAN.md — WEB-04 exit gate: fresh FULL tests/web-e2e run (supersede stale .last-run.json) + GAP-2 re-triage; human sign-off (autonomous: false) [wave 5]
 
 ### Phase 69: FUSE and WinFsp — Rust Integration and Grant-Root Awareness
 
