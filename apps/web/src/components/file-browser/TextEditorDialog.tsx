@@ -27,6 +27,13 @@ type TextEditorDialogProps = {
   shareId?: string | null;
   /** Save handler for shared files — updates file IPNS metadata via shared path */
   onSaveSharedFile?: (item: SealedChildRef, newContent: Uint8Array) => Promise<void>;
+  /**
+   * Load handler for a DIRECT single-file share (68.1-32, WEB-03 writable-shares
+   * 10.3) — recovers content via the node/v3 read chain (path []) instead of
+   * `downloadFileFromIpns`. When supplied, the `!folderKey` early-return below
+   * is skipped: a single-file share legitimately has a null `folderKey`.
+   */
+  onLoadSharedFileContent?: (item: SealedChildRef) => Promise<Uint8Array>;
 };
 
 /**
@@ -44,6 +51,7 @@ export function TextEditorDialog({
   readOnly,
   shareId,
   onSaveSharedFile,
+  onLoadSharedFileContent,
 }: TextEditorDialogProps) {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -66,7 +74,9 @@ export function TextEditorDialog({
       return;
     }
 
-    if (!folderKey) {
+    // A single-file share's root IS the file — folderKey is legitimately null
+    // when the caller supplies onLoadSharedFileContent (68.1-32).
+    if (!folderKey && !onLoadSharedFileContent) {
       setLoading(false);
       setError('Folder key not available');
       return;
@@ -93,7 +103,11 @@ export function TextEditorDialog({
 
         let plaintext: Uint8Array;
 
-        if (shareId) {
+        if (onLoadSharedFileContent) {
+          // DIRECT single-file share (68.1-32, WEB-03 writable-shares 10.3):
+          // node/v3 read chain (path []) — no folderKey/readKeySealed dependency.
+          plaintext = await onLoadSharedFileContent(item);
+        } else if (shareId) {
           // Shared file path (node/v3 read chain, 68.1-29): the current shared
           // folder's readKey (folderKey prop) unseals the file's own readKey
           // from item.readKeySealed; the raw content fileKey lives inside the
@@ -137,7 +151,7 @@ export function TextEditorDialog({
       cancelled = true;
       if (focusRaf !== undefined) cancelAnimationFrame(focusRaf);
     };
-  }, [open, item, folderKey, shareId, readOnly]);
+  }, [open, item, folderKey, shareId, readOnly, onLoadSharedFileContent]);
 
   const handleSave = useCallback(async () => {
     if (!item || !isDirty) return;

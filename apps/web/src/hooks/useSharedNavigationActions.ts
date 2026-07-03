@@ -754,6 +754,112 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
   );
 
   /**
+   * Load a DIRECT single-file share's content (68.1-32, WEB-03 writable-shares
+   * 10.3). Mirrors `downloadSharedFile`'s `navigateReadChain` read core but with
+   * `path: []` (the share root IS the file — no intermediate hops) and returns
+   * the decrypted plaintext instead of triggering a browser download, so
+   * `TextEditorDialog` can load it into the textarea. Does NOT touch
+   * `downloadSharedFile` itself — the shared-FOLDER download path stays
+   * byte-for-byte unchanged.
+   */
+  const loadSharedFileContent = useCallback(
+    async (_item: SealedChildRef): Promise<Uint8Array> => {
+      const currentShareId = p.currentShareId;
+      if (!currentShareId) {
+        throw new Error('No active share');
+      }
+      const shareEntry = p.sharedItems.find((s) => s.share.shareId === currentShareId);
+      if (!shareEntry) {
+        throw new Error('Shared item not found');
+      }
+      const share = shareEntry.share;
+      const auth = useAuthStore.getState();
+      if (!auth.vaultKeypair) {
+        throw new Error('Not authenticated');
+      }
+      const vaultKeypair = auth.vaultKeypair;
+
+      const ctx = getSdkClient().getContext();
+
+      const result = await navigateReadChain({
+        readDescriptorRef: bytesToBase64(hexToBytes(share.readDescriptorRef)),
+        recipientPrivKey: vaultKeypair.privateKey,
+        rootIpnsName: share.ipnsName,
+        rootExpectedGeneration: share.rootGeneration ?? 0,
+        path: [],
+        ctx,
+      });
+
+      if (result.status === 'revoked') {
+        throw new Error('File is no longer available (revoked)');
+      }
+      if (result.status === 'behind-retry') {
+        throw new Error('This share was updated -- please reopen it and try again');
+      }
+
+      const { content } = result;
+      const ciphertext = await fetchFromIpfs(ctx, content.cid);
+      const iv = base64ToBytes(content.fileIv);
+
+      try {
+        return content.encryptionMode === 'CTR'
+          ? await decryptAesCtr(ciphertext, content.fileKey, iv)
+          : await decryptAesGcm(ciphertext, content.fileKey, iv);
+      } finally {
+        // Terminal owner of the raw fileKey recovered inside NodeContent (D-09),
+        // mirrors downloadSharedFile's identical finally.
+        content.fileKey.fill(0);
+      }
+    },
+    [p.currentShareId, p.sharedItems]
+  );
+
+  /**
+   * Save a DIRECT single-file share's edited content (68.1-32, WEB-03
+   * writable-shares 10.3/10.4). Delegates to
+   * `CipherBoxClient.updateSharedSingleFile`, which recovers the file's
+   * read/write/ipnsPrivateKey directly from the grant descriptors (no parent
+   * folder write chain — the share root IS the file) and republishes to the
+   * file's OWN IPNS at seq+1.
+   */
+  const saveSharedSingleFile = useCallback(
+    async (_item: SealedChildRef, newContent: Uint8Array): Promise<void> => {
+      const currentShareId = p.currentShareId;
+      if (!currentShareId) {
+        throw new Error('No active share');
+      }
+      const shareEntry = p.sharedItems.find((s) => s.share.shareId === currentShareId);
+      if (!shareEntry) {
+        throw new Error('Shared item not found');
+      }
+      const share = shareEntry.share;
+      if (!share.writeDescriptorRef) {
+        throw new Error('No write access');
+      }
+      const auth = useAuthStore.getState();
+      if (!auth.vaultKeypair) {
+        throw new Error('Not authenticated');
+      }
+      const vaultKeypair = auth.vaultKeypair;
+
+      // D-09: vaultKeypair.privateKey is caller-owned — never cloned or zeroed
+      // here (matches moveItemHandler's identical treatment).
+      await getSdkClient().updateSharedSingleFile({
+        shareId: share.shareId,
+        readDescriptorRef: share.readDescriptorRef,
+        writeDescriptorRef: share.writeDescriptorRef,
+        fileIpnsName: share.ipnsName,
+        ownerPublicKey: parsePublicKey(share.sharerPublicKey),
+        recipientPrivateKey: vaultKeypair.privateKey,
+        recipientPublicKey: vaultKeypair.publicKey,
+        rootExpectedGeneration: share.rootGeneration ?? 0,
+        newContent,
+      });
+    },
+    [p.currentShareId, p.sharedItems]
+  );
+
+  /**
    * Hide a shared item from the user's view.
    */
   const hideSharedItem = useCallback(
@@ -777,6 +883,8 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
     navigateToRoot,
     navigateToBreadcrumb,
     downloadSharedFile,
+    loadSharedFileContent,
+    saveSharedSingleFile,
     hideSharedItem,
   };
 }

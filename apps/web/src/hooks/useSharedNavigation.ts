@@ -71,6 +71,18 @@ type UseSharedNavigationReturn = {
   navigateToBreadcrumb: (crumbIndex: number) => void;
   /** @stub phase 63 — file download requires Node read-chain navigation */
   downloadSharedFile: (item: SealedChildRef) => Promise<void>;
+  /**
+   * Load a DIRECT single-file share's content via the node/v3 read chain
+   * (68.1-32, WEB-03 writable-shares 10.3). Used by the text editor when the
+   * share root IS the file (`currentView === 'file'`) — no `folderKey`/
+   * `readKeySealed` dependency.
+   */
+  loadSharedFileContent: (item: SealedChildRef) => Promise<Uint8Array>;
+  /**
+   * Save a DIRECT single-file share's edited content (68.1-32, WEB-03
+   * writable-shares 10.3/10.4) — write-grant recipients only.
+   */
+  saveSharedSingleFile: (item: SealedChildRef, newContent: Uint8Array) => Promise<void>;
   hideSharedItem: (shareId: string) => Promise<void>;
   /** Upload a file to the currently-viewed write-shared folder */
   uploadFile: (file: File) => Promise<void>;

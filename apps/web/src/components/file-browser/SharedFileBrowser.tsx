@@ -87,6 +87,8 @@ export function SharedFileBrowser() {
     navigateToRoot,
     navigateToBreadcrumb,
     downloadSharedFile,
+    loadSharedFileContent,
+    saveSharedSingleFile,
     hideSharedItem,
     uploadFile,
     createFolder,
@@ -209,6 +211,10 @@ export function SharedFileBrowser() {
   const renameInputRef = useRef<HTMLInputElement>(null);
 
   const isWritable = permission === 'write';
+  // A DIRECT single-file share (root kind: 'file') — the text editor recovers
+  // content via onLoadSharedFileContent (node/v3 read chain) instead of the
+  // shared-FOLDER path's folderKey + downloadFileFromIpns (68.1-32).
+  const isSingleFileShare = currentView === 'file';
 
   // Context menu handlers for folder view
   const handleContextMenu = useCallback(
@@ -420,13 +426,17 @@ export function SharedFileBrowser() {
     if (currentView === 'file' && currentShareId) {
       const shareItem = sharedItems.find((s) => s.share.shareId === currentShareId);
       if (shareItem && isTextFile(shareItem.share.itemName)) {
-        // Synthesize a SealedChildRef for the text editor dialog
+        // Synthesize a SealedChildRef for the text editor dialog. The single-file
+        // editor recovers content via onLoadSharedFileContent (node/v3 read
+        // chain, path []) — NOT readKeySealed, which stays an inert '' stub here
+        // (68.1-32; unlike the shared-FOLDER path, a direct single-file share
+        // has no parent read-body to source a real readKeySealed from).
         const fakeChildRef: SealedChildRef = {
           name: shareItem.share.itemName,
           ipnsName: shareItem.share.ipnsName,
           generation: 0,
           versionFloor: 0n,
-          readKeySealed: '', // TODO(phase 63): populated when read-chain is available
+          readKeySealed: '',
         };
         setEditorDialog({ open: true, item: fakeChildRef });
       } else {
@@ -871,7 +881,10 @@ export function SharedFileBrowser() {
         folderKey={folderKey}
         readOnly={!isWritable}
         shareId={currentShareId}
-        onSaveSharedFile={isWritable ? updateSharedFile : undefined}
+        onLoadSharedFileContent={isSingleFileShare ? loadSharedFileContent : undefined}
+        onSaveSharedFile={
+          isWritable ? (isSingleFileShare ? saveSharedSingleFile : updateSharedFile) : undefined
+        }
       />
 
       {/* Image preview dialog */}
