@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { SealedChildRef } from '@cipherbox/core';
 import type { CipherBoxClient } from '@cipherbox/sdk';
-import { resolveKinds } from '../lib/kind-cache';
+import { getKind, resolveKinds } from '../lib/kind-cache';
 import { logger } from '../lib/logger';
 
 /**
@@ -236,24 +236,56 @@ export const useFolderStore = create<FolderState>((set, get) => ({
               break;
             }
 
-            get().updateFolderChildren(matchingFolder.id, event.children);
-            get().updateFolderSequence(matchingFolder.id, event.sequenceNumber);
+            // T-68.1-33-01: hybrid resolve-before-insert projection, mirroring
+            // navigateTo's D-02 ordering (useFolderNavigation.ts). When every
+            // child's kind is already cached (or the children array is empty,
+            // vacuously true — preserves 68.1-29 delete-last-item instant
+            // behavior), project synchronously with no added latency. When at
+            // least one child is a cache miss (e.g. first load after reload),
+            // await resolveKinds BEFORE the children land, so a row is never
+            // interactable while its kind is unresolved — closing the owner
+            // file-browser race where a file row transiently renders as a
+            // folder ([DIR]) and hides isFile-gated actions like "Edit".
+            const allKindsCached = event.children.every(
+              (ref) => getKind(ref.ipnsName) !== undefined
+            );
 
-            // D-02: this is a synchronous setter — the initial render reads a
-            // cache miss (folder-safe default). Populate the kind cache
-            // best-effort and, once it settles, re-invoke updateFolderChildren
-            // (idempotent, fresh object refs) so rows re-read the now-resolved
-            // kind. Never throw out of the subscription handler.
+            if (allKindsCached) {
+              get().updateFolderChildren(matchingFolder.id, event.children);
+              get().updateFolderSequence(matchingFolder.id, event.sequenceNumber);
+              break;
+            }
+
+            // Capture locals — `event`/`matchingFolder` must not be read after
+            // the await (matchingFolder is a snapshot, not live).
             const folderId = matchingFolder.id;
-            void resolveKinds(event.children)
-              .then(() => {
-                // Re-lookup: the folder may have been removed while resolving.
-                if (!get().folders[folderId]) return;
-                get().updateFolderChildren(folderId, event.children);
-              })
-              .catch(() => {
-                // Best-effort — leave rows folder-safe on failure.
-              });
+            const eventChildren = event.children;
+            const eventSequence = event.sequenceNumber;
+
+            // T-68.1-33-02: guarded async IIFE — never throws out of the
+            // subscription handler (internal try/catch swallows resolveKinds
+            // rejections; resolveKinds itself is already best-effort and
+            // never rejects, but the catch is defense-in-depth).
+            void (async () => {
+              try {
+                await resolveKinds(eventChildren);
+              } catch {
+                // Best-effort — fall through and still project folder-safe.
+              }
+
+              // Re-lookup: the folder may have been removed while resolving.
+              const current = get().folders[folderId];
+              if (!current) return;
+
+              // Stale-event guard: a newer state may have landed (a
+              // subsequent all-cached event, or a direct handleSync/
+              // resyncFolder insert) while this cache-miss resolve was
+              // in flight. Do not clobber it with the stale N.
+              if (current.sequenceNumber > eventSequence) return;
+
+              get().updateFolderChildren(folderId, eventChildren);
+              get().updateFolderSequence(folderId, eventSequence);
+            })();
           }
           break;
         }
