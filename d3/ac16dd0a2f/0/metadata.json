@@ -1,0 +1,233 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "d3ac16dd0a2f",
+  "session_id": "064836b9-90e4-42d5-aabc-ed5fde831a57",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-03T17:25:28.161296Z",
+  "branch": "feat/web-client-runtime-integration",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-fable-5",
+  "turn_id": "bea97404cd0b",
+  "token_usage": {
+    "input_tokens": 99479,
+    "cache_creation_tokens": 4080465,
+    "cache_read_tokens": 143579620,
+    "output_tokens": 474624,
+    "api_call_count": 505
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01Uae4oXZcmbjYJcb6Ru4Pef",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "bea97404cd0b",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 966,
+        "end": 967,
+        "entry_ids": [
+          "87bcf7d3-6ab6-4d0c-85a4-392200647a8f"
+        ],
+        "tool_use_id": "toolu_01Uae4oXZcmbjYJcb6Ru4Pef"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Uae4oXZcmbjYJcb6Ru4Pef"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01VfMELuzRNchcopiJja4PMF",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "bea97404cd0b",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 2033,
+        "end": 2034,
+        "entry_ids": [
+          "384d7ee2-7b8a-4fd9-bb01-4623280b7d35"
+        ],
+        "tool_use_id": "toolu_01VfMELuzRNchcopiJja4PMF"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01VfMELuzRNchcopiJja4PMF"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01A77Kh9XZUV4vv7Hn4xgdtt",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "bea97404cd0b",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 2086,
+        "end": 2087,
+        "entry_ids": [
+          "28cbcc55-4773-44fc-949b-4bfb41bfbeb1"
+        ],
+        "tool_use_id": "toolu_01A77Kh9XZUV4vv7Hn4xgdtt"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01A77Kh9XZUV4vv7Hn4xgdtt"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_013pdidYZSexLDDwpCT4bHoy",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "bea97404cd0b",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 3017,
+        "end": 3018,
+        "entry_ids": [
+          "18089d12-8de0-46bc-8c37-9221aaa18e22"
+        ],
+        "tool_use_id": "toolu_013pdidYZSexLDDwpCT4bHoy"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_013pdidYZSexLDDwpCT4bHoy"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ship-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 25
+  },
+  "summary": {
+    "intent": "Ship GSD phase 68.1 (web-client-runtime-integration) for CipherBox by wiring the v2.0 web app onto the node/v3 read+write chain across 33 execution plans and 3 gap-closure rounds, then run the full ship-phase pipeline (verify/secure/validate/simplify/E2E/CodeRabbit/PR) after logging deferrals as todos.",
+    "outcome": "Phase 68.1 reached verification PASSED 5/5 (commit 643f1b182) with the full web-e2e suite down to 2/205 failures (both approved deferrals); user then kicked off /ship-phase, which hit a CodeRabbit 150-file diff limit requiring per-directory splitting, and discovered the sdk-e2e gate has 89 skipped tests (7/10 fail when a probe un-skip is attempted), which was logged as a new deferred todo rather than fixed inline.",
+    "learnings": {
+      "repo": [
+        "mock-ipns-routing (delegated routing, :3001) keeps IPNS records in an in-memory Map — any container restart wipes it; records survive only via the API's synchronous ipns_records DB-cache write at publish time, so restarting it mid-dev-session can permanently orphan folders that were never DB-registered",
+        "createFolder previously omitted encryptedIpnsPrivateKey/keyEpoch on subfolder publish, so ipns_republish_schedule had zero rows — subfolder records would die at the 48h IPNS TTL in production; fixed via TEE enrollment in client.ts createFolder (68.1-16)",
+        "WriteChildRef is keyed by node UUID (childPub.id), never the ipnsName-based handle passed as moveItem's childId param — conflating the two silently orphans write-links (root cause of 68.1-31's move bug)",
+        "moveItem only ever re-linked the read-plane SealedChildRef and left the WriteChildRef orphaned in the source write-body — every file moved into a subfolder became permanently un-editable until 68.1-31 added unseal-under-source/reseal-under-dest re-homing",
+        "batch uploadFiles never inserted WriteChildRefs at all, so every web-uploaded file was un-savable from the start (fixed 68.1-29, commit 6fea17394)",
+        "SharedFolderTree stored a zeroed writeKey when cloning shared folder state, silently downgrading every write-permission share to read-only (fixed 68.1-29, commit 9725464dc)",
+        "Folder navigation/store had a D-02 kind-cache async race across three separate insertion sinks (SDK-event handler in folder.store.ts, handleSync in useFileBrowserActions.ts, resyncFolder in folder-helpers.ts) — fixing one sink alone masks the bug, all three must resolve kinds before inserting (68.1-33)",
+        "dfsFindFolder unconditionally re-resolved and overwrote every intermediate ancestor's folderTree entry on every call, even already-loaded write-capable ones, causing breadcrumb-up navigation to intermittently clobber state (68.1-26)",
+        "recovery.html (last touched Phase 24) hard-rejects any vault blob or metadata that isn't legacy v2 format, but the app has produced v3/node-v3 since Phase 62 — the recovery tool is fully incompatible with current data and needs its own port plan",
+        "apps/api's resolveRecord has a DB-canonical resolve floor that makes relay-replay attacks (rotation-durability SC-4) structurally unreachable in the current test harness — needs an API architecture decision or test redesign, not a client-side fix",
+        "shares table's plaintext item_name column was dropped entirely (not renamed) by migration 1750000000000-ApiSchemaCutover, making the REQ-4 itemName backfill dead code (shouldBackfill() permanently false) — redesign must ride the already-partially-shipped item_name_encrypted/ECIES pipeline, not revive plaintext storage (zero-knowledge rule)",
+        "mock-ipns-routing healthcheck used busybox `wget localhost`, which resolves to ::1, but the app binds IPv4-only — perpetual 'unhealthy' status was a healthcheck bug, not a service failure; fix is `127.0.0.1` in docker-compose.yml",
+        "Local e2e stack: API on :3000, delegated-routing mock on :3001 — the two are easy to conflate when health-probing",
+        "TEST_LOGIN_SECRET and DELEGATED_ROUTING_URL must be set on the API process env for local e2e test-login to succeed; mismatched/default secret gives a 401 'Invalid test login secret' with no other symptom",
+        "playwright web-e2e specs use describe.serial per file — a cascade-abort after the first failure in a file skips the rest, so a low failure count can mask far more actual coverage loss than it looks; use single-file re-runs to see the true frontier",
+        "CodeRabbit CLI review has a 150-file diff limit; a 179-file phase diff must be split into directory-scoped review passes",
+        "sdk-e2e suite has 89 tests skipped/quarantined against pre-v3-schema assumptions; un-skipping them without rework fails 7/10 — re-enabling needs a dedicated v3-alignment plan, not a mechanical un-skip"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 1669,
+          "end_line": 1810,
+          "finding": "moveItem re-homes the moved child's WriteChildRef (unseal under source writeKey, drop from source, reseal under dest writeKey, keyed by childPub.id at destEntry.generation, dest-before-source publish order preserved) — added in 68.1-31 to fix permanent un-editability after move"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 3891,
+          "finding": "updateSharedSingleFile (68.1-32): new SDK method targeting a directly-shared file's own IPNS record, since the folder-based updateSharedFile path requires a seeded SharedFolderState/parent write-body that single-file shares never have"
+        },
+        {
+          "path": "apps/web/src/stores/folder.store.ts",
+          "line": 249,
+          "end_line": 271,
+          "finding": "subscribeToSdk's folder:loaded/folder:updated handler does a hybrid projection: synchronous insert only when every child's kind is already cached, otherwise an async guarded resolveKinds-first path with a stale-sequence check — added in 68.1-33 to close the D-02 kind-cache race"
+        },
+        {
+          "path": "apps/web/src/components/file-browser/useFileBrowserActions.ts",
+          "line": 145,
+          "finding": "handleSync is the actual reload-gating inserter that bypasses SDK events entirely (fires on FileBrowser mount) — must independently await resolveKinds before updateFolderChildren, since fixing only the store's SDK-event handler misses this path"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 669,
+          "finding": "getWriteBodyParams fail-opens to {} when writeKey is zero — this is the D-03 zero-key fallback that lets read-only-seeded folder state still publish (without a write-body) instead of throwing"
+        }
+      ],
+      "workflow": [
+        "Long-running background e2e/build agents in this harness reliably lose their wake-up signal after task completion, and their transcripts can get evicted entirely — mitigate with an independent disk-based watchdog (e.g. on `.last-run.json` mtime) plus prompt-based SendMessage resume while the transcript is still warm, falling back to a fresh continuation agent with explicit completed_state context if evicted",
+        "Never use `git stash` in worktree-isolated executor agents — it operates on the shared refs/stash across all worktrees and can revert unrelated in-progress work; happened twice this session, both times self-caught and recovered via manual re-edit rather than stash pop",
+        "1Password git-commit signing can report commit_failed/timeout when the commit actually landed — always verify with `git log -1` / `git log --oneline -1` before retrying, never blind-retry (which would create duplicate commits)",
+        "When a decision-coverage or similar gate parser reports 'could not parse', check exact bullet syntax requirements (e.g. `- **D-04 [informational]:**` needs the tag INSIDE the bold group, not after it) rather than assuming the gate itself is broken",
+        "Full test-suite tallies during a serial-cascade suite understate real breakage — a spec that dies in setup silently skips dozens of downstream assertions that would otherwise have run; always corroborate a 'small failure count' claim against a single-file re-run before trusting it as health signal",
+        "Session/quota limits can kill an agent mid-task after it already wrote a plan or made uncommitted changes to disk — always spot-check disk state (uncommitted diffs, partial plan files) before treating a limit-death as 'nothing happened', and recover by validating + committing the salvageable work inline",
+        "Live hands-on user testing (not just green e2e) surfaced 3 real bugs (cold-load subfolder nav, text-editor decryption-failed, move-then-edit write-capability) that the suite structurally could not reach due to serial-abort shadowing — green e2e does not mean every code path was exercised"
+      ]
+    },
+    "friction": [
+      "CodeRabbit CLI's 150-file diff cap forced an ad hoc per-directory review split for a 179-file phase diff",
+      "sdk-e2e gate surfaced 89 skipped tests with no prior visibility; probing by un-skipping one suite revealed 7/10 failures against v3 schema assumptions, meaning the 'passing' E2E gate was silently only covering ~11% of intended coverage",
+      "Two accidental `git stash` violations by worktree executors despite an explicit no-stash rule in their instructions",
+      "Repeated exit-gate/background-agent lost-wake incidents requiring manual disk inspection and resume nudges across multiple rounds",
+      "Two separate session/quota limit deaths mid-task (once mid-triage, once mid-planning) requiring inline recovery of uncommitted/undelivered work",
+      "Wrong cwd (a stray `cd docker` persisting) caused a false 'ROADMAP.md missing' scare that needed re-verification from repo root",
+      "mock-ipns-routing's healthcheck bug (localhost resolving to ::1 vs app's IPv4-only bind) caused a long, misleading 'unhealthy service' investigation that was actually a healthcheck config bug",
+      "Extracting live e2e suite progress required working around no usable `.last-run.json`, redirected stdout piped into an agent's background capture, and playwright wiping test-results/ every run"
+    ],
+    "open_items": [
+      "Port recovery.html tool from legacy v2 vault-blob format to v3/node-v3 (todo filed 2026-07-03)",
+      "Resolve rotation-durability SC-4 relay-replay unreachability — needs an apps/api architectural decision or test redesign around the DB-canonical resolve floor (todo filed 2026-07-03)",
+      "Implement write-link re-homing for restore-to-different-parent bin-restore flow (same bug class as the move fix, but not a currently shipped flow) (todo filed 2026-07-03)",
+      "Re-enable the 89 skipped/quarantined sdk-e2e suites against the current v3 schema — 7/10 fail on mechanical un-skip and need real rework (todo filed 2026-07-03, discovered mid-ship-phase)",
+      "Push branch feat/web-client-runtime-integration (~60 commits ahead of origin, unpushed as of this session) and open the PR — user was mid-/ship-phase when transcript ends",
+      "Reword non-conventional commit subjects (e.g. `78ac715d9`, `17e4319a6`, `7209e8777`) before PR title/CI gates per ship-phase step 7",
+      "Refresh codebase map via /gsd-map-codebase (143 structural elements drifted since last mapping, flagged as warn-only, non-blocking)"
+    ]
+  }
+}
