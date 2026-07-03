@@ -43,6 +43,9 @@ import {
   hexToBytes,
   decryptAesGcm,
   decryptAesCtr,
+  AES_KEY_SIZE,
+  AES_IV_SIZE,
+  AES_CTR_IV_SIZE,
 } from '@cipherbox/crypto';
 import type { SdkContext, TeeKeys, DownloadProgressCallback } from '../types';
 import { addToIpfs, fetchFromIpfs } from '../ipfs';
@@ -229,6 +232,24 @@ export async function createFileMetadata(params: {
   ipnsPrivateKeyEncrypted?: string;
 }> {
   const mode: EncryptionMode = params.encryptionMode ?? 'GCM';
+
+  // Validate raw crypto inputs BEFORE minting keys / sealing / publishing. A
+  // wrong-length fileKey or fileIv would otherwise be stored verbatim in the
+  // sealed NodeContent and only surface (undecryptably) at download time. The
+  // internal upload path is covered by encryptAesGcm/Ctr's own length checks, but
+  // the external encryptFn (Web Worker) and direct callers are not — fail closed
+  // here with a clear crypto error (CLAUDE.md: proper error handling for crypto).
+  if (params.fileKey.length !== AES_KEY_SIZE) {
+    throw new Error(
+      `createFileMetadata: fileKey must be ${AES_KEY_SIZE} bytes (AES-256), got ${params.fileKey.length}`
+    );
+  }
+  const expectedIvLength = mode === 'CTR' ? AES_CTR_IV_SIZE : AES_IV_SIZE;
+  if (params.fileIv.length !== expectedIvLength) {
+    throw new Error(
+      `createFileMetadata: fileIv must be ${expectedIvLength} bytes for ${mode} mode, got ${params.fileIv.length}`
+    );
+  }
 
   // Mint fresh keys for this file node — the read/write keys are RETURNED raw to
   // the caller (terminal owner, D-09). Only the Ed25519 private key is fully

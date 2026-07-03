@@ -34,9 +34,6 @@ export {
   deleteFromFolder,
   addFilePointerToFolder,
   moveItem,
-  addFileToFolder,
-  addFilesToFolder,
-  replaceFileInFolder,
   mergeChildren,
 } from './folder';
 
