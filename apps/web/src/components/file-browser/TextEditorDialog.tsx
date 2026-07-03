@@ -7,9 +7,8 @@ import { useFolderStore } from '../../stores/folder.store';
 import { useVaultStore } from '../../stores/vault.store';
 import { getRootFolderState } from '../../hooks/folder-helpers';
 import { runWithFailureUx } from '../../hooks/useMutationFailureUx';
-import { downloadFile, triggerBrowserDownload } from '../../services/download.service';
+import { downloadFileFromIpns, triggerBrowserDownload } from '../../services/download.service';
 import { resolveFileMetadata, shouldCreateVersion } from '../../services/file-metadata.service';
-import { fetchShareKeys } from '../../services/share.service';
 import { addToIpfs, unpinFromIpfs } from '../../lib/api/ipfs';
 import { getSdkClient, hasSdkClient } from '../../lib/sdk-provider';
 import { logger } from '../../lib/logger';
@@ -95,32 +94,16 @@ export function TextEditorDialog({
         let plaintext: Uint8Array;
 
         if (shareId) {
-          // Shared file path: use re-wrapped file key from share_keys
-          const [{ metadata: fileMeta }, keys] = await Promise.all([
-            resolveFileMetadata(item, folderKey!),
-            fetchShareKeys(shareId),
-          ]);
-
-          // Exact match by itemId (folder share navigating to a specific file),
-          // or fallback to first file key (standalone file share where id is shareId)
-          const fileKeyRecord =
-            keys.find((k) => k.keyType === 'file' && k.itemId === item.ipnsName) ||
-            keys.find((k) => k.keyType === 'file');
-          if (!fileKeyRecord) {
-            throw new Error('File key not available — the folder owner may need to re-share');
-          }
-          const wrappedKey = fileKeyRecord.encryptedKey;
-
-          plaintext = await downloadFile(
-            {
-              cid: fileMeta.cid,
-              iv: fileMeta.fileIv,
-              wrappedKey,
-              originalName: item.name,
-              encryptionMode: fileMeta.encryptionMode,
-            },
-            auth.vaultKeypair.privateKey
-          );
+          // Shared file path (node/v3 read chain, 68.1-29): the current shared
+          // folder's readKey (folderKey prop) unseals the file's own readKey
+          // from item.readKeySealed; the raw content fileKey lives inside the
+          // file Node's read-body (NodeContent.fileKey). The previous
+          // share_keys-based path here was dead — fetchShareKeys is
+          // fail-closed empty since 68.1-20, so it always threw.
+          plaintext = await downloadFileFromIpns({
+            fileRef: item,
+            folderKey: folderKey!,
+          });
         } else if (hasSdkClient()) {
           // Owner path via SDK: resolves IPNS, decrypts metadata, downloads + decrypts content
           // TODO(phase 63): SealedChildRef.ipnsName replaces FilePointer.fileMetaIpnsName
