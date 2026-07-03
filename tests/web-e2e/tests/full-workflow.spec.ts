@@ -622,6 +622,11 @@ test.describe.serial('Full Workflow', () => {
     navigationStack.length = 0;
     navigationStack.push('root', workspaceFolder);
 
+    // waitForPathToContain(workspace) is trivially satisfied when navigating UP
+    // (the path already contained "workspace" while inside documents), so wait
+    // for the listing to render before the instant isItemVisible checks.
+    await fileList.waitForItemToAppear(documentsFolder, { timeout: 10000 });
+
     // Verify workspace children are all visible
     expect(await fileList.isItemVisible(documentsFolder)).toBe(true);
     expect(await fileList.isItemVisible(imagesFolder)).toBe(true);
