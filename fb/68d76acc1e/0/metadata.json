@@ -1,0 +1,150 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "fb68d76acc1e",
+  "session_id": "064836b9-90e4-42d5-aabc-ed5fde831a57",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-03T01:10:34.874018Z",
+  "branch": "feat/web-client-runtime-integration",
+  "checkpoints_count": 8,
+  "save_step_count": 1,
+  "files_touched": [
+    "apps/web/src/hooks/useFolderNavigation.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "ec6a28648a12",
+  "token_usage": {
+    "input_tokens": 52339,
+    "cache_creation_tokens": 2602020,
+    "cache_read_tokens": 88974592,
+    "output_tokens": 261082,
+    "api_call_count": 259
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-plan-phase-2026-07-02T19:11:49.468219Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "6a32dc56abb1",
+      "timestamp": "2026-07-02T19:11:49.468219Z",
+      "native": {
+        "command": "/gsd-plan-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01Uae4oXZcmbjYJcb6Ru4Pef",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "ec6a28648a12",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 966,
+        "end": 967,
+        "entry_ids": [
+          "87bcf7d3-6ab6-4d0c-85a4-392200647a8f"
+        ],
+        "tool_use_id": "toolu_01Uae4oXZcmbjYJcb6Ru4Pef"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Uae4oXZcmbjYJcb6Ru4Pef"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 20
+  },
+  "summary": {
+    "intent": "Execute and iteratively gap-close Phase 68.1 (web client runtime integration) using GSD's wave-based parallel execution and plan-phase workflows, then diagnose e2e/web-app bugs the user found manually.",
+    "outcome": "14 initial plans plus 8 gap-closure plans executed across multiple waves; e2e pass rate improved from 6/208 to ~200/208 over iterations; several real bugs were found and fixed (folder-store id desync, kind-cache wiring gaps, TEE republish enrollment, D-05 stale-record toast, text-editor decrypt key misuse) and multiple new gaps documented (GAP-1/2/4/5/6, enumerateSharedSubtree empty picker); the session ended hitting the account quota mid-exit-gate, requiring manual recovery of uncommitted test-fixture fixes before committing and re-verifying.",
+    "learnings": {
+      "repo": [
+        "GSD executor subagents can silently stall/lose their wake signal after backgrounding long-running commands (e.g. full e2e suites) — the orchestrator must watch for lost completion signals and resume the agent via SendMessage rather than assuming a freeze means still-running.",
+        "Serial Playwright describe blocks abort at first failure, so a 'N failed / 208' tally understates real breakage — later sections of a serial spec never execute, hiding bugs (text-editor decrypt bug was invisible until cold-reload/nested-folder fixes let the suite run deeper).",
+        "mock-ipns-routing dev container keeps IPNS records in an in-memory Map; any restart wipes records that lack a DB-backed republish registration, manifesting as permanent cold-navigation 404s for folders created before the TEE-enrollment fix.",
+        "The mock-ipns-routing healthcheck used `wget localhost` which resolves to ::1 while the app binds IPv4-only, causing perpetual 'unhealthy' status unrelated to actual service health — fixed to 127.0.0.1 in docker-compose.yml.",
+        "API listens on :3000; :3001 is the separate mock delegated-routing service — probing :3001 to check API health gives false negatives.",
+        "sdk-core's `updateFileMetadata` had a latent bug where it never actually zeroed `fileIpnsPrivateKey` despite doc comments claiming it did.",
+        "GSD decision-coverage gate requires the `[informational]` tag to be placed inside the bold ID group, e.g. `- **D-04 [informational]:**`, not elsewhere in the bullet.",
+        "migration `1750000000000-ApiSchemaCutover` dropped the `shares` table's plaintext `item_name` column entirely, making the REQ-4 itemName backfill feature permanently dead code (share.service.ts hardcodes `itemName: ''`) — reviving it would violate the zero-knowledge architecture rule."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/components/file-browser/SharedFolderRow.tsx",
+          "line": 63,
+          "finding": "hardcoded `isFolder = true` meant the D-02 kind cache populated in 68.1-14 was never consulted in the shared browser, causing files to render/behave as folders"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "downloadFromIpns fed the parent folderKey into sdk-core's resolveFileMetadata instead of the file's own readKey (recovered via unsealChildReadKey from the SealedChildRef), causing AEAD decrypt failure in the text editor/preview specifically (download/preview paths used a different, correct route)"
+        },
+        {
+          "path": "apps/web/src/hooks/useFolderNavigation.ts",
+          "finding": "final uncommitted file modified in the session — part of exit-gate GAP-2 cold-reload retry-budget fix for subfolder navigation after logout/login"
+        }
+      ],
+      "workflow": [
+        "When a background subagent is driving a long-running test suite and 'ends its turn' to wait, arm an independent watchdog (poll for the completion artifact file) rather than trusting the agent's own resume — agents can lose their wake/session and never re-trigger, especially near session/quota limits.",
+        "Verifying a subagent's self-reported `expected_base`/worktree metadata against actual git state (`git merge-base`) before recording it is worth doing — agents can misreport their own HEAD as the fork base.",
+        "When a post-merge test gate fails, don't trust a truncated `tail`-based check for exit code — re-run capturing the real exit status before concluding pass/fail.",
+        "Root-causing test/fixture regressions after a contract change (e.g., new required key fields) by reading the actual mock/fixture shape against the new call site, rather than just re-running, isolates fixture-only fixes from product-code regressions.",
+        "Live progress into a backgrounded task's captured stdout can be read directly from the task's log/capture file when the normal progress counter isn't otherwise queryable."
+      ]
+    },
+    "friction": [
+      "Wave-1 executor agent stalled mid-stream after 119 tool calls (~23 min) requiring a spot-check + resume rather than trusting the stream.",
+      "Exit-gate agent's completion signal was lost twice in a row (once after the first full e2e run, once after a shared triage run) — orchestrator had to detect via watchdog/process checks and manually resume via SendMessage each time.",
+      "A subagent (68.1-16) ran a prohibited `git stash push`/never popped it during a mid-task recovery, leaving a stray stash entry that had to be identified and dropped during cleanup.",
+      "git index.lock transient contention during Wave 3 tracking commit required a retry.",
+      "Bash tool call denied (likely reading .env) mid dev-stack diagnosis, forcing a workaround split into separate commands.",
+      "Exit-gate agent ultimately died mid-task on an account session-limit cutoff, leaving uncommitted test-fixture fixes and a SUMMARY that had to be manually recovered, validated, and committed by the orchestrator.",
+      "mock-ipns-routing's misconfigured healthcheck (IPv6 vs IPv4 localhost) caused it to appear perpetually unhealthy despite functioning correctly, consuming diagnostic time."
+    ],
+    "open_items": [
+      "GAP-1 (resolveFileMetadata AEAD failure for CTR video/batch-download) and its text-editor variant needed a fix threading SealedChildRef/unsealChildReadKey — fix was in progress at session end via the recovered exit-gate work.",
+      "GAP-2 cold-reload subfolder navigation retry-budget fix (useFolderNavigation.ts) was applied but final e2e confirmation run was cut off by the quota limit.",
+      "GAP-6: REQ-4 itemName backfill is dead code post-schema-cutover (item_name column dropped) — needs an explicit product decision (retire feature vs. redesign) rather than a unilateral code fix.",
+      "enumerateSharedSubtree (shared-move destination picker) still rides the now-empty share_keys fan-out and always returns an empty list — documented as a follow-up gap, not fixed.",
+      "Old folders/files created before the fileReadKey seal fix and TEE-enrollment fix have permanently dead/mis-sealed IPNS records in the dev vault — user was warned these are data damage, not code bugs, and need manual recreation.",
+      "Final phase re-verification (gsd-verifier round 2) was launched but its result was not yet observed before the transcript ends.",
+      "docker-compose.yml healthcheck fix and stray stash cleanup were committed but should be confirmed as part of final PR review (parenthesized commit subjects 17e4319a6/7209e8777 flagged to keep out of PR title)."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-03T01:10:00.469092Z",
+    "agent_lines": 7,
+    "agent_removed": 2,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 7,
+    "total_lines_changed": 9,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
