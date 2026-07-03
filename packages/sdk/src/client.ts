@@ -775,6 +775,24 @@ export class CipherBoxClient {
    * contract. Only structurally-absent hops (missing IPNS record, missing write
    * link) are soft failures that skip to the next sibling.
    *
+   * Cache short-circuit (68.1-26): a child already present in `folderTree`
+   * WITH a real (non-zero) writeKey is reused as-is instead of being
+   * re-resolved/re-unsealed/re-overwritten. Prior behavior always re-walked
+   * EVERY intermediate ancestor on EVERY call (even once fully cached), so
+   * navigating into a second, deeper subfolder redid a full network
+   * resolve+unseal for every already-loaded ancestor along the path and
+   * clobbered its `folderTree` entry with the fresh (but redundant) result —
+   * contradicting this method's own "later calls are cheap" contract and
+   * exposing loaded ancestors to being overwritten by later, possibly
+   * transiently-inconsistent resolves during an unrelated deeper descent. A
+   * write-capable cached entry is exactly as authoritative here as it is at
+   * the `ensureFolderLoaded` top-level cache-hit branch, which already
+   * trusts it without a re-resolve. A read-only-seeded cached entry (zero
+   * writeKey — e.g. the web-layer's parallel `navigateReadChain` walk,
+   * 68.1-05) is intentionally NOT short-circuited: it still needs the full
+   * write-chain recovery below so a write-capable root can recover its real
+   * writeKey (matching `recoverWriteKeyIfNeeded`'s 68.1-23 guarantee).
+   *
    * `visited` guards against a cyclic/malicious tree hanging the walk.
    */
   private async dfsFindFolder(
@@ -789,6 +807,17 @@ export class CipherBoxClient {
     if (!parentNode) return null;
 
     for (const childRef of parentNode.children ?? []) {
+      const cachedChild = this.folderTree.get(childRef.ipnsName);
+      const cachedWriteKey = cachedChild?.writeKey;
+      const cachedHasRealWriteKey =
+        !!cachedWriteKey && cachedWriteKey.length === 32 && !cachedWriteKey.every((b) => b === 0);
+      if (cachedChild && cachedHasRealWriteKey) {
+        if (childRef.ipnsName === targetIpnsName) return cachedChild;
+        const foundCached = await this.dfsFindFolder(cachedChild, targetIpnsName, visited);
+        if (foundCached) return foundCached;
+        continue;
+      }
+
       const childResolved = await this.resolvePublishedNode(childRef.ipnsName);
       if (!childResolved) continue; // structurally unresolvable hop — try siblings
 

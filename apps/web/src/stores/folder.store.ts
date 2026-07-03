@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { SealedChildRef } from '@cipherbox/core';
 import type { CipherBoxClient } from '@cipherbox/sdk';
 import { resolveKinds } from '../lib/kind-cache';
+import { logger } from '../lib/logger';
 
 /**
  * A folder node in the in-memory folder tree.
@@ -212,6 +213,25 @@ export const useFolderStore = create<FolderState>((set, get) => ({
           const folders = get().folders;
           const matchingFolder = Object.values(folders).find((f) => f.ipnsName === event.ipnsName);
           if (matchingFolder) {
+            // T-68.1-26-01: a folder:updated/folder:loaded event carrying an
+            // EMPTY children array must never replace an already-loaded
+            // folder's NON-EMPTY children — an empty/mismatched event here
+            // would silently blank a loaded ancestor's rendered contents
+            // (breadcrumb-up empty-flash). A genuinely-emptied folder is
+            // still reachable once its own real mutation lands with real
+            // (zero-length) data alongside a NEWER sequenceNumber; this guard
+            // only rejects the suspect empty-over-populated case.
+            if (
+              matchingFolder.isLoaded &&
+              matchingFolder.children.length > 0 &&
+              event.children.length === 0
+            ) {
+              logger.warn(
+                `[folder.store] Ignoring ${event.type} for ${event.ipnsName}: event carries empty children but the store already has ${matchingFolder.children.length} loaded — refusing to blank a loaded ancestor`
+              );
+              break;
+            }
+
             get().updateFolderChildren(matchingFolder.id, event.children);
             get().updateFolderSequence(matchingFolder.id, event.sequenceNumber);
 
