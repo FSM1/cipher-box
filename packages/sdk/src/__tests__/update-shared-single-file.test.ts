@@ -186,13 +186,25 @@ describe('CipherBoxClient.updateSharedSingleFile', () => {
   it('resolves the file keys from the grant descriptors and delegates to shareOps.updateSharedFile exactly once', async () => {
     const { filePublished, fileNode } = await buildFixture();
     mockResolution(filePublished);
-    vi.mocked(shareOps.updateSharedFile).mockResolvedValue(undefined);
+    // Snapshot params INSIDE the mock implementation, before the method's own
+    // `finally` zeroes the minted keys (D-09 terminal-owner zeroing runs on
+    // every exit path — mirrors production, where the real shareOps.updateSharedFile
+    // has already consumed the keys synchronously by the time it resolves).
+    let captured: Parameters<typeof shareOps.updateSharedFile>[1] | null = null;
+    vi.mocked(shareOps.updateSharedFile).mockImplementation(async (_swCtx, params) => {
+      captured = {
+        ...params,
+        fileReadKey: params.fileReadKey.slice(),
+        fileWriteKey: params.fileWriteKey.slice(),
+        fileIpnsPrivateKey: params.fileIpnsPrivateKey.slice(),
+      };
+    });
     const args = await buildArgs();
 
     await client.updateSharedSingleFile(args);
 
     expect(shareOps.updateSharedFile).toHaveBeenCalledTimes(1);
-    const [, params] = vi.mocked(shareOps.updateSharedFile).mock.calls[0];
+    const params = captured!;
     expect(params.fileReadKey).toHaveLength(32);
     expect(params.fileWriteKey).toHaveLength(32);
     expect(params.fileIpnsPrivateKey).toHaveLength(32);

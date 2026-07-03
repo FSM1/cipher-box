@@ -3538,6 +3538,7 @@ export class CipherBoxClient {
       children: SealedChildRef[];
     }
   ): ReturnType<typeof shareOps.buildSharedWriteContext> {
+    const { addToIpfsFn, publishNodeFn } = this.buildWriteTransportSeams();
     return shareOps.buildSharedWriteContext({
       ctx: this.ctx,
       readKey: overrides.readKey,
@@ -3549,10 +3550,44 @@ export class CipherBoxClient {
       ownerPublicKey: owningState.ownerPublicKey,
       recipientPublicKey: owningState.recipientPublicKey,
       shareId: owningState.shareId,
+      addToIpfsFn,
+      publishNodeFn,
+      addShareKeysFn: owningState.addShareKeysFn,
+    });
+  }
+
+  /**
+   * Build the transport seams (addToIpfsFn + publishNodeFn) shared by every
+   * SharedWriteContext builder (68.1-32). Extracted so
+   * {@link buildSharedWriteContextWithOverrides} and the single-file-share
+   * write path ({@link updateSharedSingleFile}, which has no owning
+   * `SharedFolderState` to build a context FROM) don't duplicate the transport
+   * wiring — behavior is byte-for-byte identical to the pre-extraction inline
+   * implementation.
+   *
+   * addToIpfsFn: uploads encrypted content via pinWithMode so the configured
+   * pinning mode (BYO/external) is honored — encrypted bytes never route
+   * through CipherBox when the user opted external.
+   *
+   * publishNodeFn: uploads the sealed PublishedNode JSON to IPFS then calls
+   * createAndPublishIpnsRecord with the supplied sequenceNumber. The
+   * node-metadata blob intentionally goes via sdkCore.addToIpfs (CipherBox),
+   * NOT pinWithMode — it is the IPNS resolution target and must remain
+   * reachable by CipherBox's relay. A non-throwing rejection (2xx with
+   * success:false) still means the record was not committed — fail closed
+   * rather than pointing a SealedChildRef/IPNS name at an unpublished record.
+   */
+  private buildWriteTransportSeams(): {
+    addToIpfsFn: (data: Uint8Array) => Promise<{ cid: string }>;
+    publishNodeFn: (params: {
+      published: PublishedNode;
+      ipnsName: string;
+      ipnsPrivateKey: Uint8Array;
+      sequenceNumber: bigint;
+    }) => Promise<{ tombstoned: true } | { tombstoned: false; newSequenceNumber: bigint }>;
+  } {
+    return {
       addToIpfsFn: async (data) => {
-        // Encrypted content must honor the configured pinning mode (BYO/external),
-        // exactly like the non-shared upload path (pinWithMode at L784/966) — never
-        // route shared-write content through CipherBox when the user opted external.
         const result = await this.pinWithMode(data, this.ctx);
         return { cid: result.cid };
       },
@@ -3566,10 +3601,6 @@ export class CipherBoxClient {
           sequenceNumber,
           ctx: this.ctx,
         });
-        // A non-throwing rejection (2xx with success:false) still means the record
-        // was not committed. Fail closed — continuing would point the parent's
-        // SealedChildRef at an IPNS name that was never published. Mirrors the
-        // explicit guard in rotateWriteSubtree (engine.ts) for the same publish path.
         if (!pubResult.success) {
           throw new Error(
             `publishNodeFn: IPNS publish rejected for ${ipnsName} (seq=${pubResult.sequenceNumber})`
@@ -3577,8 +3608,7 @@ export class CipherBoxClient {
         }
         return { tombstoned: false, newSequenceNumber: pubResult.sequenceNumber };
       },
-      addShareKeysFn: owningState.addShareKeysFn,
-    });
+    };
   }
 
   /**
@@ -3837,6 +3867,123 @@ export class CipherBoxClient {
         fileWriteKey = null;
         fileIpnsPrivateKey?.fill(0);
         fileIpnsPrivateKey = null;
+      }
+    });
+  }
+
+  /**
+   * Update a DIRECT single-file share's content (WEB-03, writable-shares 10.3).
+   *
+   * A single-file share's root IS the file — there is no parent folder write
+   * chain to walk (unlike {@link updateSharedFile}'s folder path, which
+   * requires a loaded `SharedFolderState`). The file's readKey/writeKey are
+   * recovered directly from the grant's ECIES-wrapped descriptors
+   * (`share.readDescriptorRef`/`share.writeDescriptorRef`), and the file's
+   * ipnsPrivateKey is recovered by unsealing the file's own write-body
+   * (validate-before-trust — a wrong/tampered descriptor fails AEAD auth
+   * closed here, never caught-and-continued).
+   *
+   * Publishes to the file's OWN IPNS at the resolved sequence + 1 via the
+   * same transport seams as every other shared-write path
+   * ({@link buildWriteTransportSeams}: BYO-aware content pin, CipherBox-relayed
+   * node metadata, fail-closed on publish rejection).
+   */
+  async updateSharedSingleFile(args: {
+    shareId: string;
+    readDescriptorRef: string;
+    writeDescriptorRef: string;
+    fileIpnsName: string;
+    ownerPublicKey: Uint8Array;
+    /** Caller-owned — NEVER zeroed by this method (D-09). */
+    recipientPrivateKey: Uint8Array;
+    recipientPublicKey: Uint8Array;
+    rootExpectedGeneration: number;
+    newContent: Uint8Array;
+  }): Promise<void> {
+    return this.withOperation('updateSharedSingleFile', async () => {
+      // Recovered file keys — MINTED by this call, terminal owner (D-09).
+      // args.recipientPrivateKey is caller-owned and is NEVER zeroed here.
+      let fileReadKey: Uint8Array | null = await unwrapKey(
+        hexToBytes(args.readDescriptorRef),
+        args.recipientPrivateKey
+      );
+      let fileWriteKey: Uint8Array | null = await unwrapKey(
+        hexToBytes(args.writeDescriptorRef),
+        args.recipientPrivateKey
+      );
+      let currentFileNode: CoreNode | null = null;
+
+      try {
+        const filePub = await this.resolvePublishedNode(args.fileIpnsName);
+        if (!filePub) {
+          throw new Error(`updateSharedSingleFile: file ${args.fileIpnsName} not found (revoked)`);
+        }
+
+        // Behind-retry staleness witness — never trust a generation regression,
+        // mirrors navigateReadChain's behind-retry semantics.
+        if (filePub.published.generation > args.rootExpectedGeneration) {
+          throw new Error('updateSharedSingleFile: share was updated — please reopen');
+        }
+
+        // Validate-before-trust for BOTH keys: a wrong/tampered descriptor
+        // fails AEAD auth closed here (T-68.1-32-01) — never caught.
+        currentFileNode = await unsealNode(filePub.published, fileReadKey, fileWriteKey);
+
+        if (
+          currentFileNode.kind !== 'file' ||
+          !currentFileNode.content ||
+          !currentFileNode.writeBody?.ipnsPrivateKey
+        ) {
+          throw new Error(
+            `updateSharedSingleFile: node ${args.fileIpnsName} is not a writable file node`
+          );
+        }
+        const fileIpnsPrivateKey = currentFileNode.writeBody.ipnsPrivateKey;
+
+        const { addToIpfsFn, publishNodeFn } = this.buildWriteTransportSeams();
+        const swCtx = shareOps.buildSharedWriteContext({
+          ctx: this.ctx,
+          readKey: fileReadKey,
+          writeKey: fileWriteKey,
+          publishedNode: filePub.published,
+          ipnsName: args.fileIpnsName,
+          sequenceNumber: filePub.sequenceNumber,
+          children: [],
+          ownerPublicKey: args.ownerPublicKey,
+          recipientPublicKey: args.recipientPublicKey,
+          shareId: args.shareId,
+          addToIpfsFn,
+          publishNodeFn,
+          // D-02: never invoked in the write-body model.
+          addShareKeysFn: async () => {},
+        });
+
+        await shareOps.updateSharedFile(swCtx, {
+          fileRef: {
+            name: '',
+            ipnsName: args.fileIpnsName,
+            generation: filePub.published.generation,
+            versionFloor: 0n,
+            readKeySealed: '',
+          },
+          fileNodeId: filePub.published.id,
+          fileReadKey,
+          fileWriteKey,
+          fileIpnsPrivateKey,
+          fileSequenceNumber: filePub.sequenceNumber,
+          newData: args.newContent,
+          mimeType: currentFileNode.content.mimeType,
+          originalCreatedAt: currentFileNode.createdAt,
+          originalVersions: currentFileNode.content.versions,
+        });
+      } finally {
+        // Zero every minted/unsealed key on every exit path (D-09 terminal owner).
+        fileReadKey?.fill(0);
+        fileReadKey = null;
+        fileWriteKey?.fill(0);
+        fileWriteKey = null;
+        currentFileNode?.writeBody?.ipnsPrivateKey?.fill(0);
+        currentFileNode?.content?.fileKey?.fill(0);
       }
     });
   }
