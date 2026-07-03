@@ -939,7 +939,7 @@ export class CipherBoxClient {
    * remains the authoritative conflict detector.
    */
   private async reconcileFolderSequence(ipnsName: string, expectedSequence: bigint): Promise<void> {
-    let resolved: { sequenceNumber: bigint; signatureVerified: boolean } | null;
+    let resolved: { cid: string; sequenceNumber: bigint; signatureVerified: boolean } | null;
     try {
       resolved = await sdkCore.resolveIpnsRecord(ipnsName, this.ctx);
     } catch {
@@ -986,7 +986,71 @@ export class CipherBoxClient {
     }
 
     if (resolved.sequenceNumber !== expectedSequence) {
+      // D-04 self-heal (68.1-22): when the network is AHEAD (a legitimate
+      // concurrent update from another device/session), adopt the fresher
+      // network state into folderTree BEFORE deferring, so the caller's
+      // bounded retry (useMutationFailureUx's runReconcileRetryLoop) re-reads
+      // reconciled state and succeeds — previously nothing advanced the local
+      // sequence between retries except the 30s sync poll, so the ~30s retry
+      // budget raced it and usually exhausted. Network-BEHIND (stale/replayed
+      // record, T-68-101) adopts NOTHING — refreshFolderStateFromNetwork's
+      // strictly-newer guard skips it, and that direction is classified
+      // fail-closed upstream (D-05); adopting it would be a rollback.
+      if (resolved.sequenceNumber > expectedSequence) {
+        const folder = this.folderTree.get(ipnsName);
+        // Only refresh when the in-memory entry still matches the sequence
+        // the caller reconciled against (no concurrent in-process update).
+        if (folder && folder.sequenceNumber === expectedSequence) {
+          await this.refreshFolderStateFromNetwork(folder);
+        }
+      }
       throw new ReconcileStaleError(ipnsName, expectedSequence, resolved.sequenceNumber);
+    }
+  }
+
+  /**
+   * Best-effort refresh of a folder's in-memory state (read-body children,
+   * sequence AND the unsealed metadata mirror incl. write-body) from the
+   * CURRENT network record (68.1-22).
+   *
+   * Strictly-newer guard: never adopts a record at or below the in-memory
+   * sequence (anti-rollback — a stale/replayed record must never rewind
+   * local state, T-68-101). Failures are swallowed: callers treat this as an
+   * opportunistic reconcile, not a correctness gate — the CAS-guarded publish
+   * remains the authoritative conflict detector.
+   *
+   * Why the mirror matters: getWriteBodyParams prefers
+   * `metadata.writeBody.writeChildren`, so a stale mirror makes the next
+   * publish re-seal an outdated write chain — silently dropping
+   * WriteChildRefs inserted by OTHER devices (the cross-device counterpart of
+   * adoptPublishedFolderState's same-session sync).
+   */
+  private async refreshFolderStateFromNetwork(folder: FolderState): Promise<void> {
+    try {
+      const resolved = await sdkCore.resolveIpnsRecord(folder.ipnsName, this.ctx);
+      if (!resolved || typeof resolved.sequenceNumber !== 'bigint') return;
+      if (resolved.sequenceNumber <= folder.sequenceNumber) return;
+      const raw = await sdkCore.fetchFromIpfs(this.ctx, resolved.cid);
+      const published = JSON.parse(new TextDecoder().decode(raw)) as PublishedNode;
+      const wk = folder.writeKey;
+      const realWriteKey = wk && wk.length === 32 && !wk.every((b) => b === 0) ? wk : undefined;
+      const node = await unsealNode(published, folder.folderKey, realWriteKey);
+      folder.children = node.children ?? [];
+      folder.sequenceNumber = resolved.sequenceNumber;
+      folder.metadata = node;
+      folder.nodeId = node.id;
+      folder.nodeGeneration = node.generation;
+      folder.lastLoadedAt = Date.now();
+      this.folderTree.set(folder.ipnsName, folder);
+      this.emitter.emit({
+        type: 'folder:updated',
+        folderId: folder.ipnsName,
+        ipnsName: folder.ipnsName,
+        children: folder.children,
+        sequenceNumber: folder.sequenceNumber,
+      });
+    } catch {
+      // Best-effort — the caller's publish path still owns conflict handling.
     }
   }
 
@@ -2098,16 +2162,18 @@ export class CipherBoxClient {
       }
 
       try {
-        // Re-read folder metadata to mitigate stale-children race
-        const freshFolder = await sdkCore.loadFolderMetadata({
-          ipnsName: folderIpnsName,
-          folderKey: folder.folderKey,
-          ctx: this.ctx,
-        });
-        const initialChildren = freshFolder?.metadata.children ?? folder.children;
+        // Re-read folder state (read-body children AND write-body mirror) to
+        // mitigate the stale-children race. 68.1-22: the previous read-only
+        // loadFolderMetadata refresh advanced children+sequence but left
+        // folder.metadata.writeBody stale, so getWriteBodyParams below
+        // published an OUTDATED write chain at the fresh sequence — silently
+        // dropping WriteChildRefs added by other devices (surfaced as "not
+        // write-capable (no WriteChildRef)" on the clobbered device).
+        await this.refreshFolderStateFromNetwork(folder);
+        const initialChildren = folder.children;
         const baseChildren = [...initialChildren];
         let mergedChildren = initialChildren;
-        const freshSeq = freshFolder?.sequenceNumber ?? folder.sequenceNumber;
+        const freshSeq = folder.sequenceNumber;
 
         // Add FilePointers for all successful uploads (skip collisions gracefully)
         const registeredSuccesses: FileResult[] = [];
