@@ -3536,7 +3536,11 @@ export class CipherBoxClient {
    */
   private adoptSharedFolderResult(
     shareId: string,
-    result: { publishedChildren: SealedChildRef[]; newSequenceNumber: bigint }
+    result: {
+      publishedChildren: SealedChildRef[];
+      newSequenceNumber: bigint;
+      publishedParent?: PublishedNode;
+    }
   ): void {
     // Re-read live state: the share may have been unloaded (e.g. unmount →
     // unloadSharedFolder) while the async write/refresh was in-flight. Never
@@ -3547,6 +3551,12 @@ export class CipherBoxClient {
       ...live,
       children: result.publishedChildren,
       sequenceNumber: result.newSequenceNumber,
+      // 68.1-29: adopt the freshly-published envelope when the op returns it —
+      // a later same-session shared write unsealing a STALE publishedNode
+      // republishes an outdated write chain, silently dropping WriteChildRefs
+      // inserted by earlier ops (writable-shares 3.3 mkdir dropped 3.2's
+      // upload write-link, breaking the 3.4 editor save).
+      ...(result.publishedParent ? { publishedNode: result.publishedParent } : {}),
     };
     this.sharedFolderTree.set(shareId, next);
     this.emitter.emit({

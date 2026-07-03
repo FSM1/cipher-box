@@ -251,7 +251,11 @@ async function resealAndPublishParent(
   ipnsPrivateKey: Uint8Array,
   writeChildren: WriteChildRef[],
   modifiedAt: number
-): Promise<{ publishedChildren: SealedChildRef[]; newSequenceNumber: bigint }> {
+): Promise<{
+  publishedChildren: SealedChildRef[];
+  newSequenceNumber: bigint;
+  publishedParent: PublishedNode;
+}> {
   const updatedParent: Node = {
     ...parentNode,
     modifiedAt,
@@ -269,7 +273,16 @@ async function resealAndPublishParent(
     ipnsPrivateKey,
     swCtx.sequenceNumber + 1n
   );
-  return { publishedChildren: newChildren, newSequenceNumber: newSeq };
+  // 68.1-29: return the freshly-published envelope so the client can adopt it
+  // into SharedFolderState.publishedNode — a subsequent same-session shared
+  // write that unseals a STALE envelope re-publishes an outdated write chain,
+  // silently dropping WriteChildRefs inserted by earlier ops (writable-shares
+  // 3.3 mkdir dropped 3.2's upload write-link, breaking the 3.4 editor save).
+  return {
+    publishedChildren: newChildren,
+    newSequenceNumber: newSeq,
+    publishedParent: newParentPublished,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -292,6 +305,7 @@ export async function createSharedSubfolder(
   publishedChildren: SealedChildRef[];
   newSequenceNumber: bigint;
   folderEntry: SealedChildRef;
+  publishedParent: PublishedNode;
 }> {
   if (swCtx.writeKey.length !== 32) {
     throw new Error(
@@ -371,7 +385,7 @@ export async function createSharedSubfolder(
     const newChildren = [...swCtx.children, folderEntry];
     const newWriteChildren = [...parentWriteChildren, writeChildRef];
 
-    const { publishedChildren, newSequenceNumber } = await resealAndPublishParent(
+    const { publishedChildren, newSequenceNumber, publishedParent } = await resealAndPublishParent(
       swCtx,
       parentNode,
       newChildren,
@@ -388,7 +402,7 @@ export async function createSharedSubfolder(
     childIpnsPrivateKey.fill(0);
     childIpnsPrivateKey = null;
 
-    return { publishedChildren, newSequenceNumber, folderEntry };
+    return { publishedChildren, newSequenceNumber, folderEntry, publishedParent };
   } catch (err) {
     // Zero minted keys on failure — never zero caller-supplied keys (D-09)
     childReadKey?.fill(0);
@@ -413,6 +427,7 @@ export async function uploadToSharedFolder(
   publishedChildren: SealedChildRef[];
   newSequenceNumber: bigint;
   filePointer: SealedChildRef;
+  publishedParent: PublishedNode;
 }> {
   if (swCtx.writeKey.length !== 32) {
     throw new Error(
@@ -513,7 +528,7 @@ export async function uploadToSharedFolder(
     const newChildren = [...swCtx.children, filePointer];
     const newWriteChildren = [...parentWriteChildren, writeChildRef];
 
-    const { publishedChildren, newSequenceNumber } = await resealAndPublishParent(
+    const { publishedChildren, newSequenceNumber, publishedParent } = await resealAndPublishParent(
       swCtx,
       parentNode,
       newChildren,
@@ -532,7 +547,7 @@ export async function uploadToSharedFolder(
     fileIpnsPrivateKey.fill(0);
     fileIpnsPrivateKey = null;
 
-    return { publishedChildren, newSequenceNumber, filePointer };
+    return { publishedChildren, newSequenceNumber, filePointer, publishedParent };
   } catch (err) {
     fileKey?.fill(0);
     fileReadKey?.fill(0);
