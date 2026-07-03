@@ -2310,9 +2310,31 @@ export class CipherBoxClient {
           return { successes: [], failures };
         }
 
-        // Preserve the folder's existing write-body on republish (D-03). New
-        // files' WriteChildRef insertion is owned by 68.1-07/09.
+        // Preserve the folder's existing write-body on republish (D-03) AND
+        // insert a WriteChildRef for each newly-uploaded file (68.1-29: this
+        // batch path — the ONLY path the web upload UI calls — previously
+        // never inserted WriteChildRefs, leaving every web-uploaded file
+        // permanently not write-capable; editor saves failed with
+        // "not write-capable (no WriteChildRef)" — conflict-detection 219,
+        // full-workflow 6.5.3). Mirrors the single-file uploadFile path: no
+        // real parent writeKey (legacy zero-fallback, T-68.1-01-03) means the
+        // files stay read-only, matching that path's contract.
         const writeBodyParams = await this.getWriteBodyParams(folder);
+        let updatedWriteChildren = writeBodyParams.writeChildren;
+        if (writeBodyParams.writeKey) {
+          const newWriteRefs: WriteChildRef[] = [];
+          for (const success of registeredSuccesses) {
+            const writeKeySealed = await sealChildWriteKey(
+              success.uploadResult.fileWriteKey,
+              writeBodyParams.writeKey,
+              success.fileId,
+              'file',
+              0
+            );
+            newWriteRefs.push({ childId: success.fileId, writeKeySealed });
+          }
+          updatedWriteChildren = [...(writeBodyParams.writeChildren ?? []), ...newWriteRefs];
+        }
 
         // Single folder publish + batch IPNS publish (concurrent)
         const ipnsRecords = registeredSuccesses.map((s) => s.uploadResult.ipnsRecord);
@@ -2321,7 +2343,8 @@ export class CipherBoxClient {
             children: mergedChildren,
             baseChildren,
             folderKey: folder.folderKey,
-            ...writeBodyParams,
+            writeKey: writeBodyParams.writeKey,
+            writeChildren: updatedWriteChildren,
             ipnsPrivateKey: folder.ipnsKeypair.privateKey,
             ipnsName: folderIpnsName,
             sequenceNumber: freshSeq,
@@ -2367,12 +2390,13 @@ export class CipherBoxClient {
 
         const { newSequenceNumber, publishedChildren } = folderResult.value;
 
-        // Update internal state — adopt merged published set (CR-01)
+        // Update internal state — adopt merged published set (CR-01),
+        // including the new files' WriteChildRefs (68.1-29)
         this.adoptPublishedFolderState(
           folder,
           publishedChildren,
           newSequenceNumber,
-          writeBodyParams.writeChildren
+          updatedWriteChildren
         );
 
         // Emit events
@@ -2402,12 +2426,9 @@ export class CipherBoxClient {
         };
       } finally {
         // Clear file keys for all uploads (including collision-failed ones).
-        // fileReadKey is sealed into the parent's read-body above (this call
-        // site is its terminal owner, D-09); fileWriteKey is never consumed
-        // by this batch path (WriteChildRef insertion for uploadFiles is out
-        // of scope — matches the pre-existing comment above on
-        // getWriteBodyParams) but is zeroed here regardless rather than left
-        // to linger unzeroed in memory.
+        // fileReadKey is sealed into the parent's read-body and fileWriteKey
+        // into the parent's write-body above (68.1-29) — this call site is
+        // the terminal owner of both (D-09).
         for (const success of successes) {
           clearBytes(success.uploadResult.fileKey);
           clearBytes(success.uploadResult.fileReadKey);
