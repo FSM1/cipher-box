@@ -91,29 +91,43 @@ export async function createWalletContext(
 }
 
 /**
- * Perform a full wallet login via the UI.
+ * Text signature of a transient Web3Auth Core Kit / Torus login failure.
  *
- * Drives the real wallet -> SIWE -> Core Kit flow:
- * 1. Navigate to login page
- * 2. Wait for Core Kit init (wallet button becomes enabled)
- * 3. Click [WALLET] button -> connector list appears
- * 4. Select "Mock Wallet" connector
- * 5. Wait for either:
- *    - /files redirect (success, no MFA or device already known)
- *    - DeviceWaitingScreen (MFA enabled, new device needs share)
- *
- * The mock wallet auto-approves connect + signMessage, so the SIWE
- * flow proceeds without user interaction.
- *
- * @param page - Page with mock wallet already installed via setupMockWallet()
- * @param options.timeout - Max time to wait for login outcome (default: 60s)
+ * The Core Kit's underlying Torus DKG occasionally fails to resolve a quorum
+ * of key shares (roving external flake, unrelated to app or test-infra
+ * code). Two observed error copies:
+ * - "Failed to get vault keypair from Core Kit" (useAuth.ts, surfaced via
+ *   Login.tsx's `.login-error` banner)
+ * - the raw Torus quorum error: "Unable to resolve enough promises...
+ *   invalid public key result" (propagates through the same banner when it
+ *   escapes Core Kit's login call before backend auth)
  */
-export async function loginViaWallet(
-  page: Page,
-  options: { timeout?: number } = {}
-): Promise<WalletLoginResult> {
-  const timeout = options.timeout ?? 60_000;
+const CORE_KIT_TRANSIENT_ERROR_PATTERN =
+  /Failed to get vault keypair from Core Kit|Unable to resolve enough promises|invalid public key result/i;
 
+const LOGIN_RETRY_MAX_ATTEMPTS = 3;
+const LOGIN_RETRY_BACKOFF_MS = [2_000, 4_000, 8_000];
+
+/**
+ * Detect whether the page is showing a transient Core Kit / Torus login
+ * failure: still on the login page (no /files redirect happened) AND a
+ * visible error banner matches the known transient-failure copy.
+ *
+ * Deliberately narrow -- a genuine, non-transient failure (different error
+ * text, or no banner at all) must NOT be retried, so real regressions still
+ * surface.
+ */
+async function isCoreKitTransientFailure(page: Page): Promise<boolean> {
+  if (page.url().includes('/files')) return false;
+  const banner = page.locator('[role="alert"]', { hasText: CORE_KIT_TRANSIENT_ERROR_PATTERN });
+  return banner.isVisible().catch(() => false);
+}
+
+/**
+ * Single wallet-login attempt (no retry). See loginViaWallet for the full
+ * flow description.
+ */
+async function attemptWalletLogin(page: Page, timeout: number): Promise<WalletLoginResult> {
   // 1. Navigate to login page
   await page.goto('/');
 
@@ -160,4 +174,59 @@ export async function loginViaWallet(
   }
 
   return result;
+}
+
+/**
+ * Perform a full wallet login via the UI.
+ *
+ * Drives the real wallet -> SIWE -> Core Kit flow:
+ * 1. Navigate to login page
+ * 2. Wait for Core Kit init (wallet button becomes enabled)
+ * 3. Click [WALLET] button -> connector list appears
+ * 4. Select "Mock Wallet" connector
+ * 5. Wait for either:
+ *    - /files redirect (success, no MFA or device already known)
+ *    - DeviceWaitingScreen (MFA enabled, new device needs share)
+ *
+ * The mock wallet auto-approves connect + signMessage, so the SIWE
+ * flow proceeds without user interaction.
+ *
+ * The Web3Auth Core Kit intermittently fails to resolve a quorum of Torus
+ * DKG shares -- a transient, external flake unrelated to app/test-infra
+ * code (see CORE_KIT_TRANSIENT_ERROR_PATTERN). When that specific failure
+ * signature is detected, the attempt is retried up to
+ * LOGIN_RETRY_MAX_ATTEMPTS times with exponential backoff by re-navigating
+ * to the login page and re-attempting the full flow. A genuine login
+ * failure (any other error, or the transient signature persisting past the
+ * retry budget) still surfaces so real regressions are not masked.
+ *
+ * @param page - Page with mock wallet already installed via setupMockWallet()
+ * @param options.timeout - Max time to wait for login outcome (default: 60s)
+ */
+export async function loginViaWallet(
+  page: Page,
+  options: { timeout?: number } = {}
+): Promise<WalletLoginResult> {
+  const timeout = options.timeout ?? 60_000;
+
+  let lastError: unknown;
+  for (let attempt = 0; attempt < LOGIN_RETRY_MAX_ATTEMPTS; attempt++) {
+    try {
+      return await attemptWalletLogin(page, timeout);
+    } catch (err) {
+      lastError = err;
+      const transient = await isCoreKitTransientFailure(page);
+      const isLastAttempt = attempt === LOGIN_RETRY_MAX_ATTEMPTS - 1;
+      if (!transient || isLastAttempt) {
+        throw err;
+      }
+      await page.waitForTimeout(LOGIN_RETRY_BACKOFF_MS[attempt]);
+      // Loop re-attempts via attemptWalletLogin's own page.goto('/'), which
+      // is equivalent to a reload for this purpose.
+    }
+  }
+
+  // Unreachable -- the loop above always either returns or throws -- but
+  // TypeScript can't prove that, so satisfy the return type.
+  throw lastError;
 }
