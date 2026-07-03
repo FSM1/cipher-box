@@ -4266,6 +4266,88 @@ export class CipherBoxClient {
     });
   }
 
+  /**
+   * Recover a single subfolder's writeKey from its PARENT's write-body chain
+   * (one hop), closing the deep-shared-write gap (WEB-03, 68.1-30): the web
+   * seeds `SharedFolderState.writeKey` only at the share root
+   * (`resolveSharedRootWriteKey`), so descending into a subfolder previously
+   * re-seeded that depth with a zero writeKey and every write op below the
+   * root failed GCM auth (writable-shares 8.2).
+   *
+   * Mirrors `dfsFindFolder`'s inner write-chain block exactly: the caller
+   * (`navigateToSubfolder`) must invoke this BEFORE it re-seeds
+   * `sharedFolderTree` to the child — this method reads the PARENT depth via
+   * `sharedFolderTree.get(shareId)`.
+   *
+   * Generation-source rule: `child.generation` is the PARENT-mirror
+   * (`SealedChildRef.generation`), NEVER `child.published.generation` (the
+   * child's own envelope generation) — matches `dfsFindFolder` /
+   * `enumerateSharedSubtree`.
+   *
+   * Fails closed: returns `null` when the share isn't loaded, the parent has
+   * no real (non-zero 32-byte) writeKey, the parent has no write-body, or no
+   * `WriteChildRef` matches the child's id. A tampered `writeKeySealed` or
+   * wrong parent writeKey throws (AEAD auth failure) rather than being
+   * swallowed. The recovered key is validated by unsealing the child's OWN
+   * write-body before being trusted/returned — a key that doesn't unseal the
+   * child's write-body returns `null`, never a bogus key.
+   *
+   * D-09 zeroization: the local `childWriteKey` is zeroed in a `finally`
+   * after being consumed for validation. The returned buffer is a fresh copy
+   * the caller becomes the terminal owner of. `parent.writeKey`/
+   * `parent.folderKey`/`child.readKey` (caller/tree-owned) are never zeroed
+   * here.
+   *
+   * @param shareId - Share ID seeded via loadSharedFolder (must be the
+   *   PARENT depth, not yet re-seeded to the child)
+   * @param child - The subfolder to recover a writeKey for: its resolved
+   *   `PublishedNode`, its already-unsealed `readKey`, and the PARENT-mirror
+   *   `generation` (`SealedChildRef.generation`)
+   * @returns The child's raw 32-byte writeKey (fresh copy), or `null` when
+   *   the parent/child are not write-linked or the parent is read-only
+   */
+  async resolveSharedSubfolderWriteKey(
+    shareId: string,
+    child: { published: PublishedNode; readKey: Uint8Array; generation: number }
+  ): Promise<Uint8Array | null> {
+    return this.withOperation('resolveSharedSubfolderWriteKey', async () => {
+      const parent = this.sharedFolderTree.get(shareId);
+      if (!parent) return null;
+
+      const hasRealWriteKey =
+        parent.writeKey.length === 32 && !parent.writeKey.every((b) => b === 0);
+      if (!hasRealWriteKey) return null;
+
+      const parentNode = await unsealNode(parent.publishedNode, parent.folderKey, parent.writeKey);
+      if (!parentNode.writeBody) return null;
+
+      const writeChildRef = parentNode.writeBody.writeChildren.find(
+        (wc) => wc.childId === child.published.id
+      );
+      if (!writeChildRef) return null;
+
+      let childWriteKey: Uint8Array | null = null;
+      try {
+        childWriteKey = await unsealChildWriteKey(
+          writeChildRef.writeKeySealed,
+          parent.writeKey,
+          child.published.id,
+          child.published.kind,
+          child.generation
+        );
+
+        // T-68.1-30-02: validate before trust (fail-closed, NOT caught) —
+        // mirrors dfsFindFolder's T-68.1-01-03 guarantee.
+        const childNode = await unsealNode(child.published, child.readKey, childWriteKey);
+        if (!childNode.writeBody) return null;
+
+        return new Uint8Array(childWriteKey);
+      } finally {
+        childWriteKey?.fill(0);
+      }
+    });
+  }
+
   // ---- BYO-IPFS pinning ----
 
   /**
