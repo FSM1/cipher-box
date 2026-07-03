@@ -505,6 +505,10 @@ Plans:
 - [ ] 68.1-28-PLAN.md — rotation-durability SC-4: classify the reconcile/regression error to the D-05 stale-data toast on the stale-replay rename [wave 2, depends 68.1-23]
 - [ ] 68.1-29-PLAN.md — WEB-04 exit gate: fresh FULL 208-spec tests/web-e2e run + corroborated artifact + human sign-off (autonomous: false) [wave 3, depends 68.1-23..28]
 
+**Gap closure — round 3** *(from 68.1-29-SUMMARY.md new gap: deep shared writes — root-depth-only shared writeKey seeding blocks writes inside nested subfolders of a write-shared tree, writable-shares 8.2)*
+
+- [ ] 68.1-30-PLAN.md — Deep shared-write seeding: SDK resolveSharedSubfolderWriteKey (one-hop write-chain, TDD) + navigateToSubfolder seeds the recovered subfolder writeKey; single-file writable-shares.spec.ts live re-run (WEB-03) [wave 1]
+
 ### Phase 69: FUSE and WinFsp — Rust Integration and Grant-Root Awareness
 
 **Goal**: The FUSE and WinFsp clients use symmetric key unwrap throughout, grant-root awareness gates scope-exit mutations, `Node` is a real Rust enum, and the Windows CI gate passes.
