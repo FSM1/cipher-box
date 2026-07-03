@@ -495,6 +495,16 @@ Plans:
 - [x] 68.1-20-PLAN.md — fetchShareKeys fail-closed + recipient shared writeKey seeding (writeDescriptorRef) + shared-move dest-key sourcing via write-chain [wave 4]
 - [x] 68.1-22-PLAN.md — WEB-04 exit gate: fresh FULL tests/web-e2e run (supersede stale .last-run.json) + GAP-2 re-triage; human sign-off (autonomous: false) [wave 5]
 
+**Gap closure — round 2** *(from 68.1-VERIFICATION.md Round-2 Addendum: write-plane cold-load clobber, breadcrumb-up regression, rotation SC-4, GAP-6 item-name cutover, GAP-7 shared-move picker, test-infra flake, and the fresh exit gate)*
+
+- [ ] 68.1-23-PLAN.md — Write-plane cold-load clobber fix: cold-load writeKey recovery + refreshFolderStateFromNetwork preserves the write-body mirror (conflict-detection 219 / writable-shares 3.2 / sharing-workflow 7.3) [wave 1]
+- [ ] 68.1-24-PLAN.md — GAP-6 item-name encrypted cutover: remove dead plaintext backfill + updateItemName endpoint + api:generate; encrypted end-to-end spec [wave 1]
+- [ ] 68.1-25-PLAN.md — Test-infra hardening: wallet-login Core Kit retry/backoff + createTestAccount root-Node publish (D-06 nodeId) [wave 1]
+- [ ] 68.1-26-PLAN.md — Breadcrumb-up regression (full-workflow 3.9): restore synchronous cached-children render on navigate-up [wave 2, depends 68.1-23]
+- [ ] 68.1-27-PLAN.md — GAP-7 enumerateSharedSubtree read/write-chain rewrite (off deleted share_keys) + SharedMoveDialog picker [wave 2, depends 68.1-23]
+- [ ] 68.1-28-PLAN.md — rotation-durability SC-4: classify the reconcile/regression error to the D-05 stale-data toast on the stale-replay rename [wave 2, depends 68.1-23]
+- [ ] 68.1-29-PLAN.md — WEB-04 exit gate: fresh FULL 208-spec tests/web-e2e run + corroborated artifact + human sign-off (autonomous: false) [wave 3, depends 68.1-23..28]
+
 ### Phase 69: FUSE and WinFsp — Rust Integration and Grant-Root Awareness
 
 **Goal**: The FUSE and WinFsp clients use symmetric key unwrap throughout, grant-root awareness gates scope-exit mutations, `Node` is a real Rust enum, and the Windows CI gate passes.
