@@ -3666,7 +3666,20 @@ export class CipherBoxClient {
 
       // Unseal the parent's write-body so the file's WriteChildRef (keyed by
       // UUID) can be walked (mirrors shared-write.ts unsealParentWriteBody).
-      const parentNode = await unsealNode(state.publishedNode, state.folderKey, state.writeKey);
+      //
+      // 68.1-29: resolve the parent's CURRENT on-wire record instead of
+      // trusting state.publishedNode — adoptSharedFolderResult adopts
+      // children/sequence after a shared write but NOT the envelope, so a
+      // file uploaded THIS session has no WriteChildRef in the stale
+      // envelope and the save failed with "cannot resolve write
+      // key/ipnsPrivateKey" (writable-shares 3.4). The fresh envelope is
+      // adopted back into state so later ops see it too.
+      const parentResolved = await this.resolvePublishedNode(state.ipnsName);
+      const parentPublished = parentResolved?.published ?? state.publishedNode;
+      if (parentResolved) {
+        this.sharedFolderTree.set(shareId, { ...state, publishedNode: parentResolved.published });
+      }
+      const parentNode = await unsealNode(parentPublished, state.folderKey, state.writeKey);
       if (!parentNode.writeBody) {
         throw new Error('updateSharedFile: shared folder has no write-body — not write-capable');
       }
