@@ -1,0 +1,46 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "f7952f2db912",
+  "strategy": "manual-commit",
+  "branch": "feat/web-client-runtime-integration",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "apps/web/src/components/file-browser/AudioPlayerDialog.tsx",
+    "apps/web/src/components/file-browser/DetailsDialog.tsx",
+    "apps/web/src/components/file-browser/ImagePreviewDialog.tsx",
+    "apps/web/src/components/file-browser/PdfPreviewDialog.tsx",
+    "apps/web/src/components/file-browser/ShareDialog.tsx",
+    "apps/web/src/components/file-browser/SharedFileBrowser.tsx",
+    "apps/web/src/components/file-browser/VideoPlayerDialog.tsx",
+    "apps/web/src/components/file-browser/details/FolderDetails.tsx",
+    "apps/web/src/components/file-browser/details/VersionHistory.tsx",
+    "apps/web/src/hooks/folder-helpers.ts",
+    "apps/web/src/hooks/useFileOperations.ts",
+    "apps/web/src/hooks/useFilePreview.ts",
+    "apps/web/src/hooks/useSharedNavigation.ts",
+    "apps/web/src/hooks/useSharedNavigationActions.ts",
+    "apps/web/src/hooks/useStreamingPreview.ts",
+    "apps/web/src/lib/crypto/key-wrapping.ts",
+    "apps/web/src/lib/kind-cache.ts",
+    "apps/web/src/services/file-metadata.service.ts",
+    "apps/web/src/services/invite.service.ts",
+    "apps/web/src/services/share.service.ts",
+    "apps/web/src/stores/folder.store.ts",
+    "apps/web/src/utils/fileTypes.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f7/952f2db912/0/metadata.json",
+      "transcript": "/f7/952f2db912/0/full.jsonl",
+      "content_hash": "/f7/952f2db912/0/content_hash.txt",
+      "prompt": "/f7/952f2db912/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 52,
+    "cache_creation_tokens": 905,
+    "cache_read_tokens": 594083,
+    "output_tokens": 911,
+    "api_call_count": 2
+  }
+}
