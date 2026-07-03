@@ -1,0 +1,216 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "0991f857362f",
+  "session_id": "064836b9-90e4-42d5-aabc-ed5fde831a57",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-03T12:26:00.464377Z",
+  "branch": "feat/web-client-runtime-integration",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    ".planning/phases/68.1-web-client-runtime-integration/68.1-VERIFICATION.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "dd1313b2fc27",
+  "token_usage": {
+    "input_tokens": 79529,
+    "cache_creation_tokens": 3884482,
+    "cache_read_tokens": 113456805,
+    "output_tokens": 388467,
+    "api_call_count": 395
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01Uae4oXZcmbjYJcb6Ru4Pef",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "dd1313b2fc27",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 966,
+        "end": 967,
+        "entry_ids": [
+          "87bcf7d3-6ab6-4d0c-85a4-392200647a8f"
+        ],
+        "tool_use_id": "toolu_01Uae4oXZcmbjYJcb6Ru4Pef"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Uae4oXZcmbjYJcb6Ru4Pef"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01VfMELuzRNchcopiJja4PMF",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "dd1313b2fc27",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 2033,
+        "end": 2034,
+        "entry_ids": [
+          "384d7ee2-7b8a-4fd9-bb01-4623280b7d35"
+        ],
+        "tool_use_id": "toolu_01VfMELuzRNchcopiJja4PMF"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01VfMELuzRNchcopiJja4PMF"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01A77Kh9XZUV4vv7Hn4xgdtt",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "dd1313b2fc27",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 2086,
+        "end": 2087,
+        "entry_ids": [
+          "28cbcc55-4773-44fc-949b-4bfb41bfbeb1"
+        ],
+        "tool_use_id": "toolu_01A77Kh9XZUV4vv7Hn4xgdtt"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01A77Kh9XZUV4vv7Hn4xgdtt"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "summary": {
+    "intent": "Execute and iteratively close gaps in GSD phase 68.1 (web-client-runtime-integration for CipherBox) — wiring the v2.0 web app onto the node/v3 read+write chain via wave-based parallel subagent execution, targeting the full 208-spec Playwright e2e suite as the exit criterion, then run additional gap-closure rounds (including a user-directed GAP-6 redesign: retire dead plaintext item-name backfill and wire the encrypted item-name path).",
+    "outcome": "Completed three rounds of gap-closure execution (14 original plans + 8 round-1 gap plans + 7 round-2 gap plans, 68.1-30 in flight): e2e failures dropped 6/208→~190/208→17→13→8→11→5, with root causes found and fixed for cold-load subfolder navigation, write-plane recovery on cold-load, breadcrumb ancestor clobbering, shared-folder kind discrimination, durable IPNS TEE-republish enrollment, GAP-6 encrypted item-name redesign, and enumerateSharedSubtree read/write-chain rewrite; final confirmation run showed 5 failures remaining, all already dispositioned (2 approved architectural deferrals, 1 gap being fixed by plan 68.1-30, 2 external Web3Auth flakes with green re-run evidence) — phase not yet marked complete pending 68.1-30 and final full-suite confirmation.",
+    "learnings": {
+      "repo": [
+        "mock-ipns-routing (delegated routing mock on :3001) keeps IPNS records in an in-memory Map — any container restart wipes them permanently for records lacking a DB row in ipns_records; the API's :3000 resolve falls back to that DB cache written synchronously at publish time",
+        "createFolder previously omitted encryptedIpnsPrivateKey/keyEpoch on subfolder publish, so ipns_republish_schedule got zero rows — subfolder records would die at IPNS TTL in production without a later mutation republishing them",
+        "docker-compose mock-ipns-routing healthcheck used busybox `wget localhost` which resolves to ::1 while the app binds IPv4-only — must use 127.0.0.1 in healthchecks",
+        "SealedChildRef (read plane, keyed by ipnsName) vs WriteChildRef (write plane, keyed by node UUID childId) are distinct; write-body carries recoverable ipnsPrivateKey/writeKey; content has three separate keys: fileKey (content), fileReadKey, fileWriteKey",
+        "client.downloadFromIpns was feeding the parent folderKey into sdk-core's resolveFileMetadata (which expects the file's OWN readKey) — AEAD decrypt failure surfaced as 'Decryption failed' in the text editor; preview/download used a different, correct path so were unaffected",
+        "dfsFindFolder in client.ts unconditionally re-resolved/re-unsealed/overwrote every intermediate ancestor's folderTree entry on every call, contradicting its own 'later calls are cheap' docstring — caused ancestor children to flash empty on breadcrumb-up navigation during unrelated deeper descents",
+        "SharedFolderState.writeKey was only ever seeded at the share root (68.1-20 scope boundary) — navigateToSubfolder seeds subfolders with a zero writeKey, so deep shared writes silently fail closed (writable-shares 8.2 gap, closed by 68.1-30)",
+        "apps/web/public/recovery.html (untouched since Phase 24) only accepts legacy v2 single-key vault blobs / v2 metadata schema, but the app has produced v3 vault blobs and node/v3 metadata since Phase 62 — recovery.spec e2e will always fail until recovery.html gets its own migration plan",
+        "rotation-durability SC-4's replay-simulation is structurally unreachable because the API's resolve path is DB-cache-canonical, not relay-canonical — needs an apps/api architectural decision, not a client fix",
+        "migration 1750000000000-ApiSchemaCutover dropped the shares table's plaintext item_name column entirely (not renamed); share.service.ts hardcoded itemName:'' making shouldBackfill() permanently false — REQ-4 backfill was dead code; an EncryptShareItemName migration already existed server-side as groundwork for the ECIES-based redesign",
+        "SharedWriteContext has no ipnsPrivateKey field — shared-write publishes derive the IPNS key from inside the unsealed write-body itself, so recovering a subfolder's writeKey alone (via a WriteChildRef DFS keyed on childId/UUID) is sufficient, no private-key recovery needed"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 2827,
+          "finding": "downloadFromIpns wrong-key bug: passed parent folderKey instead of file's own readKey into resolveFileMetadata, fixed in commit de2807ec8 by recovering the file readKey via unsealChildReadKey first"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 820,
+          "end_line": 894,
+          "finding": "dfsFindFolder / recoverWriteKeyIfNeeded pattern: DFS re-walk that adopts only write-plane fields (writeKey, metadata.writeBody) onto an existing FolderState entry while preserving readKey/ipnsKeypair — reused as the template for the 68.1-30 shared-subfolder writeKey resolver"
+        },
+        {
+          "path": "apps/web/src/hooks/useFolderNavigation.ts",
+          "line": 183,
+          "finding": "targetFolder?.isLoaded fast path was traced and confirmed correct (reads fresh store state synchronously); the actual breadcrumb-clobbering bug lived one layer below in client.ts's dfsFindFolder, not here"
+        },
+        {
+          "path": "apps/web/src/services/share.service.ts",
+          "finding": "fetchShareKeys/fetchPendingRotations fail-closed to [] rather than throwing; createShare removed as dead code (zero callers) in the 68.1-20 gap closure"
+        },
+        {
+          "path": "packages/sdk/src/__tests__/upload-batch.test.ts",
+          "finding": "Test harness had three stale-fixture bugs surfaced only after real crypto sealing was wired: (1) clearBytes needed a partial vi.mock with importOriginal to preserve other crypto exports, (2) node id fixture must be a real UUID not a placeholder string, (3) mockResolvedValueOnce vs mockResolvedValue to avoid mock-value leakage across tests"
+        }
+      ],
+      "workflow": [
+        "Background subagents that launch long-running bash (e.g. full 208-spec Playwright runs) frequently never get re-woken when the run completes and their session/transcript gets evicted — recovery requires independent disk-based watchdogs (polling for a completion artifact file) plus SendMessage resume while the transcript is still warm, or spawning a fresh continuation agent with explicit completed_state context if eviction already happened",
+        "A watchdog script polling for a specific file (.last-run.json) is fragile if the actual playwright config/invocation never writes that file — verify the artifact path actually gets produced before relying on it as a completion signal",
+        "GSD decision-coverage gate parser requires the ID inside the bold markdown group with colon-inside-bold: '- **D-04 [informational]:**' not '- **D-04:** [informational]' — tag placement outside the bold group fails silently",
+        "Serial (describe.serial) e2e spec files cascade-abort at first failure, hiding all downstream test coverage in that file — raw failure counts (e.g. '17 failed') understate real breakage since most of a file's assertions never execute; conversely, fixing one root-cause bug can reveal deeper failures further into the same serial file (progress, not regression)",
+        "Live hands-on testing by the user found three real bugs the automated suite structurally could not reach due to serial-abort shadowing (text-editor decrypt, cold-reload navigation, write-plane recovery) — manual/headed verification remains valuable even with e2e passing",
+        "1Password git-commit signing produces false-negative timeouts on `git commit` even when the commit actually lands — always verify via `git log -1` before treating a commit as failed and retrying",
+        "Worktree agents must never run `git stash` (shared refs/stash across all worktrees on the same repo) — one agent's stash push/pop briefly reverted another's in-progress work; user's own pre-existing stashes must be identified precisely before dropping any stray entries left by an agent"
+      ]
+    },
+    "friction": [
+      "Exit-gate agent lost its wake-up after launching the full e2e suite in the background on at least three separate occasions across two gap rounds, requiring manual disk inspection, watchdog scripts, and SendMessage resumes to recover state",
+      "Orchestrator's own account hit a session usage limit mid-closeout ('resets 3am Europe/Berlin'), killing the exit-gate agent mid-triage and requiring the orchestrator to manually recover, validate, and commit the agent's uncommitted work inline",
+      "Decision-coverage gate initially failed with an unhelpful 'could-not-parse' error requiring source-diving into the gate's own parser (decisions.cjs) to learn the exact required markdown bullet format",
+      "A watchdog polling a specific completion-artifact filename silently failed to fire because the actual playwright invocation never wrote that file, giving false confidence that the run was still progress-tracked",
+      "1Password git signing false-negative timeouts recurred multiple times, forcing repeated manual git log verification after every 'failed' commit before concluding whether a retry was needed",
+      "test-login secret mismatch between the API dev server and the e2e harness caused spurious login-timeout failures in a retest, requiring server restarts and a probe to align the secret before the real retest could run cleanly"
+    ],
+    "open_items": [
+      "68.1-30 (deep shared-write key seeding for writable-shares 8.2) is in flight — needs its final live single-file re-run and full-suite confirmation before phase completion",
+      "recovery.html is v2-only and needs its own gap-closure/migration plan to accept v3 vault blobs and node/v3 metadata (approved deferral, not yet scheduled)",
+      "rotation-durability SC-4 needs an apps/api architectural decision (or test redesign) since the DB-canonical resolve path makes the relay-replay scenario unreachable (approved deferral, not yet scheduled)",
+      "Ship-time cleanup: commits 17e4319a6 and 7209e8777 have parens beyond conventional scope in their subjects — must be excluded from/reworded in any eventual PR title",
+      "A stray git stash entry ('temp-check-baseline') created by an agent's prohibited git stash use was dropped, but the underlying rule violation (no git stash in worktree agents) should be reinforced in agent instructions going forward",
+      "Files uploaded before the fileReadKey seal fix have permanently mis-sealed parent refs in the dev vault and will never decrypt — flagged as dev-data damage, not a code bug, no fix planned or needed"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-03T12:25:13.264549Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 48,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 48,
+    "total_lines_changed": 54,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
