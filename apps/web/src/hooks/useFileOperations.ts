@@ -87,18 +87,21 @@ export function useFileOperations() {
           auth.vaultKeypair.privateKey
         );
 
-        const client = getSdkClient();
-        // T-68.1-12-04: the write-chain walk lives only inside CipherBoxClient
-        // (D-03) — this is the only way to pre-resolve the file's own IPNS
-        // signing key from the web layer. Do NOT zero it here — sdk-core
-        // updateFileMetadata is its terminal owner (T-47-01).
-        const fileIpnsPrivateKey = await client.resolveFileIpnsPrivateKey(
-          parentFolder.ipnsName,
-          fileData.fileId
-        );
-
         let prunedCids: string[] = [];
+        // Open the guarded try immediately after unwrapping newFileKey so its
+        // finally always zeroes the raw key — even if resolveFileIpnsPrivateKey
+        // (or getSdkClient) throws before replaceFile runs (D-09).
         try {
+          const client = getSdkClient();
+          // T-68.1-12-04: the write-chain walk lives only inside CipherBoxClient
+          // (D-03) — this is the only way to pre-resolve the file's own IPNS
+          // signing key from the web layer. Do NOT zero it here — sdk-core
+          // updateFileMetadata is its terminal owner (T-47-01).
+          const fileIpnsPrivateKey = await client.resolveFileIpnsPrivateKey(
+            parentFolder.ipnsName,
+            fileData.fileId
+          );
+
           ({ prunedCids } = await runWithFailureUx(() =>
             client.replaceFile(parentFolder.ipnsName, fileData.fileId, {
               fileIpnsPrivateKey,

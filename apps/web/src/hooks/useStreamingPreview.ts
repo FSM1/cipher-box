@@ -149,6 +149,10 @@ export function useStreamingPreview({
         if (cancelled) return;
 
         if (metadata.encryptionMode !== 'CTR') {
+          // This hook is the terminal consumer of resolveFileMetadata's freshly
+          // unsealed fileKey (D-09); the CTR path below zeroes it, so the non-CTR
+          // early return must zero it too rather than leak it in memory.
+          clearBytes(metadata.fileKey);
           setIsCtr(false);
           setLoading(false);
           return;

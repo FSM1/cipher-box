@@ -11,8 +11,6 @@ type VideoPlayerDialogProps = {
   item: SealedChildRef | null;
   /** Parent folder's decrypted AES-256 key (needed to decrypt file metadata) */
   folderKey: Uint8Array | null;
-  /** Share ID when previewing from a shared folder — uses re-wrapped file keys */
-  shareId?: string | null;
 };
 
 /** Map common video extensions to MIME types. */
@@ -49,13 +47,7 @@ const SPEED_OPTIONS = [1, 1.5, 2, 0.5] as const;
  * No native browser video controls -- fully custom UI with play/pause,
  * seek, volume, speed, and fullscreen. Controls auto-hide during playback.
  */
-export function VideoPlayerDialog({
-  open,
-  onClose,
-  item,
-  folderKey,
-  shareId,
-}: VideoPlayerDialogProps) {
+export function VideoPlayerDialog({ open, onClose, item, folderKey }: VideoPlayerDialogProps) {
   const mimeType = item ? getVideoMime(item.name) : 'video/mp4';
   const isStreamingCandidate = item ? STREAMING_VIDEO_MIMES.has(getVideoMime(item.name)) : false;
 
@@ -76,7 +68,6 @@ export function VideoPlayerDialog({
     item,
     mimeType,
     folderKey,
-    shareId,
   });
 
   // Determine active preview mode

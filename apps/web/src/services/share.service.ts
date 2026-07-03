@@ -163,28 +163,6 @@ export async function lookupUser(publicKeyHex: string): Promise<boolean> {
 }
 
 /**
- * DEPRECATED no-op (68.1-20): the descriptor-ref grant model (`POST /shares`
- * with `readDescriptorRef`/`writeDescriptorRef`) superseded this pre-node/v3
- * shape entirely — no caller remains anywhere in the app (real share creation
- * goes through `sharesControllerCreateShare` directly, see `ShareDialog.tsx`).
- * Fails closed as a no-op rather than throwing so any stray/future import does
- * not crash a live user flow; the descriptor-ref path never routes through here.
- *
- * Retained only until a follow-up plan deletes this file's dead pre-node/v3
- * surface entirely.
- */
-export async function updateSharePermission(
-  _shareId: string,
-  _permission: 'read' | 'write',
-  _encryptedIpnsKey?: string
-): Promise<void> {
-  // No-op (fail-closed, not throwing). `ShareDialog.handleUpgrade`/
-  // `handleDowngradeConfirm` are being migrated to `sharesControllerUpdateGrant`
-  // (PATCH /shares/:id/grant, see 68.1-19) — there is no
-  // `PATCH /shares/:id/permission`-style endpoint this function could route to.
-}
-
-/**
  * Revoke a share (soft-delete). Only the sharer can revoke.
  * Keys are kept for lazy rotation.
  */
@@ -267,41 +245,4 @@ async function fetchAllSentShares(): Promise<SentShare[]> {
 export async function hasActiveShares(folderIpnsName: string): Promise<boolean> {
   const shares = await ensureFreshSentShares();
   return shares.some((s) => s.ipnsName === folderIpnsName);
-}
-
-// ---------------------------------------------------------------------------
-// Lazy key rotation after revocation
-// ---------------------------------------------------------------------------
-
-/** A revoked share pending key rotation. */
-export type PendingRotation = {
-  shareId: string;
-  recipientPublicKey: string;
-  itemType: 'folder' | 'file';
-  ipnsName: string;
-  itemName: string;
-  revokedAt: string;
-};
-
-/**
- * Fail-closed (68.1-20): no live `GET /shares/pending-rotations`-style
- * endpoint exists (`sharesControllerRevokeShare` hard-deletes; there is no
- * server-side lazy-rotation-pending list under the descriptor-ref grant
- * model). Always returns an empty array so `checkPendingRotation` reports
- * `false` (non-throwing) rather than blocking any caller.
- */
-export async function fetchPendingRotations(): Promise<PendingRotation[]> {
-  return [];
-}
-
-/**
- * Check if a folder has pending rotations (revoked shares awaiting key rotation).
- * Called before any folder modification.
- *
- * @param folderIpnsName - IPNS name of the folder being modified
- * @returns true if there are revoked shares for this folder that need rotation
- */
-export async function checkPendingRotation(folderIpnsName: string): Promise<boolean> {
-  const pendingRotations = await fetchPendingRotations();
-  return pendingRotations.some((r) => r.ipnsName === folderIpnsName);
 }

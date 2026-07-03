@@ -4,9 +4,9 @@
  * `SealedChildRef` (frozen, NODE-03) carries no `kind` field — kind lives on
  * the child's own `PublishedNode` envelope (plaintext, top-level, no
  * unsealing required). This module resolves each child's kind once at
- * folder-load and memoizes it by `ipnsName` so `isFileRef`/`isFilePointer`
- * (fileTypes.ts) can read it back synchronously — no async ripple through
- * the component tree (design decision D-02, resolved in 68.1-04-PLAN.md).
+ * folder-load and memoizes it by `ipnsName` so `isFileRef` (fileTypes.ts)
+ * can read it back synchronously — no async ripple through the component
+ * tree (design decision D-02, resolved in 68.1-04-PLAN.md).
  *
  * Resolution is web-native (not sdk-core): `resolveIpnsRecord` (ipns.service)
  * applies the ROT-07 anti-rollback gate using the child's own
@@ -16,10 +16,9 @@
  * is the web's ctx-free IPFS relay client.
  *
  * Best-effort: a resolve failure for one ref leaves it uncached — callers
- * fall back to the folder-safe `false` default in `isFileRef`/`isFilePointer`.
- * NOTE: wiring `resolveKinds(children)` into the actual folder-load /
- * navigation render paths is owned by 68.1-14 (kept out of this plan's
- * blast radius — see 68.1-14-PLAN.md "Why this is a separate plan").
+ * fall back to the folder-safe `false` default in `isFileRef`.
+ * `resolveKinds(children)` is wired into the folder-load / navigation render
+ * paths (68.1-14) and the sync/resync inserters (68.1-33).
  */
 import type { SealedChildRef, PublishedNode } from '@cipherbox/core';
 import { resolveIpnsRecord } from '../services/ipns.service';
@@ -38,16 +37,11 @@ export function getKind(ipnsName: string): Kind | undefined {
   return kindCache.get(ipnsName);
 }
 
-/** Memoize a resolved kind. */
-export function setKind(ipnsName: string, kind: Kind): void {
-  kindCache.set(ipnsName, kind);
-}
-
 /**
  * Resolve and memoize the kind of every ref not already cached, with bounded
  * concurrency. Best-effort — a failed resolve for one ref is swallowed and
  * simply leaves that ref uncached (folder-safe miss default applies at read
- * time in `isFileRef`/`isFilePointer`); it never fails the whole batch.
+ * time in `isFileRef`); it never fails the whole batch.
  */
 export async function resolveKinds(refs: SealedChildRef[]): Promise<void> {
   const pending = refs.filter((ref) => !kindCache.has(ref.ipnsName));

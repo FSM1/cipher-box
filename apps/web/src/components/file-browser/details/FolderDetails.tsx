@@ -1,16 +1,18 @@
 import type { SealedChildRef } from '@cipherbox/core';
+import { deriveDeviceId } from '@cipherbox/crypto';
 import { CopyableValue, DetailRow } from './DetailsPrimitives';
 
 /**
  * Folder details content (node/v3: SealedChildRef display).
  * TODO(phase 63): wire read-chain navigation to load Node for full metadata.
  */
-/** Redact a key's raw bytes to a short, copy-safe hex preview (never full material). */
-function redactKeyPreview(key: Uint8Array): string {
-  const hex = Array.from(key)
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-  return `${hex.slice(0, 16)}...${hex.slice(-8)}`;
+/**
+ * Render a NON-reversible fingerprint of a key: a short prefix of its SHA-256
+ * hex digest. The digest is one-way, so — unlike the prior raw-hex slice — this
+ * leaks zero key material into the DOM. (`deriveDeviceId` = SHA-256(bytes) hex.)
+ */
+function keyFingerprint(key: Uint8Array): string {
+  return `sha256:${deriveDeviceId(key).slice(0, 16)}`;
 }
 
 export function FolderDetails({
@@ -88,9 +90,7 @@ export function FolderDetails({
 
       <DetailRow label="Folder Key">
         {folderKey ? (
-          <span className="details-value details-value--redacted">
-            {redactKeyPreview(folderKey)}
-          </span>
+          <span className="details-value details-value--redacted">{keyFingerprint(folderKey)}</span>
         ) : (
           <span className="details-value details-value--dim">unavailable (not loaded)</span>
         )}
@@ -99,7 +99,7 @@ export function FolderDetails({
       <DetailRow label="IPNS Private Key">
         {ipnsPrivateKey ? (
           <span className="details-value details-value--redacted">
-            {redactKeyPreview(ipnsPrivateKey)}
+            {keyFingerprint(ipnsPrivateKey)}
           </span>
         ) : (
           <span className="details-value details-value--dim">unavailable (not loaded)</span>

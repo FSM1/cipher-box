@@ -12,13 +12,6 @@
  * anti-rollback floor sdk-core's raw resolveIpnsRecord does not) rather than the
  * sdk-core ctx-based helpers, since the web app has no `SdkContext` bridge.
  *
- * `createFileMetadata` / `updateFileMetadata` (68.1-12) delegate straight to their
- * sdk-core counterparts (packages/sdk-core/src/file/index.ts, 68.1-07) via
- * `getSdkClient().getContext()` — unlike `resolveFileMetadata`/`downloadFileFromIpns`,
- * these do not need the ROT-07 anti-rollback wrapper (write paths always publish a
- * fresh, forward sequence number; there is no stale-read risk to guard against), so
- * delegating avoids re-implementing sdk-core's Node-build/seal/publish logic here.
- *
  * `shouldCreateVersion` / `computeRestoreVersionUpdate` / `computeDeleteVersionUpdate`
  * are pure, no-publish transforms over `NodeContent.versions` (68.1-12) — ported from
  * the pre-v3 legacy implementation (commit b24e78e90) and adapted to node/v3's raw
@@ -27,18 +20,10 @@
 
 import type { SealedChildRef, VersionEntry, NodeContent, PublishedNode } from '@cipherbox/core';
 import { unsealNode, unsealChildReadKey } from '@cipherbox/core';
-import {
-  createFileMetadata as sdkCreateFileMetadata,
-  updateFileMetadata as sdkUpdateFileMetadata,
-  type FileIpnsRecordPayload,
-  type UpdateFileContentParams,
-} from '@cipherbox/sdk-core';
+import { type UpdateFileContentParams } from '@cipherbox/sdk-core';
 import { resolveIpnsRecord } from './ipns.service';
 import { fetchFromIpfs } from '../lib/api/ipfs';
-import { getSdkClient } from '../lib/sdk-provider';
 import { useVaultSettingsStore } from '../stores/vault-settings.store';
-
-export type { FileIpnsRecordPayload };
 
 /** Content fields applied as `updates` when routing a file metadata write through the SDK client. */
 export type FileContentUpdates = UpdateFileContentParams;
@@ -51,38 +36,6 @@ function base64ToBytes(b64: string): Uint8Array {
     bytes[i] = bin.charCodeAt(i);
   }
   return bytes;
-}
-
-/**
- * Create a per-file Node record.
- *
- * Thin delegate to sdk-core's `createFileMetadata` (68.1-07) — mints
- * fileReadKey/fileWriteKey/Ed25519 keypair, seals a v3 file Node, and builds
- * (but does not publish) the file's first IPNS record.
- *
- * @security Returns fileReadKey/fileWriteKey RAW — the caller is the terminal
- *   owner (D-09), matching sdk-core's own contract.
- */
-export async function createFileMetadata(params: {
-  cid: string;
-  fileKey: Uint8Array;
-  fileIv: Uint8Array;
-  size: number;
-  mimeType: string;
-  encryptionMode?: 'GCM' | 'CTR';
-  fileId?: string;
-}): Promise<{
-  fileMetaIpnsName: string;
-  fileNodeId: string;
-  fileReadKey: Uint8Array;
-  fileWriteKey: Uint8Array;
-  ipnsRecord: FileIpnsRecordPayload;
-  ipnsPrivateKeyEncrypted?: string;
-}> {
-  return sdkCreateFileMetadata({
-    ...params,
-    ctx: getSdkClient().getContext(),
-  });
 }
 
 /**
@@ -169,42 +122,6 @@ export function shouldCreateVersion(
   const cooldownMs = useVaultSettingsStore.getState().settings.versionCooldownMinutes * 60 * 1000;
   const newestCreatedAt = currentVersions[0].createdAt;
   return Date.now() - newestCreatedAt >= cooldownMs;
-}
-
-/**
- * Update an existing file Node.
- *
- * Thin delegate to sdk-core's `updateFileMetadata` (68.1-07) — rebuilds the file
- * Node preserving id/generation/createdAt, optionally folds the superseded content
- * into version history, and republishes at fileSequenceNumber+1.
- *
- * @security Does NOT zero fileReadKey/fileWriteKey/fileIpnsPrivateKey or any
- *   fileKey embedded in currentMetadata/updates — matches sdk-core's own contract
- *   (D-09; sdk-core DOES zero fileIpnsPrivateKey on every exit path, T-47-01).
- */
-export async function updateFileMetadata(params: {
-  fileIpnsPrivateKey: Uint8Array;
-  fileReadKey: Uint8Array;
-  fileWriteKey: Uint8Array;
-  fileMetaIpnsName: string;
-  fileSequenceNumber: bigint;
-  nodeId: string;
-  nodeGeneration: number;
-  originalCreatedAt: number;
-  currentMetadata: NodeContent;
-  updates: FileContentUpdates;
-  createVersion: boolean;
-  maxVersionsPerFile?: number;
-}): Promise<{
-  ipnsName: string;
-  metadataCid: string;
-  newSequenceNumber: bigint;
-  prunedCids: string[];
-}> {
-  return sdkUpdateFileMetadata({
-    ...params,
-    ctx: getSdkClient().getContext(),
-  });
 }
 
 /**

@@ -9,8 +9,6 @@ type ImagePreviewDialogProps = {
   item: SealedChildRef | null;
   /** Parent folder's decrypted AES-256 key (needed to decrypt file metadata) */
   folderKey: Uint8Array | null;
-  /** Share ID when previewing from a shared folder — uses re-wrapped file keys */
-  shareId?: string | null;
 };
 
 /** Map common image extensions to MIME types. */
@@ -40,13 +38,7 @@ function getMimeType(filename: string): string {
  * Downloads the encrypted file from IPFS, decrypts it, and displays
  * the image using an object URL. Includes a download button.
  */
-export function ImagePreviewDialog({
-  open,
-  onClose,
-  item,
-  folderKey,
-  shareId,
-}: ImagePreviewDialogProps) {
+export function ImagePreviewDialog({ open, onClose, item, folderKey }: ImagePreviewDialogProps) {
   const mimeType = item ? getMimeType(item.name) : 'application/octet-stream';
 
   const { loading, error, objectUrl, handleDownload } = useFilePreview({
@@ -54,7 +46,6 @@ export function ImagePreviewDialog({
     item,
     mimeType,
     folderKey,
-    shareId,
   });
 
   if (!item) return null;

@@ -218,12 +218,18 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
       p.setIsLoading(true);
       p.setError(null);
 
-      // D-09: recipient private key is caller-owned -- never zeroed by this handler.
-      const wrapped = hexToBytes(share.readDescriptorRef);
-      const shareRootReadKey = await unwrapKey(wrapped, vaultKeypair.privateKey);
       let committed = false;
+      // D-09: recipient private key is caller-owned -- never zeroed by this
+      // handler. Held nullable so the finally can zero the minted read key even
+      // if the unwrap below throws (mirrors navigateToSubfolder's guarded shape).
+      let shareRootReadKey: Uint8Array | null = null;
 
       try {
+        shareRootReadKey = await unwrapKey(
+          hexToBytes(share.readDescriptorRef),
+          vaultKeypair.privateKey
+        );
+
         const ctx = getSdkClient().getContext();
         const fetched = await fetchPublishedNode(share.ipnsName, ctx);
         if (!fetched) {
@@ -284,10 +290,22 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
         // T-68.1-20-01: recover the shared-root writeKey from the grant's
         // writeDescriptorRef (write grants only) -- read-only grants keep the
         // SDK's zero-buffer writeKey default (cannot unseal the write-body).
-        const shareRootWriteKey = await resolveSharedRootWriteKey(
-          share.writeDescriptorRef,
-          vaultKeypair.privateKey
-        );
+        // Navigation is already committed above, so a write-key failure must NOT
+        // surface as a navigation error -- guard the lookup and fall back to
+        // read-only (the zero-buffer writeKey seed default keeps write ops gated)
+        // rather than hitting the outer catch.
+        let shareRootWriteKey: Uint8Array | null = null;
+        try {
+          shareRootWriteKey = await resolveSharedRootWriteKey(
+            share.writeDescriptorRef,
+            vaultKeypair.privateKey
+          );
+        } catch (writeKeyErr) {
+          logger.error(
+            '[SharedNav] Failed to recover shared-root write key (continuing read-only):',
+            writeKeyErr
+          );
+        }
         try {
           p.seedActiveSharedFolder({
             shareId,
@@ -311,7 +329,7 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
         logger.error('[SharedNav] Failed to navigate to share:', err);
         p.setError('Failed to open shared item');
       } finally {
-        if (!committed) shareRootReadKey.fill(0);
+        if (!committed && shareRootReadKey) shareRootReadKey.fill(0);
         p.setIsLoading(false);
       }
     },
@@ -701,14 +719,17 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
       try {
         const ctx = getSdkClient().getContext();
 
-        const path =
-          p.currentView === 'file'
-            ? []
-            : [
-                ...p.navStackRef.current.map((entry) => entry.ipnsName).slice(1),
-                ...(p.ipnsName ? [p.ipnsName] : []),
-                item.ipnsName,
-              ];
+        // Full folder chain from the share root (navStack[0]) down to the
+        // current folder (p.ipnsName). navigateReadChain receives the root
+        // separately via rootIpnsName, so drop it with slice(1); the remaining
+        // hops plus the leaf form the path. At the share root itself, navStack is
+        // empty and p.ipnsName IS the root -- slice(1) then correctly drops it,
+        // so the root is never double-counted.
+        const folderChain = [
+          ...p.navStackRef.current.map((entry) => entry.ipnsName),
+          ...(p.ipnsName ? [p.ipnsName] : []),
+        ];
+        const path = p.currentView === 'file' ? [] : [...folderChain.slice(1), item.ipnsName];
 
         const result = await navigateReadChain({
           readDescriptorRef: bytesToBase64(hexToBytes(share.readDescriptorRef)),

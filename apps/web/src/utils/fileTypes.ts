@@ -141,10 +141,3 @@ export function isPreviewableFile(name: string): boolean {
 export function isFileRef(item: SealedChildRef): boolean {
   return getKind(item.ipnsName) === 'file';
 }
-
-/**
- * Alias for isFileRef — kept as isFilePointer for component-layer compile compatibility.
- */
-export function isFilePointer(item: SealedChildRef): boolean {
-  return isFileRef(item);
-}

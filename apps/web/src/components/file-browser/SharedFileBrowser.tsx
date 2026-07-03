@@ -894,7 +894,6 @@ export function SharedFileBrowser() {
         // TODO(phase 63): isFilePointer removed
         item={imagePreviewDialog.item ?? null}
         folderKey={folderKey}
-        shareId={currentShareId}
       />
 
       {/* PDF preview dialog */}
@@ -904,7 +903,6 @@ export function SharedFileBrowser() {
         // TODO(phase 63): isFilePointer removed
         item={pdfPreviewDialog.item ?? null}
         folderKey={folderKey}
-        shareId={currentShareId}
       />
 
       {/* Audio player dialog */}
@@ -914,7 +912,6 @@ export function SharedFileBrowser() {
         // TODO(phase 63): isFilePointer removed
         item={audioPlayerDialog.item ?? null}
         folderKey={folderKey}
-        shareId={currentShareId}
       />
 
       {/* Video player dialog */}
@@ -924,7 +921,6 @@ export function SharedFileBrowser() {
         // TODO(phase 63): isFilePointer removed
         item={videoPlayerDialog.item ?? null}
         folderKey={folderKey}
-        shareId={currentShareId}
       />
     </div>
   );

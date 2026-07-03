@@ -157,11 +157,15 @@ export async function createInviteLink(params: {
     }
 
     let itemNameEncrypted: string | undefined;
+    let nameBytes: Uint8Array | null = null;
     try {
-      const nameBytes = new TextEncoder().encode(params.item.name);
+      nameBytes = new TextEncoder().encode(params.item.name);
       itemNameEncrypted = bytesToHex(await wrapKey(nameBytes, ephemeral.publicKey));
     } catch (err) {
       logger.warn('[Invite] Failed to wrap item name, continuing without it:', err);
+    } finally {
+      // Clear the cleartext name buffer on every path (mirrors claimInvite).
+      nameBytes?.fill(0);
     }
 
     const invite = await shareInvitesControllerCreateInvite({

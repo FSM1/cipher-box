@@ -8,8 +8,6 @@ type UseFilePreviewOptions = {
   mimeType: string;
   /** Parent folder's decrypted AES-256 key (needed to decrypt file metadata) */
   folderKey: Uint8Array | null;
-  /** Share ID when previewing from a shared folder — uses re-wrapped file keys */
-  shareId?: string | null;
 };
 
 type UseFilePreviewReturn = {

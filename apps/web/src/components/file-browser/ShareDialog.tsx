@@ -129,7 +129,10 @@ export function ShareDialog({
             ipnsName: s.rootIpnsName,
             itemName: item.name,
             itemNameEncrypted: s.itemNameEncrypted,
-            permission: s.writeDescriptorRef !== null ? 'write' : 'read',
+            // Fail-closed: only a present, non-empty writeDescriptorRef grants
+            // write. `!== null` alone would mis-map an absent (undefined) ref to
+            // 'write'; a truthy check treats null/undefined/empty as read.
+            permission: s.writeDescriptorRef ? 'write' : 'read',
             createdAt: s.createdAt,
             readDescriptorRef: s.readDescriptorRef,
             rootGeneration: parseRootGeneration(s.rootGeneration),
@@ -221,7 +224,8 @@ export function ShareDialog({
         ipnsName: item.ipnsName,
         itemName: item.name,
         itemNameEncrypted: result.itemNameEncrypted,
-        permission: result.writeDescriptorRef !== null ? 'write' : 'read',
+        // Fail-closed: treat absent/null/empty writeDescriptorRef as read.
+        permission: result.writeDescriptorRef ? 'write' : 'read',
         createdAt: result.createdAt,
         readDescriptorRef: result.readDescriptorRef,
         rootGeneration: parseRootGeneration(result.rootGeneration),
@@ -273,6 +277,13 @@ export function ShareDialog({
     async (share: SentShare) => {
       setError(null);
       setSuccess(null);
+      // Fail-closed (V5): never PATCH with a coerced generation. An undefined
+      // rootGeneration means the DTO carried no valid generation — refuse the
+      // upgrade rather than send a stale "0".
+      if (share.rootGeneration === undefined) {
+        setError('> cannot upgrade: share is stale, please reload');
+        return;
+      }
       setUpgradingId(share.shareId);
 
       let recipientPublicKey: Uint8Array | null = null;
@@ -298,7 +309,7 @@ export function ShareDialog({
 
         await sharesControllerUpdateGrant(share.shareId, {
           readDescriptorRef: share.readDescriptorRef,
-          rootGeneration: String(share.rootGeneration ?? 0),
+          rootGeneration: String(share.rootGeneration),
           writeDescriptorRef,
         });
 
@@ -323,6 +334,11 @@ export function ShareDialog({
   const handleDowngradeConfirm = useCallback(async (share: SentShare) => {
     setError(null);
     setSuccess(null);
+    // Fail-closed (V5): refuse to downgrade with a coerced generation.
+    if (share.rootGeneration === undefined) {
+      setError('> cannot downgrade: share is stale, please reload');
+      return;
+    }
     setDowngradingId(share.shareId);
     setConfirmDowngradeId(null);
 
@@ -332,7 +348,7 @@ export function ShareDialog({
       // (readDescriptorRef/rootGeneration) is re-sent unchanged, same shareId.
       await sharesControllerUpdateGrant(share.shareId, {
         readDescriptorRef: share.readDescriptorRef,
-        rootGeneration: String(share.rootGeneration ?? 0),
+        rootGeneration: String(share.rootGeneration),
         clearWriteDescriptor: true,
       });
 

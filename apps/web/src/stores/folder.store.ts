@@ -251,6 +251,11 @@ export const useFolderStore = create<FolderState>((set, get) => ({
             );
 
             if (allKindsCached) {
+              // Stale-event guard (mirrors the async branch below): never let an
+              // older all-cached event overwrite newer store state. Strict `>`
+              // so an equal-or-newer event is still adopted — the delete-last-item
+              // mutation lands at a NEWER sequence, so it passes untouched.
+              if (matchingFolder.sequenceNumber > event.sequenceNumber) break;
               get().updateFolderChildren(matchingFolder.id, event.children);
               get().updateFolderSequence(matchingFolder.id, event.sequenceNumber);
               break;

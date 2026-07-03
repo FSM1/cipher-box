@@ -1,8 +1,6 @@
 import { useVaultStore } from '../stores/vault.store';
 import { useFolderStore } from '../stores/folder.store';
 import type { FolderNode } from '../stores/folder.store';
-import { useSyncStore } from '../stores/sync.store';
-import { withConflictRetry as sdkWithConflictRetry } from '@cipherbox/sdk';
 import { fetchAndDecryptMetadata, getDepth } from '@cipherbox/sdk-core';
 import { getSdkClient } from '../lib/sdk-provider';
 import { resolveIpnsRecord } from '../services/ipns.service';
@@ -35,31 +33,6 @@ export async function resyncFolder(folderIpnsName: string, folderId: string): Pr
   await resolveKinds(resyncChildren);
   store.updateFolderChildren(folderId, resyncChildren);
   store.updateFolderSequence(folderId, resolved.sequenceNumber);
-}
-
-/**
- * Execute an operation with single-retry conflict resolution.
- *
- * Wraps the SDK's framework-agnostic withConflictRetry with web-specific
- * sync banner UI (shows/clears conflict indicator in the sync store).
- */
-export async function withConflictRetry<T>(
-  perform: () => Promise<T>,
-  resync: () => Promise<void>,
-  preRetry?: () => void
-): Promise<T> {
-  return sdkWithConflictRetry(
-    perform,
-    async () => {
-      useSyncStore.getState().setConflict('Folder updated by another device, re-syncing...');
-      try {
-        await resync();
-      } finally {
-        useSyncStore.getState().clearConflict();
-      }
-    },
-    preRetry
-  );
 }
 
 /** Maximum folder nesting depth per FOLD-03 */

@@ -50,8 +50,8 @@ export function VersionHistory({
    * beyond what the caller already provided via `versions`.
    */
   const handleDownloadVersion = useCallback(
-    async (version: VersionEntry) => {
-      setLoadingAction('download');
+    async (version: VersionEntry, index: number) => {
+      setLoadingAction(`download-${index}`);
       setActionError(null);
       try {
         const ciphertext = await fetchFromIpfs(version.cid);
@@ -191,11 +191,11 @@ export function VersionHistory({
                   <button
                     type="button"
                     className="details-version-btn"
-                    onClick={() => handleDownloadVersion(version)}
+                    onClick={() => handleDownloadVersion(version, index)}
                     disabled={isLoading}
                     aria-label={`Download version ${versionNumber}`}
                   >
-                    {loadingAction === 'download' ? '...' : 'dl'}
+                    {loadingAction === `download-${index}` ? '...' : 'dl'}
                   </button>
                   <button
                     type="button"
