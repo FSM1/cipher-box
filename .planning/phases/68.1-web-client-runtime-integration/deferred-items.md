@@ -59,3 +59,39 @@ Out-of-scope discoveries logged during plan execution (not fixed; scope boundary
   in `files_modified`). A future plan could add `output.clean: true` to
   `packages/api-client/orval.config.ts` to make future removals self-cleaning — architectural
   tooling change, not done here.
+
+## From 68.1-30 (deep shared-write seeding, WEB-03 gap closure)
+
+- **`apps/web/src/components/file-browser/SharedFileBrowser.tsx:417-447`** —
+  `writable-shares.spec.ts` test 10.3 ("Bob opens the write-shared file and can
+  edit it") fails deterministically (confirmed on two consecutive full-file live
+  runs, not a flake): the text editor opens but the loaded content is empty
+  string instead of the file's real content, so `expect(content).toBe(...)`
+  fails at line 859 of the spec.
+  - **Root cause:** for a DIRECT single-file share (root `kind: 'file'`), the
+    auto-open-editor effect synthesizes a `SealedChildRef` with
+    `readKeySealed: ''` — a pre-existing `// TODO(phase 63): populated when
+    read-chain is available` stub, predating this plan. `navigateToShare` also
+    sets `folderKey: null` for a single-file share root (by design — the root
+    IS the leaf, and `downloadSharedFile` is meant to independently re-derive
+    the chain via `navigateReadChain`). `TextEditorDialog`'s shared-file load
+    path (`downloadFileFromIpns({ fileRef: item, folderKey })`) receives both
+    an empty `readKeySealed` and a `null` `folderKey`, so it cannot recover the
+    file's content — this is a distinct, unwired code path from the shared-FOLDER
+    text-preview fix 68.1-29 already landed (`a6db25594`, which only fixed
+    `TextEditorDialog` reads for a file living inside an already-loaded shared
+    folder, not a directly-shared file root).
+  - **Why not fixed here:** `SharedFileBrowser.tsx` is NOT in this plan's
+    `files_modified` (`client.ts`, the new resolver test, and
+    `useSharedNavigationActions.ts` only); Task 3 is explicitly a no-source-edit
+    live-verification task. This is unrelated to the WEB-03 deep-shared-write
+    write-chain this plan targets (subfolder writeKey recovery) — it is a
+    read-chain wiring gap for the single-file-share editor route, never
+    reachable in any prior full-suite run because `writable-shares.spec.ts`
+    always cascade-stopped at 8.2 (the gap this plan closes) before reaching
+    Phase 10 of the spec. A future plan should wire a real read-chain recovery
+    (mirroring `downloadSharedFile`'s `navigateReadChain` approach) into the
+    auto-open-editor effect for single-file shares.
+  - **State:** `writable-shares.spec.ts` 1.1-10.2 green, 10.3 fails
+    deterministically, 10.4 did-not-run (cascade). This plan's own gating tests
+    (8.2/8.3/8.4/8.5, the deep-shared-write acceptance surface) are all green.
