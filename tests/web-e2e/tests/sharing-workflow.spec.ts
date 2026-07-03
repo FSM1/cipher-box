@@ -518,12 +518,15 @@ test.describe.serial('Sharing Workflow', () => {
   test('8.3 Unregistered user shows error', async () => {
     await aliceOpenShareDialog(sharedFileName);
 
-    // Use a valid-format key that doesn't belong to any user
-    // 0x04 + 128 hex chars (65 bytes uncompressed secp256k1)
+    // Use a VALID secp256k1 point that doesn't belong to any user — the
+    // generator point G (private key = 1). The previous aa.../bb... filler
+    // was not on the curve, so client-side ECIES wrapKey threw ("Key
+    // wrapping failed") before the API's Recipient-not-found path was ever
+    // reached (68.1-29).
     const fakeKey =
       '0x04' +
-      'aa'.repeat(32) + // x coordinate
-      'bb'.repeat(32); // y coordinate
+      '79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798' + // G.x
+      '483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8'; // G.y
 
     await aliceShareDialog.shareWithKey(fakeKey);
     const errorText = await aliceShareDialog.waitForError({ timeout: 15000 });
