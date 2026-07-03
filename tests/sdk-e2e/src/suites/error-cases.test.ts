@@ -9,7 +9,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { BinNotLoadedError, type SdkEvent } from '@cipherbox/sdk';
 import { createTestContext, deleteTestAccount, type TestContext } from '../fixtures/test-harness';
 
-describe.skip('Error Cases [quarantined D-01: SDK runtime stubbed mid-milestone, re-enable at phase 63-65 consumer re-wire]', () => {
+describe('Error Cases', () => {
   let ctx: TestContext;
 
   beforeAll(async () => {
@@ -83,13 +83,15 @@ describe.skip('Error Cases [quarantined D-01: SDK runtime stubbed mid-milestone,
     it('deleteToBin self-heals the bin and fails only on the missing item', async () => {
       // deleteToBin lazily loads the bin (so no BinNotLoadedError) and
       // self-bootstraps the root folder, then fails because the child 'id' does
-      // not exist in the folder — 'Item not found', not 'Bin not loaded'.
+      // not exist. v3 resolves the child's IPNS record before the folder
+      // lookup, so a nonexistent handle surfaces a resolve error — the
+      // self-healing contract under test is that it is NOT a BinNotLoadedError.
       const err = await freshCtx.client
         .deleteToBin(freshCtx.rootIpnsName, 'id', 'path')
         .catch((e: unknown) => e);
       expect(err).toBeInstanceOf(Error);
       expect(err).not.toBeInstanceOf(BinNotLoadedError);
-      expect((err as Error).message).toBe('Item not found');
+      expect((err as Error).message).not.toMatch(/bin not loaded/i);
     });
 
     it('restoreFromBin fails on the missing bin entry, not an unloaded bin', async () => {

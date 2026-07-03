@@ -11,7 +11,7 @@ import { createTestContext, deleteTestAccount, type TestContext } from '../fixtu
 import { getChild, expectBytesEqual } from '../helpers/assertions';
 import { generateBytes, generateTextContent, decodeText } from '../helpers/data-generators';
 
-describe.skip('Data Integrity [quarantined D-01: SDK runtime stubbed mid-milestone, re-enable at phase 63-65 consumer re-wire]', () => {
+describe('Data Integrity', () => {
   let ctx: TestContext;
 
   beforeAll(async () => {
@@ -44,10 +44,7 @@ describe.skip('Data Integrity [quarantined D-01: SDK runtime stubbed mid-milesto
       await ctx.client.uploadFile(ctx.rootIpnsName, original, fileName, 'application/octet-stream');
 
       const fileChild = getChild(ctx.client, ctx.rootIpnsName, fileName);
-      const downloaded = await ctx.client.downloadFromIpns(
-        fileChild.fileMetaIpnsName,
-        ctx.rootFolderKey
-      );
+      const downloaded = await ctx.client.downloadFromIpns(fileChild, ctx.rootFolderKey);
 
       expectBytesEqual(downloaded, original);
     });
@@ -61,23 +58,15 @@ describe.skip('Data Integrity [quarantined D-01: SDK runtime stubbed mid-milesto
     await ctx.client.uploadFile(ctx.rootIpnsName, original, 'unicode-test.txt', 'text/plain');
 
     const fileChild = getChild(ctx.client, ctx.rootIpnsName, 'unicode-test.txt');
-    const downloaded = await ctx.client.downloadFromIpns(
-      fileChild.fileMetaIpnsName,
-      ctx.rootFolderKey
-    );
+    const downloaded = await ctx.client.downloadFromIpns(fileChild, ctx.rootFolderKey);
 
     expect(decodeText(downloaded)).toBe(unicodeContent);
   });
 
   it('should round-trip a file in a nested folder', async () => {
+    // createFolder registers the subfolder write-capably (NODE-03) — no manual
+    // registerFolder (it would clobber the writeKey and break the upload).
     const folder = await ctx.client.createFolder(ctx.rootIpnsName, 'DeepTest');
-    ctx.client.registerFolder(
-      folder.ipnsName,
-      folder.folderKey,
-      { publicKey: new Uint8Array(0), privateKey: folder.ipnsPrivateKey },
-      [],
-      1n
-    );
 
     const original = generateBytes(10_000, 77);
     await ctx.client.uploadFile(
@@ -88,10 +77,7 @@ describe.skip('Data Integrity [quarantined D-01: SDK runtime stubbed mid-milesto
     );
 
     const fileChild = getChild(ctx.client, folder.ipnsName, 'nested-file.bin');
-    const downloaded = await ctx.client.downloadFromIpns(
-      fileChild.fileMetaIpnsName,
-      folder.folderKey
-    );
+    const downloaded = await ctx.client.downloadFromIpns(fileChild, folder.folderKey);
 
     expectBytesEqual(downloaded, original);
   });

@@ -15,7 +15,7 @@ import {
   FILE_SIZES,
 } from '../helpers/data-generators';
 
-describe.skip('File Operations [quarantined D-01: SDK runtime stubbed mid-milestone, re-enable at phase 63-65 consumer re-wire]', () => {
+describe('File Operations', () => {
   let ctx: TestContext;
 
   beforeAll(async () => {
@@ -75,12 +75,11 @@ describe.skip('File Operations [quarantined D-01: SDK runtime stubbed mid-milest
     await ctx.client.uploadFile(ctx.rootIpnsName, originalBytes, 'roundtrip.txt', 'text/plain');
 
     const fileChild = getChild(ctx.client, ctx.rootIpnsName, 'roundtrip.txt');
-    expect(fileChild.fileMetaIpnsName).toBeTruthy();
+    expect(fileChild.ipnsName).toBeTruthy();
 
-    const downloaded = await ctx.client.downloadFromIpns(
-      fileChild.fileMetaIpnsName,
-      ctx.rootFolderKey
-    );
+    // v3: downloadFromIpns takes the file's SealedChildRef + the PARENT folderKey
+    // (it unseals the file's own readKey from fileChild.readKeySealed).
+    const downloaded = await ctx.client.downloadFromIpns(fileChild, ctx.rootFolderKey);
 
     const downloadedText = decodeText(downloaded);
     expect(downloadedText).toBe(originalText);
@@ -97,10 +96,7 @@ describe.skip('File Operations [quarantined D-01: SDK runtime stubbed mid-milest
     );
 
     const fileChild = getChild(ctx.client, ctx.rootIpnsName, 'binary-roundtrip.bin');
-    const downloaded = await ctx.client.downloadFromIpns(
-      fileChild.fileMetaIpnsName,
-      ctx.rootFolderKey
-    );
+    const downloaded = await ctx.client.downloadFromIpns(fileChild, ctx.rootFolderKey);
 
     expectBytesEqual(downloaded, original);
   });
@@ -117,14 +113,10 @@ describe.skip('File Operations [quarantined D-01: SDK runtime stubbed mid-milest
   });
 
   it('should upload files to a subfolder', async () => {
+    // createFolder already registers the subfolder in the folderTree with its
+    // real writeKey/nodeId (NODE-03) — re-registering would clobber that
+    // write-capable entry with a zero writeKey and trip the D-06 nodeId guard.
     const folder = await ctx.client.createFolder(ctx.rootIpnsName, 'FileTestFolder');
-    ctx.client.registerFolder(
-      folder.ipnsName,
-      folder.folderKey,
-      { publicKey: new Uint8Array(0), privateKey: folder.ipnsPrivateKey },
-      [],
-      1n
-    );
 
     const content = generateTextContent('subfolder file');
     const result = await ctx.client.uploadFile(
@@ -140,13 +132,13 @@ describe.skip('File Operations [quarantined D-01: SDK runtime stubbed mid-milest
 
   it('should rename a file', async () => {
     const child = getChild(ctx.client, ctx.rootIpnsName, 'hello.txt');
-    await ctx.client.renameItem(ctx.rootIpnsName, child.id, 'renamed-hello.txt');
+    await ctx.client.renameItem(ctx.rootIpnsName, child.ipnsName, 'renamed-hello.txt');
     expectChildNamed(ctx.client, ctx.rootIpnsName, 'renamed-hello.txt');
   });
 
   it('should delete a file', async () => {
     const child = getChild(ctx.client, ctx.rootIpnsName, 'renamed-hello.txt');
-    const result = await ctx.client.deleteItem(ctx.rootIpnsName, child.id);
-    expect(result.removedItem.id).toBe(child.id);
+    const result = await ctx.client.deleteItem(ctx.rootIpnsName, child.ipnsName);
+    expect(result.removedItem.ipnsName).toBe(child.ipnsName);
   });
 });

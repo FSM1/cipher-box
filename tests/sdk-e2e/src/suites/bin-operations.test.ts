@@ -7,6 +7,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { BinEntry } from '@cipherbox/core';
+import { BinNotLoadedError } from '@cipherbox/sdk';
 import { createTestContext, deleteTestAccount, type TestContext } from '../fixtures/test-harness';
 import { expectChildNamed, expectNoChildNamed, getChild } from '../helpers/assertions';
 import { generateTextContent } from '../helpers/data-generators';
@@ -16,7 +17,7 @@ interface HasBinState {
   binState: { entries: BinEntry[]; sequenceNumber: number; ipnsName: string };
 }
 
-describe.skip('Bin Operations [quarantined D-01: SDK runtime stubbed mid-milestone, re-enable at phase 63-65 consumer re-wire]', () => {
+describe('Bin Operations', () => {
   let ctx: TestContext;
 
   beforeAll(async () => {
@@ -50,8 +51,8 @@ describe.skip('Bin Operations [quarantined D-01: SDK runtime stubbed mid-milesto
 
     const fileChild = getChild(ctx.client, ctx.rootIpnsName, 'bin-file.txt');
 
-    // Delete to bin
-    await ctx.client.deleteToBin(ctx.rootIpnsName, fileChild.id, 'My Vault');
+    // Delete to bin — read-plane handle is the child's ipnsName (NODE-03)
+    await ctx.client.deleteToBin(ctx.rootIpnsName, fileChild.ipnsName, 'My Vault');
 
     // Verify removed from folder
     expectNoChildNamed(ctx.client, ctx.rootIpnsName, 'bin-file.txt');
@@ -73,7 +74,7 @@ describe.skip('Bin Operations [quarantined D-01: SDK runtime stubbed mid-milesto
     const folder = await ctx.client.createFolder(ctx.rootIpnsName, 'BinFolder');
     expect(folder.id).toBeTruthy();
 
-    await ctx.client.deleteToBin(ctx.rootIpnsName, folder.id, 'My Vault');
+    await ctx.client.deleteToBin(ctx.rootIpnsName, folder.ipnsName, 'My Vault');
     expectNoChildNamed(ctx.client, ctx.rootIpnsName, 'BinFolder');
 
     const binState = (ctx.client as unknown as HasBinState).binState;
@@ -120,8 +121,8 @@ describe.skip('Bin Operations [quarantined D-01: SDK runtime stubbed mid-milesto
     const child1 = getChild(ctx.client, ctx.rootIpnsName, 'empty-1.txt');
     const child2 = getChild(ctx.client, ctx.rootIpnsName, 'empty-2.txt');
 
-    await ctx.client.deleteToBin(ctx.rootIpnsName, child1.id, 'My Vault');
-    await ctx.client.deleteToBin(ctx.rootIpnsName, child2.id, 'My Vault');
+    await ctx.client.deleteToBin(ctx.rootIpnsName, child1.ipnsName, 'My Vault');
+    await ctx.client.deleteToBin(ctx.rootIpnsName, child2.ipnsName, 'My Vault');
 
     const binBefore = (ctx.client as unknown as HasBinState).binState;
     expect(binBefore.entries.length).toBeGreaterThanOrEqual(2);
@@ -138,13 +139,18 @@ describe.skip('Bin Operations [quarantined D-01: SDK runtime stubbed mid-milesto
     // fire-and-forget on login, so a delete soon after login/reload must still
     // soft-delete rather than hard-delete). The bin self-heals to an empty
     // state and the root folder self-bootstraps; the call then fails only
-    // because the target child does not exist — 'Item not found', NOT
-    // 'Bin not loaded'.
+    // because the target child does not exist. v3 resolves the child's IPNS
+    // record before the folder lookup, so a nonexistent handle surfaces a
+    // resolve error — the self-healing contract under test is that it is NOT a
+    // BinNotLoadedError.
     const freshCtx = await createTestContext('bin-not-loaded');
     try {
-      await expect(
-        freshCtx.client.deleteToBin(freshCtx.rootIpnsName, 'some-id', 'My Vault')
-      ).rejects.toThrow('Item not found');
+      const err = await freshCtx.client
+        .deleteToBin(freshCtx.rootIpnsName, 'some-id', 'My Vault')
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect(err).not.toBeInstanceOf(BinNotLoadedError);
+      expect((err as Error).message).not.toMatch(/bin not loaded/i);
     } finally {
       freshCtx.cleanup();
       await deleteTestAccount(freshCtx);

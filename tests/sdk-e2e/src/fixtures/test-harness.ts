@@ -147,13 +147,19 @@ export async function createTestAccount(opts: CreateAccountOptions): Promise<Tes
       throw new Error(`vault/init failed (${initRes.status}): ${await initRes.text()}`);
     }
 
-    // 6. Create CipherBoxClient with instance-scoped axios (no singleton needed)
+    // 6. Create CipherBoxClient with instance-scoped axios (no singleton needed).
+    // rootWriteKey + rootIpnsKeypair mirror the web host-layer wiring (68.1-03,
+    // useAuth.ts) so ensureFolderLoaded / recoverWriteKeyIfNeeded can
+    // self-bootstrap write-capable folder state from root (DFS descent).
+    // The constructor makes defensive copies of all key buffers (D-09).
     const client = new CipherBoxClient({
       apiUrl,
       getAccessToken: async () => accessToken,
       vaultKeypair: { publicKey, privateKey },
       rootIpnsName,
       rootFolderKey: vault.rootReadKey,
+      rootWriteKey: vault.rootWriteKey,
+      rootIpnsKeypair: vault.rootIpnsKeypair,
       defaultHeaders: axiosDefaultHeaders(),
     });
     // D-06: thread the published root Node's nodeId/nodeGeneration (0, first

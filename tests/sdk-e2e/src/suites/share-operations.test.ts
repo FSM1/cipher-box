@@ -12,15 +12,16 @@ import { createMultiAccountFixture, type MultiAccountFixture } from '../fixtures
 import { API_URL, testFetch } from '../fixtures/test-harness';
 import { generateTextContent } from '../helpers/data-generators';
 
-/** Shape of a share object in the API response */
+/** Shape of a received/sent share object in the v3 API response (share-response.dto.ts) */
 interface ShareResponse {
   shareId: string;
-  itemName: string;
-  itemType: string;
-  encryptedKey: string;
+  readDescriptorRef: string;
+  writeDescriptorRef: string | null;
+  rootNodeId: string;
+  rootIpnsName: string;
 }
 
-describe.skip('Share Operations [quarantined D-01: SDK runtime stubbed mid-milestone, re-enable at phase 63-65 consumer re-wire]', () => {
+describe('Share Operations', () => {
   let fixture: MultiAccountFixture;
 
   beforeAll(async () => {
@@ -32,23 +33,22 @@ describe.skip('Share Operations [quarantined D-01: SDK runtime stubbed mid-miles
   });
 
   let shareId: string;
+  let sharedNodeId: string;
+  let sharedFolderIpnsName: string;
 
   it('should create a share from Alice to Bob', async () => {
     const alice = fixture.accounts.get('alice')!;
     const bob = fixture.accounts.get('bob')!;
 
-    // Alice creates a folder to share
+    // Alice creates a folder to share. createFolder already registers it in the
+    // folderTree write-capably (NODE-03) — re-registering with a zero writeKey
+    // would trip the D-06 nodeId guard on the subsequent uploadFile.
     const folder = await alice.client.createFolder(alice.rootIpnsName, 'SharedFolder');
     expect(folder.id).toBeTruthy();
+    sharedNodeId = folder.id;
+    sharedFolderIpnsName = folder.ipnsName;
 
     // Upload a file into the shared folder
-    alice.client.registerFolder(
-      folder.ipnsName,
-      folder.folderKey,
-      { publicKey: new Uint8Array(0), privateKey: folder.ipnsPrivateKey },
-      [],
-      1n
-    );
     await alice.client.uploadFile(
       folder.ipnsName,
       generateTextContent('shared content'),
@@ -56,10 +56,10 @@ describe.skip('Share Operations [quarantined D-01: SDK runtime stubbed mid-miles
       'text/plain'
     );
 
-    // Wrap the folder key for Bob using ECIES
+    // Wrap the folder readKey for Bob using ECIES (the v3 readDescriptorRef).
     const encryptedKey = await wrapKey(folder.folderKey, bob.publicKey);
 
-    // Create share via API
+    // Create share via API (v3 CreateShareDto: readDescriptorRef + rootNodeId + rootIpnsName)
     const res = await testFetch(`${API_URL}/shares`, {
       method: 'POST',
       headers: {
@@ -68,10 +68,9 @@ describe.skip('Share Operations [quarantined D-01: SDK runtime stubbed mid-miles
       },
       body: JSON.stringify({
         recipientPublicKey: '0x' + bytesToHex(bob.publicKey),
-        itemType: 'folder',
-        ipnsName: folder.ipnsName,
-        itemName: 'SharedFolder',
-        encryptedKey: bytesToHex(encryptedKey),
+        readDescriptorRef: bytesToHex(encryptedKey),
+        rootNodeId: folder.id,
+        rootIpnsName: folder.ipnsName,
       }),
     });
 
@@ -93,8 +92,9 @@ describe.skip('Share Operations [quarantined D-01: SDK runtime stubbed mid-miles
     expect(data.shares.length).toBeGreaterThanOrEqual(1);
     const share = data.shares.find((s: ShareResponse) => s.shareId === shareId);
     expect(share).toBeTruthy();
-    expect(share.itemName).toBe('SharedFolder');
-    expect(share.itemType).toBe('folder');
+    // v3 shares carry root identity (rootIpnsName/rootNodeId), not itemName/itemType.
+    expect(share.rootIpnsName).toBe(sharedFolderIpnsName);
+    expect(share.rootNodeId).toBe(sharedNodeId);
   });
 
   it('should appear in Alice sent shares', async () => {
@@ -119,14 +119,17 @@ describe.skip('Share Operations [quarantined D-01: SDK runtime stubbed mid-miles
     const data = await res.json();
     const share = data.shares.find((s: ShareResponse) => s.shareId === shareId);
 
-    // Bob unwraps the key with his private key (API returns hex-encoded ciphertext)
-    const folderKey = await unwrapKey(hexToBytes(share.encryptedKey), bob.privateKey);
+    // Bob unwraps the readDescriptorRef with his private key (hex-encoded ECIES).
+    const folderKey = await unwrapKey(hexToBytes(share.readDescriptorRef), bob.privateKey);
     expect(folderKey.length).toBe(32); // AES-256 key
   });
 
   it('should reject self-sharing', async () => {
     const alice = fixture.accounts.get('alice')!;
 
+    // Valid v3 body (passes DTO validation) so the request reaches the
+    // self-share business rule and returns 409 rather than a 400 validation error.
+    const selfKey = await wrapKey(new Uint8Array(32), alice.publicKey);
     const res = await testFetch(`${API_URL}/shares`, {
       method: 'POST',
       headers: {
@@ -135,10 +138,9 @@ describe.skip('Share Operations [quarantined D-01: SDK runtime stubbed mid-miles
       },
       body: JSON.stringify({
         recipientPublicKey: '0x' + bytesToHex(alice.publicKey),
-        itemType: 'folder',
-        ipnsName: alice.rootIpnsName,
-        itemName: 'SelfShare',
-        encryptedKey: bytesToHex(new Uint8Array(64)),
+        readDescriptorRef: bytesToHex(selfKey),
+        rootNodeId: alice.rootNodeId,
+        rootIpnsName: alice.rootIpnsName,
       }),
     });
 

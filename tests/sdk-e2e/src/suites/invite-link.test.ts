@@ -17,7 +17,7 @@ async function makeWrappedKey(publicKey: Uint8Array): Promise<string> {
   return bytesToHex(await wrapKey(fakeKey, publicKey));
 }
 
-describe.skip('Invite Link [quarantined D-01: SDK runtime stubbed mid-milestone, re-enable at phase 63-65 consumer re-wire]', () => {
+describe('Invite Link', () => {
   let fixture: MultiAccountFixture;
 
   beforeAll(async () => {
@@ -30,6 +30,7 @@ describe.skip('Invite Link [quarantined D-01: SDK runtime stubbed mid-milestone,
 
   let inviteToken: string;
   let folderIpnsName: string;
+  let folderNodeId: string;
 
   it('should create an invite link', async () => {
     const alice = fixture.accounts.get('alice')!;
@@ -37,6 +38,7 @@ describe.skip('Invite Link [quarantined D-01: SDK runtime stubbed mid-milestone,
     // Create a folder to share via invite
     const folder = await alice.client.createFolder(alice.rootIpnsName, 'InviteFolder');
     folderIpnsName = folder.ipnsName;
+    folderNodeId = folder.id;
 
     // Wrap with Alice's key (in real flow, this would be an ephemeral keypair)
     const encryptedKey = await makeWrappedKey(alice.publicKey);
@@ -47,10 +49,10 @@ describe.skip('Invite Link [quarantined D-01: SDK runtime stubbed mid-milestone,
         Authorization: `Bearer ${alice.accessToken}`,
         'Content-Type': 'application/json',
       },
+      // v3 CreateInviteDto: rootIpnsName + rootNodeId + encryptedKey
       body: JSON.stringify({
-        itemType: 'folder',
-        ipnsName: folder.ipnsName,
-        itemName: 'InviteFolder',
+        rootIpnsName: folder.ipnsName,
+        rootNodeId: folder.id,
         encryptedKey,
       }),
     });
@@ -80,10 +82,10 @@ describe.skip('Invite Link [quarantined D-01: SDK runtime stubbed mid-milestone,
     expect(res.ok).toBe(true);
 
     const data = await res.json();
+    // v3 InviteDataResponseDto: status + encryptedKey + root identity (no itemType/itemName).
     expect(data.status).toBe('active');
-    expect(data.itemType).toBe('folder');
-    expect(data.ipnsName).toBe(folderIpnsName);
-    expect(data.itemName).toBe('InviteFolder');
+    expect(data.rootIpnsName).toBe(folderIpnsName);
+    expect(data.rootNodeId).toBe(folderNodeId);
     expect(data.encryptedKey).toBeTruthy();
   });
 
@@ -99,7 +101,7 @@ describe.skip('Invite Link [quarantined D-01: SDK runtime stubbed mid-milestone,
         Authorization: `Bearer ${bob.accessToken}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ encryptedKey }),
+      body: JSON.stringify({ readDescriptorRef: encryptedKey }),
     });
 
     expect(res.status).toBe(201);
@@ -118,7 +120,7 @@ describe.skip('Invite Link [quarantined D-01: SDK runtime stubbed mid-milestone,
         Authorization: `Bearer ${charlie.accessToken}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ encryptedKey }),
+      body: JSON.stringify({ readDescriptorRef: encryptedKey }),
     });
 
     // Should be 409 (already claimed) or 404 (no longer active)
@@ -136,7 +138,7 @@ describe.skip('Invite Link [quarantined D-01: SDK runtime stubbed mid-milestone,
         Authorization: `Bearer ${bob.accessToken}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ encryptedKey }),
+      body: JSON.stringify({ readDescriptorRef: encryptedKey }),
     });
 
     expect([404, 409]).toContain(res.status);
@@ -154,9 +156,8 @@ describe.skip('Invite Link [quarantined D-01: SDK runtime stubbed mid-milestone,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        itemType: 'folder',
-        ipnsName: folderIpnsName,
-        itemName: 'InviteFolder',
+        rootIpnsName: folderIpnsName,
+        rootNodeId: folderNodeId,
         encryptedKey,
       }),
     });

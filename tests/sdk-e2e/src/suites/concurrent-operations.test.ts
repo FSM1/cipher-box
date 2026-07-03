@@ -19,7 +19,7 @@ import { createTestContext, deleteTestAccount, type TestContext } from '../fixtu
 import { expectChildNamed, getChild, getChildren } from '../helpers/assertions';
 import { generateBytes, generateTextContent } from '../helpers/data-generators';
 
-describe.skip('Concurrent Operations [quarantined D-01: SDK runtime stubbed mid-milestone, re-enable at phase 63-65 consumer re-wire]', () => {
+describe('Concurrent Operations', () => {
   let ctx: TestContext;
 
   beforeAll(async () => {
@@ -51,9 +51,9 @@ describe.skip('Concurrent Operations [quarantined D-01: SDK runtime stubbed mid-
       expectChildNamed(ctx.client, ctx.rootIpnsName, `Rapid-${i}`);
     }
 
-    // Cleanup
+    // Cleanup — read-plane handle is the child's ipnsName (NODE-03)
     for (const r of results) {
-      await ctx.client.deleteItem(ctx.rootIpnsName, r.id);
+      await ctx.client.deleteItem(ctx.rootIpnsName, r.ipnsName);
     }
   });
 
@@ -79,7 +79,7 @@ describe.skip('Concurrent Operations [quarantined D-01: SDK runtime stubbed mid-
     // Cleanup
     for (const name of fileNames) {
       const child = getChild(ctx.client, ctx.rootIpnsName, name);
-      await ctx.client.deleteItem(ctx.rootIpnsName, child.id);
+      await ctx.client.deleteItem(ctx.rootIpnsName, child.ipnsName);
     }
   });
 
@@ -88,25 +88,19 @@ describe.skip('Concurrent Operations [quarantined D-01: SDK runtime stubbed mid-
     await ctx.client.uploadFile(ctx.rootIpnsName, content, 'before-rename.txt', 'text/plain');
 
     const child = getChild(ctx.client, ctx.rootIpnsName, 'before-rename.txt');
-    await ctx.client.renameItem(ctx.rootIpnsName, child.id, 'after-rename.txt');
+    await ctx.client.renameItem(ctx.rootIpnsName, child.ipnsName, 'after-rename.txt');
 
     expectChildNamed(ctx.client, ctx.rootIpnsName, 'after-rename.txt');
 
     // Cleanup
     const renamed = getChild(ctx.client, ctx.rootIpnsName, 'after-rename.txt');
-    await ctx.client.deleteItem(ctx.rootIpnsName, renamed.id);
+    await ctx.client.deleteItem(ctx.rootIpnsName, renamed.ipnsName);
   });
 
   it('should handle create-folder then upload-into-folder sequence', async () => {
+    // createFolder registers the subfolder write-capably (NODE-03) — no manual
+    // registerFolder needed.
     const folder = await ctx.client.createFolder(ctx.rootIpnsName, 'SeqFolder');
-
-    ctx.client.registerFolder(
-      folder.ipnsName,
-      folder.folderKey,
-      { publicKey: new Uint8Array(0), privateKey: folder.ipnsPrivateKey },
-      [],
-      1n
-    );
 
     // Upload into the just-created folder
     const content = generateTextContent('sequential file');
@@ -115,28 +109,14 @@ describe.skip('Concurrent Operations [quarantined D-01: SDK runtime stubbed mid-
     expectChildNamed(ctx.client, folder.ipnsName, 'seq-file.txt');
 
     // Cleanup
-    await ctx.client.deleteItem(ctx.rootIpnsName, folder.id);
+    await ctx.client.deleteItem(ctx.rootIpnsName, folder.ipnsName);
   });
 
   it('should handle rapid create-and-move cycle', async () => {
     // Create source and dest folders
+    // createFolder registers both subfolders write-capably (NODE-03).
     const src = await ctx.client.createFolder(ctx.rootIpnsName, 'MoveSource');
     const dst = await ctx.client.createFolder(ctx.rootIpnsName, 'MoveDest');
-
-    ctx.client.registerFolder(
-      src.ipnsName,
-      src.folderKey,
-      { publicKey: new Uint8Array(0), privateKey: src.ipnsPrivateKey },
-      [],
-      1n
-    );
-    ctx.client.registerFolder(
-      dst.ipnsName,
-      dst.folderKey,
-      { publicKey: new Uint8Array(0), privateKey: dst.ipnsPrivateKey },
-      [],
-      1n
-    );
 
     // Upload files to source
     for (let i = 0; i < 3; i++) {
@@ -151,7 +131,7 @@ describe.skip('Concurrent Operations [quarantined D-01: SDK runtime stubbed mid-
     // Move each file one at a time
     for (let i = 0; i < 3; i++) {
       const child = getChild(ctx.client, src.ipnsName, `move-${i}.txt`);
-      await ctx.client.moveItem(src.ipnsName, dst.ipnsName, child.id);
+      await ctx.client.moveItem(src.ipnsName, dst.ipnsName, child.ipnsName);
     }
 
     // Verify source is empty, dest has all 3
@@ -159,7 +139,7 @@ describe.skip('Concurrent Operations [quarantined D-01: SDK runtime stubbed mid-
     expect(getChildren(ctx.client, dst.ipnsName).length).toBe(3);
 
     // Cleanup
-    await ctx.client.deleteItem(ctx.rootIpnsName, src.id);
-    await ctx.client.deleteItem(ctx.rootIpnsName, dst.id);
+    await ctx.client.deleteItem(ctx.rootIpnsName, src.ipnsName);
+    await ctx.client.deleteItem(ctx.rootIpnsName, dst.ipnsName);
   });
 });

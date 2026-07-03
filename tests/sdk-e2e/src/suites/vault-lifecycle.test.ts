@@ -17,7 +17,7 @@ import {
   testFetch,
 } from '../fixtures/test-harness';
 
-describe.skip('Vault Lifecycle [quarantined D-01: SDK runtime stubbed mid-milestone, re-enable at phase 63-65 consumer re-wire]', () => {
+describe('Vault Lifecycle', () => {
   let ctx: TestContext;
 
   afterAll(async () => {
