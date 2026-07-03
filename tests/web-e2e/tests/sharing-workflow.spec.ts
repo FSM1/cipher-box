@@ -493,10 +493,13 @@ test.describe.serial('Sharing Workflow', () => {
 
     await aliceOpenShareDialog(sharedFileName);
 
-    // Try an invalid key
+    // Try an invalid key. The app's validation copy is
+    // "invalid public key format" (ShareDialog.tsx, 68.1-11 — canonical
+    // `publicKey` terminology); the previous expectation predated that
+    // wiring (68.1-29).
     await aliceShareDialog.shareWithKey('0x1234invalid');
     const errorText = await aliceShareDialog.waitForError();
-    expect(errorText).toContain('invalid key format');
+    expect(errorText).toContain('invalid public key format');
 
     await aliceShareDialog.close();
   });
