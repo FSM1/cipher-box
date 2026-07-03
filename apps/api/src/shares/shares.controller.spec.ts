@@ -305,7 +305,9 @@ describe('SharesController', () => {
         'share-uuid-1',
         'sharer-uuid-1',
         'aabbcc',
-        '4'
+        '4',
+        undefined,
+        undefined
       );
       expect(result).toBeUndefined();
     });
