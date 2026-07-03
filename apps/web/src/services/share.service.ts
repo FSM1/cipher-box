@@ -14,7 +14,6 @@ import {
   sharesControllerLookupUser,
   sharesControllerRevokeShare,
   sharesControllerHideShare,
-  sharesControllerUpdateShareItemName,
   sharesControllerGetReceivedShares,
   sharesControllerGetSentShares,
   type ShareKeyEntryDtoKeyType,
@@ -22,21 +21,24 @@ import {
   type SentShareResponseDto,
 } from '@cipherbox/api-client';
 
-import { wrapKey, unwrapKey, bytesToHex, hexToBytes } from '@cipherbox/crypto';
+import { unwrapKey, hexToBytes } from '@cipherbox/crypto';
 import type { ReceivedShare, SentShare } from '../stores/share.store';
 import { useShareStore } from '../stores/share.store';
-import { useAuthStore } from '../stores/auth.store';
-import { logger } from '../lib/logger';
 
 // ---------------------------------------------------------------------------
-// REQ-4 — share itemName ECIES at-rest (Phase-14 M1 closure)
+// REQ-4 — share itemName ECIES at-rest (Phase-14 M1 closure; GAP-6 backfill
+// removal, 68.1-24)
 //
 // itemName is wrapped with the RECIPIENT's secp256k1 public key (the same key
 // already used for encryptedKey) before leaving the browser. Recipients decrypt
-// itemNameEncrypted with their vault private key for display; the owner's
-// sent-share list keeps the plaintext projection it had at create time and
-// falls back to any legacy plaintext itemName when ciphertext is present but
-// not decryptable (the name was wrapped for the recipient, not the owner).
+// itemNameEncrypted with their vault private key for display. There is no
+// plaintext item_name column server-side (dropped in the Phase 66 schema
+// cutover) — the lazy plaintext-backfill path (shouldBackfill /
+// backfillSentShareItemNames / PATCH /shares/:id/item-name) was permanently
+// unreachable dead code and has been removed. The owner-side sent-share
+// display uses the create-time plaintext projection held in the share store
+// (ShareDialog seeds it) since the owner cannot decrypt a ciphertext wrapped
+// for the recipient's key.
 //
 // Security: never log itemName or itemNameEncrypted; zero transient unwrapped
 // bytes after use (CLAUDE.md rule 9).
@@ -72,23 +74,6 @@ export async function decryptItemName(
   } finally {
     unwrapped.fill(0);
   }
-}
-
-/**
- * Lazy-backfill decision predicate (decision A2).
- *
- * Returns true only when a key-holding client (one that holds the recipient
- * pubkey to re-wrap with) sees a legacy plaintext-only row: plaintext present,
- * ciphertext absent. Idempotent — returns false once ciphertext exists, so a
- * backfilled row is never re-backfilled.
- *
- * @param row - Row carrying itemName + optional itemNameEncrypted
- * @param hasRecipientPubKey - Whether the caller holds the recipient pubkey
- */
-export function shouldBackfill(row: ItemNameBearingRow, hasRecipientPubKey: boolean): boolean {
-  if (!hasRecipientPubKey) return false;
-  if (row.itemNameEncrypted) return false;
-  return Boolean(row.itemName);
 }
 
 /**
@@ -165,60 +150,6 @@ export async function fetchSentShares(
 ): Promise<{ shares: SentShare[]; total: number }> {
   const result = await sharesControllerGetSentShares({ limit, offset });
   return { shares: result.shares.map(toSentShare), total: result.total };
-}
-
-/**
- * Lazy backfill of itemNameEncrypted for legacy plaintext sent shares (decision A2).
- *
- * The owner holds the recipient pubkey on each sent-share row, so it can re-wrap
- * the plaintext display name for the recipient and re-persist the ciphertext.
- * Best-effort and idempotent: rows already carrying ciphertext are skipped via
- * shouldBackfill, so a backfilled row is never re-wrapped. Failures are logged
- * (never throwing) so the share-list load is never blocked.
- *
- * Persists via `PATCH /shares/:id/item-name`, which only the sharer may call
- * and which stores the client-supplied ciphertext as-is (server never encrypts).
- *
- * @returns Count of rows successfully backfilled (re-wrapped and persisted).
- */
-export async function backfillSentShareItemNames(shares: SentShare[]): Promise<number> {
-  const vaultKeypair = useAuthStore.getState().vaultKeypair;
-  if (!vaultKeypair) return 0;
-
-  let backfilled = 0;
-
-  for (const share of shares) {
-    // Owner always holds the recipient pubkey on the row → key-holder = true.
-    if (!shouldBackfill(share, true)) continue;
-
-    try {
-      const recipientPubKey = hexToBytes(
-        share.recipientPublicKey.startsWith('0x')
-          ? share.recipientPublicKey.slice(2)
-          : share.recipientPublicKey
-      );
-      const plaintextNameBytes = new TextEncoder().encode(share.itemName);
-      let wrapped: Uint8Array | null = null;
-      try {
-        wrapped = await wrapKey(plaintextNameBytes, recipientPubKey);
-        const itemNameEncrypted = bytesToHex(wrapped);
-
-        // Persist the re-wrapped ciphertext for this legacy row. Only the sharer
-        // may update it; the server stores the ciphertext as-is.
-        await sharesControllerUpdateShareItemName(share.shareId, { itemNameEncrypted });
-        backfilled += 1;
-      } finally {
-        // Clear the transient plaintext display name from memory after wrapping.
-        plaintextNameBytes.fill(0);
-        wrapped?.fill(0);
-      }
-    } catch (err) {
-      // Never log the plaintext/ciphertext name; only the failure marker.
-      logger.warn('[share] itemName backfill re-wrap failed for share', share.shareId, err);
-    }
-  }
-
-  return backfilled;
 }
 
 /**
@@ -325,13 +256,6 @@ async function fetchAllSentShares(): Promise<SentShare[]> {
     offset += shares.length;
     if (offset >= total || shares.length === 0) break;
   }
-
-  // Lazy backfill (decision A2): re-wrap and persist itemNameEncrypted for any
-  // legacy plaintext rows. Best-effort and idempotent (shouldBackfill skips rows
-  // already carrying ciphertext), fire-and-forget so the list load never blocks.
-  void backfillSentShareItemNames(allShares).catch((err) =>
-    logger.warn('[share] itemName backfill pass failed', err)
-  );
 
   return allShares;
 }

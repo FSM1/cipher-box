@@ -17,7 +17,6 @@ import type {
   SharesControllerGetSentSharesParams,
   SharesControllerLookupUserParams,
   UpdateGrantDto,
-  UpdateItemNameDto,
 } from '../../models';
 
 import { customInstance } from '../../instance';
@@ -121,25 +120,6 @@ export const sharesControllerHideShare = (
   return customInstance<void>({ url: `/shares/${shareId}/hide`, method: 'PATCH' }, options);
 };
 /**
- * Persist the at-rest itemNameEncrypted ciphertext on a share. Only the sharer can update it; the server never encrypts and stores the client-supplied ciphertext as-is.
- * @summary Backfill share encrypted item name
- */
-export const sharesControllerUpdateShareItemName = (
-  shareId: string,
-  updateItemNameDto: BodyType<UpdateItemNameDto>,
-  options?: SecondParameter<typeof customInstance<void>>
-) => {
-  return customInstance<void>(
-    {
-      url: `/shares/${shareId}/item-name`,
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      data: updateItemNameDto,
-    },
-    options
-  );
-};
-/**
  * Persist a rotated readDescriptorRef and rootGeneration on an existing share. Only the sharer can update it; the server never re-encrypts and stores the client-supplied ciphertext as-is.
  * @summary Update a share grant descriptor
  */
@@ -178,9 +158,6 @@ export type SharesControllerRevokeShareResult = NonNullable<
 >;
 export type SharesControllerHideShareResult = NonNullable<
   Awaited<ReturnType<typeof sharesControllerHideShare>>
->;
-export type SharesControllerUpdateShareItemNameResult = NonNullable<
-  Awaited<ReturnType<typeof sharesControllerUpdateShareItemName>>
 >;
 export type SharesControllerUpdateGrantResult = NonNullable<
   Awaited<ReturnType<typeof sharesControllerUpdateGrant>>

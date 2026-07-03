@@ -228,30 +228,6 @@ export class SharesService {
   }
 
   /**
-   * Backfill the at-rest itemNameEncrypted ciphertext on a share.
-   * Only the sharer can update it (they hold the recipient pubkey to re-wrap).
-   * The server never encrypts — it persists the client-supplied ciphertext as-is.
-   */
-  async updateShareItemName(
-    shareId: string,
-    sharerId: string,
-    itemNameEncrypted: string
-  ): Promise<void> {
-    const share = await this.shareRepo.findOne({ where: { id: shareId } });
-
-    if (!share) {
-      throw new NotFoundException('Share not found');
-    }
-
-    if (share.sharerId !== sharerId) {
-      throw new ForbiddenException('Only the sharer can update the item name');
-    }
-
-    share.itemNameEncrypted = Buffer.from(itemNameEncrypted, 'hex');
-    await this.shareRepo.save(share);
-  }
-
-  /**
    * Persist a rotated readDescriptorRef and rootGeneration on an existing share.
    * Only the sharer (owner) can update it — the owner drives grant re-mint on
    * key rotation (D-10/D-11, 68-07 owner reconcile). The server never

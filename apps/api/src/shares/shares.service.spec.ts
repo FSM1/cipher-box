@@ -414,39 +414,6 @@ describe('SharesService', () => {
     });
   });
 
-  // ===========================================================================
-  // updateShareItemName()
-  // ===========================================================================
-  describe('updateShareItemName', () => {
-    it('persists the client-supplied ciphertext when the caller is the sharer', async () => {
-      const share = createMockShare();
-      shareRepo.findOne.mockResolvedValue(share);
-
-      await service.updateShareItemName('share-uuid-1', SHARER_ID, 'dd'.repeat(8));
-
-      expect(share.itemNameEncrypted).toEqual(Buffer.from('dd'.repeat(8), 'hex'));
-      expect(shareRepo.save).toHaveBeenCalledWith(share);
-    });
-
-    it('throws NotFoundException when the share is missing', async () => {
-      shareRepo.findOne.mockResolvedValue(null);
-
-      await expect(
-        service.updateShareItemName('missing', SHARER_ID, 'dd'.repeat(8))
-      ).rejects.toThrow(NotFoundException);
-      expect(shareRepo.save).not.toHaveBeenCalled();
-    });
-
-    it('throws ForbiddenException when a non-sharer attempts the update', async () => {
-      shareRepo.findOne.mockResolvedValue(createMockShare());
-
-      await expect(
-        service.updateShareItemName('share-uuid-1', 'not-the-sharer', 'dd'.repeat(8))
-      ).rejects.toThrow(ForbiddenException);
-      expect(shareRepo.save).not.toHaveBeenCalled();
-    });
-  });
-
   describe('updateGrant', () => {
     it('persists the rotated descriptor and advances rootGeneration for the sharer', async () => {
       const share = createMockShare({ rootGeneration: '2' });

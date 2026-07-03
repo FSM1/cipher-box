@@ -19,7 +19,6 @@ import { BypassableThrottlerGuard as ThrottlerGuard } from '../common/guards/thr
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { SharesService } from './shares.service';
 import { CreateShareDto } from './dto/create-share.dto';
-import { UpdateItemNameDto } from './dto/update-item-name.dto';
 import { UpdateGrantDto } from './dto/update-grant.dto';
 import { RevokeForItemsDto } from './dto/revoke-for-items.dto';
 import {
@@ -225,27 +224,6 @@ export class SharesController {
     @Param('shareId', ParseUUIDPipe) shareId: string
   ): Promise<void> {
     await this.sharesService.hideShare(shareId, req.user.id);
-  }
-
-  @Patch(':shareId/item-name')
-  @HttpCode(HttpStatus.NO_CONTENT)
-  @ApiOperation({
-    summary: 'Backfill share encrypted item name',
-    description:
-      'Persist the at-rest itemNameEncrypted ciphertext on a share. ' +
-      'Only the sharer can update it; the server never encrypts and stores ' +
-      'the client-supplied ciphertext as-is.',
-  })
-  @ApiResponse({ status: 204, description: 'Item name updated' })
-  @ApiResponse({ status: 401, description: 'Unauthorized' })
-  @ApiResponse({ status: 403, description: 'Only the sharer can update' })
-  @ApiResponse({ status: 404, description: 'Share not found' })
-  async updateShareItemName(
-    @Request() req: RequestWithUser,
-    @Param('shareId', ParseUUIDPipe) shareId: string,
-    @Body() dto: UpdateItemNameDto
-  ): Promise<void> {
-    await this.sharesService.updateShareItemName(shareId, req.user.id, dto.itemNameEncrypted);
   }
 
   @Patch(':shareId/grant')

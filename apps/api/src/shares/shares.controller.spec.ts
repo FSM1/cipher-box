@@ -7,7 +7,6 @@ import { BypassableThrottlerGuard } from '../common/guards/throttler-bypass.guar
 import { Share } from './entities/share.entity';
 import { CreateShareDto } from './dto/create-share.dto';
 import { RevokeForItemsDto } from './dto/revoke-for-items.dto';
-import { UpdateItemNameDto } from './dto/update-item-name.dto';
 import { UpdateGrantDto } from './dto/update-grant.dto';
 import { PaginationQueryDto } from './dto/pagination.dto';
 import { RequestWithUser } from '../common/types';
@@ -64,7 +63,6 @@ describe('SharesController', () => {
       lookupUserByPublicKey: jest.fn(),
       revokeShare: jest.fn(),
       hideShare: jest.fn(),
-      updateShareItemName: jest.fn(),
       updateGrant: jest.fn(),
     };
 
@@ -292,32 +290,6 @@ describe('SharesController', () => {
       sharesService.hideShare.mockRejectedValue(new NotFoundException('Share not found'));
 
       await expect(controller.hideShare(mockRequest, 'missing')).rejects.toThrow(NotFoundException);
-    });
-  });
-
-  describe('updateShareItemName', () => {
-    const dto: UpdateItemNameDto = { itemNameEncrypted: 'eeff' };
-
-    it('delegates shareId, req.user.id and ciphertext to the service', async () => {
-      sharesService.updateShareItemName.mockResolvedValue(undefined);
-
-      await controller.updateShareItemName(mockRequest, 'share-uuid-1', dto);
-
-      expect(sharesService.updateShareItemName).toHaveBeenCalledWith(
-        'share-uuid-1',
-        'sharer-uuid-1',
-        'eeff'
-      );
-    });
-
-    it('propagates ForbiddenException when a non-sharer attempts the update', async () => {
-      sharesService.updateShareItemName.mockRejectedValue(
-        new ForbiddenException('Only the sharer can update the item name')
-      );
-
-      await expect(
-        controller.updateShareItemName(mockRequest, 'share-uuid-1', dto)
-      ).rejects.toThrow(ForbiddenException);
     });
   });
 
