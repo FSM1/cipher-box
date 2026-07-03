@@ -33,6 +33,22 @@
  * calling hook's existing catch/setState/logger path is unaffected; this
  * only augments the failure path with user-visible UX. Unclassified errors
  * pass through untouched.
+ *
+ * 68.1-28 diagnostic note (rotation-durability.spec.ts SC-4 residual): the
+ * classification above is verified correct and complete for every error
+ * class `client.ts`'s `reconcileFolderSequence`/`rotationHighWater.
+ * enforceResolved` can throw. SC-4's residual failure is NOT a gap in this
+ * module -- a live repro confirmed the rename mutation SUCCEEDS silently
+ * (no error of any kind is thrown), because `apps/api`'s IPNS resolve
+ * prefers the DB-cached record whenever it is at or ahead of the network
+ * record (`ipns.service.ts::resolveRecord`), and the DB row is written
+ * synchronously on every publish this same client makes. A relay-replayed
+ * record captured from an earlier point in this client's own history can
+ * therefore never be strictly ahead of that client's own DB row, so the
+ * replay never reaches this classifier (or `enforceResolved`) to begin
+ * with. See 68.1-28-SUMMARY.md for the full trace and the follow-up this
+ * surfaces -- do not re-attempt a classification fix here without first
+ * reading that finding.
  */
 
 import {
