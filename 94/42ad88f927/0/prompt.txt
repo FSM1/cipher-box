@@ -1193,3 +1193,71 @@ The single failure is tee-republish's out-of-scope local-TEE-stack env issue (ex
 The working tree also has uncommitted changes under `apps/web/`, `packages/sdk/`, `packages/sdk-core/`, and `tests/web-e2e/` (plus the prior agent's `assertions.ts`/`test-harness.ts`/`folder-crud`/`vault-lifecycle`). Those are **not mine** — I edited only the 9 sdk-e2e suite files. I did not rebuild any dist (none was needed; all fixes were test-side).</result>
 <usage><subagent_tokens>179503</subagent_tokens><tool_uses>101</tool_uses><duration_ms>992926</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>aa63748dc2ea05dd1</task-id>
+<tool-use-id>toolu_01GWuWpxH7gp7wrJAnyEZEWR</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/064836b9-90e4-42d5-aabc-ed5fde831a57/tasks/aa63748dc2ea05dd1.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify deep CodeRabbit write-plane findings" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All changes are intact and verified. Here is my final report.
+
+## Verdict Table
+
+| # | Verdict | Evidence (one line) | Files touched |
+|---|---------|---------------------|---------------|
+| 13 | **INVALID** | `runWithFailureUx` retries ONLY `ReconcileStaleError` (useMutationFailureUx.ts:149); createFolder throws it solely at `reconcileFolderSequence` (client.ts:1391) *before* any key-mint/IPNS-publish/metadata-insert, so a retry re-runs cleanly (dup-name check at 1386 adds defense). | none |
+| 15 | **VALID-FIXED** | `createFileMetadata` stored raw `fileKey`/`fileIv` unchecked → a bad-length key from the external `encryptFn`/direct callers is only caught (undecryptably) at download. Added length guards before sealing. | `sdk-core/file/index.ts` |
+| 16 | **VALID-FIXED** | restoreFromBin ran a best-effort resolve/`console.warn` network round-trip *before* the durable bin-entry removal; moved it after `saveBinMetadata`. | `sdk/bin/index.ts` |
+| 17 | **INTENTIONAL** (D-03) | Bin `getWriteBodyParams` `!resolved → []` mirrors client.ts:679-682 fail-open; domain rule says don't flip without concrete loss. *Noted latent risk below.* | none |
+| 18 | **VALID-FIXED** | `getWriteBodyParams` (can throw) ran *after* durable `saveBinMetadata`; a throw left the item in bin+folder (dup entry on retry). Moved it before the durable write. | `sdk/bin/index.ts` |
+| 19 | **INVALID** | `writeChildren ?? []` is documented (D-03); every writeKey-bearing call site also passes writeChildren (paired from `getWriteBodyParams`, or explicit), so the "drop the chain" default is unreachable. | none |
+| 20 | **VALID-FIXED** 🔴 | **CONFIRMED REAL** — see loud callout. On 409, only the read-body was merged; the write-body was resealed with stale `params.writeChildren`, dropping a concurrent writer's `WriteChildRef`. | `sdk-core/registration.ts`, `sdk/client.ts`, `sdk/bin/index.ts` |
+| 21 | **OBSOLETE** + INTENTIONAL | Cited registration.ts:366-381 was inside the deleted `addFileToFolder`. Live equivalent (client.ts:2088-2118 `Promise.allSettled` parallel publish) is documented-deliberate (transient missing child IPNS = self-healing). | none |
+| 22 | **VALID-DEFERRED** (blocked by forbidden tests) | It *is* an in-memory return shape (wire `FileIpnsRecordPayload` already uses the correct `encryptedIpnsPrivateKey`), so rename is legit — but ~30 fixtures in the forbidden `__tests__` dirs reference `ipnsPrivateKeyEncrypted`; renaming prod-only breaks them. No prod consumer reads it (redundant). | none |
+| 24 | **INTENTIONAL/DEFERRED** (68.1-02) | Delete paths preserve the write-body verbatim by design; the deleted child's `WriteChildRef` is *retained* (chain growth), not *dropped* — DFS only consults write refs for read-body-present children, so it's dead weight, never mis-traversed. Not data loss. | none |
+| 25 | **VALID-FIXED** | `resolveFileWriteChainKeys` unseals the whole file node but returns only keys+metadata, leaving `content.fileKey` live to GC. Added `.fill(0)`; also fixed sibling `updateSharedFile` (hoisted try-scoped `currentFileNode` so the finally can zero it). | `sdk/client.ts` |
+| 26 | **VALID-FIXED** | Every `createFolder` seeds a child via `registerFolder` with real writeKey + `metadata:null`; the dfs short-circuit recursed through it → `if(!parentNode)return null`+`continue` silently skips the subtree, blocking descent to an uncached deeper target. Now requires `metadata.writeBody` to descend. | `sdk/client.ts` |
+| 28 | **INVALID** (unreachable today) | Every `folderTree[root]` writer seeds a real writeKey; `loadFolder` has zero prod callers; web `navigateReadChain` writes `sharedFolderTree` not `folderTree`. Defensive-only (would matter if a future web owned-tree read-only seed lands). | none |
+| 29 | **VALID-FIXED** | `adoptPublishedFolderState` only refreshed the mirror `if (metadata.writeBody &amp;&amp; …)`; when writeBody was absent but `publishedWriteChildren` existed the mirror stayed stale, hiding new WriteChildRefs from getWriteBodyParams/DFS. Now creates the mirror when absent. | `sdk/client.ts`, `sdk/bin/index.ts` |
+
+**Files touched (4):** `packages/sdk-core/src/folder/registration.ts`, `packages/sdk-core/src/file/index.ts`, `packages/sdk/src/client.ts`, `packages/sdk/src/bin/index.ts`.
+
+## Test outputs (targeted, no dist rebuild)
+
+sdk-core — finding 20 (CAS) + finding 15:
+```
+✓ src/__tests__/folder/write-body.test.ts (3 tests)
+✓ src/__tests__/folder/registration.test.ts (5 tests)   ← incl. CAS-retry test
+ Test Files  2 passed (2)   Tests  8 passed (8)
+
+✓ src/__tests__/upload.test.ts (6) ✓ folder.test.ts (14) ✓ file/file-node.test.ts (11)
+ Test Files  3 passed (3)   Tests  31 passed (31)
+```
+sdk — findings 20/25/26/29 + bin 16/18:
+```
+✓ src/__tests__/client-write-plane-recovery.test.ts (5 tests)
+✓ src/__tests__/client-durable-registration.test.ts (4 tests)
+✓ src/__tests__/bin.test.ts (21 tests)
+ Test Files  3 passed (3)   Tests  30 passed (30)
+
+✓ upload-batch.test.ts (19)  … Test Files 2 passed | 2 skipped (4)  Tests 24 passed | 20 skipped (0 failed)
+```
+sdk-core production typecheck (build config, excludes tests, `--noEmit` — **no dist emitted**): **exit 0, clean.**
+
+**Build caveat (not an error):** the sdk package imports sdk-core via its built `dist`, so `pnpm typecheck` on sdk will not see the new `publishedWriteChildren` return field until sdk-core dist is rebuilt (standard cross-package topological build — memory: "rebuild sdk-core dist before consumer typecheck"). I did **not** rebuild any dist per instructions; the sdk source is type-correct against the new sdk-core type (verified: `NodeWriteBody` shape, AES-const exports, all optional-chaining). At runtime the `?? fallback` keeps everything safe against the stale dist.
+
+## 🔴 LOUD CALLOUT — Finding 20 is a real shipping write-plane clobber (now fixed)
+
+**The bug (confirmed live):** `mergeChildren` (folder/merge.ts) is fully implemented — the "Phase-64 stub throws" docstring in registration.ts was stale. So on a 409 in `updateFolderMetadataAndPublish`, `publishWithCas` merges only the **read-body** (`SealedChildRef[]`), then `encodeAndUpload` reseals the **write-body** with the original closure value `params.writeChildren`. `decodeRemote` never even unsealed the remote write-body. Result: whenever two write-key holders (shared-write, or two devices of one owner) concurrently mutate the same folder, the loser's CAS retry **publishes a write-body missing the winner's freshly-added `WriteChildRef`** — the child stays readable but silently loses write capability. This is exactly the clobber class Phase 68.1 exists to prevent, on the concurrent-merge path. Reachable from ~8 owned call sites (createFolder/rename/delete/move/upload) + 2 bin sites, all of which pass a real writeKey.
+
+**Fix:** `decodeRemote` now unseals the remote write-body (`unsealNode(..., params.writeKey)`); `merge` unions writeChildren by `childId` (remote wins; write plane is add-only so a union never resurrects a deleted ref); `encodeAndUpload` seals the merged set. I also made `updateFolderMetadataAndPublish` return `publishedWriteChildren` and threaded it into all 10 `adoptPublishedFolderState` sites (via `?? fallback`, mock-safe) so the in-memory mirror can't **re-drop** the merged ref on the next conflict-free publish.
+
+**Finding 24 (related, NOT a leak, left as-is):** a *deleted* child's `WriteChildRef` is deliberately retained (write-link removal deferred to plan 68.1-02). This is chain **growth**, not data loss, and DFS never mis-traverses it — but the 68.1-02 removal should land so the write chain doesn't accumulate stale entries indefinitely.
+
+**One latent risk worth owners' attention (finding 17, not flipped):** in *both* bin `getWriteBodyParams` and client.ts `getWriteBodyParams`, a **transient** IPNS resolve miss on an already-write-capable folder returns `writeChildren: []`, and the ensuing republish would seal an **empty** write-body — dropping the whole write chain. It's a documented D-03 fail-open and identical in both files, so I did not one-sidedly flip only the bin copy; flagging it for a holistic decision.</result>
+<usage><subagent_tokens>275537</subagent_tokens><tool_uses>90</tool_uses><duration_ms>2189706</duration_ms></usage>
+</task-notification>
