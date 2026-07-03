@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "9442ad88f927",
+  "strategy": "manual-commit",
+  "branch": "feat/web-client-runtime-integration",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "tests/sdk-e2e/src/fixtures/test-harness.ts",
+    "tests/sdk-e2e/src/helpers/assertions.ts",
+    "tests/sdk-e2e/src/suites/batch-upload.test.ts",
+    "tests/sdk-e2e/src/suites/bin-operations.test.ts",
+    "tests/sdk-e2e/src/suites/concurrent-operations.test.ts",
+    "tests/sdk-e2e/src/suites/data-integrity.test.ts",
+    "tests/sdk-e2e/src/suites/error-cases.test.ts",
+    "tests/sdk-e2e/src/suites/file-operations.test.ts",
+    "tests/sdk-e2e/src/suites/folder-crud.test.ts",
+    "tests/sdk-e2e/src/suites/invite-link.test.ts",
+    "tests/sdk-e2e/src/suites/ipns-consistency.test.ts",
+    "tests/sdk-e2e/src/suites/share-operations.test.ts",
+    "tests/sdk-e2e/src/suites/vault-lifecycle.test.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/94/42ad88f927/0/metadata.json",
+      "transcript": "/94/42ad88f927/0/full.jsonl",
+      "content_hash": "/94/42ad88f927/0/content_hash.txt",
+      "prompt": "/94/42ad88f927/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 116474,
+    "cache_creation_tokens": 4833543,
+    "cache_read_tokens": 164005096,
+    "output_tokens": 603119,
+    "api_call_count": 610
+  }
+}
