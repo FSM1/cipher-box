@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "1b926b1283b4",
+  "strategy": "manual-commit",
+  "branch": "feat/web-client-runtime-integration",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/1b/926b1283b4/0/metadata.json",
+      "transcript": "/1b/926b1283b4/0/full.jsonl",
+      "content_hash": "/1b/926b1283b4/0/content_hash.txt",
+      "prompt": "/1b/926b1283b4/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 85369,
+    "cache_creation_tokens": 3966418,
+    "cache_read_tokens": 135404943,
+    "output_tokens": 432534,
+    "api_call_count": 458
+  }
+}
