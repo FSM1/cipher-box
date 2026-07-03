@@ -111,8 +111,19 @@ function adoptPublishedFolderState(
   folder.lastLoadedAt = Date.now();
   if (folder.metadata) {
     folder.metadata.children = publishedChildren;
-    if (folder.metadata.writeBody && publishedWriteChildren) {
-      folder.metadata.writeBody.writeChildren = publishedWriteChildren;
+    if (publishedWriteChildren) {
+      if (folder.metadata.writeBody) {
+        folder.metadata.writeBody.writeChildren = publishedWriteChildren;
+      } else {
+        // 68.1-29: create the write-body mirror when the folder was loaded with a
+        // read-only metadata mirror but this publish sealed a real write chain, so
+        // the next getWriteBodyParams/DFS read sees the new WriteChildRefs (mirrors
+        // CipherBoxClient.adoptPublishedFolderState).
+        folder.metadata.writeBody = {
+          ipnsPrivateKey: new Uint8Array(folder.ipnsKeypair.privateKey),
+          writeChildren: publishedWriteChildren,
+        };
+      }
     }
   }
   folderTree.set(folder.ipnsName, folder);
@@ -438,6 +449,15 @@ export async function addToBin(params: {
     },
   };
 
+  // Resolve the folder's write-body params BEFORE the durable bin write.
+  // getWriteBodyParams can resolve/fetch/unseal and THROW, so surface that
+  // failure here rather than AFTER saveBinMetadata has made the bin entry
+  // durable — a throw once the bin entry is persisted (but the folder delete has
+  // not happened) leaves the item in BOTH the bin and the folder and, on retry,
+  // accumulates a duplicate bin entry. Preserve the existing write-body verbatim
+  // (D-03) — the removed child's WriteChildRef removal is owned by 68.1-02.
+  const writeBodyParams = await getWriteBodyParams(folderState, binCtx.ctx);
+
   // 9. Persist bin metadata BEFORE the destructive source-folder publish.
   //    If the bin save fails we have not yet deleted the item from the folder,
   //    so the item remains visible and fully recoverable (fail-safe ordering).
@@ -450,22 +470,21 @@ export async function addToBin(params: {
   };
   await saveBinMetadata({ metadata, binCtx });
 
-  // 10. Publish updated folder (destructive — must happen after the restore key is durable).
-  //     Preserve the folder's existing write-body verbatim (D-03) — the removed
-  //     child's WriteChildRef removal is owned by 68.1-02, not this plan.
-  const writeBodyParams = await getWriteBodyParams(folderState, binCtx.ctx);
-  const { newSequenceNumber, publishedChildren } = await sdkCore.updateFolderMetadataAndPublish({
-    children: updatedChildren,
-    folderKey: folderState.folderKey,
-    ...writeBodyParams,
-    ipnsPrivateKey: folderState.ipnsKeypair.privateKey,
-    ipnsPublicKey: folderState.ipnsKeypair.publicKey,
-    ipnsName: folderIpnsName,
-    sequenceNumber: folderState.sequenceNumber,
-    ctx: binCtx.ctx,
-    nodeId: folderState.nodeId,
-    nodeGeneration: folderState.nodeGeneration,
-  });
+  // 10. Publish updated folder (destructive — must happen after the restore key
+  //     is durable). writeBodyParams was resolved above (before saveBinMetadata).
+  const { newSequenceNumber, publishedChildren, publishedWriteChildren } =
+    await sdkCore.updateFolderMetadataAndPublish({
+      children: updatedChildren,
+      folderKey: folderState.folderKey,
+      ...writeBodyParams,
+      ipnsPrivateKey: folderState.ipnsKeypair.privateKey,
+      ipnsPublicKey: folderState.ipnsKeypair.publicKey,
+      ipnsName: folderIpnsName,
+      sequenceNumber: folderState.sequenceNumber,
+      ctx: binCtx.ctx,
+      nodeId: folderState.nodeId,
+      nodeGeneration: folderState.nodeGeneration,
+    });
 
   // Adopt the publish result so the next publish against this folder does not
   // 409 on the server's anti-rollback sequence gate (68.1-22).
@@ -474,7 +493,7 @@ export async function addToBin(params: {
     folderState,
     publishedChildren,
     newSequenceNumber,
-    writeBodyParams.writeChildren
+    publishedWriteChildren ?? writeBodyParams.writeChildren
   );
 
   return {
@@ -563,18 +582,19 @@ export async function restoreFromBin(params: {
   // Preserve the target folder's existing write-body verbatim (D-03) — the
   // restored child's WriteChildRef insertion is owned by 68.1-02, not this plan.
   const writeBodyParams = await getWriteBodyParams(targetFolder, binCtx.ctx);
-  const { newSequenceNumber, publishedChildren } = await sdkCore.updateFolderMetadataAndPublish({
-    children: childrenForPublish,
-    folderKey: targetFolder.folderKey,
-    ...writeBodyParams,
-    ipnsPrivateKey: targetFolder.ipnsKeypair.privateKey,
-    ipnsPublicKey: targetFolder.ipnsKeypair.publicKey,
-    ipnsName: targetFolderIpnsName,
-    sequenceNumber: targetFolder.sequenceNumber,
-    ctx: binCtx.ctx,
-    nodeId: targetFolder.nodeId,
-    nodeGeneration: targetFolder.nodeGeneration,
-  });
+  const { newSequenceNumber, publishedChildren, publishedWriteChildren } =
+    await sdkCore.updateFolderMetadataAndPublish({
+      children: childrenForPublish,
+      folderKey: targetFolder.folderKey,
+      ...writeBodyParams,
+      ipnsPrivateKey: targetFolder.ipnsKeypair.privateKey,
+      ipnsPublicKey: targetFolder.ipnsKeypair.publicKey,
+      ipnsName: targetFolderIpnsName,
+      sequenceNumber: targetFolder.sequenceNumber,
+      ctx: binCtx.ctx,
+      nodeId: targetFolder.nodeId,
+      nodeGeneration: targetFolder.nodeGeneration,
+    });
 
   // Adopt the publish result so the next publish against this folder does not
   // 409 on the server's anti-rollback sequence gate (68.1-22).
@@ -583,20 +603,29 @@ export async function restoreFromBin(params: {
     targetFolder,
     publishedChildren,
     newSequenceNumber,
-    writeBodyParams.writeChildren
+    publishedWriteChildren ?? writeBodyParams.writeChildren
   );
 
-  // 6b. Verify the restored child's OWN IPNS record still resolves.
-  //     restoreFromBin only re-links the SealedChildRef into the parent (above) —
-  //     it never re-publishes the child's own record, and the bin entry carries no
-  //     child ipnsPrivateKey, so re-minting here is impossible. deleteToBin does
-  //     NOT unenroll on soft-delete (comment at deleteToBin's IPNS-unenrollment
-  //     site), so the child record should normally still be TEE-republish-enrolled
-  //     and resolvable. If it is NOT resolvable (e.g. it fell out of TEE republish
-  //     before this fix, or the routing cache evicted it and republish hasn't run
-  //     yet), warn rather than silently re-linking a dead folder as if it were
-  //     navigable — this is a fail-closed signal to the caller/UI, not a throw,
-  //     since the re-link itself succeeded.
+  // 7. Remove entry from bin and publish updated bin metadata
+  const remainingEntries = binState.entries.filter((e) => e.id !== entryId);
+  const newBinSeq = binState.sequenceNumber + 1;
+  const metadata: RecycleBinMetadata = {
+    version: BIN_METADATA_VERSION,
+    sequenceNumber: newBinSeq,
+    entries: remainingEntries,
+  };
+  await saveBinMetadata({ metadata, binCtx });
+
+  // 8. Best-effort: verify the restored child's OWN IPNS record still resolves.
+  //    Runs AFTER the durable bin cleanup (finding 16) so this diagnostic
+  //    network round-trip never delays removing the entry from the bin — it is
+  //    verify-only (console.warn), never a throw, and must not gate cleanup.
+  //    restoreFromBin only re-links the SealedChildRef into the parent (above) —
+  //    it never re-publishes the child's own record, and the bin entry carries no
+  //    child ipnsPrivateKey, so re-minting here is impossible. deleteToBin does
+  //    NOT unenroll on soft-delete, so the child record should normally still be
+  //    TEE-republish-enrolled and resolvable. If it is NOT resolvable, warn rather
+  //    than silently treating a dead folder as navigable.
   try {
     const childResolved = await sdkCore.resolveIpnsRecord(entry.nodeIpnsName, binCtx.ctx);
     if (!childResolved) {
@@ -613,16 +642,6 @@ export async function restoreFromBin(params: {
       err
     );
   }
-
-  // 7. Remove entry from bin and publish updated bin metadata
-  const remainingEntries = binState.entries.filter((e) => e.id !== entryId);
-  const newBinSeq = binState.sequenceNumber + 1;
-  const metadata: RecycleBinMetadata = {
-    version: BIN_METADATA_VERSION,
-    sequenceNumber: newBinSeq,
-    entries: remainingEntries,
-  };
-  await saveBinMetadata({ metadata, binCtx });
 
   return {
     restoredItem,

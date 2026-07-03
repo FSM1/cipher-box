@@ -709,8 +709,22 @@ export class CipherBoxClient {
     folder.lastLoadedAt = Date.now();
     if (folder.metadata) {
       folder.metadata.children = publishedChildren;
-      if (folder.metadata.writeBody && publishedWriteChildren) {
-        folder.metadata.writeBody.writeChildren = publishedWriteChildren;
+      if (publishedWriteChildren) {
+        if (folder.metadata.writeBody) {
+          folder.metadata.writeBody.writeChildren = publishedWriteChildren;
+        } else {
+          // 68.1-29: the folder carried a read-only metadata mirror (no
+          // write-body — e.g. loaded via loadFolder, or getWriteBodyParams
+          // sourced the chain from the on-wire node rather than the mirror) but
+          // this publish sealed a real write chain. CREATE the mirror so the
+          // next getWriteBodyParams (prefers metadata.writeBody) and DFS descent
+          // (walks metadata.writeBody.writeChildren) see the new WriteChildRefs
+          // instead of the absent-mirror fallback that dropped them.
+          folder.metadata.writeBody = {
+            ipnsPrivateKey: new Uint8Array(folder.ipnsKeypair.privateKey),
+            writeChildren: publishedWriteChildren,
+          };
+        }
       }
     }
     this.folderTree.set(folder.ipnsName, folder);
@@ -813,9 +827,19 @@ export class CipherBoxClient {
         !!cachedWriteKey && cachedWriteKey.length === 32 && !cachedWriteKey.every((b) => b === 0);
       if (cachedChild && cachedHasRealWriteKey) {
         if (childRef.ipnsName === targetIpnsName) return cachedChild;
-        const foundCached = await this.dfsFindFolder(cachedChild, targetIpnsName, visited);
-        if (foundCached) return foundCached;
-        continue;
+        // Only DESCEND THROUGH a cached child that is actually traversable — i.e.
+        // has an unsealed write-body mirror. A registerFolder-seeded entry
+        // (68.1-02 createFolder registers the new child with a real writeKey but
+        // metadata:null) has a real writeKey yet cannot be descended: recursing
+        // hits `if (!parentNode) return null` at the top of this method and, with
+        // the `continue` below, would wrongly SKIP the whole subtree — blocking
+        // network recovery of an uncached deeper target. Fall through to the
+        // network resolve/unseal path, which rebuilds the full traversable state.
+        if (cachedChild.metadata?.writeBody) {
+          const foundCached = await this.dfsFindFolder(cachedChild, targetIpnsName, visited);
+          if (foundCached) return foundCached;
+          continue;
+        }
       }
 
       const childResolved = await this.resolvePublishedNode(childRef.ipnsName);
@@ -1381,6 +1405,12 @@ export class CipherBoxClient {
     return this.withOperation('createFolder', async () => {
       const parent = await this.requireFolder(parentIpnsName, 'Parent folder');
 
+      // Reject duplicate sibling names — mirrors uploadFile's contract so folder
+      // and file creation enforce the same uniqueness invariant.
+      if (parent.children.some((child) => child.name === name)) {
+        throw new Error('An item with this name already exists');
+      }
+
       // Reconcile-before-publish (SC#3 / D-04): defer on any sequence mismatch.
       await this.reconcileFolderSequence(parentIpnsName, parent.sequenceNumber);
 
@@ -1496,7 +1526,7 @@ export class CipherBoxClient {
         const updatedChildren = [...parent.children, childEntry];
         const updatedWriteChildren = [...parentWriteChildren, writeChildRef];
 
-        const { newSequenceNumber, publishedChildren } =
+        const { newSequenceNumber, publishedChildren, publishedWriteChildren } =
           await sdkCore.updateFolderMetadataAndPublish({
             children: updatedChildren,
             baseChildren,
@@ -1515,7 +1545,7 @@ export class CipherBoxClient {
           parent,
           publishedChildren,
           newSequenceNumber,
-          updatedWriteChildren
+          publishedWriteChildren ?? updatedWriteChildren
         );
 
         // Register the new child so it is immediately usable (upload/rename/etc.)
@@ -1607,8 +1637,8 @@ export class CipherBoxClient {
       const writeBodyParams = await this.getWriteBodyParams(folder);
 
       // 2. Publish updated metadata
-      const { newSequenceNumber, publishedChildren } = await sdkCore.updateFolderMetadataAndPublish(
-        {
+      const { newSequenceNumber, publishedChildren, publishedWriteChildren } =
+        await sdkCore.updateFolderMetadataAndPublish({
           children: updatedChildren,
           baseChildren,
           folderKey: folder.folderKey,
@@ -1619,15 +1649,14 @@ export class CipherBoxClient {
           ctx: this.ctx,
           nodeId: folder.nodeId,
           nodeGeneration: folder.nodeGeneration,
-        }
-      );
+        });
 
       // 3. Update internal state — adopt merged published set (CR-01)
       this.adoptPublishedFolderState(
         folder,
         publishedChildren,
         newSequenceNumber,
-        writeBodyParams.writeChildren
+        publishedWriteChildren ?? writeBodyParams.writeChildren
       );
 
       // 4. Emit update event
@@ -1827,22 +1856,30 @@ export class CipherBoxClient {
       // crash between publishes never orphans the moved node out of both
       // folders — folds the Phase-64 OUT-tagged
       // sdk-client-move-publish-durability work into this cutover.
-      const { newSequenceNumber: dstSeq, publishedChildren: dstChildren } =
-        await sdkCore.updateFolderMetadataAndPublish({
-          children: updatedDest,
-          baseChildren: baseDestChildren,
-          readKey: destFolder.folderKey,
-          writeKey: destWriteBodyParams.writeKey,
-          writeChildren: rehomedDestWriteChildren,
-          ipnsPrivateKey: destFolder.ipnsKeypair.privateKey,
-          ipnsName: destIpnsName,
-          sequenceNumber: destFolder.sequenceNumber,
-          ctx: this.ctx,
-          nodeId: destFolder.nodeId,
-          nodeGeneration: destFolder.nodeGeneration,
-        });
+      const {
+        newSequenceNumber: dstSeq,
+        publishedChildren: dstChildren,
+        publishedWriteChildren: dstPublishedWriteChildren,
+      } = await sdkCore.updateFolderMetadataAndPublish({
+        children: updatedDest,
+        baseChildren: baseDestChildren,
+        readKey: destFolder.folderKey,
+        writeKey: destWriteBodyParams.writeKey,
+        writeChildren: rehomedDestWriteChildren,
+        ipnsPrivateKey: destFolder.ipnsKeypair.privateKey,
+        ipnsName: destIpnsName,
+        sequenceNumber: destFolder.sequenceNumber,
+        ctx: this.ctx,
+        nodeId: destFolder.nodeId,
+        nodeGeneration: destFolder.nodeGeneration,
+      });
 
-      this.adoptPublishedFolderState(destFolder, dstChildren, dstSeq, rehomedDestWriteChildren);
+      this.adoptPublishedFolderState(
+        destFolder,
+        dstChildren,
+        dstSeq,
+        dstPublishedWriteChildren ?? rehomedDestWriteChildren
+      );
       this.emitter.emit({
         type: 'folder:updated',
         folderId: destIpnsName,
@@ -1852,22 +1889,30 @@ export class CipherBoxClient {
       });
 
       // Publish updated source folder
-      const { newSequenceNumber: srcSeq, publishedChildren: srcChildren } =
-        await sdkCore.updateFolderMetadataAndPublish({
-          children: updatedSource,
-          baseChildren: baseSourceChildren,
-          readKey: sourceFolder.folderKey,
-          writeKey: sourceWriteBodyParams.writeKey,
-          writeChildren: rehomedSourceWriteChildren,
-          ipnsPrivateKey: sourceFolder.ipnsKeypair.privateKey,
-          ipnsName: sourceIpnsName,
-          sequenceNumber: sourceFolder.sequenceNumber,
-          ctx: this.ctx,
-          nodeId: sourceFolder.nodeId,
-          nodeGeneration: sourceFolder.nodeGeneration,
-        });
+      const {
+        newSequenceNumber: srcSeq,
+        publishedChildren: srcChildren,
+        publishedWriteChildren: srcPublishedWriteChildren,
+      } = await sdkCore.updateFolderMetadataAndPublish({
+        children: updatedSource,
+        baseChildren: baseSourceChildren,
+        readKey: sourceFolder.folderKey,
+        writeKey: sourceWriteBodyParams.writeKey,
+        writeChildren: rehomedSourceWriteChildren,
+        ipnsPrivateKey: sourceFolder.ipnsKeypair.privateKey,
+        ipnsName: sourceIpnsName,
+        sequenceNumber: sourceFolder.sequenceNumber,
+        ctx: this.ctx,
+        nodeId: sourceFolder.nodeId,
+        nodeGeneration: sourceFolder.nodeGeneration,
+      });
 
-      this.adoptPublishedFolderState(sourceFolder, srcChildren, srcSeq, rehomedSourceWriteChildren);
+      this.adoptPublishedFolderState(
+        sourceFolder,
+        srcChildren,
+        srcSeq,
+        srcPublishedWriteChildren ?? rehomedSourceWriteChildren
+      );
       this.emitter.emit({
         type: 'folder:updated',
         folderId: sourceIpnsName,
@@ -1925,8 +1970,8 @@ export class CipherBoxClient {
       const writeBodyParams = await this.getWriteBodyParams(folder);
 
       // 2. Publish updated metadata
-      const { newSequenceNumber, publishedChildren } = await sdkCore.updateFolderMetadataAndPublish(
-        {
+      const { newSequenceNumber, publishedChildren, publishedWriteChildren } =
+        await sdkCore.updateFolderMetadataAndPublish({
           children: updatedChildren,
           baseChildren,
           folderKey: folder.folderKey,
@@ -1937,15 +1982,14 @@ export class CipherBoxClient {
           ctx: this.ctx,
           nodeId: folder.nodeId,
           nodeGeneration: folder.nodeGeneration,
-        }
-      );
+        });
 
       // 3. Update internal state — adopt merged published set (CR-01)
       this.adoptPublishedFolderState(
         folder,
         publishedChildren,
         newSequenceNumber,
-        writeBodyParams.writeChildren
+        publishedWriteChildren ?? writeBodyParams.writeChildren
       );
 
       // 4. Emit update event
@@ -2138,14 +2182,14 @@ export class CipherBoxClient {
           });
         }
 
-        const { newSequenceNumber, publishedChildren } = folderResult.value;
+        const { newSequenceNumber, publishedChildren, publishedWriteChildren } = folderResult.value;
 
         // 4. Update internal state — adopt merged published set (CR-01)
         this.adoptPublishedFolderState(
           folder,
           publishedChildren,
           newSequenceNumber,
-          updatedWriteChildren
+          publishedWriteChildren ?? updatedWriteChildren
         );
 
         // 5. Emit events
@@ -2440,7 +2484,7 @@ export class CipherBoxClient {
           });
         }
 
-        const { newSequenceNumber, publishedChildren } = folderResult.value;
+        const { newSequenceNumber, publishedChildren, publishedWriteChildren } = folderResult.value;
 
         // Update internal state — adopt merged published set (CR-01),
         // including the new files' WriteChildRefs (68.1-29)
@@ -2448,7 +2492,7 @@ export class CipherBoxClient {
           folder,
           publishedChildren,
           newSequenceNumber,
-          updatedWriteChildren
+          publishedWriteChildren ?? updatedWriteChildren
         );
 
         // Emit events
@@ -2580,6 +2624,12 @@ export class CipherBoxClient {
       // Ownership transferred to the caller (D-09) — do not zero in `finally`.
       fileReadKey = null;
       fileWriteKey = null;
+
+      // Zero the decrypted content key now that the needed fields are read — this
+      // function is its terminal owner (D-09): only keys + node metadata are
+      // returned, content.fileKey is never handed to the caller, so don't leave it
+      // live until GC (mirrors updateSharedSingleFile's finally cleanup).
+      currentFileNode.content.fileKey?.fill(0);
 
       return {
         fileReadKey: resultReadKey,
@@ -2759,8 +2809,8 @@ export class CipherBoxClient {
     if (migratedIpnsPrivateKeyEncrypted) {
       const baseChildren = [...folder.children];
       const writeBodyParams = await this.getWriteBodyParams(folder);
-      const { newSequenceNumber, publishedChildren } = await sdkCore.updateFolderMetadataAndPublish(
-        {
+      const { newSequenceNumber, publishedChildren, publishedWriteChildren } =
+        await sdkCore.updateFolderMetadataAndPublish({
           children: folder.children,
           baseChildren,
           folderKey: folder.folderKey,
@@ -2772,14 +2822,13 @@ export class CipherBoxClient {
           nodeId: folder.nodeId,
           nodeGeneration: folder.nodeGeneration,
           encryptedIpnsPrivateKey: migratedIpnsPrivateKeyEncrypted,
-        }
-      );
+        });
 
       this.adoptPublishedFolderState(
         folder,
         publishedChildren,
         newSequenceNumber,
-        writeBodyParams.writeChildren
+        publishedWriteChildren ?? writeBodyParams.writeChildren
       );
     }
 
@@ -3795,6 +3844,8 @@ export class CipherBoxClient {
       );
       let fileWriteKey: Uint8Array | null = null;
       let fileIpnsPrivateKey: Uint8Array | null = null;
+      // Hoisted so the finally can zero its decrypted content key (D-09).
+      let currentFileNode: CoreNode | null = null;
 
       try {
         // Walk the parent write-body: find the WriteChildRef for this file (matched
@@ -3805,7 +3856,6 @@ export class CipherBoxClient {
         const writeChildRef = parentNode.writeBody.writeChildren.find(
           (wc) => wc.childId === fileNodeId
         );
-        let currentFileNode: CoreNode | null = null;
         if (writeChildRef) {
           fileWriteKey = await unsealChildWriteKey(
             writeChildRef.writeKeySealed,
@@ -3867,6 +3917,8 @@ export class CipherBoxClient {
         fileWriteKey = null;
         fileIpnsPrivateKey?.fill(0);
         fileIpnsPrivateKey = null;
+        // Zero the decrypted content key too — never handed to the caller.
+        currentFileNode?.content?.fileKey?.fill(0);
       }
     });
   }
