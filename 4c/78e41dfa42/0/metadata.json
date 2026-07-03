@@ -1,0 +1,211 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "4c78e41dfa42",
+  "session_id": "064836b9-90e4-42d5-aabc-ed5fde831a57",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-03T12:28:27.538262Z",
+  "branch": "feat/web-client-runtime-integration",
+  "checkpoints_count": 1,
+  "save_step_count": 2,
+  "files_touched": [
+    "packages/sdk/src/client.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "255204d86521",
+  "token_usage": {
+    "input_tokens": 82993,
+    "cache_creation_tokens": 3886420,
+    "cache_read_tokens": 113771867,
+    "output_tokens": 388835,
+    "api_call_count": 396
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01Uae4oXZcmbjYJcb6Ru4Pef",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "255204d86521",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 966,
+        "end": 967,
+        "entry_ids": [
+          "87bcf7d3-6ab6-4d0c-85a4-392200647a8f"
+        ],
+        "tool_use_id": "toolu_01Uae4oXZcmbjYJcb6Ru4Pef"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Uae4oXZcmbjYJcb6Ru4Pef"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01VfMELuzRNchcopiJja4PMF",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "255204d86521",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 2033,
+        "end": 2034,
+        "entry_ids": [
+          "384d7ee2-7b8a-4fd9-bb01-4623280b7d35"
+        ],
+        "tool_use_id": "toolu_01VfMELuzRNchcopiJja4PMF"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01VfMELuzRNchcopiJja4PMF"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01A77Kh9XZUV4vv7Hn4xgdtt",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "255204d86521",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 2086,
+        "end": 2087,
+        "entry_ids": [
+          "28cbcc55-4773-44fc-949b-4bfb41bfbeb1"
+        ],
+        "tool_use_id": "toolu_01A77Kh9XZUV4vv7Hn4xgdtt"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01A77Kh9XZUV4vv7Hn4xgdtt"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 9
+  },
+  "summary": {
+    "intent": "Execute and iteratively gap-close GSD phase 68.1 (wiring CipherBox's web app onto the node/v3 read+write chain) across multiple wave-based executions, driven by real user bug reports (nested folder nav, decryption failures, shared-write gaps) and a product decision on GAP-6 (retire dead itemName backfill, redesign encrypted).",
+    "outcome": "Phase 68.1 went through three execution/verification rounds: original 14 plans (e2e 6→190/208), gap round 1 of 8 plans (e2e 17→13→8 failures), and gap round 2 of 7 plans (68.1-23..29) reaching 5 failed/142 passed with all 5 dispositioned (2 approved deferrals, 1 routed to a new approved plan 68.1-30, 2 flakes with green re-run evidence); plan 68.1-30 (deep shared-write key seeding) was dispatched but not yet confirmed complete when the transcript ends.",
+    "learnings": {
+      "repo": [
+        "mock-ipns-routing dev container keeps IPNS records in an in-memory Map — any container restart permanently wipes records that lack a synced ipns_records DB row, manifesting as cold-load 404 loops, not propagation lag",
+        "createFolder previously omitted encryptedIpnsPrivateKey/keyEpoch on publish, so new subfolders were never enrolled in TEE republish (ipns_republish_schedule stayed empty) — a real production durability gap, fixed in gap plan 68.1-16",
+        "API is on :3000; :3001 is the delegated-routing mock (DELEGATED_ROUTING_URL target for web-e2e) — easy to confuse when health-probing",
+        "mock-ipns-routing's Docker healthcheck used busybox wget against 'localhost', which resolves to ::1 while the app binds IPv4-only, causing perpetual false-unhealthy status — fix is 127.0.0.1, not a service issue",
+        "decision-coverage gate parser requires the tag INSIDE the bold markdown group, e.g. '- **D-04 [informational]:**', not appended outside the bold span",
+        "client.ts's dfsFindFolder unconditionally re-resolved and overwrote every intermediate ancestor's folderTree entry on every call (even already-loaded, write-capable ones), causing breadcrumb-up empty-flash bugs — needed a cache short-circuit that still falls through to recovery for read-only-seeded entries",
+        "SharedWriteContext has no ipnsPrivateKey field — shared-write publishes derive the IPNS key from inside the unsealed write-body, so nested shared-write fixes only need writeKey recovery, not full key threading",
+        "apps/web/public/recovery.html (last touched Phase 24) only accepts legacy v2 single-key vault blobs/metadata; the app has produced v3/node-v3 since Phase 62 — an architectural gap requiring its own dedicated plan, not fixable inline",
+        "rotation-durability SC-4's relay-replay scenario is unreachable because the API's resolve path treats its DB cache as canonical, floor-gating client-side replay simulation",
+        "the shares table's plaintext item_name column was dropped entirely (not renamed) by migration 1750000000000-ApiSchemaCutover, making the REQ-4 itemName backfill permanently dead code (shouldBackfill() always false) — reviving plaintext storage would violate the zero-knowledge rule; an EncryptShareItemName migration already existed half-built server-side for the proper redesign"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 2827,
+          "finding": "downloadFromIpns fed the parent folderKey into sdk-core's resolveFileMetadata, which expects the file's OWN readKey — caused AEAD decrypt failures in the text editor/version history; fixed by recovering the file readKey via unsealChildReadKey before the call (commit de2807ec8)"
+        },
+        {
+          "path": "apps/web/src/hooks/useFolderNavigation.ts",
+          "line": 183,
+          "finding": "targetFolder?.isLoaded fast path was verified correct (reads fresh zustand state synchronously); the actual breadcrumb-up empty-flash bug root cause was one layer below, in client.ts's dfsFindFolder clobbering already-loaded ancestor cache entries"
+        },
+        {
+          "path": "packages/sdk/src/__tests__/upload-batch.test.ts",
+          "finding": "Stale test fixtures used pre-node/v3 UploadResult shape (fileKey only) after a client.ts contract change added fileNodeId/fileReadKey/fileWriteKey — required partial vi.mock of @cipherbox/crypto (spread importOriginal + override clearBytes), a valid-UUID fixture id, and mockResolvedValueOnce instead of mockResolvedValue to avoid state leaking across tests"
+        }
+      ],
+      "workflow": [
+        "Background agents that launch long-running suite runs and then park themselves are prone to 'lost wake' — completion notification never fires and the agent's transcript can get evicted; mitigate with an independent disk-based watchdog (polling e.g. .last-run.json mtime) plus SendMessage resume while the transcript is still warm, falling back to a fresh continuation agent with explicit completed_state if evicted",
+        "A watchdog polling a specific artifact path is only as good as knowing that path is actually written by the tool in use — one watchdog silently polled a file the playwright config never wrote, failing to catch a lost wake until the user asked directly",
+        "When a subagent times out on `git commit` but the commit git-log-verifies as landed, treat it as the known 1Password gpg-sign false-negative rather than retrying/duplicating the commit",
+        "Serial (non-parallel) e2e suites cascade-abort at the first failure in a spec file, so raw failure counts understate true breakage — deeper bugs downstream of an early failure never execute and stay invisible until the earlier bug is fixed",
+        "Two consecutive full-suite runs at a stable HEAD (baseline + confirmation) is the pattern that resolves a verifier's 'fixes landed after the last recorded run' objection — a single post-fix run isn't enough corroboration",
+        "Live user hands-on testing (headed mode, manual logout/login, opening the text editor) found three real bugs the passing/failing e2e suite structurally could not reach due to serial cascade-aborts — automated coverage claims should be treated skeptically until deep serial specs actually complete end-to-end",
+        "Worktree-isolated parallel wave execution + centralized orchestrator merge/gate cycle scales well for large phases (22+ plans across 3 rounds) but needs vigilance for: agents misreporting their own git fork-base metadata, agents extending file-list scope for legitimate one-layer-down bug fixes (documented as deviations), and prohibited git stash usage across shared worktree refs"
+      ]
+    },
+    "friction": [
+      "Wave-1 agent stalled mid-stream after 119 tool calls (~23 min) with no clear failure signal — required manual disk spot-check and prompt-based resume",
+      "Exit-gate agent lost its wake-up after backgrounding the 208-spec suite, on repeated occasions across both gap rounds — required watchdogs, manual polling, and SendMessage-based resumption each time",
+      "One session hit the account's session limit mid-agent-run ('resets 3am Europe/Berlin'), killing the exit-gate agent mid-closeout; orchestrator had to manually validate uncommitted diffs, fix a 3-stage test-harness regression, and commit the recovered work inline",
+      "git index.lock transient contention interrupted a tracking commit, requiring verification via git log before safely retrying",
+      "Decision-coverage gate initially failed to parse D-NN bullets (wrong colon placement) and then failed again because the [informational] tag was placed outside the bold markdown span instead of inside it",
+      "68.1-16 agent ran a prohibited `git stash push` on a worktree, leaving a stray shared-stash entry that had to be carefully identified and dropped without touching the user's own older stashes",
+      "68.1-21 agent misreported its own worktree fork-base (returned its own HEAD instead of the true merge-base), requiring manual git merge-base verification before recording",
+      "test-login secret mismatch between freshly restarted API/web dev servers caused login-timeout-looking e2e failures that were actually an environment misconfiguration, not a code regression",
+      "Earlier `cd docker` left the orchestrator's shell cwd stuck, causing a subsequent verification bash command to run against the wrong directory"
+    ],
+    "open_items": [
+      "68.1-30 (deep shared-write key seeding fix for writable-shares 8.2, nested subfolder writes) was dispatched but its completion was not yet confirmed in the transcript — final full 208-spec suite run still pending",
+      "recovery.html needs a dedicated gap-closure plan to support v3/node-v3 vault blobs and metadata (currently v2-only, deferred/approved by user)",
+      "rotation-durability SC-4 needs either an apps/api architectural decision or a test redesign since the relay-replay scenario is unreachable given DB-canonical resolve (deferred/approved by user)",
+      "enumerateSharedSubtree/SharedMoveDialog picker was already fixed in gap round 2 (68.1-27) but should be confirmed stable in the final suite run",
+      "Ship-time cleanup: commits 17e4319a6 and 7209e8777 have parens beyond intended scope in subjects — keep out of the eventual PR title",
+      "Any files uploaded to the dev vault before the fileReadKey seal fix have permanently mis-sealed refs and will still fail decryption — dev-data damage, not a code bug, no action needed beyond awareness",
+      "GAP-6 encrypted item-name redesign (68.1-24) removed dead backfill code and added an e2e spec, but WEB-03 should not be marked complete until the other live WEB-03 gaps are also resolved (partially covered by 68.1-29/30)"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-03T12:27:29.874631Z",
+    "agent_lines": 1,
+    "agent_removed": 0,
+    "human_added": 81,
+    "human_modified": 5,
+    "human_removed": 0,
+    "total_committed": 82,
+    "total_lines_changed": 87,
+    "agent_percentage": 1.1494252873563218,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 354,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        "packages/sdk/src/__tests__/resolve-shared-subfolder-write-key.test.ts": 269,
+        "packages/sdk/src/client.ts": 84
+      }
+    }
+  ]
+}
