@@ -527,7 +527,9 @@ test.describe.serial('Sharing Workflow', () => {
 
     await aliceShareDialog.shareWithKey(fakeKey);
     const errorText = await aliceShareDialog.waitForError({ timeout: 15000 });
-    expect(errorText).toContain('user not found');
+    // API canonical copy is "Recipient not found" (shares.service.ts),
+    // surfaced lowercased by ShareDialog (68.1-29)
+    expect(errorText).toContain('recipient not found');
 
     await aliceShareDialog.close();
   });

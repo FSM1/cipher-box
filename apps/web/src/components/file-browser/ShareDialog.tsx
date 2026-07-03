@@ -239,7 +239,14 @@ export function ShareDialog({
       );
     } catch (err) {
       logger.error('[Share] Share creation failed:', err);
-      const message = err instanceof Error ? err.message : 'share failed';
+      // Surface the API's error body (NestJS { message } shape) instead of
+      // the raw axios "Request failed with status code NNN" text (68.1-29);
+      // lowercased to match the dialog's terminal-style copy.
+      const responseMessage = (err as { response?: { data?: { message?: string | string[] } } })
+        .response?.data?.message;
+      const apiMessage = Array.isArray(responseMessage) ? responseMessage[0] : responseMessage;
+      const message =
+        apiMessage?.toLowerCase() ?? (err instanceof Error ? err.message : 'share failed');
       setError(`> ${message}`);
     } finally {
       setIsSharing(false);
