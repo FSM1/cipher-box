@@ -124,6 +124,22 @@ async function isCoreKitTransientFailure(page: Page): Promise<boolean> {
 }
 
 /**
+ * Detect the SILENT shape of the same external Core Kit flake (68.1-29): the
+ * SDK init hangs, the login page stays on "initializing..." forever, and the
+ * wallet button never renders — no error banner ever appears, so
+ * isCoreKitTransientFailure cannot catch it. Signature: a Playwright
+ * TimeoutError from the wallet-login-button waitFor/waitForFunction while
+ * still on the login page. A genuine "button never renders" regression is
+ * still surfaced: it fails identically on every retry and throws after the
+ * retry budget.
+ */
+function isCoreKitInitHang(err: unknown, page: Page): boolean {
+  if (page.url().includes('/files')) return false;
+  const msg = err instanceof Error ? err.message : String(err);
+  return /Timeout/i.test(msg) && /wallet-login-button/.test(msg);
+}
+
+/**
  * Single wallet-login attempt (no retry). See loginViaWallet for the full
  * flow description.
  */
@@ -215,7 +231,7 @@ export async function loginViaWallet(
       return await attemptWalletLogin(page, timeout);
     } catch (err) {
       lastError = err;
-      const transient = await isCoreKitTransientFailure(page);
+      const transient = (await isCoreKitTransientFailure(page)) || isCoreKitInitHang(err, page);
       const isLastAttempt = attempt === LOGIN_RETRY_MAX_ATTEMPTS - 1;
       if (!transient || isLastAttempt) {
         throw err;
