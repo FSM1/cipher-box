@@ -895,13 +895,61 @@ export class CipherBoxClient {
    */
   async ensureFolderLoaded(targetIpnsName: string): Promise<FolderState | null> {
     const existing = this.folderTree.get(targetIpnsName);
-    if (existing) return existing;
+    if (existing) {
+      // Cold-load write-plane recovery (68.1-23): a folder entry seeded
+      // read-only (registerFolder/loadFolder without a writeKey -- e.g. the
+      // web-layer's parallel navigateReadChain walk, 68.1-05) pre-empts the
+      // DFS recovery below since we short-circuit here. Recover the real
+      // writeKey + populated write-body mirror for THIS folder when possible.
+      await this.recoverWriteKeyIfNeeded(existing);
+      return existing;
+    }
 
     const rootState = await this.ensureRootFolderState();
     if (!rootState) return null;
     if (targetIpnsName === this.config.rootIpnsName) return rootState;
 
     return this.dfsFindFolder(rootState, targetIpnsName, new Set<string>());
+  }
+
+  /**
+   * Recover a real writeKey + populated `metadata.writeBody` for a folder
+   * entry that was seeded read-only (zero writeKey, e.g. via
+   * `registerFolder`/`loadFolder` without a `writeKey` argument) but IS
+   * reachable from a write-capable root (68.1-23 gap-closure).
+   *
+   * No-op when: the entry already carries a real writeKey; no root write
+   * material is configured (`internalRootIpnsKeypair`/`internalRootWriteKey`
+   * absent -- read-only clients stay read-only, unchanged behavior); the
+   * entry IS the root (`ensureRootFolderState` always seeds a real writeKey);
+   * or the folder is not reachable from root (DFS returns null).
+   *
+   * Adopts ONLY the write-plane fields (`writeKey`, `metadata.writeBody`) onto
+   * the pre-existing `FolderState` object -- its readKey/ipnsKeypair/
+   * sequenceNumber/children stay exactly as already loaded (D-09: never
+   * replace a caller/folderTree-owned read-plane view with a network re-walk).
+   */
+  private async recoverWriteKeyIfNeeded(existing: FolderState): Promise<void> {
+    const wk = existing.writeKey;
+    const hasRealWriteKey = !!wk && wk.length === 32 && !wk.every((b) => b === 0);
+    if (hasRealWriteKey) return;
+    if (!this.internalRootIpnsKeypair || !this.internalRootWriteKey) return;
+    if (existing.ipnsName === this.config.rootIpnsName) return;
+
+    const rootState = await this.ensureRootFolderState();
+    if (!rootState) return;
+
+    const recovered = await this.dfsFindFolder(rootState, existing.ipnsName, new Set<string>());
+    if (!recovered) return;
+
+    existing.writeKey = new Uint8Array(recovered.writeKey);
+    existing.metadata = existing.metadata
+      ? {
+          ...existing.metadata,
+          writeBody: recovered.metadata?.writeBody ?? existing.metadata.writeBody,
+        }
+      : recovered.metadata;
+    this.folderTree.set(existing.ipnsName, existing);
   }
 
   /**
@@ -912,11 +960,16 @@ export class CipherBoxClient {
    * get-or-self-load-or-throw contract lives in one place and a new method can't
    * silently forget the self-heal fallback.
    *
+   * Always routes through `ensureFolderLoaded` (rather than short-circuiting on
+   * an existing folderTree entry) so the cold-load write-plane recovery
+   * (`recoverWriteKeyIfNeeded`, 68.1-23) also fires for already-loaded,
+   * read-only-seeded entries.
+   *
    * @param ipnsName - IPNS name of the required folder
    * @param label - Human label for the error (e.g. 'Parent folder', 'Source folder')
    */
   private async requireFolder(ipnsName: string, label = 'Folder'): Promise<FolderState> {
-    const folder = this.folderTree.get(ipnsName) ?? (await this.ensureFolderLoaded(ipnsName));
+    const folder = await this.ensureFolderLoaded(ipnsName);
     if (!folder) throw new Error(`${label} not loaded`);
     return folder;
   }
@@ -1035,6 +1088,15 @@ export class CipherBoxClient {
       const wk = folder.writeKey;
       const realWriteKey = wk && wk.length === 32 && !wk.every((b) => b === 0) ? wk : undefined;
       const node = await unsealNode(published, folder.folderKey, realWriteKey);
+      if (realWriteKey === undefined) {
+        // Write-body preservation (68.1-23): unsealing WITHOUT a real writeKey
+        // yields a write-body-less node. Never let that REPLACE an
+        // already-populated local mirror -- a second device's bump must not
+        // silently strip this device's recovered WriteChildRefs from the wire
+        // (D-03). Read-body children/sequence/nodeId/generation still adopt
+        // the fresher network view below; only the write-body is preserved.
+        node.writeBody = folder.metadata?.writeBody ?? node.writeBody;
+      }
       folder.children = node.children ?? [];
       folder.sequenceNumber = resolved.sequenceNumber;
       folder.metadata = node;
