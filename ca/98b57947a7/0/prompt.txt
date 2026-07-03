@@ -1,0 +1,305 @@
+/gsd-plan-phase 68.1 --gaps
+
+---
+
+<task-notification>
+<task-id>a39a6b9ea9b3f8935</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/064836b9-90e4-42d5-aabc-ed5fde831a57/tasks/a39a6b9ea9b3f8935.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute gap plan 15 of phase 68.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Clean working tree, all commits landed on the correct branch. Plan execution complete.
+
+## PLAN COMPLETE
+
+**Plan:** 68.1-15
+**Tasks:** 2/2
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a39a6b9ea9b3f8935/.planning/phases/68.1-web-client-runtime-integration/68.1-15-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"68.1-15","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a39a6b9ea9b3f8935","branch":"worktree-agent-a39a6b9ea9b3f8935","expected_base":"04b17995fefe0e4be9d675f37c6c0d46901320df"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `fe703102c`: feat(web): wire SharedFolderRow to the D-02 kind cache
+- `67f421856`: feat(web): wire SharedFileBrowser in-folder download and double-click to kind cache
+- `ec1ab69bb`: docs(68.1-15): complete shared-folder kind-cache wiring plan
+
+**Duration:** ~6 min
+
+Summary of changes:
+- `apps/web/src/components/file-browser/SharedFolderRow.tsx` — replaced hardcoded `isFolder = true` stub with `isFolder = !isFileRef(item)`, and derived per-item drag payload type from `isFileRef` instead of an unconditional `'folder'` literal
+- `apps/web/src/components/file-browser/SharedFileBrowser.tsx` — in-folder `ContextMenu`'s `onDownload` is now `isFileRef(contextMenu.item) ? handleDownload : undefined` (was unconditionally `undefined`); `onDoubleClick` only navigates into subfolders when `!isFileRef(item)` (files no-op)
+
+Both tasks passed `pnpm --filter @cipherbox/web exec tsc -b --pretty false` clean and all plan acceptance-criteria greps. No deviations from plan. Runtime browser verification is explicitly deferred to the 68.1-21 exit gate per the plan's own verification section.</result>
+<usage><subagent_tokens>166050</subagent_tokens><tool_uses>37</tool_uses><duration_ms>223152</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a39a6b9ea9b3f8935</worktreePath><worktreeBranch>worktree-agent-a39a6b9ea9b3f8935</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a4878040dbd9aac90</task-id>
+<tool-use-id>toolu_012MGUKeXW7QVNWE2yK9o1zT</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/064836b9-90e4-42d5-aabc-ed5fde831a57/tasks/a4878040dbd9aac90.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute gap plan 16 of phase 68.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Clean working tree, 4 commits landed on top of the expected base. Plan execution is complete.
+
+## PLAN COMPLETE
+
+**Plan:** 68.1-16
+**Tasks:** 2/2
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a4878040dbd9aac90/.planning/phases/68.1-web-client-runtime-integration/68.1-16-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"68.1-16","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a4878040dbd9aac90","branch":"worktree-agent-a4878040dbd9aac90","expected_base":"04b17995fefe0e4be9d675f37c6c0d46901320df"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `80caf4c27`: test(sdk): add failing test for createFolder TEE enrollment (RED)
+- `aa4a249b3`: feat(sdk): enroll createFolder subfolders in TEE republish on first publish (GREEN)
+- `72380a4bc`: fix(sdk): harden bin-restore against a dead restored-child IPNS record
+- `75e1389ef`: docs(68.1-16): add plan summary for createFolder TEE enrollment gap closure
+
+**Duration:** ~5 min
+
+**Key files:**
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a4878040dbd9aac90/packages/sdk/src/client.ts` — `createFolder` now enrolls new subfolders in TEE republish (encryptedIpnsPrivateKey/keyEpoch), fail-closed before any addToIpfs side effect
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a4878040dbd9aac90/packages/sdk/src/bin/index.ts` — `restoreFromBin` warns (non-throwing) when a restored child's own IPNS record doesn't resolve post-relink
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a4878040dbd9aac90/packages/sdk/src/__tests__/client-durable-registration.test.ts` — new 4-test Vitest suite (all passing)
+
+**Process note for the orchestrator:** Mid-task I mistakenly ran a prohibited `git stash push` on `bin/index.ts`. I did not run `git stash pop` (also prohibited) — instead I manually re-read the reverted file and reapplied the identical edit via the `Edit` tool, verified the diff, and committed normally. This is documented in the SUMMARY's "Issues Encountered" section. A stray, harmless stash entry (`"temp-check-baseline"`) remains in the shared stash list and was deliberately left untouched — a maintainer may want to `git stash drop` it during routine cleanup.
+
+All acceptance criteria met: 4/4 TDD tests pass, `pnpm --filter @cipherbox/sdk build` succeeds cleanly, grep checks for enrollment fields and per-file-mint confirmation pass, and no full monorepo/e2e suite was run (per plan scope — deferred to 68.1-21 exit gate).</result>
+<usage><subagent_tokens>211506</subagent_tokens><tool_uses>82</tool_uses><duration_ms>512527</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a4878040dbd9aac90</worktreePath><worktreeBranch>worktree-agent-a4878040dbd9aac90</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a8d915abe330b51d5</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/064836b9-90e4-42d5-aabc-ed5fde831a57/tasks/a8d915abe330b51d5.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute gap plan 21 of phase 68.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 68.1-21
+**Tasks:** 2/2
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a8d915abe330b51d5/.planning/phases/68.1-web-client-runtime-integration/68.1-21-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"68.1-21","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a8d915abe330b51d5","branch":"worktree-agent-a8d915abe330b51d5","expected_base":"36ddd2d5e9ef4a8e1be3963f3415dda946bd8084"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `f3ca3d5d9`: fix(68.1-21): route stale-record replays to the D-05 rejection toast
+- `860373727`: fix(68.1-21): update legacy-share seed helper to the current CreateShareDto
+- `36ddd2d5e`: docs(68.1-21): add plan summary
+
+**Duration:** ~80 min
+
+## Summary of work
+
+**GAP-4 (D-05 toast):** Root-caused via sequence-arithmetic trace, not guesswork — the durable ROT-07 floor is bumped *pre-publish*, one step behind the client's own subsequent publish, so a relay replay of the record from immediately before that publish exactly matches the floor rather than falling below it. It sails through `enforceResolved` untouched and lands as a plain `ReconcileStaleError`, which the classifier retried uniformly for ~30s regardless of direction. Fixed by adding `localSequence`/`networkSequence` to `ReconcileStaleError` (`packages/sdk/src/client.ts`) and making `useMutationFailureUx.ts`'s retry loop only retry when network is *ahead* of local; network *behind* local now routes immediately to the D-05 rejection toast. Verified via `packages/sdk/src/__tests__/client-rotation.test.ts` (25/25 pass), clean `tsc -b` on both `@cipherbox/web` and `@cipherbox/sdk`, and clean `eslint`.
+
+**GAP-5 (seed 400):** Updated `tests/web-e2e/tests/share-itemname-backfill.spec.ts`'s legacy-seed POST body to the current `CreateShareDto` shape. This surfaced a bigger, unplanned finding I did not silently patch over: migration `1750000000000-ApiSchemaCutover` dropped the `shares` table's plaintext `item_name` column entirely (not renamed) — `apps/web/src/services/share.service.ts`'s `toSentShare`/`toReceivedShare` now hardcode `itemName: ''`, making `shouldBackfill()` permanently `false` in production (the REQ-4 backfill feature is dead code). Since fixing that "properly" would mean either reintroducing plaintext server-side name storage (forbidden by CLAUDE.md's zero-knowledge rule) or a genuine feature-retirement/redesign decision, I left it as a documented Known Gap (GAP-6) in the SUMMARY rather than deciding unilaterally — the seed-shape fix itself satisfies the plan's literal "2xx not 400" acceptance criterion.
+
+**Note for the exit-gate plan (68.1-22):** the local dev stack (vite :5173) is running from the main checkout, not this worktree (confirmed via `lsof`), so a live e2e run there wouldn't reflect this worktree's fix — both fixes were verified statically instead. `share-itemname-backfill.spec.ts` will still fail from test 2 onward even with the seed fix applied (GAP-6); that's expected, not a regression.</result>
+<usage><subagent_tokens>245141</subagent_tokens><tool_uses>100</tool_uses><duration_ms>855972</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a8d915abe330b51d5</worktreePath><worktreeBranch>worktree-agent-a8d915abe330b51d5</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ab45eb7c4e244849c</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/064836b9-90e4-42d5-aabc-ed5fde831a57/tasks/ab45eb7c4e244849c.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute gap plan 17 of phase 68.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. Regression resolved.
+
+## Post-merge gate fix complete
+
+**Commits:**
+- `525572e7f`: fix(68.1-17): update upload-batch fixtures to fileReadKey contract
+- `e9ca4bd69`: docs(68.1-17): record upload-batch fixture regression deviation in summary
+
+**Test tally:** `pnpm --filter @cipherbox/sdk exec vitest run src/__tests__/upload-batch.test.ts` — **19/19 passing** (was 1/19).
+
+**What was wrong (confirmed the coordinator's hypothesis):** `makeUploadResult` in `packages/sdk/src/__tests__/upload-batch.test.ts` still built the pre-node/v3 `UploadResult` shape — `fileKey` only, no `fileNodeId`/`fileReadKey`/`fileWriteKey`. After `227abb6c7`, the seal site read `undefined` and the new `clearBytes(fileReadKey)`/`clearBytes(fileWriteKey)` cleanup threw `Cannot read properties of undefined (reading 'fill')` inside the mocked `clearBytes`, failing 18/19 tests.
+
+**Fix (fixtures only, product code and assertion intent untouched):**
+- `makeUploadResult` now returns the full 68.1-07/09 contract: added `fileNodeId` plus independent `fileReadKey` (fill `0x52+i`) and `fileWriteKey` (fill `0x62+i`) buffers, distinct from the content `fileKey` (fill `0x42+i`) — mirroring the real two-key split.
+- "clears file keys in finally block" assertion updated from 3 to **9** `clearBytes` calls (3 keys × 3 files), with an added check that every cleared buffer is a 32-byte `Uint8Array` — covering the two new zeroed buffers without weakening the original intent.
+
+SUMMARY amended with Deviation 2 (Rule 1), the follow-up commit added to Task Commits, and `key-files.modified` updated. Working tree clean.</result>
+<usage><subagent_tokens>232203</subagent_tokens><tool_uses>14</tool_uses><duration_ms>168386</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a631280427f080771</task-id>
+<tool-use-id>toolu_01QENQp4JB1GTmRSgnBEyUQJ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/064836b9-90e4-42d5-aabc-ed5fde831a57/tasks/a631280427f080771.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute gap plan 20 of phase 68.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Everything is clean and verified. Here's the final summary of this execution.
+
+## PLAN COMPLETE
+
+**Plan:** 68.1-20
+**Tasks:** 3/3
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a631280427f080771/.planning/phases/68.1-web-client-runtime-integration/68.1-20-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"68.1-20","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a631280427f080771","branch":"worktree-agent-a631280427f080771","expected_base":"b25e89e4d6c003f2fd468db6b9c35325bdfa2595"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `503fe480f` fix: fail-close share.service throwing stubs
+- `020a1309a` feat: seed recipient shared writeKey from writeDescriptorRef
+- `310a493e0` feat: source shared-move destination keys from the write-chain
+- `3dcc3743a` docs(68.1-20): complete SHARE-WRITE-KEY recipient wiring gap closure plan
+
+**Duration:** ~45 min
+
+**Key files:**
+- `apps/web/src/services/share.service.ts` — `fetchShareKeys`/`fetchPendingRotations` fail-closed to `[]`; `createShare` removed (zero callers); `updateSharePermission` fail-closed no-op; `toReceivedShare` now populates `writeDescriptorRef`
+- `apps/web/src/stores/share.store.ts` — `ReceivedShare.writeDescriptorRef` added (deviation, Rule 2 — required for Task 2 to be achievable at all, explicitly flagged as a risk in the plan itself)
+- `apps/web/src/hooks/useSharedNavigationActions.ts` — `resolveSharedRootWriteKey` helper; `navigateToShare`/`navigateUp`/`navigateToBreadcrumb` seed the real shared-root writeKey for write grants at root depth
+- `packages/sdk/src/client.ts` — `moveInSharedFolder` reworked to resolve destination keys from a one-hop write-chain walk when `share_keys` is empty; legacy path preserved for compatibility; documented one-hop limitation (fails closed, never a guessed key)
+
+**Verification:** `pnpm --filter @cipherbox/web exec tsc -b` clean; `pnpm --filter @cipherbox/sdk build` clean; `client-shared-write.test.ts` + `enumerate-shared-subtree.test.ts` 14/14 pass; no new/regressed tsc errors (78 pre-existing quarantined-test errors unchanged, confirmed via stash-diff baseline); eslint clean on all changed files.
+
+**Known Gap surfaced (not fixed, documented in SUMMARY):** `enumerateSharedSubtree` (the shared-move destination picker) is also built on the now-empty `share_keys` fan-out and always returns an empty picker list — pre-existing gap, not a regression from this plan (previously threw instead of returning empty). Flagged for a follow-up plan.</result>
+<usage><subagent_tokens>326891</subagent_tokens><tool_uses>106</tool_uses><duration_ms>1089154</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a631280427f080771</worktreePath><worktreeBranch>worktree-agent-a631280427f080771</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0b56017e836ecf57</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/064836b9-90e4-42d5-aabc-ed5fde831a57/tasks/a0b56017e836ecf57.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute gap plan 22 exit gate" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The full web-e2e suite (208 tests, single worker) is now running in the background. I'll pause here and wait for the completion notification before proceeding to result analysis, GAP-2 re-triage, and SUMMARY creation.</result>
+<usage><subagent_tokens>105306</subagent_tokens><tool_uses>25</tool_uses><duration_ms>126316</duration_ms></usage>
+</task-notification>
+
+---
+
+what is the current pass count?
+
+---
+
+<task-notification>
+<task-id>bbocnd2gp</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/064836b9-90e4-42d5-aabc-ed5fde831a57/tasks/bbocnd2gp.output</output-file>
+<status>completed</status>
+<summary>Background command "Watchdog: signal when fresh e2e .last-run.json lands" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+one major issue I am noticing is that preview and download works, but the text editor/preview shows `decryption failed`
+
+---
+
+<task-notification>
+<task-id>a0b56017e836ecf57</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/064836b9-90e4-42d5-aabc-ed5fde831a57/tasks/a0b56017e836ecf57.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute gap plan 22 exit gate" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I need to stop manual polling — it's unproductive while the suite runs. The monitor loop bjzept0e1 is already watching the log and will notify me when the final tally is written (~15 min out). I'm ending this turn to await that completion signal. Progress: 7/208, 0 failures.</result>
+<usage><subagent_tokens>291316</subagent_tokens><tool_uses>229</tool_uses><duration_ms>3099962</duration_ms></usage>
+</task-notification>
+
+---
+
+still busy? its been at least 20 min
+
+---
+
+<task-notification>
+<task-id>bpabznfsx</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/064836b9-90e4-42d5-aabc-ed5fde831a57/tasks/bpabznfsx.output</output-file>
+<status>completed</status>
+<summary>Background command "Watchdog: signal when final re-run tally lands" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0b56017e836ecf57</task-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/064836b9-90e4-42d5-aabc-ed5fde831a57/tasks/a0b56017e836ecf57.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute gap plan 22 exit gate" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>You've hit your session limit · resets 3am (Europe/Berlin)</result>
+<usage><subagent_tokens>1498</subagent_tokens><tool_uses>279</tool_uses><duration_ms>5155325</duration_ms></usage>
+</task-notification>
+
+---
+
+please continue
+
+---
+
+regarding gap-6 - remove dead code and redesign its encryption. run the full web e2e suite and then base another gap closure plan and execution
+
+---
+
+<task-notification>
+<task-id>b2w8mzh8t</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/064836b9-90e4-42d5-aabc-ed5fde831a57/tasks/b2w8mzh8t.output</output-file>
+<status>completed</status>
+<summary>Background command "Run full web-e2e suite in background" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bh943ztzp</task-id>
+<tool-use-id>toolu_01EHswgaJYBiW7gEXvgAEqtd</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/064836b9-90e4-42d5-aabc-ed5fde831a57/tasks/bh943ztzp.output</output-file>
+<status>completed</status>
+<summary>Background command "Re-run six suspect e2e spec files" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bcqpe63ys</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/064836b9-90e4-42d5-aabc-ed5fde831a57/tasks/bcqpe63ys.output</output-file>
+<status>completed</status>
+<summary>Background command "Run conflict-detection spec file alone" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b9eaw9d19</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/064836b9-90e4-42d5-aabc-ed5fde831a57/tasks/b9eaw9d19.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for and report conflict-detection solo run" completed (exit code 0)</summary>
+</task-notification>
