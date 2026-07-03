@@ -1,0 +1,144 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "20b5f91c5a4a",
+  "session_id": "064836b9-90e4-42d5-aabc-ed5fde831a57",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-03T01:20:18.028098Z",
+  "branch": "feat/web-client-runtime-integration",
+  "checkpoints_count": 8,
+  "save_step_count": 1,
+  "files_touched": [
+    ".planning/phases/68.1-web-client-runtime-integration/68.1-VERIFICATION.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "ec6a28648a12",
+  "token_usage": {
+    "input_tokens": 52365,
+    "cache_creation_tokens": 2605023,
+    "cache_read_tokens": 89549828,
+    "output_tokens": 261894,
+    "api_call_count": 260
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-plan-phase-2026-07-02T19:11:49.468219Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "6a32dc56abb1",
+      "timestamp": "2026-07-02T19:11:49.468219Z",
+      "native": {
+        "command": "/gsd-plan-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01Uae4oXZcmbjYJcb6Ru4Pef",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "ec6a28648a12",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 966,
+        "end": 967,
+        "entry_ids": [
+          "87bcf7d3-6ab6-4d0c-85a4-392200647a8f"
+        ],
+        "tool_use_id": "toolu_01Uae4oXZcmbjYJcb6Ru4Pef"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Uae4oXZcmbjYJcb6Ru4Pef"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 20
+  },
+  "summary": {
+    "intent": "Execute all plans in GSD phase 68.1 (web client runtime integration) via wave-based parallel subagent execution, then plan and execute gap-closure waves to close verification gaps until the phase's e2e suite and success criteria pass.",
+    "outcome": "All 14 original plans plus 8 gap-closure plans executed across multiple waves with real bugs found and fixed (folder id desync, kind-cache wiring, IPNS durability enrollment, text-editor decrypt key bug, D-05 toast routing), reducing e2e failures from 17→13→8 out of 208 specs; however round-2 verification still reported gaps_found (3/5 criteria), the session hit its usage quota mid-execution requiring manual recovery of uncommitted work, and the phase remains incomplete pending further gap closure.",
+    "learnings": {
+      "repo": [
+        "mock-ipns-routing (dev delegated routing) stores IPNS records in an in-memory Map — wiped on every container restart; only records with a DB row (persisted at publish time via the API) survive, so restarting the container during dev manufactures false 'propagation timeout' failures.",
+        "mock-ipns-routing's Docker healthcheck used `wget localhost`, which busybox resolves to `::1`, but the app binds IPv4-only — perpetually unhealthy; fixed by pinning the healthcheck to 127.0.0.1.",
+        "API runs on :3000; :3001 is the mock-ipns-routing delegated-routing service, not the API — probing 3001 for API health silently hits the wrong service.",
+        "createFolder previously published subfolder IPNS records without encryptedIpnsPrivateKey/keyEpoch, so nothing enrolled in ipns_republish_schedule — a real production durability gap where subfolder records would die at the 48h IPNS TTL.",
+        "The decision-coverage gate's informational-tag parser only recognizes the tag inside the bold ID group, e.g. `- **D-04 [informational]:**` — placing it after the bold group silently fails to register.",
+        "Migration 1750000000000-ApiSchemaCutover dropped the shares table's plaintext item_name column entirely (not renamed); share.service.ts now hardcodes itemName: '', making the REQ-4 name-backfill feature permanently dead code — reviving it would require server-side plaintext name storage, which the project's zero-knowledge rule forbids.",
+        "The live /shares REST API grants an entire subtree via one ECIES wrap of the root readKey; there is no per-child key field, so collectChildKeys/ChildKeyDto (the original plan's design) has no live caller — UI code calls resolveChildNodeIdentity directly instead.",
+        "sdk-core's issueReadGrant/claimInvite produce base64 payloads but the live share/invite DTOs are hex-only — web code bypasses sdk-core's grant primitives and calls wrapKey/unwrapKey directly with hex encoding.",
+        "client.downloadFromIpns fed the parent folder's key into sdk-core's resolveFileMetadata instead of the file's own readKey (both are Uint8Array so the type system didn't catch it) — broke the text editor and version-history decrypt paths; preview/download used a different, correct path so were unaffected."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/components/file-browser/SharedFolderRow.tsx",
+          "line": 63,
+          "finding": "Hardcoded isFolder = true meant the D-02 kind cache populated in 68.1-14 was never consulted in the shared browser — files rendered as folders; fixed in gap plan 68.1-15."
+        }
+      ],
+      "workflow": [
+        "Background subagent 'completion' notifications can be lost when the agent parks itself waiting on a long-running background shell (e.g. the 208-spec Playwright suite) — happened twice with the exit-gate agent. Mitigate with an independent watchdog polling for a completion artifact (.last-run.json) and resuming the agent via SendMessage the moment it lands, rather than trusting the task-notification alone.",
+        "The full web-e2e suite is `describe.serial` — one failure early in a spec file aborts all subsequent tests in that file, so raw fail counts understate true breakage; a spec 'passing' at 190/208 can still mean most nested-content-dependent coverage never executed.",
+        "Worktree-executing subagents can misreport their own `expected_base` in worktree_metadata (returning their own HEAD/docs commit instead of the true fork point) — verify the actual merge-base via git before recording it in the wave manifest.",
+        "Never run full test suites concurrently from parallel subagents — reconfirmed from prior memory during this session's wave gating."
+      ]
+    },
+    "friction": [
+      "Wave 1 executor stalled mid-stream after 119 tool calls (~23 min); orchestrator had to spot-check filesystem/git state and resume it manually.",
+      "Exit-gate agent lost its wake-up signal twice after launching the long-running e2e suite in the background, requiring manual liveness checks and SendMessage-based resumption.",
+      "Transient git index.lock during Wave 3 tracking commit required a liveness check and retry.",
+      "A Bash command was denied (likely attempting to read a .env file) mid-diagnosis of the mock-ipns-routing healthcheck, forcing a workaround without that file.",
+      "Subagent 68.1-16 ran a prohibited `git stash push` mid-task, leaving a stray stash entry that had to be manually identified and dropped during wave cleanup.",
+      "Session hit its usage/quota limit while the exit-gate agent was mid-triage, killing the agent and losing in-progress (uncommitted) fixture fixes that had to be manually diagnosed and recommitted.",
+      "Decision-coverage gate initially failed with an opaque parse error until the exact tag-placement rule (inside the bold ID group) was found by reading the parser source.",
+      "User-driven manual testing (logout/login navigation, text editor decrypt) repeatedly surfaced real bugs the automated e2e suite structurally couldn't reach due to serial-abort shadowing."
+    ],
+    "open_items": [
+      "GAP-2 (cold-reload multi-level IPNS DFS timeout) — retry-budget fix applied but not yet reconfirmed by a clean full suite run before quota cutoff.",
+      "GAP-6 — REQ-4 itemName backfill is dead code post schema-cutover; needs an explicit feature-retirement or redesign decision, deliberately left unmarked in REQUIREMENTS/ROADMAP.",
+      "enumerateSharedSubtree (shared-move destination picker) still built on the now-empty share_keys fan-out and always returns an empty list — documented follow-up gap from 68.1-20, not yet fixed.",
+      "conflict-detection e2e failure persisted even after the 'adopt published state after every publish' fix (3cdf20e28) — root cause not yet found.",
+      "rotation-durability SC-4 e2e failure still unresolved at last check.",
+      "Round-2 phase verification reported gaps_found (3/5 success criteria) — phase 68.1 remains pending, further gap-closure planning needed.",
+      "Files uploaded to the dev vault before the fileReadKey seal fix landed have permanently mis-sealed parent refs and will keep failing to decrypt — flagged as data damage, not a code bug, no cleanup done.",
+      "Commits 17e4319a6 and 7209e8777 have parentheses in their subjects — flagged to keep out of the eventual PR title but not otherwise addressed."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-03T01:19:18.272872Z",
+    "agent_lines": 110,
+    "agent_removed": 94,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 110,
+    "total_lines_changed": 204,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
