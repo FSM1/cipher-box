@@ -120,7 +120,17 @@ const LOGIN_RETRY_BACKOFF_MS = [2_000, 4_000, 8_000];
 async function isCoreKitTransientFailure(page: Page): Promise<boolean> {
   if (page.url().includes('/files')) return false;
   const banner = page.locator('[role="alert"]', { hasText: CORE_KIT_TRANSIENT_ERROR_PATTERN });
-  return banner.isVisible().catch(() => false);
+  try {
+    // isVisible() is a point-in-time check that can race the banner's render --
+    // the error surfaces a tick after the attempt rejects. Wait briefly for the
+    // matching alert to appear before classifying, so a transient failure is not
+    // missed. A genuine non-transient failure (no matching banner) times out and
+    // returns false, so real regressions still surface.
+    await banner.waitFor({ state: 'visible', timeout: 2_000 });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
