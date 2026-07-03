@@ -217,14 +217,18 @@ export const useFolderStore = create<FolderState>((set, get) => ({
             // EMPTY children array must never replace an already-loaded
             // folder's NON-EMPTY children — an empty/mismatched event here
             // would silently blank a loaded ancestor's rendered contents
-            // (breadcrumb-up empty-flash). A genuinely-emptied folder is
-            // still reachable once its own real mutation lands with real
-            // (zero-length) data alongside a NEWER sequenceNumber; this guard
-            // only rejects the suspect empty-over-populated case.
+            // (breadcrumb-up empty-flash). A genuinely-emptied folder IS
+            // adopted: its real mutation (e.g. deleteToBin removing the last
+            // child) lands with a NEWER sequenceNumber than the store holds,
+            // so the guard only rejects an empty-over-populated event at or
+            // below the store's sequence (the stale/mismatched re-walk class;
+            // fixed 68.1-29 — the original unconditional rejection broke
+            // delete-last-item flows: recycle-bin TC02, bin-restore-after-reload).
             if (
               matchingFolder.isLoaded &&
               matchingFolder.children.length > 0 &&
-              event.children.length === 0
+              event.children.length === 0 &&
+              event.sequenceNumber <= matchingFolder.sequenceNumber
             ) {
               logger.warn(
                 `[folder.store] Ignoring ${event.type} for ${event.ipnsName}: event carries empty children but the store already has ${matchingFolder.children.length} loaded — refusing to blank a loaded ancestor`
