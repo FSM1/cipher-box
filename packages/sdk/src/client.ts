@@ -1756,12 +1756,72 @@ export class CipherBoxClient {
         childReadKey.fill(0);
       }
 
-      // Preserve BOTH folders' existing write-bodies on republish (D-03). The
-      // moved child's WriteChildRef stays in the SOURCE write-body for now —
-      // write-link re-homing on move is owned by 68.1-02 (this plan only
-      // preserves existing entries verbatim).
+      // Preserve BOTH folders' existing write-bodies on republish (D-03).
+      // 68.1-31: write-link re-homing is implemented HERE (previously
+      // deferred to 68.1-02) — the moved child's WriteChildRef is unsealed
+      // under the SOURCE writeKey, dropped from the source write-body, and
+      // re-sealed under the DEST writeKey into the dest write-body, so the
+      // moved item stays write-capable in its new location.
       const destWriteBodyParams = await this.getWriteBodyParams(destFolder);
       const sourceWriteBodyParams = await this.getWriteBodyParams(sourceFolder);
+
+      // 68.1-31: write-link re-homing. Default to verbatim preservation;
+      // only re-home when BOTH folders are write-capable (a read-plane-only
+      // move must never throw or fabricate a write link under a zero/absent
+      // key — T-68.1-01-03).
+      let rehomedDestWriteChildren = destWriteBodyParams.writeChildren;
+      let rehomedSourceWriteChildren = sourceWriteBodyParams.writeChildren;
+
+      if (!destWriteBodyParams.writeKey || !sourceWriteBodyParams.writeKey) {
+        console.warn(
+          `moveItem: source or destination folder ${sourceIpnsName} -> ${destIpnsName} is read-only — the moved item will not be write-capable in its new location`
+        );
+      } else {
+        // Write plane is keyed by node UUID (childPub.id, already resolved
+        // above for the read-plane re-seal) — NEVER the ipnsName-based
+        // `childId` param moveItem receives. The write-capability gate at
+        // resolveFileWriteChainKeys matches on this exact UUID.
+        const movedWriteRef = sourceWriteBodyParams.writeChildren?.find(
+          (wc) => wc.childId === childPub.id
+        );
+        if (movedWriteRef) {
+          let movedWriteKey: Uint8Array | null = null;
+          try {
+            // Generation is destEntry.generation — the SealedChildRef
+            // parent-mirror generation, unchanged by the move (same value
+            // the read-plane re-seal above uses).
+            movedWriteKey = await unsealChildWriteKey(
+              movedWriteRef.writeKeySealed,
+              sourceWriteBodyParams.writeKey,
+              childPub.id,
+              childPub.kind,
+              destEntry.generation
+            );
+            const writeKeySealed = await sealChildWriteKey(
+              movedWriteKey,
+              destWriteBodyParams.writeKey,
+              childPub.id,
+              childPub.kind,
+              destEntry.generation
+            );
+            rehomedDestWriteChildren = [
+              ...(destWriteBodyParams.writeChildren ?? []),
+              { childId: childPub.id, writeKeySealed },
+            ];
+            rehomedSourceWriteChildren = (sourceWriteBodyParams.writeChildren ?? []).filter(
+              (wc) => wc.childId !== childPub.id
+            );
+          } finally {
+            // Zero the recovered child writeKey on every exit path —
+            // engine-derived, terminal-owned (D-09). Never zero
+            // sourceWriteBodyParams.writeKey / destWriteBodyParams.writeKey
+            // (tree/caller-owned).
+            movedWriteKey?.fill(0);
+          }
+        }
+        // else: no source WriteChildRef for this child (pre-write-plane or
+        // already read-only) — nothing to re-home, lists stay verbatim.
+      }
 
       // D-12: publish DESTINATION before SOURCE (dest-before-source) so a
       // crash between publishes never orphans the moved node out of both
@@ -1772,7 +1832,8 @@ export class CipherBoxClient {
           children: updatedDest,
           baseChildren: baseDestChildren,
           readKey: destFolder.folderKey,
-          ...destWriteBodyParams,
+          writeKey: destWriteBodyParams.writeKey,
+          writeChildren: rehomedDestWriteChildren,
           ipnsPrivateKey: destFolder.ipnsKeypair.privateKey,
           ipnsName: destIpnsName,
           sequenceNumber: destFolder.sequenceNumber,
@@ -1781,12 +1842,7 @@ export class CipherBoxClient {
           nodeGeneration: destFolder.nodeGeneration,
         });
 
-      this.adoptPublishedFolderState(
-        destFolder,
-        dstChildren,
-        dstSeq,
-        destWriteBodyParams.writeChildren
-      );
+      this.adoptPublishedFolderState(destFolder, dstChildren, dstSeq, rehomedDestWriteChildren);
       this.emitter.emit({
         type: 'folder:updated',
         folderId: destIpnsName,
@@ -1801,7 +1857,8 @@ export class CipherBoxClient {
           children: updatedSource,
           baseChildren: baseSourceChildren,
           readKey: sourceFolder.folderKey,
-          ...sourceWriteBodyParams,
+          writeKey: sourceWriteBodyParams.writeKey,
+          writeChildren: rehomedSourceWriteChildren,
           ipnsPrivateKey: sourceFolder.ipnsKeypair.privateKey,
           ipnsName: sourceIpnsName,
           sequenceNumber: sourceFolder.sequenceNumber,
@@ -1810,12 +1867,7 @@ export class CipherBoxClient {
           nodeGeneration: sourceFolder.nodeGeneration,
         });
 
-      this.adoptPublishedFolderState(
-        sourceFolder,
-        srcChildren,
-        srcSeq,
-        sourceWriteBodyParams.writeChildren
-      );
+      this.adoptPublishedFolderState(sourceFolder, srcChildren, srcSeq, rehomedSourceWriteChildren);
       this.emitter.emit({
         type: 'folder:updated',
         folderId: sourceIpnsName,
