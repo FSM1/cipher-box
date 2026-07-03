@@ -6,6 +6,7 @@ import { withConflictRetry as sdkWithConflictRetry } from '@cipherbox/sdk';
 import { fetchAndDecryptMetadata, getDepth } from '@cipherbox/sdk-core';
 import { getSdkClient } from '../lib/sdk-provider';
 import { resolveIpnsRecord } from '../services/ipns.service';
+import { resolveKinds } from '../lib/kind-cache';
 
 /**
  * Re-sync a specific folder after a 409 conflict.
@@ -27,7 +28,12 @@ export async function resyncFolder(folderIpnsName: string, folderId: string): Pr
     getSdkClient().getContext()
   );
 
-  store.updateFolderChildren(folderId, remoteMetadata.children ?? []);
+  // T-68.1-33-01: direct owner-side inserter (409-conflict resync) — warm the
+  // kind cache BEFORE projecting so a row is never interactable while its
+  // kind is unresolved, mirroring navigateTo's D-02 ordering.
+  const resyncChildren = remoteMetadata.children ?? [];
+  await resolveKinds(resyncChildren);
+  store.updateFolderChildren(folderId, resyncChildren);
   store.updateFolderSequence(folderId, resolved.sequenceNumber);
 }
 

@@ -20,6 +20,7 @@ import {
 import type { SealedChildRef } from '@cipherbox/core';
 import { useDialogState } from '../../hooks/useDialogState';
 import { isImageFile, isPdfFile, isAudioFile, isVideoFile, isFileRef } from '../../utils/fileTypes';
+import { resolveKinds } from '../../lib/kind-cache';
 import { useFolderStore } from '../../stores/folder.store';
 import { useSyncStore } from '../../stores/sync.store';
 import { isExternalFileDrag } from '../../hooks/useDropUpload';
@@ -135,7 +136,14 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
         getSdkClient().getContext()
       );
       // Node.children is optional (SealedChildRef[] | undefined); default to []
-      useFolderStore.getState().updateFolderChildren('root', metadata.children ?? []);
+      // T-68.1-33-01: this is the reload-gating direct inserter (immediate
+      // initial sync on FileBrowser mount) — warm the kind cache BEFORE
+      // projecting so a row is never interactable while its kind is
+      // unresolved. resolveKinds is best-effort and never rejects; the
+      // surrounding try/catch already covers a slow/failed resolve.
+      const syncChildren = metadata.children ?? [];
+      await resolveKinds(syncChildren);
+      useFolderStore.getState().updateFolderChildren('root', syncChildren);
       useFolderStore.getState().updateFolderSequence('root', resolved.sequenceNumber);
       triggerSearchIndexRebuild();
     } catch (err) {
