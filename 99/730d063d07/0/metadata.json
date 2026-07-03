@@ -1,0 +1,200 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "99730d063d07",
+  "session_id": "064836b9-90e4-42d5-aabc-ed5fde831a57",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-03T15:29:09.031234Z",
+  "branch": "feat/web-client-runtime-integration",
+  "checkpoints_count": 3,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "bd4b53a6ca47",
+  "token_usage": {
+    "input_tokens": 85263,
+    "cache_creation_tokens": 3951678,
+    "cache_read_tokens": 133455894,
+    "output_tokens": 430401,
+    "api_call_count": 452
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01Uae4oXZcmbjYJcb6Ru4Pef",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "bd4b53a6ca47",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 966,
+        "end": 967,
+        "entry_ids": [
+          "87bcf7d3-6ab6-4d0c-85a4-392200647a8f"
+        ],
+        "tool_use_id": "toolu_01Uae4oXZcmbjYJcb6Ru4Pef"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Uae4oXZcmbjYJcb6Ru4Pef"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01VfMELuzRNchcopiJja4PMF",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "bd4b53a6ca47",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 2033,
+        "end": 2034,
+        "entry_ids": [
+          "384d7ee2-7b8a-4fd9-bb01-4623280b7d35"
+        ],
+        "tool_use_id": "toolu_01VfMELuzRNchcopiJja4PMF"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01VfMELuzRNchcopiJja4PMF"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01A77Kh9XZUV4vv7Hn4xgdtt",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "bd4b53a6ca47",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 2086,
+        "end": 2087,
+        "entry_ids": [
+          "28cbcc55-4773-44fc-949b-4bfb41bfbeb1"
+        ],
+        "tool_use_id": "toolu_01A77Kh9XZUV4vv7Hn4xgdtt"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01A77Kh9XZUV4vv7Hn4xgdtt"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 20
+  },
+  "summary": {
+    "intent": "Execute all plans in GSD phase 68.1 (web-client-runtime-integration for CipherBox — wiring the v2.0 web app onto the node/v3 read+write chain, replacing runtime stubs) via wave-based orchestration, then iterate through multiple gap-closure rounds driven by live user bug reports and full web-e2e suite results until the phase can be verified complete.",
+    "outcome": "Phase 68.1 progressed through 3 verification rounds (14 original plans + 8 + 5 gap-closure plans, 33 plans total) fixing dozens of real production bugs (write-plane cold-load recovery, move write-link re-homing, shared subfolder writeKey seeding, GAP-6 dead-code removal, single-file-share editor). E2e went from 6/208 baseline to the low single digits of failures, with round 3 verification landing at 4/5 success criteria and one final decision/plan (68.1-33) still in flight when the transcript ends.",
+    "learnings": {
+      "repo": [
+        "CipherBox node/v3: SealedChildRef (read plane, keyed by ipnsName) vs WriteChildRef (write plane, keyed by node UUID childId) — write-plane operations must always resolve keys by UUID, never by the ipnsName-based caller handle (moveItem's childId param is ipnsName-based, a repeated trap)",
+        "TEE republish enrollment requires BOTH encryptedIpnsPrivateKey AND keyEpoch on POST /ipns/publish; omitting either means the record silently never gets enrolled in ipns_republish_schedule",
+        "API resolve falls back to a DB cache (ipns_records table) written synchronously at publish time; mock-ipns-routing (dev-only delegated routing mock) keeps records in an in-memory Map wiped on every container restart — restarting it during dev manufactures fake 404/navigation failures for records lacking a DB row",
+        "mock-ipns-routing healthcheck used busybox `wget localhost` which resolves to ::1, but the app binds IPv4-only — perpetual 'unhealthy' status was a healthcheck bug, not a service failure; fixed to 127.0.0.1 in docker-compose.yml",
+        "Local dev stack ports: API on :3000 (nest --watch), delegated-routing mock on :3001, web vite on :5173 — easy to confuse :3000/:3001 when probing health",
+        "apps/web has zero unit spec files by design (SC#5 check: `find apps/web/src -name '*.spec.ts'` must be empty) — all logic-level testing lives in packages/sdk",
+        "Content fileKey vs fileReadKey vs fileWriteKey are three distinct keys; conflating any two of them causes silent AEAD/decrypt failures that manifest generically as 'Decryption failed' in the UI with no useful stack trace",
+        "shares table's plaintext item_name column was dropped in migration 1750000000000-ApiSchemaCutover, making the old itemName-backfill feature (REQ-4) permanently dead code — redesign must ride the already-partially-shipped item_name_encrypted/ECIES pipeline",
+        "apps/web/public/recovery.html (last touched Phase 24) only accepts legacy v2 single-key vault blobs and v2 metadata schema; the app has produced v3/node-v3 blobs since Phase 62 — recovery flow is a known architectural gap requiring its own plan",
+        "Decision-coverage gate parser (decisions.cjs) requires informational tags placed INSIDE the bold ID group: `- **D-04 [informational]:**`, not `- **D-04:** [informational]` — first placement attempt fails silently",
+        "Web3Auth/Core Kit login has real external flakiness (init hangs, retry-budget exceeded) independent of app code — these show as e2e failures that pass on isolated re-run and need retry hardening rather than app fixes"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 1759,
+          "end_line": 1870,
+          "finding": "moveItem left a deferral comment and never implemented WriteChildRef re-homing on move — the read-plane SealedChildRef was relinked to the destination but the write link stayed orphaned in the source write-body, permanently breaking edit/save after moving a file into a subfolder; fixed by unsealing under source writeKey, dropping from source, resealing under dest writeKey keyed by node UUID (never the ipnsName-based childId param)"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 2827,
+          "end_line": 2827,
+          "finding": "downloadFromIpns fed the parent folderKey into sdk-core's resolveFileMetadata, which expects the file's own readKey — a Uint8Array/Uint8Array type coincidence let it through silently, causing AEAD decrypt failure surfaced generically as 'Decryption failed' in the text editor"
+        },
+        {
+          "path": "apps/web/src/hooks/useFolderNavigation.ts",
+          "line": 183,
+          "finding": "GAP-2 cold-reload subfolder navigation: root cause was NOT this file's isLoaded fast path (verified correct) but sdk client.ts's dfsFindFolder unconditionally re-resolving and overwriting every intermediate ancestor's folderTree entry on every call, contradicting its own 'later calls are cheap' docstring; fixed with a cache short-circuit for already-cached write-capable children"
+        },
+        {
+          "path": "apps/web/src/components/file-browser/SharedFolderRow.tsx",
+          "line": 63,
+          "finding": "hardcoded isFolder = true stub meant the shared browser never consulted the D-02 kind cache populated in 68.1-14, so files always rendered/behaved as folders in shared views"
+        }
+      ],
+      "workflow": [
+        "Long-running background e2e suite launches (single-worker Playwright, ~20-25 min for 208 specs) are highly prone to 'lost wake' — the launching subagent parks itself waiting on its own background task but the completion notification/re-invocation sometimes never fires and the transcript can get evicted; mitigate with an independent orchestrator-side watchdog polling for a fresh .last-run.json/artifact plus SendMessage-based prompt resumption while the transcript is still warm",
+        "Serial Playwright describe.serial specs cascade-abort at first failure — a raw failure count (e.g. '17 failed') badly understates actual breakage because most failing groups die in setup, leaving their real coverage (often dozens of deeper tests) unexecuted; 'green' only proves what actually ran to completion",
+        "User hands-on/headed-mode verification surfaced 2-3 real bugs (text-editor decrypt, subfolder nav after logout, PDF-as-folder) that the automated e2e suite structurally could never reach due to serial-abort shadowing — manual spot-checks remain valuable even against a passing/near-passing suite",
+        "Multi-round gap-closure loop pattern: full-suite run → triage/fix → re-run only failing files → full-suite confirmation run at fixed HEAD → verifier scores against corroborated artifacts, not agent self-reports; verifier explicitly refuses to silently absorb any finding that lacks an explicit human sign-off",
+        "Committing gap-closure decisions (like GAP-6's dead-code-removal choice) as VERIFICATION.md addendums with the user's rationale recorded verbatim keeps the audit trail intact across multiple planner/executor hand-offs"
+      ]
+    },
+    "friction": [
+      "Exit-gate agent lost its wake-up signal after launching the full e2e suite in the background on at least 3 separate occasions across the session, requiring orchestrator-side watchdogs and manual SendMessage resumption each time",
+      "One exit-gate agent died mid-closeout on the account's session usage limit (reset 3am Berlin), forcing the orchestrator to manually recover, validate, and finish its uncommitted work (fixing a 3-step test-harness mock chain) inline",
+      "git index.lock contention transiently blocked a tracking commit; separately, git commits repeatedly appeared to time out due to a known 1Password gpg-sign false-negative, requiring `git log -1` verification each time before assuming failure",
+      "A watchdog script polled for a `.last-run.json` file that the actual Playwright config never wrote, silently failing to detect run completion until the user asked directly",
+      "Two different subagents (68.1-16 and 68.1-32-adjacent work) violated the 'no git stash' project rule mid-task, requiring self-caught recovery (stash pop / manual reapply) documented in their SUMMARYs",
+      "docker-compose mock-ipns-routing healthcheck was misdiagnosed as a broken service before being correctly identified as an IPv6/IPv4 localhost resolution healthcheck bug",
+      "Files uploaded to the dev vault before the fileReadKey seal fix landed have permanently mis-sealed refs and will never decrypt — this is dev-data damage, not a code regression, but could confuse future manual testing"
+    ],
+    "open_items": [
+      "68.1-33 gap-closure plan (kind-cache race in owner-side folder.store.ts/kind-cache.ts, D-02 async settle) was being authored/planned when the transcript ends — not yet executed",
+      "rotation-durability SC-4 deferred: API's DB-canonical resolve makes the relay-replay attack simulation structurally unreachable in tests — needs an apps/api architectural decision or test redesign",
+      "recovery.html deferred: still v2-blob-only vs the v3/node-v3 format the app has produced since Phase 62 — needs its own dedicated gap-closure plan",
+      "bin-restore-to-a-different-parent (as opposed to restore-to-original-parent) shares the same orphaned-WriteChildRef bug class as the fixed move bug — documented as a follow-up, not yet fixed (current shipped flow only restores to original parent so it's not user-reachable yet)",
+      "full-workflow.spec.ts 3.9 order-dependent failure was root-caused and fixed (516cd0ee3) with 53/53 passing in isolation, but no fresh full-208-spec confirmation run existed yet to prove the fix holds under real file-execution order",
+      "Ship-time cleanup note: commits 17e4319a6 and 7209e8777 have parens beyond conventional scope in their subjects — keep out of the eventual PR title",
+      "codebase drift gate reported 143 structural elements accumulated since the last codebase mapping — advisory-only, recommends a /gsd-map-codebase refresh"
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
