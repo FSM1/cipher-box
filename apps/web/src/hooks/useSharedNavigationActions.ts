@@ -413,17 +413,37 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
           p.setCurrentView('folder');
           committed = true;
 
-          p.seedActiveSharedFolder({
-            shareId: currentShareId,
-            ipnsName: childRef.ipnsName,
-            folderKey: childReadKey,
-            ipnsPrivateKey,
-            sequenceNumber: childSeq,
-            children,
-            ownerPublicKey: parsePublicKey(shareEntry.share.sharerPublicKey),
-            recipientPublicKey: vaultKeypair.publicKey,
-            publishedNode: childPublished,
-          });
+          // 68.1-30: recover this subfolder's writeKey from the PARENT depth's
+          // write-body chain BEFORE re-seeding sharedFolderTree to the child --
+          // resolveSharedSubfolderWriteKey reads sharedFolderTree.get(shareId),
+          // which is still the parent depth until seedActiveSharedFolder below
+          // overwrites that entry. Closes the deep-shared-write gap (WEB-03,
+          // writable-shares 8.2): previously every descent seeded a zero
+          // writeKey below the share root, failing GCM auth on any write op.
+          const childWriteKey = await getSdkClient().resolveSharedSubfolderWriteKey(
+            currentShareId,
+            { published: childPublished, readKey: childReadKey, generation: childRef.generation }
+          );
+          try {
+            p.seedActiveSharedFolder({
+              shareId: currentShareId,
+              ipnsName: childRef.ipnsName,
+              folderKey: childReadKey,
+              ipnsPrivateKey,
+              writeKey: childWriteKey ?? undefined,
+              sequenceNumber: childSeq,
+              children,
+              ownerPublicKey: parsePublicKey(shareEntry.share.sharerPublicKey),
+              recipientPublicKey: vaultKeypair.publicKey,
+              publishedNode: childPublished,
+            });
+          } finally {
+            // D-09: seedSharedFolder clones the writeKey buffer internally
+            // (shared-folder-projection.ts) -- this call's own derived buffer
+            // is the terminal owner and must be zeroed here (mirrors
+            // navigateToShare's shareRootWriteKey finally).
+            childWriteKey?.fill(0);
+          }
         } finally {
           if (!committed) childReadKey.fill(0);
         }
