@@ -169,8 +169,13 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
       // Track this navigation to detect stale completions from rapid clicks
       latestNavTarget.current = targetFolderId;
 
-      // Root is always constructible from vault state — just navigate
+      // Root is always constructible from vault state — just navigate.
+      // Clear any stuck loading flag: a superseded in-flight navigation's
+      // finally block declines to clear isLoading once latestNavTarget moved
+      // on (68.1-29: full-workflow 5.4 breadcrumb-during-load left the
+      // spinner up forever).
       if (targetFolderId === 'root') {
+        setIsLoading(false);
         navigate('/files');
         return;
       }
@@ -179,8 +184,10 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
       const currentFolders = useFolderStore.getState().folders;
       const targetFolder = currentFolders[targetFolderId];
 
-      // If already loaded, just navigate
+      // If already loaded, just navigate (clearing any superseded
+      // navigation's stuck loading flag — see root fast path above)
       if (targetFolder?.isLoaded) {
+        setIsLoading(false);
         navigate(`/files/${targetFolderId}`);
         return;
       }
