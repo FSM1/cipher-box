@@ -235,8 +235,13 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
       try {
         // Phase 63: ensureFolderLoaded will implement read-chain navigation.
         // This stub will throw; the catch block removes the placeholder.
-        const MAX_RETRIES = 3;
-        const RETRY_DELAY_MS = 2000;
+        // GAP-2 (68.1-13 / 68.1-22): cold-reload multi-level DFS resolves can
+        // exceed the original 3x2s budget while local IPNS records propagate
+        // after a burst of publishes. 8x3s is the documented low-risk
+        // hardening — the latestNavTarget bail-out guards keep abandoned
+        // navigations cheap.
+        const MAX_RETRIES = 8;
+        const RETRY_DELAY_MS = 3000;
         let state: FolderState | null = null;
 
         for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
