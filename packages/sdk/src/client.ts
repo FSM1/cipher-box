@@ -4035,31 +4035,34 @@ export class CipherBoxClient {
   }
 
   /**
-   * Enumerate all reachable subfolders within a shared folder tree (DFS).
+   * Enumerate all reachable subfolders within a shared folder tree (DFS),
+   * walking the node/v3 read/write chain from the loaded `SharedFolderState`
+   * (closes GAP-7 — the deleted `share_keys` table is never consulted).
    *
-   * Uses share_keys entries (ECIES-wrapped per recipient in the current schema) to
-   * derive each subfolder's readKey, loading children via the read-chain. Writable
-   * status is determined by the presence of a `keyType: 'folder-ipns'` entry for
-   * the node in the share_keys table.
+   * Read-chain descent: each `SealedChildRef.readKeySealed` is unsealed with
+   * the PARENT's readKey via `unsealChildReadKey`, using the parent-mirror
+   * generation (childRef.generation), never the child's own envelope
+   * generation (§2.6, matching `dfsFindFolder`/`navigateReadChain`). A
+   * structurally-unresolvable hop (missing IPNS record) is a soft skip; an
+   * AEAD auth failure on a present-but-wrong body throws (fail-closed).
    *
-   * D-09 zeroization: caller owns `vaultPrivateKey` — this method does NOT zero it.
-   * Per-node childFolderKey buffers (locally minted via unwrapKey) are zeroed in
-   * the finally block after each subtree load.
+   * Write-chain descent: a node is `writable: true` only when a
+   * `WriteChildRef` for its id exists in the PARENT's unsealed write-body AND
+   * `unsealChildWriteKey` succeeds under the parent writeKey. A read-only
+   * child (no WriteChildRef) is still listed (`writable: false`) and its own
+   * children are still enumerated via the read chain, but no write-chain
+   * lookup is attempted for its descendants — writability never re-appears
+   * below a read-only node.
+   *
+   * D-09 zeroization: every locally-minted childReadKey/childWriteKey is
+   * zeroed in a `finally` after it is consumed (used to unseal the child Node
+   * + recurse). `state.folderKey`/`state.writeKey` (sharedFolderTree-owned)
+   * are never zeroed here.
    *
    * @param shareId - Share ID seeded via loadSharedFolder
-   * @param args.getShareKeysFn - Returns share_keys entries for this share
-   * @param args.vaultPrivateKey - Recipient's vault private key (ECIES unwrap)
    * @returns Flat list of reachable subfolders with writable flag and parentId
    */
-  async enumerateSharedSubtree(
-    shareId: string,
-    args: {
-      getShareKeysFn: (
-        shareId: string
-      ) => Promise<Array<{ keyType: string; itemId: string; encryptedKey: string }>>;
-      vaultPrivateKey: Uint8Array;
-    }
-  ): Promise<
+  async enumerateSharedSubtree(shareId: string): Promise<
     Array<{
       id: string;
       name: string;
@@ -4072,17 +4075,16 @@ export class CipherBoxClient {
       const state = this.sharedFolderTree.get(shareId);
       if (!state) throw new Error('Shared folder not loaded');
 
-      const shareKeys = await args.getShareKeysFn(shareId);
+      const hasRealWriteKey = (wk: Uint8Array | null | undefined): boolean =>
+        !!wk && wk.length === 32 && !wk.every((b) => b === 0);
 
-      // Build maps: ipnsName → encryptedKey (folder readKey) and writable set
-      const folderKeyMap = new Map<string, string>();
-      const writableSet = new Set<string>();
-      for (const key of shareKeys) {
-        if (key.keyType === 'folder') {
-          folderKeyMap.set(key.itemId, key.encryptedKey);
-        } else if (key.keyType === 'folder-ipns') {
-          writableSet.add(key.itemId);
-        }
+      // Unseal the share root's OWN write-body once (if it is write-capable)
+      // so the first DFS level has a writeChildren list to check children
+      // against — mirrors dfsFindFolder's parentNode.writeBody lookup.
+      let rootWriteChildren: WriteChildRef[] = [];
+      if (hasRealWriteKey(state.writeKey)) {
+        const rootNode = await unsealNode(state.publishedNode, state.folderKey, state.writeKey);
+        rootWriteChildren = rootNode.writeBody?.writeChildren ?? [];
       }
 
       const result: Array<{
@@ -4093,56 +4095,99 @@ export class CipherBoxClient {
         parentId: string | null;
       }> = [];
 
-      // Visited guard prevents infinite loops on cyclic ipnsName references
+      // Visited guard prevents infinite loops on cyclic ipnsName references.
       const visited = new Set<string>();
 
-      // Iterative DFS stack — each entry is (children array, parent ipnsName)
-      const stack: Array<{ children: SealedChildRef[]; parentId: string | null }> = [
-        { children: state.children, parentId: null },
-      ];
-
-      while (stack.length > 0) {
-        const frame = stack.pop()!;
-        for (const child of frame.children) {
+      const walk = async (
+        children: SealedChildRef[],
+        parentReadKey: Uint8Array,
+        parentWriteKey: Uint8Array | null,
+        parentWriteChildren: WriteChildRef[],
+        parentId: string | null
+      ): Promise<void> => {
+        for (const child of children) {
           if (visited.has(child.ipnsName)) continue;
 
-          // Only enumerate subfolders that have a share key entry
-          const encryptedKey = folderKeyMap.get(child.ipnsName);
-          if (!encryptedKey) continue;
+          const childResolved = await this.resolvePublishedNode(child.ipnsName);
+          if (!childResolved) continue; // structurally unresolvable hop -- try siblings
 
           visited.add(child.ipnsName);
-          const writable = writableSet.has(child.ipnsName);
 
-          result.push({
-            id: child.ipnsName,
-            name: child.name,
-            ipnsName: child.ipnsName,
-            writable,
-            parentId: frame.parentId,
-          });
-
-          // Decrypt child folder key to load its children
-          // D-09: childFolderKey is locally minted here — zero it in finally
-          let childFolderKey: Uint8Array | null = null;
+          let childReadKey: Uint8Array | null = null;
+          let childWriteKey: Uint8Array | null = null;
           try {
-            const encKeyBytes = hexToBytes(encryptedKey);
-            childFolderKey = await unwrapKey(encKeyBytes, args.vaultPrivateKey);
+            // Generation-source rule: child.generation (parent mirror), NEVER
+            // childResolved.published.generation (child's own envelope).
+            childReadKey = await unsealChildReadKey(
+              child.readKeySealed,
+              parentReadKey,
+              childResolved.published.id,
+              childResolved.published.kind,
+              child.generation
+            );
 
-            const subMeta = await sdkCore.loadFolderMetadata({
+            // A file leaf is never a move destination -- only folder/root
+            // kinds are listed and descended into.
+            if (
+              childResolved.published.kind !== 'folder' &&
+              childResolved.published.kind !== 'root'
+            ) {
+              continue;
+            }
+
+            const writeChildRef = parentWriteChildren.find(
+              (wc) => wc.childId === childResolved.published.id
+            );
+
+            let writable = false;
+            if (writeChildRef && parentWriteKey) {
+              childWriteKey = await unsealChildWriteKey(
+                writeChildRef.writeKeySealed,
+                parentWriteKey,
+                childResolved.published.id,
+                childResolved.published.kind,
+                child.generation
+              );
+              writable = true;
+            }
+
+            result.push({
+              id: child.ipnsName,
+              name: child.name,
               ipnsName: child.ipnsName,
-              folderKey: childFolderKey,
-              ctx: this.ctx,
+              writable,
+              parentId,
             });
 
-            const subChildren = subMeta?.metadata.children;
-            if (subChildren && subChildren.length > 0) {
-              stack.push({ children: subChildren, parentId: child.ipnsName });
+            const childNode = await unsealNode(
+              childResolved.published,
+              childReadKey,
+              childWriteKey ?? undefined
+            );
+
+            if (childNode.children && childNode.children.length > 0) {
+              await walk(
+                childNode.children,
+                childReadKey,
+                writable ? childWriteKey : null,
+                writable ? (childNode.writeBody?.writeChildren ?? []) : [],
+                child.ipnsName
+              );
             }
           } finally {
-            if (childFolderKey) clearBytes(childFolderKey);
+            childReadKey?.fill(0);
+            childWriteKey?.fill(0);
           }
         }
-      }
+      };
+
+      await walk(
+        state.children,
+        state.folderKey,
+        hasRealWriteKey(state.writeKey) ? state.writeKey : null,
+        rootWriteChildren,
+        null
+      );
 
       return result;
     });

@@ -2,8 +2,6 @@ import { useState, useEffect, useCallback, useMemo, useRef, type KeyboardEvent }
 import type { SealedChildRef } from '@cipherbox/core';
 import { Modal } from '../ui/Modal';
 import { getSdkClient } from '../../lib/sdk-provider';
-import { useAuthStore } from '../../stores/auth.store';
-import { fetchShareKeys } from '../../services/share.service';
 import '../../styles/dialogs.css';
 
 type SharedPickerNode = {
@@ -73,8 +71,6 @@ export function SharedMoveDialog({
       return;
     }
     if (!shareId) return;
-    const auth = useAuthStore.getState();
-    if (!auth.vaultKeypair) return;
 
     setIsLoadingTree(true);
     setLoadError(null);
@@ -82,10 +78,7 @@ export function SharedMoveDialog({
     setSelectedId(null);
 
     getSdkClient()
-      .enumerateSharedSubtree(shareId, {
-        getShareKeysFn: fetchShareKeys,
-        vaultPrivateKey: auth.vaultKeypair.privateKey,
-      })
+      .enumerateSharedSubtree(shareId)
       .then((nodes) => {
         // Re-check after await: dialog may have been closed
         if (!openRef.current) return;
