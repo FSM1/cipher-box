@@ -303,3 +303,45 @@ regarding gap-6 - remove dead code and redesign its encryption. run the full web
 <status>completed</status>
 <summary>Background command "Wait for and report conflict-detection solo run" completed (exit code 0)</summary>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>abbdb38f0619519df</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/064836b9-90e4-42d5-aabc-ed5fde831a57/tasks/abbdb38f0619519df.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 23 of phase 68.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 68.1-23
+**Tasks:** 2/2
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-abbdb38f0619519df/.planning/phases/68.1-web-client-runtime-integration/68.1-23-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+worktree_path: /Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-abbdb38f0619519df
+branch: worktree-agent-abbdb38f0619519df
+expected_base: 78ac715d9bc67b0bc2d9c5dc4d67cd9f68c6c93f
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `0e4bd79df` — fix(68.1-23): recover write-plane on cold-load and preserve local write-body mirror
+- `75b7c0a02` — test(68.1-23): lock write-plane preservation + cold-load recovery invariants
+- `cf18a6f99` — docs(68.1-23): add plan summary for write-plane cold-load recovery
+- `9c4fdd543` — docs(68.1-23): append self-check result to plan summary
+
+**Duration:** 17 min
+
+Summary of the fix (`/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-abbdb38f0619519df/packages/sdk/src/client.ts`):
+
+- `refreshFolderStateFromNetwork` now preserves an already-populated `folder.metadata.writeBody` when it unseals a network-ahead record without a real writeKey (`node.writeBody = folder.metadata?.writeBody ?? node.writeBody`), instead of replacing it with an absent one.
+- New private `recoverWriteKeyIfNeeded` helper, wired into `ensureFolderLoaded`, recovers a real writeKey + populated `metadata.writeBody` for a read-only-seeded `FolderState` entry (zero writeKey) reachable from a write-capable root, via a scoped DFS re-walk that adopts only the write-plane fields onto the existing entry (readKey/ipnsKeypair preserved).
+- `requireFolder` simplified to always route through `ensureFolderLoaded` so the recovery check fires for already-loaded entries too.
+
+Verification: scoped suite (`packages/sdk/src/__tests__/client-write-plane-recovery.test.ts`, 5/5 pass), full `@cipherbox/sdk` unit suite (279 passed, 49 pre-existing skips, 0 regressions), `pnpm typecheck` clean at repo root (crypto → core → api-client → sdk-core → sdk → web → scripts), `pnpm --filter @cipherbox/sdk build` clean.
+
+Confirmation of the three target e2e specs (`conflict-detection.spec.ts:219`, `writable-shares.spec.ts` 3.2, `sharing-workflow.spec.ts` 7.3) is deferred to the 68.1-29 exit gate per this plan's own scope.</result>
+<usage><subagent_tokens>266878</subagent_tokens><tool_uses>74</tool_uses><duration_ms>616412</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-abbdb38f0619519df</worktreePath><worktreeBranch>worktree-agent-abbdb38f0619519df</worktreeBranch></worktree>
+</task-notification>
