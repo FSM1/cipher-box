@@ -1,0 +1,240 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "cf05e549f4d4",
+  "session_id": "064836b9-90e4-42d5-aabc-ed5fde831a57",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-04T01:17:53.220414Z",
+  "branch": "feat/web-client-runtime-integration",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "d2fcb0323c1b",
+  "token_usage": {
+    "input_tokens": 151730,
+    "cache_creation_tokens": 5443693,
+    "cache_read_tokens": 200478672,
+    "output_tokens": 707739,
+    "api_call_count": 713
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01Uae4oXZcmbjYJcb6Ru4Pef",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d2fcb0323c1b",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 966,
+        "end": 967,
+        "entry_ids": [
+          "87bcf7d3-6ab6-4d0c-85a4-392200647a8f"
+        ],
+        "tool_use_id": "toolu_01Uae4oXZcmbjYJcb6Ru4Pef"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Uae4oXZcmbjYJcb6Ru4Pef"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01VfMELuzRNchcopiJja4PMF",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d2fcb0323c1b",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 2033,
+        "end": 2034,
+        "entry_ids": [
+          "384d7ee2-7b8a-4fd9-bb01-4623280b7d35"
+        ],
+        "tool_use_id": "toolu_01VfMELuzRNchcopiJja4PMF"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01VfMELuzRNchcopiJja4PMF"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01A77Kh9XZUV4vv7Hn4xgdtt",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d2fcb0323c1b",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 2086,
+        "end": 2087,
+        "entry_ids": [
+          "28cbcc55-4773-44fc-949b-4bfb41bfbeb1"
+        ],
+        "tool_use_id": "toolu_01A77Kh9XZUV4vv7Hn4xgdtt"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01A77Kh9XZUV4vv7Hn4xgdtt"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_013pdidYZSexLDDwpCT4bHoy",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d2fcb0323c1b",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 3017,
+        "end": 3018,
+        "entry_ids": [
+          "18089d12-8de0-46bc-8c37-9221aaa18e22"
+        ],
+        "tool_use_id": "toolu_013pdidYZSexLDDwpCT4bHoy"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_013pdidYZSexLDDwpCT4bHoy"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ship-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "summary": {
+    "intent": "Execute GSD phase 68.1 (wiring CipherBox's web app onto the node/v3 read+write chain) end-to-end through wave-based execution, multiple gap-closure rounds, and a full ship-phase workflow (verify/secure/validate/simplify/SDK-E2E/CodeRabbit/PR), then support live manual smoke-testing of the shipped branch.",
+    "outcome": "Phase 68.1 fully executed across 33 plans and 3 verification rounds (final: passed 5/5), shipped as PR #588 with all CI checks green and MERGEABLE; manual smoke testing afterward surfaced and fixed several real bugs (move write-link orphaning, CAS-merge write-body clobber, dropped duplicate-folder-name check) plus found one new unresolved bug (owner sees stale empty shared-out folder after a write-grantee uploads) filed as a todo but not yet fixed.",
+    "learnings": {
+      "repo": [
+        "Write plane is keyed by node UUID (childId/WriteChildRef), read plane by ipnsName (SealedChildRef) — mixing these up is the root cause of several bugs this session (move re-homing, shared subfolder resolution).",
+        "publishWithCas / CAS-merge on a 409 must merge BOTH the read-body and write-body — a real shipping bug had it resealing the write-body from a stale closure value, silently dropping a concurrent writer's WriteChildRef.",
+        "D-09 zeroization rule: only the terminal owner of a key buffer zeros it; a callee must never zero a caller-owned buffer (violating this previously broke 48/89 e2e tests).",
+        "D-03: getWriteBodyParams fail-opens to {} / [] on a zero/unresolvable writeKey — intentional but has a latent risk: a transient IPNS resolve miss on an already write-capable folder can seal an empty write-body, dropping the whole write chain (duplicated in client.ts and bin/index.ts).",
+        "CI's unit-test job does NOT run apps/web tests at all (web is covered only by Playwright web-e2e) — a broken web unit test/mock can silently rot on main without CI going red.",
+        "CodeRabbit CLI has a 150-file diff cap; large phase diffs must be split into directory-scoped review passes (--dir apps/packages/tests).",
+        "mock-ipns-routing (local dev delegated-routing mock) keeps records in an in-memory Map wiped on every container restart — records without a synchronously-written ipns_records DB row die permanently on restart.",
+        "Email OTP dev-mode console logging in EmailOtpService only fires when NODE_ENV === 'development' || unset; running the API under the e2e env (NODE_ENV=test/production) silently suppresses the log even though the OTP is generated and hashed into Redis.",
+        "Folder store seeds newly-created folders as isLoaded:true with empty children (useFolderMutations.ts) and both the web nav cache and SDK's ensureFolderLoaded take a fast-path that skips re-resolving IPNS for already-loaded folders — combined with the 30s poll only re-resolving root, this means an owner never sees a collaborator's shared-write uploads until they themselves write into that folder or hard-reload.",
+        "resyncFolder exists in the codebase but has zero call sites — dead code that could have addressed the stale-snapshot class of bugs.",
+        "1Password SSH commit signing frequently produces false-negative timeouts (exit 143) even though the commit lands — always verify via `git log -1` before retrying, never blind-retry.",
+        "Web3Auth Core Kit login has a known external flake signature (\"Failed to get vault keypair from Core Kit\", init hangs) — isolable via single-file spec re-run, not a code bug."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/folder/registration.ts",
+          "finding": "decodeRemote never unsealed the remote write-body on a 409 CAS conflict, and merge only unioned read-body children — write-body was resealed from stale closure writeChildren, dropping a concurrent writer's WriteChildRef. Fixed by unsealing remote write-body and unioning writeChildren by childId (add-only, remote wins)."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 1669,
+          "end_line": 1810,
+          "finding": "moveItem re-linked the read-plane SealedChildRef on move but left the moved item's WriteChildRef orphaned in the source write-body, permanently breaking edit/save after move into a subfolder — this matched the user's live repro. Fixed by unsealing under source writeKey, dropping from source, resealing under dest writeKey, keyed by resolved node UUID (not the ipnsName-based moveItem childId param)."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 3553,
+          "finding": "buildSharedWriteContextFromState deliberately excludes ipnsPrivateKey — shared writes recover the real IPNS signing key from the unsealed write-body via state.writeKey (~line 3730 unsealNode), so a Greptile finding claiming write shares lose their signing key was invalid (dead vestigial all-zero-key seed path, not a live signing bug)."
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigationActions.ts",
+          "line": 565,
+          "end_line": 571,
+          "finding": "navigateUp only re-derives the real writeKey when isRootDepth is true; navigating up/via-breadcrumb to a deeper subfolder in a nested write-share restores it with writeKey undefined, so writes from that restored level fail 'not write-capable' until re-entering from the share root. Real bug, deferred (not fixed at ship time) due to zeroization-lifecycle risk and missing e2e coverage."
+        },
+        {
+          "path": "apps/web/src/hooks/useFolderMutations.ts",
+          "line": 137,
+          "end_line": 149,
+          "finding": "Newly created folders are seeded with isLoaded:true and empty children in the store — combined with cached-fast-path navigation and root-only polling, this is why an owner never sees a collaborator's writes into a shared-out folder without their own write or a reload."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "createFolder was missing the duplicate-name rejection that uploadFile still enforced — a v2→v3 cutover regression, confirmed and fixed by mirroring uploadFile's check."
+        }
+      ],
+      "workflow": [
+        "GSD wave-based execute-phase keeps the orchestrator lean (~15% context) by dispatching each plan to a fresh subagent in an isolated worktree, recording worktree metadata, merging, then running post-merge typecheck+scoped-vitest gates before the next wave.",
+        "Long-running background agents (especially ones that launch a multi-minute e2e suite and then wait) reliably suffer a 'lost wake' failure mode — the agent parks itself waiting on its own background shell and is never re-invoked when it completes. Mitigation: an independent disk-based watchdog (e.g. watching a results file) plus prompt-based SendMessage resumption while the transcript is still warm; if the transcript is evicted, spawn a fresh continuation agent with explicit completed-state context.",
+        "Exit-gate/checkpoint plans marked autonomous:false must get real human sign-off via AskUserQuestion for gap dispositions — never self-approve even under auto_advance config.",
+        "When rebuilding a client SDK chain (crypto→core→api-client→sdk-core→sdk→api) mid-session, both the API process and any Vite dev server must be restarted afterward — Vite caches the pre-rebuild dist and a stale API instance may be running under a different .env (e.g. E2E env vars that suppress dev-only logging).",
+        "Session/credit exhaustion can kill an agent mid-task; recovery requires inspecting the actual disk state (uncommitted diffs, partial edits) rather than trusting the last returned summary, then completing the aborted work inline or re-spawning.",
+        "CodeRabbit PR-level review can silently skip when the diff exceeds its file cap — always check for a 'skipped' state and fall back to a local directory-scoped CLI pass before relying on it as a gate.",
+        "Greptile (second PR reviewer) can raise new findings on its re-review of your own fix commits — always re-poll reviewThreads after pushing before declaring 0 unresolved."
+      ]
+    },
+    "friction": [
+      "Multiple background agents died mid-task on account session/credit limits (Fable 5 exhaustion, then a later Claude session-limit reset), requiring manual disk-state recovery and re-spawning rather than trusting agent self-reports.",
+      "Exit-gate/executor agents repeatedly lost their wake-up after launching long background e2e runs, requiring independent watchdogs and prompt-based resumption workarounds multiple times across the session.",
+      "Two executor subagents ran a forbidden `git stash` mid-task (against explicit project rules); both were caught and manually reverted/dropped without data loss, but required orchestrator vigilance.",
+      "CodeRabbit's PR-level review was skipped twice (locally at 179/207 files vs its 150-file cap), forcing manual directory-scoped local runs to get equivalent coverage.",
+      "OTP extraction was blocked for several turns because the API instance answering requests was running under leftover E2E environment variables (NODE_ENV suppressing the dev-only OTP log) rather than a plain dev config.",
+      "A stale Vite dev server (started hours before the final SDK rebuild) was silently serving pre-fix client code, which would have invalidated a smoke test had it not been caught and restarted with forced dependency re-optimization.",
+      "CI's Test job failed on a stale `shares.controller.spec.ts` assertion (expected 4 args vs the actual 6-arg write-descriptor delegation) — an out-of-session-scope regression that still had to be fixed to get the gate green.",
+      "A pre-existing, unrelated `ipns.service.test.ts` module-load crash (stale api-client mock) had to be carefully triaged to confirm it predated the branch and wasn't CI-gating, to avoid scope creep into an unrelated fix."
+    ],
+    "open_items": [
+      "PR #588 is green/MERGEABLE but not yet merged — merge decision left to the user.",
+      "Nested write-share loses write capability when navigating up/via-breadcrumb to an intermediate subfolder (writeKey not re-derived except at share root) — documented as a known non-blocker with a workaround (re-enter from share root), tracked as a todo.",
+      "New bug found in final smoke test: an owner does not see a write-grantee's uploads into a shared-out folder until they themselves write or hard-reload (stale isLoaded:true empty-children snapshot + cached-fast-path nav + root-only polling) — filed as todo `2026-07-04-owner-stale-empty-snapshot-shared-out-folder.md`, not fixed.",
+      "Recovery tool (`recovery.html`) still only supports legacy v2 vault blobs vs the v3/node-v3 format shipped since Phase 62 — needs its own port plan.",
+      "rotation-durability SC-4 residual: the API's DB-canonical resolve makes the relay-replay scenario test-unreachable — needs an apps/api architectural decision or test redesign.",
+      "restore-to-different-parent write re-homing shares the same bug class as the fixed move-write-link issue but on an unshipped flow — deferred.",
+      "~17 other follow-up todos filed during ship-phase covering: sdk-e2e quarantine sweep completion, dedupe sdk write-plane helpers, consolidate web shared-navigation duplication, hoist base64ToBytes into crypto package, remove legacy moveInSharedFolder share_keys branch, drop discarded per-upload ECIES wrapKey, download-progress UX decision, getWriteBodyParams transient-resolve-miss write-chain drop, delete-should-drop-WriteChildRef (currently retained), rename ipnsPrivateKeyEncrypted field, fix broken ipns.service unit test mock, remove dead getShareKeys folder-ipns path, and shared-nav-stack stale-children snapshot."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
