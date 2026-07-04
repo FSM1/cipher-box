@@ -1,5 +1,5 @@
 import type { SealedChildRef, NodeContent } from '@cipherbox/core';
-// TODO(phase 63): formatDate deferred; timestamps come from Node envelope
+import { formatDate } from '../../../utils/format';
 import { CopyableValue, DetailRow } from './DetailsPrimitives';
 import { VersionHistory } from './VersionHistory';
 
@@ -95,8 +95,11 @@ export function FileDetails({
       </DetailRow>
 
       <DetailRow label="Modified">
-        {/* TODO(phase 63): SealedChildRef has no modifiedAt; resolve from Node envelope */}
-        <span className="details-value details-value--dim">unavailable (phase 63)</span>
+        {typeof item.modifiedAt === 'number' && Number.isFinite(item.modifiedAt) ? (
+          <span className="details-value">{formatDate(item.modifiedAt)}</span>
+        ) : (
+          <span className="details-value details-value--dim">—</span>
+        )}
       </DetailRow>
 
       {/* Version history (only shown when versions exist) */}

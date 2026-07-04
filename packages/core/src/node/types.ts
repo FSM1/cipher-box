@@ -73,12 +73,17 @@ export type NodeContent = {
 /**
  * A sealed reference to a child node stored inside the parent's read-body.
  *
- * Field set is EXACTLY {name, ipnsName, generation, versionFloor, readKeySealed} —
- * no `writeKeySealed` or any other write field (NODE-03, design §2.2/§2.6).
+ * Field set is {name, ipnsName, generation, versionFloor, readKeySealed} plus the
+ * optional display mirrors {size, modifiedAt} — NO `writeKeySealed` or any other
+ * write field (NODE-03, design §2.2/§2.6). The mirrors live inside the sealed
+ * parent read-body (encrypted under the parent readKey), so they leak nothing to
+ * the server and nothing beyond what a readKey holder can already derive.
  *
  * `versionFloor` is a bigint matching the IPNS sequenceNumber convention (D-08).
  * `generation` is a convergence/staleness witness mirror; the authoritative value
- * lives on the child's own published envelope (design §2.7).
+ * lives on the child's own published envelope (design §2.7). `size`/`modifiedAt`
+ * are likewise non-authoritative display mirrors (the source of truth is the
+ * child's own Node: `NodeContent.size` / `Node.modifiedAt`).
  */
 export type SealedChildRef = {
   /** Display name of the child (plaintext within the sealed parent read-body). */
@@ -101,6 +106,19 @@ export type SealedChildRef = {
    * Base64; AAD role = 0x02 child-readkey.
    */
   readKeySealed: string;
+  /**
+   * Optional display mirror of the child file's plaintext byte size
+   * (`NodeContent.size`). Absent for folder children and for legacy refs written
+   * before this mirror existed — treat `undefined` as "unknown", never as 0.
+   * Non-authoritative: the source of truth is the child's own Node.
+   */
+  size?: number;
+  /**
+   * Optional display mirror of the child's last-modified time (Unix ms, mirrors
+   * `Node.modifiedAt`). Absent on legacy refs — treat `undefined` as "unknown".
+   * Non-authoritative: the source of truth is the child's own Node.
+   */
+  modifiedAt?: number;
 };
 
 // ---------------------------------------------------------------------------

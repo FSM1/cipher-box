@@ -1510,6 +1510,8 @@ export class CipherBoxClient {
           generation: 0,
           versionFloor: 1n,
           readKeySealed,
+          // Folder display mirror: creation time (no size for folders — WEB-01).
+          modifiedAt: Date.now(),
         };
 
         // Build the parent's WriteChildRef (write-body — role 0x04).
@@ -2098,6 +2100,9 @@ export class CipherBoxClient {
           name: fileName,
           ipnsName: uploadResult.fileMetaIpnsName,
           versionFloor: 1n,
+          // Display mirrors: plaintext byte size + upload time (WEB-01 size/date columns).
+          size: data.length,
+          modifiedAt: Date.now(),
         });
 
         // 2b. Insert a WriteChildRef for the new file's writeKey into the
@@ -2291,6 +2296,8 @@ export class CipherBoxClient {
         fileName: string;
         fileId: string;
         uploadResult: UploadResult;
+        /** Plaintext byte size, captured pre-upload for the parent's SealedChildRef display mirror. */
+        size: number;
       };
 
       // Run all files through the pool with Promise.allSettled
@@ -2315,7 +2322,12 @@ export class CipherBoxClient {
             });
 
             callbacks?.onFileComplete?.(file.fileName);
-            return { fileName: file.fileName, fileId, uploadResult } as FileResult;
+            return {
+              fileName: file.fileName,
+              fileId,
+              uploadResult,
+              size: file.data.length,
+            } as FileResult;
           })
         )
       );
@@ -2384,6 +2396,9 @@ export class CipherBoxClient {
               name: success.fileName,
               ipnsName: success.uploadResult.fileMetaIpnsName,
               versionFloor: 0n,
+              // Display mirrors: plaintext byte size + upload time (WEB-01 size/date columns).
+              size: success.size,
+              modifiedAt: Date.now(),
             });
             mergedChildren = updatedChildren;
             registeredSuccesses.push(success);

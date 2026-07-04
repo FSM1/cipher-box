@@ -1,5 +1,6 @@
 import type { SealedChildRef } from '@cipherbox/core';
 import { deriveDeviceId } from '@cipherbox/crypto';
+import { formatDate } from '../../../utils/format';
 import { CopyableValue, DetailRow } from './DetailsPrimitives';
 
 /**
@@ -115,8 +116,11 @@ export function FolderDetails({
       </DetailRow>
 
       <DetailRow label="Modified">
-        {/* TODO(phase 63): SealedChildRef has no modifiedAt; resolve from Node envelope */}
-        <span className="details-value details-value--dim">unavailable (phase 63)</span>
+        {typeof item.modifiedAt === 'number' && Number.isFinite(item.modifiedAt) ? (
+          <span className="details-value">{formatDate(item.modifiedAt)}</span>
+        ) : (
+          <span className="details-value details-value--dim">—</span>
+        )}
       </DetailRow>
     </div>
   );

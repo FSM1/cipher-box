@@ -12,6 +12,7 @@ import type { MouseEvent, DragEvent, KeyboardEvent } from 'react';
 import type { SealedChildRef } from '@cipherbox/core';
 import { isExternalFileDrag } from '../../hooks/useDropUpload';
 import { isFileRef } from '../../utils/fileTypes';
+import { formatBytes, formatDate } from '../../utils/format';
 import type { DragItem } from './FileListItem';
 
 type DragPayload = {
@@ -63,8 +64,13 @@ export function SharedFolderRow({
   // D-02: kind cache read (synchronous, folder-safe default on cache miss).
   const isFolder = !isFileRef(item);
   const icon = isFolder ? '📁' : '📄';
-  // TODO(phase 63): SealedChildRef has no modifiedAt; resolve from Node envelope
-  const date = '--'; // phase-63 stub
+  // Display-mirror fields on SealedChildRef (undefined on folders/legacy → em dash).
+  const size =
+    typeof item.size === 'number' && Number.isFinite(item.size) ? formatBytes(item.size) : '—';
+  const date =
+    typeof item.modifiedAt === 'number' && Number.isFinite(item.modifiedAt)
+      ? formatDate(item.modifiedAt)
+      : '—';
   const isWrite = permission === 'write';
 
   // Internal drag-over visual state
@@ -249,7 +255,7 @@ export function SharedFolderRow({
         )}
       </div>
       <div className="file-list-cell file-list-cell-size" role="gridcell">
-        --
+        {size}
       </div>
       <div className="file-list-cell file-list-cell-date" role="gridcell">
         {date}

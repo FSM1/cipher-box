@@ -7,7 +7,7 @@ import {
   type TouchEvent,
 } from 'react';
 import type { SealedChildRef } from '@cipherbox/core';
-import { formatDate, getItemIcon } from '../../utils/format';
+import { formatBytes, formatDate, getItemIcon } from '../../utils/format';
 import { isExternalFileDrag } from '../../hooks/useDropUpload';
 import { isFileRef } from '../../utils/fileTypes';
 
@@ -293,13 +293,17 @@ export function FileListItem({
 
   const itemType: 'file' | 'folder' = isFolder ? 'folder' : 'file';
 
-  // Display size: stub until read-chain provides NodeContent.size
-  // TODO(phase 63): resolve size via Node read-chain
-  const sizeDisplay = '-';
+  // Display size: plaintext byte-size mirror (files only). Folders and legacy
+  // refs carry no size mirror → em dash.
+  const sizeDisplay =
+    typeof item.size === 'number' && Number.isFinite(item.size) ? formatBytes(item.size) : '—';
 
-  // Display modified date: SealedChildRef has no modifiedAt
-  // TODO(phase 63): resolve modifiedAt from Node envelope
-  const dateDisplay = formatDate(0); // phase-63 stub
+  // Display modified date: last-modified mirror (Unix ms). Undefined on folders
+  // created before the mirror landed and on legacy refs → em dash.
+  const dateDisplay =
+    typeof item.modifiedAt === 'number' && Number.isFinite(item.modifiedAt)
+      ? formatDate(item.modifiedAt)
+      : '—';
 
   const className = [
     'file-list-item',

@@ -125,7 +125,7 @@ export class SearchIndexService {
           type: 'file', // phase 63: use Node.kind ('folder'|'file') from unsealed Node
           parentPath,
           parentFolderId: folder.id,
-          modifiedAt: 0, // phase 63: modifiedAt lives in NodeContent, not SealedChildRef
+          modifiedAt: child.modifiedAt ?? 0, // display-mirror on SealedChildRef; 0 for legacy/folders
         });
       }
     }
