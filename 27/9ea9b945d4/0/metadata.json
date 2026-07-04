@@ -1,0 +1,257 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "279ea9b945d4",
+  "session_id": "064836b9-90e4-42d5-aabc-ed5fde831a57",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-04T01:40:23.67144Z",
+  "branch": "feat/web-client-runtime-integration",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "packages/core/src/node/decode.ts",
+    "packages/core/src/node/encode.ts",
+    "packages/core/src/node/types.ts",
+    "packages/sdk-core/src/folder/metadata-ops.ts",
+    "packages/sdk/src/client.ts",
+    "packages/sdk/src/share/shared-write.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "d2fcb0323c1b",
+  "token_usage": {
+    "input_tokens": 156095,
+    "cache_creation_tokens": 5571636,
+    "cache_read_tokens": 208319184,
+    "output_tokens": 773707,
+    "api_call_count": 767
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01Uae4oXZcmbjYJcb6Ru4Pef",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d2fcb0323c1b",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 966,
+        "end": 967,
+        "entry_ids": [
+          "87bcf7d3-6ab6-4d0c-85a4-392200647a8f"
+        ],
+        "tool_use_id": "toolu_01Uae4oXZcmbjYJcb6Ru4Pef"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Uae4oXZcmbjYJcb6Ru4Pef"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01VfMELuzRNchcopiJja4PMF",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d2fcb0323c1b",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 2033,
+        "end": 2034,
+        "entry_ids": [
+          "384d7ee2-7b8a-4fd9-bb01-4623280b7d35"
+        ],
+        "tool_use_id": "toolu_01VfMELuzRNchcopiJja4PMF"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01VfMELuzRNchcopiJja4PMF"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01A77Kh9XZUV4vv7Hn4xgdtt",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d2fcb0323c1b",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 2086,
+        "end": 2087,
+        "entry_ids": [
+          "28cbcc55-4773-44fc-949b-4bfb41bfbeb1"
+        ],
+        "tool_use_id": "toolu_01A77Kh9XZUV4vv7Hn4xgdtt"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01A77Kh9XZUV4vv7Hn4xgdtt"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_013pdidYZSexLDDwpCT4bHoy",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d2fcb0323c1b",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 3017,
+        "end": 3018,
+        "entry_ids": [
+          "18089d12-8de0-46bc-8c37-9221aaa18e22"
+        ],
+        "tool_use_id": "toolu_013pdidYZSexLDDwpCT4bHoy"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_013pdidYZSexLDDwpCT4bHoy"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ship-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "summary": {
+    "intent": "Execute, verify, gap-close, and ship GSD phase 68.1 (wiring the CipherBox web app onto the node/v3 read+write chain), then respond to live bugs found during post-ship local smoke testing.",
+    "outcome": "Phase 68.1 reached verification PASSED (5/5) after multiple gap-closure rounds, shipped as PR #588 (all CI green, mergeable, merge left to user), and post-ship smoke testing surfaced two more real bugs (stale owner view of shared-out folders, missing file size/modified-date) which were being actively diagnosed/fixed (a SealedChildRef metadata-mirror feature) at transcript end.",
+    "learnings": {
+      "repo": [
+        "Write plane is keyed by node UUID (WriteChildRef.childId / childPub.id), read plane by ipnsName (SealedChildRef) — conflating the two causes write-capability bugs (root cause of the move/nested-share/cold-load write bugs found this phase).",
+        "D-03: getWriteBodyParams fail-opens to {} on a zero/absent writeKey rather than throwing — duplicated in client.ts and bin/index.ts, both need fixing together if flipped.",
+        "D-09: only the terminal owner of a key buffer zeroes it; callees must never zero caller-owned buffers.",
+        "CI's unit-test job does NOT run apps/web tests at all (web is covered only by Playwright web-e2e) — a broken web unit test/mock can rot silently without going CI-red.",
+        "CodeRabbit CLI has a 150-file diff cap; large phase diffs must be run directory-scoped (apps/packages/tests) instead of one pass.",
+        "mock-ipns-routing (delegated routing mock) keeps records in an in-memory Map — wiped on every container restart; records need a DB row (ipns_records) to survive.",
+        "1Password SSH commit signing frequently times out (exit 143) without the commit actually failing — always verify via `git log -1` before retrying, never blind-retry.",
+        "vite must be restarted with --force (dep re-optimize) after rebuilding sdk/sdk-core dist, otherwise the running web app keeps serving stale pre-rebuild client code.",
+        "EmailOtpService only logs the plaintext dev OTP to console when NODE_ENV is 'development' or unset; running the API under an E2E-style .env (NODE_ENV=test/production) silently swallows OTPs since SendGrid isn't configured either.",
+        "SealedChildRef is a frozen/versioned schema (NODE-03 golden vectors) — new fields must be optional and conditionally serialized so old records stay byte-identical.",
+        "resyncFolder exists but has zero call sites — dead code, not an active refresh path.",
+        "Subfolder navigation uses a cached fast-path (isLoaded) and never re-resolves IPNS on entry; only root gets a 30s poll, so shared-out folder contents written by another party go unseen until the owner writes or reloads.",
+        "git stash must never be used in this repo (shared refs/stash across worktrees) — two executor agents violated this rule mid-session and had to self-recover."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 1772,
+          "end_line": 1870,
+          "finding": "moveItem re-homes the moved child's WriteChildRef from source to dest write-body, keyed by resolved node UUID (childPub.id), not the ipnsName-based moveItem childId param."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 3553,
+          "finding": "buildSharedWriteContextFromState omits ipnsPrivateKey; shared writes recover the real IPNS signing key from the unsealed write-body via writeKey, not the seeded all-zero key."
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigationActions.ts",
+          "line": 565,
+          "end_line": 571,
+          "finding": "navigateUp only re-derives writeKey when isRootDepth is true; restoring a deeper nested-share subfolder loses write capability (deferred known gap)."
+        },
+        {
+          "path": "packages/sdk-core/src/folder/registration.ts",
+          "line": 366,
+          "finding": "publishWithCas's decodeRemote never unsealed the remote write-body on 409, so mergeChildren only merged the read-body — concurrent writers' WriteChildRefs were silently dropped (real bug, fixed)."
+        },
+        {
+          "path": "apps/web/src/components/file-browser/FileListItem.tsx",
+          "line": 296,
+          "end_line": 302,
+          "finding": "sizeDisplay/dateDisplay hardcoded as phase-63 stubs ('-' and formatDate(0)) because SealedChildRef never carried size/mtime; fixed by adding optional mirror fields to the schema."
+        },
+        {
+          "path": "apps/web/src/stores/folder.store.ts",
+          "line": 249,
+          "end_line": 271,
+          "finding": "SDK-event handler hybrid-projects: sync insert only when every child's kind is already cached, else awaits resolveKinds with a stale-sequence guard — fixes the D-02 async kind-cache race."
+        }
+      ],
+      "workflow": [
+        "Background agents that launch long-running shell commands (full e2e suites) frequently 'lose their wake' — transcript gets evicted and the agent never resumes on completion; mitigated with disk-state spot-checks, prompt-based SendMessage resume, or a fresh continuation agent with explicit completed_state.",
+        "Playwright specs here use describe.serial per file — a single early failure cascades and skips the rest of that file, so raw 'N failed' tallies understate real coverage; must check first-failure position per file, not just aggregate counts.",
+        "Session/usage limits killed multiple subagents mid-task across the shipping session; recovery required verifying exact disk state (git diff, uncommitted work) before resuming rather than assuming a clean restart.",
+        "For a large ship-phase diff, splitting review passes by directory and running SDK E2E + unit coverage locally before pushing avoids CI round-trips."
+      ]
+    },
+    "friction": [
+      "Repeated session/usage-limit deaths (Claude and Fable) killed subagents mid-execution multiple times, requiring manual disk-state recovery each time.",
+      "Background e2e-suite agents twice 'lost their wake' after the suite finished, requiring watchdogs and prompt-resume workarounds; one watchdog itself was based on a file (.last-run.json) this playwright config never writes.",
+      "CodeRabbit's 150-file cap was hit twice (locally and on the PR itself), forcing directory-scoped local reviews instead of a single PR-level pass.",
+      "1Password commit signing timeouts occurred repeatedly, requiring git log verification before any retry to avoid double-committing.",
+      "Two executor subagents violated the 'never git stash' rule mid-task and had to self-recover without data loss.",
+      "A stray `cd docker` left the cwd wrong, causing a false 'ROADMAP.md missing' scare.",
+      "vite serving stale pre-rebuild sdk dist required manual detection (comparing process start time to dist rebuild time) and a forced restart.",
+      "OTP extraction was blocked because the API was running under E2E .env (NODE_ENV suppressed) rather than development, requiring a diagnosis chain and API restart.",
+      "CI Test job failed post-ship on a stale shares.controller.spec.ts assertion unrelated to the ship session's direct edits, requiring investigation to confirm it wasn't a regression."
+    ],
+    "open_items": [
+      "Recovery tool (recovery.html) still only accepts legacy v2 vault blobs vs v3 — needs its own port/feature plan (deferred, todo filed).",
+      "rotation-durability SC-4 relay-replay scenario is unreachable past the API's DB-canonical resolve floor — needs an apps/api architecture decision or test redesign (deferred, todo filed).",
+      "Restore-to-different-parent write-link re-homing shares the same bug class as the move fix but is an unshipped flow — documented as a follow-up, not fixed.",
+      "Nested write-share loses write capability on navigate-up/breadcrumb restore to an intermediate subfolder — documented known non-blocker in the shipped PR, todo filed.",
+      "Dead getShareKeys folder-ipns path (superseded, no live caller) flagged for removal.",
+      "Shared nav stack stores stale children by reference on breadcrumb restore — minor UX staleness, todo filed.",
+      "ipns.service.test.ts has a broken/incomplete mock causing a module-load crash; pre-existing, non-CI-gating (CI doesn't run apps/web unit tests), left unfixed with a todo.",
+      "getWriteBodyParams's D-03 fail-open can seal an empty write-body on a transient resolve miss (duplicated in client.ts and bin/index.ts) — flagged as a latent risk needing a holistic fix decision, not flipped unilaterally.",
+      "Delete currently retains a removed child's WriteChildRef indefinitely (chain growth) instead of dropping it — todo filed.",
+      "ipnsPrivateKeyEncrypted naming inconsistency vs wire field encryptedIpnsPrivateKey — rename todo filed (blocked by forbidden-test-dir fixtures).",
+      "Owner sees a stale empty snapshot of a shared-out folder until they write into it or reload — newly found during smoke test, todo filed, workaround exists.",
+      "File size / modified-date not displayed in file list (hardcoded '-' / 1970 stub) — user chose the SealedChildRef metadata-mirror approach; core/sdk-core/sdk changes implemented and tested, UI wiring delegated to a subagent, dist rebuilt and vite restarted, but final commit/verification not yet confirmed complete at transcript end.",
+      "replaceFile/restoreFileVersion don't re-publish the parent folder, so the new size/mtime mirror will go stale after an in-place file edit until the folder is next written — accepted degradation, flagged as a follow-up rather than fixed inline.",
+      "Several simplify-pass todos remain open: dedupe SDK write-plane helpers, consolidate web shared-navigation duplication, hoist base64ToBytes into crypto package, remove legacy moveInSharedFolder share_keys branch, drop discarded per-upload ECIES wrapKey, and a download-progress UX decision for useFileDownload."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-04T01:39:24.59074Z",
+    "agent_lines": 62,
+    "agent_removed": 6,
+    "human_added": 149,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 212,
+    "total_lines_changed": 243,
+    "agent_percentage": 27.983539094650205,
+    "metric_version": 2
+  }
+}

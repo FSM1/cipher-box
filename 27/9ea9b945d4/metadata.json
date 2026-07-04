@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "279ea9b945d4",
+  "strategy": "manual-commit",
+  "branch": "feat/web-client-runtime-integration",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/core/src/node/decode.ts",
+    "packages/core/src/node/encode.ts",
+    "packages/core/src/node/types.ts",
+    "packages/sdk-core/src/folder/metadata-ops.ts",
+    "packages/sdk/src/client.ts",
+    "packages/sdk/src/share/shared-write.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/27/9ea9b945d4/0/metadata.json",
+      "transcript": "/27/9ea9b945d4/0/full.jsonl",
+      "content_hash": "/27/9ea9b945d4/0/content_hash.txt",
+      "prompt": "/27/9ea9b945d4/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 156095,
+    "cache_creation_tokens": 5571636,
+    "cache_read_tokens": 208319184,
+    "output_tokens": 773707,
+    "api_call_count": 767
+  }
+}
