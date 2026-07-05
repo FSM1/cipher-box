@@ -529,11 +529,22 @@ Plans:
 4. The interim mirror is reverted: `SealedChildRef` is back to its frozen five-field set (NODE-03), and size/modifiedAt are sourced from the resolved listing (the codec/encode/decode/`metadata-ops` mirror changes from ba3e0229a are removed).
 5. Regression coverage closes the desync bug class: a `tests/web-e2e` proves an owner (or a second client) sees a grantee's upload into a shared folder without the owner first writing, and that file size/modified-date render from the resolved listing; the full web-e2e suite stays green.
 
-**Plans**: TBD
+**Plans**: 12 plans
 
 Plans:
 
-- [ ] TBD (run /gsd-plan-phase 68.2 to break down)
+- [ ] 68.2-01-PLAN.md — Wave 1: SDK-internal gated read resolve (ROT-07 enforceResolved on resolvePublishedNode/dfsFindFolder, before any deletion) [TDD]
+- [ ] 68.2-02-PLAN.md — Wave 2: ResolvedChild type + listFolder/listSharedFolder listing API + folder:updated ResolvedChild[] event [TDD]
+- [ ] 68.2-03-PLAN.md — Wave 3: SDK write-path + IPFS-transport facade + pure-util re-exports (D-07 write scope)
+- [ ] 68.2-04-PLAN.md — Wave 4: SDK vault-bootstrap + device-registry + BYO-pinning facade (off-path pockets)
+- [ ] 68.2-05-PLAN.md — Wave 3: Author the shared-folder desync regression e2e (SC#5)
+- [ ] 68.2-06-PLAN.md — Wave 4: Web owned read rewire + relocate version-transforms + render kind/size/modifiedAt from ResolvedChild
+- [ ] 68.2-07-PLAN.md — Wave 4: Web owned file I/O rewire onto the SDK IPFS-transport facade (progress preserved)
+- [ ] 68.2-08-PLAN.md — Wave 4: Web shared-folder navigation/write rewire onto listSharedFolder
+- [ ] 68.2-09-PLAN.md — Wave 4: Collapse folder.store to a ResolvedChild projection + nav re-resolve + poll invalidation (SC#3/#5)
+- [ ] 68.2-10-PLAN.md — Wave 5: Web off-path pockets (BYO/auth/device-registry) + pure-util call sites onto the facade
+- [ ] 68.2-11-PLAN.md — Wave 6: Delete ipns.service/file-metadata.service/kind-cache/useFileSize + allowlist-free D-07 grep gate + unit/typecheck
+- [ ] 68.2-12-PLAN.md — Wave 7: Revert the SealedChildRef size/modifiedAt mirror LAST (restore NODE-03) + full web-e2e phase gate
 
 ### Phase 69: FUSE and WinFsp — Rust Integration and Grant-Root Awareness
 

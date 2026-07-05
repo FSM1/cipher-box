@@ -165,10 +165,10 @@ Which phases cover which requirements. Populated during roadmap creation.
 | WEB-02 | Phase 68.1 | Complete |
 | WEB-03 | Phase 68.1 | Complete |
 | WEB-04 | Phase 68.1 | Gaps remain — see 68.1-13-SUMMARY.md |
-| SDK-READ-01 | Phase 68.2 | Pending |
-| SDK-READ-02 | Phase 68.2 | Pending |
-| SDK-READ-03 | Phase 68.2 | Pending |
-| SDK-READ-04 | Phase 68.2 | Pending |
+| SDK-READ-01 | Phase 68.2 | Planned |
+| SDK-READ-02 | Phase 68.2 | Planned |
+| SDK-READ-03 | Phase 68.2 | Planned |
+| SDK-READ-04 | Phase 68.2 | Planned |
 | TEST-03 | Phase 69 | Pending |
 
 **Coverage:**
