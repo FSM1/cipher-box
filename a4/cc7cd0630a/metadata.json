@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "a4cc7cd0630a",
+  "strategy": "manual-commit",
+  "branch": "feat/sdk-owned-read-chain-and-resolved-folder-listings",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/68.2-sdk-owned-read-chain-and-resolved-folder-listings/68.2-CONTEXT.md",
+    ".planning/phases/68.2-sdk-owned-read-chain-and-resolved-folder-listings/68.2-DISCUSSION-LOG.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/a4/cc7cd0630a/0/metadata.json",
+      "transcript": "/a4/cc7cd0630a/0/full.jsonl",
+      "content_hash": "/a4/cc7cd0630a/0/content_hash.txt",
+      "prompt": "/a4/cc7cd0630a/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 12531,
+    "cache_creation_tokens": 167863,
+    "cache_read_tokens": 2384274,
+    "output_tokens": 41727,
+    "api_call_count": 22
+  }
+}

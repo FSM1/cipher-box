@@ -1,0 +1,6 @@
+/gsd-discuss-phase 68.2
+
+---
+
+1 - Yes this seems reasonable - the HighWaterStore will need to be mocked/injected for the nodeJS SDK tests.
+2 - include the write path in this phase. phase 69 is entirely Rust/Desktop side and should not be conflated with the current TS code (web + sdk)
