@@ -1,0 +1,74 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "bd338bbf7e09",
+  "session_id": "60afe4f5-90e8-4017-b046-ab86ca19c540",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-05T23:50:05.844179Z",
+  "branch": "feat/sdk-owned-read-chain-and-resolved-folder-listings",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "11b8c0a80fb6",
+  "token_usage": {
+    "input_tokens": 18419,
+    "cache_creation_tokens": 215509,
+    "cache_read_tokens": 4045586,
+    "output_tokens": 64655,
+    "api_call_count": 28
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-plan-phase-2026-07-05T22:58:51.387205Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "11b8c0a80fb6",
+      "timestamp": "2026-07-05T22:58:51.387205Z",
+      "native": {
+        "command": "/gsd-plan-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-plan-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "summary": {
+    "intent": "Run the GSD plan-phase orchestrator end-to-end for cipher-box phase 68.2 (SDK-owned read chain and resolved folder listings), producing research, validation, patterns, requirements, and verified plans.",
+    "outcome": "Completed the full pipeline: RESEARCH.md and VALIDATION.md written, a D-07 scope boundary decision resolved and locked into CONTEXT.md, PATTERNS.md generated, SDK-READ-01..04 registered in REQUIREMENTS.md, 12 plans across 7 waves produced and committed, and plan-checker returned VERIFICATION PASSED (with 2 non-blocking warnings) before both coverage gates passed.",
+    "learnings": {
+      "repo": [
+        "The plan:pre UI capability gate only fires when the hook registry's `when` condition classifies a phase as net-new UI surface; the lower-level ui-plan-gate check can report block:true even when no UI hook is actually active, so §5.6 must check activeHooks before treating block:true as binding.",
+        "The commit helper can report `commit_failed` as a false negative even when lint-staged completes and the commit lands cleanly — always verify with `git log` rather than trusting the helper's status.",
+        "Intel API-SURFACE extraction can return 0 symbols for this monorepo; it's HINT-only, so omit it from the planner prompt rather than pass empty noise.",
+        "The schema-gate planner contribution is orchestrator-evaluated per-phase and should be skipped when the phase touches zero ORM/DB schema files (e.g. a phase touching only packages/sdk, sdk-core, core, apps/web).",
+        "D-07's literal wording ('no raw IPFS/IPNS access anywhere in apps/web/src') sweeps in off-path pockets beyond the named folder-listing success criteria: BYO-pinning settings (ConnectionTest.tsx, StorageTab.tsx) and auth-bootstrap/device-registry crypto (useAuth.ts, device-registry.service.ts) — a full-boundary grep gate must account for these ~4 extra files."
+      ],
+      "code": [],
+      "workflow": [
+        "The research-only mode (--research-phase N with no/--research/--view flags) replaces the deleted research-phase command and is designed for cheap correction-without-replanning loops.",
+        "Plan-checker can return VERIFICATION PASSED alongside non-blocking WARNINGs (e.g. grep-only coverage on one requirement leg) and still recommend proceeding, with the gap logged for follow-up rather than blocking.",
+        "When workflow stages are strictly sequential and each subagent's output feeds the next (research → Nyquist/VALIDATION.md → pattern-mapper → planner → checker), spawn them synchronously one at a time rather than in parallel."
+      ]
+    },
+    "friction": [
+      "Commit helper's `commit_failed` false-negative required manual git log verification twice (VALIDATION.md and later commits) to confirm work actually landed.",
+      "Intel API-SURFACE extraction returned 0 symbols, adding a dead-end step before realizing it should just be omitted.",
+      "D-07's scope boundary was ambiguous enough to require a mid-workflow AskUserQuestion decision gate, adding an unplanned pause before planning could proceed."
+    ],
+    "open_items": [
+      "D-03's poll-invalidation leg has only grep-based coverage per the plan-checker's non-blocking warning — flagged for a gap-closure follow-up pass.",
+      "SHARE-WRITE-KEY write-share key threading gap (noted in prior CipherBox memory) remains open and wasn't addressed by this phase's plans."
+    ]
+  }
+}
