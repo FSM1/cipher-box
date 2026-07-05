@@ -532,18 +532,37 @@ Plans:
 **Plans**: 12 plans
 
 Plans:
+**Wave 1**
 
 - [ ] 68.2-01-PLAN.md — Wave 1: SDK-internal gated read resolve (ROT-07 enforceResolved on resolvePublishedNode/dfsFindFolder, before any deletion) [TDD]
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 68.2-02-PLAN.md — Wave 2: ResolvedChild type + listFolder/listSharedFolder listing API + folder:updated ResolvedChild[] event [TDD]
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 68.2-03-PLAN.md — Wave 3: SDK write-path + IPFS-transport facade + pure-util re-exports (D-07 write scope)
-- [ ] 68.2-04-PLAN.md — Wave 4: SDK vault-bootstrap + device-registry + BYO-pinning facade (off-path pockets)
 - [ ] 68.2-05-PLAN.md — Wave 3: Author the shared-folder desync regression e2e (SC#5)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 68.2-04-PLAN.md — Wave 4: SDK vault-bootstrap + device-registry + BYO-pinning facade (off-path pockets)
 - [ ] 68.2-06-PLAN.md — Wave 4: Web owned read rewire + relocate version-transforms + render kind/size/modifiedAt from ResolvedChild
 - [ ] 68.2-07-PLAN.md — Wave 4: Web owned file I/O rewire onto the SDK IPFS-transport facade (progress preserved)
 - [ ] 68.2-08-PLAN.md — Wave 4: Web shared-folder navigation/write rewire onto listSharedFolder
 - [ ] 68.2-09-PLAN.md — Wave 4: Collapse folder.store to a ResolvedChild projection + nav re-resolve + poll invalidation (SC#3/#5)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
 - [ ] 68.2-10-PLAN.md — Wave 5: Web off-path pockets (BYO/auth/device-registry) + pure-util call sites onto the facade
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
 - [ ] 68.2-11-PLAN.md — Wave 6: Delete ipns.service/file-metadata.service/kind-cache/useFileSize + allowlist-free D-07 grep gate + unit/typecheck
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
 - [ ] 68.2-12-PLAN.md — Wave 7: Revert the SealedChildRef size/modifiedAt mirror LAST (restore NODE-03) + full web-e2e phase gate
 
 ### Phase 69: FUSE and WinFsp — Rust Integration and Grant-Root Awareness
