@@ -6,15 +6,15 @@ current_phase: 68.1
 current_phase_name: web-client-runtime-integration
 status: executing
 stopped_at: Completed 68.1-19-PLAN.md (write-permission upgrade/downgrade via UpdateGrant + API client regeneration)
-last_updated: "2026-07-02T20:57:08.577Z"
+last_updated: "2026-07-05T22:22:39.396Z"
 last_activity: 2026-07-02
 last_activity_desc: Phase 68.1 execution started
 progress:
-  total_phases: 10
-  completed_phases: 8
-  total_plans: 87
-  completed_plans: 85
-  percent: 80
+  total_phases: 11
+  completed_phases: 9
+  total_plans: 98
+  completed_plans: 98
+  percent: 82
 ---
 
 # Project State
@@ -352,6 +352,8 @@ Recent for v1.1:
 - Phase 59 added 2026-06-23: FUSE IPNS Verify/Publish Hardening & Cleanup
 - Phase 60 added 2026-06-23: IPNS Verification Cross-Layer Closeout -- Desktop + API
 - **v2.0 Phases 61–69 added 2026-06-27**: Metadata and Sharing Refactor — read key-chaining + rotation soundness + write-revocation + TEE contract rewrite + schema cutover + web/FUSE integration
+- Phase 68.2 inserted after Phase 68: SDK-Owned Read Chain and Resolved Folder Listings (URGENT)
+- Phase 69 edited: added Rust SDK-owned read chain scope (Phase 68.2 parity)
 
 ### Open Concerns
 

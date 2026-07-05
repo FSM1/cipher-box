@@ -68,7 +68,7 @@
 - [x] **Phase 66: API Schema Cutover, Publish Gate, and Tombstone** — Delete `share_keys`, slim `shares`, rename `folder_ipns` → `ipns_records`, drop `public_key`, atomic CAS publish, tombstone state, resolve case-split, server-side generation gate; run `pnpm api:generate` (completed 2026-06-30)
 - [x] **Phase 67: TEE Lease-Renewer Contract Rewrite** — TEE becomes a record-lease-renewer (no CID origination, no sequence increment), internal epoch derivation, name↔key binding, tombstone guard (completed 2026-07-01)
 - [x] **Phase 68: Web Integration — Rotation UX and Durable Client State** — Replace `executeLazyRotation` with `rotateReadFromNode`, durable IndexedDB generation + seq high-water (M1 defense, survives restart), `folderTree` reconcile-before-rotate (all 12 plans executed 2026-07-01; verification passed 14/14 after 68-11/68-12 gap closure, see 68-VERIFICATION.md) (completed 2026-07-01)
-- [ ] **Phase 69: FUSE and WinFsp — Rust Integration and Grant-Root Awareness** — Symmetric child-key unwrap, `spawn_file_meta_reencrypt` deletion from both callers, grant-root scope computation, durable client floors, `Node` Rust enum, Windows CI gate
+- [ ] **Phase 69: FUSE and WinFsp — Rust Integration and Grant-Root Awareness** — Symmetric child-key unwrap, `spawn_file_meta_reencrypt` deletion from both callers, grant-root scope computation, durable client floors, `Node` Rust enum, Rust SDK-owned read chain (Phase 68.2 parity), Windows CI gate
 
 ## Phase Details
 
@@ -509,17 +509,45 @@ Plans:
 
 - [ ] 68.1-30-PLAN.md — Deep shared-write seeding: SDK resolveSharedSubfolderWriteKey (one-hop write-chain, TDD) + navigateToSubfolder seeds the recovered subfolder writeKey; single-file writable-shares.spec.ts live re-run (WEB-03) [wave 1]
 
+---
+
+### Phase 68.2: SDK-Owned Read Chain and Resolved Folder Listings (INSERTED)
+
+**Goal**: The gated read chain — IPNS resolve, the ROT-07 durable anti-rollback gate, IPFS fetch, and node unseal — and per-child metadata resolution live entirely inside `packages/sdk`. The SDK exposes **resolved folder listings** (a `ResolvedChild` carrying `ipnsName`, `name`, `kind`, `size?`, `modifiedAt`, `sequence`) and owns the resolve + cache + invalidation, becoming the single source of truth for folder state. The web app's parallel read path and duplicate state are collapsed to thin projections driven by SDK output/events, closing the Web/SDK folder-state desync bug class.
+
+**Depends on**: Phase 68.1 (web runtime integration — the parallel web-layer read path this consolidates was wired there)
+
+**Requirements**: SDK-READ-01, SDK-READ-02, SDK-READ-03, SDK-READ-04 (new — register in REQUIREMENTS.md during planning/discuss)
+
+**Context**: Phase 68.1 wired the web file browser onto a web-layer read chain — `apps/web/src/services/ipns.service.ts` (which owns the security-critical ROT-07 durable anti-rollback gate the raw sdk-core resolve does not apply), `apps/web/src/services/file-metadata.service.ts`, `apps/web/src/lib/kind-cache.ts`, and `apps/web/src/hooks/useFileSize.ts` — that duplicates `packages/sdk`'s own read chain (`client.ts` `ensureFolderLoaded`/`dfsFindFolder`, `sdk-core` `resolveFileMetadata`) and maintains a second source of truth (`apps/web/src/stores/folder.store.ts`) alongside the SDK's `folderTree`. This dual read path + dual state is the root of the "Web/SDK folder-state desync" bug class surfaced during 68.1 smoke testing (an owner not seeing a grantee's upload into a shared folder until they themselves write; file size/modifiedAt display gaps). Project doctrine is logic in `packages/sdk`, UI as a thin layer validated via web-e2e — so security-critical read verification must not live in a React service. This phase moves the gated read chain + listing resolution into the SDK behind an injected `DurableFloorStore` adapter (the browser supplies persistence; the SDK owns the anti-rollback gating logic), exposes resolved listings, and reduces the web to rendering a projection. It subsumes and supersedes the interim `SealedChildRef.size`/`modifiedAt` mirror added under 68.1 (commit ba3e0229a): size/kind/modifiedAt become fields on `ResolvedChild`, resolved once per folder load and cached inside the SDK — no parent-node write amplification and no per-open web-side resolve.
+
+**Success Criteria** (what must be TRUE):
+
+1. The ROT-07 durable anti-rollback gate and the file/folder read-chain resolve live in `packages/sdk`/`packages/sdk-core`, not in `apps/web/src/services`: `ipns.service.ts` and `file-metadata.service.ts` are deleted or reduced to thin re-exports, and `apps/web` no longer imports `unsealNode`/`unsealChildReadKey` or calls a web-side `resolveIpnsRecord` on the read path (`grep` in `apps/web/src` returns only rendering/projection usage).
+2. The SDK exposes a folder-listing API returning resolved children (`kind`, `size?`, `modifiedAt`, `sequence` per child); the web file list, shared browser, and details dialogs render from it with no web-side per-child resolve or cache — `apps/web/src/lib/kind-cache.ts` and `apps/web/src/hooks/useFileSize.ts` are deleted.
+3. `apps/web/src/stores/folder.store.ts` is a projection of SDK state/events, not an independent source of truth; there is exactly one folder-state owner (the SDK `folderTree`).
+4. The interim mirror is reverted: `SealedChildRef` is back to its frozen five-field set (NODE-03), and size/modifiedAt are sourced from the resolved listing (the codec/encode/decode/`metadata-ops` mirror changes from ba3e0229a are removed).
+5. Regression coverage closes the desync bug class: a `tests/web-e2e` proves an owner (or a second client) sees a grantee's upload into a shared folder without the owner first writing, and that file size/modified-date render from the resolved listing; the full web-e2e suite stays green.
+
+**Plans**: TBD
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 68.2 to break down)
+
 ### Phase 69: FUSE and WinFsp — Rust Integration and Grant-Root Awareness
 
-**Goal**: The FUSE and WinFsp clients use symmetric key unwrap throughout, grant-root awareness gates scope-exit mutations, `Node` is a real Rust enum, and the Windows CI gate passes.
+**Goal**: The FUSE and WinFsp clients use symmetric key unwrap throughout, grant-root awareness gates scope-exit mutations, `Node` is a real Rust enum, and the Windows CI gate passes. The Rust read chain (IPNS resolve + durable anti-rollback floor gate + node unseal + child-metadata resolution) lives in the shared Rust core/SDK crates — not reimplemented inline in the FUSE/WinFsp layer — mirroring the Phase 68.2 SDK-owned read chain on the TypeScript side.
 
-**Depends on**: Phase 68
+**Depends on**: Phase 68, Phase 68.2 (mirrors its SDK-owned read-chain design on the Rust side)
 
 **Requirements**: TEST-03
 
 **Sub-phase research flag**: The grant-root scope computation algorithm in `crates/fuse/src/write_ops/` is net-new and under-specified in the design; a plan-time design pass is required before implementation.
 
 **Open question (Q3 — FUSE side)**: When a write-recipient deletes/moves a node the owner independently sub-shared, decide the authority model for the FUSE delete path (mirrors Phase 65 Q3 decision).
+
+**Added scope (Phase 68.2 parity — Rust SDK ownership)**: Mirror the Phase 68.2 consolidation on the Rust side. The read-chain resolve, the durable anti-rollback generation/sequence high-water gate, node unseal, and per-child metadata resolution must live in the shared Rust crates (`crates/core`, and a dedicated Rust SDK crate if warranted), with the FUSE and WinFsp layers consuming a resolved child-listing API rather than reimplementing resolve/unseal/gating inline in `crates/fuse/src/inode.rs`, `replay.rs`, and `metadata.rs`. This keeps the desktop client a thin FUSE/WinFsp adapter over an owning Rust SDK — symmetric to `packages/sdk` owning the web read chain — so the duplication/desync class 68.2 removes on the web cannot recur in Rust. The durable floor persistence (SC#4) is the Rust analog of 68.2's injected `DurableFloorStore`.
 
 **Success Criteria** (what must be TRUE):
 
@@ -528,6 +556,7 @@ Plans:
 3. Grant-root awareness is implemented in `delete`/`rename`/`move` FUSE paths: a shared-scope exit triggers `rotateReadFromNode`; a private delete with no active grants is a pure relink with zero rotation publishes
 4. `enum Node { Folder { children: Vec<SealedChildRef> }, File { content: SealedContent }, Root { children: Vec<SealedChildRef> } }` exists in `crates/core/src/`; durable generation + seq high-water is persisted adjacent to the write journal (survives FUSE daemon restart)
 5. (TEST-03 / §7.3 test 21) `Cargo Check & Test (Windows)` CI gate passes; the dispatch-gated desktop E2E is triggered explicitly via `gh workflow run "CI E2E Tests" --ref <branch>` and passes before phase sign-off
+6. (Phase 68.2 parity) The Rust read-chain resolve + durable anti-rollback floor gate + node unseal + child-metadata resolution live in `crates/core` (and/or a dedicated Rust SDK crate); `crates/fuse` and the WinFsp paths consume a resolved child-listing API and contain no duplicated IPNS-resolve/unseal/anti-rollback logic — the read chain exists once in the Rust core, not reimplemented per client
 
 **Plans**: TBD
 
