@@ -182,13 +182,22 @@ function deserializeChildRefFromWire(raw: Record<string, unknown>, idx: number):
     );
   }
 
-  return {
+  const ref: SealedChildRef = {
     name: raw.name,
     ipnsName: raw.ipnsName,
     generation: raw.generation,
     versionFloor: BigInt(String(raw.versionFloor)),
     readKeySealed: raw.readKeySealed,
   };
+  // Optional display mirrors (added post-cutover). Absent on legacy refs — leave
+  // undefined ("unknown"), never coerce to 0. Only accept finite numbers.
+  if (typeof raw.size === 'number' && Number.isFinite(raw.size)) {
+    ref.size = raw.size;
+  }
+  if (typeof raw.modifiedAt === 'number' && Number.isFinite(raw.modifiedAt)) {
+    ref.modifiedAt = raw.modifiedAt;
+  }
+  return ref;
 }
 
 // ---------------------------------------------------------------------------

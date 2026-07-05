@@ -19,13 +19,15 @@ import {
 } from 'react';
 import type { SealedChildRef } from '@cipherbox/core';
 import { useDialogState } from '../../hooks/useDialogState';
-import { isImageFile, isPdfFile, isAudioFile, isVideoFile } from '../../utils/fileTypes';
+import { isImageFile, isPdfFile, isAudioFile, isVideoFile, isFileRef } from '../../utils/fileTypes';
+import { resolveKinds } from '../../lib/kind-cache';
 import { useFolderStore } from '../../stores/folder.store';
 import { useSyncStore } from '../../stores/sync.store';
 import { isExternalFileDrag } from '../../hooks/useDropUpload';
 import { resolveIpnsRecord } from '../../services/ipns.service';
 import { fetchAndDecryptMetadata } from '@cipherbox/sdk-core';
 import { getSdkClient } from '../../lib/sdk-provider';
+import { downloadFileFromIpns, triggerBrowserDownload } from '../../services/download.service';
 import { triggerSearchIndexRebuild } from '../../hooks/useSearch';
 import { logger } from '../../lib/logger';
 import { runWithFailureUx } from '../../hooks/useMutationFailureUx';
@@ -65,7 +67,7 @@ export type FileBrowserActionsParams = {
   isOperating: boolean;
   isDownloading: boolean;
   downloadFromIpns: (params: {
-    fileMetaIpnsName: string;
+    fileRef: SealedChildRef;
     folderKey: Uint8Array;
     fileName: string;
   }) => Promise<void>;
@@ -134,7 +136,14 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
         getSdkClient().getContext()
       );
       // Node.children is optional (SealedChildRef[] | undefined); default to []
-      useFolderStore.getState().updateFolderChildren('root', metadata.children ?? []);
+      // T-68.1-33-01: this is the reload-gating direct inserter (immediate
+      // initial sync on FileBrowser mount) — warm the kind cache BEFORE
+      // projecting so a row is never interactable while its kind is
+      // unresolved. resolveKinds is best-effort and never rejects; the
+      // surrounding try/catch already covers a slow/failed resolve.
+      const syncChildren = metadata.children ?? [];
+      await resolveKinds(syncChildren);
+      useFolderStore.getState().updateFolderChildren('root', syncChildren);
       useFolderStore.getState().updateFolderSequence('root', resolved.sequenceNumber);
       triggerSearchIndexRebuild();
     } catch (err) {
@@ -381,10 +390,18 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
 
   const handleDownload = useCallback(async () => {
     const item = contextMenu.item;
-    if (!item) return;
-    // TODO(phase 63): SealedChildRef has no .type; download deferred to phase 65 (file read-chain)
-    logger.warn('[FileBrowser] Download not implemented — phase 65 (file read-chain)');
-  }, [contextMenu.item]);
+    if (!item || !currentFolder) return;
+    if (!isFileRef(item)) return; // No folder-archive download feature.
+    try {
+      const plaintext = await downloadFileFromIpns({
+        fileRef: item,
+        folderKey: currentFolder.folderKey,
+      });
+      triggerBrowserDownload(plaintext, item.name);
+    } catch (err) {
+      logger.error(`[FileBrowser] Download failed for ${item.name}:`, err);
+    }
+  }, [contextMenu.item, currentFolder]);
 
   const handleRenameClick = useCallback(() => {
     if (contextMenu.item) openRenameDialog(contextMenu.item);
@@ -438,9 +455,19 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
   }, [selectedItems]);
 
   const handleBatchDownload = useCallback(async () => {
-    // TODO(phase 65): batch download via Node read-chain not yet implemented
-    logger.warn('[FileBrowser] Batch download not implemented — phase 65 (file read-chain)');
-  }, []);
+    if (!currentFolder || selectedItems.length === 0) return;
+    for (const item of selectedItems.filter(isFileRef)) {
+      try {
+        const plaintext = await downloadFileFromIpns({
+          fileRef: item,
+          folderKey: currentFolder.folderKey,
+        });
+        triggerBrowserDownload(plaintext, item.name);
+      } catch (err) {
+        logger.error(`[FileBrowser] Batch download failed for ${item.name}:`, err);
+      }
+    }
+  }, [currentFolder, selectedItems]);
 
   const handleBatchDeleteConfirm = useCallback(async () => {
     const items = batchDeleteDialog.items;

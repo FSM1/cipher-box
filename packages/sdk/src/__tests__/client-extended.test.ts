@@ -222,6 +222,11 @@ describe('CipherBoxClient - extended', () => {
         },
         ipnsPrivateKeyEncrypted: 'enc',
         fileKey: new Uint8Array(32).fill(0x42),
+        // v3 file Node fields (68.1-07/09) — read by the parent read/write-body
+        // seal path; the finally block also zeroes them.
+        fileNodeId: 'file2',
+        fileReadKey: new Uint8Array(32).fill(0x43),
+        fileWriteKey: new Uint8Array(32).fill(0x44),
       });
       vi.mocked(sdkCore.addFilePointerToFolder).mockReturnValue({
         updatedChildren: [
@@ -276,6 +281,9 @@ describe('CipherBoxClient - extended', () => {
       const fileKey = new Uint8Array(32).fill(0x42);
       setupFolder(client);
 
+      const fileReadKey = new Uint8Array(32).fill(0x43);
+      const fileWriteKey = new Uint8Array(32).fill(0x44);
+
       vi.mocked(sdkCore.uploadFile).mockResolvedValue({
         cid: 'bafyfile',
         encryptedSize: 100,
@@ -287,6 +295,11 @@ describe('CipherBoxClient - extended', () => {
         },
         ipnsPrivateKeyEncrypted: 'enc',
         fileKey,
+        // v3 file Node fields (68.1-07/09) — read by the parent read/write-body
+        // seal path; the finally block also zeroes them (asserted below).
+        fileNodeId: 'clear-file',
+        fileReadKey,
+        fileWriteKey,
       });
       vi.mocked(sdkCore.addFilePointerToFolder).mockResolvedValue({
         updatedChildren: [],
@@ -306,8 +319,11 @@ describe('CipherBoxClient - extended', () => {
 
       await client.uploadFile('folder-ipns', new Uint8Array([1, 2, 3]), 'clear.txt', 'text/plain');
 
-      // fileKey must be zeroed (clearBytes mock fills with 0)
+      // fileKey and the v3 fileReadKey/fileWriteKey must all be zeroed (D-09 —
+      // this call site is the terminal owner; clearBytes mock fills with 0)
       expect(fileKey.every((b) => b === 0)).toBe(true);
+      expect(fileReadKey.every((b) => b === 0)).toBe(true);
+      expect(fileWriteKey.every((b) => b === 0)).toBe(true);
     });
   });
 

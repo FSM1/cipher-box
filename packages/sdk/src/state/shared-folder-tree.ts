@@ -41,11 +41,21 @@ export class SharedFolderTree {
       if (prev.folderKey && prev.folderKey !== state.folderKey) prev.folderKey.fill(0);
       if (prev.ipnsPrivateKey && prev.ipnsPrivateKey !== state.ipnsPrivateKey)
         prev.ipnsPrivateKey.fill(0);
+      if (prev.writeKey && prev.writeKey !== state.writeKey) prev.writeKey.fill(0);
     }
     this.shares.set(shareId, {
       ...state,
       folderKey: new Uint8Array(state.folderKey),
       ipnsPrivateKey: new Uint8Array(state.ipnsPrivateKey),
+      // 68.1-29: writeKey must be cloned like the other key buffers — the web
+      // seeding caller zeroes its own writeKey buffer right after seeding
+      // (D-09 terminal ownership), so storing the caller's reference left the
+      // tree holding an all-zero writeKey. That silently downgraded every
+      // write share to read-only: uploadToSharedFolder failed GCM auth on the
+      // parent write-body ("Decryption failed", writable-shares 3.2) and
+      // enumerateSharedSubtree's zero-key detection marked every destination
+      // read-only (shared-folder-move 3.3).
+      writeKey: new Uint8Array(state.writeKey),
     });
   }
 
@@ -55,6 +65,7 @@ export class SharedFolderTree {
     if (state) {
       if (state.folderKey) state.folderKey.fill(0);
       if (state.ipnsPrivateKey) state.ipnsPrivateKey.fill(0);
+      if (state.writeKey) state.writeKey.fill(0);
     }
     this.shares.delete(shareId);
   }
@@ -72,6 +83,7 @@ export class SharedFolderTree {
     for (const state of this.shares.values()) {
       if (state.folderKey) state.folderKey.fill(0);
       if (state.ipnsPrivateKey) state.ipnsPrivateKey.fill(0);
+      if (state.writeKey) state.writeKey.fill(0);
     }
     this.shares.clear();
   }

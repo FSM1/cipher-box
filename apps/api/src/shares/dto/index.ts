@@ -1,5 +1,4 @@
 export { CreateShareDto } from './create-share.dto';
-export { UpdateItemNameDto } from './update-item-name.dto';
 export {
   CreateShareResponseDto,
   ReceivedShareResponseDto,

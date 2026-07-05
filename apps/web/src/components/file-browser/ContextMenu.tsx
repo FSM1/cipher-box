@@ -9,6 +9,7 @@ import {
 } from '@floating-ui/react';
 import type { SealedChildRef } from '@cipherbox/core';
 import { Portal } from '../ui/Portal';
+import { isFileRef } from '../../utils/fileTypes';
 import '../../styles/context-menu.css';
 
 type ContextMenuProps = {
@@ -83,8 +84,8 @@ export function ContextMenu({
   onHide,
 }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement | null>(null);
-  // TODO(phase 63): SealedChildRef has no .type; kind discrimination deferred to Node.kind
-  const isFile = false; // phase-63 stub: context menu file-only actions hidden until phase 63
+  // D-02: kind cache read (synchronous, folder-safe default on cache miss).
+  const isFile = isFileRef(item);
 
   // Create virtual reference element at click position
   const virtualReference = useMemo<VirtualElement>(

@@ -13,7 +13,8 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { type SealedChildRef } from '@cipherbox/core';
 import { ShareKeyCache } from '@cipherbox/sdk';
 import { useShareStore, type ReceivedShare } from '../stores/share.store';
-import { fetchReceivedShares, fetchShareKeys } from '../services/share.service';
+import { fetchReceivedShares, fetchShareKeys, decryptItemName } from '../services/share.service';
+import { useAuthStore } from '../stores/auth.store';
 import { getSdkClient, hasSdkClient } from '../lib/sdk-provider';
 import { logger } from '../lib/logger';
 import { useSharedNavigationActions } from './useSharedNavigationActions';
@@ -23,6 +24,7 @@ import {
   subscribeSharedFolderProjection,
   type SeedSharedFolderArgs,
 } from './shared-folder-projection';
+import { resolveKinds } from '../lib/kind-cache';
 
 /**
  * Breadcrumb entry for shared navigation.
@@ -69,6 +71,18 @@ type UseSharedNavigationReturn = {
   navigateToBreadcrumb: (crumbIndex: number) => void;
   /** @stub phase 63 — file download requires Node read-chain navigation */
   downloadSharedFile: (item: SealedChildRef) => Promise<void>;
+  /**
+   * Load a DIRECT single-file share's content via the node/v3 read chain
+   * (68.1-32, WEB-03 writable-shares 10.3). Used by the text editor when the
+   * share root IS the file (`currentView === 'file'`) — no `folderKey`/
+   * `readKeySealed` dependency.
+   */
+  loadSharedFileContent: (item: SealedChildRef) => Promise<Uint8Array>;
+  /**
+   * Save a DIRECT single-file share's edited content (68.1-32, WEB-03
+   * writable-shares 10.3/10.4) — write-grant recipients only.
+   */
+  saveSharedSingleFile: (item: SealedChildRef, newContent: Uint8Array) => Promise<void>;
   hideSharedItem: (shareId: string) => Promise<void>;
   /** Upload a file to the currently-viewed write-shared folder */
   uploadFile: (file: File) => Promise<void>;
@@ -232,6 +246,24 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
           if (offset >= page.total || page.shares.length === 0) break;
         }
 
+        // Decrypt itemNameEncrypted into the plaintext display projection
+        // (REQ-4 recipient-side decrypt — the v2.0 refactor dropped this
+        // wiring, leaving every received share rendered with an empty name;
+        // restored in 68.1-22). Per-share failures leave itemName as-is.
+        const vaultPrivateKey = useAuthStore.getState().vaultKeypair?.privateKey;
+        if (vaultPrivateKey) {
+          await Promise.all(
+            shares.map(async (share) => {
+              try {
+                share.itemName = await decryptItemName(share, vaultPrivateKey);
+              } catch {
+                // Ciphertext not decryptable with this key — keep the fallback.
+              }
+            })
+          );
+          if (cancelled) return;
+        }
+
         useShareStore.getState().setReceivedShares(shares);
 
         const items: SharedListItem[] = shares.map((share) => ({
@@ -288,6 +320,24 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
         sequenceNumberRef.current = sequenceNumber;
         setFolderChildren(children);
         setCurrentSequenceNumber(sequenceNumber);
+
+        // D-02: this projection callback is synchronous — the initial render
+        // reads a cache miss (folder-safe default). Populate the kind cache
+        // best-effort and, once it settles, re-set the children under a FRESH
+        // array reference (React bails on Object.is-equal state) so the shared
+        // rows re-read the resolved kind. Filtered by the active shareId
+        // (consistent with subscribeSharedFolderProjection's own filtering) so
+        // a stale resolve for a share the user has since navigated away from
+        // does not re-render.
+        const activeShareId = currentShareIdRef.current;
+        void resolveKinds(children)
+          .then(() => {
+            if (currentShareIdRef.current !== activeShareId) return;
+            setFolderChildren([...children]);
+          })
+          .catch(() => {
+            // Best-effort — never throw inside the subscription callback.
+          });
       }
     );
     return () => {

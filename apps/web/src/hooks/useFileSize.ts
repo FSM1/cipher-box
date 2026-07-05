@@ -8,6 +8,7 @@
  */
 
 import { useState, useEffect } from 'react';
+import type { SealedChildRef } from '@cipherbox/core';
 import { resolveFileMetadata } from '../services/file-metadata.service';
 
 /**
@@ -35,11 +36,13 @@ let cacheGeneration = 0;
  * Returns the cached size if available, otherwise fetches from IPNS.
  * Deduplicates concurrent requests for the same file.
  *
- * @param fileMetaIpnsName - IPNS name of the file's metadata record
+ * @param fileRef - The file's SealedChildRef (carries ipnsName + readKeySealed + generation)
  * @param folderKey - Parent folder's decrypted AES-256 key
  * @returns Size in bytes
  */
-async function fetchFileSize(fileMetaIpnsName: string, folderKey: Uint8Array): Promise<number> {
+async function fetchFileSize(fileRef: SealedChildRef, folderKey: Uint8Array): Promise<number> {
+  const fileMetaIpnsName = fileRef.ipnsName;
+
   // Return cached value immediately
   const cached = sizeCache.get(fileMetaIpnsName);
   if (cached !== undefined) return cached;
@@ -52,7 +55,7 @@ async function fetchFileSize(fileMetaIpnsName: string, folderKey: Uint8Array): P
   const gen = cacheGeneration;
 
   // Start new request
-  const request = resolveFileMetadata(fileMetaIpnsName, folderKey)
+  const request = resolveFileMetadata(fileRef, folderKey)
     .then(({ metadata }) => {
       if (cacheGeneration === gen) {
         sizeCache.set(fileMetaIpnsName, metadata.size);
@@ -75,22 +78,24 @@ async function fetchFileSize(fileMetaIpnsName: string, folderKey: Uint8Array): P
  * Returns `null` while loading, or the size in bytes once resolved.
  * Silently returns `null` on error (size is non-critical UI data).
  *
- * @param fileMetaIpnsName - IPNS name of the file's metadata record (null to skip)
+ * @param fileRef - The file's SealedChildRef (null to skip)
  * @param folderKey - Parent folder's decrypted AES-256 key (null to skip)
  * @returns File size in bytes, or null if not yet resolved
  *
  * @example
  * ```tsx
  * function FileRow({ file, folderKey }) {
- *   const size = useFileSize(file.fileMetaIpnsName, folderKey);
+ *   const size = useFileSize(file, folderKey);
  *   return <span>{size !== null ? formatBytes(size) : '...'}</span>;
  * }
  * ```
  */
 export function useFileSize(
-  fileMetaIpnsName: string | null,
+  fileRef: SealedChildRef | null,
   folderKey: Uint8Array | null
 ): number | null {
+  const fileMetaIpnsName = fileRef?.ipnsName ?? null;
+
   // Check cache synchronously to avoid unnecessary loading flash
   const [size, setSize] = useState<number | null>(() => {
     if (!fileMetaIpnsName) return null;
@@ -98,7 +103,7 @@ export function useFileSize(
   });
 
   useEffect(() => {
-    if (!fileMetaIpnsName || !folderKey) {
+    if (!fileRef || !fileMetaIpnsName || !folderKey) {
       setSize(null);
       return;
     }
@@ -112,7 +117,7 @@ export function useFileSize(
 
     let cancelled = false;
 
-    fetchFileSize(fileMetaIpnsName, folderKey)
+    fetchFileSize(fileRef, folderKey)
       .then((resolvedSize) => {
         if (!cancelled) {
           setSize(resolvedSize);
@@ -128,7 +133,7 @@ export function useFileSize(
     return () => {
       cancelled = true;
     };
-  }, [fileMetaIpnsName, folderKey]);
+  }, [fileRef, fileMetaIpnsName, folderKey]);
 
   return size;
 }

@@ -4,8 +4,6 @@
  * Phase 63 implementation: un-stubbed createSubfolder and updateFolderMetadataAndPublish
  * using the Phase-62 node/v3 codec (sealNode) and the CAS-retry helper (publishWithCas).
  *
- * Phase 65 stubs are preserved: addFileToFolder, addFilesToFolder, replaceFileInFolder.
- *
  * Security invariants:
  *   - createSubfolder mints new Ed25519 keypair + readKey/writeKey and does NOT zero them
  *     before returning — caller is the terminal owner (D-09).
@@ -15,7 +13,7 @@
  */
 
 import { sealNode, unsealNode } from '@cipherbox/core';
-import type { Node, PublishedNode, SealedChildRef } from '@cipherbox/core';
+import type { Node, PublishedNode, SealedChildRef, WriteChildRef } from '@cipherbox/core';
 import {
   generateEd25519Keypair,
   generateRandomBytes,
@@ -25,7 +23,6 @@ import {
   hexToBytes,
 } from '@cipherbox/crypto';
 import type { SdkContext, TeeKeys } from '../types';
-import type { FileIpnsRecordPayload } from '../file';
 import { addToIpfs, fetchFromIpfs } from '../ipfs';
 import { createAndPublishIpnsRecord } from '../ipns';
 import { publishWithCas } from '../cas';
@@ -148,13 +145,19 @@ export async function createSubfolder(params: {
  * @param params.baseChildren   - Base snapshot for three-way merge on conflict
  * @param params.readKey        - 32-byte AES-256 readKey (canonical; phase 63+)
  * @param params.folderKey      - 32-byte AES-256 readKey (backward-compat alias for readKey)
- * @param params.writeKey       - 32-byte AES-256 writeKey (optional; zero-fallback until phase 65)
+ * @param params.writeKey       - Optional 32-byte AES-256 writeKey. When supplied, the sealed
+ *   Node carries a real write-body (`{ ipnsPrivateKey, writeChildren }`) sealed under this key
+ *   (D-03). When omitted, no write-body is attached (legacy read-only-write compatibility) and
+ *   sealing falls back to an unused zero-filled writeKey (no writeSealed field is produced,
+ *   since sealNode only seals a write-body when node.writeBody is set).
+ * @param params.writeChildren  - Write-chain entries to persist inside the write-body (preserved
+ *   verbatim, order-stable). Defaults to an empty array. Only meaningful when writeKey is supplied.
  * @param params.ipnsPrivateKey - Ed25519 private key for IPNS signing
  * @param params.ipnsName       - IPNS k51 name of the folder
  * @param params.sequenceNumber - Current sequence number (CAS guard: next will be +1)
  * @param params.ctx            - SDK context for IPFS + IPNS access
  *
- * @security Does NOT zero readKey or ipnsPrivateKey — callers are terminal owners (D-09).
+ * @security Does NOT zero readKey, writeKey, or ipnsPrivateKey — callers are terminal owners (D-09).
  */
 export async function updateFolderMetadataAndPublish(params: {
   children: SealedChildRef[];
@@ -163,8 +166,10 @@ export async function updateFolderMetadataAndPublish(params: {
   readKey?: Uint8Array;
   /** @deprecated Backward-compat alias — use readKey. client.ts callers still pass folderKey. */
   folderKey?: Uint8Array;
-  /** Optional writeKey for sealing the write-body. Defaults to zero (write-body unprotected until phase 65). */
+  /** Optional writeKey — when supplied, seals a real write-body (D-03). */
   writeKey?: Uint8Array;
+  /** Write-chain entries to persist in the write-body (preserved verbatim). Defaults to []. */
+  writeChildren?: WriteChildRef[];
   ipnsPrivateKey: Uint8Array;
   ipnsPublicKey?: Uint8Array;
   ipnsName: string;
@@ -184,10 +189,38 @@ export async function updateFolderMetadataAndPublish(params: {
    * that rotateReadFromNode relies on.
    */
   nodeGeneration: number;
-}): Promise<{ cid: string; newSequenceNumber: bigint; publishedChildren: SealedChildRef[] }> {
+}): Promise<{
+  cid: string;
+  newSequenceNumber: bigint;
+  publishedChildren: SealedChildRef[];
+  /**
+   * The write-body children actually sealed into the published record — equals
+   * the input `writeChildren` on a clean publish, or the CAS-merged union of
+   * local + remote write links after a 409. Callers MUST adopt THIS (not their
+   * pre-publish local snapshot) into the in-memory write-body mirror, or the
+   * next publish reseals a stale chain and re-drops a concurrent writer's ref.
+   * Undefined for read-only (no-writeKey) publishes.
+   */
+  publishedWriteChildren?: WriteChildRef[];
+}> {
   const key = params.readKey ?? params.folderKey;
   if (!key) throw new Error('updateFolderMetadataAndPublish: readKey or folderKey is required');
-  const writeKey = params.writeKey ?? new Uint8Array(32);
+  // Only used to seal when node.writeBody is absent (sealNode never produces a
+  // writeSealed field in that case), so the zero fallback is inert — it exists
+  // purely so sealNode's required writeKey parameter has a value (D-03).
+  const writeKeyForSeal = params.writeKey ?? new Uint8Array(32);
+
+  // Write-plane CAS state. The generic publishWithCas TData only carries the
+  // read-body (SealedChildRef[]); the write-body (WriteChildRef[], keyed by
+  // childId) must be merged separately on a 409 or the retry reseals a STALE
+  // write chain and DROPS any WriteChildRef a concurrent writer added — the
+  // exact write-plane clobber phase 68.1 exists to prevent. `currentWriteChildren`
+  // is what encodeAndUpload seals; decodeRemote captures the remote write-body and
+  // merge() unions it in (write plane is add-only here — deletes are preserved
+  // verbatim per D-03/68.1-02 — so a union never resurrects an intentionally
+  // dropped entry). Only meaningful when a real writeKey is supplied.
+  let currentWriteChildren: WriteChildRef[] = params.writeChildren ?? [];
+  let remoteWriteChildren: WriteChildRef[] = [];
 
   const result = await publishWithCas<SealedChildRef[]>({
     ipnsName: params.ipnsName,
@@ -233,8 +266,22 @@ export async function updateFolderMetadataAndPublish(params: {
         createdAt: Date.now(),
         modifiedAt: Date.now(),
         children: localChildren,
+        // D-03: attach a real write-body only when the caller supplies a writeKey.
+        // Omitting writeKey preserves legacy read-only-write compatibility (no
+        // writeSealed field is produced by sealNode when writeBody is absent).
+        // Seal `currentWriteChildren` (not params.writeChildren) so a CAS-merged
+        // write chain survives a retry instead of being clobbered back to the
+        // stale local snapshot.
+        ...(params.writeKey
+          ? {
+              writeBody: {
+                ipnsPrivateKey: params.ipnsPrivateKey,
+                writeChildren: currentWriteChildren,
+              },
+            }
+          : {}),
       };
-      const publishedNode: PublishedNode = await sealNode(node, key, writeKey);
+      const publishedNode: PublishedNode = await sealNode(node, key, writeKeyForSeal);
       const { cid } = await addToIpfs(
         params.ctx,
         new TextEncoder().encode(JSON.stringify(publishedNode))
@@ -245,7 +292,12 @@ export async function updateFolderMetadataAndPublish(params: {
     decodeRemote: async (cid: string): Promise<SealedChildRef[]> => {
       const raw = await fetchFromIpfs(params.ctx, cid);
       const publishedNode = JSON.parse(new TextDecoder().decode(raw)) as PublishedNode;
-      const node = await unsealNode(publishedNode, key);
+      // Pass writeKey (when present) so the remote write-body is unsealed too and
+      // its writeChildren can be merged — not dropped — on conflict. A present
+      // remote write-body sealed under a wrong writeKey fails GCM auth closed
+      // here (fail-closed, matching the read-body's own auth contract).
+      const node = await unsealNode(publishedNode, key, params.writeKey);
+      remoteWriteChildren = node.writeBody?.writeChildren ?? [];
       return node.children ?? [];
     },
 
@@ -253,10 +305,19 @@ export async function updateFolderMetadataAndPublish(params: {
       base: SealedChildRef[] | undefined,
       local: SealedChildRef[],
       remote: SealedChildRef[]
-    ) => ({
-      // mergeChildren is a Phase-64 stub — throws on any conflict until phase 64
-      merged: mergeChildren(base ?? [], local, remote),
-    }),
+    ) => {
+      // Union the remote writer's write-body entries into the local chain
+      // (keyed by childId, remote wins on conflict) so the resealed write-body
+      // preserves BOTH writers' WriteChildRefs. Only when a real writeKey is in
+      // play — otherwise no write-body is sealed at all.
+      if (params.writeKey) {
+        const byChildId = new Map<string, WriteChildRef>();
+        for (const wc of currentWriteChildren) byChildId.set(wc.childId, wc);
+        for (const wc of remoteWriteChildren) byChildId.set(wc.childId, wc);
+        currentWriteChildren = Array.from(byChildId.values());
+      }
+      return { merged: mergeChildren(base ?? [], local, remote) };
+    },
 
     localData: params.children,
     baseData: params.baseChildren,
@@ -266,73 +327,6 @@ export async function updateFolderMetadataAndPublish(params: {
     cid: result.cid,
     newSequenceNumber: result.newSequenceNumber,
     publishedChildren: result.publishedData,
+    publishedWriteChildren: params.writeKey ? currentWriteChildren : undefined,
   };
-}
-
-/**
- * Add a single file to a folder and batch-publish both IPNS records.
- *
- * @stub phase 65 — will create a file Node, seal its readKey under the parent folder
- * readKey as a SealedChildRef, and batch-publish both IPNS records.
- */
-export async function addFileToFolder(params: {
-  children: SealedChildRef[];
-  folderKey: Uint8Array;
-  ipnsPrivateKey: Uint8Array;
-  ipnsPublicKey?: Uint8Array;
-  ipnsName: string;
-  sequenceNumber: bigint;
-  fileId: string;
-  name: string;
-  fileIpnsRecord: FileIpnsRecordPayload;
-  ipnsPrivateKeyEncrypted: string;
-  ctx: SdkContext;
-}): Promise<{ fileNode: Node; newSequenceNumber: bigint }> {
-  void params;
-  throw new Error(
-    'not implemented — phase 65 (add file Node + seal child readKey + batch-publish)'
-  );
-}
-
-/**
- * Add multiple files to a folder and batch-publish all IPNS records.
- *
- * @stub phase 65 — will create file Nodes, seal their readKeys under the parent folder
- * readKey, and batch-publish all records in a single API call.
- */
-export async function addFilesToFolder(params: {
-  children: SealedChildRef[];
-  folderKey: Uint8Array;
-  ipnsPrivateKey: Uint8Array;
-  ipnsPublicKey?: Uint8Array;
-  ipnsName: string;
-  sequenceNumber: bigint;
-  files: Array<{
-    fileId: string;
-    name: string;
-    fileIpnsRecord: FileIpnsRecordPayload;
-    ipnsPrivateKeyEncrypted: string;
-  }>;
-  ctx: SdkContext;
-}): Promise<{ fileNodes: Node[]; newSequenceNumber: bigint }> {
-  void params;
-  throw new Error(
-    'not implemented — phase 65 (add file Nodes + seal child readKeys + batch-publish)'
-  );
-}
-
-/**
- * Replace file content in folder (content update — folder IPNS record unchanged).
- *
- * @stub phase 65 — will publish only the file Node IPNS record; folder is untouched
- * because the SealedChildRef still points to the same file IPNS name.
- */
-export async function replaceFileInFolder(params: {
-  children: SealedChildRef[];
-  fileId: string;
-  fileIpnsRecord: FileIpnsRecordPayload;
-  ctx: SdkContext;
-}): Promise<void> {
-  void params;
-  throw new Error('not implemented — phase 65 (replace file Node content + publish file IPNS)');
 }

@@ -23,10 +23,34 @@ import {
   ipnsControllerUnenrollBatch,
   sharesControllerRevokeForItems,
 } from '@cipherbox/api-client';
-import { clearBytes, unwrapKey, hexToBytes } from '@cipherbox/crypto';
+import {
+  clearBytes,
+  unwrapKey,
+  wrapKey,
+  hexToBytes,
+  bytesToHex,
+  deriveEd25519PublicKey,
+  generateEd25519Keypair,
+  generateRandomBytes,
+  deriveIpnsName,
+} from '@cipherbox/crypto';
 import pLimit from 'p-limit';
-import type { BinEntry, SealedChildRef, PublishedNode, Node as CoreNode } from '@cipherbox/core';
-import { sealChildReadKey, unsealChildReadKey, unsealNode } from '@cipherbox/core';
+import type {
+  BinEntry,
+  SealedChildRef,
+  WriteChildRef,
+  PublishedNode,
+  Node as CoreNode,
+  NodeContent,
+} from '@cipherbox/core';
+import {
+  sealChildReadKey,
+  sealChildWriteKey,
+  sealNode,
+  unsealChildReadKey,
+  unsealChildWriteKey,
+  unsealNode,
+} from '@cipherbox/core';
 import type {
   CipherBoxClientConfig,
   FolderState,
@@ -69,12 +93,24 @@ export class BinNotLoadedError extends Error {
  * should re-load the folder and retry.
  */
 export class ReconcileStaleError extends Error {
+  /** In-memory `FolderTree` sequenceNumber the mutation expected to publish against. */
+  readonly localSequence: bigint;
+  /** Freshly-resolved network sequenceNumber that disagreed with `localSequence`. */
+  readonly networkSequence: bigint;
+
   constructor(ipnsName: string, localSequence: bigint, networkSequence: bigint) {
     super(
       `Reconcile stale: folder ${ipnsName} local sequenceNumber ${localSequence} does not match ` +
         `network sequenceNumber ${networkSequence} -- deferring mutation (SC#3 / D-04)`
     );
     this.name = 'ReconcileStaleError';
+    // Exposed so callers (useMutationFailureUx's D-05 classifier) can tell a
+    // genuine concurrent-update defer (network AHEAD of local -- SC#3/D-04,
+    // retry) apart from a stale/relay-replayed record (network BEHIND local
+    // -- a rejection the durable ROT-07 floor may not catch when the replayed
+    // seq exactly matches the last-recorded floor; see Gap 4 / 68.1-21).
+    this.localSequence = localSequence;
+    this.networkSequence = networkSequence;
   }
 }
 
@@ -111,6 +147,13 @@ export class CipherBoxClient {
   private internalVaultKeypair: { publicKey: Uint8Array; privateKey: Uint8Array };
   private internalRootFolderKey: Uint8Array;
   /**
+   * Internal copy of the root write key, or null when not configured (D-03).
+   * Required alongside internalRootIpnsKeypair for ensureFolderLoaded self-bootstrap
+   * to recover owned write-bodies; absent when the host hasn't wired rootWriteKey yet
+   * (Phase 68.1-03).
+   */
+  private internalRootWriteKey: Uint8Array | null = null;
+  /**
    * Internal copy of the root IPNS signing keypair, or null when not configured.
    * Enables self-bootstrapping the folder tree from root (see ensureFolderLoaded).
    */
@@ -123,6 +166,9 @@ export class CipherBoxClient {
       privateKey: new Uint8Array(config.vaultKeypair.privateKey),
     };
     this.internalRootFolderKey = new Uint8Array(config.rootFolderKey);
+    if (config.rootWriteKey) {
+      this.internalRootWriteKey = new Uint8Array(config.rootWriteKey);
+    }
     if (config.rootIpnsKeypair) {
       this.internalRootIpnsKeypair = {
         publicKey: new Uint8Array(config.rootIpnsKeypair.publicKey),
@@ -133,6 +179,7 @@ export class CipherBoxClient {
       ...config,
       vaultKeypair: this.internalVaultKeypair,
       rootFolderKey: this.internalRootFolderKey,
+      rootWriteKey: this.internalRootWriteKey ?? undefined,
       rootIpnsKeypair: this.internalRootIpnsKeypair ?? undefined,
       rotationCallbacks: config.rotationCallbacks ?? NOOP_ROTATION_CALLBACKS,
     };
@@ -233,25 +280,142 @@ export class CipherBoxClient {
   }
 
   /**
+   * DFS walk of a resolved node's children, returning every descendant's own
+   * IPNS name (the node itself is NOT included — callers prepend it).
+   *
+   * Best-effort (T-68.1-02-01): an unreadable descendant is logged and
+   * skipped rather than throwing, so a bad hop never wedges the fire-and-forget
+   * unenroll/unpin flow on an otherwise-normal delete/empty-bin. A descendant
+   * that fails to resolve/unseal still contributes its own `childRef.ipnsName`
+   * to the result (best-effort unenroll of the leaf itself) but is not
+   * descended into further.
+   *
+   * Bounded to `UNENROLL_COLLECT_CONCURRENCY` concurrent hops (T-68.1-02-01).
+   * Zeroes every minted childReadKey; never zeroes `nodeReadKey` (caller-owned, D-09).
+   */
+  private async collectDescendantIpnsNames(
+    nodeReadKey: Uint8Array,
+    nodeChildren: SealedChildRef[]
+  ): Promise<string[]> {
+    const limit = pLimit(UNENROLL_COLLECT_CONCURRENCY);
+    const results = await Promise.all(
+      nodeChildren.map((childRef) =>
+        limit(async (): Promise<string[]> => {
+          try {
+            const childResolved = await this.resolvePublishedNode(childRef.ipnsName);
+            if (!childResolved) return [childRef.ipnsName];
+            if (
+              childResolved.published.kind !== 'folder' &&
+              childResolved.published.kind !== 'root'
+            ) {
+              return [childRef.ipnsName];
+            }
+
+            let childReadKey: Uint8Array | null = null;
+            try {
+              childReadKey = await unsealChildReadKey(
+                childRef.readKeySealed,
+                nodeReadKey,
+                childResolved.published.id,
+                childResolved.published.kind,
+                childRef.generation
+              );
+              const childNode = await unsealNode(childResolved.published, childReadKey);
+              const nested = await this.collectDescendantIpnsNames(
+                childReadKey,
+                childNode.children ?? []
+              );
+              return [childRef.ipnsName, ...nested];
+            } finally {
+              childReadKey?.fill(0);
+            }
+          } catch (err) {
+            console.warn(
+              `[CipherBox] subtree collect: unreadable descendant ${childRef.ipnsName}:`,
+              err
+            );
+            return [childRef.ipnsName];
+          }
+        })
+      )
+    );
+    return results.flat();
+  }
+
+  /**
    * Extract IPNS names from a removed SealedChildRef (file or folder subtree).
    *
-   * @stub phase 65 (bin re-link): SealedChildRef has no type discriminant; the
-   * phase-65 subtree walk will traverse Node children via the read-chain.
+   * Resolves the item's own PublishedNode to learn its plaintext id/kind, then
+   * (for a folder/root) recovers its readKey from `item.readKeySealed` under
+   * `parentReadKey` and walks its descendants. A file leaf contributes only
+   * its own ipnsName. Best-effort (T-68.1-02-01): an unresolvable/unreadable
+   * item still contributes its own ipnsName so unenroll/unpin proceeds.
+   *
+   * @param parentReadKey - readKey of the folder `item` was just removed from
+   *   (caller-owned — NOT zeroed here, D-09).
    */
-  private async collectRemovedItemIpnsNames(item: SealedChildRef): Promise<string[]> {
-    void item;
-    throw new Error('not implemented — phase 65 (bin re-link: subtree IPNS collect)');
+  private async collectRemovedItemIpnsNames(
+    item: SealedChildRef,
+    parentReadKey: Uint8Array
+  ): Promise<string[]> {
+    try {
+      const resolved = await this.resolvePublishedNode(item.ipnsName);
+      if (!resolved) return [item.ipnsName];
+      if (resolved.published.kind !== 'folder' && resolved.published.kind !== 'root') {
+        return [item.ipnsName];
+      }
+
+      let itemReadKey: Uint8Array | null = null;
+      try {
+        itemReadKey = await unsealChildReadKey(
+          item.readKeySealed,
+          parentReadKey,
+          resolved.published.id,
+          resolved.published.kind,
+          item.generation
+        );
+        const itemNode = await unsealNode(resolved.published, itemReadKey);
+        const descendants = await this.collectDescendantIpnsNames(
+          itemReadKey,
+          itemNode.children ?? []
+        );
+        return [item.ipnsName, ...descendants];
+      } finally {
+        itemReadKey?.fill(0);
+      }
+    } catch (err) {
+      console.warn(`[CipherBox] subtree collect: unreadable removed item ${item.ipnsName}:`, err);
+      return [item.ipnsName];
+    }
   }
 
   /**
    * Extract IPNS names from a BinEntry (node ref and/or folder subtree).
    *
-   * @stub phase 65 (bin re-link): BinEntry.filePointer / .folderEntry removed;
-   * phase-65 implementation reads from BinEntry.nodeRef instead.
+   * Reads from `entry.nodeRef` / `entry.nodeReadKey` / `entry.nodeIpnsName`
+   * (`filePointer`/`folderEntry` were removed — [62-05]). A folder/root entry
+   * is walked via `collectDescendantIpnsNames` using the node's own children
+   * (already plaintext inside `nodeRef`, since the bin blob itself is
+   * ECIES-encrypted to the owner) and its captured `nodeReadKey`. A file entry
+   * or an entry missing the required fields (legacy/incomplete row) contributes
+   * only its own ipnsName (or nothing, if even that is absent).
    */
   private async collectBinEntryIpnsNames(entry: BinEntry): Promise<string[]> {
-    void entry;
-    throw new Error('not implemented — phase 65 (bin re-link: subtree IPNS collect)');
+    if (!entry.nodeIpnsName) return [];
+    if (!entry.nodeRef || !entry.nodeReadKey) return [entry.nodeIpnsName];
+    if (entry.nodeRef.kind !== 'folder' && entry.nodeRef.kind !== 'root') {
+      return [entry.nodeIpnsName];
+    }
+    try {
+      const descendants = await this.collectDescendantIpnsNames(
+        entry.nodeReadKey,
+        entry.nodeRef.children ?? []
+      );
+      return [entry.nodeIpnsName, ...descendants];
+    } catch (err) {
+      console.warn(`[CipherBox] subtree collect: bin entry ${entry.id} descend failed:`, err);
+      return [entry.nodeIpnsName];
+    }
   }
 
   /**
@@ -268,6 +432,9 @@ export class CipherBoxClient {
     this.internalVaultKeypair.privateKey.fill(0);
     this.internalVaultKeypair.publicKey.fill(0);
     this.internalRootFolderKey.fill(0);
+    if (this.internalRootWriteKey) {
+      this.internalRootWriteKey.fill(0);
+    }
     if (this.internalRootIpnsKeypair) {
       this.internalRootIpnsKeypair.privateKey.fill(0);
       this.internalRootIpnsKeypair.publicKey.fill(0);
@@ -326,6 +493,10 @@ export class CipherBoxClient {
    *   placeholder that will be filled by loadFolder; CRUD operations called before
    *   loadFolder will throw 'nodeId is required'.
    * @param nodeGeneration - Rotation counter of the folder's Node (D-06).
+   * @param writeKey - Optional 32-byte AES-256 write key (D-03). Omitting falls back
+   *   to a zero-filled key (legacy compatibility) — callers that need write-body
+   *   preservation on republish (rename/move/delete/restore) should supply the real
+   *   writeKey recovered via ensureFolderLoaded or createSubfolder.
    */
   registerFolder(
     ipnsName: string,
@@ -334,12 +505,14 @@ export class CipherBoxClient {
     children: SealedChildRef[],
     sequenceNumber: bigint,
     nodeId?: string,
-    nodeGeneration?: number
+    nodeGeneration?: number,
+    writeKey?: Uint8Array
   ): void {
     // Defensive copy so destroy() -> folderTree.clear() doesn't zero caller buffers
     this.folderTree.set(ipnsName, {
       ipnsName,
       folderKey: new Uint8Array(folderKey),
+      writeKey: new Uint8Array(writeKey ?? new Uint8Array(32)),
       ipnsKeypair: {
         publicKey: new Uint8Array(ipnsKeypair.publicKey),
         privateKey: new Uint8Array(ipnsKeypair.privateKey),
@@ -388,12 +561,16 @@ export class CipherBoxClient {
    * @param ipnsName - Folder's IPNS name
    * @param folderKey - Decrypted AES-256 folder key
    * @param ipnsKeypair - Ed25519 keypair for IPNS signing
+   * @param writeKey - Optional 32-byte AES-256 write key (D-03). Omitting falls back to
+   *   a zero-filled key (legacy compatibility, matching registerFolder) unless an
+   *   already-loaded folderTree entry carries a real writeKey, which is preserved.
    * @returns The loaded folder state, or null if IPNS record not found
    */
   async loadFolder(
     ipnsName: string,
     folderKey: Uint8Array,
-    ipnsKeypair: { publicKey: Uint8Array; privateKey: Uint8Array }
+    ipnsKeypair: { publicKey: Uint8Array; privateKey: Uint8Array },
+    writeKey?: Uint8Array
   ): Promise<FolderState | null> {
     return this.withOperation('loadFolder', async () => {
       const result = await sdkCore.loadFolderMetadata({
@@ -420,6 +597,9 @@ export class CipherBoxClient {
 
       const state: FolderState = {
         ipnsName,
+        // Preserve an already-recovered real writeKey across a reload rather than
+        // clobbering it with the zero-fallback (D-03).
+        writeKey: new Uint8Array(writeKey ?? existing?.writeKey ?? new Uint8Array(32)),
         folderKey,
         ipnsKeypair,
         sequenceNumber: result.sequenceNumber,
@@ -446,20 +626,319 @@ export class CipherBoxClient {
   }
 
   /**
+   * Resolve an IPNS name to its raw PublishedNode envelope + current sequenceNumber.
+   * Returns null when the IPNS record is absent (structurally unresolvable hop) —
+   * NOT when a crypto/AEAD verification subsequently fails on the caller side.
+   */
+  private async resolvePublishedNode(
+    ipnsName: string
+  ): Promise<{ published: PublishedNode; sequenceNumber: bigint } | null> {
+    const resolved = await sdkCore.resolveIpnsRecord(ipnsName, this.ctx);
+    if (!resolved) return null;
+    const raw = await sdkCore.fetchFromIpfs(this.ctx, resolved.cid);
+    const published = JSON.parse(new TextDecoder().decode(raw)) as PublishedNode;
+    return { published, sequenceNumber: resolved.sequenceNumber };
+  }
+
+  /**
+   * Resolve the write-body params (`writeKey` + current `writeChildren`) an owned
+   * publish call site must thread into `updateFolderMetadataAndPublish` so the
+   * republished folder PRESERVES its existing write chain (D-03).
+   *
+   * This plan only preserves existing writeChildren on republish — it never
+   * adds/removes WriteChildRef entries (insertion is owned by createFolder
+   * 68.1-02 and the owned-file-write plans 68.1-07/09).
+   *
+   * Sourcing order:
+   *   1. Legacy zero-fallback writeKey (registerFolder/loadFolder without a real
+   *      key) → return `{}` so the publish stays write-body-less, identical to
+   *      pre-D-03 behavior. Sealing under a zero key is exactly the
+   *      T-68.1-01-03 threat this avoids.
+   *   2. In-memory `folder.metadata.writeBody` (populated by ensureFolderLoaded,
+   *      which unseals with the real writeKey) → use its writeChildren directly.
+   *   3. Otherwise unseal the CURRENT on-wire node once per operation
+   *      (shared-write pattern: unsealNode with readKey+writeKey →
+   *      writeBody.writeChildren). An absent on-wire write-body (pre-D-03
+   *      publish) yields `[]` — the republish then seals a fresh empty
+   *      write-body going forward. A write-body that IS present but fails GCM
+   *      auth under folder.writeKey propagates as a throw (fail-closed,
+   *      T-68.1-01-03) rather than silently dropping entries.
+   *
+   * Never zeroes folder.folderKey / folder.writeKey (caller-owned, D-09).
+   */
+  private async getWriteBodyParams(
+    folder: FolderState
+  ): Promise<{ writeKey?: Uint8Array; writeChildren?: WriteChildRef[] }> {
+    const wk = folder.writeKey;
+    if (!wk || wk.length !== 32 || wk.every((b) => b === 0)) {
+      return {};
+    }
+    if (folder.metadata?.writeBody) {
+      return { writeKey: wk, writeChildren: folder.metadata.writeBody.writeChildren };
+    }
+    const resolved = await this.resolvePublishedNode(folder.ipnsName);
+    if (!resolved || !resolved.published.writeSealed) {
+      // Nothing published yet, or no write-body ever sealed — start with [].
+      return { writeKey: wk, writeChildren: [] };
+    }
+    const node = await unsealNode(resolved.published, folder.folderKey, wk);
+    return { writeKey: wk, writeChildren: node.writeBody?.writeChildren ?? [] };
+  }
+
+  /**
+   * Adopt a successful `updateFolderMetadataAndPublish` result into the
+   * in-memory FolderState, INCLUDING the unsealed `metadata` Node mirror when
+   * present (68.1-22).
+   *
+   * `getWriteBodyParams` prefers `metadata.writeBody.writeChildren` and
+   * `dfsFindFolder` walks `metadata.writeBody` directly, so leaving the mirror
+   * stale after a publish makes the NEXT mutation re-seal an OUTDATED write
+   * chain — silently dropping WriteChildRefs inserted by earlier mutations in
+   * the same session. That drop is what made cold-reload DFS descent unable to
+   * recover just-created subfolders (GAP-2 symptom) and made
+   * resolveShareWriteDescriptor fail closed on freshly-created items.
+   */
+  private adoptPublishedFolderState(
+    folder: FolderState,
+    publishedChildren: SealedChildRef[],
+    newSequenceNumber: bigint,
+    publishedWriteChildren?: WriteChildRef[]
+  ): void {
+    folder.children = publishedChildren;
+    folder.sequenceNumber = newSequenceNumber;
+    folder.lastLoadedAt = Date.now();
+    if (folder.metadata) {
+      folder.metadata.children = publishedChildren;
+      if (publishedWriteChildren) {
+        if (folder.metadata.writeBody) {
+          folder.metadata.writeBody.writeChildren = publishedWriteChildren;
+        } else {
+          // 68.1-29: the folder carried a read-only metadata mirror (no
+          // write-body — e.g. loaded via loadFolder, or getWriteBodyParams
+          // sourced the chain from the on-wire node rather than the mirror) but
+          // this publish sealed a real write chain. CREATE the mirror so the
+          // next getWriteBodyParams (prefers metadata.writeBody) and DFS descent
+          // (walks metadata.writeBody.writeChildren) see the new WriteChildRefs
+          // instead of the absent-mirror fallback that dropped them.
+          folder.metadata.writeBody = {
+            ipnsPrivateKey: new Uint8Array(folder.ipnsKeypair.privateKey),
+            writeChildren: publishedWriteChildren,
+          };
+        }
+      }
+    }
+    this.folderTree.set(folder.ipnsName, folder);
+  }
+
+  /**
+   * Seed (or return the cached) root FolderState from config, unsealing the root
+   * Node's write-body so DFS descent has the root's writeChildren available (D-03).
+   *
+   * Returns null when self-bootstrap is unavailable (no rootIpnsKeypair or
+   * rootWriteKey configured — Phase 68.1-03 wires these at the host layer) or the
+   * root IPNS record itself cannot be resolved (structurally unresolvable hop).
+   */
+  private async ensureRootFolderState(): Promise<FolderState | null> {
+    const existingRoot = this.folderTree.get(this.config.rootIpnsName);
+    if (existingRoot) return existingRoot;
+
+    if (!this.internalRootIpnsKeypair || !this.internalRootWriteKey) return null;
+
+    const resolvedRoot = await this.resolvePublishedNode(this.config.rootIpnsName);
+    if (!resolvedRoot) return null;
+
+    // Fail closed on a wrong/corrupted root key — a genuine crypto/config error,
+    // not a structurally-unresolvable hop, so this is intentionally NOT caught.
+    const rootNode = await unsealNode(
+      resolvedRoot.published,
+      this.internalRootFolderKey,
+      this.internalRootWriteKey
+    );
+
+    const rootState: FolderState = {
+      ipnsName: this.config.rootIpnsName,
+      folderKey: new Uint8Array(this.internalRootFolderKey),
+      writeKey: new Uint8Array(this.internalRootWriteKey),
+      ipnsKeypair: {
+        publicKey: new Uint8Array(this.internalRootIpnsKeypair.publicKey),
+        privateKey: new Uint8Array(this.internalRootIpnsKeypair.privateKey),
+      },
+      sequenceNumber: resolvedRoot.sequenceNumber,
+      children: rootNode.children ?? [],
+      metadata: rootNode,
+      lastLoadedAt: Date.now(),
+      nodeId: rootNode.id,
+      nodeGeneration: rootNode.generation,
+    };
+    this.folderTree.set(this.config.rootIpnsName, rootState);
+    return rootState;
+  }
+
+  /**
+   * DFS descent from `parentState` searching for `targetIpnsName`, recovering
+   * each visited folder's readKey + writeKey + ipnsPrivateKey from the write
+   * chain and registering it into folderTree along the way (early-exit once
+   * the target is found).
+   *
+   * Per-hop crypto derivation follows the generation-source rule (§2.6, matching
+   * navigateReadChain): `childRef.generation` (the PARENT MIRROR) is the AAD
+   * input for both unsealChildReadKey and unsealChildWriteKey — NEVER the
+   * child's own envelope generation. A stale-CID relay serve fails GCM auth
+   * closed (T-68.1-01-02) and propagates as a throw, matching navigateReadChain's
+   * documented "AEAD auth failure propagates as a throw, not silent success"
+   * contract. Only structurally-absent hops (missing IPNS record, missing write
+   * link) are soft failures that skip to the next sibling.
+   *
+   * Cache short-circuit (68.1-26): a child already present in `folderTree`
+   * WITH a real (non-zero) writeKey is reused as-is instead of being
+   * re-resolved/re-unsealed/re-overwritten. Prior behavior always re-walked
+   * EVERY intermediate ancestor on EVERY call (even once fully cached), so
+   * navigating into a second, deeper subfolder redid a full network
+   * resolve+unseal for every already-loaded ancestor along the path and
+   * clobbered its `folderTree` entry with the fresh (but redundant) result —
+   * contradicting this method's own "later calls are cheap" contract and
+   * exposing loaded ancestors to being overwritten by later, possibly
+   * transiently-inconsistent resolves during an unrelated deeper descent. A
+   * write-capable cached entry is exactly as authoritative here as it is at
+   * the `ensureFolderLoaded` top-level cache-hit branch, which already
+   * trusts it without a re-resolve. A read-only-seeded cached entry (zero
+   * writeKey — e.g. the web-layer's parallel `navigateReadChain` walk,
+   * 68.1-05) is intentionally NOT short-circuited: it still needs the full
+   * write-chain recovery below so a write-capable root can recover its real
+   * writeKey (matching `recoverWriteKeyIfNeeded`'s 68.1-23 guarantee).
+   *
+   * `visited` guards against a cyclic/malicious tree hanging the walk.
+   */
+  private async dfsFindFolder(
+    parentState: FolderState,
+    targetIpnsName: string,
+    visited: Set<string>
+  ): Promise<FolderState | null> {
+    if (visited.has(parentState.ipnsName)) return null;
+    visited.add(parentState.ipnsName);
+
+    const parentNode = parentState.metadata;
+    if (!parentNode) return null;
+
+    for (const childRef of parentNode.children ?? []) {
+      const cachedChild = this.folderTree.get(childRef.ipnsName);
+      const cachedWriteKey = cachedChild?.writeKey;
+      const cachedHasRealWriteKey =
+        !!cachedWriteKey && cachedWriteKey.length === 32 && !cachedWriteKey.every((b) => b === 0);
+      if (cachedChild && cachedHasRealWriteKey) {
+        if (childRef.ipnsName === targetIpnsName) return cachedChild;
+        // Only DESCEND THROUGH a cached child that is actually traversable — i.e.
+        // has an unsealed write-body mirror. A registerFolder-seeded entry
+        // (68.1-02 createFolder registers the new child with a real writeKey but
+        // metadata:null) has a real writeKey yet cannot be descended: recursing
+        // hits `if (!parentNode) return null` at the top of this method and, with
+        // the `continue` below, would wrongly SKIP the whole subtree — blocking
+        // network recovery of an uncached deeper target. Fall through to the
+        // network resolve/unseal path, which rebuilds the full traversable state.
+        if (cachedChild.metadata?.writeBody) {
+          const foundCached = await this.dfsFindFolder(cachedChild, targetIpnsName, visited);
+          if (foundCached) return foundCached;
+          continue;
+        }
+      }
+
+      const childResolved = await this.resolvePublishedNode(childRef.ipnsName);
+      if (!childResolved) continue; // structurally unresolvable hop — try siblings
+
+      let childReadKey: Uint8Array | null = null;
+      let childWriteKey: Uint8Array | null = null;
+      try {
+        // Generation-source rule: childRef.generation (parent mirror), NEVER
+        // childResolved.published.generation (child's own envelope generation).
+        childReadKey = await unsealChildReadKey(
+          childRef.readKeySealed,
+          parentState.folderKey,
+          childResolved.published.id,
+          childResolved.published.kind,
+          childRef.generation
+        );
+
+        // Only folder/root kinds can carry a write-body and be descended into
+        // further — a file leaf is never a FolderState target.
+        if (childResolved.published.kind !== 'folder' && childResolved.published.kind !== 'root') {
+          continue;
+        }
+
+        const writeChildRef = parentNode.writeBody?.writeChildren.find(
+          (wc) => wc.childId === childResolved.published.id
+        );
+        if (!writeChildRef) {
+          // No write link recorded for this child (e.g. pre-D-03 folder never
+          // republished with a write-body) — not self-writable, skip.
+          continue;
+        }
+        childWriteKey = await unsealChildWriteKey(
+          writeChildRef.writeKeySealed,
+          parentState.writeKey,
+          childResolved.published.id,
+          childResolved.published.kind,
+          childRef.generation
+        );
+
+        // T-68.1-01-03: unsealNode validates the recovered writeKey (throws on
+        // wrong key) BEFORE the recovered ipnsPrivateKey is ever trusted —
+        // intentionally not caught here (fail closed).
+        const childNode = await unsealNode(childResolved.published, childReadKey, childWriteKey);
+        if (!childNode.writeBody) continue;
+
+        const childState: FolderState = {
+          ipnsName: childRef.ipnsName,
+          folderKey: new Uint8Array(childReadKey),
+          writeKey: new Uint8Array(childWriteKey),
+          ipnsKeypair: {
+            publicKey: deriveEd25519PublicKey(childNode.writeBody.ipnsPrivateKey),
+            privateKey: new Uint8Array(childNode.writeBody.ipnsPrivateKey),
+          },
+          sequenceNumber: childResolved.sequenceNumber,
+          children: childNode.children ?? [],
+          metadata: childNode,
+          lastLoadedAt: Date.now(),
+          nodeId: childNode.id,
+          nodeGeneration: childNode.generation,
+        };
+        // folderTree.set() makes its own defensive copy (D-09), so the local
+        // childReadKey/childWriteKey buffers below are always safe to zero.
+        this.folderTree.set(childRef.ipnsName, childState);
+
+        if (childRef.ipnsName === targetIpnsName) return childState;
+
+        const found = await this.dfsFindFolder(childState, targetIpnsName, visited);
+        if (found) return found;
+      } finally {
+        // T-68.1-01-01: zero navigate-minted intermediates not retained beyond
+        // this local scope. NEVER zero parentState.folderKey/writeKey (D-09 —
+        // caller/folderTree-owned) or config root keys.
+        childReadKey?.fill(0);
+        childWriteKey?.fill(0);
+      }
+    }
+
+    return null;
+  }
+
+  /**
    * Ensure a folder is present in the internal folderTree, self-bootstrapping
    * from root if necessary.
    *
    * If the target is already loaded, returns it immediately. Otherwise — when a
-   * root IPNS keypair was configured — walks the folder tree from root (DFS with
-   * early exit), resolving each folder's metadata and unwrapping each subfolder's
-   * `folderKeyEncrypted` / `ipnsPrivateKeyEncrypted` with the vault keypair, until
-   * the target is registered. Every folder visited along the way is cached, so
-   * later calls are cheap.
+   * root IPNS keypair AND root write key were configured — walks the folder tree
+   * from root (DFS with early exit), resolving each folder's Node and recovering
+   * each subfolder's readKey + writeKey + ipnsPrivateKey from the write chain
+   * (SealedChildRef.readKeySealed + WriteChildRef.writeKeySealed — D-03; the
+   * legacy `folderKeyEncrypted`/`ipnsPrivateKeyEncrypted` fields no longer exist
+   * on SealedChildRef, NODE-03), until the target is registered. Every folder
+   * visited along the way is cached, so later calls are cheap.
    *
-   * Returns null when the client cannot self-bootstrap (no `rootIpnsKeypair`
-   * configured) or the target is not reachable from root. Callers fall back to
-   * their existing 'Folder not loaded' error on null, so behavior is unchanged
-   * when self-bootstrap is unavailable. This dissolves the "Folder not loaded"
+   * Returns null when the client cannot self-bootstrap (no `rootIpnsKeypair` or
+   * `rootWriteKey` configured, or the root IPNS record itself is unresolvable)
+   * or the target is not reachable from root. Callers fall back to their
+   * existing 'Folder not loaded' error on null, so behavior is unchanged when
+   * self-bootstrap is unavailable. This dissolves the "Folder not loaded"
    * failure class that previously required consumers to pre-seed folderTree
    * before every folderTree-dependent operation.
    *
@@ -467,15 +946,63 @@ export class CipherBoxClient {
    * @returns The loaded FolderState, or null if it cannot be bootstrapped
    * @internal
    */
-  /**
-   * @stub phase 63 (navigation/read fan-out): SealedChildRef has no
-   * folderKeyEncrypted / ipnsPrivateKeyEncrypted fields; the phase-63 DFS will
-   * unseal the child readKey from SealedChildRef.readKeySealed using the parent
-   * Node's readKey chain to derive per-folder keys.
-   */
   async ensureFolderLoaded(targetIpnsName: string): Promise<FolderState | null> {
-    void targetIpnsName;
-    throw new Error('not implemented — phase 63 (navigation/read fan-out)');
+    const existing = this.folderTree.get(targetIpnsName);
+    if (existing) {
+      // Cold-load write-plane recovery (68.1-23): a folder entry seeded
+      // read-only (registerFolder/loadFolder without a writeKey -- e.g. the
+      // web-layer's parallel navigateReadChain walk, 68.1-05) pre-empts the
+      // DFS recovery below since we short-circuit here. Recover the real
+      // writeKey + populated write-body mirror for THIS folder when possible.
+      await this.recoverWriteKeyIfNeeded(existing);
+      return existing;
+    }
+
+    const rootState = await this.ensureRootFolderState();
+    if (!rootState) return null;
+    if (targetIpnsName === this.config.rootIpnsName) return rootState;
+
+    return this.dfsFindFolder(rootState, targetIpnsName, new Set<string>());
+  }
+
+  /**
+   * Recover a real writeKey + populated `metadata.writeBody` for a folder
+   * entry that was seeded read-only (zero writeKey, e.g. via
+   * `registerFolder`/`loadFolder` without a `writeKey` argument) but IS
+   * reachable from a write-capable root (68.1-23 gap-closure).
+   *
+   * No-op when: the entry already carries a real writeKey; no root write
+   * material is configured (`internalRootIpnsKeypair`/`internalRootWriteKey`
+   * absent -- read-only clients stay read-only, unchanged behavior); the
+   * entry IS the root (`ensureRootFolderState` always seeds a real writeKey);
+   * or the folder is not reachable from root (DFS returns null).
+   *
+   * Adopts ONLY the write-plane fields (`writeKey`, `metadata.writeBody`) onto
+   * the pre-existing `FolderState` object -- its readKey/ipnsKeypair/
+   * sequenceNumber/children stay exactly as already loaded (D-09: never
+   * replace a caller/folderTree-owned read-plane view with a network re-walk).
+   */
+  private async recoverWriteKeyIfNeeded(existing: FolderState): Promise<void> {
+    const wk = existing.writeKey;
+    const hasRealWriteKey = !!wk && wk.length === 32 && !wk.every((b) => b === 0);
+    if (hasRealWriteKey) return;
+    if (!this.internalRootIpnsKeypair || !this.internalRootWriteKey) return;
+    if (existing.ipnsName === this.config.rootIpnsName) return;
+
+    const rootState = await this.ensureRootFolderState();
+    if (!rootState) return;
+
+    const recovered = await this.dfsFindFolder(rootState, existing.ipnsName, new Set<string>());
+    if (!recovered) return;
+
+    existing.writeKey = new Uint8Array(recovered.writeKey);
+    existing.metadata = existing.metadata
+      ? {
+          ...existing.metadata,
+          writeBody: recovered.metadata?.writeBody ?? existing.metadata.writeBody,
+        }
+      : recovered.metadata;
+    this.folderTree.set(existing.ipnsName, existing);
   }
 
   /**
@@ -486,11 +1013,16 @@ export class CipherBoxClient {
    * get-or-self-load-or-throw contract lives in one place and a new method can't
    * silently forget the self-heal fallback.
    *
+   * Always routes through `ensureFolderLoaded` (rather than short-circuiting on
+   * an existing folderTree entry) so the cold-load write-plane recovery
+   * (`recoverWriteKeyIfNeeded`, 68.1-23) also fires for already-loaded,
+   * read-only-seeded entries.
+   *
    * @param ipnsName - IPNS name of the required folder
    * @param label - Human label for the error (e.g. 'Parent folder', 'Source folder')
    */
   private async requireFolder(ipnsName: string, label = 'Folder'): Promise<FolderState> {
-    const folder = this.folderTree.get(ipnsName) ?? (await this.ensureFolderLoaded(ipnsName));
+    const folder = await this.ensureFolderLoaded(ipnsName);
     if (!folder) throw new Error(`${label} not loaded`);
     return folder;
   }
@@ -513,7 +1045,7 @@ export class CipherBoxClient {
    * remains the authoritative conflict detector.
    */
   private async reconcileFolderSequence(ipnsName: string, expectedSequence: bigint): Promise<void> {
-    let resolved: { sequenceNumber: bigint; signatureVerified: boolean } | null;
+    let resolved: { cid: string; sequenceNumber: bigint; signatureVerified: boolean } | null;
     try {
       resolved = await sdkCore.resolveIpnsRecord(ipnsName, this.ctx);
     } catch {
@@ -560,7 +1092,80 @@ export class CipherBoxClient {
     }
 
     if (resolved.sequenceNumber !== expectedSequence) {
+      // D-04 self-heal (68.1-22): when the network is AHEAD (a legitimate
+      // concurrent update from another device/session), adopt the fresher
+      // network state into folderTree BEFORE deferring, so the caller's
+      // bounded retry (useMutationFailureUx's runReconcileRetryLoop) re-reads
+      // reconciled state and succeeds — previously nothing advanced the local
+      // sequence between retries except the 30s sync poll, so the ~30s retry
+      // budget raced it and usually exhausted. Network-BEHIND (stale/replayed
+      // record, T-68-101) adopts NOTHING — refreshFolderStateFromNetwork's
+      // strictly-newer guard skips it, and that direction is classified
+      // fail-closed upstream (D-05); adopting it would be a rollback.
+      if (resolved.sequenceNumber > expectedSequence) {
+        const folder = this.folderTree.get(ipnsName);
+        // Only refresh when the in-memory entry still matches the sequence
+        // the caller reconciled against (no concurrent in-process update).
+        if (folder && folder.sequenceNumber === expectedSequence) {
+          await this.refreshFolderStateFromNetwork(folder);
+        }
+      }
       throw new ReconcileStaleError(ipnsName, expectedSequence, resolved.sequenceNumber);
+    }
+  }
+
+  /**
+   * Best-effort refresh of a folder's in-memory state (read-body children,
+   * sequence AND the unsealed metadata mirror incl. write-body) from the
+   * CURRENT network record (68.1-22).
+   *
+   * Strictly-newer guard: never adopts a record at or below the in-memory
+   * sequence (anti-rollback — a stale/replayed record must never rewind
+   * local state, T-68-101). Failures are swallowed: callers treat this as an
+   * opportunistic reconcile, not a correctness gate — the CAS-guarded publish
+   * remains the authoritative conflict detector.
+   *
+   * Why the mirror matters: getWriteBodyParams prefers
+   * `metadata.writeBody.writeChildren`, so a stale mirror makes the next
+   * publish re-seal an outdated write chain — silently dropping
+   * WriteChildRefs inserted by OTHER devices (the cross-device counterpart of
+   * adoptPublishedFolderState's same-session sync).
+   */
+  private async refreshFolderStateFromNetwork(folder: FolderState): Promise<void> {
+    try {
+      const resolved = await sdkCore.resolveIpnsRecord(folder.ipnsName, this.ctx);
+      if (!resolved || typeof resolved.sequenceNumber !== 'bigint') return;
+      if (resolved.sequenceNumber <= folder.sequenceNumber) return;
+      const raw = await sdkCore.fetchFromIpfs(this.ctx, resolved.cid);
+      const published = JSON.parse(new TextDecoder().decode(raw)) as PublishedNode;
+      const wk = folder.writeKey;
+      const realWriteKey = wk && wk.length === 32 && !wk.every((b) => b === 0) ? wk : undefined;
+      const node = await unsealNode(published, folder.folderKey, realWriteKey);
+      if (realWriteKey === undefined) {
+        // Write-body preservation (68.1-23): unsealing WITHOUT a real writeKey
+        // yields a write-body-less node. Never let that REPLACE an
+        // already-populated local mirror -- a second device's bump must not
+        // silently strip this device's recovered WriteChildRefs from the wire
+        // (D-03). Read-body children/sequence/nodeId/generation still adopt
+        // the fresher network view below; only the write-body is preserved.
+        node.writeBody = folder.metadata?.writeBody ?? node.writeBody;
+      }
+      folder.children = node.children ?? [];
+      folder.sequenceNumber = resolved.sequenceNumber;
+      folder.metadata = node;
+      folder.nodeId = node.id;
+      folder.nodeGeneration = node.generation;
+      folder.lastLoadedAt = Date.now();
+      this.folderTree.set(folder.ipnsName, folder);
+      this.emitter.emit({
+        type: 'folder:updated',
+        folderId: folder.ipnsName,
+        ipnsName: folder.ipnsName,
+        children: folder.children,
+        sequenceNumber: folder.sequenceNumber,
+      });
+    } catch {
+      // Best-effort — the caller's publish path still owns conflict handling.
     }
   }
 
@@ -780,29 +1385,229 @@ export class CipherBoxClient {
   }
 
   /**
-   * Create a new subfolder inside an existing folder.
+   * Create a new owned subfolder inside an existing folder.
    *
-   * Generates IPNS keypair and folder key, wraps with user's public key,
-   * adds folder entry to parent metadata, publishes parent IPNS record,
-   * and publishes empty folder metadata for the new subfolder.
+   * Mints an owned subfolder Node with its own write-body (ipnsPrivateKey +
+   * empty writeChildren), publishes it at seq 1n, then inserts a
+   * SealedChildRef into the parent read-body AND a WriteChildRef into the
+   * parent write-body and republishes the parent (D-03). Adapts the
+   * `createSharedSubfolder` build-path (shared-write.ts:288) to the owned
+   * (non-share) write chain.
    *
    * @param parentIpnsName - IPNS name of the parent folder
    * @param name - Name for the new subfolder
    * @returns Created folder's UUID, IPNS name, folder key, and IPNS private key
    */
-  /**
-   * @stub phase 63 (navigation/read fan-out): createSubfolder now returns
-   * { node: Node; ... } not { folder: FolderEntry; ... }. Phase 63 will seal
-   * the new Node under the parent's write-body and emit a SealedChildRef for
-   * the parent's updated children list.
-   */
   async createFolder(
     parentIpnsName: string,
     name: string
   ): Promise<{ id: string; ipnsName: string; folderKey: Uint8Array; ipnsPrivateKey: Uint8Array }> {
-    void parentIpnsName;
-    void name;
-    throw new Error('not implemented — phase 63 (create subfolder node)');
+    return this.withOperation('createFolder', async () => {
+      const parent = await this.requireFolder(parentIpnsName, 'Parent folder');
+
+      // Reject duplicate sibling names — mirrors uploadFile's contract so folder
+      // and file creation enforce the same uniqueness invariant.
+      if (parent.children.some((child) => child.name === name)) {
+        throw new Error('An item with this name already exists');
+      }
+
+      // Reconcile-before-publish (SC#3 / D-04): defer on any sequence mismatch.
+      await this.reconcileFolderSequence(parentIpnsName, parent.sequenceNumber);
+
+      // Preserve the parent's existing write chain — augmented below with the
+      // new child's WriteChildRef.
+      const parentWriteBodyParams = await this.getWriteBodyParams(parent);
+      if (!parentWriteBodyParams.writeKey) {
+        throw new Error(
+          `createFolder: parent folder ${parentIpnsName} has no writeKey — cannot mint an owned subfolder without a write-capable parent`
+        );
+      }
+      const parentWriteKey = parentWriteBodyParams.writeKey;
+      const parentWriteChildren = parentWriteBodyParams.writeChildren ?? [];
+
+      // Mint child keys — we own these until handed off to the caller / folderTree (D-09).
+      let childReadKey: Uint8Array | null = generateRandomBytes(32);
+      let childWriteKey: Uint8Array | null = generateRandomBytes(32);
+      const childKeypair = generateEd25519Keypair();
+      let childIpnsPrivateKey: Uint8Array | null = childKeypair.privateKey;
+
+      try {
+        const childIpnsName = await deriveIpnsName(childKeypair.publicKey);
+        const childId = crypto.randomUUID();
+        const now = Date.now();
+
+        const childNode: CoreNode = {
+          schema: 'node/v3',
+          kind: 'folder',
+          id: childId,
+          generation: 0,
+          createdAt: now,
+          modifiedAt: now,
+          children: [],
+          writeBody: {
+            ipnsPrivateKey: childIpnsPrivateKey,
+            writeChildren: [],
+          },
+        };
+
+        const childPublished = await sealNode(childNode, childReadKey, childWriteKey);
+
+        // Compute TEE enrollment fields (if teeKeys configured) BEFORE any IPFS
+        // upload — fail closed on incomplete config so a malformed teeKeys
+        // short-circuits before the addToIpfs side effect and never leaves an
+        // orphaned blob behind (mirrors createSubfolder, registration.ts:85-109).
+        let encryptedIpnsPrivateKey: string | undefined;
+        let keyEpoch: number | undefined;
+        if (this.config.teeKeys) {
+          const { currentPublicKey, currentEpoch } = this.config.teeKeys;
+          if (!currentPublicKey) {
+            throw new Error(
+              'createFolder: teeKeys.currentPublicKey is missing or empty — refusing to publish un-enrolled subfolder'
+            );
+          }
+          if (!Number.isInteger(currentEpoch) || currentEpoch < 1) {
+            throw new Error(
+              'createFolder: teeKeys.currentEpoch must be a positive integer (>= 1) — refusing to publish un-enrolled subfolder'
+            );
+          }
+          // ECIES-wrap the freshly-minted childIpnsPrivateKey under the TEE
+          // public key. Do NOT zero childIpnsPrivateKey here — wrapKey reads
+          // but does not consume the buffer; it is zeroed below at its
+          // existing terminal-owner site (D-09).
+          const teePublicKeyBytes = hexToBytes(currentPublicKey);
+          const wrappedBytes = await wrapKey(childIpnsPrivateKey, teePublicKeyBytes);
+          encryptedIpnsPrivateKey = bytesToHex(wrappedBytes);
+          keyEpoch = currentEpoch;
+        }
+
+        // First publish — sequenceNumber MUST be 1n (Phase-60 strict gate).
+        await sdkCore.createAndPublishIpnsRecord({
+          ipnsPrivateKey: childIpnsPrivateKey,
+          ipnsName: childIpnsName,
+          metadataCid: (
+            await sdkCore.addToIpfs(
+              this.ctx,
+              new TextEncoder().encode(JSON.stringify(childPublished))
+            )
+          ).cid,
+          sequenceNumber: 1n,
+          ctx: this.ctx,
+          encryptedIpnsPrivateKey,
+          keyEpoch,
+        });
+
+        // Build the parent's SealedChildRef (read-body — no write field, NODE-03).
+        const readKeySealed = await sealChildReadKey(
+          childReadKey,
+          parent.folderKey,
+          childId,
+          'folder',
+          0
+        );
+        const childEntry: SealedChildRef = {
+          name,
+          ipnsName: childIpnsName,
+          generation: 0,
+          versionFloor: 1n,
+          readKeySealed,
+          // Folder display mirror: creation time (no size for folders — WEB-01).
+          modifiedAt: Date.now(),
+        };
+
+        // Build the parent's WriteChildRef (write-body — role 0x04).
+        const writeKeySealed = await sealChildWriteKey(
+          childWriteKey,
+          parentWriteKey,
+          childId,
+          'folder',
+          0
+        );
+        const writeChildRef: WriteChildRef = { childId, writeKeySealed };
+
+        const baseChildren = [...parent.children];
+        const updatedChildren = [...parent.children, childEntry];
+        const updatedWriteChildren = [...parentWriteChildren, writeChildRef];
+
+        const { newSequenceNumber, publishedChildren, publishedWriteChildren } =
+          await sdkCore.updateFolderMetadataAndPublish({
+            children: updatedChildren,
+            baseChildren,
+            folderKey: parent.folderKey,
+            writeKey: parentWriteKey,
+            writeChildren: updatedWriteChildren,
+            ipnsPrivateKey: parent.ipnsKeypair.privateKey,
+            ipnsName: parentIpnsName,
+            sequenceNumber: parent.sequenceNumber,
+            ctx: this.ctx,
+            nodeId: parent.nodeId,
+            nodeGeneration: parent.nodeGeneration,
+          });
+
+        this.adoptPublishedFolderState(
+          parent,
+          publishedChildren,
+          newSequenceNumber,
+          publishedWriteChildren ?? updatedWriteChildren
+        );
+
+        // Register the new child so it is immediately usable (upload/rename/etc.)
+        // without a reload round-trip.
+        this.registerFolder(
+          childIpnsName,
+          childReadKey,
+          { publicKey: childKeypair.publicKey, privateKey: childIpnsPrivateKey },
+          [],
+          1n,
+          childId,
+          0,
+          childWriteKey
+        );
+
+        this.emitter.emit({
+          type: 'folder:updated',
+          folderId: parentIpnsName,
+          ipnsName: parentIpnsName,
+          children: publishedChildren,
+          sequenceNumber: newSequenceNumber,
+        });
+
+        // Scope-exit rotation (SC#2/SC#4): the parent's read chain may need
+        // rotation now that a new child scope has been entered under it.
+        await this.performScopeExitRotation({
+          ancestorIpnsNames: [parentIpnsName],
+          rootNodeIpnsName: parentIpnsName,
+          rootNodeId: parent.nodeId,
+          rootReadKey: parent.folderKey,
+          rootIpnsPrivateKey: parent.ipnsKeypair.privateKey,
+          rootIpnsPublicKey: parent.ipnsKeypair.publicKey,
+        });
+
+        // registerFolder() made its own defensive copies (D-09), so a copy
+        // handed back to the caller here is independent of the local buffers
+        // this function zeroes below.
+        const result = {
+          id: childId,
+          ipnsName: childIpnsName,
+          folderKey: new Uint8Array(childReadKey),
+          ipnsPrivateKey: new Uint8Array(childIpnsPrivateKey),
+        };
+
+        childReadKey.fill(0);
+        childReadKey = null;
+        childWriteKey.fill(0);
+        childWriteKey = null;
+        childIpnsPrivateKey.fill(0);
+        childIpnsPrivateKey = null;
+
+        return result;
+      } catch (err) {
+        // Zero minted keys on failure — never zero caller-supplied keys (D-09).
+        childReadKey?.fill(0);
+        childWriteKey?.fill(0);
+        childIpnsPrivateKey?.fill(0);
+        throw err;
+      }
+    });
   }
 
   /**
@@ -830,26 +1635,31 @@ export class CipherBoxClient {
       // mismatch, never publish (metadata OR rotation) against possibly-superseded state.
       await this.reconcileFolderSequence(folderIpnsName, folder.sequenceNumber);
 
+      // 1c. Preserve the folder's existing write-body on republish (D-03).
+      const writeBodyParams = await this.getWriteBodyParams(folder);
+
       // 2. Publish updated metadata
-      const { newSequenceNumber, publishedChildren } = await sdkCore.updateFolderMetadataAndPublish(
-        {
+      const { newSequenceNumber, publishedChildren, publishedWriteChildren } =
+        await sdkCore.updateFolderMetadataAndPublish({
           children: updatedChildren,
           baseChildren,
           folderKey: folder.folderKey,
+          ...writeBodyParams,
           ipnsPrivateKey: folder.ipnsKeypair.privateKey,
           ipnsName: folderIpnsName,
           sequenceNumber: folder.sequenceNumber,
           ctx: this.ctx,
           nodeId: folder.nodeId,
           nodeGeneration: folder.nodeGeneration,
-        }
-      );
+        });
 
       // 3. Update internal state — adopt merged published set (CR-01)
-      folder.children = publishedChildren;
-      folder.sequenceNumber = newSequenceNumber;
-      folder.lastLoadedAt = Date.now();
-      this.folderTree.set(folderIpnsName, folder);
+      this.adoptPublishedFolderState(
+        folder,
+        publishedChildren,
+        newSequenceNumber,
+        publishedWriteChildren ?? writeBodyParams.writeChildren
+      );
 
       // 4. Emit update event
       this.emitter.emit({
@@ -977,26 +1787,101 @@ export class CipherBoxClient {
         childReadKey.fill(0);
       }
 
+      // Preserve BOTH folders' existing write-bodies on republish (D-03).
+      // 68.1-31: write-link re-homing is implemented HERE (previously
+      // deferred to 68.1-02) — the moved child's WriteChildRef is unsealed
+      // under the SOURCE writeKey, dropped from the source write-body, and
+      // re-sealed under the DEST writeKey into the dest write-body, so the
+      // moved item stays write-capable in its new location.
+      const destWriteBodyParams = await this.getWriteBodyParams(destFolder);
+      const sourceWriteBodyParams = await this.getWriteBodyParams(sourceFolder);
+
+      // 68.1-31: write-link re-homing. Default to verbatim preservation;
+      // only re-home when BOTH folders are write-capable (a read-plane-only
+      // move must never throw or fabricate a write link under a zero/absent
+      // key — T-68.1-01-03).
+      let rehomedDestWriteChildren = destWriteBodyParams.writeChildren;
+      let rehomedSourceWriteChildren = sourceWriteBodyParams.writeChildren;
+
+      if (!destWriteBodyParams.writeKey || !sourceWriteBodyParams.writeKey) {
+        console.warn(
+          `moveItem: source or destination folder ${sourceIpnsName} -> ${destIpnsName} is read-only — the moved item will not be write-capable in its new location`
+        );
+      } else {
+        // Write plane is keyed by node UUID (childPub.id, already resolved
+        // above for the read-plane re-seal) — NEVER the ipnsName-based
+        // `childId` param moveItem receives. The write-capability gate at
+        // resolveFileWriteChainKeys matches on this exact UUID.
+        const movedWriteRef = sourceWriteBodyParams.writeChildren?.find(
+          (wc) => wc.childId === childPub.id
+        );
+        if (movedWriteRef) {
+          let movedWriteKey: Uint8Array | null = null;
+          try {
+            // Generation is destEntry.generation — the SealedChildRef
+            // parent-mirror generation, unchanged by the move (same value
+            // the read-plane re-seal above uses).
+            movedWriteKey = await unsealChildWriteKey(
+              movedWriteRef.writeKeySealed,
+              sourceWriteBodyParams.writeKey,
+              childPub.id,
+              childPub.kind,
+              destEntry.generation
+            );
+            const writeKeySealed = await sealChildWriteKey(
+              movedWriteKey,
+              destWriteBodyParams.writeKey,
+              childPub.id,
+              childPub.kind,
+              destEntry.generation
+            );
+            rehomedDestWriteChildren = [
+              ...(destWriteBodyParams.writeChildren ?? []),
+              { childId: childPub.id, writeKeySealed },
+            ];
+            rehomedSourceWriteChildren = (sourceWriteBodyParams.writeChildren ?? []).filter(
+              (wc) => wc.childId !== childPub.id
+            );
+          } finally {
+            // Zero the recovered child writeKey on every exit path —
+            // engine-derived, terminal-owned (D-09). Never zero
+            // sourceWriteBodyParams.writeKey / destWriteBodyParams.writeKey
+            // (tree/caller-owned).
+            movedWriteKey?.fill(0);
+          }
+        }
+        // else: no source WriteChildRef for this child (pre-write-plane or
+        // already read-only) — nothing to re-home, lists stay verbatim.
+      }
+
       // D-12: publish DESTINATION before SOURCE (dest-before-source) so a
       // crash between publishes never orphans the moved node out of both
       // folders — folds the Phase-64 OUT-tagged
       // sdk-client-move-publish-durability work into this cutover.
-      const { newSequenceNumber: dstSeq, publishedChildren: dstChildren } =
-        await sdkCore.updateFolderMetadataAndPublish({
-          children: updatedDest,
-          baseChildren: baseDestChildren,
-          readKey: destFolder.folderKey,
-          ipnsPrivateKey: destFolder.ipnsKeypair.privateKey,
-          ipnsName: destIpnsName,
-          sequenceNumber: destFolder.sequenceNumber,
-          ctx: this.ctx,
-          nodeId: destFolder.nodeId,
-          nodeGeneration: destFolder.nodeGeneration,
-        });
+      const {
+        newSequenceNumber: dstSeq,
+        publishedChildren: dstChildren,
+        publishedWriteChildren: dstPublishedWriteChildren,
+      } = await sdkCore.updateFolderMetadataAndPublish({
+        children: updatedDest,
+        baseChildren: baseDestChildren,
+        readKey: destFolder.folderKey,
+        writeKey: destWriteBodyParams.writeKey,
+        writeChildren: rehomedDestWriteChildren,
+        ipnsPrivateKey: destFolder.ipnsKeypair.privateKey,
+        ipnsName: destIpnsName,
+        sequenceNumber: destFolder.sequenceNumber,
+        ctx: this.ctx,
+        nodeId: destFolder.nodeId,
+        nodeGeneration: destFolder.nodeGeneration,
+      });
 
-      destFolder.children = dstChildren;
-      destFolder.sequenceNumber = dstSeq;
-      this.folderTree.set(destIpnsName, destFolder);
+      this.adoptPublishedFolderState(
+        destFolder,
+        dstChildren,
+        dstSeq,
+        dstPublishedWriteChildren ?? rehomedDestWriteChildren
+      );
       this.emitter.emit({
         type: 'folder:updated',
         folderId: destIpnsName,
@@ -1006,22 +1891,30 @@ export class CipherBoxClient {
       });
 
       // Publish updated source folder
-      const { newSequenceNumber: srcSeq, publishedChildren: srcChildren } =
-        await sdkCore.updateFolderMetadataAndPublish({
-          children: updatedSource,
-          baseChildren: baseSourceChildren,
-          readKey: sourceFolder.folderKey,
-          ipnsPrivateKey: sourceFolder.ipnsKeypair.privateKey,
-          ipnsName: sourceIpnsName,
-          sequenceNumber: sourceFolder.sequenceNumber,
-          ctx: this.ctx,
-          nodeId: sourceFolder.nodeId,
-          nodeGeneration: sourceFolder.nodeGeneration,
-        });
+      const {
+        newSequenceNumber: srcSeq,
+        publishedChildren: srcChildren,
+        publishedWriteChildren: srcPublishedWriteChildren,
+      } = await sdkCore.updateFolderMetadataAndPublish({
+        children: updatedSource,
+        baseChildren: baseSourceChildren,
+        readKey: sourceFolder.folderKey,
+        writeKey: sourceWriteBodyParams.writeKey,
+        writeChildren: rehomedSourceWriteChildren,
+        ipnsPrivateKey: sourceFolder.ipnsKeypair.privateKey,
+        ipnsName: sourceIpnsName,
+        sequenceNumber: sourceFolder.sequenceNumber,
+        ctx: this.ctx,
+        nodeId: sourceFolder.nodeId,
+        nodeGeneration: sourceFolder.nodeGeneration,
+      });
 
-      sourceFolder.children = srcChildren;
-      sourceFolder.sequenceNumber = srcSeq;
-      this.folderTree.set(sourceIpnsName, sourceFolder);
+      this.adoptPublishedFolderState(
+        sourceFolder,
+        srcChildren,
+        srcSeq,
+        srcPublishedWriteChildren ?? rehomedSourceWriteChildren
+      );
       this.emitter.emit({
         type: 'folder:updated',
         folderId: sourceIpnsName,
@@ -1073,26 +1966,33 @@ export class CipherBoxClient {
       // mismatch, never publish (metadata OR rotation) against possibly-superseded state.
       await this.reconcileFolderSequence(folderIpnsName, folder.sequenceNumber);
 
+      // 1c. Preserve the folder's existing write-body on republish (D-03). The
+      // removed child's WriteChildRef is preserved verbatim — write-link removal
+      // is owned by 68.1-02 (this plan only preserves, never edits, the chain).
+      const writeBodyParams = await this.getWriteBodyParams(folder);
+
       // 2. Publish updated metadata
-      const { newSequenceNumber, publishedChildren } = await sdkCore.updateFolderMetadataAndPublish(
-        {
+      const { newSequenceNumber, publishedChildren, publishedWriteChildren } =
+        await sdkCore.updateFolderMetadataAndPublish({
           children: updatedChildren,
           baseChildren,
           folderKey: folder.folderKey,
+          ...writeBodyParams,
           ipnsPrivateKey: folder.ipnsKeypair.privateKey,
           ipnsName: folderIpnsName,
           sequenceNumber: folder.sequenceNumber,
           ctx: this.ctx,
           nodeId: folder.nodeId,
           nodeGeneration: folder.nodeGeneration,
-        }
-      );
+        });
 
       // 3. Update internal state — adopt merged published set (CR-01)
-      folder.children = publishedChildren;
-      folder.sequenceNumber = newSequenceNumber;
-      folder.lastLoadedAt = Date.now();
-      this.folderTree.set(folderIpnsName, folder);
+      this.adoptPublishedFolderState(
+        folder,
+        publishedChildren,
+        newSequenceNumber,
+        publishedWriteChildren ?? writeBodyParams.writeChildren
+      );
 
       // 4. Emit update event
       this.emitter.emit({
@@ -1114,7 +2014,7 @@ export class CipherBoxClient {
       });
 
       // 6. Fire-and-forget IPNS unenrollment (resolve async collection then dispatch)
-      this.collectRemovedItemIpnsNames(removedItem)
+      this.collectRemovedItemIpnsNames(removedItem, folder.folderKey)
         .then((names) => this.fireAndForgetUnenroll(names))
         .catch((err) => console.warn('[CipherBox] IPNS unenroll collection failed:', err));
 
@@ -1185,19 +2085,48 @@ export class CipherBoxClient {
       });
 
       try {
-        // 2. Add FilePointer to folder's children (seals child readKey under parent readKey — READ-03)
+        // 2. Seal the v3 file Node's readKey (uploadResult.fileReadKey — NOT
+        // the content fileKey, D-07/NODE-02) into the parent's read-body —
+        // READ-03. childId is the file Node's own UUID (uploadResult.fileNodeId,
+        // matches WriteChildRef.childId below).
         const baseChildren = [...folder.children];
         const { updatedChildren } = await sdkCore.addFilePointerToFolder({
           children: folder.children,
-          childReadKey: uploadResult.fileKey,
+          childReadKey: uploadResult.fileReadKey,
           parentReadKey: folder.folderKey,
-          childId: fileId,
+          childId: uploadResult.fileNodeId,
           childKind: 'file',
           childGeneration: 0,
           name: fileName,
           ipnsName: uploadResult.fileMetaIpnsName,
-          versionFloor: 0n,
+          versionFloor: 1n,
+          // Display mirrors: plaintext byte size + upload time (WEB-01 size/date columns).
+          size: data.length,
+          modifiedAt: Date.now(),
         });
+
+        // 2b. Insert a WriteChildRef for the new file's writeKey into the
+        // parent's write-body (68.1-09 owns WriteChildRef insertion for
+        // owned uploads; 68.1-01's getWriteBodyParams sources the existing
+        // chain to preserve verbatim). No real writeKey (legacy zero-fallback
+        // parent, T-68.1-01-03) means the file cannot be write-linked — the
+        // upload still succeeds read-only, matching getWriteBodyParams'
+        // existing preservation-only contract at every other owned call site.
+        const writeBodyParams = await this.getWriteBodyParams(folder);
+        let updatedWriteChildren = writeBodyParams.writeChildren;
+        if (writeBodyParams.writeKey) {
+          const writeKeySealed = await sealChildWriteKey(
+            uploadResult.fileWriteKey,
+            writeBodyParams.writeKey,
+            uploadResult.fileNodeId,
+            'file',
+            0
+          );
+          updatedWriteChildren = [
+            ...(writeBodyParams.writeChildren ?? []),
+            { childId: uploadResult.fileNodeId, writeKeySealed },
+          ];
+        }
 
         // 3. Concurrent: file IPNS batch publish + folder metadata update
         //    These two operations are independent -- no data dependency between them.
@@ -1208,6 +2137,8 @@ export class CipherBoxClient {
             children: updatedChildren,
             baseChildren,
             folderKey: folder.folderKey,
+            writeKey: writeBodyParams.writeKey,
+            writeChildren: updatedWriteChildren,
             ipnsPrivateKey: folder.ipnsKeypair.privateKey,
             ipnsName: folderIpnsName,
             sequenceNumber: folder.sequenceNumber,
@@ -1256,13 +2187,15 @@ export class CipherBoxClient {
           });
         }
 
-        const { newSequenceNumber, publishedChildren } = folderResult.value;
+        const { newSequenceNumber, publishedChildren, publishedWriteChildren } = folderResult.value;
 
         // 4. Update internal state — adopt merged published set (CR-01)
-        folder.children = publishedChildren;
-        folder.sequenceNumber = newSequenceNumber;
-        folder.lastLoadedAt = Date.now();
-        this.folderTree.set(folderIpnsName, folder);
+        this.adoptPublishedFolderState(
+          folder,
+          publishedChildren,
+          newSequenceNumber,
+          publishedWriteChildren ?? updatedWriteChildren
+        );
 
         // 5. Emit events
         this.emitter.emit({
@@ -1293,6 +2226,12 @@ export class CipherBoxClient {
         return { cid: uploadResult.cid };
       } finally {
         clearBytes(uploadResult.fileKey);
+        // uploadResult.fileReadKey/fileWriteKey are caller-owned raw returns
+        // (D-09) — this call site is the terminal owner: both are sealed into
+        // the parent's read/write-body above and nothing downstream retains
+        // them, so zero the local copies once consumed.
+        clearBytes(uploadResult.fileReadKey);
+        clearBytes(uploadResult.fileWriteKey);
       }
     });
   }
@@ -1357,6 +2296,8 @@ export class CipherBoxClient {
         fileName: string;
         fileId: string;
         uploadResult: UploadResult;
+        /** Plaintext byte size, captured pre-upload for the parent's SealedChildRef display mirror. */
+        size: number;
       };
 
       // Run all files through the pool with Promise.allSettled
@@ -1381,7 +2322,12 @@ export class CipherBoxClient {
             });
 
             callbacks?.onFileComplete?.(file.fileName);
-            return { fileName: file.fileName, fileId, uploadResult } as FileResult;
+            return {
+              fileName: file.fileName,
+              fileId,
+              uploadResult,
+              size: file.data.length,
+            } as FileResult;
           })
         )
       );
@@ -1415,24 +2361,34 @@ export class CipherBoxClient {
       }
 
       try {
-        // Re-read folder metadata to mitigate stale-children race
-        const freshFolder = await sdkCore.loadFolderMetadata({
-          ipnsName: folderIpnsName,
-          folderKey: folder.folderKey,
-          ctx: this.ctx,
-        });
-        const initialChildren = freshFolder?.metadata.children ?? folder.children;
+        // Re-read folder state (read-body children AND write-body mirror) to
+        // mitigate the stale-children race. 68.1-22: the previous read-only
+        // loadFolderMetadata refresh advanced children+sequence but left
+        // folder.metadata.writeBody stale, so getWriteBodyParams below
+        // published an OUTDATED write chain at the fresh sequence — silently
+        // dropping WriteChildRefs added by other devices (surfaced as "not
+        // write-capable (no WriteChildRef)" on the clobbered device).
+        await this.refreshFolderStateFromNetwork(folder);
+        const initialChildren = folder.children;
         const baseChildren = [...initialChildren];
         let mergedChildren = initialChildren;
-        const freshSeq = freshFolder?.sequenceNumber ?? folder.sequenceNumber;
+        const freshSeq = folder.sequenceNumber;
 
         // Add FilePointers for all successful uploads (skip collisions gracefully)
         const registeredSuccesses: FileResult[] = [];
         for (const success of successes) {
           try {
+            // v3 file Node read chain (D-07/NODE-02): the parent's SealedChildRef
+            // must wrap the file Node's OWN readKey (fileReadKey, used later by
+            // resolveFileMetadata's unsealChildReadKey + unsealNode to recover the
+            // file's PublishedNode). It must NOT wrap the content-encryption key
+            // (fileKey, used only to decrypt the file bytes themselves) -- these are
+            // two independently-minted 32-byte keys. uploadFile()'s single-shot path
+            // (above) already sealed fileReadKey correctly; this batch path had been
+            // left on the pre-node/v3 field name since 68.1-07 introduced the split.
             const { updatedChildren } = await sdkCore.addFilePointerToFolder({
               children: mergedChildren,
-              childReadKey: success.uploadResult.fileKey,
+              childReadKey: success.uploadResult.fileReadKey,
               parentReadKey: folder.folderKey,
               childId: success.fileId,
               childKind: 'file',
@@ -1440,6 +2396,9 @@ export class CipherBoxClient {
               name: success.fileName,
               ipnsName: success.uploadResult.fileMetaIpnsName,
               versionFloor: 0n,
+              // Display mirrors: plaintext byte size + upload time (WEB-01 size/date columns).
+              size: success.size,
+              modifiedAt: Date.now(),
             });
             mergedChildren = updatedChildren;
             registeredSuccesses.push(success);
@@ -1462,6 +2421,32 @@ export class CipherBoxClient {
           return { successes: [], failures };
         }
 
+        // Preserve the folder's existing write-body on republish (D-03) AND
+        // insert a WriteChildRef for each newly-uploaded file (68.1-29: this
+        // batch path — the ONLY path the web upload UI calls — previously
+        // never inserted WriteChildRefs, leaving every web-uploaded file
+        // permanently not write-capable; editor saves failed with
+        // "not write-capable (no WriteChildRef)" — conflict-detection 219,
+        // full-workflow 6.5.3). Mirrors the single-file uploadFile path: no
+        // real parent writeKey (legacy zero-fallback, T-68.1-01-03) means the
+        // files stay read-only, matching that path's contract.
+        const writeBodyParams = await this.getWriteBodyParams(folder);
+        let updatedWriteChildren = writeBodyParams.writeChildren;
+        if (writeBodyParams.writeKey) {
+          const newWriteRefs: WriteChildRef[] = [];
+          for (const success of registeredSuccesses) {
+            const writeKeySealed = await sealChildWriteKey(
+              success.uploadResult.fileWriteKey,
+              writeBodyParams.writeKey,
+              success.fileId,
+              'file',
+              0
+            );
+            newWriteRefs.push({ childId: success.fileId, writeKeySealed });
+          }
+          updatedWriteChildren = [...(writeBodyParams.writeChildren ?? []), ...newWriteRefs];
+        }
+
         // Single folder publish + batch IPNS publish (concurrent)
         const ipnsRecords = registeredSuccesses.map((s) => s.uploadResult.ipnsRecord);
         const [folderResult, batchResult] = await Promise.allSettled([
@@ -1469,6 +2454,8 @@ export class CipherBoxClient {
             children: mergedChildren,
             baseChildren,
             folderKey: folder.folderKey,
+            writeKey: writeBodyParams.writeKey,
+            writeChildren: updatedWriteChildren,
             ipnsPrivateKey: folder.ipnsKeypair.privateKey,
             ipnsName: folderIpnsName,
             sequenceNumber: freshSeq,
@@ -1512,13 +2499,16 @@ export class CipherBoxClient {
           });
         }
 
-        const { newSequenceNumber, publishedChildren } = folderResult.value;
+        const { newSequenceNumber, publishedChildren, publishedWriteChildren } = folderResult.value;
 
-        // Update internal state — adopt merged published set (CR-01)
-        folder.children = publishedChildren;
-        folder.sequenceNumber = newSequenceNumber;
-        folder.lastLoadedAt = Date.now();
-        this.folderTree.set(folderIpnsName, folder);
+        // Update internal state — adopt merged published set (CR-01),
+        // including the new files' WriteChildRefs (68.1-29)
+        this.adoptPublishedFolderState(
+          folder,
+          publishedChildren,
+          newSequenceNumber,
+          publishedWriteChildren ?? updatedWriteChildren
+        );
 
         // Emit events
         this.emitter.emit({
@@ -1546,11 +2536,324 @@ export class CipherBoxClient {
           failures,
         };
       } finally {
-        // Clear file keys for all uploads (including collision-failed ones)
+        // Clear file keys for all uploads (including collision-failed ones).
+        // fileReadKey is sealed into the parent's read-body and fileWriteKey
+        // into the parent's write-body above (68.1-29) — this call site is
+        // the terminal owner of both (D-09).
         for (const success of successes) {
           clearBytes(success.uploadResult.fileKey);
+          clearBytes(success.uploadResult.fileReadKey);
+          clearBytes(success.uploadResult.fileWriteKey);
         }
       }
+    });
+  }
+
+  /**
+   * Resolve the write-chain keys for an owned file identified by its per-file
+   * IPNS name (`fileId`, matching `SealedChildRef.ipnsName` — the same
+   * convention `deleteFromFolder`/`renameInFolder` use for `childId`) within
+   * `folder`'s read-body.
+   *
+   * Mirrors the inline write-chain walk in `updateSharedFile` (68.1-08):
+   * `id`/`kind` are the resolved `PublishedNode` envelope's plaintext fields
+   * (NODE-03), used as the AAD inputs for `unsealChildReadKey`/
+   * `unsealChildWriteKey` alongside the parent-mirror `childRef.generation`
+   * (generation-source rule, §2.6). `nodeGeneration`/`originalCreatedAt` come
+   * from unsealing the file's own current Node (read-body only needs
+   * `fileReadKey`; `fileWriteKey` is required regardless since the caller
+   * republishes the Node via `updateFileMetadata`).
+   *
+   * @throws if `fileId` has no matching child, the file IPNS is unresolvable,
+   *   the file has no `WriteChildRef` in the parent's write-body (not
+   *   write-capable), or the resolved node is not a file node.
+   * @security Returns `fileReadKey`/`fileWriteKey`/`fileIpnsPrivateKey` RAW —
+   *   the caller is the terminal owner (D-09) and must zero them after use
+   *   (T-68.1-12-04: `fileIpnsPrivateKey` is recovered here from the current
+   *   file Node's write-body as a byproduct of resolving `nodeGeneration`/
+   *   `originalCreatedAt` — 68.1-09's `replaceFile`/`restoreFileVersion`/
+   *   `deleteFileVersion` receive it from the caller instead and zero this
+   *   copy unused; the new public `resolveFileIpnsPrivateKey` wrapper below
+   *   returns it directly for callers that need to pre-resolve it, since
+   *   NODE-03's frozen `SealedChildRef` schema gives the web layer no
+   *   independent way to derive it (Rule 3 deviation, 68.1-12)).
+   */
+  private async resolveFileWriteChainKeys(
+    folder: FolderState,
+    fileId: string
+  ): Promise<{
+    fileReadKey: Uint8Array;
+    fileWriteKey: Uint8Array;
+    fileIpnsPrivateKey: Uint8Array;
+    fileMetaIpnsName: string;
+    fileSequenceNumber: bigint;
+    nodeId: string;
+    nodeGeneration: number;
+    originalCreatedAt: number;
+  }> {
+    const childRef = folder.children.find((c) => c.ipnsName === fileId);
+    if (!childRef) throw new Error(`File not found: ${fileId}`);
+
+    const filePub = await this.resolvePublishedNode(childRef.ipnsName);
+    if (!filePub) throw new Error(`Cannot resolve file IPNS ${childRef.ipnsName}`);
+
+    const fileNodeId = filePub.published.id;
+    const fileKind = filePub.published.kind;
+
+    let fileReadKey: Uint8Array | null = null;
+    let fileWriteKey: Uint8Array | null = null;
+    try {
+      fileReadKey = await unsealChildReadKey(
+        childRef.readKeySealed,
+        folder.folderKey,
+        fileNodeId,
+        fileKind,
+        childRef.generation
+      );
+
+      const writeBodyParams = await this.getWriteBodyParams(folder);
+      const writeChildRef = writeBodyParams.writeChildren?.find((wc) => wc.childId === fileNodeId);
+      if (!writeBodyParams.writeKey || !writeChildRef) {
+        throw new Error(`File ${fileId} is not write-capable (no WriteChildRef)`);
+      }
+
+      fileWriteKey = await unsealChildWriteKey(
+        writeChildRef.writeKeySealed,
+        writeBodyParams.writeKey,
+        fileNodeId,
+        fileKind,
+        childRef.generation
+      );
+
+      const currentFileNode = await unsealNode(filePub.published, fileReadKey, fileWriteKey);
+      if (
+        currentFileNode.kind !== 'file' ||
+        !currentFileNode.content ||
+        !currentFileNode.writeBody
+      ) {
+        throw new Error(`Node ${fileId} is not a write-capable file node`);
+      }
+
+      const resultReadKey = fileReadKey;
+      const resultWriteKey = fileWriteKey;
+      // Ownership transferred to the caller (D-09) — do not zero in `finally`.
+      fileReadKey = null;
+      fileWriteKey = null;
+
+      // Zero the decrypted content key now that the needed fields are read — this
+      // function is its terminal owner (D-09): only keys + node metadata are
+      // returned, content.fileKey is never handed to the caller, so don't leave it
+      // live until GC (mirrors updateSharedSingleFile's finally cleanup).
+      currentFileNode.content.fileKey?.fill(0);
+
+      return {
+        fileReadKey: resultReadKey,
+        fileWriteKey: resultWriteKey,
+        // T-68.1-12-04: unsealed as a byproduct above (writeBody requires
+        // fileWriteKey to unseal) — see the docstring above for why this is
+        // now returned alongside the read/write keys.
+        fileIpnsPrivateKey: currentFileNode.writeBody.ipnsPrivateKey,
+        fileMetaIpnsName: childRef.ipnsName,
+        fileSequenceNumber: filePub.sequenceNumber,
+        nodeId: fileNodeId,
+        nodeGeneration: currentFileNode.generation,
+        originalCreatedAt: currentFileNode.createdAt,
+      };
+    } finally {
+      // Only reached on a failure path — a successful return nulled both
+      // locals above.
+      fileReadKey?.fill(0);
+      fileWriteKey?.fill(0);
+    }
+  }
+
+  /**
+   * Resolve an owned file's own IPNS signing key (write-body `ipnsPrivateKey`)
+   * so a caller can pre-resolve it before calling {@link replaceFile} /
+   * {@link restoreFileVersion} / {@link deleteFileVersion} (68.1-09's "the
+   * caller pre-resolves `fileIpnsPrivateKey`" contract — those three methods
+   * do not derive it themselves; they only resolve `fileReadKey`/
+   * `fileWriteKey` via {@link resolveFileWriteChainKeys}).
+   *
+   * The write-chain walk requires the parent folder's `writeKey`, which lives
+   * ONLY inside `CipherBoxClient`'s internal `FolderState` (D-03) — the web
+   * layer has no independent way to derive it (NODE-03's frozen
+   * `SealedChildRef` carries no `ipnsPrivateKeyEncrypted`-style field the
+   * pre-v3 model used to expose this through). This thin public wrapper over
+   * the existing private write-chain walk is the only way to satisfy that
+   * contract from `apps/web` (T-68.1-12-04, Rule 3 deviation).
+   *
+   * @param parentIpnsName - IPNS name of the folder containing the file
+   * @param fileId - IPNS name of the file (`SealedChildRef.ipnsName`)
+   * @security Returns `fileIpnsPrivateKey` RAW. When immediately passed into
+   *   `replaceFile`/`restoreFileVersion`/`deleteFileVersion`, sdk-core
+   *   `updateFileMetadata` becomes its terminal owner and zeroes it
+   *   (T-47-01) — the caller must NOT also zero it in that case. If the
+   *   caller does not pass it to one of those methods, the caller becomes
+   *   the terminal owner and must zero it itself. This method's own
+   *   `fileReadKey`/`fileWriteKey` derivations are zeroed here (D-09).
+   */
+  async resolveFileIpnsPrivateKey(parentIpnsName: string, fileId: string): Promise<Uint8Array> {
+    return this.withOperation('resolveFileIpnsPrivateKey', async () => {
+      const folder = await this.requireFolder(parentIpnsName);
+      const fileKeys = await this.resolveFileWriteChainKeys(folder, fileId);
+      fileKeys.fileReadKey.fill(0);
+      fileKeys.fileWriteKey.fill(0);
+      return fileKeys.fileIpnsPrivateKey;
+    });
+  }
+
+  /**
+   * Mint an ECIES-wrapped `writeDescriptorRef` for a WRITE-permission share or
+   * invite of an OWNED item (68.1-18, SHARE-WRITE-KEY / WEB-03 / GAP-3).
+   *
+   * Under the node/v3 write-chain, an item's own writeKey is sealed inside its
+   * PARENT's write-body (`WriteChildRef.writeKeySealed`, under the parent's
+   * writeKey) — there is no way to derive it from the parent's readKey alone
+   * (68.1-11's documented gap). This is the SDK-boundary primitive that closes
+   * that gap: it walks the owned write-chain the same way
+   * {@link resolveFileWriteChainKeys} does (parent writeKey ->
+   * `WriteChildRef.writeKeySealed` -> item's own writeKey, keyed by the
+   * item's plaintext `PublishedNode.id`/`kind`, NODE-03, and the PARENT-MIRROR
+   * `SealedChildRef.generation` — generation-source rule, mirrors
+   * `resolveChildNodeIdentity`'s readKey analog in
+   * `apps/web/src/lib/crypto/key-wrapping.ts`), then ECIES-wraps the raw
+   * writeKey for `recipientPublicKey` and returns only the wrapped hex — the
+   * item's raw writeKey never crosses the SDK boundary into the web layer
+   * (T-68.1-18-02).
+   *
+   * Fails closed (throws, never returns an empty/zero descriptor) when the
+   * parent has no write-capable `writeKey` or the item has no `WriteChildRef`
+   * in the parent's write-body (T-68.1-18-01).
+   *
+   * @param parentIpnsName - IPNS name of the folder that owns `itemIpnsName`
+   *   (i.e. the item is one of `parent.children`)
+   * @param itemIpnsName - IPNS name of the shared item (file or folder)
+   * @param recipientPublicKey - 65-byte uncompressed secp256k1 public key to
+   *   wrap the item's writeKey for (the real recipient for a direct share, or
+   *   an ephemeral keypair's public key for an invite link)
+   * @returns Hex-encoded ECIES ciphertext (the live REST DTOs are hex-only,
+   *   mirroring 68.1-11's `readDescriptorRef` convention — not base64)
+   * @security The derived item writeKey is zeroed in `finally` immediately
+   *   after wrapping (terminal owner, D-09) — it never survives past this
+   *   call's own stack frame.
+   */
+  async resolveShareWriteDescriptor(
+    parentIpnsName: string,
+    itemIpnsName: string,
+    recipientPublicKey: Uint8Array
+  ): Promise<string> {
+    return this.withOperation('resolveShareWriteDescriptor', async () => {
+      const parent = await this.requireFolder(parentIpnsName, 'Parent folder');
+
+      const writeBodyParams = await this.getWriteBodyParams(parent);
+      if (!writeBodyParams.writeKey) {
+        throw new Error(
+          `resolveShareWriteDescriptor: parent folder ${parentIpnsName} has no writeKey — cannot mint a write grant without a write-capable parent`
+        );
+      }
+      const parentWriteKey = writeBodyParams.writeKey;
+
+      const childRef = parent.children.find((c) => c.ipnsName === itemIpnsName);
+      if (!childRef) {
+        throw new Error(
+          `resolveShareWriteDescriptor: item ${itemIpnsName} not found in parent folder ${parentIpnsName}`
+        );
+      }
+
+      const itemPub = await this.resolvePublishedNode(itemIpnsName);
+      if (!itemPub) {
+        throw new Error(`resolveShareWriteDescriptor: cannot resolve item IPNS ${itemIpnsName}`);
+      }
+      const itemNodeId = itemPub.published.id;
+      const itemKind = itemPub.published.kind;
+
+      const writeChildRef = writeBodyParams.writeChildren?.find((wc) => wc.childId === itemNodeId);
+      if (!writeChildRef) {
+        throw new Error(
+          `resolveShareWriteDescriptor: item ${itemIpnsName} has no WriteChildRef in the parent write-body — cannot mint a write grant for an item with no write-chain entry`
+        );
+      }
+
+      // Derived item writeKey — this call is its terminal owner (D-09), zeroed
+      // in `finally` regardless of the wrapKey outcome.
+      let itemWriteKey: Uint8Array | null = await unsealChildWriteKey(
+        writeChildRef.writeKeySealed,
+        parentWriteKey,
+        itemNodeId,
+        itemKind,
+        childRef.generation
+      );
+
+      try {
+        const wrapped = await wrapKey(itemWriteKey, recipientPublicKey);
+        return bytesToHex(wrapped);
+      } finally {
+        itemWriteKey?.fill(0);
+        itemWriteKey = null;
+      }
+    });
+  }
+
+  /**
+   * Conditional folder re-publish for lazy IPNS-key migration (TEE key-epoch
+   * rotation).
+   *
+   * `SealedChildRef` carries no `modifiedAt`/`ipnsPrivateKeyEncrypted` field
+   * to bump under the v3 model (NODE-03 — field set is EXACTLY {name,
+   * ipnsName, generation, versionFloor, readKeySealed}), so a file-content
+   * publish never itself touches the parent folder. When
+   * `migratedIpnsPrivateKeyEncrypted` is provided, this republishes the
+   * folder's CURRENT children unchanged, threading the newly TEE-wrapped key
+   * into the folder's OWN IPNS record enrollment
+   * (`updateFolderMetadataAndPublish`'s `encryptedIpnsPrivateKey` param) —
+   * i.e. this call site is what actually persists a folder-level lazy TEE
+   * key migration, piggybacked on a file mutation instead of a dedicated
+   * publish. No-op (folder children + sequence unchanged) when no migration
+   * is pending — a file-only publish never advances the folder's own
+   * sequence. Emits `folder:updated` from the current folderTree snapshot on
+   * every call, so both branches leave a consistent emission. Mutates
+   * `folder` in place on the migration branch; the caller does not need to
+   * re-fetch it from `folderTree`.
+   */
+  private async maybeRepublishFolderForFileMigration(
+    folderIpnsName: string,
+    folder: FolderState,
+    migratedIpnsPrivateKeyEncrypted?: string
+  ): Promise<void> {
+    if (migratedIpnsPrivateKeyEncrypted) {
+      const baseChildren = [...folder.children];
+      const writeBodyParams = await this.getWriteBodyParams(folder);
+      const { newSequenceNumber, publishedChildren, publishedWriteChildren } =
+        await sdkCore.updateFolderMetadataAndPublish({
+          children: folder.children,
+          baseChildren,
+          folderKey: folder.folderKey,
+          ...writeBodyParams,
+          ipnsPrivateKey: folder.ipnsKeypair.privateKey,
+          ipnsName: folderIpnsName,
+          sequenceNumber: folder.sequenceNumber,
+          ctx: this.ctx,
+          nodeId: folder.nodeId,
+          nodeGeneration: folder.nodeGeneration,
+          encryptedIpnsPrivateKey: migratedIpnsPrivateKeyEncrypted,
+        });
+
+      this.adoptPublishedFolderState(
+        folder,
+        publishedChildren,
+        newSequenceNumber,
+        publishedWriteChildren ?? writeBodyParams.writeChildren
+      );
+    }
+
+    const live = this.folderTree.get(folderIpnsName) ?? folder;
+    this.emitter.emit({
+      type: 'folder:updated',
+      folderId: folderIpnsName,
+      ipnsName: folderIpnsName,
+      children: live.children,
+      sequenceNumber: live.sequenceNumber,
     });
   }
 
@@ -1560,47 +2863,77 @@ export class CipherBoxClient {
    * Routes the web "file replace" path (formerly the `useFileOperations`
    * fire-and-forget "6b" block) through the client so the SDK `folderTree`
    * stays authoritative. Steps:
-   *   1. Read the parent folder + sequence from `folderTree.get()` (authoritative
-   *      SDK state) — throws 'Folder not loaded' if absent.
+   *   1. Read the parent folder from `folderTree.get()` (self-healing via
+   *      `requireFolder`) and resolve the file's write-chain keys.
    *   2. Publish the file's per-IPNS metadata via sdk-core `updateFileMetadata`
-   *      (CAS-published internally). Capture `prunedCids` for the caller to unpin.
-   *   3. Touch the folder: snapshot `baseChildren`, bump the matching FilePointer's
-   *      `modifiedAt` (and persist a migrated IPNS key if provided), then publish
-   *      via `updateFolderMetadataAndPublish`.
-   *   4. Adopt `publishedChildren` + `newSequenceNumber` into `folderTree`.
-   *   5. Emit `folder:updated`.
+   *      (direct single-shot publish, 68.1-07). Capture `prunedCids` for the
+   *      caller to unpin.
+   *   3. Conditional folder re-publish — ONLY on `migratedIpnsPrivateKeyEncrypted`
+   *      (lazy TEE-key migration piggybacked on this mutation); otherwise the
+   *      folder's children/sequence are left untouched.
+   *   4. Emit `folder:updated` from the current folderTree snapshot.
    *
-   * Per locked decision 2 the caller pre-resolves `fileIpnsPrivateKey` and
-   * `currentMetadata` (web tier owns key resolution). This method does NOT zero
-   * `fileIpnsPrivateKey` — sdk-core `updateFileMetadata` zeroes it in its own
-   * finally on every exit path (T-47-01); the caller owns any additional lifecycle.
+   * Per locked decision 2 the caller pre-resolves `fileIpnsPrivateKey`,
+   * `currentMetadata`, and `updates` (web tier owns key/service logic). This
+   * method does NOT zero `fileIpnsPrivateKey` — sdk-core `updateFileMetadata`
+   * zeroes it in its own finally on every exit path (T-47-01); the caller
+   * owns any additional lifecycle. The write-chain `fileReadKey`/
+   * `fileWriteKey` this method derives ARE zeroed here (D-09 — this method is
+   * their terminal owner).
    *
    * @param parentIpnsName - IPNS name of the folder containing the file
-   * @param fileId - ID of the file (FilePointer) to replace
+   * @param fileId - IPNS name of the file (`SealedChildRef.ipnsName`) to replace
    * @param fileData - Pre-resolved key + metadata + content updates
    * @returns Pruned version CIDs the caller should unpin
-   */
-  /**
-   * @stub phase 65 (write-chain): FileMetadata replaced by NodeContent sealed in
-   * the file Node's write-body; the file's IPNS record contains a sealed Node,
-   * not a standalone FileMetadata blob. updateFileMetadata is stubbed in sdk-core.
    */
   async replaceFile(
     parentIpnsName: string,
     fileId: string,
     fileData: {
       fileIpnsPrivateKey: Uint8Array;
-      currentMetadata: unknown;
-      updates: unknown;
+      currentMetadata: NodeContent;
+      updates: sdkCore.UpdateFileContentParams;
       createVersion: boolean;
       maxVersionsPerFile?: number;
       migratedIpnsPrivateKeyEncrypted?: string;
     }
   ): Promise<{ prunedCids: string[] }> {
-    void parentIpnsName;
-    void fileId;
-    void fileData;
-    throw new Error('not implemented — phase 65 (write-chain: replaceFile)');
+    return this.withOperation('replaceFile', async () => {
+      const folder = await this.requireFolder(parentIpnsName);
+      const fileKeys = await this.resolveFileWriteChainKeys(folder, fileId);
+
+      try {
+        const publishResult = await sdkCore.updateFileMetadata({
+          fileIpnsPrivateKey: fileData.fileIpnsPrivateKey,
+          fileReadKey: fileKeys.fileReadKey,
+          fileWriteKey: fileKeys.fileWriteKey,
+          fileMetaIpnsName: fileKeys.fileMetaIpnsName,
+          fileSequenceNumber: fileKeys.fileSequenceNumber,
+          nodeId: fileKeys.nodeId,
+          nodeGeneration: fileKeys.nodeGeneration,
+          originalCreatedAt: fileKeys.originalCreatedAt,
+          currentMetadata: fileData.currentMetadata,
+          updates: fileData.updates,
+          createVersion: fileData.createVersion,
+          maxVersionsPerFile: fileData.maxVersionsPerFile,
+          ctx: this.ctx,
+        });
+
+        await this.maybeRepublishFolderForFileMigration(
+          parentIpnsName,
+          folder,
+          fileData.migratedIpnsPrivateKeyEncrypted
+        );
+
+        return { prunedCids: publishResult.prunedCids };
+      } finally {
+        fileKeys.fileReadKey.fill(0);
+        fileKeys.fileWriteKey.fill(0);
+        // T-68.1-12-04: this walk's own fileIpnsPrivateKey is unused here —
+        // the caller supplies fileData.fileIpnsPrivateKey instead. Zero it.
+        fileKeys.fileIpnsPrivateKey.fill(0);
+      }
+    });
   }
 
   /**
@@ -1608,32 +2941,31 @@ export class CipherBoxClient {
    *
    * Mirrors the web `useFileVersions.handleRestoreVersion` control flow, routed
    * through the client so `folderTree` stays authoritative:
-   *   1. Read the parent folder from `folderTree.get()` — throws if absent.
+   *   1. Read the parent folder from `folderTree.get()` (self-healing via
+   *      `requireFolder`) and resolve the file's write-chain keys.
    *   2. Publish the file's per-IPNS metadata via `updateFileMetadata` using the
    *      pre-resolved restored metadata (`updates`). Capture `prunedCids`.
    *   3. CONDITIONAL folder publish — only when `migratedIpnsPrivateKeyEncrypted`
-   *      is provided (lazy IPNS-key migration): bump the FilePointer's
-   *      `modifiedAt` + `ipnsPrivateKeyEncrypted`, publish, and adopt the result.
-   *      Otherwise leave folder children + sequence unchanged (the file-only
-   *      publish does not advance the folder sequence).
-   *   4. Emit `folder:updated` reading back from `folderTree` so both branches
-   *      emit a consistent snapshot.
+   *      is provided (lazy TEE-key migration piggybacked on this mutation, see
+   *      `maybeRepublishFolderForFileMigration`). Otherwise leave folder
+   *      children + sequence unchanged (the file-only publish does not
+   *      advance the folder sequence).
+   *   4. Emit `folder:updated` reading back from the folderTree snapshot so
+   *      both branches emit a consistent event.
    *
    * Per locked decision 2 the caller pre-resolves `fileIpnsPrivateKey`,
    * `currentMetadata`, and the restored `updates` (web tier owns the restore
-   * service logic). This method does NOT zero `fileIpnsPrivateKey` —
-   * `updateFileMetadata` owns zeroing (T-47-01).
+   * service logic — deciding WHICH version becomes live and how `versions`
+   * folds). This method does NOT zero `fileIpnsPrivateKey` —
+   * `updateFileMetadata` owns zeroing (T-47-01). The write-chain
+   * `fileReadKey`/`fileWriteKey` this method derives ARE zeroed here (D-09).
    *
    * @param parentIpnsName - IPNS name of the folder containing the file
-   * @param fileId - ID of the file (FilePointer) to restore
-   * @param versionIndex - Index of the version being restored (caller-resolved)
+   * @param fileId - IPNS name of the file (`SealedChildRef.ipnsName`) to restore
+   * @param versionIndex - Index of the version being restored (caller-resolved;
+   *   informational only here — the caller already folded it into `updates`)
    * @param params - Pre-resolved key + metadata + restored content updates
    * @returns Pruned version CIDs the caller should unpin
-   */
-  /**
-   * @stub phase 65 (write-chain): VersionEntry replaces FileMetadata.versions[];
-   * version restore will unseal a VersionEntry from NodeContent and publish an
-   * updated Node via the write-chain. updateFileMetadata is stubbed in sdk-core.
    */
   async restoreFileVersion(
     parentIpnsName: string,
@@ -1641,18 +2973,50 @@ export class CipherBoxClient {
     versionIndex: number,
     params: {
       fileIpnsPrivateKey: Uint8Array;
-      currentMetadata: unknown;
-      updates: unknown;
+      currentMetadata: NodeContent;
+      updates: sdkCore.UpdateFileContentParams;
       createVersion?: boolean;
       maxVersionsPerFile?: number;
       migratedIpnsPrivateKeyEncrypted?: string;
     }
   ): Promise<{ prunedCids: string[] }> {
-    void parentIpnsName;
-    void fileId;
     void versionIndex;
-    void params;
-    throw new Error('not implemented — phase 65 (write-chain: restoreFileVersion)');
+    return this.withOperation('restoreFileVersion', async () => {
+      const folder = await this.requireFolder(parentIpnsName);
+      const fileKeys = await this.resolveFileWriteChainKeys(folder, fileId);
+
+      try {
+        const publishResult = await sdkCore.updateFileMetadata({
+          fileIpnsPrivateKey: params.fileIpnsPrivateKey,
+          fileReadKey: fileKeys.fileReadKey,
+          fileWriteKey: fileKeys.fileWriteKey,
+          fileMetaIpnsName: fileKeys.fileMetaIpnsName,
+          fileSequenceNumber: fileKeys.fileSequenceNumber,
+          nodeId: fileKeys.nodeId,
+          nodeGeneration: fileKeys.nodeGeneration,
+          originalCreatedAt: fileKeys.originalCreatedAt,
+          currentMetadata: params.currentMetadata,
+          updates: params.updates,
+          createVersion: params.createVersion ?? false,
+          maxVersionsPerFile: params.maxVersionsPerFile,
+          ctx: this.ctx,
+        });
+
+        await this.maybeRepublishFolderForFileMigration(
+          parentIpnsName,
+          folder,
+          params.migratedIpnsPrivateKeyEncrypted
+        );
+
+        return { prunedCids: publishResult.prunedCids };
+      } finally {
+        fileKeys.fileReadKey.fill(0);
+        fileKeys.fileWriteKey.fill(0);
+        // T-68.1-12-04: this walk's own fileIpnsPrivateKey is unused here —
+        // the caller supplies params.fileIpnsPrivateKey instead. Zero it.
+        fileKeys.fileIpnsPrivateKey.fill(0);
+      }
+    });
   }
 
   /**
@@ -1660,26 +3024,30 @@ export class CipherBoxClient {
    * folderTree bookkeeping.
    *
    * Mirrors the web `useFileVersions.handleDeleteVersion` control flow. Same
-   * five-step shape as {@link restoreFileVersion}: publish file metadata via
-   * `updateFileMetadata`, conditional folder publish only on lazy IPNS-key
-   * migration, then emit `folder:updated` from the folderTree snapshot.
+   * shape as {@link restoreFileVersion}: resolve write-chain keys, publish
+   * file metadata via `updateFileMetadata`, conditional folder publish only
+   * on lazy TEE-key migration, then emit `folder:updated` from the
+   * folderTree snapshot. `updates` carries the SAME live content descriptor
+   * as `currentMetadata` (the deleted version is a past entry, not the live
+   * content) with the target version already pruned from its `versions`
+   * array by the caller — `createVersion` is always `false` here since a
+   * version-history edit never folds a new version.
    *
    * Per locked decision 2 the caller pre-resolves `fileIpnsPrivateKey`,
    * `currentMetadata`, the version-pruned `updates`, and the `deletedCid` (web
    * tier owns the delete service logic). This method does NOT zero
-   * `fileIpnsPrivateKey` — `updateFileMetadata` owns zeroing (T-47-01).
+   * `fileIpnsPrivateKey` — `updateFileMetadata` owns zeroing (T-47-01). The
+   * write-chain `fileReadKey`/`fileWriteKey` this method derives ARE zeroed
+   * here (D-09).
    *
    * @param parentIpnsName - IPNS name of the folder containing the file
-   * @param fileId - ID of the file (FilePointer) whose version is deleted
-   * @param versionIndex - Index of the version being deleted (caller-resolved)
+   * @param fileId - IPNS name of the file (`SealedChildRef.ipnsName`) whose version is deleted
+   * @param versionIndex - Index of the version being deleted (caller-resolved;
+   *   informational only here — the caller already pruned it from `updates`)
    * @param params - Pre-resolved key + metadata + version-pruned updates + deletedCid
-   * @returns The deleted version's `deletedCid` plus any `prunedCids` produced by a
-   *   409-conflict merge round inside `updateFileMetadata` — the caller must unpin both.
-   */
-  /**
-   * @stub phase 65 (write-chain): VersionEntry replaces FileMetadata.versions[];
-   * version delete will remove a VersionEntry from NodeContent and publish an
-   * updated Node via the write-chain. updateFileMetadata is stubbed in sdk-core.
+   * @returns The deleted version's `deletedCid` plus any `prunedCids` `updateFileMetadata`
+   *   reports (68.1-07's single-shot publish performs no CAS retry/merge, so this is
+   *   ordinarily empty) — the caller must unpin both.
    */
   async deleteFileVersion(
     parentIpnsName: string,
@@ -1687,58 +3055,124 @@ export class CipherBoxClient {
     versionIndex: number,
     params: {
       fileIpnsPrivateKey: Uint8Array;
-      currentMetadata: unknown;
-      updates: unknown;
+      currentMetadata: NodeContent;
+      updates: sdkCore.UpdateFileContentParams;
       deletedCid?: string;
       maxVersionsPerFile?: number;
       migratedIpnsPrivateKeyEncrypted?: string;
     }
   ): Promise<{ deletedCid?: string; prunedCids: string[] }> {
-    void parentIpnsName;
-    void fileId;
     void versionIndex;
-    void params;
-    throw new Error('not implemented — phase 65 (write-chain: deleteFileVersion)');
-  }
+    return this.withOperation('deleteFileVersion', async () => {
+      const folder = await this.requireFolder(parentIpnsName);
+      const fileKeys = await this.resolveFileWriteChainKeys(folder, fileId);
 
-  /**
-   * Conditional folder re-publish for lazy IPNS-key migration.
-   *
-   * When `migratedIpnsPrivateKeyEncrypted` is provided, snapshot baseChildren,
-   * bump the matching FilePointer's `modifiedAt` + `ipnsPrivateKeyEncrypted`,
-   * publish via `updateFolderMetadataAndPublish`, and adopt the merged result
-   * into the folder state. No-op (folder children + sequence unchanged) when
-   * no migration is needed — the file-only publish does not advance the folder
-   * sequence. Mutates `folder` in place; callers persist it via folderTree.set.
-   */
+      try {
+        const publishResult = await sdkCore.updateFileMetadata({
+          fileIpnsPrivateKey: params.fileIpnsPrivateKey,
+          fileReadKey: fileKeys.fileReadKey,
+          fileWriteKey: fileKeys.fileWriteKey,
+          fileMetaIpnsName: fileKeys.fileMetaIpnsName,
+          fileSequenceNumber: fileKeys.fileSequenceNumber,
+          nodeId: fileKeys.nodeId,
+          nodeGeneration: fileKeys.nodeGeneration,
+          originalCreatedAt: fileKeys.originalCreatedAt,
+          currentMetadata: params.currentMetadata,
+          updates: params.updates,
+          createVersion: false,
+          maxVersionsPerFile: params.maxVersionsPerFile,
+          ctx: this.ctx,
+        });
+
+        await this.maybeRepublishFolderForFileMigration(
+          parentIpnsName,
+          folder,
+          params.migratedIpnsPrivateKeyEncrypted
+        );
+
+        return { deletedCid: params.deletedCid, prunedCids: publishResult.prunedCids };
+      } finally {
+        fileKeys.fileReadKey.fill(0);
+        fileKeys.fileWriteKey.fill(0);
+        // T-68.1-12-04: this walk's own fileIpnsPrivateKey is unused here —
+        // the caller supplies params.fileIpnsPrivateKey instead. Zero it.
+        fileKeys.fileIpnsPrivateKey.fill(0);
+      }
+    });
+  }
 
   /**
    * Download a file using its per-file IPNS metadata.
    *
-   * Resolves the file's IPNS record, decrypts the metadata with the
-   * folder key, then downloads and decrypts the file content.
-   * This is the primary download path for v2 folder metadata.
+   * Recovers the file's OWN readKey from its `SealedChildRef` (sealed under the
+   * parent folder's readKey — the generation-source rule uses `fileRef.
+   * generation`, the parent mirror), resolves the file Node
+   * (`resolveFileMetadata`, 68.1-07), decrypts its `NodeContent`, then fetches +
+   * decrypts the encrypted content with the raw (non-ECIES-wrapped) `fileKey`
+   * (D-07/NODE-02, GCM or CTR per `encryptionMode`).
    *
-   * @param fileMetaIpnsName - IPNS name of the file's metadata record
-   * @param folderKey - Parent folder's decrypted AES-256 key
+   * 68.1-22 FIX: the previous signature took a bare `folderKey` and passed it
+   * straight to `sdkCore.resolveFileMetadata` as the file readKey. sdk-core
+   * unseals the file Node directly under that key, so passing the PARENT folder
+   * key (which every web call site did) always threw `CryptoError: Decryption
+   * failed`. The method now takes the file's `SealedChildRef` + the parent
+   * folderKey and recovers the file readKey the same way the web-native
+   * `resolveFileMetadata` (file-metadata.service.ts, 68.1-04) does.
+   *
+   * @param fileRef - The file's SealedChildRef from the parent folder's
+   *   read-body (carries `readKeySealed` + `generation`)
+   * @param folderKey - The PARENT folder's readKey (used to unseal the file's
+   *   own readKey from `fileRef.readKeySealed`)
    * @param onProgress - Optional download progress callback
    * @returns Decrypted file content
    */
-  /**
-   * @stub phase 65 (write-chain): resolveFileMetadata returns { metadata: unknown };
-   * the file's content-encryption fields now live in NodeContent inside the sealed
-   * Node, not in a standalone FileMetadata IPNS record. Phase 65 will unseal
-   * NodeContent from the file's Node and call downloadAndDecrypt with those fields.
-   */
   async downloadFromIpns(
-    fileMetaIpnsName: string,
+    fileRef: SealedChildRef,
     folderKey: Uint8Array,
     onProgress?: DownloadProgressCallback
   ): Promise<Uint8Array> {
-    void fileMetaIpnsName;
-    void folderKey;
-    void onProgress;
-    throw new Error('not implemented — phase 65 (write-chain: downloadFromIpns)');
+    return this.withOperation('downloadFromIpns', async () => {
+      // Resolve the file Node once to recover its plaintext `id` (the AAD input
+      // for unsealChildReadKey — matches the web-native resolveFileMetadata).
+      const resolvedNode = await this.resolvePublishedNode(fileRef.ipnsName);
+      if (!resolvedNode) {
+        throw new Error(`downloadFromIpns: IPNS record not found for ${fileRef.ipnsName}`);
+      }
+
+      // Recover the file's OWN readKey from the parent-sealed SealedChildRef.
+      // Terminal owner (D-09): zeroed after resolveFileMetadata unseals with it.
+      let fileReadKey: Uint8Array | null = await unsealChildReadKey(
+        fileRef.readKeySealed,
+        folderKey,
+        resolvedNode.published.id,
+        'file',
+        fileRef.generation
+      );
+
+      let metadata: NodeContent;
+      try {
+        ({ metadata } = await sdkCore.resolveFileMetadata(fileRef.ipnsName, fileReadKey, this.ctx));
+      } finally {
+        fileReadKey.fill(0);
+        fileReadKey = null;
+      }
+
+      try {
+        return await sdkCore.downloadFileContent({
+          cid: metadata.cid,
+          fileKey: metadata.fileKey,
+          fileIv: metadata.fileIv,
+          encryptionMode: metadata.encryptionMode,
+          ctx: this.ctx,
+          onProgress,
+        });
+      } finally {
+        // T-68.1-09-04: zero the recovered raw fileKey after decrypt — it is
+        // freshly recovered here (not caller-owned), so this call site is its
+        // terminal owner. Never zero `folderKey` (caller-owned, D-09).
+        clearBytes(metadata.fileKey);
+      }
+    });
   }
 
   /**
@@ -2134,21 +3568,90 @@ export class CipherBoxClient {
   private buildSharedWriteContextFromState(
     state: SharedFolderState
   ): ReturnType<typeof shareOps.buildSharedWriteContext> {
-    return shareOps.buildSharedWriteContext({
-      ctx: this.ctx,
+    return this.buildSharedWriteContextWithOverrides(state, {
       readKey: state.folderKey,
       writeKey: state.writeKey,
       publishedNode: state.publishedNode,
       ipnsName: state.ipnsName,
       sequenceNumber: state.sequenceNumber,
       children: state.children,
-      ownerPublicKey: state.ownerPublicKey,
-      recipientPublicKey: state.recipientPublicKey,
-      shareId: state.shareId,
+    });
+  }
+
+  /**
+   * Build a SharedWriteContext for an ARBITRARY folder (readKey/writeKey/
+   * publishedNode/ipnsName/sequenceNumber/children explicitly supplied),
+   * reusing `owningState`'s per-share owner/recipient pubkeys, shareId, and
+   * `addShareKeysFn` callback (share-scoped, not folder-scoped — no
+   * cross-share bleed, T-48-07). Used by {@link buildSharedWriteContextFromState}
+   * for the currently-loaded folder AND by `moveInSharedFolder` to build a
+   * one-off destination context from a freshly-resolved (never cached, A1)
+   * destination folder that is NOT itself tracked in `sharedFolderTree`.
+   *
+   * addToIpfsFn / publishNodeFn seams match `buildSharedWriteContextFromState`
+   * exactly (BYO-aware content pinning; node metadata always via CipherBox).
+   */
+  private buildSharedWriteContextWithOverrides(
+    owningState: SharedFolderState,
+    overrides: {
+      readKey: Uint8Array;
+      writeKey: Uint8Array;
+      publishedNode: PublishedNode;
+      ipnsName: string;
+      sequenceNumber: bigint;
+      children: SealedChildRef[];
+    }
+  ): ReturnType<typeof shareOps.buildSharedWriteContext> {
+    const { addToIpfsFn, publishNodeFn } = this.buildWriteTransportSeams();
+    return shareOps.buildSharedWriteContext({
+      ctx: this.ctx,
+      readKey: overrides.readKey,
+      writeKey: overrides.writeKey,
+      publishedNode: overrides.publishedNode,
+      ipnsName: overrides.ipnsName,
+      sequenceNumber: overrides.sequenceNumber,
+      children: overrides.children,
+      ownerPublicKey: owningState.ownerPublicKey,
+      recipientPublicKey: owningState.recipientPublicKey,
+      shareId: owningState.shareId,
+      addToIpfsFn,
+      publishNodeFn,
+      addShareKeysFn: owningState.addShareKeysFn,
+    });
+  }
+
+  /**
+   * Build the transport seams (addToIpfsFn + publishNodeFn) shared by every
+   * SharedWriteContext builder (68.1-32). Extracted so
+   * {@link buildSharedWriteContextWithOverrides} and the single-file-share
+   * write path ({@link updateSharedSingleFile}, which has no owning
+   * `SharedFolderState` to build a context FROM) don't duplicate the transport
+   * wiring — behavior is byte-for-byte identical to the pre-extraction inline
+   * implementation.
+   *
+   * addToIpfsFn: uploads encrypted content via pinWithMode so the configured
+   * pinning mode (BYO/external) is honored — encrypted bytes never route
+   * through CipherBox when the user opted external.
+   *
+   * publishNodeFn: uploads the sealed PublishedNode JSON to IPFS then calls
+   * createAndPublishIpnsRecord with the supplied sequenceNumber. The
+   * node-metadata blob intentionally goes via sdkCore.addToIpfs (CipherBox),
+   * NOT pinWithMode — it is the IPNS resolution target and must remain
+   * reachable by CipherBox's relay. A non-throwing rejection (2xx with
+   * success:false) still means the record was not committed — fail closed
+   * rather than pointing a SealedChildRef/IPNS name at an unpublished record.
+   */
+  private buildWriteTransportSeams(): {
+    addToIpfsFn: (data: Uint8Array) => Promise<{ cid: string }>;
+    publishNodeFn: (params: {
+      published: PublishedNode;
+      ipnsName: string;
+      ipnsPrivateKey: Uint8Array;
+      sequenceNumber: bigint;
+    }) => Promise<{ tombstoned: true } | { tombstoned: false; newSequenceNumber: bigint }>;
+  } {
+    return {
       addToIpfsFn: async (data) => {
-        // Encrypted content must honor the configured pinning mode (BYO/external),
-        // exactly like the non-shared upload path (pinWithMode at L784/966) — never
-        // route shared-write content through CipherBox when the user opted external.
         const result = await this.pinWithMode(data, this.ctx);
         return { cid: result.cid };
       },
@@ -2162,10 +3665,6 @@ export class CipherBoxClient {
           sequenceNumber,
           ctx: this.ctx,
         });
-        // A non-throwing rejection (2xx with success:false) still means the record
-        // was not committed. Fail closed — continuing would point the parent's
-        // SealedChildRef at an IPNS name that was never published. Mirrors the
-        // explicit guard in rotateWriteSubtree (engine.ts) for the same publish path.
         if (!pubResult.success) {
           throw new Error(
             `publishNodeFn: IPNS publish rejected for ${ipnsName} (seq=${pubResult.sequenceNumber})`
@@ -2173,8 +3672,7 @@ export class CipherBoxClient {
         }
         return { tombstoned: false, newSequenceNumber: pubResult.sequenceNumber };
       },
-      addShareKeysFn: state.addShareKeysFn,
-    });
+    };
   }
 
   /**
@@ -2184,7 +3682,11 @@ export class CipherBoxClient {
    */
   private adoptSharedFolderResult(
     shareId: string,
-    result: { publishedChildren: SealedChildRef[]; newSequenceNumber: bigint }
+    result: {
+      publishedChildren: SealedChildRef[];
+      newSequenceNumber: bigint;
+      publishedParent?: PublishedNode;
+    }
   ): void {
     // Re-read live state: the share may have been unloaded (e.g. unmount →
     // unloadSharedFolder) while the async write/refresh was in-flight. Never
@@ -2195,6 +3697,12 @@ export class CipherBoxClient {
       ...live,
       children: result.publishedChildren,
       sequenceNumber: result.newSequenceNumber,
+      // 68.1-29: adopt the freshly-published envelope when the op returns it —
+      // a later same-session shared write unsealing a STALE publishedNode
+      // republishes an outdated write chain, silently dropping WriteChildRefs
+      // inserted by earlier ops (writable-shares 3.3 mkdir dropped 3.2's
+      // upload write-link, breaking the 3.4 editor save).
+      ...(result.publishedParent ? { publishedNode: result.publishedParent } : {}),
     };
     this.sharedFolderTree.set(shareId, next);
     this.emitter.emit({
@@ -2300,10 +3808,6 @@ export class CipherBoxClient {
    * (share-key lookup with FilePointer fallback). `ctx`, `folderKey`,
    * owner/recipient pubkeys, `shareId`, and `addShareKeysFn` come from state.
    */
-  /**
-   * @stub phase 65 (write-chain): FilePointer replaced by SealedChildRef;
-   * updateSharedFile in share/shared-write.ts is stubbed for phase 65.
-   */
   async updateSharedFile(
     shareId: string,
     args: {
@@ -2312,9 +3816,243 @@ export class CipherBoxClient {
       getFileIpnsKeyFn: (itemId: string) => Promise<Uint8Array | null>;
     }
   ): Promise<void> {
-    void shareId;
-    void args;
-    throw new Error('not implemented — phase 65 (write-chain: updateSharedFile)');
+    return this.withOperation('updateSharedFile', async () => {
+      const state = this.requireSharedFolder(shareId);
+      const swCtx = this.buildSharedWriteContextFromState(state);
+
+      // Unseal the parent's write-body so the file's WriteChildRef (keyed by
+      // UUID) can be walked (mirrors shared-write.ts unsealParentWriteBody).
+      //
+      // 68.1-29: resolve the parent's CURRENT on-wire record instead of
+      // trusting state.publishedNode — adoptSharedFolderResult adopts
+      // children/sequence after a shared write but NOT the envelope, so a
+      // file uploaded THIS session has no WriteChildRef in the stale
+      // envelope and the save failed with "cannot resolve write
+      // key/ipnsPrivateKey" (writable-shares 3.4). The fresh envelope is
+      // adopted back into state so later ops see it too.
+      const parentResolved = await this.resolvePublishedNode(state.ipnsName);
+      const parentPublished = parentResolved?.published ?? state.publishedNode;
+      if (parentResolved) {
+        this.sharedFolderTree.set(shareId, { ...state, publishedNode: parentResolved.published });
+      }
+      const parentNode = await unsealNode(parentPublished, state.folderKey, state.writeKey);
+      if (!parentNode.writeBody) {
+        throw new Error('updateSharedFile: shared folder has no write-body — not write-capable');
+      }
+
+      // Resolve the file's own PublishedNode envelope — id/kind are plaintext
+      // (NODE-03) and are the AAD inputs for unsealChildReadKey/unsealChildWriteKey.
+      const filePub = await this.resolvePublishedNode(args.filePointer.ipnsName);
+      if (!filePub) {
+        throw new Error(`updateSharedFile: cannot resolve file IPNS ${args.filePointer.ipnsName}`);
+      }
+      const fileNodeId = filePub.published.id;
+      const fileKind = filePub.published.kind;
+
+      // Recover the file's readKey from the parent read-body.
+      let fileReadKey: Uint8Array | null = await unsealChildReadKey(
+        args.filePointer.readKeySealed,
+        state.folderKey,
+        fileNodeId,
+        fileKind,
+        args.filePointer.generation
+      );
+      let fileWriteKey: Uint8Array | null = null;
+      let fileIpnsPrivateKey: Uint8Array | null = null;
+      // Hoisted so the finally can zero its decrypted content key (D-09).
+      let currentFileNode: CoreNode | null = null;
+
+      try {
+        // Walk the parent write-body: find the WriteChildRef for this file (matched
+        // by UUID, never ipnsName), then recover the file's writeKey and, from the
+        // file's own write-body, its ipnsPrivateKey (shared-write.ts walkChildWriteKey
+        // + unsealParentWriteBody pattern, inlined here since both helpers are
+        // module-private to shared-write.ts).
+        const writeChildRef = parentNode.writeBody.writeChildren.find(
+          (wc) => wc.childId === fileNodeId
+        );
+        if (writeChildRef) {
+          fileWriteKey = await unsealChildWriteKey(
+            writeChildRef.writeKeySealed,
+            state.writeKey,
+            fileNodeId,
+            fileKind,
+            args.filePointer.generation
+          );
+          currentFileNode = await unsealNode(filePub.published, fileReadKey, fileWriteKey);
+          fileIpnsPrivateKey = currentFileNode.writeBody?.ipnsPrivateKey ?? null;
+        }
+
+        // Share-key fallback (legacy path, kept per the existing signature): no
+        // write link was recorded for this file — fall back to the caller-supplied
+        // lookup for the ipnsPrivateKey. A missing writeKey still fails closed below
+        // (a write-body republish is impossible without one).
+        if (!fileIpnsPrivateKey) {
+          fileIpnsPrivateKey = await args.getFileIpnsKeyFn(args.filePointer.ipnsName);
+        }
+        if (!fileWriteKey || !fileIpnsPrivateKey) {
+          throw new Error(
+            `updateSharedFile: cannot resolve write key/ipnsPrivateKey for file ${args.filePointer.ipnsName}`
+          );
+        }
+        if (!currentFileNode || currentFileNode.kind !== 'file' || !currentFileNode.content) {
+          throw new Error(`updateSharedFile: node ${args.filePointer.ipnsName} is not a file node`);
+        }
+
+        await shareOps.updateSharedFile(swCtx, {
+          fileRef: args.filePointer,
+          fileNodeId,
+          fileReadKey,
+          fileWriteKey,
+          fileIpnsPrivateKey,
+          fileSequenceNumber: filePub.sequenceNumber,
+          newData: args.newContent,
+          originalCreatedAt: currentFileNode.createdAt,
+          originalVersions: currentFileNode.content.versions,
+        });
+
+        // File-only publish: the parent's children/sequence are unchanged — emit
+        // sharedFolder:updated with the current live snapshot so consumers
+        // re-resolve the file (mirrors refreshSharedFolder's file-only emission).
+        const live = this.sharedFolderTree.get(shareId);
+        if (live) {
+          this.emitter.emit({
+            type: 'sharedFolder:updated',
+            shareId,
+            ipnsName: live.ipnsName,
+            children: live.children,
+            sequenceNumber: live.sequenceNumber,
+          });
+        }
+      } finally {
+        // Zero all derived (never caller-owned) file keys on every exit path (D-09).
+        fileReadKey?.fill(0);
+        fileReadKey = null;
+        fileWriteKey?.fill(0);
+        fileWriteKey = null;
+        fileIpnsPrivateKey?.fill(0);
+        fileIpnsPrivateKey = null;
+        // Zero the decrypted content key too — never handed to the caller.
+        currentFileNode?.content?.fileKey?.fill(0);
+      }
+    });
+  }
+
+  /**
+   * Update a DIRECT single-file share's content (WEB-03, writable-shares 10.3).
+   *
+   * A single-file share's root IS the file — there is no parent folder write
+   * chain to walk (unlike {@link updateSharedFile}'s folder path, which
+   * requires a loaded `SharedFolderState`). The file's readKey/writeKey are
+   * recovered directly from the grant's ECIES-wrapped descriptors
+   * (`share.readDescriptorRef`/`share.writeDescriptorRef`), and the file's
+   * ipnsPrivateKey is recovered by unsealing the file's own write-body
+   * (validate-before-trust — a wrong/tampered descriptor fails AEAD auth
+   * closed here, never caught-and-continued).
+   *
+   * Publishes to the file's OWN IPNS at the resolved sequence + 1 via the
+   * same transport seams as every other shared-write path
+   * ({@link buildWriteTransportSeams}: BYO-aware content pin, CipherBox-relayed
+   * node metadata, fail-closed on publish rejection).
+   */
+  async updateSharedSingleFile(args: {
+    shareId: string;
+    readDescriptorRef: string;
+    writeDescriptorRef: string;
+    fileIpnsName: string;
+    ownerPublicKey: Uint8Array;
+    /** Caller-owned — NEVER zeroed by this method (D-09). */
+    recipientPrivateKey: Uint8Array;
+    recipientPublicKey: Uint8Array;
+    rootExpectedGeneration: number;
+    newContent: Uint8Array;
+  }): Promise<void> {
+    return this.withOperation('updateSharedSingleFile', async () => {
+      // Recovered file keys — MINTED by this call, terminal owner (D-09).
+      // args.recipientPrivateKey is caller-owned and is NEVER zeroed here.
+      let fileReadKey: Uint8Array | null = await unwrapKey(
+        hexToBytes(args.readDescriptorRef),
+        args.recipientPrivateKey
+      );
+      let fileWriteKey: Uint8Array | null = await unwrapKey(
+        hexToBytes(args.writeDescriptorRef),
+        args.recipientPrivateKey
+      );
+      let currentFileNode: CoreNode | null = null;
+
+      try {
+        const filePub = await this.resolvePublishedNode(args.fileIpnsName);
+        if (!filePub) {
+          throw new Error(`updateSharedSingleFile: file ${args.fileIpnsName} not found (revoked)`);
+        }
+
+        // Behind-retry staleness witness — never trust a generation regression,
+        // mirrors navigateReadChain's behind-retry semantics.
+        if (filePub.published.generation > args.rootExpectedGeneration) {
+          throw new Error('updateSharedSingleFile: share was updated — please reopen');
+        }
+
+        // Validate-before-trust for BOTH keys: a wrong/tampered descriptor
+        // fails AEAD auth closed here (T-68.1-32-01) — never caught.
+        currentFileNode = await unsealNode(filePub.published, fileReadKey, fileWriteKey);
+
+        if (
+          currentFileNode.kind !== 'file' ||
+          !currentFileNode.content ||
+          !currentFileNode.writeBody?.ipnsPrivateKey
+        ) {
+          throw new Error(
+            `updateSharedSingleFile: node ${args.fileIpnsName} is not a writable file node`
+          );
+        }
+        const fileIpnsPrivateKey = currentFileNode.writeBody.ipnsPrivateKey;
+
+        const { addToIpfsFn, publishNodeFn } = this.buildWriteTransportSeams();
+        const swCtx = shareOps.buildSharedWriteContext({
+          ctx: this.ctx,
+          readKey: fileReadKey,
+          writeKey: fileWriteKey,
+          publishedNode: filePub.published,
+          ipnsName: args.fileIpnsName,
+          sequenceNumber: filePub.sequenceNumber,
+          children: [],
+          ownerPublicKey: args.ownerPublicKey,
+          recipientPublicKey: args.recipientPublicKey,
+          shareId: args.shareId,
+          addToIpfsFn,
+          publishNodeFn,
+          // D-02: never invoked in the write-body model.
+          addShareKeysFn: async () => {},
+        });
+
+        await shareOps.updateSharedFile(swCtx, {
+          fileRef: {
+            name: '',
+            ipnsName: args.fileIpnsName,
+            generation: filePub.published.generation,
+            versionFloor: 0n,
+            readKeySealed: '',
+          },
+          fileNodeId: filePub.published.id,
+          fileReadKey,
+          fileWriteKey,
+          fileIpnsPrivateKey,
+          fileSequenceNumber: filePub.sequenceNumber,
+          newData: args.newContent,
+          mimeType: currentFileNode.content.mimeType,
+          originalCreatedAt: currentFileNode.createdAt,
+          originalVersions: currentFileNode.content.versions,
+        });
+      } finally {
+        // Zero every minted/unsealed key on every exit path (D-09 terminal owner).
+        fileReadKey?.fill(0);
+        fileReadKey = null;
+        fileWriteKey?.fill(0);
+        fileWriteKey = null;
+        currentFileNode?.writeBody?.ipnsPrivateKey?.fill(0);
+        currentFileNode?.content?.fileKey?.fill(0);
+      }
+    });
   }
 
   /**
@@ -2378,23 +4116,46 @@ export class CipherBoxClient {
   /**
    * Move an item between two subfolders within a single shared folder (REQ-2).
    *
-   * Resolves the destination folder's keys from `share_keys` (recipient-wrapped),
-   * loads fresh dest children via `loadFolderMetadata` (A1 — never a cached ref),
-   * delegates to the stateless `moveInSharedFolder` op (publish DEST → re-key →
-   * publish SOURCE), adopts the SOURCE result into `sharedFolderTree`, and
-   * emits `sharedFolder:updated` for the active depth (source).
+   * Resolves the destination folder's read/write keys from the shared
+   * write-chain seeded in `sharedFolderTree` (68.1-20): unseals the SOURCE
+   * folder's own write-body (its `writeKey` was seeded at navigation time —
+   * root depth only, see `useSharedNavigationActions.ts` navigateToShare),
+   * looks up the destination's `WriteChildRef` by UUID, and derives
+   * `destWriteKey` via `unsealChildWriteKey`. `destFolderKey` (readKey) is
+   * derived the same way the moved item's own readKey always was — via the
+   * destination's `SealedChildRef.readKeySealed` in the source folder's
+   * read-body children. `destIpnsPrivateKey` comes from unsealing the
+   * destination's own node under its now-recovered read+write keys.
    *
-   * Write-capability guard (T-49-01): requires a `share_keys keyType:'folder-ipns'`
-   * entry for `destFolderId` — absence throws before any publish.
+   * `getShareKeysFn` is retained for backward compatibility: a non-empty
+   * result (a caller supplying a real per-child share_keys fan-out) is still
+   * honored via the legacy path below. Every current web caller's
+   * `fetchShareKeys` now always returns `[]` (68.1-20 Task 1 — no live
+   * share_keys endpoint exists), which routes here to the write-chain path.
    *
-   * Key zeroing (T-49-04): `destFolderKey`, `destIpnsPrivateKey`, and
-   * `fileIpnsPrivateKey` are zeroed in `finally` (caller owns `vaultPrivateKey`).
-   */
-  /**
-   * @stub phase 63 (navigation): SealedChildRef has no type discriminant and no
-   * folderKeyEncrypted/ipnsPrivateKeyEncrypted fields; the phase-63 DFS will
-   * unseal the child readKey from SealedChildRef.readKeySealed using the parent
-   * Node's readKey chain. moveInSharedFolder in share/shared-write.ts also stubbed.
+   * KNOWN BLOCKER (documented per 68.1-20 Task 3, not silently worked around):
+   * this resolves the destination ONLY when it is a direct child of the
+   * CURRENTLY ACTIVE shared folder's own write-body — i.e., `srcState` IS the
+   * destination's immediate parent. There is no general write-tree DFS
+   * primitive (the read-chain has `enumerateSharedSubtree`'s share_keys-based
+   * walk, itself now also broken by the same share_keys removal — a
+   * pre-existing, separately-tracked gap, not introduced here). A move whose
+   * destination is NOT a direct sibling of the moved item's own parent throws
+   * a clear, fail-closed error rather than guessing or falling back to a zero
+   * key — deeper multi-hop write-chain resolution is out of this plan's scope
+   * and needs a dedicated follow-up (a write-body equivalent of
+   * `enumerateSharedSubtree`).
+   *
+   * Publishes DEST first → re-key → publish SOURCE (dup-not-orphan,
+   * T-68.1-08-04). Adopts the SOURCE result into `sharedFolderTree` and emits
+   * `sharedFolder:updated` for the active depth (source) — the dest result is
+   * never adopted (it is not the currently-loaded state for this share,
+   * Pitfall 1).
+   *
+   * Key zeroing (T-49-04/T-68.1-08-02): all locally-derived `destFolderKey` /
+   * `destWriteKey` / `destIpnsPrivateKey` and the derived `childReadKey` are
+   * zeroed in `finally`. `vaultPrivateKey` is caller-owned and never zeroed
+   * here (D-09).
    */
   async moveInSharedFolder(
     shareId: string,
@@ -2408,37 +4169,239 @@ export class CipherBoxClient {
       ) => Promise<Array<{ keyType: string; itemId: string; encryptedKey: string }>>;
     }
   ): Promise<void> {
-    void shareId;
-    void args;
-    throw new Error('not implemented — phase 63 (navigation: moveInSharedFolder)');
+    return this.withOperation('moveInSharedFolder', async () => {
+      const srcState = this.requireSharedFolder(shareId);
+
+      // Defense-in-depth: a folder cannot be moved into itself (would
+      // orphan/cycle the subtree). The picker (enumerateSharedSubtree) already
+      // excludes a moved folder's own subtree from selection.
+      if (args.destFolderId === args.itemId) {
+        throw new Error('Cannot move a folder into itself');
+      }
+
+      const shareKeys = await args.getShareKeysFn(shareId);
+
+      let destFolderKey: Uint8Array | null = null;
+      let destWriteKey: Uint8Array | null = null;
+      let destIpnsPrivateKey: Uint8Array | null = null;
+      let destPublished: PublishedNode;
+      let destSequenceNumber: bigint;
+      let destChildren: SealedChildRef[];
+
+      try {
+        if (shareKeys.length > 0) {
+          // Legacy path (kept for compatibility, T-49-01/T-68.1-08-01
+          // write-capability guard): a caller supplying a real per-child
+          // share_keys fan-out is still honored — fail closed before any
+          // publish or key unwrap if either entry is missing.
+          const destFolderKeyRecord = shareKeys.find(
+            (k) => k.keyType === 'folder' && k.itemId === args.destFolderId
+          );
+          if (!destFolderKeyRecord) throw new Error('No read key for destination folder');
+
+          const destFolderIpnsRecord = shareKeys.find(
+            (k) => k.keyType === 'folder-ipns' && k.itemId === args.destFolderId
+          );
+          if (!destFolderIpnsRecord) throw new Error('No write key for destination folder');
+
+          destFolderKey = await unwrapKey(
+            hexToBytes(destFolderKeyRecord.encryptedKey),
+            args.vaultPrivateKey
+          );
+          destIpnsPrivateKey = await unwrapKey(
+            hexToBytes(destFolderIpnsRecord.encryptedKey),
+            args.vaultPrivateKey
+          );
+
+          // Load dest children fresh — never a cached/stale ref (A1).
+          const destMeta = await sdkCore.loadFolderMetadata({
+            ipnsName: args.destIpnsName,
+            folderKey: destFolderKey,
+            ctx: this.ctx,
+          });
+          if (!destMeta) {
+            throw new Error(
+              `moveInSharedFolder: cannot resolve destination folder ${args.destIpnsName}`
+            );
+          }
+          // Reuse the CID loadFolderMetadata already resolved instead of a
+          // second IPNS resolve round trip — content-addressed, same bytes.
+          const destRaw = await sdkCore.fetchFromIpfs(this.ctx, destMeta.cid);
+          destPublished = JSON.parse(new TextDecoder().decode(destRaw)) as PublishedNode;
+          destSequenceNumber = destMeta.sequenceNumber;
+          destChildren = destMeta.metadata.children ?? [];
+          // No write-body write-chain key in the legacy path — the
+          // folder-ipns share_keys entry plugs directly into writeKey below.
+          destWriteKey = destIpnsPrivateKey;
+        } else {
+          // 68.1-20: write-chain resolution — no live share_keys fan-out
+          // exists (fetchShareKeys always returns [], Task 1). Unseal the
+          // SOURCE folder's own write-body under its seeded writeKey and walk
+          // one hop to the destination's WriteChildRef.
+          const srcParentNode = await unsealNode(
+            srcState.publishedNode,
+            srcState.folderKey,
+            srcState.writeKey
+          );
+          if (!srcParentNode.writeBody) {
+            throw new Error(
+              'moveInSharedFolder: source folder has no write-body -- not write-capable ' +
+                '(writeKey unseeded or zero; only the share ROOT depth is seeded with a real ' +
+                'writeKey today, see useSharedNavigationActions.ts navigateToShare)'
+            );
+          }
+
+          const destPub = await this.resolvePublishedNode(args.destIpnsName);
+          if (!destPub) {
+            throw new Error(
+              `moveInSharedFolder: cannot resolve destination IPNS ${args.destIpnsName}`
+            );
+          }
+          const destNodeId = destPub.published.id;
+          const destKind = destPub.published.kind;
+
+          const destWriteChildRef = srcParentNode.writeBody.writeChildren.find(
+            (wc) => wc.childId === destNodeId
+          );
+          // destReadRef supplies the parent-mirror generation (write-chain
+          // AADs use the SAME generation source as the read-chain, §2.6) and
+          // the destination's readKeySealed.
+          const destReadRef = srcState.children.find((c) => c.ipnsName === args.destIpnsName);
+
+          if (!destWriteChildRef || !destReadRef) {
+            // KNOWN BLOCKER (see method doc): destination is not a direct
+            // child of the currently active shared folder's write-body. Fail
+            // closed with a precise, actionable error rather than a
+            // zero/guessed key.
+            throw new Error(
+              `moveInSharedFolder: destination ${args.destIpnsName} is not a direct child of ` +
+                "the currently active shared folder's write-chain -- cross-subtree write-chain " +
+                'resolution beyond one hop is not implemented (68.1-20 known blocker). ' +
+                'Navigate so the destination is a direct child of the folder you are moving from.'
+            );
+          }
+
+          destFolderKey = await unsealChildReadKey(
+            destReadRef.readKeySealed,
+            srcState.folderKey,
+            destNodeId,
+            destKind,
+            destReadRef.generation
+          );
+          destWriteKey = await unsealChildWriteKey(
+            destWriteChildRef.writeKeySealed,
+            srcState.writeKey,
+            destNodeId,
+            destKind,
+            destReadRef.generation
+          );
+
+          const destNode = await unsealNode(destPub.published, destFolderKey, destWriteKey);
+          destIpnsPrivateKey = destNode.writeBody?.ipnsPrivateKey ?? null;
+          if (!destIpnsPrivateKey) {
+            throw new Error(
+              `moveInSharedFolder: destination ${args.destIpnsName} write-body has no ipnsPrivateKey`
+            );
+          }
+
+          destPublished = destPub.published;
+          destSequenceNumber = destPub.sequenceNumber;
+          destChildren = destNode.children ?? [];
+        }
+
+        // Resolve the moved child's UUID/kind (plaintext on its own PublishedNode
+        // envelope, NODE-03) + readKey (unsealed through the SOURCE folderKey).
+        const movedRef = srcState.children.find((c) => c.ipnsName === args.itemId);
+        if (!movedRef) {
+          throw new Error(`moveInSharedFolder: item not found in source: ${args.itemId}`);
+        }
+        const itemPub = await this.resolvePublishedNode(args.itemId);
+        if (!itemPub) {
+          throw new Error(`moveInSharedFolder: cannot resolve item IPNS ${args.itemId}`);
+        }
+        const childNodeId = itemPub.published.id;
+        const childKind = itemPub.published.kind;
+        const childGeneration = movedRef.generation;
+
+        let childReadKey: Uint8Array | null = await unsealChildReadKey(
+          movedRef.readKeySealed,
+          srcState.folderKey,
+          childNodeId,
+          childKind,
+          childGeneration
+        );
+
+        try {
+          const srcCtx = this.buildSharedWriteContextFromState(srcState);
+          const destCtx = this.buildSharedWriteContextWithOverrides(srcState, {
+            readKey: destFolderKey,
+            writeKey: destWriteKey,
+            publishedNode: destPublished,
+            ipnsName: args.destIpnsName,
+            sequenceNumber: destSequenceNumber,
+            children: destChildren,
+          });
+
+          const { srcResult } = await shareOps.moveInSharedFolder({
+            srcCtx,
+            destCtx,
+            itemId: args.itemId,
+            childNodeId,
+            childKind,
+            childGeneration,
+            childReadKey,
+          });
+
+          // Adopt SOURCE only — the destination is not this share's active
+          // depth (Pitfall 1); its own subtree view (if open) re-resolves via
+          // its own navigation/enumerateSharedSubtree call.
+          this.adoptSharedFolderResult(shareId, srcResult);
+        } finally {
+          childReadKey?.fill(0);
+          childReadKey = null;
+        }
+      } finally {
+        // Zero all temporarily-resolved dest key material (T-49-04/T-68.1-08-02).
+        // vaultPrivateKey is caller-owned — never zeroed here (D-09).
+        destIpnsPrivateKey?.fill(0);
+        destIpnsPrivateKey = null;
+        destWriteKey?.fill(0);
+        destWriteKey = null;
+        destFolderKey?.fill(0);
+        destFolderKey = null;
+      }
+    });
   }
 
   /**
-   * Enumerate all reachable subfolders within a shared folder tree (DFS).
+   * Enumerate all reachable subfolders within a shared folder tree (DFS),
+   * walking the node/v3 read/write chain from the loaded `SharedFolderState`
+   * (closes GAP-7 — the deleted `share_keys` table is never consulted).
    *
-   * Uses share_keys entries (ECIES-wrapped per recipient in the current schema) to
-   * derive each subfolder's readKey, loading children via the read-chain. Writable
-   * status is determined by the presence of a `keyType: 'folder-ipns'` entry for
-   * the node in the share_keys table.
+   * Read-chain descent: each `SealedChildRef.readKeySealed` is unsealed with
+   * the PARENT's readKey via `unsealChildReadKey`, using the parent-mirror
+   * generation (childRef.generation), never the child's own envelope
+   * generation (§2.6, matching `dfsFindFolder`/`navigateReadChain`). A
+   * structurally-unresolvable hop (missing IPNS record) is a soft skip; an
+   * AEAD auth failure on a present-but-wrong body throws (fail-closed).
    *
-   * D-09 zeroization: caller owns `vaultPrivateKey` — this method does NOT zero it.
-   * Per-node childFolderKey buffers (locally minted via unwrapKey) are zeroed in
-   * the finally block after each subtree load.
+   * Write-chain descent: a node is `writable: true` only when a
+   * `WriteChildRef` for its id exists in the PARENT's unsealed write-body AND
+   * `unsealChildWriteKey` succeeds under the parent writeKey. A read-only
+   * child (no WriteChildRef) is still listed (`writable: false`) and its own
+   * children are still enumerated via the read chain, but no write-chain
+   * lookup is attempted for its descendants — writability never re-appears
+   * below a read-only node.
+   *
+   * D-09 zeroization: every locally-minted childReadKey/childWriteKey is
+   * zeroed in a `finally` after it is consumed (used to unseal the child Node
+   * + recurse). `state.folderKey`/`state.writeKey` (sharedFolderTree-owned)
+   * are never zeroed here.
    *
    * @param shareId - Share ID seeded via loadSharedFolder
-   * @param args.getShareKeysFn - Returns share_keys entries for this share
-   * @param args.vaultPrivateKey - Recipient's vault private key (ECIES unwrap)
    * @returns Flat list of reachable subfolders with writable flag and parentId
    */
-  async enumerateSharedSubtree(
-    shareId: string,
-    args: {
-      getShareKeysFn: (
-        shareId: string
-      ) => Promise<Array<{ keyType: string; itemId: string; encryptedKey: string }>>;
-      vaultPrivateKey: Uint8Array;
-    }
-  ): Promise<
+  async enumerateSharedSubtree(shareId: string): Promise<
     Array<{
       id: string;
       name: string;
@@ -2451,17 +4414,16 @@ export class CipherBoxClient {
       const state = this.sharedFolderTree.get(shareId);
       if (!state) throw new Error('Shared folder not loaded');
 
-      const shareKeys = await args.getShareKeysFn(shareId);
+      const hasRealWriteKey = (wk: Uint8Array | null | undefined): boolean =>
+        !!wk && wk.length === 32 && !wk.every((b) => b === 0);
 
-      // Build maps: ipnsName → encryptedKey (folder readKey) and writable set
-      const folderKeyMap = new Map<string, string>();
-      const writableSet = new Set<string>();
-      for (const key of shareKeys) {
-        if (key.keyType === 'folder') {
-          folderKeyMap.set(key.itemId, key.encryptedKey);
-        } else if (key.keyType === 'folder-ipns') {
-          writableSet.add(key.itemId);
-        }
+      // Unseal the share root's OWN write-body once (if it is write-capable)
+      // so the first DFS level has a writeChildren list to check children
+      // against — mirrors dfsFindFolder's parentNode.writeBody lookup.
+      let rootWriteChildren: WriteChildRef[] = [];
+      if (hasRealWriteKey(state.writeKey)) {
+        const rootNode = await unsealNode(state.publishedNode, state.folderKey, state.writeKey);
+        rootWriteChildren = rootNode.writeBody?.writeChildren ?? [];
       }
 
       const result: Array<{
@@ -2472,58 +4434,183 @@ export class CipherBoxClient {
         parentId: string | null;
       }> = [];
 
-      // Visited guard prevents infinite loops on cyclic ipnsName references
+      // Visited guard prevents infinite loops on cyclic ipnsName references.
       const visited = new Set<string>();
 
-      // Iterative DFS stack — each entry is (children array, parent ipnsName)
-      const stack: Array<{ children: SealedChildRef[]; parentId: string | null }> = [
-        { children: state.children, parentId: null },
-      ];
-
-      while (stack.length > 0) {
-        const frame = stack.pop()!;
-        for (const child of frame.children) {
+      const walk = async (
+        children: SealedChildRef[],
+        parentReadKey: Uint8Array,
+        parentWriteKey: Uint8Array | null,
+        parentWriteChildren: WriteChildRef[],
+        parentId: string | null
+      ): Promise<void> => {
+        for (const child of children) {
           if (visited.has(child.ipnsName)) continue;
 
-          // Only enumerate subfolders that have a share key entry
-          const encryptedKey = folderKeyMap.get(child.ipnsName);
-          if (!encryptedKey) continue;
+          const childResolved = await this.resolvePublishedNode(child.ipnsName);
+          if (!childResolved) continue; // structurally unresolvable hop -- try siblings
 
           visited.add(child.ipnsName);
-          const writable = writableSet.has(child.ipnsName);
 
-          result.push({
-            id: child.ipnsName,
-            name: child.name,
-            ipnsName: child.ipnsName,
-            writable,
-            parentId: frame.parentId,
-          });
-
-          // Decrypt child folder key to load its children
-          // D-09: childFolderKey is locally minted here — zero it in finally
-          let childFolderKey: Uint8Array | null = null;
+          let childReadKey: Uint8Array | null = null;
+          let childWriteKey: Uint8Array | null = null;
           try {
-            const encKeyBytes = hexToBytes(encryptedKey);
-            childFolderKey = await unwrapKey(encKeyBytes, args.vaultPrivateKey);
+            // Generation-source rule: child.generation (parent mirror), NEVER
+            // childResolved.published.generation (child's own envelope).
+            childReadKey = await unsealChildReadKey(
+              child.readKeySealed,
+              parentReadKey,
+              childResolved.published.id,
+              childResolved.published.kind,
+              child.generation
+            );
 
-            const subMeta = await sdkCore.loadFolderMetadata({
+            // A file leaf is never a move destination -- only folder/root
+            // kinds are listed and descended into.
+            if (
+              childResolved.published.kind !== 'folder' &&
+              childResolved.published.kind !== 'root'
+            ) {
+              continue;
+            }
+
+            const writeChildRef = parentWriteChildren.find(
+              (wc) => wc.childId === childResolved.published.id
+            );
+
+            let writable = false;
+            if (writeChildRef && parentWriteKey) {
+              childWriteKey = await unsealChildWriteKey(
+                writeChildRef.writeKeySealed,
+                parentWriteKey,
+                childResolved.published.id,
+                childResolved.published.kind,
+                child.generation
+              );
+              writable = true;
+            }
+
+            result.push({
+              id: child.ipnsName,
+              name: child.name,
               ipnsName: child.ipnsName,
-              folderKey: childFolderKey,
-              ctx: this.ctx,
+              writable,
+              parentId,
             });
 
-            const subChildren = subMeta?.metadata.children;
-            if (subChildren && subChildren.length > 0) {
-              stack.push({ children: subChildren, parentId: child.ipnsName });
+            const childNode = await unsealNode(
+              childResolved.published,
+              childReadKey,
+              childWriteKey ?? undefined
+            );
+
+            if (childNode.children && childNode.children.length > 0) {
+              await walk(
+                childNode.children,
+                childReadKey,
+                writable ? childWriteKey : null,
+                writable ? (childNode.writeBody?.writeChildren ?? []) : [],
+                child.ipnsName
+              );
             }
           } finally {
-            if (childFolderKey) clearBytes(childFolderKey);
+            childReadKey?.fill(0);
+            childWriteKey?.fill(0);
           }
         }
-      }
+      };
+
+      await walk(
+        state.children,
+        state.folderKey,
+        hasRealWriteKey(state.writeKey) ? state.writeKey : null,
+        rootWriteChildren,
+        null
+      );
 
       return result;
+    });
+  }
+
+  /**
+   * Recover a single subfolder's writeKey from its PARENT's write-body chain
+   * (one hop), closing the deep-shared-write gap (WEB-03, 68.1-30): the web
+   * seeds `SharedFolderState.writeKey` only at the share root
+   * (`resolveSharedRootWriteKey`), so descending into a subfolder previously
+   * re-seeded that depth with a zero writeKey and every write op below the
+   * root failed GCM auth (writable-shares 8.2).
+   *
+   * Mirrors `dfsFindFolder`'s inner write-chain block exactly: the caller
+   * (`navigateToSubfolder`) must invoke this BEFORE it re-seeds
+   * `sharedFolderTree` to the child — this method reads the PARENT depth via
+   * `sharedFolderTree.get(shareId)`.
+   *
+   * Generation-source rule: `child.generation` is the PARENT-mirror
+   * (`SealedChildRef.generation`), NEVER `child.published.generation` (the
+   * child's own envelope generation) — matches `dfsFindFolder` /
+   * `enumerateSharedSubtree`.
+   *
+   * Fails closed: returns `null` when the share isn't loaded, the parent has
+   * no real (non-zero 32-byte) writeKey, the parent has no write-body, or no
+   * `WriteChildRef` matches the child's id. A tampered `writeKeySealed` or
+   * wrong parent writeKey throws (AEAD auth failure) rather than being
+   * swallowed. The recovered key is validated by unsealing the child's OWN
+   * write-body before being trusted/returned — a key that doesn't unseal the
+   * child's write-body returns `null`, never a bogus key.
+   *
+   * D-09 zeroization: the local `childWriteKey` is zeroed in a `finally`
+   * after being consumed for validation. The returned buffer is a fresh copy
+   * the caller becomes the terminal owner of. `parent.writeKey`/
+   * `parent.folderKey`/`child.readKey` (caller/tree-owned) are never zeroed
+   * here.
+   *
+   * @param shareId - Share ID seeded via loadSharedFolder (must be the
+   *   PARENT depth, not yet re-seeded to the child)
+   * @param child - The subfolder to recover a writeKey for: its resolved
+   *   `PublishedNode`, its already-unsealed `readKey`, and the PARENT-mirror
+   *   `generation` (`SealedChildRef.generation`)
+   * @returns The child's raw 32-byte writeKey (fresh copy), or `null` when
+   *   the parent/child are not write-linked or the parent is read-only
+   */
+  async resolveSharedSubfolderWriteKey(
+    shareId: string,
+    child: { published: PublishedNode; readKey: Uint8Array; generation: number }
+  ): Promise<Uint8Array | null> {
+    return this.withOperation('resolveSharedSubfolderWriteKey', async () => {
+      const parent = this.sharedFolderTree.get(shareId);
+      if (!parent) return null;
+
+      const hasRealWriteKey =
+        parent.writeKey.length === 32 && !parent.writeKey.every((b) => b === 0);
+      if (!hasRealWriteKey) return null;
+
+      const parentNode = await unsealNode(parent.publishedNode, parent.folderKey, parent.writeKey);
+      if (!parentNode.writeBody) return null;
+
+      const writeChildRef = parentNode.writeBody.writeChildren.find(
+        (wc) => wc.childId === child.published.id
+      );
+      if (!writeChildRef) return null;
+
+      let childWriteKey: Uint8Array | null = null;
+      try {
+        childWriteKey = await unsealChildWriteKey(
+          writeChildRef.writeKeySealed,
+          parent.writeKey,
+          child.published.id,
+          child.published.kind,
+          child.generation
+        );
+
+        // T-68.1-30-02: validate before trust (fail-closed, NOT caught) —
+        // mirrors dfsFindFolder's T-68.1-01-03 guarantee.
+        const childNode = await unsealNode(child.published, child.readKey, childWriteKey);
+        if (!childNode.writeBody) return null;
+
+        return new Uint8Array(childWriteKey);
+      } finally {
+        childWriteKey?.fill(0);
+      }
     });
   }
 

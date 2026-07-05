@@ -4,6 +4,7 @@ import { Modal } from '../ui/Modal';
 import { useFolderStore } from '../../stores/folder.store';
 import { resolveIpnsRecord } from '../../services/ipns.service';
 import { resolveFileMetadata } from '../../services/file-metadata.service';
+import { getKind } from '../../lib/kind-cache';
 import '../../styles/details-dialog.css';
 import { FileDetails } from './details/FileDetails';
 import { FolderDetails } from './details/FolderDetails';
@@ -19,9 +20,11 @@ type DetailsDialogProps = {
 /**
  * Details dialog for file/folder metadata (node/v3).
  *
- * Shows technical information about the selected item.
- * TODO(phase 63): wire read-chain navigation to discriminate file vs folder (Node.kind).
- * Until then, the item type is derived from whether folderStore has an entry for ipnsName.
+ * Shows technical information about the selected item. File metadata (size/mime/
+ * versions) is resolved via `resolveFileMetadata` (68.1-04/68.1-06); file-vs-folder
+ * discrimination reads the kind cache (kind-cache.ts, D-02, populated by the
+ * folder-load render paths since 68.1-14), falling back to folderStore membership
+ * on a cache miss.
  */
 export function DetailsDialog({
   open,
@@ -36,13 +39,15 @@ export function DetailsDialog({
   const [fileMetaLoading, setFileMetaLoading] = useState(false);
   const [metadataRefresh, setMetadataRefresh] = useState(0);
 
-  // Heuristic: if the folder store has a node for this ipnsName, treat as folder.
-  // TODO(phase 63): replace with Node.kind discrimination via read-chain.
+  // Definitive kind from the kind cache (D-02); fall back to folderStore
+  // membership on a cache miss (a folder the user has navigated into is in
+  // the store even if its kind was never cached).
   const folderStoreEntry = useFolderStore((state) => {
     if (!item) return undefined;
     return Object.values(state.folders).find((f) => f.ipnsName === item.ipnsName);
   });
-  const isFolderHeuristic = !!folderStoreEntry;
+  const cachedKind = item ? getKind(item.ipnsName) : undefined;
+  const isFolderHeuristic = cachedKind !== undefined ? cachedKind === 'folder' : !!folderStoreEntry;
 
   // Resolve IPNS to get metadata CID (folder view only)
   useEffect(() => {
@@ -101,8 +106,7 @@ export function DetailsDialog({
     setFileMetaLoading(true);
     setMetadataLoading(true);
 
-    // TODO(phase 63): resolveFileMetadata is stubbed — throws 'not implemented — phase 63'
-    resolveFileMetadata(item.ipnsName, folderKey)
+    resolveFileMetadata(item, folderKey)
       .then(({ metadata, metadataCid: cid }) => {
         if (!cancelled) {
           setFileMeta(metadata as unknown as NodeContent);
@@ -155,6 +159,8 @@ export function DetailsDialog({
           metadataLoading={metadataLoading}
           sequenceNumber={folderStoreEntry?.sequenceNumber ?? null}
           childCount={folderStoreEntry ? folderStoreEntry.children.length : null}
+          folderKey={folderStoreEntry?.folderKey ?? null}
+          ipnsPrivateKey={folderStoreEntry?.ipnsPrivateKey ?? null}
         />
       )}
     </Modal>

@@ -2,18 +2,19 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
-current_phase: 69
-current_phase_name: FUSE and WinFsp — Rust Integration and Grant-Root Awareness
-status: "Phase 68 shipped - PR #587"
-stopped_at: Completed 68-12-PLAN.md (ROT-07 Gap 2 closure)
-last_updated: "2026-07-02T00:08:14.728Z"
+current_phase: 68.1
+current_phase_name: web-client-runtime-integration
+status: executing
+stopped_at: Completed 68.1-19-PLAN.md (write-permission upgrade/downgrade via UpdateGrant + API client regeneration)
+last_updated: "2026-07-05T22:22:39.396Z"
 last_activity: 2026-07-02
+last_activity_desc: Phase 68.1 execution started
 progress:
-  total_phases: 9
-  completed_phases: 8
-  total_plans: 65
-  completed_plans: 65
-  percent: 89
+  total_phases: 11
+  completed_phases: 9
+  total_plans: 98
+  completed_plans: 98
+  percent: 82
 ---
 
 # Project State
@@ -23,16 +24,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-27)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 69 — FUSE and WinFsp — Rust Integration and Grant-Root Awareness
+**Current focus:** Phase 68.1 — web-client-runtime-integration
 
 ## Current Position
 
-Phase: 69 — FUSE and WinFsp — Rust Integration and Grant-Root Awareness
-Plan: Not started
-Status: Phase 68 shipped - PR #587
-Last activity: 2026-07-02
+Phase: 68.1 (web-client-runtime-integration) — EXECUTING
+Plan: 4 of 22
+Status: Ready to execute
+Last activity: 2026-07-02 — Phase 68.1 execution started
 
-Progress: `█████████░` 8 / 9 phases (89%)
+Progress: `██████████` 79 / 79 plans (100%)
 
 ## Deferred Items
 
@@ -223,6 +224,16 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 67 P06 | 20m | 1 tasks | 2 files |
 | Phase 68 P11 | 25min | 3 tasks | 6 files |
 | Phase 68 P12 | 4min | 2 tasks | 6 files |
+| Phase 68.1 P01 | 28min | 3 tasks | 10 files |
+| Phase 68.1 P02 | 35min | 3 tasks | 2 files |
+| Phase 68.1 P03 | 10min | 1 tasks | 1 files |
+| Phase 68.1 P05 | 40min | 2 tasks | 1 files |
+| Phase 68.1 P07 | 16min | 3 tasks | 6 files |
+| Phase 68.1 P08 | 25min | 2 tasks | 2 files |
+| Phase 68.1 P13 | 240min | 2 tasks | 8 files |
+| Phase 68.1 P17 | 45min | 2 tasks | 1 files |
+| Phase 68.1 P18 | 12min | 2 tasks | 4 files |
+| Phase 68.1 P19 | 11min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -341,6 +352,8 @@ Recent for v1.1:
 - Phase 59 added 2026-06-23: FUSE IPNS Verify/Publish Hardening & Cleanup
 - Phase 60 added 2026-06-23: IPNS Verification Cross-Layer Closeout -- Desktop + API
 - **v2.0 Phases 61–69 added 2026-06-27**: Metadata and Sharing Refactor — read key-chaining + rotation soundness + write-revocation + TEE contract rewrite + schema cutover + web/FUSE integration
+- Phase 68.2 inserted after Phase 68: SDK-Owned Read Chain and Resolved Folder Listings (URGENT)
+- Phase 69 edited: added Rust SDK-owned read chain scope (Phase 68.2 parity)
 
 ### Open Concerns
 
@@ -445,6 +458,28 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase 68-11]: rotation-durability.spec.ts SC#4 proof now drives two real UI renames (seed+bump, then a rejected rename after stale-bytes replay) instead of direct module invocation; RenameDialog does not close on a failed mutation so the spec drives the form fields directly for the rejection step
 - [Phase 68-12]: rotateReadFromNode returns are keyed off rootResult.skipped (checked once at the end), not job-record status; both clean-resume and dirty-resume paths correctly return undefined since neither mints a fresh root key
 - [Phase 68-12]: performScopeExitRotation zeroes the OLD folderTree folderKey only AFTER the Map.set() swap and only post-flight (rotateReadFromNode has already returned) -- never zeroes rotationResult.readKey or the caller-supplied rootReadKey mid-flight
+- [Phase ?]: [Phase 68.1-01]: CipherBoxClientConfig.rootWriteKey optional — self-bootstrap requires rootIpnsKeypair AND rootWriteKey; host wiring lands 68.1-03
+- [Phase ?]: [Phase 68.1-01]: legacy zero-fallback writeKey publishes WITHOUT a write-body (never seal under zero key — T-68.1-01-03 structural mitigation)
+- [Phase ?]: [Phase 68.1-01]: deleteToBin/restoreFromBin write-body threading lives in bin/index.ts where the actual updateFolderMetadataAndPublish calls are
+- [Phase 68.1-02]: createFolder throws when the parent has no real writeKey — fail-closed instead of sealing WriteChildRef under a zero key
+- [Phase 68.1-02]: collectRemovedItemIpnsNames gained a required parentReadKey parameter to unseal the removed item's readKeySealed (deleteItem passes folder.folderKey)
+- [Phase ?]: [Phase 68.1-03]: publishEmptyRootNode derives+returns rootIpnsName internally -- useAuth consumes the returned name instead of a separate deriveIpnsName call
+- [Phase ?]: [Phase 68.1-03]: new-user publishEmptyRootNode call omits teeKeys (undefined) -- brand-new users have no TEE enrollment state yet
+- [Phase 68.1-05]: navigateReadChain cannot render an intermediate folder (forces kind:'file' leaf) -- folder nav uses a parallel low-level web-layer walk reusing the same sdk-core/core primitives
+- [Phase 68.1-05]: ReceivedShare.readDescriptorRef is hex on the API DTO wire; navigateReadChain expects base64 -- downloadSharedFile bridges hex-decoded bytes to base64 before calling it
+- [Phase 68.1-05]: single-file shares (root Node kind:'file') switch currentView to 'file', activating SharedFileBrowser's pre-existing synthetic-ref download effect for the first time
+- [Phase ?]: [Phase 68.1-07]: createFileMetadata builds but does not publish the file's first IPNS record (caller batch-publishes via batchPublishIpnsRecords) -- matches the pre-existing UploadResult.ipnsRecord contract already wired in client.ts
+- [Phase ?]: [Phase 68.1-07]: updateFileMetadata is a single-shot direct republish (no CAS retry/merge) -- mirrors shared-write.ts updateSharedFile, not the legacy quarantined CAS+merge flow
+- [Phase ?]: [Phase 68.1-07]: replaceFileInFolder is a thin registration.ts delegate to file/index.ts updateFileMetadata, kept for API symmetry with addFileToFolder/addFilesToFolder
+- [Phase ?]: [Phase 68.1-08]: getFileIpnsKeyFn is a fallback ONLY for fileIpnsPrivateKey in updateSharedFile — fileWriteKey always comes from the write-chain walk, fails closed if no WriteChildRef exists
+- [Phase ?]: [Phase 68.1-08]: moveInSharedFolder resolves destFolderKey/destIpnsPrivateKey from share_keys (folder + folder-ipns entries), passing the folder-ipns-wrapped value as SharedWriteContext.writeKey — fails closed via AEAD auth error if incompatible with the destination's actual write-body seal; 68.1-13 web-e2e is the empirical confirmation point
+- [Phase 68.1-13]: createFolder wrapped in runWithFailureUx (was the only folder mutation missing retry-on-ReconcileStaleError)
+- [Phase 68.1-13]: useFolderMutations.handleCreate keys new FolderNode by ipnsName not write-body UUID -- fixes folder-store id desync that silently dropped folder:updated events on nested-folder-creation
+- [Phase 68.1-13]: FileListItem.isFolder and ContextMenu.isFile now read fileTypes.ts isFileRef(item) kind cache -- both were hardcoded phase-63 stubs
+- [Phase 68.1-17]: GAP-1 root cause was a seal-side fileKey/fileReadKey field-confusion bug in uploadFiles, not an AAD/generation divergence -- fixed at the seal site only, read side untouched
+- [Phase ?]: [Phase 68.1-18]: resolveShareWriteDescriptor mirrors resolveFileWriteChainKeys' write-key walk; returns hex-wrapped writeDescriptorRef only, raw writeKey never leaves the SDK
+- [Phase ?]: [Phase 68.1-18]: resolveParentIpnsName translates useFolderNavigation's 'root' sentinel to the real root IPNS name for SDK write-chain calls
+- [Phase ?]: [Phase 68.1-19]: UpdateGrantDto write-toggle uses explicit clearWriteDescriptor boolean (not empty-string sentinel) as the downgrade clear-signal; mutually exclusive with writeDescriptorRef (BadRequestException if both supplied); omitting both leaves writeDescriptorRef untouched for existing read-only-rotation callers (owner-reconcile)
 
 ## Operator Next Steps
 
@@ -452,7 +487,12 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-01T20:06:13.030Z
-**Stopped at:** Completed 68-12-PLAN.md (ROT-07 Gap 2 closure)
+**Last session:** 2026-07-02T20:57:08.570Z
+**Stopped at:** Completed 68.1-19-PLAN.md (write-permission upgrade/downgrade via UpdateGrant + API client regeneration)
 **Resume file:** 
 None
+
+### Blockers
+
+- GAP-1 (68.1-13): resolveFileMetadata AEAD Decryption-failed for CTR/streaming video preview and post-upload batch-download -- needs dedicated crypto debugging
+- GAP-2 (68.1-13): full-workflow.spec.ts 3.8 cold-reload multi-level IPNS DFS resolve times out -- needs retry-budget tuning or propagation investigation

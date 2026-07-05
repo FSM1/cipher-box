@@ -3,18 +3,20 @@
  *
  * Tests create, nested create, rename, move, delete operations
  * through the CipherBoxClient API. Includes a 20-folder stress test.
+ *
+ * v3 contract notes (NODE-03):
+ *  - Read-plane children are SealedChildRefs keyed by ipnsName (no `id` field);
+ *    renameItem/moveItem/deleteItem take the child's ipnsName as the handle.
+ *  - createFolder registers the new subfolder in the client's folderTree with
+ *    its real writeKey — callers must NOT re-registerFolder it (that would
+ *    clobber the write-capable entry with a zero writeKey).
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createTestContext, deleteTestAccount, type TestContext } from '../fixtures/test-harness';
-import {
-  expectChildNamed,
-  expectNoChildNamed,
-  expectChildCount,
-  getChild,
-} from '../helpers/assertions';
+import { expectChildNamed, expectNoChildNamed, getChild, getChildren } from '../helpers/assertions';
 
-describe.skip('Folder CRUD [quarantined D-01: SDK runtime stubbed mid-milestone, re-enable at phase 63-65 consumer re-wire]', () => {
+describe('Folder CRUD', () => {
   let ctx: TestContext;
 
   beforeAll(async () => {
@@ -43,18 +45,8 @@ describe.skip('Folder CRUD [quarantined D-01: SDK runtime stubbed mid-milestone,
     const subResult = await ctx.client.createFolder(ctx.rootIpnsName, 'Projects');
     expect(subResult.id).toBeTruthy();
 
-    // Register the subfolder with its real keys
-    ctx.client.registerFolder(
-      subResult.ipnsName,
-      subResult.folderKey,
-      {
-        publicKey: new Uint8Array(0), // We don't have the public key from createFolder
-        privateKey: subResult.ipnsPrivateKey,
-      },
-      [],
-      1n // After the empty metadata publish
-    );
-
+    // createFolder already registered 'Projects' in the folderTree with its
+    // real writeKey — nested creation works without any manual registerFolder.
     const nested = await ctx.client.createFolder(subResult.ipnsName, 'SubProject');
     expect(nested.id).toBeTruthy();
     expectChildNamed(ctx.client, subResult.ipnsName, 'SubProject');
@@ -68,26 +60,19 @@ describe.skip('Folder CRUD [quarantined D-01: SDK runtime stubbed mid-milestone,
 
   it('should rename a folder', async () => {
     const child = getChild(ctx.client, ctx.rootIpnsName, 'Documents');
-    await ctx.client.renameItem(ctx.rootIpnsName, child.id, 'Docs');
+    await ctx.client.renameItem(ctx.rootIpnsName, child.ipnsName, 'Docs');
 
     expectChildNamed(ctx.client, ctx.rootIpnsName, 'Docs');
     expectNoChildNamed(ctx.client, ctx.rootIpnsName, 'Documents');
   });
 
   it('should move a folder between parents', async () => {
-    // Create a destination folder
+    // Create a destination folder (registered write-capable by createFolder)
     const dest = await ctx.client.createFolder(ctx.rootIpnsName, 'Archive');
-    ctx.client.registerFolder(
-      dest.ipnsName,
-      dest.folderKey,
-      { publicKey: new Uint8Array(0), privateKey: dest.ipnsPrivateKey },
-      [],
-      1n
-    );
 
-    // Move 'Docs' into 'Archive'
+    // Move 'Docs' into 'Archive' — child handle is the ipnsName (NODE-03)
     const docs = getChild(ctx.client, ctx.rootIpnsName, 'Docs');
-    await ctx.client.moveItem(ctx.rootIpnsName, dest.ipnsName, docs.id);
+    await ctx.client.moveItem(ctx.rootIpnsName, dest.ipnsName, docs.ipnsName);
 
     expectNoChildNamed(ctx.client, ctx.rootIpnsName, 'Docs');
     expectChildNamed(ctx.client, dest.ipnsName, 'Docs');
@@ -96,16 +81,16 @@ describe.skip('Folder CRUD [quarantined D-01: SDK runtime stubbed mid-milestone,
   it('should delete a folder', async () => {
     const result = await ctx.client.deleteItem(
       ctx.rootIpnsName,
-      getChild(ctx.client, ctx.rootIpnsName, 'Archive').id
+      getChild(ctx.client, ctx.rootIpnsName, 'Archive').ipnsName
     );
-    expect(result.removedItem.id).toBeTruthy();
+    expect(result.removedItem.ipnsName).toBeTruthy();
     expectNoChildNamed(ctx.client, ctx.rootIpnsName, 'Archive');
   });
 
   it('should handle deleting the last folder', async () => {
     // Delete remaining 'Projects' folder
     const projects = getChild(ctx.client, ctx.rootIpnsName, 'Projects');
-    await ctx.client.deleteItem(ctx.rootIpnsName, projects.id);
+    await ctx.client.deleteItem(ctx.rootIpnsName, projects.ipnsName);
     expectNoChildNamed(ctx.client, ctx.rootIpnsName, 'Projects');
   });
 
@@ -119,23 +104,24 @@ describe.skip('Folder CRUD [quarantined D-01: SDK runtime stubbed mid-milestone,
     await expect(ctx.client.deleteItem(ctx.rootIpnsName, 'non-existent-id')).rejects.toThrow();
   });
 
-  it('should handle 20-folder stress test', async () => {
-    const folderIds: string[] = [];
+  it('should handle 20-folder stress test', { timeout: 600_000 }, async () => {
+    const baseCount = getChildren(ctx.client, ctx.rootIpnsName).length;
+    const folderIpnsNames: string[] = [];
 
     // Create 20 folders
     for (let i = 0; i < 20; i++) {
       const result = await ctx.client.createFolder(ctx.rootIpnsName, `Stress-${i}`);
       expect(result.id).toBeTruthy();
-      folderIds.push(result.id);
+      folderIpnsNames.push(result.ipnsName);
     }
 
-    expectChildCount(ctx.client, ctx.rootIpnsName, 20);
+    expect(getChildren(ctx.client, ctx.rootIpnsName).length).toBe(baseCount + 20);
 
     // Delete all 20
-    for (const id of folderIds) {
-      await ctx.client.deleteItem(ctx.rootIpnsName, id);
+    for (const ipnsName of folderIpnsNames) {
+      await ctx.client.deleteItem(ctx.rootIpnsName, ipnsName);
     }
 
-    expectChildCount(ctx.client, ctx.rootIpnsName, 0);
+    expect(getChildren(ctx.client, ctx.rootIpnsName).length).toBe(baseCount);
   });
 });

@@ -33,6 +33,13 @@ export type ReceivedShare = {
   /** Hex-encoded ECIES descriptor ref for read access (D-07 grant data path) */
   readDescriptorRef: string;
   /**
+   * Hex-encoded ECIES descriptor ref for write access, or null for read-only
+   * shares (68.1-20, SHARE-WRITE-KEY recipient side). Unwrapped with the
+   * recipient's vault private key to recover the shared-root writeKey on
+   * navigation entry — never persisted unwrapped.
+   */
+  writeDescriptorRef?: string | null;
+  /**
    * Generation of the root node at share creation. Parsed from the DTO's
    * numeric string with an isFinite guard — a non-numeric/absent value is
    * `undefined`, never coerced to NaN/0 (V5 fail-closed floor seed, T-68-21).

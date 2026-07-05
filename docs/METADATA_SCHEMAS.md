@@ -145,19 +145,33 @@ Encoding rules for the read-body JSON:
 ## 4. SealedChildRef
 
 A sealed reference to a child node, stored inside the parent's read-body `children` array. The
-field set is **exactly** five fields -- no write field appears here (NODE-03, design §2.6).
+five core fields carry no write field (NODE-03, design §2.6); `size` and `modifiedAt` are
+optional display mirrors added post-cutover (additive/back-compat -- see below).
 
-| Field           | Type   | Encoding              | Description                                                                                         |
-| --------------- | ------ | --------------------- | --------------------------------------------------------------------------------------------------- |
-| `name`          | string | --                    | Display name of the child (plaintext within the sealed parent read-body)                            |
-| `ipnsName`      | string | k51 base32            | IPNS k51 name of the child node                                                                     |
-| `generation`    | number | --                    | Staleness witness for the child's read-key epoch (see [Invariants](#10-invariants))                 |
-| `versionFloor`  | bigint | decimal string (wire) | Owner-vouched IPNS sequence-number floor, bound at (re)share                                        |
-| `readKeySealed` | string | base64                | AES-256-GCM seal of the child's `readKey` under the parent `readKey`; AAD role `0x02` child-readkey |
+| Field           | Type    | Encoding              | Description                                                                                                            |
+| --------------- | ------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `name`          | string  | --                    | Display name of the child (plaintext within the sealed parent read-body)                                               |
+| `ipnsName`      | string  | k51 base32            | IPNS k51 name of the child node                                                                                        |
+| `generation`    | number  | --                    | Staleness witness for the child's read-key epoch (see [Invariants](#10-invariants))                                    |
+| `versionFloor`  | bigint  | decimal string (wire) | Owner-vouched IPNS sequence-number floor, bound at (re)share                                                           |
+| `readKeySealed` | string  | base64                | AES-256-GCM seal of the child's `readKey` under the parent `readKey`; AAD role `0x02` child-readkey                    |
+| `size`          | number? | --                    | Optional display mirror of a file child's plaintext byte size (`NodeContent.size`); absent for folders and legacy refs |
+| `modifiedAt`    | number? | --                    | Optional display mirror of the child's last-modified time (Unix ms, mirrors `Node.modifiedAt`); absent on legacy refs  |
 
 **Encryption:** `readKeySealed` is sealed by `sealChildReadKey` (role `0x02`). The entire
 `SealedChildRef` object lives inside the parent's sealed read-body -- it is not independently
-encrypted.
+encrypted; `size`/`modifiedAt` therefore leak nothing to the server (they sit inside the parent's
+`readSealed` ciphertext) and nothing beyond what a parent-`readKey` holder can already derive.
+
+**Display mirrors (`size`, `modifiedAt`):** Non-authoritative convenience mirrors (like
+`generation`) so the file browser can show size/date without a per-child read-chain resolve. The
+source of truth is the child's own `Node` (`NodeContent.size` / `Node.modifiedAt`). Both are
+**optional and additive**: the encoder emits them only when present, so a ref written without them
+is byte-identical to the pre-mirror format (no schema bump -- see METADATA_EVOLUTION_PROTOCOL.md
+§ additive changes); the decoder tolerates their absence as `undefined` ("unknown", never `0`).
+They are populated at child-creation time (upload / folder create / shared write) and preserved
+verbatim across move/rename/rotation; an in-place file replace does **not** re-publish the parent,
+so the mirror can lag the true value until the parent is next written.
 
 **Wire format:** `versionFloor` is serialized as a decimal string on the JSON wire because
 `bigint` is not JSON-serializable. The decoder reconstructs it via `BigInt(String(raw.versionFloor))`.

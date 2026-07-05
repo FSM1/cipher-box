@@ -8,15 +8,30 @@
  * into Zustand, keyed by a reverse `ipnsName` lookup, INCLUDING the root folder,
  * and that an unknown ipnsName is a safe no-op.
  *
- * See: phase 47 (sdk-folder-state-publish-consolidation), REQ-1, Assumption A2.
+ * T-68.1-33-01 / T-68.1-33-02: the handler's post-guard projection is a
+ * HYBRID — synchronous when every child's kind is already cached (or the
+ * children array is empty), and resolve-before-insert (awaiting
+ * `resolveKinds`, sequence-guarded against a newer state landing mid-resolve)
+ * when at least one child is a cache miss. `../../lib/kind-cache` is mocked
+ * so these tests never hit the network.
+ *
+ * See: phase 47 (sdk-folder-state-publish-consolidation), REQ-1, Assumption A2;
+ * phase 68.1-26 (empty-over-non-empty guard); phase 68.1-33 (kind-cache race).
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 // TODO(phase 63): FolderChild retired — update tests to use SealedChildRef
 import type { SealedChildRef } from '@cipherbox/core';
 import type { CipherBoxClient } from '@cipherbox/sdk';
 import type { SdkEvent, SdkEventHandler } from '@cipherbox/sdk';
 import { useFolderStore, type FolderNode } from '../folder.store';
+
+vi.mock('../../lib/kind-cache', () => ({
+  getKind: vi.fn(),
+  resolveKinds: vi.fn(),
+}));
+
+import { getKind, resolveKinds } from '../../lib/kind-cache';
 
 /**
  * Build a minimal fake CipherBoxClient that captures the handler passed to
@@ -74,6 +89,15 @@ function makeFolderNode(overrides: Partial<FolderNode>): FolderNode {
   };
 }
 
+/**
+ * Mark the given children as kind-cache HITS so the handler's
+ * `allKindsCached` check takes the synchronous fast path.
+ */
+function markCached(...children: SealedChildRef[]): void {
+  const cached = new Map(children.map((c) => [c.ipnsName, 'file' as const]));
+  vi.mocked(getKind).mockImplementation((ipnsName: string) => cached.get(ipnsName));
+}
+
 describe('useFolderStore — subscribeToSdk projection', () => {
   beforeEach(() => {
     // Reset store + module-level subscription before each test.
@@ -84,6 +108,11 @@ describe('useFolderStore — subscribeToSdk projection', () => {
       breadcrumbs: [],
       pendingPublishes: new Set<string>(),
     });
+
+    // Default: every ipnsName is a cache MISS, resolveKinds resolves
+    // immediately with no cached kinds populated (best-effort no-op).
+    vi.mocked(getKind).mockReset().mockReturnValue(undefined);
+    vi.mocked(resolveKinds).mockReset().mockResolvedValue(undefined);
   });
 
   it('projects children + sequenceNumber on folder:updated (reverse ipnsName lookup)', () => {
@@ -94,6 +123,7 @@ describe('useFolderStore — subscribeToSdk projection', () => {
     useFolderStore.getState().subscribeToSdk(client);
 
     const newChildren = [makeChild('new', 5000)];
+    markCached(...newChildren);
     emit({
       type: 'folder:updated',
       // SDK uses ipnsName as folderId
@@ -128,6 +158,7 @@ describe('useFolderStore — subscribeToSdk projection', () => {
     useFolderStore.getState().subscribeToSdk(client);
 
     const rootChildren = [makeChild('rootNew', 9000)];
+    markCached(...rootChildren);
     emit({
       type: 'folder:updated',
       folderId: 'k51root',
@@ -150,6 +181,7 @@ describe('useFolderStore — subscribeToSdk projection', () => {
     useFolderStore.getState().subscribeToSdk(client);
 
     const loadedChildren = [makeChild('loaded', 2222)];
+    markCached(...loadedChildren);
     emit({
       type: 'folder:loaded',
       folderId: 'k51child',
@@ -205,5 +237,203 @@ describe('useFolderStore — subscribeToSdk projection', () => {
     const folder = useFolderStore.getState().folders['f1'];
     expect(folder.children).toEqual(resyncChildren);
     expect(folder.sequenceNumber).toBe(8n);
+  });
+
+  // -------------------------------------------------------------------------
+  // T-68.1-33-01 / T-68.1-33-02: hybrid resolve-before-insert ordering
+  // -------------------------------------------------------------------------
+
+  it('projects children synchronously when every kind is already cached (no resolveKinds call)', () => {
+    const node = makeFolderNode({ id: 'f1', ipnsName: 'k51child', sequenceNumber: 1n });
+    useFolderStore.getState().setFolder(node);
+
+    const { client, emit } = makeFakeClient();
+    useFolderStore.getState().subscribeToSdk(client);
+
+    const cachedChildren = [makeChild('cachedA'), makeChild('cachedB')];
+    markCached(...cachedChildren);
+
+    emit({
+      type: 'folder:updated',
+      folderId: 'k51child',
+      ipnsName: 'k51child',
+      children: cachedChildren,
+      sequenceNumber: 3n,
+    });
+
+    // Asserted IMMEDIATELY after emit — no awaited tick.
+    const folder = useFolderStore.getState().folders['f1'];
+    expect(folder.children).toEqual(cachedChildren);
+    expect(folder.sequenceNumber).toBe(3n);
+    expect(resolveKinds).not.toHaveBeenCalled();
+  });
+
+  it('projects an empty children array synchronously (68.1-29 delete-last-item parity)', () => {
+    const node = makeFolderNode({
+      id: 'f1',
+      ipnsName: 'k51child',
+      isLoaded: true,
+      children: [makeChild('last')],
+      sequenceNumber: 5n,
+    });
+    useFolderStore.getState().setFolder(node);
+
+    const { client, emit } = makeFakeClient();
+    useFolderStore.getState().subscribeToSdk(client);
+
+    // A newer sequence number passes the 68.1-26 guard (a genuine deletion),
+    // so the empty array should project instantly — no resolveKinds call.
+    emit({
+      type: 'folder:updated',
+      folderId: 'k51child',
+      ipnsName: 'k51child',
+      children: [],
+      sequenceNumber: 6n,
+    });
+
+    const folder = useFolderStore.getState().folders['f1'];
+    expect(folder.children).toEqual([]);
+    expect(folder.sequenceNumber).toBe(6n);
+    expect(resolveKinds).not.toHaveBeenCalled();
+  });
+
+  it('still refuses an empty-over-non-empty event at or below the stored sequence (68.1-26 guard preserved)', () => {
+    const node = makeFolderNode({
+      id: 'f1',
+      ipnsName: 'k51child',
+      isLoaded: true,
+      children: [makeChild('kept')],
+      sequenceNumber: 5n,
+    });
+    useFolderStore.getState().setFolder(node);
+
+    const { client, emit } = makeFakeClient();
+    useFolderStore.getState().subscribeToSdk(client);
+
+    // Stale/mismatched empty event at the SAME sequence — guard must reject.
+    emit({
+      type: 'folder:updated',
+      folderId: 'k51child',
+      ipnsName: 'k51child',
+      children: [],
+      sequenceNumber: 5n,
+    });
+
+    const folder = useFolderStore.getState().folders['f1'];
+    expect(folder.children).toEqual([makeChild('kept')]);
+    expect(folder.sequenceNumber).toBe(5n);
+    expect(resolveKinds).not.toHaveBeenCalled();
+  });
+
+  it('does not project children synchronously on a cache miss; they land only after resolveKinds resolves', async () => {
+    const node = makeFolderNode({ id: 'f1', ipnsName: 'k51child', sequenceNumber: 1n });
+    useFolderStore.getState().setFolder(node);
+
+    const { client, emit } = makeFakeClient();
+    useFolderStore.getState().subscribeToSdk(client);
+
+    const missChild = makeChild('missChild');
+    // getKind defaults to undefined (cache miss) per beforeEach.
+    let settleResolve: () => void = () => {};
+    vi.mocked(resolveKinds).mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          settleResolve = resolve;
+        })
+    );
+
+    emit({
+      type: 'folder:updated',
+      folderId: 'k51child',
+      ipnsName: 'k51child',
+      children: [missChild],
+      sequenceNumber: 2n,
+    });
+
+    // Not projected synchronously — old fixture children + sequence still hold.
+    const before = useFolderStore.getState().folders['f1'];
+    expect(before.children).toEqual([makeChild('old')]);
+    expect(before.sequenceNumber).toBe(1n);
+    expect(resolveKinds).toHaveBeenCalledWith([missChild]);
+
+    settleResolve();
+    await vi.waitFor(() => {
+      expect(useFolderStore.getState().folders['f1'].sequenceNumber).toBe(2n);
+    });
+
+    const after = useFolderStore.getState().folders['f1'];
+    expect(after.children).toEqual([missChild]);
+  });
+
+  it('applies children after resolveKinds rejects (best-effort fallback), without throwing', async () => {
+    const node = makeFolderNode({ id: 'f1', ipnsName: 'k51child', sequenceNumber: 1n });
+    useFolderStore.getState().setFolder(node);
+
+    const { client, emit } = makeFakeClient();
+    useFolderStore.getState().subscribeToSdk(client);
+
+    const missChild = makeChild('rejectChild');
+    vi.mocked(resolveKinds).mockRejectedValue(new Error('resolve failed'));
+
+    expect(() =>
+      emit({
+        type: 'folder:updated',
+        folderId: 'k51child',
+        ipnsName: 'k51child',
+        children: [missChild],
+        sequenceNumber: 2n,
+      })
+    ).not.toThrow();
+
+    await vi.waitFor(() => {
+      expect(useFolderStore.getState().folders['f1'].sequenceNumber).toBe(2n);
+    });
+
+    const after = useFolderStore.getState().folders['f1'];
+    expect(after.children).toEqual([missChild]);
+  });
+
+  it('does not clobber a newer sequenceNumber with a stale cache-miss resolution (T-68.1-33-02)', async () => {
+    const node = makeFolderNode({ id: 'f1', ipnsName: 'k51child', sequenceNumber: 1n });
+    useFolderStore.getState().setFolder(node);
+
+    const { client, emit } = makeFakeClient();
+    useFolderStore.getState().subscribeToSdk(client);
+
+    const staleChild = makeChild('stale');
+    let settleResolve: () => void = () => {};
+    vi.mocked(resolveKinds).mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          settleResolve = resolve;
+        })
+    );
+
+    // Cache-miss event at sequenceNumber 2 begins resolving.
+    emit({
+      type: 'folder:updated',
+      folderId: 'k51child',
+      ipnsName: 'k51child',
+      children: [staleChild],
+      sequenceNumber: 2n,
+    });
+
+    // A newer state (e.g. a direct handleSync/resyncFolder insert, or a
+    // subsequent all-cached event) lands at sequenceNumber 5 BEFORE the
+    // stale resolve settles.
+    const newerChild = makeChild('newer');
+    useFolderStore.getState().updateFolderChildren('f1', [newerChild]);
+    useFolderStore.getState().updateFolderSequence('f1', 5n);
+
+    // Now let the stale (sequenceNumber 2) resolve settle.
+    settleResolve();
+    // Flush the microtask queue so the async continuation runs to completion.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const after = useFolderStore.getState().folders['f1'];
+    // The stale N=2 children must NOT have been applied over the newer state.
+    expect(after.children).toEqual([newerChild]);
+    expect(after.sequenceNumber).toBe(5n);
   });
 });

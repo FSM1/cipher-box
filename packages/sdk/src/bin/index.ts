@@ -22,12 +22,14 @@ import {
   deriveBinIpnsKeypair,
   sealChildReadKey,
   unsealChildReadKey,
+  unsealNode,
   type BinEntry,
   type RecycleBinMetadata,
 } from '@cipherbox/core';
-import type { SealedChildRef, Node } from '@cipherbox/core';
+import type { SealedChildRef, Node, PublishedNode, WriteChildRef } from '@cipherbox/core';
 import { bytesToHex, hexToBytes, wrapKey } from '@cipherbox/crypto';
 import type { FolderTree } from '../state/folder-tree';
+import type { FolderState } from '../types';
 
 /** Current bin metadata version. */
 const BIN_METADATA_VERSION = 'v1' as const;
@@ -51,6 +53,81 @@ export type BinState = {
   sequenceNumber: number;
   ipnsName: string;
 };
+
+// ---------------------------------------------------------------------------
+// Internal helpers: write-body preservation (D-03)
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the write-body params (`writeKey` + current `writeChildren`) the bin
+ * publish sites must thread into `updateFolderMetadataAndPublish` so the
+ * republished owned folder PRESERVES its existing write chain (D-03).
+ *
+ * Mirrors CipherBoxClient.getWriteBodyParams (client.ts): a legacy zero-fallback
+ * writeKey returns `{}` (write-body-less publish, pre-D-03 behavior); an
+ * in-memory `folder.metadata.writeBody` is preferred; otherwise the CURRENT
+ * on-wire node is unsealed once. A present-but-unopenable write-body throws
+ * fail-closed (T-68.1-01-03). Never zeroes folder keys (caller-owned, D-09).
+ */
+async function getWriteBodyParams(
+  folder: FolderState,
+  ctx: SdkContext
+): Promise<{ writeKey?: Uint8Array; writeChildren?: WriteChildRef[] }> {
+  const wk = folder.writeKey;
+  if (!wk || wk.length !== 32 || wk.every((b) => b === 0)) {
+    return {};
+  }
+  if (folder.metadata?.writeBody) {
+    return { writeKey: wk, writeChildren: folder.metadata.writeBody.writeChildren };
+  }
+  const resolved = await sdkCore.resolveIpnsRecord(folder.ipnsName, ctx);
+  if (!resolved) return { writeKey: wk, writeChildren: [] };
+  const raw = await sdkCore.fetchFromIpfs(ctx, resolved.cid);
+  const published = JSON.parse(new TextDecoder().decode(raw)) as PublishedNode;
+  if (!published.writeSealed) return { writeKey: wk, writeChildren: [] };
+  const node = await unsealNode(published, folder.folderKey, wk);
+  return { writeKey: wk, writeChildren: node.writeBody?.writeChildren ?? [] };
+}
+
+/**
+ * Adopt a successful `updateFolderMetadataAndPublish` result into the
+ * in-memory FolderState, INCLUDING the unsealed `metadata` Node mirror
+ * (68.1-22 — mirrors CipherBoxClient.adoptPublishedFolderState).
+ *
+ * The bin publish sites previously discarded the publish result entirely,
+ * leaving `folderState.sequenceNumber` one step behind the wire — so the very
+ * next publish against the same folder (e.g. restoreFromBin right after
+ * deleteToBin) hit the server's anti-rollback gate with a 409 Conflict.
+ */
+function adoptPublishedFolderState(
+  folderTree: FolderTree,
+  folder: FolderState,
+  publishedChildren: SealedChildRef[],
+  newSequenceNumber: bigint,
+  publishedWriteChildren?: WriteChildRef[]
+): void {
+  folder.children = publishedChildren;
+  folder.sequenceNumber = newSequenceNumber;
+  folder.lastLoadedAt = Date.now();
+  if (folder.metadata) {
+    folder.metadata.children = publishedChildren;
+    if (publishedWriteChildren) {
+      if (folder.metadata.writeBody) {
+        folder.metadata.writeBody.writeChildren = publishedWriteChildren;
+      } else {
+        // 68.1-29: create the write-body mirror when the folder was loaded with a
+        // read-only metadata mirror but this publish sealed a real write chain, so
+        // the next getWriteBodyParams/DFS read sees the new WriteChildRefs (mirrors
+        // CipherBoxClient.adoptPublishedFolderState).
+        folder.metadata.writeBody = {
+          ipnsPrivateKey: new Uint8Array(folder.ipnsKeypair.privateKey),
+          writeChildren: publishedWriteChildren,
+        };
+      }
+    }
+  }
+  folderTree.set(folder.ipnsName, folder);
+}
 
 // ---------------------------------------------------------------------------
 // Internal helpers: load / save bin metadata
@@ -372,6 +449,15 @@ export async function addToBin(params: {
     },
   };
 
+  // Resolve the folder's write-body params BEFORE the durable bin write.
+  // getWriteBodyParams can resolve/fetch/unseal and THROW, so surface that
+  // failure here rather than AFTER saveBinMetadata has made the bin entry
+  // durable — a throw once the bin entry is persisted (but the folder delete has
+  // not happened) leaves the item in BOTH the bin and the folder and, on retry,
+  // accumulates a duplicate bin entry. Preserve the existing write-body verbatim
+  // (D-03) — the removed child's WriteChildRef removal is owned by 68.1-02.
+  const writeBodyParams = await getWriteBodyParams(folderState, binCtx.ctx);
+
   // 9. Persist bin metadata BEFORE the destructive source-folder publish.
   //    If the bin save fails we have not yet deleted the item from the folder,
   //    so the item remains visible and fully recoverable (fail-safe ordering).
@@ -384,18 +470,31 @@ export async function addToBin(params: {
   };
   await saveBinMetadata({ metadata, binCtx });
 
-  // 10. Publish updated folder (destructive — must happen after the restore key is durable)
-  await sdkCore.updateFolderMetadataAndPublish({
-    children: updatedChildren,
-    folderKey: folderState.folderKey,
-    ipnsPrivateKey: folderState.ipnsKeypair.privateKey,
-    ipnsPublicKey: folderState.ipnsKeypair.publicKey,
-    ipnsName: folderIpnsName,
-    sequenceNumber: folderState.sequenceNumber,
-    ctx: binCtx.ctx,
-    nodeId: folderState.nodeId,
-    nodeGeneration: folderState.nodeGeneration,
-  });
+  // 10. Publish updated folder (destructive — must happen after the restore key
+  //     is durable). writeBodyParams was resolved above (before saveBinMetadata).
+  const { newSequenceNumber, publishedChildren, publishedWriteChildren } =
+    await sdkCore.updateFolderMetadataAndPublish({
+      children: updatedChildren,
+      folderKey: folderState.folderKey,
+      ...writeBodyParams,
+      ipnsPrivateKey: folderState.ipnsKeypair.privateKey,
+      ipnsPublicKey: folderState.ipnsKeypair.publicKey,
+      ipnsName: folderIpnsName,
+      sequenceNumber: folderState.sequenceNumber,
+      ctx: binCtx.ctx,
+      nodeId: folderState.nodeId,
+      nodeGeneration: folderState.nodeGeneration,
+    });
+
+  // Adopt the publish result so the next publish against this folder does not
+  // 409 on the server's anti-rollback sequence gate (68.1-22).
+  adoptPublishedFolderState(
+    folderTree,
+    folderState,
+    publishedChildren,
+    newSequenceNumber,
+    publishedWriteChildren ?? writeBodyParams.writeChildren
+  );
 
   return {
     removedItem,
@@ -480,17 +579,32 @@ export async function restoreFromBin(params: {
   const childrenForPublish = alreadyInFolder
     ? targetFolder.children
     : [...targetFolder.children, restoredItem];
-  await sdkCore.updateFolderMetadataAndPublish({
-    children: childrenForPublish,
-    folderKey: targetFolder.folderKey,
-    ipnsPrivateKey: targetFolder.ipnsKeypair.privateKey,
-    ipnsPublicKey: targetFolder.ipnsKeypair.publicKey,
-    ipnsName: targetFolderIpnsName,
-    sequenceNumber: targetFolder.sequenceNumber,
-    ctx: binCtx.ctx,
-    nodeId: targetFolder.nodeId,
-    nodeGeneration: targetFolder.nodeGeneration,
-  });
+  // Preserve the target folder's existing write-body verbatim (D-03) — the
+  // restored child's WriteChildRef insertion is owned by 68.1-02, not this plan.
+  const writeBodyParams = await getWriteBodyParams(targetFolder, binCtx.ctx);
+  const { newSequenceNumber, publishedChildren, publishedWriteChildren } =
+    await sdkCore.updateFolderMetadataAndPublish({
+      children: childrenForPublish,
+      folderKey: targetFolder.folderKey,
+      ...writeBodyParams,
+      ipnsPrivateKey: targetFolder.ipnsKeypair.privateKey,
+      ipnsPublicKey: targetFolder.ipnsKeypair.publicKey,
+      ipnsName: targetFolderIpnsName,
+      sequenceNumber: targetFolder.sequenceNumber,
+      ctx: binCtx.ctx,
+      nodeId: targetFolder.nodeId,
+      nodeGeneration: targetFolder.nodeGeneration,
+    });
+
+  // Adopt the publish result so the next publish against this folder does not
+  // 409 on the server's anti-rollback sequence gate (68.1-22).
+  adoptPublishedFolderState(
+    folderTree,
+    targetFolder,
+    publishedChildren,
+    newSequenceNumber,
+    publishedWriteChildren ?? writeBodyParams.writeChildren
+  );
 
   // 7. Remove entry from bin and publish updated bin metadata
   const remainingEntries = binState.entries.filter((e) => e.id !== entryId);
@@ -501,6 +615,33 @@ export async function restoreFromBin(params: {
     entries: remainingEntries,
   };
   await saveBinMetadata({ metadata, binCtx });
+
+  // 8. Best-effort: verify the restored child's OWN IPNS record still resolves.
+  //    Runs AFTER the durable bin cleanup (finding 16) so this diagnostic
+  //    network round-trip never delays removing the entry from the bin — it is
+  //    verify-only (console.warn), never a throw, and must not gate cleanup.
+  //    restoreFromBin only re-links the SealedChildRef into the parent (above) —
+  //    it never re-publishes the child's own record, and the bin entry carries no
+  //    child ipnsPrivateKey, so re-minting here is impossible. deleteToBin does
+  //    NOT unenroll on soft-delete, so the child record should normally still be
+  //    TEE-republish-enrolled and resolvable. If it is NOT resolvable, warn rather
+  //    than silently treating a dead folder as navigable.
+  try {
+    const childResolved = await sdkCore.resolveIpnsRecord(entry.nodeIpnsName, binCtx.ctx);
+    if (!childResolved) {
+      console.warn(
+        `[CipherBox] restoreFromBin: restored child ${entry.nodeIpnsName} (bin entry ${entryId}) ` +
+          'does not resolve — its own IPNS record appears unavailable. The child was re-linked ' +
+          'into the parent folder, but navigating into it may fail until the record republishes. ' +
+          'No re-mint is possible here (bin entries do not carry the child ipnsPrivateKey).'
+      );
+    }
+  } catch (err) {
+    console.warn(
+      `[CipherBox] restoreFromBin: resolve check for restored child ${entry.nodeIpnsName} failed:`,
+      err
+    );
+  }
 
   return {
     restoredItem,

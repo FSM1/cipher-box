@@ -622,6 +622,11 @@ test.describe.serial('Full Workflow', () => {
     navigationStack.length = 0;
     navigationStack.push('root', workspaceFolder);
 
+    // waitForPathToContain(workspace) is trivially satisfied when navigating UP
+    // (the path already contained "workspace" while inside documents), so wait
+    // for the listing to render before the instant isItemVisible checks.
+    await fileList.waitForItemToAppear(documentsFolder, { timeout: 10000 });
+
     // Verify workspace children are all visible
     expect(await fileList.isItemVisible(documentsFolder)).toBe(true);
     expect(await fileList.isItemVisible(imagesFolder)).toBe(true);
@@ -1179,6 +1184,10 @@ test.describe.serial('Full Workflow', () => {
     await contextMenu.waitForOpen();
     await contextMenu.clickDetails();
     await detailsDialog.waitForOpen();
+    // Wait for the async CID resolve to settle (see 6.5.4 note, 68.1-29)
+    await expect
+      .poll(() => detailsDialog.getValueText('Metadata CID'), { timeout: 30000 })
+      .not.toBe('resolving...');
     cidBeforeEdit = await detailsDialog.getValueText('Metadata CID');
     expect(cidBeforeEdit).toBeTruthy();
     await detailsDialog.close();
@@ -1215,6 +1224,13 @@ test.describe.serial('Full Workflow', () => {
     await contextMenu.waitForOpen();
     await contextMenu.clickDetails();
     await detailsDialog.waitForOpen();
+
+    // The Metadata CID resolves asynchronously (fresh IPNS re-resolve after
+    // the edit's publish) — wait for the loading placeholder to settle
+    // before reading, otherwise this reads "resolving..." (68.1-29).
+    await expect
+      .poll(() => detailsDialog.getValueText('Metadata CID'), { timeout: 30000 })
+      .not.toBe('resolving...');
 
     const newCid = await detailsDialog.getValueText('Metadata CID');
     expect(newCid).toBeTruthy();

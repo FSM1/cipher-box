@@ -10,8 +10,9 @@
 
 import { CipherBoxClient } from '@cipherbox/sdk';
 import { initializeVault } from '@cipherbox/core';
-import { deriveIpnsName, hexToBytes, bytesToHex } from '@cipherbox/crypto';
-import { publishVaultKeyBlob } from '@cipherbox/sdk-core';
+import { hexToBytes, bytesToHex } from '@cipherbox/crypto';
+import { publishVaultKeyBlob, publishEmptyRootNode } from '@cipherbox/sdk-core';
+import type { SdkContext } from '@cipherbox/sdk-core';
 import { createAxiosInstance } from '@cipherbox/api-client';
 
 const API_URL = process.env.SDK_E2E_API_URL ?? 'http://localhost:3000';
@@ -45,6 +46,13 @@ export interface TestAccount {
   rootFolderKey: Uint8Array;
   rootIpnsKeypair: { publicKey: Uint8Array; privateKey: Uint8Array };
   email: string;
+  /**
+   * UUID of the root Node published by publishEmptyRootNode (D-06). Threaded
+   * into the client's folderTree via registerFolder so root-folder publishes
+   * (e.g. uploadFile to the root) carry a stable nodeId instead of tripping
+   * the registration.ts:221 "nodeId is required" guard.
+   */
+  rootNodeId: string;
 }
 
 export interface TestContext extends TestAccount {
@@ -83,11 +91,10 @@ export async function createTestAccount(opts: CreateAccountOptions): Promise<Tes
   const publicKey = hexToBytes(publicKeyHex);
   const privateKey = hexToBytes(privateKeyHex);
 
-  // Steps 2-4 wrapped in try/catch to clean up the test account on failure
+  // Steps 2-5 wrapped in try/catch to clean up the test account on failure
   try {
     // 2. Initialize vault
     const vault = await initializeVault(privateKey);
-    const rootIpnsName = await deriveIpnsName(vault.rootIpnsKeypair.publicKey);
 
     // 3. Publish vault key blob to IPNS (rootFolderKey storage for recovery)
     const axiosInstance = createAxiosInstance({
@@ -95,15 +102,36 @@ export async function createTestAccount(opts: CreateAccountOptions): Promise<Tes
       getAccessToken: async () => accessToken,
       defaultHeaders: axiosDefaultHeaders(),
     });
+    const sdkCtx: SdkContext = {
+      apiUrl,
+      getAccessToken: async () => accessToken,
+      axiosInstance,
+    };
     await publishVaultKeyBlob({
       userPrivateKey: privateKey,
       userPublicKey: publicKey,
       rootReadKey: vault.rootReadKey,
       rootWriteKey: vault.rootWriteKey,
-      ctx: { apiUrl, getAccessToken: async () => accessToken, axiosInstance },
+      ctx: sdkCtx,
     });
 
-    // 4. Register vault on server (v2: only ownerPublicKey + rootIpnsName, crypto lives in IPFS)
+    // 4. Publish a real, empty kind:'root' Node (D-06) mirroring the web
+    // new-user flow (useAuth.ts -> publishEmptyRootNode). Derives+returns
+    // rootIpnsName internally -- no separate deriveIpnsName call needed
+    // (matches decision 68.1-03). No teeKeys: the harness has no TEE
+    // enrollment, same as a brand-new user.
+    const {
+      ipnsName: rootIpnsName,
+      nodeId: rootNodeId,
+      sequenceNumber: rootSequenceNumber,
+    } = await publishEmptyRootNode({
+      rootIpnsKeypair: vault.rootIpnsKeypair,
+      rootReadKey: vault.rootReadKey,
+      rootWriteKey: vault.rootWriteKey,
+      ctx: sdkCtx,
+    });
+
+    // 5. Register vault on server (v2: only ownerPublicKey + rootIpnsName, crypto lives in IPFS)
     const initRes = await fetch(`${apiUrl}/vault/init`, {
       method: 'POST',
       headers: fetchHeaders({
@@ -119,16 +147,34 @@ export async function createTestAccount(opts: CreateAccountOptions): Promise<Tes
       throw new Error(`vault/init failed (${initRes.status}): ${await initRes.text()}`);
     }
 
-    // 4. Create CipherBoxClient with instance-scoped axios (no singleton needed)
+    // 6. Create CipherBoxClient with instance-scoped axios (no singleton needed).
+    // rootWriteKey + rootIpnsKeypair mirror the web host-layer wiring (68.1-03,
+    // useAuth.ts) so ensureFolderLoaded / recoverWriteKeyIfNeeded can
+    // self-bootstrap write-capable folder state from root (DFS descent).
+    // The constructor makes defensive copies of all key buffers (D-09).
     const client = new CipherBoxClient({
       apiUrl,
       getAccessToken: async () => accessToken,
       vaultKeypair: { publicKey, privateKey },
       rootIpnsName,
       rootFolderKey: vault.rootReadKey,
+      rootWriteKey: vault.rootWriteKey,
+      rootIpnsKeypair: vault.rootIpnsKeypair,
       defaultHeaders: axiosDefaultHeaders(),
     });
-    client.registerFolder(rootIpnsName, vault.rootReadKey, vault.rootIpnsKeypair, [], 0n);
+    // D-06: thread the published root Node's nodeId/nodeGeneration (0, first
+    // publish) and rootWriteKey so subsequent publishes (e.g. uploadFile to
+    // the root) don't trip registration.ts:221's "nodeId is required" guard.
+    client.registerFolder(
+      rootIpnsName,
+      vault.rootReadKey,
+      vault.rootIpnsKeypair,
+      [],
+      rootSequenceNumber,
+      rootNodeId,
+      0,
+      vault.rootWriteKey
+    );
 
     return {
       client,
@@ -139,6 +185,7 @@ export async function createTestAccount(opts: CreateAccountOptions): Promise<Tes
       rootFolderKey: vault.rootReadKey,
       rootIpnsKeypair: vault.rootIpnsKeypair,
       email,
+      rootNodeId,
     };
   } catch (err) {
     // Clean up partially provisioned account to avoid leaks

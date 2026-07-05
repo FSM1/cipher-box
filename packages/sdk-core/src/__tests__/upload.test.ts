@@ -15,6 +15,9 @@ vi.mock('../ipfs', () => ({
 vi.mock('../file', () => ({
   createFileMetadata: vi.fn().mockResolvedValue({
     fileMetaIpnsName: 'k51-file-meta',
+    fileNodeId: 'file-node-uuid',
+    fileReadKey: new Uint8Array(32).fill(0x11),
+    fileWriteKey: new Uint8Array(32).fill(0x22),
     ipnsRecord: {
       ipnsName: 'k51-file-meta',
       recordBase64: 'base64record',
@@ -29,13 +32,13 @@ vi.mock('@cipherbox/crypto', () => ({
   generateFileKey: vi.fn(() => new Uint8Array(32).fill(0xaa)),
   generateIv: vi.fn(() => new Uint8Array(12).fill(0xbb)),
   encryptAesGcm: vi.fn().mockResolvedValue(new Uint8Array([99, 99, 99])),
-  wrapKey: vi.fn().mockResolvedValue(new Uint8Array([77, 77])),
   clearBytes: vi.fn(),
   bytesToHex: vi.fn((bytes: Uint8Array) =>
     Array.from(bytes)
       .map((b) => b.toString(16).padStart(2, '0'))
       .join('')
   ),
+  hexToBytes: vi.fn(() => new Uint8Array(12).fill(0xcc)),
 }));
 
 describe('Upload operations', () => {
@@ -139,10 +142,9 @@ describe('Upload operations', () => {
       });
 
       // Internal crypto functions should NOT have been called
-      const { generateFileKey, encryptAesGcm, wrapKey } = await import('@cipherbox/crypto');
+      const { generateFileKey, encryptAesGcm } = await import('@cipherbox/crypto');
       expect(generateFileKey).not.toHaveBeenCalled();
       expect(encryptAesGcm).not.toHaveBeenCalled();
-      expect(wrapKey).not.toHaveBeenCalled();
 
       // Result should use the external file key
       expect(result.fileKey).toBe(externalFileKey);
@@ -158,11 +160,12 @@ describe('Upload operations', () => {
 
     it('uses encryptFn result for file metadata creation', async () => {
       const ctx = createMockContext();
+      const externalFileKey = new Uint8Array(32).fill(0xee);
       const encryptFn = vi.fn().mockResolvedValue({
         ciphertext: new Uint8Array([88]),
         wrappedKey: 'ext-wrapped',
         iv: 'ext-iv',
-        fileKey: new Uint8Array(32).fill(0xee),
+        fileKey: externalFileKey,
         originalSize: 1,
         encryptedSize: 1,
       });
@@ -180,8 +183,8 @@ describe('Upload operations', () => {
       const { createFileMetadata } = await import('../file');
       expect(createFileMetadata).toHaveBeenCalledWith(
         expect.objectContaining({
-          fileKeyEncrypted: 'ext-wrapped',
-          fileIv: 'ext-iv',
+          fileKey: externalFileKey,
+          fileIv: expect.any(Uint8Array),
         })
       );
     });

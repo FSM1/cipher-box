@@ -1682,53 +1682,6 @@
         "tags": ["shares"]
       }
     },
-    "/shares/{shareId}/item-name": {
-      "patch": {
-        "description": "Persist the at-rest itemNameEncrypted ciphertext on a share. Only the sharer can update it; the server never encrypts and stores the client-supplied ciphertext as-is.",
-        "operationId": "SharesController_updateShareItemName",
-        "parameters": [
-          {
-            "name": "shareId",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UpdateItemNameDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "204": {
-            "description": "Item name updated"
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "403": {
-            "description": "Only the sharer can update"
-          },
-          "404": {
-            "description": "Share not found"
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ],
-        "summary": "Backfill share encrypted item name",
-        "tags": ["shares"]
-      }
-    },
     "/shares/{shareId}/grant": {
       "patch": {
         "description": "Persist a rotated readDescriptorRef and rootGeneration on an existing share. Only the sharer can update it; the server never re-encrypts and stores the client-supplied ciphertext as-is.",
@@ -3300,16 +3253,6 @@
         },
         "required": ["exists"]
       },
-      "UpdateItemNameDto": {
-        "type": "object",
-        "properties": {
-          "itemNameEncrypted": {
-            "type": "string",
-            "description": "Hex-encoded ECIES ciphertext of the display name wrapped for the recipient. Used to lazily backfill itemNameEncrypted on legacy shares created before at-rest encryption (decision A2)."
-          }
-        },
-        "required": ["itemNameEncrypted"]
-      },
       "UpdateGrantDto": {
         "type": "object",
         "properties": {
@@ -3320,6 +3263,15 @@
           "rootGeneration": {
             "type": "string",
             "description": "Generation of the root node the rotated descriptor is rooted at (numeric string)"
+          },
+          "writeDescriptorRef": {
+            "type": "string",
+            "description": "Hex-encoded ECIES descriptor ref for write access, set to upgrade a read-only share to write (read->write, D-09). Omit to leave any existing writeDescriptorRef unchanged (e.g. a read-descriptor-rotation-only call). Mutually exclusive with clearWriteDescriptor."
+          },
+          "clearWriteDescriptor": {
+            "type": "boolean",
+            "description": "When true, clears any existing writeDescriptorRef (write->read downgrade). Omit/false to leave writeDescriptorRef unchanged. Mutually exclusive with writeDescriptorRef.",
+            "default": false
           }
         },
         "required": ["readDescriptorRef", "rootGeneration"]

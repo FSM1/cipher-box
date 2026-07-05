@@ -1,22 +1,39 @@
 import type { SealedChildRef } from '@cipherbox/core';
+import { deriveDeviceId } from '@cipherbox/crypto';
+import { formatDate } from '../../../utils/format';
 import { CopyableValue, DetailRow } from './DetailsPrimitives';
 
 /**
  * Folder details content (node/v3: SealedChildRef display).
  * TODO(phase 63): wire read-chain navigation to load Node for full metadata.
  */
+/**
+ * Render a NON-reversible fingerprint of a key: a short prefix of its SHA-256
+ * hex digest. The digest is one-way, so — unlike the prior raw-hex slice — this
+ * leaks zero key material into the DOM. (`deriveDeviceId` = SHA-256(bytes) hex.)
+ */
+function keyFingerprint(key: Uint8Array): string {
+  return `sha256:${deriveDeviceId(key).slice(0, 16)}`;
+}
+
 export function FolderDetails({
   item,
   metadataCid,
   metadataLoading,
   sequenceNumber,
   childCount,
+  folderKey,
+  ipnsPrivateKey,
 }: {
   item: SealedChildRef;
   metadataCid: string | null;
   metadataLoading: boolean;
   sequenceNumber: bigint | null;
   childCount: number | null;
+  /** Decrypted folder read key, if this folder is loaded in the SDK's folderTree. */
+  folderKey: Uint8Array | null;
+  /** Decrypted IPNS signing private key, if this folder is loaded in the SDK's folderTree. */
+  ipnsPrivateKey: Uint8Array | null;
 }) {
   return (
     <div className="details-rows">
@@ -72,6 +89,24 @@ export function FolderDetails({
         </span>
       </DetailRow>
 
+      <DetailRow label="Folder Key">
+        {folderKey ? (
+          <span className="details-value details-value--redacted">{keyFingerprint(folderKey)}</span>
+        ) : (
+          <span className="details-value details-value--dim">unavailable (not loaded)</span>
+        )}
+      </DetailRow>
+
+      <DetailRow label="IPNS Private Key">
+        {ipnsPrivateKey ? (
+          <span className="details-value details-value--redacted">
+            {keyFingerprint(ipnsPrivateKey)}
+          </span>
+        ) : (
+          <span className="details-value details-value--dim">unavailable (not loaded)</span>
+        )}
+      </DetailRow>
+
       {/* Timestamps */}
       <div className="details-section-header">{'// timestamps'}</div>
 
@@ -81,8 +116,11 @@ export function FolderDetails({
       </DetailRow>
 
       <DetailRow label="Modified">
-        {/* TODO(phase 63): SealedChildRef has no modifiedAt; resolve from Node envelope */}
-        <span className="details-value details-value--dim">unavailable (phase 63)</span>
+        {typeof item.modifiedAt === 'number' && Number.isFinite(item.modifiedAt) ? (
+          <span className="details-value">{formatDate(item.modifiedAt)}</span>
+        ) : (
+          <span className="details-value details-value--dim">—</span>
+        )}
       </DetailRow>
     </div>
   );

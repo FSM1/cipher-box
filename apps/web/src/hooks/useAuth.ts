@@ -18,7 +18,6 @@ import {
   serializeVaultBlobV3,
   deserializeVaultBlobV3,
 } from '@cipherbox/core';
-// TODO(phase 63): re-add deriveIpnsName when root Node initialization is implemented
 import {
   deriveVaultIpnsKeypair,
   deriveVaultKeyIpnsKeypair,
@@ -29,6 +28,8 @@ import {
 } from '@cipherbox/crypto';
 import type { ByoIpfsConfig } from '@cipherbox/core';
 import type { PinningConfig } from '@cipherbox/sdk';
+import { publishEmptyRootNode } from '@cipherbox/sdk-core';
+import type { SdkContext } from '@cipherbox/sdk-core';
 import { getOrCreateDeviceIdentity } from '../lib/device/identity';
 import { detectDeviceInfo, computeIpHash } from '../lib/device/info';
 import { initializeOrSyncRegistry } from '../services/device-registry.service';
@@ -37,6 +38,7 @@ import { loadVaultSettings } from '../services/vault-settings.service';
 import { useVaultSettingsStore } from '../stores/vault-settings.store';
 import { createAndPublishIpnsRecord, resolveIpnsRecord } from '../services/ipns.service';
 import { addToIpfs, fetchFromIpfs } from '../lib/api/ipfs';
+import { apiUrl as sdkApiUrl, apiAxios } from '../lib/api-config';
 import {
   triggerOwnerReconcileOnLogin,
   runOwnerReconcileForFolder,
@@ -178,7 +180,6 @@ export function useAuth() {
         // New user -- initialize vault with v3 key blob + root Node
         logger.info('[Auth] New user -- initializing vault (v3)');
         const newVault = await initializeVault(userKeypair.privateKey);
-        // TODO(phase 63): derive rootIpnsName = await deriveIpnsName(newVault.rootIpnsKeypair.publicKey)
 
         // Derive vault key IPNS keypair (separate from root folder IPNS)
         const vaultKeyKeypair = await deriveVaultKeyIpnsKeypair(userKeypair.privateKey);
@@ -204,10 +205,38 @@ export function useAuth() {
           throw new Error('Failed to publish vault key blob to IPNS');
         }
 
-        // 2. TODO(phase 63): publish empty root Node to root IPNS using Node codec.
-        // 3. TODO(phase 63): register vault with API, set vault keys.
-        // Both steps require root Node initialization which is phase 63.
-        throw new Error('not implemented — phase 63 (root Node initialization via Node codec)');
+        // 2. Publish an empty kind:'root' Node (write-body carries the root IPNS
+        // signing key) to the root IPNS name at sequenceNumber 1n. The name is
+        // derived internally by publishEmptyRootNode from rootIpnsKeypair.publicKey
+        // and returned below (T-68.1-03-02).
+        const sdkCtx: SdkContext = {
+          apiUrl: sdkApiUrl,
+          getAccessToken: async () => useAuthStore.getState().accessToken || '',
+          axiosInstance: apiAxios,
+        };
+        const { ipnsName: rootIpnsName } = await publishEmptyRootNode({
+          rootIpnsKeypair: newVault.rootIpnsKeypair,
+          rootReadKey: newVault.rootReadKey,
+          rootWriteKey: newVault.rootWriteKey,
+          ctx: sdkCtx,
+          // New users have no TEE enrollment yet -- teeKeys stays undefined.
+        });
+
+        // 3. Register the vault with the API. Zero-crypto v2 schema: only
+        // ownerPublicKey + rootIpnsName cross the wire, never plaintext/crypto
+        // key material (CLAUDE.md rule 3/6, T-68.1-03-01).
+        const registeredVault = await vaultApi.initVault({
+          ownerPublicKey: bytesToHex(userKeypair.publicKey),
+          rootIpnsName,
+        });
+
+        setVaultKeys({
+          rootReadKey: newVault.rootReadKey,
+          rootWriteKey: newVault.rootWriteKey,
+          rootIpnsKeypair: newVault.rootIpnsKeypair,
+          rootIpnsName,
+          vaultId: registeredVault.id,
+        });
       }
 
       // Load BYO pinning config from encrypted IPNS entry (if configured).
@@ -297,10 +326,10 @@ export function useAuth() {
             privateKey: userKeypair.privateKey,
           },
           rootIpnsName: vaultState.rootIpnsName,
-          // TODO(phase 63): SDK config will be updated to accept rootReadKey/rootWriteKey
-          // For now, bridge: rootReadKey maps to the SDK's rootFolderKey slot
-
+          // rootReadKey maps to the SDK's rootFolderKey slot (read-body seal key);
+          // rootWriteKey feeds ensureFolderLoaded's DFS write-chain recovery (68.1-01).
           rootFolderKey: vaultState.rootReadKey!,
+          rootWriteKey: vaultState.rootWriteKey!,
           // Pass the root IPNS signing keypair so the client can self-bootstrap
           // and lazy-load folderTree from root (dissolves "Folder not loaded";
           // fixes bin restore after reload). Guaranteed non-null by the guard above.

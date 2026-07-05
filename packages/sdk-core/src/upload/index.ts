@@ -13,9 +13,8 @@ import {
   generateCtrIv,
   encryptAesGcm,
   encryptAesCtr,
-  wrapKey,
   clearBytes,
-  bytesToHex,
+  hexToBytes,
 } from '@cipherbox/crypto';
 import type { SdkContext, TeeKeys, ProgressCallback } from '../types';
 import { addToIpfs } from '../ipfs';
@@ -53,14 +52,30 @@ export type UploadResult = {
   fileMetaIpnsName: string;
   /** File IPNS record payload for batch publish */
   ipnsRecord: FileIpnsRecordPayload;
-  /** ECIES-wrapped IPNS private key (hex) for storage in FilePointer */
-  ipnsPrivateKeyEncrypted: string;
+  /**
+   * ECIES-wrapped IPNS private key (hex) for TEE storage/republishing.
+   * Optional — only present when teeKeys was supplied and fully enrolled
+   * (mirrors createSubfolder's encryptedIpnsPrivateKey convention).
+   */
+  ipnsPrivateKeyEncrypted?: string;
   /**
    * Plaintext file key (AES-256) for post-upload re-wrapping.
    * The caller MUST clear this with clearBytes() after use.
    * Only present when the caller needs to re-wrap for share recipients.
    */
   fileKey: Uint8Array;
+  /** New v3 file Node id — matches WriteChildRef.childId in the parent's write-body. */
+  fileNodeId: string;
+  /**
+   * New v3 file Node readKey — the parent seals this into its read-body
+   * (SealedChildRef.readKeySealed). Caller is the terminal owner (D-09).
+   */
+  fileReadKey: Uint8Array;
+  /**
+   * New v3 file Node writeKey — the parent seals this into its write-body
+   * (WriteChildRef.writeKeySealed). Caller is the terminal owner (D-09).
+   */
+  fileWriteKey: Uint8Array;
 };
 
 /**
@@ -118,8 +133,11 @@ export async function uploadFile(params: {
 
     try {
       let ciphertext: Uint8Array;
-      let wrappedKeyHex: string;
-      let ivHex: string;
+      // Raw IV bytes for the new v3 file Node (D-07/NODE-02 — base64-encoded internally
+      // by createFileMetadata). The legacy ECIES-wrap-of-fileKey step is retired: the v3
+      // model stores fileKey raw inside the sealed content, no per-recipient wrap needed
+      // at upload time (READ-03 — the parent readKey already gates access).
+      let ivBytesForFile: Uint8Array;
       let fileKeyForResult: Uint8Array;
 
       if (params.encryptFn) {
@@ -130,8 +148,7 @@ export async function uploadFile(params: {
           encryptionMode: mode,
         });
         ciphertext = extResult.ciphertext;
-        wrappedKeyHex = extResult.wrappedKey;
-        ivHex = extResult.iv;
+        ivBytesForFile = hexToBytes(extResult.iv);
         fileKeyForResult = extResult.fileKey;
         fileKeyExternal = extResult.fileKey;
       } else {
@@ -146,17 +163,14 @@ export async function uploadFile(params: {
             ? await encryptAesCtr(params.data, fileKeyInternal, iv)
             : await encryptAesGcm(params.data, fileKeyInternal, iv);
 
-        // 3. Wrap file key with user's public key (ECIES)
-        const wrappedKey = await wrapKey(fileKeyInternal, params.userPublicKey);
-        wrappedKeyHex = bytesToHex(wrappedKey);
-        ivHex = bytesToHex(iv);
+        ivBytesForFile = iv;
 
         // Return a defensive copy of the file key for re-wrapping.
         // The caller is responsible for clearing it after use.
         fileKeyForResult = new Uint8Array(fileKeyInternal);
       }
 
-      // 4. Upload encrypted content to IPFS (or BYO node via pinFn override)
+      // 3. Upload encrypted content to IPFS (or BYO node via pinFn override)
       const pinResult = params.pinFn
         ? await withPerf('ipfs:upload:byo', () =>
             params.pinFn!(params.ctx, ciphertext, params.onProgress)
@@ -164,16 +178,14 @@ export async function uploadFile(params: {
         : await addToIpfs(params.ctx, ciphertext, params.onProgress);
       const { cid, size: encryptedSize } = pinResult;
 
-      // 5. Create per-file IPNS metadata record
+      // 4. Create per-file v3 Node IPNS metadata record (raw fileKey + iv, D-07/NODE-02)
       const fileMetaResult = await createFileMetadata({
         fileId: params.fileId,
         cid,
-        fileKeyEncrypted: wrappedKeyHex,
-        fileIv: ivHex,
+        fileKey: fileKeyForResult,
+        fileIv: ivBytesForFile,
         size: originalSize,
         mimeType: params.mimeType,
-        folderKey: params.folderKey,
-        userPublicKey: params.userPublicKey,
         ctx: params.ctx,
         teeKeys: params.teeKeys,
         encryptionMode: mode,
@@ -186,6 +198,9 @@ export async function uploadFile(params: {
         ipnsRecord: fileMetaResult.ipnsRecord,
         ipnsPrivateKeyEncrypted: fileMetaResult.ipnsPrivateKeyEncrypted,
         fileKey: fileKeyForResult,
+        fileNodeId: fileMetaResult.fileNodeId,
+        fileReadKey: fileMetaResult.fileReadKey,
+        fileWriteKey: fileMetaResult.fileWriteKey,
       };
     } catch (err) {
       // Clear external fileKey if a later step (pinning/metadata) throws —

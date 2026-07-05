@@ -7,8 +7,9 @@ import {
   type TouchEvent,
 } from 'react';
 import type { SealedChildRef } from '@cipherbox/core';
-import { formatDate, getItemIcon } from '../../utils/format';
+import { formatBytes, formatDate, getItemIcon } from '../../utils/format';
 import { isExternalFileDrag } from '../../hooks/useDropUpload';
+import { isFileRef } from '../../utils/fileTypes';
 
 /**
  * Long press duration in milliseconds for touch context menu.
@@ -51,8 +52,9 @@ type FileListItemProps = {
 /**
  * Single row in the file list (node/v3).
  *
- * TODO(phase 63): file/folder discrimination via Node.kind; until then all items display
- * as folders (SealedChildRef has no .type field).
+ * File-vs-folder discrimination reads the kind cache (D-02, kind-cache.ts /
+ * fileTypes.ts's `isFileRef`), populated by `resolveKinds` on folder load —
+ * `SealedChildRef` itself carries no `.type`/`.kind` field (NODE-03).
  */
 export function FileListItem({
   item,
@@ -75,8 +77,8 @@ export function FileListItem({
   // Drag-over state for folder drop targets
   const [isDragOver, setIsDragOver] = useState(false);
 
-  // TODO(phase 63): SealedChildRef has no .type; treat all as folders for navigation
-  const isFolder = true; // phase-63 stub
+  // D-02: kind cache read (synchronous, folder-safe default on cache miss).
+  const isFolder = !isFileRef(item);
 
   /**
    * Handle single click - select the item.
@@ -101,13 +103,13 @@ export function FileListItem({
   );
 
   /**
-   * Handle double click - navigate into folder.
-   * TODO(phase 63): check Node.kind before navigating; stub navigates all items.
+   * Handle double click - navigate into folder. Files are not navigable
+   * (opening a file is a context-menu action: Preview/Edit/Download).
    */
   const handleDoubleClick = useCallback(() => {
-    // phase-63 stub: navigate as if all items are folders
+    if (!isFolder) return;
     onNavigate(item.ipnsName);
-  }, [item, onNavigate]);
+  }, [item, onNavigate, isFolder]);
 
   /**
    * Handle context menu (right-click).
@@ -289,16 +291,19 @@ export function FileListItem({
     [item, onDrop, onExternalFileDrop, isFolder]
   );
 
-  // TODO(phase 63): SealedChildRef has no .type; display all items with folder icon as placeholder
-  const itemType = 'folder'; // phase-63 stub
+  const itemType: 'file' | 'folder' = isFolder ? 'folder' : 'file';
 
-  // Display size: stub until read-chain provides NodeContent.size
-  // TODO(phase 63): resolve size via Node read-chain
-  const sizeDisplay = '-';
+  // Display size: plaintext byte-size mirror (files only). Folders and legacy
+  // refs carry no size mirror → em dash.
+  const sizeDisplay =
+    typeof item.size === 'number' && Number.isFinite(item.size) ? formatBytes(item.size) : '—';
 
-  // Display modified date: SealedChildRef has no modifiedAt
-  // TODO(phase 63): resolve modifiedAt from Node envelope
-  const dateDisplay = formatDate(0); // phase-63 stub
+  // Display modified date: last-modified mirror (Unix ms). Undefined on folders
+  // created before the mirror landed and on legacy refs → em dash.
+  const dateDisplay =
+    typeof item.modifiedAt === 'number' && Number.isFinite(item.modifiedAt)
+      ? formatDate(item.modifiedAt)
+      : '—';
 
   const className = [
     'file-list-item',

@@ -6,6 +6,7 @@ import { useFolderStore, type FolderNode } from '../stores/folder.store';
 import { useVaultStore } from '../stores/vault.store';
 import { getSdkClient } from '../lib/sdk-provider';
 import { logger } from '../lib/logger';
+import { resolveKinds } from '../lib/kind-cache';
 
 /**
  * Breadcrumb entry for navigation.
@@ -168,8 +169,13 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
       // Track this navigation to detect stale completions from rapid clicks
       latestNavTarget.current = targetFolderId;
 
-      // Root is always constructible from vault state — just navigate
+      // Root is always constructible from vault state — just navigate.
+      // Clear any stuck loading flag: a superseded in-flight navigation's
+      // finally block declines to clear isLoading once latestNavTarget moved
+      // on (68.1-29: full-workflow 5.4 breadcrumb-during-load left the
+      // spinner up forever).
       if (targetFolderId === 'root') {
+        setIsLoading(false);
         navigate('/files');
         return;
       }
@@ -178,8 +184,10 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
       const currentFolders = useFolderStore.getState().folders;
       const targetFolder = currentFolders[targetFolderId];
 
-      // If already loaded, just navigate
+      // If already loaded, just navigate (clearing any superseded
+      // navigation's stuck loading flag — see root fast path above)
       if (targetFolder?.isLoaded) {
+        setIsLoading(false);
         navigate(`/files/${targetFolderId}`);
         return;
       }
@@ -234,8 +242,13 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
       try {
         // Phase 63: ensureFolderLoaded will implement read-chain navigation.
         // This stub will throw; the catch block removes the placeholder.
-        const MAX_RETRIES = 3;
-        const RETRY_DELAY_MS = 2000;
+        // GAP-2 (68.1-13 / 68.1-22): cold-reload multi-level DFS resolves can
+        // exceed the original 3x2s budget while local IPNS records propagate
+        // after a burst of publishes. 8x3s is the documented low-risk
+        // hardening — the latestNavTarget bail-out guards keep abandoned
+        // navigations cheap.
+        const MAX_RETRIES = 8;
+        const RETRY_DELAY_MS = 3000;
         let state: FolderState | null = null;
 
         for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -253,6 +266,15 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
         if (!state) {
           throw new Error('Folder not loaded — IPNS propagation timed out');
         }
+
+        // D-02: populate the kind cache BEFORE the FolderNode lands in the
+        // store, so FileBrowser's synchronous isFileRef guards read the
+        // resolved kind on first render (no extra re-render needed here).
+        await resolveKinds(state.children);
+
+        // Re-check the stale-completion guard again — resolveKinds awaited,
+        // so the user may have navigated away while the cache was populating.
+        if (latestNavTarget.current !== targetFolderId) return;
 
         // Map FolderState -> FolderNode.
         // TODO(phase 63): use Node.id for the folder ID (not ipnsName).

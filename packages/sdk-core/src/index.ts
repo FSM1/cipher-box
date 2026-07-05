@@ -34,9 +34,6 @@ export {
   deleteFromFolder,
   addFilePointerToFolder,
   moveItem,
-  addFileToFolder,
-  addFilesToFolder,
-  replaceFileInFolder,
   mergeChildren,
 } from './folder';
 
@@ -48,7 +45,9 @@ export {
   createFileMetadata,
   resolveFileMetadata,
   updateFileMetadata,
+  downloadFileContent,
   type FileIpnsRecordPayload,
+  type UpdateFileContentParams,
 } from './file';
 
 // Upload operations
@@ -65,7 +64,7 @@ export {
 export { downloadAndDecrypt } from './download';
 
 // Vault key blob operations
-export { publishVaultKeyBlob, loadVaultKeyBlob } from './vault';
+export { publishVaultKeyBlob, loadVaultKeyBlob, publishEmptyRootNode } from './vault';
 
 // Share operations (read-chain navigation + grant issuance)
 export {

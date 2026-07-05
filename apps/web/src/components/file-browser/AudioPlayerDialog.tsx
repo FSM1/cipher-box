@@ -12,8 +12,6 @@ type AudioPlayerDialogProps = {
   item: SealedChildRef | null;
   /** Parent folder's decrypted AES-256 key (needed to decrypt file metadata) */
   folderKey: Uint8Array | null;
-  /** Share ID when previewing from a shared folder — uses re-wrapped file keys */
-  shareId?: string | null;
 };
 
 /** Map common audio extensions to MIME types. */
@@ -55,13 +53,7 @@ function formatTime(seconds: number): string {
  * Uses Web Audio API AnalyserNode for frequency spectrum visualization.
  * No native browser audio controls -- fully custom transport UI.
  */
-export function AudioPlayerDialog({
-  open,
-  onClose,
-  item,
-  folderKey,
-  shareId,
-}: AudioPlayerDialogProps) {
+export function AudioPlayerDialog({ open, onClose, item, folderKey }: AudioPlayerDialogProps) {
   const mimeType = item ? getAudioMime(item.name) : 'audio/mpeg';
   const isStreamingCandidate = item ? STREAMING_AUDIO_MIMES.has(getAudioMime(item.name)) : false;
 
@@ -82,7 +74,6 @@ export function AudioPlayerDialog({
     item,
     mimeType,
     folderKey,
-    shareId,
   });
 
   // Determine active preview mode

@@ -192,6 +192,20 @@ test.describe
     expect(floors.seq).toBe(seededSeq);
   });
 
+  // 68.1-28 diagnostic note: this test currently FAILS (confirmed via a live
+  // repro) not because of a toast-classification gap, but because the replay
+  // below never reaches the client at all. `apps/api`'s IPNS resolve prefers
+  // its DB-cached record whenever it is at or ahead of the network record
+  // (ipns.service.ts::resolveRecord), and the DB row for rootIpnsName is
+  // written synchronously by THIS SAME test's own "bump" mutation below --
+  // so by the time the replay is PUT to the mock relay, the DB row is
+  // already strictly ahead of the replayed bytes and always wins the
+  // resolve. The rename mutation below therefore SUCCEEDS silently (renames
+  // to "-rejected") instead of throwing anything for useMutationFailureUx to
+  // classify. See 68.1-28-SUMMARY.md for the full trace; per that plan's
+  // explicit scope boundary this was surfaced, not fixed here -- assertions
+  // below are left intact ("never weaken an assertion") pending a dedicated
+  // follow-up plan.
   test('rejects a relay-replayed stale record fail-closed via a genuine UI mutation, with the D-05 toast, and does not apply it (SC#4)', async ({
     request,
   }) => {

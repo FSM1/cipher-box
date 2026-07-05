@@ -12,11 +12,54 @@
  */
 
 import { useCallback } from 'react';
-import type { SealedChildRef } from '@cipherbox/core';
+import type { SealedChildRef, PublishedNode } from '@cipherbox/core';
 import { withRevocationGuard as sdkWithRevocationGuard } from '@cipherbox/sdk';
+import { resolveIpnsRecord, fetchFromIpfs } from '@cipherbox/sdk-core';
+import { unwrapKey, hexToBytes } from '@cipherbox/crypto';
 import { getSdkClient } from '../lib/sdk-provider';
+import { useAuthStore } from '../stores/auth.store';
+import { fetchShareKeys } from '../services/share.service';
 import { logger } from '../lib/logger';
 import type { SharedListItem } from './useSharedNavigation';
+
+/**
+ * Resolve a child item's write-body UUID (childNodeId) from its IPNS name.
+ * `id`/`kind` are plaintext on the PublishedNode envelope (NODE-03) -- no
+ * decryption needed. Mirrors `useSharedNavigationActions.ts`'s
+ * `fetchPublishedNode` (duplicated here; that helper is module-private to
+ * its own file).
+ */
+async function resolveChildNodeId(ipnsName: string): Promise<string> {
+  const ctx = getSdkClient().getContext();
+  const resolved = await resolveIpnsRecord(ipnsName, ctx);
+  if (!resolved) {
+    throw new Error(`Cannot resolve item ${ipnsName} (revoked or not found)`);
+  }
+  const raw = await fetchFromIpfs(ctx, resolved.cid);
+  const published = JSON.parse(new TextDecoder().decode(raw)) as PublishedNode;
+  return published.id;
+}
+
+/**
+ * Resolve a shared file's re-wrapped IPNS private key from `share_keys`
+ * (keyType `file-ipns`, itemId = file's ipnsName) -- fallback path used by
+ * `updateSharedFile` only when the write-chain walk finds no `WriteChildRef`
+ * for the file. Mirrors `useSharedNavigationActions.ts`'s
+ * `resolveFolderIpnsPrivateKey` (folder-ipns analog).
+ */
+async function resolveFileIpnsKey(itemId: string, shareId: string): Promise<Uint8Array | null> {
+  const vaultPrivateKey = useAuthStore.getState().vaultKeypair?.privateKey;
+  if (!vaultPrivateKey) return null;
+  try {
+    const keys = await fetchShareKeys(shareId);
+    const entry = keys.find((k) => k.keyType === 'file-ipns' && k.itemId === itemId);
+    if (!entry) return null;
+    return await unwrapKey(hexToBytes(entry.encryptedKey), vaultPrivateKey);
+  } catch (err) {
+    logger.error('[SharedNav] Failed to resolve file IPNS key:', err);
+    return null;
+  }
+}
 
 export type SharedWriteOpsParams = {
   currentShareId: string | null;
@@ -102,9 +145,17 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
   /**
    * Rename an item in the currently-viewed write-shared folder.
    */
-  const renameItemHandler = useCallback(async (_item: SealedChildRef, _newName: string) => {
-    throw new Error('not implemented — phase 65 (shared folder rename requires Node write-chain)');
-  }, []);
+  const renameItemHandler = useCallback(
+    async (item: SealedChildRef, newName: string) => {
+      await runWrite(async (shareId) => {
+        await getSdkClient().renameInSharedFolder(shareId, {
+          itemId: item.ipnsName,
+          newName,
+        });
+      }, 'Shared folder rename failed');
+    },
+    [runWrite]
+  );
 
   /**
    * Update a file's content in the currently-viewed write-shared folder.
@@ -115,18 +166,41 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
    * match the prior contract used by the file editor caller.
    */
   const updateSharedFileHandler = useCallback(
-    async (_item: SealedChildRef, _newContent: Uint8Array): Promise<void> => {
-      throw new Error('not implemented — phase 65 (shared file update requires Node read-chain)');
+    async (item: SealedChildRef, newContent: Uint8Array): Promise<void> => {
+      const shareId = p.currentShareId;
+      if (!shareId) {
+        throw new Error('Write access not available');
+      }
+      await withRevocationGuard(() =>
+        getSdkClient().updateSharedFile(shareId, {
+          filePointer: item,
+          newContent,
+          getFileIpnsKeyFn: (itemId) => resolveFileIpnsKey(itemId, shareId),
+        })
+      );
     },
-    []
+    [p.currentShareId, withRevocationGuard]
   );
 
   /**
    * Delete an item from the currently-viewed write-shared folder.
+   *
+   * Resolves the item's write-body UUID (childNodeId) from its PublishedNode
+   * envelope before calling the client -- deleteFromSharedFolder fails closed
+   * if childNodeId is missing (T-68.1-10-01).
    */
-  const deleteItemHandler = useCallback(async (_item: SealedChildRef) => {
-    throw new Error('not implemented — phase 65 (shared folder delete requires Node write-chain)');
-  }, []);
+  const deleteItemHandler = useCallback(
+    async (item: SealedChildRef) => {
+      await runWrite(async (shareId) => {
+        const childNodeId = await resolveChildNodeId(item.ipnsName);
+        await getSdkClient().deleteFromSharedFolder(shareId, {
+          itemId: item.ipnsName,
+          childNodeId,
+        });
+      }, 'Shared folder delete failed');
+    },
+    [runWrite]
+  );
 
   /**
    * Move an item within the shared folder to a different destination subfolder.
@@ -136,10 +210,22 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
    * zero it here (matches the established pattern; T-49-10 accepted).
    */
   const moveItemHandler = useCallback(
-    async (_item: SealedChildRef, _destFolderId: string, _destIpnsName: string) => {
-      throw new Error('not implemented — phase 65 (shared folder move requires Node write-chain)');
+    async (item: SealedChildRef, destFolderId: string, destIpnsName: string) => {
+      await runWrite(async (shareId) => {
+        const vaultPrivateKey = useAuthStore.getState().vaultKeypair?.privateKey;
+        if (!vaultPrivateKey) {
+          throw new Error('Not authenticated');
+        }
+        await getSdkClient().moveInSharedFolder(shareId, {
+          itemId: item.ipnsName,
+          destFolderId,
+          destIpnsName,
+          vaultPrivateKey,
+          getShareKeysFn: fetchShareKeys,
+        });
+      }, 'Shared folder move failed');
     },
-    []
+    [runWrite]
   );
 
   /**
@@ -151,16 +237,47 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
    */
   const batchMoveItemsHandler = useCallback(
     async (
-      _items: SealedChildRef[],
-      _destFolderId: string,
-      _destIpnsName: string,
-      _clearSelection: () => void
+      items: SealedChildRef[],
+      destFolderId: string,
+      destIpnsName: string,
+      clearSelection: () => void
     ) => {
-      throw new Error(
-        'not implemented — phase 65 (shared folder batch move requires Node write-chain)'
-      );
+      const shareId = p.currentShareId;
+      if (!shareId) {
+        p.setError('Write access not available');
+        return;
+      }
+      const vaultPrivateKey = useAuthStore.getState().vaultKeypair?.privateKey;
+      if (!vaultPrivateKey) {
+        p.setError('Not authenticated');
+        return;
+      }
+      p.setIsLoading(true);
+      p.setError(null);
+      try {
+        for (const item of items) {
+          await withRevocationGuard(() =>
+            getSdkClient().moveInSharedFolder(shareId, {
+              itemId: item.ipnsName,
+              destFolderId,
+              destIpnsName,
+              vaultPrivateKey,
+              getShareKeysFn: fetchShareKeys,
+            })
+          );
+        }
+        clearSelection();
+      } catch (err) {
+        const message = (err as Error).message || 'Shared folder batch move failed';
+        if (!message.includes('write access revoked')) {
+          p.setError(message);
+        }
+        logger.error('[SharedNav] Shared folder batch move failed:', err);
+      } finally {
+        p.setIsLoading(false);
+      }
     },
-    []
+    [p.currentShareId, p.setError, p.setIsLoading, withRevocationGuard]
   );
 
   return {

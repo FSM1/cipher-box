@@ -11,6 +11,8 @@ import { useState, useCallback } from 'react';
 import type { MouseEvent, DragEvent, KeyboardEvent } from 'react';
 import type { SealedChildRef } from '@cipherbox/core';
 import { isExternalFileDrag } from '../../hooks/useDropUpload';
+import { isFileRef } from '../../utils/fileTypes';
+import { formatBytes, formatDate } from '../../utils/format';
 import type { DragItem } from './FileListItem';
 
 type DragPayload = {
@@ -59,11 +61,16 @@ export function SharedFolderRow({
   onMoveItemTo,
   selectedItems = [],
 }: SharedFolderRowProps) {
-  // TODO(phase 63): SealedChildRef has no .type; kind discrimination deferred to Node.kind
-  const isFolder = true; // phase-63 stub: treat as folder for drag-drop and navigation
+  // D-02: kind cache read (synchronous, folder-safe default on cache miss).
+  const isFolder = !isFileRef(item);
   const icon = isFolder ? '📁' : '📄';
-  // TODO(phase 63): SealedChildRef has no modifiedAt; resolve from Node envelope
-  const date = '--'; // phase-63 stub
+  // Display-mirror fields on SealedChildRef (undefined on folders/legacy → em dash).
+  const size =
+    typeof item.size === 'number' && Number.isFinite(item.size) ? formatBytes(item.size) : '—';
+  const date =
+    typeof item.modifiedAt === 'number' && Number.isFinite(item.modifiedAt)
+      ? formatDate(item.modifiedAt)
+      : '—';
   const isWrite = permission === 'write';
 
   // Internal drag-over visual state
@@ -74,12 +81,21 @@ export function SharedFolderRow({
   // ---------------------------------------------------------------------------
   const handleDragStart = useCallback(
     (e: DragEvent) => {
-      // If this item is part of a multi-select, payload includes all selected items
+      // If this item is part of a multi-select, payload includes all selected items.
+      // D-02: per-item kind read (SealedChildRef has no .id/.type; ipnsName is the
+      // stable identifier, and isFileRef reads the kind cache per item).
       const dragItems: DragItem[] =
         isSelected && selectedItems.length > 1
-          ? // TODO(phase 63): SealedChildRef has no .id or .type; use ipnsName as id, stub type
-            selectedItems.map((i) => ({ id: i.ipnsName, type: 'folder' as const }))
-          : [{ id: item.ipnsName, type: 'folder' as const }];
+          ? selectedItems.map((i) => ({
+              id: i.ipnsName,
+              type: isFileRef(i) ? ('file' as const) : ('folder' as const),
+            }))
+          : [
+              {
+                id: item.ipnsName,
+                type: isFileRef(item) ? ('file' as const) : ('folder' as const),
+              },
+            ];
 
       const payload: DragPayload = { items: dragItems };
       e.dataTransfer.setData('application/json', JSON.stringify(payload));
@@ -239,7 +255,7 @@ export function SharedFolderRow({
         )}
       </div>
       <div className="file-list-cell file-list-cell-size" role="gridcell">
-        --
+        {size}
       </div>
       <div className="file-list-cell file-list-cell-date" role="gridcell">
         {date}

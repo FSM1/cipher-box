@@ -218,8 +218,7 @@ export function FileBrowser() {
           item={contextMenu.item}
           selectedCount={actions.selectedIds.size}
           onClose={contextMenu.hide}
-          // TODO(phase 63): SealedChildRef has no .type; file-only actions deferred
-          onDownload={undefined /* phase-63 stub */}
+          onDownload={actions.handleDownload}
           onEdit={
             /* phase-63 stub: text file edit deferred */
             isTextFile(contextMenu.item.name) ? actions.handleEditClick : undefined
@@ -233,7 +232,7 @@ export function FileBrowser() {
           onShare={actions.handleShareClick}
           onDelete={actions.handleDeleteClick}
           onDetails={actions.handleDetailsClick}
-          onBatchDownload={undefined /* phase-63 stub: batch download deferred */}
+          onBatchDownload={actions.handleBatchDownload}
           onBatchMove={actions.selectedIds.size > 1 ? actions.handleBatchMoveClick : undefined}
           onBatchDelete={actions.selectedIds.size > 1 ? actions.handleBatchDeleteClick : undefined}
         />

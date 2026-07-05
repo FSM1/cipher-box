@@ -12,9 +12,17 @@
  * u16_BE(writeLen) | ECIES(rootWriteKey)). v2 / v1 paths are retired.
  */
 
-import { deriveVaultKeyIpnsKeypair, wrapKey, unwrapKey } from '@cipherbox/crypto';
-import { serializeVaultBlobV3, deserializeVaultBlobV3 } from '@cipherbox/core';
-import type { SdkContext } from '../types';
+import {
+  deriveVaultKeyIpnsKeypair,
+  deriveIpnsName,
+  wrapKey,
+  unwrapKey,
+  bytesToHex,
+  hexToBytes,
+} from '@cipherbox/crypto';
+import { serializeVaultBlobV3, deserializeVaultBlobV3, sealNode } from '@cipherbox/core';
+import type { Node } from '@cipherbox/core';
+import type { SdkContext, TeeKeys } from '../types';
 import { addToIpfs, fetchFromIpfs } from '../ipfs';
 import { createAndPublishIpnsRecord, resolveIpnsRecord } from '../ipns';
 
@@ -87,4 +95,98 @@ export async function loadVaultKeyBlob(params: {
   const rootWriteKey = await unwrapKey(encryptedRootWriteKey, params.userPrivateKey);
 
   return { rootReadKey, rootWriteKey, ipnsName: vaultKeyKeypair.ipnsName };
+}
+
+/**
+ * Publish a new user's empty root Node (D-03 / WEB-01/WEB-02).
+ *
+ * Builds a `kind:'root'` Node with an empty `children` array and a write-body
+ * carrying the root IPNS signing key (`rootIpnsKeypair.privateKey`), seals it
+ * under `rootReadKey`/`rootWriteKey`, uploads to IPFS, and publishes the FIRST
+ * IPNS record at sequenceNumber 1n (Phase-60 strict gate: a first publish with
+ * an embedded seq != 1 is rejected with 400).
+ *
+ * Templated on `createSubfolder` (packages/sdk-core/src/folder/registration.ts):
+ * same TEE-enrollment fail-closed validation, computed BEFORE any IPFS upload
+ * side effect so a malformed `teeKeys` never leaves an orphaned blob behind.
+ *
+ * Does NOT zero `rootIpnsKeypair.privateKey` / `rootReadKey` / `rootWriteKey` —
+ * the caller is the terminal owner (D-09).
+ *
+ * @returns The root's IPNS name, the underlying Node's UUID, and sequenceNumber 1n
+ */
+export async function publishEmptyRootNode(params: {
+  rootIpnsKeypair: { publicKey: Uint8Array; privateKey: Uint8Array };
+  rootReadKey: Uint8Array;
+  rootWriteKey: Uint8Array;
+  ctx: SdkContext;
+  teeKeys?: TeeKeys;
+}): Promise<{ ipnsName: string; nodeId: string; sequenceNumber: bigint }> {
+  const ipnsName = await deriveIpnsName(params.rootIpnsKeypair.publicKey);
+  const now = Date.now();
+
+  // Compute TEE enrollment fields (if teeKeys supplied) BEFORE any IPFS upload —
+  // fail closed on incomplete config so a malformed teeKeys short-circuits before
+  // the seal/upload side effects (mirrors createSubfolder).
+  let encryptedIpnsPrivateKey: string | undefined;
+  let keyEpoch: number | undefined;
+  if (params.teeKeys) {
+    const { currentPublicKey, currentEpoch } = params.teeKeys;
+    if (!currentPublicKey) {
+      throw new Error(
+        'publishEmptyRootNode: teeKeys.currentPublicKey is missing or empty — refusing to publish un-enrolled root'
+      );
+    }
+    if (!Number.isInteger(currentEpoch) || currentEpoch < 1) {
+      throw new Error(
+        'publishEmptyRootNode: teeKeys.currentEpoch must be a positive integer (>= 1) — refusing to publish un-enrolled root'
+      );
+    }
+    // ECIES-wrap the root IPNS private key under the TEE public key. Do NOT zero
+    // rootIpnsKeypair.privateKey here — wrapKey reads but does not consume the
+    // buffer; the caller is the terminal owner (D-09).
+    const teePublicKeyBytes = hexToBytes(currentPublicKey);
+    const wrappedBytes = await wrapKey(params.rootIpnsKeypair.privateKey, teePublicKeyBytes);
+    encryptedIpnsPrivateKey = bytesToHex(wrappedBytes);
+    keyEpoch = currentEpoch;
+  }
+
+  const node: Node = {
+    schema: 'node/v3',
+    kind: 'root',
+    id: crypto.randomUUID(),
+    generation: 0,
+    createdAt: now,
+    modifiedAt: now,
+    children: [],
+    writeBody: {
+      ipnsPrivateKey: params.rootIpnsKeypair.privateKey,
+      writeChildren: [],
+    },
+  };
+
+  const publishedNode = await sealNode(node, params.rootReadKey, params.rootWriteKey);
+
+  const { cid } = await addToIpfs(
+    params.ctx,
+    new TextEncoder().encode(JSON.stringify(publishedNode))
+  );
+
+  // First publish — sequenceNumber MUST be 1n (Phase-60 strict gate).
+  const result = await createAndPublishIpnsRecord({
+    ipnsPrivateKey: params.rootIpnsKeypair.privateKey,
+    ipnsPublicKey: params.rootIpnsKeypair.publicKey,
+    ipnsName,
+    metadataCid: cid,
+    sequenceNumber: 1n,
+    ctx: params.ctx,
+    encryptedIpnsPrivateKey,
+    keyEpoch,
+  });
+
+  if (!result.success) {
+    throw new Error('publishEmptyRootNode: failed to publish empty root Node to IPNS');
+  }
+
+  return { ipnsName, nodeId: node.id, sequenceNumber: 1n };
 }

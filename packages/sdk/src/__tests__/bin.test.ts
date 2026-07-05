@@ -235,6 +235,7 @@ describe('bin operations', () => {
       folderTree.set('folder-ipns', {
         ipnsName: 'folder-ipns',
         folderKey: new Uint8Array(32).fill(0x11),
+        writeKey: new Uint8Array(32),
         ipnsKeypair: { publicKey: new Uint8Array(32), privateKey: new Uint8Array(64) },
         sequenceNumber: 1n,
         children: [fileRef],
@@ -272,6 +273,7 @@ describe('bin operations', () => {
       folderTree.set('folder-ipns', {
         ipnsName: 'folder-ipns',
         folderKey: new Uint8Array(32),
+        writeKey: new Uint8Array(32),
         ipnsKeypair: { publicKey: new Uint8Array(32), privateKey: new Uint8Array(64) },
         sequenceNumber: 1n,
         children: [fileRef],
@@ -312,6 +314,7 @@ describe('bin operations', () => {
       folderTree.set('folder-ipns', {
         ipnsName: 'folder-ipns',
         folderKey: new Uint8Array(32),
+        writeKey: new Uint8Array(32),
         ipnsKeypair: { publicKey: new Uint8Array(32), privateKey: new Uint8Array(64) },
         sequenceNumber: 1n,
         children: [fileRef],
@@ -372,6 +375,7 @@ describe('bin operations', () => {
     const PLACEHOLDER_TARGET = {
       ipnsName: 'target-ipns',
       folderKey: new Uint8Array(32),
+      writeKey: new Uint8Array(32),
       ipnsKeypair: { publicKey: new Uint8Array(32), privateKey: new Uint8Array(64) },
       sequenceNumber: 1n,
       children: [] as import('@cipherbox/core').SealedChildRef[],

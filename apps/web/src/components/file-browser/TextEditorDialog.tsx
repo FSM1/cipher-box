@@ -1,11 +1,17 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { SealedChildRef } from '@cipherbox/core';
+import { generateFileKey, generateIv, encryptAesGcm } from '@cipherbox/crypto';
 import { Modal } from '../ui/Modal';
 import { useAuthStore } from '../../stores/auth.store';
-import { downloadFile, triggerBrowserDownload } from '../../services/download.service';
-import { resolveFileMetadata } from '../../services/file-metadata.service';
-import { fetchShareKeys } from '../../services/share.service';
+import { useFolderStore } from '../../stores/folder.store';
+import { useVaultStore } from '../../stores/vault.store';
+import { getRootFolderState } from '../../hooks/folder-helpers';
+import { runWithFailureUx } from '../../hooks/useMutationFailureUx';
+import { downloadFileFromIpns, triggerBrowserDownload } from '../../services/download.service';
+import { resolveFileMetadata, shouldCreateVersion } from '../../services/file-metadata.service';
+import { addToIpfs, unpinFromIpfs } from '../../lib/api/ipfs';
 import { getSdkClient, hasSdkClient } from '../../lib/sdk-provider';
+import { logger } from '../../lib/logger';
 import '../../styles/text-editor-dialog.css';
 
 type TextEditorDialogProps = {
@@ -21,6 +27,13 @@ type TextEditorDialogProps = {
   shareId?: string | null;
   /** Save handler for shared files — updates file IPNS metadata via shared path */
   onSaveSharedFile?: (item: SealedChildRef, newContent: Uint8Array) => Promise<void>;
+  /**
+   * Load handler for a DIRECT single-file share (68.1-32, WEB-03 writable-shares
+   * 10.3) — recovers content via the node/v3 read chain (path []) instead of
+   * `downloadFileFromIpns`. When supplied, the `!folderKey` early-return below
+   * is skipped: a single-file share legitimately has a null `folderKey`.
+   */
+  onLoadSharedFileContent?: (item: SealedChildRef) => Promise<Uint8Array>;
 };
 
 /**
@@ -38,6 +51,7 @@ export function TextEditorDialog({
   readOnly,
   shareId,
   onSaveSharedFile,
+  onLoadSharedFileContent,
 }: TextEditorDialogProps) {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -60,7 +74,9 @@ export function TextEditorDialog({
       return;
     }
 
-    if (!folderKey) {
+    // A single-file share's root IS the file — folderKey is legitimately null
+    // when the caller supplies onLoadSharedFileContent (68.1-32).
+    if (!folderKey && !onLoadSharedFileContent) {
       setLoading(false);
       setError('Folder key not available');
       return;
@@ -87,40 +103,26 @@ export function TextEditorDialog({
 
         let plaintext: Uint8Array;
 
-        if (shareId) {
-          // Shared file path: use re-wrapped file key from share_keys
-          // TODO(phase 63): SealedChildRef.ipnsName replaces FilePointer.fileMetaIpnsName
-          const [{ metadata: fileMeta }, keys] = await Promise.all([
-            resolveFileMetadata(item.ipnsName, folderKey!),
-            fetchShareKeys(shareId),
-          ]);
-
-          // Exact match by itemId (folder share navigating to a specific file),
-          // or fallback to first file key (standalone file share where id is shareId)
-          // TODO(phase 63): SealedChildRef.ipnsName replaces FilePointer.id
-          const fileKeyRecord =
-            keys.find((k) => k.keyType === 'file' && k.itemId === item.ipnsName) ||
-            keys.find((k) => k.keyType === 'file');
-          if (!fileKeyRecord) {
-            throw new Error('File key not available — the folder owner may need to re-share');
-          }
-          const wrappedKey = fileKeyRecord.encryptedKey;
-
-          plaintext = await downloadFile(
-            {
-              cid: fileMeta.cid,
-              iv: fileMeta.fileIv,
-              wrappedKey,
-              originalName: item.name,
-              encryptionMode: fileMeta.encryptionMode,
-            },
-            auth.vaultKeypair.privateKey
-          );
+        if (onLoadSharedFileContent) {
+          // DIRECT single-file share (68.1-32, WEB-03 writable-shares 10.3):
+          // node/v3 read chain (path []) — no folderKey/readKeySealed dependency.
+          plaintext = await onLoadSharedFileContent(item);
+        } else if (shareId) {
+          // Shared file path (node/v3 read chain, 68.1-29): the current shared
+          // folder's readKey (folderKey prop) unseals the file's own readKey
+          // from item.readKeySealed; the raw content fileKey lives inside the
+          // file Node's read-body (NodeContent.fileKey). The previous
+          // share_keys-based path here was dead — fetchShareKeys is
+          // fail-closed empty since 68.1-20, so it always threw.
+          plaintext = await downloadFileFromIpns({
+            fileRef: item,
+            folderKey: folderKey!,
+          });
         } else if (hasSdkClient()) {
           // Owner path via SDK: resolves IPNS, decrypts metadata, downloads + decrypts content
           // TODO(phase 63): SealedChildRef.ipnsName replaces FilePointer.fileMetaIpnsName
           const client = getSdkClient();
-          plaintext = await client.downloadFromIpns(item.ipnsName, folderKey!);
+          plaintext = await client.downloadFromIpns(item, folderKey!);
         } else {
           throw new Error('SDK not initialized — please log in again');
         }
@@ -149,7 +151,7 @@ export function TextEditorDialog({
       cancelled = true;
       if (focusRaf !== undefined) cancelAnimationFrame(focusRaf);
     };
-  }, [open, item, folderKey, shareId, readOnly]);
+  }, [open, item, folderKey, shareId, readOnly, onLoadSharedFileContent]);
 
   const handleSave = useCallback(async () => {
     if (!item || !isDirty) return;
@@ -163,8 +165,68 @@ export function TextEditorDialog({
         const encoded = new TextEncoder().encode(content);
         await onSaveSharedFile(item, encoded);
       } else {
-        // TODO(phase 65): owner save path — write-chain via Node.writeBody not yet implemented
-        throw new Error('not implemented — phase 65 (owner file save via Node write-chain)');
+        // Owner save path: encrypt the edited content fresh (no pre-existing
+        // IPFS upload for in-place text edits), then publish via the file
+        // write-chain (client.replaceFile, 68.1-09).
+        if (!folderKey) {
+          throw new Error('Folder key not available');
+        }
+
+        const folders = useFolderStore.getState().folders;
+        const parentFolder =
+          parentFolderId === 'root'
+            ? getRootFolderState(useVaultStore.getState(), folders)
+            : folders[parentFolderId];
+        if (!parentFolder) {
+          throw new Error('Parent folder not found or vault not initialized');
+        }
+
+        const { metadata: currentMetadata } = await resolveFileMetadata(item, folderKey);
+        const createVersion = shouldCreateVersion(currentMetadata.versions, false);
+
+        const encoded = new TextEncoder().encode(content);
+        let newFileKey: Uint8Array | null = generateFileKey();
+        const iv = generateIv();
+
+        let prunedCids: string[] = [];
+        try {
+          const ciphertext = await encryptAesGcm(encoded, newFileKey, iv);
+          const { cid } = await addToIpfs(new Blob([ciphertext as BlobPart]));
+
+          const client = getSdkClient();
+          // T-68.1-12-04: the write-chain walk lives only inside
+          // CipherBoxClient (D-03). Do NOT zero it here — sdk-core
+          // updateFileMetadata is its terminal owner (T-47-01).
+          const fileIpnsPrivateKey = await client.resolveFileIpnsPrivateKey(
+            parentFolder.ipnsName,
+            item.ipnsName
+          );
+
+          ({ prunedCids } = await runWithFailureUx(() =>
+            client.replaceFile(parentFolder.ipnsName, item.ipnsName, {
+              fileIpnsPrivateKey,
+              currentMetadata,
+              updates: {
+                cid,
+                fileKey: newFileKey!,
+                fileIv: iv,
+                size: encoded.length,
+                mimeType: currentMetadata.mimeType,
+                encryptionMode: 'GCM',
+              },
+              createVersion,
+            })
+          ));
+        } finally {
+          newFileKey?.fill(0);
+          newFileKey = null;
+        }
+
+        for (const prunedCid of prunedCids) {
+          unpinFromIpfs(prunedCid).catch((err) =>
+            logger.warn('[TextEditor] Unpin pruned CID failed:', err)
+          );
+        }
       }
 
       onClose();
@@ -172,7 +234,7 @@ export function TextEditorDialog({
       setError(err instanceof Error ? err.message : 'Failed to save file');
       setSaving(false);
     }
-  }, [item, content, isDirty, parentFolderId, onClose, shareId, onSaveSharedFile]);
+  }, [item, content, isDirty, folderKey, parentFolderId, onClose, shareId, onSaveSharedFile]);
 
   // Handle Ctrl/Cmd+S to save (edit mode only)
   useEffect(() => {

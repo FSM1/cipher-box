@@ -9,9 +9,8 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createTestContext, deleteTestAccount, type TestContext } from '../fixtures/test-harness';
 import { expectChildNamed, getChild, expectBytesEqual } from '../helpers/assertions';
 import { generateTextContent, generateBytes, decodeText } from '../helpers/data-generators';
-import type { FilePointer } from '@cipherbox/core';
 
-describe.skip('Batch Upload Operations [quarantined D-01: SDK runtime stubbed mid-milestone, re-enable at phase 63-65 consumer re-wire]', () => {
+describe('Batch Upload Operations', () => {
   let ctx: TestContext;
 
   beforeAll(async () => {
@@ -59,8 +58,8 @@ describe.skip('Batch Upload Operations [quarantined D-01: SDK runtime stubbed mi
   });
 
   it('should round-trip verify content of batch-uploaded files', async () => {
-    const child = getChild(ctx.client, ctx.rootIpnsName, 'batch-a.txt') as FilePointer;
-    const downloaded = await ctx.client.downloadFromIpns(child.fileMetaIpnsName, ctx.rootFolderKey);
+    const child = getChild(ctx.client, ctx.rootIpnsName, 'batch-a.txt');
+    const downloaded = await ctx.client.downloadFromIpns(child, ctx.rootFolderKey);
     const text = decodeText(downloaded);
     expect(text).toContain('alpha-');
   });
@@ -85,20 +84,15 @@ describe.skip('Batch Upload Operations [quarantined D-01: SDK runtime stubbed mi
     expect(result.failures).toHaveLength(0);
 
     // Round-trip the largest file
-    const child = getChild(ctx.client, ctx.rootIpnsName, 'large.bin') as FilePointer;
-    const downloaded = await ctx.client.downloadFromIpns(child.fileMetaIpnsName, ctx.rootFolderKey);
+    const child = getChild(ctx.client, ctx.rootIpnsName, 'large.bin');
+    const downloaded = await ctx.client.downloadFromIpns(child, ctx.rootFolderKey);
     expectBytesEqual(downloaded, files[2].data);
   });
 
   it('should fire per-file progress callbacks', async () => {
+    // createFolder already registers the subfolder write-capably (NODE-03);
+    // no manual registerFolder needed (it would clobber the writeKey).
     const folder = await ctx.client.createFolder(ctx.rootIpnsName, 'ProgressTestFolder');
-    ctx.client.registerFolder(
-      folder.ipnsName,
-      folder.folderKey,
-      { publicKey: new Uint8Array(0), privateKey: folder.ipnsPrivateKey },
-      [],
-      1n
-    );
 
     const files = [
       {
@@ -129,13 +123,6 @@ describe.skip('Batch Upload Operations [quarantined D-01: SDK runtime stubbed mi
 
   it('should emit files:batchUploaded event', async () => {
     const folder = await ctx.client.createFolder(ctx.rootIpnsName, 'EventTestFolder');
-    ctx.client.registerFolder(
-      folder.ipnsName,
-      folder.folderKey,
-      { publicKey: new Uint8Array(0), privateKey: folder.ipnsPrivateKey },
-      [],
-      1n
-    );
 
     const events: Array<{ type: string }> = [];
     ctx.client.on((e) => events.push(e));

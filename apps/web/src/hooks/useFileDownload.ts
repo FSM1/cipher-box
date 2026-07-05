@@ -1,4 +1,5 @@
 import { useCallback } from 'react';
+import type { SealedChildRef } from '@cipherbox/core';
 import { triggerBrowserDownload } from '../services/download.service';
 import { useDownloadStore } from '../stores/download.store';
 import { getSdkClient, hasSdkClient } from '../lib/sdk-provider';
@@ -28,7 +29,7 @@ export function useFileDownload() {
    */
   const downloadFromIpns = useCallback(
     async (params: {
-      fileMetaIpnsName: string;
+      fileRef: SealedChildRef;
       folderKey: Uint8Array;
       fileName: string;
     }): Promise<void> => {
@@ -41,7 +42,7 @@ export function useFileDownload() {
 
         const client = getSdkClient();
         const decryptedBytes = await client.downloadFromIpns(
-          params.fileMetaIpnsName,
+          params.fileRef,
           params.folderKey,
           (loaded, total) => setProgress(loaded, total)
         );

@@ -1,8 +1,5 @@
 /* eslint-disable @typescript-eslint/ban-ts-comment */
 // @ts-nocheck
-// Phase 65 quarantine: addFileToFolder / addFilesToFolder / replaceFileInFolder skip blocks reference
-// retired FolderEntry/FilePointer types via makeFolder/makeFile helpers.
-// TODO(phase 65): revive addFileToFolder, addFilesToFolder, replaceFileInFolder
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   renameInFolder,
@@ -13,11 +10,7 @@ import {
   loadFolderMetadata,
   fetchAndDecryptMetadata,
   createSubfolder,
-  addFileToFolder,
-  addFilesToFolder,
-  replaceFileInFolder,
 } from '../folder';
-import type { FileIpnsRecordPayload } from '../file';
 import { createMockContext } from './helpers';
 
 // ---------------------------------------------------------------------------
@@ -32,8 +25,6 @@ const mockFns = vi.hoisted(() => ({
   resolveIpnsRecord: vi.fn(),
   addToIpfs: vi.fn(),
   fetchFromIpfs: vi.fn(),
-  // Kept for phase-65-skip blocks (addFileToFolder / addFilesToFolder / replaceFileInFolder)
-  encryptFolderMetadata: vi.fn(),
   // Phase-62 codec (node/v3)
   sealNode: vi.fn(),
   unsealNode: vi.fn(),
@@ -73,27 +64,6 @@ vi.mock('../ipns', () => ({
   batchPublishIpnsRecords: mockFns.batchPublishIpnsRecords,
   resolveIpnsRecord: mockFns.resolveIpnsRecord,
 }));
-
-const makeFolder = (id: string, name: string): FolderEntry => ({
-  type: 'folder',
-  id,
-  name,
-  ipnsName: `k51-${id}`,
-  ipnsPrivateKeyEncrypted: 'encrypted-key',
-  folderKeyEncrypted: 'encrypted-folder-key',
-  createdAt: 1000,
-  modifiedAt: 1000,
-});
-
-const makeFile = (id: string, name: string): FilePointer => ({
-  type: 'file',
-  id,
-  name,
-  fileMetaIpnsName: `k51-file-${id}`,
-  ipnsPrivateKeyEncrypted: 'encrypted-key',
-  createdAt: 1000,
-  modifiedAt: 1000,
-});
 
 // ---------------------------------------------------------------------------
 // load.ts — fetchAndDecryptMetadata + loadFolderMetadata
@@ -476,280 +446,5 @@ describe('updateFolderMetadataAndPublish (phase 63 — delegates to publishWithC
 
     expect(readKey).toEqual(readKeySnapshot);
     expect(ipnsKey).toEqual(ipnsKeySnapshot);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// registration.ts — addFileToFolder / addFilesToFolder / replaceFileInFolder
-// These drive buildFolderIpnsRecord + batchPublishIpnsRecords.
-// ---------------------------------------------------------------------------
-
-const makeFileIpnsRecord = (ipnsName: string): FileIpnsRecordPayload => ({
-  ipnsName,
-  recordBase64: 'cmVjb3Jk',
-  publicKey: 'cHVi',
-  metadataCid: `Qm-${ipnsName}`,
-});
-
-describe.skip('addFileToFolder — TODO(phase 65)', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockFns.encryptFolderMetadata.mockResolvedValue({ iv: 'iv', data: 'data' });
-    mockFns.addToIpfs.mockResolvedValue({ cid: 'QmFolderBlob' });
-    mockFns.createIpnsRecord.mockResolvedValue({ signed: true });
-    mockFns.marshalIpnsRecord.mockReturnValue(new Uint8Array([1, 2, 3]));
-    mockFns.batchPublishIpnsRecords.mockResolvedValue({ totalFailed: 0, results: [] });
-  });
-
-  it('creates a file pointer, builds the folder record, and batch-publishes file+folder', async () => {
-    const ctx = createMockContext();
-    const fileIpnsRecord = makeFileIpnsRecord('k51-file-aaa');
-
-    const result = await addFileToFolder({
-      children: [makeFolder('f1', 'Docs')],
-      folderKey: new Uint8Array(32).fill(1),
-      ipnsPrivateKey: new Uint8Array(64).fill(2),
-      ipnsName: 'k51-parent',
-      sequenceNumber: 4n,
-      fileId: 'file-new',
-      name: 'doc.pdf',
-      fileIpnsRecord,
-      ipnsPrivateKeyEncrypted: 'wrapped',
-      ctx,
-    });
-
-    expect(result.filePointer.id).toBe('file-new');
-    expect(result.filePointer.name).toBe('doc.pdf');
-    expect(result.filePointer.fileMetaIpnsName).toBe('k51-file-aaa');
-    // buildFolderIpnsRecord increments the sequence number by one
-    expect(result.newSequenceNumber).toBe(5n);
-
-    // Batch publish must include both the file record and the folder record.
-    // The folder record carries expectedSequenceNumber (CAS); file records do not.
-    const published = mockFns.batchPublishIpnsRecords.mock.calls[0][0];
-    expect(published).toHaveLength(2);
-    // Positive identity: the file record is published under the file IPNS name
-    // (no CAS), the folder record under the parent name (carries CAS).
-    expect(published[0].ipnsName).toBe('k51-file-aaa');
-    expect(published[0].expectedSequenceNumber).toBeUndefined();
-    expect(published[1].ipnsName).toBe('k51-parent');
-    expect(published[1].expectedSequenceNumber).toBe('4');
-  });
-
-  it('throws on name collision and never publishes', async () => {
-    const ctx = createMockContext();
-    await expect(
-      addFileToFolder({
-        children: [makeFile('f1', 'doc.pdf')],
-        folderKey: new Uint8Array(32),
-        ipnsPrivateKey: new Uint8Array(64),
-        ipnsName: 'k51-parent',
-        sequenceNumber: 0n,
-        fileId: 'file-2',
-        name: 'doc.pdf',
-        fileIpnsRecord: makeFileIpnsRecord('k51-file-bbb'),
-        ipnsPrivateKeyEncrypted: 'wrapped',
-        ctx,
-      })
-    ).rejects.toThrow('A file with this name already exists');
-    expect(mockFns.batchPublishIpnsRecords).not.toHaveBeenCalled();
-  });
-
-  it('throws when the batch publish reports failures', async () => {
-    const ctx = createMockContext();
-    mockFns.batchPublishIpnsRecords.mockResolvedValue({ totalFailed: 1, results: [] });
-
-    await expect(
-      addFileToFolder({
-        children: [],
-        folderKey: new Uint8Array(32),
-        ipnsPrivateKey: new Uint8Array(64),
-        ipnsName: 'k51-parent',
-        sequenceNumber: 0n,
-        fileId: 'file-3',
-        name: 'x.txt',
-        fileIpnsRecord: makeFileIpnsRecord('k51-file-ccc'),
-        ipnsPrivateKeyEncrypted: 'wrapped',
-        ctx,
-      })
-    ).rejects.toThrow('Failed to publish one or more IPNS records');
-  });
-});
-
-describe.skip('addFilesToFolder — TODO(phase 65)', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockFns.encryptFolderMetadata.mockResolvedValue({ iv: 'iv', data: 'data' });
-    mockFns.addToIpfs.mockResolvedValue({ cid: 'QmFolderBlob' });
-    mockFns.createIpnsRecord.mockResolvedValue({ signed: true });
-    mockFns.marshalIpnsRecord.mockReturnValue(new Uint8Array([1, 2, 3]));
-    mockFns.batchPublishIpnsRecords.mockResolvedValue({ totalFailed: 0, results: [] });
-  });
-
-  it('creates N file pointers and publishes N file records + 1 folder record', async () => {
-    const ctx = createMockContext();
-
-    const result = await addFilesToFolder({
-      children: [makeFolder('f1', 'Docs')],
-      folderKey: new Uint8Array(32).fill(1),
-      ipnsPrivateKey: new Uint8Array(64).fill(2),
-      ipnsName: 'k51-parent',
-      sequenceNumber: 10n,
-      files: [
-        {
-          fileId: 'a',
-          name: 'a.txt',
-          fileIpnsRecord: makeFileIpnsRecord('k51-a'),
-          ipnsPrivateKeyEncrypted: 'wa',
-        },
-        {
-          fileId: 'b',
-          name: 'b.txt',
-          fileIpnsRecord: makeFileIpnsRecord('k51-b'),
-          ipnsPrivateKeyEncrypted: 'wb',
-        },
-      ],
-      ctx,
-    });
-
-    expect(result.filePointers).toHaveLength(2);
-    expect(result.filePointers.map((p) => p.name)).toEqual(['a.txt', 'b.txt']);
-    expect(result.newSequenceNumber).toBe(11n);
-
-    const published = mockFns.batchPublishIpnsRecords.mock.calls[0][0];
-    expect(published).toHaveLength(3); // 2 files + 1 folder
-    // File records come first (no CAS sequence), the folder record is last.
-    expect(
-      published.filter((r: { expectedSequenceNumber?: string }) => r.expectedSequenceNumber)
-    ).toHaveLength(1);
-    expect(published[2].expectedSequenceNumber).toBe('10');
-  });
-
-  it('throws when two of the incoming files share a name', async () => {
-    const ctx = createMockContext();
-    await expect(
-      addFilesToFolder({
-        children: [],
-        folderKey: new Uint8Array(32),
-        ipnsPrivateKey: new Uint8Array(64),
-        ipnsName: 'k51-parent',
-        sequenceNumber: 0n,
-        files: [
-          {
-            fileId: 'a',
-            name: 'dup.txt',
-            fileIpnsRecord: makeFileIpnsRecord('k51-a'),
-            ipnsPrivateKeyEncrypted: 'wa',
-          },
-          {
-            fileId: 'b',
-            name: 'dup.txt',
-            fileIpnsRecord: makeFileIpnsRecord('k51-b'),
-            ipnsPrivateKeyEncrypted: 'wb',
-          },
-        ],
-        ctx,
-      })
-    ).rejects.toThrow('A file with name "dup.txt" already exists');
-    expect(mockFns.batchPublishIpnsRecords).not.toHaveBeenCalled();
-  });
-
-  it('throws when an incoming file collides with an existing child', async () => {
-    const ctx = createMockContext();
-    await expect(
-      addFilesToFolder({
-        children: [makeFile('existing', 'taken.txt')],
-        folderKey: new Uint8Array(32),
-        ipnsPrivateKey: new Uint8Array(64),
-        ipnsName: 'k51-parent',
-        sequenceNumber: 0n,
-        files: [
-          {
-            fileId: 'a',
-            name: 'taken.txt',
-            fileIpnsRecord: makeFileIpnsRecord('k51-a'),
-            ipnsPrivateKeyEncrypted: 'wa',
-          },
-        ],
-        ctx,
-      })
-    ).rejects.toThrow('A file with name "taken.txt" already exists');
-  });
-
-  it('throws when the batch publish reports failures', async () => {
-    const ctx = createMockContext();
-    mockFns.batchPublishIpnsRecords.mockResolvedValue({ totalFailed: 2, results: [] });
-
-    await expect(
-      addFilesToFolder({
-        children: [],
-        folderKey: new Uint8Array(32),
-        ipnsPrivateKey: new Uint8Array(64),
-        ipnsName: 'k51-parent',
-        sequenceNumber: 0n,
-        files: [
-          {
-            fileId: 'a',
-            name: 'a.txt',
-            fileIpnsRecord: makeFileIpnsRecord('k51-a'),
-            ipnsPrivateKeyEncrypted: 'wa',
-          },
-        ],
-        ctx,
-      })
-    ).rejects.toThrow('Failed to publish one or more IPNS records');
-  });
-});
-
-describe.skip('replaceFileInFolder — TODO(phase 65)', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockFns.batchPublishIpnsRecords.mockResolvedValue({ totalFailed: 0, results: [] });
-  });
-
-  it('publishes ONLY the file record (folder metadata untouched) when the file exists', async () => {
-    const ctx = createMockContext();
-    const fileIpnsRecord = makeFileIpnsRecord('k51-file-existing');
-
-    await replaceFileInFolder({
-      children: [makeFile('file-1', 'report.pdf'), makeFolder('f2', 'Docs')],
-      fileId: 'file-1',
-      fileIpnsRecord,
-      ctx,
-    });
-
-    const published = mockFns.batchPublishIpnsRecords.mock.calls[0][0];
-    expect(published).toHaveLength(1);
-    expect(published[0].ipnsName).toBe('k51-file-existing');
-    // Folder metadata must NOT be encrypted/uploaded for a content replace
-    expect(mockFns.encryptFolderMetadata).not.toHaveBeenCalled();
-    expect(mockFns.addToIpfs).not.toHaveBeenCalled();
-  });
-
-  it('throws when the file id is not present in the folder children', async () => {
-    const ctx = createMockContext();
-    await expect(
-      replaceFileInFolder({
-        children: [makeFolder('f1', 'Docs')],
-        fileId: 'missing-file',
-        fileIpnsRecord: makeFileIpnsRecord('k51-file-x'),
-        ctx,
-      })
-    ).rejects.toThrow('File not found');
-    expect(mockFns.batchPublishIpnsRecords).not.toHaveBeenCalled();
-  });
-
-  it('throws when the file IPNS publish fails', async () => {
-    const ctx = createMockContext();
-    mockFns.batchPublishIpnsRecords.mockResolvedValue({ totalFailed: 1, results: [] });
-
-    await expect(
-      replaceFileInFolder({
-        children: [makeFile('file-1', 'report.pdf')],
-        fileId: 'file-1',
-        fileIpnsRecord: makeFileIpnsRecord('k51-file-existing'),
-        ctx,
-      })
-    ).rejects.toThrow('Failed to publish file IPNS record');
   });
 });

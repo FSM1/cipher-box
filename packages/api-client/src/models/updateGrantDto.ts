@@ -11,4 +11,8 @@ export interface UpdateGrantDto {
   readDescriptorRef: string;
   /** Generation of the root node the rotated descriptor is rooted at (numeric string) */
   rootGeneration: string;
+  /** Hex-encoded ECIES descriptor ref for write access, set to upgrade a read-only share to write (read->write, D-09). Omit to leave any existing writeDescriptorRef unchanged (e.g. a read-descriptor-rotation-only call). Mutually exclusive with clearWriteDescriptor. */
+  writeDescriptorRef?: string;
+  /** When true, clears any existing writeDescriptorRef (write->read downgrade). Omit/false to leave writeDescriptorRef unchanged. Mutually exclusive with writeDescriptorRef. */
+  clearWriteDescriptor?: boolean;
 }

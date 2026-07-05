@@ -10,9 +10,8 @@ import { createTestContext, deleteTestAccount, type TestContext } from '../fixtu
 import { getChild } from '../helpers/assertions';
 import { generateTextContent } from '../helpers/data-generators';
 import { ipnsControllerUnenrollBatch, createAxiosInstance } from '@cipherbox/api-client';
-import type { FilePointer } from '@cipherbox/core';
 
-describe.skip('IPNS Consistency [quarantined D-01: SDK runtime stubbed mid-milestone, re-enable at phase 63-65 consumer re-wire]', () => {
+describe('IPNS Consistency', () => {
   let ctx: TestContext;
 
   beforeAll(async () => {
@@ -27,8 +26,10 @@ describe.skip('IPNS Consistency [quarantined D-01: SDK runtime stubbed mid-miles
   });
 
   it('should increment sequence number on each folder mutation', async () => {
+    // v3 eagerly publishes the empty root Node at bootstrap, and the first IPNS
+    // publish embeds sequence 1 (not 0) — so the root starts at 1n here.
     const seq0 = ctx.client.getFolderSequenceNumber(ctx.rootIpnsName);
-    expect(seq0).toBe(0n);
+    expect(seq0).toBe(1n);
 
     await ctx.client.createFolder(ctx.rootIpnsName, 'SeqTest1');
     const seq1 = ctx.client.getFolderSequenceNumber(ctx.rootIpnsName);
@@ -72,12 +73,15 @@ describe.skip('IPNS Consistency [quarantined D-01: SDK runtime stubbed mid-miles
     expect(loaded).toBeTruthy();
     const file = loaded!.children.find((c) => c.name === 'ipns-test.txt');
     expect(file).toBeTruthy();
-    expect(file!.type).toBe('file');
+    // v3 read-plane children are SealedChildRefs keyed by ipnsName (NODE-03);
+    // kind is not carried in the read body, so persistence is witnessed by the
+    // child's presence + resolvable ipnsName rather than a `type` field.
+    expect(file!.ipnsName).toBeTruthy();
   });
 
   it('should persist rename through IPNS', async () => {
     const child = getChild(ctx.client, ctx.rootIpnsName, 'SeqTest1');
-    await ctx.client.renameItem(ctx.rootIpnsName, child.id, 'RenamedSeq');
+    await ctx.client.renameItem(ctx.rootIpnsName, child.ipnsName, 'RenamedSeq');
 
     // Reload and verify
     const loaded = await ctx.client.loadFolder(
@@ -102,7 +106,7 @@ describe.skip('IPNS Consistency [quarantined D-01: SDK runtime stubbed mid-miles
     const countBefore = before!.children.length;
 
     const child = getChild(ctx.client, ctx.rootIpnsName, 'RenamedSeq');
-    await ctx.client.deleteItem(ctx.rootIpnsName, child.id);
+    await ctx.client.deleteItem(ctx.rootIpnsName, child.ipnsName);
 
     const after = await ctx.client.loadFolder(
       ctx.rootIpnsName,
@@ -118,11 +122,12 @@ describe.skip('IPNS Consistency [quarantined D-01: SDK runtime stubbed mid-miles
     await ctx.client.uploadFile(ctx.rootIpnsName, content, 'unenroll-test.txt', 'text/plain');
 
     const fileChild = getChild(ctx.client, ctx.rootIpnsName, 'unenroll-test.txt');
-    const fileIpnsName = (fileChild as FilePointer).fileMetaIpnsName;
+    // v3: the file's own ipnsName IS its per-file IPNS metadata name (NODE-03).
+    const fileIpnsName = fileChild.ipnsName;
     expect(fileIpnsName).toBeTruthy();
 
     // Delete the file — triggers fireAndForgetUnenroll internally
-    await ctx.client.deleteItem(ctx.rootIpnsName, fileChild.id);
+    await ctx.client.deleteItem(ctx.rootIpnsName, fileChild.ipnsName);
 
     // Wait for the fire-and-forget unenroll to complete
     await new Promise((r) => setTimeout(r, 1000));
@@ -152,7 +157,7 @@ describe.skip('IPNS Consistency [quarantined D-01: SDK runtime stubbed mid-miles
       expect(newSeq).toBeGreaterThan(prevSeq);
       prevSeq = newSeq;
 
-      await ctx.client.deleteItem(ctx.rootIpnsName, folder.id);
+      await ctx.client.deleteItem(ctx.rootIpnsName, folder.ipnsName);
       const afterDelete = ctx.client.getFolderSequenceNumber(ctx.rootIpnsName)!;
       expect(afterDelete).toBeGreaterThan(prevSeq);
       prevSeq = afterDelete;

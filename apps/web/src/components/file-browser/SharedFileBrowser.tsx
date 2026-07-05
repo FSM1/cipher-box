@@ -30,6 +30,7 @@ import {
   isAudioFile,
   isVideoFile,
   isPreviewableFile,
+  isFileRef,
 } from '../../utils/fileTypes';
 import { ContextMenu } from './ContextMenu';
 import { DetailsDialog } from './DetailsDialog';
@@ -86,6 +87,8 @@ export function SharedFileBrowser() {
     navigateToRoot,
     navigateToBreadcrumb,
     downloadSharedFile,
+    loadSharedFileContent,
+    saveSharedSingleFile,
     hideSharedItem,
     uploadFile,
     createFolder,
@@ -208,6 +211,10 @@ export function SharedFileBrowser() {
   const renameInputRef = useRef<HTMLInputElement>(null);
 
   const isWritable = permission === 'write';
+  // A DIRECT single-file share (root kind: 'file') — the text editor recovers
+  // content via onLoadSharedFileContent (node/v3 read chain) instead of the
+  // shared-FOLDER path's folderKey + downloadFileFromIpns (68.1-32).
+  const isSingleFileShare = currentView === 'file';
 
   // Context menu handlers for folder view
   const handleContextMenu = useCallback(
@@ -419,13 +426,17 @@ export function SharedFileBrowser() {
     if (currentView === 'file' && currentShareId) {
       const shareItem = sharedItems.find((s) => s.share.shareId === currentShareId);
       if (shareItem && isTextFile(shareItem.share.itemName)) {
-        // Synthesize a SealedChildRef for the text editor dialog
+        // Synthesize a SealedChildRef for the text editor dialog. The single-file
+        // editor recovers content via onLoadSharedFileContent (node/v3 read
+        // chain, path []) — NOT readKeySealed, which stays an inert '' stub here
+        // (68.1-32; unlike the shared-FOLDER path, a direct single-file share
+        // has no parent read-body to source a real readKeySealed from).
         const fakeChildRef: SealedChildRef = {
           name: shareItem.share.itemName,
           ipnsName: shareItem.share.ipnsName,
           generation: 0,
           versionFloor: 0n,
-          readKeySealed: '', // TODO(phase 63): populated when read-chain is available
+          readKeySealed: '',
         };
         setEditorDialog({ open: true, item: fakeChildRef });
       } else {
@@ -739,8 +750,11 @@ export function SharedFileBrowser() {
                 isSelected={selectedIds.has(item.ipnsName)}
                 onSelect={(e) => handleSelect(item.ipnsName, e)}
                 onDoubleClick={() => {
-                  // TODO(phase 63): SealedChildRef has no .type; treat all as folders for navigation
-                  navigateToSubfolder(item.ipnsName, item.name); // phase-63 stub: navigate as folder
+                  // D-02: kind cache read -- files no-op on double-click (open is a
+                  // context-menu action: Preview/Edit/Download), mirroring FileListItem.tsx.
+                  if (!isFileRef(item)) {
+                    navigateToSubfolder(item.ipnsName, item.name);
+                  }
                 }}
                 onMoveItemTo={
                   isWritable
@@ -795,8 +809,10 @@ export function SharedFileBrowser() {
           item={contextMenu.item}
           selectedCount={1}
           onClose={contextMenu.hide}
-          // TODO(phase 63): SealedChildRef has no .type; file-only actions use name extension
-          onDownload={undefined /* phase-63 stub */}
+          // D-02: kind cache read -- Download is a file-only action, gated on isFileRef
+          // (ContextMenu itself also gates on isFile, this mirrors the working top-level
+          // list context menu's onDownload={handleDownload} — Analog A).
+          onDownload={isFileRef(contextMenu.item) ? handleDownload : undefined}
           onEdit={isTextFile(contextMenu.item.name) ? handleEditClick : undefined}
           onPreview={isPreviewableFile(contextMenu.item.name) ? handlePreviewClick : undefined}
           onRename={isWritable ? handleRename : () => {}}
@@ -865,7 +881,10 @@ export function SharedFileBrowser() {
         folderKey={folderKey}
         readOnly={!isWritable}
         shareId={currentShareId}
-        onSaveSharedFile={isWritable ? updateSharedFile : undefined}
+        onLoadSharedFileContent={isSingleFileShare ? loadSharedFileContent : undefined}
+        onSaveSharedFile={
+          isWritable ? (isSingleFileShare ? saveSharedSingleFile : updateSharedFile) : undefined
+        }
       />
 
       {/* Image preview dialog */}
@@ -875,7 +894,6 @@ export function SharedFileBrowser() {
         // TODO(phase 63): isFilePointer removed
         item={imagePreviewDialog.item ?? null}
         folderKey={folderKey}
-        shareId={currentShareId}
       />
 
       {/* PDF preview dialog */}
@@ -885,7 +903,6 @@ export function SharedFileBrowser() {
         // TODO(phase 63): isFilePointer removed
         item={pdfPreviewDialog.item ?? null}
         folderKey={folderKey}
-        shareId={currentShareId}
       />
 
       {/* Audio player dialog */}
@@ -895,7 +912,6 @@ export function SharedFileBrowser() {
         // TODO(phase 63): isFilePointer removed
         item={audioPlayerDialog.item ?? null}
         folderKey={folderKey}
-        shareId={currentShareId}
       />
 
       {/* Video player dialog */}
@@ -905,7 +921,6 @@ export function SharedFileBrowser() {
         // TODO(phase 63): isFilePointer removed
         item={videoPlayerDialog.item ?? null}
         folderKey={folderKey}
-        shareId={currentShareId}
       />
     </div>
   );

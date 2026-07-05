@@ -9,10 +9,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CipherBoxClient } from '../client';
 import { createTestConfig, setupFolder } from './helpers';
 
-// Mock crypto (clearBytes used in uploadFiles for key cleanup)
-vi.mock('@cipherbox/crypto', () => ({
-  clearBytes: vi.fn((arr: Uint8Array) => arr.fill(0)),
-}));
+// Mock crypto (clearBytes used in uploadFiles for key cleanup).
+// Partial mock: the 68.1-22 re-read test builds a real sealed fixture via
+// sealNode, which needs the genuine buildNodeAad/seal primitives.
+vi.mock('@cipherbox/crypto', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@cipherbox/crypto')>();
+  return {
+    ...actual,
+    clearBytes: vi.fn((arr: Uint8Array) => arr.fill(0)),
+  };
+});
 
 // Mock sdk-core
 vi.mock('@cipherbox/sdk-core', async (importOriginal) => {
@@ -20,6 +26,7 @@ vi.mock('@cipherbox/sdk-core', async (importOriginal) => {
   return {
     ...actual,
     loadFolderMetadata: vi.fn(),
+    resolveIpnsRecord: vi.fn(),
     createSubfolder: vi.fn(),
     updateFolderMetadataAndPublish: vi.fn(),
     renameInFolder: vi.fn(),
@@ -54,6 +61,7 @@ vi.mock('../share', () => ({
 
 import * as sdkCore from '@cipherbox/sdk-core';
 import { clearBytes } from '@cipherbox/crypto';
+import { sealNode } from '@cipherbox/core';
 
 function makeUploadResult(index: number): sdkCore.UploadResult {
   return {
@@ -67,6 +75,13 @@ function makeUploadResult(index: number): sdkCore.UploadResult {
     },
     ipnsPrivateKeyEncrypted: `enc-key-${index}`,
     fileKey: new Uint8Array(32).fill(0x42 + index),
+    // node/v3 contract (68.1-07/09): fileReadKey/fileWriteKey are independent,
+    // freshly-minted keys distinct from the content-encryption fileKey. The
+    // uploadFiles seal site consumes fileReadKey (68.1-17) and the finally
+    // block zeroes all three.
+    fileNodeId: `0000000${index}-0000-4000-8000-000000000000`,
+    fileReadKey: new Uint8Array(32).fill(0x52 + index),
+    fileWriteKey: new Uint8Array(32).fill(0x62 + index),
   };
 }
 
@@ -165,38 +180,48 @@ describe('CipherBoxClient.uploadFiles - batch upload orchestration', () => {
     expect(sdkCore.updateFolderMetadataAndPublish).toHaveBeenCalledTimes(1);
   });
 
-  it('re-reads folder metadata before publish (D-05)', async () => {
+  it('re-reads folder state (read + write body) before publish (D-05 / 68.1-22)', async () => {
     setupFolder(client);
     setupBatchMocks(3);
 
-    // Return fresh metadata from loadFolderMetadata
-    vi.mocked(sdkCore.loadFolderMetadata).mockResolvedValue({
-      metadata: {
-        version: 'v2',
-        children: [
-          {
-            type: 'file' as const,
-            id: 'concurrent-file',
-            name: 'concurrent.txt',
-            fileMetaIpnsName: 'k51concurrent',
-            ipnsPrivateKeyEncrypted: 'enc',
-            createdAt: 0,
-            modifiedAt: 0,
-          },
-        ],
-      },
-      sequenceNumber: 5n,
+    // 68.1-22: the pre-publish refresh now goes through
+    // refreshFolderStateFromNetwork (resolveIpnsRecord + fetchFromIpfs +
+    // real unsealNode) so the write-body mirror refreshes alongside the
+    // read-body children — a read-only loadFolderMetadata refresh silently
+    // republished a stale write chain at the fresh sequence.
+    const folderKey = new Uint8Array(32).fill(1); // matches setupFolder
+    const freshNode = {
+      schema: 'node/v3' as const,
+      kind: 'folder' as const,
+      id: '11111111-1111-4111-8111-111111111111',
+      generation: 0,
+      createdAt: 0,
+      modifiedAt: 0,
+      children: [
+        {
+          name: 'concurrent.txt',
+          ipnsName: 'k51concurrent',
+          generation: 0,
+          versionFloor: 0n,
+          readKeySealed: 'c2VhbGVk',
+        },
+      ],
+    };
+    const published = await sealNode(freshNode, folderKey, new Uint8Array(32));
+    vi.mocked(sdkCore.resolveIpnsRecord).mockResolvedValueOnce({
       cid: 'bafyfresh',
+      sequenceNumber: 5n,
+      signatureVerified: true,
     });
+    vi.mocked(sdkCore.fetchFromIpfs).mockResolvedValueOnce(
+      new TextEncoder().encode(JSON.stringify(published))
+    );
 
     const files = makeTestFiles(3);
     await client.uploadFiles('folder-ipns', files);
 
-    // loadFolderMetadata should be called before updateFolderMetadataAndPublish
-    expect(sdkCore.loadFolderMetadata).toHaveBeenCalledTimes(1);
-    expect(sdkCore.loadFolderMetadata).toHaveBeenCalledWith(
-      expect.objectContaining({ ipnsName: 'folder-ipns' })
-    );
+    // The refresh resolves the folder's current record before publish
+    expect(sdkCore.resolveIpnsRecord).toHaveBeenCalledWith('folder-ipns', expect.anything());
 
     // The fresh sequence number should be used in the publish call
     expect(sdkCore.updateFolderMetadataAndPublish).toHaveBeenCalledWith(
@@ -295,8 +320,13 @@ describe('CipherBoxClient.uploadFiles - batch upload orchestration', () => {
     const files = makeTestFiles(3);
     await client.uploadFiles('folder-ipns', files);
 
-    // clearBytes should be called for each successful upload's file key
-    expect(clearBytes).toHaveBeenCalledTimes(3);
+    // clearBytes should be called for each successful upload's three keys
+    // (fileKey content key + fileReadKey/fileWriteKey node keys, 68.1-17)
+    expect(clearBytes).toHaveBeenCalledTimes(9);
+    for (const [arg] of vi.mocked(clearBytes).mock.calls) {
+      expect(arg).toBeInstanceOf(Uint8Array);
+      expect((arg as Uint8Array).length).toBe(32);
+    }
   });
 
   it('fires onFileError callback for failed files', async () => {

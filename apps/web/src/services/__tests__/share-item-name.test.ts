@@ -1,12 +1,13 @@
 /**
  * REQ-4 / #5 — share itemName ECIES at-rest helpers.
  *
- * Covers the two pure helpers wired into share.service.ts:
+ * Covers the pure helper wired into share.service.ts:
  *  - decryptItemName: ciphertext path (unwrap with vault private key) + legacy
  *    plaintext fallback (no ciphertext present).
- *  - shouldBackfill: the lazy-backfill decision predicate (decision A2) — true
- *    only when a key-holding client sees a plaintext-only legacy row; false once
- *    ciphertext is present (idempotent — never re-backfills a backfilled row).
+ *
+ * The lazy plaintext-backfill decision predicate (shouldBackfill) was removed
+ * (GAP-6, 68.1-24) — the item_name column was dropped in the Phase 66 schema
+ * cutover, making it permanently-unreachable dead code.
  *
  * Security: fixtures use the real wrapKey/unwrapKey ECIES primitive with a
  * generated keypair. Never log itemName/itemNameEncrypted.
@@ -14,7 +15,7 @@
 import { describe, it, expect } from 'vitest';
 import * as secp256k1 from '@noble/secp256k1';
 import { wrapKey, bytesToHex } from '@cipherbox/crypto';
-import { decryptItemName, shouldBackfill } from '../share.service';
+import { decryptItemName } from '../share.service';
 
 function generateTestKeypair(): { publicKey: Uint8Array; privateKey: Uint8Array } {
   // @noble/secp256k1 v3: randomSecretKey() (v1 randomPrivateKey() was renamed)
@@ -68,25 +69,5 @@ describe('decryptItemName', () => {
     );
 
     expect(result).toBe('legacy.txt');
-  });
-});
-
-describe('shouldBackfill', () => {
-  it('returns true: plaintext present, ciphertext absent, key-holder', () => {
-    expect(shouldBackfill({ itemName: 'legacy.txt', itemNameEncrypted: null }, true)).toBe(true);
-  });
-
-  it('returns false: ciphertext already present (idempotent — never re-backfills)', () => {
-    expect(shouldBackfill({ itemName: 'legacy.txt', itemNameEncrypted: 'deadbeef' }, true)).toBe(
-      false
-    );
-  });
-
-  it('returns false: not a key-holder', () => {
-    expect(shouldBackfill({ itemName: 'legacy.txt', itemNameEncrypted: null }, false)).toBe(false);
-  });
-
-  it('returns false: no plaintext to backfill', () => {
-    expect(shouldBackfill({ itemName: '', itemNameEncrypted: null }, true)).toBe(false);
   });
 });
