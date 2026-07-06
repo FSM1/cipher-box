@@ -6,12 +6,28 @@
 //! scope-exit subtree, scope-root first. Published IPNS records are the
 //! source of truth; the [`RotationJobRecord`] is advisory (D-10).
 //!
-//! Deliberately OUT OF SCOPE for this plan (lands in later Phase-69 plans on
-//! this same file): crash-safety dirty-frontier resume (`verifySubtreeClean`
-//! twin, 69-11), the ROT-06 no-double-bump convergence guard beyond a basic
-//! pending-count decrement, and the revocation-guarantee closures CRIT-1 /
-//! HIGH-3 / HIGH-4 (inner-grant re-mint, CAS-409 concurrent-child merge,
-//! write-plane rotation) — 69-12.
+//! 69-11 adds the crash-safety resume layer: [`verify_subtree_clean`]
+//! rebuilds the dirty frontier from PUBLISHED IPNS records (D-10) when
+//! `rotate_one(root)` comes back `Skipped` on resume, so a mid-walk crash
+//! converges instead of either blindly re-walking (double-bump risk, ROT-06)
+//! or silently doing nothing. [`RotationJobRecord::completed_node_ids`] MUST
+//! be seeded by the caller from the crash-time record before calling
+//! [`rotate_read_from_node`] again — an empty seed makes the root's (and
+//! every already-committed node's) fast idempotency path in [`rotate_one`]
+//! fail to fire, re-minting and re-publishing nodes that were already done
+//! (the exact M1 hazard this plan documents and tests).
+//!
+//! Deliberately OUT OF SCOPE for this plan (lands in a later Phase-69 plan on
+//! this same file): the revocation-guarantee closures CRIT-1 / HIGH-3 /
+//! HIGH-4 (inner-grant re-mint, CAS-409 concurrent-child merge, write-plane
+//! rotation) — 69-12. Also out of scope, and a known limitation inherited
+//! unchanged from the TS reference (`engine.ts`'s own acknowledged gap, see
+//! its `verifySubtreeClean` doc comment): a genuinely fresh, never-started
+//! child (its own published generation still matches the parent's mirror
+//! exactly) is invisible to the generation-comparison dirty check below and
+//! is NOT recovered by this resume path — only a child whose OWN rotation
+//! individually committed before the crash, but whose parent's batched
+//! republish did not yet land, is detected as "dirty".
 //!
 //! Host-agnostic (D-02): no FUSE-crate / Tauri / WinFsp import here. This
 //! is what lets 69-14's WinFsp caller consume the identical engine with zero
@@ -124,8 +140,21 @@ pub enum RotationStatus {
 ///
 /// Published IPNS records are the source of truth (D-10). This record exists
 /// purely so a host can persist it via the injected [`RotationDeps::persist_job`]
-/// seam for durable resume acceleration (69-11 extends this with real
-/// crash-safety semantics); a fresh walk never depends on it being read back.
+/// seam for durable resume acceleration.
+///
+/// @security M1 (crash-safety resume, 69-11): on resume, the CALLER is
+/// responsible for seeding `completed_node_ids` from the durably-persisted
+/// crash-time record BEFORE calling [`rotate_read_from_node`] again. This
+/// engine has no `load_job` counterpart to `persist_job` — the record is
+/// advisory and its durable storage/retrieval lives entirely with the host.
+/// Resuming with a fresh (empty) `completed_node_ids` set instead of the
+/// crash-time one defeats [`rotate_one`]'s fast idempotency path for every
+/// already-committed node, including the root: `rotate_one` will re-resolve,
+/// re-unseal, re-mint, and re-publish it, bumping its `generation` a SECOND
+/// time even though nothing needed to change. See the `rotate_read_from_node`
+/// tests `resume_after_crash_converges_without_double_bump_when_seeded` and
+/// `empty_completed_node_ids_seed_double_bumps_the_root` for the exact
+/// hazard and its fix.
 #[derive(Debug, Clone)]
 pub struct RotationJobRecord {
     /// Root of the subtree being rotated.
@@ -139,10 +168,11 @@ pub struct RotationJobRecord {
     /// Pending frontier entries for the BFS walk.
     ///
     /// Mirrors TS `RotationJobRecord.frontier` exactly: declared for advisory
-    /// resume acceleration but NOT populated by the fresh-walk happy path in
-    /// this plan (the TS reference does not write to it either — only a
-    /// dirty-resume path, 69-11's crash-safety extension, seeds an
-    /// equivalent local frontier). Reserved for that extension.
+    /// resume acceleration but NOT populated by the fresh-walk happy path
+    /// (the TS reference does not write to it either — 69-11's dirty-resume
+    /// path in [`rotate_read_from_node`] builds its own equivalent local
+    /// frontier via [`verify_subtree_clean`] instead of reading this field).
+    /// Reserved for a future extension that persists the frontier itself.
     pub frontier: Vec<String>,
 }
 
@@ -194,9 +224,10 @@ pub struct CommittedRotation {
 #[derive(Debug)]
 pub enum RotateOneOutcome {
     /// The node was already committed in a prior run (idempotency skip).
-    /// Full dirty-frontier resume reconstruction (ROT-06 convergence guard)
-    /// is 69-11's crash-safety extension — this plan only detects and
-    /// reports the skip.
+    /// When this is the SCOPE ROOT, [`rotate_read_from_node`] responds by
+    /// calling [`verify_subtree_clean`] to rebuild the dirty frontier from
+    /// published records (ROT-06 crash-safety resume, 69-11) instead of
+    /// blindly re-walking.
     Skipped {
         new_generation: u32,
     },
@@ -449,6 +480,90 @@ struct QueueItem {
     parent_ipns_name: String,
 }
 
+// ---------------------------------------------------------------------------
+// verify_subtree_clean — crash-safety dirty-frontier rebuild (ROT-06, 69-11,
+// Rust twin of engine.ts's verifySubtreeClean)
+// ---------------------------------------------------------------------------
+
+/// One dirty edge discovered by [`verify_subtree_clean`]: a child whose OWN
+/// published `generation` is strictly greater than the generation recorded
+/// in the ROOT's `SealedChildRef` mirror — i.e. the child individually
+/// committed its own rotation in a prior (crashed) run, but the parent's
+/// batched republish that would reconcile the mirror never landed.
+#[derive(Debug, Clone)]
+pub struct DirtyFrontierEntry {
+    pub ipns_name: String,
+    pub node_id: String,
+}
+
+/// Rebuilds the dirty frontier for `root_ipns_name`'s subtree from PUBLISHED
+/// IPNS records (D-10) — the source of truth — rather than trusting the
+/// (advisory, possibly crash-lost) [`RotationJobRecord`].
+///
+/// Invoked ONLY from [`rotate_read_from_node`]'s resume path, when
+/// `rotate_one(root)` returns [`RotateOneOutcome::Skipped`] (the root was
+/// already committed in a prior run). `root_read_key` MUST be the root's
+/// CURRENT (already-rotated) read key — the same key that unseals the root's
+/// presently-published envelope — not its pre-rotation key.
+///
+/// A child is "dirty" when its own published `generation` exceeds the
+/// generation recorded in the root's `SealedChildRef` mirror (`PublishedNode
+/// .generation` is a plaintext wire field on both sides — no child unsealing
+/// is needed to make this comparison, D-10). Returns an empty frontier (and
+/// thus "fully converged, nothing left to reconcile") when the root has no
+/// published record at all, matching the TS reference's fail-open-to-clean
+/// default for a torn-down subtree.
+///
+/// @security Read-only: never mints, seals, or publishes anything itself.
+pub async fn verify_subtree_clean<D: RotationDeps>(
+    deps: &D,
+    root_ipns_name: &str,
+    root_read_key: &[u8],
+) -> Result<Vec<DirtyFrontierEntry>, RotationError> {
+    let mut frontier = Vec::new();
+
+    let Some(root_resolved) = deps.resolve(root_ipns_name).await? else {
+        return Ok(frontier);
+    };
+    let root_pub = deps.fetch_node(&root_resolved.cid).await?;
+    let root_kind = node_kind_from_str(&root_pub.kind)?;
+    let root_read_key_arr = zeroizing_32_from_slice(root_read_key)?;
+    let read_sealed_bytes = decode_b64(&root_pub.read_sealed)?;
+    let root_body = unseal_node(
+        &read_sealed_bytes,
+        &root_read_key_arr,
+        &root_pub.id,
+        root_kind,
+        root_pub.generation,
+    )
+    .map_err(|e| {
+        RotationError::RotateFailed(format!(
+            "verify_subtree_clean: unseal failed for root {root_ipns_name}: {e}"
+        ))
+    })?;
+    let root_node = decode_node(&root_body).map_err(|e| {
+        RotationError::RotateFailed(format!(
+            "verify_subtree_clean: decode failed for root {root_ipns_name}: {e}"
+        ))
+    })?;
+
+    for child_ref in node_children(&root_node) {
+        let Some(child_resolved) = deps.resolve(&child_ref.ipns_name).await? else {
+            continue; // child IPNS missing — skip (matches the TS reference).
+        };
+        let child_pub = deps.fetch_node(&child_resolved.cid).await?;
+        // Dirty edge: child has rotated further than the parent's mirror.
+        if child_pub.generation > child_ref.generation {
+            frontier.push(DirtyFrontierEntry {
+                ipns_name: child_ref.ipns_name.clone(),
+                node_id: child_pub.id.clone(),
+            });
+        }
+    }
+
+    Ok(frontier)
+}
+
 /// Rotates the read key for every node in the subtree rooted at
 /// `root_node_id`.
 ///
@@ -469,8 +584,13 @@ struct QueueItem {
 ///
 /// Returns `Ok(None)` when the root itself was a resume-skip (already
 /// committed in a prior run) — there is no freshly-minted root key to hand
-/// back in that case. Full dirty-frontier reconstruction on that path
-/// (`verifySubtreeClean` twin) is 69-11's crash-safety extension.
+/// back in that case (ROT-07 Gap 2 parity: same as the TS reference, a
+/// resume-skip never surfaces a "fresh" root key even if the dirty-frontier
+/// reconciliation below did do further publishing work). On that path,
+/// [`verify_subtree_clean`] rebuilds the dirty frontier from published
+/// records (ROT-06 crash-safety resume, 69-11): an empty frontier converges
+/// immediately with zero further side effects; a non-empty frontier is
+/// folded into the same BFS walk used by the fresh-run path below.
 pub async fn rotate_read_from_node<D: RotationDeps>(
     deps: &D,
     root_node_id: &str,
@@ -481,53 +601,136 @@ pub async fn rotate_read_from_node<D: RotationDeps>(
     job_record.status = RotationStatus::InProgress;
 
     // §4.2: rotate the scope-root FIRST — the actual revocation cut.
-    let root_committed = match rotate_one(
+    let root_outcome = rotate_one(
         deps,
         Some(root_node_id),
         root_ipns_name,
         root_read_key,
         job_record,
     )
-    .await?
-    {
-        RotateOneOutcome::Skipped { .. } => {
-            // Resume path: root already committed in a prior run. Dirty-
-            // frontier reconstruction (verifySubtreeClean twin) is 69-11's
-            // crash-safety extension — this plan's fresh-walk scope ends here.
-            return Ok(None);
-        }
-        RotateOneOutcome::Committed(c) => c,
-    };
-
-    // Persist after the root commit (D-10 — the high-value early checkpoint).
-    deps.persist_job(job_record).await;
+    .await?;
 
     let mut parent_tracking: HashMap<String, ParentTrackingState> = HashMap::new();
     let mut queue: VecDeque<QueueItem> = VecDeque::new();
+    // `Some` only when THIS call freshly rotated the root — this is what
+    // ultimately gets returned to the caller (ROT-07 Gap 2 parity). A
+    // resume-skip root never populates this, even when the dirty-frontier
+    // reconciliation below performs further publishing work underneath it
+    // (matches the TS reference: `rootResult.skipped` always means `undefined`).
+    let mut fresh_root: Option<CommittedRotation> = None;
 
-    if !root_committed.children.is_empty() {
-        parent_tracking.insert(
-            root_ipns_name.to_string(),
-            ParentTrackingState {
-                parent_ipns_name: root_ipns_name.to_string(),
-                parent_new_read_key: root_committed.read_key_prime.clone(),
-                parent_node_id: root_committed.node_id.clone(),
-                parent_kind: root_committed.kind,
-                parent_generation: root_committed.new_generation,
-                parent_created_at: root_committed.created_at,
-                parent_modified_at: root_committed.modified_at,
-                parent_last_seq: root_committed.new_sequence_number,
-                children: root_committed.children.clone(),
-                pending_child_count: root_committed.children.len(),
-            },
-        );
-    }
+    match root_outcome {
+        RotateOneOutcome::Committed(root_committed) => {
+            // Persist after the root commit (D-10 — the high-value early checkpoint).
+            deps.persist_job(job_record).await;
 
-    // Enqueue the root's children — derive each child's own read key from
-    // the ROOT's OLD read key (root_read_key, still valid; rotate_one never
-    // zeroed the caller-supplied borrow, D-09).
-    for child_ref in &root_committed.children {
-        enqueue_child(deps, root_ipns_name, root_read_key, child_ref, &mut queue).await?;
+            if !root_committed.children.is_empty() {
+                parent_tracking.insert(
+                    root_ipns_name.to_string(),
+                    ParentTrackingState {
+                        parent_ipns_name: root_ipns_name.to_string(),
+                        parent_new_read_key: root_committed.read_key_prime.clone(),
+                        parent_node_id: root_committed.node_id.clone(),
+                        parent_kind: root_committed.kind,
+                        parent_generation: root_committed.new_generation,
+                        parent_created_at: root_committed.created_at,
+                        parent_modified_at: root_committed.modified_at,
+                        parent_last_seq: root_committed.new_sequence_number,
+                        children: root_committed.children.clone(),
+                        pending_child_count: root_committed.children.len(),
+                    },
+                );
+            }
+
+            // Enqueue the root's children — derive each child's own read key from
+            // the ROOT's OLD read key (root_read_key, still valid; rotate_one never
+            // zeroed the caller-supplied borrow, D-09).
+            for child_ref in &root_committed.children {
+                enqueue_child(deps, root_ipns_name, root_read_key, child_ref, &mut queue).await?;
+            }
+
+            fresh_root = Some(root_committed);
+        }
+        RotateOneOutcome::Skipped { .. } => {
+            // Resume path (ROT-06 crash-safety resume, 69-11): the root was
+            // already committed in a prior run. Rebuild the dirty frontier
+            // from PUBLISHED records (D-10) rather than trusting the
+            // advisory job record, which may have been lost in the crash.
+            let frontier = verify_subtree_clean(deps, root_ipns_name, root_read_key).await?;
+            if frontier.is_empty() {
+                // Fully converged already (or the root has no published
+                // children at all) — nothing dirty to reconcile, and nothing
+                // further gets minted or published. No double-bump risk.
+                job_record.status = RotationStatus::Complete;
+                deps.persist_job(job_record).await;
+                return Ok(None);
+            }
+
+            // Dirty resume: re-fetch the root's CURRENT published state.
+            // `root_read_key` is the root's POST-rotation key here — the
+            // prior (crashed) run already rotated it, and that is the key
+            // that unseals this presently-published envelope.
+            let root_resolved = deps.resolve(root_ipns_name).await?.ok_or_else(|| {
+                RotationError::RotateFailed(format!(
+                    "rotate_read_from_node: root {root_ipns_name} not found on dirty resume"
+                ))
+            })?;
+            let root_pub = deps.fetch_node(&root_resolved.cid).await?;
+            let root_kind = node_kind_from_str(&root_pub.kind)?;
+            let root_read_key_arr = zeroizing_32_from_slice(root_read_key)?;
+            let read_sealed_bytes = decode_b64(&root_pub.read_sealed)?;
+            let root_body = unseal_node(
+                &read_sealed_bytes,
+                &root_read_key_arr,
+                &root_pub.id,
+                root_kind,
+                root_pub.generation,
+            )
+            .map_err(|e| {
+                RotationError::RotateFailed(format!(
+                    "rotate_read_from_node: unseal failed for root {root_ipns_name} on dirty resume: {e}"
+                ))
+            })?;
+            let root_node = decode_node(&root_body).map_err(|e| {
+                RotationError::RotateFailed(format!(
+                    "rotate_read_from_node: decode failed for root {root_ipns_name} on dirty resume: {e}"
+                ))
+            })?;
+            let root_children = node_children(&root_node);
+            let (root_created_at, root_modified_at) = node_timestamps(&root_node);
+
+            // M1: `pending_child_count` is seeded from the DIRTY FRONTIER's
+            // length, not the full children list — already-converged
+            // siblings are simply absent from `frontier` and must not be
+            // re-touched (they would otherwise wedge this gate forever,
+            // since they will never again dequeue from `queue` to decrement
+            // it).
+            parent_tracking.insert(
+                root_ipns_name.to_string(),
+                ParentTrackingState {
+                    parent_ipns_name: root_ipns_name.to_string(),
+                    parent_new_read_key: root_read_key_arr,
+                    parent_node_id: root_node.id().to_string(),
+                    parent_kind: root_kind,
+                    parent_generation: root_pub.generation,
+                    parent_created_at: root_created_at,
+                    parent_modified_at: root_modified_at,
+                    parent_last_seq: root_resolved.sequence_number,
+                    children: root_children.clone(),
+                    pending_child_count: frontier.len(),
+                },
+            );
+
+            for entry in &frontier {
+                let Some(child_ref) = root_children
+                    .iter()
+                    .find(|c| c.ipns_name == entry.ipns_name)
+                else {
+                    continue;
+                };
+                enqueue_child(deps, root_ipns_name, root_read_key, child_ref, &mut queue).await?;
+            }
+        }
     }
 
     while let Some(item) = queue.pop_front() {
@@ -542,10 +745,12 @@ pub async fn rotate_read_from_node<D: RotationDeps>(
 
         match outcome {
             RotateOneOutcome::Skipped { .. } => {
-                // Convergence-guard skip handling (ROT-06 no-double-bump) is
-                // 69-11's crash-safety extension. In this plan's fresh-walk
-                // scope a skip still must not permanently wedge the parent's
-                // pending-count republish gate.
+                // ROT-06 no-double-bump convergence guard: this BFS entry was
+                // itself already committed (job_record.completed_node_ids
+                // seeded from the crash-time record contains it) — do NOT
+                // re-mint or re-publish it a second time. Still must not
+                // permanently wedge the parent's pending-count republish
+                // gate, so the decrement always fires regardless of outcome.
                 complete_pending_child(deps, &mut parent_tracking, &item.parent_ipns_name).await?;
             }
             RotateOneOutcome::Committed(child) => {
@@ -623,7 +828,12 @@ pub async fn rotate_read_from_node<D: RotationDeps>(
     job_record.status = RotationStatus::Complete;
     deps.persist_job(job_record).await;
 
-    Ok(Some(RotateReadResult {
+    // ROT-07 Gap 2: surface the root's post-rotation state to the caller so
+    // it can refresh its own folder cache. `fresh_root` is `None` on BOTH the
+    // resume-skip-with-empty-frontier path (already returned above) and the
+    // resume-skip-with-dirty-frontier path (the root itself did not freshly
+    // rotate THIS call — no fresh key exists to hand back either way).
+    Ok(fresh_root.map(|root_committed| RotateReadResult {
         read_key: root_committed.read_key_prime,
         generation: root_committed.new_generation,
         sequence_number: root_committed.new_sequence_number,
@@ -1355,5 +1565,166 @@ mod rotate_read_from_node {
         assert!(result.is_none());
         assert_eq!(deps.publish_count_for("k51/root"), 0);
         assert_eq!(deps.publish_count_for("k51/child-0"), 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // ROT-06 crash-safety resume (69-11): verify_subtree_clean + no-double-
+    // bump convergence, and the M1 completed_node_ids seeding hazard.
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn verify_subtree_clean_reports_no_dirty_entries_when_fully_converged() {
+        let deps = FakeDeps::new();
+        let root_read_key = [8u8; 32];
+        seed_root_with_children(&deps, &root_read_key, 2);
+
+        // Nothing has rotated yet -- both children's published generations
+        // match the root's mirror exactly.
+        let frontier = verify_subtree_clean(&deps, "k51/root", &root_read_key)
+            .await
+            .unwrap();
+        assert!(
+            frontier.is_empty(),
+            "expected a clean subtree, got: {frontier:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn verify_subtree_clean_reports_a_dirty_entry_when_a_child_outpaces_the_mirror() {
+        let deps = FakeDeps::new();
+        let root_read_key = [9u8; 32];
+        seed_root_with_children(&deps, &root_read_key, 2);
+
+        // Simulate "child-0 individually committed its own rotation (its
+        // published generation bumped to 1) but the parent's batched
+        // republish never landed": re-seed child-0's PublishedNode at a
+        // higher generation under a new CID/sequence. The root's mirror
+        // (still generation 0, from seed_root_with_children) is now stale.
+        let bumped_child = folder(&child_uuid(0), 1, vec![]);
+        deps.seed(
+            "k51/child-0",
+            "cid-child-0-1",
+            1,
+            seal_for_seed(&bumped_child, &[10u8; 32]),
+        );
+
+        let frontier = verify_subtree_clean(&deps, "k51/root", &root_read_key)
+            .await
+            .unwrap();
+        assert_eq!(
+            frontier.len(),
+            1,
+            "expected exactly one dirty entry, got: {frontier:?}"
+        );
+        assert_eq!(frontier[0].ipns_name, "k51/child-0");
+        assert_eq!(frontier[0].node_id, child_uuid(0));
+    }
+
+    #[tokio::test]
+    async fn resume_after_crash_converges_without_double_bump_when_seeded() {
+        let deps = FakeDeps::new();
+        let root_read_key = [5u8; 32];
+        seed_root_with_children(&deps, &root_read_key, 2);
+
+        // Pass 1: a full walk to completion -- root and both children
+        // rotate, and the batched republish for root's children mirror
+        // lands (fully converged, published state is the source of truth).
+        let mut job = RotationJobRecord::new(ROOT_ID);
+        let first = rotate_read_from_node(&deps, ROOT_ID, "k51/root", &root_read_key, &mut job)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.generation, 1);
+
+        let root_pub_count = deps.publish_count_for("k51/root");
+        let child0_pub_count = deps.publish_count_for("k51/child-0");
+        let child1_pub_count = deps.publish_count_for("k51/child-1");
+
+        // Simulate a crash: the durably-persisted RotationJobRecord only
+        // captured the root's own completion before the process died. The
+        // PUBLISHED state (source of truth, D-10) is, in fact, already
+        // fully converged -- the caller just doesn't know that yet.
+        let mut crash_time_job = RotationJobRecord::new(ROOT_ID);
+        crash_time_job
+            .completed_node_ids
+            .insert(ROOT_ID.to_string());
+
+        // Resume using the root's CURRENT (post-rotation) key -- the only
+        // key that unseals the presently-published root envelope.
+        let resume = rotate_read_from_node(
+            &deps,
+            ROOT_ID,
+            "k51/root",
+            first.read_key.as_slice(),
+            &mut crash_time_job,
+        )
+        .await
+        .unwrap();
+
+        // Root was a fast-path skip -- no fresh key to hand back.
+        assert!(resume.is_none());
+
+        // ROT-06: verify_subtree_clean found the published state already
+        // fully reconciled (empty dirty frontier) -- nothing further gets
+        // minted or published for the root or either child. No node's
+        // generation was bumped twice across the crash + resume.
+        assert_eq!(deps.publish_count_for("k51/root"), root_pub_count);
+        assert_eq!(deps.publish_count_for("k51/child-0"), child0_pub_count);
+        assert_eq!(deps.publish_count_for("k51/child-1"), child1_pub_count);
+    }
+
+    #[tokio::test]
+    async fn empty_completed_node_ids_seed_double_bumps_the_root_seeded_path_does_not() {
+        let deps = FakeDeps::new();
+        let root_read_key = [6u8; 32];
+        seed_root_with_children(&deps, &root_read_key, 1);
+
+        let mut job = RotationJobRecord::new(ROOT_ID);
+        let first = rotate_read_from_node(&deps, ROOT_ID, "k51/root", &root_read_key, &mut job)
+            .await
+            .unwrap()
+            .unwrap();
+        let gen_after_first_pass = first.generation;
+
+        // M1 hazard: resuming with an EMPTY completed_node_ids seed (the
+        // caller forgot to load the crash-time RotationJobRecord from
+        // durable storage) means rotate_one's fast idempotency path never
+        // fires for the root -- it gets re-resolved, re-unsealed, re-minted,
+        // and re-published even though it was already fully rotated.
+        let mut unseeded_job = RotationJobRecord::new(ROOT_ID);
+        let hazard = rotate_read_from_node(
+            &deps,
+            ROOT_ID,
+            "k51/root",
+            first.read_key.as_slice(),
+            &mut unseeded_job,
+        )
+        .await
+        .unwrap()
+        .expect("unseeded resume re-rotates the root -- the exact hazard this plan documents");
+        assert_eq!(
+            hazard.generation,
+            gen_after_first_pass + 1,
+            "root's generation was bumped a SECOND time by the unseeded resume"
+        );
+
+        // Contrast: the SEEDED path (completed_node_ids pre-populated from
+        // the crash-time record) does NOT double-bump -- it fast-path skips
+        // before any resolve/unseal/mint is attempted.
+        let mut seeded_job = RotationJobRecord::new(ROOT_ID);
+        seeded_job.completed_node_ids.insert(ROOT_ID.to_string());
+        let seeded = rotate_read_from_node(
+            &deps,
+            ROOT_ID,
+            "k51/root",
+            hazard.read_key.as_slice(),
+            &mut seeded_job,
+        )
+        .await
+        .unwrap();
+        assert!(
+            seeded.is_none(),
+            "seeded resume must be a fast-path skip -- no fresh rotation"
+        );
     }
 }
