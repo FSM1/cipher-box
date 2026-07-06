@@ -25,7 +25,7 @@ pub(crate) mod implementation {
     use crate::inode::InodeKind;
     use crate::operations::implementation::{
         current_gid, current_uid, fetch_and_decrypt_file_content, fetch_node_and_decrypt_content,
-        ttl_for_is_dir,
+        publish_file_node, ttl_for_is_dir,
     };
 
     /// Spawn a background content-prefetch task for a file CID.
@@ -742,25 +742,25 @@ pub(crate) mod implementation {
                 let build_result = match build_result {
                     Ok(result) => {
                         if let Some(inode) = fs.inodes.get_mut(ino) {
-                            let cached_hex = match &inode.kind {
-                                InodeKind::File {
-                                    file_ipns_key_encrypted_hex,
-                                    ..
-                                } => file_ipns_key_encrypted_hex.clone(),
-                                _ => None,
-                            };
-                            inode.kind = InodeKind::File {
-                                cid: String::new(),
-                                encrypted_file_key: result.encrypted_file_key_hex.clone(),
-                                iv: result.iv_hex.clone(),
-                                size: result.file_size,
-                                encryption_mode: "GCM".to_string(),
-                                file_meta_ipns_name: result.file_meta_ipns_name.clone(),
-                                file_meta_resolved: true,
-                                file_ipns_private_key: result.file_ipns_private_key.clone(),
-                                file_ipns_key_encrypted_hex: cached_hex,
-                                versions: result.versions_for_meta.clone(),
-                            };
+                            // node/v3 (69-09 Slice 5b): the file inode already owns
+                            // its node identity (ipns_name + read/write keys +
+                            // signing seed) from handle_create / populate_folder.
+                            // Update ONLY the content descriptors in place, clearing
+                            // the CID (filled by the live publish's UploadComplete),
+                            // and PRESERVE the moved-in keys (D-09).
+                            if let InodeKind::File {
+                                cid,
+                                iv,
+                                size,
+                                encryption_mode,
+                                ..
+                            } = &mut inode.kind
+                            {
+                                cid.clear();
+                                *iv = result.iv_hex.clone();
+                                *size = result.file_size;
+                                *encryption_mode = result.encryption_mode.clone();
+                            }
                             inode.attr.size = result.file_size;
                             inode.attr.blocks = (result.file_size + 511) / 512;
                             inode.attr.mtime = SystemTime::now();
@@ -780,26 +780,38 @@ pub(crate) mod implementation {
                         // CR-07: snapshot the entry (already put to disk) for record_failure.
                         let journal_entry_snapshot = result.entry.clone();
 
+                        // node/v3 (69-09 Slice 5b(c)): destructure the file node's
+                        // OWN identity + content descriptors for the live per-file
+                        // node publish (`publish_file_node`).
                         let crate::journal_helpers::UploadJournalResult {
                             ciphertext,
-                            file_meta,
+                            file_read_key,
+                            file_write_key,
                             file_ipns_private_key,
-                            file_meta_ipns_name,
-                            folder_key_for_file_meta,
+                            file_ipns_name,
+                            file_key,
+                            iv_hex,
+                            mime_type,
+                            encryption_mode,
+                            encrypted_ipns_for_tee,
+                            tee_key_epoch,
+                            file_size,
                             parent_ino,
                             old_file_cid,
                             pruned_cids,
                             write_gen,
+                            is_first_publish,
                             ..
                         } = result;
                         let spawn_ino = ino;
+                        // The file node's canonical id (D-07): matches the parent's
+                        // WriteChildRef.child_id + the read-body AAD.
+                        let child_id = crate::fs::uuid_from_ino(spawn_ino);
 
                         let api = fs.api.clone();
                         let rt = fs.rt.clone();
                         let upload_tx = fs.upload_tx.clone();
                         let coordinator = fs.publish_coordinator.clone();
-                        let tee_public_key = fs.tee_public_key.clone();
-                        let tee_key_epoch = fs.tee_key_epoch;
                         let spawn_journal = fs.journal.clone();
 
                         // D-05: zeroize and delete plaintext temp file BEFORE acking OS.
@@ -826,23 +838,33 @@ pub(crate) mod implementation {
                                     write_generation: write_gen,
                                 }));
 
-                                if let (Some(ipns_key), Some(ipns_name), Some(folder_key)) =
-                                    (&file_ipns_private_key, &file_meta_ipns_name, &folder_key_for_file_meta)
-                                {
-                                    let mut file_meta_with_cid = file_meta;
-                                    file_meta_with_cid.cid = file_cid;
-
-                                    if let Err(e) = publish_file_metadata(
-                                        &api, &file_meta_with_cid, folder_key, ipns_key, ipns_name, &coordinator,
-                                        tee_public_key.as_deref(),
+                                if !file_ipns_name.is_empty() {
+                                    // Live per-file node/v3 publish: re-seal the file
+                                    // node with the real content CID and publish its
+                                    // per-file IPNS record (first-publish or CAS update).
+                                    if let Err(e) = publish_file_node(
+                                        &api,
+                                        &file_ipns_name,
+                                        &child_id,
+                                        &file_cid,
+                                        &file_key,
+                                        &iv_hex,
+                                        file_size,
+                                        &mime_type,
+                                        &encryption_mode,
+                                        &file_read_key,
+                                        &file_write_key,
+                                        &file_ipns_private_key,
+                                        &coordinator,
+                                        encrypted_ipns_for_tee.as_deref(),
                                         tee_key_epoch,
-                                        is_new_file,
+                                        is_first_publish,
                                     ).await {
-                                        log::warn!("Per-file IPNS publish failed for ino {}: {}", spawn_ino, e);
+                                        log::warn!("Per-file node publish failed for ino {}: {}", spawn_ino, e);
                                     }
                                 } else {
                                     log::warn!(
-                                        "release: skipping per-file IPNS publish for ino {} (missing key/name/folder_key)",
+                                        "release: skipping per-file node publish for ino {} (missing file ipns_name)",
                                         spawn_ino
                                     );
                                 }

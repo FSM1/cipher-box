@@ -89,7 +89,7 @@ pub(crate) mod implementation {
     // intentional for the macOS sync FUSE callback path (A2 scope narrowing).
     pub use crate::content_ops::{
         fetch_and_decrypt_content_async, fetch_node_and_decrypt_content, publish_file_metadata,
-        resolve_file_descriptors,
+        publish_file_node, resolve_file_descriptors,
     };
 
     impl Filesystem for CipherBoxFS {
