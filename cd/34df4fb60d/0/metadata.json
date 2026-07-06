@@ -1,0 +1,148 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "cd34df4fb60d",
+  "session_id": "60afe4f5-90e8-4017-b046-ab86ca19c540",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-06T04:36:58.517067Z",
+  "branch": "feat/sdk-owned-read-chain-and-resolved-folder-listings",
+  "checkpoints_count": 2,
+  "save_step_count": 1,
+  "files_touched": [
+    ".planning/todos/pending/2026-07-06-d03-poll-invalidation-lacks-automated-coverage.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "a9361f1f265f",
+  "token_usage": {
+    "input_tokens": 21020,
+    "cache_creation_tokens": 732286,
+    "cache_read_tokens": 20765362,
+    "output_tokens": 193111,
+    "api_call_count": 81
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-plan-phase-2026-07-05T22:58:51.387205Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "11b8c0a80fb6",
+      "timestamp": "2026-07-05T22:58:51.387205Z",
+      "native": {
+        "command": "/gsd-plan-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01LstRAXFpXPLKR7Dc1ovYvN",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "a9361f1f265f",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 290,
+        "end": 291,
+        "entry_ids": [
+          "7c818dd5-33b0-40fe-9d44-09a605a0e033"
+        ],
+        "tool_use_id": "toolu_01LstRAXFpXPLKR7Dc1ovYvN"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01LstRAXFpXPLKR7Dc1ovYvN"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Plan and execute GSD roadmap phase 68.2 (SDK-owned read chain, resolved folder listings) for cipher-box end-to-end — research, scope decisions, pattern mapping, plan generation, verification, and wave-by-wave execution — while also spinning up an independent worktree to start phase 69 in parallel.",
+    "outcome": "Phase 68.2 planning completed (12 plans/7 waves, plan-checker PASSED, coverage gates 13/13) and execution progressed through Waves 1–3 plus 4 of 5 plans in Wave 4 (8/12 plans done, all independently spot-checked and green); a clean phase-69 worktree was created off origin/main; one non-blocking coverage gap (D-03 poll-invalidation) was logged as a todo, and a planner coverage gap (unowned components consuming SealedChildRef/ResolvedChild) was surfaced for Plan 11 to absorb.",
+    "learnings": {
+      "repo": [
+        "gsd `worktree.baseRef` config (`head` vs `fresh`) determines whether execute-phase worktree executors fork from live HEAD or origin/main — must verify before dispatching into worktrees, since a `fresh` default would miss uncommitted PLAN.md files on the phase branch.",
+        "In this pnpm monorepo, worktree-based parallel execution requires a separate `pnpm install` per worktree (expensive); for phases with mostly single-plan waves, sequential execution on the main tree is more robust and reuses installed node_modules.",
+        "REQUIREMENTS.md checkbox tracking is fragile across multi-plan requirements: plan executors sometimes mark a requirement `[x]` complete when only their own task is done, even though the requirement's full acceptance criteria (e.g. deleting legacy services) span multiple later plans — needs manual verification and correction after each plan.",
+        "SDK-touching plans require rebuilding the SDK dist before running web typecheck in the same wave, otherwise web sees stale exports (cross-package staleness landmine).",
+        "The `gap-analysis.plan-post` check's generic output parser chokes on control characters in the `rendered` field — must invoke the check directly rather than through the generic parser wrapper.",
+        "gsd-tools commit helper's `commit_failed` report is a known false negative — always confirm via `git log` before treating it as a real failure (reconfirms existing memory)."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 781,
+          "finding": "Plan 68.2-01 added the ROT-07 anti-rollback gate (`RotationHighWater.enforceResolved`) to `resolvePublishedNode` (root resolve) as one of two new read-path gating sites, alongside the pre-existing write-path gate at line 1156."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 913,
+          "finding": "Second new gating site added by plan 68.2-01: `dfsFindFolder`'s child loop now enforces the same ROT-07 read-path gate."
+        },
+        {
+          "path": "packages/sdk/src/folder-listing.ts",
+          "line": 75,
+          "end_line": 81,
+          "finding": "`resolveChildren`'s per-child skip-on-resolve/unseal-failure degradation is security-sound: the target folder is already gated via Plan-01's `ensureFolderLoaded`/`dfsFindFolder` before this runs, so an unverifiable sibling is simply omitted from the listing rather than rendered with stale/attacker content; navigating into any child re-triggers the gate."
+        }
+      ],
+      "workflow": [
+        "When a plan-checker warning is non-blocking but touches security-adjacent code, log it as a todo before advancing rather than silently deferring — keeps the gap visible without blocking execution.",
+        "Independently re-running acceptance/security tests after an executor's self-reported PASS (rather than trusting the summary) caught nothing wrong here but is worth doing on security-critical waves.",
+        "ScheduleWakeup delay calculations must be recomputed against the actual current time right before scheduling — reusing a delay computed earlier (before a quota-reset gap) produced a wake time ~25 minutes later than intended.",
+        "When a stray/duplicate scheduled wakeup can't be cleanly retracted, it's safe to let it fire as a no-op as long as the session state at fire-time is checked before taking any action."
+      ]
+    },
+    "friction": [
+      "gsd-tools query commit reported `commit_failed` multiple times despite commits landing successfully — required manual `git log` verification each time (known false negative).",
+      "Generic gap-analysis parser broke on control characters in the `rendered` field, requiring a direct/manual invocation of the check.",
+      "REQUIREMENTS.md SDK-READ-01/02 checkboxes were incorrectly marked complete by Wave 1/2 executors before their full acceptance criteria (service deletions in Wave 6) were met, requiring two rounds of manual reversion.",
+      "zsh glob syntax failed when grepping for deletion-blocking importers across apps/web/src, requiring a redo with corrected syntax.",
+      "`git fetch` could not reach GitHub from the sandboxed session (no network), forcing reliance on the last-known local `origin/main` ref.",
+      "ScheduleWakeup was first called with a delay computed from a stale pre-quota-gap timestamp, producing an incorrect wake time (04:35 instead of the intended 04:10) that had to be corrected.",
+      "Plan 68.2-06 revealed a planner coverage gap only during execution: several web components consuming SealedChildRef/ResolvedChild data (FileBrowser.tsx, SelectionActionBar.tsx, ContextMenu.tsx, SharedFileBrowser.tsx) were not owned by any plan, discovered late enough to require ad hoc scope-mapping work rather than being caught at plan-check time."
+    ],
+    "open_items": [
+      "D-03 poll-invalidation leg lacks dedicated automated test coverage — logged as todo `.planning/todos/pending/2026-07-06-d03-poll-invalidation-lacks-automated-coverage.md` for follow-up after phase completion.",
+      "Plan 11 (Wave 6, deletes ipns.service.ts/file-metadata.service.ts/kind-cache.ts/useFileSize.ts) has a residual unowned-importer surface beyond the 5 originally flagged components — includes utils/fileTypes.ts, lib/crypto/key-wrapping.ts, vault-settings.store.ts, TextEditorDialog.tsx, useStreamingPreview.ts — needs scope expansion or re-grep before deletion can proceed safely.",
+      "Phase 69 (Rust/Desktop FUSE + WinFsp) worktree created at /Users/myankelev/Code/random/cipher-box-phase69 on branch feat/phase-69-fuse-winfsp off origin/main, ready for discuss-phase → plan-phase → execute-phase in a separate session; not yet started.",
+      "Phase 69's roadmap-declared dependency on 68.2 is design-mirroring only (Rust side should mirror the SDK-owned read-chain design) — the worktree doesn't carry 68.2's CONTEXT/RESEARCH, offered to copy over but not yet done.",
+      "Wave 4 plan 68.2-09 (folder.store collapse to projection, SC#5 desync fix, D-03 freshness) was dispatched but its completion was not yet observed within this transcript — Waves 5–7 (plans 10, 11, 12) remain unexecuted."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-06T04:36:09.830157Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 210,
+    "human_modified": 53,
+    "human_removed": 0,
+    "total_committed": 210,
+    "total_lines_changed": 264,
+    "agent_percentage": 0,
+    "metric_version": 2
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "cd34df4fb60d",
+  "strategy": "manual-commit",
+  "branch": "feat/sdk-owned-read-chain-and-resolved-folder-listings",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/todos/pending/2026-07-06-d03-poll-invalidation-lacks-automated-coverage.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/cd/34df4fb60d/0/metadata.json",
+      "transcript": "/cd/34df4fb60d/0/full.jsonl",
+      "content_hash": "/cd/34df4fb60d/0/content_hash.txt",
+      "prompt": "/cd/34df4fb60d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 21020,
+    "cache_creation_tokens": 732286,
+    "cache_read_tokens": 20765362,
+    "output_tokens": 193111,
+    "api_call_count": 81
+  }
+}
