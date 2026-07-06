@@ -1164,6 +1164,24 @@ export class CipherBoxClient {
   }
 
   /**
+   * Resolve a node's plaintext identity (id + kind) from its IPNS name,
+   * without requiring any readKey -- `id`/`kind` are PLAINTEXT on the
+   * `PublishedNode` envelope (NODE-03), so no decryption is needed (D-07
+   * full-boundary facade, 68.2-08 Rule-2 addition -- replaces
+   * `useSharedWriteOps.ts`'s direct `resolveIpnsRecord`+`fetchFromIpfs`
+   * usage for `deleteFromSharedFolder`'s `childNodeId` resolution).
+   *
+   * @returns `null` when the IPNS record cannot be resolved (revoked/not found).
+   */
+  async resolveNodeIdentity(ipnsName: string): Promise<{ nodeId: string; kind: NodeKind } | null> {
+    return this.withOperation('resolveNodeIdentity', async () => {
+      const resolved = await this.resolvePublishedNode(ipnsName);
+      if (!resolved) return null;
+      return { nodeId: resolved.published.id, kind: resolved.published.kind };
+    });
+  }
+
+  /**
    * Resolve the write-body params (`writeKey` + current `writeChildren`) an owned
    * publish call site must thread into `updateFolderMetadataAndPublish` so the
    * republished folder PRESERVES its existing write chain (D-03).
