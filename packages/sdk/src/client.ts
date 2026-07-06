@@ -16,7 +16,7 @@
 import type { SdkContext, ProgressCallback, DownloadProgressCallback } from '@cipherbox/sdk-core';
 import type { PinningProvider, ExternalEncryptFn } from '@cipherbox/sdk-core';
 import type { UploadResult } from '@cipherbox/sdk-core';
-import type { TeeKeys } from '@cipherbox/sdk-core';
+import type { TeeKeys, ConnectionTestResult } from '@cipherbox/sdk-core';
 import * as sdkCore from '@cipherbox/sdk-core';
 import { selectEncryptionMode } from '@cipherbox/sdk-core';
 import {
@@ -3763,6 +3763,70 @@ export class CipherBoxClient {
   ): Promise<DeviceRegistry> {
     return this.withOperation('decryptRegistry', async () => {
       return decryptRegistry(encrypted, userPrivateKey);
+    });
+  }
+
+  // ---- BYO-pinning (config-blob passthrough, D-07 full boundary) ----
+  //
+  // The BYO-pinning config blob (and any other user-configured settings
+  // blob, e.g. the vault-settings blob) is NOT part of the ROT-07 durable
+  // anti-rollback floor: it is a user-configured settings entry, not a
+  // rotation-governed folder/file node (68.2-PATTERNS.md "No Analog
+  // Found"). These methods are therefore thin 1:1 passthroughs with no
+  // `rotationHighWater.enforceResolved` gating -- `sdkCore.resolveIpnsRecord`
+  // still performs its own Ed25519 signature verification internally
+  // (fail-closed on tampered records), just not the durable floor check.
+  // Raw IPFS fetch/upload for the config blob's bytes are already covered
+  // generically by `downloadBytes`/`uploadBytes` above -- no config-blob-
+  // specific duplicates are needed for those two operations.
+
+  /**
+   * Test connectivity to a BYO-IPFS endpoint and auto-detect its protocol
+   * (Kubo / Pinata / PSA).
+   *
+   * Thin passthrough to `sdkCore.testConnection` -- a pure network probe,
+   * no crypto/IO through the client's own IPFS transport.
+   */
+  async testConnection(endpoint: string, authToken?: string): Promise<ConnectionTestResult> {
+    return this.withOperation('testConnection', async () => {
+      return sdkCore.testConnection(endpoint, authToken);
+    });
+  }
+
+  /**
+   * Resolve a config-blob IPNS record (BYO-pinning settings, or any other
+   * user-configured blob backed by its own dedicated IPNS name).
+   *
+   * Thin passthrough to `sdkCore.resolveIpnsRecord` with `this.ctx`
+   * injected -- see the section note above for why this is NOT routed
+   * through the ROT-07 durable floor gate.
+   */
+  async resolveConfigBlob(
+    ipnsName: string
+  ): Promise<{ cid: string; sequenceNumber: bigint; signatureVerified: boolean } | null> {
+    return this.withOperation('resolveConfigBlob', async () => {
+      return sdkCore.resolveIpnsRecord(ipnsName, this.ctx);
+    });
+  }
+
+  /**
+   * Publish a config-blob IPNS record (BYO-pinning settings, or any other
+   * user-configured blob).
+   *
+   * Thin passthrough to `sdkCore.createAndPublishIpnsRecord` with
+   * `this.ctx` injected -- same no-gate rationale as `resolveConfigBlob`.
+   */
+  async publishConfigBlob(params: {
+    ipnsPrivateKey: Uint8Array;
+    ipnsPublicKey?: Uint8Array;
+    ipnsName: string;
+    metadataCid: string;
+    sequenceNumber: bigint;
+    encryptedIpnsPrivateKey?: string;
+    keyEpoch?: number;
+  }): Promise<{ success: boolean; sequenceNumber: bigint }> {
+    return this.withOperation('publishConfigBlob', async () => {
+      return sdkCore.createAndPublishIpnsRecord({ ...params, ctx: this.ctx });
     });
   }
 

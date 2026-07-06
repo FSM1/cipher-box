@@ -133,3 +133,7 @@ export { selectEncryptionMode } from '@cipherbox/sdk-core';
 // and client.deriveRegistryIpnsKeypair/encryptRegistry/decryptRegistry
 // (device-registry) without importing @cipherbox/core directly.
 export type { VaultInit, DeviceRegistry } from '@cipherbox/core';
+
+// D-07 full-boundary facade type (68.2-04) -- consumed by
+// client.testConnection (BYO-pinning passthrough, no ROT-07 gate).
+export type { ConnectionTestResult } from '@cipherbox/sdk-core';
