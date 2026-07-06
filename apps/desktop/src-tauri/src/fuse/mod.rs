@@ -83,6 +83,8 @@ pub async fn mount_filesystem(
     private_key: Vec<u8>,
     public_key: Vec<u8>,
     root_folder_key: Zeroizing<Vec<u8>>,
+    root_read_key: Zeroizing<Vec<u8>>,
+    root_write_key: Zeroizing<Vec<u8>>,
     root_ipns_name: String,
     root_ipns_private_key: Option<Vec<u8>>,
     tee_public_key: Option<Vec<u8>>,
@@ -178,29 +180,25 @@ pub async fn mount_filesystem(
 
     // node/v3 root symmetric keys (read_key/write_key) for the root node.
     //
-    // E2E-RISK (69-09 Slice 5c): node/v3 root read/write keys are RANDOMLY
-    // generated at vault registration (sdk-core `registration.ts`
-    // rootReadKey/rootWriteKey) and persisted server-side, recovered into the
-    // client key state at login. The desktop `KeyState` does NOT yet carry those
-    // node/v3 root keys (the v2.0 client runtime that recovers them is stubbed —
-    // phase 63). Until that recovery is wired, we bridge from the legacy
-    // `root_folder_key`: `read_key` reuses the 32-byte root folder key, and
-    // `write_key` is a domain-separated PLACEHOLDER transform. These will NOT
-    // match the persisted keys of a real node/v3 vault, so mount reads/writes are
-    // COMPILE-correct and unit/CI-green but their runtime correctness is gated by
-    // the later local sdk-e2e + desktop-e2e run, NOT by this slice.
+    // The REAL node/v3 root read/write keys are recovered into desktop KeyState
+    // at login (69-22 KeyState fields, populated by 69-23 vault init/recovery)
+    // and threaded in here by post_auth_finalize. They replace the earlier legacy
+    // placeholder that fabricated the two keys from `root_folder_key`; a real
+    // node/v3 vault now mounts under its own persisted keys. We only narrow the
+    // passed 32-byte state keys into fixed `[u8; 32]` locals for InodeKind::Root,
+    // prepopulate, and replay — no derivation.
     let root_read_key: Zeroizing<[u8; 32]> = {
         let mut k = [0u8; 32];
-        let src = root_folder_key.as_slice();
+        let src = root_read_key.as_slice();
         let n = src.len().min(32);
         k[..n].copy_from_slice(&src[..n]);
         Zeroizing::new(k)
     };
     let root_write_key: Zeroizing<[u8; 32]> = {
-        let mut k = *root_read_key;
-        for b in k.iter_mut() {
-            *b ^= 0xA5;
-        }
+        let mut k = [0u8; 32];
+        let src = root_write_key.as_slice();
+        let n = src.len().min(32);
+        k[..n].copy_from_slice(&src[..n]);
         Zeroizing::new(k)
     };
 
