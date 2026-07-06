@@ -4,17 +4,17 @@ milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
 current_phase: 68.2
 current_phase_name: sdk-owned-read-chain-and-resolved-folder-listings
-status: executing
+status: verifying
 stopped_at: Completed 68.2-11-PLAN.md
-last_updated: "2026-07-06T05:35:29.386Z"
+last_updated: "2026-07-06T07:10:59.330Z"
 last_activity: 2026-07-05
 last_activity_desc: Phase 68.2 execution started
 progress:
   total_phases: 11
-  completed_phases: 9
+  completed_phases: 10
   total_plans: 110
-  completed_plans: 109
-  percent: 82
+  completed_plans: 110
+  percent: 91
 ---
 
 # Project State
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 
 Phase: 68.2 (sdk-owned-read-chain-and-resolved-folder-listings) — EXECUTING
 Plan: 12 of 12
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-07-05 — Phase 68.2 execution started
 
 Progress: `██████████` 79 / 79 plans (100%)
@@ -245,6 +245,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 68.2 P09 | 40min | 2 tasks | 13 files |
 | Phase 68.2 P10 | 45min | 2 tasks | 12 files |
 | Phase 68.2 P11 | 45min | 3 tasks | 16 files |
+| Phase 68.2 P12 | 130 | - tasks | - files |
 
 ## Accumulated Context
 
@@ -518,6 +519,9 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: [Phase 68.2-11]: client.resolveFileMetadata added as new SDK facade method (Rule 2) mirroring downloadFromIpns's resolve+unseal steps -- read-only counterpart replacing the deleted web-native file-metadata.service.ts
 - [Phase ?]: [Phase 68.2-11]: FileList.tsx repointed from dead kind-cache adapter to folder store's real children: ResolvedChild[] via resolvedByIpnsName lookup (mirrors 68.2-08 SharedFileBrowser pattern) -- closes STATE.md-flagged FileList/FileBrowser ownership gap
 - [Phase ?]: [Phase 68.2-11]: download.service.ts was a 9th residual file-metadata.service.ts importer not in the orchestrator's 8-file audit -- discovered via grep sweep, migrated alongside the listed 8
+- [Phase ?]: SealedChildRef mirror reverted to frozen NODE-03 5-field set; size/modifiedAt now come exclusively from ResolvedChild (D-08)
+- [Phase ?]: Fixed 2 pre-existing e2e-blocking bugs (SharedFileBrowser empty-nav row, e2e em-dash selector mismatch) found while running the phase gate
+- [Phase ?]: SDK-READ-03 NOT marked complete: ensureFolderLoaded never re-resolves an already-loaded folder from the network, so the SC#5 desync fix is still incomplete -- root-caused, recommend dedicated gap-closure plan
 
 ## Operator Next Steps
 
@@ -525,7 +529,7 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-06T05:35:29.379Z
+**Last session:** 2026-07-06T07:09:56.633Z
 **Stopped at:** Completed 68.2-11-PLAN.md
 **Resume file:** 
 None
@@ -535,3 +539,4 @@ None
 - GAP-1 (68.1-13): resolveFileMetadata AEAD Decryption-failed for CTR/streaming video preview and post-upload batch-download -- needs dedicated crypto debugging
 - GAP-2 (68.1-13): full-workflow.spec.ts 3.8 cold-reload multi-level IPNS DFS resolve times out -- needs retry-budget tuning or propagation investigation
 - 68.2-06 gap: FileList.tsx/FileBrowser.tsx/SelectionActionBar.tsx/ContextMenu.tsx/SharedFileBrowser.tsx are not owned by any of the 12 phase-68.2 plans, yet consume the SealedChildRef-vs-ResolvedChild data this phase's D-02/SC#1/#2 goals govern -- assign ownership (Plan 09 or a fast-follow) before Plan 11's kind-cache.ts deletion / allowlist-free grep gate
+- SC#5 desync test fails: CipherBoxClient.ensureFolderLoaded's already-loaded short-circuit never re-resolves a folder's IPNS record from the network -- needs a dedicated gap-closure plan before SDK-READ-03/phase can be considered fully closed
