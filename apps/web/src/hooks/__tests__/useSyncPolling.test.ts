@@ -101,8 +101,8 @@ describe('invalidateOpenFolder (D-03 poll-invalidation leg)', () => {
 
     await invalidateOpenFolder();
 
-    expect(mockListFolder).toHaveBeenCalledWith('k51folder');
-    expect(mockEnsureFolderLoaded).toHaveBeenCalledWith('k51folder');
+    expect(mockListFolder).toHaveBeenCalledWith('k51folder', { forceResolve: true });
+    expect(mockEnsureFolderLoaded).toHaveBeenCalledWith('k51folder', { forceResolve: true });
 
     const after = useFolderStore.getState().folders['f1'];
     expect(after.children).toEqual(newResolved);

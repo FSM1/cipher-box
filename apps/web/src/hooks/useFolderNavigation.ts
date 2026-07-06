@@ -68,8 +68,8 @@ function getRootFolder(
 async function refreshFolderListing(ipnsName: string, folderId: string): Promise<void> {
   const client = getSdkClient();
   const [resolved, state] = await Promise.all([
-    client.listFolder(ipnsName),
-    client.ensureFolderLoaded(ipnsName),
+    client.listFolder(ipnsName, { forceResolve: true }),
+    client.ensureFolderLoaded(ipnsName, { forceResolve: true }),
   ]);
   const store = useFolderStore.getState();
   if (!store.folders[folderId]) return;
@@ -288,7 +288,9 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
 
         for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
           if (latestNavTarget.current !== targetFolderId) return;
-          state = await getSdkClient().ensureFolderLoaded(folderRef.ipnsName);
+          state = await getSdkClient().ensureFolderLoaded(folderRef.ipnsName, {
+            forceResolve: true,
+          });
           if (state) break;
           if (attempt === MAX_RETRIES) break;
           // IPNS not propagated yet — wait and retry
@@ -307,7 +309,9 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
         // by ipnsName+sequenceNumber, 68.2-02) BEFORE the FolderNode lands
         // in the store, so kind/size/modifiedAt are pre-resolved on first
         // render (no extra re-render, no web-side resolve, SC#3).
-        const resolvedChildren = await getSdkClient().listFolder(folderRef.ipnsName);
+        const resolvedChildren = await getSdkClient().listFolder(folderRef.ipnsName, {
+          forceResolve: true,
+        });
 
         // Re-check the stale-completion guard again — listFolder awaited,
         // so the user may have navigated away while it was in flight.

@@ -33,8 +33,8 @@ export async function invalidateOpenFolder(): Promise<void> {
   try {
     const client = getSdkClient();
     const [resolved, state] = await Promise.all([
-      client.listFolder(openFolder.ipnsName),
-      client.ensureFolderLoaded(openFolder.ipnsName),
+      client.listFolder(openFolder.ipnsName, { forceResolve: true }),
+      client.ensureFolderLoaded(openFolder.ipnsName, { forceResolve: true }),
     ]);
     const store = useFolderStore.getState();
     // Re-check: the open folder may have changed (or been removed) while
