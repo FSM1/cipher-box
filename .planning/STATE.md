@@ -5,16 +5,16 @@ milestone_name: Metadata and Sharing Refactor
 current_phase: 68.2
 current_phase_name: sdk-owned-read-chain-and-resolved-folder-listings
 status: verifying
-stopped_at: Completed 68.2-11-PLAN.md
-last_updated: "2026-07-06T07:10:59.330Z"
+stopped_at: Completed 68.2-13-PLAN.md
+last_updated: "2026-07-06T08:57:23.784Z"
 last_activity: 2026-07-05
 last_activity_desc: Phase 68.2 execution started
 progress:
   total_phases: 11
-  completed_phases: 10
-  total_plans: 110
-  completed_plans: 110
-  percent: 91
+  completed_phases: 9
+  total_plans: 112
+  completed_plans: 111
+  percent: 82
 ---
 
 # Project State
@@ -246,6 +246,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 68.2 P10 | 45min | 2 tasks | 12 files |
 | Phase 68.2 P11 | 45min | 3 tasks | 16 files |
 | Phase 68.2 P12 | 130 | - tasks | - files |
+| Phase 68.2 P13 | 8min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -522,6 +523,8 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: SealedChildRef mirror reverted to frozen NODE-03 5-field set; size/modifiedAt now come exclusively from ResolvedChild (D-08)
 - [Phase ?]: Fixed 2 pre-existing e2e-blocking bugs (SharedFileBrowser empty-nav row, e2e em-dash selector mismatch) found while running the phase gate
 - [Phase ?]: SDK-READ-03 NOT marked complete: ensureFolderLoaded never re-resolves an already-loaded folder from the network, so the SC#5 desync fix is still incomplete -- root-caused, recommend dedicated gap-closure plan
+- [Phase 68.2-13]: doReresolveFolderInPlace sources RotationHighWater generation from existing.nodeGeneration (never the freshly relay-served envelope generation) and gates versionFloor:0, mirroring ensureRootFolderState/dfsFindFolder
+- [Phase 68.2-13]: reresolveFolderInPlace/doReresolveFolderInPlace split into two private methods so the reresolveInFlight dedup map is registered synchronously before the first await, making concurrent forceResolve calls observe the same in-flight promise
 
 ## Operator Next Steps
 
@@ -529,8 +532,8 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-06T07:09:56.633Z
-**Stopped at:** Completed 68.2-11-PLAN.md
+**Last session:** 2026-07-06T08:57:23.777Z
+**Stopped at:** Completed 68.2-13-PLAN.md
 **Resume file:** 
 None
 
@@ -539,4 +542,4 @@ None
 - GAP-1 (68.1-13): resolveFileMetadata AEAD Decryption-failed for CTR/streaming video preview and post-upload batch-download -- needs dedicated crypto debugging
 - GAP-2 (68.1-13): full-workflow.spec.ts 3.8 cold-reload multi-level IPNS DFS resolve times out -- needs retry-budget tuning or propagation investigation
 - 68.2-06 gap: FileList.tsx/FileBrowser.tsx/SelectionActionBar.tsx/ContextMenu.tsx/SharedFileBrowser.tsx are not owned by any of the 12 phase-68.2 plans, yet consume the SealedChildRef-vs-ResolvedChild data this phase's D-02/SC#1/#2 goals govern -- assign ownership (Plan 09 or a fast-follow) before Plan 11's kind-cache.ts deletion / allowlist-free grep gate
-- SC#5 desync test fails: CipherBoxClient.ensureFolderLoaded's already-loaded short-circuit never re-resolves a folder's IPNS record from the network -- needs a dedicated gap-closure plan before SDK-READ-03/phase can be considered fully closed
+- SC#5 desync (partially closed by 68.2-13): CipherBoxClient.ensureFolderLoaded/listFolder now support a gated `{forceResolve:true}` re-resolve for an already-loaded folder, proven by folder-reresolve.test.ts -- but apps/web's two D-03 freshness call sites (useFolderNavigation.ts nav re-resolve, useSyncPolling.ts poll invalidation) do not yet pass forceResolve, so shared-folder-desync.spec.ts step 3.1 is still expected red until Plan 14 wires the web + proves the e2e

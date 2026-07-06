@@ -529,7 +529,7 @@ Plans:
 4. The interim mirror is reverted: `SealedChildRef` is back to its frozen five-field set (NODE-03), and size/modifiedAt are sourced from the resolved listing (the codec/encode/decode/`metadata-ops` mirror changes from ba3e0229a are removed).
 5. Regression coverage closes the desync bug class: a `tests/web-e2e` proves an owner (or a second client) sees a grantee's upload into a shared folder without the owner first writing, and that file size/modified-date render from the resolved listing; the full web-e2e suite stays green.
 
-**Plans**: 12/14 plans complete (13-14 gap closure for SDK-READ-03 / SC#5)
+**Plans**: 13/14 plans executed
 
 Plans:
 **Wave 1**
@@ -567,7 +567,7 @@ Plans:
 
 **Wave 8** *(gap closure — SDK-READ-03 / SC#5, verification 2026-07-06)*
 
-- [ ] 68.2-13-PLAN.md — Wave 8: Gated live-resolve-on-navigation for already-loaded folders (forceResolve option, fixes the self-referential cache clock) [TDD]
+- [x] 68.2-13-PLAN.md — Wave 8: Gated live-resolve-on-navigation for already-loaded folders (forceResolve option, fixes the self-referential cache clock) [TDD]
 
 **Wave 9** *(blocked on Wave 8 completion)*
 
