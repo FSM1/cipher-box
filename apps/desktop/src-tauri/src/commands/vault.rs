@@ -227,24 +227,19 @@ pub(crate) async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Res
         }
     }
 
-    // 2. Publish folder metadata using v1 encrypted envelope format on IPFS ({iv, data});
-    //    FolderMetadata.version remains "v2" (metadata schema version).
-    let empty_metadata = cipherbox_core::folder::FolderMetadata {
-        version: "v2".to_string(),
-        children: vec![],
-    };
-    let folder_key_arr: [u8; 32] = root_folder_key
-        .as_slice()
-        .try_into()
-        .map_err(|_| "Invalid root folder key length".to_string())?;
-    let sealed = cipherbox_core::folder::encrypt_folder_metadata(&empty_metadata, &folder_key_arr)
-        .map_err(|e| format!("Metadata encryption failed: {}", e))?;
-    let iv_hex = hex::encode(&sealed[..12]);
-    let data_base64 = base64::engine::general_purpose::STANDARD.encode(&sealed[12..]);
-    let json_metadata = serde_json::json!({ "iv": iv_hex, "data": data_base64 });
-    let json_bytes = serde_json::to_vec(&json_metadata)
-        .map_err(|e| format!("JSON serialization failed: {}", e))?;
-    let folder_cid = cipherbox_api_client::ipfs::upload_content(&state.sdk.api, &json_bytes)
+    // 2. Publish the root folder as an empty node/v3 ROOT node (seq 1).
+    //    The root read/write keys are derived from the mount bridge
+    //    (fuse/mod.rs:192-205) so the freshly-created root is readable/writable
+    //    at first mount; the root IPNS keypair stays HKDF-derived so create and
+    //    mount agree. PHASE-63 real node/v3 root-key persistence/recovery
+    //    supersedes this placeholder bridge (documented coupling).
+    let (root_read_key, root_write_key) = derive_root_node_keys(&root_folder_key)?;
+    let root_node_bytes = build_empty_root_published_node(
+        &root_read_key,
+        &root_write_key,
+        root_ipns_private_key.as_slice(),
+    )?;
+    let folder_cid = cipherbox_api_client::ipfs::upload_content(&state.sdk.api, &root_node_bytes)
         .await
         .map_err(|e| e.to_string())?;
 
