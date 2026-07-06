@@ -97,7 +97,10 @@ export class FileListPage {
    * Useful after file upload or folder creation.
    */
   async waitForItemToAppear(name: string, options?: { timeout?: number }): Promise<void> {
-    await this.getItem(name).waitFor({ state: 'visible', ...options });
+    // Default 60s: under parallel CI load the create/upload -> IPNS publish ->
+    // refresh round-trip can exceed Playwright's 30s default even though the item
+    // does eventually render. Callers may still override.
+    await this.getItem(name).waitFor({ state: 'visible', timeout: 60_000, ...options });
   }
 
   /**
@@ -105,7 +108,9 @@ export class FileListPage {
    * Useful after deletion or move.
    */
   async waitForItemToDisappear(name: string, options?: { timeout?: number }): Promise<void> {
-    await this.getItem(name).waitFor({ state: 'hidden', ...options });
+    // Default 60s: restore/delete/move round-trips are similarly slow under
+    // parallel CI load (see waitForItemToAppear).
+    await this.getItem(name).waitFor({ state: 'hidden', timeout: 60_000, ...options });
   }
 
   /**

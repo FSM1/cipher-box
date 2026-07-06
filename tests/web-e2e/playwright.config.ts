@@ -27,12 +27,18 @@ export default defineConfig({
   // so different files never share user/IPNS/DB state. Keep fullyParallel:false so
   // tests WITHIN a file still run serially — the describe.serial suites depend on
   // ordered, stateful steps. Local stays single-worker; CI fans out across files.
-  // Ceiling is backend contention on the shared API/Kubo/Postgres stack, not
-  // Web3Auth: 4 workers starved the write path (folder-create / IPFS add / IPNS
-  // publish round-trips exceeded 30s on the 2-vCPU CI runner). 3 workers keeps
-  // wall-clock well under the 20-min job cap without starving writes.
+  // Parallelize across files (see fullyParallel note above). Worker count is not
+  // the flake lever here — 3 and 4 workers failed the identical set of write-heavy
+  // steps. Under concurrent load on the shared 2-vCPU CI stack, correct
+  // folder-create / restore / upload round-trips simply exceed Playwright's 30s
+  // default (the item does render — just late). The real lever is a longer test
+  // timeout on CI (and matching waiter timeouts in file-list.page.ts), not fewer
+  // workers. Local stays single-worker at the default timeout.
   fullyParallel: false,
-  workers: process.env.CI ? 3 : 1,
+  workers: process.env.CI ? 4 : 1,
+
+  // Give slow-but-correct write round-trips room under parallel CI load.
+  timeout: process.env.CI ? 60_000 : 30_000,
 
   // Fail build on CI if tests marked as test.only
   forbidOnly: !!process.env.CI,
