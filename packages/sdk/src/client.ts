@@ -599,7 +599,12 @@ export class CipherBoxClient {
           type: 'folder:loaded',
           folderId: ipnsName,
           ipnsName,
-          children: existing.children,
+          children: await this.resolveListingChildren(
+            existing.children,
+            existing.folderKey,
+            ipnsName,
+            existing.sequenceNumber
+          ),
           sequenceNumber: existing.sequenceNumber,
         });
         return existing;
@@ -627,7 +632,12 @@ export class CipherBoxClient {
         type: 'folder:loaded',
         folderId: ipnsName,
         ipnsName,
-        children: result.metadata.children ?? [],
+        children: await this.resolveListingChildren(
+          state.children,
+          state.folderKey,
+          ipnsName,
+          state.sequenceNumber
+        ),
         sequenceNumber: result.sequenceNumber,
       });
 
@@ -1421,7 +1431,12 @@ export class CipherBoxClient {
         type: 'folder:updated',
         folderId: folder.ipnsName,
         ipnsName: folder.ipnsName,
-        children: folder.children,
+        children: await this.resolveListingChildren(
+          folder.children,
+          folder.folderKey,
+          folder.ipnsName,
+          folder.sequenceNumber
+        ),
         sequenceNumber: folder.sequenceNumber,
       });
     } catch {
@@ -1827,7 +1842,12 @@ export class CipherBoxClient {
           type: 'folder:updated',
           folderId: parentIpnsName,
           ipnsName: parentIpnsName,
-          children: publishedChildren,
+          children: await this.resolveListingChildren(
+            publishedChildren,
+            parent.folderKey,
+            parentIpnsName,
+            newSequenceNumber
+          ),
           sequenceNumber: newSequenceNumber,
         });
 
@@ -1926,7 +1946,12 @@ export class CipherBoxClient {
         type: 'folder:updated',
         folderId: folderIpnsName,
         ipnsName: folderIpnsName,
-        children: publishedChildren,
+        children: await this.resolveListingChildren(
+          publishedChildren,
+          folder.folderKey,
+          folderIpnsName,
+          newSequenceNumber
+        ),
         sequenceNumber: newSequenceNumber,
       });
 
@@ -2146,7 +2171,12 @@ export class CipherBoxClient {
         type: 'folder:updated',
         folderId: destIpnsName,
         ipnsName: destIpnsName,
-        children: dstChildren,
+        children: await this.resolveListingChildren(
+          dstChildren,
+          destFolder.folderKey,
+          destIpnsName,
+          dstSeq
+        ),
         sequenceNumber: dstSeq,
       });
 
@@ -2179,7 +2209,12 @@ export class CipherBoxClient {
         type: 'folder:updated',
         folderId: sourceIpnsName,
         ipnsName: sourceIpnsName,
-        children: srcChildren,
+        children: await this.resolveListingChildren(
+          srcChildren,
+          sourceFolder.folderKey,
+          sourceIpnsName,
+          srcSeq
+        ),
         sequenceNumber: srcSeq,
       });
 
@@ -2259,7 +2294,12 @@ export class CipherBoxClient {
         type: 'folder:updated',
         folderId: folderIpnsName,
         ipnsName: folderIpnsName,
-        children: publishedChildren,
+        children: await this.resolveListingChildren(
+          publishedChildren,
+          folder.folderKey,
+          folderIpnsName,
+          newSequenceNumber
+        ),
         sequenceNumber: newSequenceNumber,
       });
 
@@ -2468,7 +2508,12 @@ export class CipherBoxClient {
           type: 'folder:updated',
           folderId: folderIpnsName,
           ipnsName: folderIpnsName,
-          children: publishedChildren,
+          children: await this.resolveListingChildren(
+            publishedChildren,
+            folder.folderKey,
+            folderIpnsName,
+            newSequenceNumber
+          ),
           sequenceNumber: newSequenceNumber,
         });
 
@@ -2784,7 +2829,12 @@ export class CipherBoxClient {
           type: 'folder:updated',
           folderId: folderIpnsName,
           ipnsName: folderIpnsName,
-          children: publishedChildren,
+          children: await this.resolveListingChildren(
+            publishedChildren,
+            folder.folderKey,
+            folderIpnsName,
+            newSequenceNumber
+          ),
           sequenceNumber: newSequenceNumber,
         });
 
@@ -3112,7 +3162,12 @@ export class CipherBoxClient {
       type: 'folder:updated',
       folderId: folderIpnsName,
       ipnsName: folderIpnsName,
-      children: live.children,
+      children: await this.resolveListingChildren(
+        live.children,
+        live.folderKey,
+        folderIpnsName,
+        live.sequenceNumber
+      ),
       sequenceNumber: live.sequenceNumber,
     });
   }
@@ -3565,7 +3620,14 @@ export class CipherBoxClient {
         type: 'folder:updated',
         folderId: folderIpnsName,
         ipnsName: folderIpnsName,
-        children: folderState?.children ?? [],
+        children: folderState
+          ? await this.resolveListingChildren(
+              folderState.children,
+              folderState.folderKey,
+              folderIpnsName,
+              folderState.sequenceNumber
+            )
+          : [],
         sequenceNumber: folderState?.sequenceNumber ?? 0n,
       });
       this.emitter.emit({ type: 'bin:updated', entries: updatedBinState.entries });
@@ -3620,7 +3682,14 @@ export class CipherBoxClient {
         type: 'folder:updated',
         folderId: targetFolderIpnsName,
         ipnsName: targetFolderIpnsName,
-        children: targetState?.children ?? [],
+        children: targetState
+          ? await this.resolveListingChildren(
+              targetState.children,
+              targetState.folderKey,
+              targetFolderIpnsName,
+              targetState.sequenceNumber
+            )
+          : [],
         sequenceNumber: targetState?.sequenceNumber ?? 0n,
       });
       this.emitter.emit({ type: 'bin:updated', entries: updatedBinState.entries });
@@ -3940,14 +4009,14 @@ export class CipherBoxClient {
    * `sharedFolder:updated`. Centralizes the write-back + emission so all five
    * methods stay consistent.
    */
-  private adoptSharedFolderResult(
+  private async adoptSharedFolderResult(
     shareId: string,
     result: {
       publishedChildren: SealedChildRef[];
       newSequenceNumber: bigint;
       publishedParent?: PublishedNode;
     }
-  ): void {
+  ): Promise<void> {
     // Re-read live state: the share may have been unloaded (e.g. unmount →
     // unloadSharedFolder) while the async write/refresh was in-flight. Never
     // resurrect an explicitly-unloaded share from a pre-await snapshot.
@@ -3969,7 +4038,12 @@ export class CipherBoxClient {
       type: 'sharedFolder:updated',
       shareId,
       ipnsName: live.ipnsName,
-      children: result.publishedChildren,
+      children: await this.resolveListingChildren(
+        result.publishedChildren,
+        next.folderKey,
+        live.ipnsName,
+        result.newSequenceNumber
+      ),
       sequenceNumber: result.newSequenceNumber,
     });
   }
@@ -3992,7 +4066,7 @@ export class CipherBoxClient {
         this.buildSharedWriteContextFromState(state),
         args
       );
-      this.adoptSharedFolderResult(shareId, result);
+      await this.adoptSharedFolderResult(shareId, result);
     });
   }
 
@@ -4006,7 +4080,7 @@ export class CipherBoxClient {
         this.buildSharedWriteContextFromState(state),
         args
       );
-      this.adoptSharedFolderResult(shareId, result);
+      await this.adoptSharedFolderResult(shareId, result);
     });
   }
 
@@ -4023,7 +4097,7 @@ export class CipherBoxClient {
         this.buildSharedWriteContextFromState(state),
         args
       );
-      this.adoptSharedFolderResult(shareId, result);
+      await this.adoptSharedFolderResult(shareId, result);
     });
   }
 
@@ -4050,7 +4124,7 @@ export class CipherBoxClient {
         this.buildSharedWriteContextFromState(state),
         args
       );
-      this.adoptSharedFolderResult(shareId, result);
+      await this.adoptSharedFolderResult(shareId, result);
     });
   }
 
@@ -4174,13 +4248,27 @@ export class CipherBoxClient {
         // File-only publish: the parent's children/sequence are unchanged — emit
         // sharedFolder:updated with the current live snapshot so consumers
         // re-resolve the file (mirrors refreshSharedFolder's file-only emission).
+        //
+        // 68.2-02 (Rule 1 fix): the parent folder's OWN ipnsName+sequenceNumber
+        // is unchanged by a file-only content publish, but the just-updated
+        // FILE's own PublishedNode (content/modifiedAt) is now stale in
+        // `listingCache` if it was resolved before this update. Invalidate
+        // the parent's cache entry so the emitted ResolvedChild[] re-resolves
+        // every child (including the just-updated file) instead of serving a
+        // stale cached size/modifiedAt for it.
         const live = this.sharedFolderTree.get(shareId);
         if (live) {
+          this.listingCache.delete(live.ipnsName);
           this.emitter.emit({
             type: 'sharedFolder:updated',
             shareId,
             ipnsName: live.ipnsName,
-            children: live.children,
+            children: await this.resolveListingChildren(
+              live.children,
+              live.folderKey,
+              live.ipnsName,
+              live.sequenceNumber
+            ),
             sequenceNumber: live.sequenceNumber,
           });
         }
@@ -4360,13 +4448,18 @@ export class CipherBoxClient {
           type: 'sharedFolder:updated',
           shareId,
           ipnsName: live.ipnsName,
-          children: live.children,
+          children: await this.resolveListingChildren(
+            live.children,
+            live.folderKey,
+            live.ipnsName,
+            live.sequenceNumber
+          ),
           sequenceNumber: live.sequenceNumber,
         });
         return;
       }
 
-      this.adoptSharedFolderResult(shareId, {
+      await this.adoptSharedFolderResult(shareId, {
         publishedChildren: result.metadata.children ?? [],
         newSequenceNumber: result.sequenceNumber,
       });
@@ -4615,7 +4708,7 @@ export class CipherBoxClient {
           // Adopt SOURCE only — the destination is not this share's active
           // depth (Pitfall 1); its own subtree view (if open) re-resolves via
           // its own navigation/enumerateSharedSubtree call.
-          this.adoptSharedFolderResult(shareId, srcResult);
+          await this.adoptSharedFolderResult(shareId, srcResult);
         } finally {
           childReadKey?.fill(0);
           childReadKey = null;

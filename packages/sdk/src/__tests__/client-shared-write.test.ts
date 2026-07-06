@@ -129,13 +129,18 @@ describe('CipherBoxClient - shared write', () => {
       expect(state?.children).toEqual(PUBLISHED_CHILDREN);
 
       // Exactly one sharedFolder:updated event with the published snapshot.
+      // 68.2-02: the event payload carries ResolvedChild[] (resolved through
+      // the gated listing path), not the raw legacy FolderChild-shaped
+      // `PUBLISHED_CHILDREN` fixture (no `readKeySealed` -- pre-node/v3
+      // shape) -- the listing resolve can't open it and the child is
+      // soft-skipped, yielding [].
       const updates = events.filter((e) => e.type === 'sharedFolder:updated');
       expect(updates).toHaveLength(1);
       const updated = updates[0] as Extract<SdkEvent, { type: 'sharedFolder:updated' }>;
       expect(updated.shareId).toBe('share-1');
       expect(updated.ipnsName).toBe('k51shared');
       expect(updated.sequenceNumber).toBe(4n);
-      expect(updated.children).toEqual(PUBLISHED_CHILDREN);
+      expect(updated.children).toEqual([]);
     });
 
     it('throws "Shared folder not loaded" when the share is not loaded', async () => {
@@ -184,14 +189,17 @@ describe('CipherBoxClient - shared write', () => {
       expect(state?.sequenceNumber).toBe(5n);
       expect(state?.children).toEqual(REFRESHED_CHILDREN);
 
-      // Emitted the newer snapshot exactly once.
+      // Emitted the newer snapshot exactly once. 68.2-02: the event's
+      // children is ResolvedChild[] -- REFRESHED_CHILDREN is a legacy
+      // FolderChild fixture with no readKeySealed, so the listing resolve
+      // soft-skips it, yielding [].
       const updates = events.filter((e) => e.type === 'sharedFolder:updated');
       expect(updates).toHaveLength(1);
       const updated = updates[0] as Extract<SdkEvent, { type: 'sharedFolder:updated' }>;
       expect(updated.shareId).toBe('share-1');
       expect(updated.ipnsName).toBe('k51shared');
       expect(updated.sequenceNumber).toBe(5n);
-      expect(updated.children).toEqual(REFRESHED_CHILDREN);
+      expect(updated.children).toEqual([]);
     });
 
     it('does NOT clobber when the resolved sequence is stale/equal — re-emits existing state', async () => {
@@ -214,12 +222,15 @@ describe('CipherBoxClient - shared write', () => {
       expect(state?.sequenceNumber).toBe(3n);
       expect(state?.children).toEqual(PUBLISHED_CHILDREN);
 
-      // Re-emitted the EXISTING (fresher) snapshot so consumers stay consistent.
+      // Re-emitted the EXISTING (fresher) snapshot so consumers stay
+      // consistent. 68.2-02: the event's children is ResolvedChild[] --
+      // PUBLISHED_CHILDREN is a legacy FolderChild fixture with no
+      // readKeySealed, so the listing resolve soft-skips it, yielding [].
       const updates = events.filter((e) => e.type === 'sharedFolder:updated');
       expect(updates).toHaveLength(1);
       const updated = updates[0] as Extract<SdkEvent, { type: 'sharedFolder:updated' }>;
       expect(updated.sequenceNumber).toBe(3n);
-      expect(updated.children).toEqual(PUBLISHED_CHILDREN);
+      expect(updated.children).toEqual([]);
     });
 
     it('is a no-op when loadFolderMetadata returns null (unresolvable)', async () => {

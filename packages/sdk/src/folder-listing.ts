@@ -47,8 +47,9 @@ export type ResolvedChild = {
  * number through the caller's gated read path (ROT-07 anti-rollback,
  * `RotationHighWater.enforceResolved` -- see `client.ts`'s
  * `gatedResolveChild`). Returns `null` for a structurally unresolvable hop
- * (absent IPNS record) -- NOT for a subsequent crypto/AEAD failure, which
- * propagates as a throw (fail-closed, matching `dfsFindFolder`'s contract).
+ * (absent IPNS record). May also throw (ROT-07 rollback rejection, an
+ * unverified-signature record, or a network error) -- `resolveChildren`
+ * treats every such failure as a per-child skip (see below).
  */
 export type GatedResolveFn = (
   childRef: SealedChildRef
@@ -64,10 +65,20 @@ export type GatedResolveFn = (
  * `navigateToSubfolder`), then unseals the child's own Node to read its
  * `kind`/`modifiedAt`/`content.size`.
  *
- * A structurally unresolvable child (gatedResolve returns `null`) is
- * skipped, not thrown -- mirroring `dfsFindFolder`'s "try siblings" soft-
- * fail contract. An AEAD auth failure on unseal is NOT caught -- it
- * propagates as a throw (fail-closed).
+ * Skip semantics: a listing render degrades gracefully rather than failing
+ * entirely because of ONE bad sibling. ANY failure resolving/unsealing an
+ * individual child -- a structurally absent IPNS record, a ROT-07
+ * anti-rollback rejection (T-68.2-01), an unverified-signature record, or a
+ * corrupted/unopenable read-body -- is caught per-child and that child is
+ * simply omitted from the result; it never fails the whole listing.
+ *
+ * This does not weaken T-68.2-01's mitigation: the ALREADY-LOADED target
+ * folder itself is verified through the Plan-01 gate in
+ * `ensureFolderLoaded`/`dfsFindFolder` before this function ever runs (D-05
+ * -- the single gated read entrypoint). A sibling child this function can't
+ * currently verify is never rendered with attacker-controlled or stale
+ * content -- it is simply left out of view, which is an availability
+ * trade-off, not a trust violation.
  *
  * Never zeros `parentReadKey` (caller/`FolderState`-owned, D-09). The
  * per-child `childReadKey` minted inside this function IS zeroed once
@@ -81,12 +92,12 @@ export async function resolveChildren(
   const resolved: ResolvedChild[] = [];
 
   for (const childRef of children) {
-    const childResolved = await gatedResolve(childRef);
-    if (!childResolved) continue; // structurally unresolvable hop -- skip, try siblings
-
-    const { published, sequenceNumber } = childResolved;
     let childReadKey: Uint8Array | null = null;
     try {
+      const childResolved = await gatedResolve(childRef);
+      if (!childResolved) continue; // structurally unresolvable hop -- skip, try siblings
+
+      const { published, sequenceNumber } = childResolved;
       childReadKey = await unsealChildReadKey(
         childRef.readKeySealed,
         parentReadKey,
@@ -103,6 +114,10 @@ export async function resolveChildren(
         modifiedAt: node.modifiedAt,
         sequence: Number(sequenceNumber),
       });
+    } catch {
+      // Any per-child resolve/unseal failure -- skip it, don't fail the
+      // whole listing (see skip semantics above).
+      continue;
     } finally {
       childReadKey?.fill(0);
     }
