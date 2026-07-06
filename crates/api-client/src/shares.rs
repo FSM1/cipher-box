@@ -1,15 +1,22 @@
-//! Share revocation endpoints for the CipherBox API.
+//! Share revocation and sent-share listing endpoints for the CipherBox API.
 //!
-//! Mirrors the TypeScript `@cipherbox/api-client` share-revocation contract used
-//! by the web/SDK delete path. The desktop FUSE mount calls
+//! Mirrors the TypeScript `@cipherbox/api-client` share contract used by the
+//! web/SDK delete and grant-awareness paths. The desktop FUSE mount calls
 //! [`revoke_shares_for_items`] before destructively removing a deleted node so
 //! that any active Share/ShareInvite rows for that node are hard-revoked BEFORE
-//! the eventual unpin can orphan a sharee.
+//! the eventual unpin can orphan a sharee. [`collect_sent_shares`] is the
+//! client-side source of `activeGrantRootIpnsNames` (the set of root IPNS
+//! names the authenticated user has actively shared out), mirroring the web
+//! client's `GET /shares/sent` call that populates `useShareStore.sentShares`.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::client::ApiClient;
 use crate::error::ApiError;
+
+/// Page size used by [`collect_sent_shares`] when walking `GET /shares/sent`.
+/// Mirrors the server-side `PaginationQueryDto` default (`limit: number = 50`).
+const SENT_SHARES_PAGE_LIMIT: u32 = 50;
 
 /// Maximum number of IPNS names accepted by `POST /shares/revoke-for-items`
 /// in a single request. Mirrors the server-side `@ArrayMaxSize(5000)` guard on
@@ -76,6 +83,115 @@ pub async fn revoke_shares_for_items(
     Ok(())
 }
 
+/// A single row from `GET /shares/sent` — mirrors the server's
+/// `SentShareResponseDto` (`apps/api/src/shares/dto/share-response.dto.ts`)
+/// field-for-field. `root_ipns_name` is the value consumed downstream to
+/// build `activeGrantRootIpnsNames`.
+///
+/// Note: unlike some domain rows, revoked shares are hard-deleted server-side
+/// (see `revoke_shares_for_items`), so there is no `revoked`/status field on
+/// the wire — every row returned by this endpoint is, by construction, an
+/// active grant.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SentShareResponse {
+    /// UUID of the share row.
+    pub share_id: String,
+    /// Recipient secp256k1 public key (0x04...).
+    pub recipient_public_key: String,
+    /// Hex-encoded ECIES descriptor ref for read access.
+    pub read_descriptor_ref: String,
+    /// Hex-encoded ECIES descriptor ref for write access, or `None` for
+    /// read-only shares.
+    pub write_descriptor_ref: Option<String>,
+    /// UUID of the root shared node.
+    pub root_node_id: String,
+    /// IPNS name (k51...) of the root shared node — the grant root.
+    pub root_ipns_name: String,
+    /// Generation of the root node at share creation (numeric string).
+    pub root_generation: String,
+    /// Hex-encoded ECIES ciphertext of the display name, or `None` if not
+    /// provided.
+    pub item_name_encrypted: Option<String>,
+    /// ISO-8601 creation timestamp, kept as an opaque string (no client-side
+    /// date parsing is required for grant-root awareness).
+    pub created_at: String,
+}
+
+/// A page of `GET /shares/sent` — mirrors the server's
+/// `PaginatedSentSharesDto`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SentSharesPage {
+    /// The rows in this page.
+    pub shares: Vec<SentShareResponse>,
+    /// Total number of matching rows across all pages (not just this page).
+    pub total: u32,
+}
+
+/// Fetch a single page of the authenticated user's sent shares.
+///
+/// `GET /shares/sent?limit={limit}&offset={offset}` — mirrors
+/// `revoke_shares_for_items`'s authenticated-GET/error-handling shape. An
+/// empty result set (e.g. a user who has never shared anything) is returned
+/// as `Ok(SentSharesPage { shares: vec![], total: 0 })`, not an error.
+pub async fn list_sent_shares(
+    client: &ApiClient,
+    limit: u32,
+    offset: u32,
+) -> Result<SentSharesPage, ApiError> {
+    let path = format!("/shares/sent?limit={}&offset={}", limit, offset);
+    let resp = client.authenticated_get(&path).await?;
+
+    if !resp.status().is_success() {
+        let status = resp.status().as_u16();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(ApiError::ApiResponse {
+            status,
+            message: format!("list sent shares failed: {}", body),
+        });
+    }
+
+    resp.json()
+        .await
+        .map_err(|e| ApiError::DeserializationFailed(format!("sent shares response: {}", e)))
+}
+
+/// Pure pagination-termination decision, extracted so the loop in
+/// [`collect_sent_shares`] is unit-testable without a live HTTP server.
+///
+/// Fetch another page only if the page just fetched was non-empty AND fewer
+/// rows have been collected so far than the server-reported `total`. The
+/// non-empty check guards against a server that reports a stale/incorrect
+/// `total` — an empty page always halts pagination regardless of `total`, so
+/// the loop cannot spin forever.
+fn should_fetch_next_page(last_page_len: usize, collected_len: usize, total: u32) -> bool {
+    last_page_len > 0 && (collected_len as u32) < total
+}
+
+/// Page through `GET /shares/sent` until every sent-share row has been
+/// collected, returning the full grant-root set client-side (the source of
+/// `activeGrantRootIpnsNames` — RESEARCH Pitfall 2 / Open Question 2).
+///
+/// A user with no sent shares gets back an empty `Vec`, not an error.
+pub async fn collect_sent_shares(client: &ApiClient) -> Result<Vec<SentShareResponse>, ApiError> {
+    let mut collected: Vec<SentShareResponse> = Vec::new();
+    let mut offset: u32 = 0;
+
+    loop {
+        let page = list_sent_shares(client, SENT_SHARES_PAGE_LIMIT, offset).await?;
+        let page_len = page.shares.len();
+        collected.extend(page.shares);
+
+        if !should_fetch_next_page(page_len, collected.len(), page.total) {
+            break;
+        }
+
+        offset += SENT_SHARES_PAGE_LIMIT;
+    }
+
+    Ok(collected)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,5 +244,70 @@ mod tests {
             ApiError::ApiResponse { status, .. } => assert_eq!(status, 400),
             other => panic!("expected ApiResponse 400, got {:?}", other),
         }
+    }
+
+    /// `SentShareResponse` deserializes from the exact camelCase wire shape
+    /// produced by `SentShareResponseDto`, including the two nullable fields.
+    #[test]
+    fn sent_share_response_deserializes_camel_case() {
+        let json = r#"{
+            "shareId": "share-1",
+            "recipientPublicKey": "0x04abc",
+            "readDescriptorRef": "deadbeef",
+            "writeDescriptorRef": null,
+            "rootNodeId": "node-1",
+            "rootIpnsName": "k51one",
+            "rootGeneration": "3",
+            "itemNameEncrypted": null,
+            "createdAt": "2026-01-01T00:00:00.000Z"
+        }"#;
+        let share: SentShareResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(share.share_id, "share-1");
+        assert_eq!(share.root_ipns_name, "k51one");
+        assert_eq!(share.write_descriptor_ref, None);
+        assert_eq!(share.item_name_encrypted, None);
+    }
+
+    /// `SentSharesPage` deserializes the `{ shares, total }` envelope
+    /// (`PaginatedSentSharesDto`), including an empty-result page.
+    #[test]
+    fn sent_shares_page_deserializes_including_empty() {
+        let json = r#"{"shares":[],"total":0}"#;
+        let page: SentSharesPage = serde_json::from_str(json).unwrap();
+        assert!(page.shares.is_empty());
+        assert_eq!(page.total, 0);
+    }
+
+    /// Pagination continues while a non-empty page was returned and fewer
+    /// rows have been collected than the reported total.
+    #[test]
+    fn should_fetch_next_page_continues_when_more_remain() {
+        assert!(should_fetch_next_page(50, 50, 120));
+        assert!(should_fetch_next_page(50, 100, 120));
+    }
+
+    /// Pagination halts once the collected count reaches the reported total.
+    #[test]
+    fn should_fetch_next_page_stops_when_total_reached() {
+        assert!(!should_fetch_next_page(20, 120, 120));
+        assert!(!should_fetch_next_page(0, 120, 120));
+    }
+
+    /// An empty page halts pagination immediately even if the server
+    /// (incorrectly) still reports a higher total — this is what prevents an
+    /// infinite loop against a misbehaving/lagging server.
+    #[test]
+    fn should_fetch_next_page_stops_on_empty_page_regardless_of_total() {
+        assert!(!should_fetch_next_page(0, 0, 999));
+    }
+
+    /// `list_sent_shares` against an unreachable host surfaces the transport
+    /// error via `ApiError::RequestFailed` (through `authenticated_get`'s
+    /// `?`), mirroring the revoke path's network-error handling.
+    #[tokio::test]
+    async fn list_sent_shares_against_unreachable_host_errors() {
+        let client = ApiClient::new("http://127.0.0.1:1");
+        let result = list_sent_shares(&client, 50, 0).await;
+        assert!(result.is_err());
     }
 }
