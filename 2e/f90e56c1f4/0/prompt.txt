@@ -1,0 +1,1551 @@
+Resume /gsd-plan-phase 69. First read the handoff: /private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/d4677bf5-56d4-454f-8fd3-6ca479857b79/scratchpad/phase69-plan-resume-state.md — it has the full recovery state. Then execute the RESUME ACTIONS in order: (1) write the missing 69-14 WinFsp/Windows plan via a fresh gsd-planner (single-plan mode; 69-01..13 already exist) with requirements:[TEST-03] and autonomous:false; (2) spawn gsd-plan-checker over all 14 plans and run the revision loop if needed; (3) pass §13 requirements-coverage + §13a decision-coverage gates; (4) record STATE (§13b), annotate ROADMAP (§13c), commit plans (§13d, verify via git log — commit helper false-negatives); (5) then AUTO-ADVANCE straight into execution via Skill gsd-execute-phase args "69 --auto --no-transition" — the user explicitly authorized continuing into execution once planning is done, so do NOT re-ask.
+
+---
+
+<task-notification>
+<task-id>aadb9d9f85e6a7738</task-id>
+<tool-use-id>toolu_01TZTNHJG5HFRTQLwrjJQnd5</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/aadb9d9f85e6a7738.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 69-03 phase 69" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Both commits landed cleanly. Per instructions I do NOT update STATE.md/ROADMAP.md — the orchestrator owns that after the wave merges. Plan execution complete.
+
+## PLAN COMPLETE
+
+**Plan:** 69-03
+**Tasks:** 1/1 complete
+**SUMMARY:** /Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-aadb9d9f85e6a7738/.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-03-SUMMARY.md
+
+&lt;worktree_metadata&gt;
+{"agent_id":"69-03","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-aadb9d9f85e6a7738","branch":"worktree-agent-aadb9d9f85e6a7738","expected_base":"4619c5110d8236e29ff6b9377885e4f831309f0f"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `c77d536fb`: feat(69-03): api-client list_sent_shares GET /shares/sent wrapper
+- `a9b950965`: docs(69-03): complete list_sent_shares api-client plan
+
+**Duration:** ~4 min
+
+**Key files:**
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-aadb9d9f85e6a7738/crates/api-client/src/shares.rs` — added `list_sent_shares`, `collect_sent_shares`, `SentShareResponse`, `SentSharesPage`, and `should_fetch_next_page`, plus 6 unit tests. `cargo test -p cipherbox-api-client shares` (10/10 pass) and `cargo check --workspace` both green; no fmt drift introduced in this file.
+
+Notable finding pinned against the live API (`apps/api/src/shares/dto/share-response.dto.ts`): `SentShareResponseDto` has no `revoked`/status field since shares are hard-deleted on revoke, so every row `/shares/sent` returns is inherently an active grant — documented in the SUMMARY's Decisions section, no deviation from plan intent.</result>
+<usage><subagent_tokens>94959</subagent_tokens><tool_uses>33</tool_uses><duration_ms>317139</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-aadb9d9f85e6a7738</worktreePath><worktreeBranch>worktree-agent-aadb9d9f85e6a7738</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>adc93d30b3926a32b</task-id>
+<tool-use-id>toolu_01QbrWws6de9ipMG9bHpkpKu</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/adc93d30b3926a32b.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 69-02 phase 69" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 69-02
+**Tasks:** 2/2 complete
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-adc93d30b3926a32b/.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-02-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"69-02","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-adc93d30b3926a32b","branch":"worktree-agent-adc93d30b3926a32b","expected_base":"4619c5110d8236e29ff6b9377885e4f831309f0f"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `04b3e10a8`: feat(69-02): RotationHighWater anti-rollback gate over injected HighWaterStore
+- `be98df614`: feat(69-02): durable JSON-sidecar floor store adjacent to journal dir (D-03)
+- `16f47c6da`: docs(69-02): complete rust rot-07 durable anti-rollback floor plan
+
+**Duration:** ~8 min
+
+### Summary
+
+Ported the ROT-07 durable anti-rollback gate from `packages/sdk/src/state/rotation-high-water.ts` into `crates/sdk`:
+
+- `crates/sdk/src/rotation/mod.rs` + `crates/sdk/src/rotation/high_water.rs` — `RotationHighWater&lt;S: HighWaterStore&gt;` with a fail-closed `enforce_resolved` matching the exact TS ordering (validate live input → generation-floor → cold-device-versionFloor-or-warm-seq-floor → bump both monotonic-max), `RotationError` thiserror enum, 10 unit tests.
+- `crates/sdk/src/floor_store.rs` — `JsonSidecarFloorStore`, a durable `HighWaterStore` implementation writing an atomic JSON sidecar (temp file + rename, 0600 via `OpenOptionsExt`), no new storage dependency. 6 unit tests including a restart-survival proof and an end-to-end proof through `RotationHighWater` itself.
+- `crates/sdk/src/lib.rs` updated with `pub mod rotation;` / `pub mod floor_store;` and re-exports.
+
+All verification passed: `cargo test -p cipherbox-sdk` (75 tests, 0 failures), `cargo check --workspace` clean, `cargo clippy -p cipherbox-sdk --lib` clean on new files, no `sled`/`redb`/`rusqlite` in `crates/sdk/Cargo.toml`.
+
+One operational note: the worktree had no `node_modules`, causing the husky pre-commit hook to fail on the first commit attempt (`lint-staged` not found). Ran `pnpm install --frozen-lockfile` and retried successfully — no code changes required.
+
+STATE.md and ROADMAP.md were intentionally left untouched per orchestrator ownership.</result>
+<usage><subagent_tokens>150729</subagent_tokens><tool_uses>54</tool_uses><duration_ms>582041</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-adc93d30b3926a32b</worktreePath><worktreeBranch>worktree-agent-adc93d30b3926a32b</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ace0fedf2b7f839e6</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/ace0fedf2b7f839e6.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 69-04 phase 69" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 69-04
+**Tasks:** 2/2 complete
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-ace0fedf2b7f839e6/.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-04-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"69-04","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-ace0fedf2b7f839e6","branch":"worktree-agent-ace0fedf2b7f839e6","expected_base":"b0d1b792edce73e19c95dcccfcb5fe413dbef3c2"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `59368f57e`: test(69-04): add failing Node seal AAD KAT + transplant case
+- `6ea5bc718`: feat(69-04): AAD-bound Node seal/unseal (symmetric, no ECIES)
+- `95cecdd67`: docs(69-04): complete Node AAD-bound seal/unseal plan
+
+**Duration:** ~5 min (plus environment setup: `pnpm install --frozen-lockfile` to fix a missing `node_modules` husky pre-commit dependency in the fresh worktree)
+
+**Key files:**
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-ace0fedf2b7f839e6/crates/core/src/node/seal.rs` (new)
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-ace0fedf2b7f839e6/crates/core/tests/node_seal_vectors.rs` (new)
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-ace0fedf2b7f839e6/crates/core/src/node/mod.rs` (modified: `pub mod seal;`)
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-ace0fedf2b7f839e6/crates/core/src/node/types.rs` (modified: `NodeError::SealFailed`)
+
+**Verification:** `cargo test -p cipherbox-core --test node_seal_vectors` (7/7 pass), `cargo test -p cipherbox-core` (79 + 3 + 7 pass), `cargo check --workspace` clean, `grep -n 'ecies' crates/core/src/node/seal.rs` empty.
+
+One deviation (Rule 1, documented in SUMMARY): a doc-comment initially referenced the lowercase substring `ecies::unwrap_key` to explain what the FUSE swap replaces — tripped the plan's literal `grep -n 'ecies'` truths-check even though no ECIES code was used. Reworded to "ECIES key-unwrap call" (no behavior change).
+
+STATE.md and ROADMAP.md were **not** modified — left for the orchestrator per worktree-mode contract.</result>
+<usage><subagent_tokens>124928</subagent_tokens><tool_uses>43</tool_uses><duration_ms>592475</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-ace0fedf2b7f839e6</worktreePath><worktreeBranch>worktree-agent-ace0fedf2b7f839e6</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0a036d137d301392</task-id>
+<tool-use-id>toolu_01EYoWNjjfKjbgWhuoCD8Lu7</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/a0a036d137d301392.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 69-05 phase 69" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>No STATE.md/ROADMAP.md changes. Everything matches the plan's `files_modified` scope (plus `high_water.rs` and `lib.rs` for the required error variant and re-exports). All done.
+
+## PLAN COMPLETE
+
+**Plan:** 69-05
+**Tasks:** 1/1
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a0a036d137d301392/.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-05-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"69-05","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a0a036d137d301392","branch":"worktree-agent-a0a036d137d301392","expected_base":"b0d1b792edce73e19c95dcccfcb5fe413dbef3c2"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- ee1a24eb8: test(69-05): add failing test for has_covering_grant scope-exit predicate
+- 3ac5b5240: feat(69-05): implement has_covering_grant and maybe_rotate_on_scope_exit
+- 1bb829461: docs(69-05): complete grant-root scope-exit predicate plan
+
+**Duration:** ~6 min
+
+**Key files:**
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a0a036d137d301392/crates/sdk/src/rotation/scope.rs` (new — `has_covering_grant`, `maybe_rotate_on_scope_exit`, `CoverageParams`, `LocalGrantRecord`, `ScopeExitResult`, 16 tests)
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a0a036d137d301392/crates/sdk/src/rotation/mod.rs` (wired `pub mod scope;` + re-exports)
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a0a036d137d301392/crates/sdk/src/rotation/high_water.rs` (added `RotationError::RotateFailed(String)` variant)
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a0a036d137d301392/crates/sdk/src/lib.rs` (re-exports)
+
+Verification: `cargo test -p cipherbox-sdk rotation::scope` (16/16 pass, includes the SC#4/ROT-02 zero-rotation invariant and T-63-17 anti-malicious-relay cross-check cases) and `cargo check --workspace` both green. No STATE.md/ROADMAP.md changes made (orchestrator-owned).</result>
+<usage><subagent_tokens>137553</subagent_tokens><tool_uses>48</tool_uses><duration_ms>441522</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a0a036d137d301392</worktreePath><worktreeBranch>worktree-agent-a0a036d137d301392</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a4cb70aa75274e63f</task-id>
+<tool-use-id>toolu_019pxaSX6mmZKXgpQMhHhx5g</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/a4cb70aa75274e63f.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 69-06 phase 69" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 69-06
+**Tasks:** 1/1 complete
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a4cb70aa75274e63f/.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-06-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"69-06","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a4cb70aa75274e63f","branch":"worktree-agent-a4cb70aa75274e63f","expected_base":"b72b8c5d059f098eedfadda1642dfbd7d82922b9"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `3ff8548c9`: feat(69-06): SDK-owned gated list_folder/ResolvedChild read chain (SC#6)
+- `b72b8c5d0`: docs(69-06): complete SDK-owned gated read chain plan
+
+**Duration:** ~45 min
+
+### What was built
+
+New file `crates/sdk/src/listing.rs` (wired into `crates/sdk/src/lib.rs`):
+
+- `ResolvedChild { ipns_name, name, kind, size: Option&lt;u64&gt;, modified_at, sequence }` — six fields exactly as specified.
+- `pub async fn list_folder(fetcher, high_water, ipns_name, folder_read_key, on_updated)` and `list_shared_folder(...)` (delegates to `list_folder`) — the single gated read entrypoints.
+- `pub(crate) async fn resolve_published_node(...)` — gate-first raw resolve, **not** `pub` beyond the crate (D-05/SC#6).
+- Gate ordering: `RotationHighWater::enforce_resolved` always runs before `decode_published_node`/`unseal_node` touch the fetched bytes; a regressed generation/seq fails the whole listing closed.
+- Pitfall 4 / M1: cold-child gating sources `generation`/`version_floor` from the parent `SealedChildRef` mirror, never the child's own `PublishedNode.generation` — verified by a dedicated unit test that would fail if the source were swapped.
+- `FolderUpdatedEvent` callback fires on a successful listing (68.2 `folder:updated` analog).
+- `NodeFetcher` trait — injected fetch seam so all 6 unit tests run with a fake in-memory fetcher, zero live API/IPFS calls.
+
+Verification: `cargo test -p cipherbox-sdk listing` (6/6 pass) and `cargo check --workspace` both green; `listing.rs` is clippy-clean and rustfmt-clean.
+
+One notable deviation is documented in the SUMMARY: test fixtures initially used non-UUID node IDs, which the already-shipped `build_node_aad` fail-closed rejects — fixed by using real UUIDv5 strings in test fixtures (no production-code change needed).</result>
+<usage><subagent_tokens>237261</subagent_tokens><tool_uses>61</tool_uses><duration_ms>785677</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a4cb70aa75274e63f</worktreePath><worktreeBranch>worktree-agent-a4cb70aa75274e63f</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a7a24f3f7265f1ba2</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/a7a24f3f7265f1ba2.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 69-08 phase 69" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 69-08
+**Tasks:** 2/2 complete
+**SUMMARY:** `.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-08-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"69-08","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a7a24f3f7265f1ba2","branch":"worktree-agent-a7a24f3f7265f1ba2","expected_base":"93bde9dc29f58ab8e6e200d080a3a9b9ba277011"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `60915b36b`: feat(69-08): rotate_one per-node CAS commit + terminal-owner zeroization
+- `48e8b78c2`: feat(69-08): rotate_read_from_node scope-root-first BFS + parent-tracking reseal
+- `93bde9dc2`: docs(69-08): complete rotation engine walk core plan
+
+**Duration:** ~55 min
+
+### Summary of work
+
+Created `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a7a24f3f7265f1ba2/crates/sdk/src/rotation/engine.rs`, a Rust port of `packages/sdk-core/src/rotation/engine.ts`'s `rotateOne`/`rotateReadFromNode` walk mechanics:
+
+- `rotate_one`: mints a fresh read key, reseals via `seal_node`, CAS-publishes through an injected `RotationDeps` trait seam. `parent_read_key: &amp;[u8]` is a borrow — the type system, not just convention, prevents zeroing the caller's buffer. `read_key_prime` is zeroed only on `rotate_one`'s own failure paths.
+- `rotate_read_from_node`: rotates the scope root first (the revocation cut), then BFS-walks children via `ParentTrackingState`, which batches exactly one republish per parent regardless of child count, and persists `RotationJobRecord` after every per-node commit.
+- 9 unit tests against an in-memory `FakeDeps` fixture (no live IPNS/IPFS).
+
+Also updated `crates/sdk/src/rotation/mod.rs` and `crates/sdk/src/lib.rs` to wire/re-export the new module.
+
+Two notable deviations (both documented in SUMMARY.md): test node ids needed real UUIDs (crates/core's `build_node_aad` fail-closes on non-UUID ids), and a `rustfmt`-on-crate-root gotcha that briefly reformatted unrelated files (reverted before committing — verified via `git status --short` scope checks on both commits).
+
+This plan is `type: tdd` but was executed with combined test+implementation commits rather than separate RED/GREEN commits — documented under "TDD Gate Compliance" in the SUMMARY.
+
+STATE.md/ROADMAP.md/REQUIREMENTS.md were intentionally left untouched per worktree-mode instructions — the orchestrator owns those updates after merge.</result>
+<usage><subagent_tokens>357994</subagent_tokens><tool_uses>146</tool_uses><duration_ms>1880174</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a7a24f3f7265f1ba2</worktreePath><worktreeBranch>worktree-agent-a7a24f3f7265f1ba2</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a8cce22ff1ad4dcdb</task-id>
+<tool-use-id>toolu_01YMRjRuiXqcSur9ABjbaqtF</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/a8cce22ff1ad4dcdb.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 69-09 phase 69" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE (partial — architectural scope gap discovered and documented)
+
+**Plan:** 69-09
+**Tasks:** 1/3 executed (Task 3); Tasks 1-2 blocked by a discovered Rule 4 architectural scope gap
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a8cce22ff1ad4dcdb/.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-09-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"69-09","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a8cce22ff1ad4dcdb","branch":"worktree-agent-a8cce22ff1ad4dcdb","expected_base":"d24f86554a2c92ef0668075c55f7dbfe9371e910"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `87be79156` — ci(69-09): SC#6 single gated read-entrypoint grep gate
+- `b70b81819` — docs(69-09): complete FUSE read-path investigation plan
+
+**Duration:** ~35 min
+
+**What happened:** I investigated the plan's Task 1/Task 2 objective (swap `ecies::unwrap_key` for symmetric `unseal_child_read_key`/`unseal_node` at named call sites in `crates/fuse/src/{inode.rs,replay.rs,content_ops.rs}`) before writing any code. Concrete grep evidence showed the functions containing those call sites (`InodeTable::populate_folder`, `resolve_folder_key`, `fetch_and_decrypt_content_async`) are called from at least 9 additional `crates/fuse` files that are **not** in this plan's `files_modified` (`fs.rs`, `read_ops.rs`, `dir_ops.rs`, `cache.rs`, `events.rs`, `poll.rs`, `operations.rs`, and three `platform/windows/*.rs` files), and that the write side (`write_ops/implementation/{mkdir,upload,delete,rename}.rs`, also out of scope) has never been migrated to produce Node v3/`SealedChildRef`-shaped data — there is no symmetric per-folder read-key hierarchy anywhere in the live write path to unwrap against yet. A partial swap would either fail `cargo check --workspace` or ship a decryption regression for every existing vault. Per deviation Rule 4 (architectural changes require a human/replan decision), I did not attempt the unsafe rewrite. I did fully implement Task 3 (the SC#6 CI grep gate in `.github/workflows/ci.yml`, `cargo-linux` job), which is genuinely self-contained and safe. `inode.rs`/`replay.rs`/`content_ops.rs` remain byte-for-byte unmodified — no regression risk introduced.
+
+This finding also applies transitively to **69-10** (next wave), whose own plan text assumes 69-09 fully moved the read path off the legacy types with only `metadata.rs`/`journal_helpers.rs` remaining — that assumption does not hold; the same ~9-file gap exists there too. This is flagged prominently in the SUMMARY's "Next Phase Readiness" section for the orchestrator/next replanning pass.</result>
+<usage><subagent_tokens>226512</subagent_tokens><tool_uses>45</tool_uses><duration_ms>589080</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a8cce22ff1ad4dcdb</worktreePath><worktreeBranch>worktree-agent-a8cce22ff1ad4dcdb</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a7e0b7ddfdc981a0c</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/a7e0b7ddfdc981a0c.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 69-11 phase 69" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 69-11
+**Tasks:** 1/1
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a7e0b7ddfdc981a0c/.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-11-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"69-11","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a7e0b7ddfdc981a0c","branch":"worktree-agent-a7e0b7ddfdc981a0c","expected_base":"d24f86554a2c92ef0668075c55f7dbfe9371e910"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `bfc5bfefc`: feat(69-11): verify_subtree_clean + crash-safe rotation resume ROT-06
+- `bb5fc7b28`: docs(69-11): add plan 11 execution summary
+
+**Duration:** ~25 min
+
+## Summary
+
+Added the crash-safety resume layer to `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a7e0b7ddfdc981a0c/crates/sdk/src/rotation/engine.rs`:
+
+- `verify_subtree_clean` — rebuilds the dirty rotation frontier from published IPNS records (compares each child's own published `generation` against the root's `SealedChildRef` mirror; no child unsealing needed).
+- Restructured `rotate_read_from_node` to branch on `rotate_one(root)`'s outcome: a fresh commit takes the existing path; a resume-skip now calls `verify_subtree_clean` — an empty frontier converges immediately (zero further publishes), a non-empty frontier folds into the same BFS loop.
+- Documented the M1 contract (module doc + `RotationJobRecord` doc): callers must seed `completed_node_ids` from the crash-time job record, or the fast idempotency path never fires and already-committed nodes get double-bumped.
+
+Also exported `verify_subtree_clean` / `DirtyFrontierEntry` from `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a7e0b7ddfdc981a0c/crates/sdk/src/rotation/mod.rs`.
+
+4 new tests added (all passing): 2 unit tests for `verify_subtree_clean` in isolation, plus the 2 required scenarios — resume converges without double-bumping when seeded from the crash-time record, and the empty-seed hazard double-bumps the root while the seeded path does not.
+
+`cargo test -p cipherbox-sdk rotation::engine` — 13/13 pass. `cargo check --workspace` — green. Noted one deliberate, documented scope limitation inherited unchanged from the TS reference (`packages/sdk-core/src/rotation/engine.ts`): a child that never individually rotated at all is invisible to the generation-comparison dirty check — full detail and rationale is in the SUMMARY and in code comments.
+
+STATE.md / ROADMAP.md were not touched (orchestrator-owned).</result>
+<usage><subagent_tokens>193952</subagent_tokens><tool_uses>57</tool_uses><duration_ms>949204</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a7e0b7ddfdc981a0c</worktreePath><worktreeBranch>worktree-agent-a7e0b7ddfdc981a0c</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a44f3260ed8841b81</task-id>
+<tool-use-id>toolu_01KY3bh3GMZtw5Lpb7bA131z</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/a44f3260ed8841b81.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 69-12 phase 69" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 69-12
+**Tasks:** 2/2
+**SUMMARY:** `.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-12-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"69-12","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a44f3260ed8841b81","branch":"worktree-agent-a44f3260ed8841b81","expected_base":"031f61a919df2acf8731fac3ca2def13734f3ccb"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `be4a0cb81`: feat(69-12): CRIT-1 content-key rotation + HIGH-3 inner-grant re-mint + HIGH-4 CAS-409 re-fetch-merge
+- `031f61a91`: docs(69-12): complete rotation engine revocation closures plan
+
+**Duration:** ~55 minutes
+
+### Summary
+
+Closed the three revocation gaps in `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a44f3260ed8841b81/crates/sdk/src/rotation/engine.rs`:
+
+- **CRIT-1**: `rotate_one` mints a fresh `fileKey` for File nodes (`mint_file_key_on_rotate`), threading it into the same re-seal via `build_resealed_node`; `CommittedRotation.content_rekey_pending` marks this lazily (no eager re-encrypt, ADR 0002).
+- **HIGH-3**: New `RotationDeps` seams (`query_grants_rooted_at`/`update_grant`/`delete_grant`, default no-op) back `re_mint_grants_rooted_at`, called after every per-node commit — non-revoked recipients get ECIES-re-wrapped descriptors, revoked recipients are hard-deleted.
+- **HIGH-4**: `RotationDeps::publish_with_cas` now returns `PublishAttempt::{Published,Conflict}` instead of erroring on CAS-409. `seal_and_publish` retries (max 3 attempts) via `merge_concurrent_children`/`merge_children`, re-fetching and re-merging the remote's children before re-sealing — never a blind re-seal from a stale list. The merged children list also flows into `CommittedRotation.children` so a concurrently-added child gets its own BFS-walk rotation too (stronger than the TS reference parity target).
+
+Verification: `cargo test -p cipherbox-sdk rotation::engine` — 17/17 pass; full crate `cargo test -p cipherbox-sdk` — 114/114 pass, zero regressions; `cargo check --workspace` green; `cargo clippy -p cipherbox-sdk --tests` — zero new warnings.
+
+One minor deviation (Rule 3, documented in SUMMARY): extended `crates/sdk/src/rotation/mod.rs`'s barrel to export the two new public types (`GrantRow`, `PublishAttempt`).</result>
+<usage><subagent_tokens>254764</subagent_tokens><tool_uses>73</tool_uses><duration_ms>1119061</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a44f3260ed8841b81</worktreePath><worktreeBranch>worktree-agent-a44f3260ed8841b81</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aad8a03ff773d0215</task-id>
+<tool-use-id>toolu_01MxtpyAx357P6pcCybheFov</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/aad8a03ff773d0215.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 69-09 P1 phase 69" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I am halting this plan and returning a blocker to the orchestrator, rather than committing a broken tree. I made zero file modifications; the green baseline is intact.
+
+## BLOCKER — plan 69-09 not completable to its green boundary as scoped
+
+**Type:** decision (Rule 4 — architectural-magnitude scope discovery)
+**Plan:** 69-09
+**Progress:** 0/3 tasks committed. No edits made. Worktree tree clean, `cargo check -p cipherbox-fuse` green (baseline preserved).
+
+### Why I stopped instead of committing
+
+Plan 69-09 is an *irreducible atomic* cutover: per research §2.5, the ONLY guaranteed-green checkpoint is the plan boundary (Task 3), and Tasks 1–2 are red by design. There is no mergeable partial state — any incomplete flip leaves `cargo check --workspace` red, which the orchestrator will not merge and which destroys the current green baseline. So the decision is binary: reach full green in one pass, or don't touch the tree. My independent verification shows full green in one autonomous pass is not achievable, because the plan's premise (a "consumer cutover") is incomplete.
+
+### Grounded findings (live grep/check this session)
+
+1. **The Node write plane does not exist as callable infrastructure.** The fuse write path (`journal_helpers.rs:421`, mkdir/upload/delete/rename) emits `cipherbox_core::folder::FolderMetadata`/`FileMetadata` with ECIES-wrapped keys. There is **no** `build_node`/`create_node`/`publish_node` helper anywhere in `crates/core` or `crates/sdk` (grep for build/new/create node → empty). The only `PublishedNode` producers are listing *tests* and `rotation/engine.rs` (which only *reseals existing* nodes). Emitting `Node + SealedChildRef + PublishedNode` from the write path therefore requires building a net-new subsystem: per-node readKey generation, node-body encode, `seal_node`, `PublishedNode` envelope, the publish machinery, `NodeContent` file bodies, and the D-07 write-body/writeKey plane.
+
+2. **The gated read path (`list_folder`) is not consumable by fuse today.** `crates/fuse` never references `crates/sdk::listing` (grep → zero hits). It does raw IPNS reads via `cipherbox_api_client::ipns::resolve_ipns_verified` + `ipfs::fetch_content` at ~10 sites (content_ops, events, metadata:437/569/739, publish:96/146, fs:529, replay). Routing these through `list_folder` requires a `NodeFetcher` adapter bridging `cipherbox_api_client` → the SDK listing seam AND wiring a `RotationHighWater&lt;S&gt;` store into `CipherBoxFS` — neither exists.
+
+3. **Blast radius:** ~13,161 lines in `crates/fuse/src`, 242 legacy-type references across fuse+sdk+desktop, 39 ECIES sites, plus `crates/sdk/src/queue.rs` (1,958 lines) JournalOp weld and 718 lines of desktop construction sites — all pinned to one all-or-nothing compile boundary.
+
+Research §2.4 itself states the Rust stack "has no such head start — the write plane is still legacy — so the Rust equivalent must do in ONE phase what the web did across 62→65 (write plane) THEN 68.2 (read consolidation)." That is 5 web phases of subsystem construction compressed into one atomic Rust plan with no intermediate green. That is not completable by a single autonomous executor in one pass, and a partial attempt is strictly worse than the current green baseline (unmergeable + destroys working state).
+
+### Recommended re-scope (one strong path)
+
+Split 69-09 (P1) into two sequenced plans, mirroring how the web actually shipped this:
+
+- **P1a — Node write-plane + SDK-listing read adapter as foundation (independently green, additive):** Build the callable write-plane API in `crates/core`/`crates/sdk` (node create/seal/`PublishedNode` emit/publish; D-07 write-body) and a `NodeFetcher`+high-water bridge from `cipherbox_api_client` into `crates/sdk::listing`. Additive alongside legacy types → `cargo check --workspace` stays green at its own boundary. This is the 62–65 write-plane + 68.2 read-adapter equivalent.
+- **P1b — the atomic fuse consumer cutover (the current 69-09):** Now genuinely a mechanical consumer flip — read consumers call `list_folder`, write path calls the P1a write-plane API, `JournalOp` weld + desktop sites move together. This can hit the single green boundary because the infrastructure it consumes already exists and is tested.
+
+Then 69-10 (P2 delete legacy types), 69-13 (P3 grant-gate), 69-14 (P4 WinFsp) follow unchanged.
+
+I did not write a SUMMARY.md (that signals completion) and did not commit. The orchestrator should re-plan before re-dispatching this wave.
+
+&lt;worktree_metadata&gt;
+{"agent_id":"69-09","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-aad8a03ff773d0215","branch":"worktree-agent-aad8a03ff773d0215","expected_base":"2259d39365948af209dde8fae065f660ce6fc1dc"}
+&lt;/worktree_metadata&gt;</result>
+<usage><subagent_tokens>115816</subagent_tokens><tool_uses>13</tool_uses><duration_ms>228552</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ad94056ee5b1d8f7b</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/ad94056ee5b1d8f7b.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 69-15 P1a-core" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All 97 tests across `cipherbox-core` pass, `cargo check --workspace` is green. Plan 69-15 is complete.
+
+## PLAN COMPLETE
+
+**Plan:** 69-15
+**Tasks:** 2/2
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-ad94056ee5b1d8f7b/.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-15-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"69-15","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-ad94056ee5b1d8f7b","branch":"worktree-agent-ad94056ee5b1d8f7b","expected_base":"84ac40cc29e0712bb07c0cfea075dc85452f5b95"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `607dcc0e8`: feat(69-15): encode/decode write-body plaintext codec
+- `fc90bbb46`: feat(69-15): seal_published_node both-bodies + writeSealed KAT
+- `2585217a6`: docs(69-15): complete Node write-body codec + both-bodies seal plan
+
+**Duration:** ~15 min
+
+**Key files:**
+- `crates/core/src/node/encode.rs` — added `encode_write_body`
+- `crates/core/src/node/decode.rs` — added `decode_write_body`
+- `crates/core/src/node/seal.rs` — added `seal_published_node`
+- `crates/core/src/node/mod.rs` — re-exported new codec functions
+- `crates/core/tests/node_write_body_vectors.rs` — new writeSealed KAT test
+
+Verification: `cargo test -p cipherbox-core` → 97/97 passing; `cargo check --workspace` green; `grep -n 'ecies' crates/core/src/node/{encode,seal}.rs` empty; diff scoped to exactly `crates/core/src/node/*` + one new test file (no `crates/fuse` edits, no legacy `crates/core::folder` deletion). No deviations from plan — one incidental `cargo fmt -p` over-reformat of unrelated files was caught and reverted before committing (noted in SUMMARY).</result>
+<usage><subagent_tokens>179395</subagent_tokens><tool_uses>69</tool_uses><duration_ms>529650</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-ad94056ee5b1d8f7b</worktreePath><worktreeBranch>worktree-agent-ad94056ee5b1d8f7b</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a80f26fc26be8b2a5</task-id>
+<tool-use-id>toolu_01BLraWBrTFSBLXGqBYjGpkv</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/a80f26fc26be8b2a5.output</output-file>
+<status>failed</status>
+<summary>Agent "Execute plan 69-16 P1a-sdk" failed: Agent terminated early due to an API error: API Error: Response stalled mid-stream. The response above may be incomplete.</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I should use the fully-qualified `ecies::wrap_key` path (matching `registry.rs`'s convention) to satisfy the plan's grep-based acceptance check for ECIES usage. Let me fix that.</result>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a80f26fc26be8b2a5</worktreePath><worktreeBranch>worktree-agent-a80f26fc26be8b2a5</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a39fe060ae5cde8e8</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/a39fe060ae5cde8e8.output</output-file>
+<status>failed</status>
+<summary>Agent "Execute plan 69-09 P1b atomic FUSE cutover" failed: Agent terminated early due to an API error: You've hit your session limit · resets 2pm (Europe/Berlin)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>This `populate_folder` alone is a ~600-line intricate reconciliation function, and it is one of many across replay.rs (1612 lines), metadata.rs (1343 lines), journal_helpers.rs (719 lines), and the write ops. Let me establish the baseline build state and read the CI Rust lane, which is the one independently-completable artifact.</result>
+</task-notification>
+
+---
+
+please continue
+
+---
+
+<task-notification>
+<task-id>a73d47a9ef1c322ae</task-id>
+<tool-use-id>toolu_015MZ7C2krmrtW26Z74Yy2cv</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/a73d47a9ef1c322ae.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 69-09 P1b atomic FUSE cutover (retry)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Working tree is clean — I have made zero edits, by design, having reached a definitive architectural conclusion rather than forcing broken code. Here is my honest status report.
+
+## Green-boundary status: NOT REACHED — halting on an architectural blocker
+
+**Commits made:** none. Branch `worktree-agent-a73d47a9ef1c322ae`, HEAD unchanged at base `9ceefb22b`. Working tree clean. I deliberately made no edits — writing speculative InodeKind/write-path changes would be the "force partial/broken work to look complete" the brief forbids, and a RED worktree won't merge regardless.
+
+**Blocker classification: ARCHITECTURAL (needs re-scope, not resume or another session).**
+
+I did not repeat the prior attempt's failure mode (dying in exploration). I read the full P1a foundation I was told to consume (`core/node/{types,seal}.rs`, `sdk/{emit,adapter,listing}.rs`) and the exact fuse consumers, and found two hard, evidence-grounded facts that break the plan's premise:
+
+### Finding 1 — the plan's central "landmine 1 cross-crate weld" is stale/nonexistent
+The plan's headline weld and an explicit acceptance criterion are:
+&gt; `crates/sdk/src/queue.rs` `JournalOp::MkdirPublish.parent_metadata: cipherbox_core::folder::FolderMetadata` → repoint... grep `folder::FolderMetadata` in queue.rs returns empty.
+
+Against the current tree (`grep -n 'FolderMetadata\|parent_metadata\|cipherbox_core' crates/sdk/src/queue.rs`) that field **does not exist**. `JournalOp::{UploadFile,MkdirPublish}` carry only hex-string fields (`child_folder_key_hex`, `wrapped_key_hex`, `parent_ipns_key_hex`, …). The `parent_metadata: FolderMetadata` the research cited actually lives in the fuse-side `MkdirJournalResult` struct (`journal_helpers.rs:97`), not the cross-crate `JournalOp`. The acceptance criterion is already trivially satisfied; the "cross-crate compile unit" that justified atomicity isn't there. The research itself flagged this risk ("re-verify grep line numbers if execution is delayed") and rated the P1 task decomposition as its only MEDIUM-confidence item.
+
+### Finding 2 (the real blocker) — the foundation cannot materialize a *writable* InodeKind
+The plan says "populate_folder takes Node/`ResolvedChild`; child read-key via `unseal_child_read_key`." But:
+
+- `ResolvedChild` (`listing.rs:104`) carries **no key material** — only `{ipns_name, name, kind, size, modified_at, sequence}`. `resolve_child` unseals the child read-key and immediately zeroizes it (D-09), and it **never unseals the write-body** (`NodeWriteBody` = `ipns_private_key` + `write_children`).
+- The current `InodeKind::{Folder,File}` (`inode.rs:100`) is a full **read-write** owner state: it stores `folder_key`, `ipns_private_key`, `file_ipns_private_key`. The FUSE mount is not a read-only client (the 68.2 web mirror was) — it signs IPNS records and seals new children under each parent's key, so it needs each node's `read_key` **and** `write_key`/`ipns_private_key` in memory.
+- No public SDK entrypoint materializes the write plane for an existing tree. `emit.rs` only *mints* fresh single nodes; `listing.rs` is a read-only projection; the raw gated resolve (`resolve_published_node`) and a write-body walk are `pub(crate)`/absent. A fuse-side write-plane walk would either violate SC#6 (raw resolve in `crates/fuse/src`) or require a new gated write-plane materialization API the foundation never shipped.
+
+So "read unwraps exactly what write seals" holds for a read-only listing client but **not** for the read-write FUSE owner. The P1a foundation (69-06 listing, 69-16 emit/adapter) delivered read-only listing + single-node emit, but omitted the writable-tree materialization walk that flipping `InodeKind` to node/v3 strictly requires. That is a missing foundational plan, not something P1b can hand-roll without either an SC#6 violation or a large out-of-scope SDK addition.
+
+### Secondary scope gap
+The write path (`journal_helpers.rs` `build_upload/mkdir_journal_entry`) is built on **user-ECIES-per-file/folder under `self.public_key`** plus hex-string `JournalOp` variants. node/v3 seals a child under its **parent node's readKey** (not the user key). Making write emit Node therefore also requires reshaping the `JournalOp` wire format + replay interpretation — which the 3-task plan explicitly does not scope (it scopes only the one non-existent `parent_metadata` field).
+
+### Recommendation
+Do not resume me on this plan as written. Re-scope with a prerequisite foundation plan that adds a **gated write-plane tree-materialization API** to `crates/sdk` (given root read+write keys, walk and return per-node `{read_key, write_key, ipns_private_key}` for the mount, routed through the SC#6 gate) and enrich `ResolvedChild` (or a sibling `ResolvedOwnedChild`) to carry the recovered read key. Then P1b's InodeKind flip becomes mechanically reachable. Also drop/replace the stale "JournalOp weld" framing and add the `JournalOp` wire-format reshape as explicit P1b scope.
+
+**Green-boundary checks (all currently N/A — no code changed):**
+1. `cargo check --workspace` — not attempted (no edits).
+2. `cargo test -p cipherbox-fuse` — not attempted.
+3. `cargo test -p cipherbox-sdk` — passes on base (unchanged), but irrelevant to the flip.
+4. `grep ecies::unwrap_key` in inode.rs/content_ops.rs — still present (unchanged, migration not performed).
+5. SC#6 CI gate — not added.
+
+**Scope deviations:** none applied. **SUMMARY.md:** not written — the plan boundary was not reached, and a "complete" summary would misrepresent status. No `.planning/` state was advanced.</result>
+<usage><subagent_tokens>156312</subagent_tokens><tool_uses>17</tool_uses><duration_ms>292742</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a18969c7eee3bfd36</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/a18969c7eee3bfd36.output</output-file>
+<status>completed</status>
+<summary>Agent "Author plans 69-17, 69-18, revise 69-09" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All three plans validate cleanly. I've left the files uncommitted (no commit was requested; per your workflow, git is the orchestrator's to handle) and did not touch ROADMAP.md to avoid the known truncation hazard on a mid-flight re-scope.
+
+## Summary
+
+**Two new plan files authored:**
+- `/Users/myankelev/Code/random/cipher-box-phase69/.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-17-PLAN.md`
+- `/Users/myankelev/Code/random/cipher-box-phase69/.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-18-PLAN.md`
+
+**69-17 (P1a-2)** — gated write-plane tree-materialization in `crates/sdk/src/listing.rs`: `ResolvedOwnedChild` + `pub(crate) resolve_owned_child` + `pub list_folder_owned`, recovering per-node `{read_key, write_key, ipns_private_key}` by reusing the SAME `pub(crate) resolve_published_node` gate (SC#6) and adding the write-plane half `list_folder`/`resolve_child` discard (`unseal_child_write_key` + `unseal_node(write_sealed)`→`decode_write_body`). D-07 pairing is by child node identity (`published.id == WriteChildRef.child_id`), never ipnsName. Terminal-owner test asserts caller `parent_read_key`/`parent_write_key` byte-unchanged. Additive, `crates/fuse` untouched → `cargo check --workspace` + `cargo test -p cipherbox-sdk` green (workspace-green, like sibling 69-16). `requirements: [SC-01, SC-06]`, `depends_on: ["69-06","69-15","69-16"]`, wave 4.
+
+**69-18 (P1a-3) green-vs-fold decision: GREEN (standalone, sdk-green — NOT folded).**
+One-line rationale: `JournalOp` is self-contained in `crates/sdk/src/queue.rs` (its impl match-arms + tests reshape sdk-green), while its constructors (`journal_helpers.rs`) and reader (`replay.rs`) are in `crates/fuse` — so the clean crate-seam split is 69-18 owns the enum shape (`cargo test -p cipherbox-sdk` green; `cargo check --workspace` intentionally RED until 69-09, the sanctioned mid-flip RED the research permits) and 69-09 owns the fuse construction/reading (workspace-green boundary). Adding coexisting variants for a workspace-green 69-18 would violate D-04's no-dual-codec doctrine, so GREEN-standalone was chosen over both dual-variant and fold. `requirements: [SC-04, SC-06]`, `depends_on: ["69-15","69-16"]`, wave 4, `files_modified: [crates/sdk/src/queue.rs]`.
+
+**69-09 revisions made** (`.../69-09-PLAN.md`):
+- `depends_on += "69-17","69-18"`.
+- Removed `crates/sdk/src/queue.rs` from `files_modified` (the enum reshape is 69-18's; 69-09 only migrates the fuse constructor/reader sites onto it — consistent with the GREEN decision, per the "update files_modified if fold moves queue.rs" instruction, inverted here since GREEN keeps queue.rs in 69-18).
+- Deleted the stale "JournalOp weld / landmine 1 / `parent_metadata: FolderMetadata` in queue.rs" truth + its acceptance criterion + the Task 1 queue.rs-repoint action/verify/AC (verified: that field does not exist — `JournalOp` has only `UploadFile`/`MkdirPublish` with hex-ECIES-under-user-key fields).
+- Replaced with: read path consumes `list_folder_owned` (69-17) to populate `InodeKind` with recovered `read_key`/`write_key`/`ipns_private_key`; write path emits node/v3 + constructs 69-18's reshaped `JournalOp`; `replay.rs` reinterprets it with the fail-closed skip inherited from 69-18's `load_all_for_vault`.
+- Propagated `list_folder_owned` as a third sanctioned SC#6 read entrypoint; updated objective, artifacts block, both affected task names, verification, and success_criteria.
+- Kept intact: atomic InodeKind flip, SC#1, the SC#6 CI grep gate, fail-closed replay, desktop construction sites, keeper ECIES list, and the plan-boundary green checkpoint.
+
+All three pass `frontmatter.validate` (`valid: true`) and `verify.plan-structure` (no errors; the "missing `&lt;files&gt;`" warnings match the 69-16 sibling's `&lt;read_first&gt;` convention).</result>
+<usage><subagent_tokens>260169</subagent_tokens><tool_uses>35</tool_uses><duration_ms>1276863</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a9dd717f7612dd5f7</task-id>
+<tool-use-id>toolu_01QAFRCi1fxUMsNyZAZa21zx</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/a9dd717f7612dd5f7.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 69-17 write-owner materialization" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Plan 69-17 complete. All tasks executed, committed atomically, and the worktree is GREEN.
+
+## PLAN COMPLETE
+
+**Plan:** 69-17 (P1a-2 — gated write-plane tree materialization)
+**Tasks:** 2/2
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a9dd717f7612dd5f7/.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-17-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"69-17","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a9dd717f7612dd5f7","branch":"worktree-agent-a9dd717f7612dd5f7","expected_base":"cff05112edd20ba1da9a22255a7f6a508d12ff40"}
+&lt;/worktree_metadata&gt;
+
+**Commits (branch `worktree-agent-a9dd717f7612dd5f7`):**
+- `54e7190f5` feat(69-17): resolve_owned_child recovers the write plane through the shared gate (Task 1 — `ResolvedOwnedChild` + `resolve_owned_child` + 5 tests)
+- `0bcb99160` feat(69-17): list_folder_owned write-owner materialization entrypoint (Task 2 — `list_folder_owned` + lib.rs export + 3 tests)
+- `d30b9e61f` docs(69-17): complete gated write-owner tree materialization plan (SUMMARY.md)
+
+## Green-boundary checks (verified in this worktree)
+
+| Check | Result | Evidence |
+|-------|--------|----------|
+| `cargo test -p cipherbox-sdk` GREEN | PASS | `132 passed; 0 failed` (8 new owned tests: single-child recovery, 2-level round-trip recovered==minted, D-07 pair-by-published.id, missing-pair fail-closed, write_sealed=None fail-closed, high-water floor-gate rejection, both caller-key-buffer-unchanged) |
+| `cargo check --workspace` GREEN | PASS | `Finished dev profile` — `cipherbox-fuse` + desktop check clean, additive |
+| `git diff --stat crates/fuse` EMPTY | PASS | empty output |
+| No new `[dependencies]` in `crates/sdk/Cargo.toml` | PASS | `git diff` on Cargo.toml empty |
+| `resolve_published_node` still `pub(crate)` | PASS | grep line 182 `pub(crate) async fn resolve_published_node` |
+| `list_folder_owned` only new `pub` entrypoint | PASS | grep line 568 `pub async fn list_folder_owned` |
+| clippy no new warnings | PASS | sole `cipherbox-sdk` warning is pre-existing `emit.rs:401` build_child_refs (too-many-args) — not mine |
+
+**Hard-constraint compliance:** D-09 terminal-owner (borrowed parent keys never zeroed, verified by two byte-unchanged tests; recovered keys returned raw in `Zeroizing`; redacting `Debug`); D-07 pairing strictly by `published.id == WriteChildRef.child_id`; SC#6 single shared gate (no new resolver); parent-mirror `child_ref.generation` used for the child unseal AAD (M1); fail-closed on every failure path.
+
+## Scope deviations
+
+None in code — plan executed exactly as written.
+
+One tooling note (already reverted, no code impact): `rustfmt crates/sdk/src/lib.rs` follows `mod` declarations and reformatted the whole `crates/sdk` (pre-existing drift vs rustfmt 1.8.0 in 7 unrelated files). I reverted those out-of-scope reformats with `git checkout --`; the committed diff is confined to `listing.rs` + `lib.rs`, and no pre-existing code in `listing.rs` was reformatted (only my two changed import lines).
+
+**Duration:** ~35 min</result>
+<usage><subagent_tokens>171688</subagent_tokens><tool_uses>51</tool_uses><duration_ms>970377</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a9dd717f7612dd5f7</worktreePath><worktreeBranch>worktree-agent-a9dd717f7612dd5f7</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aad501548bf8c685c</task-id>
+<tool-use-id>toolu_01FhvfVvDAmEDgYF9p9rLAD4</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/aad501548bf8c685c.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 69-18 JournalOp node/v3 reshape" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Plan 69-18 complete. All work committed on branch `worktree-agent-aad501548bf8c685c`; source diff is confined to `crates/sdk/src/queue.rs` (+ the SUMMARY).
+
+&lt;worktree_metadata&gt;
+{"agent_id":"69-18","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-aad501548bf8c685c","branch":"worktree-agent-aad501548bf8c685c","expected_base":"4cb7320ca819eaecba068b4a12b2bdee1ab08f51"}
+&lt;/worktree_metadata&gt;
+
+## Result
+
+**Commits (branch `worktree-agent-aad501548bf8c685c`):**
+- `dc8f421a4` — feat(69-18): reshape JournalOp to node/v3 child+parent seals (Task 1)
+- `0c2911ef6` — feat(69-18): fail-closed skip for stale pre-cutover journal entries (Task 2)
+- `a0986b337` — docs(69-18): complete reshape JournalOp to node/v3 plan (SUMMARY)
+
+**`cargo test -p cipherbox-sdk`: GREEN** — 130 passed / 0 failed (queue module: 31 passed). Covers the reshaped UploadFile/MkdirPublish serde round-trips, retargeted no-plaintext invariant (symmetric base64 seals + base64 PublishedNode, never a raw/user-ECIES node-to-node key), D-07 `childId != ipnsName` dual-plane assertions, and the stale-shape fail-closed skip.
+
+**Workspace-RED is the ONLY red, and it is the expected mid-flip RED.** `cargo check --workspace` fails on exactly one crate — `cipherbox-fuse` (lib), 13 errors — and every error is a JournalOp-shape mismatch that 69-09 migrates:
+- E0026/E0559 at the `journal_helpers.rs` UploadFile/MkdirPublish constructor sites (referencing the removed `wrapped_key_hex`/`iv_hex`/`file_ipns_key_hex`/`parent_ipns_key_hex`/`filename_encrypted_hex`/`child_folder_key_hex`/`child_ipns_key_hex`/`name_encrypted_hex` fields)
+- E0027 (2×) at the `replay.rs` reader match arms (not mentioning the new `child_published_node`/`parent_child_ref`/`parent_write_child_ref` fields)
+
+`cipherbox-sdk` and all other crates compile green. `git diff --stat crates/fuse` is empty; no new `crates/sdk/Cargo.toml` dependencies.
+
+**Scope deviations (both documented in SUMMARY):**
+1. The Task 1 grep `parent_ipns_key_hex|child_folder_key_hex|wrapped_key_hex` returns 4, not 0 — all 4 are JSON string-literal keys inside the Task 2 stale-entry fixture (mandated by Task 2's action to prove old-shaped entries fail serde). The reshaped struct variants carry zero such fields.
+2. Removed three now-obsolete legacy-compat tests (`legacy_plaintext_filename_compat`, `filename_encryption_round_trips` + `generate_test_keypair`, `journal_no_plaintext_filename`) that tested the removed hex-ECIES filename mechanism (forbidden under D-04); retargeted `legacy_empty_string_ipns_loads_as_none` at the retained `file_meta_ipns_name` keeper.
+
+**Deferred parent-signing-seed doc-comment: LEFT IN PLACE** — on `UploadFile::parent_folder_ipns_name`, marking that the parent IPNS signing seed is recovered via `list_folder_owned` (69-17) at replay and that this one field is finalized against 69-09's constructor site (not re-introduced as a user-ECIES field).
+
+**SUMMARY.md:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-aad501548bf8c685c/.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-18-SUMMARY.md`
+
+Note: STATE.md/ROADMAP.md updates were not run — this is an isolated worktree executor gated on the sdk-green boundary; the orchestrator owns state advancement after wave merge.</result>
+<usage><subagent_tokens>151635</subagent_tokens><tool_uses>35</tool_uses><duration_ms>798236</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-aad501548bf8c685c</worktreePath><worktreeBranch>worktree-agent-aad501548bf8c685c</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a25ae01057475c6fb</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/a25ae01057475c6fb.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute 69-09 atomic FUSE flip on 69-18 branch" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I've completed a thorough scope assessment and reached a clear, evidence-backed conclusion. I am halting rather than thrashing, per your fallback protocol. Here is my honest report.
+
+## Blocker class: architecture/scope — NOT a mechanical flip
+
+The framing that this is "the mechanical flip the plan intends" with "13 known fuse errors" is **incorrect against the actual branch state**. The 13 errors are real, but they are the *tip* of a full, from-scratch crypto-model rewrite of the entire Unix FUSE stack. Nothing from prior attempts landed in `crates/fuse` — I verified the whole crate is still 100% on the legacy ECIES/`FolderMetadata` model.
+
+### Evidence
+
+- **Zero node/v3 wiring exists in fuse.** `grep` for `ApiNodeFetcher`, `new_journal_high_water`, `RotationHighWater`, `list_folder_owned`, `list_folder`, `SealedChildRef` across `crates/fuse/src` + desktop fuse: **all empty**. `CipherBoxFS` has `api: Arc&lt;ApiClient&gt;` and `journal: WriteQueue` but no high-water store, no fetcher, no gate. The 69-17 wiring the prompt says I should "consume, not re-derive" is not consumed anywhere — it has to be *introduced* here first.
+- **Legacy model fully intact and load-bearing.** `InodeKind::{Folder,File}` still store `encrypted_folder_key`/`encrypted_file_key` hex + `folder_key` (no `write_key` concept at all). `populate_folder(&amp;FolderMetadata)` still walks legacy `FolderChild`. All 15 `ecies::unwrap_key` sites present.
+- **Blast radius (non-test reference sites):** `folder_key` 248, `ipns_private_key` 209, `file_meta_ipns_name` 160, `FilePointer` 112, `encrypted_file_key` 76, `FolderChild` 69, `file_ipns_private_key` 68, `FolderMetadata` 61, `file_ipns_key_encrypted_hex` 51. ~12,300 LOC across the target files. **&gt;1000 interdependent sites** tied to the legacy model.
+
+### Why the 13 errors are not fixable mechanically
+
+The reshaped `JournalOp::{UploadFile,MkdirPublish}` require `child_published_node` (base64 of a freshly emitted node/v3 `PublishedNode` from `emit.rs`), `parent_child_ref: SealedChildRef`, and `parent_write_child_ref: WriteChildRef`. `build_child_refs` needs the **parent's `read_key` AND `write_key`**. The legacy `InodeKind::Folder` carries only `folder_key` (read side) and has **no write-key plane at all** — that only materializes through `list_folder_owned` → `ResolvedOwnedChild`. So constructing the reshaped `JournalOp` correctly *requires* the read-path owner materialization + the `InodeKind` reshape first. It is genuinely atomic: there is **no compiling sub-unit** — every partial edit to `InodeKind` cascades the whole crate deeper into RED with no green checkpoint until the entire read+write+replay+glue+desktop flip lands together (exactly what the plan's own "RED by design across Tasks 1-2" states).
+
+### Why I did not grind it out in one pass
+
+1. **It's design work, not find-replace.** The write path changes from "build `FolderMetadata` → ECIES-wrap child keys → publish `FilePointer`" to "emit `Node` → `build_child_refs` → splice both planes into parent → re-seal + publish." Replay (1612 LOC) rebuilds identically. That is re-architecture across ~1000 sites.
+2. **Unverifiable here.** `cargo test -p cipherbox-fuse` is thin; real correctness for this migration needs the SDK-e2e + desktop-e2e harnesses (docker stack + TEE) which cannot run in this worktree. Project memory repeatedly documents that grep/mock/compile-passing crypto impls have shipped runtime-broken (D-07 conflation, terminal-owner zeroization broke 48/89 E2E). Producing ~12k lines of unverifiable crypto and calling it "coherent progress" would violate your "do not force broken work to look complete" directive and risks vault-data corruption.
+
+## What I committed
+
+**Nothing.** The branch is untouched at **`a0986b337`** (69-18's clean completion), working tree clean. This is already the correct coherent state for a fresh executor to resume from — a speculative unused-field stub would only add a warning and would be redone in-context by the resumer. I did not write a SUMMARY.md or advance STATE.md, because the plan is not complete and I will not mark it so.
+
+## Exact remaining `cargo check --workspace` error tail
+
+13 errors, all in `crates/fuse/src/journal_helpers.rs` (constructor sites, E0026/E0559) and `crates/fuse/src/replay.rs` (reader match arms, E0027), all for the reshaped `JournalOp::{UploadFile,MkdirPublish}` fields `child_published_node` / `parent_child_ref` / `parent_write_child_ref` vs the old `*_hex` fields. Full tail captured above.
+
+## Deferred parent-signing-seed field
+
+Not reached (no write-path code written). For the resumer: `JournalOp::UploadFile.parent_folder_ipns_name` (queue.rs:128-137) is the only parent identity carried; 69-18's doc-comment mandates replay recover the parent `ipns_private_key` via `list_folder_owned` at replay time from that identity — **do not** re-introduce a user-ECIES `parent_ipns_key_hex` field. When you write the fuse replay re-publish, thread the parent seed from the owned chain, not from the journal entry.
+
+## Recommendation (fast decision for you)
+
+This plan bundles the entire Unix FUSE consumption of node/v3 (read materialization + `InodeKind` reshape + write emission + 1612-LOC replay + all glue + desktop sites + CI gate) into one atomic, unverifiable-in-isolation, &gt;1000-site change. That is why attempts 1 and 2 died. Two viable paths:
+
+1. **Budget dedicated multi-session grind with a live verification harness** — resume on this same branch, land the flip incrementally accepting RED intermediate commits, and gate the merge on a real SDK-e2e/desktop-e2e run (docker + TEE), not just `cargo check`. Do not merge on compile-green alone for this one.
+2. **Decompose** despite the research's atomicity argument — e.g., first land only the `InodeKind` reshape + `populate_folder`/`content_ops` read materialization behind the existing write path (keeping write on a thin shim), then the write-emission + `JournalOp` migration as a second plan. The research says a clean flag-day is safest, but a 1000-site single-shot with no runtime verification available is its own risk.
+
+The keystone a resumer should start with, in order: (1) add `RotationHighWater&lt;JsonSidecarFloorStore&gt;` + an `ApiNodeFetcher` construction to `CipherBoxFS` (deriving the floor path from `journal.journal_dir` via `cipherbox_sdk::new_journal_high_water`), updating the 3 struct-literal sites (fs.rs, desktop mod.rs, desktop windows/mod.rs) + `test_support.rs`; (2) reshape `InodeKind`; (3) rewrite `populate_folder` onto `list_folder_owned`; then write path; then replay; then glue+desktop; then SC#6 gate.
+
+Branch: `worktree-agent-aad501548bf8c685c` @ `a0986b337`, clean. No SUMMARY.md written (plan incomplete).</result>
+<usage><subagent_tokens>156393</subagent_tokens><tool_uses>14</tool_uses><duration_ms>405900</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a77e111afa586385c</task-id>
+<tool-use-id>toolu_01NYZqpKWuvEFmvWvjSAwZcy</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/a77e111afa586385c.output</output-file>
+<status>completed</status>
+<summary>Agent "69-09 Slice 1: InodeKind + CipherBoxFS wiring" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Slice 1 complete. The runbook lives only in the orchestrator tree (read-only) and my `InodeKind` field-set matches it exactly, so no runbook edit was needed — the only wiring deviation (fetcher) is documented in-code on the `high_water` field and reported below for Slice 2.
+
+## Slice 1 done — summary
+
+**Commit:** `4efcc3ef9` on `worktree-agent-aad501548bf8c685c` (`feat(69-09): slice 1 — reshape InodeKind + wire CipherBoxFS gate/fetcher`), 5 files, +244/−137, `--no-verify`.
+
+### Final InodeKind field-set (matches runbook exactly — no field-set deviation)
+- `Root { ipns_name: String, read_key: Zeroizing&lt;[u8;32]&gt;, write_key: Zeroizing&lt;[u8;32]&gt;, ipns_private_key: Zeroizing&lt;Vec&lt;u8&gt;&gt; }`
+- `Folder { ipns_name: String, read_key: Zeroizing&lt;[u8;32]&gt;, write_key: Zeroizing&lt;[u8;32]&gt;, ipns_private_key: Zeroizing&lt;Vec&lt;u8&gt;&gt;, children_loaded: bool }`
+- `File { ipns_name: String, cid: String, size: u64, encryption_mode: String, iv: String, read_key: Zeroizing&lt;[u8;32]&gt;, write_key: Zeroizing&lt;[u8;32]&gt;, ipns_private_key: Zeroizing&lt;Vec&lt;u8&gt;&gt; }`
+
+Dropped legacy fields: `encrypted_folder_key`, `folder_key`, `encrypted_file_key`, `file_meta_ipns_name`, `file_meta_resolved`, `file_ipns_private_key`, `file_ipns_key_encrypted_hex`, `versions`. All three `ipns_private_key` fields are now non-`Option`.
+
+**Construction note (not a shape deviation):** `InodeTable::new()` builds Root with empty placeholders (`ipns_name: String::new()`, zeroed `[0u8;32]` read/write keys, empty `Vec` seed) since root is created before AppState is available; the desktop root-population glue overwrites it in Slice 5.
+
+### CipherBoxFS wiring — DEVIATION Slice 2 must know
+- Added **one** field: `pub high_water: cipherbox_sdk::RotationHighWater&lt;cipherbox_sdk::JsonSidecarFloorStore&gt;`, constructed at each site via `cipherbox_sdk::new_journal_high_water(&amp;journal_dir)` (captured before `journal_dir` is moved into `WriteQueue::new`).
+- **No `fetcher` field was added.** `ApiNodeFetcher&lt;'a&gt;` is a borrow adapter (`struct ApiNodeFetcher&lt;'a&gt; { pub api: &amp;'a ApiClient }`) with **no `::new` constructor**. Storing it beside the owned `api: Arc&lt;ApiClient&gt;` would be self-referential. Slice 2 must construct it inline at each read-path call site. Note `self.api` is `Arc&lt;ApiClient&gt;`, and the field wants `&amp;ApiClient`, so use: `let fetcher = cipherbox_sdk::ApiNodeFetcher { api: self.api.as_ref() };` (or `&amp;*self.api`).
+
+### Sites fixed — DEVIATION: 3 real sites, not 6
+Only 3 files contain actual `CipherBoxFS { .. }` struct literals; the runbook's other three (`fs.rs`, `operations.rs`, `journal_helpers.rs`) are `impl`/`impl Filesystem for` blocks, not constructions.
+1. `crates/fuse/src/test_support.rs:128` (also migrated its `InodeKind::Root` test-fixture override to the new shape).
+2. `apps/desktop/src-tauri/src/fuse/mod.rs` (`high_water` captured at ~173, field at struct literal). Its `InodeKind::Root` override (~178) is left RED — Slice 5 desktop root-population.
+3. `apps/desktop/src-tauri/src/fuse/windows/mod.rs:75/207` (behind `cfg(winfsp)`, won't compile locally — 69-14 CI). Its Root override also left for Slice 5.
+
+`WriteQueue.journal_dir` is `pub(crate)`, unreachable from the fuse crate, so `high_water` is derived from the local `journal_dir` at each site rather than from `journal`.
+
+### cargo check -p cipherbox-fuse — 119 errors, all downstream consumers (RED expected)
+Zero errors in the enum definition (inode.rs 100–165), `InodeTable::new()` Root constructor, the `CipherBoxFS` struct def, or the 3 construction sites (no missing-`high_water` errors). Residuals by category:
+- **Slice 2 (read path):** `inode.rs` all at lines ≥347 (`populate_folder`, file swap-rebuild, `resolve_file_pointer`, `get_unresolved_*`, `mark_remotely_edited_*`); `read_ops.rs`, `dir_ops.rs`, `poll.rs`; `fs.rs` `get_folder_key`/`build_folder_metadata` referencing removed `folder_key`/`ipns_private_key.as_ref()`.
+- **Slice 3/4 (write/replay):** `journal_helpers.rs`, `write_ops/implementation/{mkdir,file_data,delete,rename}.rs`, `write_ops/grant_scope.rs`, `replay.rs` — including `missing fields child_published_node/parent_child_ref/parent_write_child_ref` (69-18 JournalOp reshape) and `missing fields read_key/write_key` (69-17 pattern matches).
+
+### For Slice 2
+`list_folder_owned` (crates/sdk/src/listing.rs:568):
+```
+pub async fn list_folder_owned&lt;F, S&gt;(
+    fetcher: &amp;F, high_water: &amp;RotationHighWater&lt;S&gt;,
+    ipns_name: &amp;str, folder_read_key: &amp;[u8;32], folder_write_key: &amp;[u8;32],
+) -&gt; Result&lt;Vec&lt;ResolvedOwnedChild&gt;, ListingError&gt;
+where F: NodeFetcher, S: HighWaterStore
+```
+`ResolvedOwnedChild { child: ResolvedChild, read_key: Zeroizing&lt;[u8;32]&gt;, write_key: Zeroizing&lt;[u8;32]&gt;, ipns_private_key: Zeroizing&lt;Vec&lt;u8&gt;&gt; }` — move these Zeroizing keys straight into the child `InodeKind` (mount is terminal owner; never zero the borrows). Pass `&amp;self.high_water` and the parent's `&amp;*read_key`/`&amp;*write_key` (deref `Zeroizing&lt;[u8;32]&gt;` → `&amp;[u8;32]`). All symbols re-exported at `cipherbox_sdk::{list_folder_owned, ResolvedOwnedChild, ApiNodeFetcher, new_journal_high_water, RotationHighWater, JsonSidecarFloorStore}`.</result>
+<usage><subagent_tokens>142553</subagent_tokens><tool_uses>30</tool_uses><duration_ms>474412</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a8031e0f98a386428</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/a8031e0f98a386428.output</output-file>
+<status>completed</status>
+<summary>Agent "69-09 Slice 2: read materialization path" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Slice 2 committed as `26cb97b36`. All done. Here is the summary.
+
+## Slice 2 COMPLETE — read materialization path
+
+**Commit:** `26cb97b36` — `feat(69-09): slice 2 — read path onto list_folder_owned + unseal_node` (3 files, +276/−629)
+Branch: `worktree-agent-aad501548bf8c685c` @ prior HEAD `4efcc3ef9`.
+
+### What migrated in each of the 3 files
+
+**`crates/fuse/src/inode.rs`** — rewrote the entire prod read block (the 5 helpers), removing all 4 node-to-node `ecies::unwrap_key` sites (was 434/452/669/727) plus the HKDF `ecies::wrap_key`:
+- `populate_folder` now routes through `cipherbox_sdk::list_folder_owned(&amp;fetcher, high_water, ipns_name, parent_read_key, parent_write_key)` (fetcher constructed inline `ApiNodeFetcher { api }`), and MOVES each `ResolvedOwnedChild`'s `Zeroizing` `read_key`/`write_key`/`ipns_private_key` straight into the child `InodeKind` (mount = terminal owner; parent borrows never zeroed). Preserved rename-by-ipns_name reuse, D-11 stable-ID loaded-state, merge_only, removal detection — all re-keyed on the now-unified `ipns_name` (both Folder and File children key on the read plane, D-07).
+- `resolve_file_pointer`, `get_unresolved_file_pointers[_for_parent]`, `mark_remotely_edited_files_unresolved` repointed onto the new File shape. The two-phase resolve model is preserved but "unresolved" now means **empty `cid`** (File content descriptors cid/iv/encryption_mode live in the file node's sealed body, filled by `resolve_file_pointer` post-unseal; `list_folder_owned` supplies keys + size only).
+- Gated the legacy `FolderChild`/`FolderMetadata` import to `#[cfg(test)]` (only the untouched keeper fixtures still use it).
+
+**`crates/fuse/src/content_ops.rs`** — `fetch_and_decrypt_content_async` recovers the file content-key by SYMMETRIC `cipherbox_core::node::seal::unseal_node` of the file node's `read_sealed` body → `decode_node` → `Node::File{content}` → `NodeContent{cid,file_iv,file_key,encryption_mode}`, then fetches+decrypts. No ECIES. The `:167` TEE `ecies::wrap_key` keeper is untouched.
+
+**`crates/fuse/src/fs.rs`** — repointed the two read helpers' field access: `get_folder_key` (`folder_key`→`read_key`); `build_folder_metadata`'s **parent-key extraction arms** (Root/Folder: non-Option `ipns_private_key.to_vec()`, `ipns_name` String, `read_key`). The child-loop write emission was left as Slice 3 (see below).
+
+### populate_folder signature change (for Slice 5's fs.rs caller)
+```rust
+pub async fn populate_folder(
+    &amp;mut self, parent_ino: u64, ipns_name: &amp;str,
+    parent_read_key: &amp;[u8; 32], parent_write_key: &amp;[u8; 32],
+    api: &amp;cipherbox_api_client::ApiClient,
+    high_water: &amp;cipherbox_sdk::RotationHighWater&lt;cipherbox_sdk::JsonSidecarFloorStore&gt;,
+    merge_only: bool,
+) -&gt; Result&lt;(), String&gt;   // now async; former (&amp;FolderMetadata, private_key, public_key) gone
+```
+Other Slice-5 caller-facing changes: `resolve_file_pointer(ino, cid, iv, size, encryption_mode)` (dropped `encrypted_file_key`+`versions`); `mark_remotely_edited_files_unresolved(parent_ino, &amp;[ResolvedOwnedChild])` (was `&amp;FolderMetadata`); `fetch_and_decrypt_content_async(api, &amp;PublishedNode, &amp;[u8;32])` (was cid/hex-key/iv/mode/private_key).
+
+### Grep DoD — both EMPTY ✓
+`grep -n 'ecies::unwrap_key' crates/fuse/src/inode.rs crates/fuse/src/content_ops.rs` → empty (exit 1).
+
+### Residual errors (78 total, RED-elsewhere EXPECTED) — **zero in inode.rs / content_ops.rs**
+- **Slice 3 (write path):** journal_helpers.rs(14), delete.rs(8), file_data.rs(6), rename.rs(3), mkdir.rs(3), grant_scope.rs(3), and fs.rs `build_folder_metadata` **child loop** (lines 181/185/222/244/255/256 — legacy FolderMetadata emission).
+- **Slice 4 (replay):** replay.rs(4).
+- **Slice 5 (glue/callers):** read_ops.rs(19), dir_ops.rs(4), poll.rs(2), and fs.rs caller sites (432/436 populate_folder+mark_remotely_edited, 453 folder_key lookup, 630 resolve_file_pointer).
+
+Every fs.rs residual is in an explicitly out-of-scope region; my two edited helpers (get_folder_key, build_folder_metadata parent arms) compile clean.
+
+### Notes for Slice 3 (write path)
+- **Write-facing InodeKind fields left ready:** File and Folder children now carry populated `read_key` + `write_key` + `ipns_private_key` (moved in from `ResolvedOwnedChild`). Slice 3's `build_child_refs` can take parent `read_key`+`write_key` from the parent `InodeKind` directly; File children expose the `write_key`/`ipns_private_key` needed for `WriteChildRef`/`JournalOp` construction.
+- **`InodeKind::File` no longer stores `file_key`** — it lives only inside the sealed `NodeContent` (recovered at read via unseal_node). Slice 3's write path must seal `file_key` into `NodeContent` (already the node/v3 model).
+- **fs.rs `build_folder_metadata` child loop is the Slice 3 seam** — replace legacy `FolderMetadata`/`FolderEntry`/`FilePointer` (folder_key_encrypted/file_meta_ipns_name/…) emission with `Node`+`SealedChildRef`/`WriteChildRef`.
+
+### Two flags for the final E2E gate
+1. **`NodeContent.file_iv` decode assumption:** content_ops uses `hex::decode` (matching the legacy iv_hex path). If emit.rs writes `file_iv` as base64, this needs adjusting — verify at the write/read round-trip.
+2. **File-node fetch for content read has no gated entrypoint yet:** `fetch_and_decrypt_content_async` needs the file's `PublishedNode`, but `list_folder_owned` rejects file nodes (`NotAFolder`). Slice 5 must route the file-node fetch through a sanctioned SC#6 path when wiring read_ops/dir_ops.</result>
+<usage><subagent_tokens>194755</subagent_tokens><tool_uses>31</tool_uses><duration_ms>888339</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>abc24bd09976dda75</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/abc24bd09976dda75.output</output-file>
+<status>completed</status>
+<summary>Agent "69-09 Slice 3: write path emission" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>No file deletions, no errors in journal_helpers/write_ops. Slice 3 is complete and committed. Here is my final report.
+
+## Slice 3 (write path) — DONE, committed `d9a0c9220`
+
+Crate is RED as expected (38 residual errors, all Slice 4/5). All my write-path files compile with zero errors/warnings.
+
+### What each file emits now
+- **`journal_helpers.rs`** — fully rewritten. `build_upload_journal_entry` and `build_mkdir_journal_entry` now seal a fresh child `PublishedNode` (`seal_published_node` + `encode_published_node`), build the D-07 dual splice via `cipherbox_sdk::build_child_refs`, and construct the reshaped `JournalOp::{UploadFile,MkdirPublish}` with `child_published_node` (base64), `parent_child_ref` (`SealedChildRef`), `parent_write_child_ref` (`WriteChildRef`), `parent_folder_ipns_name`. Result structs reshaped to carry node/v3 identity + sealed bytes. Added `parent_node_keys()` helper. Tests rewritten to assert node/v3 shape.
+- **`fs.rs build_folder_metadata`** — child loop now emits `SealedChildRef`/`WriteChildRef` per child, assembles the parent `Node::{Folder,Root}` + `NodeWriteBody`, seals → returns `(published_node_bytes, ipns_private_key, ipns_name, old_cid)`. No `FolderMetadata`/`FolderEntry`/`FilePointer` emission remains. Obsolete `build_folder_metadata_tests` (legacy per-child wrap_key) removed.
+- **`metadata.rs spawn_metadata_publish`** — reshaped to upload the sealed parent bytes + CAS-publish (the legacy `merge_folder_children` conflict path removed).
+- **`mkdir.rs` / `file_data.rs`** — node/v3 `InodeKind` literals: mint `read_key`+`write_key`+ipns seed; spawn block uploads/publishes the sealed child + re-sealed parent.
+- **`delete.rs` / `rename.rs` / `grant_scope.rs`** — repointed off removed fields.
+
+### D-07 parent write-plane key threading
+Canonical child id = **`uuid_from_ino(child_ino)`** (made `pub(crate)`) used everywhere: the child node is sealed with `id = uuid_from_ino`, and the parent's `WriteChildRef.child_id` (write plane) + `SealedChildRef` (read plane, keyed by ipnsName) use the same value. This is self-consistent for round-trip because the read path recovers `child_id` from the resolved node's own `id` — **no `InodeKind.id` field is needed**. Parent read_key/write_key are pulled from the parent `InodeKind` (Slice 2 populated); node-to-node keys live only inside the symmetric seals.
+
+### 69-13 keepers kept intact
+- `revoke_shares_blocking` (metadata.rs:267) and its unlink/rmdir call sites — untouched behaviorally; only the revoke-name source repointed from `file_meta_ipns_name`→`ipns_name`.
+- `spawn_file_meta_reencrypt` (metadata.rs:686) and its rename.rs caller — untouched; only the capture tuple repointed onto reshaped fields.
+- Bin-restore `FilePointer`/`FolderEntry` retained as **user-ECIES restore blobs** (folder read_key + signing seed wrapped under the user pubkey, like vault export — not node-to-node hops).
+
+### file_iv is HEX — confirmed
+`NodeContent.file_iv = iv_hex` (`hex::encode(iv)`) in `build_upload_journal_entry`; `file_key` stored raw (`Vec&lt;u8&gt;`).
+
+### Residual errors (categorized)
+`queue.rs`/`emit.rs`/`crates/core/node` untouched. 38 residual: `read_ops.rs` (23), `fs.rs` (5 — all `drain_refresh_completions` read-path resolution: `mark_remotely_edited_files_unresolved`, `resolve_file_pointer`, `folder_key` field), `dir_ops.rs` (4), `replay.rs` (4), `poll.rs` (2). Zero in `journal_helpers`/`write_ops`.
+
+### Notes for Slice 4 (replay)
+- **Reshaped JournalOp fields replay must read**: `UploadFile { sidecar_path, sidecar_sha256, legacy_ciphertext_b64, child_published_node: String (base64 of encode_published_node), parent_child_ref: SealedChildRef, parent_write_child_ref: WriteChildRef, file_meta_ipns_name: Option&lt;String&gt;, parent_folder_ipns_name: String, size, created_at_ms }`; `MkdirPublish { child_ipns_name, child_published_node: String, parent_child_ref, parent_write_child_ref, parent_folder_ipns_name, created_at_ms }`.
+- **Parent signing seed recovery**: not carried in the JournalOp (per 69-18 design). Replay must recover the parent `ipns_private_key` via `list_folder_owned` at replay time from `parent_folder_ipns_name`, then re-splice both planes and re-publish the parent.
+- **File-upload cid placeholder**: `build_upload_journal_entry` seals the file node with `NodeContent.cid = ""` at journal time (content cid unknown until upload). Replay must re-upload the sidecar ciphertext → real cid, then re-seal the file node with that cid before publishing (the live happy path re-seals in `publish_file_metadata`, Slice 5).
+- **E2E flags carried forward**: file `versions` are not reconstructed at upload (InodeKind dropped `versions` in Slice 1) — versioning restore regression to verify at E2E. Root node re-seal uses `id = uuid_from_ino(ROOT_INO)` — Slice 5 prepopulate should use the same for consistency (readers use the resolved node's own id, so functionally safe).</result>
+<usage><subagent_tokens>275394</subagent_tokens><tool_uses>79</tool_uses><duration_ms>1558236</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ae62a1e4d0fbe2611</task-id>
+<tool-use-id>toolu_016WsvUTn7kmbvbvhMtcZtaW</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/ae62a1e4d0fbe2611.output</output-file>
+<status>completed</status>
+<summary>Agent "69-09 Slice 4: replay.rs node/v3 rewrite" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Slice 4 is complete and committed.
+
+## Summary
+
+**Commit:** `586cfd444` — `feat(69-09): slice 4 — replay reinterprets node/v3 journal + fail-closed skip` (on `worktree-agent-aad501548bf8c685c`, 991 insertions / 1163 deletions in `crates/fuse/src/replay.rs` only).
+
+**Status: DONE.** replay.rs's own errors resolved; the single residual `replay.rs` error is the intended, documented `fetch_node_gated` Slice-5 dependency.
+
+### How each replay op was rewritten onto node/v3
+
+**MkdirPublish** (`replay_mkdir_entry`): recover parent read/write keys → decode the sealed `child_published_node` bytes (uploaded verbatim, folders carry no CID) → recover the child folder's own keys from the D-07 parent splices → unseal its write-body for the signing seed → `publish_child_node` (idempotent seq-1 first-publish + TEE enrollment) → `fetch_splice_publish_parent`.
+
+**UploadFile** (`replay_upload_entry`): park if `file_meta_ipns_name` is None → read+verify sidecar ciphertext → re-upload for the **real content CID** → recover parent keys → recover the file node's read/write keys from the parent splices → decode the placeholder node (`NodeContent.cid == ""`), unseal its read-body, **patch `content.cid` to the real CID, and RE-SEAL** under the file's own keys → publish the file node's IPNS record → splice + re-publish parent.
+
+### Parent-seed recovery + placeholder re-seal
+- Parent read/write keys recovered via a `list_folder_owned` BFS from root (`resolve_owned_parent`, node/v3 analog of the legacy hex-ECIES `resolve_folder_key`), memoized per replay call.
+- Parent **signing seed** recovered from the parent node's OWN sealed write-body (`recover_signing_seed` → `unseal_node` → `decode_write_body`) inside `fetch_splice_publish_parent` — never from the journal (69-18). This let me drop `root_ipns_private_key` from the signature entirely; only `root_read_key`/`root_write_key` are needed.
+- Re-seal uses `seal_published_node`; parent splice preserves the fetched node's id/generation/timestamps, dedups both planes, and CAS-publishes.
+
+### replay.rs:839 name-blob decision
+The old `:839` blob lived inside `decrypt_journal_name` (ECIES-unwrap of the encrypted journal name). The 69-18 JournalOp reshape **removed** `name_encrypted_hex`/`filename_encrypted_hex` — the display name now travels inside the symmetric-sealed `SealedChildRef.name`. So this was not a key hop to migrate; the whole helper was deleted because its field no longer exists. Assessment: eliminated upstream, not converted.
+
+### Fail-closed skip location
+`replay_for_vault`'s `Err(e) =&gt; journal.record_failure(...)` arm (mirroring queue.rs Err-skip): every decode/unseal/resolve/hash failure returns `Err("… — retaining entry")` and is `log::warn!/error!` + retained/parked, never `unwrap`/`panic`. Serde-level stale entries are dropped by the loader itself.
+
+### SC#6 / crypto confirmation
+No raw `resolve_published_node`/`resolve_ipns_verified` added. Sanctioned resolves only: `list_folder_owned` (owned walk) + the documented `cipherbox_sdk::fetch_node_gated` Slice-5 dependency. ECIES node-to-node hops fully removed; the only remaining ECIES is `cipherbox_crypto::wrap_key` for the TEE enrollment (crypto rule #7 keeper). No new Cargo dependency; fmt applied to replay.rs only (no out-of-scope drift).
+
+### Residual errors (all Slice 5 glue)
+`replay.rs:1` = `fetch_node_gated` (documented Slice-5 TASK 0). Remaining 34: read_ops.rs (23), fs.rs (7), dir_ops.rs (4), inode.rs (3), poll.rs (2), content_ops.rs (2) — all legacy-InodeKind-field consumers / read-completion, exactly the Slice-5 boundary. Total crate errors 39 → 35; replay.rs 4 → 1. No new errors introduced in other files.
+
+### Note for Slice 5
+1. Add `cipherbox_sdk::fetch_node_gated(fetcher, high_water, ipns_name) -&gt; Result&lt;PublishedNode, ListingError&gt;` (gate-first single-node resolve, TASK 0) — replay calls it at `replay.rs:427`.
+2. Update the `replay_for_vault` callers (`apps/desktop/src-tauri/src/fuse/mod.rs:252` + `windows/mod.rs:160`): new signature is `(journal, api, journal_dir: PathBuf, root_read_key: &amp;[u8;32], root_write_key: &amp;[u8;32], root_ipns_name, coordinator, tee_public_key, tee_key_epoch)` — the legacy `private_key`/`public_key`/`root_folder_key` params are gone; `journal_dir` and root read/write keys are already available at the mount site (`default_journal_dir()` before it moves into `WriteQueue`, root keys from root population).
+3. E2E flag carried forward: replay does not unpin the old parent CID after re-publish (`fetch_node_gated` returns no CID) — orphaned pins are GC-able, not correctness-critical, but worth noting.</result>
+<usage><subagent_tokens>210464</subagent_tokens><tool_uses>47</tool_uses><duration_ms>922795</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a930140dd4c6d5715</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/a930140dd4c6d5715.output</output-file>
+<status>completed</status>
+<summary>Agent "69-09 Slice 5: glue + desktop + gate → green" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The tree is clean at TASK 0. I've completed and verified TASK 0, but on close inspection TASK 1/2 are materially larger than the runbook's "mechanical field-repointing" estimate. Here is my honest, evidence-backed handoff.
+
+## FINAL RETURN — Slice 5 (69-09), partial
+
+**Branch:** `worktree-agent-aad501548bf8c685c` @ `019a6968b` (worktree `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-aad501548bf8c685c`). Tree clean.
+
+&lt;worktree_metadata&gt;
+{"agent_id":"69-09","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-aad501548bf8c685c","branch":"worktree-agent-aad501548bf8c685c","expected_base":"019a6968bfb40926c86abc10b66041252df35911"}
+&lt;/worktree_metadata&gt;
+
+### Commits landed this session
+- **TASK 0 — `019a6968b`** `feat(69-09): slice 5 — fetch_node_gated SC#6 single-node read entrypoint`
+  - Added `pub async fn fetch_node_gated&lt;F,S&gt;(fetcher, high_water, ipns_name) -&gt; Result&lt;PublishedNode, ListingError&gt;` in `crates/sdk/src/listing.rs` (gate-first: reuses `pub(crate) resolve_published_node`, `enforce_resolved` BEFORE decode; no new raw-resolve public surface).
+  - Re-exported `cipherbox_sdk::fetch_node_gated` in `crates/sdk/src/lib.rs`.
+  - Added 2 unit tests (emit round-trip + gate-first `SequenceRegression` rejection).
+
+TASK 1 (fuse read glue) and TASK 2 (desktop + SC#6 gate) were **not** landed — reverted my in-progress edits to leave the crate at its uniform inherited RED state (no tangled half-migration) per the RED-intermediate-commit convention.
+
+### Green-boundary checks (evidence)
+| Check | Status | Evidence |
+|---|---|---|
+| `cargo test -p cipherbox-sdk` | **PASS** | `132 passed; 0 failed` (incl. 2 new `fetch_node_gated` tests) |
+| `cargo check --workspace` | **FAIL** | `could not compile cipherbox-fuse (lib) due to 34 previous errors` (unchanged from inherited) |
+| `cargo test -p cipherbox-fuse` | **FAIL** | test-compile surface is **~250+ errors** (inode.rs alone: 180) — see below |
+| `grep ecies::unwrap_key inode.rs content_ops.rs` | **EMPTY** ✓ | inherited-green from Slice 2 (exit 1, no matches) |
+| SC#6 gate in ci.yml | **NOT ADDED** | TASK 2 not reached |
+
+### Blocker class: runbook under-scoped Slice 5 (not usage/context)
+The runbook framed Slice 5 as "mechanical field-repointing + one small SDK fn + desktop + a CI gate." Three findings contradict that:
+
+1. **The `cargo test -p cipherbox-fuse` green-boundary is ~250+ legacy-test errors, not 35.** `cargo check` (lib-only) hides them; `cargo test --no-run` reveals `inode.rs`(180), `read_ops.rs`(46), `fs.rs`(19), `write_ops/grant_scope.rs`(12), `write_ops/implementation/delete.rs`(9), `lib.rs`(9), plus `decrypt_journal_name` (deleted in Slice 4) still referenced by 4 tests. The entire `inode.rs` `#[cfg(test)]` module (~lines 730–2145) is built on the **legacy `FolderMetadata` + old 5-arg `populate_folder(metadata, private_key, public_key, merge_only)` signature** and must be rewritten to node/v3 fake-fetcher round-trips or removed. Rewriting ~250 crypto tests blind (no runtime validation this session) risks false-green — exactly the overclaim the task warns against.
+
+2. **Lib-green requires a node/v3 redesign of the background metadata-refresh pipeline, not field-repointing.** `fs.rs:420` (one of the 34 errors) calls the new 7-arg async `populate_folder`, but the whole refresh pipeline is legacy and interlocked: `events.rs::spawn_metadata_refresh` resolves via **`resolve_ipns_verified` (raw resolve) + `decrypt_metadata_from_ipfs_public` → `FolderMetadata`**, `PendingRefresh::Success` carries `FolderMetadata`, `fs.rs::drain_refresh_completions` applies it via `populate_folder` + `mark_remotely_edited_files_unresolved(ino, &amp;FolderMetadata)`, and `metadata_cache` stores `FolderMetadata` for staleness. Correct migration needs: split `populate_folder` into async-fetch (`list_folder_owned`) + sync-apply(`Vec&lt;ResolvedOwnedChild&gt;`), reshape `PendingRefresh`, and redefine `metadata_cache` semantics — touching `events.rs`, `cache.rs`, `fs.rs`, `inode.rs`.
+
+3. **The live per-file publish must be built (Slice 3 deferred it here).** The `read_ops.rs` flush handler (~785–870) still constructs legacy `InodeKind::File` fields and calls the **legacy `publish_file_metadata(&amp;FileMetadata, folder_key,…)`**. Node/v3 needs: rebuild the file `Node` with the real CID (from reshaped `UploadJournalResult{file_read_key,file_write_key,file_ipns_private_key,file_key,iv_hex,mime_type,encryption_mode,file_size}`), `seal_published_node` → publish. `replay.rs::publish_child_node` (currently `async fn`, private) is a reusable first-publish helper — but it is **first-publish-only** (skips if IPNS already resolves), so **file OVERWRITE needs a CAS-update path** (mirror `publish_file_metadata`'s CAS tail). `publish_file_metadata` must stay intact (69-13's `spawn_file_meta_reencrypt` still calls it) → add a new `publish_file_node`, don't mutate the legacy one.
+
+4. **SC#6 gate cannot be enabled with zero hits until (2)+(3) land.** `grep -rln 'resolve_ipns_verified|resolve_published_node' crates/fuse/src` (non-test) still hits **`events.rs, metadata.rs, publish.rs, fs.rs, replay.rs`**. `replay.rs`/`publish.rs` route through the sanctioned `resolve_ipns_for_replay` wrapper (assess if allowlisted), but `events.rs`/`metadata.rs`/`fs.rs` raw resolves are the read-path violations the SC#6 gate targets and must be migrated first.
+
+### Design decision for the resumer (verified, not yet committed)
+Background content-prefetch (`spawn_content_prefetch_fuse` in `read_ops.rs` + the inline `dir_ops.rs` readdir prefetch) must gate the file-node fetch via `fetch_node_gated` inside the spawned task, which needs an **owned** `RotationHighWater`. `RotationHighWater&lt;S&gt;` is **not `Clone`**. Safe fix: `#[derive(Clone)]` on `RotationHighWater` (its `JsonSidecarFloorStore` is `Clone` and holds only a `PathBuf` doing read-modify-write on disk, so a clone shares the same durable floor — no state divergence). I verified this compiles and keeps `cargo test -p cipherbox-sdk` green; I reverted it to avoid committing unused API, but the resumer should re-add it. New prefetch body: `let fetcher = ApiNodeFetcher{api:&amp;api}; let published = fetch_node_gated(&amp;fetcher,&amp;high_water,&amp;ipns_name).await?; fetch_and_decrypt_content_async(&amp;api,&amp;published,&amp;read_key).await` — plumb `(cid, ipns_name, read_key: Zeroizing&lt;[u8;32]&gt;)` instead of `(cid, encrypted_file_key, iv, mode)`. The sync write-open path (`operations.rs::fetch_and_decrypt_file_content`, uses `fs.private_key`+`unwrap_key`) must likewise take `(ipns_name, read_key)` and `block_on(fetch_node_gated)` using `&amp;fs.high_water`. "Unresolved file" is now `cid.is_empty()` (replaces `file_meta_resolved:false`, dropped in Slice 1).
+
+### Remaining task decomposition (recommend re-planning as ordered units)
+1. Read-path glue: `read_ops.rs` (file_info tuples → `(cid,ipns_name,read_key)`, prefetch callers, poll `file_meta_resolved`→`cid.is_empty()`), `dir_ops.rs` readdir prefetch + Root `ipns_name` now `String` (drop `.as_ref().and_then`), `content_ops.rs`(2), `poll.rs`(2). Requires the `RotationHighWater: Clone` enabler.
+2. Live per-file publish: new `publish_file_node` (first + CAS-update), rewire flush handler `InodeKind::File` construction + `UploadJournalResult` destructure.
+3. Refresh-pipeline node/v3 redesign: split `populate_folder`, reshape `PendingRefresh`, migrate `events.rs`/`metadata.rs`/`fs.rs` off raw resolve, redefine `metadata_cache`.
+4. Test-module migration (~250 errors) — the largest unit; needs runtime/E2E co-validation to avoid false-green.
+5. Desktop `mod.rs`/`prepopulate.rs` root population + `replay_for_vault` caller sig + `windows/*` (cfg-gated).
+6. SC#6 CI grep gate in `ci.yml` Rust lane — enable ONLY after unit 3.
+
+### SC#6 gate command (for whoever adds it, per plan spec)
+`grep -rn 'resolve_published_node\|resolve_ipns_verified' crates/fuse/src | grep -v '^\s*//'` must be empty (sanctioned entrypoints: `list_folder`/`list_shared_folder`/`list_folder_owned`/`fetch_node_gated`; `resolve_published_node` stays `pub(crate)`).
+
+### Consolidated E2E-risk list (for the orchestrator's merge gate)
+- File `versions` not reconstructed at upload — `InodeKind` dropped `versions` (Slice 1); `NodeContent.versions` exists but the write path writes `Vec::new()` → **versioning regression** to verify at E2E (journal_helpers.rs:293).
+- `file_iv` HEX round-trip — write builds `NodeContent.file_iv` as HEX; `content_ops` decodes via `hex::decode`. Verify no double-encode.
+- File-content read is gated-fetch (`fetch_node_gated`) — landed in TASK 0; verify the FUSE read path actually routes through it once the read glue lands.
+- Replay does **not** unpin the old parent CID after re-publish — orphaned pins are GC-able, not correctness-critical.
+- Live per-file **overwrite** publish (unbuilt) — if a resumer wires `publish_child_node` (first-publish-only) for overwrites, overwrites will silently skip re-publish; must use a CAS-update path.
+- No prod vaults exist (clean flag-day, D-04) + `~/.cipherbox/journal` should be cleared before first node/v3 mount (stale pre-cutover entries fail-closed skip, inherited from 69-18).
+
+No SUMMARY.md was written — the plan's `&lt;output&gt;` predicates it on reaching the green boundary, which this session did not. TASK 0 is the durable, verified deliverable; the remaining work is accurately scoped above for a fresh continuation agent on this branch.</result>
+<usage><subagent_tokens>216307</subagent_tokens><tool_uses>61</tool_uses><duration_ms>1011757</duration_ms></usage>
+</task-notification>
+
+---
+
+please continue
+
+---
+
+<task-notification>
+<task-id>aa8545899b6f3dab4</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/aa8545899b6f3dab4.output</output-file>
+<status>completed</status>
+<summary>Agent "69-09 Slice 5b: fuse lib to green" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All four sub-steps landed and the definition of done for Slice 5b is met. Final verification summary:
+
+- `cargo check -p cipherbox-fuse` (lib, default features): **GREEN** (`Finished dev profile`)
+- `cargo test -p cipherbox-sdk`: **GREEN** (132 passed)
+- ecies node-to-node greps in `inode.rs`/`content_ops.rs`: **EMPTY**
+- `cargo check -p cipherbox-fuse --tests`: RED (149 errs, was 201) — expected, Slice 5c test-module work
+- desktop crate: not rebuilt — expected RED (Slice 5c)
+
+## Commit hashes (a)–(d)
+- **(a)** `68c8b5d93` — `#[derive(Clone)]` on `RotationHighWater` (crates/sdk); sdk-green preserved (132 tests)
+- **(b)** `28328fb0e` — read/prefetch glue onto `fetch_node_gated`
+- **(c)** `9db2016a2` — live per-file `publish_file_node` (first + CAS update)
+- **(d)** `da5e158a9` — refresh pipeline onto node/v3, **lib green**
+
+Branch `worktree-agent-aad501548bf8c685c`, based on `019a6968b`.
+
+## How `publish_file_node` was built (without touching `publish_file_metadata`)
+New standalone `pub async fn publish_file_node` added alongside `publish_file_metadata` in `content_ops.rs` (69-13's `spawn_file_meta_reencrypt` still calls the untouched `publish_file_metadata`). It re-seals the file `Node::File` with the now-known content CID (`seal_published_node` under the file's own read/write keys), uploads the sealed envelope to IPFS, then publishes the per-file IPNS record:
+- **first-publish tail**: seq `1`, `expected_sequence_number: None`, TEE enrollment via the pre-wrapped `encrypted_ipns_for_tee` (rule #7); `Conflict` → `Err` → EIO.
+- **CAS-update tail**: routes through the shared `crate::metadata::publish_with_cas_retry` (no TEE re-enroll), re-signing the same node-envelope CID at each attempted sequence.
+The `read_ops` flush handler's `InodeKind::File` finalize now mutates descriptors in place (clears CID, sets iv/size/mode, preserves moved-in keys, D-09), and the `UploadJournalResult` destructure reads the node/v3 fields (`file_read_key`, `file_write_key`, `file_key`, `iv_hex`, `mime_type`, `encrypted_ipns_for_tee`, `is_first_publish`, …), computing `child_id = uuid_from_ino(ino)` for AAD consistency.
+
+## Refresh-pipeline reshape (d)
+- Split `InodeTable::populate_folder` into async-fetch (`list_folder_owned`) + new sync `apply_owned_children(parent_ino, Vec&lt;ResolvedOwnedChild&gt;, merge_only)`.
+- `PendingRefresh::Success` now carries `children: Vec&lt;ResolvedOwnedChild&gt;` (dropped `metadata`/`cid`); `PendingFilePointer::Success` dropped `encrypted_file_key`/`versions`.
+- `spawn_metadata_refresh` reshaped to take `(parent_read_key, parent_write_key, owned high_water)` and call `list_folder_owned` (SC#6).
+- `fs.rs::drain_refresh_completions` applies owned children synchronously; the FP-resolve spawn now recovers each file's OWN `read_key` and calls the gated `content_ops::resolve_file_descriptors` (fetch_node_gated + unseal); `pending_fp_resolves` VecDeque now carries per-file read_key.
+- `metadata_cache` (cache.rs) redefined to a pure per-ipns freshness+best-effort-cid marker (dropped the `FolderMetadata` payload); `set(ipns_name, cid)`.
+- dir_ops/read_ops staleness detection extract `read_key`+`write_key` and thread `high_water` into the reshaped spawn.
+
+## Read-path raw resolves gone (SC#6)
+`events.rs` and `fs.rs`: **zero** raw `resolve_ipns_verified`/`resolve_published_node` (only a doc-comment mention remains in events.rs). `metadata.rs` retains **two** raw resolves that are NOT node/v3 folder/file reads and are out of this slice's scope:
+- `metadata.rs:472` — `spawn_bin_entry_publish` (legacy recycle-**bin** subsystem, still `encrypt_bin_metadata`-based; not node/v3).
+- `metadata.rs:648` — `resolve_and_fetch_file_meta`, called only by `spawn_file_meta_reencrypt` (69-13, leave-untouched).
+
+## Notes for Slice 5c
+1. **SC#6 CI grep gate** must allowlist/wrap the two metadata.rs resolves above plus the sanctioned `resolve_ipns_for_replay` (replay.rs/publish.rs). Decide: allowlist the bin+reencrypt sites, or wrap them in a sanctioned helper.
+2. **Test modules** (149 fuse test-compile errors): `inode.rs`, `fs.rs`, `cache.rs` `#[cfg(test)]` blocks still use removed `InodeKind` fields (`folder_key`, `encrypted_file_key`, `file_meta_resolved`, `versions`, …), the old 3-arg `MetadataCache::set`, 5-arg `populate_folder`, 7-arg `resolve_file_pointer`/`mark_remotely_edited`, and `FolderMetadata`. Per the runbook: delete legacy-model tests, port only non-crypto mechanics, add node/v3 fake-fetcher smoke tests.
+3. **Desktop** (mod.rs/prepopulate.rs + `replay_for_vault` caller sig + windows/*) still on the old shape — Slice 5c.
+4. **E2E flags** (carry-forward): metadata_cache no longer surfaces the resolved parent CID, so old parent-metadata CIDs are no longer unpinned on republish (GC-able orphan pins — extends the existing replay orphan-pin flag); file `versions` still not reconstructed on write; file_iv hex round-trip.</result>
+<usage><subagent_tokens>301106</subagent_tokens><tool_uses>73</tool_uses><duration_ms>1146058</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a327a327f0972d72d</task-id>
+<tool-use-id>toolu_01J7fzRJ62drr6QQPjf1PYcK</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/a327a327f0972d72d.output</output-file>
+<status>completed</status>
+<summary>Agent "69-09 Slice 5c: desktop + tests + SC#6 → green" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Slice 5c is complete. The final tree is clean, the full workspace is green, and all four sub-steps landed on `worktree-agent-aad501548bf8c685c`.
+
+## Slice 5c — FINAL slice complete
+
+**Commit hashes (all on `worktree-agent-aad501548bf8c685c`, HEAD `70af0daed`):**
+1. `c2910ea5f` — desktop root population + replay caller onto node/v3
+2. `445384bf8` — migrate fuse test module to node/v3 (delete legacy-model tests)
+3. `5bb22969d` — SC#6 single-gated-read CI grep gate
+4. `70af0daed` — SUMMARY
+
+**Green-boundary checks (verified in worktree, all PASS):**
+| Check | Result |
+|-------|--------|
+| `cargo check --workspace` (default fuse feature) | 0 errors ✅ |
+| `cargo test -p cipherbox-fuse` | 92 lib + 1 vector passed, 0 failed ✅ |
+| `cargo test -p cipherbox-sdk` | 132 passed, 0 failed ✅ |
+| `grep ecies::unwrap_key inode.rs content_ops.rs` | 0 / 0 — EMPTY ✅ |
+| SC#6 gate dry-run | CLEAN (3 allowlisted, 0 unsanctioned); negative-tested ✅ |
+| Working tree | clean (reverted 8 out-of-scope rustfmt-drift files) ✅ |
+
+**Test groups DELETED (asserted the removed model):** inode.rs legacy tail (5-arg `populate_folder(&amp;FolderMetadata)` round-trips, ECIES-keypair `mark_remotely_edited_*`, `d11_*`/`upsert_children_*` on the old signature, Option-shaped `ipns_private_key` field checks); lib.rs `decrypt_journal_name_round_trip` (helper deleted in Slice 4).
+
+**Test groups KEPT/PORTED (non-crypto mechanics):** inode table/id/insert/find/remove/NFC-name; cache freshness-marker (2-arg `set`); fs.rs `drain_refresh_completions` refresh tests (→ `PendingRefresh::Success{children}`); lib.rs `replay_reuploads_ciphertext` sidecar round-trip (→ reshaped `UploadFile`); journal_helpers mkdir MkdirPublish; grant_scope/delete `InodeKind` helpers. **ADDED** 4 node/v3 `apply_owned_children`/`resolve_file_pointer` smoke tests.
+
+**SC#6 gate command** (cargo-linux lane): greps `crates/fuse/src` for raw `resolve_ipns_verified(`/`resolve_published_node(` and fails unless a `// sc6-allow:` marker sits within a ±1-line window (rustfmt-stable). **Allowlist:** publish.rs `resolve_sequence`/`resolve_sequence_strict` (replay, `resolve_ipns_for_replay`); metadata.rs `spawn_bin_entry_publish` (recycle-bin) + `resolve_and_fetch_file_meta` (69-13 reencrypt).
+
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-aad501548bf8c685c/.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-09-SUMMARY.md`
+
+**Consolidated E2E-risk list for the merge gate** (compile/unit-green ≠ runtime-correct — the honest boundary):
+1. **Desktop root read/write keys are placeholder-bridged** from legacy `root_folder_key` — the real node/v3 root keys are randomly generated at vault registration (sdk-core `registration.ts`) and persisted server-side; desktop recovery into `KeyState` is NOT wired (v2.0 client stubbed, phase 63). A real node/v3 vault mount reads/writes with the wrong root keys until recovery lands.
+2. File `versions` not reconstructed on write (`InodeKind` dropped `versions`; `NodeContent.versions` unpopulated) — versioning regression.
+3. `file_iv` hex round-trip (write builds HEX; `content_ops` `hex::decode`s).
+4. Gated content read (`fetch_node_gated` → `fetch_and_decrypt_content_async`) decrypt correctness.
+5. Overwrite/CAS path via new `publish_file_node` (first + CAS-update tail).
+6. Orphaned parent-CID pins — `metadata_cache` no longer surfaces old CID for unpin (GC-able orphans).
+7. `~/.cipherbox/journal` sidecar high-water gate on first mount + replay against a fresh journal dir.
+
+One flagged deviation: the desktop root-key bridge (Rule 2/3) — plumbing correct, key bytes placeholder, documented in-code and in the SUMMARY, not overclaimed. No new Cargo dependency; keepers (TEE wrap, `revoke_shares_blocking`/`spawn_file_meta_reencrypt`/`publish_file_metadata`, legacy `crates/core/src/folder.rs`) untouched.</result>
+<usage><subagent_tokens>296674</subagent_tokens><tool_uses>128</tool_uses><duration_ms>1946271</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a9110c2b13480cd9b</task-id>
+<tool-use-id>toolu_01CoXntthbySSPo4khiZEcmk</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/a9110c2b13480cd9b.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 69-13 grant-scope gate" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Plan 69-13 is complete and green. All three commits landed on the worktree branch.
+
+## PLAN COMPLETE — 69-13
+
+**Branch:** `worktree-agent-a9110c2b13480cd9b` (forked from `f6ad740a2b1a82342585be08853501498a773ca9`)
+
+**Commits:**
+- `04ddc148e` feat(69-13): grant-root-gated delete/rename + D-07 dual-keying
+- `c0dc0f499` feat(69-13): SC#2 delete re-encrypt-on-move + CI gate
+- `d8050534c` docs(69-13): SUMMARY
+
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a9110c2b13480cd9b/.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-13-SUMMARY.md`
+
+### Green-boundary checks (verified in this worktree)
+| Check | Result |
+|---|---|
+| `cargo check --workspace` (default + `--features fuse`) | GREEN, no warnings |
+| `cargo test -p cipherbox-fuse` | 96 passed, 0 failed (incl. new spy/gate/D-07 tests) |
+| `cargo test -p cipherbox-sdk` | 132 passed, 0 failed |
+| `grep spawn_file_meta_reencrypt … \| grep -v platform/windows` | EMPTY |
+| `revoke_shares_blocking` unconditional call sites in delete.rs | GONE |
+| SC#2 CI gate in ci.yml (non-Windows), alongside SC#6 | present |
+
+### How the grant gate replaced revoke_shares_blocking
+Both unconditional `revoke_shares_blocking` calls (unlink + rmdir) are replaced by `run_scope_exit_gate` → `gate_scope_exit`, which branches on `grant_root_for` (wrapping `has_covering_grant`, 69-05/69-07): **private = 0 rotate + 0 extra publish** (pure parent relink; spy-proven `spy.calls()==0`), **shared-scope exit = exactly 1 rotate** at the matched grant-root (spy `==1`, rooted at `k51folderA`). No local predicate re-implemented.
+
+### publish_file_metadata: KEPT (not deletable)
+Grep-confirmed still referenced by the live Windows path (`platform/windows/operations.rs:272` → `write_ops.rs:979`). Only the re-encrypt-on-move helper + retry machinery (which alone consumed it on Unix) were removed. `publish_file_node` untouched.
+
+### D-07 threading + security-review markers
+Write plane (`uuid_from_ino`/childId) and read plane (grant-root `ipns_name`) threaded as separate params into `rotate_read_on_scope_exit`; `SECURITY-REVIEW: D-07` markers on the driver, seam, and both delete gate sites; distinctness test added. `crates/fuse/src/write_ops/` flagged for explicit security review.
+
+### SC#2 gate command
+`grep -rn 'spawn_file_meta_reencrypt' crates/fuse/src | grep -v 'platform/windows' | grep -vE ':[0-9]+:[[:space:]]*//'`
+
+### Scope deviations
+- Removed the now-unused Unix `publish_file_metadata` re-export in `operations.rs` (Rule 3 — direct consequence of the SC#2 deletion; would trip a `-D warnings` lane).
+- Reverted out-of-scope rustfmt drift in 8 untouched files (base tree wasn't fmt-clean).
+
+### Residual E2E risk (not overclaiming)
+`rotate_read_on_scope_exit` **fails closed** — no production `RotationDeps` implementor exists anywhere in the workspace (verified: only the engine's `FakeDeps`), so a live `rotate_read_from_node` call is not constructible in this plan. Private deletes are fully correct; **shared-scope-exit deletes/moves on Unix currently EIO** until the RotationDeps live-wiring plan lands (matches the known ROT-07 live-wiring gap). Secure-by-default; the spy-based rotation-count tests + merged sdk rotation-engine unit tests are the reachable gate. Documented in the SUMMARY's Known Limitation section.</result>
+<usage><subagent_tokens>239366</subagent_tokens><tool_uses>82</tool_uses><duration_ms>1554494</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a9110c2b13480cd9b</worktreePath><worktreeBranch>worktree-agent-a9110c2b13480cd9b</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aaa678405613c6e35</task-id>
+<tool-use-id>toolu_01MfK6wdAm4ufnfV2tptH76Q</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/aaa678405613c6e35.output</output-file>
+<status>completed</status>
+<summary>Agent "Author plans 69-19, 69-20, re-scope 69-10" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All three plans are clean, well-formed, and validated. Done.
+
+## Result
+
+Three plan files authored/rewritten (all `.planning/`-only; no source touched):
+
+- `/Users/myankelev/Code/random/cipher-box-phase69/.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-19-PLAN.md`
+- `/Users/myankelev/Code/random/cipher-box-phase69/.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-20-PLAN.md`
+- `/Users/myankelev/Code/random/cipher-box-phase69/.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-10-PLAN.md` (rewritten)
+
+Frontmatter + structure validate clean for all three (`valid=true`, 2 tasks each, zero errors; the "missing `&lt;files&gt;`" warnings match the phase's established convention — siblings 69-13/69-16 use per-task `&lt;read_first&gt;` + frontmatter `files_modified`).
+
+### Boundaries per plan
+- **69-19 (P4a, recycle-bin):** `depends_on: ["69-09","69-13"]`, wave 7 — MID-FLIP RED tolerated across the cross-crate reshape; PLAN boundary is `cargo check --workspace` (default fuse) + `cargo test -p cipherbox-core bin`/`-p cipherbox-fuse delete` green. `--features winfsp` expected-RED (WinFsp bin-write verified by 69-14 CI).
+- **69-20 (P4b, vault-creation):** `depends_on: ["69-19"]`, wave 7 — WORKSPACE-GREEN (`cargo check --workspace` + a pure `build_empty_root_published_node` unit test). Full new-user runtime = desktop-e2e deferred to phase-63 root-key recovery.
+- **69-10 (P4c, delete):** `depends_on: ["69-09","69-19","69-20"]`, wave 7 — Task 1 core-local green (`cargo check -p cipherbox-core`), PLAN boundary WORKSPACE-GREEN (`cargo check --workspace` + `cargo test --workspace --features fuse` + residual grep). `--features winfsp` expected-RED → 69-14.
+
+### BinEntry reshape (69-19)
+DROP `file_pointer: Option&lt;FilePointer&gt;`, `folder_entry: Option&lt;FolderEntry&gt;`, `original_folder_key_encrypted`. ADD `child_published_node: String` (b64 `encode_published_node`, re-upload keeper), `child_ref: SealedChildRef` (read plane, keyed by ipnsName), `write_child_ref: WriteChildRef` (write plane, D-07, keyed by childId UUID = `uuid_from_ino`). KEEP the ECIES `encrypt_bin_metadata`/`decrypt_bin_metadata` envelope (user-key keeper) and `VersionCidEntry`/`BinItemType`/`RecycleBinMetadata`. `use crate::folder::{FilePointer, FolderEntry}` → `use crate::node::{SealedChildRef, WriteChildRef}`.
+
+### Exact 69-10 delete list
+From `crates/core/src/folder.rs`: `FolderMetadata`, `FolderChild`, `FolderEntry`, `FilePointer`, `FileMetadata`, `encrypt_folder_metadata`, `decrypt_folder_metadata`, `encrypt_file_metadata`, `decrypt_file_metadata`, `default_encryption_mode` + all their tests. From `crates/core/src/decrypt.rs`: both dead helpers (`decrypt_metadata_from_ipfs_public`, `decrypt_file_metadata_from_ipfs_public`) → module dropped. `file.rs` reduced to re-export VersionEntry; `lib.rs` re-exports fixed. From `crates/fuse`: `metadata.rs` `merge_folder_children` + `encrypt_metadata_to_json` (+ tests + lib.rs re-exports); `content_ops.rs` `publish_file_metadata`. From `apps/desktop`: `mod.rs` `encrypt_metadata_to_json` import + the merge-test block.
+
+### Two deviations from the brief's literal 69-10 list (baked in for the `cargo check --workspace` boundary to actually hold — flag for your awareness)
+1. **`folder::VersionEntry` is RETAINED, not deleted.** `crates/fuse/src/helpers.rs` (`apply_versioning`/`versions_to_bin_entries`, unconditionally compiled) consumes `cipherbox_core::folder::VersionEntry`. So folder.rs is *reduced* to hold `VersionEntry` (not emptied); `pub mod folder;` stays. It's not in the boundary grep set, so the brief's grep still passes.
+2. **`content_ops.rs::publish_file_metadata` must be deleted** (the brief's list only named `merge_folder_children`/`encrypt_metadata_to_json`). It's a live default-compiled `FileMetadata`/`encrypt_file_metadata` consumer (winfsp-only caller; superseded by node/v3 `publish_file_node`). Left in place, deleting `FileMetadata` breaks the default build. Added `content_ops.rs` to `files_modified`; winfsp callers break → 69-14, consistent with the established deferral doctrine.
+
+Also confirmed and encoded: **no live Rust bin-restore command exists** (the bin is write-only today), so 69-19 lands the restore *data* + a pure re-splice round-trip test proving restore-sufficiency rather than fabricating a nonexistent FUSE restore command; and **69-20 uses the core seal path directly, not `build_folder_emission`** (it mints random keys — vault-creation needs HKDF-derived IPNS + the mount-consistent bridge keys `root_read_key = root_folder_key[..32]`, `root_write_key = read ^ 0xA5`, mod.rs:192-205, phase-63 coupling documented).
+
+I did not touch ROADMAP.md or commit (task scoped to the three `.planning/` files). Note: phase 69's plan count/list grew by +2 — if the ROADMAP plan list is tracked, it may want the two new entries added by the orchestrator.</result>
+<usage><subagent_tokens>262027</subagent_tokens><tool_uses>40</tool_uses><duration_ms>1129924</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a02a51b07a5a9de31</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/a02a51b07a5a9de31.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 69-19 recycle-bin node/v3" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Plan 69-19 complete and green. All work committed on `worktree-agent-a02a51b07a5a9de31`.
+
+## PLAN COMPLETE
+
+**Plan:** 69-19 (P4a — recycle-bin node/v3 migration)
+**Tasks:** 2/2
+
+&lt;worktree_metadata&gt;
+{"agent_id":"69-19","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a02a51b07a5a9de31","branch":"worktree-agent-a02a51b07a5a9de31","expected_base":"297f0fb0b111e2d8d879d9276f1adc2126751d20"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `f0605a0d9` feat(69-19): reshape BinEntry to node/v3 restore data
+- `9b9215aa1` feat(69-19): FUSE delete bin-write on node/v3 D-07 dual refs
+- `de6a2dc7d` docs(69-19): complete recycle-bin node/v3 migration plan
+
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a02a51b07a5a9de31/.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-19-SUMMARY.md`
+
+### Green-boundary checks (verified in this worktree)
+
+| Check | Result | Evidence |
+|-------|--------|----------|
+| `cargo check --workspace` (default fuse) | PASS | `Finished dev profile ... in 34.47s` |
+| `cargo test -p cipherbox-core` | PASS | 87+3+7+1 passed, 0 failed (incl. BinEntry reshape + D-07 non-conflation) |
+| `cargo test -p cipherbox-fuse` | PASS | 97+1 passed, 0 failed (incl. new re-splice round-trip + 4 existing delete tests) |
+| `grep FilePointer\|FolderEntry crates/core/src/bin.rs` | PASS | empty — replaced by SealedChildRef/WriteChildRef |
+| `--features winfsp` | EXPECTED-RED | fails on the `windows-future` platform crate (`windows_core::imp::IMarshal` missing on macOS) — never reaches our code; 69-14 Windows CI owns it. Not a regression. |
+
+### Final BinEntry shape
+`id, item_type, name, original_parent_ipns_name, original_path, deleted_at, size, mime_type, content_cid?, content_size?, version_cids?, child_published_node: String, child_ref: SealedChildRef, write_child_ref: WriteChildRef`
+
+### How the delete path captures the restore refs
+Copies the parent inode read/write keys, borrows the child inode's own read/write keys + ipns_name, computes `child_id = uuid_from_ino(child_ino)`, and calls `cipherbox_sdk::build_child_refs(...)` → `SealedChildRef` (read plane sealed under parent read key, keyed by ipnsName) + `WriteChildRef` (write plane sealed under parent write key, keyed by the UUID). Never conflated; `SECURITY-REVIEW: D-07` markers at both sites.
+
+### ECIES envelope
+Kept verbatim — `encrypt_bin_metadata`/`decrypt_bin_metadata` still ECIES-wrap the whole `RecycleBinMetadata` under the user key. No node-to-node hop introduced; round-trip test green.
+
+### Re-splice round-trip test
+`bin_dual_refs_are_restore_sufficient_and_d07_distinct` re-splices `child_ref` into a fresh `Node::Folder` and `write_child_ref` into its `NodeWriteBody`, seals+encodes, then unseals and asserts the child ipns_name reappears in the read plane, child_id in the write plane, and `child_id != ipns_name`.
+
+### WinFsp
+Edited best-effort to mirror the FUSE change (dropped FilePointer/FolderEntry, node/v3 build_child_refs). EXPECTED-RED locally; 69-14 Windows CI is authoritative.
+
+### Scope deviations
+None. Diff limited to the plan's `files_modified` allowlist (`bin.rs`, `delete.rs`, `windows/write_ops.rs`); `metadata.rs` verified untouched. No new Cargo dependency. Residual E2E risks (no live restore command, empty `child_published_node` keeper, generation pinned to 0, WinFsp unverified locally) are documented in the SUMMARY.
+
+Note: STATE.md/ROADMAP.md updates were intentionally not run — this is an isolated wave-7 worktree executor; the execute-phase orchestrator owns state/roadmap reconciliation on merge.</result>
+<usage><subagent_tokens>159628</subagent_tokens><tool_uses>43</tool_uses><duration_ms>669026</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a02a51b07a5a9de31</worktreePath><worktreeBranch>worktree-agent-a02a51b07a5a9de31</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aed29cf0ef2df853a</task-id>
+<tool-use-id>toolu_01Ao2Nj29iLno5BUNa1buFyJ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/aed29cf0ef2df853a.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 69-20 vault-creation node/v3" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Plan 69-20 complete. All tasks executed, committed atomically, green boundary verified in this worktree.
+
+## Commits (branch `worktree-agent-aed29cf0ef2df853a`)
+- `1f2329f50` — feat(69-20): pure empty-root node/v3 emit helper + KAT unit test
+- `dbb5d6f0f` — feat(69-20): vault-creation emits empty node/v3 root node
+- `2565fb366` — docs(69-20): summary
+
+## Green boundary (verified)
+- `cargo check --workspace` — GREEN (only pre-existing third-party `fuser` dead-struct warnings; our helpers' dead-code warnings cleared once wired in Task 2).
+- KAT unit test `cipherbox-desktop --features fuse root_emit` — 1 passed.
+- `cargo test -p cipherbox-core` — 87 passed; `cargo test -p cipherbox-fuse` — 97 passed. No regressions.
+- `grep 'FolderMetadata\|encrypt_folder_metadata\|cipherbox_core::folder' vault.rs` — EMPTY (the root-creation site no longer uses them).
+
+## How the empty root node was built
+- `build_empty_root_published_node` composes the CORE seal path directly: `Node::Root { generation: 0, children: [] }` + `NodeWriteBody { ipns_private_key: &lt;root ipns seed&gt;, write_children: [] }` → `cipherbox_core::node::seal::seal_published_node(.., Some(&amp;write_body))` → `encode_published_node`. No `build_folder_emission`/`create_folder_node` (those mint random keys).
+- Uploaded via existing `ipfs::upload_content`, published at seq 1 through the reused `create_ipns_record(.., 1, ..)` / `marshal_ipns_record` / `IpnsPublishRequest{expected_sequence_number: None}` / `publish_ipns` tail.
+
+## Keys (mount-consistent bridge — confirmed byte-matched to `fuse/mod.rs:192-205`)
+- root IPNS keypair: HKDF `derive_vault_ipns_keypair` (unchanged, identical at create+mount)
+- `root_read_key = root_folder_key[..32]` (same `.min(32)` copy as the mount)
+- `root_write_key = root_read_key ^ 0xA5`
+- Phase-63 coupling documented in code comment + SUMMARY (placeholder until real node/v3 root-key persistence/recovery lands).
+
+## Residual FolderMetadata use in vault.rs
+None. The v2 vault-KEY-blob path (`serialize_vault_blob_v2` + `ecies::wrap_key`) and `/vault/init` tail are untouched (ECIES retained per NODE-06). Remaining `build_folder_emission` mentions are doc-comments only.
+
+## Scope deviations
+None. rustfmt (`--edition 2021`, changed file only) reflowed a few pre-existing lines in `load_vault_settings` — in-scope per the plan's fmt rule.
+
+## Residual E2E risk (not overclaimed)
+Placeholder bridge-key coupling and unverified live create→mount round-trip are gated by phase-63 desktop-e2e (deferred/accepted, D-06). Reachable gate here = pure seal/round-trip KAT + workspace-green, both passing.
+
+SUMMARY.md: `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-aed29cf0ef2df853a/.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-20-SUMMARY.md`</result>
+<usage><subagent_tokens>108759</subagent_tokens><tool_uses>30</tool_uses><duration_ms>395703</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-aed29cf0ef2df853a</worktreePath><worktreeBranch>worktree-agent-aed29cf0ef2df853a</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a53a3e307a1584aa9</task-id>
+<tool-use-id>toolu_01XthJqn3r5sY44mBQ5QuKEh</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/a53a3e307a1584aa9.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 69-10 delete legacy types" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Plan 69-10 (P4c / D-04) complete. Worktree is clean and green.
+
+## PLAN COMPLETE
+
+**Plan:** 69-10
+**Tasks:** 2/2
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a53a3e307a1584aa9/.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-10-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"69-10","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a53a3e307a1584aa9","branch":"worktree-agent-a53a3e307a1584aa9","expected_base":"e31cdef59ed7820a79ad2d3afd29a418134e94f2"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `a4af46256`: refactor(69-10): delete legacy folder-model types from crates/core (retain VersionEntry)
+- `edcfddabf`: refactor(69-10): remove legacy folder-model consumers from fuse + desktop
+- `a5f358544`: docs(69-10): complete legacy folder-model deletion plan
+
+**Duration:** ~10 min
+
+### Green-boundary checks (verified in this worktree)
+
+| Check | Result | Evidence |
+|-------|--------|----------|
+| `cargo check --workspace` (default fuse) | PASS | Finished dev profile, all crates compiled |
+| `cargo test --workspace --no-default-features --features fuse` | PASS | Every suite `test result: ok`, 0 failed (core/sdk/fuse/api-client/crypto) |
+| Residual grep (excl winfsp trees + comments) | PASS | No live deleted-type/fn references — only `PendingFilePointer` (distinct live type), `InvalidFolderMetadata` (unrelated error variant), CHANGELOG/CLAUDE.md docs, and `FilePointer` inside `log::` string literals in 69-09-owned files |
+| `--features winfsp` | RED (EXPECTED) | Deferred to 69-14. On macOS fails at `windows-future`/`windows_core::imp::IMarshal` dep crates (winfsp is CI-only); on the Windows runner the still-present `publish_file_metadata` callers (`platform/windows/operations.rs:272`, `write_ops.rs:18,983`) + deleted types break |
+
+### Symbols deleted
+- **crates/core/folder.rs:** `FolderMetadata`, `FolderChild`, `FolderEntry`, `FilePointer`, `FileMetadata`, `encrypt_folder_metadata`, `decrypt_folder_metadata`, `encrypt_file_metadata`, `decrypt_file_metadata`, `default_encryption_mode` + all their tests
+- **crates/core/decrypt.rs:** whole file deleted (`decrypt_metadata_from_ipfs_public`, `decrypt_file_metadata_from_ipfs_public` + tests); `pub mod decrypt;` dropped from lib.rs
+- **crates/fuse/metadata.rs:** `merge_folder_children`, `encrypt_metadata_to_json` + merge tests + lib.rs re-exports
+- **crates/fuse/content_ops.rs:** `publish_file_metadata`
+- **apps/desktop fuse/mod.rs:** `encrypt_metadata_to_json` import + merge-test block
+
+### Survivors confirmed
+- `crates/core::folder::VersionEntry` retained (`pub struct VersionEntry` + `pub mod folder` present, helpers.rs consumer resolves)
+- node/v3 types (`crates/core/src/node/*`) untouched
+- `publish_file_node` retained — now the single per-file publish path
+- No `From&lt;FolderMetadata&gt;`/`From&lt;FileMetadata&gt;`/`to_node`/`from_legacy`/`into_node` adapter (grep empty) — D-04 single-codec doctrine enforced
+
+### Scope deviations
+- Reverted rustfmt collateral: `rustfmt` on crate-root `lib.rs` recursively reformats the whole module tree; I `git checkout --`'d all out-of-scope reformatted files (core `ipns.rs`/`node/decode.rs`/`vault_blob.rs`; fuse `file_handle.rs`/`helpers.rs`/`platform/*`/`write_ops/mod.rs`) so the committed tree touches only the 8 in-scope files.
+- Task 1 first commit initially captured only the `decrypt.rs` deletion (a `git add` aborted on the already-`git rm`'d pathspec); resolved via `git commit --amend` — final `a4af46256` contains all 4 core changes.
+
+This completes the phase's non-Windows legacy-retirement work (noted in the SUMMARY). Windows remains deferred to 69-14 by design.</result>
+<usage><subagent_tokens>142532</subagent_tokens><tool_uses>59</tool_uses><duration_ms>713629</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a53a3e307a1584aa9</worktreePath><worktreeBranch>worktree-agent-a53a3e307a1584aa9</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+I think that wiring up the desktop root-key recovery so that desktop e2e can be exercised is necessary before this phase can be marked as complete.
+
+---
+
+<task-notification>
+<task-id>a44778ef0f942b5ff</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/a44778ef0f942b5ff.output</output-file>
+<status>completed</status>
+<summary>Agent "Map node/v3 root-key recovery lifecycle" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Design doc written. Summary:
+
+## node/v3 ROOT-KEY recovery: model, gap, wiring
+
+**The real model (web, fully wired — not stubbed).** At vault registration the web generates **two independent random 32-byte keys**, `rootReadKey` + `rootWriteKey` (`packages/core/src/vault/init.ts:43-46`) — NOT derived from anything. It ECIES-wraps both under the user's secp256k1 public key and packs them into a **vault blob v3** (`0x03 | u16(readLen) | ECIES(read) | u16(writeLen) | ECIES(write)`, `packages/core/src/vault/blob.ts:33`), uploads it to IPFS, and publishes at the HKDF-derived vault-key IPNS name. The root **Ed25519 IPNS keypair is HKDF-derived** (deterministic, recomputable, NOT in the blob). The API DB is zero-knowledge — the `vaults` table stores only `owner_public_key` + `root_ipns_name`. Login recovery: `GET /vault` → resolve vault-key IPNS → fetch blob → `deserializeVaultBlobV3` → ECIES-unwrap both under the private key → re-derive IPNS key via HKDF → land into `useVaultStore` (`rootReadKey`/`rootWriteKey`/`rootIpnsKeypair`).
+
+**The exact gap.** The desktop is still on the **legacy v2 single-key** model. It stores one random `root_folder_key` in a **v2 blob** and fabricates node/v3 read/write keys with the `^0xA5` bridge. Rust `crates/core/src/vault_blob.rs` implements **only v2**; `KeyState` (`crates/sdk/src/state.rs`) has only `root_folder_key`, no `root_read_key`/`root_write_key`. Consequence: a web-created v3 vault is literally unreadable by the desktop (`fetch_and_decrypt_vault` errors "not v2 format"), and vice versa. The desktop's stale comments cite "phase 63 stubbed" — that's outdated; the web shipped it in #578/69-20.
+
+**Recommended wiring — option (a): port the web v3 model to Rust verbatim** (desktop reads/writes the SAME persisted v3 blob). Because the web keys are random, HKDF re-derivation (option c) is impossible; desktop-only registration (b) leaves vaults mutually unreadable. Option (a) makes vaults cross-client openable and reuses the **already-frozen KAT** `tests/vectors/vault-v3-blob.json` (shipped in #578 waiting for the Rust port). The root IPNS HKDF derivation is already byte-identical TS↔Rust (`cross_language.rs`), and the Rust root-node seal path already works — it just needs real random keys instead of the bridge.
+
+**~5 plans:** (1) Rust v3 blob codec + cross-language KAT, (2) `KeyState` two-key fields, (3) desktop vault init/recovery → v3 + delete `derive_root_node_keys`, (4) mount wiring in `auth.rs`/`fuse/mod.rs` deleting the `^0xA5` bridge (`mod.rs:179-205`; prepopulate/replay already accept the two keys), (5) fix the desktop-e2e verifier (`verify-filepointer.mts` still reads retired `rootFolderKey`) and run.
+
+**Desktop-e2e after wiring:** runnable. FUSE-local I/O tests pass immediately once plans 3–4 land; the API round-trip/content-decrypt path needs plan 5's `rootFolderKey → rootReadKey` fix to be meaningful. Stack is the full **local** setup from `.github/workflows/desktop-e2e.yml` — Postgres 16, `apps/api`, Kubo v0.34, Redis, mock-ipns-routing, plus the platform FUSE driver — provisioned natively (no docker), dispatch-gated in CI, runnable locally via the `--dev-key` + `/auth/test-login` headless recipe (keypair comes from the server, not the CLI key).
+
+Full doc: `/Users/myankelev/Code/random/cipher-box-phase69/.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-ROOT-KEY-RECOVERY-RESEARCH.md`</result>
+<usage><subagent_tokens>150374</subagent_tokens><tool_uses>34</tool_uses><duration_ms>448116</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ac8c4488023f929cf</task-id>
+<tool-use-id>toolu_01YPFfyA5ToXotw3JZ8G1ySB</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/ac8c4488023f929cf.output</output-file>
+<status>completed</status>
+<summary>Agent "Author root-key recovery plans 69-21..69-25" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All five plans are written, validated (`valid=true`, zero errors), and hardened. Here is the report.
+
+## PLANNING COMPLETE — Phase 69 node/v3 root-key recovery (plans 21–25)
+
+### Plan file paths (all wave 8, sequential via `depends_on`)
+
+| Plan | Path | Boundary |
+|------|------|----------|
+| **69-21** | `.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-21-PLAN.md` | `cargo check --workspace` + `cargo test -p cipherbox-core vault_blob` green (v3 codec + KAT + v2 preserved) |
+| **69-22** | `.../69-22-PLAN.md` | `cargo check --workspace` + `cargo test -p cipherbox-sdk state` green (KeyState two-key fields + zeroization) |
+| **69-23** | `.../69-23-PLAN.md` | `cargo check --workspace` + `cargo test -p cipherbox-desktop --features fuse vault` green (init→recover v3 round-trip) |
+| **69-24** | `.../69-24-PLAN.md` | `cargo check --workspace` + `cargo test -p cipherbox-desktop --features fuse` green; `grep -rn '0xA5' apps/desktop/src-tauri/src/fuse/` empty |
+| **69-25** | `.../69-25-PLAN.md` | `pnpm --filter @cipherbox/sdk-core typecheck` green + tsx module-load; does NOT run e2e (orchestrator does) |
+
+`depends_on`: 21→[], 22→[21], 23→[21,22], 24→[22,23], 25→[24]. No file overlaps across the five, so "all wave 8" is safe (order enforced by `depends_on`).
+
+### Exact v3 blob byte format encoded (69-21)
+```
+0x03 | u16_BE(readLen) | ECIES(rootReadKey) | u16_BE(writeLen) | ECIES(rootWriteKey)
+```
+Big-endian u16 lengths; envelope-only (no crypto in the codec — the caller supplies already-ECIES-wrapped bytes). `deserialize` returns **owned** `(Vec&lt;u8&gt;, Vec&lt;u8&gt;)` copies to match blob.ts's `.slice()` D-09 semantics. Transcribed field-for-field from `packages/core/src/vault/blob.ts`.
+
+### KAT vector drives 69-21 — confirmed
+The frozen `tests/vectors/vault-v3-blob.json` (`read_key`=0xaa+0x00..0x7f 129B, `write_key`=0xbb+0x00..0x7f 129B, `expected_blob_hex="030081aa…7f0081bb…7f"`) is **loaded at runtime** (via `CARGO_MANIFEST_DIR`/`../../tests/vectors/…` + serde_json, mirroring `crates/core/tests/node_codec_vectors.rs`) and asserted byte-identical + round-trip — not a hardcoded duplicate. This is the same vector the TS twin `packages/core/src/__tests__/vault-blob-vectors.test.ts` asserts, so a web-minted vault opens on desktop and vice-versa.
+
+### Is 69-20 fully superseded by 69-23? — Partially
+- **Superseded (deleted):** `derive_root_node_keys` (the `^0xA5` bridge) and the v2-blob vault creation (`serialize_vault_blob_v2` on the init path). 69-23 mints **two independent random 32-byte keys** and publishes a **v3 blob**.
+- **Retained/reused:** 69-20's pure `build_empty_root_published_node` helper — now fed the **real random keys** instead of bridge keys. The seq-1 publish tail and `/vault/init` body are reused unchanged (server stays zero-knowledge: only `owner_public_key` + `root_ipns_name`).
+
+### Sequencing / blocking notes
+- **auth.rs placement deviation (flag):** the user's spec listed `commands/auth.rs` under 69-23, but I placed it in **69-24**. Reason: `post_auth_finalize`'s mount call must change **in lockstep** with `mount_filesystem`'s new signature; splitting them would break workspace-green or force two plans to edit auth.rs. 69-23 is `commands/vault.rs`-only; 69-24 owns `fuse/mod.rs` + `fuse/windows/mod.rs` + `commands/auth.rs`.
+- **Transitional `root_folder_key`:** 69-22 **keeps** `root_folder_key` (additive); 69-23 recovery still populates it (= `root_read_key`) so the still-bridged mount + `post_auth_finalize` stay green until 69-24 flips the mount to the real keys.
+- **`CipherBoxFS.root_folder_key` stays (crates/fuse untouched):** it's still consumed at `fs.rs:112` + winfsp read_ops/dir_ops, so 69-24 keeps threading it into the struct; its full removal is out-of-scope crates/fuse cleanup. This keeps 69-24 desktop-only.
+- **WinFsp (D-06):** 69-24 Task 2 is `cfg(winfsp)` edit-for-correctness (parity signature, bridge deleted); the default build never compiles it — Windows CI gate + 69-14 + the user's Windows box are the sign-off authority.
+- **69-25 verifier is a real node/v3 migration, not a rename:** `loadFolderMetadata`/`resolveFileMetadata` are already node/v3 (they `unsealNode`), but the helpers still use legacy `FolderEntry`/`FilePointer` child fields — so the fix threads `rootReadKey` → `SealedChildRef` traversal → `unsealChildReadKey` (parent-mirror generation, navigate.ts Pitfall 1) → raw `NodeContent.fileKey` download. Boundary is typecheck/build; the **live e2e run is the orchestrator's** (SC#5), documented as a full LOCAL run recipe in the plan.
+- **Not committed / ROADMAP not touched:** per your scope ("author the 5 files") and commit-only-when-asked. The plans are on disk, unstaged. `verify.plan-structure` warnings are per-task "missing `&lt;files&gt;`" (matches sibling 69-16/69-13/69-20 which use `&lt;read_first&gt;` + frontmatter `files_modified`) and 69-21's intentional "wave&gt;1, empty depends_on" — both consistent with the format you pointed me to.</result>
+<usage><subagent_tokens>255061</subagent_tokens><tool_uses>41</tool_uses><duration_ms>1187758</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a079611fab452cb18</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/a079611fab452cb18.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 69-21 vault-blob-v3 codec" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Plan 69-21 complete. All green-boundary checks pass in this worktree.
+
+## PLAN COMPLETE
+
+**Plan:** 69-21 — Rust `vault-blob-v3` codec + cross-language KAT
+**Tasks:** 2/2
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a079611fab452cb18/.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-21-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"69-21","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a079611fab452cb18","branch":"worktree-agent-a079611fab452cb18","expected_base":"ab4ecefcf3c24cf831b59e06fc8f240e35b86f66"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `300317e80`: test(69-21): add failing vault-blob-v3 cross-language KAT (RED)
+- `0e1f604bf`: feat(69-21): vault-blob-v3 codec byte-matching the cross-language KAT (GREEN)
+- `04351dae1`: feat(69-21): v3 blob edge tests + lib re-export
+- `35a67b81d`: docs(69-21): complete vault-blob-v3 codec plan
+
+### Green-boundary evidence (verified in worktree)
+
+- `cargo check --workspace` — **GREEN** (`Finished dev profile`).
+- `cargo test -p cipherbox-core --lib vault_blob` — **28 tests pass** (14 pre-existing v2 + 14 new v3), including `test_cross_platform_v3_vector` (byte-identity + round-trip).
+- Envelope-only confirmed: `grep -nE 'ecies|wrap_key|seal|encrypt_aes' crates/core/src/vault_blob.rs` → empty.
+- No new dependency: `crates/core/Cargo.toml` has no diff from base.
+
+### v3 format encoded (matches KAT byte-for-byte)
+
+```
+0x03 | u16_BE(readLen) | ECIES(rootReadKey) | u16_BE(writeLen) | ECIES(rootWriteKey)
+```
+
+Big-endian u16 lengths, envelope-only (caller supplies already-ECIES-wrapped bytes). The KAT asserts the full `expected_blob_hex` from `tests/vectors/vault-v3-blob.json`, loaded at runtime via `CARGO_MANIFEST_DIR` + `serde_json` (not hardcoded). Prefix asserted: `030081aa000102...` (version `0x03`, readLen `0x0081`=129, read key `0xaa` + `0x00..0x7f`); write segment `...7f0081bb000102...` (writeLen `0x0081`=129, write key `0xbb` + `0x00..0x7f`).
+
+### v2 untouched
+
+`git diff &lt;base&gt; -- crates/core/src/vault_blob.rs` shows **no `-`/`+` lines** touching any v2 symbol or v2 test — all additions are below the v2 block. `lib.rs` re-export extended additively (v2 exports preserved).
+
+### Scope deviations
+
+One: reverted pre-existing out-of-scope rustfmt drift in `crates/core/src/ipns.rs` and `crates/core/src/node/decode.rs` via `git checkout --` (base tree isn't fmt-clean). Not part of any 69-21 commit; working tree is clean. `deserialize_vault_blob_v3` returns OWNED `Vec&lt;u8&gt;` copies (D-09) — verified by `test_v3_deserialize_returns_owned_copies` (mutating the source blob after deserialize does not corrupt recovered keys).
+
+**Duration:** ~10m</result>
+<usage><subagent_tokens>88786</subagent_tokens><tool_uses>28</tool_uses><duration_ms>335587</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a079611fab452cb18</worktreePath><worktreeBranch>worktree-agent-a079611fab452cb18</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+please continue
+
+---
+
+<task-notification>
+<task-id>a9597fefea1d023da</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/a9597fefea1d023da.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 69-22 KeyState two-key fields" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Plan 69-22 complete.
+
+## PLAN COMPLETE
+
+**Plan:** 69-22
+**Tasks:** 1/1
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a9597fefea1d023da/.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-22-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"69-22","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a9597fefea1d023da","branch":"worktree-agent-a9597fefea1d023da","expected_base":"629c14c68cd176f96f5ae38fa438660dc8a71ee2"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `b8abd36d7`: feat(69-22): KeyState root_read_key/root_write_key with zeroization (48 insertions, 0 deletions — purely additive)
+- `e200f38fe`: docs(69-22): complete KeyState node/v3 root key slots plan
+
+**Duration:** ~6m
+
+### Green-boundary checks (verified in this worktree, evidence)
+- `cargo check --workspace` — GREEN (`Finished dev profile in 35.08s`).
+- `cargo test -p cipherbox-sdk state` — GREEN, 6 passed / 0 failed, incl. the extended `new_creates_state_with_none_fields`, `fields_are_writable_and_readable`, `clear_zeros_all_sensitive_byte_fields` covering both new fields (defaults None, read/write round-trip, zeroize-to-None on clear).
+- `root_folder_key` retained + unchanged: `grep -c root_folder_key` = 10; git diff is additive-only (0 deletions).
+- `grep '0xA5' crates/sdk/src/state.rs` — empty (no XOR bridge).
+
+### Fields/accessors added (struct: `KeyState` in `crates/sdk/src/state.rs`)
+```rust
+pub root_read_key:  RwLock&lt;Option&lt;zeroize::Zeroizing&lt;Vec&lt;u8&gt;&gt;&gt;&gt;,
+pub root_write_key: RwLock&lt;Option&lt;zeroize::Zeroizing&lt;Vec&lt;u8&gt;&gt;&gt;&gt;,
+```
+- `new()`: both `RwLock::new(None)`.
+- `clear()`: two zeroization blocks (`k.zeroize()` then `*key = None`) mirroring the `root_folder_key` block — `clear()` is the terminal owner wiping its own stored keys.
+- No separate getter/setter methods; fields are public `RwLock`s accessed directly (same pattern as `root_folder_key`), reached from desktop as `state.sdk.root_read_key` / `root_write_key`.
+
+### Zeroization + retention confirmation
+- `root_folder_key` kept (transitional until 69-24); zeroization for both new fields covered by tests. AppState (`apps/desktop/src-tauri/src/state.rs`) **untouched** — it wraps `Arc&lt;KeyState&gt;` and `clear_keys()` already delegates to `KeyState::clear()`. `git status` showed only `crates/sdk/src/state.rs` modified. `crates/sdk/Cargo.toml` diff empty (no new dependency).
+
+### Scope deviations
+- One auto-fix (Rule 3): reverted out-of-scope `rustfmt` reformatting of three pre-existing lines the base tree left un-fmt (two `vault_settings` asserts + the `root_ipns_*` asserts) so the commit diff stayed purely additive. My new multi-line asserts remain rustfmt-correct.
+
+STATE.md/ROADMAP.md were not touched — this agent runs in an isolated worktree gated on the green boundary; the execute-phase orchestrator owns state/roadmap updates at merge.</result>
+<usage><subagent_tokens>78526</subagent_tokens><tool_uses>27</tool_uses><duration_ms>237191</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a9597fefea1d023da</worktreePath><worktreeBranch>worktree-agent-a9597fefea1d023da</worktreeBranch></worktree>
+</task-notification>
