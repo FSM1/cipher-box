@@ -8,8 +8,9 @@ import {
   type VirtualElement,
 } from '@floating-ui/react';
 import type { SealedChildRef } from '@cipherbox/core';
+import type { ResolvedChild } from '@cipherbox/sdk';
 import { Portal } from '../ui/Portal';
-import { isFileRef } from '../../utils/fileTypes';
+import { isFileRefResolved } from '../../utils/fileTypes';
 import '../../styles/context-menu.css';
 
 type ContextMenuProps = {
@@ -17,8 +18,15 @@ type ContextMenuProps = {
   x: number;
   /** Y position (client coordinates) */
   y: number;
-  /** The file or folder item */
+  /** The file or folder item (identity-only raw ref -- no `.kind`) */
   item: SealedChildRef;
+  /**
+   * SDK-resolved listing for the current folder (68.2-15). Supplies `item`'s
+   * `kind` (keyed by ipnsName) that the raw `item` lacks after the 68.2-11
+   * kind-cache removal -- gates the file-only Download action. Omitted for
+   * bin/read-only contexts that never surface Download.
+   */
+  resolvedChildren?: ResolvedChild[];
   /** Number of selected items (for multi-selection context) */
   selectedCount: number;
   /** Callback to close the menu */
@@ -67,6 +75,7 @@ export function ContextMenu({
   x,
   y,
   item,
+  resolvedChildren,
   selectedCount,
   onClose,
   onDownload,
@@ -84,8 +93,14 @@ export function ContextMenu({
   onHide,
 }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement | null>(null);
-  // D-02: kind cache read (synchronous, folder-safe default on cache miss).
-  const isFile = isFileRef(item);
+  // 68.2-15: `item` is an identity-only raw ref with no `.kind`; classify
+  // against the SDK-resolved listing keyed by ipnsName (folder-safe default
+  // on miss / when no listing supplied).
+  const resolvedByIpnsName = useMemo(
+    () => new Map((resolvedChildren ?? []).map((r) => [r.ipnsName, r])),
+    [resolvedChildren]
+  );
+  const isFile = isFileRefResolved(item, resolvedByIpnsName);
 
   // Create virtual reference element at click position
   const virtualReference = useMemo<VirtualElement>(

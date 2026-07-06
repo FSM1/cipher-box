@@ -79,3 +79,36 @@ export function reconfigurePinning(pinningConfig?: PinningConfig): void {
   _lastConfig = { ..._lastConfig, pinningConfig };
   _client = new CipherBoxClient({ ..._lastConfig, axiosInstance: apiAxios });
 }
+
+/**
+ * Create a throwaway `CipherBoxClient` for facade calls that must run
+ * BEFORE the real vault-scoped client exists -- vault-bootstrap crypto and
+ * config-blob (BYO/vault-settings) resolve/publish during initial login,
+ * when `rootIpnsName`/`rootFolderKey` aren't known yet (this client mints
+ * or loads the very keys the real client needs to be constructed).
+ *
+ * The facade methods this is used for (`bootstrapVaultKeys`,
+ * `serializeVault`/`deserializeVault`, `publishEmptyRootNode`,
+ * `resolveConfigBlob`/`publishConfigBlob`, `uploadBytes`/`downloadBytes`)
+ * only read `ctx` (apiUrl/getAccessToken/axiosInstance) or caller-supplied
+ * key material passed directly as arguments -- they never touch
+ * `rootIpnsName`/`rootFolderKey`/`folderTree`, so the placeholder values
+ * below are never read. Callers MUST call `.destroy()` when finished to
+ * zero this client's defensive key copies (D-09) -- it is a fully separate
+ * instance from the module-level `_client`, so destroying it never affects
+ * the real client.
+ */
+export function createBootstrapClient(config: {
+  apiUrl: string;
+  getAccessToken: () => Promise<string>;
+  vaultKeypair: { publicKey: Uint8Array; privateKey: Uint8Array };
+}): CipherBoxClient {
+  return new CipherBoxClient({
+    apiUrl: config.apiUrl,
+    getAccessToken: config.getAccessToken,
+    vaultKeypair: config.vaultKeypair,
+    rootIpnsName: '',
+    rootFolderKey: new Uint8Array(32),
+    axiosInstance: apiAxios,
+  });
+}

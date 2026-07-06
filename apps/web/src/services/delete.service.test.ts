@@ -1,7 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('../lib/api/ipfs', () => ({
-  unpinFromIpfs: vi.fn().mockResolvedValue(undefined),
+const mockUnpin = vi.fn().mockResolvedValue(undefined);
+
+vi.mock('../lib/sdk-provider', () => ({
+  getSdkClient: vi.fn(() => ({
+    unpin: mockUnpin,
+  })),
 }));
 
 const mockRemoveUsage = vi.fn();
@@ -23,7 +27,6 @@ vi.mock('../lib/logger', () => ({
   },
 }));
 
-import { unpinFromIpfs } from '../lib/api/ipfs';
 import { logger } from '../lib/logger';
 import { deleteFile } from './delete.service';
 
@@ -33,10 +36,10 @@ describe('deleteFile', () => {
     mockFetchQuota.mockResolvedValue(true);
   });
 
-  it('calls unpinFromIpfs, then removeUsage, then fetchQuota in order', async () => {
+  it('calls unpin, then removeUsage, then fetchQuota in order', async () => {
     const callOrder: string[] = [];
-    vi.mocked(unpinFromIpfs).mockImplementationOnce(async () => {
-      callOrder.push('unpinFromIpfs');
+    mockUnpin.mockImplementationOnce(async () => {
+      callOrder.push('unpin');
     });
     mockRemoveUsage.mockImplementationOnce(() => {
       callOrder.push('removeUsage');
@@ -48,7 +51,7 @@ describe('deleteFile', () => {
 
     await deleteFile('bafytest123', 1024);
 
-    expect(callOrder[0]).toBe('unpinFromIpfs');
+    expect(callOrder[0]).toBe('unpin');
     expect(callOrder[1]).toBe('removeUsage');
     expect(callOrder[2]).toBe('fetchQuota');
     expect(mockFetchQuota).toHaveBeenCalledOnce();

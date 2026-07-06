@@ -4,7 +4,7 @@ import { decryptAesGcm, decryptAesCtr } from '@cipherbox/crypto';
 import { useFolder } from '../../../hooks/useFolder';
 import { formatDate, formatBytes } from '../../../utils/format';
 import { formatDateWithTime } from './DetailsPrimitives';
-import { fetchFromIpfs } from '../../../lib/api/ipfs';
+import { getSdkClient } from '../../../lib/sdk-provider';
 import { triggerBrowserDownload } from '../../../services/download.service';
 
 /** Decodes a base64 string to a Uint8Array (VersionEntry.fileIv is base64, v3 contract). */
@@ -54,7 +54,7 @@ export function VersionHistory({
       setLoadingAction(`download-${index}`);
       setActionError(null);
       try {
-        const ciphertext = await fetchFromIpfs(version.cid);
+        const ciphertext = await getSdkClient().downloadBytes(version.cid);
         const iv = base64ToBytes(version.fileIv);
         const plaintext =
           version.encryptionMode === 'CTR'

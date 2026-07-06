@@ -12,8 +12,7 @@ import {
 import type { ByoIpfsConfig } from '@cipherbox/core';
 import { useAuthStore } from '../../stores/auth.store';
 import { useQuotaStore } from '../../stores/quota.store';
-import { addToIpfs, fetchFromIpfs } from '../../lib/api/ipfs';
-import { createAndPublishIpnsRecord, resolveIpnsRecord } from '../../services/ipns.service';
+import { getSdkClient } from '../../lib/sdk-provider';
 import { ConnectionTest } from './ConnectionTest';
 import { MigrationProgress } from './MigrationProgress';
 import { migrationApi } from '../../lib/api/migration';
@@ -118,11 +117,11 @@ export function StorageTab() {
         const ipnsName = storedIpnsName || keypair.ipnsName;
 
         // Try resolving the BYO config IPNS record
-        const resolved = await resolveIpnsRecord(ipnsName);
+        const resolved = await getSdkClient().resolveConfigBlob(ipnsName);
         if (cancelled) return;
 
         if (resolved?.cid) {
-          const encrypted = await fetchFromIpfs(resolved.cid);
+          const encrypted = await getSdkClient().downloadBytes(resolved.cid);
           if (cancelled) return;
 
           const config = await decryptByoConfig(encrypted, vaultKeypair.privateKey);
@@ -176,8 +175,7 @@ export function StorageTab() {
 
       const encrypted = await encryptByoConfig(config, vaultKeypair.publicKey);
 
-      const blob = new Blob([encrypted as BlobPart]);
-      const { cid } = await addToIpfs(blob);
+      const { cid } = await getSdkClient().uploadBytes(encrypted);
 
       const byoKeypair = await deriveByoConfigIpnsKeypair(vaultKeypair.privateKey);
 
@@ -188,7 +186,7 @@ export function StorageTab() {
       const storedIpnsName = localStorage.getItem(BYO_IPNS_NAME_KEY);
       if (storedIpnsName) {
         try {
-          const existing = await resolveIpnsRecord(storedIpnsName);
+          const existing = await getSdkClient().resolveConfigBlob(storedIpnsName);
           if (existing?.sequenceNumber) {
             sequenceNumber = BigInt(existing.sequenceNumber) + 1n;
           }
@@ -209,7 +207,7 @@ export function StorageTab() {
         keyEpoch = teeKeys.currentEpoch;
       }
 
-      await createAndPublishIpnsRecord({
+      await getSdkClient().publishConfigBlob({
         ipnsPrivateKey: byoKeypair.privateKey,
         ipnsName: byoKeypair.ipnsName,
         metadataCid: cid,

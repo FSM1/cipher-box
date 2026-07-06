@@ -1,5 +1,5 @@
 import type { SealedChildRef } from '@cipherbox/core';
-import { getKind } from '../lib/kind-cache';
+import type { ResolvedChild } from '@cipherbox/sdk';
 
 /** Extensions recognized as editable text files. */
 const TEXT_EXTENSIONS = new Set([
@@ -129,15 +129,45 @@ export function isPreviewableFile(name: string): boolean {
 }
 
 /**
- * Type guard: narrows SealedChildRef to a "file-kind" ref (D-02).
+ * Type guard: is this child a "file-kind" ref?
  *
- * `SealedChildRef` carries no `kind` field (NODE-03) — kind discrimination reads
- * the kind cache (kind-cache.ts), populated by `resolveKinds` from the child's own
- * plaintext `PublishedNode.kind`. Synchronous by design (called in render-time list
- * mapping across many components). A cache miss defaults to `false` (folder-safe —
- * renders as a folder row rather than mis-opening a file preview); folder-load
- * populates the cache before render, so a miss is a transient.
+ * Accepts EITHER shape (D-02):
+ * - `ResolvedChild` (the SDK-resolved listing, SDK-READ-02) carries `kind`
+ *   pre-resolved -- read it directly, no cache/resolve needed. This is the
+ *   target shape every render site converges on.
+ * - `SealedChildRef` (the legacy per-child ref, still the identity/crypto
+ *   carrier for call sites that only have identity -- e.g. context-menu/
+ *   download/drag payloads that need `readKeySealed`/`generation` -- and no
+ *   paired `ResolvedChild` lookup available at that call site) defaults to
+ *   `false` (folder-safe). 68.2-11 removed the per-ipnsName kind-cache
+ *   (kind-cache.ts) this branch used to fall back to: `resolveKinds` was
+ *   never wired into any render path, so the cache was permanently empty in
+ *   practice -- this default preserves that exact always-miss behavior.
+ *
+ * Synchronous by design (called in render-time list mapping across many
+ * components).
  */
-export function isFileRef(item: SealedChildRef): boolean {
-  return getKind(item.ipnsName) === 'file';
+export function isFileRef(item: SealedChildRef | ResolvedChild): boolean {
+  if ('kind' in item) return item.kind === 'file';
+  return false;
+}
+
+/**
+ * Kind classification for a ref against the SDK-resolved listing (68.2-15).
+ *
+ * A bare `SealedChildRef` carries no `.kind` (the per-ipnsName kind-cache was
+ * removed in 68.2-11), so `isFileRef` alone always reports a bare ref as a
+ * folder. Call sites that hold identity-only refs -- selection/context-menu/
+ * download payloads keyed off `rawChildren` -- must classify against the
+ * paired `ResolvedChild` (SDK-READ-02) instead, keyed by `ipnsName`. A
+ * `ResolvedChild` passed directly is read inline; a bare `SealedChildRef` is
+ * looked up in `resolvedByIpnsName` (a miss -- still-loading listing -- stays
+ * folder-safe `false`, preserving the pre-regression default).
+ */
+export function isFileRefResolved(
+  ref: SealedChildRef | ResolvedChild,
+  resolvedByIpnsName: Map<string, ResolvedChild>
+): boolean {
+  if ('kind' in ref) return ref.kind === 'file';
+  return resolvedByIpnsName.get(ref.ipnsName)?.kind === 'file';
 }

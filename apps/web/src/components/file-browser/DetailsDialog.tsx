@@ -1,10 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { SealedChildRef, NodeContent } from '@cipherbox/core';
+import type { ResolvedChild } from '@cipherbox/sdk';
 import { Modal } from '../ui/Modal';
 import { useFolderStore } from '../../stores/folder.store';
-import { resolveIpnsRecord } from '../../services/ipns.service';
-import { resolveFileMetadata } from '../../services/file-metadata.service';
-import { getKind } from '../../lib/kind-cache';
+import { getSdkClient } from '../../lib/sdk-provider';
 import '../../styles/details-dialog.css';
 import { FileDetails } from './details/FileDetails';
 import { FolderDetails } from './details/FolderDetails';
@@ -13,6 +12,15 @@ type DetailsDialogProps = {
   open: boolean;
   onClose: () => void;
   item: SealedChildRef | null;
+  /**
+   * The SDK-resolved display projection for `item`'s folder (SDK-READ-02) --
+   * kind/size/modifiedAt pre-resolved, looked up by ipnsName (mirrors
+   * FileList's `resolvedByIpnsName` pattern, 68.2-11). A miss (item not yet
+   * present in the resolved listing) falls back to a folder-safe default
+   * with unknown size/modifiedAt -- `SealedChildRef` no longer carries a
+   * size/modifiedAt display mirror (D-08/68.2-12 revert).
+   */
+  resolvedChildren: ResolvedChild[];
   folderKey: Uint8Array | null;
   parentFolderId: string;
 };
@@ -21,15 +29,17 @@ type DetailsDialogProps = {
  * Details dialog for file/folder metadata (node/v3).
  *
  * Shows technical information about the selected item. File metadata (size/mime/
- * versions) is resolved via `resolveFileMetadata` (68.1-04/68.1-06); file-vs-folder
- * discrimination reads the kind cache (kind-cache.ts, D-02, populated by the
- * folder-load render paths since 68.1-14), falling back to folderStore membership
- * on a cache miss.
+ * versions) is resolved via `client.resolveFileMetadata` (68.2-11 SDK facade,
+ * formerly the web-native file-metadata.service.ts); file-vs-folder
+ * discrimination reads folderStore membership (the prior per-ipnsName kind
+ * lookup cache is a 68.2 deletion target -- Plan 07 drops this dialog's
+ * dependency on it).
  */
 export function DetailsDialog({
   open,
   onClose,
   item,
+  resolvedChildren,
   folderKey,
   parentFolderId,
 }: DetailsDialogProps) {
@@ -39,15 +49,41 @@ export function DetailsDialog({
   const [fileMetaLoading, setFileMetaLoading] = useState(false);
   const [metadataRefresh, setMetadataRefresh] = useState(0);
 
-  // Definitive kind from the kind cache (D-02); fall back to folderStore
-  // membership on a cache miss (a folder the user has navigated into is in
-  // the store even if its kind was never cached).
+  // 68.2-06 companion patch: FileDetails/FolderDetails render from
+  // ResolvedChild (SDK-READ-02) rather than SealedChildRef (D-08 no-regression
+  // render repoint). Look up the parent folder's SDK-resolved listing by
+  // ipnsName (mirrors FileList's resolvedByIpnsName pattern, 68.2-11); a miss
+  // (item not yet present in the resolved listing) falls back to a
+  // folder-safe default with unknown size/modifiedAt -- `SealedChildRef` no
+  // longer carries a size/modifiedAt display mirror (D-08/68.2-12 revert).
+  const resolvedFromListing: ResolvedChild | undefined = item
+    ? resolvedChildren.find((c) => c.ipnsName === item.ipnsName)
+    : undefined;
+
+  // Kind discriminator: prefer the SDK-authoritative `kind` from the resolved
+  // parent listing (present for every child of the current folder, including
+  // subfolders the user has not navigated into) and fall back to folderStore
+  // membership only on a listing miss (the prior per-ipnsName kind cache was
+  // dropped, D-07/68.2-07). Deriving solely from folderStore misclassified an
+  // un-visited folder (absent from the store) as a file.
   const folderStoreEntry = useFolderStore((state) => {
     if (!item) return undefined;
     return Object.values(state.folders).find((f) => f.ipnsName === item.ipnsName);
   });
-  const cachedKind = item ? getKind(item.ipnsName) : undefined;
-  const isFolderHeuristic = cachedKind !== undefined ? cachedKind === 'folder' : !!folderStoreEntry;
+  const isFolderHeuristic = resolvedFromListing
+    ? resolvedFromListing.kind === 'folder'
+    : !!folderStoreEntry;
+
+  const resolvedItem: ResolvedChild | null = item
+    ? (resolvedFromListing ?? {
+        ipnsName: item.ipnsName,
+        name: item.name,
+        kind: isFolderHeuristic ? 'folder' : 'file',
+        size: undefined,
+        modifiedAt: 0,
+        sequence: 0,
+      })
+    : null;
 
   // Resolve IPNS to get metadata CID (folder view only)
   useEffect(() => {
@@ -68,10 +104,17 @@ export function DetailsDialog({
     let cancelled = false;
     setMetadataLoading(true);
 
-    resolveIpnsRecord(item.ipnsName)
-      .then((result) => {
+    // Confirms the folder resolves via the SDK's gated facade (D-07;
+    // client.getFolderMetadata delegates to the Plan-01 gated ensureFolderLoaded
+    // path). The facade returns the folder's decoded Node, not the raw IPNS
+    // resolve's CID -- that value isn't exposed at this layer, so this dialog's
+    // "Metadata CID" technical-info row shows "unavailable" (FolderDetails'
+    // existing null fallback) rather than depending on a raw IPNS resolve.
+    getSdkClient()
+      .getFolderMetadata(item.ipnsName)
+      .then(() => {
         if (!cancelled) {
-          setMetadataCid(result?.cid ?? null);
+          setMetadataCid(null);
         }
       })
       .catch(() => {
@@ -106,7 +149,8 @@ export function DetailsDialog({
     setFileMetaLoading(true);
     setMetadataLoading(true);
 
-    resolveFileMetadata(item, folderKey)
+    getSdkClient()
+      .resolveFileMetadata(item, folderKey)
       .then(({ metadata, metadataCid: cid }) => {
         if (!cancelled) {
           setFileMeta(metadata as unknown as NodeContent);
@@ -135,7 +179,7 @@ export function DetailsDialog({
     setMetadataRefresh((prev) => prev + 1);
   }, []);
 
-  if (!item) return null;
+  if (!item || !resolvedItem) return null;
 
   const title = isFolderHeuristic ? 'Folder Details' : 'File Details';
 
@@ -143,7 +187,7 @@ export function DetailsDialog({
     <Modal open={open} onClose={onClose} title={title}>
       {!isFolderHeuristic ? (
         <FileDetails
-          item={item}
+          item={resolvedItem}
           metadataCid={metadataCid}
           metadataLoading={metadataLoading}
           fileMeta={fileMeta}
@@ -154,13 +198,14 @@ export function DetailsDialog({
         />
       ) : (
         <FolderDetails
-          item={item}
+          item={resolvedItem}
           metadataCid={metadataCid}
           metadataLoading={metadataLoading}
           sequenceNumber={folderStoreEntry?.sequenceNumber ?? null}
           childCount={folderStoreEntry ? folderStoreEntry.children.length : null}
           folderKey={folderStoreEntry?.folderKey ?? null}
           ipnsPrivateKey={folderStoreEntry?.ipnsPrivateKey ?? null}
+          readKeySealed={item.readKeySealed}
         />
       )}
     </Modal>

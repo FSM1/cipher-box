@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { SealedChildRef } from '@cipherbox/core';
 import { bytesToHex, clearBytes } from '@cipherbox/crypto';
-import { resolveFileMetadata } from '../services/file-metadata.service';
 import { downloadFileFromIpns, triggerBrowserDownload } from '../services/download.service';
 import { registerStream, unregisterStream, isSwActive, waitForSW } from '../lib/sw-registration';
+import { getSdkClient } from '../lib/sdk-provider';
 
 type UseStreamingPreviewOptions = {
   open: boolean;
@@ -51,7 +51,7 @@ type SwMessage =
 /**
  * Hook for SW-based streaming media preview of CTR-encrypted files.
  *
- * Resolves the file's `NodeContent` via `resolveFileMetadata`; when
+ * Resolves the file's `NodeContent` via `client.resolveFileMetadata`; when
  * `encryptionMode === 'CTR'` it registers a decrypt context with the Service
  * Worker (raw fileKey + base64 iv converted to hex, matching decrypt-sw.ts's
  * contract) and exposes `/decrypt-stream/{ipnsName}` as the media element src.
@@ -145,7 +145,7 @@ export function useStreamingPreview({
 
     (async () => {
       try {
-        const { metadata } = await resolveFileMetadata(item, folderKey);
+        const { metadata } = await getSdkClient().resolveFileMetadata(item, folderKey);
         if (cancelled) return;
 
         if (metadata.encryptionMode !== 'CTR') {

@@ -1,9 +1,18 @@
+import { useMemo } from 'react';
 import type { SealedChildRef } from '@cipherbox/core';
-import { isFileRef } from '../../utils/fileTypes';
+import type { ResolvedChild } from '@cipherbox/sdk';
+import { isFileRefResolved } from '../../utils/fileTypes';
 
 type SelectionActionBarProps = {
-  /** Selected items */
+  /** Selected items (identity-only raw refs -- no `.kind`) */
   selectedItems: SealedChildRef[];
+  /**
+   * SDK-resolved listing for the current folder (68.2-15). Supplies the
+   * per-child `kind` (keyed by ipnsName) that the raw `selectedItems` lack
+   * after the 68.2-11 kind-cache removal -- drives the file/folder count copy
+   * and the download-button affordance.
+   */
+  resolvedChildren: ResolvedChild[];
   /** Whether an operation is in progress */
   isLoading: boolean;
   /** Callback to clear selection */
@@ -22,15 +31,22 @@ type SelectionActionBarProps = {
  */
 export function SelectionActionBar({
   selectedItems,
+  resolvedChildren,
   isLoading,
   onClearSelection,
   onDownload,
   onMove,
   onDelete,
 }: SelectionActionBarProps) {
-  // Kind-aware count copy (D-02 kind cache) — pre-v2.0 contract asserted by
+  // Kind-aware count copy (D-02) — pre-v2.0 contract asserted by
   // full-workflow.spec.ts 4.6: "2 files selected" / "2 files, 1 folder selected".
-  const fileCount = selectedItems.filter(isFileRef).length;
+  // 68.2-15: raw `selectedItems` carry no `.kind`; classify against the
+  // SDK-resolved listing keyed by ipnsName.
+  const resolvedByIpnsName = useMemo(
+    () => new Map(resolvedChildren.map((r) => [r.ipnsName, r])),
+    [resolvedChildren]
+  );
+  const fileCount = selectedItems.filter((it) => isFileRefResolved(it, resolvedByIpnsName)).length;
   const folderCount = selectedItems.length - fileCount;
   const parts: string[] = [];
   if (fileCount > 0) parts.push(fileCount === 1 ? '1 file' : `${fileCount} files`);

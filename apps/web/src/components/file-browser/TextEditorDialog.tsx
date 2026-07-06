@@ -8,8 +8,7 @@ import { useVaultStore } from '../../stores/vault.store';
 import { getRootFolderState } from '../../hooks/folder-helpers';
 import { runWithFailureUx } from '../../hooks/useMutationFailureUx';
 import { downloadFileFromIpns, triggerBrowserDownload } from '../../services/download.service';
-import { resolveFileMetadata, shouldCreateVersion } from '../../services/file-metadata.service';
-import { addToIpfs, unpinFromIpfs } from '../../lib/api/ipfs';
+import { shouldCreateVersion } from '../../lib/version-transforms';
 import { getSdkClient, hasSdkClient } from '../../lib/sdk-provider';
 import { logger } from '../../lib/logger';
 import '../../styles/text-editor-dialog.css';
@@ -181,7 +180,8 @@ export function TextEditorDialog({
           throw new Error('Parent folder not found or vault not initialized');
         }
 
-        const { metadata: currentMetadata } = await resolveFileMetadata(item, folderKey);
+        const client = getSdkClient();
+        const { metadata: currentMetadata } = await client.resolveFileMetadata(item, folderKey);
         const createVersion = shouldCreateVersion(currentMetadata.versions, false);
 
         const encoded = new TextEncoder().encode(content);
@@ -191,9 +191,8 @@ export function TextEditorDialog({
         let prunedCids: string[] = [];
         try {
           const ciphertext = await encryptAesGcm(encoded, newFileKey, iv);
-          const { cid } = await addToIpfs(new Blob([ciphertext as BlobPart]));
+          const { cid } = await client.uploadBytes(ciphertext);
 
-          const client = getSdkClient();
           // T-68.1-12-04: the write-chain walk lives only inside
           // CipherBoxClient (D-03). Do NOT zero it here — sdk-core
           // updateFileMetadata is its terminal owner (T-47-01).
@@ -223,9 +222,9 @@ export function TextEditorDialog({
         }
 
         for (const prunedCid of prunedCids) {
-          unpinFromIpfs(prunedCid).catch((err) =>
-            logger.warn('[TextEditor] Unpin pruned CID failed:', err)
-          );
+          client
+            .unpin(prunedCid)
+            .catch((err) => logger.warn('[TextEditor] Unpin pruned CID failed:', err));
         }
       }
 

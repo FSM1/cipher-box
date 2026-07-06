@@ -1,8 +1,8 @@
 import { decryptAesGcm, decryptAesCtr, unwrapKey, hexToBytes, clearBytes } from '@cipherbox/crypto';
 import type { SealedChildRef } from '@cipherbox/core';
-import { fetchFromIpfs, DownloadProgressCallback } from '../lib/api/ipfs';
+import type { DownloadProgressCallback } from '@cipherbox/sdk-core';
+import { getSdkClient } from '../lib/sdk-provider';
 import { UploadedFile } from './upload.service';
-import { resolveFileMetadata } from './file-metadata.service';
 
 /** Decodes a base64 string to a Uint8Array (NodeContent.fileIv is base64, v3 contract). */
 function base64ToBytes(b64: string): Uint8Array {
@@ -36,8 +36,8 @@ export async function downloadFile(
   privateKey: Uint8Array,
   onProgress?: DownloadProgressCallback
 ): Promise<Uint8Array> {
-  // 1. Fetch encrypted file from IPFS
-  const ciphertext = await fetchFromIpfs(metadata.cid, onProgress);
+  // 1. Fetch encrypted file from IPFS via the SDK's IPFS-transport facade (D-07)
+  const ciphertext = await getSdkClient().downloadBytes(metadata.cid, onProgress);
 
   // 2. Convert hex strings to bytes
   const iv = hexToBytes(metadata.iv);
@@ -105,11 +105,12 @@ export async function downloadAndSaveFile(
 /**
  * Download and decrypt a file using its per-file Node content (node/v3 read-chain).
  *
- * Resolves the file's `NodeContent` via `resolveFileMetadata` (readKey recovered
- * from `fileRef.readKeySealed` under the parent `folderKey`), fetches the content
- * CID, then decrypts with the RAW fileKey recovered inside `NodeContent.fileKey`
- * — NOT the legacy ECIES `downloadAndDecrypt`/`unwrapKey` path. `NodeContent.fileIv`
- * is base64-encoded (v3 contract; NOT hex like the legacy `FileMetadata.iv`).
+ * Resolves the file's `NodeContent` via `client.resolveFileMetadata` (68.2-11 SDK
+ * facade; readKey recovered from `fileRef.readKeySealed` under the parent
+ * `folderKey`), fetches the content CID, then decrypts with the RAW fileKey
+ * recovered inside `NodeContent.fileKey` — NOT the legacy ECIES
+ * `downloadAndDecrypt`/`unwrapKey` path. `NodeContent.fileIv` is base64-encoded
+ * (v3 contract; NOT hex like the legacy `FileMetadata.iv`).
  *
  * @security `metadata.fileKey` originates from `resolveFileMetadata`'s freshly
  *   unsealed `NodeContent` — this function is its terminal consumer and zeroes it
@@ -120,9 +121,10 @@ export async function downloadFileFromIpns(params: {
   folderKey: Uint8Array;
   onProgress?: DownloadProgressCallback;
 }): Promise<Uint8Array> {
-  const { metadata } = await resolveFileMetadata(params.fileRef, params.folderKey);
+  const client = getSdkClient();
+  const { metadata } = await client.resolveFileMetadata(params.fileRef, params.folderKey);
 
-  const ciphertext = await fetchFromIpfs(metadata.cid, params.onProgress);
+  const ciphertext = await client.downloadBytes(metadata.cid, params.onProgress);
   const iv = base64ToBytes(metadata.fileIv);
   const fileKey = metadata.fileKey;
 

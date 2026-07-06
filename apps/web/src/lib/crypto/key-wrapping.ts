@@ -3,12 +3,10 @@
  * model, D-02).
  *
  * `resolveChildNodeIdentity` walks ONE hop of the read-chain for a single
- * `SealedChildRef`: it fetches the child's own `PublishedNode` (plaintext
- * `id`/`kind`/`generation`, needed for the child-readkey AAD) and derives the
- * child's own readKey via `unsealChildReadKey` using the PARENT-MIRROR
- * generation (`childRef.generation`) as the AAD input -- never the child's own
- * envelope generation (generation-source rule, mirrors sdk-core's
- * `navigateReadChain` / web's `resolveFileMetadata`, 68.1-04/07).
+ * `SealedChildRef`, recovering the child's own readKey + plaintext node
+ * identity. It is a thin delegate to `client.resolveChildIdentity` (the SDK
+ * facade, 68.2-07 Rule-2 addition) -- the web no longer performs the raw
+ * IPNS resolve, raw IPFS fetch, or child-readkey unseal itself (D-07).
  *
  * Architecture note (D-06/D-07): the live grant model
  * (`sdk-core/share/grant.ts` issueReadGrant/claimInvite, and the `/shares` +
@@ -20,10 +18,8 @@
  * per-child write-key fan-out.
  */
 
-import { unsealChildReadKey } from '@cipherbox/core';
 import type { SealedChildRef, PublishedNode, NodeKind } from '@cipherbox/core';
-import { resolveIpnsRecord } from '../../services/ipns.service';
-import { fetchFromIpfs } from '../api/ipfs';
+import { getSdkClient } from '../sdk-provider';
 
 /** A single child node's own readKey + plaintext identity, recovered via one read-chain hop. */
 export type ChildNodeIdentity = {
@@ -57,30 +53,5 @@ export async function resolveChildNodeIdentity(
   childRef: SealedChildRef,
   parentReadKey: Uint8Array
 ): Promise<ChildNodeIdentity> {
-  const resolved = await resolveIpnsRecord(childRef.ipnsName, {
-    generation: childRef.generation,
-    versionFloor: Number(childRef.versionFloor),
-  });
-  if (!resolved) {
-    throw new Error(`resolveChildNodeIdentity: IPNS record not found for ${childRef.ipnsName}`);
-  }
-
-  const raw = await fetchFromIpfs(resolved.cid);
-  const published = JSON.parse(new TextDecoder().decode(raw)) as PublishedNode;
-
-  const readKey = await unsealChildReadKey(
-    childRef.readKeySealed,
-    parentReadKey,
-    published.id,
-    published.kind,
-    childRef.generation // parent-mirror generation-source rule -- never published.generation
-  );
-
-  return {
-    readKey,
-    nodeId: published.id,
-    kind: published.kind,
-    generation: published.generation,
-    published,
-  };
+  return getSdkClient().resolveChildIdentity(childRef, parentReadKey);
 }

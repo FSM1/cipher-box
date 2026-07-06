@@ -38,21 +38,22 @@ export class FileListPage {
 
   /**
    * Get a specific file item by name.
-   * Files have size displayed (not "-").
+   * Files have size displayed (not the em-dash placeholder "—").
    */
   getFileItem(name: string): Locator {
     return this.getItem(name).filter({
-      hasNot: this.page.locator('.file-list-item-size', { hasText: '-' }),
+      hasNot: this.page.locator('.file-list-item-size', { hasText: '—' }),
     });
   }
 
   /**
    * Get a specific folder item by name.
-   * Folders have size displayed as "-".
+   * Folders have size displayed as the em-dash placeholder "—"
+   * (FileListItem.tsx renders U+2014 EM DASH, not a hyphen-minus).
    */
   getFolderItem(name: string): Locator {
     return this.getItem(name).filter({
-      has: this.page.locator('.file-list-item-size', { hasText: '-' }),
+      has: this.page.locator('.file-list-item-size', { hasText: '—' }),
     });
   }
 

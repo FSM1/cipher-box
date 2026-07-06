@@ -47,6 +47,13 @@ export type {
   LocalGrantRecord,
 } from './types';
 
+// SDK-owned resolved folder listings (SDK-READ-02, D-02) -- the single
+// per-child metadata answer returned by client.listFolder/listSharedFolder
+// and carried on folder:loaded/folder:updated/sharedFolder:updated events.
+// Type-only export: the web consumes ResolvedChild for rendering, never
+// constructs one itself (D-07).
+export type { ResolvedChild } from './folder-listing';
+
 // Shared-folder state (sibling tree keyed by shareId)
 export { SharedFolderTree } from './state/shared-folder-tree';
 
@@ -108,3 +115,33 @@ export {
 
 // Error handling and retry utilities
 export { isForbiddenError, isConflictError, withRevocationGuard, withConflictRetry } from './error';
+
+// Pure structural utils (D-07 write scope) -- no crypto/IO, re-exported so
+// apps/web imports these from the facade instead of @cipherbox/sdk-core
+// directly (RESEARCH Code Examples: MoveDialog.tsx, useFolderMutations.ts,
+// streaming-crypto.service.ts current call sites).
+export {
+  getDepth,
+  isDescendantOf,
+  calculateSubtreeDepth,
+  type TreeNode,
+} from '@cipherbox/sdk-core';
+export { selectEncryptionMode } from '@cipherbox/sdk-core';
+
+// D-07 full-boundary facade types (68.2-04) -- the web consumes these to call
+// client.bootstrapVaultKeys/serializeVault/deserializeVault (vault-bootstrap)
+// and client.deriveRegistryIpnsKeypair/encryptRegistry/decryptRegistry
+// (device-registry) without importing @cipherbox/core directly.
+export type { VaultInit, DeviceRegistry } from '@cipherbox/core';
+
+// D-07 full-boundary facade type (68.2-04) -- consumed by
+// client.testConnection (BYO-pinning passthrough, no ROT-07 gate).
+export type { ConnectionTestResult } from '@cipherbox/sdk-core';
+
+// D-07 full-boundary re-export (68.2-10 cutover) -- vault-settings runtime
+// constant/validator + type, consumed by vault-settings.service.ts,
+// vault-settings.store.ts, and VaultTab.tsx instead of importing
+// @cipherbox/core directly (68.2-PATTERNS.md flags this as a remaining
+// literal-wording D-07 violation; this closes it).
+export { DEFAULT_VAULT_SETTINGS, validateVaultSettings } from '@cipherbox/core';
+export type { VaultSettings } from '@cipherbox/core';

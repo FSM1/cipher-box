@@ -7,6 +7,7 @@ import {
   type TouchEvent,
 } from 'react';
 import type { SealedChildRef } from '@cipherbox/core';
+import type { ResolvedChild } from '@cipherbox/sdk';
 import { formatBytes, formatDate, getItemIcon } from '../../utils/format';
 import { isExternalFileDrag } from '../../hooks/useDropUpload';
 import { isFileRef } from '../../utils/fileTypes';
@@ -20,8 +21,20 @@ const LONG_PRESS_DURATION = 500;
 export type DragItem = { id: string; type: 'file' | 'folder' };
 
 type FileListItemProps = {
-  /** The child ref to display (node/v3 SealedChildRef) */
+  /**
+   * The child ref to display -- the identity/crypto carrier passed to
+   * selection, context-menu, download, and drag-and-drop callbacks
+   * (`readKeySealed`/`generation` are needed downstream, e.g.
+   * `downloadFileFromIpns`). Kept as `SealedChildRef` rather than
+   * `ResolvedChild` for this reason; see `resolved` below for display.
+   */
   item: SealedChildRef;
+  /**
+   * The SDK-resolved display projection for this same child (SDK-READ-02) --
+   * `kind`/`size`/`modifiedAt` are pre-resolved here, no per-item cache/resolve
+   * needed at render time (D-02).
+   */
+  resolved: ResolvedChild;
   /** Whether this item is currently selected */
   isSelected: boolean;
   /** Parent folder ID (for drag data) */
@@ -52,12 +65,13 @@ type FileListItemProps = {
 /**
  * Single row in the file list (node/v3).
  *
- * File-vs-folder discrimination reads the kind cache (D-02, kind-cache.ts /
- * fileTypes.ts's `isFileRef`), populated by `resolveKinds` on folder load —
- * `SealedChildRef` itself carries no `.type`/`.kind` field (NODE-03).
+ * File-vs-folder discrimination and size/modified-date display read the
+ * SDK-resolved `ResolvedChild` projection (`resolved` prop, SDK-READ-02,
+ * D-02) — `SealedChildRef` itself carries no `.kind` field (NODE-03).
  */
 export function FileListItem({
   item,
+  resolved,
   isSelected,
   parentId,
   selectedIds,
@@ -77,8 +91,8 @@ export function FileListItem({
   // Drag-over state for folder drop targets
   const [isDragOver, setIsDragOver] = useState(false);
 
-  // D-02: kind cache read (synchronous, folder-safe default on cache miss).
-  const isFolder = !isFileRef(item);
+  // D-02: kind pre-resolved on ResolvedChild, no per-item cache/resolve.
+  const isFolder = !isFileRef(resolved);
 
   /**
    * Handle single click - select the item.
@@ -293,16 +307,21 @@ export function FileListItem({
 
   const itemType: 'file' | 'folder' = isFolder ? 'folder' : 'file';
 
-  // Display size: plaintext byte-size mirror (files only). Folders and legacy
-  // refs carry no size mirror → em dash.
+  // Display size: resolved plaintext byte size (files only, ResolvedChild.size
+  // is undefined for folders) — SDK-resolved, not a web-side mirror/cache.
   const sizeDisplay =
-    typeof item.size === 'number' && Number.isFinite(item.size) ? formatBytes(item.size) : '—';
+    typeof resolved.size === 'number' && Number.isFinite(resolved.size)
+      ? formatBytes(resolved.size)
+      : '—';
 
-  // Display modified date: last-modified mirror (Unix ms). Undefined on folders
-  // created before the mirror landed and on legacy refs → em dash.
+  // Display modified date: resolved last-modified time (Unix ms). The
+  // unresolved fallback (`toResolvedChildView`) uses `modifiedAt: 0` as a
+  // sentinel for "not yet in the resolved listing" (e.g. an in-flight sync
+  // race), so treat any non-positive value as the "—" placeholder rather than
+  // rendering the 1970 epoch.
   const dateDisplay =
-    typeof item.modifiedAt === 'number' && Number.isFinite(item.modifiedAt)
-      ? formatDate(item.modifiedAt)
+    typeof resolved.modifiedAt === 'number' && resolved.modifiedAt > 0
+      ? formatDate(resolved.modifiedAt)
       : '—';
 
   const className = [

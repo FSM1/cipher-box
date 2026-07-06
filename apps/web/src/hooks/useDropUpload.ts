@@ -197,9 +197,8 @@ export function useDropUpload() {
       if (duplicateFiles.length > 0) {
         const replacements: PendingReplacement[] = [];
 
-        // Hoist dynamic imports before the loop to avoid per-iteration async overhead
+        // Hoist dynamic import before the loop to avoid per-iteration async overhead
         const { encryptFile } = await import('../services/file-crypto.service');
-        const { addToIpfs } = await import('../lib/api/ipfs');
 
         for (const file of duplicateFiles) {
           const uploadId = createUploadId(file.name);
@@ -215,16 +214,13 @@ export function useDropUpload() {
           const userPublicKey = useAuthStore.getState().vaultKeypair?.publicKey;
           if (!userPublicKey) throw new Error('No keypair available');
           const encrypted = await encryptFile(file, userPublicKey);
-          // Pass a clean Uint8Array copy -- never use .buffer (may include extra bytes)
-          const blob = new Blob([new Uint8Array(encrypted.ciphertext)], {
-            type: 'application/octet-stream',
-          });
 
-          const cancelToken = useUploadStore.getState().files.get(uploadId)?.cancelSource?.token;
-          const ipfsResult = await addToIpfs(
-            blob,
-            (percent) => useUploadStore.getState().updateFileProgress(uploadId, percent),
-            cancelToken
+          // SDK facade's uploadBytes takes the Uint8Array directly -- no Blob
+          // construction needed here (D-07; the facade doesn't currently accept
+          // a cancel token, 68.2-03 scope -- a known limitation vs. the prior
+          // direct raw-IPFS-upload + cancelToken path).
+          const ipfsResult = await client.uploadBytes(encrypted.ciphertext, (percent) =>
+            useUploadStore.getState().updateFileProgress(uploadId, percent)
           );
 
           orphanCids.push(ipfsResult.cid);
@@ -258,17 +254,11 @@ export function useDropUpload() {
       if (message !== 'Upload cancelled by user' && currentDupUploadId) {
         useUploadStore.getState().setFileStatus(currentDupUploadId, 'error', message);
       }
-      // Best-effort cleanup: unpin orphaned CIDs from failed upload
+      // Best-effort cleanup: unpin orphaned CIDs from failed upload via the SDK facade (D-07)
       if (orphanCids.length > 0) {
-        import('../lib/api/ipfs')
-          .then(({ unpinFromIpfs }) => {
-            for (const cid of orphanCids) {
-              unpinFromIpfs(cid).catch((err) =>
-                logger.warn('[Upload] Unpin orphaned CID failed:', err)
-              );
-            }
-          })
-          .catch((err) => logger.warn('[Upload] Failed to load IPFS module for cleanup:', err));
+        for (const cid of orphanCids) {
+          client.unpin(cid).catch((err) => logger.warn('[Upload] Unpin orphaned CID failed:', err));
+        }
       }
       return false;
     } finally {

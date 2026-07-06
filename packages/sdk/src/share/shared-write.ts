@@ -370,8 +370,6 @@ export async function createSharedSubfolder(
       generation: 0,
       versionFloor: 1n,
       readKeySealed,
-      // Folder display mirror: creation time (no size for folders — WEB-01).
-      modifiedAt: Date.now(),
     };
 
     // Build WriteChildRef for parent's write-body (write link — role 0x04)
@@ -515,10 +513,6 @@ export async function uploadToSharedFolder(
       generation: 0,
       versionFloor: 1n,
       readKeySealed,
-      // Display mirrors so the owner (and other grantees) see size/date without a
-      // per-child resolve (WEB-01). Plaintext size; write time.
-      size: params.data.length,
-      modifiedAt: Date.now(),
     };
 
     // Build WriteChildRef for parent's write-body (role 0x04)

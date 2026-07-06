@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
-current_phase: 68.1
-current_phase_name: web-client-runtime-integration
-status: executing
-stopped_at: Completed 68.1-19-PLAN.md (write-permission upgrade/downgrade via UpdateGrant + API client regeneration)
-last_updated: "2026-07-05T22:22:39.396Z"
-last_activity: 2026-07-02
-last_activity_desc: Phase 68.1 execution started
+current_phase: 68.2
+current_phase_name: sdk-owned-read-chain-and-resolved-folder-listings
+status: verifying
+stopped_at: Completed 68.2-13-PLAN.md
+last_updated: "2026-07-06T09:47:49.127Z"
+last_activity: 2026-07-05
+last_activity_desc: Phase 68.2 execution started
 progress:
   total_phases: 11
-  completed_phases: 9
-  total_plans: 98
-  completed_plans: 98
-  percent: 82
+  completed_phases: 10
+  total_plans: 112
+  completed_plans: 112
+  percent: 91
 ---
 
 # Project State
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-27)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 68.1 — web-client-runtime-integration
+**Current focus:** Phase 68.2 — sdk-owned-read-chain-and-resolved-folder-listings
 
 ## Current Position
 
-Phase: 68.1 (web-client-runtime-integration) — EXECUTING
-Plan: 4 of 22
-Status: Ready to execute
-Last activity: 2026-07-02 — Phase 68.1 execution started
+Phase: 68.2 (sdk-owned-read-chain-and-resolved-folder-listings) — SHIPPING
+Plan: 14 of 14
+Status: Phase complete — verified, secured, validated; PR #589 open
+Last activity: 2026-07-06 — Phase 68.2 gap-closure + ship review
 
 Progress: `██████████` 79 / 79 plans (100%)
 
@@ -234,6 +234,20 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 68.1 P17 | 45min | 2 tasks | 1 files |
 | Phase 68.1 P18 | 12min | 2 tasks | 4 files |
 | Phase 68.1 P19 | 11min | 2 tasks | 7 files |
+| Phase 68.2 P01 | 25min | 2 tasks | 2 files |
+| Phase 68.2 P02 | 25min | 3 tasks | 5 files |
+| Phase 68.2 P03 | 20min | 2 tasks | 5 files |
+| Phase 68.2 P05 | 15min | 1 tasks | 1 files |
+| Phase 68.2 P04 | 20min | 2 tasks | 4 files |
+| Phase 68.2 P06 | 65min | 3 tasks | 12 files |
+| Phase 68.2 P07 | 35min | 2 tasks | 11 files |
+| Phase 68.2 P08 | 90min | 2 tasks | 10 files |
+| Phase 68.2 P09 | 40min | 2 tasks | 13 files |
+| Phase 68.2 P10 | 45min | 2 tasks | 12 files |
+| Phase 68.2 P11 | 45min | 3 tasks | 16 files |
+| Phase 68.2 P12 | 130 | - tasks | - files |
+| Phase 68.2 P13 | 8min | 2 tasks | 2 files |
+| Phase 68.2 P14 | 50min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -480,6 +494,39 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: [Phase 68.1-18]: resolveShareWriteDescriptor mirrors resolveFileWriteChainKeys' write-key walk; returns hex-wrapped writeDescriptorRef only, raw writeKey never leaves the SDK
 - [Phase ?]: [Phase 68.1-18]: resolveParentIpnsName translates useFolderNavigation's 'root' sentinel to the real root IPNS name for SDK write-chain calls
 - [Phase ?]: [Phase 68.1-19]: UpdateGrantDto write-toggle uses explicit clearWriteDescriptor boolean (not empty-string sentinel) as the downgrade clear-signal; mutually exclusive with writeDescriptorRef (BadRequestException if both supplied); omitting both leaves writeDescriptorRef untouched for existing read-only-rotation callers (owner-reconcile)
+- [Phase ?]: 68.2-01: read-path gate mirrors write-path gate but sources generation from childRef.generation (parent SealedChildRef mirror) for children, and in-memory folderTree nodeGeneration for root (no parent mirror exists)
+- [Phase ?]: 68.2-01: getWriteBodyParams intentionally left ungated per D-05 -- this plan is read-path only
+- [Phase ?]: [Phase 68.2-02]: gatedResolveChild is a NEW standalone per-child listing gate distinct from dfsFindFolder's tree-descent gate; resolveChildren catches ALL per-child resolve/unseal failures (widened from absent-record-only) since the already-loaded target folder remains gated via Plan 01, so an unresolvable sibling is simply omitted, not rendered stale/tampered
+- [Phase ?]: [Phase 68.2-02]: listingCache is keyed by plain ipnsName (not namespaced per owned/shared path) and invalidated by sequenceNumber; updateSharedFile explicitly invalidates the cache entry on file-only republish since that doesn't bump the parent's own sequence
+- [Phase ?]: [Phase 68.2-03]: uploadBytes/downloadBytes/unpin added as new standalone facade methods (not extensions to pinWithMode) -- mediate the web's direct raw-IPFS-transport call sites orthogonal to uploadFile/uploadFiles orchestration
+- [Phase ?]: [Phase 68.2-03]: getFolderMetadata returns the full decrypted Node (matching sdkCore.fetchAndDecryptMetadata's shape) by delegating entirely to the gated ensureFolderLoaded -- listFolder remains the resolved-children-only entrypoint
+- [Phase ?]: [Phase 68.2-03]: pure structural utils (getDepth/isDescendantOf/calculateSubtreeDepth/selectEncryptionMode) re-exported directly from @cipherbox/sdk-core's own barrel, not re-implemented
+- [Phase ?]: [Phase 68.2-05]: shared-folder-desync.spec.ts asserts against FileListItem.tsx's raw em-dash/epoch placeholder values directly (not FileListPage.getFileItem/getFolderItem's dash-based type filters, a pre-existing unrelated selector quirk) -- avoids coupling the new SC#5 spec to that mismatch
+- [Phase ?]: [Phase 68.2-04]: serializeVault/deserializeVault combine encryptVaultKeys+serializeVaultBlobV3 and deserializeVaultBlobV3+unwrapKey x2 into single facade calls mirroring useAuth.ts's exact sequences
+- [Phase ?]: [Phase 68.2-04]: deserializeVault zeroes the already-unwrapped rootReadKey if the paired unwrapKey call for rootWriteKey fails (T-68.2-09)
+- [Phase ?]: [Phase 68.2-04]: resolveConfigBlob/publishConfigBlob deliberately skip rotationHighWater.enforceResolved -- BYO config blob is user-configured, not a rotation-governed node
+- [Phase 68.2-06]: handleSync/resyncFolder call BOTH client.listFolder and client.getFolderMetadata -- FolderNode.children stays SealedChildRef[] (write-path crypto identity), a store-level ResolvedChild[] projection is Plan 09's job
+- [Phase 68.2-06]: isFileRef widened to SealedChildRef | ResolvedChild union (not narrowed) after finding 6 live call sites outside this plan's scope that would break -- deliberate, documented exception to the plan's literal kind-cache-removal wording
+- [Phase 68.2-06]: FileListItem.tsx dual-prop pattern: item stays SealedChildRef (identity/crypto carrier for callbacks), new resolved: ResolvedChild prop drives kind/size/modifiedAt display
+- [Phase 68.2-07]: client.resolveChildIdentity added as a new SDK facade method (Rule 2) -- key-wrapping.ts's resolveChildNodeIdentity delegates to it, mirroring folder-listing.ts's resolveChildren per-child readKey-recovery step
+- [Phase 68.2-07]: DetailsDialog.tsx drops the kind-cache fallback entirely (folderStore membership only); folder metadataCid always renders as unavailable since client.getFolderMetadata does not expose the raw resolve CID
+- [Phase ?]: [Phase 68.2-08]: resolveShareRoot/descendSharedChild/downloadSharedFile added as Rule-2 SDK facades to complete the share-nav rewire; downloadSharedFile returns a revoked/behind-retry/ok union instead of throwing
+- [Phase ?]: [Phase 68.2-08]: SharedFolderRow keeps item:SealedChildRef and adds a new resolved?:ResolvedChild prop (dual-prop pattern, mirrors Plan 06 FileListItem) rather than a straight type swap, since SharedFileBrowser.tsx's unowned dialog consumers still need readKeySealed
+- [Phase ?]: [Phase 68.2-09]: FolderNode gained optional rawChildren?: SealedChildRef[] alongside the retyped children: ResolvedChild[] -- the SDK event no longer carries raw identity, and ~9 write-path files needed it
+- [Phase ?]: [Phase 68.2-09]: shared-folder-projection.ts re-reads raw children from client.getSharedFolderState at event-apply time instead of the now-resolved sharedFolder:updated event payload
+- [Phase ?]: [Phase 68.2-10]: sdk-provider.createBootstrapClient() added (deviation) -- throwaway CipherBoxClient for facade calls that must run before rootIpnsName/rootFolderKey exist (useAuth.ts vault-bootstrap/BYO-load pre-login path)
+- [Phase ?]: [Phase 68.2-10]: DEFAULT_VAULT_SETTINGS/validateVaultSettings/VaultSettings re-exported from @cipherbox/sdk (deviation) -- closes the literal-wording D-07 gap PATTERNS.md flagged for vault-settings
+- [Phase ?]: [Phase 68.2-10]: vault-settings.service.ts loadVaultSettings/saveVaultSettings take an injected CipherBoxClient param (bootstrap pre-login, real client post-login) instead of reaching for a module-level client
+- [Phase ?]: [Phase 68.2-10]: device-registry.service.ts uses getSdkClient() unconditionally (no bootstrap client) since both exported functions only ever run post-login
+- [Phase ?]: [Phase 68.2-11]: client.resolveFileMetadata added as new SDK facade method (Rule 2) mirroring downloadFromIpns's resolve+unseal steps -- read-only counterpart replacing the deleted web-native file-metadata.service.ts
+- [Phase ?]: [Phase 68.2-11]: FileList.tsx repointed from dead kind-cache adapter to folder store's real children: ResolvedChild[] via resolvedByIpnsName lookup (mirrors 68.2-08 SharedFileBrowser pattern) -- closes STATE.md-flagged FileList/FileBrowser ownership gap
+- [Phase ?]: [Phase 68.2-11]: download.service.ts was a 9th residual file-metadata.service.ts importer not in the orchestrator's 8-file audit -- discovered via grep sweep, migrated alongside the listed 8
+- [Phase ?]: SealedChildRef mirror reverted to frozen NODE-03 5-field set; size/modifiedAt now come exclusively from ResolvedChild (D-08)
+- [Phase ?]: Fixed 2 pre-existing e2e-blocking bugs (SharedFileBrowser empty-nav row, e2e em-dash selector mismatch) found while running the phase gate
+- [Phase ?]: SDK-READ-03 NOT marked complete: ensureFolderLoaded never re-resolves an already-loaded folder from the network, so the SC#5 desync fix is still incomplete -- root-caused, recommend dedicated gap-closure plan
+- [Phase 68.2-13]: doReresolveFolderInPlace sources RotationHighWater generation from existing.nodeGeneration (never the freshly relay-served envelope generation) and gates versionFloor:0, mirroring ensureRootFolderState/dfsFindFolder
+- [Phase 68.2-13]: reresolveFolderInPlace/doReresolveFolderInPlace split into two private methods so the reresolveInFlight dedup map is registered synchronously before the first await, making concurrent forceResolve calls observe the same in-flight promise
+- [Phase ?]: [Phase 68.2-14]: SDK-READ-03 marked [x] on the strength of shared-folder-desync.spec.ts step 3.1 passing cleanly (4/4 isolated); full-web-e2e-green portion documented as CI-fresh-container-authoritative-pending, not force-passed
 
 ## Operator Next Steps
 
@@ -487,8 +534,8 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-02T20:57:08.570Z
-**Stopped at:** Completed 68.1-19-PLAN.md (write-permission upgrade/downgrade via UpdateGrant + API client regeneration)
+**Last session:** 2026-07-06T09:47:11.448Z
+**Stopped at:** Completed 68.2-13-PLAN.md
 **Resume file:** 
 None
 
@@ -496,3 +543,5 @@ None
 
 - GAP-1 (68.1-13): resolveFileMetadata AEAD Decryption-failed for CTR/streaming video preview and post-upload batch-download -- needs dedicated crypto debugging
 - GAP-2 (68.1-13): full-workflow.spec.ts 3.8 cold-reload multi-level IPNS DFS resolve times out -- needs retry-budget tuning or propagation investigation
+- 68.2-06 gap: FileList.tsx/FileBrowser.tsx/SelectionActionBar.tsx/ContextMenu.tsx/SharedFileBrowser.tsx are not owned by any of the 12 phase-68.2 plans, yet consume the SealedChildRef-vs-ResolvedChild data this phase's D-02/SC#1/#2 goals govern -- assign ownership (Plan 09 or a fast-follow) before Plan 11's kind-cache.ts deletion / allowlist-free grep gate
+- SC#5 desync (partially closed by 68.2-13): CipherBoxClient.ensureFolderLoaded/listFolder now support a gated `{forceResolve:true}` re-resolve for an already-loaded folder, proven by folder-reresolve.test.ts -- but apps/web's two D-03 freshness call sites (useFolderNavigation.ts nav re-resolve, useSyncPolling.ts poll invalidation) do not yet pass forceResolve, so shared-folder-desync.spec.ts step 3.1 is still expected red until Plan 14 wires the web + proves the e2e

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
-import { testConnection, type ConnectionTestResult } from '@cipherbox/sdk-core';
+import type { ConnectionTestResult } from '@cipherbox/sdk';
 import { wrapKey, hexToBytes, bytesToHex } from '@cipherbox/crypto';
 import { teeControllerConnectionTest } from '@cipherbox/api-client';
 import { useAuthStore } from '../../stores/auth.store';
+import { getSdkClient } from '../../lib/sdk-provider';
 import { logger } from '../../lib/logger';
 
 type ConnectionTestProps = {
@@ -47,7 +48,7 @@ export function ConnectionTest({ endpoint, authToken, onTestResult }: Connection
       } else {
         // Fallback: browser-side test when TEE keys not available
         logger.warn('[BYO] TEE keys not available, falling back to browser-side connection test');
-        const result = await testConnection(endpoint, authToken || undefined);
+        const result = await getSdkClient().testConnection(endpoint, authToken || undefined);
         setTestResult(result);
         onTestResult?.(result);
       }

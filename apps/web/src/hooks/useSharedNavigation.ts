@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { type SealedChildRef } from '@cipherbox/core';
-import { ShareKeyCache } from '@cipherbox/sdk';
+import { ShareKeyCache, type ResolvedChild } from '@cipherbox/sdk';
 import { useShareStore, type ReceivedShare } from '../stores/share.store';
 import { fetchReceivedShares, fetchShareKeys, decryptItemName } from '../services/share.service';
 import { useAuthStore } from '../stores/auth.store';
@@ -24,7 +24,6 @@ import {
   subscribeSharedFolderProjection,
   type SeedSharedFolderArgs,
 } from './shared-folder-projection';
-import { resolveKinds } from '../lib/kind-cache';
 
 /**
  * Breadcrumb entry for shared navigation.
@@ -52,6 +51,14 @@ type UseSharedNavigationReturn = {
   currentShareId: string | null;
   sharedItems: SharedListItem[];
   folderChildren: SealedChildRef[];
+  /**
+   * Resolved display projection of `folderChildren` for the CURRENT depth
+   * (68.2-08, SDK-READ-02) -- `kind`/`size`/`modifiedAt` pre-resolved via
+   * `client.listSharedFolder`. `folderChildren` itself stays `SealedChildRef[]`
+   * (identity/crypto carrier for write-op calls, which need `readKeySealed`);
+   * this is the parallel display source consumers should render from.
+   */
+  resolvedChildren: ResolvedChild[];
   folderKey: Uint8Array | null;
   breadcrumbs: SharedBreadcrumb[];
   isLoading: boolean;
@@ -122,6 +129,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
   const [currentShareId, setCurrentShareId] = useState<string | null>(null);
   const [sharedItems, setSharedItems] = useState<SharedListItem[]>([]);
   const [folderChildren, setFolderChildren] = useState<SealedChildRef[]>([]);
+  const [resolvedChildren, setResolvedChildren] = useState<ResolvedChild[]>([]);
   const [folderKey, setFolderKey] = useState<Uint8Array | null>(null);
   const [breadcrumbs, setBreadcrumbs] = useState<SharedBreadcrumb[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -320,24 +328,6 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
         sequenceNumberRef.current = sequenceNumber;
         setFolderChildren(children);
         setCurrentSequenceNumber(sequenceNumber);
-
-        // D-02: this projection callback is synchronous — the initial render
-        // reads a cache miss (folder-safe default). Populate the kind cache
-        // best-effort and, once it settles, re-set the children under a FRESH
-        // array reference (React bails on Object.is-equal state) so the shared
-        // rows re-read the resolved kind. Filtered by the active shareId
-        // (consistent with subscribeSharedFolderProjection's own filtering) so
-        // a stale resolve for a share the user has since navigated away from
-        // does not re-render.
-        const activeShareId = currentShareIdRef.current;
-        void resolveKinds(children)
-          .then(() => {
-            if (currentShareIdRef.current !== activeShareId) return;
-            setFolderChildren([...children]);
-          })
-          .catch(() => {
-            // Best-effort — never throw inside the subscription callback.
-          });
       }
     );
     return () => {
@@ -351,6 +341,38 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       }
     };
   }, []);
+
+  // ---------------------------------------------------------------------------
+  // Resolved display projection (68.2-08, D-02) -- `client.listSharedFolder`
+  // resolves the CURRENT depth's children (already seeded into
+  // `sharedFolderTree` by every nav action / the projection above) into
+  // `ResolvedChild[]` for display. Re-runs whenever the current depth's raw
+  // children or sequence changes (navigation, `sharedFolder:updated`).
+  // Cached in-SDK by ipnsName+sequenceNumber (Plan 02), so repeat calls at an
+  // unchanged depth are cheap.
+  // ---------------------------------------------------------------------------
+
+  useEffect(() => {
+    if (currentView !== 'folder' || !currentShareId || !hasSdkClient()) {
+      setResolvedChildren([]);
+      return;
+    }
+    let cancelled = false;
+    getSdkClient()
+      .listSharedFolder(currentShareId, [])
+      .then((resolved) => {
+        if (!cancelled) setResolvedChildren(resolved);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          logger.error('[SharedNav] Failed to resolve shared listing for display:', err);
+          setResolvedChildren([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentView, currentShareId, folderChildren, currentSequenceNumber]);
 
   // ---------------------------------------------------------------------------
   // Delegate to sub-hooks
@@ -452,6 +474,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     currentShareId,
     sharedItems,
     folderChildren,
+    resolvedChildren,
     folderKey,
     breadcrumbs,
     isLoading,
