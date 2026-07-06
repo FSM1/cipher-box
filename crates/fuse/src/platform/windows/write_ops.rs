@@ -115,6 +115,7 @@ pub mod implementation {
 
                 let inode = InodeData {
                     ino,
+                    node_id: crate::fs::uuid_from_ino(ino),
                     parent_ino,
                     name: name.to_string(),
                     kind: InodeKind::Folder {
@@ -342,6 +343,7 @@ pub mod implementation {
 
             let inode = InodeData {
                 ino,
+                node_id: crate::fs::uuid_from_ino(ino),
                 parent_ino,
                 name: name.to_string(),
                 kind: InodeKind::File {

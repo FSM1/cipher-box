@@ -313,9 +313,16 @@ pub fn run_scope_exit_gate(fs: &crate::CipherBoxFS, ino: u64) -> Result<(), ()> 
         .expect("sent_shares lock poisoned")
         .clone();
     let api = fs.api.clone();
-    // Write-plane key (D-07): the mutated node's UUID, kept DISTINCT from the
-    // read-plane grant-root ipns_name threaded into the rotate seam below.
-    let child_id = crate::fs::uuid_from_ino(ino);
+    // Write-plane key (D-07): the mutated node's stable id (its stored node_id ==
+    // real published.id), kept DISTINCT from the read-plane grant-root ipns_name
+    // threaded into the rotate seam below. Sourced from the inode, NOT
+    // uuid_from_ino(ino), so a materialized shared node exits scope on its real
+    // write-plane key. Falls back to uuid_from_ino only if the inode is missing.
+    let child_id = fs
+        .inodes
+        .get(ino)
+        .map(|i| i.node_id.clone())
+        .unwrap_or_else(|| crate::fs::uuid_from_ino(ino));
     fs.rt
         .block_on(gate_scope_exit(
             &fs.inodes,
@@ -363,6 +370,7 @@ mod tests {
     ) {
         table.insert(InodeData {
             ino,
+            node_id: crate::fs::uuid_from_ino(ino),
             parent_ino,
             name: name.to_string(),
             kind: InodeKind::Folder {
@@ -387,6 +395,7 @@ mod tests {
     ) {
         table.insert(InodeData {
             ino,
+            node_id: crate::fs::uuid_from_ino(ino),
             parent_ino,
             name: name.to_string(),
             // node/v3: the file's IPNS identity is the plain `ipns_name` field

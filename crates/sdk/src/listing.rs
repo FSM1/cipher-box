@@ -123,6 +123,13 @@ pub struct ResolvedChild {
 /// the material can never leak into a log line (mirrors `emit::FolderEmission`).
 pub struct ResolvedOwnedChild {
     pub child: ResolvedChild,
+    /// The child node's STABLE own id (`PublishedNode.id`), recovered from the
+    /// resolved child envelope. This — NOT any client-local inode number — is
+    /// the D-07 write-plane pairing key (`WriteChildRef.child_id`) and the seal
+    /// AAD. The FUSE mount MUST persist this on the inode so a later parent
+    /// re-publish keys the child's `WriteChildRef` by the child's real id even
+    /// after the child was re-materialized under a fresh local inode number.
+    pub node_id: String,
     /// Raw 32-byte readKey recovered under the parent readKey (D-09 —
     /// caller-owned from here).
     pub read_key: Zeroizing<[u8; 32]>,
@@ -138,6 +145,7 @@ impl std::fmt::Debug for ResolvedOwnedChild {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ResolvedOwnedChild")
             .field("child", &self.child)
+            .field("node_id", &self.node_id)
             .field("read_key", &"[REDACTED]")
             .field("write_key", &"[REDACTED]")
             .field("ipns_private_key", &"[REDACTED]")
@@ -544,6 +552,10 @@ where
             modified_at,
             sequence,
         },
+        // D-07: the child's own STABLE id (already used as the pairing key above).
+        // This is what the caller must persist so a re-published parent keys the
+        // child's WriteChildRef by the real node id, not a local inode number.
+        node_id: published.id.clone(),
         read_key,
         write_key,
         ipns_private_key,

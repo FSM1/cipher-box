@@ -174,6 +174,20 @@ pub enum InodeKind {
 pub struct InodeData {
     /// Inode number.
     pub ino: u64,
+    /// The node's STABLE own id (`PublishedNode.id` == the D-07
+    /// `WriteChildRef.child_id` == the seal AAD).
+    ///
+    /// This is the child-identity key the parent's write plane pairs on. It is
+    /// assigned ONCE and never re-derived from the (client-local, non-portable)
+    /// inode number: `uuid_from_ino(ino)` at creation, or the child's remote
+    /// `published.id` when materialized from a listing
+    /// (`apply_owned_children`). Publish paths (`build_folder_metadata`, the
+    /// per-file publish, the upload journal) MUST use this value, NOT
+    /// `uuid_from_ino(local_ino)` — otherwise a parent re-published after a
+    /// re-materialization keys the child's `WriteChildRef` by a fresh local ino
+    /// that no longer matches the child node's real id, and `list_folder_owned`
+    /// fails the D-07 read/write pairing.
+    pub node_id: String,
     /// Parent inode number.
     pub parent_ino: u64,
     /// Decrypted entry name.
@@ -225,6 +239,9 @@ impl InodeTable {
 
         let root = InodeData {
             ino: ROOT_INO,
+            // Root's stable id preserves the pre-node_id behavior exactly:
+            // build_folder_metadata sealed the root under uuid_from_ino(ROOT_INO).
+            node_id: crate::fs::uuid_from_ino(ROOT_INO),
             parent_ino: ROOT_INO, // root is its own parent
             name: String::new(),
             kind: InodeKind::Root {
@@ -426,6 +443,7 @@ impl InodeTable {
         for owned in resolved {
             let ResolvedOwnedChild {
                 child,
+                node_id,
                 read_key,
                 write_key,
                 ipns_private_key,
@@ -502,6 +520,9 @@ impl InodeTable {
                     };
                     let inode = InodeData {
                         ino,
+                        // D-07: persist the child's REAL id, not uuid_from_ino(ino)
+                        // (this materialized ino may differ from the creator's).
+                        node_id: node_id.clone(),
                         parent_ino,
                         name: child.name.clone(),
                         kind: InodeKind::Folder {
@@ -534,6 +555,9 @@ impl InodeTable {
                     };
                     let inode = InodeData {
                         ino,
+                        // D-07: persist the child's REAL id, not uuid_from_ino(ino)
+                        // (this materialized ino may differ from the creator's).
+                        node_id: node_id.clone(),
                         parent_ino,
                         name: child.name.clone(),
                         // Content descriptors (cid/iv/encryption_mode) live in the
@@ -766,6 +790,9 @@ mod tests {
                 modified_at: 1000,
                 sequence: 1,
             },
+            // A materialized child carries a REAL remote id distinct from any
+            // uuid_from_ino(local_ino) — derive a stable fixture id from the ipns.
+            node_id: format!("nodeid-{ipns}"),
             read_key: Zeroizing::new([0x11u8; 32]),
             write_key: Zeroizing::new([0x22u8; 32]),
             ipns_private_key: Zeroizing::new(vec![0x33u8; 32]),
@@ -778,6 +805,7 @@ mod tests {
         let now = SystemTime::now();
         InodeData {
             ino,
+            node_id: crate::fs::uuid_from_ino(ino),
             parent_ino: parent,
             name: name.to_string(),
             kind: InodeKind::Folder {

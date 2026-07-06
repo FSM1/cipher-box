@@ -821,8 +821,18 @@ pub(crate) mod implementation {
                         } = result;
                         let spawn_ino = ino;
                         // The file node's canonical id (D-07): matches the parent's
-                        // WriteChildRef.child_id + the read-body AAD.
-                        let child_id = crate::fs::uuid_from_ino(spawn_ino);
+                        // WriteChildRef.child_id + the read-body AAD. Sourced from the
+                        // inode's STORED node_id (its real published.id) — NOT
+                        // uuid_from_ino(spawn_ino): a file materialized from a remote
+                        // listing then written via the mount keeps the id its creator
+                        // published under, so this per-file re-publish preserves the
+                        // identity the parent's write plane pairs on. Falls back to
+                        // uuid_from_ino only if the inode vanished (never expected).
+                        let child_id = fs
+                            .inodes
+                            .get(spawn_ino)
+                            .map(|i| i.node_id.clone())
+                            .unwrap_or_else(|| crate::fs::uuid_from_ino(spawn_ino));
 
                         let api = fs.api.clone();
                         let rt = fs.rt.clone();
