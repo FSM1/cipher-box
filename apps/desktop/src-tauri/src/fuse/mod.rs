@@ -276,6 +276,9 @@ pub async fn mount_filesystem(
         mutated_folders: HashMap::new(),
         publish_coordinator,
         publish_queue: HashMap::new(),
+        sent_shares: std::sync::RwLock::new(
+            cipherbox_fuse::write_ops::grant_scope::SentSharesCache::empty(),
+        ),
     };
 
     let mount_path_clone = mount_path.clone();

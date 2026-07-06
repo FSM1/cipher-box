@@ -197,6 +197,9 @@ mod mount_impl {
             mutated_folders: HashMap::new(),
             publish_coordinator,
             publish_queue: HashMap::new(),
+            sent_shares: std::sync::RwLock::new(
+                cipherbox_fuse::write_ops::grant_scope::SentSharesCache::empty(),
+            ),
         };
 
         // Create WinFsp context with Arc<Mutex<>> for interior mutability

@@ -69,10 +69,33 @@ pub struct CipherBoxFS {
     /// Durable write journal — persists pending uploads and mkdir-publishes to disk
     /// so they survive a crash or remount.  Callbacks write here before acking the OS.
     pub journal: cipherbox_sdk::WriteQueue,
+    /// Local cache of the authenticated user's sent shares (grant-root
+    /// awareness, SC#3 / 69-07). Refreshed out-of-band via
+    /// [`CipherBoxFS::refresh_sent_shares`] — mount init / periodic, NEVER a
+    /// per-mutation network call (Pitfall 2 / T-69-07-01). Delete/rename
+    /// scope-exit checks (69-11/69-14) read this synchronously via
+    /// `crate::write_ops::grant_scope::build_coverage_params`.
+    pub sent_shares: std::sync::RwLock<crate::write_ops::grant_scope::SentSharesCache>,
 }
 
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 impl CipherBoxFS {
+    /// Refresh the local sent-shares cache from the relay
+    /// (`GET /shares/sent`, paginated via `collect_sent_shares`, 69-03).
+    ///
+    /// Intended call sites: mount init and a periodic background refresh —
+    /// NEVER the delete/rename hot path (Pitfall 2 / T-69-07-01). Grant-root
+    /// scope-exit checks read the resulting cache synchronously through
+    /// `sent_shares` (see `write_ops::grant_scope::build_coverage_params`).
+    pub async fn refresh_sent_shares(&self) -> Result<(), cipherbox_api_client::ApiError> {
+        let cache = crate::write_ops::grant_scope::refresh_sent_shares(&self.api).await?;
+        *self
+            .sent_shares
+            .write()
+            .expect("sent_shares lock poisoned") = cache;
+        Ok(())
+    }
+
     pub fn get_folder_key(&self, folder_ino: u64) -> Option<Zeroizing<Vec<u8>>> {
         self.inodes
             .get(folder_ino)
