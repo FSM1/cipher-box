@@ -618,120 +618,134 @@ pub mod implementation {
                 None => return,
             };
 
-            // Capture bin entry data for file or folder before removal
-            let bin_file_data: Option<(
+            // Capture the PARENT read/write keys (node/v3 D-07 dual-ref seal
+            // material). Terminal-owner (D-09): copy the bytes, never zero the
+            // inode-owned buffers.
+            let parent_keys: Option<([u8; 32], [u8; 32])> =
+                fs.inodes.get(parent_ino).and_then(|p| match &p.kind {
+                    InodeKind::Root {
+                        read_key,
+                        write_key,
+                        ..
+                    }
+                    | InodeKind::Folder {
+                        read_key,
+                        write_key,
+                        ..
+                    } => Some((**read_key, **write_key)),
+                    _ => None,
+                });
+
+            // Capture the D-07 dual ref for a File or Folder child from its OWN
+            // node/v3 keys, mirroring the FUSE handle_unlink/handle_rmdir path:
+            // SealedChildRef.ipns_name (READ plane, a k51) and
+            // WriteChildRef.child_id = uuid_from_ino(ino) (WRITE plane, a UUID)
+            // — never conflated. Tuple: (name, size, item_type, content_cid,
+            // child_ref, write_child_ref, child_published_node).
+            let bin_capture: Option<(
                 String,
                 u64,
-                cipherbox_core::folder::FilePointer,
+                cipherbox_core::bin::BinItemType,
                 String,
-                Option<Vec<cipherbox_core::bin::VersionCidEntry>>,
+                cipherbox_core::node::SealedChildRef,
+                cipherbox_core::node::WriteChildRef,
+                String,
             )> = match fs.inodes.get(ino) {
-                Some(inode) => match &inode.kind {
-                    InodeKind::File {
-                        file_meta_ipns_name,
-                        file_ipns_key_encrypted_hex,
-                        size,
-                        cid,
-                        versions,
-                        ..
-                    } => {
-                        let created_ms = inode
-                            .attr
-                            .crtime
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_millis() as u64;
-
-                        match file_meta_ipns_name {
-                            Some(name) if !name.is_empty() => {
-                                let file_pointer = cipherbox_core::folder::FilePointer {
-                                    id: cipherbox_crypto::utils::generate_uuid_v4(),
-                                    name: inode.name.clone(),
-                                    file_meta_ipns_name: name.clone(),
-                                    ipns_private_key_encrypted: file_ipns_key_encrypted_hex.clone(),
-                                    created_at: if created_ms > 0 { created_ms } else { now_ms },
-                                    modified_at: now_ms,
-                                };
-                                let ver_cids = crate::helpers::versions_to_bin_entries(versions);
-                                Some((
-                                    inode.name.clone(),
-                                    *size,
-                                    file_pointer,
-                                    cid.clone(),
-                                    ver_cids,
-                                ))
-                            }
-                            _ => {
+                Some(inode) => {
+                    // WRITE plane is keyed by the child UUID (uuid_from_ino).
+                    let child_id = crate::fs::uuid_from_ino(ino);
+                    match &inode.kind {
+                        InodeKind::File {
+                            ipns_name,
+                            read_key,
+                            write_key,
+                            size,
+                            cid,
+                            ..
+                        } => {
+                            if ipns_name.is_empty() {
                                 log::warn!(
-                                        "cleanup delete: missing file_meta_ipns_name for ino {}, skipping bin entry",
-                                        ino
-                                    );
+                                    "cleanup delete: missing ipns_name for ino {}, skipping bin entry",
+                                    ino
+                                );
+                                None
+                            } else if let Some((pr, pw)) = parent_keys {
+                                // SECURITY-REVIEW: D-07 dual-keying — childId(UUID
+                                // via uuid_from_ino) vs ipnsName must not be
+                                // conflated.
+                                cipherbox_sdk::build_child_refs(
+                                    &**read_key,
+                                    &**write_key,
+                                    &pr,
+                                    &pw,
+                                    &child_id,
+                                    ipns_name,
+                                    &inode.name,
+                                    cipherbox_core::node::NodeKind::File,
+                                    0,
+                                    0,
+                                )
+                                .ok()
+                                .map(|(cr, wr)| {
+                                    (
+                                        inode.name.clone(),
+                                        *size,
+                                        cipherbox_core::bin::BinItemType::File,
+                                        cid.clone(),
+                                        cr,
+                                        wr,
+                                        String::new(),
+                                    )
+                                })
+                            } else {
                                 None
                             }
                         }
-                    }
-                    _ => None,
-                },
-                None => None,
-            };
-
-            let bin_folder_data: Option<(String, cipherbox_core::folder::FolderEntry)> =
-                if bin_file_data.is_none() {
-                    match fs.inodes.get(ino) {
-                        Some(inode) => {
-                            match &inode.kind {
-                                InodeKind::Folder {
+                        InodeKind::Folder {
+                            ipns_name,
+                            read_key,
+                            write_key,
+                            ..
+                        } => {
+                            if ipns_name.is_empty() {
+                                None
+                            } else if let Some((pr, pw)) = parent_keys {
+                                // SECURITY-REVIEW: D-07 dual-keying — childId(UUID
+                                // via uuid_from_ino) vs ipnsName must not be
+                                // conflated.
+                                cipherbox_sdk::build_child_refs(
+                                    &**read_key,
+                                    &**write_key,
+                                    &pr,
+                                    &pw,
+                                    &child_id,
                                     ipns_name,
-                                    encrypted_folder_key,
-                                    ipns_private_key,
-                                    ..
-                                } => {
-                                    let created_ms = inode
-                                        .attr
-                                        .crtime
-                                        .duration_since(UNIX_EPOCH)
-                                        .unwrap_or_default()
-                                        .as_millis()
-                                        as u64;
-
-                                    match ipns_private_key {
-                                        Some(key) => {
-                                            match cipherbox_crypto::ecies::wrap_key(
-                                                key,
-                                                &fs.public_key,
-                                            ) {
-                                                Ok(wrapped) => {
-                                                    let folder_entry = cipherbox_core::folder::FolderEntry {
-                                                    id: cipherbox_crypto::utils::generate_uuid_v4(),
-                                                    name: inode.name.clone(),
-                                                    ipns_name: ipns_name.clone(),
-                                                    folder_key_encrypted: encrypted_folder_key.clone(),
-                                                    ipns_private_key_encrypted: hex::encode(&wrapped),
-                                                    created_at: if created_ms > 0 { created_ms } else { now_ms },
-                                                    modified_at: now_ms,
-                                                };
-                                                    Some((inode.name.clone(), folder_entry))
-                                                }
-                                                Err(e) => {
-                                                    log::error!("cleanup delete: failed to wrap IPNS key: {}", e);
-                                                    None
-                                                }
-                                            }
-                                        }
-                                        None => {
-                                            log::error!("cleanup delete: missing IPNS private key for ino {}", ino);
-                                            None
-                                        }
-                                    }
-                                }
-                                _ => None,
+                                    &inode.name,
+                                    cipherbox_core::node::NodeKind::Folder,
+                                    0,
+                                    0,
+                                )
+                                .ok()
+                                .map(|(cr, wr)| {
+                                    (
+                                        inode.name.clone(),
+                                        0u64,
+                                        cipherbox_core::bin::BinItemType::Folder,
+                                        String::new(),
+                                        cr,
+                                        wr,
+                                        String::new(),
+                                    )
+                                })
+                            } else {
+                                None
                             }
                         }
-                        None => None,
+                        _ => None,
                     }
-                } else {
-                    None
-                };
+                }
+                None => None,
+            };
 
             fs.publish_queue.remove(&ino);
             fs.inodes.remove(ino);
@@ -750,7 +764,7 @@ pub mod implementation {
                 .inodes
                 .get(parent_ino)
                 .map(|p| match &p.kind {
-                    InodeKind::Root { ipns_name, .. } => ipns_name.clone().unwrap_or_default(),
+                    InodeKind::Root { ipns_name, .. } => ipns_name.clone(),
                     InodeKind::Folder { ipns_name, .. } => ipns_name.clone(),
                     _ => String::new(),
                 })
@@ -759,49 +773,39 @@ pub mod implementation {
             if !parent_ipns_name.is_empty() {
                 let parent_path = crate::helpers::build_folder_path(&fs, parent_ino);
 
-                let bin_entry = if let Some((name, size, fp, cid, ver_cids)) = bin_file_data {
-                    // Capture the file's parent folderKey (ECIES-wrapped) so a later
-                    // restore can re-encrypt the FileMetadata to a different
-                    // destination folder. Mirrors the FUSE handle_unlink path.
-                    let original_folder_key_encrypted = fs
-                        .get_folder_key(parent_ino)
-                        .and_then(|fk| {
-                            cipherbox_crypto::ecies::wrap_key(&fk, fs.public_key.as_slice()).ok()
-                        })
-                        .map(hex::encode);
+                let bin_entry = if let Some((
+                    name,
+                    size,
+                    item_type,
+                    cid,
+                    child_ref,
+                    write_child_ref,
+                    child_published_node,
+                )) = bin_capture
+                {
+                    let (content_cid, content_size, mime_type) = match item_type {
+                        cipherbox_core::bin::BinItemType::File => (
+                            if cid.is_empty() { None } else { Some(cid) },
+                            Some(size),
+                            cipherbox_crypto::utils::mime_from_extension(&name).to_string(),
+                        ),
+                        cipherbox_core::bin::BinItemType::Folder => (None, None, String::new()),
+                    };
                     Some(cipherbox_core::bin::BinEntry {
                         id: cipherbox_crypto::utils::generate_uuid_v4(),
-                        item_type: cipherbox_core::bin::BinItemType::File,
-                        name: name.clone(),
-                        original_parent_ipns_name: parent_ipns_name,
-                        original_path: parent_path,
-                        original_folder_key_encrypted,
-                        deleted_at: now_ms,
-                        size,
-                        mime_type: cipherbox_crypto::utils::mime_from_extension(&name).to_string(),
-                        content_cid: if cid.is_empty() { None } else { Some(cid) },
-                        content_size: Some(size),
-                        version_cids: ver_cids,
-                        file_pointer: Some(fp),
-                        folder_entry: None,
-                    })
-                } else if let Some((name, fe)) = bin_folder_data {
-                    Some(cipherbox_core::bin::BinEntry {
-                        id: cipherbox_crypto::utils::generate_uuid_v4(),
-                        item_type: cipherbox_core::bin::BinItemType::Folder,
+                        item_type,
                         name,
                         original_parent_ipns_name: parent_ipns_name,
                         original_path: parent_path,
-                        // Folders keep their own key on restore; nothing to capture.
-                        original_folder_key_encrypted: None,
                         deleted_at: now_ms,
-                        size: 0,
-                        mime_type: String::new(),
-                        content_cid: None,
-                        content_size: None,
+                        size,
+                        mime_type,
+                        content_cid,
+                        content_size,
                         version_cids: None,
-                        file_pointer: None,
-                        folder_entry: Some(fe),
+                        child_published_node,
+                        child_ref,
+                        write_child_ref,
                     })
                 } else {
                     None

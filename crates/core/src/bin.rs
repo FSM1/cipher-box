@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::folder::{FilePointer, FolderEntry};
+use crate::node::{SealedChildRef, WriteChildRef};
 
 #[derive(Debug, Error)]
 pub enum BinError {
@@ -43,16 +43,6 @@ pub struct BinEntry {
     pub name: String,
     pub original_parent_ipns_name: String,
     pub original_path: String,
-    /// ECIES-wrapped (to the user's secp256k1 public key) AES folder key of the
-    /// file's ORIGINAL parent folder, captured at delete time. A file's
-    /// `FileMetadata` is sealed with its parent folder's key, so restoring to a
-    /// folder with a different key — or whose original parent no longer exists —
-    /// requires this to re-encrypt the record. Files only; `None` for folders and
-    /// legacy entries written before this field existed. Serialized as
-    /// `originalFolderKeyEncrypted`, matching the TypeScript `BinEntry`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(default)]
-    pub original_folder_key_encrypted: Option<String>,
     pub deleted_at: u64,
     pub size: u64,
     pub mime_type: String,
@@ -65,12 +55,22 @@ pub struct BinEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(default)]
     pub version_cids: Option<Vec<VersionCidEntry>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(default)]
-    pub file_pointer: Option<FilePointer>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(default)]
-    pub folder_entry: Option<FolderEntry>,
+    /// node/v3 restore keeper: base64 of the deleted node's
+    /// `encode_published_node` (a re-upload blob so a later restore can
+    /// re-publish the child node). Best-effort at delete time — may be an
+    /// empty string when the sealed envelope is not available without I/O.
+    /// Serialized as `childPublishedNode`.
+    pub child_published_node: String,
+    /// node/v3 READ-plane link (keyed by ipnsName): the child's readKey sealed
+    /// under the ORIGINAL parent's readKey. Re-spliced into a target parent's
+    /// read-body on restore. Distinct from `write_child_ref` (D-07) — never
+    /// conflate `child_ref.ipns_name` (a k51) with `write_child_ref.child_id`
+    /// (a UUID). Serialized as `childRef`.
+    pub child_ref: SealedChildRef,
+    /// node/v3 WRITE-plane link (keyed by childId UUID, D-07): the child's
+    /// writeKey sealed under the ORIGINAL parent's writeKey. Re-spliced into a
+    /// target parent's write-body on restore. Serialized as `writeChildRef`.
+    pub write_child_ref: WriteChildRef,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -95,8 +95,7 @@ pub fn encrypt_bin_metadata(
     metadata: &RecycleBinMetadata,
     user_public_key: &[u8],
 ) -> Result<Vec<u8>, BinError> {
-    let json = serde_json::to_vec(metadata)
-        .map_err(|_| BinError::SerializationFailed)?;
+    let json = serde_json::to_vec(metadata).map_err(|_| BinError::SerializationFailed)?;
     cipherbox_crypto::ecies::wrap_key(&json, user_public_key)
         .map_err(|_| BinError::EncryptionFailed)
 }
@@ -108,12 +107,13 @@ pub fn decrypt_bin_metadata(
 ) -> Result<RecycleBinMetadata, BinError> {
     let plaintext = cipherbox_crypto::ecies::unwrap_key(ciphertext, user_private_key)
         .map_err(|_| BinError::DecryptionFailed)?;
-    let metadata: RecycleBinMetadata = serde_json::from_slice(&plaintext)
-        .map_err(|_| BinError::DeserializationFailed)?;
+    let metadata: RecycleBinMetadata =
+        serde_json::from_slice(&plaintext).map_err(|_| BinError::DeserializationFailed)?;
     if metadata.version != "v1" {
-        return Err(BinError::ValidationFailed(
-            format!("Unsupported bin metadata version: {}", metadata.version),
-        ));
+        return Err(BinError::ValidationFailed(format!(
+            "Unsupported bin metadata version: {}",
+            metadata.version
+        )));
     }
     Ok(metadata)
 }
@@ -138,6 +138,26 @@ mod tests {
         (sk.serialize().to_vec(), pk.serialize().to_vec())
     }
 
+    /// A sample READ-plane child ref keyed by ipnsName (a k51 identity).
+    fn sample_child_ref(ipns_name: &str) -> SealedChildRef {
+        SealedChildRef {
+            name: "deleted-photo.jpg".to_string(),
+            ipns_name: ipns_name.to_string(),
+            generation: 0,
+            version_floor: 0,
+            read_key_sealed: "cmVhZC1rZXktc2VhbGVk".to_string(),
+        }
+    }
+
+    /// A sample WRITE-plane child ref keyed by childId (a UUID) — D-07 distinct
+    /// from the read plane's `ipns_name`.
+    fn sample_write_child_ref(child_id: &str) -> WriteChildRef {
+        WriteChildRef {
+            child_id: child_id.to_string(),
+            write_key_sealed: "d3JpdGUta2V5LXNlYWxlZA==".to_string(),
+        }
+    }
+
     fn sample_bin_entry() -> BinEntry {
         BinEntry {
             id: "entry-1".to_string(),
@@ -145,15 +165,15 @@ mod tests {
             name: "deleted-photo.jpg".to_string(),
             original_parent_ipns_name: "k51parent".to_string(),
             original_path: "/Documents/deleted-photo.jpg".to_string(),
-            original_folder_key_encrypted: Some("aabbccdd".to_string()),
             deleted_at: 1700000000000,
             size: 4096,
             mime_type: "image/jpeg".to_string(),
             content_cid: Some("bafyfile123".to_string()),
             content_size: Some(4096),
             version_cids: None,
-            file_pointer: None,
-            folder_entry: None,
+            child_published_node: "cHVibGlzaGVkLW5vZGU=".to_string(),
+            child_ref: sample_child_ref("k51file-abc"),
+            write_child_ref: sample_write_child_ref("550e8400-e29b-41d4-a716-446655440000"),
         }
     }
 
@@ -192,23 +212,21 @@ mod tests {
                     name: "old-folder".to_string(),
                     original_parent_ipns_name: "k51root".to_string(),
                     original_path: "/old-folder".to_string(),
-                    original_folder_key_encrypted: None,
                     deleted_at: 1700000001000,
                     size: 0,
                     mime_type: "".to_string(),
                     content_cid: None,
                     content_size: None,
                     version_cids: None,
-                    file_pointer: None,
-                    folder_entry: Some(FolderEntry {
-                        id: "folder-id".to_string(),
+                    child_published_node: String::new(),
+                    child_ref: SealedChildRef {
                         name: "old-folder".to_string(),
                         ipns_name: "k51folder".to_string(),
-                        folder_key_encrypted: "aabb".to_string(),
-                        ipns_private_key_encrypted: "ccdd".to_string(),
-                        created_at: 1000,
-                        modified_at: 2000,
-                    }),
+                        generation: 0,
+                        version_floor: 0,
+                        read_key_sealed: "Zm9sZGVyLXJlYWQ=".to_string(),
+                    },
+                    write_child_ref: sample_write_child_ref("660e8400-e29b-41d4-a716-446655440001"),
                 },
             ],
         };
@@ -222,36 +240,40 @@ mod tests {
         assert_eq!(decrypted.entries[0].id, "entry-1");
         assert_eq!(decrypted.entries[0].name, "deleted-photo.jpg");
         assert_eq!(
-            decrypted.entries[0].original_folder_key_encrypted.as_deref(),
-            Some("aabbccdd"),
-            "captured original folder key must survive the encrypt/decrypt round trip"
+            decrypted.entries[0].child_ref.ipns_name, "k51file-abc",
+            "the node/v3 read-plane child ref must survive the encrypt/decrypt round trip"
+        );
+        assert_eq!(
+            decrypted.entries[0].write_child_ref.child_id, "550e8400-e29b-41d4-a716-446655440000",
+            "the node/v3 write-plane child ref must survive the encrypt/decrypt round trip"
         );
         assert_eq!(decrypted.entries[1].id, "entry-2");
-        assert!(decrypted.entries[1].folder_entry.is_some());
-        assert!(
-            decrypted.entries[1].original_folder_key_encrypted.is_none(),
-            "folder entries carry no original folder key"
+        assert_eq!(decrypted.entries[1].child_ref.ipns_name, "k51folder");
+    }
+
+    /// D-07 non-conflation: the write plane is keyed by a UUID `child_id` and
+    /// the read plane by a k51 `ipns_name` — the two key spaces must never be
+    /// equal. Guards the invariant at the type level (project memory
+    /// "write plane keyed by UUID, read plane by ipnsName").
+    #[test]
+    fn child_ref_ipns_name_never_equals_write_child_ref_child_id() {
+        let entry = sample_bin_entry();
+        assert_ne!(
+            entry.write_child_ref.child_id, entry.child_ref.ipns_name,
+            "D-07: WriteChildRef.child_id (a UUID) must never equal SealedChildRef.ipns_name (a k51)"
         );
     }
 
     #[test]
-    fn original_folder_key_serializes_camel_case_and_skips_when_none() {
-        let with_key = serde_json::to_string(&sample_bin_entry()).unwrap();
-        assert!(with_key.contains("\"originalFolderKeyEncrypted\":\"aabbccdd\""));
-        assert!(!with_key.contains("original_folder_key_encrypted"));
-
-        let mut without = sample_bin_entry();
-        without.original_folder_key_encrypted = None;
-        let json = serde_json::to_string(&without).unwrap();
-        assert!(
-            !json.contains("originalFolderKeyEncrypted"),
-            "None must be skipped so folder/legacy entries stay clean"
-        );
-
-        // Legacy entries (no field at all) deserialize to None via serde(default).
-        let legacy = r#"{"id":"x","itemType":"file","name":"a.txt","originalParentIpnsName":"k51","originalPath":"/a.txt","deletedAt":1,"size":1,"mimeType":"text/plain"}"#;
-        let parsed: BinEntry = serde_json::from_str(legacy).unwrap();
-        assert!(parsed.original_folder_key_encrypted.is_none());
+    fn node_v3_restore_fields_serialize_camel_case() {
+        let json = serde_json::to_string(&sample_bin_entry()).unwrap();
+        assert!(json.contains("\"childPublishedNode\""));
+        assert!(json.contains("\"childRef\""));
+        assert!(json.contains("\"writeChildRef\""));
+        // The legacy fields are gone — never emitted on the wire.
+        assert!(!json.contains("originalFolderKeyEncrypted"));
+        assert!(!json.contains("filePointer"));
+        assert!(!json.contains("folderEntry"));
     }
 
     #[test]
