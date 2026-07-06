@@ -79,6 +79,8 @@ describe('CipherBoxClient.downloadSharedFile', () => {
       path: ['k51leaf'],
     });
 
+    expect(result.status).toBe('ok');
+    if (result.status !== 'ok') throw new Error('unreachable');
     expect(result.plaintext).toEqual(plaintext);
     expect(result.mimeType).toBe('text/plain');
     expect(result.encryptionMode).toBe('GCM');
@@ -128,37 +130,39 @@ describe('CipherBoxClient.downloadSharedFile', () => {
       path: [],
     });
 
+    expect(result.status).toBe('ok');
+    if (result.status !== 'ok') throw new Error('unreachable');
     expect(result.plaintext).toEqual(plaintext);
     expect(result.encryptionMode).toBe('CTR');
   });
 
-  it('throws when the chain reports revoked, without calling fetchFromIpfs', async () => {
+  it('returns status revoked without calling fetchFromIpfs', async () => {
     vi.mocked(sdkCore.navigateReadChain).mockResolvedValue({ status: 'revoked' });
 
-    await expect(
-      client.downloadSharedFile({
-        readDescriptorRef: bytesToHex(new Uint8Array([1])),
-        recipientPrivateKey: new Uint8Array(32).fill(1),
-        rootIpnsName: 'k51root',
-        rootExpectedGeneration: 0,
-        path: [],
-      })
-    ).rejects.toThrow(/revoked/i);
+    const result = await client.downloadSharedFile({
+      readDescriptorRef: bytesToHex(new Uint8Array([1])),
+      recipientPrivateKey: new Uint8Array(32).fill(1),
+      rootIpnsName: 'k51root',
+      rootExpectedGeneration: 0,
+      path: [],
+    });
+
+    expect(result.status).toBe('revoked');
     expect(sdkCore.fetchFromIpfs).not.toHaveBeenCalled();
   });
 
-  it('throws (behind-retry) when the root was rotated since the grant was issued', async () => {
+  it('returns status behind-retry when the root was rotated since the grant was issued', async () => {
     vi.mocked(sdkCore.navigateReadChain).mockResolvedValue({ status: 'behind-retry' });
 
-    await expect(
-      client.downloadSharedFile({
-        readDescriptorRef: bytesToHex(new Uint8Array([1])),
-        recipientPrivateKey: new Uint8Array(32).fill(1),
-        rootIpnsName: 'k51root',
-        rootExpectedGeneration: 0,
-        path: [],
-      })
-    ).rejects.toThrow(/reopen/i);
+    const result = await client.downloadSharedFile({
+      readDescriptorRef: bytesToHex(new Uint8Array([1])),
+      recipientPrivateKey: new Uint8Array(32).fill(1),
+      rootIpnsName: 'k51root',
+      rootExpectedGeneration: 0,
+      path: [],
+    });
+
+    expect(result.status).toBe('behind-retry');
     expect(sdkCore.fetchFromIpfs).not.toHaveBeenCalled();
   });
 });

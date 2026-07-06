@@ -1010,7 +1010,11 @@ export class CipherBoxClient {
     rootIpnsName: string;
     rootExpectedGeneration: number;
     path: string[];
-  }): Promise<{ plaintext: Uint8Array; mimeType: string; encryptionMode: EncryptionMode }> {
+  }): Promise<
+    | { status: 'revoked' }
+    | { status: 'behind-retry' }
+    | { status: 'ok'; plaintext: Uint8Array; mimeType: string; encryptionMode: EncryptionMode }
+  > {
     return this.withOperation('downloadSharedFile', async () => {
       const result = await sdkCore.navigateReadChain({
         readDescriptorRef: sharedFileBytesToBase64(hexToBytes(args.readDescriptorRef)),
@@ -1021,12 +1025,8 @@ export class CipherBoxClient {
         ctx: this.ctx,
       });
 
-      if (result.status === 'revoked') {
-        throw new Error('downloadSharedFile: file is no longer available (revoked)');
-      }
-      if (result.status === 'behind-retry') {
-        throw new Error('downloadSharedFile: share was updated -- please reopen and try again');
-      }
+      if (result.status === 'revoked') return { status: 'revoked' as const };
+      if (result.status === 'behind-retry') return { status: 'behind-retry' as const };
 
       const { content } = result;
       try {
@@ -1036,10 +1036,129 @@ export class CipherBoxClient {
           content.encryptionMode === 'CTR'
             ? await decryptAesCtr(ciphertext, content.fileKey, iv)
             : await decryptAesGcm(ciphertext, content.fileKey, iv);
-        return { plaintext, mimeType: content.mimeType, encryptionMode: content.encryptionMode };
+        return {
+          status: 'ok' as const,
+          plaintext,
+          mimeType: content.mimeType,
+          encryptionMode: content.encryptionMode,
+        };
       } finally {
         // Terminal owner of the raw fileKey recovered inside NodeContent (D-09).
         content.fileKey.fill(0);
+      }
+    });
+  }
+
+  /**
+   * Resolve a share's ROOT node from its grant descriptor (D-07 full-boundary
+   * facade, 68.2-08 Rule-2 addition -- the share-ENTRY counterpart to
+   * {@link resolveChildIdentity}'s per-child descent). ONE ECIES unwrap of
+   * `readDescriptorRef` -> shareRootReadKey, resolve+unseal the root Node.
+   * Hoisted verbatim from `useSharedNavigationActions.ts`'s `navigateToShare`
+   * (the raw-crypto portion only -- UI state wiring/seeding stays in the web
+   * hook).
+   *
+   * @security `recipientPrivateKey` is caller-owned, NEVER zeroed here
+   *   (D-09). On `'ok'`, the caller becomes the terminal owner of the
+   *   returned `readKey` (must zero it once superseded/discarded/consumed).
+   */
+  async resolveShareRoot(args: {
+    readDescriptorRef: string;
+    recipientPrivateKey: Uint8Array;
+    rootIpnsName: string;
+    rootExpectedGeneration?: number;
+  }): Promise<
+    | { status: 'revoked' }
+    | { status: 'behind-retry' }
+    | {
+        status: 'ok';
+        kind: NodeKind;
+        readKey: Uint8Array;
+        children: SealedChildRef[];
+        sequenceNumber: bigint;
+        published: PublishedNode;
+      }
+  > {
+    return this.withOperation('resolveShareRoot', async () => {
+      const shareRootReadKey = await unwrapKey(
+        hexToBytes(args.readDescriptorRef),
+        args.recipientPrivateKey
+      );
+      let committed = false;
+      try {
+        const resolved = await this.resolvePublishedNode(args.rootIpnsName);
+        if (!resolved) return { status: 'revoked' as const };
+        if (
+          args.rootExpectedGeneration !== undefined &&
+          resolved.published.generation > args.rootExpectedGeneration
+        ) {
+          return { status: 'behind-retry' as const };
+        }
+        const rootNode = await unsealNode(resolved.published, shareRootReadKey);
+        committed = true;
+        return {
+          status: 'ok' as const,
+          kind: rootNode.kind,
+          readKey: shareRootReadKey,
+          children: rootNode.children ?? [],
+          sequenceNumber: resolved.sequenceNumber,
+          published: resolved.published,
+        };
+      } finally {
+        if (!committed) shareRootReadKey.fill(0);
+      }
+    });
+  }
+
+  /**
+   * Descend one hop into a shared CHILD folder (D-07 full-boundary facade,
+   * 68.2-08 Rule-2 addition) -- gated-resolve the child, unseal its readKey
+   * under the CURRENT depth's readKey (generation-source rule:
+   * `childRef.generation`, the parent mirror, never the child's own envelope
+   * generation), then unseal the child Node to recover its OWN children +
+   * sequence. Mirrors {@link listSharedFolder}'s internal per-hop loop body,
+   * but returns the RAW `SealedChildRef[]` (the web still needs these for
+   * nav-stack/write-op identity, e.g. `updateSharedFile`'s
+   * `readKeySealed`-dependent filePointer) instead of the resolved display
+   * projection -- callers needing `ResolvedChild[]` for THIS depth should
+   * call {@link listSharedFolder} separately (cached, cheap).
+   *
+   * @returns `null` when the child's IPNS record is no longer resolvable
+   *   (revoked/not-found) -- fail-closed, matches `gatedResolveChild`.
+   * @security Never zeros `parentReadKey` (caller-owned, D-09). The caller
+   *   becomes the terminal owner of the returned `readKey`.
+   */
+  async descendSharedChild(
+    childRef: SealedChildRef,
+    parentReadKey: Uint8Array
+  ): Promise<{
+    readKey: Uint8Array;
+    children: SealedChildRef[];
+    sequenceNumber: bigint;
+    published: PublishedNode;
+  } | null> {
+    return this.withOperation('descendSharedChild', async () => {
+      const resolved = await this.gatedResolveChild(childRef);
+      if (!resolved) return null;
+      const readKey = await unsealChildReadKey(
+        childRef.readKeySealed,
+        parentReadKey,
+        resolved.published.id,
+        resolved.published.kind,
+        childRef.generation // parent mirror -- NEVER resolved.published.generation
+      );
+      let committed = false;
+      try {
+        const node = await unsealNode(resolved.published, readKey);
+        committed = true;
+        return {
+          readKey,
+          children: node.children ?? [],
+          sequenceNumber: resolved.sequenceNumber,
+          published: resolved.published,
+        };
+      } finally {
+        if (!committed) readKey.fill(0);
       }
     });
   }
