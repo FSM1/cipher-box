@@ -49,16 +49,6 @@ export function DetailsDialog({
   const [fileMetaLoading, setFileMetaLoading] = useState(false);
   const [metadataRefresh, setMetadataRefresh] = useState(0);
 
-  // Kind heuristic sourced from folderStore membership only (the prior
-  // per-ipnsName kind lookup cache is dropped, D-07/68.2-07): a folder the
-  // user has navigated into is present in the web's folder store; anything
-  // else is treated as a file.
-  const folderStoreEntry = useFolderStore((state) => {
-    if (!item) return undefined;
-    return Object.values(state.folders).find((f) => f.ipnsName === item.ipnsName);
-  });
-  const isFolderHeuristic = !!folderStoreEntry;
-
   // 68.2-06 companion patch: FileDetails/FolderDetails render from
   // ResolvedChild (SDK-READ-02) rather than SealedChildRef (D-08 no-regression
   // render repoint). Look up the parent folder's SDK-resolved listing by
@@ -66,8 +56,26 @@ export function DetailsDialog({
   // (item not yet present in the resolved listing) falls back to a
   // folder-safe default with unknown size/modifiedAt -- `SealedChildRef` no
   // longer carries a size/modifiedAt display mirror (D-08/68.2-12 revert).
+  const resolvedFromListing: ResolvedChild | undefined = item
+    ? resolvedChildren.find((c) => c.ipnsName === item.ipnsName)
+    : undefined;
+
+  // Kind discriminator: prefer the SDK-authoritative `kind` from the resolved
+  // parent listing (present for every child of the current folder, including
+  // subfolders the user has not navigated into) and fall back to folderStore
+  // membership only on a listing miss (the prior per-ipnsName kind cache was
+  // dropped, D-07/68.2-07). Deriving solely from folderStore misclassified an
+  // un-visited folder (absent from the store) as a file.
+  const folderStoreEntry = useFolderStore((state) => {
+    if (!item) return undefined;
+    return Object.values(state.folders).find((f) => f.ipnsName === item.ipnsName);
+  });
+  const isFolderHeuristic = resolvedFromListing
+    ? resolvedFromListing.kind === 'folder'
+    : !!folderStoreEntry;
+
   const resolvedItem: ResolvedChild | null = item
-    ? (resolvedChildren.find((c) => c.ipnsName === item.ipnsName) ?? {
+    ? (resolvedFromListing ?? {
         ipnsName: item.ipnsName,
         name: item.name,
         kind: isFolderHeuristic ? 'folder' : 'file',

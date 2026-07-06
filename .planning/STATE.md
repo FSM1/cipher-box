@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 
 ## Current Position
 
-Phase: 68.2 (sdk-owned-read-chain-and-resolved-folder-listings) — EXECUTING
-Plan: 12 of 12
-Status: Phase complete — ready for verification
-Last activity: 2026-07-05 — Phase 68.2 execution started
+Phase: 68.2 (sdk-owned-read-chain-and-resolved-folder-listings) — SHIPPING
+Plan: 14 of 14
+Status: Phase complete — verified, secured, validated; PR #589 open
+Last activity: 2026-07-06 — Phase 68.2 gap-closure + ship review
 
 Progress: `██████████` 79 / 79 plans (100%)
 

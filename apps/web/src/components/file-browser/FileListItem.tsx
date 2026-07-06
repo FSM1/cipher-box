@@ -314,9 +314,13 @@ export function FileListItem({
       ? formatBytes(resolved.size)
       : '—';
 
-  // Display modified date: resolved last-modified time (Unix ms).
+  // Display modified date: resolved last-modified time (Unix ms). The
+  // unresolved fallback (`toResolvedChildView`) uses `modifiedAt: 0` as a
+  // sentinel for "not yet in the resolved listing" (e.g. an in-flight sync
+  // race), so treat any non-positive value as the "—" placeholder rather than
+  // rendering the 1970 epoch.
   const dateDisplay =
-    typeof resolved.modifiedAt === 'number' && Number.isFinite(resolved.modifiedAt)
+    typeof resolved.modifiedAt === 'number' && resolved.modifiedAt > 0
       ? formatDate(resolved.modifiedAt)
       : '—';
 

@@ -19,6 +19,8 @@ verified and SECURED. Two secondary read facades still call
   `id`/`kind` for `deleteFromSharedFolder`'s childNodeId resolution.
 - `resolveFileMetadata(fileRef, folderKey)` (~`client.ts:3897`) — resolves a
   file's own IPNS record for the detail dialog.
+- `downloadFromIpns(fileRef, ...)` (~`client.ts:3925`) — resolves `fileRef.ipnsName`
+  directly on the download path (same `gatedResolveChild(fileRef)` fix applies).
 
 **Severity is low, not a hole:** content integrity is still protected by AEAD —
 a tampered `published.id` derives the wrong child read key and `unsealNode` /
