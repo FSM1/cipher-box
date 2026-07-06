@@ -84,20 +84,13 @@ export function serializeContentForWire(content: NodeContent): Record<string, un
  * We serialize it as a decimal string and reverse in decode.ts.
  */
 function serializeChildRefForWire(ref: SealedChildRef): Record<string, unknown> {
-  const wire: Record<string, unknown> = {
+  return {
     name: ref.name,
     ipnsName: ref.ipnsName,
     generation: ref.generation,
     versionFloor: ref.versionFloor.toString(),
     readKeySealed: ref.readKeySealed,
   };
-  // Optional display mirrors are appended in a FIXED position AND only when
-  // present, so a ref without them encodes byte-identically to the pre-mirror
-  // format (D-04 back-compat / golden vectors), while a ref that carries them is
-  // still deterministic.
-  if (ref.size !== undefined) wire.size = ref.size;
-  if (ref.modifiedAt !== undefined) wire.modifiedAt = ref.modifiedAt;
-  return wire;
 }
 
 // ---------------------------------------------------------------------------

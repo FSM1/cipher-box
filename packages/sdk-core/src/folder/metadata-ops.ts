@@ -82,8 +82,6 @@ export function deleteFromFolder(params: { children: SealedChildRef[]; childId: 
  * @param params.name           - Display name of the child
  * @param params.ipnsName       - IPNS k51 name of the child node
  * @param params.versionFloor   - Owner-vouched IPNS sequence floor (0n for new nodes)
- * @param params.size           - Optional plaintext byte size (file children only) — display mirror
- * @param params.modifiedAt     - Optional last-modified time (Unix ms) — display mirror
  * @returns Updated children array and the new SealedChildRef
  *
  * @security Does NOT zero childReadKey or parentReadKey — callers are terminal owners (D-09).
@@ -98,8 +96,6 @@ export async function addFilePointerToFolder(params: {
   name: string;
   ipnsName: string;
   versionFloor: bigint;
-  size?: number;
-  modifiedAt?: number;
 }): Promise<{ updatedChildren: SealedChildRef[]; newRef: SealedChildRef }> {
   // Seal child readKey under parent readKey — EXACTLY ONE call, no per-recipient loop
   const readKeySealed = await sealChildReadKey(
@@ -117,9 +113,6 @@ export async function addFilePointerToFolder(params: {
     versionFloor: params.versionFloor,
     readKeySealed,
   };
-  // Display mirrors (non-authoritative; source of truth is the child's own Node).
-  if (params.size !== undefined) newRef.size = params.size;
-  if (params.modifiedAt !== undefined) newRef.modifiedAt = params.modifiedAt;
 
   return { updatedChildren: [...params.children, newRef], newRef };
 }
