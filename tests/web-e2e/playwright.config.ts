@@ -27,9 +27,12 @@ export default defineConfig({
   // so different files never share user/IPNS/DB state. Keep fullyParallel:false so
   // tests WITHIN a file still run serially — the describe.serial suites depend on
   // ordered, stateful steps. Local stays single-worker; CI fans out across files.
-  // Ceiling is Web3Auth Sapphire Devnet tolerance for concurrent DKG, not our infra.
+  // Ceiling is backend contention on the shared API/Kubo/Postgres stack, not
+  // Web3Auth: 4 workers starved the write path (folder-create / IPFS add / IPNS
+  // publish round-trips exceeded 30s on the 2-vCPU CI runner). 3 workers keeps
+  // wall-clock well under the 20-min job cap without starving writes.
   fullyParallel: false,
-  workers: process.env.CI ? 4 : 1,
+  workers: process.env.CI ? 3 : 1,
 
   // Fail build on CI if tests marked as test.only
   forbidOnly: !!process.env.CI,
