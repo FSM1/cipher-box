@@ -101,15 +101,21 @@ pub fn handle_rename(
         zeroize::Zeroizing<Vec<u8>>,
     )> = if parent != newparent {
         match fs.inodes.get(source_ino).map(|i| &i.kind) {
+            // node/v3: the file carries a plain `ipns_name` + raw signing seed
+            // (69-13 owns the cross-folder re-encrypt semantics — this only
+            // repoints the capture onto the reshaped InodeKind fields).
             Some(InodeKind::File {
-                file_meta_ipns_name: Some(meta_ipns),
-                file_ipns_private_key: Some(key),
+                ipns_name,
+                ipns_private_key,
                 ..
-            }) if !meta_ipns.is_empty() => {
+            }) if !ipns_name.is_empty() => {
                 match (fs.get_folder_key(parent), fs.get_folder_key(newparent)) {
-                    (Some(src_key), Some(dst_key)) => {
-                        Some((meta_ipns.clone(), key.clone(), src_key, dst_key))
-                    }
+                    (Some(src_key), Some(dst_key)) => Some((
+                        ipns_name.clone(),
+                        ipns_private_key.clone(),
+                        src_key,
+                        dst_key,
+                    )),
                     _ => {
                         log::warn!(
                                 "rename: cross-folder move missing folder key(s) for ino {}; skipping metadata re-encrypt",
@@ -174,8 +180,8 @@ pub fn handle_rename(
                         let cid_clone = cid.clone();
                         let api = fs.api.clone();
                         fs.rt.spawn(async move {
-                            let _ = cipherbox_api_client::ipfs::unpin_content(&api, &cid_clone)
-                                .await;
+                            let _ =
+                                cipherbox_api_client::ipfs::unpin_content(&api, &cid_clone).await;
                         });
                     }
                 }

@@ -62,18 +62,16 @@ pub fn ancestor_ipns_chain(inodes: &InodeTable, start_ino: u64) -> Vec<String> {
         };
 
         match &inode.kind {
-            InodeKind::Root {
-                ipns_name: Some(name),
-                ..
-            } => chain.push(name.clone()),
-            InodeKind::Folder { ipns_name, .. } => chain.push(ipns_name.clone()),
-            InodeKind::File {
-                file_meta_ipns_name: Some(name),
-                ..
-            } => chain.push(name.clone()),
-            // Root with no ipns_name yet (pre-init) or an unresolved File
-            // (no file_meta_ipns_name) contribute nothing to the chain.
-            _ => {}
+            // node/v3: Root/Folder/File all carry a plain `ipns_name: String`.
+            // An empty string (Root pre-init, or a never-published File)
+            // contributes nothing to the chain.
+            InodeKind::Root { ipns_name, .. }
+            | InodeKind::Folder { ipns_name, .. }
+            | InodeKind::File { ipns_name, .. } => {
+                if !ipns_name.is_empty() {
+                    chain.push(ipns_name.clone());
+                }
+            }
         }
 
         if current_ino == ROOT_INO {
@@ -205,7 +203,13 @@ mod tests {
         }
     }
 
-    fn insert_folder(table: &mut InodeTable, ino: u64, parent_ino: u64, name: &str, ipns_name: &str) {
+    fn insert_folder(
+        table: &mut InodeTable,
+        ino: u64,
+        parent_ino: u64,
+        name: &str,
+        ipns_name: &str,
+    ) {
         table.insert(InodeData {
             ino,
             parent_ino,
@@ -296,11 +300,18 @@ mod tests {
         let chain = ancestor_ipns_chain(&table, folder_b);
         assert_eq!(
             chain,
-            vec!["k51folderB".to_string(), "k51folderA".to_string(), "k51root".to_string()]
+            vec![
+                "k51folderB".to_string(),
+                "k51folderA".to_string(),
+                "k51root".to_string()
+            ]
         );
 
         let chain_a = ancestor_ipns_chain(&table, folder_a);
-        assert_eq!(chain_a, vec!["k51folderA".to_string(), "k51root".to_string()]);
+        assert_eq!(
+            chain_a,
+            vec!["k51folderA".to_string(), "k51root".to_string()]
+        );
     }
 
     #[test]

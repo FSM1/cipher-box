@@ -120,183 +120,168 @@ impl CipherBoxFS {
             })
     }
 
+    /// Re-seal a folder/root node as a node/v3 `PublishedNode` from the current
+    /// inode-table state (69-09 Slice 3 write emission).
+    ///
+    /// Splices EVERY child into BOTH planes (D-07): a read-plane `SealedChildRef`
+    /// (child readKey sealed under the parent readKey, keyed by ipnsName) and a
+    /// write-plane `WriteChildRef` (child writeKey sealed under the parent
+    /// writeKey, keyed by `child_id = uuid_from_ino(child_ino)`). The child node
+    /// itself is sealed with the SAME `uuid_from_ino` id (see the write helpers),
+    /// so a reader recovering `child_id` from the resolved node round-trips the
+    /// AAD. Returns the encoded `PublishedNode` bytes ready for IPFS upload, plus
+    /// the parent's signing seed + ipns name + previous CID (for the publish).
+    ///
+    /// Legacy `FolderMetadata`/`FolderEntry`/`FilePointer` emission is GONE — the
+    /// node-to-node keys now live ONLY inside the symmetric seals (crypto rule #7
+    /// / NODE-06). The former per-child user-ECIES `wrap_key` hops are removed.
     pub fn build_folder_metadata(
         &self,
         folder_ino: u64,
-    ) -> Result<
-        (
-            cipherbox_core::FolderMetadata,
-            Vec<u8>,
-            Vec<u8>,
-            String,
-            Option<String>,
-        ),
-        String,
-    > {
-        let (folder_key, ipns_private_key, ipns_name, child_inos) = {
+    ) -> Result<(Vec<u8>, Vec<u8>, String, Option<String>), String> {
+        use cipherbox_core::node::{
+            encode_published_node, seal::seal_published_node, Node, NodeKind, NodeWriteBody,
+            SealedChildRef, WriteChildRef,
+        };
+
+        let (parent_read_key, parent_write_key, ipns_private_key, ipns_name, is_root, child_inos) = {
             let inode = self
                 .inodes
                 .get(folder_ino)
                 .ok_or_else(|| format!("Folder inode {} not found", folder_ino))?;
             let children = inode.children.clone().unwrap_or_default();
             match &inode.kind {
-                // node/v3 (69-09 Slice 2): `ipns_private_key` is now a non-Option
-                // Zeroizing seed and `ipns_name` a plain String; the parent's
-                // symmetric readKey (`read_key`) replaces the legacy `folder_key`.
-                // NOTE: the child-loop below still emits the legacy FolderMetadata
-                // wire (folder_key_encrypted / file_meta_ipns_name / ...); that
-                // WRITE-EMISSION rewrite is 69-09 Slice 3 (this slice only repoints
-                // the parent-key extraction so the read helper compiles).
                 crate::inode::InodeKind::Root {
+                    read_key,
+                    write_key,
                     ipns_private_key,
                     ipns_name,
                     ..
-                } => {
-                    let key = ipns_private_key.to_vec();
-                    let name = ipns_name.clone();
-                    (self.root_folder_key.to_vec(), key, name, children)
-                }
+                } => (
+                    **read_key,
+                    **write_key,
+                    ipns_private_key.to_vec(),
+                    ipns_name.clone(),
+                    true,
+                    children,
+                ),
                 crate::inode::InodeKind::Folder {
                     read_key,
+                    write_key,
                     ipns_private_key,
                     ipns_name,
                     ..
-                } => {
-                    let key = ipns_private_key.to_vec();
-                    (read_key.to_vec(), key, ipns_name.clone(), children)
-                }
+                } => (
+                    **read_key,
+                    **write_key,
+                    ipns_private_key.to_vec(),
+                    ipns_name.clone(),
+                    false,
+                    children,
+                ),
                 _ => return Err("Cannot update metadata for non-folder inode".to_string()),
             }
         };
 
-        let mut metadata_children = Vec::new();
+        let mut sealed_children: Vec<SealedChildRef> = Vec::new();
+        let mut write_children: Vec<WriteChildRef> = Vec::new();
         for &child_ino in &child_inos {
             let child = self
                 .inodes
                 .get(child_ino)
                 .ok_or_else(|| format!("Child inode {} not found", child_ino))?;
-            match &child.kind {
+            let (kind, child_ipns, child_read_key, child_write_key) = match &child.kind {
                 crate::inode::InodeKind::Folder {
-                    ipns_name: child_ipns,
-                    encrypted_folder_key,
-                    ipns_private_key: child_ipns_key,
+                    ipns_name,
+                    read_key,
+                    write_key,
                     ..
-                } => {
-                    let ipns_key_encrypted = if let Some(key) = child_ipns_key {
-                        hex::encode(
-                            cipherbox_crypto::wrap_key(key, &self.public_key)
-                                .map_err(|e| format!("Wrap IPNS key: {}", e))?,
-                        )
-                    } else {
-                        String::new()
-                    };
-                    let now_ms = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis() as u64;
-                    let created_ms = child
-                        .attr
-                        .crtime
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis() as u64;
-                    let modified_ms = child
-                        .attr
-                        .mtime
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis() as u64;
-                    metadata_children.push(cipherbox_core::FolderChild::Folder(
-                        cipherbox_core::FolderEntry {
-                            id: uuid_from_ino(child_ino),
-                            name: child.name.clone(),
-                            ipns_name: child_ipns.clone(),
-                            folder_key_encrypted: encrypted_folder_key.clone(),
-                            ipns_private_key_encrypted: ipns_key_encrypted,
-                            created_at: if created_ms > 0 { created_ms } else { now_ms },
-                            modified_at: if modified_ms > 0 { modified_ms } else { now_ms },
-                        },
-                    ));
-                }
+                } => (NodeKind::Folder, ipns_name.clone(), **read_key, **write_key),
                 crate::inode::InodeKind::File {
-                    file_meta_ipns_name,
-                    file_ipns_private_key,
-                    file_ipns_key_encrypted_hex,
+                    ipns_name,
+                    read_key,
+                    write_key,
                     ..
-                } => {
-                    let now_ms = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis() as u64;
-                    let created_ms = child
-                        .attr
-                        .crtime
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis() as u64;
-                    let modified_ms = child
-                        .attr
-                        .mtime
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis() as u64;
-                    let ipns_name_val = match file_meta_ipns_name {
-                        Some(name) if !name.is_empty() => name.clone(),
-                        _ => {
-                            log::error!(
-                                "File '{}' (ino {}) has no fileMetaIpnsName",
-                                child.name,
-                                child_ino
-                            );
-                            continue;
-                        }
-                    };
-                    let ipns_key_encrypted = if let Some(h) = file_ipns_key_encrypted_hex {
-                        Some(h.clone())
-                    } else if let Some(key) = file_ipns_private_key {
-                        Some(hex::encode(
-                            cipherbox_crypto::wrap_key(key, &self.public_key)
-                                .map_err(|e| format!("Wrap IPNS key: {}", e))?,
-                        ))
-                    } else {
-                        None
-                    };
-                    metadata_children.push(cipherbox_core::FolderChild::File(
-                        cipherbox_core::FilePointer {
-                            id: uuid_from_ino(child_ino),
-                            name: child.name.clone(),
-                            file_meta_ipns_name: ipns_name_val,
-                            ipns_private_key_encrypted: ipns_key_encrypted,
-                            created_at: if created_ms > 0 { created_ms } else { now_ms },
-                            modified_at: if modified_ms > 0 { modified_ms } else { now_ms },
-                        },
-                    ));
-                }
-                _ => {}
+                } => (NodeKind::File, ipns_name.clone(), **read_key, **write_key),
+                _ => continue,
+            };
+            // Skip children with no IPNS identity yet (e.g. a freshly-created,
+            // never-published file): nothing to link into the read chain.
+            if child_ipns.is_empty() {
+                continue;
             }
+            let child_id = uuid_from_ino(child_ino);
+            let (sealed_ref, write_ref) = cipherbox_sdk::build_child_refs(
+                &child_read_key,
+                &child_write_key,
+                &parent_read_key,
+                &parent_write_key,
+                &child_id,
+                &child_ipns,
+                &child.name,
+                kind,
+                0,
+                0,
+            )
+            .map_err(|e| format!("build_child_refs failed for child {}: {}", child_ino, e))?;
+            sealed_children.push(sealed_ref);
+            write_children.push(write_ref);
         }
 
-        let metadata = cipherbox_core::FolderMetadata {
-            version: "v2".to_string(),
-            children: metadata_children,
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let node_id = uuid_from_ino(folder_ino);
+        let node = if is_root {
+            Node::Root {
+                id: node_id,
+                generation: 0,
+                created_at: now_ms,
+                modified_at: now_ms,
+                children: sealed_children,
+            }
+        } else {
+            Node::Folder {
+                id: node_id,
+                generation: 0,
+                created_at: now_ms,
+                modified_at: now_ms,
+                children: sealed_children,
+            }
         };
+        let write_body = NodeWriteBody {
+            ipns_private_key: ipns_private_key.clone(),
+            write_children,
+        };
+        let published = seal_published_node(
+            &node,
+            &parent_read_key,
+            &parent_write_key,
+            Some(&write_body),
+        )
+        .map_err(|e| format!("seal_published_node failed for {}: {}", folder_ino, e))?;
+        let published_bytes = encode_published_node(&published)
+            .map_err(|e| format!("encode_published_node failed for {}: {}", folder_ino, e))?;
+
         let old_cid = self.metadata_cache.get(&ipns_name).map(|c| c.cid.clone());
-        Ok((metadata, folder_key, ipns_private_key, ipns_name, old_cid))
+        Ok((published_bytes, ipns_private_key, ipns_name, old_cid))
     }
 
     pub fn update_folder_metadata(&mut self, folder_ino: u64) -> Result<(), String> {
         self.mutated_folders
             .insert(folder_ino, std::time::Instant::now());
-        let (metadata, folder_key, ipns_private_key, ipns_name, old_cid) =
+        let (published_node, ipns_private_key, ipns_name, old_cid) =
             self.build_folder_metadata(folder_ino)?;
-        // D-12: wrap owned clones in Zeroizing before passing to spawn_metadata_publish.
-        // build_folder_metadata returns .to_vec()/.clone() copies — the inode's own
-        // Zeroizing fields are NOT consumed. Ownership-transfer is safe here.
+        // D-12: wrap the owned signing-seed clone in Zeroizing before passing to
+        // spawn_metadata_publish. build_folder_metadata returns owned copies — the
+        // inode's own Zeroizing fields are NOT consumed. node/v3: the sealed
+        // `published_node` bytes are uploaded verbatim (no folder_key needed by the
+        // publisher; sealing already happened in build_folder_metadata).
         spawn_metadata_publish(
             self.api.clone(),
             self.rt.clone(),
-            metadata,
-            Zeroizing::new(folder_key),
+            published_node,
             Zeroizing::new(ipns_private_key),
             ipns_name,
             old_cid,
@@ -382,12 +367,11 @@ impl CipherBoxFS {
         for folder_ino in ready {
             self.publish_queue.remove(&folder_ino);
             match self.build_folder_metadata(folder_ino) {
-                Ok((m, fk, ipk, in_, oc)) => spawn_metadata_publish(
+                Ok((published_node, ipk, in_, oc)) => spawn_metadata_publish(
                     self.api.clone(),
                     self.rt.clone(),
-                    m,
-                    Zeroizing::new(fk),  // D-12: wrap owned clone in Zeroizing
-                    Zeroizing::new(ipk), // D-12: wrap owned clone in Zeroizing
+                    published_node,
+                    Zeroizing::new(ipk), // D-12: wrap owned signing-seed clone in Zeroizing
                     in_,
                     oc,
                     self.publish_coordinator.clone(),
@@ -647,8 +631,16 @@ impl CipherBoxFS {
     }
 }
 
+/// Derive a stable, deterministic node UUID from an inode number.
+///
+/// node/v3 (69-09): this is the CANONICAL node id used across the write path.
+/// A child node is sealed with `id = uuid_from_ino(child_ino)` and the parent's
+/// `SealedChildRef`/`WriteChildRef` are built with the same `child_id`, so the
+/// read path (which recovers `child_id` from the resolved node's own `id`)
+/// round-trips the AAD-bound seals. The value is a valid RFC-4122 v4-shaped
+/// hyphenated UUID (D-07 write plane keyed by this UUID; read plane by ipnsName).
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
-fn uuid_from_ino(ino: u64) -> String {
+pub(crate) fn uuid_from_ino(ino: u64) -> String {
     format!(
         "{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}",
         (ino >> 32) as u32,
@@ -664,181 +656,6 @@ pub fn mount_point() -> PathBuf {
     dirs::home_dir()
         .expect("Could not determine home directory")
         .join("CipherBox")
-}
-
-/// Tests for `build_folder_metadata` key-wrap error propagation (Finding A / T-59-01).
-///
-/// These tests verify that a `wrap_key` failure in the `InodeKind::File` arm
-/// returns `Err("Wrap IPNS key: ...")` rather than silently producing a
-/// `FilePointer` with `ipns_private_key_encrypted: None`.
-#[cfg(all(test, feature = "fuse"))]
-mod build_folder_metadata_tests {
-    use crate::inode::{FileAttrs, InodeData, InodeKind, ROOT_INO};
-    use crate::test_support::make_test_fs_with_keypair;
-    use std::time::SystemTime;
-    use zeroize::Zeroizing;
-
-    /// Generate a real secp256k1 keypair via the `ecies` dev-dep.
-    /// A zero vec is NOT a valid curve point (wrap_key fails on it).
-    fn real_keypair() -> (Zeroizing<Vec<u8>>, Zeroizing<Vec<u8>>) {
-        let (sk, pk) = ecies::utils::generate_keypair();
-        (
-            Zeroizing::new(sk.serialize().to_vec()),
-            Zeroizing::new(pk.serialize().to_vec()),
-        )
-    }
-
-    /// Build a minimal file inode with `file_ipns_private_key` set and insert it
-    /// as a child of root.  Returns the child inode number.
-    fn insert_file_with_private_key(
-        fs: &mut crate::CipherBoxFS,
-        file_ipns_private_key: Option<Zeroizing<Vec<u8>>>,
-        file_ipns_key_encrypted_hex: Option<String>,
-    ) -> u64 {
-        let ino = fs.inodes.allocate_ino();
-        let now = SystemTime::now();
-        let data = InodeData {
-            ino,
-            parent_ino: ROOT_INO,
-            name: "test.txt".to_string(),
-            kind: InodeKind::File {
-                cid: "bafytest".to_string(),
-                encrypted_file_key: "deadbeef".to_string(),
-                iv: "aabbccdd".to_string(),
-                size: 100,
-                encryption_mode: "GCM".to_string(),
-                file_meta_ipns_name: Some("k51file-ipns-name".to_string()),
-                file_meta_resolved: true,
-                file_ipns_private_key,
-                file_ipns_key_encrypted_hex,
-                versions: None,
-            },
-            attr: FileAttrs {
-                ino,
-                size: 100,
-                blocks: 1,
-                atime: now,
-                mtime: now,
-                ctime: now,
-                crtime: now,
-                is_dir: false,
-                perm: 0o644,
-                nlink: 1,
-            },
-            children: None,
-            write_generation: 0,
-        };
-        fs.inodes.insert(data);
-        // Register as child of root
-        if let Some(root) = fs.inodes.get_mut(ROOT_INO) {
-            if let Some(ref mut children) = root.children {
-                children.push(ino);
-            }
-        }
-        ino
-    }
-
-    /// Test 1 (RED): A file child with a `file_ipns_private_key` and an INVALID
-    /// public_key (zero vec — not a valid secp256k1 point) causes `wrap_key` to
-    /// fail.  `build_folder_metadata` MUST return `Err` whose message starts with
-    /// "Wrap IPNS key:" and must NOT silently return `Ok` with
-    /// `ipns_private_key_encrypted: None`.
-    ///
-    /// This test is RED under the broken `.ok()` code and GREEN after the fix.
-    #[tokio::test]
-    async fn build_folder_metadata_wrap_key_error_propagates_as_err() {
-        // Zero public_key is NOT a valid secp256k1 point → wrap_key will Err.
-        let private_key = Zeroizing::new(vec![0u8; 32]);
-        let invalid_public_key = Zeroizing::new(vec![0u8; 33]);
-        let mut fs = make_test_fs_with_keypair(private_key, invalid_public_key);
-
-        let _ino = insert_file_with_private_key(
-            &mut fs,
-            Some(Zeroizing::new(vec![1u8; 32])), // non-empty private key → triggers wrap
-            None,                                // no pre-wrapped hex → forces wrap path
-        );
-
-        let result = fs.build_folder_metadata(ROOT_INO);
-        assert!(
-            result.is_err(),
-            "build_folder_metadata MUST return Err when wrap_key fails; got Ok instead"
-        );
-        let err_msg = result.unwrap_err();
-        assert!(
-            err_msg.starts_with("Wrap IPNS key:"),
-            "Error message must start with 'Wrap IPNS key:'; got: {err_msg:?}"
-        );
-    }
-
-    /// Test 2: When `file_ipns_key_encrypted_hex` is already `Some(hex)`, the
-    /// pre-wrapped hex is carried through unchanged (the already-wrapped path is
-    /// not affected by this fix).
-    #[tokio::test]
-    async fn build_folder_metadata_pre_wrapped_hex_passes_through() {
-        let (private_key, public_key) = real_keypair();
-        let mut fs = make_test_fs_with_keypair(private_key, public_key);
-
-        let pre_wrapped_hex = "deadbeef1234".to_string();
-        let _ino = insert_file_with_private_key(
-            &mut fs,
-            None,                          // no raw private key
-            Some(pre_wrapped_hex.clone()), // pre-wrapped hex present
-        );
-
-        let result = fs.build_folder_metadata(ROOT_INO);
-        assert!(
-            result.is_ok(),
-            "build_folder_metadata must succeed when hex is pre-wrapped"
-        );
-        let (metadata, _, _, _, _) = result.unwrap();
-        let file_child = metadata.children.iter().find_map(|c| {
-            if let cipherbox_core::FolderChild::File(fp) = c {
-                Some(fp)
-            } else {
-                None
-            }
-        });
-        assert!(file_child.is_some(), "Must have one File child");
-        assert_eq!(
-            file_child.unwrap().ipns_private_key_encrypted.as_deref(),
-            Some(pre_wrapped_hex.as_str()),
-            "Pre-wrapped hex must be carried through unchanged"
-        );
-    }
-
-    /// Test 3: When the file has NEITHER a private key NOR a pre-wrapped hex,
-    /// `ipns_private_key_encrypted` is `None` and `build_folder_metadata` returns
-    /// `Ok` (the genuinely-absent path stays `None` — only the wrap-FAILURE path
-    /// becomes `Err`).
-    #[tokio::test]
-    async fn build_folder_metadata_absent_key_produces_none_not_err() {
-        let (private_key, public_key) = real_keypair();
-        let mut fs = make_test_fs_with_keypair(private_key, public_key);
-
-        let _ino = insert_file_with_private_key(
-            &mut fs, None, // no private key
-            None, // no pre-wrapped hex
-        );
-
-        let result = fs.build_folder_metadata(ROOT_INO);
-        assert!(
-            result.is_ok(),
-            "build_folder_metadata must succeed when key is absent"
-        );
-        let (metadata, _, _, _, _) = result.unwrap();
-        let file_child = metadata.children.iter().find_map(|c| {
-            if let cipherbox_core::FolderChild::File(fp) = c {
-                Some(fp)
-            } else {
-                None
-            }
-        });
-        assert!(file_child.is_some(), "Must have one File child");
-        assert!(
-            file_child.unwrap().ipns_private_key_encrypted.is_none(),
-            "ipns_private_key_encrypted must be None when no key is present"
-        );
-    }
 }
 
 /// Tests for `drain_refresh_completions` — the IPNS-refresh apply path and the
