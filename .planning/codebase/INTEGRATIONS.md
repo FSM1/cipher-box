@@ -11,7 +11,7 @@
   - SDK/Client: Kubo HTTP API via `apps/api/src/ipfs/`
   - Auth: None (local daemon)
   - Env: `IPFS_LOCAL_API_URL` (default `http://localhost:5001`), `IPFS_LOCAL_GATEWAY_URL` (default `http://localhost:8080`)
-  - CI: `ipfs/kubo:v0.40.0` service container
+  - CI: `ipfs/kubo:v0.42.0` service container
   - API Endpoints: `POST /ipfs/upload`, `GET /ipfs/:cid`, `POST /ipfs/unpin`
 
 - Delegated IPNS Routing - IPNS record publishing and resolution
@@ -81,7 +81,7 @@
 - IPFS (Kubo) - Decentralized encrypted file content storage
   - All stored content is ciphertext (zero-knowledge server)
   - Pinning managed by API (`pinned_cids` table tracks what to keep pinned)
-  - CI: `ipfs/kubo:v0.40.0` service container
+  - CI: `ipfs/kubo:v0.42.0` service container
 
 **Caching:**
 
