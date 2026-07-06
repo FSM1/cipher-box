@@ -1,0 +1,131 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "fc2eed31da2e",
+  "session_id": "60afe4f5-90e8-4017-b046-ab86ca19c540",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-06T00:33:17.407561Z",
+  "branch": "feat/sdk-owned-read-chain-and-resolved-folder-listings",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "4c3bc475a96e",
+  "token_usage": {
+    "input_tokens": 19609,
+    "cache_creation_tokens": 636015,
+    "cache_read_tokens": 9890675,
+    "output_tokens": 117979,
+    "api_call_count": 51
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-plan-phase-2026-07-05T22:58:51.387205Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "11b8c0a80fb6",
+      "timestamp": "2026-07-05T22:58:51.387205Z",
+      "native": {
+        "command": "/gsd-plan-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01LstRAXFpXPLKR7Dc1ovYvN",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "4c3bc475a96e",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 290,
+        "end": 291,
+        "entry_ids": [
+          "7c818dd5-33b0-40fe-9d44-09a605a0e033"
+        ],
+        "tool_use_id": "toolu_01LstRAXFpXPLKR7Dc1ovYvN"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01LstRAXFpXPLKR7Dc1ovYvN"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Plan and begin executing GSD roadmap phase 68.2 (SDK-owned read chain and resolved folder listings) end-to-end via /gsd-plan-phase then /gsd-execute-phase, and in parallel spin up a git worktree to start independent phase 69 (Rust FUSE/WinFsp) work.",
+    "outcome": "Phase 68.2 planning completed fully (research, VALIDATION.md, D-07 scope decision, pattern map, REQUIREMENTS registration, 12 plans/7 waves, plan-checker PASSED, all coverage gates green, all committed); execution began sequentially on the main tree with Wave 1 (68.2-01, the security-critical SDK read-path gate) independently verified complete (296/296 tests) and Wave 2 (68.2-02) dispatched. A clean origin/main-based worktree for phase 69 was also created and handed off for a separate session.",
+    "learnings": {
+      "repo": [
+        "The plan:pre UI capability gate only fires when the hook registry's `when` condition classifies the phase as a net-new UI surface; the lower-level ui-plan-gate check can report block:true even when no UI hook is active for the phase — only active hooks matter, not the raw check output.",
+        "Intel API-SURFACE extraction (§7.9) returns 0 symbols for this monorepo — it's HINT-only, so omit it from planner prompts rather than pass an empty/noise section.",
+        "The schema-gate planner contribution is orchestrator-evaluated: skip injecting it when the phase touches zero ORM/DB schema files (e.g., pure SDK/codec/web work).",
+        "PATTERNS.md (from the pattern-mapper hook) is not auto-committed — must be committed manually after the pattern-mapper agent returns.",
+        "worktree.baseRef defaults to 'head' (reason: baseref-head) for this repo's execute-phase, meaning executor worktrees fork from live HEAD (carrying all PLAN.md files), not from origin/main — verify this before dispatching worktree executors on an unmerged branch.",
+        "The gap-analysis.plan-post check's rendered output can contain control characters that break naive parsing; call the check directly rather than parsing the wrapped `rendered` field.",
+        "This pnpm monorepo requires each git worktree to run its own `pnpm install`, making per-wave worktree create/merge/cleanup expensive — for phases with mostly single-plan waves, sequential execution on the main tree is preferable and equally correct when the planner made same-wave plans file-disjoint.",
+        "packages/sdk/src/client.ts: enforceResolved (ROT-07 anti-rollback gate) is now wired at read-path sites resolvePublishedNode (~line 781) and dfsFindFolder child loop (~line 913), alongside the pre-existing write-path gate (~line 1156)."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 781,
+          "finding": "RotationHighWater.enforceResolved gate added to resolvePublishedNode (root resolve) as part of closing the SDK read-path zero-gating gap (RESEARCH Pitfall 2 / ROT-07), landed before any web service deletion."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 913,
+          "finding": "enforceResolved gate added to dfsFindFolder's child loop, same ROT-07 read-path closure as line 781."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 1156,
+          "finding": "Pre-existing write-path enforceResolved gate that the new read-path gates now parallel."
+        }
+      ],
+      "workflow": [
+        "For security-critical foundational plans, independently re-run the acceptance tests rather than trusting the subagent's self-reported PASS before advancing to the next wave.",
+        "When a genuine scope ambiguity is surfaced by research (e.g., D-07's literal wording sweeping in off-path files beyond the stated success criteria), stop and use AskUserQuestion to lock the decision into CONTEXT.md before the planner runs, rather than letting the planner guess.",
+        "For independent parallel roadmap phases, create a plain `git worktree add` off a fetched/verified origin/main (not EnterWorktree) so the new phase's session doesn't inherit in-progress planning commits from the branch already being driven in the main checkout.",
+        "Non-blocking plan-checker warnings (e.g., grep-only coverage on a redundant safety leg) should still be logged as a todo immediately, independent of whether the user chooses to proceed to execution."
+      ]
+    },
+    "friction": [
+      "`git fetch` failed from the sandboxed session (no network access to GitHub), requiring reliance on a last-known-good local origin/main ref that had to be manually verified as current.",
+      "gsd-tools commit helper repeatedly reports `commit_failed` as a false negative even when the commit verifiably lands in git log, requiring manual `git log` verification each time.",
+      "Intel API-SURFACE extraction returned 0 symbols for this monorepo, producing no useful signal for the planner prompt.",
+      "Post-planning gap-analysis check output contained control characters that broke the initial parsing attempt, requiring a fallback to calling the check directly."
+    ],
+    "open_items": [
+      "D-03's poll-invalidation leg has no dedicated automated test (only call-site grep coverage in Plan 09) — logged as todo 2026-07-06-d03-poll-invalidation-lacks-automated-coverage.md for gap closure after phase 68.2 completes.",
+      "Phase 69 worktree was created and handed off but planning (/gsd-discuss-phase 69, /gsd-plan-phase 69) has not yet started — user was advised to begin with discuss-phase due to an under-specified grant-root scope algorithm and an unresolved FUSE delete-authority-model question.",
+      "Offered but not yet performed: copying phase 68.2's CONTEXT.md and RESEARCH.md into the phase-69 worktree as reference material for the design-mirroring dependency.",
+      "Phase 68.2 execution is only 1/12 plans complete (Wave 1 done, Wave 2 dispatched) — Waves 3-7 (write facade, desync e2e, web rewire, store collapse, off-path pockets, service deletion + grep gate, mirror revert + full web-e2e) remain."
+    ]
+  }
+}
