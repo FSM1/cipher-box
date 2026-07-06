@@ -47,6 +47,13 @@ export type {
   LocalGrantRecord,
 } from './types';
 
+// SDK-owned resolved folder listings (SDK-READ-02, D-02) -- the single
+// per-child metadata answer returned by client.listFolder/listSharedFolder
+// and carried on folder:loaded/folder:updated/sharedFolder:updated events.
+// Type-only export: the web consumes ResolvedChild for rendering, never
+// constructs one itself (D-07).
+export type { ResolvedChild } from './folder-listing';
+
 // Shared-folder state (sibling tree keyed by shareId)
 export { SharedFolderTree } from './state/shared-folder-tree';
 
