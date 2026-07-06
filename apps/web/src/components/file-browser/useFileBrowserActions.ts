@@ -20,12 +20,9 @@ import {
 import type { SealedChildRef } from '@cipherbox/core';
 import { useDialogState } from '../../hooks/useDialogState';
 import { isImageFile, isPdfFile, isAudioFile, isVideoFile, isFileRef } from '../../utils/fileTypes';
-import { resolveKinds } from '../../lib/kind-cache';
 import { useFolderStore } from '../../stores/folder.store';
 import { useSyncStore } from '../../stores/sync.store';
 import { isExternalFileDrag } from '../../hooks/useDropUpload';
-import { resolveIpnsRecord } from '../../services/ipns.service';
-import { fetchAndDecryptMetadata } from '@cipherbox/sdk-core';
 import { getSdkClient } from '../../lib/sdk-provider';
 import { downloadFileFromIpns, triggerBrowserDownload } from '../../services/download.service';
 import { triggerSearchIndexRebuild } from '../../hooks/useSearch';
@@ -113,38 +110,26 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
     if (!rootFolder) return;
 
     try {
-      // Background sync's own resolve is a mutation-adjacent fail-closed surface
-      // (SequenceRegressionError/GenerationRegressionError, D-05). It is now wired
-      // through the same durable anti-rollback gate as the folder mutations
-      // (Gap 1 / SC#4), routed through the same classifier so a rejection
-      // surfaces the D-05 toast instead of failing silently. The folder store
-      // carries no generation field for root, so 0 is passed (matching the
-      // SDK client's own default when a folder's nodeGeneration is unknown).
-      const resolved = await runWithFailureUx(() =>
-        resolveIpnsRecord(rootIpnsName, {
-          generation: 0,
-          versionFloor: Number(rootFolder.sequenceNumber),
-        })
-      );
-      if (!resolved) return;
+      // Background sync's resolve now routes through the SDK's own gated read
+      // path (client.listFolder / client.getFolderMetadata, both backed by
+      // ensureFolderLoaded's ROT-07 durable anti-rollback floor) instead of
+      // the web's own un-gated resolveIpnsRecord + fetchAndDecryptMetadata
+      // call (SC#1, T-68.2-04). A gate rejection (SequenceRegressionError /
+      // GenerationRegressionError) is routed through the same
+      // runWithFailureUx classifier so it surfaces the D-05 toast instead of
+      // failing silently, matching the prior web-side gate's behavior.
+      const client = getSdkClient();
+      await runWithFailureUx(() => client.listFolder(rootIpnsName));
+      const metadata = await client.getFolderMetadata(rootIpnsName);
+      if (!metadata) return;
 
-      if (resolved.sequenceNumber <= rootFolder.sequenceNumber) return;
-
-      const metadata = await fetchAndDecryptMetadata(
-        resolved.cid,
-        rootFolder.folderKey,
-        getSdkClient().getContext()
-      );
-      // Node.children is optional (SealedChildRef[] | undefined); default to []
-      // T-68.1-33-01: this is the reload-gating direct inserter (immediate
-      // initial sync on FileBrowser mount) — warm the kind cache BEFORE
-      // projecting so a row is never interactable while its kind is
-      // unresolved. resolveKinds is best-effort and never rejects; the
-      // surrounding try/catch already covers a slow/failed resolve.
+      // Node.children is optional (SealedChildRef[] | undefined); default to
+      // []. T-68.1-33-01's kind-cache warming step is removed here (SC#2) --
+      // kind now arrives pre-resolved on ResolvedChild via the listFolder
+      // call above; the store's own children field keeps the raw
+      // SealedChildRef[] the write path needs (D-09).
       const syncChildren = metadata.children ?? [];
-      await resolveKinds(syncChildren);
       useFolderStore.getState().updateFolderChildren('root', syncChildren);
-      useFolderStore.getState().updateFolderSequence('root', resolved.sequenceNumber);
       triggerSearchIndexRebuild();
     } catch (err) {
       logger.error('[FileBrowser] Sync refresh failed:', err);
