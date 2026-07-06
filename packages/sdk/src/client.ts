@@ -16,6 +16,7 @@
 import type { SdkContext, ProgressCallback, DownloadProgressCallback } from '@cipherbox/sdk-core';
 import type { PinningProvider, ExternalEncryptFn } from '@cipherbox/sdk-core';
 import type { UploadResult } from '@cipherbox/sdk-core';
+import type { TeeKeys } from '@cipherbox/sdk-core';
 import * as sdkCore from '@cipherbox/sdk-core';
 import { selectEncryptionMode } from '@cipherbox/sdk-core';
 import {
@@ -51,6 +52,21 @@ import {
   unsealChildWriteKey,
   unsealNode,
 } from '@cipherbox/core';
+// D-07 full-boundary facade primitives (68.2-04): auth-bootstrap/vault crypto
+// (useAuth.ts) and device-registry crypto (device-registry.service.ts) --
+// these are the @cipherbox/core symbols the web imports at runtime today;
+// mediating them here lets the cutover wave (Plan 10) stop importing
+// @cipherbox/core directly for vault/registry operations.
+import {
+  initializeVault,
+  encryptVaultKeys,
+  serializeVaultBlobV3,
+  deserializeVaultBlobV3,
+  deriveRegistryIpnsKeypair,
+  encryptRegistry,
+  decryptRegistry,
+} from '@cipherbox/core';
+import type { VaultInit, DeviceRegistry } from '@cipherbox/core';
 import type {
   CipherBoxClientConfig,
   FolderState,
@@ -3604,6 +3620,149 @@ export class CipherBoxClient {
   async unpin(cid: string): Promise<void> {
     return this.withOperation('unpin', async () => {
       await sdkCore.unpinFromIpfs(this.ctx, cid);
+    });
+  }
+
+  // ---- Vault bootstrap (D-07 full boundary: auth-bootstrap crypto facade) ----
+
+  /**
+   * Generate a brand-new vault's root keys for a first-time user.
+   *
+   * Thin passthrough to `@cipherbox/core`'s `initializeVault` -- mints two
+   * independent random `rootReadKey`/`rootWriteKey` AES keys plus the
+   * deterministic `rootIpnsKeypair` derived from `userPrivateKey`. The
+   * returned `VaultInit` is handed to the caller, who becomes its terminal
+   * owner (D-09): this facade does not zero anything on success, matching
+   * `initializeVault`'s own passthrough contract.
+   *
+   * @param userPrivateKey - 32-byte secp256k1 private key (caller-owned, never zeroed here)
+   * @returns Freshly minted `VaultInit` (rootReadKey, rootWriteKey, rootIpnsKeypair)
+   */
+  async bootstrapVaultKeys(userPrivateKey: Uint8Array): Promise<VaultInit> {
+    return this.withOperation('bootstrapVaultKeys', async () => {
+      return initializeVault(userPrivateKey);
+    });
+  }
+
+  /**
+   * ECIES-wrap a `VaultInit`'s root keys under `userPublicKey` and serialize
+   * them as the v3 vault key blob ready for IPFS upload.
+   *
+   * Combines `@cipherbox/core`'s `encryptVaultKeys` + `serializeVaultBlobV3`
+   * into a single facade call (mirrors the exact two-step sequence
+   * `useAuth.ts`'s new-user path performs today). The returned blob carries
+   * only ciphertext -- no zeroing needed.
+   *
+   * @param vault - Plaintext `VaultInit` from `bootstrapVaultKeys`
+   * @param userPublicKey - 65-byte uncompressed secp256k1 public key
+   * @returns The v3 vault key blob bytes
+   */
+  async serializeVault(vault: VaultInit, userPublicKey: Uint8Array): Promise<Uint8Array> {
+    return this.withOperation('serializeVault', async () => {
+      const encrypted = await encryptVaultKeys(vault, userPublicKey);
+      return serializeVaultBlobV3(encrypted.encryptedRootReadKey, encrypted.encryptedRootWriteKey);
+    });
+  }
+
+  /**
+   * Deserialize a v3 vault key blob fetched from IPFS and ECIES-unwrap both
+   * root keys under `userPrivateKey`.
+   *
+   * Combines `@cipherbox/core`'s `deserializeVaultBlobV3` with two
+   * `unwrapKey` calls (mirrors `useAuth.ts`'s existing-user load path). The
+   * caller becomes the terminal owner of the returned plaintext keys
+   * (D-09) -- but if the SECOND `unwrapKey` call fails after the first
+   * succeeds, the already-unwrapped `rootReadKey` is zeroed before
+   * propagating the error so a half-unwrapped vault key never lingers in
+   * memory (T-68.2-09).
+   *
+   * @param blobBytes - The v3 vault key blob fetched from IPFS
+   * @param userPrivateKey - 32-byte secp256k1 private key (caller-owned, never zeroed here)
+   * @returns The decrypted `rootReadKey`/`rootWriteKey`
+   */
+  async deserializeVault(
+    blobBytes: Uint8Array,
+    userPrivateKey: Uint8Array
+  ): Promise<{ rootReadKey: Uint8Array; rootWriteKey: Uint8Array }> {
+    return this.withOperation('deserializeVault', async () => {
+      const { encryptedRootReadKey, encryptedRootWriteKey } = deserializeVaultBlobV3(blobBytes);
+      const rootReadKey = await unwrapKey(encryptedRootReadKey, userPrivateKey);
+      try {
+        const rootWriteKey = await unwrapKey(encryptedRootWriteKey, userPrivateKey);
+        return { rootReadKey, rootWriteKey };
+      } catch (error) {
+        clearBytes(rootReadKey);
+        throw error;
+      }
+    });
+  }
+
+  /**
+   * Publish a brand-new user's empty root Node (D-03 / WEB-01/WEB-02).
+   *
+   * Thin passthrough to `sdkCore.publishEmptyRootNode` with `this.ctx`
+   * injected -- the sdk-core primitive already documents that it does NOT
+   * zero `rootIpnsKeypair.privateKey`/`rootReadKey`/`rootWriteKey` (caller
+   * is the terminal owner, D-09); this facade preserves that contract.
+   *
+   * @returns The root's IPNS name, the underlying Node's UUID, and sequenceNumber 1n
+   */
+  async publishEmptyRootNode(params: {
+    rootIpnsKeypair: { publicKey: Uint8Array; privateKey: Uint8Array };
+    rootReadKey: Uint8Array;
+    rootWriteKey: Uint8Array;
+    teeKeys?: TeeKeys;
+  }): Promise<{ ipnsName: string; nodeId: string; sequenceNumber: bigint }> {
+    return this.withOperation('publishEmptyRootNode', async () => {
+      return sdkCore.publishEmptyRootNode({ ...params, ctx: this.ctx });
+    });
+  }
+
+  // ---- Device registry (D-07 full boundary: registry crypto facade) ----
+
+  /**
+   * Derive the deterministic Ed25519 IPNS keypair for the device registry.
+   *
+   * Thin passthrough to `@cipherbox/core`'s `deriveRegistryIpnsKeypair` --
+   * mints a fresh keypair from `userPrivateKey` (caller-owned) and returns
+   * it to the caller, who becomes its terminal owner (D-09).
+   *
+   * @param userPrivateKey - 32-byte secp256k1 private key (caller-owned, never zeroed here)
+   */
+  async deriveRegistryIpnsKeypair(
+    userPrivateKey: Uint8Array
+  ): Promise<{ privateKey: Uint8Array; publicKey: Uint8Array; ipnsName: string }> {
+    return this.withOperation('deriveRegistryIpnsKeypair', async () => {
+      return deriveRegistryIpnsKeypair(userPrivateKey);
+    });
+  }
+
+  /**
+   * Encrypt (ECIES) a `DeviceRegistry` for IPFS storage.
+   *
+   * Thin passthrough to `@cipherbox/core`'s `encryptRegistry`. The
+   * underlying primitive already zeroes its own intermediate plaintext
+   * JSON buffer in a `finally` block -- no additional zeroing needed here.
+   */
+  async encryptRegistry(registry: DeviceRegistry, userPublicKey: Uint8Array): Promise<Uint8Array> {
+    return this.withOperation('encryptRegistry', async () => {
+      return encryptRegistry(registry, userPublicKey);
+    });
+  }
+
+  /**
+   * Decrypt (ECIES) a `DeviceRegistry` blob fetched from IPFS.
+   *
+   * Thin passthrough to `@cipherbox/core`'s `decryptRegistry`. The
+   * underlying primitive already zeroes its own intermediate plaintext
+   * buffer in a `finally` block -- no additional zeroing needed here.
+   */
+  async decryptRegistry(
+    encrypted: Uint8Array,
+    userPrivateKey: Uint8Array
+  ): Promise<DeviceRegistry> {
+    return this.withOperation('decryptRegistry', async () => {
+      return decryptRegistry(encrypted, userPrivateKey);
     });
   }
 

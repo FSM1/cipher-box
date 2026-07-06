@@ -127,3 +127,9 @@ export {
   type TreeNode,
 } from '@cipherbox/sdk-core';
 export { selectEncryptionMode } from '@cipherbox/sdk-core';
+
+// D-07 full-boundary facade types (68.2-04) -- the web consumes these to call
+// client.bootstrapVaultKeys/serializeVault/deserializeVault (vault-bootstrap)
+// and client.deriveRegistryIpnsKeypair/encryptRegistry/decryptRegistry
+// (device-registry) without importing @cipherbox/core directly.
+export type { VaultInit, DeviceRegistry } from '@cipherbox/core';
