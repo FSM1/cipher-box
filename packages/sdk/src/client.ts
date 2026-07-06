@@ -855,7 +855,17 @@ export class CipherBoxClient {
     const resolved = await resolveChildren(children, parentReadKey, (childRef) =>
       this.gatedResolveChild(childRef)
     );
-    this.listingCache.set(ipnsName, { sequenceNumber, children: resolved });
+    // Do NOT cache a PARTIAL listing. `resolveChildren` skips any child it
+    // can't currently resolve (transient network error, ROT-07 rejection, bad
+    // AEAD -- as well as a genuinely revoked/absent hop). Caching an incomplete
+    // result at this sequenceNumber would pin it until a remote write advances
+    // the sequence or the client reloads -- even the `forceResolve` poll/nav
+    // paths reuse a same-sequence entry (they refresh the folder's OWN sequence,
+    // not its children). Skipping the cache-set when a child was dropped lets a
+    // later resolve reattempt it and self-heal on network recovery.
+    if (resolved.length === children.length) {
+      this.listingCache.set(ipnsName, { sequenceNumber, children: resolved });
+    }
     return resolved;
   }
 

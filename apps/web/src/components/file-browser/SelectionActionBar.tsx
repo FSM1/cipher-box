@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import type { SealedChildRef } from '@cipherbox/core';
 import type { ResolvedChild } from '@cipherbox/sdk';
 import { isFileRefResolved } from '../../utils/fileTypes';
@@ -41,7 +42,10 @@ export function SelectionActionBar({
   // full-workflow.spec.ts 4.6: "2 files selected" / "2 files, 1 folder selected".
   // 68.2-15: raw `selectedItems` carry no `.kind`; classify against the
   // SDK-resolved listing keyed by ipnsName.
-  const resolvedByIpnsName = new Map(resolvedChildren.map((r) => [r.ipnsName, r]));
+  const resolvedByIpnsName = useMemo(
+    () => new Map(resolvedChildren.map((r) => [r.ipnsName, r])),
+    [resolvedChildren]
+  );
   const fileCount = selectedItems.filter((it) => isFileRefResolved(it, resolvedByIpnsName)).length;
   const folderCount = selectedItems.length - fileCount;
   const parts: string[] = [];
