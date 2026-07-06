@@ -29,12 +29,23 @@ export async function deleteAccountViaPage(page: Page): Promise<void> {
             ? window.location.origin.replace('app.', 'api.')
             : 'http://localhost:3000');
 
-      // Refresh to get access token (uses HTTP-only cookie)
-      const refreshRes = await fetch(`${apiUrl}/auth/refresh`, {
-        method: 'POST',
-        credentials: 'include',
-      });
-      if (!refreshRes.ok) return { ok: false, step: 'refresh', status: refreshRes.status };
+      // Refresh to get access token (uses HTTP-only cookie). Refresh tokens are
+      // single-use: at teardown the app page may still be polling IPNS and can
+      // fire its own /auth/refresh, rotating the cookie and making this raw call
+      // lose the race with a 401. Retry a few times -- the browser holds the
+      // freshly rotated cookie once the race settles.
+      let refreshRes: Response | undefined;
+      for (let attempt = 0; attempt < 4; attempt++) {
+        refreshRes = await fetch(`${apiUrl}/auth/refresh`, {
+          method: 'POST',
+          credentials: 'include',
+        });
+        if (refreshRes.ok) break;
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      if (!refreshRes || !refreshRes.ok) {
+        return { ok: false, step: 'refresh', status: refreshRes ? refreshRes.status : 0 };
+      }
       const { accessToken } = await refreshRes.json();
 
       const deleteRes = await fetch(`${apiUrl}/auth/account`, {

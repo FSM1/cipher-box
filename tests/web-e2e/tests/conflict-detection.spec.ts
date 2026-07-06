@@ -13,7 +13,6 @@ import { FileListPage } from '../page-objects/file-browser/file-list.page';
 import { UploadZonePage } from '../page-objects/file-browser/upload-zone.page';
 import { CreateFolderDialogPage } from '../page-objects/dialogs/create-folder-dialog.page';
 import { ContextMenuPage } from '../page-objects/file-browser/context-menu.page';
-import { ConfirmDialogPage } from '../page-objects/dialogs/confirm-dialog.page';
 import { TextEditorDialogPage } from '../page-objects/dialogs/text-editor-dialog.page';
 
 /**
@@ -43,7 +42,6 @@ test.describe.serial('Conflict Detection', () => {
   let uploadZone: UploadZonePage;
   let createFolderDialog: CreateFolderDialogPage;
   let contextMenu: ContextMenuPage;
-  let confirmDialog: ConfirmDialogPage;
   let textEditorDialog: TextEditorDialogPage;
 
   let account: PrivateKeyAccount;
@@ -72,7 +70,6 @@ test.describe.serial('Conflict Detection', () => {
     uploadZone = new UploadZonePage(page);
     createFolderDialog = new CreateFolderDialogPage(page);
     contextMenu = new ContextMenuPage(page);
-    confirmDialog = new ConfirmDialogPage(page);
     textEditorDialog = new TextEditorDialogPage(page);
 
     // Login via wallet (mock wallet auto-approves connect + SIWE)
@@ -105,29 +102,16 @@ test.describe.serial('Conflict Detection', () => {
       await closeConflictDevice(deviceB);
     }
 
-    // Clean up remote items created during tests (runs even if earlier serial tests fail)
-    try {
-      const itemsToDelete = [...createdItems].reverse();
-      for (const item of itemsToDelete) {
-        const isVisible = await fileList.isItemVisible(item.name).catch(() => false);
-        if (!isVisible) continue;
-
-        await fileList.rightClickItem(item.name);
-        await contextMenu.waitForOpen();
-        await contextMenu.clickDelete();
-        await confirmDialog.waitForOpen();
-        await confirmDialog.clickConfirm();
-        await fileList.waitForItemToDisappear(item.name, { timeout: 30000 });
-      }
-    } catch (err) {
-      // Best-effort cleanup -- don't fail the suite if cleanup itself fails
-      console.warn('Cleanup of conflict test items failed:', err);
-    }
-
     cleanupTestFiles();
 
-    // Delete test account before closing context (page must still be navigable)
-    // Both primary and deviceB share the same wallet identity, so deleting once suffices.
+    // Delete the test account before closing the context (page must still be
+    // navigable). deleteAccount cascades server-side and removes every folder,
+    // file, and IPNS record for this identity, so there is no need to delete the
+    // created items through the UI first. That redundant per-item loop used to
+    // blow the 60s afterAll budget here: because this is the conflict suite,
+    // device A's local sequence is stale, so each UI delete triggered a
+    // 409 -> auto-resync -> retry cycle under 4-worker API rate-limiting.
+    // Both primary and deviceB share the same wallet identity, so one delete suffices.
     if (page) {
       await deleteAccountViaPage(page);
     }
