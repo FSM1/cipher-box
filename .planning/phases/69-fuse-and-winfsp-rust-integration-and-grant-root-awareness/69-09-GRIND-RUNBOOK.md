@@ -134,6 +134,15 @@ Remaining is a refresh-pipeline REDESIGN + live per-file publish BUILD + big tes
       reshape PendingRefresh (events.rs) off FolderMetadata; drain_refresh_completions (fs.rs); redefine metadata_cache (cache.rs);
       migrate events.rs/metadata.rs/fs.rs raw resolve_ipns_verified → list_folder_owned/fetch_node_gated (SC#6). metadata.rs 17
       FolderMetadata refs. LEAVE revoke_shares_blocking/spawn_file_meta_reencrypt/publish_file_metadata (69-13).
+## SLICE 5b OUTCOME ✅ LIB GREEN. commits 68c8b5d93(a Clone RotationHighWater) 28328fb0e(b read glue) 9db2016a2(c
+publish_file_node first+CAS, publish_file_metadata untouched) da5e158a9(d refresh pipeline). cargo check -p cipherbox-fuse
+GREEN; sdk green 132; ecies greps empty. Workspace RED = ONLY cipherbox-desktop (15 errs: InodeKind missing read_key/write_key
++ replay_for_vault caller sig). fuse test-compile 149. SC#6: read-path raw resolves gone from events/fs; metadata.rs retains
+TWO out-of-scope raw resolves — :472 spawn_bin_entry_publish (legacy recycle-bin, not node/v3) + :648 resolve_and_fetch_file_meta
+(only spawn_file_meta_reencrypt/69-13 calls it) — SC#6 gate must ALLOWLIST these two + resolve_ipns_for_replay (replay/publish.rs).
+publish_file_node in content_ops.rs; apply_owned_children(sync); PendingRefresh::Success{children:Vec<ResolvedOwnedChild>};
+metadata_cache = per-ipns freshness+cid marker (set(ipns,cid)). E2E flag+: metadata_cache no longer unpins old parent CID (GC-able orphans).
+
 - **Slice 5c — desktop + TEST-module + SC#6 gate → FULL green boundary.**
   desktop mod.rs/prepopulate.rs root population (list_folder_owned, id=uuid_from_ino(ROOT_INO)) + replay_for_vault caller sig
   (journal,api,journal_dir:PathBuf,root_read_key:&[u8;32],root_write_key:&[u8;32],root_ipns_name,coordinator,tee_public_key,tee_key_epoch);
