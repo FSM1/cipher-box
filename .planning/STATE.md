@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
-current_phase: 68.1
-current_phase_name: web-client-runtime-integration
+current_phase: 68.2
+current_phase_name: sdk-owned-read-chain-and-resolved-folder-listings
 status: executing
 stopped_at: Phase 68.2 context gathered
-last_updated: "2026-07-05T22:56:40.798Z"
-last_activity: 2026-07-02
-last_activity_desc: Phase 68.1 execution started
+last_updated: "2026-07-06T00:14:02.487Z"
+last_activity: 2026-07-05
+last_activity_desc: Phase 68.2 execution started
 progress:
   total_phases: 11
   completed_phases: 9
-  total_plans: 98
-  completed_plans: 98
+  total_plans: 110
+  completed_plans: 99
   percent: 82
 ---
 
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-27)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 68.1 — web-client-runtime-integration
+**Current focus:** Phase 68.2 — sdk-owned-read-chain-and-resolved-folder-listings
 
 ## Current Position
 
-Phase: 68.1 (web-client-runtime-integration) — EXECUTING
-Plan: 4 of 22
+Phase: 68.2 (sdk-owned-read-chain-and-resolved-folder-listings) — EXECUTING
+Plan: 2 of 12
 Status: Ready to execute
-Last activity: 2026-07-02 — Phase 68.1 execution started
+Last activity: 2026-07-05 — Phase 68.2 execution started
 
 Progress: `██████████` 79 / 79 plans (100%)
 
@@ -234,6 +234,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 68.1 P17 | 45min | 2 tasks | 1 files |
 | Phase 68.1 P18 | 12min | 2 tasks | 4 files |
 | Phase 68.1 P19 | 11min | 2 tasks | 7 files |
+| Phase 68.2 P01 | 25min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -480,6 +481,8 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: [Phase 68.1-18]: resolveShareWriteDescriptor mirrors resolveFileWriteChainKeys' write-key walk; returns hex-wrapped writeDescriptorRef only, raw writeKey never leaves the SDK
 - [Phase ?]: [Phase 68.1-18]: resolveParentIpnsName translates useFolderNavigation's 'root' sentinel to the real root IPNS name for SDK write-chain calls
 - [Phase ?]: [Phase 68.1-19]: UpdateGrantDto write-toggle uses explicit clearWriteDescriptor boolean (not empty-string sentinel) as the downgrade clear-signal; mutually exclusive with writeDescriptorRef (BadRequestException if both supplied); omitting both leaves writeDescriptorRef untouched for existing read-only-rotation callers (owner-reconcile)
+- [Phase ?]: 68.2-01: read-path gate mirrors write-path gate but sources generation from childRef.generation (parent SealedChildRef mirror) for children, and in-memory folderTree nodeGeneration for root (no parent mirror exists)
+- [Phase ?]: 68.2-01: getWriteBodyParams intentionally left ungated per D-05 -- this plan is read-path only
 
 ## Operator Next Steps
 
@@ -487,10 +490,10 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-05T22:56:40.789Z
+**Last session:** 2026-07-06T00:13:11.397Z
 **Stopped at:** Phase 68.2 context gathered
 **Resume file:** 
-.planning/phases/68.2-sdk-owned-read-chain-and-resolved-folder-listings/68.2-CONTEXT.md
+None
 
 ### Blockers
 
