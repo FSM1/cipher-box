@@ -1,0 +1,15 @@
+//! Unified Node model (`node/v3`) — Rust twin of `packages/core/src/node/*.ts`.
+//!
+//! This module is ADDITIVE alongside the legacy `crate::folder` types; the
+//! clean D-04 cutover + call-site migration lands in the 69-10 plan.
+
+mod decode;
+mod encode;
+mod types;
+
+pub use decode::{decode_node, decode_published_node};
+pub use encode::{encode_node, encode_published_node};
+pub use types::{
+    Node, NodeContent, NodeError, NodeKind, NodeWriteBody, PublishedNode, SealedChildRef,
+    VersionEntry, WriteChildRef,
+};
