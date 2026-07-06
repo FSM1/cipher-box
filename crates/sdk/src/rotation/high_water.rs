@@ -77,6 +77,11 @@ pub enum RotationError {
         field: &'static str,
         value: i64,
     },
+    /// Propagated verbatim from an injected `rotate` closure (e.g.
+    /// `rotation::scope::maybe_rotate_on_scope_exit`) when the underlying
+    /// `rotate_read_from_node` call fails. Fail-closed: never swallowed.
+    #[error("Rotation failed: {0}")]
+    RotateFailed(String),
 }
 
 /// Validates a live input or stored candidate value. Fail-closed (V5):
