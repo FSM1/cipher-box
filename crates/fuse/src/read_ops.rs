@@ -170,31 +170,43 @@ pub(crate) mod implementation {
         // OR if the parent folder metadata is stale and needs a background refresh.
         // This mirrors readdir's staleness check so that file access (stat, open)
         // also triggers metadata refresh, not only directory listings.
-        let (needs_load, needs_refresh) = {
+        // node/v3 (69-09 Slice 5b(d)): refresh needs the folder's symmetric
+        // read_key + write_key for list_folder_owned (not a legacy folder_key).
+        type RefreshTarget = (String, [u8; 32], [u8; 32]);
+        let (needs_load, needs_refresh): (Option<RefreshTarget>, Option<RefreshTarget>) = {
             if let Some(parent_inode) = fs.inodes.get(parent) {
                 match &parent_inode.kind {
                     InodeKind::Folder {
                         children_loaded,
                         ipns_name,
-                        folder_key,
+                        read_key,
+                        write_key,
                         ..
                     } => {
                         if !children_loaded {
-                            (Some((ipns_name.clone(), folder_key.clone())), None)
+                            (Some((ipns_name.clone(), **read_key, **write_key)), None)
                         } else if fs.metadata_cache.get(ipns_name).is_none() {
-                            (None, Some((ipns_name.clone(), folder_key.clone())))
+                            (None, Some((ipns_name.clone(), **read_key, **write_key)))
                         } else {
                             (None, None)
                         }
                     }
-                    InodeKind::Root { ipns_name, .. } => {
-                        let stale = ipns_name.as_ref().and_then(|name| {
-                            if fs.metadata_cache.get(name).is_none() {
-                                Some((name.clone(), fs.root_folder_key.clone()))
-                            } else {
-                                None
-                            }
-                        });
+                    InodeKind::Root {
+                        ipns_name,
+                        read_key,
+                        write_key,
+                        ..
+                    } => {
+                        let name = if ipns_name.is_empty() {
+                            fs.root_ipns_name.clone()
+                        } else {
+                            ipns_name.clone()
+                        };
+                        let stale = if !name.is_empty() && fs.metadata_cache.get(&name).is_none() {
+                            Some((name, **read_key, **write_key))
+                        } else {
+                            None
+                        };
                         (None, stale)
                     }
                     _ => (None, None),
@@ -206,8 +218,8 @@ pub(crate) mod implementation {
         };
 
         // Non-blocking stale metadata refresh (same as readdir's staleness check)
-        if let Some((ipns_name, folder_key)) =
-            needs_refresh.filter(|(n, _)| !fs.refreshing_metadata.contains(n))
+        if let Some((ipns_name, read_key, write_key)) =
+            needs_refresh.filter(|(n, _, _)| !fs.refreshing_metadata.contains(n))
         {
             fs.refreshing_metadata.insert(ipns_name.clone());
             crate::spawn_metadata_refresh(
@@ -216,13 +228,15 @@ pub(crate) mod implementation {
                 fs.refresh_tx.clone(),
                 parent,
                 ipns_name,
-                folder_key,
+                read_key,
+                write_key,
+                fs.high_water.clone(),
             );
         }
 
         // Non-blocking lazy load: fire background fetch
-        if let Some((ipns_name, folder_key)) =
-            needs_load.filter(|(n, _)| !fs.refreshing_metadata.contains(n))
+        if let Some((ipns_name, read_key, write_key)) =
+            needs_load.filter(|(n, _, _)| !fs.refreshing_metadata.contains(n))
         {
             fs.refreshing_metadata.insert(ipns_name.clone());
             crate::spawn_metadata_refresh(
@@ -231,7 +245,9 @@ pub(crate) mod implementation {
                 fs.refresh_tx.clone(),
                 parent,
                 ipns_name,
-                folder_key,
+                read_key,
+                write_key,
+                fs.high_water.clone(),
             );
             reply.error(libc::ENOENT);
             return;

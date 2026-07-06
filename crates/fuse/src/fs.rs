@@ -389,19 +389,24 @@ impl CipherBoxFS {
         let cutoff = std::time::Instant::now() - std::time::Duration::from_secs(30);
         self.mutated_folders.retain(|_, ts| *ts > cutoff);
         while let Ok(refresh) = self.refresh_rx.try_recv() {
-            let (ino, ipns_name, metadata, cid) = match refresh {
+            let (ino, ipns_name, children) = match refresh {
                 PendingRefresh::Success {
                     ino,
                     ipns_name,
-                    metadata,
-                    cid,
-                } => (ino, ipns_name, metadata, cid),
+                    children,
+                } => (ino, ipns_name, children),
                 PendingRefresh::Failure { ipns_name } => {
                     self.refreshing_metadata.remove(&ipns_name);
                     continue;
                 }
             };
             self.refreshing_metadata.remove(&ipns_name);
+            // node/v3 (69-09 Slice 5b(d)): the cache is now a pure freshness marker
+            // (no metadata payload); record the refresh so staleness checks skip a
+            // re-spawn within the TTL. The old-CID for unpin is not surfaced by the
+            // gated owned resolve, so pass an empty cid (best-effort — E2E flag:
+            // stale parent metadata CIDs may accumulate as GC-able orphan pins).
+            self.metadata_cache.set(&ipns_name, String::new());
             if self.mutated_folders.contains_key(&ino) || self.publish_queue.contains_key(&ino) {
                 // This folder has pending local mutations/publishes. Do NOT rebuild
                 // its structure from remote metadata -- that would clobber the local
@@ -411,171 +416,128 @@ impl CipherBoxFS {
                 // genuine remote edits for re-resolution -- local mutations (local
                 // mtime >= remote) are left untouched -- then fall through to the
                 // shared resolution-spawn block below.
-                self.metadata_cache.set(&ipns_name, metadata.clone(), cid);
                 self.inodes
-                    .mark_remotely_edited_files_unresolved(ino, &metadata);
+                    .mark_remotely_edited_files_unresolved(ino, &children);
             } else {
-                self.metadata_cache
-                    .set(&ipns_name, metadata.clone(), cid.clone());
-                if let Err(e) = self.inodes.populate_folder(
-                    ino,
-                    &metadata,
-                    &self.private_key,
-                    &self.public_key,
-                    true,
-                ) {
-                    log::warn!("Drain refresh apply failed for ino {}: {}", ino, e);
-                }
+                // Synchronous apply of the owned children the background task
+                // already fetched (async-fetch / sync-apply split).
+                self.inodes.apply_owned_children(ino, children, true);
             }
             // Spawn async resolution for unresolved FilePointers in this folder.
             // Covers both the freshly-populated path and the locally-mutating
             // remote-edit path (marked just above).
             let unresolved = self.inodes.get_unresolved_file_pointers_for_parent(ino);
             if !unresolved.is_empty() {
-                let folder_key = self.inodes.get(ino).and_then(|i| match &i.kind {
-                    crate::inode::InodeKind::Root { .. } => Some(self.root_folder_key.to_vec()),
-                    crate::inode::InodeKind::Folder { folder_key, .. } => Some(folder_key.to_vec()),
-                    _ => None,
-                });
-                if let Some(fk) = folder_key {
-                    let fk_arr = match <[u8; 32]>::try_from(fk.as_slice()) {
-                        Ok(arr) => arr,
-                        Err(_) => {
-                            log::warn!(
-                                "FilePointer resolution skipped for folder ino {}: folder_key length is {} (expected 32)",
-                                ino,
-                                fk.len()
-                            );
-                            continue;
-                        }
+                // Cap concurrent resolution tasks to avoid network thrashing in large folders.
+                // D-09: entries exceeding the cap are pushed onto pending_fp_resolves (a
+                // VecDeque) instead of being silently dropped. The queue is drained first
+                // on each refresh cycle so nothing is lost between cycles.
+                const MAX_CONCURRENT_FP_RESOLVES: usize = 10;
+                let mut spawned = 0;
+                // Inodes staged or re-queued THIS cycle. resolving_file_pointers is only
+                // updated in the spawn loop below (after both passes), so without this a
+                // drained entry and the same still-unresolved fresh entry would both be
+                // staged → two resolve tasks racing on one inode. Also prevents re-queueing
+                // an inode already sitting in pending_fp_resolves.
+                let mut scheduled_this_cycle = std::collections::HashSet::<u64>::new();
+
+                // Drain pending_fp_resolves first (entries that overflowed in a prior cycle).
+                // node/v3: each carries the FILE's own symmetric read_key (5b(d)).
+                let mut pending_drain: Vec<(u64, String, [u8; 32])> = Vec::new();
+                while let Some(entry) = self.pending_fp_resolves.pop_front() {
+                    if self.resolving_file_pointers.contains(&entry.0)
+                        || !scheduled_this_cycle.insert(entry.0)
+                    {
+                        continue; // Already in-flight, or already drained this cycle
+                    }
+                    if spawned >= MAX_CONCURRENT_FP_RESOLVES {
+                        // Still over cap — put it back at the front and stop draining
+                        scheduled_this_cycle.remove(&entry.0);
+                        self.pending_fp_resolves.push_front(entry);
+                        break;
+                    }
+                    pending_drain.push(entry);
+                    spawned += 1;
+                }
+
+                // Build the full list of entries to spawn: drained-from-queue first,
+                // then fresh unresolved entries (up to the remaining cap). Each fresh
+                // file carries its OWN node/v3 read_key (recovered from the inode).
+                // Entries exceeding the cap are pushed onto pending_fp_resolves.
+                for (fp_ino, fp_ipns) in unresolved {
+                    if self.resolving_file_pointers.contains(&fp_ino)
+                        || scheduled_this_cycle.contains(&fp_ino)
+                    {
+                        continue; // Already in-flight, or already staged/queued this cycle
+                    }
+                    // node/v3: recover this file's OWN symmetric read_key to unseal its
+                    // node read-body. Skip if the inode is gone or not a file.
+                    let read_key = match self.inodes.get(fp_ino).map(|i| &i.kind) {
+                        Some(crate::inode::InodeKind::File { read_key, .. }) => **read_key,
+                        _ => continue,
                     };
-                    // Cap concurrent resolution tasks to avoid network thrashing in large folders.
-                    // D-09: entries exceeding the cap are pushed onto pending_fp_resolves (a
-                    // VecDeque) instead of being silently dropped. The queue is drained first
-                    // on each refresh cycle so nothing is lost between cycles.
-                    const MAX_CONCURRENT_FP_RESOLVES: usize = 10;
-                    let mut spawned = 0;
-                    // Inodes staged or re-queued THIS cycle. resolving_file_pointers is only
-                    // updated in the spawn loop below (after both passes), so without this a
-                    // drained entry and the same still-unresolved fresh entry would both be
-                    // staged → two resolve tasks racing on one inode. Also prevents re-queueing
-                    // an inode already sitting in pending_fp_resolves.
-                    let mut scheduled_this_cycle = std::collections::HashSet::<u64>::new();
-
-                    // Drain pending_fp_resolves first (entries that overflowed in a prior cycle).
-                    // Each carries the folder key of the folder it originated from.
-                    let mut pending_drain: Vec<(u64, String, [u8; 32])> = Vec::new();
-                    while let Some(entry) = self.pending_fp_resolves.pop_front() {
-                        if self.resolving_file_pointers.contains(&entry.0)
-                            || !scheduled_this_cycle.insert(entry.0)
-                        {
-                            continue; // Already in-flight, or already drained this cycle
-                        }
-                        if spawned >= MAX_CONCURRENT_FP_RESOLVES {
-                            // Still over cap — put it back at the front and stop draining
-                            scheduled_this_cycle.remove(&entry.0);
-                            self.pending_fp_resolves.push_front(entry);
-                            break;
-                        }
-                        pending_drain.push(entry);
-                        spawned += 1;
-                    }
-
-                    // Build the full list of entries to spawn: drained-from-queue first,
-                    // then fresh unresolved entries (up to the remaining cap). Fresh entries
-                    // belong to the folder being refreshed this cycle, so they carry fk_arr.
-                    // Entries exceeding the cap are pushed onto pending_fp_resolves with fk_arr.
-                    for (fp_ino, fp_ipns) in unresolved {
-                        if self.resolving_file_pointers.contains(&fp_ino)
-                            || scheduled_this_cycle.contains(&fp_ino)
-                        {
-                            continue; // Already in-flight, or already staged/queued this cycle
-                        }
-                        if spawned >= MAX_CONCURRENT_FP_RESOLVES {
-                            // D-09: push to continuation queue instead of silent drop.
-                            scheduled_this_cycle.insert(fp_ino);
-                            self.pending_fp_resolves
-                                .push_back((fp_ino, fp_ipns, fk_arr));
-                            continue;
-                        }
+                    if spawned >= MAX_CONCURRENT_FP_RESOLVES {
+                        // D-09: push to continuation queue instead of silent drop.
                         scheduled_this_cycle.insert(fp_ino);
-                        pending_drain.push((fp_ino, fp_ipns, fk_arr));
-                        spawned += 1;
+                        self.pending_fp_resolves
+                            .push_back((fp_ino, fp_ipns, read_key));
+                        continue;
                     }
+                    scheduled_this_cycle.insert(fp_ino);
+                    pending_drain.push((fp_ino, fp_ipns, read_key));
+                    spawned += 1;
+                }
 
-                    // Spawn tasks for all entries collected (drained queue + fresh, up to cap).
-                    // Each entry decrypts with its OWN folder key (entry_fk), not the current
-                    // cycle's fk_arr — drained entries may come from a different parent folder.
-                    for (fp_ino, fp_ipns, entry_fk) in pending_drain {
-                        self.resolving_file_pointers.insert(fp_ino);
-                        let api = self.api.clone();
-                        let tx = self.filepointer_tx.clone();
-                        self.rt.spawn(async move {
-                            let result = tokio::time::timeout(NETWORK_TIMEOUT, async {
-                                // D-01: route through the verified chokepoint.
-                                let cid = match cipherbox_api_client::ipns::resolve_ipns_verified(
-                                    &api, &fp_ipns,
-                                )
-                                .await
-                                {
-                                    Ok(v) => v.cid,
-                                    // D-04: Legacy variant removed — all-absent sig fields fail closed.
-                                    Err(cipherbox_api_client::ipns::VerifyError::Invalid(msg)) => {
-                                        return Err(format!(
-                                            "FilePointer IPNS {} verify failed: {}",
-                                            fp_ipns, msg
-                                        ));
-                                    }
-                                    Err(cipherbox_api_client::ipns::VerifyError::Api(e)) => {
-                                        return Err(format!("{}", e));
-                                    }
-                                };
-                                let enc_bytes =
-                                    cipherbox_api_client::ipfs::fetch_content(&api, &cid)
-                                        .await
-                                        .map_err(|e| format!("{}", e))?;
-                                cipherbox_core::decrypt_file_metadata_from_ipfs_public(
-                                    &enc_bytes, &entry_fk,
-                                )
-                            })
-                            .await;
+                // Spawn tasks for all entries collected (drained queue + fresh, up to cap).
+                // Each entry unseals with its OWN file read_key via the gated single-node
+                // fetch (SC#6, resolve_file_descriptors → fetch_node_gated) — no raw resolve.
+                for (fp_ino, fp_ipns, entry_read_key) in pending_drain {
+                    self.resolving_file_pointers.insert(fp_ino);
+                    let api = self.api.clone();
+                    let tx = self.filepointer_tx.clone();
+                    // Owned high-water clone for the spawned resolve task (5b(a)).
+                    let high_water = self.high_water.clone();
+                    self.rt.spawn(async move {
+                        let result = tokio::time::timeout(
+                            NETWORK_TIMEOUT,
+                            crate::content_ops::resolve_file_descriptors(
+                                &api,
+                                &high_water,
+                                &fp_ipns,
+                                &entry_read_key,
+                            ),
+                        )
+                        .await;
 
-                            match result {
-                                Ok(Ok(fm)) => {
-                                    log::debug!(
-                                        "FilePointer async resolved for ino {} (cid={})",
-                                        fp_ino,
-                                        &fm.cid[..fm.cid.len().min(12)]
-                                    );
-                                    let _ = tx.send(PendingFilePointer::Success {
-                                        ino: fp_ino,
-                                        cid: fm.cid,
-                                        encrypted_file_key: fm.file_key_encrypted,
-                                        iv: fm.file_iv,
-                                        size: fm.size,
-                                        encryption_mode: fm.encryption_mode,
-                                        versions: fm.versions,
-                                    });
-                                }
-                                Ok(Err(e)) => {
-                                    log::warn!(
-                                        "FilePointer resolve failed for ino {}: {}",
-                                        fp_ino,
-                                        e
-                                    );
-                                    let _ = tx.send(PendingFilePointer::Failure { ino: fp_ino });
-                                }
-                                Err(_) => {
-                                    log::warn!(
-                                        "FilePointer resolve timed out for ino {} ({}s)",
-                                        fp_ino,
-                                        NETWORK_TIMEOUT.as_secs()
-                                    );
-                                    let _ = tx.send(PendingFilePointer::Failure { ino: fp_ino });
-                                }
+                        match result {
+                            Ok(Ok((cid, iv, size, encryption_mode))) => {
+                                log::debug!(
+                                    "FilePointer async resolved for ino {} (cid={})",
+                                    fp_ino,
+                                    &cid[..cid.len().min(12)]
+                                );
+                                let _ = tx.send(PendingFilePointer::Success {
+                                    ino: fp_ino,
+                                    cid,
+                                    iv,
+                                    size,
+                                    encryption_mode,
+                                });
                             }
-                        });
-                    }
+                            Ok(Err(e)) => {
+                                log::warn!("FilePointer resolve failed for ino {}: {}", fp_ino, e);
+                                let _ = tx.send(PendingFilePointer::Failure { ino: fp_ino });
+                            }
+                            Err(_) => {
+                                log::warn!(
+                                    "FilePointer resolve timed out for ino {} ({}s)",
+                                    fp_ino,
+                                    NETWORK_TIMEOUT.as_secs()
+                                );
+                                let _ = tx.send(PendingFilePointer::Failure { ino: fp_ino });
+                            }
+                        }
+                    });
                 }
             }
         }
@@ -604,22 +566,13 @@ impl CipherBoxFS {
                 PendingFilePointer::Success {
                     ino,
                     cid,
-                    encrypted_file_key,
                     iv,
                     size,
                     encryption_mode,
-                    versions,
                 } => {
                     self.resolving_file_pointers.remove(&ino);
-                    self.inodes.resolve_file_pointer(
-                        ino,
-                        cid,
-                        encrypted_file_key,
-                        iv,
-                        size,
-                        encryption_mode,
-                        versions,
-                    );
+                    self.inodes
+                        .resolve_file_pointer(ino, cid, iv, size, encryption_mode);
                     log::debug!("FilePointer resolved async for ino {}", ino);
                 }
                 PendingFilePointer::Failure { ino } => {

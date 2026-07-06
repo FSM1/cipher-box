@@ -88,8 +88,7 @@ pub(crate) mod implementation {
     // NETWORK_TIMEOUT = 3s (vs 10s in crate::block_with_timeout) which is
     // intentional for the macOS sync FUSE callback path (A2 scope narrowing).
     pub use crate::content_ops::{
-        fetch_and_decrypt_content_async, fetch_node_and_decrypt_content, publish_file_metadata,
-        publish_file_node, resolve_file_descriptors,
+        fetch_node_and_decrypt_content, publish_file_metadata, publish_file_node,
     };
 
     impl Filesystem for CipherBoxFS {

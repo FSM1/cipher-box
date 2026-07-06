@@ -353,6 +353,26 @@ impl InodeTable {
         .await
         .map_err(|e| format!("list_folder_owned failed for {}: {}", ipns_name, e))?;
 
+        self.apply_owned_children(parent_ino, resolved, merge_only);
+        Ok(())
+    }
+
+    /// Sync-apply half of the node/v3 refresh pipeline (69-09 Slice 5b(d)).
+    ///
+    /// Splits [`populate_folder`] into an async fetch ([`cipherbox_sdk::list_folder_owned`])
+    /// and this synchronous apply so the FUSE callback thread's
+    /// `drain_refresh_completions` can apply a `Vec<ResolvedOwnedChild>` that a
+    /// background task already fetched — the mount never awaits on the callback
+    /// thread. Applies the same stable-ipns_name ino-reuse, rename-by-ipns, and
+    /// `merge_only` preservation semantics `populate_folder` had inline. The mount
+    /// is the terminal owner of each child's moved-in `Zeroizing` keys (D-09).
+    #[cfg(any(feature = "fuse", feature = "winfsp"))]
+    pub fn apply_owned_children(
+        &mut self,
+        parent_ino: u64,
+        resolved: Vec<ResolvedOwnedChild>,
+        merge_only: bool,
+    ) {
         let old_child_inos: Vec<u64> = self
             .inodes
             .get(&parent_ino)
@@ -573,8 +593,6 @@ impl InodeTable {
                 InodeKind::File { .. } => {}
             }
         }
-
-        Ok(())
     }
 
     /// Fill a File inode's node/v3 content descriptors (CID, IV, size,

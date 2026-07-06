@@ -7,8 +7,6 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use zeroize::Zeroize;
 
-use cipherbox_core::folder::FolderMetadata;
-
 /// Time-to-live for cached folder metadata (matches 30s sync polling interval).
 pub const METADATA_TTL: Duration = Duration::from_secs(30);
 
@@ -17,14 +15,22 @@ pub const MAX_CACHE_SIZE: usize = 256 * 1024 * 1024;
 
 // -- Metadata Cache -----------------------------------------------------------
 
-/// Cached folder metadata entry with timestamp.
+/// Cached folder freshness marker with timestamp.
+///
+/// node/v3 (69-09 Slice 5b(d)): the legacy `FolderMetadata` payload is gone —
+/// the read path no longer round-trips a plaintext `FolderMetadata` (children
+/// live inside the sealed node envelope and are materialized straight into the
+/// inode table via `apply_owned_children`). This cache is now a pure
+/// per-IPNS-name FRESHNESS marker: a present, non-expired entry means "this
+/// folder was refreshed within the TTL, don't re-spawn". The `cid` field is a
+/// best-effort record of the last-published metadata CID for old-CID unpin (may
+/// be empty when the refresh path could not surface it).
 pub struct CachedMetadata {
-    pub metadata: FolderMetadata,
     pub cid: String,
     fetched_at: Instant,
 }
 
-/// In-memory cache for decrypted folder metadata, keyed by IPNS name.
+/// In-memory freshness cache for folder metadata, keyed by IPNS name.
 ///
 /// Entries expire after `METADATA_TTL` (30 seconds). Stale entries return
 /// `None` from `get()` but remain in the map until overwritten or invalidated.
@@ -39,21 +45,21 @@ impl MetadataCache {
         }
     }
 
-    /// Get cached metadata if it exists and is still fresh (within TTL).
+    /// Get the freshness entry if it exists and is still fresh (within TTL).
     ///
     /// Returns `None` if the entry doesn't exist or has expired.
     pub fn get(&self, ipns_name: &str) -> Option<&CachedMetadata> {
-        self.entries.get(ipns_name).filter(|entry| {
-            entry.fetched_at.elapsed() < METADATA_TTL
-        })
+        self.entries
+            .get(ipns_name)
+            .filter(|entry| entry.fetched_at.elapsed() < METADATA_TTL)
     }
 
-    /// Store folder metadata in the cache.
-    pub fn set(&mut self, ipns_name: &str, metadata: FolderMetadata, cid: String) {
+    /// Record that `ipns_name` was refreshed just now, with a best-effort
+    /// last-published metadata `cid` (empty when unavailable).
+    pub fn set(&mut self, ipns_name: &str, cid: String) {
         self.entries.insert(
             ipns_name.to_string(),
             CachedMetadata {
-                metadata,
                 cid,
                 fetched_at: Instant::now(),
             },
@@ -254,9 +260,15 @@ mod tests {
 
         cache.set("c", vec![2u8; chunk]);
 
-        assert!(cache.get("a").is_some(), "a should still be cached (recently accessed)");
+        assert!(
+            cache.get("a").is_some(),
+            "a should still be cached (recently accessed)"
+        );
         assert!(cache.get("b").is_none(), "b should be evicted (LRU)");
-        assert!(cache.get("c").is_some(), "c should be cached (just inserted)");
+        assert!(
+            cache.get("c").is_some(),
+            "c should be cached (just inserted)"
+        );
     }
 
     #[test]
