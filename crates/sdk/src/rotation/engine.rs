@@ -17,17 +17,19 @@
 //! fail to fire, re-minting and re-publishing nodes that were already done
 //! (the exact M1 hazard this plan documents and tests).
 //!
-//! Deliberately OUT OF SCOPE for this plan (lands in a later Phase-69 plan on
-//! this same file): the revocation-guarantee closures CRIT-1 / HIGH-3 /
-//! HIGH-4 (inner-grant re-mint, CAS-409 concurrent-child merge, write-plane
-//! rotation) — 69-12. Also out of scope, and a known limitation inherited
-//! unchanged from the TS reference (`engine.ts`'s own acknowledged gap, see
-//! its `verifySubtreeClean` doc comment): a genuinely fresh, never-started
-//! child (its own published generation still matches the parent's mirror
-//! exactly) is invisible to the generation-comparison dirty check below and
-//! is NOT recovered by this resume path — only a child whose OWN rotation
-//! individually committed before the crash, but whose parent's batched
-//! republish did not yet land, is detected as "dirty".
+//! 69-12 closes the three revocation-guarantee gaps left open above:
+//! CRIT-1 (lazy file-key rotation, [`mint_file_key_on_rotate`]), HIGH-3
+//! (inner-grant re-mint, [`re_mint_grants_rooted_at`]), and HIGH-4 (CAS-409
+//! concurrent-child merge, [`merge_children`]/[`merge_concurrent_children`]).
+//! Write-plane rotation remains out of scope (a later plan). Also out of
+//! scope, and a known limitation inherited unchanged from the TS reference
+//! (`engine.ts`'s own acknowledged gap, see its `verifySubtreeClean` doc
+//! comment): a genuinely fresh, never-started child (its own published
+//! generation still matches the parent's mirror exactly) is invisible to
+//! the generation-comparison dirty check below and is NOT recovered by this
+//! resume path — only a child whose OWN rotation individually committed
+//! before the crash, but whose parent's batched republish did not yet land,
+//! is detected as "dirty".
 //!
 //! Host-agnostic (D-02): no FUSE-crate / Tauri / WinFsp import here. This
 //! is what lets 69-14's WinFsp caller consume the identical engine with zero
@@ -76,10 +78,54 @@ pub struct ResolvedRecord {
     pub sequence_number: u64,
 }
 
-/// Outcome of a CAS-guarded publish.
+/// Outcome of a CAS-guarded publish that actually landed.
 #[derive(Debug, Clone)]
 pub struct PublishOutcome {
     pub new_sequence_number: u64,
+}
+
+/// Result of a single [`RotationDeps::publish_with_cas`] attempt (HIGH-4,
+/// T-69-12-03).
+///
+/// Splitting "published" from "conflict" as an `Ok` variant (rather than
+/// reporting a CAS-409 as an `Err`) is deliberate: a conflict is an
+/// EXPECTED, recoverable outcome of the check-and-set contract, not a
+/// transport/logic failure. [`seal_and_publish`]'s retry loop is the only
+/// caller that inspects this distinction; every other publish failure
+/// (network error, auth failure, etc.) still surfaces as `Err`.
+#[derive(Debug, Clone)]
+pub enum PublishAttempt {
+    /// The CAS check passed; `node` is now the published record.
+    Published(PublishOutcome),
+    /// The CAS check failed: `remote` is the winning concurrent publish
+    /// already live at the target IPNS name, and `current_sequence_number`
+    /// is its sequence number. The caller MUST re-fetch, re-decode, and
+    /// re-merge before retrying — NEVER blind-re-seal from a stale
+    /// in-memory child list (T-69-12-03).
+    Conflict {
+        remote: PublishedNode,
+        current_sequence_number: u64,
+    },
+}
+
+/// One share/grant row rooted at a rotated node (HIGH-3, T-69-12-02).
+///
+/// Rust twin of the TS `GrantRemintCallbacks` query row shape
+/// (`packages/sdk-core/src/rotation/engine.ts`). Deliberately carries raw
+/// key bytes rather than any wire (hex/base64) encoding — decoding the
+/// `crates/api-client` wire representation into this shape is the
+/// PRODUCTION `RotationDeps` implementor's job (D-02/D-04: this module
+/// stays transport-decoupled and never imports `cipherbox-api-client`
+/// itself).
+#[derive(Debug, Clone)]
+pub struct GrantRow {
+    pub share_id: String,
+    /// Recipient's ECIES public key (raw bytes — not hex/base64 encoded).
+    pub recipient_public_key: Vec<u8>,
+    /// `true` when this grant has been revoked; a revoked recipient's row
+    /// is deleted, NEVER re-minted (T-64-04b parity — re-minting a revoked
+    /// recipient's descriptor would defeat revocation).
+    pub is_revoked: bool,
 }
 
 /// Injected seams for the rotation walk: resolve, fetch, CAS-publish, and
@@ -107,20 +153,50 @@ pub trait RotationDeps {
 
     /// CAS-publish `node` to `ipns_name`, guarded by `expected_sequence_number`.
     ///
-    /// CAS-409 concurrent-write merge (ROT-05/HIGH-4, engine.ts's
-    /// `mergeConcurrentChildren`) is deferred to 69-12 — this plan's seam
-    /// contract is a simple check-and-set.
+    /// Returns [`PublishAttempt::Conflict`] (not `Err`) on a CAS-409 — see
+    /// [`PublishAttempt`]'s doc comment for why a conflict is a recoverable
+    /// `Ok` outcome rather than a failure (ROT-05/HIGH-4, engine.ts's
+    /// `mergeConcurrentChildren`, T-69-12-03).
     async fn publish_with_cas(
         &self,
         ipns_name: &str,
         expected_sequence_number: u64,
         node: &PublishedNode,
-    ) -> Result<PublishOutcome, RotationError>;
+    ) -> Result<PublishAttempt, RotationError>;
 
     /// Advisory checkpoint — called after EVERY per-node commit (D-10).
     /// Published IPNS records remain the source of truth; this is a
     /// resume-acceleration hint only, never authoritative.
     async fn persist_job(&self, job: &RotationJobRecord);
+
+    /// HIGH-3 (T-69-12-02): returns every grant/share whose root is
+    /// `node_id` — INCLUDING an inner grant rooted at a subtree node deep
+    /// inside the rotating tree, not just the scope root.
+    ///
+    /// Default no-op (empty): the clean happy-path (no grants shared out of
+    /// this subtree at all) never touches this seam — mirrors the TS
+    /// reference's `GrantRemintCallbacks` being an optional param (D-01
+    /// conditional invocation / D-04 transport seam).
+    async fn query_grants_rooted_at(&self, _node_id: &str) -> Result<Vec<GrantRow>, RotationError> {
+        Ok(Vec::new())
+    }
+
+    /// HIGH-3: persists a re-minted `readDescriptorRef` (ECIES-wrapped new
+    /// readKey) + the new generation for a non-revoked recipient's grant
+    /// row. Default no-op.
+    async fn update_grant(
+        &self,
+        _share_id: &str,
+        _read_descriptor_ref: &str,
+        _new_generation: u32,
+    ) -> Result<(), RotationError> {
+        Ok(())
+    }
+
+    /// HIGH-3: hard-deletes a revoked recipient's grant row. Default no-op.
+    async fn delete_grant(&self, _share_id: &str) -> Result<(), RotationError> {
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -215,8 +291,19 @@ pub struct CommittedRotation {
     pub created_at: u64,
     pub modified_at: u64,
     /// Plaintext children of the rotated node (to enqueue in the BFS
-    /// frontier). Empty for file nodes.
+    /// frontier). Empty for file nodes. HIGH-4 (T-69-12-03): reflects the
+    /// FINAL (possibly CAS-409-merged) children list actually published —
+    /// NOT the pre-rotation snapshot — so a concurrently-added child is
+    /// both preserved in the published body AND enqueued for its own
+    /// rotation/re-seal-under-the-new-parent-key by the BFS walk, exactly
+    /// like any other child.
     pub children: Vec<SealedChildRef>,
+    /// CRIT-1 (T-69-12-01): `true` when this rotation minted a fresh
+    /// `fileKey` for a File node (always `true` for File, always `false`
+    /// for Folder/Root — folder nodes carry no content key). Advisory: the
+    /// actual re-encrypt-on-next-write is lazy (ADR 0002) and happens
+    /// outside this engine; this flag is the host's cue to apply it.
+    pub content_rekey_pending: bool,
 }
 
 /// Return type for a single-node rotation step. Mirrors TS's
@@ -320,6 +407,19 @@ pub async fn rotate_one<D: RotationDeps>(
     read_key_prime.copy_from_slice(&read_key_prime_raw);
     read_key_prime_raw.zeroize();
 
+    // CRIT-1 (T-69-12-01 / ADR 0002): a File node gets a freshly minted
+    // fileKey placed directly into the resealed NodeContent — this rides
+    // along in the SAME re-seal below, no separate publish, no eager
+    // re-encrypt of already-published content. `content_rekey_pending` is
+    // the advisory marker the host applies lazily on this node's next
+    // write. Folder/Root nodes carry no content — no-op (`None`).
+    let file_key_prime: Option<Zeroizing<[u8; 32]>> = if kind == NodeKind::File {
+        Some(mint_file_key_on_rotate())
+    } else {
+        None
+    };
+    let content_rekey_pending = file_key_prime.is_some();
+
     match seal_and_publish(
         deps,
         node_ipns_name,
@@ -329,13 +429,26 @@ pub async fn rotate_one<D: RotationDeps>(
         kind,
         new_generation,
         &read_key_prime,
+        &parent_read_key_arr,
+        file_key_prime.as_deref(),
     )
     .await
     {
-        Ok(new_sequence_number) => {
+        Ok((new_sequence_number, children)) => {
             let (created_at, modified_at) = node_timestamps(&node);
-            let children = node_children(&node);
-            // D-07: mark committed AFTER the publish succeeds — never before.
+
+            // HIGH-3 (T-69-12-02): re-mint grants rooted at THIS node
+            // BEFORE marking it completed — D-07 parity: a failure here
+            // must not silently skip the node on resume.
+            if let Err(e) =
+                re_mint_grants_rooted_at(deps, &resolved_node_id, &read_key_prime, new_generation)
+                    .await
+            {
+                read_key_prime.zeroize();
+                return Err(e);
+            }
+
+            // D-07: mark committed AFTER the publish + grant re-mint succeed.
             job_record
                 .completed_node_ids
                 .insert(resolved_node_id.clone());
@@ -348,23 +461,167 @@ pub async fn rotate_one<D: RotationDeps>(
                 created_at,
                 modified_at,
                 children,
+                content_rekey_pending,
             }))
         }
         Err(e) => {
             // Zero read_key_prime on failure — rotate_one minted it, so
             // rotate_one is the terminal owner (D-09). Do NOT touch
             // parent_read_key — it is caller-owned and only ever borrowed.
+            // file_key_prime (Zeroizing) self-zeroes on drop below.
             read_key_prime.zeroize();
             Err(e)
         }
     }
 }
 
+/// CRIT-1 (T-69-12-01): mints a fresh 32-byte `fileKey` for a File node's
+/// content, to be placed into the resealed `NodeContent` by the caller.
+///
+/// A holder of the OLD readKey/fileKey can still decrypt every version
+/// already published under the OLD key (that ciphertext is presumed
+/// leaked — ADR 0002 lazy revocation stance), but the NEXT published
+/// version is encrypted under THIS fresh key, which the old holder never
+/// receives.
+///
+/// @security Returns `Zeroizing` — NOT zeroed here. The caller (`rotate_one`)
+/// consumes it via the re-seal on success, or lets it self-zero on drop on
+/// any failure path (D-09 terminal-owner rule).
+fn mint_file_key_on_rotate() -> Zeroizing<[u8; 32]> {
+    let mut raw = cipherbox_crypto::generate_random_bytes(32);
+    let mut key = Zeroizing::new([0u8; 32]);
+    key.copy_from_slice(&raw);
+    raw.zeroize();
+    key
+}
+
+/// HIGH-3 (T-69-12-02): re-mints the `readDescriptorRef` for every
+/// non-revoked grant rooted at `node_id` — including an inner grant rooted
+/// at a subtree node — and hard-deletes a revoked recipient's row.
+///
+/// Rust twin of `reMintGrantsRootedAt`
+/// (`packages/sdk-core/src/rotation/engine.ts`). Called unconditionally
+/// after every per-node commit (root and every BFS child): the default
+/// no-op `RotationDeps::query_grants_rooted_at` makes this a zero-cost path
+/// for any node with nothing shared out of it (D-01 conditional invocation
+/// is satisfied by the seam's own default, not by a call-site branch).
+///
+/// @security ECIES-wraps the new readKey via `cipherbox_crypto::wrap_key`
+/// — never hand-rolled key wrapping (T-64-04c parity). Does NOT zero
+/// `new_read_key` — caller is terminal owner (D-09).
+async fn re_mint_grants_rooted_at<D: RotationDeps>(
+    deps: &D,
+    node_id: &str,
+    new_read_key: &[u8; 32],
+    new_generation: u32,
+) -> Result<(), RotationError> {
+    let grants = deps.query_grants_rooted_at(node_id).await?;
+    for grant in grants {
+        if grant.is_revoked {
+            // T-64-04b parity: re-minting a revoked recipient's descriptor
+            // would defeat revocation — delete the row instead.
+            deps.delete_grant(&grant.share_id).await?;
+        } else {
+            let wrapped = cipherbox_crypto::wrap_key(new_read_key, &grant.recipient_public_key)
+                .map_err(|e| {
+                RotationError::RotateFailed(format!(
+                    "re_mint_grants_rooted_at: wrap_key failed for share {}: {e}",
+                    grant.share_id
+                ))
+            })?;
+            let read_descriptor_ref = base64_encode(&wrapped);
+            deps.update_grant(&grant.share_id, &read_descriptor_ref, new_generation)
+                .await?;
+        }
+    }
+    Ok(())
+}
+
+/// Three-way merge of `SealedChildRef` lists — Rust twin of
+/// `packages/sdk-core/src/folder/merge.ts`'s `mergeChildren` (ROT-05/HIGH-4,
+/// T-69-12-03).
+///
+/// Union by `ipns_name`: `local` entries loaded first, `remote` entries
+/// overwrite on conflict (remote wins — a concurrent add present only in
+/// `remote` is never dropped). A `base` entry absent from BOTH `local` AND
+/// `remote` is an intentional delete and is pruned from the result.
+///
+/// No crypto: operates purely on already-sealed `SealedChildRef` values.
+fn merge_children(
+    base: &[SealedChildRef],
+    local: &[SealedChildRef],
+    remote: &[SealedChildRef],
+) -> Vec<SealedChildRef> {
+    let mut merged: HashMap<String, SealedChildRef> = HashMap::new();
+    for child in local {
+        merged.insert(child.ipns_name.clone(), child.clone());
+    }
+    for child in remote {
+        merged.insert(child.ipns_name.clone(), child.clone());
+    }
+
+    let local_names: HashSet<&str> = local.iter().map(|c| c.ipns_name.as_str()).collect();
+    let remote_names: HashSet<&str> = remote.iter().map(|c| c.ipns_name.as_str()).collect();
+    for child in base {
+        if !local_names.contains(child.ipns_name.as_str())
+            && !remote_names.contains(child.ipns_name.as_str())
+        {
+            merged.remove(&child.ipns_name);
+        }
+    }
+
+    merged.into_values().collect()
+}
+
+/// HIGH-4 (T-69-12-03): re-decodes a CAS-409 conflict's winning `remote`
+/// envelope under the OLD (pre-rotation) read key — it was sealed before
+/// this rotation started — and three-way merges its children against the
+/// pre-rotation base/local list via [`merge_children`].
+///
+/// `base_and_local_children` doubles as both the merge's `base` and `local`
+/// arguments: `rotate_one` never adds or removes children on its own re-seal
+/// (it only rotates keys/generation), so the node's pre-rotation children
+/// snapshot IS both the CAS base and the local candidate here.
+async fn merge_concurrent_children(
+    remote: &PublishedNode,
+    old_read_key: &[u8; 32],
+    base_and_local_children: &[SealedChildRef],
+) -> Result<Vec<SealedChildRef>, RotationError> {
+    let remote_kind = node_kind_from_str(&remote.kind)?;
+    let remote_sealed_bytes = decode_b64(&remote.read_sealed)?;
+    let remote_body = unseal_node(
+        &remote_sealed_bytes,
+        old_read_key,
+        &remote.id,
+        remote_kind,
+        remote.generation,
+    )
+    .map_err(|e| {
+        RotationError::RotateFailed(format!("merge_concurrent_children: unseal failed: {e}"))
+    })?;
+    let remote_node = decode_node(&remote_body).map_err(|e| {
+        RotationError::RotateFailed(format!("merge_concurrent_children: decode failed: {e}"))
+    })?;
+    let remote_children = node_children(&remote_node);
+    Ok(merge_children(
+        base_and_local_children,
+        base_and_local_children,
+        &remote_children,
+    ))
+}
+
 /// Re-seals `node`'s read-body under `read_key_prime` with the bumped
-/// `new_generation`, then CAS-publishes it. Split out of `rotate_one` so the
-/// caller retains ownership of `read_key_prime` and can zero it on `Err`
-/// without threading a fallible expression through a manual try/catch
-/// (Rust has none) inside the minted-key's own scope.
+/// `new_generation`, then CAS-publishes it, retrying with a HIGH-4 merge on
+/// every CAS-409 (T-69-12-03) up to [`MAX_CAS_MERGE_ATTEMPTS`]. Split out of
+/// `rotate_one` so the caller retains ownership of `read_key_prime` and can
+/// zero it on `Err` without threading a fallible expression through a
+/// manual try/catch (Rust has none) inside the minted-key's own scope.
+///
+/// Returns the final sequence number AND the final (possibly CAS-409-merged)
+/// children list actually published — the caller threads this list into
+/// `CommittedRotation.children` so a concurrently-added child is both
+/// preserved in the published body and enqueued for its own rotation by the
+/// BFS walk (never silently dropped, T-69-12-03).
 #[allow(clippy::too_many_arguments)]
 async fn seal_and_publish<D: RotationDeps>(
     deps: &D,
@@ -375,40 +632,71 @@ async fn seal_and_publish<D: RotationDeps>(
     kind: NodeKind,
     new_generation: u32,
     read_key_prime: &[u8; 32],
-) -> Result<u64, RotationError> {
-    let updated_node = with_generation(node, new_generation);
-    let read_body = encode_node(&updated_node).map_err(|e| {
-        RotationError::RotateFailed(format!(
-            "rotate_one: encode failed for {node_ipns_name}: {e}"
-        ))
-    })?;
-    let resealed =
-        seal_node(&read_body, read_key_prime, node_id, kind, new_generation).map_err(|e| {
+    old_read_key: &[u8; 32],
+    file_key_prime: Option<&[u8; 32]>,
+) -> Result<(u64, Vec<SealedChildRef>), RotationError> {
+    /// HIGH-4 (T-69-12-03): bounds the CAS-409 retry-merge loop so a
+    /// pathologically contended node cannot spin forever (mirrors the TS
+    /// reference's `publishWithCas({ maxAttempts: 3 })`).
+    const MAX_CAS_MERGE_ATTEMPTS: u32 = 3;
+
+    let mut current_children = node_children(node);
+    let mut current_expected_seq = expected_sequence_number;
+
+    for attempt in 1..=MAX_CAS_MERGE_ATTEMPTS {
+        let updated_node =
+            build_resealed_node(node, new_generation, &current_children, file_key_prime);
+        let read_body = encode_node(&updated_node).map_err(|e| {
             RotationError::RotateFailed(format!(
-                "rotate_one: seal failed for {node_ipns_name}: {e}"
+                "rotate_one: encode failed for {node_ipns_name}: {e}"
             ))
         })?;
+        let resealed =
+            seal_node(&read_body, read_key_prime, node_id, kind, new_generation).map_err(|e| {
+                RotationError::RotateFailed(format!(
+                    "rotate_one: seal failed for {node_ipns_name}: {e}"
+                ))
+            })?;
 
-    let published_node = PublishedNode {
-        schema: "node/v3".to_string(),
-        kind: kind.as_str().to_string(),
-        id: node_id.to_string(),
-        generation: new_generation,
-        aead_version: 1,
-        read_sealed: base64_encode(&resealed),
-        write_sealed: None,
-    };
+        let published_node = PublishedNode {
+            schema: "node/v3".to_string(),
+            kind: kind.as_str().to_string(),
+            id: node_id.to_string(),
+            generation: new_generation,
+            aead_version: 1,
+            read_sealed: base64_encode(&resealed),
+            write_sealed: None,
+        };
 
-    let outcome = deps
-        .publish_with_cas(node_ipns_name, expected_sequence_number, &published_node)
-        .await
-        .map_err(|e| {
-            RotationError::RotateFailed(format!(
-                "rotate_one: publish failed for {node_ipns_name}: {e}"
-            ))
-        })?;
+        match deps
+            .publish_with_cas(node_ipns_name, current_expected_seq, &published_node)
+            .await
+            .map_err(|e| {
+                RotationError::RotateFailed(format!(
+                    "rotate_one: publish failed for {node_ipns_name}: {e}"
+                ))
+            })? {
+            PublishAttempt::Published(outcome) => {
+                return Ok((outcome.new_sequence_number, current_children));
+            }
+            PublishAttempt::Conflict {
+                remote,
+                current_sequence_number,
+            } => {
+                if attempt == MAX_CAS_MERGE_ATTEMPTS {
+                    return Err(RotationError::RotateFailed(format!(
+                        "rotate_one: exhausted {MAX_CAS_MERGE_ATTEMPTS} CAS-409 merge retries for {node_ipns_name}"
+                    )));
+                }
+                current_children =
+                    merge_concurrent_children(&remote, old_read_key, &current_children).await?;
+                current_expected_seq = current_sequence_number;
+                // Retry the seal+publish with the merged children.
+            }
+        }
+    }
 
-    Ok(outcome.new_sequence_number)
+    unreachable!("seal_and_publish loop always returns or errors within MAX_CAS_MERGE_ATTEMPTS")
 }
 
 // ---------------------------------------------------------------------------
@@ -978,20 +1266,29 @@ async fn republish_parent<D: RotationDeps>(
         write_sealed: None,
     };
 
-    deps.publish_with_cas(
-        &state.parent_ipns_name,
-        state.parent_last_seq,
-        &published_node,
-    )
-    .await
-    .map_err(|e| {
-        RotationError::RotateFailed(format!(
-            "republish_parent: publish failed for {}: {e}",
+    match deps
+        .publish_with_cas(
+            &state.parent_ipns_name,
+            state.parent_last_seq,
+            &published_node,
+        )
+        .await
+        .map_err(|e| {
+            RotationError::RotateFailed(format!(
+                "republish_parent: publish failed for {}: {e}",
+                state.parent_ipns_name
+            ))
+        })? {
+        PublishAttempt::Published(_) => Ok(()),
+        // HIGH-4's CAS-409 retry-merge is a rotate_one-only capability in
+        // this plan (T-69-12-03 scopes it there explicitly) — the batched
+        // parent republish still fails closed on a concurrent conflict
+        // rather than silently dropping data.
+        PublishAttempt::Conflict { .. } => Err(RotationError::RotateFailed(format!(
+            "republish_parent: CAS conflict for {} (concurrent-merge retry is not yet wired to the batched parent republish)",
             state.parent_ipns_name
-        ))
-    })?;
-
-    Ok(())
+        ))),
+    }
 }
 
 /// Resolve `ipns_name` then fetch its `PublishedNode` envelope. Used to peek
@@ -1013,35 +1310,47 @@ async fn resolve_and_fetch<D: RotationDeps>(
 // Small helpers
 // ---------------------------------------------------------------------------
 
-/// Returns a copy of `node` with `generation` replaced, preserving every
-/// other field (including plaintext `children`/`content`).
-fn with_generation(node: &Node, generation: u32) -> Node {
+/// Returns a copy of `node` with `generation` replaced, `children` replaced
+/// by `children_override` (Folder/Root only — ignored for File, which
+/// carries no children field), and — when `file_key_prime` is `Some` (File
+/// nodes only, CRIT-1 T-69-12-01) — `content.file_key` swapped to the
+/// freshly minted key, zeroing the old one first (D-09 hygiene: `node` is a
+/// fresh `unseal_node` output owned by this call, not a caller-reused
+/// buffer, so wiping its old content key here is safe).
+///
+/// `children_override` carries the FINAL (possibly HIGH-4-merged) children
+/// list, not necessarily `node`'s own pre-rotation snapshot — see
+/// `seal_and_publish`'s retry loop.
+fn build_resealed_node(
+    node: &Node,
+    generation: u32,
+    children_override: &[SealedChildRef],
+    file_key_prime: Option<&[u8; 32]>,
+) -> Node {
     match node {
         Node::Folder {
             id,
             created_at,
             modified_at,
-            children,
             ..
         } => Node::Folder {
             id: id.clone(),
             generation,
             created_at: *created_at,
             modified_at: *modified_at,
-            children: children.clone(),
+            children: children_override.to_vec(),
         },
         Node::Root {
             id,
             created_at,
             modified_at,
-            children,
             ..
         } => Node::Root {
             id: id.clone(),
             generation,
             created_at: *created_at,
             modified_at: *modified_at,
-            children: children.clone(),
+            children: children_override.to_vec(),
         },
         Node::File {
             id,
@@ -1049,13 +1358,20 @@ fn with_generation(node: &Node, generation: u32) -> Node {
             modified_at,
             content,
             ..
-        } => Node::File {
-            id: id.clone(),
-            generation,
-            created_at: *created_at,
-            modified_at: *modified_at,
-            content: content.clone(),
-        },
+        } => {
+            let mut new_content = content.clone();
+            if let Some(fk) = file_key_prime {
+                new_content.file_key.zeroize();
+                new_content.file_key = fk.to_vec();
+            }
+            Node::File {
+                id: id.clone(),
+                generation,
+                created_at: *created_at,
+                modified_at: *modified_at,
+                content: new_content,
+            }
+        }
     }
 }
 
@@ -1158,6 +1474,23 @@ mod test_support {
         /// When `Some`, the NEXT `publish_with_cas` call for this ipns_name
         /// fails instead of succeeding (used for the failure-path test).
         pub fail_publish_for: Mutex<Option<String>>,
+        /// When `Some((ipns_name, remote))`, the NEXT `publish_with_cas`
+        /// call for `ipns_name` reports a HIGH-4 CAS-409 conflict against
+        /// `remote` instead of succeeding normally — used to simulate "a
+        /// concurrent writer added a child mid-rotation" (T-69-12-03). Real
+        /// interleaving is not exercised by these in-memory fakes; this is
+        /// the deterministic stand-in.
+        pub inject_conflict_for: Mutex<Option<(String, PublishedNode)>>,
+        /// node_id -> grant rows returned by `query_grants_rooted_at`
+        /// (HIGH-3, T-69-12-02). Absent entries return an empty list (the
+        /// trait's own default), matching "no grants shared out of this
+        /// node".
+        pub grants_by_node: Mutex<HashMap<String, Vec<GrantRow>>>,
+        /// Ordered log of every `update_grant` call:
+        /// `(share_id, read_descriptor_ref, new_generation)`.
+        pub updated_grants: Mutex<Vec<(String, String, u32)>>,
+        /// Ordered log of every `delete_grant` call's `share_id`.
+        pub deleted_grants: Mutex<Vec<String>>,
     }
 
     impl FakeDeps {
@@ -1172,6 +1505,15 @@ mod test_support {
                 .unwrap()
                 .insert(ipns_name.to_string(), (cid.to_string(), sequence_number));
             self.blobs.lock().unwrap().insert(cid.to_string(), node);
+        }
+
+        /// Registers `grants` as the rows returned for `node_id` by
+        /// `query_grants_rooted_at` (HIGH-3 test seam).
+        pub fn seed_grants(&self, node_id: &str, grants: Vec<GrantRow>) {
+            self.grants_by_node
+                .lock()
+                .unwrap()
+                .insert(node_id.to_string(), grants);
         }
 
         pub fn resolve_call_count(&self) -> usize {
@@ -1216,7 +1558,7 @@ mod test_support {
             ipns_name: &str,
             expected_sequence_number: u64,
             node: &PublishedNode,
-        ) -> Result<PublishOutcome, RotationError> {
+        ) -> Result<PublishAttempt, RotationError> {
             if let Some(fail_name) = self.fail_publish_for.lock().unwrap().take() {
                 if fail_name == ipns_name {
                     return Err(RotationError::RotateFailed(format!(
@@ -1225,6 +1567,37 @@ mod test_support {
                 }
                 // Not the targeted name — put it back for a later call.
                 *self.fail_publish_for.lock().unwrap() = Some(fail_name);
+            }
+
+            if let Some((name, remote)) = self.inject_conflict_for.lock().unwrap().take() {
+                if name == ipns_name {
+                    // Advance the backing store's seq/cid to the injected
+                    // remote so the RETRY publish (after merge) succeeds
+                    // against this same "current" state.
+                    let current_seq = self
+                        .records
+                        .lock()
+                        .unwrap()
+                        .get(ipns_name)
+                        .map(|(_, seq)| *seq)
+                        .unwrap_or(0);
+                    let new_seq = current_seq + 1;
+                    let new_cid = format!("{ipns_name}-conflict-cid-v{new_seq}");
+                    self.blobs
+                        .lock()
+                        .unwrap()
+                        .insert(new_cid.clone(), remote.clone());
+                    self.records
+                        .lock()
+                        .unwrap()
+                        .insert(ipns_name.to_string(), (new_cid, new_seq));
+                    return Ok(PublishAttempt::Conflict {
+                        remote,
+                        current_sequence_number: new_seq,
+                    });
+                }
+                // Not the targeted name — put it back for a later call.
+                *self.inject_conflict_for.lock().unwrap() = Some((name, remote));
             }
 
             let current_seq = self
@@ -1252,9 +1625,9 @@ mod test_support {
                 .insert(ipns_name.to_string(), (new_cid, new_seq));
             self.publish_log.lock().unwrap().push(ipns_name.to_string());
 
-            Ok(PublishOutcome {
+            Ok(PublishAttempt::Published(PublishOutcome {
                 new_sequence_number: new_seq,
-            })
+            }))
         }
 
         async fn persist_job(&self, job: &RotationJobRecord) {
@@ -1262,6 +1635,38 @@ mod test_support {
                 .lock()
                 .unwrap()
                 .push(job.completed_node_ids.len());
+        }
+
+        async fn query_grants_rooted_at(
+            &self,
+            node_id: &str,
+        ) -> Result<Vec<GrantRow>, RotationError> {
+            Ok(self
+                .grants_by_node
+                .lock()
+                .unwrap()
+                .get(node_id)
+                .cloned()
+                .unwrap_or_default())
+        }
+
+        async fn update_grant(
+            &self,
+            share_id: &str,
+            read_descriptor_ref: &str,
+            new_generation: u32,
+        ) -> Result<(), RotationError> {
+            self.updated_grants.lock().unwrap().push((
+                share_id.to_string(),
+                read_descriptor_ref.to_string(),
+                new_generation,
+            ));
+            Ok(())
+        }
+
+        async fn delete_grant(&self, share_id: &str) -> Result<(), RotationError> {
+            self.deleted_grants.lock().unwrap().push(share_id.to_string());
+            Ok(())
         }
     }
 
@@ -1405,6 +1810,119 @@ mod rotate_one {
 
         assert!(result.is_err());
         assert!(!job.completed_node_ids.contains(NODE_1_ID));
+    }
+
+    // -----------------------------------------------------------------------
+    // CRIT-1 (T-69-12-01): lazy content-key rotation on a File node.
+    // -----------------------------------------------------------------------
+
+    fn file_node(id: &str, generation: u32, file_key: Vec<u8>) -> Node {
+        Node::File {
+            id: id.to_string(),
+            generation,
+            created_at: 2_000,
+            modified_at: 2_000,
+            content: cipherbox_core::node::NodeContent {
+                cid: "cid-v1".to_string(),
+                file_iv: "aaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                size: 42,
+                mime_type: "text/plain".to_string(),
+                encryption_mode: "GCM".to_string(),
+                file_key,
+                versions: vec![],
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn crit1_file_rotation_mints_fresh_file_key_and_sets_pending_marker() {
+        let deps = FakeDeps::new();
+        let read_key = [4u8; 32];
+        let old_file_key = vec![9u8; 32];
+        let node = file_node(NODE_1_ID, 0, old_file_key.clone());
+        deps.seed("k51/file-1", "cid-0", 0, seal_for_seed(&node, &read_key));
+
+        let mut job = RotationJobRecord::new(NODE_1_ID);
+        let outcome = rotate_one(&deps, Some(NODE_1_ID), "k51/file-1", &read_key, &mut job)
+            .await
+            .unwrap();
+
+        let committed = match outcome {
+            RotateOneOutcome::Committed(c) => c,
+            RotateOneOutcome::Skipped { .. } => panic!("expected a fresh commit, got Skipped"),
+        };
+        assert!(
+            committed.content_rekey_pending,
+            "CRIT-1: File rotation must set the content_rekey_pending marker"
+        );
+        assert!(
+            committed.children.is_empty(),
+            "File nodes carry no children"
+        );
+
+        // Recover the fresh fileKey from what was actually published.
+        let resolved = deps.resolve("k51/file-1").await.unwrap().unwrap();
+        let published = deps.fetch_node(&resolved.cid).await.unwrap();
+        let sealed_bytes = decode_b64(&published.read_sealed).unwrap();
+        let body = unseal_node(
+            &sealed_bytes,
+            &committed.read_key_prime,
+            NODE_1_ID,
+            NodeKind::File,
+            committed.new_generation,
+        )
+        .unwrap();
+        let republished = decode_node(&body).unwrap();
+        let new_file_key = match republished {
+            Node::File { content, .. } => content.file_key,
+            _ => panic!("expected a File node"),
+        };
+        assert_ne!(
+            new_file_key, old_file_key,
+            "CRIT-1: a fresh fileKey must be minted on rotate"
+        );
+
+        // A holder of the OLD fileKey cannot decrypt the NEXT published version.
+        let old_key_arr = zeroizing_32_from_slice(&old_file_key).unwrap();
+        let new_key_arr = zeroizing_32_from_slice(&new_file_key).unwrap();
+        let iv = [1u8; 12];
+        let plaintext = b"next version content";
+        let ciphertext =
+            cipherbox_crypto::encrypt_aes_gcm(plaintext, &new_key_arr, &iv).unwrap();
+        assert!(
+            cipherbox_crypto::decrypt_aes_gcm(&ciphertext, &old_key_arr, &iv).is_err(),
+            "CRIT-1: old fileKey must NOT decrypt content encrypted under the new fileKey"
+        );
+        assert_eq!(
+            cipherbox_crypto::decrypt_aes_gcm(&ciphertext, &new_key_arr, &iv).unwrap(),
+            plaintext
+        );
+
+        // No eager re-encrypt: exactly one publish for this node (the
+        // rotation's own re-seal) — no separate "re-encrypt existing
+        // content" publish call.
+        assert_eq!(deps.publish_count_for("k51/file-1"), 1);
+    }
+
+    #[tokio::test]
+    async fn crit1_folder_rotation_never_sets_content_rekey_pending() {
+        let deps = FakeDeps::new();
+        let read_key = [5u8; 32];
+        let node = folder(NODE_1_ID, 0, vec![]);
+        deps.seed("k51/node-1", "cid-0", 0, seal_for_seed(&node, &read_key));
+
+        let mut job = RotationJobRecord::new(NODE_1_ID);
+        let outcome = rotate_one(&deps, Some(NODE_1_ID), "k51/node-1", &read_key, &mut job)
+            .await
+            .unwrap();
+
+        match outcome {
+            RotateOneOutcome::Committed(c) => assert!(
+                !c.content_rekey_pending,
+                "Folder nodes carry no content — must never set content_rekey_pending"
+            ),
+            RotateOneOutcome::Skipped { .. } => panic!("expected a fresh commit"),
+        }
     }
 }
 
@@ -1725,6 +2243,198 @@ mod rotate_read_from_node {
         assert!(
             seeded.is_none(),
             "seeded resume must be a fast-path skip -- no fresh rotation"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // HIGH-3 (T-69-12-02): inner-grant re-mint rooted at a subtree node.
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn high3_inner_grant_at_a_child_is_re_minted_and_revoked_recipient_is_cut() {
+        let deps = FakeDeps::new();
+        let root_read_key = [7u8; 32];
+        seed_root_with_children(&deps, &root_read_key, 1);
+
+        // An inner grant rooted at child-0 -- a leaf deep in the rotating
+        // tree, NOT the scope root -- must still be reached by HIGH-3.
+        let (active_sk, active_pk) = ecies::utils::generate_keypair();
+        let (_revoked_sk, revoked_pk) = ecies::utils::generate_keypair();
+        deps.seed_grants(
+            &child_uuid(0),
+            vec![
+                GrantRow {
+                    share_id: "share-active".to_string(),
+                    recipient_public_key: active_pk.serialize().to_vec(),
+                    is_revoked: false,
+                },
+                GrantRow {
+                    share_id: "share-revoked".to_string(),
+                    recipient_public_key: revoked_pk.serialize().to_vec(),
+                    is_revoked: true,
+                },
+            ],
+        );
+
+        let mut job = RotationJobRecord::new(ROOT_ID);
+        let result = rotate_read_from_node(&deps, ROOT_ID, "k51/root", &root_read_key, &mut job)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            deps.deleted_grants.lock().unwrap().clone(),
+            vec!["share-revoked".to_string()],
+            "HIGH-3: a revoked recipient's row must be deleted, never re-minted"
+        );
+
+        let updated = deps.updated_grants.lock().unwrap().clone();
+        assert_eq!(
+            updated.len(),
+            1,
+            "exactly the non-revoked share is re-minted, got: {updated:?}"
+        );
+        let (share_id, read_descriptor_ref, new_generation) = &updated[0];
+        assert_eq!(share_id, "share-active");
+        assert_eq!(*new_generation, 1);
+
+        // Recover child-0's ACTUAL new readKey via the normal parent-chain
+        // path (root's new readKey -> SealedChildRef -> unseal_child_read_key)
+        // and confirm it matches what was ECIES-wrapped for the survivor.
+        let root_resolved = deps.resolve("k51/root").await.unwrap().unwrap();
+        let root_pub = deps.fetch_node(&root_resolved.cid).await.unwrap();
+        let root_sealed = decode_b64(&root_pub.read_sealed).unwrap();
+        let root_body = unseal_node(
+            &root_sealed,
+            &result.read_key,
+            ROOT_ID,
+            NodeKind::Folder,
+            result.generation,
+        )
+        .unwrap();
+        let root_node = decode_node(&root_body).unwrap();
+        let children = node_children(&root_node);
+        let child_ref = children
+            .iter()
+            .find(|c| c.ipns_name == "k51/child-0")
+            .unwrap();
+        let child_sealed_key = decode_b64(&child_ref.read_key_sealed).unwrap();
+        let child_new_read_key = unseal_child_read_key(
+            &child_sealed_key,
+            &result.read_key,
+            &child_uuid(0),
+            NodeKind::Folder,
+            child_ref.generation,
+        )
+        .unwrap();
+
+        let wrapped_bytes = decode_b64(read_descriptor_ref).unwrap();
+        let unwrapped =
+            cipherbox_crypto::unwrap_key(&wrapped_bytes, &active_sk.serialize()).unwrap();
+        assert_eq!(
+            unwrapped.as_slice(),
+            child_new_read_key.as_slice(),
+            "the re-minted descriptor must wrap child-0's ACTUAL new readKey"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // HIGH-4 (T-69-12-03): CAS-409 concurrent-add re-fetch + re-merge.
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn high4_concurrent_add_mid_rotation_is_merged_not_dropped() {
+        let deps = FakeDeps::new();
+        let root_read_key = [8u8; 32];
+        seed_root_with_children(&deps, &root_read_key, 1);
+
+        // Simulate "a concurrent writer added a NEW child (child-concurrent)
+        // to root while THIS rotation was in flight": a remote PublishedNode
+        // at root's PRE-rotation generation, sealed under the SAME (OLD)
+        // root read key -- the concurrent writer wasn't rotating, just
+        // adding a child via a normal write.
+        let concurrent_child_key = [77u8; 32];
+        let concurrent_child_id = child_uuid(99);
+        let concurrent_child_node = folder(&concurrent_child_id, 0, vec![]);
+        deps.seed(
+            "k51/child-concurrent",
+            "cid-child-concurrent-0",
+            0,
+            seal_for_seed(&concurrent_child_node, &concurrent_child_key),
+        );
+        let concurrent_sealed_key = seal_child_read_key(
+            &concurrent_child_key,
+            &root_read_key,
+            &concurrent_child_id,
+            NodeKind::Folder,
+            0,
+        )
+        .unwrap();
+
+        let remote_root_node = folder(
+            ROOT_ID,
+            0,
+            vec![
+                SealedChildRef {
+                    name: "child-0".to_string(),
+                    ipns_name: "k51/child-0".to_string(),
+                    generation: 0,
+                    version_floor: 0,
+                    read_key_sealed: base64_encode(
+                        &seal_child_read_key(
+                            &[10u8; 32],
+                            &root_read_key,
+                            &child_uuid(0),
+                            NodeKind::Folder,
+                            0,
+                        )
+                        .unwrap(),
+                    ),
+                },
+                SealedChildRef {
+                    name: "concurrent-child".to_string(),
+                    ipns_name: "k51/child-concurrent".to_string(),
+                    generation: 0,
+                    version_floor: 0,
+                    read_key_sealed: base64_encode(&concurrent_sealed_key),
+                },
+            ],
+        );
+        let remote_published = seal_for_seed(&remote_root_node, &root_read_key);
+
+        *deps.inject_conflict_for.lock().unwrap() =
+            Some(("k51/root".to_string(), remote_published));
+
+        let mut job = RotationJobRecord::new(ROOT_ID);
+        let result = rotate_read_from_node(&deps, ROOT_ID, "k51/root", &root_read_key, &mut job)
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Fetch the FINAL published root and confirm the concurrently-added
+        // child survived the rotation's merge -- never silently dropped.
+        let root_resolved = deps.resolve("k51/root").await.unwrap().unwrap();
+        let root_pub = deps.fetch_node(&root_resolved.cid).await.unwrap();
+        let root_sealed = decode_b64(&root_pub.read_sealed).unwrap();
+        let root_body = unseal_node(
+            &root_sealed,
+            &result.read_key,
+            ROOT_ID,
+            NodeKind::Folder,
+            result.generation,
+        )
+        .unwrap();
+        let root_node = decode_node(&root_body).unwrap();
+        let children = node_children(&root_node);
+
+        assert!(
+            children.iter().any(|c| c.ipns_name == "k51/child-concurrent"),
+            "HIGH-4: a child added concurrently mid-rotation must be present \
+             in the completed parent, got: {children:?}"
+        );
+        assert!(
+            children.iter().any(|c| c.ipns_name == "k51/child-0"),
+            "the original child must also survive the merge"
         );
     }
 }

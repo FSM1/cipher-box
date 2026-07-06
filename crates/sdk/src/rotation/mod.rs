@@ -13,8 +13,8 @@ pub mod scope;
 
 pub use engine::{
     rotate_one, rotate_read_from_node, verify_subtree_clean, CommittedRotation, DirtyFrontierEntry,
-    PublishOutcome, ResolvedRecord, RotateOneOutcome, RotateReadResult, RotationDeps,
-    RotationJobRecord, RotationStatus,
+    GrantRow, PublishAttempt, PublishOutcome, ResolvedRecord, RotateOneOutcome, RotateReadResult,
+    RotationDeps, RotationJobRecord, RotationStatus,
 };
 pub use high_water::{EnforceResolvedParams, HighWaterStore, RotationError, RotationHighWater};
 pub use scope::{
