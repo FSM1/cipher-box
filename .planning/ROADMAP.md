@@ -529,7 +529,7 @@ Plans:
 4. The interim mirror is reverted: `SealedChildRef` is back to its frozen five-field set (NODE-03), and size/modifiedAt are sourced from the resolved listing (the codec/encode/decode/`metadata-ops` mirror changes from ba3e0229a are removed).
 5. Regression coverage closes the desync bug class: a `tests/web-e2e` proves an owner (or a second client) sees a grantee's upload into a shared folder without the owner first writing, and that file size/modified-date render from the resolved listing; the full web-e2e suite stays green.
 
-**Plans**: 6/12 plans executed
+**Plans**: 7/12 plans executed
 
 Plans:
 **Wave 1**
@@ -549,7 +549,7 @@ Plans:
 
 - [x] 68.2-04-PLAN.md — Wave 4: SDK vault-bootstrap + device-registry + BYO-pinning facade (off-path pockets)
 - [x] 68.2-06-PLAN.md — Wave 4: Web owned read rewire + relocate version-transforms + render kind/size/modifiedAt from ResolvedChild
-- [ ] 68.2-07-PLAN.md — Wave 4: Web owned file I/O rewire onto the SDK IPFS-transport facade (progress preserved)
+- [x] 68.2-07-PLAN.md — Wave 4: Web owned file I/O rewire onto the SDK IPFS-transport facade (progress preserved)
 - [ ] 68.2-08-PLAN.md — Wave 4: Web shared-folder navigation/write rewire onto listSharedFolder
 - [ ] 68.2-09-PLAN.md — Wave 4: Collapse folder.store to a ResolvedChild projection + nav re-resolve + poll invalidation (SC#3/#5)
 
