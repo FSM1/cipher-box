@@ -51,3 +51,15 @@ leaves a folder open and asserts a grantee's later write appears via the poll
 
 Re-check at Phase 68.2 gap-closure (or when Plan 09 executes). If Plan 09's
 executor upgrades the poll AC to a behavioral test, retire this todo.
+
+## Resolution (2026-07-06, Plan 09)
+
+Added `apps/web/src/hooks/__tests__/useSyncPolling.test.ts` (6 tests) directly
+exercising the poll-invalidation leg's exported `invalidateOpenFolder`
+function against the real `useFolderStore` (no React render harness, only
+the SDK client boundary mocked). Covers: a poll tick observing a higher
+`sequenceNumber` re-projects children/rawChildren/sequenceNumber; no-ops when
+no folder is open, the open folder isn't loaded yet, or the SDK client isn't
+initialized; a resolve failure is swallowed (best-effort, never fails the
+poll tick); and a stale in-flight resolve is discarded if the open folder
+changes mid-flight. Retiring per the disposition above.

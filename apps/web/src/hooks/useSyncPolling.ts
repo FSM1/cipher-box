@@ -19,8 +19,11 @@ const SYNC_INTERVAL_MS = 30000; // 30 seconds per CONTEXT.md
  * the nav-triggered re-resolve leg) still picks up remote changes (e.g. a
  * write from another device). Best-effort: a failure here must never fail
  * the overall sync tick.
+ *
+ * Exported for direct unit testing (see `__tests__/useSyncPolling.test.ts`)
+ * -- a plain async function, no React render harness needed.
  */
-async function invalidateOpenFolder(): Promise<void> {
+export async function invalidateOpenFolder(): Promise<void> {
   if (!hasSdkClient()) return;
   const { currentFolderId, folders } = useFolderStore.getState();
   if (!currentFolderId) return;
