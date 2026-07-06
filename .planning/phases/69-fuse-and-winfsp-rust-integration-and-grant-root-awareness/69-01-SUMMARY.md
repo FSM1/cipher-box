@@ -155,3 +155,7 @@ None - no external service configuration required.
 ---
 *Phase: 69-fuse-and-winfsp-rust-integration-and-grant-root-awareness*
 *Completed: 2026-07-06*
+
+## Self-Check: PASSED
+
+All created files verified present on disk (crates/core/src/node/{types,encode,decode,mod}.rs, crates/core/tests/node_codec_vectors.rs, this SUMMARY.md). All commit hashes verified in `git log --oneline --all` (f4664bcc3, dca421bd2, c065a2450).
