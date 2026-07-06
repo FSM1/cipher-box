@@ -116,16 +116,19 @@ export class SearchIndexService {
     for (const folder of Object.values(folders)) {
       const parentPath = this.buildPath(folder.id, folders);
 
-      // Index each child (files and subfolders)
-      // TODO(phase 63): use Node.kind for type discrimination; SealedChildRef has no .type/.id/.modifiedAt/.createdAt
+      // Index each child (files and subfolders). `folder.children` is the
+      // SDK-resolved `ResolvedChild[]` projection (68.2-09) -- `modifiedAt`
+      // is sourced from the child's own resolved listing entry, not the
+      // (now-reverted) SealedChildRef display mirror (D-08/68.2-12).
+      // TODO(phase 63): use ResolvedChild.kind for type discrimination instead of hardcoding 'file'
       for (const child of folder.children) {
         documents.push({
           id: `${folder.id}:${child.ipnsName}`,
           name: child.name,
-          type: 'file', // phase 63: use Node.kind ('folder'|'file') from unsealed Node
+          type: 'file', // phase 63: use ResolvedChild.kind ('folder'|'file')
           parentPath,
           parentFolderId: folder.id,
-          modifiedAt: child.modifiedAt ?? 0, // display-mirror on SealedChildRef; 0 for legacy/folders
+          modifiedAt: child.modifiedAt,
         });
       }
     }

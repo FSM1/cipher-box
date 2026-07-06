@@ -577,6 +577,7 @@ export function SharedFileBrowser() {
           open={detailsDialog.open}
           onClose={() => setDetailsDialog({ open: false, item: null })}
           item={detailsDialog.item}
+          resolvedChildren={resolvedChildren}
           folderKey={null}
           parentFolderId=""
         />
@@ -873,6 +874,7 @@ export function SharedFileBrowser() {
         open={detailsDialog.open}
         onClose={() => setDetailsDialog({ open: false, item: null })}
         item={detailsDialog.item}
+        resolvedChildren={resolvedChildren}
         folderKey={folderKey}
         parentFolderId=""
       />

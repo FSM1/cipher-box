@@ -15,8 +15,10 @@ import { ParentDirRow } from './ParentDirRow';
  * SDK-resolved listing (the folder store's `children: ResolvedChild[]`,
  * Plan 09) rather than falling back to the retired kind-cache. A miss (item
  * not yet present in the resolved listing, e.g. an in-flight sync race)
- * falls back to a folder-safe default built from the raw `SealedChildRef`
- * mirror fields.
+ * falls back to a folder-safe default with unknown size/modifiedAt --
+ * `SealedChildRef` no longer carries a size/modifiedAt display mirror
+ * (D-08/68.2-12 revert; size/modifiedAt are sourced from `ResolvedChild`
+ * only).
  */
 function toResolvedChildView(
   ref: SealedChildRef,
@@ -27,8 +29,8 @@ function toResolvedChildView(
     ipnsName: ref.ipnsName,
     name: ref.name,
     kind: 'folder',
-    size: ref.size,
-    modifiedAt: ref.modifiedAt ?? 0,
+    size: undefined,
+    modifiedAt: 0,
     sequence: 0,
   };
 }

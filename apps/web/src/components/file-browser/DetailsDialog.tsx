@@ -12,6 +12,15 @@ type DetailsDialogProps = {
   open: boolean;
   onClose: () => void;
   item: SealedChildRef | null;
+  /**
+   * The SDK-resolved display projection for `item`'s folder (SDK-READ-02) --
+   * kind/size/modifiedAt pre-resolved, looked up by ipnsName (mirrors
+   * FileList's `resolvedByIpnsName` pattern, 68.2-11). A miss (item not yet
+   * present in the resolved listing) falls back to a folder-safe default
+   * with unknown size/modifiedAt -- `SealedChildRef` no longer carries a
+   * size/modifiedAt display mirror (D-08/68.2-12 revert).
+   */
+  resolvedChildren: ResolvedChild[];
   folderKey: Uint8Array | null;
   parentFolderId: string;
 };
@@ -30,6 +39,7 @@ export function DetailsDialog({
   open,
   onClose,
   item,
+  resolvedChildren,
   folderKey,
   parentFolderId,
 }: DetailsDialogProps) {
@@ -51,18 +61,20 @@ export function DetailsDialog({
 
   // 68.2-06 companion patch: FileDetails/FolderDetails render from
   // ResolvedChild (SDK-READ-02) rather than SealedChildRef (D-08 no-regression
-  // render repoint) -- built from isFolderHeuristic above, since this dialog
-  // only has a SealedChildRef, not a listFolder-resolved entry, for the
-  // selected item.
+  // render repoint). Look up the parent folder's SDK-resolved listing by
+  // ipnsName (mirrors FileList's resolvedByIpnsName pattern, 68.2-11); a miss
+  // (item not yet present in the resolved listing) falls back to a
+  // folder-safe default with unknown size/modifiedAt -- `SealedChildRef` no
+  // longer carries a size/modifiedAt display mirror (D-08/68.2-12 revert).
   const resolvedItem: ResolvedChild | null = item
-    ? {
+    ? (resolvedChildren.find((c) => c.ipnsName === item.ipnsName) ?? {
         ipnsName: item.ipnsName,
         name: item.name,
         kind: isFolderHeuristic ? 'folder' : 'file',
-        size: item.size,
-        modifiedAt: item.modifiedAt ?? 0,
+        size: undefined,
+        modifiedAt: 0,
         sequence: 0,
-      }
+      })
     : null;
 
   // Resolve IPNS to get metadata CID (folder view only)

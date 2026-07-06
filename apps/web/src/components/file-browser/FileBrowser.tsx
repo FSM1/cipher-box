@@ -287,6 +287,7 @@ export function FileBrowser() {
         open={actions.detailsDialog.open}
         onClose={actions.closeDetailsDialog}
         item={actions.detailsDialog.item}
+        resolvedChildren={currentFolder?.children ?? []}
         folderKey={currentFolder?.folderKey ?? null}
         parentFolderId={currentFolderId}
       />
