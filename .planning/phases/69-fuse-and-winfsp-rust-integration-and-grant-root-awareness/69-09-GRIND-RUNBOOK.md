@@ -88,6 +88,34 @@ enum InodeKind {
   exists but write path doesn't populate) — versioning regression to verify at E2E; (b) file_iv hex round-trip; (c) content read
   gated-fetch (Slice 5 TASK 0 fetch_node_gated).
 
+## SLICE 4 OUTCOME (commit 586cfd444) — carry-forward for Slice 5
+- replay.rs rewritten onto node/v3. 39→35 errs; replay.rs 4→1 (the 1 = intended fetch_node_gated dep at replay.rs:427).
+- Parent keys via list_folder_owned BFS from root (resolve_owned_parent); parent signing seed from parent's OWN sealed
+  write-body (recover_signing_seed→unseal_node→decode_write_body), NOT journal. UploadFile: sidecar→real cid→patch
+  NodeContent.cid→re-seal→publish. replay.rs:839 name-blob: decrypt_journal_name DELETED (name now in SealedChildRef.name).
+- Fail-closed skip in replay_for_vault Err arm (record_failure/retain, no panic).
+### SLICE 5 (FINAL → workspace GREEN) — detailed task list (35 fuse errs + desktop + gate):
+- **TASK 0 (sdk, additive, keep sdk-green, own commit):** add `pub async fn fetch_node_gated<F,S>(fetcher:&F,
+  high_water:&RotationHighWater<S>, ipns_name:&str) -> Result<PublishedNode, ListingError>` to crates/sdk/src/listing.rs
+  — gate-first (reuse resolve_published_node, enforce_resolved BEFORE return), NO new raw-resolve public surface beyond
+  this sanctioned entrypoint; re-export at cipherbox_sdk::. Add a unit test (round-trip an emitted node). replay.rs:427 + read_ops call it.
+- **fuse glue:** read_ops.rs(23), fs.rs(7 read-completion: drain_refresh_completions, populate_folder caller w/ new async sig
+  passing api+high_water, resolve_file_pointer, mark_remotely_edited), dir_ops.rs(4), inode.rs(3 residual), poll.rs(2),
+  content_ops.rs(2) — repoint onto new InodeKind fields + new signatures (runbook SLICE 2/3 OUTCOME sigs). File content read:
+  fetch the file PublishedNode via fetch_node_gated → content_ops fetch_and_decrypt_content_async(api,&PublishedNode,&read_key).
+- **desktop:** apps/desktop/src-tauri/src/fuse/mod.rs + prepopulate.rs root population → list_folder_owned + Node populate_folder
+  sig; root InodeKind::Root filled from AppState root read_key/write_key/ipns seed (id=uuid_from_ino(ROOT_INO)). Update
+  replay_for_vault callers (mod.rs:252 + windows/mod.rs:160) to new sig: (journal, api, journal_dir:PathBuf, root_read_key:&[u8;32],
+  root_write_key:&[u8;32], root_ipns_name, coordinator, tee_public_key, tee_key_epoch) — legacy private_key/public_key/root_folder_key gone.
+  windows/* behind cfg(winfsp) won't locally compile (69-14 CI) — edit for correctness anyway.
+- **SC#6 CI gate:** add grep-gate step to ci.yml Rust lane (cargo-macos ~635 / cargo-linux ~684): fail if crates/fuse/src
+  references raw resolve (resolve_published_node|resolve_ipns_verified) outside list_folder|list_shared_folder|list_folder_owned|
+  fetch_node_gated. Local dry-run zero hits.
+- **GREEN BOUNDARY:** cargo check --workspace green + cargo test -p cipherbox-fuse green + -p cipherbox-sdk green +
+  grep ecies::unwrap_key inode.rs/content_ops.rs EMPTY. Write 69-09-SUMMARY.md. Commit incrementally (TASK0 sdk / fuse glue /
+  desktop+gate) so partial survives.
+- E2E FLAG add: replay doesn't unpin old parent CID after re-publish (orphaned pins GC-able, not correctness-critical).
+
 ## Slices (sequential, same branch; each: commit even if crate RED elsewhere, that's expected)
 1. **Types + CipherBoxFS wiring** (keystone 1+2): reshape `InodeKind` (inode.rs enum def + its constructors);
    add `high_water: RotationHighWater<JsonSidecarFloorStore>` + `fetcher: ApiNodeFetcher` (or the wired gate)
