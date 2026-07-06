@@ -277,11 +277,12 @@ pub(crate) async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Res
     Ok(())
 }
 
-/// Fetch vault from backend and decrypt rootFolderKey from IPFS v2 blob.
+/// Fetch vault from backend and recover the node/v3 root keys from the IPFS v3 blob.
 ///
-/// All users read rootFolderKey from the IPFS vault blob v2 header.
-/// The IPNS keypair is always HKDF-derived from the user's private key.
-/// Stores all keys in AppState (memory only).
+/// Deserializes the vault-blob-v3 and ECIES-unwraps BOTH `root_read_key` and
+/// `root_write_key` under the user's private key. The root Ed25519 IPNS keypair
+/// is always HKDF-derived from the user's private key (recomputable, not in the
+/// blob). Stores all keys in AppState (memory only).
 pub(crate) async fn fetch_and_decrypt_vault(state: &AppState) -> Result<(), String> {
     log::info!("Fetching and decrypting vault keys");
 
@@ -352,19 +353,26 @@ pub(crate) async fn fetch_and_decrypt_vault(state: &AppState) -> Result<(), Stri
         .await
         .map_err(|e| format!("IPFS fetch failed for vault key blob: {}", e))?;
 
-    if cipherbox_core::vault_blob::detect_blob_version(&blob_bytes) != 2 {
-        return Err("Vault key blob is not v2 format".into());
-    }
-    let enc_key = cipherbox_core::vault_blob::deserialize_vault_blob_v2(&blob_bytes)
-        .map_err(|e| format!("v2 blob parse failed: {}", e))?;
-    let root_folder_key = cipherbox_crypto::ecies::unwrap_key(enc_key, &private_key)
-        .map_err(|e| format!("Failed to decrypt rootFolderKey from v2 blob: {}", e))?;
+    // node/v3: deserialize the two ECIES-wrapped root keys (read then write) and
+    // unwrap each under the user's private key. A v2/malformed blob is rejected
+    // fail-closed by deserialize_vault_blob_v3's Err (the old v2-only gate is gone).
+    let (enc_read, enc_write) = cipherbox_core::vault_blob::deserialize_vault_blob_v3(&blob_bytes)
+        .map_err(|e| format!("v3 blob parse failed: {}", e))?;
+    let root_read_key = cipherbox_crypto::ecies::unwrap_key(&enc_read, &private_key)
+        .map_err(|e| format!("Failed to decrypt root read key from v3 blob: {}", e))?;
+    let root_write_key = cipherbox_crypto::ecies::unwrap_key(&enc_write, &private_key)
+        .map_err(|e| format!("Failed to decrypt root write key from v3 blob: {}", e))?;
 
-    // `unwrap_key` returns `Zeroizing<Vec<u8>>` (Phase 51 S3); the SDK-state field is
-    // also `Zeroizing<Vec<u8>>`, so store it directly and keep the key wiped on drop.
-    *state.sdk.root_folder_key.write().await = Some(root_folder_key);
+    // `unwrap_key` returns `Zeroizing<Vec<u8>>` and the SDK-state fields are also
+    // `Zeroizing<Vec<u8>>`, so store directly and keep the keys wiped on drop.
+    // Transitional (until 69-24): `root_folder_key` mirrors `root_read_key` so the
+    // still-bridged mount (fuse/mod.rs) + post_auth_finalize `root_folder_key`
+    // read stay workspace-green; 69-24 removes this coupling.
+    *state.sdk.root_folder_key.write().await = Some(Zeroizing::new(root_read_key.to_vec()));
+    *state.sdk.root_read_key.write().await = Some(root_read_key);
+    *state.sdk.root_write_key.write().await = Some(root_write_key);
 
-    // Root folder IPNS key is HKDF-derived
+    // Root folder IPNS key is HKDF-derived (recomputable, NOT in the blob)
     *state.sdk.root_ipns_private_key.write().await = Some(root_ipns_priv.to_vec());
 
     // Store IPNS name and TEE keys
@@ -457,6 +465,104 @@ mod root_emit_tests {
         assert!(
             opened_with_read.is_err(),
             "the write-body must not open under the read key (AAD/key separation)"
+        );
+    }
+
+    /// End-to-end init->recover round-trip (pure, no live IO): mirror
+    /// `initialize_vault`'s wrap+serialize with two INDEPENDENT random-style root
+    /// keys, then mirror `fetch_and_decrypt_vault`'s deserialize+unwrap and assert
+    /// both keys come back byte-identical (and stay distinct). Finally seal the
+    /// empty root under the recovered keys and assert the read-body opens under
+    /// root_read_key but the write-body does NOT (AAD/key separation).
+    #[test]
+    fn init_recover_v3_round_trips() {
+        // Fixed secp256k1 keypair: private key = 1, public key = generator point G
+        // (uncompressed, 0x04 prefix). Avoids adding a keygen dependency.
+        let private_key = {
+            let mut k = [0u8; 32];
+            k[31] = 1;
+            k
+        };
+        let public_key = hex::decode(
+            "0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f8179\
+8483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8",
+        )
+        .expect("valid uncompressed secp256k1 pubkey hex");
+
+        // Two INDEPENDENT distinct root keys (never derived from each other).
+        let root_read_key = [0x11u8; 32];
+        let root_write_key = [0x22u8; 32];
+        assert_ne!(root_read_key, root_write_key);
+
+        // INIT twin: ECIES-wrap both (read then write), serialize the v3 blob.
+        let enc_read = cipherbox_crypto::ecies::wrap_key(&root_read_key, &public_key)
+            .expect("wrap root read key");
+        let enc_write = cipherbox_crypto::ecies::wrap_key(&root_write_key, &public_key)
+            .expect("wrap root write key");
+        let blob = cipherbox_core::vault_blob::serialize_vault_blob_v3(&enc_read, &enc_write)
+            .expect("serialize v3 blob");
+
+        // RECOVER twin: deserialize the v3 blob, unwrap both under the private key.
+        let (dec_enc_read, dec_enc_write) =
+            cipherbox_core::vault_blob::deserialize_vault_blob_v3(&blob)
+                .expect("deserialize v3 blob");
+        let rec_read = cipherbox_crypto::ecies::unwrap_key(&dec_enc_read, &private_key)
+            .expect("unwrap root read key");
+        let rec_write = cipherbox_crypto::ecies::unwrap_key(&dec_enc_write, &private_key)
+            .expect("unwrap root write key");
+
+        // Both keys recovered byte-identical and remain distinct.
+        assert_eq!(rec_read.as_slice(), &root_read_key);
+        assert_eq!(rec_write.as_slice(), &root_write_key);
+        assert_ne!(rec_read.as_slice(), rec_write.as_slice());
+
+        // Seal the empty root under the RECOVERED keys; read-body opens under the
+        // read key, write-body must NOT open under the read key (AAD separation).
+        let root_ipns_seed = [0x33u8; 32];
+        let read_arr: [u8; 32] = rec_read
+            .as_slice()
+            .try_into()
+            .expect("read key is 32 bytes");
+        let write_arr: [u8; 32] = rec_write
+            .as_slice()
+            .try_into()
+            .expect("write key is 32 bytes");
+        let bytes = build_empty_root_published_node(&read_arr, &write_arr, &root_ipns_seed)
+            .expect("build empty root node under recovered keys");
+        let published =
+            cipherbox_core::node::decode_published_node(&bytes).expect("decode published node");
+
+        let read_sealed = base64::engine::general_purpose::STANDARD
+            .decode(&published.read_sealed)
+            .expect("valid base64 read_sealed");
+        let read_body = cipherbox_core::node::seal::unseal_node(
+            &read_sealed,
+            &read_arr,
+            &published.id,
+            cipherbox_core::node::NodeKind::Root,
+            0,
+        )
+        .expect("unseal read body under recovered read key");
+        match cipherbox_core::node::decode_node(&read_body).expect("decode read-body node") {
+            cipherbox_core::node::Node::Root { children, .. } => {
+                assert!(children.is_empty(), "recovered root has no children");
+            }
+            other => panic!("expected Node::Root, got {:?}", other),
+        }
+
+        let write_sealed = base64::engine::general_purpose::STANDARD
+            .decode(published.write_sealed.as_ref().expect("write body sealed"))
+            .expect("valid base64 write_sealed");
+        let opened_with_read = cipherbox_core::node::seal::unseal_node(
+            &write_sealed,
+            &read_arr,
+            &published.id,
+            cipherbox_core::node::NodeKind::Root,
+            0,
+        );
+        assert!(
+            opened_with_read.is_err(),
+            "the write-body must not open under the recovered read key (AAD/key separation)"
         );
     }
 }
