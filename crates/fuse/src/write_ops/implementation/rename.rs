@@ -90,6 +90,21 @@ pub fn handle_rename(
         newparent,
     );
 
+    // SC#3 grant-scope gate for a cross-folder move (a scope-exit for the source
+    // subtree). A same-folder rename is NOT a scope exit — the node stays in
+    // place, so no rotation. Computed on the SOURCE ancestry BEFORE any inode
+    // mutation so a fail-closed rotation aborts the move cleanly (item stays
+    // put). Private move → pure `SealedChildRef` relink of both parents (ZERO
+    // rotation, D-08 unlink+bin-equivalent with no cross-principal revoke);
+    // shared-scope exit → rotate the read key from the matched grant-root
+    // ancestor EXACTLY ONCE. D-07 dual-keying is threaded inside the driver.
+    if parent != newparent
+        && crate::write_ops::grant_scope::run_scope_exit_gate(fs, source_ino).is_err()
+    {
+        reply.error(libc::EIO);
+        return;
+    }
+
     // Cross-folder FILE moves must re-encrypt the per-file FileMetadata to the
     // destination folderKey (it is sealed with the parent folderKey). Capture
     // the inputs now, before any inode mutation. Folder moves need nothing — a
