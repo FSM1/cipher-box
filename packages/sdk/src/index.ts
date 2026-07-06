@@ -115,3 +115,15 @@ export {
 
 // Error handling and retry utilities
 export { isForbiddenError, isConflictError, withRevocationGuard, withConflictRetry } from './error';
+
+// Pure structural utils (D-07 write scope) -- no crypto/IO, re-exported so
+// apps/web imports these from the facade instead of @cipherbox/sdk-core
+// directly (RESEARCH Code Examples: MoveDialog.tsx, useFolderMutations.ts,
+// streaming-crypto.service.ts current call sites).
+export {
+  getDepth,
+  isDescendantOf,
+  calculateSubtreeDepth,
+  type TreeNode,
+} from '@cipherbox/sdk-core';
+export { selectEncryptionMode } from '@cipherbox/sdk-core';

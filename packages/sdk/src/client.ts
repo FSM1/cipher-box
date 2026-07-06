@@ -769,6 +769,27 @@ export class CipherBoxClient {
   }
 
   /**
+   * Return a folder's full decoded metadata (the decrypted `Node`,
+   * including its raw `SealedChildRef[]` children) by delegating to the
+   * gated `ensureFolderLoaded` path (D-05 single gated read entrypoint).
+   *
+   * Mediated replacement for the web's direct `sdkCore.fetchAndDecryptMetadata`
+   * call (RESEARCH Code Examples, `useFileBrowserActions.ts`/`folder-helpers.ts`)
+   * — callers that need the folder's own metadata fields (not just its
+   * resolved children) should use this instead of `listFolder`.
+   *
+   * @param ipnsName - IPNS name of the folder
+   * @returns The decrypted `Node`, or `null` if the folder cannot be loaded
+   *   (matches `ensureFolderLoaded`'s not-found contract)
+   */
+  async getFolderMetadata(ipnsName: string): Promise<CoreNode | null> {
+    return this.withOperation('getFolderMetadata', async () => {
+      const folder = await this.ensureFolderLoaded(ipnsName);
+      return folder?.metadata ?? null;
+    });
+  }
+
+  /**
    * List a shared folder's children as `ResolvedChild[]` for an
    * INTERMEDIATE folder reached by descending `path` (a sequence of child
    * `ipnsName`s) from the already-loaded share root/depth in
