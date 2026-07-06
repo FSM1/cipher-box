@@ -12,9 +12,8 @@
  */
 
 import { useCallback } from 'react';
-import type { SealedChildRef, PublishedNode } from '@cipherbox/core';
+import type { SealedChildRef } from '@cipherbox/core';
 import { withRevocationGuard as sdkWithRevocationGuard } from '@cipherbox/sdk';
-import { resolveIpnsRecord, fetchFromIpfs } from '@cipherbox/sdk-core';
 import { unwrapKey, hexToBytes } from '@cipherbox/crypto';
 import { getSdkClient } from '../lib/sdk-provider';
 import { useAuthStore } from '../stores/auth.store';
@@ -23,21 +22,17 @@ import { logger } from '../lib/logger';
 import type { SharedListItem } from './useSharedNavigation';
 
 /**
- * Resolve a child item's write-body UUID (childNodeId) from its IPNS name.
- * `id`/`kind` are plaintext on the PublishedNode envelope (NODE-03) -- no
- * decryption needed. Mirrors `useSharedNavigationActions.ts`'s
- * `fetchPublishedNode` (duplicated here; that helper is module-private to
- * its own file).
+ * Resolve a child item's write-body UUID (childNodeId) from its IPNS name via
+ * `client.resolveNodeIdentity` (D-07, 68.2-08) -- `id`/`kind` are plaintext
+ * on the PublishedNode envelope (NODE-03), so no readKey/decryption is
+ * needed; the SDK facade resolves+parses the envelope internally.
  */
 async function resolveChildNodeId(ipnsName: string): Promise<string> {
-  const ctx = getSdkClient().getContext();
-  const resolved = await resolveIpnsRecord(ipnsName, ctx);
-  if (!resolved) {
+  const identity = await getSdkClient().resolveNodeIdentity(ipnsName);
+  if (!identity) {
     throw new Error(`Cannot resolve item ${ipnsName} (revoked or not found)`);
   }
-  const raw = await fetchFromIpfs(ctx, resolved.cid);
-  const published = JSON.parse(new TextDecoder().decode(raw)) as PublishedNode;
-  return published.id;
+  return identity.nodeId;
 }
 
 /**

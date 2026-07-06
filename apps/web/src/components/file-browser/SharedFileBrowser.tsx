@@ -75,6 +75,7 @@ export function SharedFileBrowser() {
     currentView,
     sharedItems,
     folderChildren,
+    resolvedChildren,
     currentShareId,
     folderKey,
     breadcrumbs,
@@ -149,6 +150,16 @@ export function SharedFileBrowser() {
   const selectedItems = useMemo(
     () => folderChildren.filter((c) => selectedIds.has(c.ipnsName)),
     [folderChildren, selectedIds]
+  );
+
+  // 68.2-08 (D-02): resolved display projection, keyed by ipnsName -- passed
+  // to SharedFolderRow's `resolved` prop so kind/size/modifiedAt render from
+  // the SDK-resolved listing (client.listSharedFolder) instead of the legacy
+  // SealedChildRef display-mirror fields. `folderChildren` itself stays the
+  // identity/crypto carrier for every write-op/dialog call site below.
+  const resolvedByIpnsName = useMemo(
+    () => new Map(resolvedChildren.map((r) => [r.ipnsName, r])),
+    [resolvedChildren]
   );
   // The batch action bar only appears for a genuine multi-selection (>1), mirroring
   // the private vault (FileBrowser :205 `selectedIds.size > 1`). Gating on >0 would
@@ -739,6 +750,7 @@ export function SharedFileBrowser() {
               <SharedFolderRow
                 key={item.ipnsName}
                 item={item}
+                resolved={resolvedByIpnsName.get(item.ipnsName)}
                 permission={permission}
                 isRenaming={renamingItem?.ipnsName === item.ipnsName}
                 renameValue={renameValue}

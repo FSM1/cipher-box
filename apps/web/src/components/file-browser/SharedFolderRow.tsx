@@ -10,6 +10,7 @@ import type React from 'react';
 import { useState, useCallback } from 'react';
 import type { MouseEvent, DragEvent, KeyboardEvent } from 'react';
 import type { SealedChildRef } from '@cipherbox/core';
+import type { ResolvedChild } from '@cipherbox/sdk';
 import { isExternalFileDrag } from '../../hooks/useDropUpload';
 import { isFileRef } from '../../utils/fileTypes';
 import { formatBytes, formatDate } from '../../utils/format';
@@ -21,6 +22,17 @@ type DragPayload = {
 
 export type SharedFolderRowProps = {
   item: SealedChildRef;
+  /**
+   * Resolved display projection of `item` (68.2-08, D-02) -- when present,
+   * `kind`/`size`/`modifiedAt` render from this instead of `item`'s own
+   * (legacy, unreliable) display-mirror fields. `item` itself stays the
+   * identity/crypto carrier for callbacks (drag payload id, rename/delete/
+   * move calls), matching `FileListItem.tsx`'s owned-folder dual-prop
+   * pattern (Plan 06). `undefined` while the resolved listing is still
+   * loading -- falls back to `item`'s own fields (may render the em-dash
+   * placeholder / kind-cache default in that window).
+   */
+  resolved?: ResolvedChild;
   permission: 'read' | 'write' | null;
   isRenaming: boolean;
   renameValue: string;
@@ -47,6 +59,7 @@ export type SharedFolderRowProps = {
 
 export function SharedFolderRow({
   item,
+  resolved,
   permission,
   isRenaming,
   renameValue,
@@ -61,15 +74,22 @@ export function SharedFolderRow({
   onMoveItemTo,
   selectedItems = [],
 }: SharedFolderRowProps) {
-  // D-02: kind cache read (synchronous, folder-safe default on cache miss).
-  const isFolder = !isFileRef(item);
+  // 68.2-08 (D-02): prefer the resolved listing's kind when available --
+  // isFileRef reads `.kind` directly off a ResolvedChild, no kind-cache
+  // lookup needed. Falls back to the legacy kind-cache-backed SealedChildRef
+  // path while the resolved listing is still loading.
+  const isFolder = !isFileRef(resolved ?? item);
   const icon = isFolder ? '📁' : '📄';
-  // Display-mirror fields on SealedChildRef (undefined on folders/legacy → em dash).
+  // 68.2-08 (D-02): size/modifiedAt render from the resolved listing when
+  // available -- em dash while still loading (SealedChildRef's own display
+  // mirrors are the pre-68.2-08 fallback, kept for the loading window only).
   const size =
-    typeof item.size === 'number' && Number.isFinite(item.size) ? formatBytes(item.size) : '—';
+    typeof resolved?.size === 'number' && Number.isFinite(resolved.size)
+      ? formatBytes(resolved.size)
+      : '—';
   const date =
-    typeof item.modifiedAt === 'number' && Number.isFinite(item.modifiedAt)
-      ? formatDate(item.modifiedAt)
+    typeof resolved?.modifiedAt === 'number' && Number.isFinite(resolved.modifiedAt)
+      ? formatDate(resolved.modifiedAt)
       : '—';
   const isWrite = permission === 'write';
 
