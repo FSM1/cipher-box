@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { type VaultSettings, DEFAULT_VAULT_SETTINGS } from '@cipherbox/core';
+import { type VaultSettings, DEFAULT_VAULT_SETTINGS } from '@cipherbox/sdk';
 
 type VaultSettingsState = {
   /** Current vault settings */

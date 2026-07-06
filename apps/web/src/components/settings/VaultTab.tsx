@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { type VaultSettings, DEFAULT_VAULT_SETTINGS, validateVaultSettings } from '@cipherbox/core';
+import { type VaultSettings, DEFAULT_VAULT_SETTINGS, validateVaultSettings } from '@cipherbox/sdk';
 import { useVaultSettingsStore } from '../../stores/vault-settings.store';
 import { saveVaultSettings } from '../../services/vault-settings.service';
 import { useAuthStore } from '../../stores/auth.store';
+import { getSdkClient } from '../../lib/sdk-provider';
 
 /**
  * VAULT tab for the Settings page.
@@ -63,6 +64,7 @@ export function VaultTab() {
       });
 
       await saveVaultSettings({
+        client: getSdkClient(),
         settings: newSettings,
         userPublicKey: vaultKeypair.publicKey,
         userPrivateKey: vaultKeypair.privateKey,

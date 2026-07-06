@@ -9,15 +9,9 @@ import { useFolderStore } from '../stores/folder.store';
 import { useVaultStore } from '../stores/vault.store';
 import { useDeviceRegistryStore } from '../stores/device-registry.store';
 import { clearAllUserStores } from '../lib/clear-user-stores';
-import { initSdkClient } from '../lib/sdk-provider';
+import { initSdkClient, createBootstrapClient } from '../lib/sdk-provider';
 import { setFaroUser, clearFaroUser } from '../lib/faro';
 // api-config.ts handles setApiClientConfig at module load time
-import {
-  initializeVault,
-  encryptVaultKeys,
-  serializeVaultBlobV3,
-  deserializeVaultBlobV3,
-} from '@cipherbox/core';
 import {
   deriveVaultIpnsKeypair,
   deriveVaultKeyIpnsKeypair,
@@ -28,17 +22,13 @@ import {
 } from '@cipherbox/crypto';
 import type { ByoIpfsConfig } from '@cipherbox/core';
 import type { PinningConfig } from '@cipherbox/sdk';
-import { publishEmptyRootNode } from '@cipherbox/sdk-core';
-import type { SdkContext } from '@cipherbox/sdk-core';
 import { getOrCreateDeviceIdentity } from '../lib/device/identity';
 import { detectDeviceInfo, computeIpHash } from '../lib/device/info';
 import { initializeOrSyncRegistry } from '../services/device-registry.service';
 import { useBinStore } from '../stores/bin.store';
 import { loadVaultSettings } from '../services/vault-settings.service';
 import { useVaultSettingsStore } from '../stores/vault-settings.store';
-import { createAndPublishIpnsRecord, resolveIpnsRecord } from '../services/ipns.service';
-import { addToIpfs, fetchFromIpfs } from '../lib/api/ipfs';
-import { apiUrl as sdkApiUrl, apiAxios } from '../lib/api-config';
+import { apiUrl as sdkApiUrl } from '../lib/api-config';
 import {
   triggerOwnerReconcileOnLogin,
   runOwnerReconcileForFolder,
@@ -134,240 +124,254 @@ export function useAuth() {
       // Store keypair in auth store for crypto operations
       setVaultKeypair(userKeypair);
 
-      // Isolate getVault() so only its 404 triggers new-user initialization.
-      // Downstream errors (IPNS resolve, IPFS fetch) must not be misclassified.
-      let existingVault: Awaited<ReturnType<typeof vaultApi.getVault>> | null = null;
+      // Throwaway facade client for vault-bootstrap/config-blob operations
+      // that must run BEFORE rootIpnsName/rootFolderKey are known -- this
+      // client mints/loads the very keys the REAL SDK client (initSdkClient
+      // below) needs to be constructed. These facade methods only read
+      // `ctx` (apiUrl/getAccessToken/axiosInstance) or caller-supplied key
+      // material passed directly as arguments; they never touch
+      // rootIpnsName/rootFolderKey/folderTree, so the placeholder values
+      // createBootstrapClient uses internally are safe. Destroyed in the
+      // finally block below once no longer needed (D-09) -- it is a fully
+      // separate instance from the real sdkClient constructed later.
+      const bootstrapClient = createBootstrapClient({
+        apiUrl: sdkApiUrl,
+        getAccessToken: async () => useAuthStore.getState().accessToken || '',
+        vaultKeypair: { publicKey: userKeypair.publicKey, privateKey: userKeypair.privateKey },
+      });
+
       try {
-        existingVault = await vaultApi.getVault();
-      } catch (error) {
-        const is404 = (error as { response?: { status?: number } })?.response?.status === 404;
-        if (!is404) {
-          logger.error('[useAuth] Failed to load vault:', error);
-          throw error;
-        }
-      }
-
-      if (existingVault) {
-        // Store TEE keys if available
-        if (existingVault.teeKeys) {
-          useAuthStore.getState().setTeeKeys(existingVault.teeKeys);
-        }
-
-        // Load vault v3 key blob from dedicated vault key IPNS (separate from root folder IPNS)
-        const vaultKeyKeypair = await deriveVaultKeyIpnsKeypair(userKeypair.privateKey);
-
-        const resolved = await resolveIpnsRecord(vaultKeyKeypair.ipnsName);
-        if (!resolved) throw new Error('Vault key IPNS name not found');
-
-        const blobBytes = await fetchFromIpfs(resolved.cid);
-
-        // Deserialize v3 blob (only rootReadKey + rootWriteKey; IPNS keypair is derived)
-        const { encryptedRootReadKey, encryptedRootWriteKey } = deserializeVaultBlobV3(blobBytes);
-        const rootReadKey = await unwrapKey(encryptedRootReadKey, userKeypair.privateKey);
-        const rootWriteKey = await unwrapKey(encryptedRootWriteKey, userKeypair.privateKey);
-
-        // IPNS keypair is deterministically derived from user private key (not in blob)
-        const rootIpnsKeypair = await deriveVaultIpnsKeypair(userKeypair.privateKey);
-
-        setVaultKeys({
-          rootReadKey,
-          rootWriteKey,
-          rootIpnsKeypair,
-          rootIpnsName: existingVault.rootIpnsName,
-          vaultId: existingVault.id,
-        });
-      } else {
-        // New user -- initialize vault with v3 key blob + root Node
-        logger.info('[Auth] New user -- initializing vault (v3)');
-        const newVault = await initializeVault(userKeypair.privateKey);
-
-        // Derive vault key IPNS keypair (separate from root folder IPNS)
-        const vaultKeyKeypair = await deriveVaultKeyIpnsKeypair(userKeypair.privateKey);
-        const vaultKeyIpnsName = vaultKeyKeypair.ipnsName;
-
-        // 1. Encrypt and serialize v3 key blob, publish to vault key IPNS
-        // serializeVaultBlobV3 stores only rootReadKey + rootWriteKey (IPNS keypair is derived)
-        const encryptedKeys = await encryptVaultKeys(newVault, userKeypair.publicKey);
-        const v3Blob = serializeVaultBlobV3(
-          encryptedKeys.encryptedRootReadKey,
-          encryptedKeys.encryptedRootWriteKey
-        );
-
-        const keyBlobUpload = await addToIpfs(new Blob([v3Blob as unknown as BlobPart]));
-        const keyPublishResult = await createAndPublishIpnsRecord({
-          ipnsPrivateKey: vaultKeyKeypair.privateKey,
-          ipnsName: vaultKeyIpnsName,
-          metadataCid: keyBlobUpload.cid,
-          sequenceNumber: 1n,
-          expectedSequenceNumber: undefined,
-        });
-        if (!keyPublishResult.success) {
-          throw new Error('Failed to publish vault key blob to IPNS');
-        }
-
-        // 2. Publish an empty kind:'root' Node (write-body carries the root IPNS
-        // signing key) to the root IPNS name at sequenceNumber 1n. The name is
-        // derived internally by publishEmptyRootNode from rootIpnsKeypair.publicKey
-        // and returned below (T-68.1-03-02).
-        const sdkCtx: SdkContext = {
-          apiUrl: sdkApiUrl,
-          getAccessToken: async () => useAuthStore.getState().accessToken || '',
-          axiosInstance: apiAxios,
-        };
-        const { ipnsName: rootIpnsName } = await publishEmptyRootNode({
-          rootIpnsKeypair: newVault.rootIpnsKeypair,
-          rootReadKey: newVault.rootReadKey,
-          rootWriteKey: newVault.rootWriteKey,
-          ctx: sdkCtx,
-          // New users have no TEE enrollment yet -- teeKeys stays undefined.
-        });
-
-        // 3. Register the vault with the API. Zero-crypto v2 schema: only
-        // ownerPublicKey + rootIpnsName cross the wire, never plaintext/crypto
-        // key material (CLAUDE.md rule 3/6, T-68.1-03-01).
-        const registeredVault = await vaultApi.initVault({
-          ownerPublicKey: bytesToHex(userKeypair.publicKey),
-          rootIpnsName,
-        });
-
-        setVaultKeys({
-          rootReadKey: newVault.rootReadKey,
-          rootWriteKey: newVault.rootWriteKey,
-          rootIpnsKeypair: newVault.rootIpnsKeypair,
-          rootIpnsName,
-          vaultId: registeredVault.id,
-        });
-      }
-
-      // Load BYO pinning config from encrypted IPNS entry (if configured).
-      // Gracefully degrades to cipherbox-only mode on any failure.
-      const loadByoConfig = async (
-        userPrivateKey: Uint8Array
-      ): Promise<PinningConfig | undefined> => {
-        // Time-bound the entire lookup so a hung IPFS peer can't block login
-        const BYO_LOAD_TIMEOUT_MS = 10_000;
-        const inner = async (): Promise<PinningConfig | undefined> => {
-          const byoKeypair = await deriveByoConfigIpnsKeypair(userPrivateKey);
-          const ipnsName = byoKeypair.ipnsName;
-
-          const resolved = await resolveIpnsRecord(ipnsName);
-          if (!resolved?.cid) return undefined;
-
-          const encrypted = await fetchFromIpfs(resolved.cid);
-          const plaintext = await unwrapKey(encrypted, userPrivateKey);
-          let config: ByoIpfsConfig;
-          try {
-            const json = new TextDecoder().decode(plaintext);
-            config = JSON.parse(json) as ByoIpfsConfig;
-          } finally {
-            clearBytes(plaintext);
-          }
-
-          // Runtime validation: ensure the blob has a valid shape
-          const validModes = ['cipherbox', 'external', 'dual'];
-          if (!config.pinningMode || !validModes.includes(config.pinningMode)) {
-            return undefined;
-          }
-          if (config.pinningMode !== 'cipherbox' && !config.externalProvider?.endpoint) {
-            return undefined;
-          }
-
-          return {
-            mode: config.pinningMode,
-            externalProvider: config.externalProvider ?? undefined,
-          };
-        };
-
+        // Isolate getVault() so only its 404 triggers new-user initialization.
+        // Downstream errors (IPNS resolve, IPFS fetch) must not be misclassified.
+        let existingVault: Awaited<ReturnType<typeof vaultApi.getVault>> | null = null;
         try {
-          const result = await Promise.race([
-            inner(),
-            new Promise<undefined>((resolve) =>
-              setTimeout(() => resolve(undefined), BYO_LOAD_TIMEOUT_MS)
-            ),
-          ]);
-          return result;
-        } catch {
-          // No BYO config or decryption failed -- default to cipherbox-only
-          return undefined;
+          existingVault = await vaultApi.getVault();
+        } catch (error) {
+          const is404 = (error as { response?: { status?: number } })?.response?.status === 404;
+          if (!is404) {
+            logger.error('[useAuth] Failed to load vault:', error);
+            throw error;
+          }
         }
-      };
 
-      // Initialize SDK client with decrypted vault keys
-      const vaultState = useVaultStore.getState();
-      const authState = useAuthStore.getState();
-      if (
-        vaultState.rootReadKey &&
-        vaultState.rootWriteKey &&
-        vaultState.rootIpnsKeypair &&
-        vaultState.rootIpnsName
-      ) {
-        const apiUrl = import.meta.env.VITE_API_URL || window.location.origin + '/api';
-        const getAccessToken = async () => {
-          const state = useAuthStore.getState();
-          return state.accessToken || '';
+        if (existingVault) {
+          // Store TEE keys if available
+          if (existingVault.teeKeys) {
+            useAuthStore.getState().setTeeKeys(existingVault.teeKeys);
+          }
+
+          // Load vault v3 key blob from dedicated vault key IPNS (separate from root folder IPNS)
+          const vaultKeyKeypair = await deriveVaultKeyIpnsKeypair(userKeypair.privateKey);
+
+          const resolved = await bootstrapClient.resolveConfigBlob(vaultKeyKeypair.ipnsName);
+          if (!resolved) throw new Error('Vault key IPNS name not found');
+
+          const blobBytes = await bootstrapClient.downloadBytes(resolved.cid);
+
+          // Deserialize + ECIES-unwrap v3 blob (only rootReadKey + rootWriteKey;
+          // IPNS keypair is derived) via the SDK facade
+          const { rootReadKey, rootWriteKey } = await bootstrapClient.deserializeVault(
+            blobBytes,
+            userKeypair.privateKey
+          );
+
+          // IPNS keypair is deterministically derived from user private key (not in blob)
+          const rootIpnsKeypair = await deriveVaultIpnsKeypair(userKeypair.privateKey);
+
+          setVaultKeys({
+            rootReadKey,
+            rootWriteKey,
+            rootIpnsKeypair,
+            rootIpnsName: existingVault.rootIpnsName,
+            vaultId: existingVault.id,
+          });
+        } else {
+          // New user -- initialize vault with v3 key blob + root Node
+          logger.info('[Auth] New user -- initializing vault (v3)');
+          const newVault = await bootstrapClient.bootstrapVaultKeys(userKeypair.privateKey);
+
+          // Derive vault key IPNS keypair (separate from root folder IPNS)
+          const vaultKeyKeypair = await deriveVaultKeyIpnsKeypair(userKeypair.privateKey);
+          const vaultKeyIpnsName = vaultKeyKeypair.ipnsName;
+
+          // 1. ECIES-wrap + serialize v3 key blob, publish to vault key IPNS
+          // serializeVault stores only rootReadKey + rootWriteKey (IPNS keypair is derived)
+          const v3Blob = await bootstrapClient.serializeVault(newVault, userKeypair.publicKey);
+
+          const keyBlobUpload = await bootstrapClient.uploadBytes(v3Blob);
+          const keyPublishResult = await bootstrapClient.publishConfigBlob({
+            ipnsPrivateKey: vaultKeyKeypair.privateKey,
+            ipnsName: vaultKeyIpnsName,
+            metadataCid: keyBlobUpload.cid,
+            sequenceNumber: 1n,
+          });
+          if (!keyPublishResult.success) {
+            throw new Error('Failed to publish vault key blob to IPNS');
+          }
+
+          // 2. Publish an empty kind:'root' Node (write-body carries the root IPNS
+          // signing key) to the root IPNS name at sequenceNumber 1n. The name is
+          // derived internally by publishEmptyRootNode from rootIpnsKeypair.publicKey
+          // and returned below (T-68.1-03-02).
+          const { ipnsName: rootIpnsName } = await bootstrapClient.publishEmptyRootNode({
+            rootIpnsKeypair: newVault.rootIpnsKeypair,
+            rootReadKey: newVault.rootReadKey,
+            rootWriteKey: newVault.rootWriteKey,
+            // New users have no TEE enrollment yet -- teeKeys stays undefined.
+          });
+
+          // 3. Register the vault with the API. Zero-crypto v2 schema: only
+          // ownerPublicKey + rootIpnsName cross the wire, never plaintext/crypto
+          // key material (CLAUDE.md rule 3/6, T-68.1-03-01).
+          const registeredVault = await vaultApi.initVault({
+            ownerPublicKey: bytesToHex(userKeypair.publicKey),
+            rootIpnsName,
+          });
+
+          setVaultKeys({
+            rootReadKey: newVault.rootReadKey,
+            rootWriteKey: newVault.rootWriteKey,
+            rootIpnsKeypair: newVault.rootIpnsKeypair,
+            rootIpnsName,
+            vaultId: registeredVault.id,
+          });
+        }
+
+        // Load BYO pinning config from encrypted IPNS entry (if configured).
+        // Gracefully degrades to cipherbox-only mode on any failure.
+        const loadByoConfig = async (
+          userPrivateKey: Uint8Array
+        ): Promise<PinningConfig | undefined> => {
+          // Time-bound the entire lookup so a hung IPFS peer can't block login
+          const BYO_LOAD_TIMEOUT_MS = 10_000;
+          const inner = async (): Promise<PinningConfig | undefined> => {
+            const byoKeypair = await deriveByoConfigIpnsKeypair(userPrivateKey);
+            const ipnsName = byoKeypair.ipnsName;
+
+            const resolved = await bootstrapClient.resolveConfigBlob(ipnsName);
+            if (!resolved?.cid) return undefined;
+
+            const encrypted = await bootstrapClient.downloadBytes(resolved.cid);
+            const plaintext = await unwrapKey(encrypted, userPrivateKey);
+            let config: ByoIpfsConfig;
+            try {
+              const json = new TextDecoder().decode(plaintext);
+              config = JSON.parse(json) as ByoIpfsConfig;
+            } finally {
+              clearBytes(plaintext);
+            }
+
+            // Runtime validation: ensure the blob has a valid shape
+            const validModes = ['cipherbox', 'external', 'dual'];
+            if (!config.pinningMode || !validModes.includes(config.pinningMode)) {
+              return undefined;
+            }
+            if (config.pinningMode !== 'cipherbox' && !config.externalProvider?.endpoint) {
+              return undefined;
+            }
+
+            return {
+              mode: config.pinningMode,
+              externalProvider: config.externalProvider ?? undefined,
+            };
+          };
+
+          try {
+            const result = await Promise.race([
+              inner(),
+              new Promise<undefined>((resolve) =>
+                setTimeout(() => resolve(undefined), BYO_LOAD_TIMEOUT_MS)
+              ),
+            ]);
+            return result;
+          } catch {
+            // No BYO config or decryption failed -- default to cipherbox-only
+            return undefined;
+          }
         };
 
-        // Load BYO config and vault settings in parallel before initializing SDK client
-        const [pinningConfig, vaultSettings] = await Promise.all([
-          loadByoConfig(userKeypair.privateKey),
-          loadVaultSettings(userKeypair.privateKey),
-        ]);
+        // Initialize SDK client with decrypted vault keys
+        const vaultState = useVaultStore.getState();
+        const authState = useAuthStore.getState();
+        if (
+          vaultState.rootReadKey &&
+          vaultState.rootWriteKey &&
+          vaultState.rootIpnsKeypair &&
+          vaultState.rootIpnsName
+        ) {
+          const apiUrl = import.meta.env.VITE_API_URL || window.location.origin + '/api';
+          const getAccessToken = async () => {
+            const state = useAuthStore.getState();
+            return state.accessToken || '';
+          };
 
-        // Populate vault settings store
-        useVaultSettingsStore.getState().setSettings(vaultSettings);
+          // Load BYO config and vault settings in parallel before initializing SDK client
+          const [pinningConfig, vaultSettings] = await Promise.all([
+            loadByoConfig(userKeypair.privateKey),
+            loadVaultSettings(bootstrapClient, userKeypair.privateKey),
+          ]);
 
-        // @cipherbox/api-client is configured in lib/api-config.ts at module load time.
+          // Populate vault settings store
+          useVaultSettingsStore.getState().setSettings(vaultSettings);
 
-        const sdkClient = initSdkClient({
-          apiUrl,
-          getAccessToken,
-          vaultKeypair: {
-            publicKey: userKeypair.publicKey,
-            privateKey: userKeypair.privateKey,
-          },
-          rootIpnsName: vaultState.rootIpnsName,
-          // rootReadKey maps to the SDK's rootFolderKey slot (read-body seal key);
-          // rootWriteKey feeds ensureFolderLoaded's DFS write-chain recovery (68.1-01).
-          rootFolderKey: vaultState.rootReadKey!,
-          rootWriteKey: vaultState.rootWriteKey!,
-          // Pass the root IPNS signing keypair so the client can self-bootstrap
-          // and lazy-load folderTree from root (dissolves "Folder not loaded";
-          // fixes bin restore after reload). Guaranteed non-null by the guard above.
-          rootIpnsKeypair: vaultState.rootIpnsKeypair,
-          teeKeys: authState.teeKeys ?? undefined,
-          pinningConfig,
-          // shareCallbacks (getCoveringShares/addShareKeys) removed: the SDK's
-          // per-recipient key fan-out is dead code (D-03 already skips it at
-          // upload time) and the web `addShareKeys` fan-out it called into is
-          // deleted (SC#2 / D-12) — descriptor refs replace it.
-          // Concrete web driver for the scope-exit rotation injection seam
-          // (68-05): durable job checkpoint + D-02/D-03 progress badge +
-          // D-09 multi-tab leader election (68-08).
-          rotationCallbacks: buildRotationClientCallbacks(),
-          // Durable ROT-07 anti-rollback gate (Gap 1 / SC#4): the IndexedDB-backed
-          // rotationHighWater makes the SDK's reconcileFolderSequence enforceResolved
-          // check live for every revocation-triggering mutation in this client.
-          rotationHighWater,
-        });
+          // @cipherbox/api-client is configured in lib/api-config.ts at module load time.
 
-        // Subscribe folder store to SDK events
-        useFolderStore.getState().subscribeToSdk(sdkClient);
+          const sdkClient = initSdkClient({
+            apiUrl,
+            getAccessToken,
+            vaultKeypair: {
+              publicKey: userKeypair.publicKey,
+              privateKey: userKeypair.privateKey,
+            },
+            rootIpnsName: vaultState.rootIpnsName,
+            // rootReadKey maps to the SDK's rootFolderKey slot (read-body seal key);
+            // rootWriteKey feeds ensureFolderLoaded's DFS write-chain recovery (68.1-01).
+            rootFolderKey: vaultState.rootReadKey!,
+            rootWriteKey: vaultState.rootWriteKey!,
+            // Pass the root IPNS signing keypair so the client can self-bootstrap
+            // and lazy-load folderTree from root (dissolves "Folder not loaded";
+            // fixes bin restore after reload). Guaranteed non-null by the guard above.
+            rootIpnsKeypair: vaultState.rootIpnsKeypair,
+            teeKeys: authState.teeKeys ?? undefined,
+            pinningConfig,
+            // shareCallbacks (getCoveringShares/addShareKeys) removed: the SDK's
+            // per-recipient key fan-out is dead code (D-03 already skips it at
+            // upload time) and the web `addShareKeys` fan-out it called into is
+            // deleted (SC#2 / D-12) — descriptor refs replace it.
+            // Concrete web driver for the scope-exit rotation injection seam
+            // (68-05): durable job checkpoint + D-02/D-03 progress badge +
+            // D-09 multi-tab leader election (68-08).
+            rotationCallbacks: buildRotationClientCallbacks(),
+            // Durable ROT-07 anti-rollback gate (Gap 1 / SC#4): the IndexedDB-backed
+            // rotationHighWater makes the SDK's reconcileFolderSequence enforceResolved
+            // check live for every revocation-triggering mutation in this client.
+            rotationHighWater,
+          });
 
-        // Subscribe bin store to SDK events
-        useBinStore.getState().subscribeToSdk(sdkClient);
+          // Subscribe folder store to SDK events
+          useFolderStore.getState().subscribeToSdk(sdkClient);
 
-        // D-11 opportunistic post-mutation owner-reconcile trigger: after the
-        // client emits a mutation-complete event for a folder, fire-and-forget
-        // a reconcile scoped to that folder alongside the eager login sweep
-        // below. Best-effort/idempotent -- errors are captured inside
-        // runOwnerReconcileForFolder and never thrown here.
-        sdkClient.on((event) => {
-          if (event.type === 'folder:updated') {
-            void runOwnerReconcileForFolder(event.ipnsName).catch((error) => {
-              logger.error('[Auth] Opportunistic owner-reconcile failed (non-blocking):', error);
-            });
-          }
-        });
+          // Subscribe bin store to SDK events
+          useBinStore.getState().subscribeToSdk(sdkClient);
+
+          // D-11 opportunistic post-mutation owner-reconcile trigger: after the
+          // client emits a mutation-complete event for a folder, fire-and-forget
+          // a reconcile scoped to that folder alongside the eager login sweep
+          // below. Best-effort/idempotent -- errors are captured inside
+          // runOwnerReconcileForFolder and never thrown here.
+          sdkClient.on((event) => {
+            if (event.type === 'folder:updated') {
+              void runOwnerReconcileForFolder(event.ipnsName).catch((error) => {
+                logger.error('[Auth] Opportunistic owner-reconcile failed (non-blocking):', error);
+              });
+            }
+          });
+        }
+      } finally {
+        // Zero this throwaway client's defensive key copies (D-09). The
+        // real sdkClient constructed above (if any) is an independent
+        // instance and is unaffected by this destroy() call.
+        bootstrapClient.destroy();
       }
 
       // Non-blocking device registry initialization (fire-and-forget)

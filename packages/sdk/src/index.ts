@@ -137,3 +137,11 @@ export type { VaultInit, DeviceRegistry } from '@cipherbox/core';
 // D-07 full-boundary facade type (68.2-04) -- consumed by
 // client.testConnection (BYO-pinning passthrough, no ROT-07 gate).
 export type { ConnectionTestResult } from '@cipherbox/sdk-core';
+
+// D-07 full-boundary re-export (68.2-10 cutover) -- vault-settings runtime
+// constant/validator + type, consumed by vault-settings.service.ts,
+// vault-settings.store.ts, and VaultTab.tsx instead of importing
+// @cipherbox/core directly (68.2-PATTERNS.md flags this as a remaining
+// literal-wording D-07 violation; this closes it).
+export { DEFAULT_VAULT_SETTINGS, validateVaultSettings } from '@cipherbox/core';
+export type { VaultSettings } from '@cipherbox/core';

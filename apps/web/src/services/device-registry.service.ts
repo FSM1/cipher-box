@@ -5,23 +5,23 @@
  * load existing registry, register new devices, update heartbeats, encrypt,
  * pin to IPFS, and publish via IPNS.
  *
- * Follows the same IPFS/IPNS patterns as folder.service.ts.
+ * Registry crypto (`deriveRegistryIpnsKeypair`/`encryptRegistry`/
+ * `decryptRegistry`) and config-blob resolve/publish/transport
+ * (`resolveConfigBlob`/`publishConfigBlob`/`uploadBytes`/`downloadBytes`)
+ * route through the SDK facade client (D-07) instead of calling
+ * `@cipherbox/core`/`sdk-core`/`ipns.service` directly. Both exported
+ * functions here only run after login (the initial call site in
+ * `useAuth.ts` fires after `initSdkClient`; the polling call site in
+ * `useDeviceRegistrySync.ts` is gated on `isInitialized`), so `getSdkClient()`
+ * is always available.
  *
  * IMPORTANT: Registry operations must NEVER block login.
  * All errors are caught and logged, returning null on failure.
  */
 
-import {
-  deriveRegistryIpnsKeypair,
-  encryptRegistry,
-  decryptRegistry,
-  type DeviceRegistry,
-  type DeviceEntry,
-  type DevicePlatform,
-} from '@cipherbox/core';
+import type { DeviceRegistry, DeviceEntry, DevicePlatform } from '@cipherbox/core';
 import { bytesToHex, hexToBytes, wrapKey, type DeviceKeypair } from '@cipherbox/crypto';
-import { addToIpfs, fetchFromIpfs } from '../lib/api/ipfs';
-import { createAndPublishIpnsRecord, resolveIpnsRecord } from './ipns.service';
+import { getSdkClient } from '../lib/sdk-provider';
 import { useAuthStore } from '../stores/auth.store';
 import { logger } from '../lib/logger';
 
@@ -53,19 +53,21 @@ export async function initializeOrSyncRegistry(params: {
   };
 }): Promise<{ registry: DeviceRegistry; ipnsName: string } | null> {
   try {
+    const client = getSdkClient();
+
     // 1. Derive deterministic IPNS keypair for the registry
-    const registryIpns = await deriveRegistryIpnsKeypair(params.userPrivateKey);
+    const registryIpns = await client.deriveRegistryIpnsKeypair(params.userPrivateKey);
 
     // 2. Try to resolve existing registry
     let registry: DeviceRegistry | null = null;
     let needsPublish = true;
 
-    const resolved = await resolveIpnsRecord(registryIpns.ipnsName);
+    const resolved = await client.resolveConfigBlob(registryIpns.ipnsName);
 
     if (resolved) {
       // Existing registry found -- fetch and decrypt
-      const encryptedBytes = await fetchFromIpfs(resolved.cid);
-      registry = await decryptRegistry(encryptedBytes, params.userPrivateKey);
+      const encryptedBytes = await client.downloadBytes(resolved.cid);
+      registry = await client.decryptRegistry(encryptedBytes, params.userPrivateKey);
 
       // Snapshot before modification for change detection
       const beforeJson = JSON.stringify(registry);
@@ -139,10 +141,10 @@ export async function initializeOrSyncRegistry(params: {
     registry.sequenceNumber++;
 
     // 6. Encrypt registry with user's public key
-    const encryptedBytes = await encryptRegistry(registry, params.userPublicKey);
+    const encryptedBytes = await client.encryptRegistry(registry, params.userPublicKey);
 
-    // 7. Pin to IPFS (cast to BlobPart; never use .buffer per CLAUDE.md)
-    const { cid } = await addToIpfs(new Blob([encryptedBytes as BlobPart]));
+    // 7. Pin to IPFS
+    const { cid } = await client.uploadBytes(encryptedBytes);
 
     // 8. Publish IPNS with TEE enrollment
     const teeKeys = useAuthStore.getState().teeKeys;
@@ -159,7 +161,7 @@ export async function initializeOrSyncRegistry(params: {
       keyEpoch = teeKeys.currentEpoch;
     }
 
-    await createAndPublishIpnsRecord({
+    await client.publishConfigBlob({
       ipnsPrivateKey: registryIpns.privateKey,
       ipnsName: registryIpns.ipnsName,
       metadataCid: cid,
@@ -190,15 +192,16 @@ export async function loadRegistry(userPrivateKey: Uint8Array): Promise<{
   sequenceNumber: bigint;
 } | null> {
   try {
-    const registryIpns = await deriveRegistryIpnsKeypair(userPrivateKey);
-    const resolved = await resolveIpnsRecord(registryIpns.ipnsName);
+    const client = getSdkClient();
+    const registryIpns = await client.deriveRegistryIpnsKeypair(userPrivateKey);
+    const resolved = await client.resolveConfigBlob(registryIpns.ipnsName);
 
     if (!resolved) {
       return null;
     }
 
-    const encryptedBytes = await fetchFromIpfs(resolved.cid);
-    const registry = await decryptRegistry(encryptedBytes, userPrivateKey);
+    const encryptedBytes = await client.downloadBytes(resolved.cid);
+    const registry = await client.decryptRegistry(encryptedBytes, userPrivateKey);
 
     return {
       registry,
