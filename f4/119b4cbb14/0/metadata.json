@@ -1,0 +1,106 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "f4119b4cbb14",
+  "session_id": "d4677bf5-56d4-454f-8fd3-6ca479857b79",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-06T15:16:24.677424Z",
+  "branch": "feat/fuse-and-winfsp-rust-integration-and-grant-root-awareness",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    ".planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-09-GRIND-RUNBOOK.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "0fa42af4d0d2",
+  "token_usage": {
+    "input_tokens": 45675,
+    "cache_creation_tokens": 2408987,
+    "cache_read_tokens": 50798587,
+    "output_tokens": 397865,
+    "api_call_count": 209
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-plan-phase-2026-07-06T00:42:46.39441Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "103b1b040411",
+      "timestamp": "2026-07-06T00:42:46.39441Z",
+      "native": {
+        "command": "/gsd-plan-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_015eJDTZpSmjNRDAJybVnxND",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "0fa42af4d0d2",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 256,
+        "end": 257,
+        "entry_ids": [
+          "24f97eb3-c271-4784-81e1-48625d7a914f"
+        ],
+        "tool_use_id": "toolu_015eJDTZpSmjNRDAJybVnxND"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015eJDTZpSmjNRDAJybVnxND"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 24
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-06T15:15:44.645171Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 27,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 27,
+    "total_lines_changed": 27,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
