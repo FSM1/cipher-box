@@ -1,8 +1,8 @@
 ---
 phase: 69
 slug: fuse-and-winfsp-rust-integration-and-grant-root-awareness
-status: draft
-nyquist_compliant: false
+status: approved
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-07-06
 ---
