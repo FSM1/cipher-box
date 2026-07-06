@@ -56,6 +56,20 @@ test.describe.serial('Full Workflow', () => {
   let detailsDialog: DetailsDialogPage;
   let textEditorDialog: TextEditorDialogPage;
 
+  // Assert an item's presence/absence, waiting for the list to settle first.
+  // Under parallel CI load the folder list re-renders only after a mutation's
+  // IPNS publish -> refresh round-trip, so an instant isItemVisible() check can
+  // race the mutation it is verifying. The waiters no-op when the state is
+  // already correct, so these are safe drop-in replacements everywhere.
+  const expectItemGone = async (name: string): Promise<void> => {
+    await fileList.waitForItemToDisappear(name);
+    expect(await fileList.isItemVisible(name)).toBe(false);
+  };
+  const expectItemPresent = async (name: string): Promise<void> => {
+    await fileList.waitForItemToAppear(name);
+    expect(await fileList.isItemVisible(name)).toBe(true);
+  };
+
   // Test data - unique names for this test run
   const timestamp = Date.now();
 
@@ -308,36 +322,36 @@ test.describe.serial('Full Workflow', () => {
 
   test('2.1 Create workspace folder at root', async () => {
     await createFolder(workspaceFolder);
-    expect(await fileList.isItemVisible(workspaceFolder)).toBe(true);
+    await expectItemPresent(workspaceFolder);
   });
 
   test('2.2 Create documents folder inside workspace', async () => {
     await navigateIntoFolder(workspaceFolder);
     await createFolder(documentsFolder);
-    expect(await fileList.isItemVisible(documentsFolder)).toBe(true);
+    await expectItemPresent(documentsFolder);
   });
 
   test('2.3 Create images folder inside workspace', async () => {
     // Still inside workspace
     await createFolder(imagesFolder);
-    expect(await fileList.isItemVisible(imagesFolder)).toBe(true);
+    await expectItemPresent(imagesFolder);
   });
 
   test('2.4 Create projects folder inside workspace', async () => {
     await createFolder(projectsFolder);
-    expect(await fileList.isItemVisible(projectsFolder)).toBe(true);
+    await expectItemPresent(projectsFolder);
   });
 
   test('2.5 Create active folder inside projects', async () => {
     await navigateIntoFolder(projectsFolder);
     await createFolder(activeFolder);
-    expect(await fileList.isItemVisible(activeFolder)).toBe(true);
+    await expectItemPresent(activeFolder);
   });
 
   test('2.6 Create archive folder inside projects', async () => {
     // Still inside projects
     await createFolder(archiveFolder);
-    expect(await fileList.isItemVisible(archiveFolder)).toBe(true);
+    await expectItemPresent(archiveFolder);
   });
 
   // ============================================
@@ -353,14 +367,14 @@ test.describe.serial('Full Workflow', () => {
 
     for (const file of rootFiles) {
       await uploadFile(file.name, file.content);
-      expect(await fileList.isItemVisible(file.name)).toBe(true);
+      await expectItemPresent(file.name);
     }
   });
 
   test('3.2 Upload editable file to root (for later edit test)', async () => {
     // This file will be edited later (deleted and re-uploaded with new content)
     await uploadFile(editableFileName, editableFileOriginalContent);
-    expect(await fileList.isItemVisible(editableFileName)).toBe(true);
+    await expectItemPresent(editableFileName);
   });
 
   test('3.3 Upload files to documents folder (3 files)', async () => {
@@ -369,7 +383,7 @@ test.describe.serial('Full Workflow', () => {
 
     for (const file of documentFiles) {
       await uploadFile(file.name, file.content);
-      expect(await fileList.isItemVisible(file.name)).toBe(true);
+      await expectItemPresent(file.name);
     }
   });
 
@@ -379,7 +393,7 @@ test.describe.serial('Full Workflow', () => {
 
     for (const file of imageFiles) {
       await uploadFile(file.name, file.content);
-      expect(await fileList.isItemVisible(file.name)).toBe(true);
+      await expectItemPresent(file.name);
     }
   });
 
@@ -390,7 +404,7 @@ test.describe.serial('Full Workflow', () => {
 
     for (const file of activeProjectFiles) {
       await uploadFile(file.name, file.content);
-      expect(await fileList.isItemVisible(file.name)).toBe(true);
+      await expectItemPresent(file.name);
     }
   });
 
@@ -400,7 +414,7 @@ test.describe.serial('Full Workflow', () => {
 
     for (const file of archiveProjectFiles) {
       await uploadFile(file.name, file.content);
-      expect(await fileList.isItemVisible(file.name)).toBe(true);
+      await expectItemPresent(file.name);
     }
   });
 
@@ -425,7 +439,7 @@ test.describe.serial('Full Workflow', () => {
     // Navigate to root where root files are visible
     await navigateToRoot();
     const fileName = rootFiles[1].name;
-    expect(await fileList.isItemVisible(fileName)).toBe(true);
+    await expectItemPresent(fileName);
 
     // Open context menu and click Details
     await fileList.rightClickItem(fileName);
@@ -470,7 +484,7 @@ test.describe.serial('Full Workflow', () => {
 
   test('3.66 View folder details via context menu', async () => {
     // We're at root, right-click on workspace folder
-    expect(await fileList.isItemVisible(workspaceFolder)).toBe(true);
+    await expectItemPresent(workspaceFolder);
 
     await fileList.rightClickItem(workspaceFolder);
     await contextMenu.waitForOpen();
@@ -569,9 +583,9 @@ test.describe.serial('Full Workflow', () => {
     // Verify other root-level items are also visible
     // rootFiles[0] was moved to workspace in 5.1 — but Phase 5 hasn't run yet at this point
     for (const file of rootFiles) {
-      expect(await fileList.isItemVisible(file.name)).toBe(true);
+      await expectItemPresent(file.name);
     }
-    expect(await fileList.isItemVisible(editableFileName)).toBe(true);
+    await expectItemPresent(editableFileName);
   });
 
   test('3.7.1 Storage quota persists after page reload', async () => {
@@ -596,9 +610,9 @@ test.describe.serial('Full Workflow', () => {
     await fileList.waitForItemToAppear(documentsFolder, { timeout: 60000 });
 
     // Verify workspace children are visible (documents, images, projects)
-    expect(await fileList.isItemVisible(documentsFolder)).toBe(true);
-    expect(await fileList.isItemVisible(imagesFolder)).toBe(true);
-    expect(await fileList.isItemVisible(projectsFolder)).toBe(true);
+    await expectItemPresent(documentsFolder);
+    await expectItemPresent(imagesFolder);
+    await expectItemPresent(projectsFolder);
 
     // Navigate deeper into documents — exercises nested IPNS resolve + key unwrap
     await navigateIntoFolder(documentsFolder);
@@ -608,7 +622,7 @@ test.describe.serial('Full Workflow', () => {
 
     // Verify uploaded document files are visible
     for (const file of documentFiles) {
-      expect(await fileList.isItemVisible(file.name)).toBe(true);
+      await expectItemPresent(file.name);
     }
   });
 
@@ -628,9 +642,9 @@ test.describe.serial('Full Workflow', () => {
     await fileList.waitForItemToAppear(documentsFolder, { timeout: 10000 });
 
     // Verify workspace children are all visible
-    expect(await fileList.isItemVisible(documentsFolder)).toBe(true);
-    expect(await fileList.isItemVisible(imagesFolder)).toBe(true);
-    expect(await fileList.isItemVisible(projectsFolder)).toBe(true);
+    await expectItemPresent(documentsFolder);
+    await expectItemPresent(imagesFolder);
+    await expectItemPresent(projectsFolder);
   });
 
   test('3.10 Upload file to subfolder after reload', async () => {
@@ -644,12 +658,12 @@ test.describe.serial('Full Workflow', () => {
 
     // Verify existing image files are present (from Phase 3.4)
     for (const file of imageFiles) {
-      expect(await fileList.isItemVisible(file.name)).toBe(true);
+      await expectItemPresent(file.name);
     }
 
     // Upload a new file — exercises the upload path after cold-load
     await uploadFile(postReloadFile.name, postReloadFile.content);
-    expect(await fileList.isItemVisible(postReloadFile.name)).toBe(true);
+    await expectItemPresent(postReloadFile.name);
 
     // Navigate away and back to verify persistence
     await navigateBack(); // Back to workspace
@@ -657,7 +671,7 @@ test.describe.serial('Full Workflow', () => {
 
     // File should still be there
     await fileList.waitForItemToAppear(postReloadFile.name, { timeout: 30000 });
-    expect(await fileList.isItemVisible(postReloadFile.name)).toBe(true);
+    await expectItemPresent(postReloadFile.name);
 
     // Navigate back to root for Phase 4
     await navigateToRoot();
@@ -683,7 +697,7 @@ test.describe.serial('Full Workflow', () => {
 
     // Create the multiselect folder at root
     await createFolder(multiselectFolder);
-    expect(await fileList.isItemVisible(multiselectFolder)).toBe(true);
+    await expectItemPresent(multiselectFolder);
 
     // Navigate into it
     await navigateIntoFolder(multiselectFolder);
@@ -691,12 +705,12 @@ test.describe.serial('Full Workflow', () => {
     // Upload 3 test files
     for (const file of msFiles) {
       await uploadFile(file.name, file.content);
-      expect(await fileList.isItemVisible(file.name)).toBe(true);
+      await expectItemPresent(file.name);
     }
 
     // Create a subfolder for move target
     await createFolder(batchDelFolder);
-    expect(await fileList.isItemVisible(batchDelFolder)).toBe(true);
+    await expectItemPresent(batchDelFolder);
   });
 
   test('4.1 Single click selects one item, clicking another deselects first', async () => {
@@ -876,7 +890,7 @@ test.describe.serial('Full Workflow', () => {
 
     // Both files should be gone
     await fileList.waitForItemToDisappear(delFile1.name, { timeout: 15000 });
-    expect(await fileList.isItemVisible(delFile2.name)).toBe(false);
+    await expectItemGone(delFile2.name);
   });
 
   test('4.11 Batch move via action bar', async () => {
@@ -906,12 +920,12 @@ test.describe.serial('Full Workflow', () => {
 
     // Files should be gone from current view
     await fileList.waitForItemToDisappear(msFiles[0].name, { timeout: 15000 });
-    expect(await fileList.isItemVisible(moveFile.name)).toBe(false);
+    await expectItemGone(moveFile.name);
 
     // Navigate into subfolder and verify
     await navigateIntoFolder(batchDelFolder);
-    expect(await fileList.isItemVisible(msFiles[0].name)).toBe(true);
-    expect(await fileList.isItemVisible(moveFile.name)).toBe(true);
+    await expectItemPresent(msFiles[0].name);
+    await expectItemPresent(moveFile.name);
 
     // Navigate back
     await navigateBack();
@@ -938,7 +952,7 @@ test.describe.serial('Full Workflow', () => {
 
     // Delete the multiselect folder
     await deleteItem(multiselectFolder);
-    expect(await fileList.isItemVisible(multiselectFolder)).toBe(false);
+    await expectItemGone(multiselectFolder);
   });
 
   // ============================================
@@ -955,7 +969,7 @@ test.describe.serial('Full Workflow', () => {
 
     // Get the first root file to move
     const fileToMove = rootFiles[0].name;
-    expect(await fileList.isItemVisible(fileToMove)).toBe(true);
+    await expectItemPresent(fileToMove);
 
     // Open context menu and click Move to...
     await fileList.rightClickItem(fileToMove);
@@ -973,16 +987,12 @@ test.describe.serial('Full Workflow', () => {
     await moveDialog.clickMove();
     await moveDialog.waitForClose({ timeout: 15000 });
 
-    // Verify file is no longer at root. Wait for the post-move refresh to
-    // settle first — under parallel CI load the instant visibility check can
-    // race the move's IPNS publish -> refresh round-trip.
-    await fileList.waitForItemToDisappear(fileToMove);
-    expect(await fileList.isItemVisible(fileToMove)).toBe(false);
+    // Verify file is no longer at root
+    await expectItemGone(fileToMove);
 
     // Navigate to workspace and verify file is there
     await navigateIntoFolder(workspaceFolder);
-    await fileList.waitForItemToAppear(fileToMove);
-    expect(await fileList.isItemVisible(fileToMove)).toBe(true);
+    await expectItemPresent(fileToMove);
   });
 
   test('5.2 Move file between sibling folders via context menu', async () => {
@@ -994,7 +1004,7 @@ test.describe.serial('Full Workflow', () => {
 
     // Get a document file to move (we have 3, take the first)
     const fileToMove = documentFiles[0].name;
-    expect(await fileList.isItemVisible(fileToMove)).toBe(true);
+    await expectItemPresent(fileToMove);
 
     // Navigate back to workspace where we can see both documents and images folders
     await navigateBack();
@@ -1010,7 +1020,7 @@ test.describe.serial('Full Workflow', () => {
     await navigateIntoFolder(documentsFolder);
 
     // File should be visible in documents
-    expect(await fileList.isItemVisible(fileToMove)).toBe(true);
+    await expectItemPresent(fileToMove);
 
     // Use context menu to move to images folder (sibling folder)
     await fileList.rightClickItem(fileToMove);
@@ -1024,12 +1034,12 @@ test.describe.serial('Full Workflow', () => {
     await moveDialog.waitForClose({ timeout: 15000 });
 
     // File should be gone from documents
-    expect(await fileList.isItemVisible(fileToMove)).toBe(false);
+    await expectItemGone(fileToMove);
 
     // Navigate to images and verify
     await navigateBack(); // Back to workspace
     await navigateIntoFolder(imagesFolder);
-    expect(await fileList.isItemVisible(fileToMove)).toBe(true);
+    await expectItemPresent(fileToMove);
   });
 
   test('5.3 Move file via drag-drop to breadcrumb', async () => {
@@ -1038,7 +1048,7 @@ test.describe.serial('Full Workflow', () => {
 
     // Get an image file to move
     const fileToMove = imageFiles[0].name;
-    expect(await fileList.isItemVisible(fileToMove)).toBe(true);
+    await expectItemPresent(fileToMove);
 
     // Drag to workspace breadcrumb
     const sourceItem = fileList.getItem(fileToMove);
@@ -1048,11 +1058,11 @@ test.describe.serial('Full Workflow', () => {
     await page.waitForTimeout(1000);
 
     // File should be gone from images
-    expect(await fileList.isItemVisible(fileToMove)).toBe(false);
+    await expectItemGone(fileToMove);
 
     // Navigate to workspace and verify file is there
     await navigateBack(); // Go up to workspace
-    expect(await fileList.isItemVisible(fileToMove)).toBe(true);
+    await expectItemPresent(fileToMove);
   });
 
   test('5.4 Navigate via breadcrumb click', async () => {
@@ -1072,7 +1082,7 @@ test.describe.serial('Full Workflow', () => {
     await fileList.waitForItemToAppear(projectsFolder, { timeout: 15000 });
 
     // Verify we're at workspace - should see projects folder
-    expect(await fileList.isItemVisible(projectsFolder)).toBe(true);
+    await expectItemPresent(projectsFolder);
   });
 
   // ============================================
@@ -1084,7 +1094,7 @@ test.describe.serial('Full Workflow', () => {
     await navigateToRoot();
 
     // Verify original file exists
-    expect(await fileList.isItemVisible(editableFileName)).toBe(true);
+    await expectItemPresent(editableFileName);
 
     // Download the file first to verify it's downloadable
     const downloadPromise = page.waitForEvent('download');
@@ -1099,13 +1109,13 @@ test.describe.serial('Full Workflow', () => {
     await deleteItem(editableFileName);
 
     // Verify file is gone
-    expect(await fileList.isItemVisible(editableFileName)).toBe(false);
+    await expectItemGone(editableFileName);
 
     // Upload new version with same name but different content
     await uploadFile(editableFileName, editableFileUpdatedContent);
 
     // Verify new file exists
-    expect(await fileList.isItemVisible(editableFileName)).toBe(true);
+    await expectItemPresent(editableFileName);
 
     // Download again to verify it's the new content (by checking download works)
     const downloadPromise2 = page.waitForEvent('download');
@@ -1127,7 +1137,7 @@ test.describe.serial('Full Workflow', () => {
     // We're at root from 5.1
 
     // Right-click the text file — "Edit" should be in context menu
-    expect(await fileList.isItemVisible(editableFileName)).toBe(true);
+    await expectItemPresent(editableFileName);
     await fileList.rightClickItem(editableFileName);
     await contextMenu.waitForOpen();
 
@@ -1136,7 +1146,7 @@ test.describe.serial('Full Workflow', () => {
     await contextMenu.closeWithEscape();
 
     // Right-click a folder — "Edit" should NOT be in context menu
-    expect(await fileList.isItemVisible(workspaceFolder)).toBe(true);
+    await expectItemPresent(workspaceFolder);
     await fileList.rightClickItem(workspaceFolder);
     await contextMenu.waitForOpen();
 
@@ -1219,7 +1229,7 @@ test.describe.serial('Full Workflow', () => {
     await textEditorDialog.waitForClose({ timeout: 30000 });
 
     // File should still be visible in the list
-    expect(await fileList.isItemVisible(editableFileName)).toBe(true);
+    await expectItemPresent(editableFileName);
   });
 
   test('6.5.4 Verify CID changed after edit (re-encryption confirmed)', async () => {
@@ -1393,7 +1403,7 @@ test.describe.serial('Full Workflow', () => {
     const fileToRename = rootFiles[1].name;
     const newFileName = `renamed-${timestamp}.txt`;
 
-    expect(await fileList.isItemVisible(fileToRename)).toBe(true);
+    await expectItemPresent(fileToRename);
 
     await fileList.rightClickItem(fileToRename);
     await contextMenu.waitForOpen();
@@ -1402,8 +1412,8 @@ test.describe.serial('Full Workflow', () => {
     await renameDialog.rename(newFileName);
 
     await fileList.waitForItemToAppear(newFileName, { timeout: 15000 });
-    expect(await fileList.isItemVisible(fileToRename)).toBe(false);
-    expect(await fileList.isItemVisible(newFileName)).toBe(true);
+    await expectItemGone(fileToRename);
+    await expectItemPresent(newFileName);
 
     // Update the array for cleanup
     rootFiles[1].name = newFileName;
@@ -1416,7 +1426,7 @@ test.describe.serial('Full Workflow', () => {
     const folderToRename = imagesFolder;
     const newFolderName = `media-${timestamp}`;
 
-    expect(await fileList.isItemVisible(folderToRename)).toBe(true);
+    await expectItemPresent(folderToRename);
 
     await fileList.rightClickItem(folderToRename);
     await contextMenu.waitForOpen();
@@ -1425,8 +1435,8 @@ test.describe.serial('Full Workflow', () => {
     await renameDialog.rename(newFolderName);
 
     await fileList.waitForItemToAppear(newFolderName, { timeout: 15000 });
-    expect(await fileList.isItemVisible(folderToRename)).toBe(false);
-    expect(await fileList.isItemVisible(newFolderName)).toBe(true);
+    await expectItemGone(folderToRename);
+    await expectItemPresent(newFolderName);
   });
 
   // ============================================
@@ -1441,7 +1451,7 @@ test.describe.serial('Full Workflow', () => {
     await deleteItem(workspaceFolder);
 
     // Verify folder is gone
-    expect(await fileList.isItemVisible(workspaceFolder)).toBe(false);
+    await expectItemGone(workspaceFolder);
   });
 
   test('8.2 Delete remaining root files', async () => {
