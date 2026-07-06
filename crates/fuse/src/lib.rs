@@ -19,7 +19,11 @@ pub mod dir_ops;
 pub mod operations;
 #[cfg(feature = "fuse")]
 pub mod read_ops;
-#[cfg(feature = "fuse")]
+// write_ops::grant_scope (69-07) is platform-agnostic and consumed by the
+// Windows write handlers too (69-14), so the module itself is reachable under
+// EITHER platform feature; the fuse-only handler implementations inside it
+// stay gated behind `feature = "fuse"` (see write_ops/mod.rs).
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub mod write_ops;
 
 // Platform-specific modules
