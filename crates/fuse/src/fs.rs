@@ -111,8 +111,10 @@ impl CipherBoxFS {
                 crate::inode::InodeKind::Root { .. } => {
                     Some(Zeroizing::new(self.root_folder_key.to_vec()))
                 }
-                crate::inode::InodeKind::Folder { folder_key, .. } => {
-                    Some(Zeroizing::new(folder_key.to_vec()))
+                // node/v3 (69-09): the folder's symmetric readKey replaces the
+                // legacy `folder_key` (node-to-node key).
+                crate::inode::InodeKind::Folder { read_key, .. } => {
+                    Some(Zeroizing::new(read_key.to_vec()))
                 }
                 _ => None,
             })
@@ -138,31 +140,30 @@ impl CipherBoxFS {
                 .ok_or_else(|| format!("Folder inode {} not found", folder_ino))?;
             let children = inode.children.clone().unwrap_or_default();
             match &inode.kind {
+                // node/v3 (69-09 Slice 2): `ipns_private_key` is now a non-Option
+                // Zeroizing seed and `ipns_name` a plain String; the parent's
+                // symmetric readKey (`read_key`) replaces the legacy `folder_key`.
+                // NOTE: the child-loop below still emits the legacy FolderMetadata
+                // wire (folder_key_encrypted / file_meta_ipns_name / ...); that
+                // WRITE-EMISSION rewrite is 69-09 Slice 3 (this slice only repoints
+                // the parent-key extraction so the read helper compiles).
                 crate::inode::InodeKind::Root {
-                    ipns_private_key,
-                    ipns_name,
-                } => {
-                    let key = ipns_private_key
-                        .as_ref()
-                        .ok_or("Root IPNS key not available")?
-                        .to_vec();
-                    let name = ipns_name
-                        .as_ref()
-                        .ok_or("Root IPNS name not available")?
-                        .clone();
-                    (self.root_folder_key.to_vec(), key, name, children)
-                }
-                crate::inode::InodeKind::Folder {
-                    folder_key,
                     ipns_private_key,
                     ipns_name,
                     ..
                 } => {
-                    let key = ipns_private_key
-                        .as_ref()
-                        .ok_or("Subfolder IPNS key not available")?
-                        .to_vec();
-                    (folder_key.to_vec(), key, ipns_name.clone(), children)
+                    let key = ipns_private_key.to_vec();
+                    let name = ipns_name.clone();
+                    (self.root_folder_key.to_vec(), key, name, children)
+                }
+                crate::inode::InodeKind::Folder {
+                    read_key,
+                    ipns_private_key,
+                    ipns_name,
+                    ..
+                } => {
+                    let key = ipns_private_key.to_vec();
+                    (read_key.to_vec(), key, ipns_name.clone(), children)
                 }
                 _ => return Err("Cannot update metadata for non-folder inode".to_string()),
             }

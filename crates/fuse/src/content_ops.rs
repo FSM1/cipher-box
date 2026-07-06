@@ -32,36 +32,69 @@ fn zeroizing_32_from_slice(
 
 /// Async version of content download + decrypt for background prefetch tasks.
 ///
+/// node/v3 (69-09 Slice 2): the file content-key is recovered by SYMMETRIC
+/// unseal of the file node's OWN sealed read-body — NOT ECIES. The `published`
+/// envelope's `read_sealed` body is unsealed under the file node's `read_key`
+/// (from `InodeKind::File.read_key`) via `cipherbox_core::node::seal::unseal_node`,
+/// yielding a `NodeContent { cid, file_iv, encryption_mode, file_key, .. }`.
+/// The content is then fetched by that CID and decrypted with the recovered
+/// `file_key`.
+///
+/// D-09 terminal owner: `read_key` is a caller-owned borrow, never zeroed here.
+/// The recovered `file_key`/`NodeContent` scratch is owned locally and dropped
+/// (the fixed-key buffer via `Zeroizing`).
+///
+/// SIGNATURE CHANGE (69-09 Slice 5 caller note): the former
+/// `(cid, encrypted_file_key_hex, iv_hex, encryption_mode, private_key)` params
+/// are replaced by the file node's fetched `PublishedNode` + its `read_key`
+/// (the descriptors now live authoritatively inside the sealed body). The
+/// caller (read_ops/dir_ops) must obtain the file node's `PublishedNode` via
+/// the sanctioned resolve path and pass the inode's `read_key`.
+///
 /// Uses fully-qualified submodule paths for `cipherbox_crypto` so this compiles
 /// under both `fuse` and `winfsp` feature sets.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub async fn fetch_and_decrypt_content_async(
     api: &cipherbox_api_client::ApiClient,
-    cid: &str,
-    encrypted_file_key_hex: &str,
-    iv_hex: &str,
-    encryption_mode: &str,
-    private_key: &[u8],
+    published: &cipherbox_core::node::PublishedNode,
+    read_key: &[u8; 32],
 ) -> Result<Vec<u8>, String> {
-    let encrypted_bytes = cipherbox_api_client::ipfs::fetch_content(api, cid)
+    use base64::Engine as _;
+
+    // Recover the file node's content descriptor by SYMMETRIC unseal of its own
+    // read-body (node/v3, SC#1) — never ECIES.
+    let read_sealed_bytes = base64::engine::general_purpose::STANDARD
+        .decode(&published.read_sealed)
+        .map_err(|e| format!("Invalid file node read_sealed base64: {}", e))?;
+    let body = cipherbox_core::node::seal::unseal_node(
+        &read_sealed_bytes,
+        read_key,
+        &published.id,
+        cipherbox_core::node::NodeKind::File,
+        published.generation,
+    )
+    .map_err(|e| format!("File node read-body unseal failed: {}", e))?;
+    let node = cipherbox_core::node::decode_node(&body)
+        .map_err(|e| format!("File node decode failed: {}", e))?;
+    let content = match node {
+        cipherbox_core::node::Node::File { content, .. } => content,
+        _ => return Err("Expected a file node, got folder/root".to_string()),
+    };
+
+    let encrypted_bytes = cipherbox_api_client::ipfs::fetch_content(api, &content.cid)
         .await
         .map_err(|e| e.to_string())?;
-    let encrypted_file_key =
-        hex::decode(encrypted_file_key_hex).map_err(|_| "Invalid file key hex".to_string())?;
-    // unwrap_key returns Zeroizing<Vec<u8>> (S3/D-05).
-    let file_key = cipherbox_crypto::ecies::unwrap_key(&encrypted_file_key, private_key)
-        .map_err(|e| format!("File key unwrap failed: {}", e))?;
-    let file_key_arr = zeroizing_32_from_slice(file_key.as_slice(), "Invalid file key length")?;
+    let file_key_arr = zeroizing_32_from_slice(&content.file_key, "Invalid file key length")?;
 
-    let plaintext = if encryption_mode == "CTR" {
-        let iv = hex::decode(iv_hex).map_err(|_| "Invalid file IV hex".to_string())?;
+    let plaintext = if content.encryption_mode == "CTR" {
+        let iv = hex::decode(&content.file_iv).map_err(|_| "Invalid file IV hex".to_string())?;
         let iv_arr: [u8; 16] = iv
             .try_into()
             .map_err(|_| "Invalid CTR IV length (expected 16)".to_string())?;
         cipherbox_crypto::aes_ctr::decrypt_aes_ctr(&encrypted_bytes, &file_key_arr, &iv_arr)
             .map_err(|e| format!("CTR decryption failed: {}", e))?
     } else {
-        let iv = hex::decode(iv_hex).map_err(|_| "Invalid file IV hex".to_string())?;
+        let iv = hex::decode(&content.file_iv).map_err(|_| "Invalid file IV hex".to_string())?;
         let iv_arr: [u8; 12] = iv
             .try_into()
             .map_err(|_| "Invalid GCM IV length (expected 12)".to_string())?;
@@ -218,11 +251,10 @@ pub async fn publish_file_metadata(
                 let marshaled = cipherbox_core::ipns::marshal_ipns_record(&record)
                     .map_err(|e| format!("File IPNS record marshal failed on retry: {}", e))?;
                 use base64::Engine;
-                let retry_record_b64 =
-                    base64::engine::general_purpose::STANDARD.encode(&marshaled);
+                let retry_record_b64 = base64::engine::general_purpose::STANDARD.encode(&marshaled);
                 Ok((retry_record_b64, file_meta_cid_for_closure.clone()))
             },
-            &[], // no old CIDs to unpin on per-file publish (caller handles pruned_cids)
+            &[],  // no old CIDs to unpin on per-file publish (caller handles pruned_cids)
             None, // D-01a: no JournalOp::FilePublish variant; exhaustion → Err → EIO
         )
         .await?;
