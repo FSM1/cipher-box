@@ -859,7 +859,7 @@ export class CipherBoxClient {
    * `registerFolder`, exactly like every other `ensureFolderLoaded`-backed
    * mutation chokepoint.
    */
-  async listFolder(ipnsName: string): Promise<ResolvedChild[]> {
+  async listFolder(ipnsName: string, _opts?: { forceResolve?: boolean }): Promise<ResolvedChild[]> {
     return this.withOperation('listFolder', async () => {
       const folder = await this.ensureFolderLoaded(ipnsName);
       if (!folder) return [];
@@ -1546,7 +1546,10 @@ export class CipherBoxClient {
    * @returns The loaded FolderState, or null if it cannot be bootstrapped
    * @internal
    */
-  async ensureFolderLoaded(targetIpnsName: string): Promise<FolderState | null> {
+  async ensureFolderLoaded(
+    targetIpnsName: string,
+    _opts?: { forceResolve?: boolean }
+  ): Promise<FolderState | null> {
     const existing = this.folderTree.get(targetIpnsName);
     if (existing) {
       // Cold-load write-plane recovery (68.1-23): a folder entry seeded
