@@ -5,6 +5,7 @@
 //! Mirrors @cipherbox/core TypeScript package.
 
 pub mod folder;
+pub mod node;
 pub mod file;
 pub mod registry;
 pub mod bin;
