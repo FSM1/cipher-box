@@ -5,15 +5,15 @@ milestone_name: Metadata and Sharing Refactor
 current_phase: 68.2
 current_phase_name: sdk-owned-read-chain-and-resolved-folder-listings
 status: executing
-stopped_at: Completed 68.2-08-PLAN.md
-last_updated: "2026-07-06T04:01:05.135Z"
+stopped_at: Completed 68.2-09-PLAN.md
+last_updated: "2026-07-06T04:43:10.364Z"
 last_activity: 2026-07-05
 last_activity_desc: Phase 68.2 execution started
 progress:
   total_phases: 11
   completed_phases: 9
   total_plans: 110
-  completed_plans: 106
+  completed_plans: 107
   percent: 82
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 ## Current Position
 
 Phase: 68.2 (sdk-owned-read-chain-and-resolved-folder-listings) — EXECUTING
-Plan: 9 of 12
+Plan: 10 of 12
 Status: Ready to execute
 Last activity: 2026-07-05 — Phase 68.2 execution started
 
@@ -242,6 +242,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 68.2 P06 | 65min | 3 tasks | 12 files |
 | Phase 68.2 P07 | 35min | 2 tasks | 11 files |
 | Phase 68.2 P08 | 90min | 2 tasks | 10 files |
+| Phase 68.2 P09 | 40min | 2 tasks | 13 files |
 
 ## Accumulated Context
 
@@ -506,6 +507,8 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase 68.2-07]: DetailsDialog.tsx drops the kind-cache fallback entirely (folderStore membership only); folder metadataCid always renders as unavailable since client.getFolderMetadata does not expose the raw resolve CID
 - [Phase ?]: [Phase 68.2-08]: resolveShareRoot/descendSharedChild/downloadSharedFile added as Rule-2 SDK facades to complete the share-nav rewire; downloadSharedFile returns a revoked/behind-retry/ok union instead of throwing
 - [Phase ?]: [Phase 68.2-08]: SharedFolderRow keeps item:SealedChildRef and adds a new resolved?:ResolvedChild prop (dual-prop pattern, mirrors Plan 06 FileListItem) rather than a straight type swap, since SharedFileBrowser.tsx's unowned dialog consumers still need readKeySealed
+- [Phase ?]: [Phase 68.2-09]: FolderNode gained optional rawChildren?: SealedChildRef[] alongside the retyped children: ResolvedChild[] -- the SDK event no longer carries raw identity, and ~9 write-path files needed it
+- [Phase ?]: [Phase 68.2-09]: shared-folder-projection.ts re-reads raw children from client.getSharedFolderState at event-apply time instead of the now-resolved sharedFolder:updated event payload
 
 ## Operator Next Steps
 
@@ -513,8 +516,8 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-06T04:01:05.128Z
-**Stopped at:** Completed 68.2-08-PLAN.md
+**Last session:** 2026-07-06T04:43:10.355Z
+**Stopped at:** Completed 68.2-09-PLAN.md
 **Resume file:** 
 None
 
