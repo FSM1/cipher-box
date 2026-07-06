@@ -8,8 +8,8 @@ mod encode;
 pub mod seal;
 mod types;
 
-pub use decode::{decode_node, decode_published_node};
-pub use encode::{encode_node, encode_published_node};
+pub use decode::{decode_node, decode_published_node, decode_write_body};
+pub use encode::{encode_node, encode_published_node, encode_write_body};
 pub use types::{
     Node, NodeContent, NodeError, NodeKind, NodeWriteBody, PublishedNode, SealedChildRef,
     VersionEntry, WriteChildRef,

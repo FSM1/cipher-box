@@ -12,7 +12,7 @@
 
 use serde::Deserialize;
 
-use super::types::{Node, NodeContent, NodeError, PublishedNode, SealedChildRef};
+use super::types::{Node, NodeContent, NodeError, NodeWriteBody, PublishedNode, SealedChildRef};
 
 /// Wire representation shared by `folder` and `root` kinds.
 #[derive(Deserialize)]
@@ -107,5 +107,12 @@ pub fn decode_node(bytes: &[u8]) -> Result<Node, NodeError> {
 /// This plan treats `readSealed`/`writeSealed` as opaque already-sealed
 /// base64 strings — no AEAD unsealing happens here.
 pub fn decode_published_node(bytes: &[u8]) -> Result<PublishedNode, NodeError> {
+    serde_json::from_slice(bytes).map_err(|e| NodeError::DeserializationFailed(e.to_string()))
+}
+
+/// Decodes a `NodeWriteBody` from plaintext wire bytes (twin of TS
+/// `decodeWriteBody`). Fail-closed: returns `NodeError` (never panics) on
+/// malformed input — mirrors `decode_node`'s idiom (T-69-01-01).
+pub fn decode_write_body(bytes: &[u8]) -> Result<NodeWriteBody, NodeError> {
     serde_json::from_slice(bytes).map_err(|e| NodeError::DeserializationFailed(e.to_string()))
 }

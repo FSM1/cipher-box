@@ -12,7 +12,7 @@
 
 use serde::Serialize;
 
-use super::types::{Node, NodeContent, NodeError, PublishedNode, SealedChildRef};
+use super::types::{Node, NodeContent, NodeError, NodeWriteBody, PublishedNode, SealedChildRef};
 
 /// Wire representation shared by `folder` and `root` kinds — both carry a
 /// `children` array and differ only in the `kind` discriminator string.
@@ -105,4 +105,65 @@ pub fn encode_node(node: &Node) -> Result<Vec<u8>, NodeError> {
 /// base64 strings supplied by the caller — no AEAD sealing happens here.
 pub fn encode_published_node(node: &PublishedNode) -> Result<Vec<u8>, NodeError> {
     serde_json::to_vec(node).map_err(|_| NodeError::SerializationFailed)
+}
+
+/// Encodes a `NodeWriteBody` to canonical plaintext JSON bytes (no AEAD).
+///
+/// FIXED field order (`ipnsPrivateKey` then `writeChildren`) so the output is
+/// deterministic and, once sealed under the writeKey, byte-identical to the
+/// frozen cross-language KAT (`tests/vectors/node-codec.json`
+/// `seal_vectors[0].expected_published_node.writeSealed`, D-07/P1a-core).
+///
+/// `NodeWriteBody` already derives serde camelCase + base64 for
+/// `ipns_private_key`, so a direct `serde_json::to_vec` yields the twin of
+/// TS `encodeWriteBody`. Twin of `packages/core/src/node/encode.ts::encodeWriteBody`.
+///
+/// Never logs `wb` (it carries `ipns_private_key`, T-69-15-01).
+pub fn encode_write_body(wb: &NodeWriteBody) -> Result<Vec<u8>, NodeError> {
+    serde_json::to_vec(wb).map_err(|_| NodeError::SerializationFailed)
+}
+
+#[cfg(test)]
+mod write_body_tests {
+    use super::*;
+    use crate::node::decode::decode_write_body;
+    use crate::node::types::WriteChildRef;
+
+    #[test]
+    fn write_body_round_trip_populated() {
+        let wb = NodeWriteBody {
+            ipns_private_key: vec![0x44u8; 32],
+            write_children: vec![WriteChildRef {
+                child_id: "660e8400-e29b-41d4-a716-446655440001".to_string(),
+                write_key_sealed: "c2VhbGVkLXdyaXRlLWtleQ==".to_string(),
+            }],
+        };
+
+        let encoded = encode_write_body(&wb).expect("encode ok");
+        let decoded = decode_write_body(&encoded).expect("decode ok");
+        assert_eq!(decoded, wb);
+    }
+
+    #[test]
+    fn write_body_round_trip_empty_children() {
+        let wb = NodeWriteBody {
+            ipns_private_key: vec![0x11u8; 32],
+            write_children: vec![],
+        };
+
+        let encoded = encode_write_body(&wb).expect("encode ok");
+        // FIXED field order: ipnsPrivateKey then writeChildren.
+        let text = std::str::from_utf8(&encoded).unwrap();
+        assert!(text.starts_with(r#"{"ipnsPrivateKey":"#));
+        assert!(text.ends_with(r#""writeChildren":[]}"#));
+
+        let decoded = decode_write_body(&encoded).expect("decode ok");
+        assert_eq!(decoded, wb);
+    }
+
+    #[test]
+    fn decode_write_body_malformed_bytes_fail_closed() {
+        let result = decode_write_body(b"not json at all {{{");
+        assert!(matches!(result, Err(NodeError::DeserializationFailed(_))));
+    }
 }
