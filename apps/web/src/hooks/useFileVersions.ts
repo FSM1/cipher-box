@@ -6,8 +6,6 @@ import { useVaultStore } from '../stores/vault.store';
 import { useQuotaStore } from '../stores/quota.store';
 import { useVaultSettingsStore } from '../stores/vault-settings.store';
 import { getSdkClient } from '../lib/sdk-provider';
-import { unpinFromIpfs } from '../lib/api/ipfs';
-import { resolveFileMetadata } from '../services/file-metadata.service';
 import { computeRestoreVersionUpdate, computeDeleteVersionUpdate } from '../lib/version-transforms';
 import { logger } from '../lib/logger';
 
@@ -32,7 +30,7 @@ function resolveParentFolder(parentId: string) {
  * React hook for file version management operations (restore, delete).
  *
  * Both handlers (68.1-12) resolve the current `NodeContent` via the read-chain
- * (`resolveFileMetadata`, 68.1-04), compute the pure version transform
+ * (`client.resolveFileMetadata`, 68.2-11 SDK facade), compute the pure version transform
  * (`computeRestoreVersionUpdate`/`computeDeleteVersionUpdate`, 68.1-12), resolve
  * the file's write-chain signing key via `client.resolveFileIpnsPrivateKey`
  * (T-68.1-12-04), and publish via `client.restoreFileVersion`/`deleteFileVersion`
@@ -75,7 +73,8 @@ export function useFileVersions() {
           throw new Error('File not found in folder');
         }
 
-        const { metadata: currentMetadata } = await resolveFileMetadata(
+        const client = getSdkClient();
+        const { metadata: currentMetadata } = await client.resolveFileMetadata(
           fileRef,
           parentFolder.folderKey
         );
@@ -86,7 +85,6 @@ export function useFileVersions() {
           prunedCids: computedPrunedCids,
         } = computeRestoreVersionUpdate(currentMetadata.versions, versionIndex);
 
-        const client = getSdkClient();
         // T-68.1-12-04: the write-chain walk lives only inside CipherBoxClient
         // (D-03). Do NOT zero it here — sdk-core updateFileMetadata is its
         // terminal owner (T-47-01).
@@ -109,9 +107,9 @@ export function useFileVersions() {
         );
 
         for (const prunedCid of new Set([...computedPrunedCids, ...mergePrunedCids])) {
-          unpinFromIpfs(prunedCid).catch((err) =>
-            logger.warn('[Versions] Unpin pruned CID failed:', err)
-          );
+          client
+            .unpin(prunedCid)
+            .catch((err) => logger.warn('[Versions] Unpin pruned CID failed:', err));
         }
 
         useQuotaStore.getState().fetchQuota();
@@ -154,7 +152,8 @@ export function useFileVersions() {
           throw new Error('File not found in folder');
         }
 
-        const { metadata: currentMetadata } = await resolveFileMetadata(
+        const client = getSdkClient();
+        const { metadata: currentMetadata } = await client.resolveFileMetadata(
           fileRef,
           parentFolder.folderKey
         );
@@ -164,7 +163,6 @@ export function useFileVersions() {
           versionIndex
         );
 
-        const client = getSdkClient();
         // T-68.1-12-04: the write-chain walk lives only inside CipherBoxClient
         // (D-03). Do NOT zero it here — sdk-core updateFileMetadata is its
         // terminal owner (T-47-01).
@@ -198,9 +196,7 @@ export function useFileVersions() {
           ...prunedCids,
         ];
         for (const cid of new Set(allPrunedCids)) {
-          unpinFromIpfs(cid).catch((err) =>
-            logger.warn('[Versions] Unpin pruned CID failed:', err)
-          );
+          client.unpin(cid).catch((err) => logger.warn('[Versions] Unpin pruned CID failed:', err));
         }
 
         useQuotaStore.getState().fetchQuota();

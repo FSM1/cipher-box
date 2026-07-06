@@ -187,6 +187,7 @@ export function FileBrowser() {
       {!isLoading && (hasChildren || hasUploadsForFolder) && (
         <FileList
           items={rawChildren}
+          resolvedChildren={currentFolder?.children ?? []}
           selectedIds={actions.selectedIds}
           parentId={currentFolderId}
           folderKey={currentFolder?.folderKey ?? null}

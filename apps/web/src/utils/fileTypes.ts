@@ -1,6 +1,5 @@
 import type { SealedChildRef } from '@cipherbox/core';
 import type { ResolvedChild } from '@cipherbox/sdk';
-import { getKind } from '../lib/kind-cache';
 
 /** Extensions recognized as editable text files. */
 const TEXT_EXTENSIONS = new Set([
@@ -132,21 +131,23 @@ export function isPreviewableFile(name: string): boolean {
 /**
  * Type guard: is this child a "file-kind" ref?
  *
- * Accepts EITHER shape during the 68.2 cutover (D-02):
+ * Accepts EITHER shape (D-02):
  * - `ResolvedChild` (the SDK-resolved listing, SDK-READ-02) carries `kind`
  *   pre-resolved -- read it directly, no cache/resolve needed. This is the
- *   target shape every render site converges on by the end of the phase.
+ *   target shape every render site converges on.
  * - `SealedChildRef` (the legacy per-child ref, still the identity/crypto
- *   carrier for call sites not yet converted to `ResolvedChild` this phase --
- *   e.g. context-menu/download/drag payloads that need `readKeySealed`/
- *   `generation`) falls back to the kind cache (kind-cache.ts), populated by
- *   `resolveKinds` from the child's own plaintext `PublishedNode.kind`. A
- *   cache miss defaults to `false` (folder-safe).
+ *   carrier for call sites that only have identity -- e.g. context-menu/
+ *   download/drag payloads that need `readKeySealed`/`generation` -- and no
+ *   paired `ResolvedChild` lookup available at that call site) defaults to
+ *   `false` (folder-safe). 68.2-11 removed the per-ipnsName kind-cache
+ *   (kind-cache.ts) this branch used to fall back to: `resolveKinds` was
+ *   never wired into any render path, so the cache was permanently empty in
+ *   practice -- this default preserves that exact always-miss behavior.
  *
  * Synchronous by design (called in render-time list mapping across many
  * components).
  */
 export function isFileRef(item: SealedChildRef | ResolvedChild): boolean {
   if ('kind' in item) return item.kind === 'file';
-  return getKind(item.ipnsName) === 'file';
+  return false;
 }

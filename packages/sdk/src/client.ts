@@ -3747,6 +3747,59 @@ export class CipherBoxClient {
   }
 
   /**
+   * Resolve a file Node's decrypted content metadata WITHOUT downloading or
+   * decrypting its body.
+   *
+   * Recovers the file's OWN readKey from its `SealedChildRef` (sealed under the
+   * parent folder's readKey — generation-source rule uses `fileRef.generation`,
+   * the parent mirror, per Pitfall 3), then delegates to sdk-core's
+   * `resolveFileMetadata` to resolve + fetch + unseal the file's `NodeContent`.
+   * This is the read-only counterpart to {@link downloadFromIpns} (shares its
+   * exact resolve/unseal steps) for callers that only need file metadata
+   * (size, versions, mimeType, cid) — not the plaintext content itself. Added
+   * (68.2-11, Rule 2) as the SDK facade replacement for the deleted web-native
+   * `resolveFileMetadata` (file-metadata.service.ts).
+   *
+   * @param fileRef - The file's SealedChildRef from the parent folder's
+   *   read-body (carries `readKeySealed` + `generation`)
+   * @param folderKey - The PARENT folder's readKey (used to unseal the file's
+   *   own readKey from `fileRef.readKeySealed`)
+   * @returns The file's decrypted `NodeContent` plus its resolved metadata CID
+   * @security `fileReadKey` is minted internally (recovered from the
+   *   read-chain) and zeroed on every exit path (D-09). The returned
+   *   `metadata.fileKey` is caller-owned and NOT zeroed here — matches
+   *   sdk-core's `resolveFileMetadata` / the deleted web
+   *   `file-metadata.service.ts`.
+   */
+  async resolveFileMetadata(
+    fileRef: SealedChildRef,
+    folderKey: Uint8Array
+  ): Promise<{ metadata: NodeContent; metadataCid: string }> {
+    return this.withOperation('resolveFileMetadata', async () => {
+      const resolvedNode = await this.resolvePublishedNode(fileRef.ipnsName);
+      if (!resolvedNode) {
+        throw new Error(`resolveFileMetadata: IPNS record not found for ${fileRef.ipnsName}`);
+      }
+
+      // Terminal owner (D-09): zeroed after sdkCore.resolveFileMetadata unseals with it.
+      let fileReadKey: Uint8Array | null = await unsealChildReadKey(
+        fileRef.readKeySealed,
+        folderKey,
+        resolvedNode.published.id,
+        'file',
+        fileRef.generation
+      );
+
+      try {
+        return await sdkCore.resolveFileMetadata(fileRef.ipnsName, fileReadKey, this.ctx);
+      } finally {
+        fileReadKey.fill(0);
+        fileReadKey = null;
+      }
+    });
+  }
+
+  /**
    * Download a file using its per-file IPNS metadata.
    *
    * Recovers the file's OWN readKey from its `SealedChildRef` (sealed under the

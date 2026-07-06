@@ -4,7 +4,6 @@ import type { ResolvedChild } from '@cipherbox/sdk';
 import { Modal } from '../ui/Modal';
 import { useFolderStore } from '../../stores/folder.store';
 import { getSdkClient } from '../../lib/sdk-provider';
-import { resolveFileMetadata } from '../../services/file-metadata.service';
 import '../../styles/details-dialog.css';
 import { FileDetails } from './details/FileDetails';
 import { FolderDetails } from './details/FolderDetails';
@@ -21,7 +20,8 @@ type DetailsDialogProps = {
  * Details dialog for file/folder metadata (node/v3).
  *
  * Shows technical information about the selected item. File metadata (size/mime/
- * versions) is resolved via `resolveFileMetadata` (68.1-04/68.1-06); file-vs-folder
+ * versions) is resolved via `client.resolveFileMetadata` (68.2-11 SDK facade,
+ * formerly the web-native file-metadata.service.ts); file-vs-folder
  * discrimination reads folderStore membership (the prior per-ipnsName kind
  * lookup cache is a 68.2 deletion target -- Plan 07 drops this dialog's
  * dependency on it).
@@ -129,7 +129,8 @@ export function DetailsDialog({
     setFileMetaLoading(true);
     setMetadataLoading(true);
 
-    resolveFileMetadata(item, folderKey)
+    getSdkClient()
+      .resolveFileMetadata(item, folderKey)
       .then(({ metadata, metadataCid: cid }) => {
         if (!cancelled) {
           setFileMeta(metadata as unknown as NodeContent);
