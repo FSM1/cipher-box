@@ -1,10 +1,10 @@
-import type { SealedChildRef } from '@cipherbox/core';
+import type { ResolvedChild } from '@cipherbox/sdk';
 import { deriveDeviceId } from '@cipherbox/crypto';
 import { formatDate } from '../../../utils/format';
 import { CopyableValue, DetailRow } from './DetailsPrimitives';
 
 /**
- * Folder details content (node/v3: SealedChildRef display).
+ * Folder details content (node/v3: ResolvedChild display).
  * TODO(phase 63): wire read-chain navigation to load Node for full metadata.
  */
 /**
@@ -24,8 +24,9 @@ export function FolderDetails({
   childCount,
   folderKey,
   ipnsPrivateKey,
+  readKeySealed,
 }: {
-  item: SealedChildRef;
+  item: ResolvedChild;
   metadataCid: string | null;
   metadataLoading: boolean;
   sequenceNumber: bigint | null;
@@ -34,6 +35,13 @@ export function FolderDetails({
   folderKey: Uint8Array | null;
   /** Decrypted IPNS signing private key, if this folder is loaded in the SDK's folderTree. */
   ipnsPrivateKey: Uint8Array | null;
+  /**
+   * The folder's AES-GCM sealed readKey blob, as it lives in the PARENT
+   * folder's `SealedChildRef.readKeySealed` (not present on `ResolvedChild` --
+   * this is a write/crypto-identity field, not a display field, so the caller
+   * threads it through separately).
+   */
+  readKeySealed: string;
 }) {
   return (
     <div className="details-rows">
@@ -84,8 +92,7 @@ export function FolderDetails({
       <DetailRow label="Read Key Sealed">
         {/* TODO(phase 63): readKeySealed is an AES-GCM sealed blob inside the parent's read-body */}
         <span className="details-value details-value--redacted">
-          {item.readKeySealed.slice(0, 16)}...{item.readKeySealed.slice(-8)} (sealed under parent
-          read-key)
+          {readKeySealed.slice(0, 16)}...{readKeySealed.slice(-8)} (sealed under parent read-key)
         </span>
       </DetailRow>
 

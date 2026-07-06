@@ -1,10 +1,34 @@
 import { type DragEvent, type MouseEvent, useRef } from 'react';
 import type { SealedChildRef } from '@cipherbox/core';
+import type { ResolvedChild } from '@cipherbox/sdk';
 import { useUploadStore } from '../../stores/upload.store';
 import type { PerFileUpload } from '../../stores/upload.store';
+import { getKind } from '../../lib/kind-cache';
 import { FileListItem, type DragItem } from './FileListItem';
 import { UploadListItem } from './UploadListItem';
 import { ParentDirRow } from './ParentDirRow';
+
+/**
+ * 68.2-06 companion patch: builds the `ResolvedChild` display projection
+ * `FileListItem` now renders from (SDK-READ-02, D-08 no-regression render
+ * repoint) out of the current `SealedChildRef` mirror + kind cache -- this
+ * is a like-for-like repackaging of data ALREADY available today, not a new
+ * resolve. `FileList`'s own `items`/`allItems` stay `SealedChildRef[]` (the
+ * identity/crypto carrier selection/context-menu/download/drag callbacks
+ * need); Plan 09's store projection is the designated place to replace this
+ * adapter with a real SDK-resolved listing once `client.listFolder`'s
+ * result has a home in the folder store.
+ */
+function toResolvedChildView(ref: SealedChildRef): ResolvedChild {
+  return {
+    ipnsName: ref.ipnsName,
+    name: ref.name,
+    kind: getKind(ref.ipnsName) === 'file' ? 'file' : 'folder',
+    size: ref.size,
+    modifiedAt: ref.modifiedAt ?? 0,
+    sequence: 0,
+  };
+}
 
 /**
  * Virtual entry representing an in-progress upload in the sorted file list.
@@ -207,6 +231,7 @@ export function FileList({
             <FileListItem
               key={item.ipnsName}
               item={item}
+              resolved={toResolvedChildView(item)}
               isSelected={selectedIds.has(item.ipnsName)}
               parentId={parentId}
               selectedIds={selectedIds}

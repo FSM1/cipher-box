@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { SealedChildRef, NodeContent } from '@cipherbox/core';
+import type { ResolvedChild } from '@cipherbox/sdk';
 import { Modal } from '../ui/Modal';
 import { useFolderStore } from '../../stores/folder.store';
 import { resolveIpnsRecord } from '../../services/ipns.service';
@@ -48,6 +49,24 @@ export function DetailsDialog({
   });
   const cachedKind = item ? getKind(item.ipnsName) : undefined;
   const isFolderHeuristic = cachedKind !== undefined ? cachedKind === 'folder' : !!folderStoreEntry;
+
+  // 68.2-06 companion patch: FileDetails/FolderDetails now render from
+  // ResolvedChild (SDK-READ-02) rather than SealedChildRef (D-08 no-regression
+  // render repoint). This file's own resolveFileMetadata/resolveIpnsRecord
+  // read path is Plan 07's scope to rewire onto the SDK facade -- this patch
+  // ONLY adapts the render-prop boundary using data already computed above
+  // (cachedKind/isFolderHeuristic), so FileDetails/FolderDetails don't render
+  // with a compile error ahead of that rewire.
+  const resolvedItem: ResolvedChild | null = item
+    ? {
+        ipnsName: item.ipnsName,
+        name: item.name,
+        kind: isFolderHeuristic ? 'folder' : 'file',
+        size: item.size,
+        modifiedAt: item.modifiedAt ?? 0,
+        sequence: 0,
+      }
+    : null;
 
   // Resolve IPNS to get metadata CID (folder view only)
   useEffect(() => {
@@ -135,7 +154,7 @@ export function DetailsDialog({
     setMetadataRefresh((prev) => prev + 1);
   }, []);
 
-  if (!item) return null;
+  if (!item || !resolvedItem) return null;
 
   const title = isFolderHeuristic ? 'Folder Details' : 'File Details';
 
@@ -143,7 +162,7 @@ export function DetailsDialog({
     <Modal open={open} onClose={onClose} title={title}>
       {!isFolderHeuristic ? (
         <FileDetails
-          item={item}
+          item={resolvedItem}
           metadataCid={metadataCid}
           metadataLoading={metadataLoading}
           fileMeta={fileMeta}
@@ -154,13 +173,14 @@ export function DetailsDialog({
         />
       ) : (
         <FolderDetails
-          item={item}
+          item={resolvedItem}
           metadataCid={metadataCid}
           metadataLoading={metadataLoading}
           sequenceNumber={folderStoreEntry?.sequenceNumber ?? null}
           childCount={folderStoreEntry ? folderStoreEntry.children.length : null}
           folderKey={folderStoreEntry?.folderKey ?? null}
           ipnsPrivateKey={folderStoreEntry?.ipnsPrivateKey ?? null}
+          readKeySealed={item.readKeySealed}
         />
       )}
     </Modal>
