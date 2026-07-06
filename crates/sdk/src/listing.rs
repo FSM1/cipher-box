@@ -638,6 +638,48 @@ where
 }
 
 // ---------------------------------------------------------------------------
+// Single-node gated fetch — the sanctioned single-node read entrypoint (SC#6)
+// ---------------------------------------------------------------------------
+
+/// Resolves a SINGLE node envelope at `ipns_name` through the SAME gate-first
+/// chain as `list_folder`/`list_folder_owned` (SC#6 — no raw resolve leaks to
+/// consumers; the raw resolve primitive stays `pub(crate)`).
+///
+/// This is the ONLY sanctioned way for a consumer (the FUSE mount's file
+/// CONTENT read + journal replay) to obtain a node's own [`PublishedNode`]
+/// envelope: `list_folder`/`list_folder_owned` reject a file node (they list
+/// CHILDREN of a folder), but the content-decrypt path needs the file node's
+/// own envelope. This wrapper gates the node's OWN resolve exactly as
+/// `list_folder` gates the folder it lists — using the generation floor the
+/// `high_water` already tracks for `ipns_name` (defaulting to 0 on first
+/// contact) — and returns the decoded envelope only on a passing gate.
+///
+/// GATE-FIRST (T-69-06-01): `enforce_resolved` runs BEFORE the fetched bytes
+/// are decoded (inside `resolve_published_node`); a regressed generation/seq
+/// fails closed (`Err`). No new raw-resolve public surface is added — this is
+/// the single additional gated entrypoint beyond `list_folder`/
+/// `list_shared_folder`/`list_folder_owned`.
+pub async fn fetch_node_gated<F, S>(
+    fetcher: &F,
+    high_water: &RotationHighWater<S>,
+    ipns_name: &str,
+) -> Result<PublishedNode, ListingError>
+where
+    F: NodeFetcher,
+    S: HighWaterStore,
+{
+    let own_generation = high_water
+        .get_generation_floor(ipns_name)
+        .await
+        .unwrap_or(0) as i64;
+
+    let (published, _own_sequence) =
+        resolve_published_node(fetcher, high_water, ipns_name, own_generation, 0).await?;
+
+    Ok(published)
+}
+
+// ---------------------------------------------------------------------------
 // Wire-format helpers
 // ---------------------------------------------------------------------------
 
@@ -1738,7 +1780,9 @@ mod tests {
         // Seed the child's floor at 5; its parent-mirror generation is 0 -> the
         // gate rejects it (0 < 5) BEFORE any owned unseal.
         let high_water = rhw();
-        high_water.bump_generation(&file_emission.ipns_name, 5).await;
+        high_water
+            .bump_generation(&file_emission.ipns_name, 5)
+            .await;
 
         let result = list_folder_owned(
             &fetcher,
@@ -1836,5 +1880,93 @@ mod tests {
             parent_write_key, parent_write_key_before,
             "list_folder_owned must never mutate/zero the caller's folder_write_key"
         );
+    }
+
+    // =================================================================
+    // fetch_node_gated: the sanctioned single-node read entrypoint
+    // (SC#6) — file CONTENT read + journal replay consume it.
+    // =================================================================
+
+    // -----------------------------------------------------------------
+    // Happy path: round-trip an emitted file node's own PublishedNode
+    // envelope through the gate.
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn fetch_node_gated_round_trips_an_emitted_file_node() {
+        let file_emission = build_file_emission(owned_content(321)).unwrap();
+
+        let fetcher = FakeFetcher(HashMap::from([(
+            file_emission.ipns_name.clone(),
+            FetchedRecord {
+                sequence_number: 7,
+                bytes: file_emission.published_node.clone(),
+            },
+        )]));
+        let high_water = rhw();
+
+        let published = fetch_node_gated(&fetcher, &high_water, &file_emission.ipns_name)
+            .await
+            .expect("fetch_node_gated should return the file node's own envelope");
+
+        // The returned envelope is the file node's OWN PublishedNode -- its id
+        // matches the emitted node identity and its kind is "file" (which
+        // list_folder/list_folder_owned would REJECT via NotAFolder).
+        assert_eq!(published.id, file_emission.id);
+        assert_eq!(published.kind, "file");
+        assert_eq!(published.schema, "node/v3");
+
+        // The gate ran and bumped the seq floor for this node_id (proving it is
+        // gated by high_water, not a raw resolve).
+        assert_eq!(
+            high_water.get_seq_floor(&file_emission.ipns_name).await,
+            Some(7)
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Gate-first fail-closed: a sequence regression against the floor
+    // the gate already tracks rejects the fetch (proves fetch_node_gated
+    // routes through enforce_resolved, not a raw resolve).
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn fetch_node_gated_rejects_a_sequence_regression() {
+        let file_emission = build_file_emission(owned_content(1)).unwrap();
+        let high_water = rhw();
+
+        // First contact at seq=20 succeeds and seeds the seq floor at 20.
+        let fetcher_hi = FakeFetcher(HashMap::from([(
+            file_emission.ipns_name.clone(),
+            FetchedRecord {
+                sequence_number: 20,
+                bytes: file_emission.published_node.clone(),
+            },
+        )]));
+        fetch_node_gated(&fetcher_hi, &high_water, &file_emission.ipns_name)
+            .await
+            .expect("first contact at seq=20 should pass");
+
+        // A later resolve reporting seq=3 is a rollback -- the gate rejects it
+        // BEFORE the (identical) bytes are trusted.
+        let fetcher_lo = FakeFetcher(HashMap::from([(
+            file_emission.ipns_name.clone(),
+            FetchedRecord {
+                sequence_number: 3,
+                bytes: file_emission.published_node.clone(),
+            },
+        )]));
+        let result = fetch_node_gated(&fetcher_lo, &high_water, &file_emission.ipns_name).await;
+
+        match result {
+            Err(ListingError::Gated(name, RotationError::SequenceRegression { .. })) => {
+                assert_eq!(name, file_emission.ipns_name);
+            }
+            other => panic!(
+                "expected ListingError::Gated(.., SequenceRegression) proving fetch_node_gated \
+                 is gate-first; got: {:?}",
+                other
+            ),
+        }
     }
 }
