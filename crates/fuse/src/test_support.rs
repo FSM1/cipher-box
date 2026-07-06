@@ -122,6 +122,9 @@ pub(crate) fn make_test_fs_with_keypair(
         publish_coordinator: Arc::new(crate::PublishCoordinator::new()),
         publish_queue: HashMap::new(),
         journal: cipherbox_sdk::WriteQueue::new(journal_dir, 5),
+        sent_shares: std::sync::RwLock::new(
+            crate::write_ops::grant_scope::SentSharesCache::empty(),
+        ),
     }
 }
 
