@@ -1,6 +1,84 @@
 //! Vault initialization and decryption commands.
 
 use crate::state::AppState;
+use zeroize::Zeroizing;
+
+/// Derive the node/v3 root read/write keys from the legacy `root_folder_key`,
+/// byte-matching the desktop mount bridge in
+/// `apps/desktop/src-tauri/src/fuse/mod.rs:192-205` so a freshly-created vault
+/// is readable/writable at first mount.
+///
+/// PHASE-63 COUPLING (temporary placeholder): the real node/v3 root read/write
+/// keys are minted server-side at registration (sdk-core `registration.ts`
+/// `rootReadKey`/`rootWriteKey`) and recovered into the client key state at
+/// login. Until that recovery is wired into the desktop runtime (phase 63),
+/// BOTH create (here) and mount (mod.rs:192-205) bridge from `root_folder_key`:
+/// `read_key` = the first 32 bytes; `write_key` = `read_key` with every byte
+/// XOR 0xA5. These two derivations MUST stay byte-identical — changing one
+/// without the other silently breaks create/mount consistency.
+fn derive_root_node_keys(
+    root_folder_key: &[u8],
+) -> Result<(Zeroizing<[u8; 32]>, Zeroizing<[u8; 32]>), String> {
+    // read_key: reuse the 32-byte root folder key (mount bridge mod.rs:192-198).
+    let read_key: Zeroizing<[u8; 32]> = {
+        let mut k = [0u8; 32];
+        let src = root_folder_key;
+        let n = src.len().min(32);
+        k[..n].copy_from_slice(&src[..n]);
+        Zeroizing::new(k)
+    };
+    // write_key: domain-separated placeholder transform (mount bridge mod.rs:199-205).
+    let write_key: Zeroizing<[u8; 32]> = {
+        let mut k = *read_key;
+        for b in k.iter_mut() {
+            *b ^= 0xA5;
+        }
+        Zeroizing::new(k)
+    };
+    Ok((read_key, write_key))
+}
+
+/// Build an empty node/v3 ROOT node (no children) sealed under the given root
+/// read/write keys, returning the `encode_published_node` envelope bytes.
+///
+/// Pure / no-IO. Mirrors the `crates/sdk::build_folder_emission` seal path
+/// (`seal_published_node(.., Some(&write_body))` → `encode_published_node`) but
+/// with DETERMINISTIC keys — the HKDF-derived root IPNS signing seed and the
+/// mount-bridge root read/write keys — instead of the minted random keys
+/// `build_folder_emission` uses, so create and mount agree on the root keys.
+///
+/// Terminal-owner (D-09): the caller owns the key buffers; this helper only
+/// borrows them into the seal and never zeroes caller-owned material.
+fn build_empty_root_published_node(
+    root_read_key: &[u8; 32],
+    root_write_key: &[u8; 32],
+    root_ipns_private_key: &[u8],
+) -> Result<Vec<u8>, String> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let root_node = cipherbox_core::node::Node::Root {
+        id: cipherbox_crypto::utils::generate_uuid_v4(),
+        generation: 0,
+        created_at: now,
+        modified_at: now,
+        children: Vec::new(),
+    };
+    let write_body = cipherbox_core::node::NodeWriteBody {
+        ipns_private_key: root_ipns_private_key.to_vec(),
+        write_children: Vec::new(),
+    };
+    let published = cipherbox_core::node::seal::seal_published_node(
+        &root_node,
+        root_read_key,
+        root_write_key,
+        Some(&write_body),
+    )
+    .map_err(|e| format!("root node seal failed: {}", e))?;
+    cipherbox_core::node::encode_published_node(&published)
+        .map_err(|e| format!("root node encode failed: {}", e))
+}
 
 /// Load user-configurable vault settings from encrypted IPNS entry.
 ///
@@ -11,30 +89,28 @@ pub(crate) async fn load_vault_settings(
     api: &std::sync::Arc<cipherbox_api_client::ApiClient>,
     private_key: &[u8; 32],
 ) -> cipherbox_core::VaultSettings {
-    let result: Result<cipherbox_core::VaultSettings, String> = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        async {
+    let result: Result<cipherbox_core::VaultSettings, String> =
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
             let (_priv_key, _pub_key, ipns_name) =
                 cipherbox_crypto::hkdf::derive_vault_settings_ipns_keypair(private_key)
                     .map_err(|e| format!("HKDF derivation failed: {:?}", e))?;
 
             // D-09: route through verified chokepoint — fail-closed on tampered settings.
-            let resolved = match cipherbox_api_client::ipns::resolve_ipns_verified(api, &ipns_name)
-                .await
-            {
-                Ok(v) => v,
-                Err(cipherbox_api_client::ipns::VerifyError::Api(e)) => {
-                    return Err(format!("IPNS resolve failed: {}", e));
-                }
-                Err(cipherbox_api_client::ipns::VerifyError::Invalid(msg)) => {
-                    log::error!(
-                        "Vault settings IPNS {} verify failed (D-09): {}",
-                        ipns_name,
-                        msg
-                    );
-                    return Err(format!("IPNS verification failed: {}", msg));
-                }
-            };
+            let resolved =
+                match cipherbox_api_client::ipns::resolve_ipns_verified(api, &ipns_name).await {
+                    Ok(v) => v,
+                    Err(cipherbox_api_client::ipns::VerifyError::Api(e)) => {
+                        return Err(format!("IPNS resolve failed: {}", e));
+                    }
+                    Err(cipherbox_api_client::ipns::VerifyError::Invalid(msg)) => {
+                        log::error!(
+                            "Vault settings IPNS {} verify failed (D-09): {}",
+                            ipns_name,
+                            msg
+                        );
+                        return Err(format!("IPNS verification failed: {}", msg));
+                    }
+                };
 
             let encrypted = cipherbox_api_client::ipfs::fetch_content(api, &resolved.cid)
                 .await
@@ -48,10 +124,9 @@ pub(crate) async fn load_vault_settings(
                 .map_err(|e| format!("JSON parse failed: {}", e))?;
 
             Ok(cipherbox_core::validate_vault_settings(&parsed))
-        },
-    )
-    .await
-    .unwrap_or_else(|_| Err("vault settings load timed out after 10s".to_string()));
+        })
+        .await
+        .unwrap_or_else(|_| Err("vault settings load timed out after 10s".to_string()));
 
     match result {
         Ok(settings) => {
@@ -113,15 +188,20 @@ pub(crate) async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Res
     use base64::Engine;
 
     // 1. Publish v2 key blob to vault key IPNS (key only, no metadata)
-    let blob_bytes = cipherbox_core::vault_blob::serialize_vault_blob_v2(&encrypted_root_folder_key)?;
-    let key_blob_cid = cipherbox_api_client::ipfs::upload_content(&state.sdk.api, &blob_bytes).await.map_err(|e| e.to_string())?;
+    let blob_bytes =
+        cipherbox_core::vault_blob::serialize_vault_blob_v2(&encrypted_root_folder_key)?;
+    let key_blob_cid = cipherbox_api_client::ipfs::upload_content(&state.sdk.api, &blob_bytes)
+        .await
+        .map_err(|e| e.to_string())?;
 
-    let vault_key_ipns_arr: [u8; 32] = vault_key_ipns_private.as_slice()
+    let vault_key_ipns_arr: [u8; 32] = vault_key_ipns_private
+        .as_slice()
         .try_into()
         .map_err(|_| "Invalid vault key IPNS private key length".to_string())?;
     let key_value = format!("/ipfs/{}", key_blob_cid);
-    let key_record = cipherbox_core::ipns::create_ipns_record(&vault_key_ipns_arr, &key_value, 1, 86_400_000)
-        .map_err(|e| format!("IPNS record creation failed: {}", e))?;
+    let key_record =
+        cipherbox_core::ipns::create_ipns_record(&vault_key_ipns_arr, &key_value, 1, 86_400_000)
+            .map_err(|e| format!("IPNS record creation failed: {}", e))?;
     let key_marshaled = cipherbox_core::ipns::marshal_ipns_record(&key_record)
         .map_err(|e| format!("IPNS record marshaling failed: {}", e))?;
     let key_record_base64 = base64::engine::general_purpose::STANDARD.encode(&key_marshaled);
@@ -134,11 +214,16 @@ pub(crate) async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Res
         key_epoch: None,
         expected_sequence_number: None,
     };
-    match cipherbox_api_client::ipns::publish_ipns(&state.sdk.api, &key_publish_req).await.map_err(|e| e.to_string())? {
+    match cipherbox_api_client::ipns::publish_ipns(&state.sdk.api, &key_publish_req)
+        .await
+        .map_err(|e| e.to_string())?
+    {
         cipherbox_api_client::PublishResult::Success => {}
         cipherbox_api_client::PublishResult::Conflict { .. } => {
             log::warn!("Unexpected conflict on vault key blob publish (sequence 1); aborting vault initialization to avoid mismatched root_folder_key");
-            return Err("Vault initialization aborted due to existing vault key IPNS record".to_string());
+            return Err(
+                "Vault initialization aborted due to existing vault key IPNS record".to_string(),
+            );
         }
     }
 
@@ -159,14 +244,18 @@ pub(crate) async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Res
     let json_metadata = serde_json::json!({ "iv": iv_hex, "data": data_base64 });
     let json_bytes = serde_json::to_vec(&json_metadata)
         .map_err(|e| format!("JSON serialization failed: {}", e))?;
-    let folder_cid = cipherbox_api_client::ipfs::upload_content(&state.sdk.api, &json_bytes).await.map_err(|e| e.to_string())?;
+    let folder_cid = cipherbox_api_client::ipfs::upload_content(&state.sdk.api, &json_bytes)
+        .await
+        .map_err(|e| e.to_string())?;
 
-    let root_ipns_arr: [u8; 32] = root_ipns_private_key.as_slice()
+    let root_ipns_arr: [u8; 32] = root_ipns_private_key
+        .as_slice()
         .try_into()
         .map_err(|_| "Invalid root IPNS private key length".to_string())?;
     let folder_value = format!("/ipfs/{}", folder_cid);
-    let folder_record = cipherbox_core::ipns::create_ipns_record(&root_ipns_arr, &folder_value, 1, 86_400_000)
-        .map_err(|e| format!("IPNS record creation failed: {}", e))?;
+    let folder_record =
+        cipherbox_core::ipns::create_ipns_record(&root_ipns_arr, &folder_value, 1, 86_400_000)
+            .map_err(|e| format!("IPNS record creation failed: {}", e))?;
     let folder_marshaled = cipherbox_core::ipns::marshal_ipns_record(&folder_record)
         .map_err(|e| format!("IPNS record marshaling failed: {}", e))?;
     let folder_record_base64 = base64::engine::general_purpose::STANDARD.encode(&folder_marshaled);
@@ -179,11 +268,16 @@ pub(crate) async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Res
         key_epoch: None,
         expected_sequence_number: None,
     };
-    match cipherbox_api_client::ipns::publish_ipns(&state.sdk.api, &folder_publish_req).await.map_err(|e| e.to_string())? {
+    match cipherbox_api_client::ipns::publish_ipns(&state.sdk.api, &folder_publish_req)
+        .await
+        .map_err(|e| e.to_string())?
+    {
         cipherbox_api_client::PublishResult::Success => {}
         cipherbox_api_client::PublishResult::Conflict { .. } => {
             log::warn!("Unexpected conflict on root folder publish (sequence 1); aborting vault initialization to avoid inconsistent state");
-            return Err("Vault initialization aborted due to existing root folder IPNS record".to_string());
+            return Err(
+                "Vault initialization aborted due to existing root folder IPNS record".to_string(),
+            );
         }
     }
 
@@ -306,4 +400,98 @@ pub(crate) async fn fetch_and_decrypt_vault(state: &AppState) -> Result<(), Stri
 
     log::info!("Vault keys decrypted and stored in memory");
     Ok(())
+}
+
+#[cfg(test)]
+mod root_emit_tests {
+    use super::*;
+    use base64::Engine as _;
+
+    /// KAT-consistent round-trip for the empty node/v3 root emit helper:
+    /// seal+encode → decode envelope → unseal both bodies under the bridge
+    /// keys, asserting AAD key separation (read key cannot open the write body).
+    #[test]
+    fn build_empty_root_published_node_round_trips() {
+        let root_folder_key = [0x42u8; 32];
+        let root_ipns_seed = [0x11u8; 32];
+
+        let (read_key, write_key) =
+            derive_root_node_keys(&root_folder_key).expect("derive root node keys");
+
+        // Bridge byte-match (mod.rs:192-205): read = first 32 bytes; write = read ^ 0xA5.
+        assert_eq!(*read_key, root_folder_key);
+        let mut expected_write = root_folder_key;
+        for b in expected_write.iter_mut() {
+            *b ^= 0xA5;
+        }
+        assert_eq!(*write_key, expected_write);
+
+        let bytes = build_empty_root_published_node(&read_key, &write_key, &root_ipns_seed)
+            .expect("build empty root published node");
+
+        // Envelope shape: schema node/v3, kind root, generation 0, both bodies sealed.
+        let published =
+            cipherbox_core::node::decode_published_node(&bytes).expect("decode published node");
+        assert_eq!(published.schema, "node/v3");
+        assert_eq!(published.kind, "root");
+        assert_eq!(published.generation, 0);
+        assert!(
+            published.write_sealed.is_some(),
+            "write body must be sealed"
+        );
+
+        // Read-body unseals under the root read key → empty-children Root.
+        let read_sealed = base64::engine::general_purpose::STANDARD
+            .decode(&published.read_sealed)
+            .expect("valid base64 read_sealed");
+        let read_body = cipherbox_core::node::seal::unseal_node(
+            &read_sealed,
+            &read_key,
+            &published.id,
+            cipherbox_core::node::NodeKind::Root,
+            0,
+        )
+        .expect("unseal read body under read key");
+        match cipherbox_core::node::decode_node(&read_body).expect("decode read-body node") {
+            cipherbox_core::node::Node::Root {
+                children,
+                generation,
+                ..
+            } => {
+                assert!(children.is_empty(), "root has no children");
+                assert_eq!(generation, 0);
+            }
+            other => panic!("expected Node::Root, got {:?}", other),
+        }
+
+        // Write-body unseals under the root write key → empty write_children + the ipns seed.
+        let write_sealed = base64::engine::general_purpose::STANDARD
+            .decode(published.write_sealed.as_ref().unwrap())
+            .expect("valid base64 write_sealed");
+        let write_body_bytes = cipherbox_core::node::seal::unseal_node(
+            &write_sealed,
+            &write_key,
+            &published.id,
+            cipherbox_core::node::NodeKind::Root,
+            0,
+        )
+        .expect("unseal write body under write key");
+        let write_body =
+            cipherbox_core::node::decode_write_body(&write_body_bytes).expect("decode write body");
+        assert!(write_body.write_children.is_empty(), "no write children");
+        assert_eq!(write_body.ipns_private_key, root_ipns_seed.to_vec());
+
+        // AAD key separation: the read key must NOT open the write-body seal.
+        let opened_with_read = cipherbox_core::node::seal::unseal_node(
+            &write_sealed,
+            &read_key,
+            &published.id,
+            cipherbox_core::node::NodeKind::Root,
+            0,
+        );
+        assert!(
+            opened_with_read.is_err(),
+            "the write-body must not open under the read key (AAD/key separation)"
+        );
+    }
 }
