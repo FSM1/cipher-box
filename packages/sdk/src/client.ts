@@ -198,6 +198,13 @@ export class CipherBoxClient {
    */
   private listingCache: Map<string, { sequenceNumber: bigint; children: ResolvedChild[] }> =
     new Map();
+  /**
+   * In-flight dedup for `reresolveFolderInPlace` (68.2-13, T-68.2-13-04):
+   * coalesces concurrent `{ forceResolve: true }` calls for the SAME
+   * ipnsName (e.g. a nav re-resolve firing alongside the 30s poll leg) to a
+   * single network resolve.
+   */
+  private reresolveInFlight: Map<string, Promise<FolderState | null>> = new Map();
   private keyCache: KeyCache;
   private binState: BinState | null = null;
   /** BYO-IPFS external pinning provider (null when mode is 'cipherbox') */
@@ -858,10 +865,18 @@ export class CipherBoxClient {
    * client can call this directly without a prior `loadFolder`/
    * `registerFolder`, exactly like every other `ensureFolderLoaded`-backed
    * mutation chokepoint.
+   *
+   * `opts.forceResolve` (68.2-13, SDK-READ-03 / SC#5) threads through to
+   * `ensureFolderLoaded` so an already-loaded folder's stored sequence
+   * advances from network truth BEFORE this method's own
+   * `resolveListingChildren` cache check runs -- closing the
+   * self-referential cache-clock gap where the check compared the incoming
+   * sequence against the SAME stale value the short-circuit had just
+   * returned.
    */
-  async listFolder(ipnsName: string, _opts?: { forceResolve?: boolean }): Promise<ResolvedChild[]> {
+  async listFolder(ipnsName: string, opts?: { forceResolve?: boolean }): Promise<ResolvedChild[]> {
     return this.withOperation('listFolder', async () => {
-      const folder = await this.ensureFolderLoaded(ipnsName);
+      const folder = await this.ensureFolderLoaded(ipnsName, opts);
       if (!folder) return [];
       return this.resolveListingChildren(
         folder.children,
@@ -1542,16 +1557,30 @@ export class CipherBoxClient {
    * failure class that previously required consumers to pre-seed folderTree
    * before every folderTree-dependent operation.
    *
+   * `opts.forceResolve` (68.2-13, SDK-READ-03 / SC#5) is a DELIBERATE,
+   * distinct live-resolve-on-navigation path: for an ALREADY-LOADED entry,
+   * it routes to {@link reresolveFolderInPlace} instead of this method's
+   * verbatim short-circuit -- gated re-resolving the folder's OWN IPNS
+   * record from the network and advancing the stored `FolderState` in
+   * place, closing the self-referential cache-clock gap where a repeat
+   * `ensureFolderLoaded`/`listFolder` call for an already-loaded folder
+   * never saw a grantee's later write. Internal write-mutation chokepoints
+   * (`requireFolder`, etc.) call this method with NO opts and keep the
+   * cheap cached fast path untouched.
+   *
    * @param targetIpnsName - IPNS name of the folder to ensure is loaded
    * @returns The loaded FolderState, or null if it cannot be bootstrapped
    * @internal
    */
   async ensureFolderLoaded(
     targetIpnsName: string,
-    _opts?: { forceResolve?: boolean }
+    opts?: { forceResolve?: boolean }
   ): Promise<FolderState | null> {
     const existing = this.folderTree.get(targetIpnsName);
     if (existing) {
+      if (opts?.forceResolve) {
+        return this.reresolveFolderInPlace(existing);
+      }
       // Cold-load write-plane recovery (68.1-23): a folder entry seeded
       // read-only (registerFolder/loadFolder without a writeKey -- e.g. the
       // web-layer's parallel navigateReadChain walk, 68.1-05) pre-empts the
@@ -1566,6 +1595,100 @@ export class CipherBoxClient {
     if (targetIpnsName === this.config.rootIpnsName) return rootState;
 
     return this.dfsFindFolder(rootState, targetIpnsName, new Set<string>());
+  }
+
+  /**
+   * Dedup wrapper (T-68.2-13-04) around {@link doReresolveFolderInPlace}:
+   * coalesces concurrent `{ forceResolve: true }` calls for the SAME
+   * `ipnsName` (e.g. a nav re-resolve and the 30s poll leg firing together)
+   * to a single network resolve, sharing one in-flight promise.
+   */
+  private reresolveFolderInPlace(existing: FolderState): Promise<FolderState | null> {
+    const ipnsName = existing.ipnsName;
+    const inFlight = this.reresolveInFlight.get(ipnsName);
+    if (inFlight) return inFlight;
+
+    const promise = this.doReresolveFolderInPlace(existing).finally(() => {
+      this.reresolveInFlight.delete(ipnsName);
+    });
+    this.reresolveInFlight.set(ipnsName, promise);
+    return promise;
+  }
+
+  /**
+   * Gated live-resolve-on-navigation for an ALREADY-LOADED folder (68.2-13,
+   * SDK-READ-03 / SC#5). Re-resolves the folder's OWN IPNS record from the
+   * network and, when genuinely newer, updates the EXISTING `FolderState`
+   * object in place (D-09 single-owner, SC#3 -- never a second state object
+   * or a second store).
+   *
+   * GATED re-resolve (D-05): mirrors `dfsFindFolder`'s per-hop gate block
+   * exactly -- fail closed on `!signatureVerified` BEFORE any floor
+   * mutation, guard `Number.MAX_SAFE_INTEGER` overflow, then gate through
+   * `RotationHighWater.enforceResolved`. `generation` is sourced from
+   * `existing.nodeGeneration` (a locally-trusted, previously-gate-validated
+   * value) -- NEVER the freshly relay-served envelope generation (Pitfall
+   * 3). `versionFloor: 0` mirrors `ensureRootFolderState`'s own gate: the
+   * seqFloor is already established for an already-loaded node, so it is
+   * never consulted. Gate errors and AEAD unseal errors PROPAGATE
+   * (fail-closed, matching `dfsFindFolder`'s T-68.1-01-02 contract) --
+   * fire-and-forget web freshness callers swallow them.
+   *
+   * A null resolve (structurally unresolvable / transient network miss) or
+   * a resolved sequence that is not strictly newer (#489 sequence-as-clock
+   * guard, mirrors `loadFolder`'s own guard) returns `existing` unchanged
+   * without re-unsealing -- never blows away a loaded view on a stale or
+   * failed read.
+   */
+  private async doReresolveFolderInPlace(existing: FolderState): Promise<FolderState | null> {
+    const resolved = await this.resolvePublishedNode(existing.ipnsName);
+    if (!resolved) return existing;
+
+    if (this.config.rotationHighWater) {
+      if (!resolved.signatureVerified) {
+        throw new Error(
+          `IPNS resolve for ${existing.ipnsName} returned an unverified record -- refusing to gate durable floors on it`
+        );
+      }
+      if (resolved.sequenceNumber > BigInt(Number.MAX_SAFE_INTEGER)) {
+        throw new Error(
+          `IPNS sequence number for ${existing.ipnsName} exceeds Number.MAX_SAFE_INTEGER -- refusing lossy floor conversion`
+        );
+      }
+      await this.config.rotationHighWater.enforceResolved({
+        nodeId: existing.ipnsName,
+        seq: Number(resolved.sequenceNumber),
+        generation: existing.nodeGeneration,
+        versionFloor: 0,
+      });
+    }
+
+    // Sequence-as-clock guard (#489): the gate above has already rejected
+    // any true regression; an equal/stale-lagging read is not fresher than
+    // what's already stored, so return existing unchanged without
+    // re-unsealing (mirrors loadFolder's own guard).
+    if (resolved.sequenceNumber <= existing.sequenceNumber) {
+      return existing;
+    }
+
+    const wk = existing.writeKey;
+    const hasRealWriteKey = !!wk && wk.length === 32 && !wk.every((b) => b === 0);
+    const node = hasRealWriteKey
+      ? await unsealNode(resolved.published, existing.folderKey, existing.writeKey)
+      : await unsealNode(resolved.published, existing.folderKey);
+
+    // In-place update (D-09 single-owner, SC#3): preserve writeKey/
+    // ipnsKeypair/nodeId, advance the cache clock + write-plane mirror.
+    existing.sequenceNumber = resolved.sequenceNumber;
+    existing.children = node.children ?? [];
+    existing.metadata = node;
+    existing.nodeGeneration = node.generation;
+    existing.lastLoadedAt = Date.now();
+    this.folderTree.set(existing.ipnsName, existing);
+
+    await this.recoverWriteKeyIfNeeded(existing);
+
+    return existing;
   }
 
   /**
