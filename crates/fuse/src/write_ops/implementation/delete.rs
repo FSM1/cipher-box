@@ -123,9 +123,12 @@ pub fn handle_unlink(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Rep
                     // a k51) and WriteChildRef.child_id = uuid_from_ino(child_ino)
                     // (WRITE plane, a UUID) — the two key spaces are NEVER
                     // conflated.
-                    // SECURITY-REVIEW: D-07 dual-keying — childId(UUID via
-                    // uuid_from_ino) vs ipnsName must not be conflated.
-                    let child_id = crate::fs::uuid_from_ino(child_ino);
+                    // SECURITY-REVIEW: D-07 dual-keying — childId(UUID) vs ipnsName
+                    // must not be conflated. childId is the inode's STORED node_id
+                    // (its real published.id), NOT uuid_from_ino(child_ino): a
+                    // materialized-then-deleted file keeps its creator's id, so the
+                    // bin entry's WriteChildRef pairs correctly on restore.
+                    let child_id = inode.node_id.clone();
                     let refs = cipherbox_sdk::build_child_refs(
                         &**read_key,
                         &**write_key,
@@ -325,9 +328,12 @@ pub fn handle_rmdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Repl
                         // plane, a k51), WriteChildRef.child_id =
                         // uuid_from_ino(child_ino) (WRITE plane, a UUID) — never
                         // conflated.
-                        // SECURITY-REVIEW: D-07 dual-keying — childId(UUID via
-                        // uuid_from_ino) vs ipnsName must not be conflated.
-                        let child_id = crate::fs::uuid_from_ino(child_ino);
+                        // SECURITY-REVIEW: D-07 dual-keying — childId(UUID) vs
+                        // ipnsName must not be conflated. childId is the inode's
+                        // STORED node_id (its real published.id), NOT
+                        // uuid_from_ino(child_ino), so a materialized-then-removed
+                        // folder's bin entry pairs correctly on restore.
+                        let child_id = inode.node_id.clone();
                         match cipherbox_sdk::build_child_refs(
                             &**read_key,
                             &**write_key,
@@ -487,6 +493,7 @@ mod tests {
         let t = UNIX_EPOCH + Duration::from_millis(1_700_000_000_000);
         fs.inodes.insert(InodeData {
             ino,
+            node_id: crate::fs::uuid_from_ino(ino),
             parent_ino: ROOT_INO,
             name: name.to_string(),
             // node/v3: shareable identity is the plain `ipns_name`; descriptors
@@ -528,6 +535,7 @@ mod tests {
         let t = UNIX_EPOCH + Duration::from_millis(1_700_000_000_000);
         fs.inodes.insert(InodeData {
             ino,
+            node_id: crate::fs::uuid_from_ino(ino),
             parent_ino: ROOT_INO,
             name: name.to_string(),
             kind: InodeKind::Folder {

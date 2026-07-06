@@ -144,12 +144,25 @@ impl CipherBoxFS {
             SealedChildRef, WriteChildRef,
         };
 
-        let (parent_read_key, parent_write_key, ipns_private_key, ipns_name, is_root, child_inos) = {
+        let (
+            parent_read_key,
+            parent_write_key,
+            ipns_private_key,
+            ipns_name,
+            is_root,
+            folder_node_id,
+            child_inos,
+        ) = {
             let inode = self
                 .inodes
                 .get(folder_ino)
                 .ok_or_else(|| format!("Folder inode {} not found", folder_ino))?;
             let children = inode.children.clone().unwrap_or_default();
+            // D-07: the folder's OWN node id is its stored, stable id — NOT
+            // uuid_from_ino(folder_ino). A re-materialized folder keeps the id its
+            // creator published under, so its parent's SealedChildRef AAD (bound to
+            // that id) still round-trips.
+            let folder_node_id = inode.node_id.clone();
             match &inode.kind {
                 crate::inode::InodeKind::Root {
                     read_key,
@@ -163,6 +176,7 @@ impl CipherBoxFS {
                     ipns_private_key.to_vec(),
                     ipns_name.clone(),
                     true,
+                    folder_node_id,
                     children,
                 ),
                 crate::inode::InodeKind::Folder {
@@ -177,6 +191,7 @@ impl CipherBoxFS {
                     ipns_private_key.to_vec(),
                     ipns_name.clone(),
                     false,
+                    folder_node_id,
                     children,
                 ),
                 _ => return Err("Cannot update metadata for non-folder inode".to_string()),
@@ -210,7 +225,14 @@ impl CipherBoxFS {
             if child_ipns.is_empty() {
                 continue;
             }
-            let child_id = uuid_from_ino(child_ino);
+            // D-07: key BOTH planes by the child's stored, stable node id (its
+            // real published.id), NOT uuid_from_ino(child_ino). The local ino is
+            // client-private and may differ from the ino the child was created
+            // under (e.g. a child re-materialized from a remote listing on this or
+            // another client). Using it here would seal a WriteChildRef whose
+            // child_id no longer matches the child node's published.id, breaking
+            // list_folder_owned's read/write pairing.
+            let child_id = child.node_id.clone();
             let (sealed_ref, write_ref) = cipherbox_sdk::build_child_refs(
                 &child_read_key,
                 &child_write_key,
@@ -232,7 +254,7 @@ impl CipherBoxFS {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
-        let node_id = uuid_from_ino(folder_ino);
+        let node_id = folder_node_id;
         let node = if is_root {
             Node::Root {
                 id: node_id,
@@ -642,6 +664,7 @@ mod drain_refresh_completions_tests {
         let mtime = UNIX_EPOCH + Duration::from_millis(mtime_ms);
         fs.inodes.insert(InodeData {
             ino,
+            node_id: crate::fs::uuid_from_ino(ino),
             parent_ino: ROOT_INO,
             name: "hello.txt".to_string(),
             kind: InodeKind::File {
@@ -687,6 +710,7 @@ mod drain_refresh_completions_tests {
                 modified_at: file_mtime_ms,
                 sequence: 1,
             },
+            node_id: "nodeid-hello".to_string(),
             read_key: Zeroizing::new([7u8; 32]),
             write_key: Zeroizing::new([8u8; 32]),
             ipns_private_key: Zeroizing::new(vec![3u8; 32]),
@@ -801,6 +825,243 @@ mod drain_refresh_completions_tests {
         assert!(
             fs.metadata_cache.get(ROOT_IPNS).is_none(),
             "Failure applies no cache write"
+        );
+    }
+}
+
+/// D-07 write-plane pairing regression (desktop-e2e "Cross-client sync" / "Move
+/// content" failure): a parent re-published by the FUSE write path
+/// (`build_folder_metadata`) must key its child's `WriteChildRef.child_id` by the
+/// child node's REAL id (its `published.id`), NOT by `uuid_from_ino(local_ino)`.
+///
+/// A child materialized from a remote listing is assigned a FRESH local inode
+/// number (`apply_owned_children`) that differs from the ino its creator used.
+/// Before the fix `build_folder_metadata` sealed the `WriteChildRef` with
+/// `uuid_from_ino(fresh_local_ino)`, which no longer matched the child node's
+/// `published.id`, so `list_folder_owned`'s D-07 pairing failed for minutes on
+/// every metadata refresh ("no WriteChildRef paired with child node id …").
+///
+/// This test drives the REAL `build_folder_metadata` publish for a materialized
+/// child (stored `node_id` != `uuid_from_ino(local_ino)`), then runs the SDK
+/// `list_folder_owned` owned read against the published parent and asserts the
+/// read/write planes pair. It FAILS before the fix and PASSES after.
+#[cfg(all(test, feature = "fuse"))]
+mod d07_write_plane_pairing_tests {
+    use crate::inode::{FileAttrs, InodeData, InodeKind, ROOT_INO};
+    use crate::test_support::make_test_fs;
+    use cipherbox_core::node::{
+        encode_published_node, seal::seal_published_node, Node, NodeContent, NodeKind,
+        NodeWriteBody, VersionEntry,
+    };
+    use cipherbox_sdk::{
+        list_folder_owned, FetchedRecord, HighWaterStore, ListingError, NodeFetcher,
+        RotationHighWater,
+    };
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use std::time::SystemTime;
+    use zeroize::Zeroizing;
+
+    /// In-memory high-water store (mirrors listing.rs's own `MemStore` fixture).
+    #[derive(Default)]
+    struct MemStore(Mutex<HashMap<String, u64>>);
+    impl HighWaterStore for MemStore {
+        async fn get(&self, node_id: &str) -> Option<u64> {
+            self.0.lock().unwrap().get(node_id).copied()
+        }
+        async fn put(&self, node_id: &str, value: u64) {
+            self.0.lock().unwrap().insert(node_id.to_string(), value);
+        }
+    }
+
+    /// In-memory fetcher: ipns_name -> FetchedRecord (no live IPFS).
+    #[derive(Default)]
+    struct FakeFetcher(HashMap<String, FetchedRecord>);
+    impl NodeFetcher for FakeFetcher {
+        async fn fetch(&self, ipns_name: &str) -> Result<FetchedRecord, ListingError> {
+            self.0
+                .get(ipns_name)
+                .cloned()
+                .ok_or_else(|| ListingError::FetchFailed {
+                    ipns_name: ipns_name.to_string(),
+                    message: "not in fixture".to_string(),
+                })
+        }
+    }
+
+    fn attrs(ino: u64, is_dir: bool) -> FileAttrs {
+        let now = SystemTime::now();
+        FileAttrs {
+            ino,
+            size: 0,
+            blocks: 0,
+            atime: now,
+            mtime: now,
+            ctime: now,
+            crtime: now,
+            is_dir,
+            perm: if is_dir { 0o777 } else { 0o666 },
+            nlink: if is_dir { 2 } else { 1 },
+        }
+    }
+
+    /// Seal the child file node's own `PublishedNode` bytes under its OWN
+    /// read/write keys, with `id == node_id` (mirrors `publish_file_node` /
+    /// `build_upload_journal`). The write-body carries the child's signing seed.
+    fn child_file_published_bytes(
+        node_id: &str,
+        read_key: &[u8; 32],
+        write_key: &[u8; 32],
+        ipns_private_key: &[u8],
+    ) -> Vec<u8> {
+        let node = Node::File {
+            id: node_id.to_string(),
+            generation: 0,
+            created_at: 1_000,
+            modified_at: 2_000,
+            content: NodeContent {
+                cid: "cid-materialized".to_string(),
+                file_iv: "iv-materialized".to_string(),
+                size: 123,
+                mime_type: "text/plain".to_string(),
+                encryption_mode: "GCM".to_string(),
+                file_key: vec![9u8; 32],
+                versions: Vec::<VersionEntry>::new(),
+            },
+        };
+        let write_body = NodeWriteBody {
+            ipns_private_key: ipns_private_key.to_vec(),
+            write_children: Vec::new(),
+        };
+        let published =
+            seal_published_node(&node, read_key, write_key, Some(&write_body)).unwrap();
+        encode_published_node(&published).unwrap()
+    }
+
+    #[tokio::test]
+    async fn build_folder_metadata_pairs_a_materialized_child_by_its_real_node_id() {
+        let mut fs = make_test_fs();
+
+        // --- Parent folder inode (a child of root) with its OWN keys. ---
+        let parent_ino = fs.inodes.allocate_ino();
+        let parent_read_key = [21u8; 32];
+        let parent_write_key = [22u8; 32];
+        const PARENT_IPNS: &str = "k51-parent-d07";
+
+        // --- Materialized file child. ---
+        // Its stored node_id is its REAL remote id (as if created by another
+        // client / a prior mount at inode 7) — deliberately DISTINCT from
+        // uuid_from_ino(child_local_ino). This is exactly what
+        // apply_owned_children persists after a remote refresh.
+        let child_local_ino = fs.inodes.allocate_ino();
+        let child_node_id = crate::fs::uuid_from_ino(7);
+        assert_ne!(
+            child_node_id,
+            crate::fs::uuid_from_ino(child_local_ino),
+            "fixture precondition: materialized child's real id must differ from \
+             uuid_from_ino(its fresh local ino) — otherwise the bug can't surface"
+        );
+        let child_read_key = [31u8; 32];
+        let child_write_key = [32u8; 32];
+        let child_ipns_private_key = vec![7u8; 32];
+        const CHILD_IPNS: &str = "k51-child-d07";
+
+        fs.inodes.insert(InodeData {
+            ino: child_local_ino,
+            node_id: child_node_id.clone(),
+            parent_ino,
+            name: "moved.txt".to_string(),
+            kind: InodeKind::File {
+                ipns_name: CHILD_IPNS.to_string(),
+                cid: String::new(),
+                size: 123,
+                encryption_mode: "GCM".to_string(),
+                iv: String::new(),
+                read_key: Zeroizing::new(child_read_key),
+                write_key: Zeroizing::new(child_write_key),
+                ipns_private_key: Zeroizing::new(child_ipns_private_key.clone()),
+            },
+            attr: attrs(child_local_ino, false),
+            children: None,
+            write_generation: 0,
+        });
+
+        fs.inodes.insert(InodeData {
+            ino: parent_ino,
+            node_id: crate::fs::uuid_from_ino(parent_ino),
+            parent_ino: ROOT_INO,
+            name: "folder".to_string(),
+            kind: InodeKind::Folder {
+                ipns_name: PARENT_IPNS.to_string(),
+                read_key: Zeroizing::new(parent_read_key),
+                write_key: Zeroizing::new(parent_write_key),
+                ipns_private_key: Zeroizing::new(vec![5u8; 32]),
+                children_loaded: true,
+            },
+            attr: attrs(parent_ino, true),
+            children: Some(vec![child_local_ino]),
+            write_generation: 0,
+        });
+
+        // --- The REAL write-path publish: rebuild + seal BOTH parent planes. ---
+        let (parent_published_bytes, _ipk, ipns_name, _old_cid) = fs
+            .build_folder_metadata(parent_ino)
+            .expect("build_folder_metadata should succeed");
+        assert_eq!(ipns_name, PARENT_IPNS);
+
+        // --- Serve the published parent + the child file node via a fake IPFS. ---
+        let child_bytes = child_file_published_bytes(
+            &child_node_id,
+            &child_read_key,
+            &child_write_key,
+            &child_ipns_private_key,
+        );
+        let fetcher = FakeFetcher(HashMap::from([
+            (
+                PARENT_IPNS.to_string(),
+                FetchedRecord {
+                    sequence_number: 1,
+                    bytes: parent_published_bytes,
+                },
+            ),
+            (
+                CHILD_IPNS.to_string(),
+                FetchedRecord {
+                    sequence_number: 1,
+                    bytes: child_bytes,
+                },
+            ),
+        ]));
+        let high_water = RotationHighWater::new(MemStore::default(), MemStore::default());
+
+        // --- The gated owned read chain: D-07 read/write pairing MUST succeed. ---
+        let children = list_folder_owned(
+            &fetcher,
+            &high_water,
+            PARENT_IPNS,
+            &parent_read_key,
+            &parent_write_key,
+        )
+        .await
+        .expect(
+            "list_folder_owned must pair the materialized child's read plane \
+             (SealedChildRef by ipns_name) with its write plane (WriteChildRef by \
+             the child's REAL published.id) — regression: build_folder_metadata \
+             keyed the WriteChildRef by uuid_from_ino(fresh_local_ino) instead",
+        );
+
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].child.ipns_name, CHILD_IPNS);
+        assert_eq!(
+            children[0].node_id, child_node_id,
+            "the recovered child identity is its real remote node_id"
+        );
+        // Recovered write material round-trips (D-09 terminal-owner).
+        assert_eq!(&children[0].read_key[..], &child_read_key[..]);
+        assert_eq!(&children[0].write_key[..], &child_write_key[..]);
+        assert_eq!(
+            children[0].ipns_private_key.as_slice(),
+            child_ipns_private_key.as_slice()
         );
     }
 }

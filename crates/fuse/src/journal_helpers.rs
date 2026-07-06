@@ -297,7 +297,16 @@ impl crate::CipherBoxFS {
         // the stack copy.
         cipherbox_crypto::utils::clear_bytes(&mut file_key);
 
-        let child_id = crate::fs::uuid_from_ino(ino);
+        // D-07: the file node's stable id is the inode's STORED node_id (its real
+        // published.id), NOT uuid_from_ino(ino). A file materialized from a remote
+        // listing then written keeps its creator's id; both the file-node seal and
+        // the parent D-07 splices below must use it so replay re-publishes an
+        // envelope whose id still pairs with the parent's WriteChildRef.child_id.
+        let child_id = self
+            .inodes
+            .get(ino)
+            .map(|i| i.node_id.clone())
+            .unwrap_or_else(|| crate::fs::uuid_from_ino(ino));
         let file_node = Node::File {
             id: child_id.clone(),
             generation: 0,

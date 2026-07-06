@@ -223,6 +223,9 @@ pub fn handle_create(
 
     let inode = InodeData {
         ino,
+        // Fresh file: its stable id is uuid_from_ino(ino); the file node is first
+        // published with this id (see the per-file publish + upload journal).
+        node_id: crate::fs::uuid_from_ino(ino),
         parent_ino: parent,
         name: name_str.to_string(),
         kind: InodeKind::File {
@@ -329,6 +332,7 @@ mod tests {
         };
         let inode = InodeData {
             ino: child_ino,
+            node_id: crate::fs::uuid_from_ino(child_ino),
             parent_ino: ROOT_INO,
             name: "dup".to_string(),
             kind: InodeKind::Folder {

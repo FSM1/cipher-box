@@ -78,6 +78,9 @@ pub fn handle_mkdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Repl
 
         let inode = InodeData {
             ino,
+            // Fresh folder: its stable id is uuid_from_ino(ino); the child folder
+            // node is first published (mkdir journal) under this same id.
+            node_id: crate::fs::uuid_from_ino(ino),
             parent_ino: parent,
             name: name_str.to_string(),
             kind: InodeKind::Folder {
