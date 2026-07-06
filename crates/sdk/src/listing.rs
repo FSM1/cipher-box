@@ -550,6 +550,93 @@ where
     })
 }
 
+/// Owned twin of [`list_folder`]: materializes an EXISTING tree's per-child
+/// owned `{read_key, write_key, ipns_private_key}` through the SAME
+/// `NodeFetcher` + `RotationHighWater::enforce_resolved` gate (SC#6 — no raw
+/// resolve; `resolve_published_node` stays `pub(crate)`).
+///
+/// Unlike `list_folder` (read-only, unseals only the parent READ-body), this
+/// ALSO unseals the parent WRITE-body (`folder_write_key`) to recover
+/// `write_children: Vec<WriteChildRef>` so the D-07 read/write pairing is
+/// possible. An owned walk REQUIRES the write body — a folder with no
+/// `write_sealed` fails closed.
+///
+/// No `on_updated` callback: key material must NEVER fan out to a callback/
+/// event/log — this is the mount's internal materialization, not a projection
+/// push. The parent `folder_read_key`/`folder_write_key` are borrowed and
+/// never zeroed (terminal owner, D-09).
+pub async fn list_folder_owned<F, S>(
+    fetcher: &F,
+    high_water: &RotationHighWater<S>,
+    ipns_name: &str,
+    folder_read_key: &[u8; 32],
+    folder_write_key: &[u8; 32],
+) -> Result<Vec<ResolvedOwnedChild>, ListingError>
+where
+    F: NodeFetcher,
+    S: HighWaterStore,
+{
+    let own_generation = high_water
+        .get_generation_floor(ipns_name)
+        .await
+        .unwrap_or(0) as i64;
+
+    let (published, _own_sequence) =
+        resolve_published_node(fetcher, high_water, ipns_name, own_generation, 0).await?;
+
+    let kind = node_kind_from_str(&published.kind)?;
+
+    // Parent READ-body -> children (SealedChildRef, read plane).
+    let read_sealed_bytes = decode_b64(&published.read_sealed)?;
+    let read_body = seal::unseal_node(
+        &read_sealed_bytes,
+        folder_read_key,
+        &published.id,
+        kind,
+        published.generation,
+    )?;
+    let node = decode_node(&read_body)?;
+    let children: &Vec<SealedChildRef> = match &node {
+        Node::Folder { children, .. } | Node::Root { children, .. } => children,
+        Node::File { .. } => return Err(ListingError::NotAFolder(ipns_name.to_string())),
+    };
+
+    // Parent WRITE-body -> write_children (WriteChildRef, write plane) for the
+    // D-07 pairing. An owned walk REQUIRES the write body -- fail closed.
+    let write_sealed = published.write_sealed.as_ref().ok_or_else(|| {
+        ListingError::Node(NodeError::InvalidFormat(format!(
+            "owned folder {} has no write_sealed body (owned walk requires the write body)",
+            published.id
+        )))
+    })?;
+    let write_sealed_bytes = decode_b64(write_sealed)?;
+    let write_body_bytes = Zeroizing::new(seal::unseal_node(
+        &write_sealed_bytes,
+        folder_write_key,
+        &published.id,
+        kind,
+        published.generation,
+    )?);
+    let write_children = decode_write_body(&write_body_bytes)?.write_children;
+
+    let mut resolved = Vec::with_capacity(children.len());
+    for child_ref in children {
+        resolved.push(
+            resolve_owned_child(
+                fetcher,
+                high_water,
+                folder_read_key,
+                folder_write_key,
+                child_ref,
+                &write_children,
+            )
+            .await?,
+        );
+    }
+
+    Ok(resolved)
+}
+
 // ---------------------------------------------------------------------------
 // Wire-format helpers
 // ---------------------------------------------------------------------------
@@ -1133,6 +1220,38 @@ mod tests {
         STANDARD.encode(sealed)
     }
 
+    /// Re-seals a parent folder identity (from `parent_stub`) carrying exactly
+    /// the given read/write child refs -- returns the encoded PublishedNode
+    /// bytes (the "add children to an existing folder" step, mirroring the
+    /// emit.rs round-trip fixture idiom).
+    fn parent_published_with_children(
+        parent_stub: &FolderEmission,
+        parent_read_key: &[u8; 32],
+        parent_write_key: &[u8; 32],
+        children: Vec<SealedChildRef>,
+        write_children: Vec<WriteChildRef>,
+    ) -> Vec<u8> {
+        let parent_node = Node::Folder {
+            id: parent_stub.id.clone(),
+            generation: 0,
+            created_at: 1_000,
+            modified_at: 5_000,
+            children,
+        };
+        let write_body = NodeWriteBody {
+            ipns_private_key: parent_stub.ipns_private_key.clone(),
+            write_children,
+        };
+        let published = seal::seal_published_node(
+            &parent_node,
+            parent_read_key,
+            parent_write_key,
+            Some(&write_body),
+        )
+        .expect("re-seal parent ok");
+        encode_published_node(&published).expect("encode ok")
+    }
+
     // -----------------------------------------------------------------
     // Single-child owned recovery: recovered read/write/ipns keys equal
     // exactly what emit.rs minted.
@@ -1440,6 +1559,282 @@ mod tests {
         assert_eq!(
             parent_write_key, parent_write_key_before,
             "resolve_owned_child must never mutate/zero the caller's parent_write_key"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // 2-level emit -> owned round-trip: list_folder_owned recovers each
+    // child's read/write/ipns keys byte-equal to what emit.rs minted.
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn list_folder_owned_two_level_round_trip_recovers_minted_keys() {
+        let file_emission = build_file_emission(owned_content(777)).unwrap();
+        let subfolder_emission = build_folder_emission(vec![], vec![], false).unwrap();
+        let parent_stub = build_folder_emission(vec![], vec![], false).unwrap();
+
+        let parent_read_key: [u8; 32] = parent_stub.read_key.clone().try_into().unwrap();
+        let parent_write_key: [u8; 32] = parent_stub.write_key.clone().try_into().unwrap();
+        let file_read_key: [u8; 32] = file_emission.read_key.clone().try_into().unwrap();
+        let file_write_key: [u8; 32] = file_emission.write_key.clone().try_into().unwrap();
+        let folder_read_key: [u8; 32] = subfolder_emission.read_key.clone().try_into().unwrap();
+        let folder_write_key: [u8; 32] = subfolder_emission.write_key.clone().try_into().unwrap();
+
+        let (file_sealed_ref, file_write_ref) = build_child_refs(
+            &file_read_key,
+            &file_write_key,
+            &parent_read_key,
+            &parent_write_key,
+            &file_emission.id,
+            &file_emission.ipns_name,
+            "hello.txt",
+            NodeKind::File,
+            0,
+            0,
+        )
+        .unwrap();
+        let (folder_sealed_ref, folder_write_ref) = build_child_refs(
+            &folder_read_key,
+            &folder_write_key,
+            &parent_read_key,
+            &parent_write_key,
+            &subfolder_emission.id,
+            &subfolder_emission.ipns_name,
+            "subdir",
+            NodeKind::Folder,
+            0,
+            0,
+        )
+        .unwrap();
+
+        let parent_bytes = parent_published_with_children(
+            &parent_stub,
+            &parent_read_key,
+            &parent_write_key,
+            vec![file_sealed_ref, folder_sealed_ref],
+            vec![file_write_ref, folder_write_ref],
+        );
+
+        let fetcher = FakeFetcher(HashMap::from([
+            (
+                parent_stub.ipns_name.clone(),
+                FetchedRecord {
+                    sequence_number: 1,
+                    bytes: parent_bytes,
+                },
+            ),
+            (
+                file_emission.ipns_name.clone(),
+                FetchedRecord {
+                    sequence_number: 1,
+                    bytes: file_emission.published_node.clone(),
+                },
+            ),
+            (
+                subfolder_emission.ipns_name.clone(),
+                FetchedRecord {
+                    sequence_number: 1,
+                    bytes: subfolder_emission.published_node.clone(),
+                },
+            ),
+        ]));
+        let high_water = rhw();
+
+        let children = list_folder_owned(
+            &fetcher,
+            &high_water,
+            &parent_stub.ipns_name,
+            &parent_read_key,
+            &parent_write_key,
+        )
+        .await
+        .expect("list_folder_owned should succeed");
+
+        assert_eq!(children.len(), 2);
+
+        let f = children
+            .iter()
+            .find(|c| c.child.ipns_name == file_emission.ipns_name)
+            .expect("file child resolved");
+        assert_eq!(f.child.name, "hello.txt");
+        assert_eq!(f.child.kind, NodeKind::File);
+        assert_eq!(f.child.size, Some(777));
+        assert_eq!(&f.read_key[..], file_emission.read_key.as_slice());
+        assert_eq!(&f.write_key[..], file_emission.write_key.as_slice());
+        assert_eq!(
+            f.ipns_private_key.as_slice(),
+            file_emission.ipns_private_key.as_slice()
+        );
+
+        let d = children
+            .iter()
+            .find(|c| c.child.ipns_name == subfolder_emission.ipns_name)
+            .expect("folder child resolved");
+        assert_eq!(d.child.name, "subdir");
+        assert_eq!(d.child.kind, NodeKind::Folder);
+        assert_eq!(d.child.size, None);
+        assert_eq!(&d.read_key[..], subfolder_emission.read_key.as_slice());
+        assert_eq!(&d.write_key[..], subfolder_emission.write_key.as_slice());
+        assert_eq!(
+            d.ipns_private_key.as_slice(),
+            subfolder_emission.ipns_private_key.as_slice()
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // High-water floor gate: a child whose parent-mirror generation is
+    // below a pre-seeded floor fails the WHOLE owned listing closed.
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn list_folder_owned_high_water_floor_gate_rejects_regressed_child() {
+        let file_emission = build_file_emission(owned_content(42)).unwrap();
+        let parent_stub = build_folder_emission(vec![], vec![], false).unwrap();
+
+        let parent_read_key: [u8; 32] = parent_stub.read_key.clone().try_into().unwrap();
+        let parent_write_key: [u8; 32] = parent_stub.write_key.clone().try_into().unwrap();
+        let file_read_key: [u8; 32] = file_emission.read_key.clone().try_into().unwrap();
+        let file_write_key: [u8; 32] = file_emission.write_key.clone().try_into().unwrap();
+
+        let (file_sealed_ref, file_write_ref) = build_child_refs(
+            &file_read_key,
+            &file_write_key,
+            &parent_read_key,
+            &parent_write_key,
+            &file_emission.id,
+            &file_emission.ipns_name,
+            "regressed.bin",
+            NodeKind::File,
+            0,
+            0,
+        )
+        .unwrap();
+
+        let parent_bytes = parent_published_with_children(
+            &parent_stub,
+            &parent_read_key,
+            &parent_write_key,
+            vec![file_sealed_ref],
+            vec![file_write_ref],
+        );
+
+        let fetcher = FakeFetcher(HashMap::from([
+            (
+                parent_stub.ipns_name.clone(),
+                FetchedRecord {
+                    sequence_number: 1,
+                    bytes: parent_bytes,
+                },
+            ),
+            (
+                file_emission.ipns_name.clone(),
+                FetchedRecord {
+                    sequence_number: 1,
+                    bytes: file_emission.published_node.clone(),
+                },
+            ),
+        ]));
+
+        // Seed the child's floor at 5; its parent-mirror generation is 0 -> the
+        // gate rejects it (0 < 5) BEFORE any owned unseal.
+        let high_water = rhw();
+        high_water.bump_generation(&file_emission.ipns_name, 5).await;
+
+        let result = list_folder_owned(
+            &fetcher,
+            &high_water,
+            &parent_stub.ipns_name,
+            &parent_read_key,
+            &parent_write_key,
+        )
+        .await;
+
+        match result {
+            Err(ListingError::Gated(name, RotationError::GenerationRegression { .. })) => {
+                assert_eq!(name, file_emission.ipns_name);
+            }
+            other => panic!(
+                "expected ListingError::Gated(.., GenerationRegression) for the regressed \
+                 owned child; got: {:?}",
+                other
+            ),
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Terminal owner (D-09): parent read+write key buffers are unchanged
+    // after list_folder_owned.
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn list_folder_owned_leaves_parent_key_buffers_unchanged() {
+        let file_emission = build_file_emission(owned_content(9)).unwrap();
+        let parent_stub = build_folder_emission(vec![], vec![], false).unwrap();
+
+        let parent_read_key: [u8; 32] = parent_stub.read_key.clone().try_into().unwrap();
+        let parent_write_key: [u8; 32] = parent_stub.write_key.clone().try_into().unwrap();
+        let parent_read_key_before = parent_read_key;
+        let parent_write_key_before = parent_write_key;
+        let file_read_key: [u8; 32] = file_emission.read_key.clone().try_into().unwrap();
+        let file_write_key: [u8; 32] = file_emission.write_key.clone().try_into().unwrap();
+
+        let (file_sealed_ref, file_write_ref) = build_child_refs(
+            &file_read_key,
+            &file_write_key,
+            &parent_read_key,
+            &parent_write_key,
+            &file_emission.id,
+            &file_emission.ipns_name,
+            "keep.bin",
+            NodeKind::File,
+            0,
+            0,
+        )
+        .unwrap();
+
+        let parent_bytes = parent_published_with_children(
+            &parent_stub,
+            &parent_read_key,
+            &parent_write_key,
+            vec![file_sealed_ref],
+            vec![file_write_ref],
+        );
+
+        let fetcher = FakeFetcher(HashMap::from([
+            (
+                parent_stub.ipns_name.clone(),
+                FetchedRecord {
+                    sequence_number: 1,
+                    bytes: parent_bytes,
+                },
+            ),
+            (
+                file_emission.ipns_name.clone(),
+                FetchedRecord {
+                    sequence_number: 1,
+                    bytes: file_emission.published_node.clone(),
+                },
+            ),
+        ]));
+        let high_water = rhw();
+
+        let _ = list_folder_owned(
+            &fetcher,
+            &high_water,
+            &parent_stub.ipns_name,
+            &parent_read_key,
+            &parent_write_key,
+        )
+        .await
+        .expect("list_folder_owned should succeed");
+
+        assert_eq!(
+            parent_read_key, parent_read_key_before,
+            "list_folder_owned must never mutate/zero the caller's folder_read_key"
+        );
+        assert_eq!(
+            parent_write_key, parent_write_key_before,
+            "list_folder_owned must never mutate/zero the caller's folder_write_key"
         );
     }
 }
