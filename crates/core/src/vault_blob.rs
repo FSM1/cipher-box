@@ -350,4 +350,111 @@ mod tests {
         assert_eq!(r, read_key);
         assert_eq!(w, write_key);
     }
+
+    #[test]
+    fn test_v3_serialize_rejects_empty_read() {
+        let err = serialize_vault_blob_v3(&[], &[0xBB]).unwrap_err();
+        assert!(err.contains("read key must not be empty"));
+    }
+
+    #[test]
+    fn test_v3_serialize_rejects_empty_write() {
+        let err = serialize_vault_blob_v3(&[0xAA], &[]).unwrap_err();
+        assert!(err.contains("write key must not be empty"));
+    }
+
+    #[test]
+    fn test_v3_serialize_rejects_read_too_long() {
+        let read = vec![0xAA; 65536];
+        let err = serialize_vault_blob_v3(&read, &[0xBB]).unwrap_err();
+        assert!(err.contains("read key too long"));
+    }
+
+    #[test]
+    fn test_v3_serialize_rejects_write_too_long() {
+        let write = vec![0xBB; 65536];
+        let err = serialize_vault_blob_v3(&[0xAA], &write).unwrap_err();
+        assert!(err.contains("write key too long"));
+    }
+
+    #[test]
+    fn test_v3_deserialize_rejects_short_blob() {
+        // 4 bytes < 5-byte minimum header
+        assert!(deserialize_vault_blob_v3(&[0x03, 0x00, 0x01, 0xAA]).is_err());
+        assert!(deserialize_vault_blob_v3(&[]).is_err());
+    }
+
+    #[test]
+    fn test_v3_deserialize_rejects_wrong_version() {
+        // Well-formed length fields but a v2 version byte, and a JSON ('{') byte.
+        let blob = vec![0x02, 0x00, 0x01, 0xAA, 0x00, 0x01, 0xBB];
+        assert!(deserialize_vault_blob_v3(&blob).is_err());
+        let blob = vec![0x7B, 0x00, 0x01, 0xAA, 0x00, 0x01, 0xBB];
+        assert!(deserialize_vault_blob_v3(&blob).is_err());
+    }
+
+    #[test]
+    fn test_v3_deserialize_rejects_zero_read_length() {
+        let blob = vec![0x03, 0x00, 0x00, 0x00, 0x01, 0xBB];
+        let err = deserialize_vault_blob_v3(&blob).unwrap_err();
+        assert!(err.contains("read key length must be > 0"));
+    }
+
+    #[test]
+    fn test_v3_deserialize_rejects_zero_write_length() {
+        // read_len=1 present, write header declares 0
+        let blob = vec![0x03, 0x00, 0x01, 0xAA, 0x00, 0x00];
+        let err = deserialize_vault_blob_v3(&blob).unwrap_err();
+        assert!(err.contains("write key length must be > 0"));
+    }
+
+    #[test]
+    fn test_v3_deserialize_rejects_truncated_write_header() {
+        // Header promises read_len=5 but only ~2 bytes follow, so the write
+        // key header would run off the end.
+        let blob = vec![0x03, 0x00, 0x05, 0xAA, 0xBB];
+        let err = deserialize_vault_blob_v3(&blob).unwrap_err();
+        assert!(err.contains("missing write key header"));
+    }
+
+    #[test]
+    fn test_v3_deserialize_rejects_truncated_write_body() {
+        // read_len=1, write_len declared 4 but only 1 byte present
+        let blob = vec![0x03, 0x00, 0x01, 0xAA, 0x00, 0x04, 0xBB];
+        let err = deserialize_vault_blob_v3(&blob).unwrap_err();
+        assert!(err.contains("truncated (write key)"));
+    }
+
+    #[test]
+    fn test_v3_minimal_round_trip() {
+        let blob = serialize_vault_blob_v3(&[0xAA], &[0xBB]).unwrap();
+        assert_eq!(hex::encode(&blob), "030001aa0001bb");
+        let (r, w) = deserialize_vault_blob_v3(&blob).unwrap();
+        assert_eq!(r, vec![0xAA]);
+        assert_eq!(w, vec![0xBB]);
+    }
+
+    #[test]
+    fn test_v3_near_u16_round_trip() {
+        let read = vec![0x11; 65535];
+        let write = vec![0x22; 65535];
+        let blob = serialize_vault_blob_v3(&read, &write).unwrap();
+        assert_eq!(blob.len(), 1 + 2 + 65535 + 2 + 65535);
+        let (r, w) = deserialize_vault_blob_v3(&blob).unwrap();
+        assert_eq!(r, read);
+        assert_eq!(w, write);
+    }
+
+    #[test]
+    fn test_v3_deserialize_returns_owned_copies() {
+        // Mutating the source blob after deserialize must NOT affect the
+        // returned keys (owned copies, D-09).
+        let mut blob = serialize_vault_blob_v3(&[0xAA], &[0xBB]).unwrap();
+        let (r, w) = deserialize_vault_blob_v3(&blob).unwrap();
+        for b in blob.iter_mut() {
+            *b = 0;
+        }
+        assert_eq!(r, vec![0xAA]);
+        assert_eq!(w, vec![0xBB]);
+    }
 }
