@@ -68,9 +68,18 @@ export function FileBrowser() {
   const initialSyncComplete = useSyncStore((state) => state.initialSyncComplete);
   const syncStatus = useSyncStore((state) => state.status);
 
+  // Plan 09 (68.2-09): `currentFolder.children` is now the SDK's resolved
+  // `ResolvedChild[]` display projection (kind/size/modifiedAt pre-resolved,
+  // SC#2). `useFileBrowserActions`/`FileList` still need the same-session
+  // raw `SealedChildRef[]` identity/crypto carrier (`rawChildren`, D-09) for
+  // selection/context-menu/download/drag callbacks and dialogs.
+  const rawChildren = currentFolder?.rawChildren ?? [];
+
   const actions = useFileBrowserActions({
     currentFolderId,
-    currentFolder,
+    currentFolder: currentFolder
+      ? { children: rawChildren, folderKey: currentFolder.folderKey }
+      : null,
     breadcrumbs,
     navigateTo,
     navigateUp,
@@ -91,8 +100,7 @@ export function FileBrowser() {
   useSyncPolling(actions.handleSync);
   useDeviceRegistrySync();
 
-  const children = currentFolder?.children ?? [];
-  const hasChildren = children.length > 0;
+  const hasChildren = rawChildren.length > 0;
 
   // Show FileList (with progress rows) instead of EmptyState when uploads are
   // actively targeting this folder, even if the folder has no committed children yet.
@@ -178,7 +186,7 @@ export function FileBrowser() {
 
       {!isLoading && (hasChildren || hasUploadsForFolder) && (
         <FileList
-          items={children}
+          items={rawChildren}
           selectedIds={actions.selectedIds}
           parentId={currentFolderId}
           folderKey={currentFolder?.folderKey ?? null}

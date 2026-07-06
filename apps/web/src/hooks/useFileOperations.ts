@@ -68,7 +68,13 @@ export function useFileOperations() {
           throw new Error('Parent folder not found or vault not initialized');
         }
 
-        const fileRef = parentFolder.children.find((c) => c.ipnsName === fileData.fileId);
+        // Raw identity (readKeySealed/generation/versionFloor) is needed to
+        // unseal the file's read-chain -- the store's display `children`
+        // (ResolvedChild[], Plan 09) no longer carries these; `rawChildren`
+        // is the same-session write-path mirror (D-09).
+        const fileRef = (parentFolder.rawChildren ?? []).find(
+          (c) => c.ipnsName === fileData.fileId
+        );
         if (!fileRef) {
           throw new Error('File not found in folder');
         }

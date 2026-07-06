@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { SealedChildRef } from '@cipherbox/core';
+import type { ResolvedChild } from '@cipherbox/sdk';
 import type { CipherBoxClient } from '@cipherbox/sdk';
-import { getKind, resolveKinds } from '../lib/kind-cache';
 import { logger } from '../lib/logger';
 
 /**
@@ -17,8 +17,23 @@ export type FolderNode = {
   ipnsName: string;
   /** Parent folder ID (null for root) */
   parentId: string | null;
-  /** Decrypted children (sealed child refs — phase 63 populates via read-chain navigation) */
-  children: SealedChildRef[];
+  /**
+   * Resolved children for display — kind/size/modifiedAt pre-resolved by the
+   * SDK (68.2-02 `ResolvedChild[]`). The SDK's `folderTree` is the single
+   * owner of the raw `SealedChildRef[]` write-path identity; this store is a
+   * pure display projection and never independently resolves (SC#3, D-01).
+   */
+  children: ResolvedChild[];
+  /**
+   * Raw sealed children (write-path/crypto identity carrier) — the SDK's
+   * `folderTree` is the source of truth; this is a same-session mirror
+   * populated from `ensureFolderLoaded`/`listFolder` call sites (nav,
+   * resync, poll) wherever raw `readKeySealed`/`generation`/`versionFloor`
+   * are needed (e.g. `resolveFileMetadata`). Optional — a folder that has
+   * only ever received the display `children` projection (no raw
+   * fetch yet) simply has none; write-path callers guard with `?? []`.
+   */
+  rawChildren?: SealedChildRef[];
   /** Has metadata been fetched and decrypted? */
   isLoaded: boolean;
   /** Is metadata currently being fetched? */
@@ -52,7 +67,8 @@ type FolderState = {
 
   // Actions
   setFolder: (folder: FolderNode) => void;
-  updateFolderChildren: (folderId: string, children: SealedChildRef[]) => void;
+  updateFolderChildren: (folderId: string, children: ResolvedChild[]) => void;
+  updateFolderRawChildren: (folderId: string, rawChildren: SealedChildRef[]) => void;
   updateFolderSequence: (folderId: string, sequenceNumber: bigint) => void;
   setCurrentFolder: (folderId: string | null) => void;
   setBreadcrumbs: (breadcrumbs: Breadcrumb[]) => void;
@@ -100,6 +116,19 @@ export const useFolderStore = create<FolderState>((set, get) => ({
         folders: {
           ...state.folders,
           [folderId]: { ...folder, children, isLoaded: true, isLoading: false },
+        },
+      };
+    }),
+
+  updateFolderRawChildren: (folderId, rawChildren) =>
+    set((state) => {
+      const folder = state.folders[folderId];
+      if (!folder) return state;
+
+      return {
+        folders: {
+          ...state.folders,
+          [folderId]: { ...folder, rawChildren },
         },
       };
     }),
@@ -215,20 +244,19 @@ export const useFolderStore = create<FolderState>((set, get) => ({
           if (matchingFolder) {
             // T-68.1-26-01: a folder:updated/folder:loaded event carrying an
             // EMPTY children array must never replace an already-loaded
-            // folder's NON-EMPTY children — an empty/mismatched event here
-            // would silently blank a loaded ancestor's rendered contents
-            // (breadcrumb-up empty-flash). A genuinely-emptied folder IS
-            // adopted: its real mutation (e.g. deleteToBin removing the last
-            // child) lands with a NEWER sequenceNumber than the store holds,
-            // so the guard only rejects an empty-over-populated event at or
-            // below the store's sequence (the stale/mismatched re-walk class;
-            // fixed 68.1-29 — the original unconditional rejection broke
-            // delete-last-item flows: recycle-bin TC02, bin-restore-after-reload).
+            // folder's NON-EMPTY children at or below the store's current
+            // sequence — an empty/mismatched event here would silently blank
+            // a loaded ancestor's rendered contents (breadcrumb-up
+            // empty-flash). A genuinely-emptied folder IS adopted: its real
+            // mutation (e.g. deleteToBin removing the last child) lands with
+            // a NEWER sequenceNumber than the store holds, so the guard only
+            // rejects an empty-over-populated event at or below the store's
+            // sequence (the stale/mismatched re-walk class).
             if (
               matchingFolder.isLoaded &&
               matchingFolder.children.length > 0 &&
               event.children.length === 0 &&
-              event.sequenceNumber <= matchingFolder.sequenceNumber
+              matchingFolder.sequenceNumber >= event.sequenceNumber
             ) {
               logger.warn(
                 `[folder.store] Ignoring ${event.type} for ${event.ipnsName}: event carries empty children but the store already has ${matchingFolder.children.length} loaded — refusing to blank a loaded ancestor`
@@ -236,61 +264,16 @@ export const useFolderStore = create<FolderState>((set, get) => ({
               break;
             }
 
-            // T-68.1-33-01: hybrid resolve-before-insert projection, mirroring
-            // navigateTo's D-02 ordering (useFolderNavigation.ts). When every
-            // child's kind is already cached (or the children array is empty,
-            // vacuously true — preserves 68.1-29 delete-last-item instant
-            // behavior), project synchronously with no added latency. When at
-            // least one child is a cache miss (e.g. first load after reload),
-            // await resolveKinds BEFORE the children land, so a row is never
-            // interactable while its kind is unresolved — closing the owner
-            // file-browser race where a file row transiently renders as a
-            // folder ([DIR]) and hides isFile-gated actions like "Edit".
-            const allKindsCached = event.children.every(
-              (ref) => getKind(ref.ipnsName) !== undefined
-            );
-
-            if (allKindsCached) {
-              // Stale-event guard (mirrors the async branch below): never let an
-              // older all-cached event overwrite newer store state. Strict `>`
-              // so an equal-or-newer event is still adopted — the delete-last-item
-              // mutation lands at a NEWER sequence, so it passes untouched.
-              if (matchingFolder.sequenceNumber > event.sequenceNumber) break;
-              get().updateFolderChildren(matchingFolder.id, event.children);
-              get().updateFolderSequence(matchingFolder.id, event.sequenceNumber);
-              break;
-            }
-
-            // Capture locals — `event`/`matchingFolder` must not be read after
-            // the await (matchingFolder is a snapshot, not live).
-            const folderId = matchingFolder.id;
-            const eventChildren = event.children;
-            const eventSequence = event.sequenceNumber;
-
-            // T-68.1-33-02: guarded async IIFE — never throws out of the
-            // subscription handler (internal try/catch swallows resolveKinds
-            // rejections; resolveKinds itself is already best-effort and
-            // never rejects, but the catch is defense-in-depth).
-            void (async () => {
-              try {
-                await resolveKinds(eventChildren);
-              } catch {
-                // Best-effort — fall through and still project folder-safe.
-              }
-
-              // Re-lookup: the folder may have been removed while resolving.
-              const current = get().folders[folderId];
-              if (!current) return;
-
-              // Stale-event guard: a newer state may have landed (a
-              // subsequent all-cached event, or a direct handleSync/
-              // resyncFolder insert) while this cache-miss resolve was
-              // in flight. Do not clobber it with the stale N.
-              if (current.sequenceNumber > eventSequence) return;
-
-              get().updateFolderChildren(folderId, eventChildren);
-              get().updateFolderSequence(folderId, eventSequence);
-            })();
+            // T-68.1-33-01: `ResolvedChild[]` arrives fully resolved (kind
+            // pre-resolved by the SDK, 68.2-02) — the store is a pure
+            // projection and never independently resolves (SC#3, D-01). A
+            // straight synchronous update is safe; only the stale-event
+            // guard below is needed. Strict `>` so an equal-or-newer event is
+            // still adopted — the delete-last-item mutation lands at a NEWER
+            // sequence, so it passes untouched.
+            if (matchingFolder.sequenceNumber > event.sequenceNumber) break;
+            get().updateFolderChildren(matchingFolder.id, event.children);
+            get().updateFolderSequence(matchingFolder.id, event.sequenceNumber);
           }
           break;
         }

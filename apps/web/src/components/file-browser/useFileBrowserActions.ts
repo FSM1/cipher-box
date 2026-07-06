@@ -111,25 +111,27 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
 
     try {
       // Background sync's resolve now routes through the SDK's own gated read
-      // path (client.listFolder / client.getFolderMetadata, both backed by
-      // ensureFolderLoaded's ROT-07 durable anti-rollback floor) instead of
-      // the web's own un-gated resolveIpnsRecord + fetchAndDecryptMetadata
-      // call (SC#1, T-68.2-04). A gate rejection (SequenceRegressionError /
+      // path (client.listFolder / client.ensureFolderLoaded, both backed by
+      // ROT-07's durable anti-rollback floor) instead of the web's own
+      // un-gated resolveIpnsRecord + fetchAndDecryptMetadata call (SC#1,
+      // T-68.2-04). A gate rejection (SequenceRegressionError /
       // GenerationRegressionError) is routed through the same
       // runWithFailureUx classifier so it surfaces the D-05 toast instead of
       // failing silently, matching the prior web-side gate's behavior.
       const client = getSdkClient();
-      await runWithFailureUx(() => client.listFolder(rootIpnsName));
-      const metadata = await client.getFolderMetadata(rootIpnsName);
-      if (!metadata) return;
+      const resolved = await runWithFailureUx(() => client.listFolder(rootIpnsName));
+      const state = await client.ensureFolderLoaded(rootIpnsName);
 
-      // Node.children is optional (SealedChildRef[] | undefined); default to
-      // []. T-68.1-33-01's kind-cache warming step is removed here (SC#2) --
-      // kind now arrives pre-resolved on ResolvedChild via the listFolder
-      // call above; the store's own children field keeps the raw
-      // SealedChildRef[] the write path needs (D-09).
-      const syncChildren = metadata.children ?? [];
-      useFolderStore.getState().updateFolderChildren('root', syncChildren);
+      // Plan 09 (68.2-09): the store's `children` field is now the SDK's
+      // resolved `ResolvedChild[]` display projection (kind/size/modifiedAt
+      // pre-resolved, SC#2) -- the store never independently resolves.
+      // `rawChildren` is the same-session raw `SealedChildRef[]` mirror the
+      // write path still needs (D-09).
+      useFolderStore.getState().updateFolderChildren('root', resolved);
+      if (state) {
+        useFolderStore.getState().updateFolderRawChildren('root', state.children);
+        useFolderStore.getState().updateFolderSequence('root', state.sequenceNumber);
+      }
       triggerSearchIndexRebuild();
     } catch (err) {
       logger.error('[FileBrowser] Sync refresh failed:', err);

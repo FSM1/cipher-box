@@ -37,6 +37,7 @@ export type SharedFolderClient = Pick<
   | 'updateSharedFile'
   | 'moveInSharedFolder' // REQ-2
   | 'enumerateSharedSubtree' // REQ-1
+  | 'getSharedFolderState' // Plan 09 (68.2-09): raw-identity re-read on projection apply
 >;
 
 /**
@@ -124,9 +125,17 @@ export type SharedFolderProjectionApply = (
  * `getActiveShareId` is read at event time (not closed over) so the same
  * subscription stays correct as the active share changes.
  *
- * Note: `updateSharedFile` emits with UNCHANGED children/sequence (file-only
- * metadata publish) — the projection applies it as a no-op-on-data re-resolve
- * signal, which is safe because children/sequence are identical.
+ * `event.children` is the SDK's resolved `ResolvedChild[]` DISPLAY listing
+ * (68.2-02) -- it no longer carries the raw `SealedChildRef[]` identity
+ * `apply`'s write-path consumers need (readKeySealed/generation/
+ * versionFloor). The raw children are re-read from the SDK's authoritative
+ * `sharedFolderTree` via `getSharedFolderState` at event time instead (Plan
+ * 09, SC#3: the web never independently resolves; it only re-reads the
+ * SDK's own already-current state).
+ *
+ * Note: `updateSharedFile` emits with UNCHANGED sequence (file-only
+ * metadata publish) — the projection applies it as a no-op-on-data
+ * re-resolve signal, which is safe because the raw children are identical.
  *
  * @returns the unsubscribe function (call on unmount / share-change).
  */
@@ -137,7 +146,9 @@ export function subscribeSharedFolderProjection(
 ): () => void {
   return client.on((event) => {
     if (event.type !== 'sharedFolder:updated') return;
-    if (event.shareId !== getActiveShareId()) return;
-    apply(event.children, event.sequenceNumber);
+    const activeShareId = getActiveShareId();
+    if (event.shareId !== activeShareId) return;
+    const state = client.getSharedFolderState(activeShareId);
+    apply(state?.children ?? [], event.sequenceNumber);
   });
 }

@@ -8,16 +8,17 @@ import { getSdkClient } from '../lib/sdk-provider';
  * Re-sync a specific folder after a 409 conflict.
  *
  * Routes through the SDK's gated read path (`client.listFolder` /
- * `client.getFolderMetadata`, both backed by `ensureFolderLoaded` -- ROT-07
- * durable anti-rollback floor) instead of the web's own un-gated
- * `resolveIpnsRecord` + `fetchAndDecryptMetadata` call (SC#1, T-68.2-04).
+ * `client.ensureFolderLoaded`, both backed by ROT-07's durable anti-rollback
+ * floor) instead of the web's own un-gated `resolveIpnsRecord` +
+ * `fetchAndDecryptMetadata` call (SC#1, T-68.2-04).
  *
- * `listFolder` is called first so this resync also warms the SDK's
- * `ResolvedChild[]` listing cache (kind/size/modifiedAt pre-resolved,
- * SC#2) for any Plan-09 store projection consuming it; `getFolderMetadata`
- * (a cache-hit on the same just-loaded `FolderState`, zero extra network
- * cost) supplies the raw `SealedChildRef[]` the store's `children` field
- * still needs for write-path/crypto identity (D-09).
+ * `listFolder` resolves the SDK's `ResolvedChild[]` display projection
+ * (kind/size/modifiedAt pre-resolved, SC#2) -- this IS the store's
+ * `children` field (Plan 09, SC#3: the store never independently
+ * resolves). `ensureFolderLoaded` (a cache-hit on the same just-loaded
+ * `FolderState`, zero extra network cost) supplies the raw
+ * `SealedChildRef[]` (`rawChildren`) and current `sequenceNumber` the
+ * write path still needs (D-09).
  */
 export async function resyncFolder(folderIpnsName: string, folderId: string): Promise<void> {
   const store = useFolderStore.getState();
@@ -25,16 +26,14 @@ export async function resyncFolder(folderIpnsName: string, folderId: string): Pr
   if (!folderNode) return;
 
   const client = getSdkClient();
-  await client.listFolder(folderIpnsName);
-  const metadata = await client.getFolderMetadata(folderIpnsName);
-  if (!metadata) return;
+  const resolved = await client.listFolder(folderIpnsName);
+  const state = await client.ensureFolderLoaded(folderIpnsName);
 
-  const resyncChildren = metadata.children ?? [];
-  store.updateFolderChildren(folderId, resyncChildren);
-  // `Node` carries no sequenceNumber of its own (that's an IPNS envelope-level
-  // field, not part of the decrypted content) -- the store's sequenceNumber
-  // is left untouched here; Plan 09's freshness wiring is the designated
-  // place to thread a resolved envelope sequence back through the facade.
+  store.updateFolderChildren(folderId, resolved);
+  if (state) {
+    store.updateFolderRawChildren(folderId, state.children);
+    store.updateFolderSequence(folderId, state.sequenceNumber);
+  }
 }
 
 /** Maximum folder nesting depth per FOLD-03 */
