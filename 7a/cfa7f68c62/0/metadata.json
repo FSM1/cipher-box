@@ -1,0 +1,116 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "7acfa7f68c62",
+  "session_id": "60afe4f5-90e8-4017-b046-ab86ca19c540",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-06T00:05:48.850728Z",
+  "branch": "feat/sdk-owned-read-chain-and-resolved-folder-listings",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "11b8c0a80fb6",
+  "token_usage": {
+    "input_tokens": 19192,
+    "cache_creation_tokens": 302521,
+    "cache_read_tokens": 7672964,
+    "output_tokens": 96985,
+    "api_call_count": 43
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-plan-phase-2026-07-05T22:58:51.387205Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "11b8c0a80fb6",
+      "timestamp": "2026-07-05T22:58:51.387205Z",
+      "native": {
+        "command": "/gsd-plan-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01LstRAXFpXPLKR7Dc1ovYvN",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "11b8c0a80fb6",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 290,
+        "end": 291,
+        "entry_ids": [
+          "7c818dd5-33b0-40fe-9d44-09a605a0e033"
+        ],
+        "tool_use_id": "toolu_01LstRAXFpXPLKR7Dc1ovYvN"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01LstRAXFpXPLKR7Dc1ovYvN"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "summary": {
+    "intent": "Run the GSD plan-phase workflow for CipherBox phase 68.2 (SDK-owned read chain and resolved folder listings) end-to-end — research, scope resolution, requirements registration, planning, and verification — then hand off to execute-phase to implement the resulting plans.",
+    "outcome": "Phase 68.2 was fully planned: RESEARCH.md, VALIDATION.md, and PATTERNS.md were produced, a D-07 scope ambiguity was resolved by the user (full boundary), REQUIREMENTS.md gained SDK-READ-01..04, the planner emitted 12 plans across 7 waves, and the plan-checker returned PASSED (2 non-blocking warnings, logged as a todo). Execute-phase then started, choosing sequential execution on the main tree over parallel worktrees, and began Wave 1 (plan 68.2-01).",
+    "learnings": {
+      "repo": [
+        "GSD commit helper can report `commit_failed` as a false negative even when the commit actually succeeded via lint-staged — always verify with `git log` before treating it as a real failure.",
+        "The intel API-SURFACE extraction (§7.9) returns 0 symbols for this monorepo — it's HINT-only, so omit it from planner prompts rather than passing empty noise.",
+        "gsd-tools gap-analysis output can contain control characters in its `rendered` field that break naive parsing — run the underlying check directly instead of parsing the wrapped output.",
+        "D-07's literal wording ('no raw IPFS/IPNS access anywhere in apps/web/src') sweeps in off-path pockets not covered by the phase's stated success criteria: BYO-pinning settings (ConnectionTest.tsx, StorageTab.tsx) and auth-bootstrap/device-registry crypto (useAuth.ts, device-registry.service.ts) — worth an explicit scope decision rather than assuming SC#1-5 define the full boundary.",
+        "In this pnpm monorepo, worktree executors need their own `pnpm install` per worktree, which is expensive; when most waves are single-plan, sequential execution on the main tree is preferable to parallel worktree spin-up/merge/cleanup.",
+        "Before dispatching executors into parallel worktrees, verify `worktree.baseRef` — if it defaults to `origin/main` ('fresh') instead of live HEAD, executors would fork missing any HEAD-only commits (e.g., freshly committed PLAN.md files)."
+      ],
+      "code": [
+        {
+          "path": ".planning/phases/68.2-sdk-owned-read-chain-and-resolved-folder-listings/68.2-01-PLAN.md",
+          "finding": "Wave 1 plan adds the ROT-07 anti-rollback gate (RotationHighWater.enforceResolved) to the SDK's own read path (resolvePublishedNode/dfsFindFolder/ensureFolderLoaded) via TDD (RED gate test → GREEN implementation), and must land before any deletion of ipns.service.ts so no shipped security guarantee regresses (RESEARCH Pitfall 2)."
+        }
+      ],
+      "workflow": [
+        "In plan-phase, the UI plan-gate only actually fires if the registry's `when` condition activates a UI capability hook for the phase — a lower-level ui-plan-gate check reporting `block:true` is irrelevant if no UI hook is active in `activeHooks`.",
+        "Register new requirement IDs (e.g., SDK-READ-01..04) in REQUIREMENTS.md before spawning the planner, so coverage gates have a stable target to check against.",
+        "Plan-checker warnings are advisory and non-blocking — proceed to finalization but log a gap-closure todo matching the repo's `.planning/todos/pending/` dated-markdown convention.",
+        "In execute-phase, check both the worktree base-check (#683 auto-degrade decision) and `worktree.baseRef` before choosing parallel-worktree vs sequential execution mode.",
+        "Auto-advance config (`auto_advance: true`) should still be confirmed with the user via AskUserQuestion when the next step is a large, security-critical, multi-wave execution with outstanding checker warnings, rather than silently launching."
+      ]
+    },
+    "friction": [
+      "GSD commit helper's `commit_failed` false-positive required manual `git log` verification at least twice during the session.",
+      "gap-analysis.plan-post check output had control characters that broke the standard parser, requiring a direct re-run of the check.",
+      "intel API-SURFACE extraction came back empty (0 symbols), adding a dead-end step before it could be skipped.",
+      "D-07's grep-gate scope was ambiguous and required a mid-flow AskUserQuestion to resolve before planning could proceed confidently.",
+      "Nyquist validation setup created a hard dependency on RESEARCH.md's Validation Architecture section, forcing research to run before VALIDATION.md could be populated."
+    ],
+    "open_items": [
+      "D-03's poll-invalidation leg has no dedicated automated test (only call-site grep coverage in Plan 09) — logged as todo `.planning/todos/pending/2026-07-06-d03-poll-invalidation-lacks-automated-coverage.md` for a future gap-closure pass.",
+      "Execution of the 12-plan, 7-wave phase 68.2 is only at Wave 1 (plan 68.2-01 dispatched) — Waves 2-7 remain to be executed.",
+      "Write-share key threading (SHARE-WRITE-KEY) remains an open gap per prior project memory, tangential to but not resolved by this phase's SDK read-chain work."
+    ]
+  }
+}
