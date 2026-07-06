@@ -238,8 +238,8 @@ pub async fn publish_file_metadata(
     //
     // D-01a: no JournalOp::FilePublish variant exists in crates/sdk/src/queue.rs
     // (only UploadFile/MkdirPublish); journaling per-file publish is deferred (CONTEXT
-    // Deferred Ideas). On retry exhaustion: return Err, which the fire-and-forget caller
-    // (spawn_file_meta_reencrypt) or the blocking/sync path logs at log::error! → EIO.
+    // Deferred Ideas). On retry exhaustion: return Err, which the fire-and-forget
+    // per-file publish caller or the blocking/sync path logs at log::error! → EIO.
     //
     // TEE enrollment fields (encrypted_ipns_for_tee, tee_epoch) are used ONLY on the
     // is_first_publish branch below, which builds its own IpnsPublishRequest and does NOT
@@ -341,8 +341,9 @@ pub async fn publish_file_metadata(
 /// - update (overwrite): route through the shared CAS helper
 ///   [`crate::metadata::publish_with_cas_retry`] (no TEE re-enroll).
 ///
-/// `publish_file_metadata` is intentionally left untouched — 69-13's
-/// `spawn_file_meta_reencrypt` still calls it. D-09: `read_key`/`write_key` are
+/// `publish_file_metadata` is the legacy per-file publish path, retained for the
+/// Windows write handlers (`platform/windows`); the node/v3 flip routes live
+/// publishes through this function instead. D-09: `read_key`/`write_key` are
 /// caller-owned borrows; the raw `file_key` is moved into `NodeContent.file_key`
 /// (sealed inside the read-body, never ECIES).
 #[cfg(any(feature = "fuse", feature = "winfsp"))]

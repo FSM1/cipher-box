@@ -105,53 +105,11 @@ pub fn handle_rename(
         return;
     }
 
-    // Cross-folder FILE moves must re-encrypt the per-file FileMetadata to the
-    // destination folderKey (it is sealed with the parent folderKey). Capture
-    // the inputs now, before any inode mutation. Folder moves need nothing — a
-    // folder keeps its own key, as do the files inside it.
-    let reencrypt_inputs: Option<(
-        String,
-        zeroize::Zeroizing<Vec<u8>>,
-        zeroize::Zeroizing<Vec<u8>>,
-        zeroize::Zeroizing<Vec<u8>>,
-    )> = if parent != newparent {
-        match fs.inodes.get(source_ino).map(|i| &i.kind) {
-            // node/v3: the file carries a plain `ipns_name` + raw signing seed
-            // (69-13 owns the cross-folder re-encrypt semantics — this only
-            // repoints the capture onto the reshaped InodeKind fields).
-            Some(InodeKind::File {
-                ipns_name,
-                ipns_private_key,
-                ..
-            }) if !ipns_name.is_empty() => {
-                match (fs.get_folder_key(parent), fs.get_folder_key(newparent)) {
-                    (Some(src_key), Some(dst_key)) => Some((
-                        ipns_name.clone(),
-                        ipns_private_key.clone(),
-                        src_key,
-                        dst_key,
-                    )),
-                    _ => {
-                        log::warn!(
-                                "rename: cross-folder move missing folder key(s) for ino {}; skipping metadata re-encrypt",
-                                source_ino
-                            );
-                        None
-                    }
-                }
-            }
-            Some(InodeKind::File { .. }) => {
-                log::warn!(
-                        "rename: cross-folder file move for ino {} missing IPNS name/key; skipping metadata re-encrypt",
-                        source_ino
-                    );
-                None
-            }
-            _ => None,
-        }
-    } else {
-        None
-    };
+    // SC#2: a cross-folder move is now a PURE `SealedChildRef` relink — each
+    // node self-seals under its OWN readKey, so there is no per-file metadata to
+    // re-encrypt on move (the legacy re-encrypt-on-move path is dead by
+    // construction and deleted). The read-scope cut for a shared move is handled
+    // by the grant-scope gate above (rotation), not by re-keying the moved file.
 
     // If destination exists, handle replacement
     if let Some(dest_ino) = fs.inodes.find_child(newparent, newname_str) {
@@ -260,23 +218,6 @@ pub fn handle_rename(
         if let Err(e) = fs.update_folder_metadata(parent) {
             log::error!("Failed to update parent metadata after rename: {}", e);
         }
-    }
-
-    // Re-encrypt the moved file's metadata to the destination folderKey
-    // (fire-and-forget). Without this, every fresh resolve under the new
-    // folder's key fails to decrypt.
-    if let Some((meta_ipns, file_ipns_key, src_key, dst_key)) = reencrypt_inputs {
-        crate::spawn_file_meta_reencrypt(
-            fs.api.clone(),
-            fs.rt.clone(),
-            meta_ipns,
-            file_ipns_key,
-            src_key,
-            dst_key,
-            fs.publish_coordinator.clone(),
-            fs.tee_public_key.clone(),
-            fs.tee_key_epoch,
-        );
     }
 
     reply.ok();
