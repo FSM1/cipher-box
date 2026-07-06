@@ -5,6 +5,7 @@
 
 mod decode;
 mod encode;
+pub mod seal;
 mod types;
 
 pub use decode::{decode_node, decode_published_node};
