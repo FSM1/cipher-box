@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "bd734c0c446f",
+  "strategy": "manual-commit",
+  "branch": "chore/web-e2e-parallel-workers",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/bd/734c0c446f/0/metadata.json",
+      "transcript": "/bd/734c0c446f/0/full.jsonl",
+      "content_hash": "/bd/734c0c446f/0/content_hash.txt",
+      "prompt": "/bd/734c0c446f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 21103,
+    "cache_creation_tokens": 682874,
+    "cache_read_tokens": 21393069,
+    "output_tokens": 124228,
+    "api_call_count": 136
+  }
+}
