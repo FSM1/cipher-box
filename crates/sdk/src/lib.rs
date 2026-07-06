@@ -26,7 +26,7 @@ pub use error::SdkError;
 pub use floor_store::JsonSidecarFloorStore;
 pub use listing::{
     list_folder, list_shared_folder, FetchedRecord, FolderUpdatedCallback, FolderUpdatedEvent,
-    ListingError, NodeFetcher, ResolvedChild,
+    ListingError, NodeFetcher, ResolvedChild, ResolvedOwnedChild,
 };
 pub use queue::{
     JournalEntry, JournalEntryStatus, JournalOp, WriteQueue, JOURNAL_GC_MAX_AGE_DAYS,
