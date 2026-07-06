@@ -469,7 +469,7 @@ pub fn spawn_bin_entry_publish(
 
             // D-01: route bin IPNS resolve through the verified chokepoint.
             let (mut bin_metadata, existing_cid) =
-                match cipherbox_api_client::ipns::resolve_ipns_verified(&api, &bin_ipns_name).await
+                match cipherbox_api_client::ipns::resolve_ipns_verified(&api, &bin_ipns_name).await // sc6-allow: legacy recycle-bin publish (spawn_bin_entry_publish), not a node/v3 read
                 {
                     Ok(verified) => {
                         match cipherbox_api_client::ipfs::fetch_content(&api, &verified.cid).await {
@@ -646,6 +646,7 @@ async fn resolve_and_fetch_file_meta(
     // D-01: route through the verified chokepoint.
     let cid =
         match cipherbox_api_client::ipns::resolve_ipns_verified(api, file_meta_ipns_name).await {
+            // sc6-allow: 69-13 file-meta reencrypt (resolve_and_fetch_file_meta), not a node/v3 read
             Ok(v) => v.cid,
             // D-04: Legacy variant removed — all-absent sig fields fail closed.
             Err(cipherbox_api_client::ipns::VerifyError::Invalid(msg)) => {
