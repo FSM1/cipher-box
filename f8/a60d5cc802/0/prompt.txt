@@ -1,0 +1,617 @@
+Resume /gsd-plan-phase 69. First read the handoff: /private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/d4677bf5-56d4-454f-8fd3-6ca479857b79/scratchpad/phase69-plan-resume-state.md — it has the full recovery state. Then execute the RESUME ACTIONS in order: (1) write the missing 69-14 WinFsp/Windows plan via a fresh gsd-planner (single-plan mode; 69-01..13 already exist) with requirements:[TEST-03] and autonomous:false; (2) spawn gsd-plan-checker over all 14 plans and run the revision loop if needed; (3) pass §13 requirements-coverage + §13a decision-coverage gates; (4) record STATE (§13b), annotate ROADMAP (§13c), commit plans (§13d, verify via git log — commit helper false-negatives); (5) then AUTO-ADVANCE straight into execution via Skill gsd-execute-phase args "69 --auto --no-transition" — the user explicitly authorized continuing into execution once planning is done, so do NOT re-ask.
+
+---
+
+<task-notification>
+<task-id>aadb9d9f85e6a7738</task-id>
+<tool-use-id>toolu_01TZTNHJG5HFRTQLwrjJQnd5</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/aadb9d9f85e6a7738.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 69-03 phase 69" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Both commits landed cleanly. Per instructions I do NOT update STATE.md/ROADMAP.md — the orchestrator owns that after the wave merges. Plan execution complete.
+
+## PLAN COMPLETE
+
+**Plan:** 69-03
+**Tasks:** 1/1 complete
+**SUMMARY:** /Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-aadb9d9f85e6a7738/.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-03-SUMMARY.md
+
+&lt;worktree_metadata&gt;
+{"agent_id":"69-03","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-aadb9d9f85e6a7738","branch":"worktree-agent-aadb9d9f85e6a7738","expected_base":"4619c5110d8236e29ff6b9377885e4f831309f0f"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `c77d536fb`: feat(69-03): api-client list_sent_shares GET /shares/sent wrapper
+- `a9b950965`: docs(69-03): complete list_sent_shares api-client plan
+
+**Duration:** ~4 min
+
+**Key files:**
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-aadb9d9f85e6a7738/crates/api-client/src/shares.rs` — added `list_sent_shares`, `collect_sent_shares`, `SentShareResponse`, `SentSharesPage`, and `should_fetch_next_page`, plus 6 unit tests. `cargo test -p cipherbox-api-client shares` (10/10 pass) and `cargo check --workspace` both green; no fmt drift introduced in this file.
+
+Notable finding pinned against the live API (`apps/api/src/shares/dto/share-response.dto.ts`): `SentShareResponseDto` has no `revoked`/status field since shares are hard-deleted on revoke, so every row `/shares/sent` returns is inherently an active grant — documented in the SUMMARY's Decisions section, no deviation from plan intent.</result>
+<usage><subagent_tokens>94959</subagent_tokens><tool_uses>33</tool_uses><duration_ms>317139</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-aadb9d9f85e6a7738</worktreePath><worktreeBranch>worktree-agent-aadb9d9f85e6a7738</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>adc93d30b3926a32b</task-id>
+<tool-use-id>toolu_01QbrWws6de9ipMG9bHpkpKu</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/adc93d30b3926a32b.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 69-02 phase 69" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 69-02
+**Tasks:** 2/2 complete
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-adc93d30b3926a32b/.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-02-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"69-02","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-adc93d30b3926a32b","branch":"worktree-agent-adc93d30b3926a32b","expected_base":"4619c5110d8236e29ff6b9377885e4f831309f0f"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `04b3e10a8`: feat(69-02): RotationHighWater anti-rollback gate over injected HighWaterStore
+- `be98df614`: feat(69-02): durable JSON-sidecar floor store adjacent to journal dir (D-03)
+- `16f47c6da`: docs(69-02): complete rust rot-07 durable anti-rollback floor plan
+
+**Duration:** ~8 min
+
+### Summary
+
+Ported the ROT-07 durable anti-rollback gate from `packages/sdk/src/state/rotation-high-water.ts` into `crates/sdk`:
+
+- `crates/sdk/src/rotation/mod.rs` + `crates/sdk/src/rotation/high_water.rs` — `RotationHighWater&lt;S: HighWaterStore&gt;` with a fail-closed `enforce_resolved` matching the exact TS ordering (validate live input → generation-floor → cold-device-versionFloor-or-warm-seq-floor → bump both monotonic-max), `RotationError` thiserror enum, 10 unit tests.
+- `crates/sdk/src/floor_store.rs` — `JsonSidecarFloorStore`, a durable `HighWaterStore` implementation writing an atomic JSON sidecar (temp file + rename, 0600 via `OpenOptionsExt`), no new storage dependency. 6 unit tests including a restart-survival proof and an end-to-end proof through `RotationHighWater` itself.
+- `crates/sdk/src/lib.rs` updated with `pub mod rotation;` / `pub mod floor_store;` and re-exports.
+
+All verification passed: `cargo test -p cipherbox-sdk` (75 tests, 0 failures), `cargo check --workspace` clean, `cargo clippy -p cipherbox-sdk --lib` clean on new files, no `sled`/`redb`/`rusqlite` in `crates/sdk/Cargo.toml`.
+
+One operational note: the worktree had no `node_modules`, causing the husky pre-commit hook to fail on the first commit attempt (`lint-staged` not found). Ran `pnpm install --frozen-lockfile` and retried successfully — no code changes required.
+
+STATE.md and ROADMAP.md were intentionally left untouched per orchestrator ownership.</result>
+<usage><subagent_tokens>150729</subagent_tokens><tool_uses>54</tool_uses><duration_ms>582041</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-adc93d30b3926a32b</worktreePath><worktreeBranch>worktree-agent-adc93d30b3926a32b</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ace0fedf2b7f839e6</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/ace0fedf2b7f839e6.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 69-04 phase 69" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 69-04
+**Tasks:** 2/2 complete
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-ace0fedf2b7f839e6/.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-04-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"69-04","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-ace0fedf2b7f839e6","branch":"worktree-agent-ace0fedf2b7f839e6","expected_base":"b0d1b792edce73e19c95dcccfcb5fe413dbef3c2"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `59368f57e`: test(69-04): add failing Node seal AAD KAT + transplant case
+- `6ea5bc718`: feat(69-04): AAD-bound Node seal/unseal (symmetric, no ECIES)
+- `95cecdd67`: docs(69-04): complete Node AAD-bound seal/unseal plan
+
+**Duration:** ~5 min (plus environment setup: `pnpm install --frozen-lockfile` to fix a missing `node_modules` husky pre-commit dependency in the fresh worktree)
+
+**Key files:**
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-ace0fedf2b7f839e6/crates/core/src/node/seal.rs` (new)
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-ace0fedf2b7f839e6/crates/core/tests/node_seal_vectors.rs` (new)
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-ace0fedf2b7f839e6/crates/core/src/node/mod.rs` (modified: `pub mod seal;`)
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-ace0fedf2b7f839e6/crates/core/src/node/types.rs` (modified: `NodeError::SealFailed`)
+
+**Verification:** `cargo test -p cipherbox-core --test node_seal_vectors` (7/7 pass), `cargo test -p cipherbox-core` (79 + 3 + 7 pass), `cargo check --workspace` clean, `grep -n 'ecies' crates/core/src/node/seal.rs` empty.
+
+One deviation (Rule 1, documented in SUMMARY): a doc-comment initially referenced the lowercase substring `ecies::unwrap_key` to explain what the FUSE swap replaces — tripped the plan's literal `grep -n 'ecies'` truths-check even though no ECIES code was used. Reworded to "ECIES key-unwrap call" (no behavior change).
+
+STATE.md and ROADMAP.md were **not** modified — left for the orchestrator per worktree-mode contract.</result>
+<usage><subagent_tokens>124928</subagent_tokens><tool_uses>43</tool_uses><duration_ms>592475</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-ace0fedf2b7f839e6</worktreePath><worktreeBranch>worktree-agent-ace0fedf2b7f839e6</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0a036d137d301392</task-id>
+<tool-use-id>toolu_01EYoWNjjfKjbgWhuoCD8Lu7</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/a0a036d137d301392.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 69-05 phase 69" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>No STATE.md/ROADMAP.md changes. Everything matches the plan's `files_modified` scope (plus `high_water.rs` and `lib.rs` for the required error variant and re-exports). All done.
+
+## PLAN COMPLETE
+
+**Plan:** 69-05
+**Tasks:** 1/1
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a0a036d137d301392/.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-05-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"69-05","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a0a036d137d301392","branch":"worktree-agent-a0a036d137d301392","expected_base":"b0d1b792edce73e19c95dcccfcb5fe413dbef3c2"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- ee1a24eb8: test(69-05): add failing test for has_covering_grant scope-exit predicate
+- 3ac5b5240: feat(69-05): implement has_covering_grant and maybe_rotate_on_scope_exit
+- 1bb829461: docs(69-05): complete grant-root scope-exit predicate plan
+
+**Duration:** ~6 min
+
+**Key files:**
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a0a036d137d301392/crates/sdk/src/rotation/scope.rs` (new — `has_covering_grant`, `maybe_rotate_on_scope_exit`, `CoverageParams`, `LocalGrantRecord`, `ScopeExitResult`, 16 tests)
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a0a036d137d301392/crates/sdk/src/rotation/mod.rs` (wired `pub mod scope;` + re-exports)
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a0a036d137d301392/crates/sdk/src/rotation/high_water.rs` (added `RotationError::RotateFailed(String)` variant)
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a0a036d137d301392/crates/sdk/src/lib.rs` (re-exports)
+
+Verification: `cargo test -p cipherbox-sdk rotation::scope` (16/16 pass, includes the SC#4/ROT-02 zero-rotation invariant and T-63-17 anti-malicious-relay cross-check cases) and `cargo check --workspace` both green. No STATE.md/ROADMAP.md changes made (orchestrator-owned).</result>
+<usage><subagent_tokens>137553</subagent_tokens><tool_uses>48</tool_uses><duration_ms>441522</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a0a036d137d301392</worktreePath><worktreeBranch>worktree-agent-a0a036d137d301392</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a4cb70aa75274e63f</task-id>
+<tool-use-id>toolu_019pxaSX6mmZKXgpQMhHhx5g</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/a4cb70aa75274e63f.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 69-06 phase 69" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 69-06
+**Tasks:** 1/1 complete
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a4cb70aa75274e63f/.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-06-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"69-06","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a4cb70aa75274e63f","branch":"worktree-agent-a4cb70aa75274e63f","expected_base":"b72b8c5d059f098eedfadda1642dfbd7d82922b9"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `3ff8548c9`: feat(69-06): SDK-owned gated list_folder/ResolvedChild read chain (SC#6)
+- `b72b8c5d0`: docs(69-06): complete SDK-owned gated read chain plan
+
+**Duration:** ~45 min
+
+### What was built
+
+New file `crates/sdk/src/listing.rs` (wired into `crates/sdk/src/lib.rs`):
+
+- `ResolvedChild { ipns_name, name, kind, size: Option&lt;u64&gt;, modified_at, sequence }` — six fields exactly as specified.
+- `pub async fn list_folder(fetcher, high_water, ipns_name, folder_read_key, on_updated)` and `list_shared_folder(...)` (delegates to `list_folder`) — the single gated read entrypoints.
+- `pub(crate) async fn resolve_published_node(...)` — gate-first raw resolve, **not** `pub` beyond the crate (D-05/SC#6).
+- Gate ordering: `RotationHighWater::enforce_resolved` always runs before `decode_published_node`/`unseal_node` touch the fetched bytes; a regressed generation/seq fails the whole listing closed.
+- Pitfall 4 / M1: cold-child gating sources `generation`/`version_floor` from the parent `SealedChildRef` mirror, never the child's own `PublishedNode.generation` — verified by a dedicated unit test that would fail if the source were swapped.
+- `FolderUpdatedEvent` callback fires on a successful listing (68.2 `folder:updated` analog).
+- `NodeFetcher` trait — injected fetch seam so all 6 unit tests run with a fake in-memory fetcher, zero live API/IPFS calls.
+
+Verification: `cargo test -p cipherbox-sdk listing` (6/6 pass) and `cargo check --workspace` both green; `listing.rs` is clippy-clean and rustfmt-clean.
+
+One notable deviation is documented in the SUMMARY: test fixtures initially used non-UUID node IDs, which the already-shipped `build_node_aad` fail-closed rejects — fixed by using real UUIDv5 strings in test fixtures (no production-code change needed).</result>
+<usage><subagent_tokens>237261</subagent_tokens><tool_uses>61</tool_uses><duration_ms>785677</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a4cb70aa75274e63f</worktreePath><worktreeBranch>worktree-agent-a4cb70aa75274e63f</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a7a24f3f7265f1ba2</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/a7a24f3f7265f1ba2.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 69-08 phase 69" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 69-08
+**Tasks:** 2/2 complete
+**SUMMARY:** `.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-08-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"69-08","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a7a24f3f7265f1ba2","branch":"worktree-agent-a7a24f3f7265f1ba2","expected_base":"93bde9dc29f58ab8e6e200d080a3a9b9ba277011"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `60915b36b`: feat(69-08): rotate_one per-node CAS commit + terminal-owner zeroization
+- `48e8b78c2`: feat(69-08): rotate_read_from_node scope-root-first BFS + parent-tracking reseal
+- `93bde9dc2`: docs(69-08): complete rotation engine walk core plan
+
+**Duration:** ~55 min
+
+### Summary of work
+
+Created `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a7a24f3f7265f1ba2/crates/sdk/src/rotation/engine.rs`, a Rust port of `packages/sdk-core/src/rotation/engine.ts`'s `rotateOne`/`rotateReadFromNode` walk mechanics:
+
+- `rotate_one`: mints a fresh read key, reseals via `seal_node`, CAS-publishes through an injected `RotationDeps` trait seam. `parent_read_key: &amp;[u8]` is a borrow — the type system, not just convention, prevents zeroing the caller's buffer. `read_key_prime` is zeroed only on `rotate_one`'s own failure paths.
+- `rotate_read_from_node`: rotates the scope root first (the revocation cut), then BFS-walks children via `ParentTrackingState`, which batches exactly one republish per parent regardless of child count, and persists `RotationJobRecord` after every per-node commit.
+- 9 unit tests against an in-memory `FakeDeps` fixture (no live IPNS/IPFS).
+
+Also updated `crates/sdk/src/rotation/mod.rs` and `crates/sdk/src/lib.rs` to wire/re-export the new module.
+
+Two notable deviations (both documented in SUMMARY.md): test node ids needed real UUIDs (crates/core's `build_node_aad` fail-closes on non-UUID ids), and a `rustfmt`-on-crate-root gotcha that briefly reformatted unrelated files (reverted before committing — verified via `git status --short` scope checks on both commits).
+
+This plan is `type: tdd` but was executed with combined test+implementation commits rather than separate RED/GREEN commits — documented under "TDD Gate Compliance" in the SUMMARY.
+
+STATE.md/ROADMAP.md/REQUIREMENTS.md were intentionally left untouched per worktree-mode instructions — the orchestrator owns those updates after merge.</result>
+<usage><subagent_tokens>357994</subagent_tokens><tool_uses>146</tool_uses><duration_ms>1880174</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a7a24f3f7265f1ba2</worktreePath><worktreeBranch>worktree-agent-a7a24f3f7265f1ba2</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a8cce22ff1ad4dcdb</task-id>
+<tool-use-id>toolu_01YMRjRuiXqcSur9ABjbaqtF</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/a8cce22ff1ad4dcdb.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 69-09 phase 69" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE (partial — architectural scope gap discovered and documented)
+
+**Plan:** 69-09
+**Tasks:** 1/3 executed (Task 3); Tasks 1-2 blocked by a discovered Rule 4 architectural scope gap
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a8cce22ff1ad4dcdb/.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-09-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"69-09","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a8cce22ff1ad4dcdb","branch":"worktree-agent-a8cce22ff1ad4dcdb","expected_base":"d24f86554a2c92ef0668075c55f7dbfe9371e910"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `87be79156` — ci(69-09): SC#6 single gated read-entrypoint grep gate
+- `b70b81819` — docs(69-09): complete FUSE read-path investigation plan
+
+**Duration:** ~35 min
+
+**What happened:** I investigated the plan's Task 1/Task 2 objective (swap `ecies::unwrap_key` for symmetric `unseal_child_read_key`/`unseal_node` at named call sites in `crates/fuse/src/{inode.rs,replay.rs,content_ops.rs}`) before writing any code. Concrete grep evidence showed the functions containing those call sites (`InodeTable::populate_folder`, `resolve_folder_key`, `fetch_and_decrypt_content_async`) are called from at least 9 additional `crates/fuse` files that are **not** in this plan's `files_modified` (`fs.rs`, `read_ops.rs`, `dir_ops.rs`, `cache.rs`, `events.rs`, `poll.rs`, `operations.rs`, and three `platform/windows/*.rs` files), and that the write side (`write_ops/implementation/{mkdir,upload,delete,rename}.rs`, also out of scope) has never been migrated to produce Node v3/`SealedChildRef`-shaped data — there is no symmetric per-folder read-key hierarchy anywhere in the live write path to unwrap against yet. A partial swap would either fail `cargo check --workspace` or ship a decryption regression for every existing vault. Per deviation Rule 4 (architectural changes require a human/replan decision), I did not attempt the unsafe rewrite. I did fully implement Task 3 (the SC#6 CI grep gate in `.github/workflows/ci.yml`, `cargo-linux` job), which is genuinely self-contained and safe. `inode.rs`/`replay.rs`/`content_ops.rs` remain byte-for-byte unmodified — no regression risk introduced.
+
+This finding also applies transitively to **69-10** (next wave), whose own plan text assumes 69-09 fully moved the read path off the legacy types with only `metadata.rs`/`journal_helpers.rs` remaining — that assumption does not hold; the same ~9-file gap exists there too. This is flagged prominently in the SUMMARY's "Next Phase Readiness" section for the orchestrator/next replanning pass.</result>
+<usage><subagent_tokens>226512</subagent_tokens><tool_uses>45</tool_uses><duration_ms>589080</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a8cce22ff1ad4dcdb</worktreePath><worktreeBranch>worktree-agent-a8cce22ff1ad4dcdb</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a7e0b7ddfdc981a0c</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/a7e0b7ddfdc981a0c.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 69-11 phase 69" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 69-11
+**Tasks:** 1/1
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a7e0b7ddfdc981a0c/.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-11-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"69-11","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a7e0b7ddfdc981a0c","branch":"worktree-agent-a7e0b7ddfdc981a0c","expected_base":"d24f86554a2c92ef0668075c55f7dbfe9371e910"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `bfc5bfefc`: feat(69-11): verify_subtree_clean + crash-safe rotation resume ROT-06
+- `bb5fc7b28`: docs(69-11): add plan 11 execution summary
+
+**Duration:** ~25 min
+
+## Summary
+
+Added the crash-safety resume layer to `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a7e0b7ddfdc981a0c/crates/sdk/src/rotation/engine.rs`:
+
+- `verify_subtree_clean` — rebuilds the dirty rotation frontier from published IPNS records (compares each child's own published `generation` against the root's `SealedChildRef` mirror; no child unsealing needed).
+- Restructured `rotate_read_from_node` to branch on `rotate_one(root)`'s outcome: a fresh commit takes the existing path; a resume-skip now calls `verify_subtree_clean` — an empty frontier converges immediately (zero further publishes), a non-empty frontier folds into the same BFS loop.
+- Documented the M1 contract (module doc + `RotationJobRecord` doc): callers must seed `completed_node_ids` from the crash-time job record, or the fast idempotency path never fires and already-committed nodes get double-bumped.
+
+Also exported `verify_subtree_clean` / `DirtyFrontierEntry` from `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a7e0b7ddfdc981a0c/crates/sdk/src/rotation/mod.rs`.
+
+4 new tests added (all passing): 2 unit tests for `verify_subtree_clean` in isolation, plus the 2 required scenarios — resume converges without double-bumping when seeded from the crash-time record, and the empty-seed hazard double-bumps the root while the seeded path does not.
+
+`cargo test -p cipherbox-sdk rotation::engine` — 13/13 pass. `cargo check --workspace` — green. Noted one deliberate, documented scope limitation inherited unchanged from the TS reference (`packages/sdk-core/src/rotation/engine.ts`): a child that never individually rotated at all is invisible to the generation-comparison dirty check — full detail and rationale is in the SUMMARY and in code comments.
+
+STATE.md / ROADMAP.md were not touched (orchestrator-owned).</result>
+<usage><subagent_tokens>193952</subagent_tokens><tool_uses>57</tool_uses><duration_ms>949204</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a7e0b7ddfdc981a0c</worktreePath><worktreeBranch>worktree-agent-a7e0b7ddfdc981a0c</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a44f3260ed8841b81</task-id>
+<tool-use-id>toolu_01KY3bh3GMZtw5Lpb7bA131z</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/a44f3260ed8841b81.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 69-12 phase 69" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 69-12
+**Tasks:** 2/2
+**SUMMARY:** `.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-12-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"69-12","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a44f3260ed8841b81","branch":"worktree-agent-a44f3260ed8841b81","expected_base":"031f61a919df2acf8731fac3ca2def13734f3ccb"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `be4a0cb81`: feat(69-12): CRIT-1 content-key rotation + HIGH-3 inner-grant re-mint + HIGH-4 CAS-409 re-fetch-merge
+- `031f61a91`: docs(69-12): complete rotation engine revocation closures plan
+
+**Duration:** ~55 minutes
+
+### Summary
+
+Closed the three revocation gaps in `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a44f3260ed8841b81/crates/sdk/src/rotation/engine.rs`:
+
+- **CRIT-1**: `rotate_one` mints a fresh `fileKey` for File nodes (`mint_file_key_on_rotate`), threading it into the same re-seal via `build_resealed_node`; `CommittedRotation.content_rekey_pending` marks this lazily (no eager re-encrypt, ADR 0002).
+- **HIGH-3**: New `RotationDeps` seams (`query_grants_rooted_at`/`update_grant`/`delete_grant`, default no-op) back `re_mint_grants_rooted_at`, called after every per-node commit — non-revoked recipients get ECIES-re-wrapped descriptors, revoked recipients are hard-deleted.
+- **HIGH-4**: `RotationDeps::publish_with_cas` now returns `PublishAttempt::{Published,Conflict}` instead of erroring on CAS-409. `seal_and_publish` retries (max 3 attempts) via `merge_concurrent_children`/`merge_children`, re-fetching and re-merging the remote's children before re-sealing — never a blind re-seal from a stale list. The merged children list also flows into `CommittedRotation.children` so a concurrently-added child gets its own BFS-walk rotation too (stronger than the TS reference parity target).
+
+Verification: `cargo test -p cipherbox-sdk rotation::engine` — 17/17 pass; full crate `cargo test -p cipherbox-sdk` — 114/114 pass, zero regressions; `cargo check --workspace` green; `cargo clippy -p cipherbox-sdk --tests` — zero new warnings.
+
+One minor deviation (Rule 3, documented in SUMMARY): extended `crates/sdk/src/rotation/mod.rs`'s barrel to export the two new public types (`GrantRow`, `PublishAttempt`).</result>
+<usage><subagent_tokens>254764</subagent_tokens><tool_uses>73</tool_uses><duration_ms>1119061</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a44f3260ed8841b81</worktreePath><worktreeBranch>worktree-agent-a44f3260ed8841b81</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aad8a03ff773d0215</task-id>
+<tool-use-id>toolu_01MxtpyAx357P6pcCybheFov</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/aad8a03ff773d0215.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 69-09 P1 phase 69" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I am halting this plan and returning a blocker to the orchestrator, rather than committing a broken tree. I made zero file modifications; the green baseline is intact.
+
+## BLOCKER — plan 69-09 not completable to its green boundary as scoped
+
+**Type:** decision (Rule 4 — architectural-magnitude scope discovery)
+**Plan:** 69-09
+**Progress:** 0/3 tasks committed. No edits made. Worktree tree clean, `cargo check -p cipherbox-fuse` green (baseline preserved).
+
+### Why I stopped instead of committing
+
+Plan 69-09 is an *irreducible atomic* cutover: per research §2.5, the ONLY guaranteed-green checkpoint is the plan boundary (Task 3), and Tasks 1–2 are red by design. There is no mergeable partial state — any incomplete flip leaves `cargo check --workspace` red, which the orchestrator will not merge and which destroys the current green baseline. So the decision is binary: reach full green in one pass, or don't touch the tree. My independent verification shows full green in one autonomous pass is not achievable, because the plan's premise (a "consumer cutover") is incomplete.
+
+### Grounded findings (live grep/check this session)
+
+1. **The Node write plane does not exist as callable infrastructure.** The fuse write path (`journal_helpers.rs:421`, mkdir/upload/delete/rename) emits `cipherbox_core::folder::FolderMetadata`/`FileMetadata` with ECIES-wrapped keys. There is **no** `build_node`/`create_node`/`publish_node` helper anywhere in `crates/core` or `crates/sdk` (grep for build/new/create node → empty). The only `PublishedNode` producers are listing *tests* and `rotation/engine.rs` (which only *reseals existing* nodes). Emitting `Node + SealedChildRef + PublishedNode` from the write path therefore requires building a net-new subsystem: per-node readKey generation, node-body encode, `seal_node`, `PublishedNode` envelope, the publish machinery, `NodeContent` file bodies, and the D-07 write-body/writeKey plane.
+
+2. **The gated read path (`list_folder`) is not consumable by fuse today.** `crates/fuse` never references `crates/sdk::listing` (grep → zero hits). It does raw IPNS reads via `cipherbox_api_client::ipns::resolve_ipns_verified` + `ipfs::fetch_content` at ~10 sites (content_ops, events, metadata:437/569/739, publish:96/146, fs:529, replay). Routing these through `list_folder` requires a `NodeFetcher` adapter bridging `cipherbox_api_client` → the SDK listing seam AND wiring a `RotationHighWater&lt;S&gt;` store into `CipherBoxFS` — neither exists.
+
+3. **Blast radius:** ~13,161 lines in `crates/fuse/src`, 242 legacy-type references across fuse+sdk+desktop, 39 ECIES sites, plus `crates/sdk/src/queue.rs` (1,958 lines) JournalOp weld and 718 lines of desktop construction sites — all pinned to one all-or-nothing compile boundary.
+
+Research §2.4 itself states the Rust stack "has no such head start — the write plane is still legacy — so the Rust equivalent must do in ONE phase what the web did across 62→65 (write plane) THEN 68.2 (read consolidation)." That is 5 web phases of subsystem construction compressed into one atomic Rust plan with no intermediate green. That is not completable by a single autonomous executor in one pass, and a partial attempt is strictly worse than the current green baseline (unmergeable + destroys working state).
+
+### Recommended re-scope (one strong path)
+
+Split 69-09 (P1) into two sequenced plans, mirroring how the web actually shipped this:
+
+- **P1a — Node write-plane + SDK-listing read adapter as foundation (independently green, additive):** Build the callable write-plane API in `crates/core`/`crates/sdk` (node create/seal/`PublishedNode` emit/publish; D-07 write-body) and a `NodeFetcher`+high-water bridge from `cipherbox_api_client` into `crates/sdk::listing`. Additive alongside legacy types → `cargo check --workspace` stays green at its own boundary. This is the 62–65 write-plane + 68.2 read-adapter equivalent.
+- **P1b — the atomic fuse consumer cutover (the current 69-09):** Now genuinely a mechanical consumer flip — read consumers call `list_folder`, write path calls the P1a write-plane API, `JournalOp` weld + desktop sites move together. This can hit the single green boundary because the infrastructure it consumes already exists and is tested.
+
+Then 69-10 (P2 delete legacy types), 69-13 (P3 grant-gate), 69-14 (P4 WinFsp) follow unchanged.
+
+I did not write a SUMMARY.md (that signals completion) and did not commit. The orchestrator should re-plan before re-dispatching this wave.
+
+&lt;worktree_metadata&gt;
+{"agent_id":"69-09","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-aad8a03ff773d0215","branch":"worktree-agent-aad8a03ff773d0215","expected_base":"2259d39365948af209dde8fae065f660ce6fc1dc"}
+&lt;/worktree_metadata&gt;</result>
+<usage><subagent_tokens>115816</subagent_tokens><tool_uses>13</tool_uses><duration_ms>228552</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ad94056ee5b1d8f7b</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/ad94056ee5b1d8f7b.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 69-15 P1a-core" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All 97 tests across `cipherbox-core` pass, `cargo check --workspace` is green. Plan 69-15 is complete.
+
+## PLAN COMPLETE
+
+**Plan:** 69-15
+**Tasks:** 2/2
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-ad94056ee5b1d8f7b/.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-15-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"69-15","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-ad94056ee5b1d8f7b","branch":"worktree-agent-ad94056ee5b1d8f7b","expected_base":"84ac40cc29e0712bb07c0cfea075dc85452f5b95"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `607dcc0e8`: feat(69-15): encode/decode write-body plaintext codec
+- `fc90bbb46`: feat(69-15): seal_published_node both-bodies + writeSealed KAT
+- `2585217a6`: docs(69-15): complete Node write-body codec + both-bodies seal plan
+
+**Duration:** ~15 min
+
+**Key files:**
+- `crates/core/src/node/encode.rs` — added `encode_write_body`
+- `crates/core/src/node/decode.rs` — added `decode_write_body`
+- `crates/core/src/node/seal.rs` — added `seal_published_node`
+- `crates/core/src/node/mod.rs` — re-exported new codec functions
+- `crates/core/tests/node_write_body_vectors.rs` — new writeSealed KAT test
+
+Verification: `cargo test -p cipherbox-core` → 97/97 passing; `cargo check --workspace` green; `grep -n 'ecies' crates/core/src/node/{encode,seal}.rs` empty; diff scoped to exactly `crates/core/src/node/*` + one new test file (no `crates/fuse` edits, no legacy `crates/core::folder` deletion). No deviations from plan — one incidental `cargo fmt -p` over-reformat of unrelated files was caught and reverted before committing (noted in SUMMARY).</result>
+<usage><subagent_tokens>179395</subagent_tokens><tool_uses>69</tool_uses><duration_ms>529650</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-ad94056ee5b1d8f7b</worktreePath><worktreeBranch>worktree-agent-ad94056ee5b1d8f7b</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a80f26fc26be8b2a5</task-id>
+<tool-use-id>toolu_01BLraWBrTFSBLXGqBYjGpkv</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/a80f26fc26be8b2a5.output</output-file>
+<status>failed</status>
+<summary>Agent "Execute plan 69-16 P1a-sdk" failed: Agent terminated early due to an API error: API Error: Response stalled mid-stream. The response above may be incomplete.</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I should use the fully-qualified `ecies::wrap_key` path (matching `registry.rs`'s convention) to satisfy the plan's grep-based acceptance check for ECIES usage. Let me fix that.</result>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a80f26fc26be8b2a5</worktreePath><worktreeBranch>worktree-agent-a80f26fc26be8b2a5</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a39fe060ae5cde8e8</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/a39fe060ae5cde8e8.output</output-file>
+<status>failed</status>
+<summary>Agent "Execute plan 69-09 P1b atomic FUSE cutover" failed: Agent terminated early due to an API error: You've hit your session limit · resets 2pm (Europe/Berlin)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>This `populate_folder` alone is a ~600-line intricate reconciliation function, and it is one of many across replay.rs (1612 lines), metadata.rs (1343 lines), journal_helpers.rs (719 lines), and the write ops. Let me establish the baseline build state and read the CI Rust lane, which is the one independently-completable artifact.</result>
+</task-notification>
+
+---
+
+please continue
+
+---
+
+<task-notification>
+<task-id>a73d47a9ef1c322ae</task-id>
+<tool-use-id>toolu_015MZ7C2krmrtW26Z74Yy2cv</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/a73d47a9ef1c322ae.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 69-09 P1b atomic FUSE cutover (retry)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Working tree is clean — I have made zero edits, by design, having reached a definitive architectural conclusion rather than forcing broken code. Here is my honest status report.
+
+## Green-boundary status: NOT REACHED — halting on an architectural blocker
+
+**Commits made:** none. Branch `worktree-agent-a73d47a9ef1c322ae`, HEAD unchanged at base `9ceefb22b`. Working tree clean. I deliberately made no edits — writing speculative InodeKind/write-path changes would be the "force partial/broken work to look complete" the brief forbids, and a RED worktree won't merge regardless.
+
+**Blocker classification: ARCHITECTURAL (needs re-scope, not resume or another session).**
+
+I did not repeat the prior attempt's failure mode (dying in exploration). I read the full P1a foundation I was told to consume (`core/node/{types,seal}.rs`, `sdk/{emit,adapter,listing}.rs`) and the exact fuse consumers, and found two hard, evidence-grounded facts that break the plan's premise:
+
+### Finding 1 — the plan's central "landmine 1 cross-crate weld" is stale/nonexistent
+The plan's headline weld and an explicit acceptance criterion are:
+&gt; `crates/sdk/src/queue.rs` `JournalOp::MkdirPublish.parent_metadata: cipherbox_core::folder::FolderMetadata` → repoint... grep `folder::FolderMetadata` in queue.rs returns empty.
+
+Against the current tree (`grep -n 'FolderMetadata\|parent_metadata\|cipherbox_core' crates/sdk/src/queue.rs`) that field **does not exist**. `JournalOp::{UploadFile,MkdirPublish}` carry only hex-string fields (`child_folder_key_hex`, `wrapped_key_hex`, `parent_ipns_key_hex`, …). The `parent_metadata: FolderMetadata` the research cited actually lives in the fuse-side `MkdirJournalResult` struct (`journal_helpers.rs:97`), not the cross-crate `JournalOp`. The acceptance criterion is already trivially satisfied; the "cross-crate compile unit" that justified atomicity isn't there. The research itself flagged this risk ("re-verify grep line numbers if execution is delayed") and rated the P1 task decomposition as its only MEDIUM-confidence item.
+
+### Finding 2 (the real blocker) — the foundation cannot materialize a *writable* InodeKind
+The plan says "populate_folder takes Node/`ResolvedChild`; child read-key via `unseal_child_read_key`." But:
+
+- `ResolvedChild` (`listing.rs:104`) carries **no key material** — only `{ipns_name, name, kind, size, modified_at, sequence}`. `resolve_child` unseals the child read-key and immediately zeroizes it (D-09), and it **never unseals the write-body** (`NodeWriteBody` = `ipns_private_key` + `write_children`).
+- The current `InodeKind::{Folder,File}` (`inode.rs:100`) is a full **read-write** owner state: it stores `folder_key`, `ipns_private_key`, `file_ipns_private_key`. The FUSE mount is not a read-only client (the 68.2 web mirror was) — it signs IPNS records and seals new children under each parent's key, so it needs each node's `read_key` **and** `write_key`/`ipns_private_key` in memory.
+- No public SDK entrypoint materializes the write plane for an existing tree. `emit.rs` only *mints* fresh single nodes; `listing.rs` is a read-only projection; the raw gated resolve (`resolve_published_node`) and a write-body walk are `pub(crate)`/absent. A fuse-side write-plane walk would either violate SC#6 (raw resolve in `crates/fuse/src`) or require a new gated write-plane materialization API the foundation never shipped.
+
+So "read unwraps exactly what write seals" holds for a read-only listing client but **not** for the read-write FUSE owner. The P1a foundation (69-06 listing, 69-16 emit/adapter) delivered read-only listing + single-node emit, but omitted the writable-tree materialization walk that flipping `InodeKind` to node/v3 strictly requires. That is a missing foundational plan, not something P1b can hand-roll without either an SC#6 violation or a large out-of-scope SDK addition.
+
+### Secondary scope gap
+The write path (`journal_helpers.rs` `build_upload/mkdir_journal_entry`) is built on **user-ECIES-per-file/folder under `self.public_key`** plus hex-string `JournalOp` variants. node/v3 seals a child under its **parent node's readKey** (not the user key). Making write emit Node therefore also requires reshaping the `JournalOp` wire format + replay interpretation — which the 3-task plan explicitly does not scope (it scopes only the one non-existent `parent_metadata` field).
+
+### Recommendation
+Do not resume me on this plan as written. Re-scope with a prerequisite foundation plan that adds a **gated write-plane tree-materialization API** to `crates/sdk` (given root read+write keys, walk and return per-node `{read_key, write_key, ipns_private_key}` for the mount, routed through the SC#6 gate) and enrich `ResolvedChild` (or a sibling `ResolvedOwnedChild`) to carry the recovered read key. Then P1b's InodeKind flip becomes mechanically reachable. Also drop/replace the stale "JournalOp weld" framing and add the `JournalOp` wire-format reshape as explicit P1b scope.
+
+**Green-boundary checks (all currently N/A — no code changed):**
+1. `cargo check --workspace` — not attempted (no edits).
+2. `cargo test -p cipherbox-fuse` — not attempted.
+3. `cargo test -p cipherbox-sdk` — passes on base (unchanged), but irrelevant to the flip.
+4. `grep ecies::unwrap_key` in inode.rs/content_ops.rs — still present (unchanged, migration not performed).
+5. SC#6 CI gate — not added.
+
+**Scope deviations:** none applied. **SUMMARY.md:** not written — the plan boundary was not reached, and a "complete" summary would misrepresent status. No `.planning/` state was advanced.</result>
+<usage><subagent_tokens>156312</subagent_tokens><tool_uses>17</tool_uses><duration_ms>292742</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a18969c7eee3bfd36</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/a18969c7eee3bfd36.output</output-file>
+<status>completed</status>
+<summary>Agent "Author plans 69-17, 69-18, revise 69-09" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All three plans validate cleanly. I've left the files uncommitted (no commit was requested; per your workflow, git is the orchestrator's to handle) and did not touch ROADMAP.md to avoid the known truncation hazard on a mid-flight re-scope.
+
+## Summary
+
+**Two new plan files authored:**
+- `/Users/myankelev/Code/random/cipher-box-phase69/.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-17-PLAN.md`
+- `/Users/myankelev/Code/random/cipher-box-phase69/.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-18-PLAN.md`
+
+**69-17 (P1a-2)** — gated write-plane tree-materialization in `crates/sdk/src/listing.rs`: `ResolvedOwnedChild` + `pub(crate) resolve_owned_child` + `pub list_folder_owned`, recovering per-node `{read_key, write_key, ipns_private_key}` by reusing the SAME `pub(crate) resolve_published_node` gate (SC#6) and adding the write-plane half `list_folder`/`resolve_child` discard (`unseal_child_write_key` + `unseal_node(write_sealed)`→`decode_write_body`). D-07 pairing is by child node identity (`published.id == WriteChildRef.child_id`), never ipnsName. Terminal-owner test asserts caller `parent_read_key`/`parent_write_key` byte-unchanged. Additive, `crates/fuse` untouched → `cargo check --workspace` + `cargo test -p cipherbox-sdk` green (workspace-green, like sibling 69-16). `requirements: [SC-01, SC-06]`, `depends_on: ["69-06","69-15","69-16"]`, wave 4.
+
+**69-18 (P1a-3) green-vs-fold decision: GREEN (standalone, sdk-green — NOT folded).**
+One-line rationale: `JournalOp` is self-contained in `crates/sdk/src/queue.rs` (its impl match-arms + tests reshape sdk-green), while its constructors (`journal_helpers.rs`) and reader (`replay.rs`) are in `crates/fuse` — so the clean crate-seam split is 69-18 owns the enum shape (`cargo test -p cipherbox-sdk` green; `cargo check --workspace` intentionally RED until 69-09, the sanctioned mid-flip RED the research permits) and 69-09 owns the fuse construction/reading (workspace-green boundary). Adding coexisting variants for a workspace-green 69-18 would violate D-04's no-dual-codec doctrine, so GREEN-standalone was chosen over both dual-variant and fold. `requirements: [SC-04, SC-06]`, `depends_on: ["69-15","69-16"]`, wave 4, `files_modified: [crates/sdk/src/queue.rs]`.
+
+**69-09 revisions made** (`.../69-09-PLAN.md`):
+- `depends_on += "69-17","69-18"`.
+- Removed `crates/sdk/src/queue.rs` from `files_modified` (the enum reshape is 69-18's; 69-09 only migrates the fuse constructor/reader sites onto it — consistent with the GREEN decision, per the "update files_modified if fold moves queue.rs" instruction, inverted here since GREEN keeps queue.rs in 69-18).
+- Deleted the stale "JournalOp weld / landmine 1 / `parent_metadata: FolderMetadata` in queue.rs" truth + its acceptance criterion + the Task 1 queue.rs-repoint action/verify/AC (verified: that field does not exist — `JournalOp` has only `UploadFile`/`MkdirPublish` with hex-ECIES-under-user-key fields).
+- Replaced with: read path consumes `list_folder_owned` (69-17) to populate `InodeKind` with recovered `read_key`/`write_key`/`ipns_private_key`; write path emits node/v3 + constructs 69-18's reshaped `JournalOp`; `replay.rs` reinterprets it with the fail-closed skip inherited from 69-18's `load_all_for_vault`.
+- Propagated `list_folder_owned` as a third sanctioned SC#6 read entrypoint; updated objective, artifacts block, both affected task names, verification, and success_criteria.
+- Kept intact: atomic InodeKind flip, SC#1, the SC#6 CI grep gate, fail-closed replay, desktop construction sites, keeper ECIES list, and the plan-boundary green checkpoint.
+
+All three pass `frontmatter.validate` (`valid: true`) and `verify.plan-structure` (no errors; the "missing `&lt;files&gt;`" warnings match the 69-16 sibling's `&lt;read_first&gt;` convention).</result>
+<usage><subagent_tokens>260169</subagent_tokens><tool_uses>35</tool_uses><duration_ms>1276863</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a9dd717f7612dd5f7</task-id>
+<tool-use-id>toolu_01QAFRCi1fxUMsNyZAZa21zx</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box-phase69/3c26c487-a8f4-41db-a791-84e9394aaedb/tasks/a9dd717f7612dd5f7.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 69-17 write-owner materialization" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Plan 69-17 complete. All tasks executed, committed atomically, and the worktree is GREEN.
+
+## PLAN COMPLETE
+
+**Plan:** 69-17 (P1a-2 — gated write-plane tree materialization)
+**Tasks:** 2/2
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a9dd717f7612dd5f7/.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-17-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"69-17","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a9dd717f7612dd5f7","branch":"worktree-agent-a9dd717f7612dd5f7","expected_base":"cff05112edd20ba1da9a22255a7f6a508d12ff40"}
+&lt;/worktree_metadata&gt;
+
+**Commits (branch `worktree-agent-a9dd717f7612dd5f7`):**
+- `54e7190f5` feat(69-17): resolve_owned_child recovers the write plane through the shared gate (Task 1 — `ResolvedOwnedChild` + `resolve_owned_child` + 5 tests)
+- `0bcb99160` feat(69-17): list_folder_owned write-owner materialization entrypoint (Task 2 — `list_folder_owned` + lib.rs export + 3 tests)
+- `d30b9e61f` docs(69-17): complete gated write-owner tree materialization plan (SUMMARY.md)
+
+## Green-boundary checks (verified in this worktree)
+
+| Check | Result | Evidence |
+|-------|--------|----------|
+| `cargo test -p cipherbox-sdk` GREEN | PASS | `132 passed; 0 failed` (8 new owned tests: single-child recovery, 2-level round-trip recovered==minted, D-07 pair-by-published.id, missing-pair fail-closed, write_sealed=None fail-closed, high-water floor-gate rejection, both caller-key-buffer-unchanged) |
+| `cargo check --workspace` GREEN | PASS | `Finished dev profile` — `cipherbox-fuse` + desktop check clean, additive |
+| `git diff --stat crates/fuse` EMPTY | PASS | empty output |
+| No new `[dependencies]` in `crates/sdk/Cargo.toml` | PASS | `git diff` on Cargo.toml empty |
+| `resolve_published_node` still `pub(crate)` | PASS | grep line 182 `pub(crate) async fn resolve_published_node` |
+| `list_folder_owned` only new `pub` entrypoint | PASS | grep line 568 `pub async fn list_folder_owned` |
+| clippy no new warnings | PASS | sole `cipherbox-sdk` warning is pre-existing `emit.rs:401` build_child_refs (too-many-args) — not mine |
+
+**Hard-constraint compliance:** D-09 terminal-owner (borrowed parent keys never zeroed, verified by two byte-unchanged tests; recovered keys returned raw in `Zeroizing`; redacting `Debug`); D-07 pairing strictly by `published.id == WriteChildRef.child_id`; SC#6 single shared gate (no new resolver); parent-mirror `child_ref.generation` used for the child unseal AAD (M1); fail-closed on every failure path.
+
+## Scope deviations
+
+None in code — plan executed exactly as written.
+
+One tooling note (already reverted, no code impact): `rustfmt crates/sdk/src/lib.rs` follows `mod` declarations and reformatted the whole `crates/sdk` (pre-existing drift vs rustfmt 1.8.0 in 7 unrelated files). I reverted those out-of-scope reformats with `git checkout --`; the committed diff is confined to `listing.rs` + `lib.rs`, and no pre-existing code in `listing.rs` was reformatted (only my two changed import lines).
+
+**Duration:** ~35 min</result>
+<usage><subagent_tokens>171688</subagent_tokens><tool_uses>51</tool_uses><duration_ms>970377</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a9dd717f7612dd5f7</worktreePath><worktreeBranch>worktree-agent-a9dd717f7612dd5f7</worktreeBranch></worktree>
+</task-notification>
