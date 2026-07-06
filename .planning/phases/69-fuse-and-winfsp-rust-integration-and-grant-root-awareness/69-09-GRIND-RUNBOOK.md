@@ -116,6 +116,33 @@ enum InodeKind {
   desktop+gate) so partial survives.
 - E2E FLAG add: replay doesn't unpin old parent CID after re-publish (orphaned pins GC-able, not correctness-critical).
 
+## SLICE 5 = PARTIAL (TASK 0 only). Commit 019a6968b: sdk `fetch_node_gated` (SC#6 single-node read), sdk-green (132t).
+Runbook UNDER-SCOPED Slice 5. VERIFIED remaining: lib 35 errs, TEST-compile 201 errs, raw-resolve non-test sites
+events.rs/fs.rs/metadata.rs/publish.rs (+replay.rs sanctioned resolve_ipns_for_replay wrapper — assess allowlist).
+Remaining is a refresh-pipeline REDESIGN + live per-file publish BUILD + big test-module migration — NOT repointing.
+
+### REVISED continuation slices (branch worktree-agent-aad501548bf8c685c @ 019a6968b):
+- **Slice 5b — crates/fuse LIB → `cargo check -p cipherbox-fuse` (lib) green.** Incremental commits:
+  (a) ENABLER: `#[derive(Clone)]` on RotationHighWater in crates/sdk (JsonSidecarFloorStore is Clone, PathBuf-backed
+      read-modify-write on disk → clone shares durable floor, no divergence; verified compiles + sdk-green). Own commit.
+  (b) read glue: read_ops.rs, dir_ops.rs, content_ops.rs, poll.rs, operations.rs read/open. file read = fetch_node_gated
+      (needs owned high_water clone in spawned prefetch task) → fetch_and_decrypt_content_async(api,&PublishedNode,&read_key).
+      Plumb (cid, ipns_name, read_key:Zeroizing<[u8;32]>) not (cid,encrypted_file_key,iv,mode). "unresolved"=cid.is_empty().
+  (c) live per-file publish: NEW `publish_file_node` (first-publish + CAS-update tail) — do NOT mutate publish_file_metadata
+      (69-13 spawn_file_meta_reencrypt still calls it). Rewire read_ops flush handler InodeKind::File + UploadJournalResult destructure.
+  (d) refresh-pipeline REDESIGN: split populate_folder into async-fetch(list_folder_owned)+sync-apply(Vec<ResolvedOwnedChild>);
+      reshape PendingRefresh (events.rs) off FolderMetadata; drain_refresh_completions (fs.rs); redefine metadata_cache (cache.rs);
+      migrate events.rs/metadata.rs/fs.rs raw resolve_ipns_verified → list_folder_owned/fetch_node_gated (SC#6). metadata.rs 17
+      FolderMetadata refs. LEAVE revoke_shares_blocking/spawn_file_meta_reencrypt/publish_file_metadata (69-13).
+- **Slice 5c — desktop + TEST-module + SC#6 gate → FULL green boundary.**
+  desktop mod.rs/prepopulate.rs root population (list_folder_owned, id=uuid_from_ino(ROOT_INO)) + replay_for_vault caller sig
+  (journal,api,journal_dir:PathBuf,root_read_key:&[u8;32],root_write_key:&[u8;32],root_ipns_name,coordinator,tee_public_key,tee_key_epoch);
+  windows/* cfg(winfsp) edit-for-correctness (69-14 CI). TEST MODULE (201 errs): **DELETE legacy-model tests** (FolderMetadata
+  round-trips, old 5-arg populate_folder, decrypt_journal_name) — they test intentionally-removed behavior; KEEP/port only
+  non-crypto fuse-mechanics tests (inode table, path handling); deep crypto correctness = E2E gate (user decision). Add a couple
+  node/v3 fake-fetcher smoke tests. SC#6 ci.yml grep gate. Boundary: cargo check --workspace green + test -p cipherbox-fuse
+  (compiles+passes) green + -p cipherbox-sdk green + ecies greps empty. Write 69-09-SUMMARY.md.
+
 ## Slices (sequential, same branch; each: commit even if crate RED elsewhere, that's expected)
 1. **Types + CipherBoxFS wiring** (keystone 1+2): reshape `InodeKind` (inode.rs enum def + its constructors);
    add `high_water: RotationHighWater<JsonSidecarFloorStore>` + `fetcher: ApiNodeFetcher` (or the wired gate)
