@@ -51,6 +51,25 @@ enum InodeKind {
   -> Result<Vec<ResolvedOwnedChild>, ListingError>`; `ResolvedOwnedChild { child: ResolvedChild, read_key, write_key,
   ipns_private_key }` (move Zeroizing keys straight into child InodeKind).
 
+## SLICE 2 OUTCOME (commit 26cb97b36) — carry-forward for Slices 3-5
+- Read path done: populate_folder→list_folder_owned; content_ops→unseal_node. Both ecies::unwrap_key greps EMPTY. 120→78 errs.
+- populate_folder NEW sig (Slice 5 fs.rs caller): `async fn populate_folder(&mut self, parent_ino, ipns_name:&str,
+  parent_read_key:&[u8;32], parent_write_key:&[u8;32], api:&ApiClient, high_water:&RotationHighWater<JsonSidecarFloorStore>,
+  merge_only:bool) -> Result<(),String>`. Also: `resolve_file_pointer(ino, cid, iv, size, encryption_mode)` (dropped
+  encrypted_file_key+versions); `mark_remotely_edited_files_unresolved(parent_ino, &[ResolvedOwnedChild])`;
+  `fetch_and_decrypt_content_async(api, &PublishedNode, &[u8;32] read_key)`.
+- InodeKind::File no longer stores file_key (lives in sealed NodeContent, recovered via unseal_node). "unresolved" = empty cid.
+- NodeContent (core/node/types.rs:80): { cid:String, file_iv:String, size, mime_type, encryption_mode, file_key:Vec<u8>
+  (base64 wire), versions:Vec<VersionEntry> }. ⇒ **file_iv is HEX** (content_ops does hex::decode) — Slice 3 write MUST
+  build NodeContent.file_iv as HEX. file versioning lives in NodeContent.versions (not InodeKind) — verify at E2E.
+- FLAG (Slice 5, RESOLVED APPROACH): content_ops takes &PublishedNode but list_folder_owned rejects file nodes. Slice 5
+  TASK 0 = add a sanctioned SC#6 public `fetch_node_gated(fetcher,high_water,ipns_name)->PublishedNode` wrapper to sdk
+  listing.rs (gate-first resolve_published_node), re-export at cipherbox_sdk::; read_ops uses it to fetch the file's
+  PublishedNode → content_ops. Keeps Slice 2's content_ops sig intact. (Tiny additive sdk fn on the branch.)
+- Slice 3 SEAM: fs.rs build_folder_metadata CHILD LOOP (181/185/222/244/255/256) = legacy FolderMetadata/FolderEntry/
+  FilePointer emission → replace with Node + SealedChildRef/WriteChildRef. Parent read_key+write_key come straight
+  from parent InodeKind. File child's write_key/ipns_private_key populated (from ResolvedOwnedChild) → build WriteChildRef/JournalOp.
+
 ## Slices (sequential, same branch; each: commit even if crate RED elsewhere, that's expected)
 1. **Types + CipherBoxFS wiring** (keystone 1+2): reshape `InodeKind` (inode.rs enum def + its constructors);
    add `high_water: RotationHighWater<JsonSidecarFloorStore>` + `fetcher: ApiNodeFetcher` (or the wired gate)
