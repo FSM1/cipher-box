@@ -973,11 +973,15 @@ test.describe.serial('Full Workflow', () => {
     await moveDialog.clickMove();
     await moveDialog.waitForClose({ timeout: 15000 });
 
-    // Verify file is no longer at root
+    // Verify file is no longer at root. Wait for the post-move refresh to
+    // settle first — under parallel CI load the instant visibility check can
+    // race the move's IPNS publish -> refresh round-trip.
+    await fileList.waitForItemToDisappear(fileToMove);
     expect(await fileList.isItemVisible(fileToMove)).toBe(false);
 
     // Navigate to workspace and verify file is there
     await navigateIntoFolder(workspaceFolder);
+    await fileList.waitForItemToAppear(fileToMove);
     expect(await fileList.isItemVisible(fileToMove)).toBe(true);
   });
 
