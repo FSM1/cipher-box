@@ -1,10 +1,9 @@
 import { useState, useCallback } from 'react';
 import { useFolderStore } from '../stores/folder.store';
 import { useVaultStore } from '../stores/vault.store';
-import { getDepth, isDescendantOf, calculateSubtreeDepth } from '@cipherbox/sdk-core';
 import type { FolderNode } from '../stores/folder.store';
 import { getSdkClient } from '../lib/sdk-provider';
-import { BinNotLoadedError } from '@cipherbox/sdk';
+import { BinNotLoadedError, getDepth, isDescendantOf, calculateSubtreeDepth } from '@cipherbox/sdk';
 import { useVaultSettingsStore } from '../stores/vault-settings.store';
 import { MAX_FOLDER_DEPTH, getRootFolderState } from './folder-helpers';
 import type { FolderOperationState } from './folder-helpers';
