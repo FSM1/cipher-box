@@ -1,0 +1,132 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "9b761b056b7e",
+  "session_id": "60afe4f5-90e8-4017-b046-ab86ca19c540",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-06T01:01:39.40636Z",
+  "branch": "feat/sdk-owned-read-chain-and-resolved-folder-listings",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "4c3bc475a96e",
+  "token_usage": {
+    "input_tokens": 19687,
+    "cache_creation_tokens": 650680,
+    "cache_read_tokens": 10892055,
+    "output_tokens": 129113,
+    "api_call_count": 54
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-plan-phase-2026-07-05T22:58:51.387205Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "11b8c0a80fb6",
+      "timestamp": "2026-07-05T22:58:51.387205Z",
+      "native": {
+        "command": "/gsd-plan-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01LstRAXFpXPLKR7Dc1ovYvN",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "4c3bc475a96e",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 290,
+        "end": 291,
+        "entry_ids": [
+          "7c818dd5-33b0-40fe-9d44-09a605a0e033"
+        ],
+        "tool_use_id": "toolu_01LstRAXFpXPLKR7Dc1ovYvN"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01LstRAXFpXPLKR7Dc1ovYvN"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Run the GSD plan-phase workflow to produce executable PLAN.md files for roadmap phase 68.2 (SDK-owned read chain and resolved folder listings), then execute those plans wave-by-wave via the execute-phase workflow, while also spinning up an independent git worktree to parallelize planning/execution of phase 69.",
+    "outcome": "Phase 68.2 planning completed end-to-end (research, Nyquist VALIDATION.md, D-07 scope decision locked, pattern mapping, 4 requirements registered, 12 plans across 7 waves, plan-checker PASSED with 2 non-blocking warnings, coverage gates 13/13) and committed across 7 commits; execution began sequentially on the main tree with Waves 1 and 2 completed and independently verified (ROT-07 gate holds, 296-300 tests passing), Wave 3 in progress; a separate worktree for phase 69 was created off origin/main at cipher-box-phase69 ready for the user to kick off in a new session.",
+    "learnings": {
+      "repo": [
+        "plan:pre hook activation for the UI capability is gated by a `when` condition classifying the phase type (net-new UI surface vs architecture/refactor); a lower-level ui-plan-gate check can report block:true even when the higher-level hook never activates, so §5.6 must check activeHooks, not just the raw check result.",
+        "The `gsd-tools query commit` helper has a known false-negative: it can report `commit_failed` even though the commit landed cleanly in git log — always verify via `git log` rather than trusting the reported status.",
+        "New phase_req_ids marked 'new' in ROADMAP must be registered in REQUIREMENTS.md (requirement section, traceability rows, coverage summary) before the planner runs so coverage gates have a stable target.",
+        "Worktree parallel execution depends on `worktree.baseRef` config: if it defaults to 'fresh' (off origin/main) instead of 'head', executor worktrees would fork without the branch's PLAN.md commits — this must be explicitly verified before dispatching, not assumed.",
+        "In this pnpm monorepo, worktree-based parallel executors each need their own `pnpm install` (expensive); for phases where most waves are single-plan, running sequentially on the main tree reuses installed node_modules and is more robust than orchestrating worktree create/merge/cleanup per wave.",
+        "The advisory gap-analysis check's parser chokes on control characters in the `rendered` field output; running the underlying check directly is a viable workaround.",
+        "The schema-gate planner contribution is orchestrator-evaluated (not always injected) — skip injecting it when the phase touches no ORM/DB schema files.",
+        "Intel API-surface extraction (§7.9) can return 0 symbols for this monorepo; when empty it's HINT-only and should be omitted from the planner prompt rather than passed as noise."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/folder-listing.ts",
+          "line": 75,
+          "end_line": 81,
+          "finding": "resolveChildren docstring documents that per-child skip-on-resolve/unseal-failure is security-sound because the parent folder is already gated via Plan-01's ensureFolderLoaded/dfsFindFolder before this runs — an unverifiable sibling is simply omitted (availability tradeoff), never rendered with stale/attacker content, and navigating into any child re-triggers the ROT-07 gate."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 781,
+          "finding": "RotationHighWater.enforceResolved wired into root folder resolve path (resolvePublishedNode) as part of Plan 68.2-01's read-path anti-rollback gate."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 913,
+          "finding": "enforceResolved also wired into dfsFindFolder's child loop; pre-existing write-path gate remains at line 1156 for comparison."
+        }
+      ],
+      "workflow": [
+        "Independently spot-check and re-run acceptance/security tests after each executor completes rather than trusting the subagent's self-reported PLAN COMPLETE summary, especially for security-critical or deviation-flagged changes.",
+        "When a user wants parallel independent work in a separate worktree while the current session keeps driving other work, use plain `git worktree add` rather than an EnterWorktree-style tool that would switch the current session's context.",
+        "Reserve AskUserQuestion for genuine decision gates (research-first vs skip-research, ambiguous scope boundaries like D-07, auto-advance vs manual review) rather than asking for routine steps.",
+        "For monorepos where most waves in a phase are single-plan, sequential execution on the main tree can be both simpler and more correct than parallel worktree execution."
+      ]
+    },
+    "friction": [
+      "git fetch failed from the sandboxed session due to no network access to GitHub, forcing reliance on the last-known local origin/main ref (validated as current by cross-referencing against the 68.2 branch's fork point).",
+      "Recurring gsd commit-helper false-negative ('commit_failed' reported despite successful commits) required manual git log verification after multiple commits during the session.",
+      "The gap-analysis gate's JSON parser choked on control characters in the `rendered` field, requiring a manual workaround to run the check directly.",
+      "Had to carefully inspect raw plan:pre hook JSON to resolve an apparent contradiction between the UI plan-gate check reporting block:true and it not actually being an active gate for this phase."
+    ],
+    "open_items": [
+      "D-03's poll-invalidation leg lacks dedicated automated test coverage (only call-site grep in Plan 09); logged as a todo (.planning/todos/pending/2026-07-06-d03-poll-invalidation-lacks-automated-coverage.md) for a future gap-closure pass.",
+      "Phase 69 (FUSE/WinFsp Rust work) worktree is created and ready at cipher-box-phase69 but /gsd-discuss-phase 69 → /gsd-plan-phase 69 → /gsd-execute-phase 69 still need to be run by the user in a separate session.",
+      "Offered but not yet performed: copying phase 68.2's CONTEXT.md/RESEARCH.md into the phase-69 worktree as reference material for its design-mirroring dependency on 68.2's SDK-owned read-chain approach.",
+      "Phase 68.2 execution Waves 4-7 (web rewire + store collapse, off-path pockets, service deletion + D-07 grep gate, SealedChildRef mirror revert + full web-e2e gate) remain to be executed and verified."
+    ]
+  }
+}
