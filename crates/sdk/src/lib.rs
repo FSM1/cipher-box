@@ -4,7 +4,9 @@
 //! key material management, and device registry operations.
 //! Mirrors @cipherbox/sdk TypeScript package.
 
+pub mod adapter;
 pub mod client;
+pub mod emit;
 pub mod error;
 pub mod floor_store;
 pub mod listing;
@@ -14,7 +16,12 @@ pub mod rotation;
 pub mod state;
 pub mod sync;
 
+pub use adapter::{new_journal_high_water, ApiNodeFetcher};
 pub use client::CipherBoxSdkClient;
+pub use emit::{
+    build_child_refs, build_file_emission, build_folder_emission, create_file_node,
+    create_folder_node, FileEmission, FolderEmission, TeeEnrollment,
+};
 pub use error::SdkError;
 pub use floor_store::JsonSidecarFloorStore;
 pub use listing::{
