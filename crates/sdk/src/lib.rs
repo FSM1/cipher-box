@@ -25,8 +25,9 @@ pub use emit::{
 pub use error::SdkError;
 pub use floor_store::JsonSidecarFloorStore;
 pub use listing::{
-    list_folder, list_folder_owned, list_shared_folder, FetchedRecord, FolderUpdatedCallback,
-    FolderUpdatedEvent, ListingError, NodeFetcher, ResolvedChild, ResolvedOwnedChild,
+    fetch_node_gated, list_folder, list_folder_owned, list_shared_folder, FetchedRecord,
+    FolderUpdatedCallback, FolderUpdatedEvent, ListingError, NodeFetcher, ResolvedChild,
+    ResolvedOwnedChild,
 };
 pub use queue::{
     JournalEntry, JournalEntryStatus, JournalOp, WriteQueue, JOURNAL_GC_MAX_AGE_DAYS,

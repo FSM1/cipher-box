@@ -13,12 +13,7 @@ use crate::CipherBoxFS;
 /// The caller supplies a closure that receives `(parent_ipns_name, parent_path)`
 /// and returns the fully-populated `BinEntry`.  The closure is only called when
 /// the parent IPNS name is non-empty (i.e. the publish is not skipped).
-fn publish_bin_entry_on_delete<F>(
-    fs: &mut CipherBoxFS,
-    parent: u64,
-    op: &str,
-    make_entry: F,
-)
+fn publish_bin_entry_on_delete<F>(fs: &mut CipherBoxFS, parent: u64, op: &str, make_entry: F)
 where
     F: FnOnce(String, String) -> cipherbox_core::bin::BinEntry,
 {
@@ -26,7 +21,7 @@ where
         .inodes
         .get(parent)
         .map(|p| match &p.kind {
-            InodeKind::Root { ipns_name, .. } => ipns_name.clone().unwrap_or_default(),
+            InodeKind::Root { ipns_name, .. } => ipns_name.clone(),
             InodeKind::Folder { ipns_name, .. } => ipns_name.clone(),
             _ => String::new(),
         })
@@ -81,15 +76,15 @@ pub fn handle_unlink(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Rep
     // pattern of carrying the revoke name out of the same match.
     let (file_meta_ipns_name, bin_entry_data) = match fs.inodes.get(child_ino) {
         Some(inode) => match &inode.kind {
+            // node/v3: the file carries a plain `ipns_name` + raw signing seed.
             InodeKind::File {
-                file_meta_ipns_name,
-                file_ipns_key_encrypted_hex,
+                ipns_name,
+                ipns_private_key,
                 size,
                 cid,
-                versions,
                 ..
             } => {
-                let revoke_ipns_name = file_meta_ipns_name.clone().unwrap_or_default();
+                let revoke_ipns_name = ipns_name.clone();
                 let now_ms = SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
@@ -101,32 +96,39 @@ pub fn handle_unlink(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Rep
                     .unwrap_or_default()
                     .as_millis() as u64;
 
-                let meta_ipns = match file_meta_ipns_name {
-                    Some(name) if !name.is_empty() => Some(name.clone()),
-                    _ => {
-                        // file_meta_ipns_name is optional for files loaded from
-                        // remote metadata before IPNS resolve. Since bin publishing
-                        // is best-effort, skip creating a bin entry when it's missing
-                        // instead of failing the unlink.
-                        log::warn!(
-                            "unlink: missing file_meta_ipns_name for ino {}, skipping bin entry",
-                            child_ino
-                        );
-                        None
-                    }
+                let meta_ipns = if ipns_name.is_empty() {
+                    // A never-published file (no IPNS identity yet). Bin publishing
+                    // is best-effort — skip the bin entry rather than fail the unlink.
+                    log::warn!(
+                        "unlink: missing ipns_name for ino {}, skipping bin entry",
+                        child_ino
+                    );
+                    None
+                } else {
+                    Some(ipns_name.clone())
                 };
 
                 let bin_data = if let Some(meta_ipns) = meta_ipns {
+                    // Restore-blob keeper: user-ECIES-wrap the file's signing seed so
+                    // a later restore can re-publish the file IPNS record. This is a
+                    // user-key wrap (like vault export), NOT a node-to-node key hop.
+                    let ipns_private_key_encrypted =
+                        cipherbox_crypto::wrap_key(ipns_private_key.as_slice(), &fs.public_key)
+                            .ok()
+                            .map(|w| hex::encode(&w));
                     let file_pointer = cipherbox_core::folder::FilePointer {
                         id: cipherbox_crypto::utils::generate_uuid_v4(),
                         name: inode.name.clone(),
                         file_meta_ipns_name: meta_ipns,
-                        ipns_private_key_encrypted: file_ipns_key_encrypted_hex.clone(),
+                        ipns_private_key_encrypted,
                         created_at: if created_ms > 0 { created_ms } else { now_ms },
                         modified_at: now_ms,
                     };
 
-                    let ver_cids = crate::helpers::versions_to_bin_entries(versions);
+                    // Version history now lives in the sealed NodeContent, not the
+                    // inode (Slice 1) — version CIDs are not captured in the bin
+                    // entry here (file-versioning restore E2E flag).
+                    let ver_cids: Option<Vec<cipherbox_core::bin::VersionCidEntry>> = None;
                     Some((
                         inode.name.clone(),
                         *size,
@@ -182,9 +184,7 @@ pub fn handle_unlink(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Rep
         // longer exists. Mirrors the SDK `addToBin` capture.
         let original_folder_key_encrypted = fs
             .get_folder_key(parent)
-            .and_then(|fk| {
-                cipherbox_crypto::ecies::wrap_key(&fk, fs.public_key.as_slice()).ok()
-            })
+            .and_then(|fk| cipherbox_crypto::ecies::wrap_key(&fk, fs.public_key.as_slice()).ok())
             .map(hex::encode);
 
         let deleted_at = now
@@ -243,9 +243,11 @@ pub fn handle_rmdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Repl
     let bin_entry_data = match fs.inodes.get(child_ino) {
         Some(inode) => {
             match &inode.kind {
+                // node/v3: the folder carries symmetric read/write keys + a raw
+                // signing seed (non-Option).
                 InodeKind::Folder {
                     ipns_name,
-                    encrypted_folder_key,
+                    read_key,
                     ipns_private_key,
                     ..
                 } => {
@@ -268,34 +270,40 @@ pub fn handle_rmdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Repl
                         .unwrap_or_default()
                         .as_millis() as u64;
 
-                    // Build the ECIES-wrapped IPNS private key for the FolderEntry
-                    let ipns_key_encrypted = match ipns_private_key {
-                        Some(key) => match cipherbox_crypto::wrap_key(key, &fs.public_key) {
+                    // Restore-blob keeper: user-ECIES-wrap the folder's signing seed
+                    // so a later restore can re-publish the folder IPNS record. A
+                    // user-key wrap (like vault export), NOT a node-to-node key hop.
+                    let ipns_key_encrypted = match cipherbox_crypto::wrap_key(
+                        ipns_private_key.as_slice(),
+                        &fs.public_key,
+                    ) {
+                        Ok(wrapped) => hex::encode(&wrapped),
+                        Err(e) => {
+                            log::error!("rmdir: failed to wrap IPNS key for bin entry: {}", e);
+                            reply.error(libc::EIO);
+                            return;
+                        }
+                    };
+                    // Restore-blob keeper: user-ECIES-wrap the folder's symmetric
+                    // readKey so restore can re-derive the folder's node key.
+                    let folder_key_encrypted =
+                        match cipherbox_crypto::wrap_key(read_key.as_slice(), &fs.public_key) {
                             Ok(wrapped) => hex::encode(&wrapped),
                             Err(e) => {
                                 log::error!(
-                                    "rmdir: failed to wrap IPNS key for bin entry: {}",
+                                    "rmdir: failed to wrap folder readKey for bin entry: {}",
                                     e
                                 );
                                 reply.error(libc::EIO);
                                 return;
                             }
-                        },
-                        None => {
-                            log::error!(
-                                "rmdir: missing folder IPNS private key for ino {}",
-                                child_ino
-                            );
-                            reply.error(libc::EIO);
-                            return;
-                        }
-                    };
+                        };
 
                     let folder_entry = cipherbox_core::folder::FolderEntry {
                         id: cipherbox_crypto::utils::generate_uuid_v4(),
                         name: inode.name.clone(),
                         ipns_name: ipns_name.clone(),
-                        folder_key_encrypted: encrypted_folder_key.clone(),
+                        folder_key_encrypted,
                         ipns_private_key_encrypted: ipns_key_encrypted,
                         created_at: if created_ms > 0 { created_ms } else { now_ms },
                         modified_at: now_ms,
@@ -406,17 +414,17 @@ mod tests {
             ino,
             parent_ino: ROOT_INO,
             name: name.to_string(),
+            // node/v3: shareable identity is the plain `ipns_name`; descriptors
+            // (cid/iv) filled, keys moved in.
             kind: InodeKind::File {
+                ipns_name: "k51file-shared".to_string(),
                 cid: "bafyContent".to_string(),
-                encrypted_file_key: "deadbeef".to_string(),
-                iv: "aabbccdd".to_string(),
                 size: 10,
                 encryption_mode: "GCM".to_string(),
-                file_meta_ipns_name: Some("k51file-shared".to_string()),
-                file_meta_resolved: true,
-                file_ipns_private_key: Some(Zeroizing::new(vec![3u8; 32])),
-                file_ipns_key_encrypted_hex: Some("abcd".to_string()),
-                versions: None,
+                iv: "aabbccdd".to_string(),
+                read_key: Zeroizing::new([2u8; 32]),
+                write_key: Zeroizing::new([4u8; 32]),
+                ipns_private_key: Zeroizing::new(vec![3u8; 32]),
             },
             attr: FileAttrs {
                 ino,
@@ -449,9 +457,9 @@ mod tests {
             name: name.to_string(),
             kind: InodeKind::Folder {
                 ipns_name: "k51folder-shared".to_string(),
-                encrypted_folder_key: "abcd".to_string(),
-                folder_key: Zeroizing::new(vec![1u8; 32]),
-                ipns_private_key: Some(Zeroizing::new(vec![5u8; 32])),
+                read_key: Zeroizing::new([1u8; 32]),
+                write_key: Zeroizing::new([6u8; 32]),
+                ipns_private_key: Zeroizing::new(vec![5u8; 32]),
                 children_loaded: true,
             },
             attr: FileAttrs {

@@ -3,106 +3,121 @@
 //! This module provides `build_upload_journal_entry` and
 //! `build_mkdir_journal_entry` as inherent methods on [`CipherBoxFS`], so both
 //! the fuser (macOS/Linux) and WinFsp (Windows) write paths share a single
-//! implementation of the encrypt → ECIES-wrap → resolve-parent-IPNS →
-//! build-`JournalEntry` steps.
+//! implementation of the encrypt → seal-node → build-`JournalEntry` steps.
 //!
 //! Each platform keeps its own reply/return machinery, in-memory inode
 //! mutations, and background spawn — only the entry-build steps live here.
 //!
+//! ## node/v3 write emission (69-09 Slice 3)
+//!
+//! The write path emits a fresh sealed `PublishedNode` for the child
+//! (`emit.rs`/`seal_published_node`) and the D-07 dual read/write splices for
+//! the parent (`cipherbox_sdk::build_child_refs`): a read-plane
+//! [`SealedChildRef`] keyed by ipnsName and a write-plane [`WriteChildRef`]
+//! keyed by `child_id = uuid_from_ino(child_ino)`. The child node is sealed
+//! with the SAME `uuid_from_ino` id, so a reader recovering `child_id` from the
+//! resolved node round-trips the AAD. Node-to-node keys live ONLY inside the
+//! symmetric seals — the former per-key ECIES-under-user-key hops are gone.
+//!
 //! ## Security invariants
 //!
-//! - The built `JournalEntry` references `ciphertext` only — plaintext is
-//!   never written to the journal or to disk.  `UploadJournalResult` carries
-//!   the plaintext transiently in memory (for the `pending_content`
-//!   read-after-write cache); it is never persisted.
-//! - Each key is ECIES-wrapped exactly once.  The caller must not re-wrap.
-//! - `is_first_publish` is threaded through to the caller so the per-file
-//!   IPNS sequence number is computed correctly (§Pitfall 4 in 45-RESEARCH.md).
+//! - The built `JournalEntry` references `ciphertext` only via a sidecar —
+//!   plaintext is never written to the journal or to disk. `UploadJournalResult`
+//!   carries the plaintext transiently in memory (read-after-write cache).
+//! - Keys are minted/derived once; caller-owned buffers are never zeroed here
+//!   (D-09 terminal-owner discipline — the freshly minted keys are moved out).
+//! - The ONLY retained ECIES is the TEE-pubkey wrap of the child ipnsPrivateKey
+//!   (CLAUDE.md rule #7) — never a node-to-node key hop.
 
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 use crate::inode::{InodeKind, ROOT_INO};
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+use base64::Engine as _;
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+use cipherbox_core::node::{
+    encode_published_node, seal::seal_published_node, Node, NodeContent, NodeKind, NodeWriteBody,
+};
 
 /// Result returned by [`CipherBoxFS::build_upload_journal_entry`].
 ///
-/// Carries the built [`cipherbox_sdk::JournalEntry`] and every field the
-/// caller's inode-mutation and spawn block needs.  The `ciphertext` field
-/// holds the AES-256-GCM encrypted file content; the `plaintext` field is
-/// transient in-memory data for the read-after-write cache and is never
-/// written to the journal or disk.
+/// Carries the built [`cipherbox_sdk::JournalEntry`] plus the node/v3 file
+/// identity + content the caller's live publish (`publish_file_metadata`) needs
+/// to seal + publish the file node once the content CID is known. The
+/// `ciphertext`/`plaintext` fields are transient in-memory data (read-after-write
+/// cache); they are never written to the journal or disk.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub struct UploadJournalResult {
     /// The fully-built journal entry ready for `journal.put`.
     pub entry: cipherbox_sdk::JournalEntry,
-    /// AES-256-GCM encrypted file content.
+    /// AES-256-GCM encrypted file content (transient — for the live upload).
     pub ciphertext: Vec<u8>,
-    /// Decrypted plaintext — used to populate `pending_content` in the
-    /// in-memory cache so reads after write return the correct bytes without a
-    /// network round-trip.
+    /// Decrypted plaintext — used to populate `pending_content` so reads after
+    /// write return the correct bytes without a network round-trip.
     pub plaintext: Vec<u8>,
-    /// The `FileMetadata` struct ready for the per-file IPNS publish.
-    pub file_meta: cipherbox_core::folder::FileMetadata,
-    /// Raw Ed25519 private key for the per-file IPNS record (if present).
-    /// Zeroized on drop.
-    pub file_ipns_private_key: Option<zeroize::Zeroizing<Vec<u8>>>,
-    /// IPNS name for the per-file metadata record (if present).
-    pub file_meta_ipns_name: Option<String>,
-    /// Folder key used to encrypt the per-file IPNS record (if present).
-    /// Zeroized on drop (S3/D-05).
-    pub folder_key_for_file_meta: Option<zeroize::Zeroizing<Vec<u8>>>,
-    /// ECIES-hex-encoded file key, as stored in the inode and journal.
-    pub encrypted_file_key_hex: String,
-    /// Hex-encoded AES-GCM IV.
+    /// The file node's own symmetric readKey (node/v3). Terminal-owned here.
+    pub file_read_key: zeroize::Zeroizing<[u8; 32]>,
+    /// The file node's own symmetric writeKey (node/v3).
+    pub file_write_key: zeroize::Zeroizing<[u8; 32]>,
+    /// The file node's Ed25519 signing seed (per-file IPNS record).
+    pub file_ipns_private_key: zeroize::Zeroizing<Vec<u8>>,
+    /// The file node's per-file IPNS name (stable across overwrites, D-02).
+    pub file_ipns_name: String,
+    /// Raw 32-byte AES content key — sealed inside `NodeContent.file_key`
+    /// (NOT ECIES-wrapped; node/v3 stores it raw inside the sealed read-body).
+    pub file_key: zeroize::Zeroizing<Vec<u8>>,
+    /// Hex-encoded AES-GCM IV (NodeContent.file_iv is HEX — content_ops decodes
+    /// it via `hex::decode`).
     pub iv_hex: String,
-    /// Plaintext size in bytes (after encryption).
+    /// MIME type derived from the file name.
+    pub mime_type: String,
+    /// Encryption mode ("GCM").
+    pub encryption_mode: String,
+    /// TEE-ECIES-wrapped file ipnsPrivateKey (rule #7), or `None` if no TEE key.
+    pub encrypted_ipns_for_tee: Option<String>,
+    /// Current TEE key epoch (forwarded verbatim from `CipherBoxFS`).
+    pub tee_key_epoch: Option<u32>,
+    /// Plaintext size in bytes.
     pub file_size: u64,
-    /// Versioning history for the new file metadata entry.
-    pub versions_for_meta: Option<Vec<cipherbox_core::folder::VersionEntry>>,
     /// Inode number of the parent folder.
     pub parent_ino: u64,
     /// CID of the previous version of this file (for unpin after upload).
     pub old_file_cid: Option<String>,
     /// CIDs of versions pruned by the versioning policy (to be unpinned).
     pub pruned_cids: Vec<String>,
-    /// Write generation at the time the helper was called (before any inode
-    /// mutation by the caller).
+    /// Write generation at the time the helper was called.
     pub write_gen: u64,
     /// Whether this is the first publish for the per-file IPNS record.
-    /// Passed to `publish_file_metadata` so the sequence number starts at 0.
     pub is_first_publish: bool,
 }
 
 /// Result returned by [`CipherBoxFS::build_mkdir_journal_entry`].
 ///
-/// Carries the built [`cipherbox_sdk::JournalEntry`] and every field the
-/// caller's spawn block needs to upload the initial folder metadata and
-/// publish the new child + parent IPNS records.
+/// Carries the built [`cipherbox_sdk::JournalEntry`] plus the freshly sealed
+/// child `PublishedNode` bytes and the re-sealed parent `PublishedNode` bytes
+/// (with the new child spliced into BOTH planes), ready for the caller's
+/// background upload + IPNS publish.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub struct MkdirJournalResult {
     /// The fully-built journal entry ready for `journal.put`.
     pub entry: cipherbox_sdk::JournalEntry,
-    /// Encrypted initial folder metadata bytes ready for IPFS upload.
-    pub json_bytes: Vec<u8>,
-    /// Raw Ed25519 private key for the new child folder IPNS record.
-    /// Zeroized on drop.
-    pub ipns_private_key: zeroize::Zeroizing<Vec<u8>>,
-    /// TEE-ECIES-wrapped child IPNS private key (for key rotation / TEE
-    /// republishing).  `None` if no TEE public key is configured.
+    /// Encoded sealed child folder `PublishedNode` bytes ready for IPFS upload.
+    pub child_published_node: Vec<u8>,
+    /// Raw Ed25519 signing seed for the new child folder IPNS record.
+    pub child_ipns_private_key: zeroize::Zeroizing<Vec<u8>>,
+    /// TEE-ECIES-wrapped child IPNS private key (rule #7). `None` if no TEE key.
     pub encrypted_ipns_for_tee: Option<String>,
     /// Current TEE key epoch (forwarded verbatim from `CipherBoxFS`).
     pub tee_key_epoch: Option<u32>,
     /// IPNS name for the newly created child folder.
-    pub ipns_name: String,
-    /// Parent folder metadata snapshot (with the new child already appended)
-    /// ready for the parent IPNS publish.
-    pub parent_metadata: cipherbox_core::folder::FolderMetadata,
-    /// Raw parent folder encryption key.
-    pub parent_folder_key: Vec<u8>,
-    /// Raw Ed25519 private key for the parent folder IPNS record.
-    pub parent_ipns_key: Vec<u8>,
+    pub child_ipns_name: String,
+    /// Re-sealed parent `PublishedNode` bytes (child spliced) for the parent
+    /// IPNS publish.
+    pub parent_published_node: Vec<u8>,
+    /// Raw Ed25519 signing seed for the parent folder IPNS record.
+    pub parent_ipns_private_key: Vec<u8>,
     /// IPNS name of the parent folder.
     pub parent_ipns_name: String,
-    /// CID of the parent folder's previous metadata blob (for unpin on
-    /// successful publish).
+    /// CID of the parent folder's previous metadata blob (for unpin on publish).
     pub parent_old_cid: Option<String>,
     /// Inode number assigned to the new child folder.
     pub ino: u64,
@@ -110,32 +125,70 @@ pub struct MkdirJournalResult {
 
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 impl crate::CipherBoxFS {
+    /// Extract a parent folder/root node's symmetric keys + identity from the
+    /// inode table (node/v3). Returns `(read_key, write_key, ipns_private_key,
+    /// ipns_name)`.
+    fn parent_node_keys(
+        &self,
+        parent_ino: u64,
+    ) -> Result<([u8; 32], [u8; 32], Vec<u8>, String), String> {
+        let inode = self
+            .inodes
+            .get(parent_ino)
+            .ok_or_else(|| format!("Parent inode {} not found", parent_ino))?;
+        match &inode.kind {
+            InodeKind::Root {
+                read_key,
+                write_key,
+                ipns_private_key,
+                ipns_name,
+            } => Ok((
+                **read_key,
+                **write_key,
+                ipns_private_key.to_vec(),
+                if ipns_name.is_empty() {
+                    self.root_ipns_name.clone()
+                } else {
+                    ipns_name.clone()
+                },
+            )),
+            InodeKind::Folder {
+                read_key,
+                write_key,
+                ipns_private_key,
+                ipns_name,
+                ..
+            } => Ok((
+                **read_key,
+                **write_key,
+                ipns_private_key.to_vec(),
+                ipns_name.clone(),
+            )),
+            _ => Err(format!("Parent inode {} is not a folder", parent_ino)),
+        }
+    }
+
     /// Build a [`JournalEntry`] for an upload (file write) without writing the
     /// entry to disk, mutating inodes, or spawning.
     ///
-    /// Performs:
-    /// 1. Read plaintext from the temp file handle.
-    /// 2. AES-256-GCM encrypt + ECIES-wrap the file key.
-    /// 3. Extract previous file metadata from the inode table.
-    /// 4. Apply versioning policy.
-    /// 5. Resolve `parent_folder_ipns_name` and ECIES-wrap the parent IPNS key.
-    /// 6. ECIES-wrap the per-file IPNS key (if present).
-    /// 7. Build and return a [`JournalOp::UploadFile`] entry.
+    /// node/v3: seals a fresh file `PublishedNode` (content CID filled at
+    /// publish time by the live path / replay) + the D-07 dual parent splices,
+    /// and constructs the reshaped [`cipherbox_sdk::JournalOp::UploadFile`].
     ///
     /// # Security
     ///
-    /// Keys are wrapped exactly once.  The returned `UploadJournalResult`
-    /// carries ciphertext only; the file key is cleared before return.
+    /// The raw AES content key is moved into `NodeContent.file_key` (sealed
+    /// inside the node's read-body) and returned to the caller for the live
+    /// re-seal — it is never ECIES-wrapped and never journaled in the clear.
     pub fn build_upload_journal_entry(
         &self,
         ino: u64,
         handle: &crate::file_handle::OpenFileHandle,
         is_new_file: bool,
     ) -> Result<UploadJournalResult, String> {
-        // D-01 (WR-06): reject oversized files BEFORE reading the temp file into memory so the
-        // release path replies EIO instead of allocating a multi-GB buffer and stalling the
-        // shared FS thread. The size is read from the temp file's on-disk metadata — checking
-        // after `read_all()` would defeat the guard (the allocation already happened).
+        // D-01 (WR-06): reject oversized files BEFORE reading the temp file into
+        // memory so the release path replies EIO instead of allocating a
+        // multi-GB buffer and stalling the shared FS thread.
         let size_on_disk = handle.get_size()?;
         if size_on_disk > cipherbox_sdk::MAX_JOURNAL_PAYLOAD_BYTES {
             return Err(format!(
@@ -151,9 +204,7 @@ impl crate::CipherBoxFS {
         let mut file_key = cipherbox_crypto::utils::generate_file_key();
         let iv = cipherbox_crypto::utils::generate_iv();
 
-        // Zeroize the raw file key on every fallible path — `generate_file_key`
-        // returns a plain `[u8; 32]` with no zeroize-on-drop, so an early `?`
-        // return here would otherwise leave the key in memory.
+        // Zeroize the raw file key on every fallible path.
         let ciphertext = match cipherbox_crypto::aes::encrypt_aes_gcm(&plaintext, &file_key, &iv) {
             Ok(ct) => ct,
             Err(e) => {
@@ -162,78 +213,60 @@ impl crate::CipherBoxFS {
             }
         };
 
-        let wrapped_key = match cipherbox_crypto::ecies::wrap_key(&file_key, &self.public_key) {
-            Ok(wk) => wk,
-            Err(e) => {
-                cipherbox_crypto::utils::clear_bytes(&mut file_key);
-                return Err(format!("Key wrapping failed: {}", e));
-            }
-        };
+        let iv_hex = hex::encode(iv);
 
-        // Zeroize raw file key on the success path.
-        cipherbox_crypto::utils::clear_bytes(&mut file_key);
-
+        // node/v3: recover the file node's own identity (read/write keys, signing
+        // seed, ipns name) from the inode. handle_create minted these for a fresh
+        // file; populate_folder filled them for an existing (overwrite) file.
         let (
-            old_file_cid,
-            old_encrypted_key,
-            old_iv,
-            old_size,
-            old_mode,
-            existing_versions,
+            file_read_key,
+            file_write_key,
             file_ipns_private_key,
-            file_meta_ipns_name,
+            file_ipns_name,
+            old_file_cid,
+            existing_mode,
         ) = self
             .inodes
             .get(ino)
-            .map(|inode| match &inode.kind {
+            .and_then(|inode| match &inode.kind {
                 InodeKind::File {
+                    ipns_name,
                     cid,
-                    encrypted_file_key,
-                    iv,
-                    size,
                     encryption_mode,
-                    versions,
-                    file_ipns_private_key,
-                    file_meta_ipns_name,
+                    read_key,
+                    write_key,
+                    ipns_private_key,
                     ..
-                } => (
+                } => Some((
+                    read_key.clone(),
+                    write_key.clone(),
+                    ipns_private_key.clone(),
+                    ipns_name.clone(),
                     if cid.is_empty() {
                         None
                     } else {
                         Some(cid.clone())
                     },
-                    encrypted_file_key.clone(),
-                    iv.clone(),
-                    *size,
                     encryption_mode.clone(),
-                    versions.clone(),
-                    file_ipns_private_key.clone(),
-                    file_meta_ipns_name.clone(),
-                ),
-                _ => (
-                    None,
-                    String::new(),
-                    String::new(),
-                    0,
-                    "GCM".to_string(),
-                    None,
-                    None,
-                    None,
-                ),
+                )),
+                _ => None,
             })
-            .unwrap_or((
-                None,
-                String::new(),
-                String::new(),
-                0,
-                "GCM".to_string(),
-                None,
-                None,
-                None,
-            ));
+            .ok_or_else(|| {
+                cipherbox_crypto::utils::clear_bytes(&mut file_key);
+                format!("Upload target inode {} is not a node/v3 file", ino)
+            })?;
 
-        let encrypted_file_key_hex = hex::encode(&wrapped_key);
-        let iv_hex = hex::encode(&iv);
+        let encryption_mode = if existing_mode.is_empty() {
+            "GCM".to_string()
+        } else {
+            existing_mode
+        };
+
+        let (write_gen, parent_ino) = self
+            .inodes
+            .get(ino)
+            .map(|i| (i.write_generation, i.parent_ino))
+            .unwrap_or((0, ROOT_INO));
 
         let file_name = self
             .inodes
@@ -244,60 +277,51 @@ impl crate::CipherBoxFS {
 
         let now_ms = current_unix_ms();
 
-        let (new_versions, pruned_cids) = crate::helpers::apply_versioning(
-            existing_versions,
-            &old_file_cid,
-            &old_encrypted_key,
-            &old_iv,
-            old_size,
-            &old_mode,
-            now_ms,
-            self.max_versions_per_file,
-            self.version_cooldown_ms,
-            ino,
-        );
+        // Build the file NodeContent. The content CID is filled at publish time
+        // (live path / replay re-upload) — the journal-time seal uses an empty
+        // CID placeholder. `file_iv` is HEX (content_ops decodes via hex::decode);
+        // `file_key` is the RAW 32-byte AES key (sealed inside the read-body).
+        // Versioning history is not reconstructed here (InodeKind dropped
+        // `versions` in Slice 1 — see the file-versioning E2E flag).
+        let node_content = NodeContent {
+            cid: String::new(),
+            file_iv: iv_hex.clone(),
+            size: file_size,
+            mime_type: mime_type.clone(),
+            encryption_mode: encryption_mode.clone(),
+            file_key: file_key.to_vec(),
+            versions: Vec::new(),
+        };
 
-        let versions_for_meta = new_versions.as_ref().filter(|v| !v.is_empty()).cloned();
+        // Raw file key is now owned by NodeContent + the returned result; clear
+        // the stack copy.
+        cipherbox_crypto::utils::clear_bytes(&mut file_key);
 
-        let (write_gen, parent_ino) = self
-            .inodes
-            .get(ino)
-            .map(|i| (i.write_generation, i.parent_ino))
-            .unwrap_or((0, ROOT_INO));
+        let child_id = crate::fs::uuid_from_ino(ino);
+        let file_node = Node::File {
+            id: child_id.clone(),
+            generation: 0,
+            created_at: now_ms,
+            modified_at: now_ms,
+            content: node_content.clone(),
+        };
+        let write_body = NodeWriteBody {
+            ipns_private_key: file_ipns_private_key.to_vec(),
+            write_children: Vec::new(),
+        };
+        let published = seal_published_node(
+            &file_node,
+            &file_read_key,
+            &file_write_key,
+            Some(&write_body),
+        )
+        .map_err(|e| format!("File node seal failed: {}", e))?;
+        let child_published_node = encode_published_node(&published)
+            .map_err(|e| format!("File node encode failed: {}", e))?;
+        let child_published_node_b64 =
+            base64::engine::general_purpose::STANDARD.encode(&child_published_node);
 
-        let folder_key_for_file_meta = self.get_folder_key(parent_ino);
-
-        // Resolve parent IPNS name for stable journal entry (D-02).
-        let parent_folder_ipns_name = self
-            .inodes
-            .get(parent_ino)
-            .and_then(|inode| match &inode.kind {
-                InodeKind::Root { ipns_name, .. } => ipns_name.clone(),
-                InodeKind::Folder { ipns_name, .. } => Some(ipns_name.clone()),
-                _ => None,
-            })
-            .unwrap_or_else(|| self.root_ipns_name.clone());
-
-        // CR-01: journal the user-ECIES-wrapped parent IPNS key so replay can
-        // sign and publish the parent IPNS record at crash-recovery time.
-        let parent_ipns_key_hex_for_journal = self
-            .inodes
-            .get(parent_ino)
-            .and_then(|inode| match &inode.kind {
-                InodeKind::Root {
-                    ipns_private_key, ..
-                } => ipns_private_key.as_deref(),
-                InodeKind::Folder {
-                    ipns_private_key, ..
-                } => ipns_private_key.as_deref(),
-                _ => None,
-            })
-            .map(|raw_key| wrap_key_to_hex(raw_key, &self.public_key, "parent IPNS key"))
-            .unwrap_or_default();
-
-        // D-01: ciphertext goes to a sidecar `<id>.bin`, not into the JSON. Compute the
-        // sidecar path + SHA-256 now so the entry references exactly what put_with_sidecar
-        // will write; the in-memory `ciphertext` is still returned for the live upload thread.
+        // D-01: ciphertext goes to a sidecar `<id>.bin`, not into the JSON.
         let entry_id = generate_entry_id();
         let sidecar_path = self.journal.sidecar_path_for(&entry_id);
         let sidecar_sha256 = {
@@ -307,31 +331,32 @@ impl crate::CipherBoxFS {
             hex::encode(hasher.finalize())
         };
 
-        // D-04 (IN-03): ECIES-encrypt the filename at rest — no plaintext name persists.
-        // Unlike key wrapping (where an empty-string fallback is acceptable), a failed
-        // filename encryption must fail the write so we never silently lose the name.
-        let filename_encrypted_hex = hex::encode(
-            cipherbox_crypto::ecies::wrap_key(file_name.as_bytes(), &self.public_key)
-                .map_err(|e| format!("filename encryption failed: {}", e))?,
-        );
+        // Parent read/write keys for the D-07 dual splice.
+        let (parent_read_key, parent_write_key, _parent_ipns_key, parent_folder_ipns_name) =
+            self.parent_node_keys(parent_ino)?;
 
-        // ECIES-wrap the per-file IPNS key exactly once (CR-01, no double-wrap).
-        // Only journalled when there's an IPNS name to publish.
-        let file_ipns_key_hex = if file_meta_ipns_name.is_none() {
-            None
-        } else {
-            file_ipns_private_key
-                .as_ref()
-                .map(|k| wrap_key_to_hex(k, &self.public_key, "file IPNS key"))
-                .or_else(|| {
-                    self.inodes.get(ino).and_then(|i| match &i.kind {
-                        InodeKind::File {
-                            file_ipns_key_encrypted_hex,
-                            ..
-                        } => file_ipns_key_encrypted_hex.clone(),
-                        _ => None,
-                    })
-                })
+        let (parent_child_ref, parent_write_child_ref) = cipherbox_sdk::build_child_refs(
+            &file_read_key,
+            &file_write_key,
+            &parent_read_key,
+            &parent_write_key,
+            &child_id,
+            &file_ipns_name,
+            &file_name,
+            NodeKind::File,
+            0,
+            0,
+        )
+        .map_err(|e| format!("build_child_refs (file) failed: {}", e))?;
+
+        // TEE-wrap the file ipnsPrivateKey for republishing (rule #7).
+        let (encrypted_ipns_for_tee, tee_key_epoch) = match &self.tee_public_key {
+            Some(tee_key) => {
+                let wrapped = cipherbox_crypto::wrap_key(&file_ipns_private_key, tee_key)
+                    .map_err(|e| format!("TEE key wrapping failed: {}", e))?;
+                (Some(hex::encode(&wrapped)), self.tee_key_epoch)
+            }
+            None => (None, None),
         };
 
         let entry = cipherbox_sdk::JournalEntry {
@@ -340,15 +365,12 @@ impl crate::CipherBoxFS {
             op: cipherbox_sdk::JournalOp::UploadFile {
                 sidecar_path,
                 sidecar_sha256,
-                // Compat-only field; new entries always use the sidecar, never inline ciphertext.
                 legacy_ciphertext_b64: String::new(),
-                wrapped_key_hex: encrypted_file_key_hex.clone(),
-                iv_hex: iv_hex.clone(),
-                file_meta_ipns_name: file_meta_ipns_name.clone(),
-                file_ipns_key_hex,
+                child_published_node: child_published_node_b64,
+                parent_child_ref,
+                parent_write_child_ref,
+                file_meta_ipns_name: Some(file_ipns_name.clone()),
                 parent_folder_ipns_name,
-                parent_ipns_key_hex: parent_ipns_key_hex_for_journal,
-                filename_encrypted_hex,
                 size: file_size,
                 created_at_ms: now_ms,
             },
@@ -356,34 +378,24 @@ impl crate::CipherBoxFS {
             status: cipherbox_sdk::JournalEntryStatus::Pending,
         };
 
-        let file_meta = cipherbox_core::folder::FileMetadata {
-            version: "v1".to_string(),
-            cid: String::new(),
-            file_key_encrypted: encrypted_file_key_hex.clone(),
-            file_iv: iv_hex.clone(),
-            size: file_size,
-            mime_type,
-            encryption_mode: "GCM".to_string(),
-            created_at: now_ms,
-            modified_at: now_ms,
-            versions: versions_for_meta.clone(),
-        };
-
         Ok(UploadJournalResult {
             entry,
             ciphertext,
             plaintext,
-            file_meta,
+            file_read_key,
+            file_write_key,
             file_ipns_private_key,
-            file_meta_ipns_name,
-            folder_key_for_file_meta,
-            encrypted_file_key_hex,
+            file_ipns_name,
+            file_key: zeroize::Zeroizing::new(node_content.file_key),
             iv_hex,
+            mime_type,
+            encryption_mode,
+            encrypted_ipns_for_tee,
+            tee_key_epoch,
             file_size,
-            versions_for_meta,
             parent_ino,
             old_file_cid,
-            pruned_cids,
+            pruned_cids: Vec::new(),
             write_gen,
             is_first_publish: is_new_file,
         })
@@ -392,85 +404,93 @@ impl crate::CipherBoxFS {
     /// Build a [`JournalEntry`] for a directory creation (mkdir) without
     /// writing the entry to disk, mutating inodes, or spawning.
     ///
-    /// The caller is expected to have already:
-    /// - Allocated `ino` via `fs.inodes.allocate_ino()`
-    /// - Inserted the new child inode
-    /// - Updated the parent inode's children + timestamps
+    /// node/v3: seals a fresh child folder `PublishedNode`, re-seals the parent
+    /// with the child spliced into BOTH planes (via `build_folder_metadata`),
+    /// and constructs the reshaped [`cipherbox_sdk::JournalOp::MkdirPublish`].
     ///
-    /// Performs:
-    /// 1. Generate the initial encrypted folder metadata bytes.
-    /// 2. Optionally ECIES-wrap the child IPNS key for the TEE.
-    /// 3. Build the parent folder metadata snapshot via `build_folder_metadata`.
-    /// 4. ECIES-wrap parent + child IPNS private keys (user key).
-    /// 5. Build and return a [`JournalOp::MkdirPublish`] entry.
-    ///
-    /// # Security
-    ///
-    /// Each key is wrapped exactly once.  The TEE-wrapped key is stored
-    /// separately from the user-ECIES-wrapped key in the result struct.
+    /// The caller is expected to have already allocated `child_ino`, inserted
+    /// the new child inode (with these read/write keys + ipns identity), and
+    /// updated the parent's children list, so `build_folder_metadata` sees it.
     pub fn build_mkdir_journal_entry(
         &self,
         parent_ino: u64,
         child_ino: u64,
         name: &str,
-        folder_key: &[u8],
-        ipns_name: &str,
-        ipns_private_key: zeroize::Zeroizing<Vec<u8>>,
-        encrypted_folder_key_hex: &str,
+        child_read_key: &[u8; 32],
+        child_write_key: &[u8; 32],
+        child_ipns_name: &str,
+        child_ipns_private_key: zeroize::Zeroizing<Vec<u8>>,
     ) -> Result<MkdirJournalResult, String> {
-        let metadata = cipherbox_core::folder::FolderMetadata {
-            version: "v2".to_string(),
-            children: vec![],
+        let child_id = crate::fs::uuid_from_ino(child_ino);
+        let now_ms = current_unix_ms();
+
+        // Seal the fresh (empty) child folder node under its OWN read/write keys.
+        let child_node = Node::Folder {
+            id: child_id.clone(),
+            generation: 0,
+            created_at: now_ms,
+            modified_at: now_ms,
+            children: Vec::new(),
+        };
+        let child_write_body = NodeWriteBody {
+            ipns_private_key: child_ipns_private_key.to_vec(),
+            write_children: Vec::new(),
+        };
+        let child_published = seal_published_node(
+            &child_node,
+            child_read_key,
+            child_write_key,
+            Some(&child_write_body),
+        )
+        .map_err(|e| format!("Child folder seal failed: {}", e))?;
+        let child_published_node = encode_published_node(&child_published)
+            .map_err(|e| format!("Child folder encode failed: {}", e))?;
+        let child_published_node_b64 =
+            base64::engine::general_purpose::STANDARD.encode(&child_published_node);
+
+        // TEE-wrap the child IPNS private key for republishing (rule #7).
+        let (encrypted_ipns_for_tee, tee_key_epoch) = match &self.tee_public_key {
+            Some(tee_key) => {
+                let wrapped = cipherbox_crypto::wrap_key(&child_ipns_private_key, tee_key)
+                    .map_err(|e| format!("TEE key wrapping failed: {}", e))?;
+                (Some(hex::encode(&wrapped)), self.tee_key_epoch)
+            }
+            None => (None, None),
         };
 
-        let json_bytes = crate::encrypt_metadata_to_json(&metadata, folder_key)?;
+        // Parent read/write keys for the D-07 dual splice.
+        let (parent_read_key, parent_write_key, _parent_ipns_key, _parent_ipns_name) =
+            self.parent_node_keys(parent_ino)?;
 
-        // TEE-wrap the child IPNS private key for republishing (if TEE configured).
-        let encrypted_ipns_for_tee = if let Some(ref tee_key) = self.tee_public_key {
-            let wrapped = cipherbox_crypto::wrap_key(&ipns_private_key, tee_key)
-                .map_err(|e| format!("TEE key wrapping failed: {}", e))?;
-            Some(hex::encode(&wrapped))
-        } else {
-            None
-        };
-        let tee_key_epoch = self.tee_key_epoch;
+        let (parent_child_ref, parent_write_child_ref) = cipherbox_sdk::build_child_refs(
+            child_read_key,
+            child_write_key,
+            &parent_read_key,
+            &parent_write_key,
+            &child_id,
+            child_ipns_name,
+            name,
+            NodeKind::Folder,
+            0,
+            0,
+        )
+        .map_err(|e| format!("build_child_refs (folder) failed: {}", e))?;
 
-        let (parent_metadata, parent_folder_key, parent_ipns_key, parent_ipns_name, parent_old_cid) =
+        // Re-seal the parent with the new child spliced into BOTH planes. The
+        // child inode is already inserted, so build_folder_metadata includes it.
+        let (parent_published_node, parent_ipns_private_key, parent_ipns_name, parent_old_cid) =
             self.build_folder_metadata(parent_ino)?;
-
-        let mkdir_created_at_ms = current_unix_ms();
-
-        // CR-01: journal the user-ECIES-wrapped parent IPNS key for replay signing.
-        // An empty string (on wrap failure) parks the entry on replay rather than
-        // persisting a degraded key silently.
-        let parent_ipns_key_hex_for_journal =
-            wrap_key_to_hex(&parent_ipns_key, &self.public_key, "parent IPNS key");
-
-        // CR-03: journal the user-ECIES-wrapped child IPNS key (NOT TEE-wrapped) —
-        // replay writes this into FolderEntry.ipns_private_key_encrypted, which must
-        // be user-ECIES-wrapped.  An empty string parks the entry rather than
-        // bricking the folder with an unusable key.
-        let child_ipns_key_hex_user_wrapped =
-            wrap_key_to_hex(&ipns_private_key, &self.public_key, "child IPNS key");
-
-        // D-04 (IN-03): ECIES-encrypt the directory name at rest. A failed encryption
-        // fails the write rather than persisting a plaintext or empty name.
-        let name_encrypted_hex = hex::encode(
-            cipherbox_crypto::ecies::wrap_key(name.as_bytes(), &self.public_key)
-                .map_err(|e| format!("directory name encryption failed: {}", e))?,
-        );
 
         let entry = cipherbox_sdk::JournalEntry {
             id: generate_entry_id(),
             vault_root_ipns: self.root_ipns_name.clone(),
             op: cipherbox_sdk::JournalOp::MkdirPublish {
-                child_ipns_name: ipns_name.to_string(),
-                child_folder_key_hex: encrypted_folder_key_hex.to_string(),
-                child_ipns_key_hex: child_ipns_key_hex_user_wrapped,
+                child_ipns_name: child_ipns_name.to_string(),
+                child_published_node: child_published_node_b64,
+                parent_child_ref,
+                parent_write_child_ref,
                 parent_folder_ipns_name: parent_ipns_name.clone(),
-                parent_ipns_key_hex: parent_ipns_key_hex_for_journal,
-                name_encrypted_hex,
-                created_at_ms: mkdir_created_at_ms,
+                created_at_ms: now_ms,
             },
             retries: 0,
             status: cipherbox_sdk::JournalEntryStatus::Pending,
@@ -478,14 +498,13 @@ impl crate::CipherBoxFS {
 
         Ok(MkdirJournalResult {
             entry,
-            json_bytes,
-            ipns_private_key,
+            child_published_node,
+            child_ipns_private_key,
             encrypted_ipns_for_tee,
             tee_key_epoch,
-            ipns_name: ipns_name.to_string(),
-            parent_metadata,
-            parent_folder_key,
-            parent_ipns_key,
+            child_ipns_name: child_ipns_name.to_string(),
+            parent_published_node,
+            parent_ipns_private_key,
             parent_ipns_name,
             parent_old_cid,
             ino: child_ino,
@@ -508,27 +527,13 @@ fn generate_entry_id() -> String {
     hex::encode(cipherbox_crypto::utils::generate_random_bytes(16))
 }
 
-/// ECIES-wrap `raw_key` for `public_key` and hex-encode it for journalling.
-///
-/// On wrap failure, logs a warning and returns an empty string — an empty key
-/// field makes replay park the entry rather than persist a degraded key
-/// (CR-01 / CR-03).
-#[cfg(any(feature = "fuse", feature = "winfsp"))]
-fn wrap_key_to_hex(raw_key: &[u8], public_key: &[u8], label: &str) -> String {
-    cipherbox_crypto::wrap_key(raw_key, public_key)
-        .map(|w| hex::encode(&w))
-        .unwrap_or_else(|e| {
-            log::warn!("Failed to wrap {} for journal: {}", label, e);
-            String::new()
-        })
-}
-
 // REQ-6: builder round-trip tests. Gated on `feature = "fuse"` because they use
-// the `crate::test_support` harness (itself fuse-feature-gated) and a real EC
-// keypair so `wrap_key` ECIES-wraps key material (Threat T-46-02). Network-free.
+// the `crate::test_support` harness. Network-free.
 #[cfg(all(test, feature = "fuse"))]
 mod tests {
     use crate::test_support::{make_isolated_journal_dir, make_test_fs_with_keypair};
+    // node/v3: the base64 `Engine` trait must be in scope for `.decode(...)`.
+    use base64::Engine;
     use zeroize::Zeroizing;
 
     /// Generate a real secp256k1 keypair (33-byte compressed pubkey, 32-byte
@@ -541,131 +546,72 @@ mod tests {
         )
     }
 
+    /// node/v3: mkdir builds a MkdirPublish op carrying the sealed child
+    /// PublishedNode + the D-07 dual parent splices (never legacy hex-ECIES keys).
     #[tokio::test]
-    async fn build_upload_journal_entry_round_trips() {
-        let (private_key, public_key) = real_keypair();
-        let fs = make_test_fs_with_keypair(private_key, public_key);
-
-        // A fresh write handle backed by a temp file with real content.
-        // Isolated per-test dir keyed by process id + counter so parallel test
-        // binaries never collide on a shared path (T-46-04).
-        let temp_dir = make_isolated_journal_dir();
-        let ino = 4242u64; // not present in inodes → treated as a brand-new file
-        let mut handle =
-            crate::file_handle::OpenFileHandle::new_write(ino, &temp_dir, None).unwrap();
-        let plaintext = b"hello cipherbox upload round trip";
-        handle.write_at(0, plaintext).unwrap();
-
-        let result = fs
-            .build_upload_journal_entry(ino, &handle, /* is_new_file */ true)
-            .expect("upload builder must succeed with a real keypair");
-
-        match &result.entry.op {
-            cipherbox_sdk::JournalOp::UploadFile {
-                sidecar_path,
-                sidecar_sha256,
-                wrapped_key_hex,
-                filename_encrypted_hex,
-                ..
-            } => {
-                // D-01: ciphertext lives in a sidecar, not in the JSON entry.
-                assert!(
-                    sidecar_path.to_string_lossy().ends_with(".bin"),
-                    "sidecar_path must point at a .bin file, got {:?}",
-                    sidecar_path
-                );
-                // The in-memory ciphertext is carried transiently for the live upload.
-                assert!(
-                    !result.ciphertext.is_empty(),
-                    "in-memory ciphertext must be non-empty"
-                );
-                assert_ne!(
-                    result.ciphertext.as_slice(),
-                    plaintext.as_slice(),
-                    "journalled bytes must be ciphertext, never plaintext (T-46-01)"
-                );
-                // sidecar_sha256 must be the SHA-256 of the in-memory ciphertext.
-                let expected = {
-                    use sha2::{Digest, Sha256};
-                    let mut h = Sha256::new();
-                    h.update(&result.ciphertext);
-                    hex::encode(h.finalize())
-                };
-                assert_eq!(
-                    sidecar_sha256, &expected,
-                    "sidecar_sha256 must match SHA-256 of the ciphertext"
-                );
-                // D-04: the filename is ECIES-encrypted hex, never the plaintext name.
-                assert!(
-                    !filename_encrypted_hex.is_empty()
-                        && hex::decode(filename_encrypted_hex).is_ok(),
-                    "filename_encrypted_hex must be valid ECIES hex (T-52-09 / IN-03)"
-                );
-                // The file key is ECIES-wrapped (present, hex-encoded), never raw.
-                assert!(
-                    !wrapped_key_hex.is_empty(),
-                    "wrapped_key_hex must be present and ECIES-wrapped (T-46-02)"
-                );
-                assert!(
-                    hex::decode(wrapped_key_hex).is_ok(),
-                    "wrapped_key_hex must be valid hex"
-                );
-            }
-            other => panic!("expected UploadFile op, got {:?}", other),
-        }
-
-        // Plaintext is carried transiently in memory only, never in the entry.
-        assert_eq!(result.plaintext, plaintext);
-    }
-
-    #[tokio::test]
-    async fn build_mkdir_journal_entry_round_trips() {
+    async fn build_mkdir_journal_entry_emits_node_v3() {
         let (private_key, public_key) = real_keypair();
         let fs = make_test_fs_with_keypair(private_key, public_key);
 
         let parent_ino = crate::inode::ROOT_INO;
         let child_ino = 9001u64;
         let child_ipns_private_key = Zeroizing::new(vec![3u8; 32]);
+        let child_read_key = [5u8; 32];
+        let child_write_key = [6u8; 32];
 
         let result = fs
             .build_mkdir_journal_entry(
                 parent_ino,
                 child_ino,
                 "newdir",
-                &[5u8; 32],        // folder_key
-                "k51child-newdir", // child ipns name
+                &child_read_key,
+                &child_write_key,
+                "k51child-newdir",
                 child_ipns_private_key,
-                "deadbeef", // encrypted_folder_key_hex
             )
             .expect("mkdir builder must succeed against the root parent");
 
         assert_eq!(result.ino, child_ino, "result must reference the new child");
+        assert!(
+            !result.child_published_node.is_empty(),
+            "child PublishedNode bytes must be present"
+        );
         match &result.entry.op {
             cipherbox_sdk::JournalOp::MkdirPublish {
                 child_ipns_name,
-                name_encrypted_hex,
-                child_ipns_key_hex,
-                parent_ipns_key_hex,
+                child_published_node,
+                parent_child_ref,
+                parent_write_child_ref,
                 ..
             } => {
                 assert_eq!(child_ipns_name, "k51child-newdir");
-                // D-04: directory name is ECIES-encrypted hex, never the plaintext "newdir".
+                // The child PublishedNode is base64 of a sealed node/v3 envelope.
                 assert!(
-                    !name_encrypted_hex.is_empty() && hex::decode(name_encrypted_hex).is_ok(),
-                    "name_encrypted_hex must be valid ECIES hex (IN-03)"
+                    !child_published_node.is_empty()
+                        && base64::engine::general_purpose::STANDARD
+                            .decode(child_published_node.as_bytes())
+                            .is_ok(),
+                    "child_published_node must be valid base64 of the sealed node"
+                );
+                // Read plane keyed by ipnsName; write plane keyed by childId UUID
+                // (D-07) — never conflated.
+                assert_eq!(parent_child_ref.ipns_name, "k51child-newdir");
+                assert_eq!(
+                    parent_write_child_ref.child_id,
+                    crate::fs::uuid_from_ino(child_ino),
+                    "WriteChildRef must be keyed by the child UUID (uuid_from_ino)"
                 );
                 assert_ne!(
-                    name_encrypted_hex, "newdir",
-                    "directory name must not be persisted as plaintext"
-                );
-                // Both IPNS keys are ECIES-wrapped (non-empty hex), never raw.
-                assert!(
-                    !child_ipns_key_hex.is_empty() && hex::decode(child_ipns_key_hex).is_ok(),
-                    "child IPNS key must be ECIES-wrapped hex (T-46-02)"
+                    parent_write_child_ref.child_id, parent_child_ref.ipns_name,
+                    "write-plane childId must never equal the read-plane ipnsName"
                 );
                 assert!(
-                    !parent_ipns_key_hex.is_empty() && hex::decode(parent_ipns_key_hex).is_ok(),
-                    "parent IPNS key must be ECIES-wrapped hex (T-46-02)"
+                    !parent_child_ref.read_key_sealed.is_empty(),
+                    "read_key_sealed (symmetric seal under parent readKey) must be present"
+                );
+                assert!(
+                    !parent_write_child_ref.write_key_sealed.is_empty(),
+                    "write_key_sealed (symmetric seal under parent writeKey) must be present"
                 );
             }
             other => panic!("expected MkdirPublish op, got {:?}", other),
@@ -673,39 +619,20 @@ mod tests {
     }
 
     /// D-01 (WR-06): a file larger than `MAX_JOURNAL_PAYLOAD_BYTES` must cause
-    /// `build_upload_journal_entry` to return `Err` (so the release path replies EIO)
-    /// rather than encrypting + streaming a multi-GB sidecar and stalling the FS thread.
-    ///
-    /// This drives the *real* helper against an oversized handle so the guard's
-    /// ordering (it must run BEFORE `read_all()`) is actually covered: a regression
-    /// that moved the check after the read, or removed it, would fail here. We avoid
-    /// allocating real bytes by `set_len`-ing the temp file to a sparse logical size
-    /// past the cap — `get_size()` reads `fs::metadata().len()`, so the guard fires
-    /// on the logical length without any multi-GB allocation. The at/under-cap path
-    /// is covered by `build_upload_journal_entry_round_trips` (a small file succeeds).
-    ///
-    /// Async only because `make_test_fs_with_keypair` captures `Handle::current()`; the
-    /// helper under test is synchronous and the guard runs before any `.await`.
+    /// `build_upload_journal_entry` to return `Err` before reading the file.
     #[tokio::test]
     async fn payload_size_cap_returns_err() {
         let (private_key, public_key) = real_keypair();
         let fs = make_test_fs_with_keypair(private_key, public_key);
 
-        // A fresh write handle backed by a temp file. ino is deliberately absent
-        // from the inode table so the helper treats it as a brand-new file.
         let temp_dir = make_isolated_journal_dir();
         let ino = 9999u64;
-        let handle =
-            crate::file_handle::OpenFileHandle::new_write(ino, &temp_dir, None).unwrap();
+        let handle = crate::file_handle::OpenFileHandle::new_write(ino, &temp_dir, None).unwrap();
 
-        // Make the temp file sparse and one byte past the cap. No real allocation:
-        // set_len produces a logical size that get_size() reports verbatim.
         handle
             .truncate(cipherbox_sdk::MAX_JOURNAL_PAYLOAD_BYTES + 1)
             .expect("truncate to oversize must succeed (sparse file)");
 
-        // The real helper must reject before reading the file into memory.
-        // `UploadJournalResult` does not derive Debug, so match instead of `expect_err`.
         let err = match fs.build_upload_journal_entry(ino, &handle, /* is_new_file */ true) {
             Ok(_) => panic!("over-cap file must be rejected by the real helper"),
             Err(e) => e,

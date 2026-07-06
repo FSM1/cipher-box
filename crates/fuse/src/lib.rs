@@ -31,15 +31,15 @@ pub mod platform;
 
 // New sibling modules from lib.rs decomposition
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
-pub mod runtime;
-#[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub mod events;
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
-pub mod publish;
+pub mod fs;
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub mod metadata;
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
-pub mod fs;
+pub mod publish;
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+pub mod runtime;
 
 // Test-only harness (make_test_fs / CaptureSender / reply_error_code).
 #[cfg(all(test, feature = "fuse"))]
@@ -53,22 +53,21 @@ pub use inode::{InodeData, InodeTable};
 
 // Re-exports (new modules)
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
-pub use runtime::block_with_timeout;
-#[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub use events::{
-    FsEvent, PendingContent, PendingFilePointer, PendingRefresh, UploadComplete,
-    spawn_metadata_refresh,
+    spawn_metadata_refresh, FsEvent, PendingContent, PendingFilePointer, PendingRefresh,
+    UploadComplete,
 };
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
-pub use publish::{PublishCoordinator, PublishQueueEntry, next_file_publish_sequence};
+pub use fs::{mount_point, CipherBoxFS};
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub use metadata::{
     encrypt_metadata_to_json, merge_folder_children, revoke_shares_blocking,
     spawn_bin_entry_publish, spawn_file_meta_reencrypt, spawn_metadata_publish,
 };
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
-pub use fs::{CipherBoxFS, mount_point};
-
+pub use publish::{next_file_publish_sequence, PublishCoordinator, PublishQueueEntry};
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+pub use runtime::block_with_timeout;
 
 // Replay module (extracted in Task 3).
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
@@ -88,7 +87,6 @@ pub mod content_ops;
 // poll_filepointer_resolution is fuse-only (takes &mut CipherBoxFS, macOS pattern).
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub mod poll;
-
 
 // REQ-6: Sample handler tests proving the test_support harness works. Gated on
 // `feature = "fuse"` because they construct `fuser::Reply*` values and use the
@@ -402,17 +400,29 @@ mod durability_characterization_tests {
         let entry = cipherbox_sdk::JournalEntry {
             id: entry_id.clone(),
             vault_root_ipns: vault.clone(),
+            // node/v3 reshaped UploadFile (69-09 Slice 3): the legacy hex-ECIES key
+            // fields (wrapped_key_hex/iv_hex/file_ipns_key_hex/parent_ipns_key_hex/
+            // filename_encrypted_hex) are gone. This test exercises only the sidecar
+            // ciphertext round-trip (D-01/D-04 durability), so the node/v3 crypto
+            // fields carry inert fixture values.
             op: cipherbox_sdk::JournalOp::UploadFile {
                 sidecar_path: sidecar_path.clone(),
                 sidecar_sha256: sidecar_sha256.clone(),
                 legacy_ciphertext_b64: String::new(),
-                wrapped_key_hex: "deadbeef".to_string(),
-                iv_hex: "00112233445566778899aabb".to_string(),
+                child_published_node: String::new(),
+                parent_child_ref: cipherbox_core::node::SealedChildRef {
+                    name: "enc-replay.bin".to_string(),
+                    ipns_name: "k51child-replay".to_string(),
+                    generation: 0,
+                    version_floor: 0,
+                    read_key_sealed: String::new(),
+                },
+                parent_write_child_ref: cipherbox_core::node::WriteChildRef {
+                    child_id: "00000000-0000-0000-0000-000000000000".to_string(),
+                    write_key_sealed: String::new(),
+                },
                 file_meta_ipns_name: None,
-                file_ipns_key_hex: None,
                 parent_folder_ipns_name: vault.clone(),
-                parent_ipns_key_hex: String::new(),
-                filename_encrypted_hex: hex::encode(b"enc-replay.bin"),
                 size: original_ciphertext.len() as u64,
                 created_at_ms: 1_700_000_000_000,
             },
@@ -516,60 +526,11 @@ mod durability_characterization_tests {
         );
     }
 
-    /// D-04: the replay name-decrypt helper round-trips an ECIES-wrapped name, passes a
-    /// non-hex legacy plaintext through once, but RETAINS (Err) a valid-hex-but-corrupt
-    /// ECIES name rather than replaying it verbatim as a garbage filename.
-    #[test]
-    fn decrypt_journal_name_round_trip_and_legacy_compat() {
-        let (private_key, public_key) = real_keypair();
-
-        // Round-trip: wrap_key → hex → decrypt_journal_name recovers the plaintext.
-        let encrypted_hex =
-            hex::encode(cipherbox_crypto::ecies::wrap_key(b"report.txt", &public_key).unwrap());
-        assert_eq!(
-            crate::replay::decrypt_journal_name(&encrypted_hex, &private_key).unwrap(),
-            "report.txt",
-            "ECIES-encrypted name must decrypt back to the plaintext"
-        );
-
-        // Legacy passthrough-once: a non-hex plaintext value is returned verbatim (Ok).
-        assert_eq!(
-            crate::replay::decrypt_journal_name("legacy-plain.txt", &private_key).unwrap(),
-            "legacy-plain.txt",
-            "a non-hex legacy plaintext name must pass through unchanged"
-        );
-
-        // Hex-SHAPED legacy plaintext names: a pre-Phase-52 filename can itself be pure
-        // even-length hex (hyphen-less UUID, SHA-1, SHA-256, …). Such a name hex-decodes
-        // but is far shorter than ECIES_MIN_CIPHERTEXT_SIZE, so it must pass through
-        // verbatim — NOT be mistaken for a corrupt ciphertext, parked, and GC-purged.
-        for legacy_hex in [
-            "550e8400e29b41d4a716446655440000",                         // UUID, no hyphens (16 bytes)
-            "a94a8fe5ccb19ba61c4c0873d391e987982fbbd3",                 // SHA-1 (20 bytes)
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", // SHA-256 (32 bytes)
-        ] {
-            assert_eq!(
-                crate::replay::decrypt_journal_name(legacy_hex, &private_key).unwrap(),
-                legacy_hex,
-                "hex-decodable legacy name below the ECIES floor must pass through, not park"
-            );
-        }
-
-        // Valid hex, long enough to be an ECIES ciphertext, but NOT a valid one is
-        // corruption (e.g. in-place bit-rot of a real ECIES name keeps its length): it must
-        // return Err so the entry is retained, never replayed as a garbage filename.
-        let not_ecies = hex::encode([0xABu8; cipherbox_crypto::ecies::ECIES_MIN_CIPHERTEXT_SIZE]);
-        let err = crate::replay::decrypt_journal_name(&not_ecies, &private_key)
-            .expect_err("valid-hex-but-corrupt ECIES name must be retained, not passed through");
-        assert!(
-            err.contains("retaining entry"),
-            "corruption error must signal retention, got: {}",
-            err
-        );
-        // The error must not leak the (raw hex) name or any path (D-04).
-        assert!(
-            !err.contains(&not_ecies),
-            "corruption error must not embed the name"
-        );
-    }
+    // 69-09 Slice 5c: `decrypt_journal_name_round_trip_and_legacy_compat` was
+    // DELETED. It exercised `crate::replay::decrypt_journal_name`, the per-entry
+    // ECIES filename-unwrap helper removed in Slice 4 — the child display name now
+    // travels in plaintext inside the parent's sealed `SealedChildRef.name`, so
+    // there is no journal-name ciphertext to decrypt at replay. This asserted the
+    // intentionally-removed model; name-handling mechanics are covered by the
+    // inode NFC tests and the SDK seal vectors.
 }

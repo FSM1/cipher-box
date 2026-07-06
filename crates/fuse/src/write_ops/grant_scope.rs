@@ -62,18 +62,16 @@ pub fn ancestor_ipns_chain(inodes: &InodeTable, start_ino: u64) -> Vec<String> {
         };
 
         match &inode.kind {
-            InodeKind::Root {
-                ipns_name: Some(name),
-                ..
-            } => chain.push(name.clone()),
-            InodeKind::Folder { ipns_name, .. } => chain.push(ipns_name.clone()),
-            InodeKind::File {
-                file_meta_ipns_name: Some(name),
-                ..
-            } => chain.push(name.clone()),
-            // Root with no ipns_name yet (pre-init) or an unresolved File
-            // (no file_meta_ipns_name) contribute nothing to the chain.
-            _ => {}
+            // node/v3: Root/Folder/File all carry a plain `ipns_name: String`.
+            // An empty string (Root pre-init, or a never-published File)
+            // contributes nothing to the chain.
+            InodeKind::Root { ipns_name, .. }
+            | InodeKind::Folder { ipns_name, .. }
+            | InodeKind::File { ipns_name, .. } => {
+                if !ipns_name.is_empty() {
+                    chain.push(ipns_name.clone());
+                }
+            }
         }
 
         if current_ino == ROOT_INO {
@@ -205,16 +203,22 @@ mod tests {
         }
     }
 
-    fn insert_folder(table: &mut InodeTable, ino: u64, parent_ino: u64, name: &str, ipns_name: &str) {
+    fn insert_folder(
+        table: &mut InodeTable,
+        ino: u64,
+        parent_ino: u64,
+        name: &str,
+        ipns_name: &str,
+    ) {
         table.insert(InodeData {
             ino,
             parent_ino,
             name: name.to_string(),
             kind: InodeKind::Folder {
                 ipns_name: ipns_name.to_string(),
-                encrypted_folder_key: "deadbeef".to_string(),
-                folder_key: Zeroizing::new(vec![0u8; 32]),
-                ipns_private_key: Some(Zeroizing::new(vec![0u8; 32])),
+                read_key: Zeroizing::new([0u8; 32]),
+                write_key: Zeroizing::new([0u8; 32]),
+                ipns_private_key: Zeroizing::new(vec![0u8; 32]),
                 children_loaded: false,
             },
             attr: make_attrs(ino, true),
@@ -234,17 +238,17 @@ mod tests {
             ino,
             parent_ino,
             name: name.to_string(),
+            // node/v3: the file's IPNS identity is the plain `ipns_name` field
+            // (empty == not-yet-published). Descriptors (cid/iv) stay empty here.
             kind: InodeKind::File {
+                ipns_name: file_meta_ipns_name.unwrap_or_default().to_string(),
                 cid: String::new(),
-                encrypted_file_key: String::new(),
-                iv: String::new(),
                 size: 0,
                 encryption_mode: "GCM".to_string(),
-                file_meta_ipns_name: file_meta_ipns_name.map(|s| s.to_string()),
-                file_meta_resolved: file_meta_ipns_name.is_some(),
-                file_ipns_private_key: None,
-                file_ipns_key_encrypted_hex: None,
-                versions: None,
+                iv: String::new(),
+                read_key: Zeroizing::new([0u8; 32]),
+                write_key: Zeroizing::new([0u8; 32]),
+                ipns_private_key: Zeroizing::new(vec![0u8; 32]),
             },
             attr: make_attrs(ino, false),
             children: None,
@@ -258,8 +262,10 @@ mod tests {
         let mut table = InodeTable::new();
         if let Some(root) = table.get_mut(ROOT_INO) {
             root.kind = InodeKind::Root {
-                ipns_private_key: None,
-                ipns_name: Some("k51root".to_string()),
+                ipns_name: "k51root".to_string(),
+                read_key: Zeroizing::new([0u8; 32]),
+                write_key: Zeroizing::new([0u8; 32]),
+                ipns_private_key: Zeroizing::new(Vec::new()),
             };
         }
         let folder_a = table.allocate_ino();
@@ -296,11 +302,18 @@ mod tests {
         let chain = ancestor_ipns_chain(&table, folder_b);
         assert_eq!(
             chain,
-            vec!["k51folderB".to_string(), "k51folderA".to_string(), "k51root".to_string()]
+            vec![
+                "k51folderB".to_string(),
+                "k51folderA".to_string(),
+                "k51root".to_string()
+            ]
         );
 
         let chain_a = ancestor_ipns_chain(&table, folder_a);
-        assert_eq!(chain_a, vec!["k51folderA".to_string(), "k51root".to_string()]);
+        assert_eq!(
+            chain_a,
+            vec!["k51folderA".to_string(), "k51root".to_string()]
+        );
     }
 
     #[test]

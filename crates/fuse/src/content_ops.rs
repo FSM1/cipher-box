@@ -30,38 +30,129 @@ fn zeroizing_32_from_slice(
     Ok(out)
 }
 
+/// Symmetrically unseal a file node's OWN read-body (node/v3, SC#1) and return
+/// its [`NodeContent`] descriptor. Never ECIES — the read-body is sealed under
+/// the file node's `read_key`. `read_key` is a caller-owned borrow (D-09).
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+pub fn unseal_file_content(
+    published: &cipherbox_core::node::PublishedNode,
+    read_key: &[u8; 32],
+) -> Result<cipherbox_core::node::NodeContent, String> {
+    use base64::Engine as _;
+    let read_sealed_bytes = base64::engine::general_purpose::STANDARD
+        .decode(&published.read_sealed)
+        .map_err(|e| format!("Invalid file node read_sealed base64: {}", e))?;
+    let body = cipherbox_core::node::seal::unseal_node(
+        &read_sealed_bytes,
+        read_key,
+        &published.id,
+        cipherbox_core::node::NodeKind::File,
+        published.generation,
+    )
+    .map_err(|e| format!("File node read-body unseal failed: {}", e))?;
+    let node = cipherbox_core::node::decode_node(&body)
+        .map_err(|e| format!("File node decode failed: {}", e))?;
+    match node {
+        cipherbox_core::node::Node::File { content, .. } => Ok(content),
+        _ => Err("Expected a file node, got folder/root".to_string()),
+    }
+}
+
+/// Gated single-node fetch (SC#6) + symmetric content download + decrypt.
+///
+/// node/v3: resolves the file node at `ipns_name` through the sanctioned
+/// [`cipherbox_sdk::fetch_node_gated`] wrapper (anti-rollback gate first), then
+/// unseals its read-body under `read_key` and downloads+decrypts the content.
+/// This is the owned-prefetch entrypoint used by the read/open/readdir paths —
+/// each takes an OWNED `high_water` clone into the spawned task. `read_key` is a
+/// caller-owned borrow (D-09).
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+pub async fn fetch_node_and_decrypt_content(
+    api: &cipherbox_api_client::ApiClient,
+    high_water: &cipherbox_sdk::RotationHighWater<cipherbox_sdk::JsonSidecarFloorStore>,
+    ipns_name: &str,
+    read_key: &[u8; 32],
+) -> Result<Vec<u8>, String> {
+    let fetcher = cipherbox_sdk::ApiNodeFetcher { api };
+    let published = cipherbox_sdk::fetch_node_gated(&fetcher, high_water, ipns_name)
+        .await
+        .map_err(|e| format!("fetch_node_gated failed for {}: {}", ipns_name, e))?;
+    fetch_and_decrypt_content_async(api, &published, read_key).await
+}
+
+/// Gated single-node fetch (SC#6) that recovers a file's content DESCRIPTORS
+/// (CID, IV hex, size, encryption mode) WITHOUT downloading the content.
+///
+/// Used by the FilePointer-resolution path: an unresolved File inode (empty CID)
+/// is resolved by fetching its own node and unsealing the read-body. Returns
+/// `(cid, iv_hex, size, encryption_mode)`.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+pub async fn resolve_file_descriptors(
+    api: &cipherbox_api_client::ApiClient,
+    high_water: &cipherbox_sdk::RotationHighWater<cipherbox_sdk::JsonSidecarFloorStore>,
+    ipns_name: &str,
+    read_key: &[u8; 32],
+) -> Result<(String, String, u64, String), String> {
+    let fetcher = cipherbox_sdk::ApiNodeFetcher { api };
+    let published = cipherbox_sdk::fetch_node_gated(&fetcher, high_water, ipns_name)
+        .await
+        .map_err(|e| format!("fetch_node_gated failed for {}: {}", ipns_name, e))?;
+    let content = unseal_file_content(&published, read_key)?;
+    Ok((
+        content.cid,
+        content.file_iv,
+        content.size,
+        content.encryption_mode,
+    ))
+}
+
 /// Async version of content download + decrypt for background prefetch tasks.
+///
+/// node/v3 (69-09 Slice 2): the file content-key is recovered by SYMMETRIC
+/// unseal of the file node's OWN sealed read-body — NOT ECIES. The `published`
+/// envelope's `read_sealed` body is unsealed under the file node's `read_key`
+/// (from `InodeKind::File.read_key`) via `cipherbox_core::node::seal::unseal_node`,
+/// yielding a `NodeContent { cid, file_iv, encryption_mode, file_key, .. }`.
+/// The content is then fetched by that CID and decrypted with the recovered
+/// `file_key`.
+///
+/// D-09 terminal owner: `read_key` is a caller-owned borrow, never zeroed here.
+/// The recovered `file_key`/`NodeContent` scratch is owned locally and dropped
+/// (the fixed-key buffer via `Zeroizing`).
+///
+/// SIGNATURE CHANGE (69-09 Slice 5 caller note): the former
+/// `(cid, encrypted_file_key_hex, iv_hex, encryption_mode, private_key)` params
+/// are replaced by the file node's fetched `PublishedNode` + its `read_key`
+/// (the descriptors now live authoritatively inside the sealed body). The
+/// caller (read_ops/dir_ops) must obtain the file node's `PublishedNode` via
+/// the sanctioned resolve path and pass the inode's `read_key`.
 ///
 /// Uses fully-qualified submodule paths for `cipherbox_crypto` so this compiles
 /// under both `fuse` and `winfsp` feature sets.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub async fn fetch_and_decrypt_content_async(
     api: &cipherbox_api_client::ApiClient,
-    cid: &str,
-    encrypted_file_key_hex: &str,
-    iv_hex: &str,
-    encryption_mode: &str,
-    private_key: &[u8],
+    published: &cipherbox_core::node::PublishedNode,
+    read_key: &[u8; 32],
 ) -> Result<Vec<u8>, String> {
-    let encrypted_bytes = cipherbox_api_client::ipfs::fetch_content(api, cid)
+    // Recover the file node's content descriptor by SYMMETRIC unseal of its own
+    // read-body (node/v3, SC#1) — never ECIES.
+    let content = unseal_file_content(published, read_key)?;
+
+    let encrypted_bytes = cipherbox_api_client::ipfs::fetch_content(api, &content.cid)
         .await
         .map_err(|e| e.to_string())?;
-    let encrypted_file_key =
-        hex::decode(encrypted_file_key_hex).map_err(|_| "Invalid file key hex".to_string())?;
-    // unwrap_key returns Zeroizing<Vec<u8>> (S3/D-05).
-    let file_key = cipherbox_crypto::ecies::unwrap_key(&encrypted_file_key, private_key)
-        .map_err(|e| format!("File key unwrap failed: {}", e))?;
-    let file_key_arr = zeroizing_32_from_slice(file_key.as_slice(), "Invalid file key length")?;
+    let file_key_arr = zeroizing_32_from_slice(&content.file_key, "Invalid file key length")?;
 
-    let plaintext = if encryption_mode == "CTR" {
-        let iv = hex::decode(iv_hex).map_err(|_| "Invalid file IV hex".to_string())?;
+    let plaintext = if content.encryption_mode == "CTR" {
+        let iv = hex::decode(&content.file_iv).map_err(|_| "Invalid file IV hex".to_string())?;
         let iv_arr: [u8; 16] = iv
             .try_into()
             .map_err(|_| "Invalid CTR IV length (expected 16)".to_string())?;
         cipherbox_crypto::aes_ctr::decrypt_aes_ctr(&encrypted_bytes, &file_key_arr, &iv_arr)
             .map_err(|e| format!("CTR decryption failed: {}", e))?
     } else {
-        let iv = hex::decode(iv_hex).map_err(|_| "Invalid file IV hex".to_string())?;
+        let iv = hex::decode(&content.file_iv).map_err(|_| "Invalid file IV hex".to_string())?;
         let iv_arr: [u8; 12] = iv
             .try_into()
             .map_err(|_| "Invalid GCM IV length (expected 12)".to_string())?;
@@ -218,11 +309,10 @@ pub async fn publish_file_metadata(
                 let marshaled = cipherbox_core::ipns::marshal_ipns_record(&record)
                     .map_err(|e| format!("File IPNS record marshal failed on retry: {}", e))?;
                 use base64::Engine;
-                let retry_record_b64 =
-                    base64::engine::general_purpose::STANDARD.encode(&marshaled);
+                let retry_record_b64 = base64::engine::general_purpose::STANDARD.encode(&marshaled);
                 Ok((retry_record_b64, file_meta_cid_for_closure.clone()))
             },
-            &[], // no old CIDs to unpin on per-file publish (caller handles pruned_cids)
+            &[],  // no old CIDs to unpin on per-file publish (caller handles pruned_cids)
             None, // D-01a: no JournalOp::FilePublish variant; exhaustion → Err → EIO
         )
         .await?;
@@ -231,6 +321,165 @@ pub async fn publish_file_metadata(
     }
 
     log::info!("Per-file IPNS publish succeeded for {}", file_ipns_name);
+
+    Ok(())
+}
+
+/// Live per-file node/v3 publish (69-09 Slice 5b(c)).
+///
+/// The node/v3 analog of [`publish_file_metadata`]: instead of encrypting a
+/// legacy `FileMetadata` blob, this re-seals the file's OWN `PublishedNode` with
+/// the now-known content `cid` (the journal-time seal used an empty-CID
+/// placeholder), uploads the sealed envelope to IPFS, and publishes the file's
+/// per-file IPNS record pointing at the envelope CID.
+///
+/// Two publish tails:
+/// - `is_first_publish` (fresh file): publish at sequence 1 with
+///   `expected_sequence_number: None` and TEE enrollment (the pre-wrapped
+///   `encrypted_ipns_for_tee`, rule #7). A `Conflict` means another client raced
+///   → `Err` → EIO.
+/// - update (overwrite): route through the shared CAS helper
+///   [`crate::metadata::publish_with_cas_retry`] (no TEE re-enroll).
+///
+/// `publish_file_metadata` is intentionally left untouched — 69-13's
+/// `spawn_file_meta_reencrypt` still calls it. D-09: `read_key`/`write_key` are
+/// caller-owned borrows; the raw `file_key` is moved into `NodeContent.file_key`
+/// (sealed inside the read-body, never ECIES).
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+#[allow(clippy::too_many_arguments)]
+pub async fn publish_file_node(
+    api: &cipherbox_api_client::ApiClient,
+    file_ipns_name: &str,
+    child_id: &str,
+    cid: &str,
+    file_key: &[u8],
+    iv_hex: &str,
+    size: u64,
+    mime_type: &str,
+    encryption_mode: &str,
+    read_key: &[u8; 32],
+    write_key: &[u8; 32],
+    ipns_private_key: &zeroize::Zeroizing<Vec<u8>>,
+    coordinator: &crate::PublishCoordinator,
+    encrypted_ipns_for_tee: Option<&str>,
+    tee_key_epoch: Option<u32>,
+    is_first_publish: bool,
+) -> Result<(), String> {
+    use base64::Engine as _;
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    // 1. Re-seal the file node with the real content CID.
+    let node_content = cipherbox_core::node::NodeContent {
+        cid: cid.to_string(),
+        file_iv: iv_hex.to_string(),
+        size,
+        mime_type: mime_type.to_string(),
+        encryption_mode: encryption_mode.to_string(),
+        file_key: file_key.to_vec(),
+        versions: Vec::new(),
+    };
+    let file_node = cipherbox_core::node::Node::File {
+        id: child_id.to_string(),
+        generation: 0,
+        created_at: now_ms,
+        modified_at: now_ms,
+        content: node_content,
+    };
+    let write_body = cipherbox_core::node::NodeWriteBody {
+        ipns_private_key: ipns_private_key.to_vec(),
+        write_children: Vec::new(),
+    };
+    let published = cipherbox_core::node::seal::seal_published_node(
+        &file_node,
+        read_key,
+        write_key,
+        Some(&write_body),
+    )
+    .map_err(|e| format!("File node seal failed: {}", e))?;
+    let published_bytes = cipherbox_core::node::encode_published_node(&published)
+        .map_err(|e| format!("File node encode failed: {}", e))?;
+
+    // 2. Upload the sealed node envelope to IPFS.
+    let node_cid = cipherbox_api_client::ipfs::upload_content(api, &published_bytes)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // 3. Publish the per-file IPNS record → /ipfs/<node envelope CID>.
+    let ipns_key_arr = zeroizing_32_from_slice(
+        ipns_private_key.as_slice(),
+        "Invalid file IPNS private key length",
+    )?;
+    let value = format!("/ipfs/{}", node_cid);
+
+    if is_first_publish {
+        // First publish: no prior record → seq 1, expected None, TEE enroll.
+        let (enc_tee, epoch) = match (encrypted_ipns_for_tee, tee_key_epoch) {
+            (Some(h), Some(e)) => (Some(h.to_string()), Some(e)),
+            (Some(_), None) => {
+                return Err("TEE wrap present but key_epoch missing".to_string());
+            }
+            _ => (None, None),
+        };
+        let record = cipherbox_core::ipns::create_ipns_record(&ipns_key_arr, &value, 1, 86_400_000)
+            .map_err(|e| format!("File node IPNS record creation failed: {}", e))?;
+        let marshaled = cipherbox_core::ipns::marshal_ipns_record(&record)
+            .map_err(|e| format!("File node IPNS record marshal failed: {}", e))?;
+        let record_b64 = base64::engine::general_purpose::STANDARD.encode(&marshaled);
+        let req = cipherbox_api_client::IpnsPublishRequest {
+            ipns_name: file_ipns_name.to_string(),
+            record: record_b64,
+            metadata_cid: node_cid.clone(),
+            encrypted_ipns_private_key: enc_tee,
+            key_epoch: epoch,
+            expected_sequence_number: None,
+        };
+        match cipherbox_api_client::ipns::publish_ipns(api, &req)
+            .await
+            .map_err(|e| e.to_string())?
+        {
+            cipherbox_api_client::PublishResult::Success => {}
+            cipherbox_api_client::PublishResult::Conflict { .. } => {
+                return Err(format!(
+                    "Conflict on first per-file node publish for {} — another client raced",
+                    file_ipns_name
+                ));
+            }
+        }
+        coordinator.record_publish(file_ipns_name, 1);
+    } else {
+        // Update publish: CAS via the shared helper (D-02 / D-03). Re-sign the
+        // SAME node envelope CID at each attempted sequence.
+        let node_cid_for_closure = node_cid.clone();
+        let ipns_key_ref = &ipns_key_arr;
+        crate::metadata::publish_with_cas_retry(
+            api,
+            coordinator,
+            file_ipns_name,
+            |new_seq_for_record: u64| {
+                let value = format!("/ipfs/{}", node_cid_for_closure);
+                let record = cipherbox_core::ipns::create_ipns_record(
+                    ipns_key_ref,
+                    &value,
+                    new_seq_for_record,
+                    86_400_000,
+                )
+                .map_err(|e| format!("File node IPNS record creation failed on retry: {}", e))?;
+                let marshaled = cipherbox_core::ipns::marshal_ipns_record(&record)
+                    .map_err(|e| format!("File node IPNS record marshal failed on retry: {}", e))?;
+                let retry_record_b64 = base64::engine::general_purpose::STANDARD.encode(&marshaled);
+                Ok((retry_record_b64, node_cid_for_closure.clone()))
+            },
+            &[],
+            None, // D-01a: no JournalOp::FilePublish variant; exhaustion → Err → EIO
+        )
+        .await?;
+    }
+
+    log::info!("Per-file node/v3 publish succeeded for {}", file_ipns_name);
 
     Ok(())
 }

@@ -52,7 +52,9 @@ pub(crate) async fn resolve_ipns_for_replay(
 /// - `Err(e)` whose text signals 404 / "not found" → `NotFound`
 /// - any other `Err(e)` → `Error(e)` (entry retained on replay)
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
-pub(crate) fn classify_resolve_outcome(result: Result<u64, String>) -> crate::error::IpnsResolveOutcome {
+pub(crate) fn classify_resolve_outcome(
+    result: Result<u64, String>,
+) -> crate::error::IpnsResolveOutcome {
     use crate::error::IpnsResolveOutcome;
     match result {
         Ok(seq) => IpnsResolveOutcome::Found(seq),
@@ -94,6 +96,7 @@ impl PublishCoordinator {
     ) -> Result<u64, String> {
         // D-01: route through the verified chokepoint.
         match cipherbox_api_client::ipns::resolve_ipns_verified(api, ipns_name).await {
+            // sc6-allow: replay-path resolve (resolve_ipns_for_replay), not a node/v3 read
             Ok(verified) => {
                 // D-08: use sequence from signed CBOR data.
                 let resolved = verified.sequence_number;
@@ -108,7 +111,8 @@ impl PublishCoordinator {
                 // D-02: verify failure on soft resolve — fall back to cache (never wedge).
                 log::warn!(
                     "resolve_sequence: IPNS {} verify failed: {} — falling back to cache (D-02)",
-                    ipns_name, msg
+                    ipns_name,
+                    msg
                 );
                 match self.get_cached(ipns_name) {
                     Some(cached) => Ok(cached),
@@ -118,19 +122,23 @@ impl PublishCoordinator {
                     )),
                 }
             }
-            Err(cipherbox_api_client::ipns::VerifyError::Api(e)) => match self.get_cached(ipns_name) {
-                Some(cached) => {
-                    log::warn!(
-                        "IPNS resolve failed for {}, using cached seq {}: {}",
-                        ipns_name, cached, e
-                    );
-                    Ok(cached)
+            Err(cipherbox_api_client::ipns::VerifyError::Api(e)) => {
+                match self.get_cached(ipns_name) {
+                    Some(cached) => {
+                        log::warn!(
+                            "IPNS resolve failed for {}, using cached seq {}: {}",
+                            ipns_name,
+                            cached,
+                            e
+                        );
+                        Ok(cached)
+                    }
+                    None => Err(format!(
+                        "IPNS resolve failed and no cached sequence for {}: {}",
+                        ipns_name, e
+                    )),
                 }
-                None => Err(format!(
-                    "IPNS resolve failed and no cached sequence for {}: {}",
-                    ipns_name, e
-                )),
-            },
+            }
         }
     }
 
@@ -144,6 +152,7 @@ impl PublishCoordinator {
     ) -> Result<u64, String> {
         // D-01: route through the verified chokepoint.
         match cipherbox_api_client::ipns::resolve_ipns_verified(api, ipns_name).await {
+            // sc6-allow: replay-path resolve (resolve_ipns_for_replay), not a node/v3 read
             Ok(verified) => {
                 // D-08: use sequence from signed CBOR data.
                 let cached = self.get_cached(ipns_name).unwrap_or(0);

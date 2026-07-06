@@ -1,13 +1,19 @@
 //! Pending result types and background-task spawn helpers for the FUSE filesystem.
 
 /// Pending folder refresh result sent from background tasks.
+///
+/// node/v3 (69-09 Slice 5b(d)): the async half of the refresh pipeline resolves
+/// the folder through the gated owned materialization
+/// ([`cipherbox_sdk::list_folder_owned`]) and hands the resulting owned children
+/// to the FS thread, which applies them synchronously via
+/// `InodeTable::apply_owned_children`. The former decrypted `FolderMetadata` +
+/// resolved `cid` payload is gone — children carry their own recovered keys.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub enum PendingRefresh {
     Success {
         ino: u64,
         ipns_name: String,
-        metadata: cipherbox_core::folder::FolderMetadata,
-        cid: String,
+        children: Vec<cipherbox_sdk::ResolvedOwnedChild>,
     },
     Failure {
         ipns_name: String,
@@ -22,16 +28,20 @@ pub enum PendingContent {
 }
 
 /// Pending FilePointer resolution result sent from background async tasks.
+///
+/// node/v3 (69-09 Slice 5b(d)): a file's content descriptors (CID, IV hex, size,
+/// encryption mode) are recovered by unsealing the file node's OWN read-body
+/// (via [`cipherbox_sdk::fetch_node_gated`] → `resolve_file_descriptors`) — the
+/// former legacy `encrypted_file_key` hex + `versions` fields are gone (the file
+/// key lives sealed inside the node and is recovered lazily at content read).
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub enum PendingFilePointer {
     Success {
         ino: u64,
         cid: String,
-        encrypted_file_key: String,
         iv: String,
         size: u64,
         encryption_mode: String,
-        versions: Option<Vec<cipherbox_core::folder::VersionEntry>>,
     },
     Failure {
         ino: u64,
@@ -70,47 +80,42 @@ pub struct UploadComplete {
 /// matching the FP-resolve timeout pattern in `fs.rs`. A hung resolve/fetch can no
 /// longer hold `refreshing_metadata` indefinitely — the Elapsed arm sends Failure
 /// so the next refresh cycle can proceed.
+///
+/// node/v3 (69-09 Slice 5b(d)): resolves the folder through the single gated
+/// owned entrypoint [`cipherbox_sdk::list_folder_owned`] (SC#6 — NO raw
+/// `resolve_ipns_verified`). The parent's symmetric `read_key`/`write_key` and
+/// an OWNED `high_water` clone (5b(a)) are moved into the task; the recovered
+/// `Vec<ResolvedOwnedChild>` is handed to the FS thread for synchronous apply.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_metadata_refresh(
     rt: &tokio::runtime::Handle,
     api: std::sync::Arc<cipherbox_api_client::ApiClient>,
     tx: std::sync::mpsc::Sender<PendingRefresh>,
     ino: u64,
     ipns_name: String,
-    folder_key: zeroize::Zeroizing<Vec<u8>>,
+    parent_read_key: [u8; 32],
+    parent_write_key: [u8; 32],
+    high_water: cipherbox_sdk::RotationHighWater<cipherbox_sdk::JsonSidecarFloorStore>,
 ) {
     rt.spawn(async move {
         // D-10: bound the entire refresh with NETWORK_TIMEOUT so a hung resolve/fetch
         // never holds refreshing_metadata open indefinitely.
-        let result: Result<(cipherbox_core::folder::FolderMetadata, String), String> =
-            match tokio::time::timeout(
-                crate::runtime::NETWORK_TIMEOUT,
-                async {
-                    // D-01: route through the verified chokepoint.
-                    let verified = match cipherbox_api_client::ipns::resolve_ipns_verified(&api, &ipns_name).await {
-                        Ok(v) => v,
-                        // D-04: Legacy variant removed — all-absent sig fields fail closed.
-                        // The Invalid arm below handles this case.
-                        Err(cipherbox_api_client::ipns::VerifyError::Invalid(msg)) => {
-                            // D-02: fail only this operation; poll loop self-heals.
-                            return Err(format!("IPNS {} verify failed: {}", ipns_name, msg));
-                        }
-                        Err(cipherbox_api_client::ipns::VerifyError::Api(e)) => {
-                            return Err(format!("resolve: {}", e));
-                        }
-                    };
-                    let encrypted_bytes =
-                        cipherbox_api_client::ipfs::fetch_content(&api, &verified.cid)
-                            .await
-                            .map_err(|e| format!("fetch: {}", e))?;
-                    let metadata = cipherbox_core::decrypt::decrypt_metadata_from_ipfs_public(
-                        &encrypted_bytes,
-                        &folder_key,
-                    )
-                    .map_err(|e| format!("decrypt: {}", e))?;
-                    Ok((metadata, verified.cid))
-                },
-            )
+        let result: Result<Vec<cipherbox_sdk::ResolvedOwnedChild>, String> =
+            match tokio::time::timeout(crate::runtime::NETWORK_TIMEOUT, async {
+                // SC#6: the single gated owned read entrypoint (gate-first resolve
+                // inside list_folder_owned) — no raw resolve on the read path.
+                let fetcher = cipherbox_sdk::ApiNodeFetcher { api: &api };
+                cipherbox_sdk::list_folder_owned(
+                    &fetcher,
+                    &high_water,
+                    &ipns_name,
+                    &parent_read_key,
+                    &parent_write_key,
+                )
+                .await
+                .map_err(|e| format!("list_folder_owned: {}", e))
+            })
             .await
             {
                 Ok(inner) => inner,
@@ -125,12 +130,11 @@ pub fn spawn_metadata_refresh(
             };
 
         match result {
-            Ok((metadata, cid)) => {
+            Ok(children) => {
                 let _ = tx.send(PendingRefresh::Success {
                     ino,
                     ipns_name,
-                    metadata,
-                    cid,
+                    children,
                 });
             }
             Err(e) => {

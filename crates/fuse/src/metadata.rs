@@ -296,10 +296,12 @@ pub fn revoke_shares_blocking(
                     }
                 }
             }
-            Err(last_err.unwrap_or(cipherbox_api_client::ApiError::ApiResponse {
-                status: 0,
-                message: "share revocation exhausted retries".to_string(),
-            }))
+            Err(
+                last_err.unwrap_or(cipherbox_api_client::ApiError::ApiResponse {
+                    status: 0,
+                    message: "share revocation exhausted retries".to_string(),
+                }),
+            )
         })
         .await
     });
@@ -325,13 +327,22 @@ pub fn revoke_shares_blocking(
     }
 }
 
-/// Spawn a background OS thread to upload encrypted metadata and publish via IPNS.
+/// Spawn a background OS thread to upload a sealed node/v3 `PublishedNode` and
+/// publish it via IPNS (69-09 Slice 3 write emission).
+///
+/// The parent folder/root node was already re-sealed by
+/// [`crate::CipherBoxFS::build_folder_metadata`] — this function uploads the
+/// opaque `published_node` bytes verbatim (no `FolderMetadata` encrypt) and runs
+/// the CAS publish loop. On an IPNS sequence conflict it republishes the SAME
+/// sealed bytes at a fresh sequence (last-writer-wins). The node/v3 merge of
+/// concurrent remote children (the former `merge_folder_children` path) is
+/// deferred to 69-09 Slice 5 — a sealed envelope cannot be structurally merged
+/// without unsealing under the parent readKey, which Slice 5 wires in.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub fn spawn_metadata_publish(
     api: Arc<ApiClient>,
     rt: tokio::runtime::Handle,
-    metadata: cipherbox_core::folder::FolderMetadata,
-    folder_key: Zeroizing<Vec<u8>>, // D-12: Zeroizing to match spawn_bin_entry_publish pattern
+    published_node: Vec<u8>,
     ipns_private_key: Zeroizing<Vec<u8>>, // D-12: Zeroizing to match spawn_bin_entry_publish pattern
     ipns_name: String,
     old_metadata_cid: Option<String>,
@@ -342,8 +353,7 @@ pub fn spawn_metadata_publish(
             let lock = coordinator.get_lock(&ipns_name);
             let _guard = lock.lock().await;
 
-            // Pre-validate IPNS key length so make_record can use it without fallible conversion.
-            // Using a Zeroizing wrapper so the fixed-size bytes are zeroed on drop.
+            // Pre-validate IPNS key length so the record builder is infallible.
             let ipns_key_arr: Zeroizing<[u8; 32]> = {
                 let arr: [u8; 32] = ipns_private_key
                     .as_slice()
@@ -352,184 +362,77 @@ pub fn spawn_metadata_publish(
                 Zeroizing::new(arr)
             };
 
-            // Pre-upload: build the initial encrypted metadata blob before entering the
-            // CAS loop so make_record only re-encrypts on the conflict retry path.
-            let json_bytes = encrypt_metadata_to_json(&metadata, &folder_key)?;
-            let initial_cid = cipherbox_api_client::ipfs::upload_content(&api, &json_bytes)
+            // Upload the sealed node/v3 envelope ONCE, then CAS-publish it.
+            let cid = cipherbox_api_client::ipfs::upload_content(&api, &published_node)
                 .await
                 .map_err(|e| format!("{}", e))?;
-
-            // old_cids_to_unpin: the previous metadata CID (if any) — unpinned on success.
             let old_cids: Vec<String> = old_metadata_cid.into_iter().collect();
 
-            // make_record: builds the signed IPNS record for the initial (non-conflict)
-            // publish, reusing the pre-uploaded blob CID. It is sync, so it cannot perform
-            // the async merge-on-conflict the folder path needs — hence the folder site does
-            // NOT route through publish_with_cas_retry; it runs its own inline CAS loop below
-            // (D-03). Cloned because the closure captures the CID by value.
-            let initial_cid_for_closure = initial_cid.clone();
-            let make_record = |new_seq: u64| -> Result<(String, String), String> {
+            let make_record = |new_seq: u64| -> Result<String, String> {
                 use base64::Engine;
-                let value = format!("/ipfs/{}", initial_cid_for_closure);
-                let record = cipherbox_core::create_ipns_record(
-                    &ipns_key_arr,
-                    &value,
-                    new_seq,
-                    86_400_000,
-                )
-                .map_err(|e| format!("IPNS record creation failed: {}", e))?;
+                let value = format!("/ipfs/{}", cid);
+                let record =
+                    cipherbox_core::create_ipns_record(&ipns_key_arr, &value, new_seq, 86_400_000)
+                        .map_err(|e| format!("IPNS record creation failed: {}", e))?;
                 let marshaled = cipherbox_core::marshal_ipns_record(&record)
                     .map_err(|e| format!("IPNS record marshal failed: {}", e))?;
-                let record_b64 =
-                    base64::engine::general_purpose::STANDARD.encode(&marshaled);
-                Ok((record_b64, initial_cid_for_closure.clone()))
+                Ok(base64::engine::general_purpose::STANDARD.encode(&marshaled))
             };
 
-            // Folder CAS loop: own retry path (NOT publish_with_cas_retry) because the
-            // conflict arm must async-fetch + merge_folder_children + re-encrypt remote
-            // metadata before retrying, which the sync make_record closure can't express.
-            // publish_with_cas_retry covers the per-file/bin sites; this loop is the
-            // reference implementation it was extracted from and shares the same decision
-            // policy (D-03). On persistent conflict it returns Err (D-01a: no
-            // JournalOp variant for standalone folder re-publish; surfaced as Err).
-
-            // --- Folder CAS loop ---
-            let seq = coordinator.resolve_sequence(&api, &ipns_name).await?;
-            let new_seq = seq
-                .checked_add(1)
-                .ok_or_else(|| "IPNS sequence number overflow".to_string())?;
-
-            // Build record using the initial CID
-            let (record_b64, new_cid) = make_record(new_seq)?;
-
-            let req = cipherbox_api_client::IpnsPublishRequest {
-                ipns_name: ipns_name.clone(),
-                record: record_b64,
-                metadata_cid: new_cid.clone(),
-                encrypted_ipns_private_key: None,
-                key_epoch: None,
-                expected_sequence_number: Some(seq.to_string()),
-            };
-
-            match cipherbox_api_client::ipns::publish_ipns(&api, &req)
-                .await
-                .map_err(|e| format!("{}", e))?
-            {
-                cipherbox_api_client::PublishResult::Success => {
-                    coordinator.record_publish(&ipns_name, new_seq);
-                    for cid in &old_cids {
-                        let _ = cipherbox_api_client::ipfs::unpin_content(&api, cid).await;
+            // CAS loop: on conflict, republish the SAME sealed bytes at a fresh
+            // sequence (last-writer-wins). Bounded to avoid an unbounded retry.
+            let max_attempts = 5u32;
+            let mut attempt = 0u32;
+            loop {
+                let seq = coordinator.resolve_sequence(&api, &ipns_name).await?;
+                let new_seq = seq
+                    .checked_add(1)
+                    .ok_or_else(|| "IPNS sequence number overflow".to_string())?;
+                let record_b64 = make_record(new_seq)?;
+                let req = cipherbox_api_client::IpnsPublishRequest {
+                    ipns_name: ipns_name.clone(),
+                    record: record_b64,
+                    metadata_cid: cid.clone(),
+                    encrypted_ipns_private_key: None,
+                    key_epoch: None,
+                    expected_sequence_number: Some(seq.to_string()),
+                };
+                match cipherbox_api_client::ipns::publish_ipns(&api, &req)
+                    .await
+                    .map_err(|e| format!("{}", e))?
+                {
+                    cipherbox_api_client::PublishResult::Success => {
+                        coordinator.record_publish(&ipns_name, new_seq);
+                        for old in &old_cids {
+                            let _ = cipherbox_api_client::ipfs::unpin_content(&api, old).await;
+                        }
+                        log::info!("Background node/v3 publish succeeded for {}", ipns_name);
+                        break;
                     }
-                    log::info!("Background metadata publish succeeded for {}", ipns_name);
-                }
-                cipherbox_api_client::PublishResult::Conflict {
-                    current_sequence_number,
-                } => {
-                    log::warn!(
-                        "Conflict for {}: expected seq {}, server has {}",
-                        ipns_name,
-                        seq,
-                        current_sequence_number
-                    );
-
-                    let fresh_seq = coordinator.resolve_sequence(&api, &ipns_name).await?;
-                    // D-01/D-02: route through verified chokepoint; fail only this merge operation.
-                    let remote_cid = match cipherbox_api_client::ipns::resolve_ipns_verified(&api, &ipns_name).await {
-                        Ok(v) => v.cid,
-                        // D-04: Legacy variant removed — all-absent sig fields fail closed.
-                        Err(cipherbox_api_client::ipns::VerifyError::Invalid(msg)) => {
-                            // F11: fail-closed verify failure strands the pre-uploaded blob;
-                            // unpin it best-effort (mirrors the Success/persistent-Conflict exits).
-                            let _ =
-                                cipherbox_api_client::ipfs::unpin_content(&api, &new_cid).await;
-                            return Err(format!("IPNS {} verify failed on merge: {}", ipns_name, msg));
+                    cipherbox_api_client::PublishResult::Conflict {
+                        current_sequence_number,
+                    } => {
+                        attempt += 1;
+                        if attempt >= max_attempts {
+                            let _ = cipherbox_api_client::ipfs::unpin_content(&api, &cid).await;
+                            return Err(format!(
+                                "Persistent conflict for {} after {} attempts",
+                                ipns_name, max_attempts
+                            ));
                         }
-                        Err(cipherbox_api_client::ipns::VerifyError::Api(e)) => {
-                            // F11: transient resolve API failure also strands the
-                            // pre-uploaded blob; unpin it best-effort (mirrors the
-                            // Invalid arm and the Success/persistent-Conflict exits).
-                            let _ =
-                                cipherbox_api_client::ipfs::unpin_content(&api, &new_cid).await;
-                            return Err(format!("{}", e));
-                        }
-                    };
-                    let remote_bytes =
-                        cipherbox_api_client::ipfs::fetch_content(&api, &remote_cid)
-                            .await
-                            .map_err(|e| format!("{}", e))?;
-                    let remote_metadata = cipherbox_core::decrypt_metadata_from_ipfs_public(
-                        &remote_bytes,
-                        &folder_key,
-                    )?;
-
-                    let merged_metadata = merge_folder_children(&metadata, remote_metadata);
-
-                    let jitter_ms = (std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .subsec_nanos()
-                        % 400) as u64
-                        + 100;
-                    tokio::time::sleep(std::time::Duration::from_millis(jitter_ms)).await;
-
-                    let retry_json = encrypt_metadata_to_json(&merged_metadata, &folder_key)?;
-                    let retry_cid = cipherbox_api_client::ipfs::upload_content(&api, &retry_json)
-                        .await
-                        .map_err(|e| format!("{}", e))?;
-
-                    let retry_seq = fresh_seq
-                        .checked_add(1)
-                        .ok_or_else(|| "IPNS sequence number overflow on retry".to_string())?;
-                    let retry_value = format!("/ipfs/{}", retry_cid);
-                    let retry_record = cipherbox_core::create_ipns_record(
-                        &ipns_key_arr,
-                        &retry_value,
-                        retry_seq,
-                        86_400_000,
-                    )
-                    .map_err(|e| format!("IPNS retry record failed: {}", e))?;
-                    let retry_marshaled = cipherbox_core::marshal_ipns_record(&retry_record)
-                        .map_err(|e| format!("IPNS retry marshal failed: {}", e))?;
-                    use base64::Engine;
-                    let retry_b64 =
-                        base64::engine::general_purpose::STANDARD.encode(&retry_marshaled);
-
-                    let retry_cid_for_cleanup = retry_cid.clone();
-                    let retry_req = cipherbox_api_client::IpnsPublishRequest {
-                        ipns_name: ipns_name.clone(),
-                        record: retry_b64,
-                        metadata_cid: retry_cid,
-                        encrypted_ipns_private_key: None,
-                        key_epoch: None,
-                        expected_sequence_number: Some(fresh_seq.to_string()),
-                    };
-
-                    match cipherbox_api_client::ipns::publish_ipns(&api, &retry_req)
-                        .await
-                        .map_err(|e| format!("{}", e))?
-                    {
-                        cipherbox_api_client::PublishResult::Success => {
-                            coordinator.record_publish(&ipns_name, retry_seq);
-                            let _ = cipherbox_api_client::ipfs::unpin_content(&api, &new_cid).await;
-                            for cid in &old_cids {
-                                let _ =
-                                    cipherbox_api_client::ipfs::unpin_content(&api, cid).await;
-                            }
-                            log::info!(
-                                "Conflict resolved for {} after retry (seq {})",
-                                ipns_name,
-                                retry_seq
-                            );
-                        }
-                        cipherbox_api_client::PublishResult::Conflict { .. } => {
-                            let _ = cipherbox_api_client::ipfs::unpin_content(&api, &new_cid).await;
-                            let _ = cipherbox_api_client::ipfs::unpin_content(
-                                &api,
-                                &retry_cid_for_cleanup,
-                            )
-                            .await;
-                            return Err(format!("Persistent conflict for {}", ipns_name));
-                        }
+                        log::warn!(
+                            "Conflict for {} (expected {}, server has {}); retrying at fresh seq",
+                            ipns_name,
+                            seq,
+                            current_sequence_number
+                        );
+                        let jitter_ms = (std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .subsec_nanos()
+                            % 400) as u64
+                            + 100;
+                        tokio::time::sleep(std::time::Duration::from_millis(jitter_ms)).await;
                     }
                 }
             }
@@ -566,7 +469,8 @@ pub fn spawn_bin_entry_publish(
 
             // D-01: route bin IPNS resolve through the verified chokepoint.
             let (mut bin_metadata, existing_cid) =
-                match cipherbox_api_client::ipns::resolve_ipns_verified(&api, &bin_ipns_name).await {
+                match cipherbox_api_client::ipns::resolve_ipns_verified(&api, &bin_ipns_name).await // sc6-allow: legacy recycle-bin publish (spawn_bin_entry_publish), not a node/v3 read
+                {
                     Ok(verified) => {
                         match cipherbox_api_client::ipfs::fetch_content(&api, &verified.cid).await {
                             Ok(bytes) => {
@@ -590,7 +494,11 @@ pub fn spawn_bin_entry_publish(
                     // D-04: Legacy variant removed — all-absent sig fields fail closed.
                     Err(cipherbox_api_client::ipns::VerifyError::Invalid(msg)) => {
                         // D-02: fail only this operation.
-                        log::warn!("spawn_bin_entry_publish: IPNS {} verify failed: {}", bin_ipns_name, msg);
+                        log::warn!(
+                            "spawn_bin_entry_publish: IPNS {} verify failed: {}",
+                            bin_ipns_name,
+                            msg
+                        );
                         return Err(format!("Bin IPNS verify failed: {}", msg));
                     }
                     Err(cipherbox_api_client::ipns::VerifyError::Api(e)) => {
@@ -736,20 +644,22 @@ async fn resolve_and_fetch_file_meta(
     file_meta_ipns_name: &str,
 ) -> Result<Vec<u8>, String> {
     // D-01: route through the verified chokepoint.
-    let cid = match cipherbox_api_client::ipns::resolve_ipns_verified(api, file_meta_ipns_name).await {
-        Ok(v) => v.cid,
-        // D-04: Legacy variant removed — all-absent sig fields fail closed.
-        Err(cipherbox_api_client::ipns::VerifyError::Invalid(msg)) => {
-            // D-02: fail only this operation.
-            return Err(format!(
-                "file IPNS {} verify failed: {}",
-                file_meta_ipns_name, msg
-            ));
-        }
-        Err(cipherbox_api_client::ipns::VerifyError::Api(e)) => {
-            return Err(format!("resolve file IPNS: {}", e));
-        }
-    };
+    let cid =
+        match cipherbox_api_client::ipns::resolve_ipns_verified(api, file_meta_ipns_name).await {
+            // sc6-allow: 69-13 file-meta reencrypt (resolve_and_fetch_file_meta), not a node/v3 read
+            Ok(v) => v.cid,
+            // D-04: Legacy variant removed — all-absent sig fields fail closed.
+            Err(cipherbox_api_client::ipns::VerifyError::Invalid(msg)) => {
+                // D-02: fail only this operation.
+                return Err(format!(
+                    "file IPNS {} verify failed: {}",
+                    file_meta_ipns_name, msg
+                ));
+            }
+            Err(cipherbox_api_client::ipns::VerifyError::Api(e)) => {
+                return Err(format!("resolve file IPNS: {}", e));
+            }
+        };
     let enc_bytes = cipherbox_api_client::ipfs::fetch_content(api, &cid)
         .await
         .map_err(|e| format!("fetch file metadata: {}", e))?;
@@ -793,16 +703,15 @@ pub fn spawn_file_meta_reencrypt(
     std::thread::spawn(move || {
         // Fixed-size keys; a bad length is a terminal misconfiguration, not retryable.
         // Wrap the copies in `Zeroizing` so the fixed-size key bytes are wiped on drop.
-        let source_key_arr: Zeroizing<[u8; 32]> =
-            match source_folder_key.as_slice().try_into() {
-                Ok(arr) => Zeroizing::new(arr),
-                Err(_) => {
-                    log::error!(
-                        "File metadata re-encrypt on move failed: invalid source folder key length"
-                    );
-                    return;
-                }
-            };
+        let source_key_arr: Zeroizing<[u8; 32]> = match source_folder_key.as_slice().try_into() {
+            Ok(arr) => Zeroizing::new(arr),
+            Err(_) => {
+                log::error!(
+                    "File metadata re-encrypt on move failed: invalid source folder key length"
+                );
+                return;
+            }
+        };
         let dest_key_arr: Zeroizing<[u8; 32]> = match dest_folder_key.as_slice().try_into() {
             Ok(arr) => Zeroizing::new(arr),
             Err(_) => {
@@ -979,14 +888,15 @@ mod tests {
                 MockPublishResult::Conflict { .. } => {
                     // Re-resolve + re-make-record (the retry path)
                     let fresh_seq: u64 = 1; // simulated re-resolved sequence
-                    let retry_seq =
-                        fresh_seq.checked_add(1).ok_or_else(|| "overflow".to_string())?;
+                    let retry_seq = fresh_seq
+                        .checked_add(1)
+                        .ok_or_else(|| "overflow".to_string())?;
                     make_record_call_count += 1;
                     let _retry_record = format!("record-seq-{}", retry_seq);
 
-                    match retry_publish.unwrap_or(MockPublishResult::Err(
-                        "no retry configured".to_string(),
-                    )) {
+                    match retry_publish
+                        .unwrap_or(MockPublishResult::Err("no retry configured".to_string()))
+                    {
                         MockPublishResult::Success => {
                             record_publish_called = true;
                             return Ok(());
@@ -997,7 +907,9 @@ mod tests {
                             // Per D-01a: return Err (fire-and-forget → EIO)
                             if journal_entry_is_some {
                                 // Future: queue.put(&entry); return Ok
-                                return Err("persistent conflict — journal path placeholder".to_string());
+                                return Err(
+                                    "persistent conflict — journal path placeholder".to_string()
+                                );
                             } else {
                                 return Err(format!("persistent conflict for test-ipns-name"));
                             }
@@ -1036,7 +948,10 @@ mod tests {
             call_count, 2,
             "make_record must be called twice (initial + retry)"
         );
-        assert!(record_publish, "record_publish must be called on retry success");
+        assert!(
+            record_publish,
+            "record_publish must be called on retry success"
+        );
     }
 
     // Test 3: persistent conflict with journal_entry: None (the per-file/bin path per D-01a).
@@ -1052,7 +967,10 @@ mod tests {
             }),
             false, // journal_entry: None — the per-file/bin path per D-01a
         );
-        assert!(result.is_err(), "persistent conflict with journal:None must return Err");
+        assert!(
+            result.is_err(),
+            "persistent conflict with journal:None must return Err"
+        );
         let err_msg = result.unwrap_err();
         assert!(
             err_msg.to_lowercase().contains("conflict"),
@@ -1295,21 +1213,23 @@ mod tests {
     /// re-attempt and ultimately surface as a failure → EIO if persistent).
     #[test]
     fn revoke_non_apiresponse_errors_are_retryable() {
-        assert!(!super::is_non_retryable_revoke_error(&ApiError::AuthFailed(
-            "no token".to_string()
-        )));
+        assert!(!super::is_non_retryable_revoke_error(
+            &ApiError::AuthFailed("no token".to_string())
+        ));
         assert!(!super::is_non_retryable_revoke_error(
             &ApiError::DeserializationFailed("bad json".to_string())
         ));
-        assert!(!super::is_non_retryable_revoke_error(&ApiError::IpnsNotFound(
-            "k51".to_string()
-        )));
+        assert!(!super::is_non_retryable_revoke_error(
+            &ApiError::IpnsNotFound("k51".to_string())
+        ));
         // The internal "exhausted retries" sentinel (status 0) is NOT in the
         // 4xx range, so it does not short-circuit a fresh attempt.
-        assert!(!super::is_non_retryable_revoke_error(&ApiError::ApiResponse {
-            status: 0,
-            message: "exhausted".to_string(),
-        }));
+        assert!(!super::is_non_retryable_revoke_error(
+            &ApiError::ApiResponse {
+                status: 0,
+                message: "exhausted".to_string(),
+            }
+        ));
     }
 
     /// An empty ipns_name is a no-op: revoke_shares_blocking returns Ok(())
