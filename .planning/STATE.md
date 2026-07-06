@@ -5,15 +5,15 @@ milestone_name: Metadata and Sharing Refactor
 current_phase: 68.2
 current_phase_name: sdk-owned-read-chain-and-resolved-folder-listings
 status: executing
-stopped_at: Completed 68.2-04-PLAN.md
-last_updated: "2026-07-06T01:34:57.541Z"
+stopped_at: Completed 68.2-06-PLAN.md
+last_updated: "2026-07-06T02:45:05.820Z"
 last_activity: 2026-07-05
 last_activity_desc: Phase 68.2 execution started
 progress:
   total_phases: 11
   completed_phases: 9
   total_plans: 110
-  completed_plans: 103
+  completed_plans: 104
   percent: 82
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 ## Current Position
 
 Phase: 68.2 (sdk-owned-read-chain-and-resolved-folder-listings) — EXECUTING
-Plan: 6 of 12
+Plan: 7 of 12
 Status: Ready to execute
 Last activity: 2026-07-05 — Phase 68.2 execution started
 
@@ -239,6 +239,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 68.2 P03 | 20min | 2 tasks | 5 files |
 | Phase 68.2 P05 | 15min | 1 tasks | 1 files |
 | Phase 68.2 P04 | 20min | 2 tasks | 4 files |
+| Phase 68.2 P06 | 65min | 3 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -496,6 +497,9 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: [Phase 68.2-04]: serializeVault/deserializeVault combine encryptVaultKeys+serializeVaultBlobV3 and deserializeVaultBlobV3+unwrapKey x2 into single facade calls mirroring useAuth.ts's exact sequences
 - [Phase ?]: [Phase 68.2-04]: deserializeVault zeroes the already-unwrapped rootReadKey if the paired unwrapKey call for rootWriteKey fails (T-68.2-09)
 - [Phase ?]: [Phase 68.2-04]: resolveConfigBlob/publishConfigBlob deliberately skip rotationHighWater.enforceResolved -- BYO config blob is user-configured, not a rotation-governed node
+- [Phase 68.2-06]: handleSync/resyncFolder call BOTH client.listFolder and client.getFolderMetadata -- FolderNode.children stays SealedChildRef[] (write-path crypto identity), a store-level ResolvedChild[] projection is Plan 09's job
+- [Phase 68.2-06]: isFileRef widened to SealedChildRef | ResolvedChild union (not narrowed) after finding 6 live call sites outside this plan's scope that would break -- deliberate, documented exception to the plan's literal kind-cache-removal wording
+- [Phase 68.2-06]: FileListItem.tsx dual-prop pattern: item stays SealedChildRef (identity/crypto carrier for callbacks), new resolved: ResolvedChild prop drives kind/size/modifiedAt display
 
 ## Operator Next Steps
 
@@ -503,8 +507,8 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-06T01:34:57.535Z
-**Stopped at:** Completed 68.2-04-PLAN.md
+**Last session:** 2026-07-06T02:45:05.813Z
+**Stopped at:** Completed 68.2-06-PLAN.md
 **Resume file:** 
 None
 
@@ -512,3 +516,4 @@ None
 
 - GAP-1 (68.1-13): resolveFileMetadata AEAD Decryption-failed for CTR/streaming video preview and post-upload batch-download -- needs dedicated crypto debugging
 - GAP-2 (68.1-13): full-workflow.spec.ts 3.8 cold-reload multi-level IPNS DFS resolve times out -- needs retry-budget tuning or propagation investigation
+- 68.2-06 gap: FileList.tsx/FileBrowser.tsx/SelectionActionBar.tsx/ContextMenu.tsx/SharedFileBrowser.tsx are not owned by any of the 12 phase-68.2 plans, yet consume the SealedChildRef-vs-ResolvedChild data this phase's D-02/SC#1/#2 goals govern -- assign ownership (Plan 09 or a fast-follow) before Plan 11's kind-cache.ts deletion / allowlist-free grep gate
