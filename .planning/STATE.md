@@ -6,15 +6,15 @@ current_phase: 68.2
 current_phase_name: sdk-owned-read-chain-and-resolved-folder-listings
 status: verifying
 stopped_at: Completed 68.2-13-PLAN.md
-last_updated: "2026-07-06T08:57:23.784Z"
+last_updated: "2026-07-06T09:47:49.127Z"
 last_activity: 2026-07-05
 last_activity_desc: Phase 68.2 execution started
 progress:
   total_phases: 11
-  completed_phases: 9
+  completed_phases: 10
   total_plans: 112
-  completed_plans: 111
-  percent: 82
+  completed_plans: 112
+  percent: 91
 ---
 
 # Project State
@@ -247,6 +247,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 68.2 P11 | 45min | 3 tasks | 16 files |
 | Phase 68.2 P12 | 130 | - tasks | - files |
 | Phase 68.2 P13 | 8min | 2 tasks | 2 files |
+| Phase 68.2 P14 | 50min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -525,6 +526,7 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: SDK-READ-03 NOT marked complete: ensureFolderLoaded never re-resolves an already-loaded folder from the network, so the SC#5 desync fix is still incomplete -- root-caused, recommend dedicated gap-closure plan
 - [Phase 68.2-13]: doReresolveFolderInPlace sources RotationHighWater generation from existing.nodeGeneration (never the freshly relay-served envelope generation) and gates versionFloor:0, mirroring ensureRootFolderState/dfsFindFolder
 - [Phase 68.2-13]: reresolveFolderInPlace/doReresolveFolderInPlace split into two private methods so the reresolveInFlight dedup map is registered synchronously before the first await, making concurrent forceResolve calls observe the same in-flight promise
+- [Phase ?]: [Phase 68.2-14]: SDK-READ-03 marked [x] on the strength of shared-folder-desync.spec.ts step 3.1 passing cleanly (4/4 isolated); full-web-e2e-green portion documented as CI-fresh-container-authoritative-pending, not force-passed
 
 ## Operator Next Steps
 
@@ -532,7 +534,7 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-06T08:57:23.777Z
+**Last session:** 2026-07-06T09:47:11.448Z
 **Stopped at:** Completed 68.2-13-PLAN.md
 **Resume file:** 
 None
