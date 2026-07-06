@@ -629,15 +629,26 @@ export class CipherBoxClient {
    * Resolve an IPNS name to its raw PublishedNode envelope + current sequenceNumber.
    * Returns null when the IPNS record is absent (structurally unresolvable hop) —
    * NOT when a crypto/AEAD verification subsequently fails on the caller side.
+   *
+   * Threads `signatureVerified` from `sdkCore.resolveIpnsRecord` (68.2-01 —
+   * previously discarded) so read-path callers (`dfsFindFolder`,
+   * `ensureRootFolderState`) can fail closed on an unverified record BEFORE
+   * gating it through `RotationHighWater.enforceResolved` (ROT-07).
    */
-  private async resolvePublishedNode(
-    ipnsName: string
-  ): Promise<{ published: PublishedNode; sequenceNumber: bigint } | null> {
+  private async resolvePublishedNode(ipnsName: string): Promise<{
+    published: PublishedNode;
+    sequenceNumber: bigint;
+    signatureVerified: boolean;
+  } | null> {
     const resolved = await sdkCore.resolveIpnsRecord(ipnsName, this.ctx);
     if (!resolved) return null;
     const raw = await sdkCore.fetchFromIpfs(this.ctx, resolved.cid);
     const published = JSON.parse(new TextDecoder().decode(raw)) as PublishedNode;
-    return { published, sequenceNumber: resolved.sequenceNumber };
+    return {
+      published,
+      sequenceNumber: resolved.sequenceNumber,
+      signatureVerified: resolved.signatureVerified,
+    };
   }
 
   /**
@@ -747,6 +758,34 @@ export class CipherBoxClient {
     const resolvedRoot = await this.resolvePublishedNode(this.config.rootIpnsName);
     if (!resolvedRoot) return null;
 
+    // 68.2-01: gate the root resolve through the durable ROT-07 floor. The
+    // root has no parent SealedChildRef mirror to source `generation` from
+    // (unlike a child hop in dfsFindFolder below), so this mirrors the
+    // write-path gate (reconcileFolderSequence) and sources `generation`
+    // from the in-memory folderTree entry (absent on first contact — 0).
+    // `versionFloor` is 0: the root is the client's own self-bootstrapped
+    // node, not a covering grant from another party, so there is no
+    // owner-vouched cold-device floor to apply beyond "non-negative".
+    if (this.config.rotationHighWater) {
+      if (!resolvedRoot.signatureVerified) {
+        throw new Error(
+          `IPNS resolve for ${this.config.rootIpnsName} returned an unverified record -- refusing to gate durable floors on it`
+        );
+      }
+      if (resolvedRoot.sequenceNumber > BigInt(Number.MAX_SAFE_INTEGER)) {
+        throw new Error(
+          `IPNS sequence number for ${this.config.rootIpnsName} exceeds Number.MAX_SAFE_INTEGER -- refusing lossy floor conversion`
+        );
+      }
+      const nodeGeneration = this.folderTree.get(this.config.rootIpnsName)?.nodeGeneration ?? 0;
+      await this.config.rotationHighWater.enforceResolved({
+        nodeId: this.config.rootIpnsName,
+        seq: Number(resolvedRoot.sequenceNumber),
+        generation: nodeGeneration,
+        versionFloor: 0,
+      });
+    }
+
     // Fail closed on a wrong/corrupted root key — a genuine crypto/config error,
     // not a structurally-unresolvable hop, so this is intentionally NOT caught.
     const rootNode = await unsealNode(
@@ -848,6 +887,37 @@ export class CipherBoxClient {
       let childReadKey: Uint8Array | null = null;
       let childWriteKey: Uint8Array | null = null;
       try {
+        // 68.2-01 (ROT-07, SDK-READ-01): gate this read-path resolve through
+        // the durable anti-rollback floor BEFORE the resolve is trusted for
+        // any unseal below. Fail closed on an unverified record BEFORE any
+        // floor mutation (T-68.2-02) -- a relay could otherwise forge a huge
+        // seq/generation and permanently wedge this node behind a regression
+        // error. Generation-source rule (Pitfall 3 / T-68.2-03): sources
+        // `generation` from childRef.generation (the PARENT SealedChildRef
+        // mirror), NEVER childResolved.published.generation (the child's own
+        // envelope generation) -- matching the unsealChildReadKey call below.
+        if (this.config.rotationHighWater) {
+          if (!childResolved.signatureVerified) {
+            throw new Error(
+              `IPNS resolve for ${childRef.ipnsName} returned an unverified record -- refusing to gate durable floors on it`
+            );
+          }
+          if (
+            childResolved.sequenceNumber > BigInt(Number.MAX_SAFE_INTEGER) ||
+            childRef.versionFloor > BigInt(Number.MAX_SAFE_INTEGER)
+          ) {
+            throw new Error(
+              `IPNS sequence number for ${childRef.ipnsName} exceeds Number.MAX_SAFE_INTEGER -- refusing lossy floor conversion`
+            );
+          }
+          await this.config.rotationHighWater.enforceResolved({
+            nodeId: childRef.ipnsName,
+            seq: Number(childResolved.sequenceNumber),
+            generation: childRef.generation,
+            versionFloor: Number(childRef.versionFloor),
+          });
+        }
+
         // Generation-source rule: childRef.generation (parent mirror), NEVER
         // childResolved.published.generation (child's own envelope generation).
         childReadKey = await unsealChildReadKey(
