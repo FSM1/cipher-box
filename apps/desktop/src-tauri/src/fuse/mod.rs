@@ -171,13 +171,46 @@ pub async fn mount_filesystem(
     // node/v3 anti-rollback gate: sidecars live adjacent to the write journal
     // (69-09 Slice 1). Capture before `journal_dir` is moved into WriteQueue.
     let high_water = cipherbox_sdk::new_journal_high_water(&journal_dir);
+    // Replay needs the journal dir to rebuild its own high-water gate; capture a
+    // clone before `journal_dir` is moved into WriteQueue::new below.
+    let replay_journal_dir = journal_dir.clone();
     let journal = cipherbox_sdk::WriteQueue::new(journal_dir, JOURNAL_MAX_RETRIES);
+
+    // node/v3 root symmetric keys (read_key/write_key) for the root node.
+    //
+    // E2E-RISK (69-09 Slice 5c): node/v3 root read/write keys are RANDOMLY
+    // generated at vault registration (sdk-core `registration.ts`
+    // rootReadKey/rootWriteKey) and persisted server-side, recovered into the
+    // client key state at login. The desktop `KeyState` does NOT yet carry those
+    // node/v3 root keys (the v2.0 client runtime that recovers them is stubbed —
+    // phase 63). Until that recovery is wired, we bridge from the legacy
+    // `root_folder_key`: `read_key` reuses the 32-byte root folder key, and
+    // `write_key` is a domain-separated PLACEHOLDER transform. These will NOT
+    // match the persisted keys of a real node/v3 vault, so mount reads/writes are
+    // COMPILE-correct and unit/CI-green but their runtime correctness is gated by
+    // the later local sdk-e2e + desktop-e2e run, NOT by this slice.
+    let root_read_key: Zeroizing<[u8; 32]> = {
+        let mut k = [0u8; 32];
+        let src = root_folder_key.as_slice();
+        let n = src.len().min(32);
+        k[..n].copy_from_slice(&src[..n]);
+        Zeroizing::new(k)
+    };
+    let root_write_key: Zeroizing<[u8; 32]> = {
+        let mut k = *root_read_key;
+        for b in k.iter_mut() {
+            *b ^= 0xA5;
+        }
+        Zeroizing::new(k)
+    };
 
     let mut inodes = cipherbox_fuse::inode::InodeTable::new();
     if let Some(root) = inodes.get_mut(cipherbox_fuse::inode::ROOT_INO) {
         root.kind = cipherbox_fuse::inode::InodeKind::Root {
-            ipns_private_key: root_ipns_private_key.map(Zeroizing::new),
-            ipns_name: Some(root_ipns_name.clone()),
+            ipns_name: root_ipns_name.clone(),
+            read_key: root_read_key.clone(),
+            write_key: root_write_key.clone(),
+            ipns_private_key: Zeroizing::new(root_ipns_private_key.clone().unwrap_or_default()),
         };
     }
 
@@ -186,17 +219,17 @@ pub async fn mount_filesystem(
     let (filepointer_tx, filepointer_rx) = std::sync::mpsc::channel::<PendingFilePointer>();
     let (upload_tx, upload_rx) = std::sync::mpsc::channel::<cipherbox_fuse::FsEvent>();
 
-    // Pre-populate root folder and subfolders via shared prepopulate helper.
-    // Returns initial_sequences for seeding the PublishCoordinator.
-    let mut metadata_cache = cipherbox_fuse::cache::MetadataCache::new();
+    // Pre-populate root folder and subfolders via shared prepopulate helper
+    // (node/v3 gated owned listing). Returns initial_sequences for seeding the
+    // PublishCoordinator (empty under node/v3 — see prepopulate module docs).
+    let metadata_cache = cipherbox_fuse::cache::MetadataCache::new();
     let initial_sequences = crate::fuse::prepopulate::prepopulate_filesystem(
         &state.sdk.api,
         &mut inodes,
-        &mut metadata_cache,
+        &high_water,
         &root_ipns_name,
-        root_folder_key.as_slice(),
-        &private_key,
-        &public_key,
+        &root_read_key,
+        &root_write_key,
     )
     .await;
 
@@ -234,16 +267,19 @@ pub async fn mount_filesystem(
     // ops are individually bounded by `tokio::time::timeout` inside replay_for_vault), and the
     // mount proceeds immediately. Errors are logged but never fail the mount.
     //
-    // Clone every borrowed argument into owned values BEFORE `private_key`/`public_key`/
-    // `root_folder_key` are moved into CipherBoxFS (wrapped in Zeroizing) below — so both the
-    // replay task and the FS own their own copies (no move-then-borrow). Replay sends no
+    // Copy every argument into owned values for the replay task: the node/v3 root
+    // read/write keys are `Copy` [u8;32]s and `replay_journal_dir` was cloned
+    // before the journal dir moved into WriteQueue::new — so both the replay task
+    // and the FS own their own copies (no move-then-borrow). Replay sends no
     // FsEvent::UploadComplete, so spawning before CipherBoxFS construction is race-free.
     {
         let replay_journal = journal.clone();
         let replay_api = state.sdk.api.clone();
-        let replay_private_key = private_key.clone();
-        let replay_public_key = public_key.clone();
-        let replay_root_folder_key = root_folder_key.clone();
+        let replay_journal_dir = replay_journal_dir;
+        // node/v3 root material (copies of the [u8;32] keys) — replaces the legacy
+        // private_key/public_key/root_folder_key replay args.
+        let replay_root_read_key = *root_read_key;
+        let replay_root_write_key = *root_write_key;
         let replay_root_ipns_name = root_ipns_name.clone();
         let replay_coordinator = publish_coordinator.clone();
         let replay_tee_public_key = tee_public_key.clone();
@@ -252,9 +288,9 @@ pub async fn mount_filesystem(
             cipherbox_fuse::replay_for_vault(
                 &replay_journal,
                 replay_api,
-                &replay_private_key,
-                &replay_public_key,
-                &replay_root_folder_key,
+                replay_journal_dir,
+                &replay_root_read_key,
+                &replay_root_write_key,
                 &replay_root_ipns_name,
                 replay_coordinator,
                 replay_tee_public_key.as_deref(),
