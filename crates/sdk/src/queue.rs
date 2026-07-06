@@ -1158,6 +1158,90 @@ mod tests {
         assert_eq!(loaded[0].id, "valid1");
     }
 
+    /// T-69-18-01 (D-04 clean flag-day): a STALE pre-cutover on-disk entry — well-formed
+    /// JSON in the OLD hex-ECIES JournalOp shape, carrying NONE of the node/v3 crypto fields
+    /// (child_published_node/parent_child_ref/parent_write_child_ref) — must fail serde under
+    /// the reshaped types and be `log::warn!`+SKIPPED by `load_all_for_vault`, never bridged
+    /// and never panicked.
+    ///
+    /// This proves the reshape added NO dual-format deserializer: because Task 1 added no
+    /// `#[serde(alias)]`/`#[serde(default)]` compat for the node/v3 fields, the legacy entry
+    /// hits the EXISTING serde Err-skip loop (the same idiom as
+    /// `malformed_json_is_skipped_not_panicked`) with zero new migration/bridge code. A
+    /// current node/v3 entry written alongside still loads, proving the skip is selective.
+    #[test]
+    fn stale_legacy_shaped_entry_fails_closed() {
+        let (q, dir) = make_temp_queue();
+
+        // A well-formed JSON in the PRE-CUTOVER UploadFile shape: old hex-ECIES key fields,
+        // no node/v3 fields. Authored by hand because the reshaped type can no longer PRODUCE
+        // this shape. It is valid JSON but does not match the node/v3 JournalOp.
+        let legacy_upload = r#"{
+            "id": "stale-legacy-upload",
+            "vault_root_ipns": "k51vaultstale",
+            "op": {
+                "UploadFile": {
+                    "ciphertext_b64": "Y3Q=",
+                    "wrapped_key_hex": "776b",
+                    "iv_hex": "6976",
+                    "file_meta_ipns_name": "k51file",
+                    "file_ipns_key_hex": null,
+                    "parent_folder_ipns_name": "k51parent",
+                    "parent_ipns_key_hex": "6563696573",
+                    "filename": "report.txt",
+                    "size": 1,
+                    "created_at_ms": 1000
+                }
+            },
+            "retries": 0,
+            "status": "Pending"
+        }"#;
+        std::fs::write(dir.join("stale-legacy-upload.json"), legacy_upload)
+            .expect("write stale upload");
+
+        // A stale pre-cutover MkdirPublish, likewise old-shaped.
+        let legacy_mkdir = r#"{
+            "id": "stale-legacy-mkdir",
+            "vault_root_ipns": "k51vaultstale",
+            "op": {
+                "MkdirPublish": {
+                    "child_ipns_name": "k51child",
+                    "child_folder_key_hex": "666b",
+                    "child_ipns_key_hex": "636b",
+                    "parent_folder_ipns_name": "k51parent",
+                    "parent_ipns_key_hex": "6563696573",
+                    "name": "folder1",
+                    "created_at_ms": 1000
+                }
+            },
+            "retries": 0,
+            "status": "Pending"
+        }"#;
+        std::fs::write(dir.join("stale-legacy-mkdir.json"), legacy_mkdir)
+            .expect("write stale mkdir");
+
+        // Only the two stale entries exist → load returns EMPTY (both skipped, no panic).
+        let loaded = q
+            .load_all_for_vault("k51vaultstale")
+            .expect("load must not panic on stale entries");
+        assert!(
+            loaded.is_empty(),
+            "stale pre-cutover entries must be skipped (fail closed), not deserialized"
+        );
+
+        // A current node/v3 entry written alongside the stale ones still loads — the skip is
+        // selective (per-entry serde Err), not a blanket load failure.
+        q.put(&make_upload_entry("fresh-v3", "k51vaultstale"))
+            .expect("put fresh node/v3 entry");
+        let loaded2 = q
+            .load_all_for_vault("k51vaultstale")
+            .expect("load with fresh entry");
+        assert_eq!(loaded2.len(), 1, "only the fresh node/v3 entry loads");
+        assert_eq!(loaded2[0].id, "fresh-v3");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     // ---- node/v3 D-07 dual-plane round-trip + ordering by created_at_ms tests ----
 
     /// D-07: an UploadFile entry carries BOTH a read-plane SealedChildRef (keyed by
