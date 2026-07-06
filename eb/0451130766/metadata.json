@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "eb0451130766",
+  "strategy": "manual-commit",
+  "branch": "feat/sdk-owned-read-chain-and-resolved-folder-listings",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/eb/0451130766/0/metadata.json",
+      "transcript": "/eb/0451130766/0/full.jsonl",
+      "content_hash": "/eb/0451130766/0/content_hash.txt",
+      "prompt": "/eb/0451130766/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 19609,
+    "cache_creation_tokens": 636015,
+    "cache_read_tokens": 9890675,
+    "output_tokens": 117979,
+    "api_call_count": 51
+  }
+}
