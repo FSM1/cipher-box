@@ -1,4 +1,4 @@
-import { unpinFromIpfs } from '../lib/api/ipfs';
+import { getSdkClient } from '../lib/sdk-provider';
 import { useQuotaStore } from '../stores/quota.store';
 import { logger } from '../lib/logger';
 
@@ -13,8 +13,8 @@ import { logger } from '../lib/logger';
  * @param sizeBytes - Size of the file (for quota update)
  */
 export async function deleteFile(cid: string, sizeBytes: number): Promise<void> {
-  // 1. Unpin from IPFS via backend
-  await unpinFromIpfs(cid);
+  // 1. Unpin from IPFS via the SDK's IPFS-transport facade (D-07)
+  await getSdkClient().unpin(cid);
 
   // 2. Update local quota
   const quotaStore = useQuotaStore.getState();

@@ -1,6 +1,7 @@
 import { decryptAesGcm, decryptAesCtr, unwrapKey, hexToBytes, clearBytes } from '@cipherbox/crypto';
 import type { SealedChildRef } from '@cipherbox/core';
-import { fetchFromIpfs, DownloadProgressCallback } from '../lib/api/ipfs';
+import type { DownloadProgressCallback } from '@cipherbox/sdk-core';
+import { getSdkClient } from '../lib/sdk-provider';
 import { UploadedFile } from './upload.service';
 import { resolveFileMetadata } from './file-metadata.service';
 
@@ -36,8 +37,8 @@ export async function downloadFile(
   privateKey: Uint8Array,
   onProgress?: DownloadProgressCallback
 ): Promise<Uint8Array> {
-  // 1. Fetch encrypted file from IPFS
-  const ciphertext = await fetchFromIpfs(metadata.cid, onProgress);
+  // 1. Fetch encrypted file from IPFS via the SDK's IPFS-transport facade (D-07)
+  const ciphertext = await getSdkClient().downloadBytes(metadata.cid, onProgress);
 
   // 2. Convert hex strings to bytes
   const iv = hexToBytes(metadata.iv);
@@ -122,7 +123,7 @@ export async function downloadFileFromIpns(params: {
 }): Promise<Uint8Array> {
   const { metadata } = await resolveFileMetadata(params.fileRef, params.folderKey);
 
-  const ciphertext = await fetchFromIpfs(metadata.cid, params.onProgress);
+  const ciphertext = await getSdkClient().downloadBytes(metadata.cid, params.onProgress);
   const iv = base64ToBytes(metadata.fileIv);
   const fileKey = metadata.fileKey;
 

@@ -1,6 +1,5 @@
 import { encryptFile, EncryptedFileResult } from './file-crypto.service';
-import { addToIpfs, AddResponse } from '../lib/api/ipfs';
-import { CancelToken } from 'axios';
+import { getSdkClient } from '../lib/sdk-provider';
 
 const MAX_RETRIES = 3;
 const RETRY_BASE_DELAY = 500;
@@ -46,23 +45,26 @@ async function withRetry<T>(
 }
 
 /**
- * Upload a single file: encrypt then upload to IPFS.
+ * Upload a single file: encrypt then upload to IPFS via the SDK's
+ * IPFS-transport facade (D-07, `client.uploadBytes`). Progress is threaded
+ * through verbatim; the facade does not currently accept a cancel token
+ * (68.2-03 scope) -- this function has no production callers today (only
+ * the `UploadedFile` type is reused by `download.service.ts`), so that is
+ * not a live regression.
  */
 export async function uploadFile(
   file: File,
   userPublicKey: Uint8Array,
-  onProgress?: (percent: number) => void,
-  cancelToken?: CancelToken
+  onProgress?: (percent: number) => void
 ): Promise<UploadedFile> {
   // 1. Encrypt the file
   const encrypted: EncryptedFileResult = await encryptFile(file, userPublicKey);
 
-  // 2. Upload to IPFS with retry
-  // Cast to ArrayBuffer for TypeScript 5.9 compatibility (Uint8Array.buffer is ArrayBufferLike)
-  const blob = new Blob([encrypted.ciphertext.buffer as ArrayBuffer], {
-    type: 'application/octet-stream',
-  });
-  const result: AddResponse = await withRetry(() => addToIpfs(blob, onProgress, cancelToken));
+  // 2. Upload to IPFS with retry via the SDK facade (uploadBytes takes the
+  // Uint8Array directly -- no Blob construction needed here).
+  const result = await withRetry(() =>
+    getSdkClient().uploadBytes(encrypted.ciphertext, onProgress)
+  );
 
   return {
     cid: result.cid,
