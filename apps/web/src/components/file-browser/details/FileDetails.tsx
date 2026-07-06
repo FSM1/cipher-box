@@ -1,10 +1,11 @@
-import type { SealedChildRef, NodeContent } from '@cipherbox/core';
+import type { NodeContent } from '@cipherbox/core';
+import type { ResolvedChild } from '@cipherbox/sdk';
 import { formatDate } from '../../../utils/format';
 import { CopyableValue, DetailRow } from './DetailsPrimitives';
 import { VersionHistory } from './VersionHistory';
 
 /**
- * File details content (node/v3: SealedChildRef display; content resolved via read-chain).
+ * File details content (node/v3: ResolvedChild display; content resolved via read-chain).
  * TODO(phase 63): wire read-chain navigation to load NodeContent for display.
  */
 export function FileDetails({
@@ -17,7 +18,7 @@ export function FileDetails({
   parentFolderId,
   onVersionAction,
 }: {
-  item: SealedChildRef;
+  item: ResolvedChild;
   metadataCid: string | null;
   metadataLoading: boolean;
   /** NodeContent resolved via read-chain — null until phase-63 read-chain lands. */

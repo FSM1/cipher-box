@@ -3,6 +3,13 @@
  *
  * Follows the exact same zero-knowledge pattern as BYO-IPFS config:
  * ECIES encrypt with user's publicKey, upload to IPFS, publish IPNS record.
+ *
+ * Resolve/publish/upload/download route through the injected `CipherBoxClient`
+ * facade (`resolveConfigBlob`/`publishConfigBlob`/`uploadBytes`/`downloadBytes`,
+ * D-07) instead of calling sdk-core/ipns.service directly. Callers pass either
+ * the real SDK client (post-login) or a throwaway bootstrap client
+ * (`createBootstrapClient`, pre-login) -- these facade methods don't depend on
+ * which one is supplied.
  */
 
 import {
@@ -13,9 +20,8 @@ import {
   hexToBytes,
   bytesToHex,
 } from '@cipherbox/crypto';
-import { type VaultSettings, DEFAULT_VAULT_SETTINGS, validateVaultSettings } from '@cipherbox/core';
-import { addToIpfs, fetchFromIpfs } from '../lib/api/ipfs';
-import { createAndPublishIpnsRecord, resolveIpnsRecord } from './ipns.service';
+import { type VaultSettings, DEFAULT_VAULT_SETTINGS, validateVaultSettings } from '@cipherbox/sdk';
+import type { CipherBoxClient } from '@cipherbox/sdk';
 
 /** Timeout for loading vault settings from IPNS (matches BYO config timeout) */
 const LOAD_TIMEOUT_MS = 10_000;
@@ -25,24 +31,28 @@ const LOAD_TIMEOUT_MS = 10_000;
  *
  * Follows the exact BYO-IPFS config load pattern:
  * 1. Derive IPNS keypair via HKDF
- * 2. Resolve IPNS name to CID
- * 3. Fetch encrypted blob from IPFS
+ * 2. Resolve IPNS name to CID (via client.resolveConfigBlob)
+ * 3. Fetch encrypted blob from IPFS (via client.downloadBytes)
  * 4. ECIES-decrypt with user's privateKey
  * 5. Parse JSON and validate
  *
  * Returns DEFAULT_VAULT_SETTINGS on any failure (graceful degradation).
  *
+ * @param client - SDK facade client (real or bootstrap)
  * @param userPrivateKey - User's secp256k1 private key
  * @returns Validated VaultSettings (defaults on failure)
  */
-export async function loadVaultSettings(userPrivateKey: Uint8Array): Promise<VaultSettings> {
+export async function loadVaultSettings(
+  client: CipherBoxClient,
+  userPrivateKey: Uint8Array
+): Promise<VaultSettings> {
   const inner = async (): Promise<VaultSettings> => {
     const keypair = await deriveVaultSettingsIpnsKeypair(userPrivateKey);
 
-    const resolved = await resolveIpnsRecord(keypair.ipnsName);
+    const resolved = await client.resolveConfigBlob(keypair.ipnsName);
     if (!resolved?.cid) return { ...DEFAULT_VAULT_SETTINGS };
 
-    const encrypted = await fetchFromIpfs(resolved.cid);
+    const encrypted = await client.downloadBytes(resolved.cid);
     const plaintext = await unwrapKey(encrypted, userPrivateKey);
     let parsed: unknown;
     try {
@@ -74,21 +84,23 @@ export async function loadVaultSettings(userPrivateKey: Uint8Array): Promise<Vau
  * Follows the exact BYO-IPFS config save pattern:
  * 1. Serialize settings JSON
  * 2. ECIES-encrypt with user's publicKey
- * 3. Upload encrypted blob to IPFS
- * 4. Derive IPNS keypair and resolve current sequence number
- * 5. Publish updated IPNS record
+ * 3. Upload encrypted blob to IPFS (via client.uploadBytes)
+ * 4. Derive IPNS keypair and resolve current sequence number (via client.resolveConfigBlob)
+ * 5. Publish updated IPNS record (via client.publishConfigBlob)
  *
+ * @param params.client - SDK facade client (real or bootstrap)
  * @param params.settings - Validated VaultSettings to save
  * @param params.userPublicKey - User's secp256k1 public key
  * @param params.userPrivateKey - User's secp256k1 private key
  */
 export async function saveVaultSettings(params: {
+  client: CipherBoxClient;
   settings: VaultSettings;
   userPublicKey: Uint8Array;
   userPrivateKey: Uint8Array;
   teeKeys?: { currentEpoch: number; currentPublicKey: string } | null;
 }): Promise<void> {
-  const { settings, userPublicKey, userPrivateKey, teeKeys } = params;
+  const { client, settings, userPublicKey, userPrivateKey, teeKeys } = params;
 
   // 1. Serialize and encrypt
   const plaintext = new TextEncoder().encode(JSON.stringify(settings));
@@ -99,19 +111,18 @@ export async function saveVaultSettings(params: {
     clearBytes(plaintext);
   }
 
-  // 2. Upload to IPFS (addToIpfs expects a Blob)
-  const blob = new Blob([encrypted as BlobPart]);
-  const { cid } = await addToIpfs(blob);
+  // 2. Upload to IPFS
+  const { cid } = await client.uploadBytes(encrypted);
 
   // 3. Derive IPNS keypair
   const keypair = await deriveVaultSettingsIpnsKeypair(userPrivateKey);
 
   // 4. Resolve current sequence number for monotonic increment.
-  // resolveIpnsRecord returns null for a true not-found (first publish) and THROWS for
+  // resolveConfigBlob returns null for a true not-found (first publish) and THROWS for
   // verification/transient failures — let those propagate so a tampered or unverifiable
   // existing record fails closed instead of being silently masked as a first publish (seq 1).
   let sequenceNumber = 1n;
-  const resolved = await resolveIpnsRecord(keypair.ipnsName);
+  const resolved = await client.resolveConfigBlob(keypair.ipnsName);
   if (resolved) {
     sequenceNumber = BigInt(resolved.sequenceNumber ?? 0) + 1n;
   }
@@ -127,7 +138,7 @@ export async function saveVaultSettings(params: {
   }
 
   // 6. Create and publish IPNS record
-  const result = await createAndPublishIpnsRecord({
+  const result = await client.publishConfigBlob({
     ipnsPrivateKey: keypair.privateKey,
     ipnsName: keypair.ipnsName,
     metadataCid: cid,

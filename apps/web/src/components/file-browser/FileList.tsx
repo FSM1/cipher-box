@@ -1,10 +1,39 @@
-import { type DragEvent, type MouseEvent, useRef } from 'react';
+import { type DragEvent, type MouseEvent, useMemo, useRef } from 'react';
 import type { SealedChildRef } from '@cipherbox/core';
+import type { ResolvedChild } from '@cipherbox/sdk';
 import { useUploadStore } from '../../stores/upload.store';
 import type { PerFileUpload } from '../../stores/upload.store';
 import { FileListItem, type DragItem } from './FileListItem';
 import { UploadListItem } from './UploadListItem';
 import { ParentDirRow } from './ParentDirRow';
+
+/**
+ * 68.2-11: builds the `ResolvedChild` display projection `FileListItem`
+ * renders from (SDK-READ-02, D-08 no-regression render repoint), keyed by
+ * ipnsName off the caller-supplied `resolvedByIpnsName` map -- mirrors the
+ * SharedFileBrowser/SharedFolderRow pattern (68.2-08) of looking up the
+ * SDK-resolved listing (the folder store's `children: ResolvedChild[]`,
+ * Plan 09) rather than falling back to the retired kind-cache. A miss (item
+ * not yet present in the resolved listing, e.g. an in-flight sync race)
+ * falls back to a folder-safe default with unknown size/modifiedAt --
+ * `SealedChildRef` no longer carries a size/modifiedAt display mirror
+ * (D-08/68.2-12 revert; size/modifiedAt are sourced from `ResolvedChild`
+ * only).
+ */
+function toResolvedChildView(
+  ref: SealedChildRef,
+  resolved: ResolvedChild | undefined
+): ResolvedChild {
+  if (resolved) return resolved;
+  return {
+    ipnsName: ref.ipnsName,
+    name: ref.name,
+    kind: 'folder',
+    size: undefined,
+    modifiedAt: 0,
+    sequence: 0,
+  };
+}
 
 /**
  * Virtual entry representing an in-progress upload in the sorted file list.
@@ -25,6 +54,12 @@ type UploadVirtualEntry = {
 type FileListProps = {
   /** Items to display (files and folders) */
   items: SealedChildRef[];
+  /**
+   * The SDK-resolved display projection for `items` (SDK-READ-02) -- kind/
+   * size/modifiedAt pre-resolved, looked up per-item by ipnsName. A miss
+   * (item not yet present) falls back to a folder-safe default.
+   */
+  resolvedChildren: ResolvedChild[];
   /** Set of currently selected item IDs */
   selectedIds: Set<string>;
   /** Parent folder ID (for drag operations) */
@@ -95,6 +130,7 @@ function sortItems(items: SealedChildRef[]): SealedChildRef[] {
  */
 export function FileList({
   items,
+  resolvedChildren,
   selectedIds,
   parentId,
   folderKey,
@@ -109,6 +145,13 @@ export function FileList({
   onExternalFileDrop: _onExternalFileDrop, // TODO(phase 63): drop disabled until Node.kind discrimination
   onRetryUpload,
 }: FileListProps) {
+  // 68.2-11: per-ipnsName lookup into the SDK-resolved display projection
+  // (mirrors SharedFileBrowser's resolvedByIpnsName, 68.2-08).
+  const resolvedByIpnsName = useMemo(
+    () => new Map(resolvedChildren.map((r) => [r.ipnsName, r])),
+    [resolvedChildren]
+  );
+
   // Subscribe to upload entries for this folder only (IDs + status, not progress).
   // Progress updates re-render individual UploadListItem rows via their own fine-grained selectors.
   // Custom equality via ref prevents re-renders on every progress tick.
@@ -207,6 +250,7 @@ export function FileList({
             <FileListItem
               key={item.ipnsName}
               item={item}
+              resolved={toResolvedChildView(item, resolvedByIpnsName.get(item.ipnsName))}
               isSelected={selectedIds.has(item.ipnsName)}
               parentId={parentId}
               selectedIds={selectedIds}

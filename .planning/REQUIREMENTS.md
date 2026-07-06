@@ -81,6 +81,15 @@ The sdk-core read/write chains shipped in Phases 63/65 but the web app + `Cipher
 - [x] **WEB-03**: The web app's shared + sharing runtime is wired — shared-folder read navigation + shared-file download via `navigateReadChain`, shared-folder write ops (rename/delete/move/batch move, shared file update), plus share creation, permission upgrade, and invite create+claim (replaces the shared `phase 63/65` stubs)
 - [ ] **WEB-04**: The full `tests/web-e2e` Playwright suite passes end-to-end against the standard local/CI stack (login→browse→upload→download→share→delete→versions→rotation UX), validating Phases 62–68 at runtime; `apps/web/src` adds zero `*.spec.ts` files (SC#5 doctrine — logic in SDK, UI via web-e2e) — **NOT YET MET**: 68.1-13 fixed 5 real bugs (see 68.1-13-SUMMARY.md) but the full suite was not re-confirmed green; two new gaps (GAP-1 resolveFileMetadata AEAD failure, GAP-2 cold-reload IPNS DFS timeout) plus pre-existing known gaps (SHARE-WRITE-KEY, fetchShareKeys stub) remain. SC#1 (no reachable stub throw) and SC#5 (zero web unit specs) both hold.
 
+### SDK-READ — SDK-owned read chain and resolved folder listings
+
+Phase 68.1 wired the web app onto a parallel web-layer read path (`ipns.service.ts`, `file-metadata.service.ts`, `kind-cache.ts`, `useFileSize.ts`) that duplicates the SDK's own read chain and maintains a second folder-state source of truth (`folder.store.ts`), producing the Web/SDK folder-state desync bug class. These requirements move the gated read chain + listing resolution into `packages/sdk` and reduce the web to a projection. Both the read AND write TypeScript paths become SDK-mediated (D-07 full boundary).
+
+- [x] **SDK-READ-01**: The gated read chain lives entirely in `packages/sdk`/`packages/sdk-core` — IPNS resolve, the ROT-07 durable anti-rollback gate (`RotationHighWater.enforceResolved`, reusing the existing `HighWaterStore` seam, injectable/mockable for Node unit tests), IPFS fetch, node unseal, and per-child metadata resolution — and the gated listing path is the single read entrypoint that always enforces the floor gate; raw `resolveIpnsRecord` becomes SDK-internal only (never on the read path, never in `apps/web/src`). `apps/web/src/services/ipns.service.ts` and `file-metadata.service.ts` are deleted.
+- [x] **SDK-READ-02**: The SDK exposes resolved folder listings — `listFolder(ipnsName)` / `listSharedFolder(...)` returning `ResolvedChild[]` (carrying `ipnsName`, `name`, `kind`, `size?`, `modifiedAt`, `sequence` per child, resolved once per folder load and cached in the SDK keyed by IPNS name) plus a `folder:updated` event; the web file list, shared browser, and details dialogs render from it with no web-side per-child resolve or cache. `apps/web/src/lib/kind-cache.ts` and `apps/web/src/hooks/useFileSize.ts` are deleted.
+- [x] **SDK-READ-03**: `apps/web/src/stores/folder.store.ts` is a thin projection of SDK state/events (single folder-state owner = the SDK `folderTree`), with belt-and-suspenders freshness — re-resolve on every folder open/navigation AND poll-driven invalidation for the currently-open folder — closing the desync bug class; a new `tests/web-e2e` proves an owner (or a second client) sees a grantee's upload into a shared folder without the owner writing first, with size/modifiedAt rendered from the resolved listing, and the full web-e2e suite stays green.
+- [x] **SDK-READ-04**: The `apps/web/src` ↔ SDK boundary is enforced (D-07, full scope): `apps/web/src` makes zero runtime calls into `@cipherbox/sdk-core` or `@cipherbox/core` and no raw IPFS/IPNS access on either the read or write path (type-only `import type` allowed) — acceptance is an allowlist-free `grep` gate across all of `apps/web/src`, including BYO-pinning settings (`ConnectionTest.tsx`/`StorageTab.tsx`) and auth-bootstrap/device-registry crypto (`useAuth.ts`/`device-registry.service.ts`) — and the interim `SealedChildRef.size`/`modifiedAt` mirror (commit `ba3e0229a`) is reverted LAST so `SealedChildRef` is back to its frozen NODE-03 five-field set with no display-regression window.
+
 ## Future Requirements (deferred)
 
 ### Capability layer (Tier 3)
@@ -156,15 +165,19 @@ Which phases cover which requirements. Populated during roadmap creation.
 | WEB-02 | Phase 68.1 | Complete |
 | WEB-03 | Phase 68.1 | Complete |
 | WEB-04 | Phase 68.1 | Gaps remain — see 68.1-13-SUMMARY.md |
+| SDK-READ-01 | Phase 68.2 | Complete |
+| SDK-READ-02 | Phase 68.2 | Complete |
+| SDK-READ-03 | Phase 68.2 | Complete |
+| SDK-READ-04 | Phase 68.2 | Complete |
 | TEST-03 | Phase 69 | Pending |
 
 **Coverage:**
 
-- v1 requirements: 39 total (CRYPTO ×3, NODE ×6, READ ×5, ROT ×7, WRITE ×4, TEE ×7, DATA ×4, TEST ×3)
-- Mapped to phases: 39
+- v1 requirements: 47 total (CRYPTO ×3, NODE ×6, READ ×5, ROT ×7, WRITE ×4, TEE ×7, DATA ×4, TEST ×3, WEB ×4, SDK-READ ×4)
+- Mapped to phases: 47
 - Unmapped: 0 ✓
 
 ---
 
 _Requirements defined: 2026-06-27_
-_Last updated: 2026-06-27 — traceability table populated, coverage 39/39_
+_Last updated: 2026-07-06 — registered SDK-READ-01..04 (Phase 68.2, D-07 full-boundary read+write); coverage 47/47_

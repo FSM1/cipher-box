@@ -1,38 +1,31 @@
 /**
  * useSharedNavigationActions -- Navigation action handlers for shared content.
  *
- * Wires the shared-folder read-chain (Node v3): navigateToShare / navigateToSubfolder
- * descend by unwrapping the grant's readDescriptorRef (root) or unsealing a
- * SealedChildRef.readKeySealed (subfolder hop, generation-source rule --
- * childRef.generation, the PARENT MIRROR, never the child's own envelope
- * generation, §2.6). navigateUp / navigateToBreadcrumb restore prior levels
- * from the in-memory nav stack (no network round-trip). downloadSharedFile
- * walks the full grant->leaf chain via sdk-core's navigateReadChain and
- * decrypts with the leaf's raw fileKey.
+ * Wires the shared-folder read-chain (Node v3): navigateToShare /
+ * navigateToSubfolder descend via the SDK's gated shared read-chain facade
+ * (`client.resolveShareRoot` / `client.descendSharedChild`, 68.2-08) -- the
+ * web no longer runs its own read-chain walk (the walk lives in the SDK,
+ * hoisted in Plan 02/08, gated behind ROT-07 per Plan 01). navigateUp /
+ * navigateToBreadcrumb restore prior levels from the in-memory nav stack (no
+ * network round-trip). downloadSharedFile / loadSharedFileContent route
+ * through `client.downloadSharedFile` (68.2-08), which wraps sdk-core's
+ * navigateReadChain + the fetch/decrypt orchestration entirely inside the SDK.
  *
  * Security (D-09): recipient vault private key is caller-owned, never zeroed
- * here. Minted intermediates (share-root/subfolder readKeys, raw fileKey) are
- * zeroed on every exit path once they are no longer the live state.
+ * here. Minted intermediates (share-root/subfolder readKeys) are zeroed on
+ * every exit path once they are no longer the live state.
  */
 
 import { useCallback, type MutableRefObject } from 'react';
-import type { SealedChildRef, PublishedNode } from '@cipherbox/core';
-import { unsealNode, unsealChildReadKey } from '@cipherbox/core';
+import type { SealedChildRef } from '@cipherbox/core';
 import { ShareKeyCache } from '@cipherbox/sdk';
-import {
-  navigateReadChain,
-  resolveIpnsRecord,
-  fetchFromIpfs,
-  type SdkContext,
-} from '@cipherbox/sdk-core';
-import { unwrapKey, hexToBytes, decryptAesGcm, decryptAesCtr } from '@cipherbox/crypto';
+import { unwrapKey, hexToBytes } from '@cipherbox/crypto';
 import { useShareStore } from '../stores/share.store';
 import { useAuthStore } from '../stores/auth.store';
 import { hideShare } from '../services/share.service';
 import { triggerBrowserDownload } from '../services/download.service';
 import { getSdkClient } from '../lib/sdk-provider';
 import { logger } from '../lib/logger';
-import { resolveKinds } from '../lib/kind-cache';
 import { parsePublicKey, type SeedSharedFolderArgs } from './shared-folder-projection';
 import type { SharedListItem, SharedBreadcrumb } from './useSharedNavigation';
 
@@ -87,54 +80,6 @@ export type SharedNavigationActionsParams = {
   seedActiveSharedFolder: (args: Omit<SeedSharedFolderArgs, 'addShareKeysFn'>) => void;
 };
 
-// ---------------------------------------------------------------------------
-// Read-chain helpers (mirror packages/sdk-core/src/share/navigate.ts's private
-// helpers -- duplicated here because folder navigation needs to stop at an
-// intermediate FOLDER node, while sdk-core's navigateReadChain always requires
-// the walked-to leaf to be a FILE node).
-// ---------------------------------------------------------------------------
-
-/** Decode a base64 string to raw bytes (browser atob-based). */
-function base64ToBytes(b64: string): Uint8Array {
-  const bin = atob(b64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) {
-    bytes[i] = bin.charCodeAt(i);
-  }
-  return bytes;
-}
-
-/**
- * Encode raw bytes to base64 (browser btoa-based).
- *
- * Bridges the web's hex-encoded `readDescriptorRef` (API DTO contract --
- * `apps/api/src/shares/shares.service.ts` stores/serializes it as hex) into
- * `navigateReadChain`'s base64 contract (sdk-core's own `issueReadGrant`
- * produces base64 -- the two encodings diverge at the API boundary).
- */
-function bytesToBase64(bytes: Uint8Array): string {
-  let bin = '';
-  for (let i = 0; i < bytes.length; i++) {
-    bin += String.fromCharCode(bytes[i]);
-  }
-  return btoa(bin);
-}
-
-/**
- * Resolve an IPNS name and return its raw PublishedNode envelope + sequence.
- * Returns null when the IPNS record is absent (revoked / not-found, fail-closed).
- */
-async function fetchPublishedNode(
-  ipnsName: string,
-  ctx: SdkContext
-): Promise<{ published: PublishedNode; sequenceNumber: bigint } | null> {
-  const resolved = await resolveIpnsRecord(ipnsName, ctx);
-  if (!resolved) return null;
-  const raw = await fetchFromIpfs(ctx, resolved.cid);
-  const published = JSON.parse(new TextDecoder().decode(raw)) as PublishedNode;
-  return { published, sequenceNumber: resolved.sequenceNumber };
-}
-
 /**
  * Resolve a folder's IPNS signing key for write shares.
  *
@@ -148,6 +93,25 @@ async function fetchPublishedNode(
  * `writeKey ?? new Uint8Array(32)` convention -- write mutations remain
  * gated at the UI layer by `permission === 'write'`).
  */
+async function resolveFolderIpnsPrivateKey(
+  shareId: string,
+  folderIpnsName: string,
+  permission: 'read' | 'write',
+  vaultPrivateKey: Uint8Array,
+  getShareKeys: SharedNavigationActionsParams['getShareKeys']
+): Promise<Uint8Array> {
+  if (permission !== 'write') return new Uint8Array(32);
+  try {
+    const keys = await getShareKeys(shareId);
+    const entry = keys.find((k) => k.keyType === 'folder-ipns' && k.itemId === folderIpnsName);
+    if (!entry) return new Uint8Array(32);
+    return await unwrapKey(hexToBytes(entry.encryptedKey), vaultPrivateKey);
+  } catch (err) {
+    logger.error('[SharedNav] Failed to resolve folder IPNS key:', err);
+    return new Uint8Array(32);
+  }
+}
+
 /**
  * Unwrap a grant's `writeDescriptorRef` into the shared-root writeKey
  * (68.1-20, SHARE-WRITE-KEY recipient side).
@@ -172,33 +136,16 @@ async function resolveSharedRootWriteKey(
   return unwrapKey(hexToBytes(writeDescriptorRef), vaultPrivateKey);
 }
 
-async function resolveFolderIpnsPrivateKey(
-  shareId: string,
-  folderIpnsName: string,
-  permission: 'read' | 'write',
-  vaultPrivateKey: Uint8Array,
-  getShareKeys: SharedNavigationActionsParams['getShareKeys']
-): Promise<Uint8Array> {
-  if (permission !== 'write') return new Uint8Array(32);
-  try {
-    const keys = await getShareKeys(shareId);
-    const entry = keys.find((k) => k.keyType === 'folder-ipns' && k.itemId === folderIpnsName);
-    if (!entry) return new Uint8Array(32);
-    return await unwrapKey(hexToBytes(entry.encryptedKey), vaultPrivateKey);
-  } catch (err) {
-    logger.error('[SharedNav] Failed to resolve folder IPNS key:', err);
-    return new Uint8Array(32);
-  }
-}
-
 export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
   /**
    * Navigate into a shared folder/file from the top-level list.
    *
-   * ONE ECIES unwrap of `readDescriptorRef` -> share-root readKey, resolve +
-   * unseal the root Node. A `kind: 'file'` root (single-file share) switches
-   * to `currentView: 'file'` instead -- `SharedFileBrowser`'s effect then
-   * calls `downloadSharedFile` with a synthetic root-referencing ref.
+   * `client.resolveShareRoot` performs the ONE ECIES unwrap of
+   * `readDescriptorRef` -> share-root readKey and resolves + unseals the
+   * root Node entirely inside the SDK (D-07). A `kind: 'file'` root
+   * (single-file share) switches to `currentView: 'file'` instead --
+   * `SharedFileBrowser`'s effect then calls `downloadSharedFile` with a
+   * synthetic root-referencing ref.
    */
   const navigateToShare = useCallback(
     async (shareId: string) => {
@@ -220,50 +167,50 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
 
       let committed = false;
       // D-09: recipient private key is caller-owned -- never zeroed by this
-      // handler. Held nullable so the finally can zero the minted read key even
-      // if the unwrap below throws (mirrors navigateToSubfolder's guarded shape).
+      // handler. Held nullable so the finally can zero the SDK-minted read
+      // key if an exception occurs after 'ok' but before it is either
+      // stored into state (folder case) or explicitly discarded (file case).
       let shareRootReadKey: Uint8Array | null = null;
 
       try {
-        shareRootReadKey = await unwrapKey(
-          hexToBytes(share.readDescriptorRef),
-          vaultKeypair.privateKey
-        );
+        const result = await getSdkClient().resolveShareRoot({
+          readDescriptorRef: share.readDescriptorRef,
+          recipientPrivateKey: vaultKeypair.privateKey,
+          rootIpnsName: share.ipnsName,
+          rootExpectedGeneration: share.rootGeneration,
+        });
 
-        const ctx = getSdkClient().getContext();
-        const fetched = await fetchPublishedNode(share.ipnsName, ctx);
-        if (!fetched) {
+        if (result.status === 'revoked') {
           p.setError('Share is no longer available (revoked)');
           return;
         }
-        const { published: rootPublished, sequenceNumber: rootSeq } = fetched;
-
-        // T-68.1-05-03: behind-retry -- root rotated since the grant witness.
-        if (share.rootGeneration !== undefined && rootPublished.generation > share.rootGeneration) {
+        if (result.status === 'behind-retry') {
           p.setError('This share was updated -- please reopen it');
           return;
         }
 
-        const rootNode = await unsealNode(rootPublished, shareRootReadKey);
+        const { kind, readKey, children, sequenceNumber: rootSeq } = result;
+        shareRootReadKey = readKey;
 
         p.navStackRef.current = [];
         p.setCurrentShareId(shareId);
         p.setPermission(share.permission);
 
-        if (rootNode.kind === 'file') {
+        if (kind === 'file') {
           // Single-file share: the root IS the leaf. Discard the readKey we
           // minted to determine the kind -- downloadSharedFile independently
-          // re-derives the full chain via navigateReadChain (path: []).
+          // re-derives the full chain via client.downloadSharedFile (path: []).
+          shareRootReadKey.fill(0);
           p.setFolderChildren([]);
           p.setFolderKey(null);
           p.setIpnsName(null);
           p.setCurrentSequenceNumber(null);
           p.setBreadcrumbs([]);
           p.setCurrentView('file');
+          committed = true;
           return;
         }
 
-        const children = rootNode.children ?? [];
         const ipnsPrivateKey = await resolveFolderIpnsPrivateKey(
           shareId,
           share.ipnsName,
@@ -271,11 +218,6 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
           vaultKeypair.privateKey,
           p.getShareKeys
         );
-
-        // D-02: populate the kind cache before setFolderChildren so
-        // SharedFileBrowser's synchronous isFileRef guards read the resolved
-        // kind on first render.
-        await resolveKinds(children);
 
         p.zeroIpnsKey();
         p.ipnsPrivateKeyRef.current = ipnsPrivateKey;
@@ -317,7 +259,7 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
             children,
             ownerPublicKey: parsePublicKey(share.sharerPublicKey),
             recipientPublicKey: vaultKeypair.publicKey,
-            publishedNode: rootPublished,
+            publishedNode: result.published,
           });
         } finally {
           // D-09: seedSharedFolder clones the writeKey buffer internally
@@ -329,6 +271,12 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
         logger.error('[SharedNav] Failed to navigate to share:', err);
         p.setError('Failed to open shared item');
       } finally {
+        // shareRootReadKey is zeroed inside the SDK on every non-'ok' result
+        // (revoked/behind-retry); once 'ok', the web is the terminal owner.
+        // `committed` is set true immediately once the key is either stored
+        // into state (folder case) or explicitly discarded (file case) --
+        // this only fires if something throws in between (e.g.
+        // resolveFolderIpnsPrivateKey), preventing a leak.
         if (!committed && shareRootReadKey) shareRootReadKey.fill(0);
         p.setIsLoading(false);
       }
@@ -339,10 +287,10 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
   /**
    * Navigate into a subfolder within a shared folder.
    *
-   * One read-chain hop: find the target's SealedChildRef in the currently
-   * loaded children, unseal its readKey under the CURRENT folderKey using
-   * `childRef.generation` (parent mirror -- generation-source rule, never the
-   * child's own envelope generation), unseal the child Node.
+   * One read-chain hop via `client.descendSharedChild` -- gated-resolve the
+   * target's SealedChildRef, unseal its readKey under the CURRENT folderKey
+   * (generation-source rule handled inside the SDK), unseal the child Node
+   * to recover its own children, all inside the SDK (D-07).
    */
   const navigateToSubfolder = useCallback(
     async (folderId: string, folderName: string) => {
@@ -369,27 +317,15 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
       p.setError(null);
 
       try {
-        const ctx = getSdkClient().getContext();
-        const fetched = await fetchPublishedNode(childRef.ipnsName, ctx);
-        if (!fetched) {
+        const descended = await getSdkClient().descendSharedChild(childRef, currentFolderKey);
+        if (!descended) {
           p.setError('Folder is no longer available (revoked)');
           return;
         }
-        const { published: childPublished, sequenceNumber: childSeq } = fetched;
-
-        const childReadKey = await unsealChildReadKey(
-          childRef.readKeySealed,
-          currentFolderKey,
-          childPublished.id,
-          childPublished.kind,
-          childRef.generation // parent mirror -- NOT childPublished.generation
-        );
+        const { readKey: childReadKey, children, sequenceNumber: childSeq, published } = descended;
 
         let committed = false;
         try {
-          const childNode = await unsealNode(childPublished, childReadKey);
-          const children = childNode.children ?? [];
-
           const shareEntry = p.sharedItems.find((s) => s.share.shareId === currentShareId);
           if (!shareEntry) {
             p.setError('Shared item not found');
@@ -402,10 +338,6 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
             vaultKeypair.privateKey,
             p.getShareKeys
           );
-
-          // D-02: populate the kind cache before setFolderChildren so the
-          // resolved kind is present on first render of this level.
-          await resolveKinds(children);
 
           // Push the CURRENT (pre-descent) level so navigateUp / navigateToBreadcrumb
           // can restore it without a network round-trip.
@@ -440,7 +372,7 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
           // writeKey below the share root, failing GCM auth on any write op.
           const childWriteKey = await getSdkClient().resolveSharedSubfolderWriteKey(
             currentShareId,
-            { published: childPublished, readKey: childReadKey, generation: childRef.generation }
+            { published, readKey: childReadKey, generation: childRef.generation }
           );
           try {
             p.seedActiveSharedFolder({
@@ -453,7 +385,7 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
               children,
               ownerPublicKey: parsePublicKey(shareEntry.share.sharerPublicKey),
               recipientPublicKey: vaultKeypair.publicKey,
-              publishedNode: childPublished,
+              publishedNode: published,
             });
           } finally {
             // D-09: seedSharedFolder clones the writeKey buffer internally
@@ -532,10 +464,6 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
     p.navStackRef.current = stack.slice(0, -1);
 
     p.setFolderChildren(parent.children);
-    // D-02: parent.children were already resolved on descent, so this is a
-    // memoized no-op in the common case — kept for consistency / defense in
-    // depth in case the cache was cleared (e.g. logout/login) in between.
-    await resolveKinds(parent.children);
     p.setFolderKey(parent.folderKey);
     p.setIpnsName(parent.ipnsName);
     p.setCurrentSequenceNumber(parent.sequenceNumber);
@@ -620,10 +548,6 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
       p.navStackRef.current = stack.slice(0, crumbIndex);
 
       p.setFolderChildren(target.children);
-      // D-02: target.children were already resolved on descent, so this is a
-      // memoized no-op in the common case — kept for consistency / defense in
-      // depth in case the cache was cleared (e.g. logout/login) in between.
-      await resolveKinds(target.children);
       p.setFolderKey(target.folderKey);
       p.setIpnsName(target.ipnsName);
       p.setCurrentSequenceNumber(target.sequenceNumber);
@@ -686,12 +610,11 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
   );
 
   /**
-   * Download a shared file using the full grant->leaf read-chain.
-   *
-   * Walks `navigateReadChain` from the share root to `item` (path = every
-   * ipnsName strictly between root and the leaf, inclusive of the leaf;
-   * empty when the share root IS the file, single-file-share case), then
-   * fetches the CID and decrypts with the leaf's RAW fileKey (base64 iv).
+   * Download a shared file via `client.downloadSharedFile` -- the full
+   * grant->leaf read-chain walk, IPFS fetch, and decrypt all happen inside
+   * the SDK (D-07); this handler only computes the `path` (every ipnsName
+   * strictly between root and the leaf, inclusive of the leaf; empty when
+   * the share root IS the file) and triggers the browser download.
    */
   const downloadSharedFile = useCallback(
     async (item: SealedChildRef) => {
@@ -717,27 +640,24 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
       p.setError(null);
 
       try {
-        const ctx = getSdkClient().getContext();
-
         // Full folder chain from the share root (navStack[0]) down to the
-        // current folder (p.ipnsName). navigateReadChain receives the root
-        // separately via rootIpnsName, so drop it with slice(1); the remaining
-        // hops plus the leaf form the path. At the share root itself, navStack is
-        // empty and p.ipnsName IS the root -- slice(1) then correctly drops it,
-        // so the root is never double-counted.
+        // current folder (p.ipnsName). The SDK receives the root separately
+        // via rootIpnsName, so drop it with slice(1); the remaining hops plus
+        // the leaf form the path. At the share root itself, navStack is empty
+        // and p.ipnsName IS the root -- slice(1) then correctly drops it, so
+        // the root is never double-counted.
         const folderChain = [
           ...p.navStackRef.current.map((entry) => entry.ipnsName),
           ...(p.ipnsName ? [p.ipnsName] : []),
         ];
         const path = p.currentView === 'file' ? [] : [...folderChain.slice(1), item.ipnsName];
 
-        const result = await navigateReadChain({
-          readDescriptorRef: bytesToBase64(hexToBytes(share.readDescriptorRef)),
-          recipientPrivKey: vaultKeypair.privateKey,
+        const result = await getSdkClient().downloadSharedFile({
+          readDescriptorRef: share.readDescriptorRef,
+          recipientPrivateKey: vaultKeypair.privateKey,
           rootIpnsName: share.ipnsName,
           rootExpectedGeneration: share.rootGeneration ?? 0,
           path,
-          ctx,
         });
 
         if (result.status === 'revoked') {
@@ -749,21 +669,7 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
           return;
         }
 
-        const { content } = result;
-        const ciphertext = await fetchFromIpfs(ctx, content.cid);
-        const iv = base64ToBytes(content.fileIv);
-
-        try {
-          const plaintext =
-            content.encryptionMode === 'CTR'
-              ? await decryptAesCtr(ciphertext, content.fileKey, iv)
-              : await decryptAesGcm(ciphertext, content.fileKey, iv);
-          triggerBrowserDownload(plaintext, item.name, content.mimeType);
-        } finally {
-          // T-68.1-05 mirror of T-68.1-04-01: this handler is the terminal
-          // owner of the raw fileKey recovered inside NodeContent (D-09).
-          content.fileKey.fill(0);
-        }
+        triggerBrowserDownload(result.plaintext, item.name, result.mimeType);
       } catch (err) {
         logger.error('[SharedNav] Failed to download shared file:', err);
         p.setError('Failed to download file');
@@ -776,11 +682,11 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
 
   /**
    * Load a DIRECT single-file share's content (68.1-32, WEB-03 writable-shares
-   * 10.3). Mirrors `downloadSharedFile`'s `navigateReadChain` read core but with
-   * `path: []` (the share root IS the file — no intermediate hops) and returns
-   * the decrypted plaintext instead of triggering a browser download, so
-   * `TextEditorDialog` can load it into the textarea. Does NOT touch
-   * `downloadSharedFile` itself — the shared-FOLDER download path stays
+   * 10.3). Mirrors `downloadSharedFile`'s `client.downloadSharedFile` read
+   * core but with `path: []` (the share root IS the file — no intermediate
+   * hops) and returns the decrypted plaintext instead of triggering a browser
+   * download, so `TextEditorDialog` can load it into the textarea. Does NOT
+   * touch `downloadSharedFile` itself — the shared-FOLDER download path stays
    * byte-for-byte unchanged.
    */
   const loadSharedFileContent = useCallback(
@@ -800,15 +706,12 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
       }
       const vaultKeypair = auth.vaultKeypair;
 
-      const ctx = getSdkClient().getContext();
-
-      const result = await navigateReadChain({
-        readDescriptorRef: bytesToBase64(hexToBytes(share.readDescriptorRef)),
-        recipientPrivKey: vaultKeypair.privateKey,
+      const result = await getSdkClient().downloadSharedFile({
+        readDescriptorRef: share.readDescriptorRef,
+        recipientPrivateKey: vaultKeypair.privateKey,
         rootIpnsName: share.ipnsName,
         rootExpectedGeneration: share.rootGeneration ?? 0,
         path: [],
-        ctx,
       });
 
       if (result.status === 'revoked') {
@@ -818,19 +721,7 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
         throw new Error('This share was updated -- please reopen it and try again');
       }
 
-      const { content } = result;
-      const ciphertext = await fetchFromIpfs(ctx, content.cid);
-      const iv = base64ToBytes(content.fileIv);
-
-      try {
-        return content.encryptionMode === 'CTR'
-          ? await decryptAesCtr(ciphertext, content.fileKey, iv)
-          : await decryptAesGcm(ciphertext, content.fileKey, iv);
-      } finally {
-        // Terminal owner of the raw fileKey recovered inside NodeContent (D-09),
-        // mirrors downloadSharedFile's identical finally.
-        content.fileKey.fill(0);
-      }
+      return result.plaintext;
     },
     [p.currentShareId, p.sharedItems]
   );

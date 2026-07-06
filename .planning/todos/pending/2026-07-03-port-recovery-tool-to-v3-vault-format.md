@@ -4,7 +4,9 @@ title: Port standalone recovery tool to v3 vault format
 area: web
 files:
   - apps/web/public/recovery.html
-  - tests/web-e2e/tests/recovery.spec.ts
+  - tests/web-e2e/tests/recovery.spec.ts:68
+  - packages/core/src/vault/blob.ts:87
+  - packages/core/src/node/seal.ts
 source: 68.1-VERIFICATION.md (human-approved deferral, override 1 of 2)
 ---
 
@@ -24,3 +26,25 @@ tool to the v3 node format — unseal via the v3 envelope (readKey chain), under
 `WriteChildRef`/`SealedChildRef` split, and keep it a fully offline, standalone HTML
 artifact. Un-defer `recovery.spec.ts` once ported so the full web-e2e suite has zero
 expected failures.
+
+### Confirmed scope (from web-e2e parallelization investigation, 2026-07-06)
+
+Two distinct blockers — the tool is on the entire pre-#578 model, not just the blob header:
+
+1. **Blob parse (small):** `recovery.html:394,1160` hard-check `blob[0] === 0x02` and
+   halt with "not v2 format" on the current `0x03` blob. Replace with a v3 parser
+   mirroring `deserializeVaultBlobV3` (`packages/core/src/vault/blob.ts:87`): check
+   `0x03`, read `u16_BE(readLen)`, ECIES-decrypt the read-key segment (recovery only
+   needs the read chain; the write key can be ignored).
+2. **Folder/file traversal (large):** `recoverFolder` still expects the pre-#578
+   `{iv,data}` AES-GCM envelope with a `children[]` array. The runtime now publishes a
+   `node/v3` `PublishedNode` envelope sealed via `packages/core/src/node/seal.ts`
+   (AAD triad — roles `0x01` node / `0x02` child readKey / `0x03` content,
+   `buildNodeAad(id, kindByte, generation, role)`). Re-implement `unsealNode` /
+   `unsealChildReadKey` / `unsealContent` inline, since `recovery.html` is a
+   dependency-free standalone file (CDN `@noble`, no bundler).
+
+**Status:** as of the web-e2e parallelization branch, `recovery.spec.ts:68` is
+`test.fixme`'d (not just failing) with a `FIXME(recovery-v3)` pointer. Remove the
+`.fixme` once `recovery.html` speaks v3 so the full web-e2e suite has zero expected
+failures / skips.

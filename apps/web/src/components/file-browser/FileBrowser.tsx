@@ -4,7 +4,7 @@ import { useFolderNavigation } from '../../hooks/useFolderNavigation';
 import { useFolder } from '../../hooks/useFolder';
 import { useFileDownload } from '../../hooks/useFileDownload';
 import { useContextMenu } from '../../hooks/useContextMenu';
-import { useSyncPolling } from '../../hooks/useSyncPolling';
+import { useSyncPolling, invalidateOpenFolder } from '../../hooks/useSyncPolling';
 import { useDeviceRegistrySync } from '../../hooks/useDeviceRegistrySync';
 import { useDropUpload } from '../../hooks/useDropUpload';
 import { isPreviewableFile, isTextFile } from '../../utils/fileTypes';
@@ -68,9 +68,19 @@ export function FileBrowser() {
   const initialSyncComplete = useSyncStore((state) => state.initialSyncComplete);
   const syncStatus = useSyncStore((state) => state.status);
 
+  // Plan 09 (68.2-09): `currentFolder.children` is now the SDK's resolved
+  // `ResolvedChild[]` display projection (kind/size/modifiedAt pre-resolved,
+  // SC#2). `useFileBrowserActions`/`FileList` still need the same-session
+  // raw `SealedChildRef[]` identity/crypto carrier (`rawChildren`, D-09) for
+  // selection/context-menu/download/drag callbacks and dialogs.
+  const rawChildren = currentFolder?.rawChildren ?? [];
+
   const actions = useFileBrowserActions({
     currentFolderId,
-    currentFolder,
+    currentFolder: currentFolder
+      ? { children: rawChildren, folderKey: currentFolder.folderKey }
+      : null,
+    resolvedChildren: currentFolder?.children ?? [],
     breadcrumbs,
     navigateTo,
     navigateUp,
@@ -91,8 +101,7 @@ export function FileBrowser() {
   useSyncPolling(actions.handleSync);
   useDeviceRegistrySync();
 
-  const children = currentFolder?.children ?? [];
-  const hasChildren = children.length > 0;
+  const hasChildren = rawChildren.length > 0;
 
   // Show FileList (with progress rows) instead of EmptyState when uploads are
   // actively targeting this folder, even if the folder has no committed children yet.
@@ -144,7 +153,17 @@ export function FileBrowser() {
             <UploadZone
               folderId={currentFolderId}
               onUploadComplete={() => {
-                void actions.handleSync().catch(() => {});
+                // 68.2-16: refresh the CURRENTLY OPEN folder immediately -- the
+                // upload targets `currentFolderId`, which may be a subfolder,
+                // but `handleSync` only ever resyncs root. Without this the
+                // just-uploaded child never appears in a subfolder view until
+                // the 30s poll's `invalidateOpenFolder` leg happens to fire.
+                // Then run the root/tree + search-index resync (best-effort).
+                void invalidateOpenFolder()
+                  .catch(() => {})
+                  .finally(() => {
+                    void actions.handleSync().catch(() => {});
+                  });
               }}
             />
           </div>
@@ -178,7 +197,8 @@ export function FileBrowser() {
 
       {!isLoading && (hasChildren || hasUploadsForFolder) && (
         <FileList
-          items={children}
+          items={rawChildren}
+          resolvedChildren={currentFolder?.children ?? []}
           selectedIds={actions.selectedIds}
           parentId={currentFolderId}
           folderKey={currentFolder?.folderKey ?? null}
@@ -203,6 +223,7 @@ export function FileBrowser() {
       {actions.multiSelectActive && actions.selectedIds.size > 1 && (
         <SelectionActionBar
           selectedItems={actions.selectedItems}
+          resolvedChildren={currentFolder?.children ?? []}
           isLoading={isOperating || isDownloading}
           onClearSelection={actions.clearSelection}
           onDownload={actions.handleBatchDownload}
@@ -216,6 +237,7 @@ export function FileBrowser() {
           x={contextMenu.x}
           y={contextMenu.y}
           item={contextMenu.item}
+          resolvedChildren={currentFolder?.children ?? []}
           selectedCount={actions.selectedIds.size}
           onClose={contextMenu.hide}
           onDownload={actions.handleDownload}
@@ -278,6 +300,7 @@ export function FileBrowser() {
         open={actions.detailsDialog.open}
         onClose={actions.closeDetailsDialog}
         item={actions.detailsDialog.item}
+        resolvedChildren={currentFolder?.children ?? []}
         folderKey={currentFolder?.folderKey ?? null}
         parentFolderId={currentFolderId}
       />

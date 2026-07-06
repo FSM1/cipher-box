@@ -19,7 +19,7 @@ import {
   AES_CTR_NONCE_SIZE,
 } from '@cipherbox/crypto';
 
-import { selectEncryptionMode as selectMode } from '@cipherbox/sdk-core';
+import { selectEncryptionMode as selectMode } from '@cipherbox/sdk';
 import type { EncryptedFileResult } from './file-crypto.service';
 
 /** Chunk size for streaming encryption: 1MB */

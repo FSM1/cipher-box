@@ -21,7 +21,7 @@
 // FolderChild retired; shared folder write operations stubbed to throw
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { SealedChildRef } from '@cipherbox/core';
-import type { SdkEvent, SdkEventHandler } from '@cipherbox/sdk';
+import type { ResolvedChild, SdkEvent, SdkEventHandler } from '@cipherbox/sdk';
 import {
   seedSharedFolder,
   subscribeSharedFolderProjection,
@@ -76,18 +76,41 @@ function makeChild(name: string): SealedChildRef {
 }
 
 /**
+ * Build a ResolvedChild fixture (the DISPLAY shape `sharedFolder:updated`
+ * actually carries post-68.2-02) with a recognizable name. Distinct from
+ * `makeChild` (the raw identity shape `getSharedFolderState` returns) --
+ * `subscribeSharedFolderProjection` sources the projected `children` from
+ * the latter, never from the event payload itself (Plan 09).
+ */
+function makeResolvedChild(name: string): ResolvedChild {
+  return {
+    ipnsName: `k51file-${name}`,
+    name,
+    kind: 'file',
+    modifiedAt: 0,
+    sequence: 0,
+  };
+}
+
+/**
  * Fake client capturing the `sharedFolder:updated` handler and recording calls
- * to the five shared write methods + `loadSharedFolder`.
+ * to the five shared write methods + `loadSharedFolder`. `getSharedFolderState`
+ * returns whatever raw `SealedChildRef[]` was last set via `setRawChildren`
+ * (defaulting to `loadSharedFolder`'s seeded state) -- mirrors the SDK's
+ * `sharedFolderTree` being the raw-identity source of truth the projection
+ * re-reads from at event time (Plan 09, not the event payload).
  */
 function makeFakeClient(): {
   client: SharedFolderClient;
   emit: (event: SdkEvent) => void;
   calls: { method: string; shareId: string; args: unknown }[];
   loaded: { shareId: string; state: unknown }[];
+  setRawChildren: (shareId: string, children: SealedChildRef[]) => void;
 } {
   let captured: SdkEventHandler | null = null;
   const calls: { method: string; shareId: string; args: unknown }[] = [];
   const loaded: { shareId: string; state: unknown }[] = [];
+  const rawChildrenByShareId = new Map<string, SealedChildRef[]>();
 
   const record =
     (method: string) =>
@@ -102,8 +125,9 @@ function makeFakeClient(): {
         captured = null;
       };
     },
-    loadSharedFolder(shareId: string, state: unknown): void {
+    loadSharedFolder(shareId: string, state: { children?: SealedChildRef[] }): void {
       loaded.push({ shareId, state });
+      rawChildrenByShareId.set(shareId, state.children ?? []);
     },
     unloadSharedFolder: vi.fn(),
     uploadToSharedFolder: record('uploadToSharedFolder'),
@@ -116,6 +140,10 @@ function makeFakeClient(): {
     refreshSharedFolder: async (shareId: string): Promise<void> => {
       calls.push({ method: 'refreshSharedFolder', shareId, args: undefined });
     },
+    getSharedFolderState(shareId: string): { children: SealedChildRef[] } | undefined {
+      const children = rawChildrenByShareId.get(shareId);
+      return children ? { children } : undefined;
+    },
   } as unknown as SharedFolderClient;
 
   return {
@@ -126,6 +154,7 @@ function makeFakeClient(): {
     },
     calls,
     loaded,
+    setRawChildren: (shareId, children) => rawChildrenByShareId.set(shareId, children),
   };
 }
 
@@ -204,12 +233,16 @@ describe('shared-folder projection (REQ-3) — write hook reads nothing back', (
       }
     );
 
+    // The projection re-reads RAW identity from the SDK's authoritative
+    // sharedFolderTree (getSharedFolderState) at event time -- the event's
+    // own `children` is the resolved DISPLAY shape and is not the source.
     const updated = [makeChild('new')];
+    fake.setRawChildren('share-1', updated);
     fake.emit({
       type: 'sharedFolder:updated',
       shareId: 'share-1',
       ipnsName: 'k51folder',
-      children: updated,
+      children: [makeResolvedChild('new')],
       sequenceNumber: 9n,
     });
 
@@ -233,11 +266,12 @@ describe('shared-folder projection (REQ-3) — write hook reads nothing back', (
       }
     );
 
+    fake.setRawChildren('share-OTHER', [makeChild('leak')]);
     fake.emit({
       type: 'sharedFolder:updated',
       shareId: 'share-OTHER',
       ipnsName: 'k51other',
-      children: [makeChild('leak')],
+      children: [makeResolvedChild('leak')],
       sequenceNumber: 99n,
     });
 
@@ -250,6 +284,7 @@ describe('shared-folder projection (REQ-3) — write hook reads nothing back', (
     const fake = makeFakeClient();
     const original = [makeChild('doc')];
     const refs = { children: original, sequenceNumber: 4n as bigint | null };
+    fake.setRawChildren('share-1', original);
 
     subscribeSharedFolderProjection(
       fake.client,
@@ -260,12 +295,13 @@ describe('shared-folder projection (REQ-3) — write hook reads nothing back', (
       }
     );
 
-    // updateSharedFile emits with the SAME children/sequence (file-only publish).
+    // updateSharedFile emits with the SAME sequence (file-only publish); raw
+    // children are unchanged in the SDK's sharedFolderTree.
     fake.emit({
       type: 'sharedFolder:updated',
       shareId: 'share-1',
       ipnsName: 'k51folder',
-      children: original,
+      children: [makeResolvedChild('doc')],
       sequenceNumber: 4n,
     });
 
@@ -308,13 +344,15 @@ describe('shared-folder projection (REQ-3) — write hook reads nothing back', (
 
       // The SDK's sequence-guarded re-resolve then emits the newer snapshot; the
       // projection subscription is the sole writer — proving the poll path lands
-      // through the SAME subscription as the write path.
+      // through the SAME subscription as the write path. Raw identity is
+      // re-read from getSharedFolderState, not the event's resolved payload.
       const polled = [makeChild('remote')];
+      fake.setRawChildren('share-1', polled);
       fake.emit({
         type: 'sharedFolder:updated',
         shareId: 'share-1',
         ipnsName: 'k51folder',
-        children: polled,
+        children: [makeResolvedChild('remote')],
         sequenceNumber: 7n,
       });
 
@@ -339,11 +377,12 @@ describe('shared-folder projection (REQ-3) — write hook reads nothing back', (
       );
 
       await (fake.client as unknown as WithRefresh).refreshSharedFolder('share-OTHER');
+      fake.setRawChildren('share-OTHER', [makeChild('leak')]);
       fake.emit({
         type: 'sharedFolder:updated',
         shareId: 'share-OTHER',
         ipnsName: 'k51other',
-        children: [makeChild('leak')],
+        children: [makeResolvedChild('leak')],
         sequenceNumber: 99n,
       });
 
@@ -372,7 +411,7 @@ describe('shared-folder projection (REQ-3) — write hook reads nothing back', (
         type: 'sharedFolder:updated',
         shareId: 'share-1',
         ipnsName: 'k51folder',
-        children: [makeChild('new')],
+        children: [makeResolvedChild('new')],
         sequenceNumber: 2n,
       })
     ).toThrow('handler not subscribed');

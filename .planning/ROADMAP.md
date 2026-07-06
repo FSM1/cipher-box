@@ -68,7 +68,7 @@
 - [x] **Phase 66: API Schema Cutover, Publish Gate, and Tombstone** — Delete `share_keys`, slim `shares`, rename `folder_ipns` → `ipns_records`, drop `public_key`, atomic CAS publish, tombstone state, resolve case-split, server-side generation gate; run `pnpm api:generate` (completed 2026-06-30)
 - [x] **Phase 67: TEE Lease-Renewer Contract Rewrite** — TEE becomes a record-lease-renewer (no CID origination, no sequence increment), internal epoch derivation, name↔key binding, tombstone guard (completed 2026-07-01)
 - [x] **Phase 68: Web Integration — Rotation UX and Durable Client State** — Replace `executeLazyRotation` with `rotateReadFromNode`, durable IndexedDB generation + seq high-water (M1 defense, survives restart), `folderTree` reconcile-before-rotate (all 12 plans executed 2026-07-01; verification passed 14/14 after 68-11/68-12 gap closure, see 68-VERIFICATION.md) (completed 2026-07-01)
-- [ ] **Phase 69: FUSE and WinFsp — Rust Integration and Grant-Root Awareness** — Symmetric child-key unwrap, `spawn_file_meta_reencrypt` deletion from both callers, grant-root scope computation, durable client floors, `Node` Rust enum, Rust SDK-owned read chain (Phase 68.2 parity), Windows CI gate
+- [x] **Phase 69: FUSE and WinFsp — Rust Integration and Grant-Root Awareness** — Symmetric child-key unwrap, `spawn_file_meta_reencrypt` deletion from both callers, grant-root scope computation, durable client floors, `Node` Rust enum, Rust SDK-owned read chain (Phase 68.2 parity), Windows CI gate (completed 2026-07-06)
 
 ## Phase Details
 
@@ -529,11 +529,49 @@ Plans:
 4. The interim mirror is reverted: `SealedChildRef` is back to its frozen five-field set (NODE-03), and size/modifiedAt are sourced from the resolved listing (the codec/encode/decode/`metadata-ops` mirror changes from ba3e0229a are removed).
 5. Regression coverage closes the desync bug class: a `tests/web-e2e` proves an owner (or a second client) sees a grantee's upload into a shared folder without the owner first writing, and that file size/modified-date render from the resolved listing; the full web-e2e suite stays green.
 
-**Plans**: TBD
+**Plans**: 14/14 plans complete
 
 Plans:
+**Wave 1**
 
-- [ ] TBD (run /gsd-plan-phase 68.2 to break down)
+- [x] 68.2-01-PLAN.md — Wave 1: SDK-internal gated read resolve (ROT-07 enforceResolved on resolvePublishedNode/dfsFindFolder, before any deletion) [TDD]
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 68.2-02-PLAN.md — Wave 2: ResolvedChild type + listFolder/listSharedFolder listing API + folder:updated ResolvedChild[] event [TDD]
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 68.2-03-PLAN.md — Wave 3: SDK write-path + IPFS-transport facade + pure-util re-exports (D-07 write scope)
+- [x] 68.2-05-PLAN.md — Wave 3: Author the shared-folder desync regression e2e (SC#5)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 68.2-04-PLAN.md — Wave 4: SDK vault-bootstrap + device-registry + BYO-pinning facade (off-path pockets)
+- [x] 68.2-06-PLAN.md — Wave 4: Web owned read rewire + relocate version-transforms + render kind/size/modifiedAt from ResolvedChild
+- [x] 68.2-07-PLAN.md — Wave 4: Web owned file I/O rewire onto the SDK IPFS-transport facade (progress preserved)
+- [x] 68.2-08-PLAN.md — Wave 4: Web shared-folder navigation/write rewire onto listSharedFolder
+- [x] 68.2-09-PLAN.md — Wave 4: Collapse folder.store to a ResolvedChild projection + nav re-resolve + poll invalidation (SC#3/#5)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [x] 68.2-10-PLAN.md — Wave 5: Web off-path pockets (BYO/auth/device-registry) + pure-util call sites onto the facade
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [x] 68.2-11-PLAN.md — Wave 6: Delete ipns.service/file-metadata.service/kind-cache/useFileSize + allowlist-free D-07 grep gate + unit/typecheck
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
+- [x] 68.2-12-PLAN.md — Wave 7: Revert the SealedChildRef size/modifiedAt mirror LAST (restore NODE-03) + full web-e2e phase gate
+
+**Wave 8** *(gap closure — SDK-READ-03 / SC#5, verification 2026-07-06)*
+
+- [x] 68.2-13-PLAN.md — Wave 8: Gated live-resolve-on-navigation for already-loaded folders (forceResolve option, fixes the self-referential cache clock) [TDD]
+
+**Wave 9** *(blocked on Wave 8 completion)*
+
+- [x] 68.2-14-PLAN.md — Wave 9: Thread { forceResolve: true } into the web nav/poll freshness legs + prove shared-folder-desync e2e + full-suite re-triage
 
 ### Phase 69: FUSE and WinFsp — Rust Integration and Grant-Root Awareness
 

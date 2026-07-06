@@ -249,11 +249,16 @@ describe('CipherBoxClient', () => {
       expect(result!.sequenceNumber).toBe(5n);
       expect(result!.children).toEqual(mockChildren);
 
-      // Verify folder:loaded event
+      // Verify folder:loaded event. 68.2-02: the event payload carries
+      // ResolvedChild[] (resolved through the gated listing path), not the
+      // raw legacy SealedChildRef-shaped `mockChildren` fixture above --
+      // `mockChildren` has no `readKeySealed` (pre-node/v3 shape), so the
+      // listing resolve cannot open it and the child is soft-skipped
+      // (folder-listing.ts's per-child skip semantics), yielding [].
       const loadedEvent = events.find((e) => e.type === 'folder:loaded');
       expect(loadedEvent).toBeDefined();
       expect((loadedEvent as { folderId: string }).folderId).toBe('test-ipns');
-      expect((loadedEvent as { children: unknown[] }).children).toEqual(mockChildren);
+      expect((loadedEvent as { children: unknown[] }).children).toEqual([]);
     });
 
     it('returns null when IPNS record not found', async () => {

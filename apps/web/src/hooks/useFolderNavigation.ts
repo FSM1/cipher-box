@@ -1,12 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import type { SealedChildRef } from '@cipherbox/core';
-import type { FolderState } from '@cipherbox/sdk';
+import type { ResolvedChild, FolderState } from '@cipherbox/sdk';
 import { useFolderStore, type FolderNode } from '../stores/folder.store';
 import { useVaultStore } from '../stores/vault.store';
 import { getSdkClient } from '../lib/sdk-provider';
 import { logger } from '../lib/logger';
-import { resolveKinds } from '../lib/kind-cache';
 
 /**
  * Breadcrumb entry for navigation.
@@ -56,6 +54,30 @@ function getRootFolder(
     folderKey: vaultStore.rootReadKey,
     ipnsPrivateKey: vaultStore.rootIpnsKeypair.privateKey,
   };
+}
+
+/**
+ * D-03 belt-and-suspenders freshness, deterministic leg: re-resolve a
+ * folder's `ResolvedChild[]` display listing (+ raw `SealedChildRef[]`
+ * identity mirror and current sequence) via the SDK's gated
+ * `listFolder`/`ensureFolderLoaded` -- the web never independently resolves
+ * (SC#3). `listFolder`'s in-SDK cache (keyed by ipnsName+sequenceNumber,
+ * 68.2-02) makes a call for an unchanged folder cheap. No-ops if the folder
+ * has since been removed from the store (navigated away / deleted).
+ */
+async function refreshFolderListing(ipnsName: string, folderId: string): Promise<void> {
+  const client = getSdkClient();
+  const [resolved, state] = await Promise.all([
+    client.listFolder(ipnsName, { forceResolve: true }),
+    client.ensureFolderLoaded(ipnsName, { forceResolve: true }),
+  ]);
+  const store = useFolderStore.getState();
+  if (!store.folders[folderId]) return;
+  store.updateFolderChildren(folderId, resolved);
+  if (state) {
+    store.updateFolderRawChildren(folderId, state.children);
+    store.updateFolderSequence(folderId, state.sequenceNumber);
+  }
 }
 
 /**
@@ -177,6 +199,16 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
       if (targetFolderId === 'root') {
         setIsLoading(false);
         navigate('/files');
+        useFolderStore.getState().setCurrentFolder('root');
+        // D-03 nav re-resolve (root leg): fire-and-forget, never blocks the
+        // navigation itself -- keeps the cached view live if the underlying
+        // vault root has changed since it was last loaded (e.g. another
+        // device's write, or a prior session's stale cache).
+        if (rootIpnsName) {
+          void refreshFolderListing(rootIpnsName, 'root').catch((err) => {
+            logger.error('[Nav] Background root re-resolve failed:', err);
+          });
+        }
         return;
       }
 
@@ -185,26 +217,29 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
       const targetFolder = currentFolders[targetFolderId];
 
       // If already loaded, just navigate (clearing any superseded
-      // navigation's stuck loading flag — see root fast path above)
+      // navigation's stuck loading flag — see root fast path above), then
+      // kick off the D-03 nav re-resolve in the background (deterministic
+      // freshness leg — never independently resolved, always through the
+      // SDK's gated listFolder/ensureFolderLoaded).
       if (targetFolder?.isLoaded) {
         setIsLoading(false);
         navigate(`/files/${targetFolderId}`);
+        useFolderStore.getState().setCurrentFolder(targetFolderId);
+        void refreshFolderListing(targetFolder.ipnsName, targetFolderId).catch((err) => {
+          logger.error('[Nav] Background re-resolve failed:', err);
+        });
         return;
       }
 
-      // TODO(phase 63): read-chain navigation — find the SealedChildRef for this subfolder,
-      // unseal the parent read-body to recover the child readKey, then navigate.
-      // For now, find the child ref by ipnsName from any loaded parent's children.
-      let folderRef: SealedChildRef | undefined;
+      // Find the child ref for this subfolder from any loaded parent's
+      // resolved children (identifies by ipnsName; folderId maps to ipnsName
+      // via the FolderNode's own ipnsName field).
+      let folderRef: ResolvedChild | undefined;
       let parentId: string | null = null;
 
       for (const [fId, fNode] of Object.entries(currentFolders)) {
         if (!fNode.isLoaded) continue;
-        // SealedChildRef identifies children by ipnsName; folderId maps to ipnsName
-        // via the FolderNode's own ipnsName field (phase 63 will use the Node id).
-        const match = fNode.children.find(
-          (c): c is SealedChildRef => c.ipnsName === targetFolderId
-        );
+        const match = fNode.children.find((c) => c.ipnsName === targetFolderId);
         if (match) {
           folderRef = match;
           parentId = fId;
@@ -214,7 +249,7 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
 
       if (!folderRef) {
         logger.error(
-          `[Nav] Cannot load folder ${targetFolderId}: no parent with its SealedChildRef is loaded`
+          `[Nav] Cannot load folder ${targetFolderId}: no loaded parent has a matching child ref`
         );
         return;
       }
@@ -253,7 +288,9 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
 
         for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
           if (latestNavTarget.current !== targetFolderId) return;
-          state = await getSdkClient().ensureFolderLoaded(folderRef.ipnsName);
+          state = await getSdkClient().ensureFolderLoaded(folderRef.ipnsName, {
+            forceResolve: true,
+          });
           if (state) break;
           if (attempt === MAX_RETRIES) break;
           // IPNS not propagated yet — wait and retry
@@ -267,13 +304,17 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
           throw new Error('Folder not loaded — IPNS propagation timed out');
         }
 
-        // D-02: populate the kind cache BEFORE the FolderNode lands in the
-        // store, so FileBrowser's synchronous isFileRef guards read the
-        // resolved kind on first render (no extra re-render needed here).
-        await resolveKinds(state.children);
+        // D-03 nav re-resolve (deterministic freshness leg): resolve the
+        // display listing through the SDK's gated `listFolder` (SDK-cached
+        // by ipnsName+sequenceNumber, 68.2-02) BEFORE the FolderNode lands
+        // in the store, so kind/size/modifiedAt are pre-resolved on first
+        // render (no extra re-render, no web-side resolve, SC#3).
+        const resolvedChildren = await getSdkClient().listFolder(folderRef.ipnsName, {
+          forceResolve: true,
+        });
 
-        // Re-check the stale-completion guard again — resolveKinds awaited,
-        // so the user may have navigated away while the cache was populating.
+        // Re-check the stale-completion guard again — listFolder awaited,
+        // so the user may have navigated away while it was in flight.
         if (latestNavTarget.current !== targetFolderId) return;
 
         // Map FolderState -> FolderNode.
@@ -283,7 +324,8 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
           name: folderRef.name,
           ipnsName: folderRef.ipnsName,
           parentId,
-          children: state.children,
+          children: resolvedChildren,
+          rawChildren: state.children,
           isLoaded: true,
           isLoading: false,
           sequenceNumber: state.sequenceNumber,
@@ -292,6 +334,7 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
         };
 
         useFolderStore.getState().setFolder(folderNode);
+        useFolderStore.getState().setCurrentFolder(targetFolderId);
       } catch (err) {
         logger.error('[Nav] Failed to load subfolder:', err);
         // Only clean up if this is still the latest navigation
@@ -313,7 +356,7 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
         }
       }
     },
-    [navigate]
+    [navigate, rootIpnsName]
   );
 
   /**

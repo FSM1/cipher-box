@@ -1,6 +1,21 @@
 import { type Page, type Locator } from '@playwright/test';
 
 /**
+ * Raise a per-call wait timeout to a 60s floor under CI, where the shared
+ * API/Kubo/Postgres stack under parallel-worker load makes write round-trips
+ * (create/upload/rename/delete -> IPNS publish -> refresh) slower than the
+ * serial-calibrated timeouts the specs pass. Longer explicit timeouts are
+ * honored; local runs keep the caller's value (undefined -> Playwright default).
+ */
+function ciFloor(timeout?: number): number | undefined {
+  if (!process.env.CI) return timeout;
+  // Preserve an explicit `timeout: 0` — in Playwright that means "no timeout,
+  // defer to the test/global budget", which the CI floor must not clamp to 60s.
+  if (timeout === 0) return 0;
+  return Math.max(60_000, timeout ?? 0);
+}
+
+/**
  * Page object for FileList component interactions.
  *
  * Encapsulates all file and folder list interactions in the main content area.
@@ -38,21 +53,22 @@ export class FileListPage {
 
   /**
    * Get a specific file item by name.
-   * Files have size displayed (not "-").
+   * Files have size displayed (not the em-dash placeholder "—").
    */
   getFileItem(name: string): Locator {
     return this.getItem(name).filter({
-      hasNot: this.page.locator('.file-list-item-size', { hasText: '-' }),
+      hasNot: this.page.locator('.file-list-item-size', { hasText: '—' }),
     });
   }
 
   /**
    * Get a specific folder item by name.
-   * Folders have size displayed as "-".
+   * Folders have size displayed as the em-dash placeholder "—"
+   * (FileListItem.tsx renders U+2014 EM DASH, not a hyphen-minus).
    */
   getFolderItem(name: string): Locator {
     return this.getItem(name).filter({
-      has: this.page.locator('.file-list-item-size', { hasText: '-' }),
+      has: this.page.locator('.file-list-item-size', { hasText: '—' }),
     });
   }
 
@@ -96,7 +112,12 @@ export class FileListPage {
    * Useful after file upload or folder creation.
    */
   async waitForItemToAppear(name: string, options?: { timeout?: number }): Promise<void> {
-    await this.getItem(name).waitFor({ state: 'visible', ...options });
+    // Under parallel CI load the create/upload -> IPNS publish -> refresh
+    // round-trip can exceed the serial-calibrated per-call timeouts sprinkled
+    // across the specs, even though the item does eventually render. Enforce a
+    // 60s floor on CI while still honoring longer explicit timeouts; locally,
+    // leave the caller's value untouched.
+    await this.getItem(name).waitFor({ state: 'visible', timeout: ciFloor(options?.timeout) });
   }
 
   /**
@@ -104,7 +125,9 @@ export class FileListPage {
    * Useful after deletion or move.
    */
   async waitForItemToDisappear(name: string, options?: { timeout?: number }): Promise<void> {
-    await this.getItem(name).waitFor({ state: 'hidden', ...options });
+    // Restore/delete/move round-trips are similarly slow under parallel CI load
+    // (see waitForItemToAppear); apply the same CI floor.
+    await this.getItem(name).waitFor({ state: 'hidden', timeout: ciFloor(options?.timeout) });
   }
 
   /**

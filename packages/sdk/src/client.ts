@@ -16,6 +16,7 @@
 import type { SdkContext, ProgressCallback, DownloadProgressCallback } from '@cipherbox/sdk-core';
 import type { PinningProvider, ExternalEncryptFn } from '@cipherbox/sdk-core';
 import type { UploadResult } from '@cipherbox/sdk-core';
+import type { TeeKeys, ConnectionTestResult } from '@cipherbox/sdk-core';
 import * as sdkCore from '@cipherbox/sdk-core';
 import { selectEncryptionMode } from '@cipherbox/sdk-core';
 import {
@@ -33,6 +34,8 @@ import {
   generateEd25519Keypair,
   generateRandomBytes,
   deriveIpnsName,
+  decryptAesGcm,
+  decryptAesCtr,
 } from '@cipherbox/crypto';
 import pLimit from 'p-limit';
 import type {
@@ -42,6 +45,8 @@ import type {
   PublishedNode,
   Node as CoreNode,
   NodeContent,
+  NodeKind,
+  EncryptionMode,
 } from '@cipherbox/core';
 import {
   sealChildReadKey,
@@ -51,6 +56,21 @@ import {
   unsealChildWriteKey,
   unsealNode,
 } from '@cipherbox/core';
+// D-07 full-boundary facade primitives (68.2-04): auth-bootstrap/vault crypto
+// (useAuth.ts) and device-registry crypto (device-registry.service.ts) --
+// these are the @cipherbox/core symbols the web imports at runtime today;
+// mediating them here lets the cutover wave (Plan 10) stop importing
+// @cipherbox/core directly for vault/registry operations.
+import {
+  initializeVault,
+  encryptVaultKeys,
+  serializeVaultBlobV3,
+  deserializeVaultBlobV3,
+  deriveRegistryIpnsKeypair,
+  encryptRegistry,
+  decryptRegistry,
+} from '@cipherbox/core';
+import type { VaultInit, DeviceRegistry } from '@cipherbox/core';
 import type {
   CipherBoxClientConfig,
   FolderState,
@@ -64,6 +84,7 @@ import { KeyCache } from './state/key-cache';
 import * as binOps from './bin';
 import type { BinState } from './bin';
 import * as shareOps from './share';
+import { resolveChildren, type ResolvedChild } from './folder-listing';
 
 /** Maximum concurrent encrypt+pin operations for batch uploads. */
 const UPLOAD_CONCURRENCY = 3;
@@ -75,6 +96,35 @@ const UPLOAD_CONCURRENCY = 3;
  * sequentially, so this caps the number of subtrees fetched in parallel.
  */
 const UNENROLL_COLLECT_CONCURRENCY = 8;
+
+/**
+ * Decode a base64 string to raw bytes (68.2-08 hoist from
+ * `apps/web/src/hooks/useSharedNavigationActions.ts` -- decodes
+ * `NodeContent.fileIv`, which is base64-encoded under node/v3, unlike the
+ * legacy hex-encoded fileIv `sdkCore.downloadAndDecrypt` expects).
+ */
+function sharedFileBase64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) {
+    bytes[i] = bin.charCodeAt(i);
+  }
+  return bytes;
+}
+
+/**
+ * Encode raw bytes to base64 (68.2-08 hoist). Bridges the web's hex-encoded
+ * `readDescriptorRef` (API DTO contract) into `navigateReadChain`'s base64
+ * contract (sdk-core's own `issueReadGrant` produces base64 -- the two
+ * encodings diverge at the API boundary).
+ */
+function sharedFileBytesToBase64(bytes: Uint8Array): string {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) {
+    bin += String.fromCharCode(bytes[i]);
+  }
+  return btoa(bin);
+}
 
 /** Thrown when a bin operation is attempted before loadBin() has been called. */
 export class BinNotLoadedError extends Error {
@@ -139,6 +189,22 @@ export class CipherBoxClient {
    * `ipnsName`, so they live in their own map (D REQ-3, A4).
    */
   private sharedFolderTree: SharedFolderTree;
+  /**
+   * In-SDK cache of resolved listings (SDK-READ-02, D-02), keyed by IPNS
+   * name and invalidated by sequenceNumber -- the clock. A folder and any
+   * shared-folder depth reaching the SAME ipnsName share one cache entry
+   * (ResolvedChild[] is fully determined by the folder's own content, not
+   * the access path that reached it).
+   */
+  private listingCache: Map<string, { sequenceNumber: bigint; children: ResolvedChild[] }> =
+    new Map();
+  /**
+   * In-flight dedup for `reresolveFolderInPlace` (68.2-13, T-68.2-13-04):
+   * coalesces concurrent `{ forceResolve: true }` calls for the SAME
+   * ipnsName (e.g. a nav re-resolve firing alongside the 30s poll leg) to a
+   * single network resolve.
+   */
+  private reresolveInFlight: Map<string, Promise<FolderState | null>> = new Map();
   private keyCache: KeyCache;
   private binState: BinState | null = null;
   /** BYO-IPFS external pinning provider (null when mode is 'cipherbox') */
@@ -426,6 +492,10 @@ export class CipherBoxClient {
     this.folderTree.clear();
     this.sharedFolderTree.clear();
     this.keyCache.clear();
+    // Drop the SDK-owned read caches so no resolved listing (private folder
+    // structure) or in-flight re-resolve closure survives after destroy().
+    this.listingCache.clear();
+    this.reresolveInFlight.clear();
     this.emitter.removeAll();
     // Zero internal key copies (defense-in-depth; JS GC may retain copies)
     // Only zeroes our copies, not the caller-provided buffers
@@ -589,7 +659,12 @@ export class CipherBoxClient {
           type: 'folder:loaded',
           folderId: ipnsName,
           ipnsName,
-          children: existing.children,
+          children: await this.resolveListingChildren(
+            existing.children,
+            existing.folderKey,
+            ipnsName,
+            existing.sequenceNumber
+          ),
           sequenceNumber: existing.sequenceNumber,
         });
         return existing;
@@ -617,7 +692,12 @@ export class CipherBoxClient {
         type: 'folder:loaded',
         folderId: ipnsName,
         ipnsName,
-        children: result.metadata.children ?? [],
+        children: await this.resolveListingChildren(
+          state.children,
+          state.folderKey,
+          ipnsName,
+          state.sequenceNumber
+        ),
         sequenceNumber: result.sequenceNumber,
       });
 
@@ -629,15 +709,507 @@ export class CipherBoxClient {
    * Resolve an IPNS name to its raw PublishedNode envelope + current sequenceNumber.
    * Returns null when the IPNS record is absent (structurally unresolvable hop) —
    * NOT when a crypto/AEAD verification subsequently fails on the caller side.
+   *
+   * Threads `signatureVerified` from `sdkCore.resolveIpnsRecord` (68.2-01 —
+   * previously discarded) so read-path callers (`dfsFindFolder`,
+   * `ensureRootFolderState`) can fail closed on an unverified record BEFORE
+   * gating it through `RotationHighWater.enforceResolved` (ROT-07).
    */
-  private async resolvePublishedNode(
-    ipnsName: string
-  ): Promise<{ published: PublishedNode; sequenceNumber: bigint } | null> {
+  private async resolvePublishedNode(ipnsName: string): Promise<{
+    published: PublishedNode;
+    sequenceNumber: bigint;
+    signatureVerified: boolean;
+  } | null> {
     const resolved = await sdkCore.resolveIpnsRecord(ipnsName, this.ctx);
     if (!resolved) return null;
     const raw = await sdkCore.fetchFromIpfs(this.ctx, resolved.cid);
     const published = JSON.parse(new TextDecoder().decode(raw)) as PublishedNode;
-    return { published, sequenceNumber: resolved.sequenceNumber };
+    return {
+      published,
+      sequenceNumber: resolved.sequenceNumber,
+      signatureVerified: resolved.signatureVerified,
+    };
+  }
+
+  /**
+   * Resolve one folder-listing CHILD's PublishedNode through the durable
+   * ROT-07 anti-rollback gate (T-68.2-01 / SDK-READ-02) -- the single gated
+   * read entrypoint `folder-listing.ts`'s `resolveChildren` is injected with
+   * (D-05).
+   *
+   * This is a STANDALONE per-child listing resolve, distinct from
+   * `dfsFindFolder`'s per-hop gate: `dfsFindFolder` gates a child only while
+   * searching for a specific DESCENDANT target and discards the result for
+   * every non-matching (including every file) child; every immediate child
+   * of a LISTED folder is gated here, file children included.
+   *
+   * Fail-closed and generation-sourcing rules mirror `dfsFindFolder`'s gate
+   * exactly (68.2-01): fail closed on `!signatureVerified` BEFORE any floor
+   * mutation, guard `Number.MAX_SAFE_INTEGER` overflow, and source
+   * `generation`/`versionFloor` from `childRef` (the PARENT's SealedChildRef
+   * mirror) -- NEVER the child's own envelope generation (Pitfall 3).
+   */
+  private async gatedResolveChild(
+    childRef: SealedChildRef
+  ): Promise<{ published: PublishedNode; sequenceNumber: bigint } | null> {
+    const resolved = await this.resolvePublishedNode(childRef.ipnsName);
+    if (!resolved) return null; // structurally unresolvable hop -- skip, try siblings
+
+    if (this.config.rotationHighWater) {
+      if (!resolved.signatureVerified) {
+        throw new Error(
+          `IPNS resolve for ${childRef.ipnsName} returned an unverified record -- refusing to gate durable floors on it`
+        );
+      }
+      if (
+        resolved.sequenceNumber > BigInt(Number.MAX_SAFE_INTEGER) ||
+        childRef.versionFloor > BigInt(Number.MAX_SAFE_INTEGER)
+      ) {
+        throw new Error(
+          `IPNS sequence number for ${childRef.ipnsName} exceeds Number.MAX_SAFE_INTEGER -- refusing lossy floor conversion`
+        );
+      }
+      await this.config.rotationHighWater.enforceResolved({
+        nodeId: childRef.ipnsName,
+        seq: Number(resolved.sequenceNumber),
+        generation: childRef.generation,
+        versionFloor: Number(childRef.versionFloor),
+      });
+    }
+
+    return { published: resolved.published, sequenceNumber: resolved.sequenceNumber };
+  }
+
+  /**
+   * Resolve a single child's OWN readKey + plaintext node identity by
+   * walking one hop of the read-chain (D-07 full-boundary facade, 68.2-07
+   * Rule-2 addition).
+   *
+   * Mirrors `resolveChildren`'s (folder-listing.ts) per-child resolve+unseal
+   * step, but returns the raw derived `readKey` + full node identity instead
+   * of the display-only `ResolvedChild` projection. This is the facade
+   * replacement for `apps/web/src/lib/crypto/key-wrapping.ts`'s
+   * `resolveChildNodeIdentity` (used by ShareDialog / invite.service to
+   * derive a shared item's OWN readKey + nodeId/generation before issuing a
+   * grant -- the grant root IS the shared item, not its parent).
+   *
+   * Routes through the same gated resolve (`gatedResolveChild`, ROT-07) as
+   * every other per-child listing hop (D-05 single gated read entrypoint).
+   *
+   * @param childRef - The child's SealedChildRef as it lives in the parent's children array
+   * @param parentReadKey - The parent node's decrypted readKey (unwrapping key)
+   * @security Does NOT zero `parentReadKey` -- caller is the terminal owner (D-09).
+   *   The returned `readKey` is minted by this call; the caller becomes its
+   *   terminal owner and must zero it on its own lifecycle boundary.
+   */
+  async resolveChildIdentity(
+    childRef: SealedChildRef,
+    parentReadKey: Uint8Array
+  ): Promise<{
+    readKey: Uint8Array;
+    nodeId: string;
+    kind: NodeKind;
+    generation: number;
+    published: PublishedNode;
+  }> {
+    return this.withOperation('resolveChildIdentity', async () => {
+      const resolved = await this.gatedResolveChild(childRef);
+      if (!resolved) {
+        throw new Error(`resolveChildIdentity: IPNS record not found for ${childRef.ipnsName}`);
+      }
+      const { published } = resolved;
+      const readKey = await unsealChildReadKey(
+        childRef.readKeySealed,
+        parentReadKey,
+        published.id,
+        published.kind,
+        childRef.generation // parent-mirror generation-source rule -- never published.generation
+      );
+      return {
+        readKey,
+        nodeId: published.id,
+        kind: published.kind,
+        generation: published.generation,
+        published,
+      };
+    });
+  }
+
+  /**
+   * Resolve (or return the cached) `ResolvedChild[]` for a folder's sealed
+   * children, cached in `listingCache` keyed by `ipnsName` and invalidated
+   * by `sequenceNumber` -- the clock (D-02). A repeat call for the same
+   * `ipnsName` at an UNCHANGED `sequenceNumber` returns the cached listing
+   * without re-resolving any child.
+   */
+  private async resolveListingChildren(
+    children: SealedChildRef[],
+    parentReadKey: Uint8Array,
+    ipnsName: string,
+    sequenceNumber: bigint
+  ): Promise<ResolvedChild[]> {
+    const cached = this.listingCache.get(ipnsName);
+    if (cached && cached.sequenceNumber === sequenceNumber) {
+      return cached.children;
+    }
+    const resolved = await resolveChildren(children, parentReadKey, (childRef) =>
+      this.gatedResolveChild(childRef)
+    );
+    // Do NOT cache a PARTIAL listing. `resolveChildren` skips any child it
+    // can't currently resolve (transient network error, ROT-07 rejection, bad
+    // AEAD -- as well as a genuinely revoked/absent hop). Caching an incomplete
+    // result at this sequenceNumber would pin it until a remote write advances
+    // the sequence or the client reloads -- even the `forceResolve` poll/nav
+    // paths reuse a same-sequence entry (they refresh the folder's OWN sequence,
+    // not its children). Skipping the cache-set when a child was dropped lets a
+    // later resolve reattempt it and self-heal on network recovery.
+    if (resolved.length === children.length) {
+      this.listingCache.set(ipnsName, { sequenceNumber, children: resolved });
+    }
+    return resolved;
+  }
+
+  /**
+   * List a folder's children as `ResolvedChild[]` (SDK-READ-02, SC#2) --
+   * resolved once per folder load through the gated read path (68.2-01) and
+   * cached in the SDK keyed by `ipnsName` (D-02). The web renders directly
+   * from this result with no web-side per-child resolve or cache.
+   *
+   * Self-bootstraps via `ensureFolderLoaded` (68.2-01 gated), so a cold
+   * client can call this directly without a prior `loadFolder`/
+   * `registerFolder`, exactly like every other `ensureFolderLoaded`-backed
+   * mutation chokepoint.
+   *
+   * `opts.forceResolve` (68.2-13, SDK-READ-03 / SC#5) threads through to
+   * `ensureFolderLoaded` so an already-loaded folder's stored sequence
+   * advances from network truth BEFORE this method's own
+   * `resolveListingChildren` cache check runs -- closing the
+   * self-referential cache-clock gap where the check compared the incoming
+   * sequence against the SAME stale value the short-circuit had just
+   * returned.
+   */
+  async listFolder(ipnsName: string, opts?: { forceResolve?: boolean }): Promise<ResolvedChild[]> {
+    return this.withOperation('listFolder', async () => {
+      const folder = await this.ensureFolderLoaded(ipnsName, opts);
+      if (!folder) return [];
+      return this.resolveListingChildren(
+        folder.children,
+        folder.folderKey,
+        ipnsName,
+        folder.sequenceNumber
+      );
+    });
+  }
+
+  /**
+   * Return a folder's full decoded metadata (the decrypted `Node`,
+   * including its raw `SealedChildRef[]` children) by delegating to the
+   * gated `ensureFolderLoaded` path (D-05 single gated read entrypoint).
+   *
+   * Mediated replacement for the web's direct `sdkCore.fetchAndDecryptMetadata`
+   * call (RESEARCH Code Examples, `useFileBrowserActions.ts`/`folder-helpers.ts`)
+   * — callers that need the folder's own metadata fields (not just its
+   * resolved children) should use this instead of `listFolder`.
+   *
+   * @param ipnsName - IPNS name of the folder
+   * @returns The decrypted `Node`, or `null` if the folder cannot be loaded
+   *   (matches `ensureFolderLoaded`'s not-found contract)
+   */
+  async getFolderMetadata(ipnsName: string): Promise<CoreNode | null> {
+    return this.withOperation('getFolderMetadata', async () => {
+      const folder = await this.ensureFolderLoaded(ipnsName);
+      return folder?.metadata ?? null;
+    });
+  }
+
+  /**
+   * List a shared folder's children as `ResolvedChild[]` for an
+   * INTERMEDIATE folder reached by descending `path` (a sequence of child
+   * `ipnsName`s) from the already-loaded share root/depth in
+   * `sharedFolderTree` (SDK-READ-02, SC#2).
+   *
+   * `path` walks one hop at a time -- gated-resolve the hop's
+   * PublishedNode, unseal its readKey under the CURRENT depth's readKey
+   * (generation-source rule: `childRef.generation`, the PARENT mirror,
+   * §2.6), unseal its Node to recover the next depth's children -- hoisted
+   * from `apps/web/src/hooks/useSharedNavigationActions.ts`'s
+   * `navigateToSubfolder` walk (Pitfall 1: `navigateReadChain` forces a
+   * `kind: 'file'` leaf and cannot render an intermediate folder, so this
+   * walk is NOT built on top of it). This method never mutates
+   * `sharedFolderTree` -- listing is read-only; navigation commits still go
+   * through the existing `navigateToShare`/`navigateToSubfolder` web flow.
+   *
+   * Zeroing: each hop's minted readKey is the terminal owner's
+   * responsibility once superseded by the next hop (or once the final
+   * listing resolve completes) -- never the original `sharedFolderTree`
+   * entry's `folderKey` (caller/tree-owned, D-09).
+   *
+   * @throws if `shareId` has no loaded `SharedFolderState`, if a hop in
+   *   `path` is not found among the current depth's children, or if a hop
+   *   is no longer resolvable (revoked).
+   */
+  async listSharedFolder(shareId: string, path: string[] = []): Promise<ResolvedChild[]> {
+    return this.withOperation('listSharedFolder', async () => {
+      const state = this.sharedFolderTree.get(shareId);
+      if (!state) {
+        throw new Error(`Shared folder not loaded: ${shareId}`);
+      }
+
+      let currentChildren = state.children;
+      let currentReadKey = state.folderKey; // caller/tree-owned -- never zeroed
+      let currentIpnsName = state.ipnsName;
+      let currentSequenceNumber = state.sequenceNumber;
+      let mintedReadKey: Uint8Array | null = null;
+
+      try {
+        for (const targetIpnsName of path) {
+          const childRef = currentChildren.find((c) => c.ipnsName === targetIpnsName);
+          if (!childRef) {
+            throw new Error(
+              `Shared subfolder not found in listSharedFolder path: ${targetIpnsName}`
+            );
+          }
+          const childResolved = await this.gatedResolveChild(childRef);
+          if (!childResolved) {
+            throw new Error(`Shared subfolder is no longer available (revoked): ${targetIpnsName}`);
+          }
+          const childReadKey = await unsealChildReadKey(
+            childRef.readKeySealed,
+            currentReadKey,
+            childResolved.published.id,
+            childResolved.published.kind,
+            childRef.generation // parent mirror -- NEVER childResolved.published.generation
+          );
+          // Adopt this hop's key BEFORE unsealNode so the outer `finally`
+          // zeroes it even if unsealNode throws (leak-on-failure fix). This
+          // hop's key supersedes the previous hop's minted key -- zero that
+          // now (T-68.1-01-01 pattern); state.folderKey itself is never zeroed.
+          mintedReadKey?.fill(0);
+          mintedReadKey = childReadKey;
+
+          const childNode = await unsealNode(childResolved.published, childReadKey);
+
+          currentChildren = childNode.children ?? [];
+          currentIpnsName = childRef.ipnsName;
+          currentSequenceNumber = childResolved.sequenceNumber;
+          currentReadKey = childReadKey;
+        }
+
+        return await this.resolveListingChildren(
+          currentChildren,
+          currentReadKey,
+          currentIpnsName,
+          currentSequenceNumber
+        );
+      } finally {
+        mintedReadKey?.fill(0);
+      }
+    });
+  }
+
+  /**
+   * Download and decrypt a shared file's content by walking the full
+   * grant->leaf read-chain (D-07 full-boundary facade, 68.2-08 Rule-2
+   * addition -- not in this plan's original `<files_modified>`, added
+   * because no existing facade covered shared single-file download).
+   *
+   * Wraps `sdkCore.navigateReadChain` (UNCHANGED -- per 68.2-RESEARCH.md's
+   * explicit guidance, this primitive is not modified because it has other
+   * existing callers) plus the fetch+decrypt orchestration that previously
+   * lived directly in `apps/web/src/hooks/useSharedNavigationActions.ts`'s
+   * `downloadSharedFile`/`loadSharedFileContent`. This method only MOVES
+   * that orchestration into the SDK so the web stops importing
+   * `navigateReadChain`/`fetchFromIpfs` (sdk-core) at runtime for shared
+   * file reads.
+   *
+   * `path` is the sequence of ipnsNames strictly between the share root and
+   * the leaf, INCLUSIVE of the leaf -- empty when the share root IS the file
+   * (single-file share) or when the file is a direct child of the currently
+   * viewed folder depth.
+   *
+   * @param args.readDescriptorRef - HEX-encoded ECIES-wrapped share-root
+   *   readKey (the `ReceivedShare`/API DTO wire contract) -- bridged to
+   *   `navigateReadChain`'s base64 contract internally.
+   * @param args.recipientPrivateKey - Caller-owned, NEVER zeroed here (D-09).
+   * @security The minted share-root/intermediate readKeys and the leaf's raw
+   *   fileKey are recovered and zeroed entirely inside `navigateReadChain`
+   *   and this method -- only decrypted plaintext leaves this method.
+   */
+  async downloadSharedFile(args: {
+    readDescriptorRef: string;
+    recipientPrivateKey: Uint8Array;
+    rootIpnsName: string;
+    rootExpectedGeneration: number;
+    path: string[];
+  }): Promise<
+    | { status: 'revoked' }
+    | { status: 'behind-retry' }
+    | { status: 'ok'; plaintext: Uint8Array; mimeType: string; encryptionMode: EncryptionMode }
+  > {
+    return this.withOperation('downloadSharedFile', async () => {
+      const result = await sdkCore.navigateReadChain({
+        readDescriptorRef: sharedFileBytesToBase64(hexToBytes(args.readDescriptorRef)),
+        recipientPrivKey: args.recipientPrivateKey,
+        rootIpnsName: args.rootIpnsName,
+        rootExpectedGeneration: args.rootExpectedGeneration,
+        path: args.path,
+        ctx: this.ctx,
+      });
+
+      if (result.status === 'revoked') return { status: 'revoked' as const };
+      if (result.status === 'behind-retry') return { status: 'behind-retry' as const };
+
+      const { content } = result;
+      try {
+        const ciphertext = await sdkCore.fetchFromIpfs(this.ctx, content.cid);
+        const iv = sharedFileBase64ToBytes(content.fileIv);
+        const plaintext =
+          content.encryptionMode === 'CTR'
+            ? await decryptAesCtr(ciphertext, content.fileKey, iv)
+            : await decryptAesGcm(ciphertext, content.fileKey, iv);
+        return {
+          status: 'ok' as const,
+          plaintext,
+          mimeType: content.mimeType,
+          encryptionMode: content.encryptionMode,
+        };
+      } finally {
+        // Terminal owner of the raw fileKey recovered inside NodeContent (D-09).
+        content.fileKey.fill(0);
+      }
+    });
+  }
+
+  /**
+   * Resolve a share's ROOT node from its grant descriptor (D-07 full-boundary
+   * facade, 68.2-08 Rule-2 addition -- the share-ENTRY counterpart to
+   * {@link resolveChildIdentity}'s per-child descent). ONE ECIES unwrap of
+   * `readDescriptorRef` -> shareRootReadKey, resolve+unseal the root Node.
+   * Hoisted verbatim from `useSharedNavigationActions.ts`'s `navigateToShare`
+   * (the raw-crypto portion only -- UI state wiring/seeding stays in the web
+   * hook).
+   *
+   * @security `recipientPrivateKey` is caller-owned, NEVER zeroed here
+   *   (D-09). On `'ok'`, the caller becomes the terminal owner of the
+   *   returned `readKey` (must zero it once superseded/discarded/consumed).
+   */
+  async resolveShareRoot(args: {
+    readDescriptorRef: string;
+    recipientPrivateKey: Uint8Array;
+    rootIpnsName: string;
+    rootExpectedGeneration?: number;
+  }): Promise<
+    | { status: 'revoked' }
+    | { status: 'behind-retry' }
+    | {
+        status: 'ok';
+        kind: NodeKind;
+        readKey: Uint8Array;
+        children: SealedChildRef[];
+        sequenceNumber: bigint;
+        published: PublishedNode;
+      }
+  > {
+    return this.withOperation('resolveShareRoot', async () => {
+      const shareRootReadKey = await unwrapKey(
+        hexToBytes(args.readDescriptorRef),
+        args.recipientPrivateKey
+      );
+      let committed = false;
+      try {
+        const resolved = await this.resolvePublishedNode(args.rootIpnsName);
+        if (!resolved) return { status: 'revoked' as const };
+        if (
+          args.rootExpectedGeneration !== undefined &&
+          resolved.published.generation > args.rootExpectedGeneration
+        ) {
+          return { status: 'behind-retry' as const };
+        }
+        const rootNode = await unsealNode(resolved.published, shareRootReadKey);
+        committed = true;
+        return {
+          status: 'ok' as const,
+          kind: rootNode.kind,
+          readKey: shareRootReadKey,
+          children: rootNode.children ?? [],
+          sequenceNumber: resolved.sequenceNumber,
+          published: resolved.published,
+        };
+      } finally {
+        if (!committed) shareRootReadKey.fill(0);
+      }
+    });
+  }
+
+  /**
+   * Descend one hop into a shared CHILD folder (D-07 full-boundary facade,
+   * 68.2-08 Rule-2 addition) -- gated-resolve the child, unseal its readKey
+   * under the CURRENT depth's readKey (generation-source rule:
+   * `childRef.generation`, the parent mirror, never the child's own envelope
+   * generation), then unseal the child Node to recover its OWN children +
+   * sequence. Mirrors {@link listSharedFolder}'s internal per-hop loop body,
+   * but returns the RAW `SealedChildRef[]` (the web still needs these for
+   * nav-stack/write-op identity, e.g. `updateSharedFile`'s
+   * `readKeySealed`-dependent filePointer) instead of the resolved display
+   * projection -- callers needing `ResolvedChild[]` for THIS depth should
+   * call {@link listSharedFolder} separately (cached, cheap).
+   *
+   * @returns `null` when the child's IPNS record is no longer resolvable
+   *   (revoked/not-found) -- fail-closed, matches `gatedResolveChild`.
+   * @security Never zeros `parentReadKey` (caller-owned, D-09). The caller
+   *   becomes the terminal owner of the returned `readKey`.
+   */
+  async descendSharedChild(
+    childRef: SealedChildRef,
+    parentReadKey: Uint8Array
+  ): Promise<{
+    readKey: Uint8Array;
+    children: SealedChildRef[];
+    sequenceNumber: bigint;
+    published: PublishedNode;
+  } | null> {
+    return this.withOperation('descendSharedChild', async () => {
+      const resolved = await this.gatedResolveChild(childRef);
+      if (!resolved) return null;
+      const readKey = await unsealChildReadKey(
+        childRef.readKeySealed,
+        parentReadKey,
+        resolved.published.id,
+        resolved.published.kind,
+        childRef.generation // parent mirror -- NEVER resolved.published.generation
+      );
+      let committed = false;
+      try {
+        const node = await unsealNode(resolved.published, readKey);
+        committed = true;
+        return {
+          readKey,
+          children: node.children ?? [],
+          sequenceNumber: resolved.sequenceNumber,
+          published: resolved.published,
+        };
+      } finally {
+        if (!committed) readKey.fill(0);
+      }
+    });
+  }
+
+  /**
+   * Resolve a node's plaintext identity (id + kind) from its IPNS name,
+   * without requiring any readKey -- `id`/`kind` are PLAINTEXT on the
+   * `PublishedNode` envelope (NODE-03), so no decryption is needed (D-07
+   * full-boundary facade, 68.2-08 Rule-2 addition -- replaces
+   * `useSharedWriteOps.ts`'s direct `resolveIpnsRecord`+`fetchFromIpfs`
+   * usage for `deleteFromSharedFolder`'s `childNodeId` resolution).
+   *
+   * @returns `null` when the IPNS record cannot be resolved (revoked/not found).
+   */
+  async resolveNodeIdentity(ipnsName: string): Promise<{ nodeId: string; kind: NodeKind } | null> {
+    return this.withOperation('resolveNodeIdentity', async () => {
+      const resolved = await this.resolvePublishedNode(ipnsName);
+      if (!resolved) return null;
+      return { nodeId: resolved.published.id, kind: resolved.published.kind };
+    });
   }
 
   /**
@@ -747,6 +1319,34 @@ export class CipherBoxClient {
     const resolvedRoot = await this.resolvePublishedNode(this.config.rootIpnsName);
     if (!resolvedRoot) return null;
 
+    // 68.2-01: gate the root resolve through the durable ROT-07 floor. The
+    // root has no parent SealedChildRef mirror to source `generation` from
+    // (unlike a child hop in dfsFindFolder below), so this mirrors the
+    // write-path gate (reconcileFolderSequence) and sources `generation`
+    // from the in-memory folderTree entry (absent on first contact — 0).
+    // `versionFloor` is 0: the root is the client's own self-bootstrapped
+    // node, not a covering grant from another party, so there is no
+    // owner-vouched cold-device floor to apply beyond "non-negative".
+    if (this.config.rotationHighWater) {
+      if (!resolvedRoot.signatureVerified) {
+        throw new Error(
+          `IPNS resolve for ${this.config.rootIpnsName} returned an unverified record -- refusing to gate durable floors on it`
+        );
+      }
+      if (resolvedRoot.sequenceNumber > BigInt(Number.MAX_SAFE_INTEGER)) {
+        throw new Error(
+          `IPNS sequence number for ${this.config.rootIpnsName} exceeds Number.MAX_SAFE_INTEGER -- refusing lossy floor conversion`
+        );
+      }
+      const nodeGeneration = this.folderTree.get(this.config.rootIpnsName)?.nodeGeneration ?? 0;
+      await this.config.rotationHighWater.enforceResolved({
+        nodeId: this.config.rootIpnsName,
+        seq: Number(resolvedRoot.sequenceNumber),
+        generation: nodeGeneration,
+        versionFloor: 0,
+      });
+    }
+
     // Fail closed on a wrong/corrupted root key — a genuine crypto/config error,
     // not a structurally-unresolvable hop, so this is intentionally NOT caught.
     const rootNode = await unsealNode(
@@ -848,6 +1448,37 @@ export class CipherBoxClient {
       let childReadKey: Uint8Array | null = null;
       let childWriteKey: Uint8Array | null = null;
       try {
+        // 68.2-01 (ROT-07, SDK-READ-01): gate this read-path resolve through
+        // the durable anti-rollback floor BEFORE the resolve is trusted for
+        // any unseal below. Fail closed on an unverified record BEFORE any
+        // floor mutation (T-68.2-02) -- a relay could otherwise forge a huge
+        // seq/generation and permanently wedge this node behind a regression
+        // error. Generation-source rule (Pitfall 3 / T-68.2-03): sources
+        // `generation` from childRef.generation (the PARENT SealedChildRef
+        // mirror), NEVER childResolved.published.generation (the child's own
+        // envelope generation) -- matching the unsealChildReadKey call below.
+        if (this.config.rotationHighWater) {
+          if (!childResolved.signatureVerified) {
+            throw new Error(
+              `IPNS resolve for ${childRef.ipnsName} returned an unverified record -- refusing to gate durable floors on it`
+            );
+          }
+          if (
+            childResolved.sequenceNumber > BigInt(Number.MAX_SAFE_INTEGER) ||
+            childRef.versionFloor > BigInt(Number.MAX_SAFE_INTEGER)
+          ) {
+            throw new Error(
+              `IPNS sequence number for ${childRef.ipnsName} exceeds Number.MAX_SAFE_INTEGER -- refusing lossy floor conversion`
+            );
+          }
+          await this.config.rotationHighWater.enforceResolved({
+            nodeId: childRef.ipnsName,
+            seq: Number(childResolved.sequenceNumber),
+            generation: childRef.generation,
+            versionFloor: Number(childRef.versionFloor),
+          });
+        }
+
         // Generation-source rule: childRef.generation (parent mirror), NEVER
         // childResolved.published.generation (child's own envelope generation).
         childReadKey = await unsealChildReadKey(
@@ -942,13 +1573,30 @@ export class CipherBoxClient {
    * failure class that previously required consumers to pre-seed folderTree
    * before every folderTree-dependent operation.
    *
+   * `opts.forceResolve` (68.2-13, SDK-READ-03 / SC#5) is a DELIBERATE,
+   * distinct live-resolve-on-navigation path: for an ALREADY-LOADED entry,
+   * it routes to {@link reresolveFolderInPlace} instead of this method's
+   * verbatim short-circuit -- gated re-resolving the folder's OWN IPNS
+   * record from the network and advancing the stored `FolderState` in
+   * place, closing the self-referential cache-clock gap where a repeat
+   * `ensureFolderLoaded`/`listFolder` call for an already-loaded folder
+   * never saw a grantee's later write. Internal write-mutation chokepoints
+   * (`requireFolder`, etc.) call this method with NO opts and keep the
+   * cheap cached fast path untouched.
+   *
    * @param targetIpnsName - IPNS name of the folder to ensure is loaded
    * @returns The loaded FolderState, or null if it cannot be bootstrapped
    * @internal
    */
-  async ensureFolderLoaded(targetIpnsName: string): Promise<FolderState | null> {
+  async ensureFolderLoaded(
+    targetIpnsName: string,
+    opts?: { forceResolve?: boolean }
+  ): Promise<FolderState | null> {
     const existing = this.folderTree.get(targetIpnsName);
     if (existing) {
+      if (opts?.forceResolve) {
+        return this.reresolveFolderInPlace(existing);
+      }
       // Cold-load write-plane recovery (68.1-23): a folder entry seeded
       // read-only (registerFolder/loadFolder without a writeKey -- e.g. the
       // web-layer's parallel navigateReadChain walk, 68.1-05) pre-empts the
@@ -963,6 +1611,100 @@ export class CipherBoxClient {
     if (targetIpnsName === this.config.rootIpnsName) return rootState;
 
     return this.dfsFindFolder(rootState, targetIpnsName, new Set<string>());
+  }
+
+  /**
+   * Dedup wrapper (T-68.2-13-04) around {@link doReresolveFolderInPlace}:
+   * coalesces concurrent `{ forceResolve: true }` calls for the SAME
+   * `ipnsName` (e.g. a nav re-resolve and the 30s poll leg firing together)
+   * to a single network resolve, sharing one in-flight promise.
+   */
+  private reresolveFolderInPlace(existing: FolderState): Promise<FolderState | null> {
+    const ipnsName = existing.ipnsName;
+    const inFlight = this.reresolveInFlight.get(ipnsName);
+    if (inFlight) return inFlight;
+
+    const promise = this.doReresolveFolderInPlace(existing).finally(() => {
+      this.reresolveInFlight.delete(ipnsName);
+    });
+    this.reresolveInFlight.set(ipnsName, promise);
+    return promise;
+  }
+
+  /**
+   * Gated live-resolve-on-navigation for an ALREADY-LOADED folder (68.2-13,
+   * SDK-READ-03 / SC#5). Re-resolves the folder's OWN IPNS record from the
+   * network and, when genuinely newer, updates the EXISTING `FolderState`
+   * object in place (D-09 single-owner, SC#3 -- never a second state object
+   * or a second store).
+   *
+   * GATED re-resolve (D-05): mirrors `dfsFindFolder`'s per-hop gate block
+   * exactly -- fail closed on `!signatureVerified` BEFORE any floor
+   * mutation, guard `Number.MAX_SAFE_INTEGER` overflow, then gate through
+   * `RotationHighWater.enforceResolved`. `generation` is sourced from
+   * `existing.nodeGeneration` (a locally-trusted, previously-gate-validated
+   * value) -- NEVER the freshly relay-served envelope generation (Pitfall
+   * 3). `versionFloor: 0` mirrors `ensureRootFolderState`'s own gate: the
+   * seqFloor is already established for an already-loaded node, so it is
+   * never consulted. Gate errors and AEAD unseal errors PROPAGATE
+   * (fail-closed, matching `dfsFindFolder`'s T-68.1-01-02 contract) --
+   * fire-and-forget web freshness callers swallow them.
+   *
+   * A null resolve (structurally unresolvable / transient network miss) or
+   * a resolved sequence that is not strictly newer (#489 sequence-as-clock
+   * guard, mirrors `loadFolder`'s own guard) returns `existing` unchanged
+   * without re-unsealing -- never blows away a loaded view on a stale or
+   * failed read.
+   */
+  private async doReresolveFolderInPlace(existing: FolderState): Promise<FolderState | null> {
+    const resolved = await this.resolvePublishedNode(existing.ipnsName);
+    if (!resolved) return existing;
+
+    if (this.config.rotationHighWater) {
+      if (!resolved.signatureVerified) {
+        throw new Error(
+          `IPNS resolve for ${existing.ipnsName} returned an unverified record -- refusing to gate durable floors on it`
+        );
+      }
+      if (resolved.sequenceNumber > BigInt(Number.MAX_SAFE_INTEGER)) {
+        throw new Error(
+          `IPNS sequence number for ${existing.ipnsName} exceeds Number.MAX_SAFE_INTEGER -- refusing lossy floor conversion`
+        );
+      }
+      await this.config.rotationHighWater.enforceResolved({
+        nodeId: existing.ipnsName,
+        seq: Number(resolved.sequenceNumber),
+        generation: existing.nodeGeneration,
+        versionFloor: 0,
+      });
+    }
+
+    // Sequence-as-clock guard (#489): the gate above has already rejected
+    // any true regression; an equal/stale-lagging read is not fresher than
+    // what's already stored, so return existing unchanged without
+    // re-unsealing (mirrors loadFolder's own guard).
+    if (resolved.sequenceNumber <= existing.sequenceNumber) {
+      return existing;
+    }
+
+    const wk = existing.writeKey;
+    const hasRealWriteKey = !!wk && wk.length === 32 && !wk.every((b) => b === 0);
+    const node = hasRealWriteKey
+      ? await unsealNode(resolved.published, existing.folderKey, existing.writeKey)
+      : await unsealNode(resolved.published, existing.folderKey);
+
+    // In-place update (D-09 single-owner, SC#3): preserve writeKey/
+    // ipnsKeypair/nodeId, advance the cache clock + write-plane mirror.
+    existing.sequenceNumber = resolved.sequenceNumber;
+    existing.children = node.children ?? [];
+    existing.metadata = node;
+    existing.nodeGeneration = node.generation;
+    existing.lastLoadedAt = Date.now();
+    this.folderTree.set(existing.ipnsName, existing);
+
+    await this.recoverWriteKeyIfNeeded(existing);
+
+    return existing;
   }
 
   /**
@@ -1161,7 +1903,12 @@ export class CipherBoxClient {
         type: 'folder:updated',
         folderId: folder.ipnsName,
         ipnsName: folder.ipnsName,
-        children: folder.children,
+        children: await this.resolveListingChildren(
+          folder.children,
+          folder.folderKey,
+          folder.ipnsName,
+          folder.sequenceNumber
+        ),
         sequenceNumber: folder.sequenceNumber,
       });
     } catch {
@@ -1510,8 +2257,6 @@ export class CipherBoxClient {
           generation: 0,
           versionFloor: 1n,
           readKeySealed,
-          // Folder display mirror: creation time (no size for folders — WEB-01).
-          modifiedAt: Date.now(),
         };
 
         // Build the parent's WriteChildRef (write-body — role 0x04).
@@ -1567,7 +2312,12 @@ export class CipherBoxClient {
           type: 'folder:updated',
           folderId: parentIpnsName,
           ipnsName: parentIpnsName,
-          children: publishedChildren,
+          children: await this.resolveListingChildren(
+            publishedChildren,
+            parent.folderKey,
+            parentIpnsName,
+            newSequenceNumber
+          ),
           sequenceNumber: newSequenceNumber,
         });
 
@@ -1666,7 +2416,12 @@ export class CipherBoxClient {
         type: 'folder:updated',
         folderId: folderIpnsName,
         ipnsName: folderIpnsName,
-        children: publishedChildren,
+        children: await this.resolveListingChildren(
+          publishedChildren,
+          folder.folderKey,
+          folderIpnsName,
+          newSequenceNumber
+        ),
         sequenceNumber: newSequenceNumber,
       });
 
@@ -1886,7 +2641,12 @@ export class CipherBoxClient {
         type: 'folder:updated',
         folderId: destIpnsName,
         ipnsName: destIpnsName,
-        children: dstChildren,
+        children: await this.resolveListingChildren(
+          dstChildren,
+          destFolder.folderKey,
+          destIpnsName,
+          dstSeq
+        ),
         sequenceNumber: dstSeq,
       });
 
@@ -1919,7 +2679,12 @@ export class CipherBoxClient {
         type: 'folder:updated',
         folderId: sourceIpnsName,
         ipnsName: sourceIpnsName,
-        children: srcChildren,
+        children: await this.resolveListingChildren(
+          srcChildren,
+          sourceFolder.folderKey,
+          sourceIpnsName,
+          srcSeq
+        ),
         sequenceNumber: srcSeq,
       });
 
@@ -1999,7 +2764,12 @@ export class CipherBoxClient {
         type: 'folder:updated',
         folderId: folderIpnsName,
         ipnsName: folderIpnsName,
-        children: publishedChildren,
+        children: await this.resolveListingChildren(
+          publishedChildren,
+          folder.folderKey,
+          folderIpnsName,
+          newSequenceNumber
+        ),
         sequenceNumber: newSequenceNumber,
       });
 
@@ -2100,9 +2870,6 @@ export class CipherBoxClient {
           name: fileName,
           ipnsName: uploadResult.fileMetaIpnsName,
           versionFloor: 1n,
-          // Display mirrors: plaintext byte size + upload time (WEB-01 size/date columns).
-          size: data.length,
-          modifiedAt: Date.now(),
         });
 
         // 2b. Insert a WriteChildRef for the new file's writeKey into the
@@ -2208,7 +2975,12 @@ export class CipherBoxClient {
           type: 'folder:updated',
           folderId: folderIpnsName,
           ipnsName: folderIpnsName,
-          children: publishedChildren,
+          children: await this.resolveListingChildren(
+            publishedChildren,
+            folder.folderKey,
+            folderIpnsName,
+            newSequenceNumber
+          ),
           sequenceNumber: newSequenceNumber,
         });
 
@@ -2396,9 +3168,6 @@ export class CipherBoxClient {
               name: success.fileName,
               ipnsName: success.uploadResult.fileMetaIpnsName,
               versionFloor: 0n,
-              // Display mirrors: plaintext byte size + upload time (WEB-01 size/date columns).
-              size: success.size,
-              modifiedAt: Date.now(),
             });
             mergedChildren = updatedChildren;
             registeredSuccesses.push(success);
@@ -2524,7 +3293,12 @@ export class CipherBoxClient {
           type: 'folder:updated',
           folderId: folderIpnsName,
           ipnsName: folderIpnsName,
-          children: publishedChildren,
+          children: await this.resolveListingChildren(
+            publishedChildren,
+            folder.folderKey,
+            folderIpnsName,
+            newSequenceNumber
+          ),
           sequenceNumber: newSequenceNumber,
         });
 
@@ -2852,7 +3626,12 @@ export class CipherBoxClient {
       type: 'folder:updated',
       folderId: folderIpnsName,
       ipnsName: folderIpnsName,
-      children: live.children,
+      children: await this.resolveListingChildren(
+        live.children,
+        live.folderKey,
+        folderIpnsName,
+        live.sequenceNumber
+      ),
       sequenceNumber: live.sequenceNumber,
     });
   }
@@ -3102,6 +3881,59 @@ export class CipherBoxClient {
   }
 
   /**
+   * Resolve a file Node's decrypted content metadata WITHOUT downloading or
+   * decrypting its body.
+   *
+   * Recovers the file's OWN readKey from its `SealedChildRef` (sealed under the
+   * parent folder's readKey — generation-source rule uses `fileRef.generation`,
+   * the parent mirror, per Pitfall 3), then delegates to sdk-core's
+   * `resolveFileMetadata` to resolve + fetch + unseal the file's `NodeContent`.
+   * This is the read-only counterpart to {@link downloadFromIpns} (shares its
+   * exact resolve/unseal steps) for callers that only need file metadata
+   * (size, versions, mimeType, cid) — not the plaintext content itself. Added
+   * (68.2-11, Rule 2) as the SDK facade replacement for the deleted web-native
+   * `resolveFileMetadata` (file-metadata.service.ts).
+   *
+   * @param fileRef - The file's SealedChildRef from the parent folder's
+   *   read-body (carries `readKeySealed` + `generation`)
+   * @param folderKey - The PARENT folder's readKey (used to unseal the file's
+   *   own readKey from `fileRef.readKeySealed`)
+   * @returns The file's decrypted `NodeContent` plus its resolved metadata CID
+   * @security `fileReadKey` is minted internally (recovered from the
+   *   read-chain) and zeroed on every exit path (D-09). The returned
+   *   `metadata.fileKey` is caller-owned and NOT zeroed here — matches
+   *   sdk-core's `resolveFileMetadata` / the deleted web
+   *   `file-metadata.service.ts`.
+   */
+  async resolveFileMetadata(
+    fileRef: SealedChildRef,
+    folderKey: Uint8Array
+  ): Promise<{ metadata: NodeContent; metadataCid: string }> {
+    return this.withOperation('resolveFileMetadata', async () => {
+      const resolvedNode = await this.resolvePublishedNode(fileRef.ipnsName);
+      if (!resolvedNode) {
+        throw new Error(`resolveFileMetadata: IPNS record not found for ${fileRef.ipnsName}`);
+      }
+
+      // Terminal owner (D-09): zeroed after sdkCore.resolveFileMetadata unseals with it.
+      let fileReadKey: Uint8Array | null = await unsealChildReadKey(
+        fileRef.readKeySealed,
+        folderKey,
+        resolvedNode.published.id,
+        'file',
+        fileRef.generation
+      );
+
+      try {
+        return await sdkCore.resolveFileMetadata(fileRef.ipnsName, fileReadKey, this.ctx);
+      } finally {
+        fileReadKey.fill(0);
+        fileReadKey = null;
+      }
+    });
+  }
+
+  /**
    * Download a file using its per-file IPNS metadata.
    *
    * Recovers the file's OWN readKey from its `SealedChildRef` (sealed under the
@@ -3212,6 +4044,272 @@ export class CipherBoxClient {
     });
   }
 
+  // ---- IPFS transport (raw) ----
+
+  /**
+   * Upload raw (already-encrypted) bytes to IPFS via the backend relay.
+   *
+   * This is the mediated entrypoint for callers that need direct IPFS
+   * transport access without the full file-metadata orchestration that
+   * `uploadFile`/`uploadFiles` perform (e.g. BYO-pinning config blobs,
+   * device-registry blobs). Progress is forwarded verbatim to the underlying
+   * `sdkCore.addToIpfs` call so upload-progress UI keeps working (D-07 write
+   * scope; RESEARCH Open Q2). Does not zero `encryptedData` — caller-supplied
+   * buffers are never zeroed here (D-09, caller is terminal owner).
+   *
+   * @param encryptedData - Pre-encrypted bytes to upload
+   * @param onProgress - Optional upload progress callback (percent 0-100)
+   * @returns The resulting CID and size
+   */
+  async uploadBytes(
+    encryptedData: Uint8Array,
+    onProgress?: ProgressCallback
+  ): Promise<{ cid: string; size: number }> {
+    return this.withOperation('uploadBytes', async () => {
+      const result = await sdkCore.addToIpfs(this.ctx, encryptedData, onProgress);
+      return { cid: result.cid, size: result.size };
+    });
+  }
+
+  /**
+   * Download raw (still-encrypted) bytes from IPFS via the backend relay.
+   *
+   * Mediated entrypoint for direct IPFS transport reads (no metadata/key
+   * resolution) — the raw counterpart to `uploadBytes`. Progress is
+   * forwarded verbatim to `sdkCore.fetchFromIpfs` so download-progress UI
+   * keeps working (D-07 write scope; RESEARCH Open Q2).
+   *
+   * @param cid - IPFS CID to fetch
+   * @param onProgress - Optional download progress callback (loaded, total)
+   * @returns The fetched (still-encrypted) bytes
+   */
+  async downloadBytes(cid: string, onProgress?: DownloadProgressCallback): Promise<Uint8Array> {
+    return this.withOperation('downloadBytes', async () => {
+      return sdkCore.fetchFromIpfs(this.ctx, cid, onProgress);
+    });
+  }
+
+  /**
+   * Unpin a CID from IPFS via the backend relay.
+   *
+   * Mediated entrypoint for direct IPFS transport unpin calls (e.g. cleanup
+   * after a superseded config/registry blob publish).
+   *
+   * @param cid - IPFS CID to unpin
+   */
+  async unpin(cid: string): Promise<void> {
+    return this.withOperation('unpin', async () => {
+      await sdkCore.unpinFromIpfs(this.ctx, cid);
+    });
+  }
+
+  // ---- Vault bootstrap (D-07 full boundary: auth-bootstrap crypto facade) ----
+
+  /**
+   * Generate a brand-new vault's root keys for a first-time user.
+   *
+   * Thin passthrough to `@cipherbox/core`'s `initializeVault` -- mints two
+   * independent random `rootReadKey`/`rootWriteKey` AES keys plus the
+   * deterministic `rootIpnsKeypair` derived from `userPrivateKey`. The
+   * returned `VaultInit` is handed to the caller, who becomes its terminal
+   * owner (D-09): this facade does not zero anything on success, matching
+   * `initializeVault`'s own passthrough contract.
+   *
+   * @param userPrivateKey - 32-byte secp256k1 private key (caller-owned, never zeroed here)
+   * @returns Freshly minted `VaultInit` (rootReadKey, rootWriteKey, rootIpnsKeypair)
+   */
+  async bootstrapVaultKeys(userPrivateKey: Uint8Array): Promise<VaultInit> {
+    return this.withOperation('bootstrapVaultKeys', async () => {
+      return initializeVault(userPrivateKey);
+    });
+  }
+
+  /**
+   * ECIES-wrap a `VaultInit`'s root keys under `userPublicKey` and serialize
+   * them as the v3 vault key blob ready for IPFS upload.
+   *
+   * Combines `@cipherbox/core`'s `encryptVaultKeys` + `serializeVaultBlobV3`
+   * into a single facade call (mirrors the exact two-step sequence
+   * `useAuth.ts`'s new-user path performs today). The returned blob carries
+   * only ciphertext -- no zeroing needed.
+   *
+   * @param vault - Plaintext `VaultInit` from `bootstrapVaultKeys`
+   * @param userPublicKey - 65-byte uncompressed secp256k1 public key
+   * @returns The v3 vault key blob bytes
+   */
+  async serializeVault(vault: VaultInit, userPublicKey: Uint8Array): Promise<Uint8Array> {
+    return this.withOperation('serializeVault', async () => {
+      const encrypted = await encryptVaultKeys(vault, userPublicKey);
+      return serializeVaultBlobV3(encrypted.encryptedRootReadKey, encrypted.encryptedRootWriteKey);
+    });
+  }
+
+  /**
+   * Deserialize a v3 vault key blob fetched from IPFS and ECIES-unwrap both
+   * root keys under `userPrivateKey`.
+   *
+   * Combines `@cipherbox/core`'s `deserializeVaultBlobV3` with two
+   * `unwrapKey` calls (mirrors `useAuth.ts`'s existing-user load path). The
+   * caller becomes the terminal owner of the returned plaintext keys
+   * (D-09) -- but if the SECOND `unwrapKey` call fails after the first
+   * succeeds, the already-unwrapped `rootReadKey` is zeroed before
+   * propagating the error so a half-unwrapped vault key never lingers in
+   * memory (T-68.2-09).
+   *
+   * @param blobBytes - The v3 vault key blob fetched from IPFS
+   * @param userPrivateKey - 32-byte secp256k1 private key (caller-owned, never zeroed here)
+   * @returns The decrypted `rootReadKey`/`rootWriteKey`
+   */
+  async deserializeVault(
+    blobBytes: Uint8Array,
+    userPrivateKey: Uint8Array
+  ): Promise<{ rootReadKey: Uint8Array; rootWriteKey: Uint8Array }> {
+    return this.withOperation('deserializeVault', async () => {
+      const { encryptedRootReadKey, encryptedRootWriteKey } = deserializeVaultBlobV3(blobBytes);
+      const rootReadKey = await unwrapKey(encryptedRootReadKey, userPrivateKey);
+      try {
+        const rootWriteKey = await unwrapKey(encryptedRootWriteKey, userPrivateKey);
+        return { rootReadKey, rootWriteKey };
+      } catch (error) {
+        clearBytes(rootReadKey);
+        throw error;
+      }
+    });
+  }
+
+  /**
+   * Publish a brand-new user's empty root Node (D-03 / WEB-01/WEB-02).
+   *
+   * Thin passthrough to `sdkCore.publishEmptyRootNode` with `this.ctx`
+   * injected -- the sdk-core primitive already documents that it does NOT
+   * zero `rootIpnsKeypair.privateKey`/`rootReadKey`/`rootWriteKey` (caller
+   * is the terminal owner, D-09); this facade preserves that contract.
+   *
+   * @returns The root's IPNS name, the underlying Node's UUID, and sequenceNumber 1n
+   */
+  async publishEmptyRootNode(params: {
+    rootIpnsKeypair: { publicKey: Uint8Array; privateKey: Uint8Array };
+    rootReadKey: Uint8Array;
+    rootWriteKey: Uint8Array;
+    teeKeys?: TeeKeys;
+  }): Promise<{ ipnsName: string; nodeId: string; sequenceNumber: bigint }> {
+    return this.withOperation('publishEmptyRootNode', async () => {
+      return sdkCore.publishEmptyRootNode({ ...params, ctx: this.ctx });
+    });
+  }
+
+  // ---- Device registry (D-07 full boundary: registry crypto facade) ----
+
+  /**
+   * Derive the deterministic Ed25519 IPNS keypair for the device registry.
+   *
+   * Thin passthrough to `@cipherbox/core`'s `deriveRegistryIpnsKeypair` --
+   * mints a fresh keypair from `userPrivateKey` (caller-owned) and returns
+   * it to the caller, who becomes its terminal owner (D-09).
+   *
+   * @param userPrivateKey - 32-byte secp256k1 private key (caller-owned, never zeroed here)
+   */
+  async deriveRegistryIpnsKeypair(
+    userPrivateKey: Uint8Array
+  ): Promise<{ privateKey: Uint8Array; publicKey: Uint8Array; ipnsName: string }> {
+    return this.withOperation('deriveRegistryIpnsKeypair', async () => {
+      return deriveRegistryIpnsKeypair(userPrivateKey);
+    });
+  }
+
+  /**
+   * Encrypt (ECIES) a `DeviceRegistry` for IPFS storage.
+   *
+   * Thin passthrough to `@cipherbox/core`'s `encryptRegistry`. The
+   * underlying primitive already zeroes its own intermediate plaintext
+   * JSON buffer in a `finally` block -- no additional zeroing needed here.
+   */
+  async encryptRegistry(registry: DeviceRegistry, userPublicKey: Uint8Array): Promise<Uint8Array> {
+    return this.withOperation('encryptRegistry', async () => {
+      return encryptRegistry(registry, userPublicKey);
+    });
+  }
+
+  /**
+   * Decrypt (ECIES) a `DeviceRegistry` blob fetched from IPFS.
+   *
+   * Thin passthrough to `@cipherbox/core`'s `decryptRegistry`. The
+   * underlying primitive already zeroes its own intermediate plaintext
+   * buffer in a `finally` block -- no additional zeroing needed here.
+   */
+  async decryptRegistry(
+    encrypted: Uint8Array,
+    userPrivateKey: Uint8Array
+  ): Promise<DeviceRegistry> {
+    return this.withOperation('decryptRegistry', async () => {
+      return decryptRegistry(encrypted, userPrivateKey);
+    });
+  }
+
+  // ---- BYO-pinning (config-blob passthrough, D-07 full boundary) ----
+  //
+  // The BYO-pinning config blob (and any other user-configured settings
+  // blob, e.g. the vault-settings blob) is NOT part of the ROT-07 durable
+  // anti-rollback floor: it is a user-configured settings entry, not a
+  // rotation-governed folder/file node (68.2-PATTERNS.md "No Analog
+  // Found"). These methods are therefore thin 1:1 passthroughs with no
+  // `rotationHighWater.enforceResolved` gating -- `sdkCore.resolveIpnsRecord`
+  // still performs its own Ed25519 signature verification internally
+  // (fail-closed on tampered records), just not the durable floor check.
+  // Raw IPFS fetch/upload for the config blob's bytes are already covered
+  // generically by `downloadBytes`/`uploadBytes` above -- no config-blob-
+  // specific duplicates are needed for those two operations.
+
+  /**
+   * Test connectivity to a BYO-IPFS endpoint and auto-detect its protocol
+   * (Kubo / Pinata / PSA).
+   *
+   * Thin passthrough to `sdkCore.testConnection` -- a pure network probe,
+   * no crypto/IO through the client's own IPFS transport.
+   */
+  async testConnection(endpoint: string, authToken?: string): Promise<ConnectionTestResult> {
+    return this.withOperation('testConnection', async () => {
+      return sdkCore.testConnection(endpoint, authToken);
+    });
+  }
+
+  /**
+   * Resolve a config-blob IPNS record (BYO-pinning settings, or any other
+   * user-configured blob backed by its own dedicated IPNS name).
+   *
+   * Thin passthrough to `sdkCore.resolveIpnsRecord` with `this.ctx`
+   * injected -- see the section note above for why this is NOT routed
+   * through the ROT-07 durable floor gate.
+   */
+  async resolveConfigBlob(
+    ipnsName: string
+  ): Promise<{ cid: string; sequenceNumber: bigint; signatureVerified: boolean } | null> {
+    return this.withOperation('resolveConfigBlob', async () => {
+      return sdkCore.resolveIpnsRecord(ipnsName, this.ctx);
+    });
+  }
+
+  /**
+   * Publish a config-blob IPNS record (BYO-pinning settings, or any other
+   * user-configured blob).
+   *
+   * Thin passthrough to `sdkCore.createAndPublishIpnsRecord` with
+   * `this.ctx` injected -- same no-gate rationale as `resolveConfigBlob`.
+   */
+  async publishConfigBlob(params: {
+    ipnsPrivateKey: Uint8Array;
+    ipnsPublicKey?: Uint8Array;
+    ipnsName: string;
+    metadataCid: string;
+    sequenceNumber: bigint;
+    encryptedIpnsPrivateKey?: string;
+    keyEpoch?: number;
+  }): Promise<{ success: boolean; sequenceNumber: bigint }> {
+    return this.withOperation('publishConfigBlob', async () => {
+      return sdkCore.createAndPublishIpnsRecord({ ...params, ctx: this.ctx });
+    });
+  }
+
   // ---- Bin operations ----
 
   /**
@@ -3305,7 +4403,14 @@ export class CipherBoxClient {
         type: 'folder:updated',
         folderId: folderIpnsName,
         ipnsName: folderIpnsName,
-        children: folderState?.children ?? [],
+        children: folderState
+          ? await this.resolveListingChildren(
+              folderState.children,
+              folderState.folderKey,
+              folderIpnsName,
+              folderState.sequenceNumber
+            )
+          : [],
         sequenceNumber: folderState?.sequenceNumber ?? 0n,
       });
       this.emitter.emit({ type: 'bin:updated', entries: updatedBinState.entries });
@@ -3360,7 +4465,14 @@ export class CipherBoxClient {
         type: 'folder:updated',
         folderId: targetFolderIpnsName,
         ipnsName: targetFolderIpnsName,
-        children: targetState?.children ?? [],
+        children: targetState
+          ? await this.resolveListingChildren(
+              targetState.children,
+              targetState.folderKey,
+              targetFolderIpnsName,
+              targetState.sequenceNumber
+            )
+          : [],
         sequenceNumber: targetState?.sequenceNumber ?? 0n,
       });
       this.emitter.emit({ type: 'bin:updated', entries: updatedBinState.entries });
@@ -3680,14 +4792,14 @@ export class CipherBoxClient {
    * `sharedFolder:updated`. Centralizes the write-back + emission so all five
    * methods stay consistent.
    */
-  private adoptSharedFolderResult(
+  private async adoptSharedFolderResult(
     shareId: string,
     result: {
       publishedChildren: SealedChildRef[];
       newSequenceNumber: bigint;
       publishedParent?: PublishedNode;
     }
-  ): void {
+  ): Promise<void> {
     // Re-read live state: the share may have been unloaded (e.g. unmount →
     // unloadSharedFolder) while the async write/refresh was in-flight. Never
     // resurrect an explicitly-unloaded share from a pre-await snapshot.
@@ -3709,7 +4821,12 @@ export class CipherBoxClient {
       type: 'sharedFolder:updated',
       shareId,
       ipnsName: live.ipnsName,
-      children: result.publishedChildren,
+      children: await this.resolveListingChildren(
+        result.publishedChildren,
+        next.folderKey,
+        live.ipnsName,
+        result.newSequenceNumber
+      ),
       sequenceNumber: result.newSequenceNumber,
     });
   }
@@ -3732,7 +4849,7 @@ export class CipherBoxClient {
         this.buildSharedWriteContextFromState(state),
         args
       );
-      this.adoptSharedFolderResult(shareId, result);
+      await this.adoptSharedFolderResult(shareId, result);
     });
   }
 
@@ -3746,7 +4863,7 @@ export class CipherBoxClient {
         this.buildSharedWriteContextFromState(state),
         args
       );
-      this.adoptSharedFolderResult(shareId, result);
+      await this.adoptSharedFolderResult(shareId, result);
     });
   }
 
@@ -3763,7 +4880,7 @@ export class CipherBoxClient {
         this.buildSharedWriteContextFromState(state),
         args
       );
-      this.adoptSharedFolderResult(shareId, result);
+      await this.adoptSharedFolderResult(shareId, result);
     });
   }
 
@@ -3790,7 +4907,7 @@ export class CipherBoxClient {
         this.buildSharedWriteContextFromState(state),
         args
       );
-      this.adoptSharedFolderResult(shareId, result);
+      await this.adoptSharedFolderResult(shareId, result);
     });
   }
 
@@ -3914,13 +5031,27 @@ export class CipherBoxClient {
         // File-only publish: the parent's children/sequence are unchanged — emit
         // sharedFolder:updated with the current live snapshot so consumers
         // re-resolve the file (mirrors refreshSharedFolder's file-only emission).
+        //
+        // 68.2-02 (Rule 1 fix): the parent folder's OWN ipnsName+sequenceNumber
+        // is unchanged by a file-only content publish, but the just-updated
+        // FILE's own PublishedNode (content/modifiedAt) is now stale in
+        // `listingCache` if it was resolved before this update. Invalidate
+        // the parent's cache entry so the emitted ResolvedChild[] re-resolves
+        // every child (including the just-updated file) instead of serving a
+        // stale cached size/modifiedAt for it.
         const live = this.sharedFolderTree.get(shareId);
         if (live) {
+          this.listingCache.delete(live.ipnsName);
           this.emitter.emit({
             type: 'sharedFolder:updated',
             shareId,
             ipnsName: live.ipnsName,
-            children: live.children,
+            children: await this.resolveListingChildren(
+              live.children,
+              live.folderKey,
+              live.ipnsName,
+              live.sequenceNumber
+            ),
             sequenceNumber: live.sequenceNumber,
           });
         }
@@ -4100,13 +5231,18 @@ export class CipherBoxClient {
           type: 'sharedFolder:updated',
           shareId,
           ipnsName: live.ipnsName,
-          children: live.children,
+          children: await this.resolveListingChildren(
+            live.children,
+            live.folderKey,
+            live.ipnsName,
+            live.sequenceNumber
+          ),
           sequenceNumber: live.sequenceNumber,
         });
         return;
       }
 
-      this.adoptSharedFolderResult(shareId, {
+      await this.adoptSharedFolderResult(shareId, {
         publishedChildren: result.metadata.children ?? [],
         newSequenceNumber: result.sequenceNumber,
       });
@@ -4355,7 +5491,7 @@ export class CipherBoxClient {
           // Adopt SOURCE only — the destination is not this share's active
           // depth (Pitfall 1); its own subtree view (if open) re-resolves via
           // its own navigation/enumerateSharedSubtree call.
-          this.adoptSharedFolderResult(shareId, srcResult);
+          await this.adoptSharedFolderResult(shareId, srcResult);
         } finally {
           childReadKey?.fill(0);
           childReadKey = null;
