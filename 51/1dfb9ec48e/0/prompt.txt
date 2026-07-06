@@ -1,0 +1,9 @@
+Check web-e2e run 28817693133 on branch chore/web-e2e-parallel-workers (4 workers + 60s timeouts). Report wall-clock, pass/fail. Confirm whether the 5 Class-A slow-write failures (full-workflow, recycle-bin, invite-link, sharing-workflow, rotation-durability) cleared and only the 2 Class-B races (recovery:68, conflict-detection:219) remain. If unexpected failures, characterize them. Summarize state for the user.
+
+---
+
+Check web-e2e run 28817693133 on branch chore/web-e2e-parallel-workers (4 workers + 60s timeouts). Report wall-clock, pass/fail. Confirm whether the 5 Class-A slow-write failures cleared and only the 2 Class-B races (recovery:68, conflict-detection:219) remain. Characterize any unexpected failures. Summarize state for the user.
+
+---
+
+Check web-e2e run 28817693133 on branch chore/web-e2e-parallel-workers (4 workers + 60s timeouts). Did it complete or hit the 20-min cap? Report wall-clock, pass/fail. Confirm the 5 Class-A slow-write failures cleared and only the 2 Class-B races (recovery:68, conflict-detection:219) remain. If it cancelled at 20min, note the 60s timeouts pushed wall-clock over budget and recommend next step. Summarize for the user.
