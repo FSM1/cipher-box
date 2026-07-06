@@ -20,6 +20,9 @@ pub use queue::{
     JournalEntry, JournalEntryStatus, JournalOp, WriteQueue, JOURNAL_GC_MAX_AGE_DAYS,
     JOURNAL_GC_MAX_SIZE_BYTES, MAX_JOURNAL_PAYLOAD_BYTES,
 };
-pub use rotation::{EnforceResolvedParams, HighWaterStore, RotationError, RotationHighWater};
+pub use rotation::{
+    has_covering_grant, maybe_rotate_on_scope_exit, CoverageParams, EnforceResolvedParams,
+    HighWaterStore, LocalGrantRecord, RotationError, RotationHighWater, ScopeExitResult,
+};
 pub use state::{KeyState, SyncStatus};
 pub use sync::SyncDaemon;
