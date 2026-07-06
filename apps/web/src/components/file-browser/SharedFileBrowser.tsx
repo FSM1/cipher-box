@@ -703,8 +703,13 @@ export function SharedFileBrowser() {
         </div>
       )}
 
-      {/* File list */}
-      {!isLoading && hasChildren && (
+      {/* File list -- the [..] PARENT_DIR row must always render while inside a
+          shared folder (even when empty), otherwise a freshly-created/empty
+          shared folder leaves no way back up and no `.file-list-row--parent`
+          anchor for callers that navigate in before anything has been
+          uploaded (SC#5 desync repro: grantee navigates into an empty shared
+          folder to upload the very first file). */}
+      {!isLoading && !error && (
         <div className="file-list" role="grid">
           {/* Header row */}
           <div className="file-list-header" role="row">
@@ -719,8 +724,8 @@ export function SharedFileBrowser() {
             </div>
           </div>
 
-          {/* [..] PARENT_DIR row */}
           <div className="file-list-body" role="rowgroup">
+            {/* [..] PARENT_DIR row */}
             <div
               className="file-list-row file-list-row--parent"
               role="row"
@@ -745,71 +750,74 @@ export function SharedFileBrowser() {
               </div>
             </div>
 
-            {/* File/folder rows */}
-            {/* TODO(phase 63): SealedChildRef uses ipnsName as identifier; .type replaced by phase-63 stubs */}
-            {sortedChildren.map((item) => (
-              <SharedFolderRow
-                key={item.ipnsName}
-                item={item}
-                resolved={resolvedByIpnsName.get(item.ipnsName)}
-                permission={permission}
-                isRenaming={renamingItem?.ipnsName === item.ipnsName}
-                renameValue={renameValue}
-                renameInputRef={renameInputRef}
-                onRenameChange={setRenameValue}
-                onRenameKeyDown={handleRenameKeyDown}
-                onRenameSubmit={handleRenameSubmit}
-                onContextMenu={(e) => handleContextMenu(e, item)}
-                isSelected={selectedIds.has(item.ipnsName)}
-                onSelect={(e) => handleSelect(item.ipnsName, e)}
-                onDoubleClick={() => {
-                  // D-02: kind cache read -- files no-op on double-click (open is a
-                  // context-menu action: Preview/Edit/Download), mirroring FileListItem.tsx.
-                  if (!isFileRef(item)) {
-                    navigateToSubfolder(item.ipnsName, item.name);
-                  }
-                }}
-                onMoveItemTo={
-                  isWritable
-                    ? (destFolderId, destIpnsName, draggedItems) => {
-                        // Route by what was actually dragged. Resolve by ipnsName.
-                        // TODO(phase 63): DragItem.id maps to SealedChildRef.ipnsName
-                        const draggedIds = new Set(draggedItems.map((d) => d.id));
-                        const movedItems = sortedChildren.filter((c) => draggedIds.has(c.ipnsName));
-                        if (movedItems.length === 0) return;
-                        if (movedItems.length > 1) {
-                          void batchMoveItems(
-                            movedItems,
-                            destFolderId,
-                            destIpnsName,
-                            clearSelection
+            {hasChildren ? (
+              /* File/folder rows */
+              /* TODO(phase 63): SealedChildRef uses ipnsName as identifier; .type replaced by phase-63 stubs */
+              sortedChildren.map((item) => (
+                <SharedFolderRow
+                  key={item.ipnsName}
+                  item={item}
+                  resolved={resolvedByIpnsName.get(item.ipnsName)}
+                  permission={permission}
+                  isRenaming={renamingItem?.ipnsName === item.ipnsName}
+                  renameValue={renameValue}
+                  renameInputRef={renameInputRef}
+                  onRenameChange={setRenameValue}
+                  onRenameKeyDown={handleRenameKeyDown}
+                  onRenameSubmit={handleRenameSubmit}
+                  onContextMenu={(e) => handleContextMenu(e, item)}
+                  isSelected={selectedIds.has(item.ipnsName)}
+                  onSelect={(e) => handleSelect(item.ipnsName, e)}
+                  onDoubleClick={() => {
+                    // D-02: kind cache read -- files no-op on double-click (open is a
+                    // context-menu action: Preview/Edit/Download), mirroring FileListItem.tsx.
+                    if (!isFileRef(item)) {
+                      navigateToSubfolder(item.ipnsName, item.name);
+                    }
+                  }}
+                  onMoveItemTo={
+                    isWritable
+                      ? (destFolderId, destIpnsName, draggedItems) => {
+                          // Route by what was actually dragged. Resolve by ipnsName.
+                          // TODO(phase 63): DragItem.id maps to SealedChildRef.ipnsName
+                          const draggedIds = new Set(draggedItems.map((d) => d.id));
+                          const movedItems = sortedChildren.filter((c) =>
+                            draggedIds.has(c.ipnsName)
                           );
-                        } else {
-                          void moveItem(movedItems[0], destFolderId, destIpnsName);
+                          if (movedItems.length === 0) return;
+                          if (movedItems.length > 1) {
+                            void batchMoveItems(
+                              movedItems,
+                              destFolderId,
+                              destIpnsName,
+                              clearSelection
+                            );
+                          } else {
+                            void moveItem(movedItems[0], destFolderId, destIpnsName);
+                          }
                         }
-                      }
-                    : undefined
-                }
-                selectedItems={selectedItems}
-              />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Empty folder */}
-      {!isLoading && !hasChildren && !error && (
-        <div className="empty-state" data-testid="shared-empty-folder">
-          <div className="empty-state-content">
-            <pre className="empty-state-ascii" aria-hidden="true">
-              {sharedEmptyArt}
-            </pre>
-            <p className="empty-state-text">{'// EMPTY SHARED FOLDER'}</p>
-            <p className="empty-state-hint">
-              {isWritable
-                ? 'drag files here or use --upload'
-                : 'this shared folder has no contents'}
-            </p>
+                      : undefined
+                  }
+                  selectedItems={selectedItems}
+                />
+              ))
+            ) : (
+              /* Empty folder -- still inside the [..] PARENT_DIR-anchored file-list
+                 body so navigating back up remains possible (D-08 fix). */
+              <div className="empty-state empty-state--inline" data-testid="shared-empty-folder">
+                <div className="empty-state-content">
+                  <pre className="empty-state-ascii" aria-hidden="true">
+                    {sharedEmptyArt}
+                  </pre>
+                  <p className="empty-state-text">{'// EMPTY SHARED FOLDER'}</p>
+                  <p className="empty-state-hint">
+                    {isWritable
+                      ? 'drag files here or use --upload'
+                      : 'this shared folder has no contents'}
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
