@@ -1,0 +1,176 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "8fe94aa5f739",
+  "session_id": "280a8452-8d87-4e5c-ad7a-1157d57bef96",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-06T22:44:35.815074Z",
+  "branch": "chore/web-e2e-parallel-workers",
+  "checkpoints_count": 3,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "8167ac32781b",
+  "token_usage": {
+    "input_tokens": 21982,
+    "cache_creation_tokens": 747583,
+    "cache_read_tokens": 27775289,
+    "output_tokens": 145255,
+    "api_call_count": 159
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01LsRtbE6Tt8Ct48ML8yj8NY",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-capture"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "8167ac32781b",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 932,
+        "end": 933,
+        "entry_ids": [
+          "0e2cb95e-e860-4760-a2e5-1ad5907d4643"
+        ],
+        "tool_use_id": "toolu_01LsRtbE6Tt8Ct48ML8yj8NY"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01LsRtbE6Tt8Ct48ML8yj8NY"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-capture",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 16
+  },
+  "summary": {
+    "intent": "Diagnose a cancelled/timed-out web-e2e CI run after phase 68.2 merged, determine whether it was a regression or pre-existing issue, and fix it so the suite runs reliably in CI.",
+    "outcome": "Root-caused the timeout to a fully-serial 213-test suite exceeding the 20-min job cap (not a 68.2 regression); parallelized the suite (workers 1→4→3) with CI-aware timeout floors, fixed three genuine races (conflict-detection cleanup, rotation-durability SC#4 fail-closed gate, full-workflow instant-visibility asserts), marked the real recovery.html v3-format gap as test.fixme, reached a reliable green run (212 passed/1 skipped, ~16min), enriched an existing GSD todo for the recovery gap, and was proceeding to open the PR.",
+    "learnings": {
+      "repo": [
+        "web-e2e uses an HTML-only CI reporter — no per-test stdout, only a final summary that never appears if the job is killed on timeout.",
+        "playwright-report upload step is `if: failure()`, which does NOT run on a cancelled/timed-out job — cancelled runs produce zero diagnostic artifacts.",
+        "Wallet account isolation is by construction: `privateKeyToAccount(generatePrivateKey())` → unique address → unique backend userId → isolated browser context, so there's no cross-test user/IPNS/DB collision.",
+        "23 of 24 web-e2e spec files use `test.describe.serial(...)`, which is exactly the granularity Playwright parallelizes when `fullyParallel: false` and `workers > 1` (whole files go to workers, intra-file order preserved).",
+        "Web3Auth Sapphire Devnet login is a real ~90s external DKG with no bypass (`api-helpers.getAuthToken` is an unimplemented TODO); a retry harness (`isCoreKitTransientFailure`/`isCoreKitInitHang`) exists for its transient flakiness.",
+        "One hardcoded Anvil well-known private key exists in wallet-login.spec.ts; confirmed confined to that file (all describe blocks serial) plus a non-spec perf helper, so no cross-file userId collision from parallelization.",
+        "recovery.html is hard-coded to the retired v2 single-key vault blob format and the pre-#578 `{iv,data}` folder envelope; the SDK now writes v3 two-key blobs + node/v3 sealed envelopes (#578) — the shipped disaster-recovery tool cannot recover any current-format vault.",
+        "apps/api's `ipns.service.ts::resolveRecord` prefers the DB-cached record whenever `dbSeq >= networkSeq` — this is an anti-rollback defense but also shadows any test attempt to replay stale records at the network layer.",
+        "Refresh tokens are single-use; the app has a dedup guard (`apps/web/src/lib/api/auth.ts` `refreshPromise`) but the test cleanup helper's raw `fetch('/auth/refresh')` bypasses it, causing 401s that silently abort account deletion and leak test accounts.",
+        "`deleteAccount` cascades server-side (deletes all related DB records), making a manual per-item UI-delete loop before account deletion redundant and budget-costly under load.",
+        "The client-side durable seq floor (`enforceResolved` in rotation-high-water.ts) is the real fail-closed anti-rollback gate and can be staged directly by writing to the `cipherbox-rotation-state` IndexedDB store, avoiding the need to actually win a server-side replay race."
+      ],
+      "code": [
+        {
+          "path": "tests/web-e2e/playwright.config.ts",
+          "line": 41,
+          "finding": "workers set to process.env.CI ? N : 1 with fullyParallel:false kept; test-level timeout bumped to 60s (then 90s) under CI"
+        },
+        {
+          "path": "tests/web-e2e/page-objects/file-browser/file-list.page.ts",
+          "line": 10,
+          "end_line": 13,
+          "finding": "Added ciFloor() helper enforcing a 60s minimum wait under CI for item-appear/disappear waiters, overriding ~65 short hardcoded call-site timeouts without touching them individually"
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 394,
+          "end_line": 407,
+          "finding": "detectBlobVersion hard-checks blob[0]===0x02 (BLOB_V2_VERSION); fails immediately on v3 blobs (blob[0]===0x03)"
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 1159,
+          "end_line": 1160,
+          "finding": "showError fires 'not v2 format' before ever calling showStep(2), which is why the progress log stays empty for the full test timeout"
+        },
+        {
+          "path": "packages/core/src/vault/blob.ts",
+          "line": 17,
+          "end_line": 87,
+          "finding": "BLOB_V3_VERSION=0x03 format and deserializeVaultBlobV3 that recovery.html would need to mirror"
+        },
+        {
+          "path": "packages/core/src/node/seal.ts",
+          "line": 96,
+          "finding": "sealNode / AAD scheme (roles 0x01/0x02/0x03, buildNodeAad) that recovery.html's folder traversal would need to unseal inline"
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 673,
+          "end_line": 701,
+          "finding": "resolveRecord's dbSeq>=networkSeq branch (line 685) always shadows lower-seq replayed records, making server-side stale-record replay untestable"
+        },
+        {
+          "path": "tests/web-e2e/utils/cleanup-helpers.ts",
+          "line": 33,
+          "end_line": 58,
+          "finding": "deleteAccountViaPage's raw fetch('/auth/refresh') bypasses the app's dedup guard and races concurrent app-initiated refreshes, causing tolerated-but-silent 401s that skip account deletion"
+        },
+        {
+          "path": "tests/web-e2e/tests/conflict-detection.spec.ts",
+          "line": 100,
+          "end_line": 138,
+          "finding": "afterAll ran a redundant 7-item UI-delete loop before account deletion, blowing the 60s hook budget under parallel load; fixed by deleting account first (cascades) and dropping the loop"
+        },
+        {
+          "path": "tests/web-e2e/tests/rotation-durability.spec.ts",
+          "line": 209,
+          "end_line": 293,
+          "finding": "SC#4 originally relied on a mock-relay replay that could never reach the client (shadowed by DB cache); fixed test-only by writing a durable seq floor directly into IndexedDB above the server sequence, then driving a real rename through the live enforceResolved gate"
+        },
+        {
+          "path": "tests/web-e2e/tests/full-workflow.spec.ts",
+          "line": 952,
+          "end_line": 1032,
+          "finding": "Recurring anti-pattern: instant isItemVisible() assert immediately after a mutation races the async UI refresh; fixed via wait-then-assert helpers applied to 58 call sites in the file"
+        }
+      ],
+      "workflow": [
+        "Use ScheduleWakeup to check back on long-running CI dispatches instead of polling manually.",
+        "For independent failure classes discovered in one CI run, dispatch parallel investigation subagents scoped to disjoint files, then resume (via SendMessage) the one whose fix is most complex rather than re-deriving its context.",
+        "Downloading just the error-context.md DOM snapshots from a large Playwright HTML report artifact (rather than the full 128MB bundle) is decisive for distinguishing 'slow but correct' failures from genuine bugs.",
+        "When a fix only partially clears a long serial test journey, expect a whack-a-mole pattern — the journey advances to a new, previously-unreached failure point, requiring multiple CI round-trips to converge.",
+        "Before applying an agent's proposed fix, verify its diff and working-tree scope (e.g. `git status`, targeted diff review) to confirm it didn't touch product code or weaken security invariants it claimed to preserve."
+      ]
+    },
+    "friction": [
+      "Multiple tool calls to check GitHub Actions run status were malformed and had to be retried verbatim.",
+      "A compound bash command (commit+push+dispatch) timed out on a slow pre-push hook mid-execution, causing a duplicate CI run dispatch that had to be manually cancelled.",
+      "GitHub Actions API does not expose live logs mid-run — status/log inspection only works after job completion, forcing blind waits on long CI runs.",
+      "Hit session usage limit mid-task, requiring the user to explicitly say 'please continue'.",
+      "HTML-only CI reporter meant no per-test progress was visible in logs; had to estimate suite progress from server-side proxy signals (e.g. wallet login counts) early in the investigation.",
+      "Playwright report artifact was 128MB, too large to fully download — required selectively extracting only the error-context snapshot files."
+    ],
+    "open_items": [
+      "recovery.html v3 port (real recoverability hole) is not fixed — tracked via enrichment of existing todo .planning/todos/pending/2026-07-03-port-recovery-tool-to-v3-vault-format.md, and recovery.spec.ts:68 is test.fixme'd pending the port.",
+      "PR for chore/web-e2e-parallel-workers had not yet been opened at end of transcript; /resolve-pr-reviews was planned to run once CodeRabbit/Greptile reviews land.",
+      "multi-account-wallet.ts:77 login timeout (90s) is contention-sensitive under parallel workers; flagged as the lever to bump if login flake resurfaces, but not changed.",
+      "Repo convention: opening the PR triggers a bot chore(release) commit, so any further push to the branch needs a git fetch+rebase first — noted but not yet executed."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}

@@ -1,0 +1,200 @@
+Check web-e2e run 28819214278 on branch chore/web-e2e-parallel-workers (4 workers + ciFloor 60s waiters). Report wall-clock and pass/fail. Confirm it landed at the 2 expected Class-B races only (recovery:68, conflict-detection:219) — if any slow-write failures remain, identify their call site/timeout. If exactly the 2 races remain, tell the user we've isolated the infra fix and the 2 races are the separate tracked work; ask if they want to open a PR for the parallelization now (leaving the 2 races as known-failing to fix next) or investigate the races first.
+
+---
+
+<task-notification>
+<task-id>a3c2cd567c606421d</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/064836b9-90e4-42d5-aabc-ed5fde831a57/tasks/a3c2cd567c606421d.output</output-file>
+<status>completed</status>
+<summary>Agent "Investigate recovery v2/v3 failure" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have a complete picture. Here is the diagnosis.
+
+## Root cause
+
+The recovery tool (`apps/web/public/recovery.html`) is hard-coded to the retired **v2 single-key vault blob** format, but the SDK-created account now writes the **v3 two-key vault blob** introduced by #578. The version byte mismatch halts recovery immediately, before Step 2 (where the progress log lives) is ever shown — which is exactly why `[data-testid="recovery-progress-log"]` stays empty for the full timeout.
+
+Concretely:
+
+- Setup writes **v3**. `test-harness.ts:110` calls `publishVaultKeyBlob(...)` with **both** `rootReadKey` and `rootWriteKey`. That function (`packages/sdk-core/src/vault/index.ts:38-72`) ECIES-wraps both keys and serializes via `serializeVaultBlobV3` (`packages/core/src/vault/blob.ts:33`), whose first byte is `BLOB_V3_VERSION = 0x03` (`blob.ts:17`).
+- Recovery expects **v2**. `recovery.html:394` defines `BLOB_V2_VERSION = 0x02`; `detectBlobVersion` (`recovery.html:396-398`) returns `2` only when `blob[0] === 0x02`. At `recovery.html:1159`, `if (detectBlobVersion(blobBytes) !== 2)` fires (blob[0] is `0x03` → detects "1"), so it renders `showError(1, 'The vault blob at this IPNS name is not v2 format. Recovery cannot proceed.')` at `recovery.html:1160` and returns without ever calling `showStep(2)`.
+
+The IPNS derivation itself is fine — recovery's `cipherbox-vault-key-ipns-v1` / `cipherbox-vault-ipns-v1` HKDF info strings (`recovery.html:414-416`) match `packages/crypto/src/vault/derive-ipns.ts:29-30`. The tool successfully resolves the IPNS name and fetches the blob (proven by the fact it reached the version check and displayed the "not v2" error). This is **not** a stale-IPNS/timing issue — consistent with the deterministic failure.
+
+## A second, downstream blocker (would still fail after fixing the version byte)
+
+Even if the blob check is patched to parse v3, recovery's folder traversal is also on the old codec. `recoverFolder` (`recovery.html:874-1024`) expects folder metadata as a `{iv, data}` AES-GCM JSON envelope with a `children[]` array carrying `child.folderKeyEncrypted` / `child.ipnsName` / `child.fileMetaIpnsName` / `metadata.version === 'v2'`. But `publishEmptyRootNode` (`packages/sdk-core/src/vault/index.ts:118`) now publishes a **`node/v3` `PublishedNode` envelope** (`{schema:'node/v3', kind, id, generation, aeadVersion, readSealed, writeSealed}`) produced by `sealNode` (`packages/core/src/node/seal.ts:96`) — AES-GCM-AAD-sealed bodies, with child readKeys sealed under the parent readKey (role 0x02) and file content sealed as `NodeContent` (role 0x03). `decryptFolderMetadata` at `recovery.html:894` would throw on this structure. So the tool is entirely on the pre-#578 filesystem model, not just the blob header.
+
+## Classification: **B — genuine product gap**
+
+The test writes what a real user's vault writes today (v3 is the current production format, per the `blob.ts` header and `sdk-core/vault/index.ts:11` "hard-cut to v3, v2/v1 retired"). The standalone disaster-recovery tool `recovery.html` was never ported to the #578 two-key v3 Node codec when the web runtime was wired up in #588/#589. This is a real recoverability hole: the shipped recovery tool cannot recover any current-format vault, not just a test artifact. It is not fixable inside `tests/web-e2e`.
+
+## Proposed fix
+
+The honest fix is to port `recovery.html` to the v3 codec — this is not a one-liner:
+
+1. **Blob parse (small):** replace `BLOB_V2_VERSION`/`detectBlobVersion`/`deserializeVaultBlobV2` (`recovery.html:394-407`, `1159-1167`) with a v3 parser mirroring `deserializeVaultBlobV3` (`packages/core/src/vault/blob.ts:87`): check `blob[0]===0x03`, read `u16_BE(readLen)`, ECIES-decrypt the readKey segment as `rootFolderKey` (recovery only needs the read chain; the write key can be ignored).
+2. **Folder/file traversal (large):** rewrite `recoverFolder` to parse the `node/v3` `PublishedNode` envelope and unseal via the AAD scheme in `packages/core/src/node/seal.ts` — reproducing `unsealNode` (role 0x01), `unsealChildReadKey` (role 0x02), and `unsealContent` (role 0x03), plus `buildNodeAad(id, kindByte, generation, role)`. Because recovery.html is a dependency-free hand-rolled HTML file (CDN `@noble` imports, no bundler), this AAD/seal logic must be re-implemented inline.
+
+Given the size of step 2, the pragmatic path is to file the recovery-tool v3 port as a product task and, if CI needs to go green in the interim, mark `recovery.spec.ts:68` `test.fixme`/`test.skip` with a comment pointing at the gap — but that only masks the missing recoverability, it does not restore it.
+
+Key files: `apps/web/public/recovery.html` (the gap), `packages/core/src/vault/blob.ts`, `packages/core/src/node/seal.ts`, `packages/sdk-core/src/vault/index.ts`, `tests/sdk-e2e/src/fixtures/test-harness.ts`, `tests/web-e2e/tests/recovery.spec.ts`.</result>
+<usage><subagent_tokens>82313</subagent_tokens><tool_uses>11</tool_uses><duration_ms>192765</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0b9cd0853fa42692</task-id>
+<tool-use-id>toolu_01Pdfju7rUdfRbLkfWdZtmFP</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/064836b9-90e4-42d5-aabc-ed5fde831a57/tasks/a0b9cd0853fa42692.output</output-file>
+<status>completed</status>
+<summary>Agent "Investigate rotation SC#4 failure" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have a complete diagnosis.
+
+## Root Cause
+
+**Two independent problems stack here. The one actually producing the observed failure is a test-harness timing bug (A); the diagnostic note in the test describes a second, deeper premise bug (B) that only surfaces once (A) is fixed.**
+
+### The observed failure — test-level timeout starvation (Classification A)
+
+The error (`Test timeout of 60000ms exceeded` → `browser has been closed`, waiting for `durability-bump-&lt;runId&gt;-renamed` to become visible) fires at **`tests/web-e2e/tests/rotation-durability.spec.ts:241`** — the *first* bump-rename's wait, long before the replay/D-05 logic is ever reached.
+
+The mismatch:
+
+- **`rotation-durability.spec.ts:212`** caps the whole test at `test.setTimeout(60_000)` — identical to the global CI budget (`tests/web-e2e/playwright.config.ts:41`, `timeout: process.env.CI ? 60_000`).
+- But every item-waiter is floored to 60s on CI: **`file-list.page.ts:10-13`** `ciFloor()` does `Math.max(60_000, timeout)`, so the `{ timeout: 15000 }` at `:233` and `:241` each actually block up to **60s** (`file-list.page.ts:117`).
+- This `:209` test chains **two full create+rename IPNS round-trips** (`:230-241`) plus a mock-relay GET/PUT plus a third rename — each `waitForItemToAppear` is an IPNS publish→refresh round-trip that, under 4-worker parallel load on the shared 2-vCPU stack, can eat tens of seconds. A single slow create at `:233` exhausts most of the 60s budget; the `:241` renamed-item wait is then still pending when the **test-level** 60s cap fires, Playwright tears down the page, and the pending `waitFor` reports "browser has been closed."
+
+The passing sibling at **`:152`** does only **one** create+rename (two floored waiters) and inherits the same 60s — it fits, barely. `:209` crams ~3x the IPNS work into the same 60s. The `test.setTimeout(60_000)` at `:212` is not raising anything on CI (it equals the global); it just documents a budget that is far too small for the number of 60s-floored waiters this test chains. The rename mutation is **not** being blocked by the anti-rollback gate at this point — the step-2 bump rename (`:235-241`) resolves the *current fresh* record (the stale replay PUT does not happen until `:250`), so `enforceResolved` passes; the item is simply slow to render and the test runs out of wall-clock budget.
+
+### The deeper premise bug (Classification B) — will surface after the timeout is fixed
+
+The test's own note at **`:195-208`** is correct and confirmed in product code. `apps/api/src/ipns/ipns.service.ts::resolveRecord` prefers the DB-cached record whenever `dbSeq &gt;= networkSeq` (**`ipns.service.ts:673-701`**, specifically the `if (dbSeq &gt;= networkSeq) { ... return cachedResult; }` branch at `:685-696`). The test's own bump mutation writes a higher-seq DB row synchronously during publish, so the replayed stale bytes PUT to the mock relay at `:250` are always strictly behind the DB row and never win the resolve. The client therefore never sees the stale record, the final rename at `:265-270` **succeeds** instead of throwing, and the D-05 toast assertion (`:275-277`) would fail. This is a real test-vs-product design gap, explicitly deferred ("surfaced, not fixed") per `68.1-28-SUMMARY.md`.
+
+## Proposed minimal fix
+
+Two changes, because fixing timing alone just moves the failure from `:241` to the D-05 assertion at `:276`:
+
+1. **(A) Raise this test's wall-clock budget** to cover its ~3 chained 60s-floored IPNS round-trips. Change `rotation-durability.spec.ts:212` from `test.setTimeout(60_000)` to `test.setTimeout(240_000)` (4x the per-waiter floor + HTTP replay headroom). This is the direct fix for the reported timeout and stays entirely within `tests/web-e2e`.
+
+2. **(B) Make the replay actually reach the client** so the D-05 assertion is exercised (otherwise the test is green-by-accident-only-if-timing). The gate lives in the SDK client, but the API's DB-cache preference (`ipns.service.ts:685`) shadows the replay. The test-only fix is to defeat the DB shortcut for the replayed read — e.g. resolve through a path/name the API DB row does not front, or have the replay carry a sequence at/above the DB row so it is served to the client and then rejected by the *client-side* `enforceResolved` durable floor. This is the follow-up plan the note defers; it is not fixable purely by a timeout bump.
+
+If you only want the reported symptom gone right now, do (1). Be aware it will expose (B) as the next failure — so both are needed for a genuinely green test.
+
+Key files: `tests/web-e2e/tests/rotation-durability.spec.ts` (`:212` budget, `:241` failing wait, `:195-208` note, `:275-277` D-05 assertion), `tests/web-e2e/playwright.config.ts:41` (global 60s), `tests/web-e2e/page-objects/file-browser/file-list.page.ts:10-13,117` (`ciFloor`), `apps/api/src/ipns/ipns.service.ts:673-701` (DB-cache-wins branch defeating the replay).</result>
+<usage><subagent_tokens>55509</subagent_tokens><tool_uses>11</tool_uses><duration_ms>222128</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a2f2a05d20f934570</task-id>
+<tool-use-id>toolu_01LgWL71Yok5gBnjz1VSXWgX</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/064836b9-90e4-42d5-aabc-ed5fde831a57/tasks/a2f2a05d20f934570.output</output-file>
+<status>completed</status>
+<summary>Agent "Investigate conflict cleanup 401" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Confirmed the full picture. Here's my diagnosis.
+
+## Root cause
+
+Two independent test-harness problems compound in `afterAll` (conflict-detection.spec.ts:100-138). Neither is a product auth bug.
+
+### 1. The HTTP 401 — raw refresh bypasses the app's dedup guard and loses a single-use-token race
+
+`deleteAccountViaPage` issues a raw `fetch('/auth/refresh')` from inside `page.evaluate` (cleanup-helpers.ts:33-37). Refresh tokens are **single-use**: every `/auth/refresh` revokes the presented token and issues a new one (`auth.service.ts:257-312` → `token.service.ts:69-115`, sets `revokedAt` on the old, creates a fresh pair; the controller re-sets the rotated cookie at `auth.controller.ts:141-142`).
+
+The web app knows this is dangerous and guards against it with a shared in-flight `refreshPromise` (apps/web/src/lib/api/auth.ts:36-70), whose comment states verbatim: *"the first response rotates the refresh token, causing later concurrent calls to fail with 401."* The cleanup helper's raw fetch does **not** participate in that dedup. At teardown the device-A page is still live (IPNS polling, axios interceptors), so an app-initiated `/auth/refresh` and the helper's raw fetch race on the same HttpOnly cookie — the loser presents an already-revoked token and gets `UnauthorizedException('Invalid refresh token')` → HTTP 401 (`token.service.ts:98-99`). That is the exact `[cleanup] Account deletion failed at refresh: HTTP 401` line (cleanup-helpers.ts:52-53). It appears across multiple suites because they all share this helper.
+
+This 401 is *tolerated* (the helper returns cleanly, never throws) — so it does **not** itself hang. Its real damage is that the account is never deleted (the `DELETE /auth/account` at cleanup-helpers.ts:40 is skipped by the early return at line 37), leaking the test account.
+
+### 2. The 60s hang — the redundant UI-delete loop blows the hook budget
+
+The `afterAll` timeout is spent in the per-item UI-delete loop (conflict-detection.spec.ts:108-121), not in `deleteAccountViaPage`. This suite tracks ~7 items (seed + 3 sequence-bumps + upload + folder + edit-target). Because it is a *conflict* suite, device A's local sequence is stale (device B bumped it repeatedly), so each UI delete is a folder mutation that triggers the 409→auto-resync→retry cycle, each ending in `waitForItemToDisappear(..., 30000)`, all under 4-worker API rate-limiting. Seven such deletes deterministically exceed the 60s budget set at line 101. The surrounding `try/catch` (lines 122-125) cannot rescue a **Playwright hook-level timeout** — at 60s Playwright force-aborts the hook and tears down the context, which surfaces as `browserContext.close: Target page, context or browser has been closed`.
+
+The loop is also entirely **redundant**: `deleteAccount` deletes the user row and *"cascade handles all related DB records"* (auth.service.ts:225-245), so account deletion already removes every folder/file/IPNS record server-side.
+
+## Classification
+
+**(A) Test-harness cleanup-robustness issue.** Confirmed — not a product bug. Single-use rotation is intentional product behavior that the app itself handles correctly via dedup; the cleanup helper simply fails to cooperate, and the teardown does slow redundant work under too tight a budget.
+
+## Proposed minimal fix
+
+Highest-leverage change is to reorder and slim the teardown — it fixes both the leak and the hang:
+
+1. **Delete the account first, drop the per-item UI-delete loop.** Since `deleteAccount` cascades (auth.service.ts:225-245), move `deleteAccountViaPage(page)` ahead of / in place of the lines 108-121 loop. This removes the conflict-resync delete cycle that consumes the 60s budget.
+2. **Make `deleteAccountViaPage` tolerate the rotation race** so the account actually deletes: retry the refresh 2-3 times with a short backoff on a non-`ok` response (cleanup-helpers.ts:33-37) — a concurrent app rotation is transient and the browser holds the freshly-rotated cookie once it settles. (Alternatively, call the app's own deduped `authApi.refresh()` or reuse the app's in-memory access token instead of a raw bypassing fetch.)
+3. Optional secondary: if any best-effort UI cleanup is retained, wrap it in `Promise.race` against a short internal deadline rather than relying on the 60s hook timeout, and/or raise `test.setTimeout` at line 101.
+
+Files: tests/web-e2e/tests/conflict-detection.spec.ts:100-138, tests/web-e2e/utils/cleanup-helpers.ts:14-58. Supporting product code (unchanged): apps/web/src/lib/api/auth.ts:36-70, apps/api/src/auth/services/token.service.ts:69-115, apps/api/src/auth/auth.service.ts:225-245.</result>
+<usage><subagent_tokens>69264</subagent_tokens><tool_uses>17</tool_uses><duration_ms>343094</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0b9cd0853fa42692</task-id>
+<tool-use-id>toolu_0115bQd67vtAV8B1YQ41JWFu</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/064836b9-90e4-42d5-aabc-ed5fde831a57/tasks/a0b9cd0853fa42692.output</output-file>
+<status>completed</status>
+<summary>Agent "Investigate rotation SC#4 failure" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Typecheck and lint both pass. Here is my report.
+
+## Summary
+
+Fixed `rotation-durability.spec.ts:209` (SC#4) so it genuinely exercises the ROT-07 fail-closed gate and passes on CI. **Test-only changes; zero product code touched.**
+
+### Root cause (confirmed against product code)
+Two stacked problems:
+- **(A) Timing:** the test capped itself at `test.setTimeout(60_000)` — equal to the global CI budget (`playwright.config.ts:41`) — while chaining multiple item-waiters that `ciFloor()` (`file-list.page.ts:10-13`) raises to a 60s floor each, across two full create+rename IPNS round-trips. Under 4-worker load the test budget expired mid-wait, tearing the page down ("browser has been closed").
+- **(B) Broken premise:** the relay-replay could never reach the client. `sdkCore.resolveIpnsRecord` (`packages/sdk-core/src/ipns/index.ts:196-203`) resolves through the CipherBox API `/ipns/resolve`, whose `resolveRecord` prefers the DB-cached record whenever `dbSeq &gt;= networkSeq` (`apps/api/src/ipns/ipns.service.ts:685`). The bump's publish writes the DB row synchronously, so replayed stale bytes on the mock relay are always shadowed. The final rename therefore succeeded silently instead of firing the D-05 toast.
+
+### Why the requested "replay reaches the client" is impossible test-only
+- The API DB row (at `bumpedSeq`) shadows any lower-seq network record; there is **no HTTP surface** to lower/clear it (controller exposes only publish / resolve / tombstone / unenroll — `ipns.controller.ts`).
+- Forging a *higher*-seq signed record to win the network-ahead branch is impossible without the root IPNS private key (client-held).
+- The API DB-cache-wins is itself an anti-rollback defense — weakening it via product code would be a security regression, so I did not.
+
+### The fix (mechanism)
+The client-side durable floor (`enforceResolved`, `packages/sdk/src/state/rotation-high-water.ts`) rejects when a resolved `seq &lt; seqFloor`, throwing `SequenceRegressionError` → `useMutationFailureUx.ts:181` → the exact D-05 toast `'Stale data from server rejected.'`. I reproduce the anti-rollback condition faithfully and test-only by raising the device's durable seq floor **above** the server's current sequence (the same persisted memory the passing `:152`/`:180` tests prove is durable), then driving a real rename whose live `reconcileFolderSequence` (`client.ts:1789-1834`) resolves the now-below-floor server record and is rejected fail-closed. This drives the *entire* live gate path via a genuine UI mutation — it does not stub or bypass the mechanism.
+
+### Files/edits (all in `tests/web-e2e/tests/rotation-durability.spec.ts`)
+- **Scope-note doc comment** (~lines 29-39): documented the new durable-floor write; removed the now-unused `MOCK_ROUTING_URL` const.
+- **New helper `writeDurableSeqFloor`** (after `readDurableFloors`): writes the seq high-water floor into the real `cipherbox-rotation-state` IndexedDB store using out-of-line keys `put(value, nodeId)`, matching `rotation-state.service.ts`.
+- **SC#4 test** (formerly lines 195-293): replaced the stale 68.1-28 note with an accurate mechanism note; raised `test.setTimeout` to `240_000` (Part A); replaced the inert relay GET/PUT replay with a durable-floor injection (`bumpedSeq + 1000`); kept the real bump and the real rejected-rename mutation; updated the post-rejection floor assertion to the injected value (`injectedFloor`) since a rejected resolve never bumps the floor. D-05 toast and "not applied" (item name unchanged) assertions retained.
+
+### Verification
+- `npx tsc --noEmit -p tsconfig.json` in `tests/web-e2e` → EXIT 0.
+- `npx eslint tests/web-e2e/tests/rotation-durability.spec.ts` → EXIT 0.
+- Full web-e2e not run locally (heavy stack); CI will verify. No commit made — changes left in the working tree.
+
+I did **not** touch any of the files you flagged as concurrently edited.</result>
+<usage><subagent_tokens>101661</subagent_tokens><tool_uses>18</tool_uses><duration_ms>442105</duration_ms></usage>
+</task-notification>
+
+---
+
+Check web-e2e run 28822913256 on branch chore/web-e2e-parallel-workers (all 4 fixes: move, conflict cleanup, rotation SC#4 durable-floor, recovery test.fixme). Report wall-clock and pass/fail. Target is GREEN: 0 failed, recovery:68 shown as skipped/fixme. If any of the 3 fixed tests (full-workflow move, conflict-detection:219, rotation-durability SC#4) still fail, pull the error detail and characterize whether the fix was insufficient. If green, tell the user we've reached green and it's ready to open the PR (parallelization + timeout floors + 3 race fixes), with recovery.html v3 port as the one tracked follow-up. Also remind me to offer capturing the recovery gap as a GSD todo per their workflow preference.
+
+---
+
+please continue
+
+---
+
+Check web-e2e run 28823884697 on branch chore/web-e2e-parallel-workers (full-workflow visibility asserts now wait-backed). Report wall-clock and pass/fail. Target: 0 failed, 1 skipped (recovery fixme). If green: tell the user we've reached green — the branch (parallelization + CI timeout floors + ciFloor waiters + conflict/rotation/move race fixes + recovery fixme) is ready to open as a PR, with the recovery.html v3 port as the single tracked follow-up; and OFFER to capture that recovery gap as a GSD todo (/gsd:capture --todo) per their workflow preference (they prefer gsd capture over gh issues). If any full-workflow step still fails, pull the error detail — if it's another instant-assert race not covered by the helpers (e.g. a different page object or an isItemVisible stored in a var), identify it; otherwise characterize it.
+
+---
+
+Check web-e2e run 28827120758 on branch chore/web-e2e-parallel-workers (3 workers + 90s test budget). Report wall-clock and pass/fail. Target: 0 failed, 1 skipped (recovery fixme). If green: tell the user we've reached reliable green and the branch is ready to open as a PR (parallelization at 3 workers + CI timeout floors + conflict/rotation/move race fixes + full-workflow wait-backed asserts + recovery fixme), with the recovery.html v3 port as the single tracked follow-up; OFFER to capture that recovery gap as a GSD todo (/gsd:capture --todo, they prefer gsd capture over gh issues); and note per repo rules a fresh git fetch+rebase is needed before any further push since opening a PR triggers the bot chore(release) commit. If any failures remain, pull error detail and characterize whether it's contention (bump/again) or a genuine issue; if it's login-timeout flake again, consider bumping multi-account-wallet.ts:77 login timeout.
+
+---
+
+cool seems like the web e2e is now passing (except for the one skipped recovery test).
+
+---
+
+please capture the gsd todo, and then create a PR, followed by a /resolve-pr-reviews once coderabbit and greptile reviews come in.
