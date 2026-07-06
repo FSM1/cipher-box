@@ -9,7 +9,7 @@
 1. [Overview](#1-overview)
 2. [Encryption Hierarchy](#2-encryption-hierarchy)
 3. [Node (node/v3)](#3-node-nodev3)
-4. [SealedChildRef](#4-sealedchildref)
+4. [SealedChildRef and ResolvedChild](#4-sealedchildref)
 5. [PublishedNode](#5-publishednode)
 6. [NodeContent](#6-nodecontent)
 7. [VersionEntry](#7-versionentry)
@@ -145,39 +145,59 @@ Encoding rules for the read-body JSON:
 ## 4. SealedChildRef
 
 A sealed reference to a child node, stored inside the parent's read-body `children` array. The
-five core fields carry no write field (NODE-03, design §2.6); `size` and `modifiedAt` are
-optional display mirrors added post-cutover (additive/back-compat -- see below).
+field set is FROZEN to exactly five fields -- no write field, and no size/date display field
+(NODE-03, design §2.6). An interim revision (commit `ba3e0229a`, Phase 68.1) added optional
+`size`/`modifiedAt` display mirrors directly to this type; these were reverted in Phase 68.2
+(D-08) in favor of `ResolvedChild` (below), which resolves each child's own `Node` once per
+folder-load instead of maintaining a second, independently-stale mirror inside the sealed parent
+read-body.
 
-| Field           | Type    | Encoding              | Description                                                                                                            |
-| --------------- | ------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `name`          | string  | --                    | Display name of the child (plaintext within the sealed parent read-body)                                               |
-| `ipnsName`      | string  | k51 base32            | IPNS k51 name of the child node                                                                                        |
-| `generation`    | number  | --                    | Staleness witness for the child's read-key epoch (see [Invariants](#10-invariants))                                    |
-| `versionFloor`  | bigint  | decimal string (wire) | Owner-vouched IPNS sequence-number floor, bound at (re)share                                                           |
-| `readKeySealed` | string  | base64                | AES-256-GCM seal of the child's `readKey` under the parent `readKey`; AAD role `0x02` child-readkey                    |
-| `size`          | number? | --                    | Optional display mirror of a file child's plaintext byte size (`NodeContent.size`); absent for folders and legacy refs |
-| `modifiedAt`    | number? | --                    | Optional display mirror of the child's last-modified time (Unix ms, mirrors `Node.modifiedAt`); absent on legacy refs  |
+| Field           | Type   | Encoding              | Description                                                                                         |
+| --------------- | ------ | --------------------- | --------------------------------------------------------------------------------------------------- |
+| `name`          | string | --                    | Display name of the child (plaintext within the sealed parent read-body)                            |
+| `ipnsName`      | string | k51 base32            | IPNS k51 name of the child node                                                                     |
+| `generation`    | number | --                    | Staleness witness for the child's read-key epoch (see [Invariants](#10-invariants))                 |
+| `versionFloor`  | bigint | decimal string (wire) | Owner-vouched IPNS sequence-number floor, bound at (re)share                                        |
+| `readKeySealed` | string | base64                | AES-256-GCM seal of the child's `readKey` under the parent `readKey`; AAD role `0x02` child-readkey |
 
 **Encryption:** `readKeySealed` is sealed by `sealChildReadKey` (role `0x02`). The entire
 `SealedChildRef` object lives inside the parent's sealed read-body -- it is not independently
-encrypted; `size`/`modifiedAt` therefore leak nothing to the server (they sit inside the parent's
-`readSealed` ciphertext) and nothing beyond what a parent-`readKey` holder can already derive.
-
-**Display mirrors (`size`, `modifiedAt`):** Non-authoritative convenience mirrors (like
-`generation`) so the file browser can show size/date without a per-child read-chain resolve. The
-source of truth is the child's own `Node` (`NodeContent.size` / `Node.modifiedAt`). Both are
-**optional and additive**: the encoder emits them only when present, so a ref written without them
-is byte-identical to the pre-mirror format (no schema bump -- see METADATA_EVOLUTION_PROTOCOL.md
-§ additive changes); the decoder tolerates their absence as `undefined` ("unknown", never `0`).
-They are populated at child-creation time (upload / folder create / shared write) and preserved
-verbatim across move/rename/rotation; an in-place file replace does **not** re-publish the parent,
-so the mirror can lag the true value until the parent is next written.
+encrypted.
 
 **Wire format:** `versionFloor` is serialized as a decimal string on the JSON wire because
 `bigint` is not JSON-serializable. The decoder reconstructs it via `BigInt(String(raw.versionFloor))`.
 
 **Source files:** `packages/core/src/node/types.ts`, `packages/core/src/node/seal.ts`
 (`sealChildReadKey`, `unsealChildReadKey`)
+
+### ResolvedChild (SDK-resolved display projection)
+
+`ResolvedChild` is the canonical carrier for a folder child's display metadata (kind, size,
+last-modified time). It is NOT a wire/encrypted schema -- it is an in-memory TypeScript type
+(`packages/sdk/src/folder-listing.ts`) that the SDK assembles once per folder-load by resolving
+each `SealedChildRef`'s own child `Node` through the gated read path
+(`RotationHighWater.enforceResolved`, ROT-07). `apps/web` renders exclusively from
+`ResolvedChild` -- it never reads a size/date display field off `SealedChildRef` (SDK-READ-02,
+D-08).
+
+| Field        | Type               | Description                                                                                         |
+| ------------ | ------------------ | --------------------------------------------------------------------------------------------------- |
+| `ipnsName`   | string             | IPNS k51 name of the child node (matches `SealedChildRef.ipnsName`)                                 |
+| `name`       | string             | Display name of the child (matches `SealedChildRef.name`)                                           |
+| `kind`       | `NodeKind`         | `'file' \| 'folder' \| 'root'`, read from the child's own resolved `Node.kind`                      |
+| `size`       | number? (optional) | Plaintext byte size (`NodeContent.size`); populated for file children only, `undefined` for folders |
+| `modifiedAt` | number             | The child's own `Node.modifiedAt` (Unix ms) -- authoritative, not a mirror                          |
+| `sequence`   | number             | The child's own current IPNS sequence number at resolve time                                        |
+
+**Authoritative, not cached long-term:** unlike the retired `SealedChildRef` mirror,
+`ResolvedChild.size`/`modifiedAt` are read directly from the child's own `Node` at resolve time
+(via the same gated resolve used for every other read), so they cannot go stale independently of
+the child's actual content -- resolving again always reflects the child's current state. The SDK
+caches `ResolvedChild[]` per folder keyed by the folder's own IPNS sequence number
+(`CipherBoxClient`'s `listingCache`), invalidating whenever the folder's sequence advances.
+
+**Source files:** `packages/sdk/src/folder-listing.ts` (`ResolvedChild`, `resolveChildren`),
+`packages/sdk/src/client.ts` (`listFolder`, `listSharedFolder`, `ensureFolderLoaded`)
 
 ---
 
