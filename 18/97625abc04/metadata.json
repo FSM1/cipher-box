@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "1897625abc04",
+  "strategy": "manual-commit",
+  "branch": "feat/fuse-and-winfsp-rust-integration-and-grant-root-awareness",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-09-PLAN.md",
+    ".planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-10-PLAN.md",
+    ".planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-13-PLAN.md",
+    ".planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-14-PLAN.md",
+    ".planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-FUSE-CUTOVER-RESEARCH.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/18/97625abc04/0/metadata.json",
+      "transcript": "/18/97625abc04/0/full.jsonl",
+      "content_hash": "/18/97625abc04/0/content_hash.txt",
+      "prompt": "/18/97625abc04/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 20501,
+    "cache_creation_tokens": 1561565,
+    "cache_read_tokens": 25557801,
+    "output_tokens": 205452,
+    "api_call_count": 93
+  }
+}
