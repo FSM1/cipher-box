@@ -19,9 +19,11 @@
 //! Terminal-owner rule (D-09): none of these functions zero caller-supplied
 //! or returned key/body buffers — the caller owns that lifecycle.
 
+use base64::Engine as _;
 use cipherbox_crypto::aes::{build_node_aad, seal_aes_gcm_aad, unseal_aes_gcm_aad};
 
-use super::types::{NodeError, NodeKind};
+use super::encode::{encode_node, encode_write_body};
+use super::types::{Node, NodeError, NodeKind, NodeWriteBody, PublishedNode};
 
 /// Role byte: whole read-body/write-body sealed under its own key.
 const ROLE_BODY: u8 = 0x01;
@@ -149,4 +151,172 @@ pub fn unseal_child_write_key(
     )?;
     let key = unseal_aes_gcm_aad(sealed, parent_write_key, &aad)?;
     Ok(key)
+}
+
+/// Seals a `Node` into its on-wire `PublishedNode` envelope, sealing BOTH the
+/// read-body (under `read_key`, role 0x01) and, when `write_body` is `Some`,
+/// the write-body (under `write_key`, role 0x01) — populating
+/// `PublishedNode.write_sealed` (previously never populated, D-07/NODE-04).
+///
+/// `write_body` is an EXPLICIT parameter — the `Node` enum gains no field
+/// (research Pattern 1 / Landmine 2): a field-add would force-recompile every
+/// `Node::{Folder,File,Root}` construction and collapse the D-02 core/sdk
+/// split; the read chain never needs `write_body`.
+///
+/// Twin of `packages/core/src/node/seal.ts::sealNode(node, readKey, writeKey)`.
+/// Composes ONLY `cipherbox_crypto::aes::seal_aes_gcm_aad` + `build_node_aad`
+/// (no ECIES — reserved for the TEE `ipnsPrivateKey` wrap, 69-16).
+pub fn seal_published_node(
+    node: &Node,
+    read_key: &[u8; 32],
+    write_key: &[u8; 32],
+    write_body: Option<&NodeWriteBody>,
+) -> Result<PublishedNode, NodeError> {
+    let read_body = encode_node(node)?;
+    let read_sealed_bytes = seal_node(
+        &read_body,
+        read_key,
+        node.id(),
+        node.kind(),
+        node.generation(),
+    )?;
+    let read_sealed = base64::engine::general_purpose::STANDARD.encode(read_sealed_bytes);
+
+    let write_sealed = match write_body {
+        Some(wb) => {
+            let wb_bytes = encode_write_body(wb)?;
+            let aad = build_node_aad(
+                node.id(),
+                kind_byte(node.kind()),
+                node.generation(),
+                ROLE_BODY,
+            )?;
+            let sealed = seal_aes_gcm_aad(&wb_bytes, write_key, &aad)?;
+            Some(base64::engine::general_purpose::STANDARD.encode(sealed))
+        }
+        None => None,
+    };
+
+    Ok(PublishedNode {
+        schema: "node/v3".to_string(),
+        kind: node.kind().as_str().to_string(),
+        id: node.id().to_string(),
+        generation: node.generation(),
+        aead_version: 1,
+        read_sealed,
+        write_sealed,
+    })
+}
+
+#[cfg(test)]
+mod seal_published_node_tests {
+    use super::*;
+    use crate::node::decode::decode_write_body;
+    use crate::node::types::WriteChildRef;
+
+    fn sample_node() -> Node {
+        Node::Folder {
+            id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+            generation: 0,
+            created_at: 1719532800000,
+            modified_at: 1719532800000,
+            children: vec![],
+        }
+    }
+
+    fn sample_write_body() -> NodeWriteBody {
+        NodeWriteBody {
+            ipns_private_key: vec![0x44u8; 32],
+            write_children: vec![WriteChildRef {
+                child_id: "660e8400-e29b-41d4-a716-446655440001".to_string(),
+                write_key_sealed: "c2VhbGVkLXdyaXRlLWtleQ==".to_string(),
+            }],
+        }
+    }
+
+    #[test]
+    fn both_bodies_populated_when_write_body_some() {
+        let node = sample_node();
+        let read_key = [0x01u8; 32];
+        let write_key = [0x02u8; 32];
+        let wb = sample_write_body();
+
+        let published = seal_published_node(&node, &read_key, &write_key, Some(&wb))
+            .expect("seal_published_node ok");
+
+        assert!(!published.read_sealed.is_empty());
+        assert!(published.write_sealed.is_some());
+        assert_eq!(published.schema, "node/v3");
+        assert_eq!(published.kind, "folder");
+        assert_eq!(published.id, node.id());
+        assert_eq!(published.generation, node.generation());
+        assert_eq!(published.aead_version, 1);
+    }
+
+    #[test]
+    fn write_sealed_none_when_write_body_none() {
+        let node = sample_node();
+        let read_key = [0x01u8; 32];
+        let write_key = [0x02u8; 32];
+
+        let published = seal_published_node(&node, &read_key, &write_key, None)
+            .expect("seal_published_node ok");
+
+        assert!(published.write_sealed.is_none());
+    }
+
+    #[test]
+    fn write_body_is_recoverable_via_unseal_and_decode() {
+        let node = sample_node();
+        let read_key = [0x01u8; 32];
+        let write_key = [0x02u8; 32];
+        let wb = sample_write_body();
+
+        let published = seal_published_node(&node, &read_key, &write_key, Some(&wb))
+            .expect("seal_published_node ok");
+
+        let write_sealed_b64 = published.write_sealed.expect("write_sealed present");
+        let write_sealed_bytes = base64::engine::general_purpose::STANDARD
+            .decode(write_sealed_b64)
+            .expect("valid base64");
+
+        let wb_bytes = unseal_node(
+            &write_sealed_bytes,
+            &write_key,
+            node.id(),
+            node.kind(),
+            node.generation(),
+        )
+        .expect("unseal_node with write_key ok");
+        let recovered = decode_write_body(&wb_bytes).expect("decode_write_body ok");
+        assert_eq!(recovered, wb);
+    }
+
+    #[test]
+    fn aad_transplant_read_key_cannot_open_write_sealed() {
+        let node = sample_node();
+        let read_key = [0x01u8; 32];
+        let write_key = [0x02u8; 32];
+        let wb = sample_write_body();
+
+        let published = seal_published_node(&node, &read_key, &write_key, Some(&wb))
+            .expect("seal_published_node ok");
+
+        let write_sealed_b64 = published.write_sealed.expect("write_sealed present");
+        let write_sealed_bytes = base64::engine::general_purpose::STANDARD
+            .decode(write_sealed_b64)
+            .expect("valid base64");
+
+        let result = unseal_node(
+            &write_sealed_bytes,
+            &read_key,
+            node.id(),
+            node.kind(),
+            node.generation(),
+        );
+        assert!(
+            result.is_err(),
+            "unsealing the write-body with the READ key must fail (GCM auth-tag mismatch)"
+        );
+    }
 }
