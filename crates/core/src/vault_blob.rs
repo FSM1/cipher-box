@@ -94,9 +94,42 @@ pub fn serialize_vault_blob_v3(
     encrypted_root_read_key: &[u8],
     encrypted_root_write_key: &[u8],
 ) -> Result<Vec<u8>, String> {
-    // STUB (RED): real implementation lands in the GREEN commit.
-    let _ = (encrypted_root_read_key, encrypted_root_write_key);
-    Err("serialize_vault_blob_v3 not implemented".into())
+    if encrypted_root_read_key.is_empty() {
+        return Err("Encrypted read key must not be empty for v3 blob".into());
+    }
+    if encrypted_root_read_key.len() > u16::MAX as usize {
+        return Err(format!(
+            "Encrypted read key too long for v3 blob ({} bytes, max {})",
+            encrypted_root_read_key.len(),
+            u16::MAX
+        ));
+    }
+    if encrypted_root_write_key.is_empty() {
+        return Err("Encrypted write key must not be empty for v3 blob".into());
+    }
+    if encrypted_root_write_key.len() > u16::MAX as usize {
+        return Err(format!(
+            "Encrypted write key too long for v3 blob ({} bytes, max {})",
+            encrypted_root_write_key.len(),
+            u16::MAX
+        ));
+    }
+
+    let read_len = encrypted_root_read_key.len() as u16;
+    let write_len = encrypted_root_write_key.len() as u16;
+
+    // Layout: 0x03 | u16_BE(read_len) | enc_read | u16_BE(write_len) | enc_write
+    let mut result = Vec::with_capacity(
+        1 + 2 + encrypted_root_read_key.len() + 2 + encrypted_root_write_key.len(),
+    );
+    result.push(BLOB_V3_VERSION);
+    result.push((read_len >> 8) as u8);
+    result.push((read_len & 0xff) as u8);
+    result.extend_from_slice(encrypted_root_read_key);
+    result.push((write_len >> 8) as u8);
+    result.push((write_len & 0xff) as u8);
+    result.extend_from_slice(encrypted_root_write_key);
+    Ok(result)
 }
 
 /// Deserialize a vault key blob v3 into OWNED (read_key, write_key) copies.
@@ -106,9 +139,40 @@ pub fn serialize_vault_blob_v3(
 /// blob.ts `.slice()`). Fail-closed: wrong version / truncated / zero-length
 /// segments return `Err` (never panics).
 pub fn deserialize_vault_blob_v3(blob: &[u8]) -> Result<(Vec<u8>, Vec<u8>), String> {
-    // STUB (RED): real implementation lands in the GREEN commit.
-    let _ = blob;
-    Err("deserialize_vault_blob_v3 not implemented".into())
+    if blob.len() < 5 {
+        return Err(format!(
+            "Vault blob too short for v3 header (need at least 5 bytes, have {})",
+            blob.len()
+        ));
+    }
+    if blob[0] != BLOB_V3_VERSION {
+        return Err("Not a v3 vault blob".into());
+    }
+
+    let read_len = ((blob[1] as usize) << 8) | (blob[2] as usize);
+    if read_len == 0 {
+        return Err("Invalid v3 blob: read key length must be > 0".into());
+    }
+    if blob.len() < 3 + read_len + 2 {
+        return Err("Vault blob truncated (missing write key header)".into());
+    }
+
+    // OWNED copy (not a borrowed view) so a later zeroization of the source
+    // blob cannot corrupt the recovered key (D-09, mirrors blob.ts `.slice()`).
+    let read_key = blob[3..3 + read_len].to_vec();
+
+    let write_offset = 3 + read_len;
+    let write_len = ((blob[write_offset] as usize) << 8) | (blob[write_offset + 1] as usize);
+    if write_len == 0 {
+        return Err("Invalid v3 blob: write key length must be > 0".into());
+    }
+    if blob.len() < write_offset + 2 + write_len {
+        return Err("Vault blob truncated (write key)".into());
+    }
+
+    let write_key = blob[write_offset + 2..write_offset + 2 + write_len].to_vec();
+
+    Ok((read_key, write_key))
 }
 
 #[cfg(test)]
