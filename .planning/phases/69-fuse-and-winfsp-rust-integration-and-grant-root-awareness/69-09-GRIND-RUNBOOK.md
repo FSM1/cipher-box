@@ -70,6 +70,24 @@ enum InodeKind {
   FilePointer emission → replace with Node + SealedChildRef/WriteChildRef. Parent read_key+write_key come straight
   from parent InodeKind. File child's write_key/ipns_private_key populated (from ResolvedOwnedChild) → build WriteChildRef/JournalOp.
 
+## SLICE 3 OUTCOME (commit d9a0c9220) — carry-forward for Slices 4-5
+- Write path emits Node + reshaped JournalOp. 78→39 errs. Zero in journal_helpers/write_ops. file_iv HEX confirmed.
+- D-07 canonical child id = `uuid_from_ino(child_ino)` (now pub(crate)); child node sealed with id=uuid_from_ino;
+  parent WriteChildRef.child_id (write) + SealedChildRef (read, by ipnsName) both use it. Readers recover child_id
+  from the resolved node's OWN id → NO InodeKind.id field needed. Slice 5 prepopulate root: use id=uuid_from_ino(ROOT_INO).
+- Reshaped JournalOp (Slice 4 replay reads): `UploadFile { sidecar_path, sidecar_sha256, legacy_ciphertext_b64,
+  child_published_node:String(b64 encode_published_node), parent_child_ref:SealedChildRef, parent_write_child_ref:WriteChildRef,
+  file_meta_ipns_name:Option<String>, parent_folder_ipns_name:String, size, created_at_ms }`;
+  `MkdirPublish { child_ipns_name, child_published_node:String, parent_child_ref, parent_write_child_ref, parent_folder_ipns_name, created_at_ms }`.
+- Slice 4 replay MUST: (1) recover parent ipns_private_key via list_folder_owned(parent_folder_ipns_name) at replay
+  (NOT from journal — 69-18 deferred field); (2) UploadFile cid PLACEHOLDER: journal seals file node with NodeContent.cid=""
+  → replay re-uploads sidecar ciphertext → real cid → RE-SEAL file node with cid BEFORE publishing (live happy path
+  re-seals in publish_file_metadata, Slice 5); (3) re-splice both planes into parent, re-publish parent; (4) fail-closed
+  log::warn!+skip on stale/deser failure (mirror queue.rs Err-skip); (5) replay.rs:839 folder-NAME blob = keeper if genuine.
+- E2E FLAGS accumulating: (a) file `versions` not reconstructed at upload (InodeKind dropped versions; NodeContent.versions
+  exists but write path doesn't populate) — versioning regression to verify at E2E; (b) file_iv hex round-trip; (c) content read
+  gated-fetch (Slice 5 TASK 0 fetch_node_gated).
+
 ## Slices (sequential, same branch; each: commit even if crate RED elsewhere, that's expected)
 1. **Types + CipherBoxFS wiring** (keystone 1+2): reshape `InodeKind` (inode.rs enum def + its constructors);
    add `high_water: RotationHighWater<JsonSidecarFloorStore>` + `fetcher: ApiNodeFetcher` (or the wired gate)
