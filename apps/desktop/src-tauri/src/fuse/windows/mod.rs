@@ -39,6 +39,8 @@ mod mount_impl {
         private_key: Vec<u8>,
         public_key: Vec<u8>,
         root_folder_key: Zeroizing<Vec<u8>>,
+        root_read_key: Zeroizing<Vec<u8>>,
+        root_write_key: Zeroizing<Vec<u8>>,
         root_ipns_name: String,
         root_ipns_private_key: Option<Vec<u8>>,
         tee_public_key: Option<Vec<u8>>,
@@ -78,23 +80,24 @@ mod mount_impl {
         let journal = cipherbox_sdk::WriteQueue::new(journal_dir, crate::fuse::JOURNAL_MAX_RETRIES);
 
         // node/v3 root symmetric keys (read_key/write_key) for the root node.
-        // E2E-RISK (69-09 Slice 5c): mirrors the fuse (macOS/Linux) mount — the
-        // real node/v3 root keys are server-persisted (sdk-core registration.ts)
-        // and not yet recovered into desktop KeyState (v2.0 client stubbed, phase
-        // 63). Bridged from the legacy root_folder_key; runtime correctness is
-        // E2E-gated, not gated by this slice. See fuse/mod.rs for the full note.
+        // Mirrors the fuse (macOS/Linux) mount: the REAL node/v3 root keys are
+        // recovered into desktop KeyState at login (69-22 fields, populated by
+        // 69-23) and threaded in by post_auth_finalize. The earlier legacy
+        // placeholder that fabricated the two keys from root_folder_key is
+        // retired. We only narrow the passed 32-byte state keys into fixed
+        // [u8; 32] locals — no derivation. See fuse/mod.rs for the full note.
         let root_read_key: Zeroizing<[u8; 32]> = {
             let mut k = [0u8; 32];
-            let src = root_folder_key.as_slice();
+            let src = root_read_key.as_slice();
             let n = src.len().min(32);
             k[..n].copy_from_slice(&src[..n]);
             Zeroizing::new(k)
         };
         let root_write_key: Zeroizing<[u8; 32]> = {
-            let mut k = *root_read_key;
-            for b in k.iter_mut() {
-                *b ^= 0xA5;
-            }
+            let mut k = [0u8; 32];
+            let src = root_write_key.as_slice();
+            let n = src.len().min(32);
+            k[..n].copy_from_slice(&src[..n]);
             Zeroizing::new(k)
         };
 
