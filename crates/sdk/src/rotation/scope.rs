@@ -93,10 +93,22 @@ pub enum ScopeExitResult {
 ///
 /// # Security
 /// No I/O. Never logs key material. Pure input→boolean transform.
-pub fn has_covering_grant(_params: &CoverageParams) -> bool {
-    // RED phase (69-05 Task 1): implementation intentionally not yet
-    // written — see GREEN-phase commit for the real leaf-first scan.
-    todo!("has_covering_grant: RED phase stub, implemented in GREEN commit")
+pub fn has_covering_grant(params: &CoverageParams) -> bool {
+    for ancestor in &params.node_ancestor_ipns_names {
+        // Check relay-supplied set (completeness aid — §3.9).
+        if params.active_grant_root_ipns_names.contains(ancestor) {
+            return true;
+        }
+        // Check client's own local grant record (anti-malicious-relay
+        // cross-check — §3.9 / T-63-17).
+        if let Some(rec) = &params.local_grant_record {
+            if &rec.root_ipns_name == ancestor {
+                return true;
+            }
+        }
+    }
+
+    false
 }
 
 // ---------------------------------------------------------------------------
@@ -128,16 +140,24 @@ pub fn has_covering_grant(_params: &CoverageParams) -> bool {
 /// No key material is held or zeroed here. Delegates zeroization to
 /// `rotate` (the `rotate_read_from_node` callee, which follows D-09).
 pub async fn maybe_rotate_on_scope_exit<F, Fut>(
-    _params: &CoverageParams,
-    _rotate: F,
+    params: &CoverageParams,
+    rotate: F,
 ) -> Result<ScopeExitResult, RotationError>
 where
     F: FnOnce() -> Fut,
     Fut: Future<Output = Result<(), RotationError>>,
 {
-    // RED phase (69-05 Task 1): implementation intentionally not yet
-    // written — see GREEN-phase commit for the real gating logic.
-    todo!("maybe_rotate_on_scope_exit: RED phase stub, implemented in GREEN commit")
+    if !has_covering_grant(params) {
+        // ROT-02 / SC#4: no covering grant → zero rotation, zero IPNS
+        // publishes. The caller already performed the parent relink; no
+        // further action here.
+        return Ok(ScopeExitResult::NoRotation);
+    }
+
+    // Covered scope-exit: invoke rotation exactly once. `rotate` is injected
+    // for testability (a call-counter spy in this module's tests).
+    rotate().await?;
+    Ok(ScopeExitResult::Rotated)
 }
 
 #[cfg(test)]
@@ -320,7 +340,10 @@ mod tests {
     async fn sc4_rot02_private_move_with_non_matching_sources_triggers_zero_rotations() {
         let spy = RotateSpy::default();
         let params = CoverageParams {
-            node_ancestor_ipns_names: vec!["k51/moved-node".to_string(), "k51/src-folder".to_string()],
+            node_ancestor_ipns_names: vec![
+                "k51/moved-node".to_string(),
+                "k51/src-folder".to_string(),
+            ],
             active_grant_root_ipns_names: HashSet::from([
                 "k51/other-shared-folder".to_string(), // share for a different subtree
             ]),
@@ -451,7 +474,9 @@ mod tests {
         };
 
         let result = maybe_rotate_on_scope_exit(&params, || async {
-            Err(RotationError::RotateFailed("simulated rotate failure".to_string()))
+            Err(RotationError::RotateFailed(
+                "simulated rotate failure".to_string(),
+            ))
         })
         .await;
 
