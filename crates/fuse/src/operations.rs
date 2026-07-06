@@ -87,9 +87,10 @@ pub(crate) mod implementation {
     // fetch_and_decrypt_file_content is NOT re-exported here: it uses a private
     // NETWORK_TIMEOUT = 3s (vs 10s in crate::block_with_timeout) which is
     // intentional for the macOS sync FUSE callback path (A2 scope narrowing).
-    pub use crate::content_ops::{
-        fetch_node_and_decrypt_content, publish_file_metadata, publish_file_node,
-    };
+    // publish_file_metadata (the legacy per-file publish) is NOT re-exported on
+    // the Unix path: after the SC#2 re-encrypt-on-move deletion (69-13) it has no
+    // Unix caller — only the Windows write handlers use it, via their own module.
+    pub use crate::content_ops::{fetch_node_and_decrypt_content, publish_file_node};
 
     impl Filesystem for CipherBoxFS {
         fn init(

@@ -23,10 +23,14 @@
 //! ancestor-walk + `has_covering_grant` call site (T-69-07-03).
 
 use std::collections::HashSet;
+use std::future::Future;
 
 use cipherbox_api_client::shares::{collect_sent_shares, SentShareResponse};
 use cipherbox_api_client::{ApiClient, ApiError};
-use cipherbox_sdk::rotation::scope::{has_covering_grant, CoverageParams, LocalGrantRecord};
+use cipherbox_sdk::rotation::scope::{
+    has_covering_grant, CoverageParams, LocalGrantRecord, ScopeExitResult,
+};
+use cipherbox_sdk::rotation::RotationError;
 
 use crate::inode::{InodeKind, InodeTable, ROOT_INO};
 
@@ -178,6 +182,153 @@ pub fn grant_root_for(ancestors: &[String], params: &CoverageParams) -> Option<S
         }
     }
     None
+}
+
+// ---------------------------------------------------------------------------
+// Scope-exit gate — the ONE rule, shared by every Unix delete/rename site
+// ---------------------------------------------------------------------------
+
+/// SC#3 / ROT-02 grant-scope gate for a delete/rename scope-exit.
+///
+/// Walks the mutated node's leaf-first ancestor IPNS chain
+/// ([`ancestor_ipns_chain`]) and cross-checks it against the local sent-shares
+/// cache ([`build_coverage_params`] → [`grant_root_for`], which WRAP
+/// `cipherbox_sdk::rotation::scope::has_covering_grant`, 69-05). This gate
+/// NEVER re-implements the coverage predicate (research landmine 10).
+///
+/// - **No covering grant (private):** returns [`ScopeExitResult::NoRotation`]
+///   WITHOUT invoking `rotate`. The caller performs a PURE parent relink
+///   (reseal the parent's `SealedChildRef` list, republish the PARENT ONLY) —
+///   ZERO rotation, ZERO extra IPNS publishes (ROT-02 / SC#3 zero-rotation
+///   invariant). This is also the D-08 (Q3 Model a) path: a write-recipient's
+///   out-of-scope delete/move unlinks+bins ONLY — no cross-principal revoke is
+///   ever issued here, and no new schema is introduced.
+/// - **Covering grant (shared-scope exit):** invokes `rotate` EXACTLY ONCE,
+///   passing the matched grant-root ipns_name (`grant_root_for` — the closest
+///   leaf-first ancestor that is a grant root, i.e. the node to rotate FROM).
+///
+/// `rotate` is injectable so tests assert the call count with a spy (mirroring
+/// the sdk `maybe_rotate_on_scope_exit` spy pattern). A `rotate` error
+/// propagates as `Err` — fail-closed, never swallowed.
+///
+/// # Security
+/// D-07 dual-keying: the grant-root passed to `rotate` is a READ-plane key
+/// (`SealedChildRef.ipns_name`). The caller is responsible for threading the
+/// WRITE-plane key (`WriteChildRef.child_id` = `uuid_from_ino`) separately —
+/// the two key spaces MUST NOT be conflated (see [`rotate_read_on_scope_exit`]).
+pub async fn gate_scope_exit<F, Fut>(
+    inodes: &InodeTable,
+    start_ino: u64,
+    sent_cache: &SentSharesCache,
+    rotate: F,
+) -> Result<ScopeExitResult, RotationError>
+where
+    F: FnOnce(String) -> Fut,
+    Fut: Future<Output = Result<(), RotationError>>,
+{
+    let ancestors = ancestor_ipns_chain(inodes, start_ino);
+    let params = build_coverage_params(&ancestors, sent_cache);
+    match grant_root_for(&ancestors, &params) {
+        // ROT-02 / SC#3: no covering grant → zero rotation, zero extra
+        // publishes. The caller's parent relink is the entire durable effect.
+        None => Ok(ScopeExitResult::NoRotation),
+        // Covered scope-exit: rotate the read key from the matched grant-root
+        // ancestor EXACTLY ONCE. `grant_root_for` short-circuits at the first
+        // (closest, leaf-first) matching ancestor, so this fires once per
+        // scope-exit regardless of how many ancestors are grant roots.
+        Some(grant_root_ipns_name) => {
+            rotate(grant_root_ipns_name).await?;
+            Ok(ScopeExitResult::Rotated)
+        }
+    }
+}
+
+/// Live read-key rotation for a shared-scope exit (SC#3): rotate the read key
+/// from the matched grant-root node EXACTLY ONCE via
+/// `cipherbox_sdk::rotation::engine::rotate_read_from_node` (69-08).
+///
+/// # Security — D-07 dual-keying (HARD CONSTRAINT)
+/// `grant_root_ipns_name` is the READ-plane key (`SealedChildRef.ipns_name`);
+/// `deleted_child_id` is the WRITE-plane key (`WriteChildRef.child_id` =
+/// `crate::fs::uuid_from_ino`). They index two DISTINCT key spaces and must
+/// NEVER be conflated — conflating them silently breaks `rotateWriteFromNode`
+/// (project invariant). Both are threaded here as separate parameters.
+/// `crates/fuse/src/write_ops/` is flagged for explicit security review.
+///
+/// # LIVE-WIRING RESIDUAL (deferred — flagged in the 69-13 SUMMARY)
+/// A production `cipherbox_sdk::rotation::engine::RotationDeps` implementor
+/// (IPNS resolve-verify + node fetch/unseal + CAS publish + wire→`GrantRow`
+/// decode + advisory job persistence) does NOT yet exist anywhere in this
+/// workspace — only the engine's in-crate `FakeDeps` test double. Constructing
+/// it (and its own test coverage) is a standalone live-wiring plan, matching
+/// the known ROT-07 live-wiring gap. Until it lands, a covered scope-exit fails
+/// CLOSED here (`Err` → EIO at the caller) rather than completing the
+/// delete/move WITHOUT rotating the read key — which would leave a removed
+/// reader with continued access, the exact revocation-bypass this gate exists
+/// to prevent. Private deletes never reach this seam.
+pub async fn rotate_read_on_scope_exit(
+    _api: &ApiClient,
+    grant_root_ipns_name: &str,
+    deleted_child_id: &str,
+) -> Result<(), RotationError> {
+    // ipns_name (read plane) and child UUID (write plane) are PUBLIC
+    // identifiers, not key material — safe to log (CLAUDE.md rule 2).
+    log::error!(
+        "shared-scope-exit read-key rotation is not yet live-wired \
+         (read-plane grant_root ipns={}, write-plane child_id={}): failing closed",
+        grant_root_ipns_name,
+        deleted_child_id,
+    );
+    Err(RotationError::RotateFailed(
+        "read-key rotation on shared-scope exit not yet live-wired \
+         (production RotationDeps implementor pending)"
+            .to_string(),
+    ))
+}
+
+/// Drive the SC#3 scope-exit gate for a mutation of `ino` (unlink / rmdir /
+/// cross-folder rename) against the live `CipherBoxFS` state — the single call
+/// site shared by every Unix delete/rename handler (§3.8 "one rule, four call
+/// sites").
+///
+/// Reads the local sent-shares cache synchronously (Pitfall 2 / T-69-07-01 —
+/// NEVER a per-mutation network fetch) and blocks the fuser callback thread on
+/// [`gate_scope_exit`] via `fs.rt.block_on` (the same pattern the replaced
+/// `revoke_shares_blocking` used). Returns `Ok(())` on a private delete (zero
+/// rotation) or a successfully-rotated shared-scope exit; `Err(())` on a
+/// rotation failure — the caller maps that to EIO and aborts the destructive
+/// removal (fail-closed).
+///
+/// SECURITY-REVIEW: D-07 dual-keying — the write plane is keyed by `child_id`
+/// (`crate::fs::uuid_from_ino`, `WriteChildRef.child_id`) and the read plane by
+/// `ipns_name` (`SealedChildRef.ipns_name` / the grant-root). The two key
+/// spaces are threaded as SEPARATE values into [`rotate_read_on_scope_exit`]
+/// and MUST NEVER be conflated. `crates/fuse/src/write_ops/` is flagged for
+/// explicit security review.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+pub fn run_scope_exit_gate(fs: &crate::CipherBoxFS, ino: u64) -> Result<(), ()> {
+    let sent_cache = fs
+        .sent_shares
+        .read()
+        .expect("sent_shares lock poisoned")
+        .clone();
+    let api = fs.api.clone();
+    // Write-plane key (D-07): the mutated node's UUID, kept DISTINCT from the
+    // read-plane grant-root ipns_name threaded into the rotate seam below.
+    let child_id = crate::fs::uuid_from_ino(ino);
+    fs.rt
+        .block_on(gate_scope_exit(
+            &fs.inodes,
+            ino,
+            &sent_cache,
+            move |grant_root_ipns_name| async move {
+                rotate_read_on_scope_exit(&api, &grant_root_ipns_name, &child_id).await
+            },
+        ))
+        .map(|_| ())
+        .map_err(|e| {
+            log::error!("scope-exit gate failed (fail-closed): {}", e);
+        })
 }
 
 #[cfg(test)]
@@ -397,5 +548,157 @@ mod tests {
             })
         );
         assert!(has_covering_grant(&params));
+    }
+
+    // -----------------------------------------------------------------
+    // gate_scope_exit — the SC#3 / ROT-02 spy-based rotation-count gate
+    // -----------------------------------------------------------------
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    /// SC#3 / ROT-02 zero-rotation invariant: a PRIVATE delete (no covering
+    /// grant — empty sent-shares cache) invokes the rotate spy ZERO times and
+    /// returns `NoRotation`. This is the signature invariant of the phase.
+    #[tokio::test]
+    async fn gate_scope_exit_private_delete_triggers_zero_rotations() {
+        let (table, _a, _b, file_c) = build_nested_tree();
+        let cache = SentSharesCache::empty();
+        let spy = AtomicUsize::new(0);
+
+        let result = gate_scope_exit(&table, file_c, &cache, |_grant_root| {
+            let spy = &spy;
+            async move {
+                spy.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(
+            spy.load(Ordering::SeqCst),
+            0,
+            "private delete must not rotate"
+        );
+        assert_eq!(result, ScopeExitResult::NoRotation);
+    }
+
+    /// A shared-scope exit (an ancestor is a grant root) invokes the rotate spy
+    /// EXACTLY ONCE, rooted at `grant_root_for` (the closest leaf-first matching
+    /// ancestor), and returns `Rotated`.
+    #[tokio::test]
+    async fn gate_scope_exit_shared_exit_rotates_exactly_once_at_grant_root() {
+        let (table, _a, _b, file_c) = build_nested_tree();
+        // FolderA (an ancestor of file_c) is a grant root; file_c's own ipns is
+        // NOT, so the gate must rotate FROM folderA, not the leaf.
+        let cache = SentSharesCache {
+            root_ipns_names: HashSet::from(["k51folderA".to_string()]),
+        };
+        let spy = AtomicUsize::new(0);
+        let captured: Mutex<Option<String>> = Mutex::new(None);
+
+        let result = gate_scope_exit(&table, file_c, &cache, |grant_root| {
+            let spy = &spy;
+            let captured = &captured;
+            async move {
+                spy.fetch_add(1, Ordering::SeqCst);
+                *captured.lock().unwrap() = Some(grant_root);
+                Ok(())
+            }
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(
+            spy.load(Ordering::SeqCst),
+            1,
+            "shared exit rotates exactly once"
+        );
+        assert_eq!(result, ScopeExitResult::Rotated);
+        assert_eq!(
+            captured.into_inner().unwrap().as_deref(),
+            Some("k51folderA"),
+            "rotation must be rooted at the matched grant-root ancestor, not the leaf"
+        );
+    }
+
+    /// Multiple grant-root ancestors still rotate EXACTLY ONCE (one rotation per
+    /// scope-exit) — no over-rotation.
+    #[tokio::test]
+    async fn gate_scope_exit_multiple_grant_roots_rotate_once() {
+        let (table, _a, _b, file_c) = build_nested_tree();
+        let cache = SentSharesCache {
+            root_ipns_names: HashSet::from([
+                "k51folderB".to_string(),
+                "k51folderA".to_string(),
+                "k51root".to_string(),
+            ]),
+        };
+        let spy = AtomicUsize::new(0);
+
+        let result = gate_scope_exit(&table, file_c, &cache, |_grant_root| {
+            let spy = &spy;
+            async move {
+                spy.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(spy.load(Ordering::SeqCst), 1);
+        assert_eq!(result, ScopeExitResult::Rotated);
+    }
+
+    /// A rotate error propagates as `Err` (fail-closed), never swallowed — the
+    /// caller maps it to EIO and aborts the destructive removal.
+    #[tokio::test]
+    async fn gate_scope_exit_rotate_error_propagates_and_is_not_swallowed() {
+        let (table, _a, _b, file_c) = build_nested_tree();
+        let cache = SentSharesCache {
+            root_ipns_names: HashSet::from(["k51folderA".to_string()]),
+        };
+
+        let result = gate_scope_exit(&table, file_c, &cache, |_grant_root| async {
+            Err(RotationError::RotateFailed("boom".to_string()))
+        })
+        .await;
+
+        assert_eq!(
+            result.unwrap_err(),
+            RotationError::RotateFailed("boom".to_string())
+        );
+    }
+
+    /// D-07 dual-keying: the READ-plane key surfaced to the rotate seam (the
+    /// grant-root ipns_name) and the WRITE-plane key (`uuid_from_ino`) are
+    /// DISTINCT values drawn from distinct key spaces — never interchangeable.
+    #[test]
+    fn d07_read_plane_grant_root_ipns_and_write_plane_child_id_are_distinct() {
+        let (table, _a, _b, file_c) = build_nested_tree();
+        let ancestors = ancestor_ipns_chain(&table, file_c);
+        let cache = SentSharesCache {
+            root_ipns_names: HashSet::from(["k51folderA".to_string()]),
+        };
+        let params = build_coverage_params(&ancestors, &cache);
+
+        // Read plane: the grant-root IPNS name the rotation is rooted at.
+        let read_plane = grant_root_for(&ancestors, &params).expect("covered");
+        // Write plane: the mutated node's UUID (WriteChildRef.child_id).
+        let write_plane = crate::fs::uuid_from_ino(file_c);
+
+        assert_ne!(
+            read_plane, write_plane,
+            "D-07: read-plane ipns_name must never equal the write-plane child UUID"
+        );
+        assert!(
+            read_plane.starts_with("k51"),
+            "read plane is an IPNS k51 name"
+        );
+        assert!(
+            !write_plane.starts_with("k51"),
+            "write plane is a UUID, not an IPNS name"
+        );
     }
 }
