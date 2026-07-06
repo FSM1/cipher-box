@@ -59,13 +59,17 @@ pub struct EnforceResolvedParams {
 /// a more precise `match`).
 #[derive(Debug, Error, PartialEq, Eq, Clone)]
 pub enum RotationError {
-    #[error("Generation regression rejected for node {node_id}: floor={floor}, attempted={attempted}")]
+    #[error(
+        "Generation regression rejected for node {node_id}: floor={floor}, attempted={attempted}"
+    )]
     GenerationRegression {
         node_id: String,
         floor: i64,
         attempted: i64,
     },
-    #[error("Sequence regression rejected for node {node_id}: floor={floor}, attempted={attempted}")]
+    #[error(
+        "Sequence regression rejected for node {node_id}: floor={floor}, attempted={attempted}"
+    )]
     SequenceRegression {
         node_id: String,
         floor: i64,
@@ -127,6 +131,7 @@ async fn bump_floor<S: HighWaterStore>(store: &S, node_id: &str, candidate: i64)
 /// Holds two injected [`HighWaterStore`] seams — one for the generation
 /// floor, one for the seq floor. Holds no in-instance cache: every
 /// read/write goes through the injected stores.
+#[derive(Clone)]
 pub struct RotationHighWater<S: HighWaterStore> {
     generation_store: S,
     seq_store: S,
