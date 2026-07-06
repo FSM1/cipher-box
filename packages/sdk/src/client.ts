@@ -3527,6 +3527,65 @@ export class CipherBoxClient {
     });
   }
 
+  // ---- IPFS transport (raw) ----
+
+  /**
+   * Upload raw (already-encrypted) bytes to IPFS via the backend relay.
+   *
+   * This is the mediated entrypoint for callers that need direct IPFS
+   * transport access without the full file-metadata orchestration that
+   * `uploadFile`/`uploadFiles` perform (e.g. BYO-pinning config blobs,
+   * device-registry blobs). Progress is forwarded verbatim to the underlying
+   * `sdkCore.addToIpfs` call so upload-progress UI keeps working (D-07 write
+   * scope; RESEARCH Open Q2). Does not zero `encryptedData` — caller-supplied
+   * buffers are never zeroed here (D-09, caller is terminal owner).
+   *
+   * @param encryptedData - Pre-encrypted bytes to upload
+   * @param onProgress - Optional upload progress callback (percent 0-100)
+   * @returns The resulting CID and size
+   */
+  async uploadBytes(
+    encryptedData: Uint8Array,
+    onProgress?: ProgressCallback
+  ): Promise<{ cid: string; size: number }> {
+    return this.withOperation('uploadBytes', async () => {
+      const result = await sdkCore.addToIpfs(this.ctx, encryptedData, onProgress);
+      return { cid: result.cid, size: result.size };
+    });
+  }
+
+  /**
+   * Download raw (still-encrypted) bytes from IPFS via the backend relay.
+   *
+   * Mediated entrypoint for direct IPFS transport reads (no metadata/key
+   * resolution) — the raw counterpart to `uploadBytes`. Progress is
+   * forwarded verbatim to `sdkCore.fetchFromIpfs` so download-progress UI
+   * keeps working (D-07 write scope; RESEARCH Open Q2).
+   *
+   * @param cid - IPFS CID to fetch
+   * @param onProgress - Optional download progress callback (loaded, total)
+   * @returns The fetched (still-encrypted) bytes
+   */
+  async downloadBytes(cid: string, onProgress?: DownloadProgressCallback): Promise<Uint8Array> {
+    return this.withOperation('downloadBytes', async () => {
+      return sdkCore.fetchFromIpfs(this.ctx, cid, onProgress);
+    });
+  }
+
+  /**
+   * Unpin a CID from IPFS via the backend relay.
+   *
+   * Mediated entrypoint for direct IPFS transport unpin calls (e.g. cleanup
+   * after a superseded config/registry blob publish).
+   *
+   * @param cid - IPFS CID to unpin
+   */
+  async unpin(cid: string): Promise<void> {
+    return this.withOperation('unpin', async () => {
+      await sdkCore.unpinFromIpfs(this.ctx, cid);
+    });
+  }
+
   // ---- Bin operations ----
 
   /**
