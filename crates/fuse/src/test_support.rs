@@ -39,9 +39,11 @@ static TEST_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// (Threat T-46-04).
 pub(crate) fn make_isolated_journal_dir() -> PathBuf {
     let unique = TEST_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir()
-        .join("cb-test-journal")
-        .join(format!("{}-{}", std::process::id(), unique));
+    let dir = std::env::temp_dir().join("cb-test-journal").join(format!(
+        "{}-{}",
+        std::process::id(),
+        unique
+    ));
     // queue.rs WriteQueue::new does not create the dir — do it here.
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create isolated journal dir");
@@ -82,8 +84,10 @@ pub(crate) fn make_test_fs_with_keypair(
     let mut inodes = crate::inode::InodeTable::new();
     if let Some(root) = inodes.get_mut(crate::inode::ROOT_INO) {
         root.kind = crate::inode::InodeKind::Root {
-            ipns_name: Some("k51test-root".to_string()),
-            ipns_private_key: Some(Zeroizing::new(vec![7u8; 32])),
+            ipns_name: "k51test-root".to_string(),
+            read_key: Zeroizing::new([0u8; 32]),
+            write_key: Zeroizing::new([0u8; 32]),
+            ipns_private_key: Zeroizing::new(vec![7u8; 32]),
         };
     }
 
@@ -121,10 +125,9 @@ pub(crate) fn make_test_fs_with_keypair(
         upload_tx,
         publish_coordinator: Arc::new(crate::PublishCoordinator::new()),
         publish_queue: HashMap::new(),
+        high_water: cipherbox_sdk::new_journal_high_water(&journal_dir),
         journal: cipherbox_sdk::WriteQueue::new(journal_dir, 5),
-        sent_shares: std::sync::RwLock::new(
-            crate::write_ops::grant_scope::SentSharesCache::empty(),
-        ),
+        sent_shares: std::sync::RwLock::new(crate::write_ops::grant_scope::SentSharesCache::empty()),
     }
 }
 

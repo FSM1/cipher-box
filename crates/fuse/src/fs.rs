@@ -69,6 +69,17 @@ pub struct CipherBoxFS {
     /// Durable write journal — persists pending uploads and mkdir-publishes to disk
     /// so they survive a crash or remount.  Callbacks write here before acking the OS.
     pub journal: cipherbox_sdk::WriteQueue,
+    /// node/v3 anti-rollback high-water gate (69-16/69-17). Persists the
+    /// per-IPNS generation + sequence floors to JSON sidecars adjacent to the
+    /// write journal, so `list_folder_owned` fails closed on a stale/rolled-back
+    /// record. Constructed via `cipherbox_sdk::new_journal_high_water(<journal_dir>)`.
+    ///
+    /// NOTE (69-09 Slice 1): the node fetcher is intentionally NOT a stored
+    /// field. `cipherbox_sdk::ApiNodeFetcher<'a>` borrows `&'a ApiClient`;
+    /// storing it alongside the owned `api: Arc<ApiClient>` would be a
+    /// self-referential struct. Read-path call sites (Slice 2) construct
+    /// `ApiNodeFetcher { api: &self.api }` inline instead.
+    pub high_water: cipherbox_sdk::RotationHighWater<cipherbox_sdk::JsonSidecarFloorStore>,
     /// Local cache of the authenticated user's sent shares (grant-root
     /// awareness, SC#3 / 69-07). Refreshed out-of-band via
     /// [`CipherBoxFS::refresh_sent_shares`] — mount init / periodic, NEVER a
@@ -89,10 +100,7 @@ impl CipherBoxFS {
     /// `sent_shares` (see `write_ops::grant_scope::build_coverage_params`).
     pub async fn refresh_sent_shares(&self) -> Result<(), cipherbox_api_client::ApiError> {
         let cache = crate::write_ops::grant_scope::refresh_sent_shares(&self.api).await?;
-        *self
-            .sent_shares
-            .write()
-            .expect("sent_shares lock poisoned") = cache;
+        *self.sent_shares.write().expect("sent_shares lock poisoned") = cache;
         Ok(())
     }
 
@@ -245,12 +253,10 @@ impl CipherBoxFS {
                     let ipns_key_encrypted = if let Some(h) = file_ipns_key_encrypted_hex {
                         Some(h.clone())
                     } else if let Some(key) = file_ipns_private_key {
-                        Some(
-                            hex::encode(
-                                cipherbox_crypto::wrap_key(key, &self.public_key)
-                                    .map_err(|e| format!("Wrap IPNS key: {}", e))?,
-                            ),
-                        )
+                        Some(hex::encode(
+                            cipherbox_crypto::wrap_key(key, &self.public_key)
+                                .map_err(|e| format!("Wrap IPNS key: {}", e))?,
+                        ))
                     } else {
                         None
                     };
@@ -323,8 +329,7 @@ impl CipherBoxFS {
                                 let cid = pruned_cid.clone();
                                 self.rt.spawn(async move {
                                     let _ =
-                                        cipherbox_api_client::ipfs::unpin_content(&api, &cid)
-                                            .await;
+                                        cipherbox_api_client::ipfs::unpin_content(&api, &cid).await;
                                 });
                             }
                         }
@@ -380,7 +385,7 @@ impl CipherBoxFS {
                     self.api.clone(),
                     self.rt.clone(),
                     m,
-                    Zeroizing::new(fk), // D-12: wrap owned clone in Zeroizing
+                    Zeroizing::new(fk),  // D-12: wrap owned clone in Zeroizing
                     Zeroizing::new(ipk), // D-12: wrap owned clone in Zeroizing
                     in_,
                     oc,
@@ -443,12 +448,8 @@ impl CipherBoxFS {
             let unresolved = self.inodes.get_unresolved_file_pointers_for_parent(ino);
             if !unresolved.is_empty() {
                 let folder_key = self.inodes.get(ino).and_then(|i| match &i.kind {
-                    crate::inode::InodeKind::Root { .. } => {
-                        Some(self.root_folder_key.to_vec())
-                    }
-                    crate::inode::InodeKind::Folder { folder_key, .. } => {
-                        Some(folder_key.to_vec())
-                    }
+                    crate::inode::InodeKind::Root { .. } => Some(self.root_folder_key.to_vec()),
+                    crate::inode::InodeKind::Folder { folder_key, .. } => Some(folder_key.to_vec()),
                     _ => None,
                 });
                 if let Some(fk) = folder_key {
@@ -508,7 +509,8 @@ impl CipherBoxFS {
                         if spawned >= MAX_CONCURRENT_FP_RESOLVES {
                             // D-09: push to continuation queue instead of silent drop.
                             scheduled_this_cycle.insert(fp_ino);
-                            self.pending_fp_resolves.push_back((fp_ino, fp_ipns, fk_arr));
+                            self.pending_fp_resolves
+                                .push_back((fp_ino, fp_ipns, fk_arr));
                             continue;
                         }
                         scheduled_this_cycle.insert(fp_ino);
@@ -526,7 +528,11 @@ impl CipherBoxFS {
                         self.rt.spawn(async move {
                             let result = tokio::time::timeout(NETWORK_TIMEOUT, async {
                                 // D-01: route through the verified chokepoint.
-                                let cid = match cipherbox_api_client::ipns::resolve_ipns_verified(&api, &fp_ipns).await {
+                                let cid = match cipherbox_api_client::ipns::resolve_ipns_verified(
+                                    &api, &fp_ipns,
+                                )
+                                .await
+                                {
                                     Ok(v) => v.cid,
                                     // D-04: Legacy variant removed — all-absent sig fields fail closed.
                                     Err(cipherbox_api_client::ipns::VerifyError::Invalid(msg)) => {
@@ -748,7 +754,7 @@ mod build_folder_metadata_tests {
         let _ino = insert_file_with_private_key(
             &mut fs,
             Some(Zeroizing::new(vec![1u8; 32])), // non-empty private key → triggers wrap
-            None,                                  // no pre-wrapped hex → forces wrap path
+            None,                                // no pre-wrapped hex → forces wrap path
         );
 
         let result = fs.build_folder_metadata(ROOT_INO);
@@ -774,12 +780,15 @@ mod build_folder_metadata_tests {
         let pre_wrapped_hex = "deadbeef1234".to_string();
         let _ino = insert_file_with_private_key(
             &mut fs,
-            None,                                    // no raw private key
-            Some(pre_wrapped_hex.clone()),            // pre-wrapped hex present
+            None,                          // no raw private key
+            Some(pre_wrapped_hex.clone()), // pre-wrapped hex present
         );
 
         let result = fs.build_folder_metadata(ROOT_INO);
-        assert!(result.is_ok(), "build_folder_metadata must succeed when hex is pre-wrapped");
+        assert!(
+            result.is_ok(),
+            "build_folder_metadata must succeed when hex is pre-wrapped"
+        );
         let (metadata, _, _, _, _) = result.unwrap();
         let file_child = metadata.children.iter().find_map(|c| {
             if let cipherbox_core::FolderChild::File(fp) = c {
@@ -806,13 +815,15 @@ mod build_folder_metadata_tests {
         let mut fs = make_test_fs_with_keypair(private_key, public_key);
 
         let _ino = insert_file_with_private_key(
-            &mut fs,
-            None, // no private key
+            &mut fs, None, // no private key
             None, // no pre-wrapped hex
         );
 
         let result = fs.build_folder_metadata(ROOT_INO);
-        assert!(result.is_ok(), "build_folder_metadata must succeed when key is absent");
+        assert!(
+            result.is_ok(),
+            "build_folder_metadata must succeed when key is absent"
+        );
         let (metadata, _, _, _, _) = result.unwrap();
         let file_child = metadata.children.iter().find_map(|c| {
             if let cipherbox_core::FolderChild::File(fp) = c {
@@ -943,7 +954,10 @@ mod drain_refresh_completions_tests {
         send_refresh(&fs, refresh_metadata(1700001000000));
         fs.drain_refresh_completions();
 
-        assert!(is_unresolved(&fs, file_ino), "remote edit marked unresolved");
+        assert!(
+            is_unresolved(&fs, file_ino),
+            "remote edit marked unresolved"
+        );
         assert!(
             fs.resolving_file_pointers.contains(&file_ino),
             "fall-through spawn must enqueue the marked file for resolution"

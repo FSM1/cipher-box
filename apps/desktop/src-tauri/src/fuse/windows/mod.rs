@@ -53,7 +53,11 @@ mod mount_impl {
         if mount_path.exists() {
             match std::fs::remove_dir_all(&mount_path) {
                 Ok(()) => log::info!("Cleaned stale mount point: {}", mount_path.display()),
-                Err(e) => log::warn!("Failed to clean stale mount point {}: {}", mount_path.display(), e),
+                Err(e) => log::warn!(
+                    "Failed to clean stale mount point {}: {}",
+                    mount_path.display(),
+                    e
+                ),
             }
         }
 
@@ -66,6 +70,9 @@ mod mount_impl {
         let journal_dir = crate::fuse::default_journal_dir();
         std::fs::create_dir_all(&journal_dir)
             .map_err(|e| format!("Failed to create journal directory: {}", e))?;
+        // node/v3 anti-rollback gate: sidecars live adjacent to the write journal
+        // (69-09 Slice 1). Capture before `journal_dir` is moved into WriteQueue.
+        let high_water = cipherbox_sdk::new_journal_high_water(&journal_dir);
         let journal = cipherbox_sdk::WriteQueue::new(journal_dir, crate::fuse::JOURNAL_MAX_RETRIES);
 
         // Build the inode table
@@ -108,7 +115,10 @@ mod mount_impl {
                 coord.record_publish(name, *seq);
             }
             if !initial_sequences.is_empty() {
-                log::info!("PublishCoordinator seeded with {} sequence(s) from pre-populate", initial_sequences.len());
+                log::info!(
+                    "PublishCoordinator seeded with {} sequence(s) from pre-populate",
+                    initial_sequences.len()
+                );
             }
             coord
         };
@@ -194,6 +204,7 @@ mod mount_impl {
             upload_rx,
             upload_tx,
             journal,
+            high_water,
             mutated_folders: HashMap::new(),
             publish_coordinator,
             publish_queue: HashMap::new(),
@@ -203,17 +214,22 @@ mod mount_impl {
         };
 
         // Create WinFsp context with Arc<Mutex<>> for interior mutability
-        let context = cipherbox_fuse::platform::windows::operations::implementation::WinFspContext {
-            inner: Arc::new(Mutex::new(fs)),
-            rt: rt.clone(),
-        };
+        let context =
+            cipherbox_fuse::platform::windows::operations::implementation::WinFspContext {
+                inner: Arc::new(Mutex::new(fs)),
+                rt: rt.clone(),
+            };
 
         // Initialize WinFsp runtime
         // NOTE: winfsp_init_or_die() calls std::process::exit() on failure,
         // killing the process silently. Use winfsp_init() instead for proper error handling.
         log::info!("Initializing WinFsp runtime...");
-        let _init = winfsp::winfsp_init()
-            .map_err(|e| format!("WinFsp initialization failed (is WinFsp installed?): {:?}", e))?;
+        let _init = winfsp::winfsp_init().map_err(|e| {
+            format!(
+                "WinFsp initialization failed (is WinFsp installed?): {:?}",
+                e
+            )
+        })?;
         log::info!("WinFsp runtime initialized successfully");
 
         // Create volume params
@@ -226,11 +242,8 @@ mod mount_impl {
             .case_preserved_names(true);
 
         log::info!("Creating WinFsp FileSystemHost...");
-        let mut host = winfsp::host::FileSystemHost::new(
-            volume_params,
-            context,
-        )
-        .map_err(|e| format!("Failed to create WinFsp host: {:?}", e))?;
+        let mut host = winfsp::host::FileSystemHost::new(volume_params, context)
+            .map_err(|e| format!("Failed to create WinFsp host: {:?}", e))?;
         log::info!("WinFsp FileSystemHost created");
 
         // Set mount point
@@ -332,7 +345,11 @@ mod mount_impl {
         // If it's still there after a crash, clean it up.
         if mount_path.exists() {
             if let Err(e) = std::fs::remove_dir_all(&mount_path) {
-                log::warn!("Failed to remove stale mount path {}: {}", mount_path.display(), e);
+                log::warn!(
+                    "Failed to remove stale mount path {}: {}",
+                    mount_path.display(),
+                    e
+                );
             }
         }
 
