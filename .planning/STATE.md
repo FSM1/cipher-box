@@ -5,15 +5,15 @@ milestone_name: Metadata and Sharing Refactor
 current_phase: 68.2
 current_phase_name: sdk-owned-read-chain-and-resolved-folder-listings
 status: executing
-stopped_at: Completed 68.2-03-PLAN.md
-last_updated: "2026-07-06T01:05:05.979Z"
+stopped_at: Completed 68.2-05-PLAN.md
+last_updated: "2026-07-06T01:16:21.861Z"
 last_activity: 2026-07-05
 last_activity_desc: Phase 68.2 execution started
 progress:
   total_phases: 11
   completed_phases: 9
   total_plans: 110
-  completed_plans: 101
+  completed_plans: 102
   percent: 82
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 ## Current Position
 
 Phase: 68.2 (sdk-owned-read-chain-and-resolved-folder-listings) — EXECUTING
-Plan: 4 of 12
+Plan: 5 of 12
 Status: Ready to execute
 Last activity: 2026-07-05 — Phase 68.2 execution started
 
@@ -237,6 +237,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 68.2 P01 | 25min | 2 tasks | 2 files |
 | Phase 68.2 P02 | 25min | 3 tasks | 5 files |
 | Phase 68.2 P03 | 20min | 2 tasks | 5 files |
+| Phase 68.2 P05 | 15min | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -490,6 +491,7 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: [Phase 68.2-03]: uploadBytes/downloadBytes/unpin added as new standalone facade methods (not extensions to pinWithMode) -- mediate the web's direct raw-IPFS-transport call sites orthogonal to uploadFile/uploadFiles orchestration
 - [Phase ?]: [Phase 68.2-03]: getFolderMetadata returns the full decrypted Node (matching sdkCore.fetchAndDecryptMetadata's shape) by delegating entirely to the gated ensureFolderLoaded -- listFolder remains the resolved-children-only entrypoint
 - [Phase ?]: [Phase 68.2-03]: pure structural utils (getDepth/isDescendantOf/calculateSubtreeDepth/selectEncryptionMode) re-exported directly from @cipherbox/sdk-core's own barrel, not re-implemented
+- [Phase ?]: [Phase 68.2-05]: shared-folder-desync.spec.ts asserts against FileListItem.tsx's raw em-dash/epoch placeholder values directly (not FileListPage.getFileItem/getFolderItem's dash-based type filters, a pre-existing unrelated selector quirk) -- avoids coupling the new SC#5 spec to that mismatch
 
 ## Operator Next Steps
 
@@ -497,8 +499,8 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-06T01:05:05.971Z
-**Stopped at:** Completed 68.2-03-PLAN.md
+**Last session:** 2026-07-06T01:16:21.853Z
+**Stopped at:** Completed 68.2-05-PLAN.md
 **Resume file:** 
 None
 
