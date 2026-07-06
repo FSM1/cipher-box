@@ -64,6 +64,7 @@ import { KeyCache } from './state/key-cache';
 import * as binOps from './bin';
 import type { BinState } from './bin';
 import * as shareOps from './share';
+import { resolveChildren, type ResolvedChild } from './folder-listing';
 
 /** Maximum concurrent encrypt+pin operations for batch uploads. */
 const UPLOAD_CONCURRENCY = 3;
@@ -139,6 +140,15 @@ export class CipherBoxClient {
    * `ipnsName`, so they live in their own map (D REQ-3, A4).
    */
   private sharedFolderTree: SharedFolderTree;
+  /**
+   * In-SDK cache of resolved listings (SDK-READ-02, D-02), keyed by IPNS
+   * name and invalidated by sequenceNumber -- the clock. A folder and any
+   * shared-folder depth reaching the SAME ipnsName share one cache entry
+   * (ResolvedChild[] is fully determined by the folder's own content, not
+   * the access path that reached it).
+   */
+  private listingCache: Map<string, { sequenceNumber: bigint; children: ResolvedChild[] }> =
+    new Map();
   private keyCache: KeyCache;
   private binState: BinState | null = null;
   /** BYO-IPFS external pinning provider (null when mode is 'cipherbox') */
@@ -649,6 +659,186 @@ export class CipherBoxClient {
       sequenceNumber: resolved.sequenceNumber,
       signatureVerified: resolved.signatureVerified,
     };
+  }
+
+  /**
+   * Resolve one folder-listing CHILD's PublishedNode through the durable
+   * ROT-07 anti-rollback gate (T-68.2-01 / SDK-READ-02) -- the single gated
+   * read entrypoint `folder-listing.ts`'s `resolveChildren` is injected with
+   * (D-05).
+   *
+   * This is a STANDALONE per-child listing resolve, distinct from
+   * `dfsFindFolder`'s per-hop gate: `dfsFindFolder` gates a child only while
+   * searching for a specific DESCENDANT target and discards the result for
+   * every non-matching (including every file) child; every immediate child
+   * of a LISTED folder is gated here, file children included.
+   *
+   * Fail-closed and generation-sourcing rules mirror `dfsFindFolder`'s gate
+   * exactly (68.2-01): fail closed on `!signatureVerified` BEFORE any floor
+   * mutation, guard `Number.MAX_SAFE_INTEGER` overflow, and source
+   * `generation`/`versionFloor` from `childRef` (the PARENT's SealedChildRef
+   * mirror) -- NEVER the child's own envelope generation (Pitfall 3).
+   */
+  private async gatedResolveChild(
+    childRef: SealedChildRef
+  ): Promise<{ published: PublishedNode; sequenceNumber: bigint } | null> {
+    const resolved = await this.resolvePublishedNode(childRef.ipnsName);
+    if (!resolved) return null; // structurally unresolvable hop -- skip, try siblings
+
+    if (this.config.rotationHighWater) {
+      if (!resolved.signatureVerified) {
+        throw new Error(
+          `IPNS resolve for ${childRef.ipnsName} returned an unverified record -- refusing to gate durable floors on it`
+        );
+      }
+      if (
+        resolved.sequenceNumber > BigInt(Number.MAX_SAFE_INTEGER) ||
+        childRef.versionFloor > BigInt(Number.MAX_SAFE_INTEGER)
+      ) {
+        throw new Error(
+          `IPNS sequence number for ${childRef.ipnsName} exceeds Number.MAX_SAFE_INTEGER -- refusing lossy floor conversion`
+        );
+      }
+      await this.config.rotationHighWater.enforceResolved({
+        nodeId: childRef.ipnsName,
+        seq: Number(resolved.sequenceNumber),
+        generation: childRef.generation,
+        versionFloor: Number(childRef.versionFloor),
+      });
+    }
+
+    return { published: resolved.published, sequenceNumber: resolved.sequenceNumber };
+  }
+
+  /**
+   * Resolve (or return the cached) `ResolvedChild[]` for a folder's sealed
+   * children, cached in `listingCache` keyed by `ipnsName` and invalidated
+   * by `sequenceNumber` -- the clock (D-02). A repeat call for the same
+   * `ipnsName` at an UNCHANGED `sequenceNumber` returns the cached listing
+   * without re-resolving any child.
+   */
+  private async resolveListingChildren(
+    children: SealedChildRef[],
+    parentReadKey: Uint8Array,
+    ipnsName: string,
+    sequenceNumber: bigint
+  ): Promise<ResolvedChild[]> {
+    const cached = this.listingCache.get(ipnsName);
+    if (cached && cached.sequenceNumber === sequenceNumber) {
+      return cached.children;
+    }
+    const resolved = await resolveChildren(children, parentReadKey, (childRef) =>
+      this.gatedResolveChild(childRef)
+    );
+    this.listingCache.set(ipnsName, { sequenceNumber, children: resolved });
+    return resolved;
+  }
+
+  /**
+   * List a folder's children as `ResolvedChild[]` (SDK-READ-02, SC#2) --
+   * resolved once per folder load through the gated read path (68.2-01) and
+   * cached in the SDK keyed by `ipnsName` (D-02). The web renders directly
+   * from this result with no web-side per-child resolve or cache.
+   *
+   * Self-bootstraps via `ensureFolderLoaded` (68.2-01 gated), so a cold
+   * client can call this directly without a prior `loadFolder`/
+   * `registerFolder`, exactly like every other `ensureFolderLoaded`-backed
+   * mutation chokepoint.
+   */
+  async listFolder(ipnsName: string): Promise<ResolvedChild[]> {
+    return this.withOperation('listFolder', async () => {
+      const folder = await this.ensureFolderLoaded(ipnsName);
+      if (!folder) return [];
+      return this.resolveListingChildren(
+        folder.children,
+        folder.folderKey,
+        ipnsName,
+        folder.sequenceNumber
+      );
+    });
+  }
+
+  /**
+   * List a shared folder's children as `ResolvedChild[]` for an
+   * INTERMEDIATE folder reached by descending `path` (a sequence of child
+   * `ipnsName`s) from the already-loaded share root/depth in
+   * `sharedFolderTree` (SDK-READ-02, SC#2).
+   *
+   * `path` walks one hop at a time -- gated-resolve the hop's
+   * PublishedNode, unseal its readKey under the CURRENT depth's readKey
+   * (generation-source rule: `childRef.generation`, the PARENT mirror,
+   * §2.6), unseal its Node to recover the next depth's children -- hoisted
+   * from `apps/web/src/hooks/useSharedNavigationActions.ts`'s
+   * `navigateToSubfolder` walk (Pitfall 1: `navigateReadChain` forces a
+   * `kind: 'file'` leaf and cannot render an intermediate folder, so this
+   * walk is NOT built on top of it). This method never mutates
+   * `sharedFolderTree` -- listing is read-only; navigation commits still go
+   * through the existing `navigateToShare`/`navigateToSubfolder` web flow.
+   *
+   * Zeroing: each hop's minted readKey is the terminal owner's
+   * responsibility once superseded by the next hop (or once the final
+   * listing resolve completes) -- never the original `sharedFolderTree`
+   * entry's `folderKey` (caller/tree-owned, D-09).
+   *
+   * @throws if `shareId` has no loaded `SharedFolderState`, if a hop in
+   *   `path` is not found among the current depth's children, or if a hop
+   *   is no longer resolvable (revoked).
+   */
+  async listSharedFolder(shareId: string, path: string[] = []): Promise<ResolvedChild[]> {
+    return this.withOperation('listSharedFolder', async () => {
+      const state = this.sharedFolderTree.get(shareId);
+      if (!state) {
+        throw new Error(`Shared folder not loaded: ${shareId}`);
+      }
+
+      let currentChildren = state.children;
+      let currentReadKey = state.folderKey; // caller/tree-owned -- never zeroed
+      let currentIpnsName = state.ipnsName;
+      let currentSequenceNumber = state.sequenceNumber;
+      let mintedReadKey: Uint8Array | null = null;
+
+      try {
+        for (const targetIpnsName of path) {
+          const childRef = currentChildren.find((c) => c.ipnsName === targetIpnsName);
+          if (!childRef) {
+            throw new Error(
+              `Shared subfolder not found in listSharedFolder path: ${targetIpnsName}`
+            );
+          }
+          const childResolved = await this.gatedResolveChild(childRef);
+          if (!childResolved) {
+            throw new Error(`Shared subfolder is no longer available (revoked): ${targetIpnsName}`);
+          }
+          const childReadKey = await unsealChildReadKey(
+            childRef.readKeySealed,
+            currentReadKey,
+            childResolved.published.id,
+            childResolved.published.kind,
+            childRef.generation // parent mirror -- NEVER childResolved.published.generation
+          );
+          const childNode = await unsealNode(childResolved.published, childReadKey);
+
+          // This hop's key supersedes the previous hop's minted key -- zero it
+          // now (T-68.1-01-01 pattern); state.folderKey itself is never zeroed.
+          mintedReadKey?.fill(0);
+          mintedReadKey = childReadKey;
+
+          currentChildren = childNode.children ?? [];
+          currentIpnsName = childRef.ipnsName;
+          currentSequenceNumber = childResolved.sequenceNumber;
+          currentReadKey = childReadKey;
+        }
+
+        return await this.resolveListingChildren(
+          currentChildren,
+          currentReadKey,
+          currentIpnsName,
+          currentSequenceNumber
+        );
+      } finally {
+        mintedReadKey?.fill(0);
+      }
+    });
   }
 
   /**
