@@ -529,7 +529,7 @@ Plans:
 4. The interim mirror is reverted: `SealedChildRef` is back to its frozen five-field set (NODE-03), and size/modifiedAt are sourced from the resolved listing (the codec/encode/decode/`metadata-ops` mirror changes from ba3e0229a are removed).
 5. Regression coverage closes the desync bug class: a `tests/web-e2e` proves an owner (or a second client) sees a grantee's upload into a shared folder without the owner first writing, and that file size/modified-date render from the resolved listing; the full web-e2e suite stays green.
 
-**Plans**: 12/12 plans complete
+**Plans**: 12/14 plans complete (13-14 gap closure for SDK-READ-03 / SC#5)
 
 Plans:
 **Wave 1**
@@ -564,6 +564,14 @@ Plans:
 **Wave 7** *(blocked on Wave 6 completion)*
 
 - [x] 68.2-12-PLAN.md — Wave 7: Revert the SealedChildRef size/modifiedAt mirror LAST (restore NODE-03) + full web-e2e phase gate
+
+**Wave 8** *(gap closure — SDK-READ-03 / SC#5, verification 2026-07-06)*
+
+- [ ] 68.2-13-PLAN.md — Wave 8: Gated live-resolve-on-navigation for already-loaded folders (forceResolve option, fixes the self-referential cache clock) [TDD]
+
+**Wave 9** *(blocked on Wave 8 completion)*
+
+- [ ] 68.2-14-PLAN.md — Wave 9: Thread { forceResolve: true } into the web nav/poll freshness legs + prove shared-folder-desync e2e + full-suite re-triage
 
 ### Phase 69: FUSE and WinFsp — Rust Integration and Grant-Root Awareness
 
