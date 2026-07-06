@@ -9,6 +9,9 @@ import { type Page, type Locator } from '@playwright/test';
  */
 function ciFloor(timeout?: number): number | undefined {
   if (!process.env.CI) return timeout;
+  // Preserve an explicit `timeout: 0` — in Playwright that means "no timeout,
+  // defer to the test/global budget", which the CI floor must not clamp to 60s.
+  if (timeout === 0) return 0;
   return Math.max(60_000, timeout ?? 0);
 }
 

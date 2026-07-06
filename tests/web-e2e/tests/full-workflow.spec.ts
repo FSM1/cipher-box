@@ -61,12 +61,12 @@ test.describe.serial('Full Workflow', () => {
   // IPNS publish -> refresh round-trip, so an instant isItemVisible() check can
   // race the mutation it is verifying. The waiters no-op when the state is
   // already correct, so these are safe drop-in replacements everywhere.
-  const expectItemGone = async (name: string): Promise<void> => {
-    await fileList.waitForItemToDisappear(name);
+  const expectItemGone = async (name: string, options?: { timeout?: number }): Promise<void> => {
+    await fileList.waitForItemToDisappear(name, options);
     expect(await fileList.isItemVisible(name)).toBe(false);
   };
-  const expectItemPresent = async (name: string): Promise<void> => {
-    await fileList.waitForItemToAppear(name);
+  const expectItemPresent = async (name: string, options?: { timeout?: number }): Promise<void> => {
+    await fileList.waitForItemToAppear(name, options);
     expect(await fileList.isItemVisible(name)).toBe(true);
   };
 
@@ -670,8 +670,7 @@ test.describe.serial('Full Workflow', () => {
     await navigateIntoFolder(imagesFolder);
 
     // File should still be there
-    await fileList.waitForItemToAppear(postReloadFile.name, { timeout: 30000 });
-    await expectItemPresent(postReloadFile.name);
+    await expectItemPresent(postReloadFile.name, { timeout: 30000 });
 
     // Navigate back to root for Phase 4
     await navigateToRoot();
