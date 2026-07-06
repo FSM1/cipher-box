@@ -1,11 +1,33 @@
+/**
+ * verify-filepointer.ts -- Verify a file in the vault via the node/v3 read chain.
+ *
+ * Authenticates via test-login, loads the node/v3 vault key blob (rootReadKey),
+ * loads the root Node, traverses the SealedChildRef read chain to the target
+ * file, unseals the child read key under the parent read key
+ * (unsealChildReadKey, parent-mirror generation), resolves the file's
+ * NodeContent, and optionally downloads + decrypts the content with the RAW
+ * NodeContent.fileKey (the v3 model stores fileKey un-wrapped inside the sealed
+ * read-body — no ECIES).
+ *
+ * Usage:
+ *   TEST_SECRET=<secret> tsx verify-filepointer.ts \
+ *     --api-url http://localhost:3000 \
+ *     --email dev-key@cipherbox.local \
+ *     --file-name hello.txt \
+ *     [--folder-name Subfolder] \
+ *     [--expected-content "text"]
+ */
+
 import {
-  downloadAndDecrypt,
-  resolveFileMetadata,
-  loadFolderMetadata,
   loadVaultKeyBlob,
+  loadFolderMetadata,
+  resolveFileMetadata,
+  downloadFileContent,
+  resolveIpnsRecord,
+  fetchFromIpfs,
   type SdkContext,
 } from '@cipherbox/sdk-core';
-import { unwrapKey, hexToBytes } from '@cipherbox/crypto';
+import { unsealChildReadKey, type PublishedNode, type SealedChildRef } from '@cipherbox/core';
 import { authenticate, buildSdkContext, parseCliArgs } from '../../../tests/e2e-helpers/auth';
 
 interface VerifyFilePointerArgs {
@@ -43,6 +65,41 @@ function parseArgs(argv: string[]): VerifyFilePointerArgs {
   };
 }
 
+/**
+ * Resolve an IPNS name and return the raw node/v3 PublishedNode envelope.
+ * The envelope's id/kind/generation are plaintext (AAD inputs) — mirrors the
+ * canonical hop in packages/sdk-core/src/share/navigate.ts.
+ */
+async function fetchPublishedNode(ipnsName: string, ctx: SdkContext): Promise<PublishedNode> {
+  const resolved = await resolveIpnsRecord(ipnsName, ctx);
+  if (!resolved) {
+    throw new Error(`IPNS record not found for ${ipnsName}`);
+  }
+  const raw = await fetchFromIpfs(ctx, resolved.cid);
+  return JSON.parse(new TextDecoder().decode(raw)) as PublishedNode;
+}
+
+/**
+ * Derive a child node's read key from its SealedChildRef under the parent read
+ * key. Uses childRef.generation (the PARENT MIRROR), never the child's own
+ * envelope generation (navigate.ts Pitfall 1 / generation-source rule §2.6).
+ */
+async function deriveChildReadKey(
+  childRef: SealedChildRef,
+  parentReadKey: Uint8Array,
+  ctx: SdkContext
+): Promise<{ childReadKey: Uint8Array; childPublished: PublishedNode }> {
+  const childPublished = await fetchPublishedNode(childRef.ipnsName, ctx);
+  const childReadKey = await unsealChildReadKey(
+    childRef.readKeySealed,
+    parentReadKey,
+    childPublished.id, // plaintext from child envelope
+    childPublished.kind, // plaintext from child envelope
+    childRef.generation // parent mirror (NOT childPublished.generation)
+  );
+  return { childReadKey, childPublished };
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const auth = await authenticate(args.apiUrl, args.email, args.secret);
@@ -68,67 +125,69 @@ async function main(): Promise<void> {
 
   const folder = await loadFolderMetadata({
     ipnsName: rootIpnsName,
-    folderKey: vaultKeyBlob.rootFolderKey,
+    folderKey: vaultKeyBlob.rootReadKey,
     ctx,
   });
   if (!folder) {
     throw new Error(`Root folder metadata not found for ${rootIpnsName}`);
   }
 
-  // Resolve which folder to search in, and the folderKey the file's metadata is
-  // encrypted under. Default: root. With --folder-name, descend one level into
-  // that subfolder (its folderKey is ECIES-wrapped for the vault on its
-  // FolderEntry), so a file moved into a subfolder can be verified — and read
-  // back under the destination folderKey, which is exactly what the
-  // move/restore re-encryption must produce.
-  let searchChildren = folder.metadata.children;
-  let fileFolderKey = vaultKeyBlob.rootFolderKey;
+  // Resolve which folder to search in, and the parent read key the file's child
+  // ref is sealed under. Default: root. With --folder-name, descend one level
+  // into that subfolder — the subfolder's read key is derived from the root's
+  // SealedChildRef via unsealChildReadKey, so a file moved into a subfolder can
+  // be verified under the destination read key (which is exactly what the
+  // move/restore re-link must preserve).
+  let searchChildren = folder.metadata.children ?? [];
+  let parentReadKey = vaultKeyBlob.rootReadKey;
 
   if (args.folderName) {
-    const subEntry = folder.metadata.children.find(
-      (child) => child.type === 'folder' && child.name === args.folderName
-    );
-    if (!subEntry || subEntry.type !== 'folder') {
+    const subRef = searchChildren.find((child) => child.name === args.folderName);
+    if (!subRef) {
       throw new Error(`Subfolder not found at root: ${args.folderName}`);
     }
-    const subFolderKey = await unwrapKey(hexToBytes(subEntry.folderKeyEncrypted), userPrivateKey);
+    const { childReadKey: subReadKey, childPublished } = await deriveChildReadKey(
+      subRef,
+      parentReadKey,
+      ctx
+    );
+    if (childPublished.kind !== 'folder') {
+      throw new Error(`Child ${args.folderName} at root is not a folder`);
+    }
     const subFolder = await loadFolderMetadata({
-      ipnsName: subEntry.ipnsName,
-      folderKey: subFolderKey,
+      ipnsName: subRef.ipnsName,
+      folderKey: subReadKey,
       ctx,
     });
     if (!subFolder) {
       throw new Error(`Subfolder metadata not found for ${args.folderName}`);
     }
-    searchChildren = subFolder.metadata.children;
-    fileFolderKey = subFolderKey;
+    searchChildren = subFolder.metadata.children ?? [];
+    parentReadKey = subReadKey;
   }
 
-  const filePointer = searchChildren.find(
-    (child) => child.type === 'file' && child.name === args.fileName
-  );
-
-  if (!filePointer || filePointer.type !== 'file') {
-    throw new Error(`FilePointer not found for ${args.fileName}`);
+  const fileRef = searchChildren.find((child) => child.name === args.fileName);
+  if (!fileRef) {
+    throw new Error(`SealedChildRef not found for ${args.fileName}`);
   }
 
-  if (!filePointer.fileMetaIpnsName) {
-    throw new Error(`FilePointer for ${args.fileName} is missing fileMetaIpnsName`);
-  }
-
-  const { metadata, metadataCid } = await resolveFileMetadata(
-    filePointer.fileMetaIpnsName,
-    fileFolderKey,
+  const { childReadKey: fileReadKey, childPublished: filePublished } = await deriveChildReadKey(
+    fileRef,
+    parentReadKey,
     ctx
   );
+  if (filePublished.kind !== 'file') {
+    throw new Error(`Child ${args.fileName} is not a file node`);
+  }
+
+  const { metadata, metadataCid } = await resolveFileMetadata(fileRef.ipnsName, fileReadKey, ctx);
 
   let contentVerified = false;
   if (args.expectedContent !== undefined) {
-    const plaintext = await downloadAndDecrypt({
+    const plaintext = await downloadFileContent({
       cid: metadata.cid,
-      fileKeyEncrypted: metadata.fileKeyEncrypted,
+      fileKey: metadata.fileKey,
       fileIv: metadata.fileIv,
-      userPrivateKey,
       encryptionMode: metadata.encryptionMode,
       ctx,
     });
@@ -147,7 +206,7 @@ async function main(): Promise<void> {
       rootIpnsName,
       rootMetadataCid: folder.cid,
       fileName: args.fileName,
-      fileMetaIpnsName: filePointer.fileMetaIpnsName,
+      fileIpnsName: fileRef.ipnsName,
       fileMetadataCid: metadataCid,
       fileCid: metadata.cid,
       contentVerified,
