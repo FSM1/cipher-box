@@ -60,10 +60,7 @@ pub use events::{
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub use fs::{mount_point, CipherBoxFS};
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
-pub use metadata::{
-    encrypt_metadata_to_json, merge_folder_children, revoke_shares_blocking,
-    spawn_bin_entry_publish, spawn_metadata_publish,
-};
+pub use metadata::{revoke_shares_blocking, spawn_bin_entry_publish, spawn_metadata_publish};
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub use publish::{next_file_publish_sequence, PublishCoordinator, PublishQueueEntry};
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
@@ -76,7 +73,7 @@ pub mod replay;
 pub use replay::replay_for_vault;
 
 // Tier-2 dedup: shared async crypto/IPNS helpers (fetch_and_decrypt_content_async,
-// publish_file_metadata). The sync wrapper fetch_and_decrypt_file_content stays in
+// publish_file_node). The sync wrapper fetch_and_decrypt_file_content stays in
 // each operations.rs because macOS FUSE uses a 3s private timeout while Windows uses
 // the 10s crate::block_with_timeout (A2 scope narrowing — see content_ops.rs doc).
 #[cfg(any(feature = "fuse", feature = "winfsp"))]

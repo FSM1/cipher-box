@@ -9,8 +9,8 @@
 #[allow(unused_imports)]
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub use cipherbox_fuse::{
-    encrypt_metadata_to_json, mount_point, spawn_bin_entry_publish, CipherBoxFS, PendingContent,
-    PendingFilePointer, PendingRefresh, PublishCoordinator, UploadComplete,
+    mount_point, spawn_bin_entry_publish, CipherBoxFS, PendingContent, PendingFilePointer,
+    PendingRefresh, PublishCoordinator, UploadComplete,
 };
 
 #[allow(unused_imports)]
@@ -403,58 +403,6 @@ pub fn unmount_filesystem() -> Result<(), String> {
 #[cfg(test)]
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 mod tests {
-    use cipherbox_core::folder::{FilePointer, FolderChild, FolderMetadata};
-    use cipherbox_fuse::merge_folder_children;
-
-    fn make_file(ipns: &str, name: &str) -> FolderChild {
-        FolderChild::File(FilePointer {
-            id: format!("id-{}", name),
-            name: name.to_string(),
-            file_meta_ipns_name: ipns.to_string(),
-            ipns_private_key_encrypted: None,
-            created_at: 1000,
-            modified_at: 2000,
-        })
-    }
-
-    fn metadata(children: Vec<FolderChild>) -> FolderMetadata {
-        FolderMetadata {
-            version: "v2".to_string(),
-            children,
-        }
-    }
-
-    fn child_name(child: &FolderChild) -> &str {
-        match child {
-            FolderChild::Folder(f) => &f.name,
-            FolderChild::File(f) => &f.name,
-        }
-    }
-
-    #[test]
-    fn merge_both_empty() {
-        let merged = merge_folder_children(&metadata(vec![]), metadata(vec![]));
-        assert!(merged.children.is_empty());
-    }
-
-    #[test]
-    fn merge_disjoint_children_union() {
-        let merged = merge_folder_children(
-            &metadata(vec![make_file("a", "a.txt")]),
-            metadata(vec![make_file("b", "b.txt")]),
-        );
-        assert_eq!(merged.children.len(), 2);
-    }
-
-    #[test]
-    fn merge_identical_uses_local() {
-        let merged = merge_folder_children(
-            &metadata(vec![make_file("a", "local.jpg")]),
-            metadata(vec![make_file("a", "remote.jpg")]),
-        );
-        assert_eq!(merged.children.len(), 1);
-        assert_eq!(child_name(&merged.children[0]), "local.jpg");
-    }
 
     #[test]
     fn default_journal_dir_ends_with_cipherbox_cb_journal() {
