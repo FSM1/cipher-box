@@ -153,7 +153,13 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
       const resolved = await runWithFailureUx(() =>
         client.listFolder(rootIpnsName, { forceResolve: true })
       );
-      const state = await client.ensureFolderLoaded(rootIpnsName, { forceResolve: true });
+      // Route ensureFolderLoaded through the same D-05 classifier as listFolder
+      // so a forced-resolve gate rejection (SequenceRegressionError /
+      // GenerationRegressionError) surfaces the toast instead of only hitting
+      // the catch-and-rethrow below.
+      const state = await runWithFailureUx(() =>
+        client.ensureFolderLoaded(rootIpnsName, { forceResolve: true })
+      );
 
       // Plan 09 (68.2-09): the store's `children` field is now the SDK's
       // resolved `ResolvedChild[]` display projection (kind/size/modifiedAt

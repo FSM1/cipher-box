@@ -118,14 +118,16 @@ export class SearchIndexService {
 
       // Index each child (files and subfolders). `folder.children` is the
       // SDK-resolved `ResolvedChild[]` projection (68.2-09) -- `modifiedAt`
-      // is sourced from the child's own resolved listing entry, not the
-      // (now-reverted) SealedChildRef display mirror (D-08/68.2-12).
-      // TODO(phase 63): use ResolvedChild.kind for type discrimination instead of hardcoding 'file'
+      // AND `kind` are sourced from the child's own resolved listing entry,
+      // not the (now-reverted) SealedChildRef display mirror (D-08/68.2-12).
       for (const child of folder.children) {
         documents.push({
           id: `${folder.id}:${child.ipnsName}`,
           name: child.name,
-          type: 'file', // phase 63: use ResolvedChild.kind ('folder'|'file')
+          // Discriminate by the resolved kind so subfolders index as 'folder'
+          // (not silently as 'file'); a folder's own self-entry above wins
+          // dedup via its distinct id.
+          type: child.kind === 'file' ? 'file' : 'folder',
           parentPath,
           parentFolderId: folder.id,
           modifiedAt: child.modifiedAt,

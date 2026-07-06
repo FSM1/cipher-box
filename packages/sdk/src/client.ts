@@ -492,6 +492,10 @@ export class CipherBoxClient {
     this.folderTree.clear();
     this.sharedFolderTree.clear();
     this.keyCache.clear();
+    // Drop the SDK-owned read caches so no resolved listing (private folder
+    // structure) or in-flight re-resolve closure survives after destroy().
+    this.listingCache.clear();
+    this.reresolveInFlight.clear();
     this.emitter.removeAll();
     // Zero internal key copies (defense-in-depth; JS GC may retain copies)
     // Only zeroes our copies, not the caller-provided buffers
@@ -966,12 +970,14 @@ export class CipherBoxClient {
             childResolved.published.kind,
             childRef.generation // parent mirror -- NEVER childResolved.published.generation
           );
-          const childNode = await unsealNode(childResolved.published, childReadKey);
-
-          // This hop's key supersedes the previous hop's minted key -- zero it
+          // Adopt this hop's key BEFORE unsealNode so the outer `finally`
+          // zeroes it even if unsealNode throws (leak-on-failure fix). This
+          // hop's key supersedes the previous hop's minted key -- zero that
           // now (T-68.1-01-01 pattern); state.folderKey itself is never zeroed.
           mintedReadKey?.fill(0);
           mintedReadKey = childReadKey;
+
+          const childNode = await unsealNode(childResolved.published, childReadKey);
 
           currentChildren = childNode.children ?? [];
           currentIpnsName = childRef.ipnsName;

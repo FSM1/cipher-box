@@ -33,10 +33,15 @@ export async function resyncFolder(folderIpnsName: string, folderId: string): Pr
   const resolved = await client.listFolder(folderIpnsName, { forceResolve: true });
   const state = await client.ensureFolderLoaded(folderIpnsName, { forceResolve: true });
 
-  store.updateFolderChildren(folderId, resolved);
+  // Re-read the store after the awaits: the folder may have been navigated
+  // away from or removed while resolving (matches refreshFolderListing /
+  // invalidateOpenFolder). Skip the writeback if it's gone.
+  const freshStore = useFolderStore.getState();
+  if (!freshStore.folders[folderId]) return;
+  freshStore.updateFolderChildren(folderId, resolved);
   if (state) {
-    store.updateFolderRawChildren(folderId, state.children);
-    store.updateFolderSequence(folderId, state.sequenceNumber);
+    freshStore.updateFolderRawChildren(folderId, state.children);
+    freshStore.updateFolderSequence(folderId, state.sequenceNumber);
   }
 }
 
