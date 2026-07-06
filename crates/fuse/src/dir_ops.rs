@@ -4,26 +4,19 @@
 
 #[cfg(feature = "fuse")]
 pub(crate) mod implementation {
-    use fuser::{
-        FileType, ReplyDirectory, ReplyEmpty, ReplyOpen, ReplyStatfs,
-    };
+    use fuser::{FileType, ReplyDirectory, ReplyEmpty, ReplyOpen, ReplyStatfs};
     use std::sync::atomic::Ordering;
 
-    use crate::CipherBoxFS;
     use crate::constants::{CONTENT_DOWNLOAD_TIMEOUT, QUOTA_BYTES};
     use crate::helpers::is_platform_special;
     use crate::inode::{InodeKind, BLOCK_SIZE};
-    use crate::operations::implementation::fetch_and_decrypt_content_async;
+    use crate::operations::implementation::fetch_node_and_decrypt_content;
+    use crate::CipherBoxFS;
 
     /// List directory entries.
     ///
     /// Returns ALL entries in a single pass (FUSE-T requirement).
-    pub fn handle_readdir(
-        fs: &mut CipherBoxFS,
-        ino: u64,
-        offset: i64,
-        mut reply: ReplyDirectory,
-    ) {
+    pub fn handle_readdir(fs: &mut CipherBoxFS, ino: u64, offset: i64, mut reply: ReplyDirectory) {
         // 1. Drain any pending background results (non-blocking)
         fs.drain_upload_completions();
         fs.drain_refresh_completions();
@@ -40,16 +33,18 @@ pub(crate) mod implementation {
             };
 
             match &inode.kind {
-                InodeKind::Root { ipns_name, .. } => {
-                    ipns_name.as_ref().and_then(|name| {
-                        if fs.metadata_cache.get(name).is_none() {
-                            Some((name.clone(), fs.root_folder_key.clone()))
-                        } else {
-                            None
-                        }
-                    })
-                }
-                InodeKind::Folder { ipns_name, folder_key, .. } => {
+                InodeKind::Root { ipns_name, .. } => ipns_name.as_ref().and_then(|name| {
+                    if fs.metadata_cache.get(name).is_none() {
+                        Some((name.clone(), fs.root_folder_key.clone()))
+                    } else {
+                        None
+                    }
+                }),
+                InodeKind::Folder {
+                    ipns_name,
+                    folder_key,
+                    ..
+                } => {
                     if fs.metadata_cache.get(ipns_name).is_none() {
                         Some((ipns_name.clone(), folder_key.clone()))
                     } else {
@@ -61,9 +56,18 @@ pub(crate) mod implementation {
         };
 
         // Fire background refresh (non-blocking, results applied on next readdir)
-        if let Some((ipns_name, folder_key)) = stale_info.filter(|(n, _)| offset == 0 && !fs.refreshing_metadata.contains(n)) {
+        if let Some((ipns_name, folder_key)) =
+            stale_info.filter(|(n, _)| offset == 0 && !fs.refreshing_metadata.contains(n))
+        {
             fs.refreshing_metadata.insert(ipns_name.clone());
-            crate::spawn_metadata_refresh(&fs.rt, fs.api.clone(), fs.refresh_tx.clone(), ino, ipns_name, folder_key);
+            crate::spawn_metadata_refresh(
+                &fs.rt,
+                fs.api.clone(),
+                fs.refresh_tx.clone(),
+                ino,
+                ipns_name,
+                folder_key,
+            );
         }
 
         // 3. Return current (possibly stale) entries immediately
@@ -88,18 +92,14 @@ pub(crate) mod implementation {
                     continue;
                 }
                 let file_type = match &child.kind {
-                    InodeKind::Root { .. } | InodeKind::Folder { .. } => {
-                        FileType::Directory
-                    }
+                    InodeKind::Root { .. } | InodeKind::Folder { .. } => FileType::Directory,
                     InodeKind::File { .. } => FileType::RegularFile,
                 };
                 entries.push((child_ino, file_type, child.name.clone()));
             }
         }
 
-        for (i, (ino, file_type, name)) in
-            entries.iter().enumerate().skip(offset as usize)
-        {
+        for (i, (ino, file_type, name)) in entries.iter().enumerate().skip(offset as usize) {
             if reply.add(*ino, (i + 1) as i64, *file_type, &name) {
                 break;
             }
@@ -112,8 +112,17 @@ pub(crate) mod implementation {
             fs.drain_content_prefetches();
             for &child_ino in &children {
                 if let Some(child) = fs.inodes.get(child_ino) {
-                    if let InodeKind::File { cid, encrypted_file_key, iv, encryption_mode, .. } = &child.kind {
+                    // node/v3: prefetch a resolved file by fetching its own gated
+                    // node (SC#6) and unsealing the content under its read_key.
+                    if let InodeKind::File {
+                        cid,
+                        ipns_name,
+                        read_key,
+                        ..
+                    } = &child.kind
+                    {
                         if !cid.is_empty()
+                            && !ipns_name.is_empty()
                             && fs.content_cache.get(cid).is_none()
                             && !fs.prefetching.contains(cid)
                         {
@@ -121,17 +130,21 @@ pub(crate) mod implementation {
                             let rt = fs.rt.clone();
                             let tx = fs.content_tx.clone();
                             let cid_clone = cid.clone();
-                            let efk = encrypted_file_key.clone();
-                            let iv_clone = iv.clone();
-                            let enc_mode = encryption_mode.clone();
-                            let pk = fs.private_key.clone();
+                            let ipns_clone = ipns_name.clone();
+                            let read_key_owned: [u8; 32] = **read_key;
+                            // Owned high-water clone for the spawned prefetch task
+                            // (shares the same durable PathBuf-backed floor, 5b(a)).
+                            let high_water = fs.high_water.clone();
                             fs.prefetching.insert(cid.clone());
 
                             rt.spawn(async move {
                                 let result = tokio::time::timeout(
                                     CONTENT_DOWNLOAD_TIMEOUT,
-                                    fetch_and_decrypt_content_async(
-                                        &api, &cid_clone, &efk, &iv_clone, &enc_mode, &pk,
+                                    fetch_node_and_decrypt_content(
+                                        &api,
+                                        &high_water,
+                                        &ipns_clone,
+                                        &read_key_owned,
                                     ),
                                 )
                                 .await;
@@ -149,12 +162,23 @@ pub(crate) mod implementation {
                                         });
                                     }
                                     Ok(Err(e)) => {
-                                        log::error!("Prefetch(readdir) failed for CID {}: {}", cid_clone, e);
-                                        let _ = tx.send(crate::PendingContent::Failure { cid: cid_clone });
+                                        log::error!(
+                                            "Prefetch(readdir) failed for CID {}: {}",
+                                            cid_clone,
+                                            e
+                                        );
+                                        let _ = tx.send(crate::PendingContent::Failure {
+                                            cid: cid_clone,
+                                        });
                                     }
                                     Err(_) => {
-                                        log::error!("Prefetch(readdir) timed out for CID {}", cid_clone);
-                                        let _ = tx.send(crate::PendingContent::Failure { cid: cid_clone });
+                                        log::error!(
+                                            "Prefetch(readdir) timed out for CID {}",
+                                            cid_clone
+                                        );
+                                        let _ = tx.send(crate::PendingContent::Failure {
+                                            cid: cid_clone,
+                                        });
                                     }
                                 }
                             });
@@ -166,11 +190,7 @@ pub(crate) mod implementation {
     }
 
     /// Open a directory handle.
-    pub fn handle_opendir(
-        fs: &mut CipherBoxFS,
-        ino: u64,
-        reply: ReplyOpen,
-    ) {
+    pub fn handle_opendir(fs: &mut CipherBoxFS, ino: u64, reply: ReplyOpen) {
         if fs.inodes.get(ino).is_some() {
             let fh = fs.next_fh.fetch_add(1, Ordering::SeqCst);
             reply.opened(fh, 0);

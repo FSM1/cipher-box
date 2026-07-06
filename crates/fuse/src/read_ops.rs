@@ -24,8 +24,8 @@ pub(crate) mod implementation {
     use crate::helpers::is_platform_special;
     use crate::inode::InodeKind;
     use crate::operations::implementation::{
-        current_gid, current_uid, fetch_and_decrypt_content_async, fetch_and_decrypt_file_content,
-        publish_file_metadata, ttl_for_is_dir,
+        current_gid, current_uid, fetch_and_decrypt_file_content, fetch_node_and_decrypt_content,
+        ttl_for_is_dir,
     };
 
     /// Spawn a background content-prefetch task for a file CID.
@@ -33,30 +33,32 @@ pub(crate) mod implementation {
     /// Dedupes the three identical prefetch-spawn blocks that appear in
     /// handle_open (read path) and handle_read (two sites). The `label` parameter
     /// is used in error log messages so callers retain their distinct context.
+    ///
+    /// node/v3 (69-09 Slice 5b): prefetch resolves the file's OWN gated node
+    /// (SC#6) via `ipns_name` and unseals the content under `read_key` — the
+    /// former `(encrypted_file_key, iv, encryption_mode)` params are gone (those
+    /// descriptors now live inside the sealed node). The spawned task takes an
+    /// OWNED `high_water` clone (5b(a)). The result is cached under `cid`.
     fn spawn_content_prefetch_fuse(
         fs: &mut CipherBoxFS,
         cid: String,
-        encrypted_file_key: String,
-        iv: String,
-        encryption_mode: String,
+        ipns_name: String,
+        read_key: [u8; 32],
         label: &'static str,
     ) {
         let api = fs.api.clone();
         let rt = fs.rt.clone();
         let tx = fs.content_tx.clone();
         let cid_clone = cid.clone();
-        let efk = encrypted_file_key;
-        let iv_clone = iv;
-        let enc_mode = encryption_mode;
-        let pk = fs.private_key.clone();
+        let ipns_clone = ipns_name;
+        let read_key_owned = read_key;
+        let high_water = fs.high_water.clone();
         fs.prefetching.insert(cid);
 
         rt.spawn(async move {
             let result = tokio::time::timeout(
                 CONTENT_DOWNLOAD_TIMEOUT,
-                fetch_and_decrypt_content_async(
-                    &api, &cid_clone, &efk, &iv_clone, &enc_mode, &pk,
-                ),
+                fetch_node_and_decrypt_content(&api, &high_water, &ipns_clone, &read_key_owned),
             )
             .await;
 
@@ -266,20 +268,18 @@ pub(crate) mod implementation {
 
     /// Open a file for reading or writing.
     pub fn handle_open(fs: &mut CipherBoxFS, ino: u64, flags: i32, reply: ReplyOpen) {
+        // node/v3 (69-09 Slice 5b): the open path carries the file's stable
+        // identity `(cid, ipns_name, read_key)` — the content descriptors
+        // (encrypted_file_key/iv/encryption_mode) now live inside the sealed node
+        // and are recovered lazily by the gated fetch. "unresolved" == empty CID.
         let file_info = match fs.inodes.get(ino) {
             Some(inode) => match &inode.kind {
                 InodeKind::File {
                     cid,
-                    encrypted_file_key,
-                    iv,
-                    encryption_mode,
+                    ipns_name,
+                    read_key,
                     ..
-                } => Some((
-                    cid.clone(),
-                    encrypted_file_key.clone(),
-                    iv.clone(),
-                    encryption_mode.clone(),
-                )),
+                } => Some((cid.clone(), ipns_name.clone(), **read_key)),
                 _ => {
                     reply.error(libc::EISDIR);
                     return;
@@ -291,7 +291,7 @@ pub(crate) mod implementation {
             }
         };
 
-        let (cid, encrypted_file_key, iv, encryption_mode) = {
+        let (cid, ipns_name, read_key): (String, String, [u8; 32]) = {
             let mut info = file_info.unwrap();
             if info.0.is_empty() {
                 let is_unresolved = fs
@@ -300,10 +300,7 @@ pub(crate) mod implementation {
                     .map(|i| {
                         matches!(
                             &i.kind,
-                            InodeKind::File {
-                                file_meta_resolved: false,
-                                ..
-                            }
+                            InodeKind::File { cid, .. } if cid.is_empty()
                         )
                     })
                     .unwrap_or(false);
@@ -315,18 +312,12 @@ pub(crate) mod implementation {
                             if let Some(inode) = fs.inodes.get(ino) {
                                 if let InodeKind::File {
                                     cid,
-                                    encrypted_file_key,
-                                    iv,
-                                    encryption_mode,
+                                    ipns_name,
+                                    read_key,
                                     ..
                                 } = &inode.kind
                                 {
-                                    info = (
-                                        cid.clone(),
-                                        encrypted_file_key.clone(),
-                                        iv.clone(),
-                                        encryption_mode.clone(),
-                                    );
+                                    info = (cid.clone(), ipns_name.clone(), **read_key);
                                 }
                             }
                         }
@@ -387,13 +378,7 @@ pub(crate) mod implementation {
                 if let Some(cached) = fs.content_cache.get(&cid) {
                     Some(cached.to_vec())
                 } else {
-                    match fetch_and_decrypt_file_content(
-                        fs,
-                        &cid,
-                        &encrypted_file_key,
-                        &iv,
-                        &encryption_mode,
-                    ) {
+                    match fetch_and_decrypt_file_content(fs, &ipns_name, &read_key) {
                         Ok(content) => Some(content),
                         Err(e) => {
                             log::error!("Failed to fetch content for write-open: {}", e);
@@ -428,9 +413,8 @@ pub(crate) mod implementation {
                 spawn_content_prefetch_fuse(
                     fs,
                     cid.clone(),
-                    encrypted_file_key.clone(),
-                    iv.clone(),
-                    encryption_mode.clone(),
+                    ipns_name.clone(),
+                    read_key,
                     "Prefetch failed",
                 );
             }
@@ -487,21 +471,15 @@ pub(crate) mod implementation {
             }
         }
 
-        let (cid, encrypted_file_key_hex, iv_hex, encryption_mode) = {
+        let (cid, ipns_name, read_key): (String, String, [u8; 32]) = {
             match fs.inodes.get(ino) {
                 Some(inode) => match &inode.kind {
                     InodeKind::File {
                         cid,
-                        encrypted_file_key,
-                        iv,
-                        encryption_mode,
+                        ipns_name,
+                        read_key,
                         ..
-                    } => (
-                        cid.clone(),
-                        encrypted_file_key.clone(),
-                        iv.clone(),
-                        encryption_mode.clone(),
-                    ),
+                    } => (cid.clone(), ipns_name.clone(), **read_key),
                     _ => {
                         reply.error(libc::EISDIR);
                         return;
@@ -521,10 +499,7 @@ pub(crate) mod implementation {
                 .map(|i| {
                     matches!(
                         &i.kind,
-                        InodeKind::File {
-                            file_meta_resolved: false,
-                            ..
-                        }
+                        InodeKind::File { cid, .. } if cid.is_empty()
                     )
                 })
                 .unwrap_or(false);
@@ -536,19 +511,16 @@ pub(crate) mod implementation {
                     if let Some(inode) = fs.inodes.get(ino) {
                         if let InodeKind::File {
                             cid,
-                            encrypted_file_key,
-                            iv,
-                            encryption_mode,
-                            file_meta_resolved: true,
+                            ipns_name,
+                            read_key,
                             ..
                         } = &inode.kind
                         {
                             if !cid.is_empty() {
                                 // Re-extract file info for the normal read path
                                 let new_cid = cid.clone();
-                                let new_efk = encrypted_file_key.clone();
-                                let new_iv = iv.clone();
-                                let new_em = encryption_mode.clone();
+                                let new_ipns = ipns_name.clone();
+                                let new_read_key: [u8; 32] = **read_key;
                                 // Check cache first
                                 if let Some(cached) = fs.content_cache.get(&new_cid) {
                                     let start = offset as usize;
@@ -569,9 +541,8 @@ pub(crate) mod implementation {
                                     spawn_content_prefetch_fuse(
                                         fs,
                                         new_cid,
-                                        new_efk,
-                                        new_iv,
-                                        new_em,
+                                        new_ipns,
+                                        new_read_key,
                                         "Read prefetch (post-FP-resolve) failed",
                                     );
                                 }
@@ -645,9 +616,8 @@ pub(crate) mod implementation {
             spawn_content_prefetch_fuse(
                 fs,
                 cid.clone(),
-                encrypted_file_key_hex.clone(),
-                iv_hex.clone(),
-                encryption_mode.clone(),
+                ipns_name.clone(),
+                read_key,
                 "Read prefetch failed",
             );
         }
@@ -737,8 +707,7 @@ pub(crate) mod implementation {
                         // The ciphertext (up to the 2 GiB cap) is MOVED into the writer thread
                         // rather than cloned, then handed back through the channel so the later
                         // upload thread can reuse it without a second multi-GB allocation.
-                        let (tx, rx) =
-                            std::sync::mpsc::channel::<(Result<(), String>, Vec<u8>)>();
+                        let (tx, rx) = std::sync::mpsc::channel::<(Result<(), String>, Vec<u8>)>();
                         let put_journal = fs.journal.clone();
                         let put_entry = result.entry.clone();
                         let put_ciphertext = std::mem::take(&mut result.ciphertext);
@@ -756,9 +725,7 @@ pub(crate) mod implementation {
                                 result.ciphertext = ciphertext;
                                 Ok(result)
                             }
-                            Ok((Err(e), _)) => {
-                                Err(format!("journal sidecar write failed: {}", e))
-                            }
+                            Ok((Err(e), _)) => Err(format!("journal sidecar write failed: {}", e)),
                             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(format!(
                                 "journal sidecar write timed out after {}s",
                                 (crate::runtime::NETWORK_TIMEOUT * 18).as_secs()

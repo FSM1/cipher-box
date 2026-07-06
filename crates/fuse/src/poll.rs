@@ -30,10 +30,7 @@ pub(crate) const FILEPOINTER_POLL_TIMEOUT: std::time::Duration = std::time::Dura
 /// This is `pub(crate)` so the macOS read path in `read_ops.rs` can call it
 /// from a sibling module.
 #[cfg(feature = "fuse")]
-pub(crate) fn poll_filepointer_resolution(
-    fs: &mut crate::CipherBoxFS,
-    ino: u64,
-) -> PollResult {
+pub(crate) fn poll_filepointer_resolution(fs: &mut crate::CipherBoxFS, ino: u64) -> PollResult {
     use std::time::Duration;
     const FILEPOINTER_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -51,12 +48,8 @@ pub(crate) fn poll_filepointer_resolution(
         // Break early if async task completed with Failure (ino removed from set)
         if !fs.resolving_file_pointers.contains(&ino) {
             if let Some(inode) = fs.inodes.get(ino) {
-                if let crate::inode::InodeKind::File {
-                    file_meta_resolved: true,
-                    cid,
-                    ..
-                } = &inode.kind
-                {
+                // node/v3: "resolved" == content descriptors filled (non-empty CID).
+                if let crate::inode::InodeKind::File { cid, .. } = &inode.kind {
                     if !cid.is_empty() {
                         return PollResult::Resolved;
                     }
@@ -70,12 +63,7 @@ pub(crate) fn poll_filepointer_resolution(
         }
         // Still in-flight -- check if resolved yet
         if let Some(inode) = fs.inodes.get(ino) {
-            if let crate::inode::InodeKind::File {
-                cid,
-                file_meta_resolved: true,
-                ..
-            } = &inode.kind
-            {
+            if let crate::inode::InodeKind::File { cid, .. } = &inode.kind {
                 if !cid.is_empty() {
                     return PollResult::Resolved;
                 }

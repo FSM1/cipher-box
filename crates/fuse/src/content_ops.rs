@@ -30,6 +30,82 @@ fn zeroizing_32_from_slice(
     Ok(out)
 }
 
+/// Symmetrically unseal a file node's OWN read-body (node/v3, SC#1) and return
+/// its [`NodeContent`] descriptor. Never ECIES — the read-body is sealed under
+/// the file node's `read_key`. `read_key` is a caller-owned borrow (D-09).
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+pub fn unseal_file_content(
+    published: &cipherbox_core::node::PublishedNode,
+    read_key: &[u8; 32],
+) -> Result<cipherbox_core::node::NodeContent, String> {
+    use base64::Engine as _;
+    let read_sealed_bytes = base64::engine::general_purpose::STANDARD
+        .decode(&published.read_sealed)
+        .map_err(|e| format!("Invalid file node read_sealed base64: {}", e))?;
+    let body = cipherbox_core::node::seal::unseal_node(
+        &read_sealed_bytes,
+        read_key,
+        &published.id,
+        cipherbox_core::node::NodeKind::File,
+        published.generation,
+    )
+    .map_err(|e| format!("File node read-body unseal failed: {}", e))?;
+    let node = cipherbox_core::node::decode_node(&body)
+        .map_err(|e| format!("File node decode failed: {}", e))?;
+    match node {
+        cipherbox_core::node::Node::File { content, .. } => Ok(content),
+        _ => Err("Expected a file node, got folder/root".to_string()),
+    }
+}
+
+/// Gated single-node fetch (SC#6) + symmetric content download + decrypt.
+///
+/// node/v3: resolves the file node at `ipns_name` through the sanctioned
+/// [`cipherbox_sdk::fetch_node_gated`] wrapper (anti-rollback gate first), then
+/// unseals its read-body under `read_key` and downloads+decrypts the content.
+/// This is the owned-prefetch entrypoint used by the read/open/readdir paths —
+/// each takes an OWNED `high_water` clone into the spawned task. `read_key` is a
+/// caller-owned borrow (D-09).
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+pub async fn fetch_node_and_decrypt_content(
+    api: &cipherbox_api_client::ApiClient,
+    high_water: &cipherbox_sdk::RotationHighWater<cipherbox_sdk::JsonSidecarFloorStore>,
+    ipns_name: &str,
+    read_key: &[u8; 32],
+) -> Result<Vec<u8>, String> {
+    let fetcher = cipherbox_sdk::ApiNodeFetcher { api };
+    let published = cipherbox_sdk::fetch_node_gated(&fetcher, high_water, ipns_name)
+        .await
+        .map_err(|e| format!("fetch_node_gated failed for {}: {}", ipns_name, e))?;
+    fetch_and_decrypt_content_async(api, &published, read_key).await
+}
+
+/// Gated single-node fetch (SC#6) that recovers a file's content DESCRIPTORS
+/// (CID, IV hex, size, encryption mode) WITHOUT downloading the content.
+///
+/// Used by the FilePointer-resolution path: an unresolved File inode (empty CID)
+/// is resolved by fetching its own node and unsealing the read-body. Returns
+/// `(cid, iv_hex, size, encryption_mode)`.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+pub async fn resolve_file_descriptors(
+    api: &cipherbox_api_client::ApiClient,
+    high_water: &cipherbox_sdk::RotationHighWater<cipherbox_sdk::JsonSidecarFloorStore>,
+    ipns_name: &str,
+    read_key: &[u8; 32],
+) -> Result<(String, String, u64, String), String> {
+    let fetcher = cipherbox_sdk::ApiNodeFetcher { api };
+    let published = cipherbox_sdk::fetch_node_gated(&fetcher, high_water, ipns_name)
+        .await
+        .map_err(|e| format!("fetch_node_gated failed for {}: {}", ipns_name, e))?;
+    let content = unseal_file_content(&published, read_key)?;
+    Ok((
+        content.cid,
+        content.file_iv,
+        content.size,
+        content.encryption_mode,
+    ))
+}
+
 /// Async version of content download + decrypt for background prefetch tasks.
 ///
 /// node/v3 (69-09 Slice 2): the file content-key is recovered by SYMMETRIC
@@ -59,27 +135,9 @@ pub async fn fetch_and_decrypt_content_async(
     published: &cipherbox_core::node::PublishedNode,
     read_key: &[u8; 32],
 ) -> Result<Vec<u8>, String> {
-    use base64::Engine as _;
-
     // Recover the file node's content descriptor by SYMMETRIC unseal of its own
     // read-body (node/v3, SC#1) — never ECIES.
-    let read_sealed_bytes = base64::engine::general_purpose::STANDARD
-        .decode(&published.read_sealed)
-        .map_err(|e| format!("Invalid file node read_sealed base64: {}", e))?;
-    let body = cipherbox_core::node::seal::unseal_node(
-        &read_sealed_bytes,
-        read_key,
-        &published.id,
-        cipherbox_core::node::NodeKind::File,
-        published.generation,
-    )
-    .map_err(|e| format!("File node read-body unseal failed: {}", e))?;
-    let node = cipherbox_core::node::decode_node(&body)
-        .map_err(|e| format!("File node decode failed: {}", e))?;
-    let content = match node {
-        cipherbox_core::node::Node::File { content, .. } => content,
-        _ => return Err("Expected a file node, got folder/root".to_string()),
-    };
+    let content = unseal_file_content(published, read_key)?;
 
     let encrypted_bytes = cipherbox_api_client::ipfs::fetch_content(api, &content.cid)
         .await
