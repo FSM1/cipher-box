@@ -5,15 +5,15 @@ milestone_name: Metadata and Sharing Refactor
 current_phase: 68.2
 current_phase_name: sdk-owned-read-chain-and-resolved-folder-listings
 status: executing
-stopped_at: Phase 68.2 context gathered
-last_updated: "2026-07-06T00:14:02.487Z"
+stopped_at: Completed 68.2-02-PLAN.md
+last_updated: "2026-07-06T00:52:11.055Z"
 last_activity: 2026-07-05
 last_activity_desc: Phase 68.2 execution started
 progress:
   total_phases: 11
   completed_phases: 9
   total_plans: 110
-  completed_plans: 99
+  completed_plans: 100
   percent: 82
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 ## Current Position
 
 Phase: 68.2 (sdk-owned-read-chain-and-resolved-folder-listings) — EXECUTING
-Plan: 2 of 12
+Plan: 3 of 12
 Status: Ready to execute
 Last activity: 2026-07-05 — Phase 68.2 execution started
 
@@ -235,6 +235,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 68.1 P18 | 12min | 2 tasks | 4 files |
 | Phase 68.1 P19 | 11min | 2 tasks | 7 files |
 | Phase 68.2 P01 | 25min | 2 tasks | 2 files |
+| Phase 68.2 P02 | 25min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -483,6 +484,8 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: [Phase 68.1-19]: UpdateGrantDto write-toggle uses explicit clearWriteDescriptor boolean (not empty-string sentinel) as the downgrade clear-signal; mutually exclusive with writeDescriptorRef (BadRequestException if both supplied); omitting both leaves writeDescriptorRef untouched for existing read-only-rotation callers (owner-reconcile)
 - [Phase ?]: 68.2-01: read-path gate mirrors write-path gate but sources generation from childRef.generation (parent SealedChildRef mirror) for children, and in-memory folderTree nodeGeneration for root (no parent mirror exists)
 - [Phase ?]: 68.2-01: getWriteBodyParams intentionally left ungated per D-05 -- this plan is read-path only
+- [Phase ?]: [Phase 68.2-02]: gatedResolveChild is a NEW standalone per-child listing gate distinct from dfsFindFolder's tree-descent gate; resolveChildren catches ALL per-child resolve/unseal failures (widened from absent-record-only) since the already-loaded target folder remains gated via Plan 01, so an unresolvable sibling is simply omitted, not rendered stale/tampered
+- [Phase ?]: [Phase 68.2-02]: listingCache is keyed by plain ipnsName (not namespaced per owned/shared path) and invalidated by sequenceNumber; updateSharedFile explicitly invalidates the cache entry on file-only republish since that doesn't bump the parent's own sequence
 
 ## Operator Next Steps
 
@@ -490,8 +493,8 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-06T00:13:11.397Z
-**Stopped at:** Phase 68.2 context gathered
+**Last session:** 2026-07-06T00:52:11.046Z
+**Stopped at:** Completed 68.2-02-PLAN.md
 **Resume file:** 
 None
 
