@@ -1,0 +1,76 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "60948f3771cf",
+  "session_id": "3c26c487-a8f4-41db-a791-84e9394aaedb",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-06T00:42:05.086842Z",
+  "branch": "feat/fuse-and-winfsp-rust-integration-and-grant-root-awareness",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/STATE.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "27c33eb9699d",
+  "checkpoint_transcript_start": 187,
+  "transcript_lines_at_start": 187,
+  "token_usage": {
+    "input_tokens": 26,
+    "cache_creation_tokens": 1337,
+    "cache_read_tokens": 154678,
+    "output_tokens": 758,
+    "api_call_count": 1
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-discuss-phase-2026-07-06T00:17:33.895778Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-discuss-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "27c33eb9699d",
+      "timestamp": "2026-07-06T00:17:33.895778Z",
+      "native": {
+        "command": "/gsd-discuss-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-discuss-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "summary": {
+    "intent": "Land a documentation commit capturing phase context (69) via the gsd helper tooling, then update STATE.md to reflect the session.",
+    "outcome": "The commit landed successfully (57edc0877 docs(69): capture phase context) and STATE.md was updated and committed, despite the gsd helper reporting a false 'commit_failed' status.",
+    "learnings": {
+      "repo": [],
+      "code": [],
+      "workflow": [
+        "When the gsd helper reports commit_failed, verify against `git log` and `git status` before retrying — the tree may already be clean and the commit already landed, making a retry redundant or duplicative."
+      ]
+    },
+    "friction": [
+      "gsd helper reported a false-negative 'commit_failed' status even though the commit actually succeeded."
+    ],
+    "open_items": []
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-06T00:41:54.413756Z",
+    "agent_lines": 5,
+    "agent_removed": 5,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 5,
+    "total_lines_changed": 10,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
