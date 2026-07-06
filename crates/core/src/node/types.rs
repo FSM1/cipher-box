@@ -11,6 +11,7 @@
 //!
 //! Design references: `docs/METADATA_SCHEMAS.md` §3-8, NODE-01..NODE-04.
 
+use cipherbox_crypto::CryptoError;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -26,6 +27,10 @@ pub enum NodeError {
     DeserializationFailed(String),
     #[error("Invalid node format: {0}")]
     InvalidFormat(String),
+    /// AAD-bound seal/unseal failure (69-04): AEAD auth-tag mismatch,
+    /// malformed node_id, or any other `cipherbox_crypto` failure.
+    #[error("Node seal/unseal failed: {0}")]
+    SealFailed(#[from] CryptoError),
 }
 
 /// Discriminator for the three node kinds (mirrors TS `NodeKind`).
