@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "ca680dd34e0e",
+  "strategy": "manual-commit",
+  "branch": "chore/web-e2e-parallel-workers",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "tests/web-e2e/playwright.config.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ca/680dd34e0e/0/metadata.json",
+      "transcript": "/ca/680dd34e0e/0/full.jsonl",
+      "content_hash": "/ca/680dd34e0e/0/content_hash.txt",
+      "prompt": "/ca/680dd34e0e/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 12868,
+    "cache_creation_tokens": 90249,
+    "cache_read_tokens": 1778096,
+    "output_tokens": 17638,
+    "api_call_count": 26
+  }
+}

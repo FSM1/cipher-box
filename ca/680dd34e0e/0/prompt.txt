@@ -1,0 +1,9 @@
+the web e2e test after merging phase 68.2 was cancelled, potentially timed out: https://github.com/FSM1/cipher-box/actions/runs/28811365951/job/85439945331
+
+---
+
+a lot of the suites can be run in parallel if different user accounts (wallet private keys) are utilized in the individual test runs.
+
+---
+
+Yeah, I think that your approach makes a lot of sense, push the changes up to a chore branch and then execute the web-e2e against this branch on CI.
