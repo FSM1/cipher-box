@@ -5,15 +5,15 @@ milestone_name: Metadata and Sharing Refactor
 current_phase: 68.2
 current_phase_name: sdk-owned-read-chain-and-resolved-folder-listings
 status: executing
-stopped_at: Completed 68.2-10-PLAN.md
-last_updated: "2026-07-06T05:08:27.150Z"
+stopped_at: Completed 68.2-11-PLAN.md
+last_updated: "2026-07-06T05:35:29.386Z"
 last_activity: 2026-07-05
 last_activity_desc: Phase 68.2 execution started
 progress:
   total_phases: 11
   completed_phases: 9
   total_plans: 110
-  completed_plans: 108
+  completed_plans: 109
   percent: 82
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 ## Current Position
 
 Phase: 68.2 (sdk-owned-read-chain-and-resolved-folder-listings) — EXECUTING
-Plan: 11 of 12
+Plan: 12 of 12
 Status: Ready to execute
 Last activity: 2026-07-05 — Phase 68.2 execution started
 
@@ -244,6 +244,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 68.2 P08 | 90min | 2 tasks | 10 files |
 | Phase 68.2 P09 | 40min | 2 tasks | 13 files |
 | Phase 68.2 P10 | 45min | 2 tasks | 12 files |
+| Phase 68.2 P11 | 45min | 3 tasks | 16 files |
 
 ## Accumulated Context
 
@@ -514,6 +515,9 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: [Phase 68.2-10]: DEFAULT_VAULT_SETTINGS/validateVaultSettings/VaultSettings re-exported from @cipherbox/sdk (deviation) -- closes the literal-wording D-07 gap PATTERNS.md flagged for vault-settings
 - [Phase ?]: [Phase 68.2-10]: vault-settings.service.ts loadVaultSettings/saveVaultSettings take an injected CipherBoxClient param (bootstrap pre-login, real client post-login) instead of reaching for a module-level client
 - [Phase ?]: [Phase 68.2-10]: device-registry.service.ts uses getSdkClient() unconditionally (no bootstrap client) since both exported functions only ever run post-login
+- [Phase ?]: [Phase 68.2-11]: client.resolveFileMetadata added as new SDK facade method (Rule 2) mirroring downloadFromIpns's resolve+unseal steps -- read-only counterpart replacing the deleted web-native file-metadata.service.ts
+- [Phase ?]: [Phase 68.2-11]: FileList.tsx repointed from dead kind-cache adapter to folder store's real children: ResolvedChild[] via resolvedByIpnsName lookup (mirrors 68.2-08 SharedFileBrowser pattern) -- closes STATE.md-flagged FileList/FileBrowser ownership gap
+- [Phase ?]: [Phase 68.2-11]: download.service.ts was a 9th residual file-metadata.service.ts importer not in the orchestrator's 8-file audit -- discovered via grep sweep, migrated alongside the listed 8
 
 ## Operator Next Steps
 
@@ -521,8 +525,8 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-06T05:08:09.401Z
-**Stopped at:** Completed 68.2-10-PLAN.md
+**Last session:** 2026-07-06T05:35:29.379Z
+**Stopped at:** Completed 68.2-11-PLAN.md
 **Resume file:** 
 None
 
