@@ -69,6 +69,48 @@ pub fn deserialize_vault_blob_v2(blob: &[u8]) -> Result<&[u8], String> {
     Ok(&blob[3..3 + key_len])
 }
 
+// ---------------------------------------------------------------------------
+// Vault key blob v3 format (ADDITIVE — v2 above is untouched).
+//
+// Format: 0x03 | u16_BE(readLen) | ECIES(rootReadKey) | u16_BE(writeLen) | ECIES(rootWriteKey)
+//
+// Carries BOTH ECIES-wrapped root keys (rootReadKey + rootWriteKey) in one
+// blob (NODE-06, D-05). This codec is pure envelope byte-manipulation — it
+// performs NO crypto; the caller (69-23) supplies the already-ECIES-wrapped
+// key bytes. Mirrors packages/core/src/vault/blob.ts field-for-field so a
+// v3 vault minted on either client opens on the other (D-04).
+// ---------------------------------------------------------------------------
+
+/// Version byte for v3 format.
+pub const BLOB_V3_VERSION: u8 = 0x03;
+
+/// Serialize a vault key blob v3.
+///
+/// Produces: `0x03 | u16_BE(read_len) | enc_read | u16_BE(write_len) | enc_write`
+///
+/// Both segments must be non-empty and <= u16::MAX bytes. Envelope-only: the
+/// caller supplies the already-ECIES-wrapped key bytes.
+pub fn serialize_vault_blob_v3(
+    encrypted_root_read_key: &[u8],
+    encrypted_root_write_key: &[u8],
+) -> Result<Vec<u8>, String> {
+    // STUB (RED): real implementation lands in the GREEN commit.
+    let _ = (encrypted_root_read_key, encrypted_root_write_key);
+    Err("serialize_vault_blob_v3 not implemented".into())
+}
+
+/// Deserialize a vault key blob v3 into OWNED (read_key, write_key) copies.
+///
+/// Returns owned `Vec<u8>` copies (not borrowed views) so a later zeroization
+/// of the source blob cannot corrupt the recovered keys (D-09, mirrors
+/// blob.ts `.slice()`). Fail-closed: wrong version / truncated / zero-length
+/// segments return `Err` (never panics).
+pub fn deserialize_vault_blob_v3(blob: &[u8]) -> Result<(Vec<u8>, Vec<u8>), String> {
+    // STUB (RED): real implementation lands in the GREEN commit.
+    let _ = blob;
+    Err("deserialize_vault_blob_v3 not implemented".into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,9 +186,9 @@ mod tests {
 
         let blob_hex = hex::encode(&blob);
         let expected_hex = concat!(
-            "02",   // version byte
-            "0081", // key_len = 129
-            "aa",   // key[0]
+            "02",                               // version byte
+            "0081",                             // key_len = 129
+            "aa",                               // key[0]
             "000102030405060708090a0b0c0d0e0f", // key[1..16]
             "101112131415161718191a1b1c1d1e1f", // key[17..32]
             "202122232425262728292a2b2c2d2e2f", // key[33..48]
@@ -204,5 +246,44 @@ mod tests {
         let decoded = deserialize_vault_blob_v2(&blob).unwrap();
         assert_eq!(decoded.len(), 65535);
         assert_eq!(decoded, key.as_slice());
+    }
+
+    // -- v3 codec tests ----------------------------------------------------
+
+    /// Cross-language KAT: loads the FROZEN vector tests/vectors/vault-v3-blob.json
+    /// at runtime (mirroring crates/core/tests/node_codec_vectors.rs) and asserts
+    /// serialize output is byte-identical to expected_blob_hex + a full round-trip.
+    /// The vector — not a hardcoded copy — drives the gate, so a future layout
+    /// drift on either the Rust or TS side fails here (T-69-21-01, D-04).
+    #[test]
+    fn test_cross_platform_v3_vector() {
+        use std::path::PathBuf;
+
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/vectors/vault-v3-blob.json");
+        let data = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("Failed to load {}: {}", path.display(), e));
+        let vector: serde_json::Value = serde_json::from_str(&data)
+            .unwrap_or_else(|e| panic!("Failed to parse {}: {}", path.display(), e));
+
+        let read_key_hex = vector["read_key_hex"].as_str().expect("read_key_hex");
+        let write_key_hex = vector["write_key_hex"].as_str().expect("write_key_hex");
+        let expected_blob_hex = vector["expected_blob_hex"]
+            .as_str()
+            .expect("expected_blob_hex");
+
+        let read_key = hex::decode(read_key_hex).expect("decode read_key_hex");
+        let write_key = hex::decode(write_key_hex).expect("decode write_key_hex");
+        assert_eq!(read_key.len(), 129);
+        assert_eq!(write_key.len(), 129);
+
+        // serialize == expected_blob_hex, byte-for-byte
+        let blob = serialize_vault_blob_v3(&read_key, &write_key).unwrap();
+        assert_eq!(hex::encode(&blob), expected_blob_hex);
+
+        // round-trip: deserialize back to the two input keys (OWNED copies)
+        let (r, w) = deserialize_vault_blob_v3(&blob).unwrap();
+        assert_eq!(r, read_key);
+        assert_eq!(w, write_key);
     }
 }
