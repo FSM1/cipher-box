@@ -7,11 +7,8 @@ import { useQuotaStore } from '../stores/quota.store';
 import { useVaultSettingsStore } from '../stores/vault-settings.store';
 import { getSdkClient } from '../lib/sdk-provider';
 import { unpinFromIpfs } from '../lib/api/ipfs';
-import {
-  resolveFileMetadata,
-  computeRestoreVersionUpdate,
-  computeDeleteVersionUpdate,
-} from '../services/file-metadata.service';
+import { resolveFileMetadata } from '../services/file-metadata.service';
+import { computeRestoreVersionUpdate, computeDeleteVersionUpdate } from '../lib/version-transforms';
 import { logger } from '../lib/logger';
 
 /** Decodes a base64 string to a Uint8Array (NodeContent.fileIv is base64, v3 contract). */

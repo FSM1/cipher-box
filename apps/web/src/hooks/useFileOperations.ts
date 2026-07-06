@@ -7,7 +7,8 @@ import { useFolderStore } from '../stores/folder.store';
 import { useVaultStore } from '../stores/vault.store';
 import { getSdkClient } from '../lib/sdk-provider';
 import { unpinFromIpfs } from '../lib/api/ipfs';
-import { resolveFileMetadata, shouldCreateVersion } from '../services/file-metadata.service';
+import { resolveFileMetadata } from '../services/file-metadata.service';
+import { shouldCreateVersion } from '../lib/version-transforms';
 import { runWithFailureUx } from './useMutationFailureUx';
 import { logger } from '../lib/logger';
 
