@@ -43,6 +43,7 @@ import type {
   PublishedNode,
   Node as CoreNode,
   NodeContent,
+  NodeKind,
 } from '@cipherbox/core';
 import {
   sealChildReadKey,
@@ -734,6 +735,61 @@ export class CipherBoxClient {
     }
 
     return { published: resolved.published, sequenceNumber: resolved.sequenceNumber };
+  }
+
+  /**
+   * Resolve a single child's OWN readKey + plaintext node identity by
+   * walking one hop of the read-chain (D-07 full-boundary facade, 68.2-07
+   * Rule-2 addition).
+   *
+   * Mirrors `resolveChildren`'s (folder-listing.ts) per-child resolve+unseal
+   * step, but returns the raw derived `readKey` + full node identity instead
+   * of the display-only `ResolvedChild` projection. This is the facade
+   * replacement for `apps/web/src/lib/crypto/key-wrapping.ts`'s
+   * `resolveChildNodeIdentity` (used by ShareDialog / invite.service to
+   * derive a shared item's OWN readKey + nodeId/generation before issuing a
+   * grant -- the grant root IS the shared item, not its parent).
+   *
+   * Routes through the same gated resolve (`gatedResolveChild`, ROT-07) as
+   * every other per-child listing hop (D-05 single gated read entrypoint).
+   *
+   * @param childRef - The child's SealedChildRef as it lives in the parent's children array
+   * @param parentReadKey - The parent node's decrypted readKey (unwrapping key)
+   * @security Does NOT zero `parentReadKey` -- caller is the terminal owner (D-09).
+   *   The returned `readKey` is minted by this call; the caller becomes its
+   *   terminal owner and must zero it on its own lifecycle boundary.
+   */
+  async resolveChildIdentity(
+    childRef: SealedChildRef,
+    parentReadKey: Uint8Array
+  ): Promise<{
+    readKey: Uint8Array;
+    nodeId: string;
+    kind: NodeKind;
+    generation: number;
+    published: PublishedNode;
+  }> {
+    return this.withOperation('resolveChildIdentity', async () => {
+      const resolved = await this.gatedResolveChild(childRef);
+      if (!resolved) {
+        throw new Error(`resolveChildIdentity: IPNS record not found for ${childRef.ipnsName}`);
+      }
+      const { published } = resolved;
+      const readKey = await unsealChildReadKey(
+        childRef.readKeySealed,
+        parentReadKey,
+        published.id,
+        published.kind,
+        childRef.generation // parent-mirror generation-source rule -- never published.generation
+      );
+      return {
+        readKey,
+        nodeId: published.id,
+        kind: published.kind,
+        generation: published.generation,
+        published,
+      };
+    });
   }
 
   /**

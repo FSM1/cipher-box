@@ -3,9 +3,8 @@ import type { SealedChildRef, NodeContent } from '@cipherbox/core';
 import type { ResolvedChild } from '@cipherbox/sdk';
 import { Modal } from '../ui/Modal';
 import { useFolderStore } from '../../stores/folder.store';
-import { resolveIpnsRecord } from '../../services/ipns.service';
+import { getSdkClient } from '../../lib/sdk-provider';
 import { resolveFileMetadata } from '../../services/file-metadata.service';
-import { getKind } from '../../lib/kind-cache';
 import '../../styles/details-dialog.css';
 import { FileDetails } from './details/FileDetails';
 import { FolderDetails } from './details/FolderDetails';
@@ -23,9 +22,9 @@ type DetailsDialogProps = {
  *
  * Shows technical information about the selected item. File metadata (size/mime/
  * versions) is resolved via `resolveFileMetadata` (68.1-04/68.1-06); file-vs-folder
- * discrimination reads the kind cache (kind-cache.ts, D-02, populated by the
- * folder-load render paths since 68.1-14), falling back to folderStore membership
- * on a cache miss.
+ * discrimination reads folderStore membership (the prior per-ipnsName kind
+ * lookup cache is a 68.2 deletion target -- Plan 07 drops this dialog's
+ * dependency on it).
  */
 export function DetailsDialog({
   open,
@@ -40,23 +39,21 @@ export function DetailsDialog({
   const [fileMetaLoading, setFileMetaLoading] = useState(false);
   const [metadataRefresh, setMetadataRefresh] = useState(0);
 
-  // Definitive kind from the kind cache (D-02); fall back to folderStore
-  // membership on a cache miss (a folder the user has navigated into is in
-  // the store even if its kind was never cached).
+  // Kind heuristic sourced from folderStore membership only (the prior
+  // per-ipnsName kind lookup cache is dropped, D-07/68.2-07): a folder the
+  // user has navigated into is present in the web's folder store; anything
+  // else is treated as a file.
   const folderStoreEntry = useFolderStore((state) => {
     if (!item) return undefined;
     return Object.values(state.folders).find((f) => f.ipnsName === item.ipnsName);
   });
-  const cachedKind = item ? getKind(item.ipnsName) : undefined;
-  const isFolderHeuristic = cachedKind !== undefined ? cachedKind === 'folder' : !!folderStoreEntry;
+  const isFolderHeuristic = !!folderStoreEntry;
 
-  // 68.2-06 companion patch: FileDetails/FolderDetails now render from
+  // 68.2-06 companion patch: FileDetails/FolderDetails render from
   // ResolvedChild (SDK-READ-02) rather than SealedChildRef (D-08 no-regression
-  // render repoint). This file's own resolveFileMetadata/resolveIpnsRecord
-  // read path is Plan 07's scope to rewire onto the SDK facade -- this patch
-  // ONLY adapts the render-prop boundary using data already computed above
-  // (cachedKind/isFolderHeuristic), so FileDetails/FolderDetails don't render
-  // with a compile error ahead of that rewire.
+  // render repoint) -- built from isFolderHeuristic above, since this dialog
+  // only has a SealedChildRef, not a listFolder-resolved entry, for the
+  // selected item.
   const resolvedItem: ResolvedChild | null = item
     ? {
         ipnsName: item.ipnsName,
@@ -87,10 +84,17 @@ export function DetailsDialog({
     let cancelled = false;
     setMetadataLoading(true);
 
-    resolveIpnsRecord(item.ipnsName)
-      .then((result) => {
+    // Confirms the folder resolves via the SDK's gated facade (D-07;
+    // client.getFolderMetadata delegates to the Plan-01 gated ensureFolderLoaded
+    // path). The facade returns the folder's decoded Node, not the raw IPNS
+    // resolve's CID -- that value isn't exposed at this layer, so this dialog's
+    // "Metadata CID" technical-info row shows "unavailable" (FolderDetails'
+    // existing null fallback) rather than depending on a raw IPNS resolve.
+    getSdkClient()
+      .getFolderMetadata(item.ipnsName)
+      .then(() => {
         if (!cancelled) {
-          setMetadataCid(result?.cid ?? null);
+          setMetadataCid(null);
         }
       })
       .catch(() => {

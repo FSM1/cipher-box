@@ -3,7 +3,7 @@ import { Modal } from '../ui/Modal';
 import { useUploadStore } from '../../stores/upload.store';
 import type { PendingReplacement } from '../../stores/upload.store';
 import { useFileOperations } from '../../hooks/useFileOperations';
-import { unpinFromIpfs } from '../../lib/api/ipfs';
+import { getSdkClient } from '../../lib/sdk-provider';
 import { useQuotaStore } from '../../stores/quota.store';
 import '../../styles/dialogs.css';
 import { logger } from '../../lib/logger';
@@ -51,9 +51,9 @@ export function ReplaceFileDialog({ replacements, onComplete }: ReplaceFileDialo
     } catch (err) {
       logger.error('[replace] Failed to replace file:', err);
       // Clean up orphaned pin + quota on failure
-      void unpinFromIpfs(current.encryptedData.cid).catch((err) =>
-        logger.warn('[replace] Unpin failed:', err)
-      );
+      void getSdkClient()
+        .unpin(current.encryptedData.cid)
+        .catch((err) => logger.warn('[replace] Unpin failed:', err));
       useQuotaStore.getState().removeUsage(current.encryptedData.size);
       advance();
     } finally {
@@ -64,9 +64,9 @@ export function ReplaceFileDialog({ replacements, onComplete }: ReplaceFileDialo
   const handleSkip = useCallback(() => {
     if (!current || isLoading) return;
     // Unpin the orphaned upload since user chose to skip
-    void unpinFromIpfs(current.encryptedData.cid).catch((err) =>
-      logger.warn('[replace] Unpin failed:', err)
-    );
+    void getSdkClient()
+      .unpin(current.encryptedData.cid)
+      .catch((err) => logger.warn('[replace] Unpin failed:', err));
     useQuotaStore.getState().removeUsage(current.encryptedData.size);
     advance();
   }, [current, isLoading, advance]);
@@ -75,9 +75,9 @@ export function ReplaceFileDialog({ replacements, onComplete }: ReplaceFileDialo
     if (isLoading) return;
     // Skip all remaining replacements and clean up orphaned pins + quota
     for (let i = currentIndex; i < replacements.length; i++) {
-      void unpinFromIpfs(replacements[i].encryptedData.cid).catch((err) =>
-        logger.warn('[replace] Unpin failed:', err)
-      );
+      void getSdkClient()
+        .unpin(replacements[i].encryptedData.cid)
+        .catch((err) => logger.warn('[replace] Unpin failed:', err));
       useQuotaStore.getState().removeUsage(replacements[i].encryptedData.size);
     }
     useUploadStore.getState().clearPendingReplacements();
