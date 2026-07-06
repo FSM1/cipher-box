@@ -23,7 +23,10 @@ pub use error::CoreError;
 pub use folder::VersionEntry;
 pub use ipns::{create_ipns_record, marshal_ipns_record, IpnsRecord};
 pub use registry::{DeviceAuthStatus, DeviceEntry, DevicePlatform, DeviceRegistry};
-pub use vault_blob::{deserialize_vault_blob_v2, detect_blob_version, serialize_vault_blob_v2};
+pub use vault_blob::{
+    deserialize_vault_blob_v2, deserialize_vault_blob_v3, detect_blob_version,
+    serialize_vault_blob_v2, serialize_vault_blob_v3, BLOB_V3_VERSION,
+};
 pub use vault_settings::{
     default_vault_settings, validate_vault_settings, DeleteBehavior, VaultSettings,
 };
