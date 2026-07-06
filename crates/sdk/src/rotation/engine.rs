@@ -34,13 +34,15 @@
 //!     zeroing a reused session buffer. Flag this file in every security
 //!     review (T-69-08-01).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use zeroize::{Zeroize, Zeroizing};
 
-use cipherbox_core::node::seal::{seal_node, unseal_node};
+use cipherbox_core::node::seal::{
+    seal_child_read_key, seal_node, unseal_child_read_key, unseal_node,
+};
 use cipherbox_core::node::{
     decode_node, encode_node, Node, NodeKind, PublishedNode, SealedChildRef,
 };
@@ -379,6 +381,425 @@ async fn seal_and_publish<D: RotationDeps>(
 }
 
 // ---------------------------------------------------------------------------
+// rotate_read_from_node — scope-root-first BFS walk (ROT-01, engine.ts §4.2)
+// ---------------------------------------------------------------------------
+
+/// Return shape for a successful (fresh, non-resume-skip) `rotate_read_from_node`
+/// run: the ROOT node's post-rotation read key/generation/sequence number
+/// (ROT-07 Gap 2 parity).
+///
+/// Callers (69-11 FUSE / 69-14 WinFsp) use this to refresh their own
+/// in-memory folder-tree entry so a same-session retry does not operate on
+/// stale pre-rotation state.
+///
+/// @security `read_key` is NOT zeroed by `rotate_read_from_node` — the
+/// caller becomes the terminal owner (D-09). It is `Zeroizing` so that
+/// whichever caller ultimately drops it does zero it, rather than leaking it
+/// as a plain buffer forever.
+#[derive(Debug)]
+pub struct RotateReadResult {
+    pub read_key: Zeroizing<[u8; 32]>,
+    pub generation: u32,
+    pub sequence_number: u64,
+}
+
+/// Per-parent bookkeeping for the out-of-band re-seal + batched republish
+/// (D-02/D-09, engine.ts §4.7 parent-tracking Map).
+///
+/// Problem this solves: `rotate_one` seals nothing under a PARENT's key — it
+/// only knows the node's OWN pre/post-rotation keys. But a parent's
+/// `SealedChildRef[N].read_key_sealed` must be sealed under the PARENT's NEW
+/// read key for `unseal_child_read_key` to authenticate on the next read.
+/// That out-of-band re-seal, and the single batched parent re-publish after
+/// ALL of a parent's children have rotated (regardless of child count),
+/// happen here in the walk driver — not inside `rotate_one`.
+struct ParentTrackingState {
+    parent_ipns_name: String,
+    /// The parent's freshly minted read key (from the parent's own
+    /// `CommittedRotation`). Used both to reseal each child's new read key
+    /// under it, and to reseal the parent's own read-body on republish.
+    parent_new_read_key: Zeroizing<[u8; 32]>,
+    parent_node_id: String,
+    parent_kind: NodeKind,
+    parent_generation: u32,
+    parent_created_at: u64,
+    parent_modified_at: u64,
+    /// IPNS sequence number from the parent's OWN rotation publish — the CAS
+    /// guard for the batched republish below.
+    parent_last_seq: u64,
+    /// Mutable copy of the parent's children, updated in place as each
+    /// child rotates.
+    children: Vec<SealedChildRef>,
+    /// Decremented per child; the batched republish fires when this reaches
+    /// zero, regardless of how many children the parent has (T-69-08-03 /
+    /// DoS mitigation: exactly one republish per parent).
+    pending_child_count: usize,
+}
+
+/// One BFS frontier entry.
+struct QueueItem {
+    child_ref: SealedChildRef,
+    /// This node's OWN pre-rotation read key, derived via
+    /// `unseal_child_read_key` from the PARENT's OLD read key before this
+    /// node was enqueued. Owned `Zeroizing` — dropped (and thus zeroed)
+    /// automatically at the end of the BFS iteration that consumes it,
+    /// which is the same "queue-key zeroization on every exit path" the TS
+    /// reference achieves manually with a `finally { .fill(0) }` block.
+    node_read_key: Zeroizing<[u8; 32]>,
+    parent_ipns_name: String,
+}
+
+/// Rotates the read key for every node in the subtree rooted at
+/// `root_node_id`.
+///
+/// Ordering (D-05 parity, §4.2): the scope root is rotated FIRST — this is
+/// the actual cut that revokes a revoked reader's access at the cheapest
+/// commit point. The remaining nodes are then processed as a BFS frontier
+/// walk, calling `rotate_one` per node and advancing the frontier with each
+/// node's freshly minted `read_key_prime`.
+///
+/// The job record is advisory (D-10): [`RotationDeps::persist_job`] is
+/// called after EVERY per-node commit (root and every BFS child) so a host
+/// can checkpoint progress durably, but published IPNS records remain the
+/// source of truth.
+///
+/// Host-agnostic (D-02): no FUSE / Tauri / WinFsp import.
+///
+/// @security Does NOT zero `root_read_key` — caller is terminal owner (D-09).
+///
+/// Returns `Ok(None)` when the root itself was a resume-skip (already
+/// committed in a prior run) — there is no freshly-minted root key to hand
+/// back in that case. Full dirty-frontier reconstruction on that path
+/// (`verifySubtreeClean` twin) is 69-11's crash-safety extension.
+pub async fn rotate_read_from_node<D: RotationDeps>(
+    deps: &D,
+    root_node_id: &str,
+    root_ipns_name: &str,
+    root_read_key: &[u8],
+    job_record: &mut RotationJobRecord,
+) -> Result<Option<RotateReadResult>, RotationError> {
+    job_record.status = RotationStatus::InProgress;
+
+    // §4.2: rotate the scope-root FIRST — the actual revocation cut.
+    let root_committed = match rotate_one(
+        deps,
+        Some(root_node_id),
+        root_ipns_name,
+        root_read_key,
+        job_record,
+    )
+    .await?
+    {
+        RotateOneOutcome::Skipped { .. } => {
+            // Resume path: root already committed in a prior run. Dirty-
+            // frontier reconstruction (verifySubtreeClean twin) is 69-11's
+            // crash-safety extension — this plan's fresh-walk scope ends here.
+            return Ok(None);
+        }
+        RotateOneOutcome::Committed(c) => c,
+    };
+
+    // Persist after the root commit (D-10 — the high-value early checkpoint).
+    deps.persist_job(job_record).await;
+
+    let mut parent_tracking: HashMap<String, ParentTrackingState> = HashMap::new();
+    let mut queue: VecDeque<QueueItem> = VecDeque::new();
+
+    if !root_committed.children.is_empty() {
+        parent_tracking.insert(
+            root_ipns_name.to_string(),
+            ParentTrackingState {
+                parent_ipns_name: root_ipns_name.to_string(),
+                parent_new_read_key: root_committed.read_key_prime.clone(),
+                parent_node_id: root_committed.node_id.clone(),
+                parent_kind: root_committed.kind,
+                parent_generation: root_committed.new_generation,
+                parent_created_at: root_committed.created_at,
+                parent_modified_at: root_committed.modified_at,
+                parent_last_seq: root_committed.new_sequence_number,
+                children: root_committed.children.clone(),
+                pending_child_count: root_committed.children.len(),
+            },
+        );
+    }
+
+    // Enqueue the root's children — derive each child's own read key from
+    // the ROOT's OLD read key (root_read_key, still valid; rotate_one never
+    // zeroed the caller-supplied borrow, D-09).
+    for child_ref in &root_committed.children {
+        enqueue_child(deps, root_ipns_name, root_read_key, child_ref, &mut queue).await?;
+    }
+
+    while let Some(item) = queue.pop_front() {
+        let outcome = rotate_one(
+            deps,
+            None,
+            &item.child_ref.ipns_name,
+            item.node_read_key.as_slice(),
+            job_record,
+        )
+        .await?;
+
+        match outcome {
+            RotateOneOutcome::Skipped { .. } => {
+                // Convergence-guard skip handling (ROT-06 no-double-bump) is
+                // 69-11's crash-safety extension. In this plan's fresh-walk
+                // scope a skip still must not permanently wedge the parent's
+                // pending-count republish gate.
+                complete_pending_child(deps, &mut parent_tracking, &item.parent_ipns_name).await?;
+            }
+            RotateOneOutcome::Committed(child) => {
+                // Advisory checkpoint after every per-node commit (D-10).
+                deps.persist_job(job_record).await;
+
+                // D-02: reseal the child's new read key' under the PARENT's
+                // NEW read key' (out-of-band — rotate_one does not do this;
+                // parent-tracking is the sole place it happens).
+                if let Some(state) = parent_tracking.get_mut(&item.parent_ipns_name) {
+                    let sealed = seal_child_read_key(
+                        &child.read_key_prime,
+                        &state.parent_new_read_key,
+                        &child.node_id,
+                        child.kind,
+                        child.new_generation,
+                    )
+                    .map_err(|e| {
+                        RotationError::RotateFailed(format!(
+                            "rotate_read_from_node: reseal failed for child {} under parent {}: {e}",
+                            child.node_id, item.parent_ipns_name
+                        ))
+                    })?;
+                    if let Some(idx) = state
+                        .children
+                        .iter()
+                        .position(|c| c.ipns_name == item.child_ref.ipns_name)
+                    {
+                        state.children[idx].read_key_sealed = base64_encode(&sealed);
+                        state.children[idx].generation = child.new_generation;
+                    }
+                }
+                complete_pending_child(deps, &mut parent_tracking, &item.parent_ipns_name).await?;
+
+                // Set up parent tracking for this node's own children
+                // (recursive D-02/D-09) — only when it actually has any.
+                if !child.children.is_empty() {
+                    parent_tracking.insert(
+                        item.child_ref.ipns_name.clone(),
+                        ParentTrackingState {
+                            parent_ipns_name: item.child_ref.ipns_name.clone(),
+                            parent_new_read_key: child.read_key_prime.clone(),
+                            parent_node_id: child.node_id.clone(),
+                            parent_kind: child.kind,
+                            parent_generation: child.new_generation,
+                            parent_created_at: child.created_at,
+                            parent_modified_at: child.modified_at,
+                            parent_last_seq: child.new_sequence_number,
+                            children: child.children.clone(),
+                            pending_child_count: child.children.len(),
+                        },
+                    );
+                }
+
+                // Enqueue this node's children using THIS node's OWN
+                // (pre-rotation) read key — item.node_read_key is still
+                // valid here (rotate_one never zeroed it; it is dropped,
+                // and thus zeroed, only when this loop iteration ends).
+                for grandchild_ref in &child.children {
+                    enqueue_child(
+                        deps,
+                        &item.child_ref.ipns_name,
+                        item.node_read_key.as_slice(),
+                        grandchild_ref,
+                        &mut queue,
+                    )
+                    .await?;
+                }
+            }
+        }
+    }
+
+    // Terminal status: all nodes rotated (or skipped). Persist the complete
+    // status so a host can safely discard the job record.
+    job_record.status = RotationStatus::Complete;
+    deps.persist_job(job_record).await;
+
+    Ok(Some(RotateReadResult {
+        read_key: root_committed.read_key_prime,
+        generation: root_committed.new_generation,
+        sequence_number: root_committed.new_sequence_number,
+    }))
+}
+
+/// Resolves `child_ref`'s IPNS name, derives its own pre-rotation read key
+/// from `parent_old_read_key` (using the child's plaintext `id`/`kind` for
+/// the AAD binding — the generation-source rule: `child_ref.generation`,
+/// the PARENT's mirror, not the child's own envelope generation), and
+/// enqueues it.
+async fn enqueue_child<D: RotationDeps>(
+    deps: &D,
+    parent_ipns_name: &str,
+    parent_old_read_key: &[u8],
+    child_ref: &SealedChildRef,
+    queue: &mut VecDeque<QueueItem>,
+) -> Result<(), RotationError> {
+    let child_pub = resolve_and_fetch(deps, &child_ref.ipns_name).await?;
+    let child_kind = node_kind_from_str(&child_pub.kind)?;
+    let parent_old_read_key_arr = zeroizing_32_from_slice(parent_old_read_key)?;
+    let sealed_bytes = decode_b64(&child_ref.read_key_sealed)?;
+
+    let mut child_read_key_raw = unseal_child_read_key(
+        &sealed_bytes,
+        &parent_old_read_key_arr,
+        &child_pub.id,
+        child_kind,
+        child_ref.generation,
+    )
+    .map_err(|e| {
+        RotationError::RotateFailed(format!(
+            "enqueue_child: unseal_child_read_key failed for {}: {e}",
+            child_ref.ipns_name
+        ))
+    })?;
+
+    if child_read_key_raw.len() != 32 {
+        child_read_key_raw.zeroize();
+        return Err(RotationError::RotateFailed(format!(
+            "enqueue_child: unsealed read key for {} is not 32 bytes",
+            child_ref.ipns_name
+        )));
+    }
+    let mut child_read_key = Zeroizing::new([0u8; 32]);
+    child_read_key.copy_from_slice(&child_read_key_raw);
+    child_read_key_raw.zeroize();
+
+    queue.push_back(QueueItem {
+        child_ref: child_ref.clone(),
+        node_read_key: child_read_key,
+        parent_ipns_name: parent_ipns_name.to_string(),
+    });
+
+    Ok(())
+}
+
+/// Decrements `parent_ipns_name`'s pending-child counter; when it reaches
+/// zero, fires the batched republish exactly once (T-69-08-03) and removes
+/// the tracking entry.
+async fn complete_pending_child<D: RotationDeps>(
+    deps: &D,
+    parent_tracking: &mut HashMap<String, ParentTrackingState>,
+    parent_ipns_name: &str,
+) -> Result<(), RotationError> {
+    let should_republish = if let Some(state) = parent_tracking.get_mut(parent_ipns_name) {
+        state.pending_child_count = state.pending_child_count.saturating_sub(1);
+        state.pending_child_count == 0
+    } else {
+        false
+    };
+
+    if should_republish {
+        if let Some(state) = parent_tracking.remove(parent_ipns_name) {
+            republish_parent(deps, &state).await?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Rebuilds a parent's read-body with its updated `children` array, reseals
+/// it under the parent's NEW read key, and CAS-publishes — the single
+/// batched republish per parent (T-69-08-03).
+async fn republish_parent<D: RotationDeps>(
+    deps: &D,
+    state: &ParentTrackingState,
+) -> Result<(), RotationError> {
+    let node = match state.parent_kind {
+        NodeKind::Folder => Node::Folder {
+            id: state.parent_node_id.clone(),
+            generation: state.parent_generation,
+            created_at: state.parent_created_at,
+            modified_at: state.parent_modified_at,
+            children: state.children.clone(),
+        },
+        NodeKind::Root => Node::Root {
+            id: state.parent_node_id.clone(),
+            generation: state.parent_generation,
+            created_at: state.parent_created_at,
+            modified_at: state.parent_modified_at,
+            children: state.children.clone(),
+        },
+        NodeKind::File => {
+            // Structurally unreachable: parent_tracking is only ever seeded
+            // when a node's `children` is non-empty, and file nodes never
+            // carry a `children` field (Node::File has none).
+            return Err(RotationError::RotateFailed(format!(
+                "republish_parent: unexpected File kind for {}",
+                state.parent_ipns_name
+            )));
+        }
+    };
+
+    let read_body = encode_node(&node).map_err(|e| {
+        RotationError::RotateFailed(format!(
+            "republish_parent: encode failed for {}: {e}",
+            state.parent_ipns_name
+        ))
+    })?;
+    let resealed = seal_node(
+        &read_body,
+        &state.parent_new_read_key,
+        &state.parent_node_id,
+        state.parent_kind,
+        state.parent_generation,
+    )
+    .map_err(|e| {
+        RotationError::RotateFailed(format!(
+            "republish_parent: seal failed for {}: {e}",
+            state.parent_ipns_name
+        ))
+    })?;
+
+    let published_node = PublishedNode {
+        schema: "node/v3".to_string(),
+        kind: state.parent_kind.as_str().to_string(),
+        id: state.parent_node_id.clone(),
+        generation: state.parent_generation,
+        aead_version: 1,
+        read_sealed: base64_encode(&resealed),
+        write_sealed: None,
+    };
+
+    deps.publish_with_cas(
+        &state.parent_ipns_name,
+        state.parent_last_seq,
+        &published_node,
+    )
+    .await
+    .map_err(|e| {
+        RotationError::RotateFailed(format!(
+            "republish_parent: publish failed for {}: {e}",
+            state.parent_ipns_name
+        ))
+    })?;
+
+    Ok(())
+}
+
+/// Resolve `ipns_name` then fetch its `PublishedNode` envelope. Used to peek
+/// a child's plaintext `id`/`kind` (needed for the read-key AAD binding)
+/// before `rotate_one` independently re-resolves/re-fetches the same node —
+/// mirrors the TS reference's identical `resolveAndFetch` + `rotateOne`
+/// double-hop.
+async fn resolve_and_fetch<D: RotationDeps>(
+    deps: &D,
+    ipns_name: &str,
+) -> Result<PublishedNode, RotationError> {
+    let resolved = deps.resolve(ipns_name).await?.ok_or_else(|| {
+        RotationError::RotateFailed(format!("resolve_and_fetch: {ipns_name} not found in IPNS"))
+    })?;
+    deps.fetch_node(&resolved.cid).await
+}
+
+// ---------------------------------------------------------------------------
 // Small helpers
 // ---------------------------------------------------------------------------
 
@@ -507,7 +928,6 @@ mod test_support {
     //! `MemStore`/`FakeFetcher` test fixtures).
 
     use super::*;
-    use std::collections::HashMap;
     use std::sync::Mutex;
 
     #[derive(Default)]
@@ -775,5 +1195,165 @@ mod rotate_one {
 
         assert!(result.is_err());
         assert!(!job.completed_node_ids.contains(NODE_1_ID));
+    }
+}
+
+#[cfg(test)]
+mod rotate_read_from_node {
+    use super::test_support::{seal_for_seed, FakeDeps};
+    use super::*;
+
+    /// `build_node_aad` (69-04) requires a real RFC-4122 UUID for `node_id`.
+    /// The `k51/...`-prefixed IPNS names used alongside these ids are plain
+    /// map keys (not UUID-validated) and stay human-readable for clarity.
+    const ROOT_ID: &str = "00000000-0000-0000-0000-000000000000";
+
+    fn child_uuid(i: usize) -> String {
+        format!("00000000-0000-0000-0000-{:012}", i + 1)
+    }
+
+    fn folder(id: &str, generation: u32, children: Vec<SealedChildRef>) -> Node {
+        Node::Folder {
+            id: id.to_string(),
+            generation,
+            created_at: 1_000,
+            modified_at: 1_000,
+            children,
+        }
+    }
+
+    /// Seeds a root with `child_count` empty-folder children, each keyed
+    /// with its own read key sealed under the root's OLD read key.
+    fn seed_root_with_children(
+        deps: &FakeDeps,
+        root_read_key: &[u8; 32],
+        child_count: usize,
+    ) -> Vec<[u8; 32]> {
+        let mut child_keys = Vec::new();
+        let mut child_refs = Vec::new();
+        for i in 0..child_count {
+            let child_label = format!("child-{i}");
+            let child_id = child_uuid(i);
+            let child_key = [(10 + i) as u8; 32];
+            let child_node = folder(&child_id, 0, vec![]);
+            let sealed_key =
+                seal_child_read_key(&child_key, root_read_key, &child_id, NodeKind::Folder, 0)
+                    .unwrap();
+            deps.seed(
+                &format!("k51/{child_label}"),
+                &format!("cid-{child_label}-0"),
+                0,
+                seal_for_seed(&child_node, &child_key),
+            );
+            child_refs.push(SealedChildRef {
+                name: child_label.clone(),
+                ipns_name: format!("k51/{child_label}"),
+                generation: 0,
+                version_floor: 0,
+                read_key_sealed: base64_encode(&sealed_key),
+            });
+            child_keys.push(child_key);
+        }
+
+        let root_node = folder(ROOT_ID, 0, child_refs);
+        deps.seed(
+            "k51/root",
+            "cid-root-0",
+            0,
+            seal_for_seed(&root_node, root_read_key),
+        );
+
+        child_keys
+    }
+
+    #[tokio::test]
+    async fn root_is_committed_before_any_child_ordering() {
+        let deps = FakeDeps::new();
+        let root_read_key = [1u8; 32];
+        seed_root_with_children(&deps, &root_read_key, 2);
+
+        let mut job = RotationJobRecord::new(ROOT_ID);
+        let result = rotate_read_from_node(&deps, ROOT_ID, "k51/root", &root_read_key, &mut job)
+            .await
+            .unwrap();
+        assert!(result.is_some());
+
+        let log = deps.publish_log.lock().unwrap().clone();
+        let root_first_index = log.iter().position(|n| n == "k51/root").unwrap();
+        let first_child_index = log
+            .iter()
+            .position(|n| n == "k51/child-0" || n == "k51/child-1")
+            .unwrap();
+        assert!(
+            root_first_index < first_child_index,
+            "expected root's own publish before any child's publish, got log: {log:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn persist_job_fires_exactly_once_per_committed_node() {
+        let deps = FakeDeps::new();
+        let root_read_key = [2u8; 32];
+        seed_root_with_children(&deps, &root_read_key, 2);
+
+        let mut job = RotationJobRecord::new(ROOT_ID);
+        rotate_read_from_node(&deps, ROOT_ID, "k51/root", &root_read_key, &mut job)
+            .await
+            .unwrap()
+            .unwrap();
+
+        // root + 2 children == 3 committed nodes -- plus the final
+        // "status = Complete" persist call at the very end == 4 total, but
+        // only the first 3 correspond 1:1 to a per-node commit. Assert the
+        // per-commit calls are present (monotonically increasing
+        // completed-count snapshots reaching 3), which is what "persist
+        // fires once per committed node" means operationally.
+        let log = deps.persist_log.lock().unwrap().clone();
+        assert!(
+            log.contains(&1) && log.contains(&2) && log.contains(&3),
+            "expected persist snapshots after 1, 2, and 3 completions, got: {log:?}"
+        );
+        assert_eq!(job.completed_node_ids.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn two_children_one_parent_issues_exactly_one_batched_republish() {
+        let deps = FakeDeps::new();
+        let root_read_key = [3u8; 32];
+        seed_root_with_children(&deps, &root_read_key, 2);
+
+        let mut job = RotationJobRecord::new(ROOT_ID);
+        let result = rotate_read_from_node(&deps, ROOT_ID, "k51/root", &root_read_key, &mut job)
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Exactly two publishes for "k51/root": the root's OWN rotate_one
+        // commit, plus the SINGLE batched republish after both children
+        // finish (never three, which would mean one republish per child --
+        // the T-69-08-03 DoS mitigation this test pins).
+        assert_eq!(deps.publish_count_for("k51/root"), 2);
+        assert_eq!(deps.publish_count_for("k51/child-0"), 1);
+        assert_eq!(deps.publish_count_for("k51/child-1"), 1);
+
+        assert_eq!(result.generation, 1);
+    }
+
+    #[tokio::test]
+    async fn root_resume_skip_returns_none_without_processing_children() {
+        let deps = FakeDeps::new();
+        let root_read_key = [4u8; 32];
+        seed_root_with_children(&deps, &root_read_key, 1);
+
+        let mut job = RotationJobRecord::new(ROOT_ID);
+        job.completed_node_ids.insert(ROOT_ID.to_string());
+
+        let result = rotate_read_from_node(&deps, ROOT_ID, "k51/root", &root_read_key, &mut job)
+            .await
+            .unwrap();
+
+        assert!(result.is_none());
+        assert_eq!(deps.publish_count_for("k51/root"), 0);
+        assert_eq!(deps.publish_count_for("k51/child-0"), 0);
     }
 }

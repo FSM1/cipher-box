@@ -26,10 +26,10 @@ pub use queue::{
     JOURNAL_GC_MAX_SIZE_BYTES, MAX_JOURNAL_PAYLOAD_BYTES,
 };
 pub use rotation::{
-    has_covering_grant, maybe_rotate_on_scope_exit, rotate_one, CommittedRotation, CoverageParams,
-    EnforceResolvedParams, HighWaterStore, LocalGrantRecord, PublishOutcome, ResolvedRecord,
-    RotateOneOutcome, RotationDeps, RotationError, RotationHighWater, RotationJobRecord,
-    RotationStatus, ScopeExitResult,
+    has_covering_grant, maybe_rotate_on_scope_exit, rotate_one, rotate_read_from_node,
+    CommittedRotation, CoverageParams, EnforceResolvedParams, HighWaterStore, LocalGrantRecord,
+    PublishOutcome, ResolvedRecord, RotateOneOutcome, RotateReadResult, RotationDeps,
+    RotationError, RotationHighWater, RotationJobRecord, RotationStatus, ScopeExitResult,
 };
 pub use state::{KeyState, SyncStatus};
 pub use sync::SyncDaemon;
