@@ -25,9 +25,13 @@ export async function resyncFolder(folderIpnsName: string, folderId: string): Pr
   const folderNode = store.folders[folderId];
   if (!folderNode) return;
 
+  // 68.2-16: force a live resolve on both legs -- this runs after a local
+  // write lost a 409 CAS race, so the SDK cache may still hold the pre-write
+  // listing for this ipnsName+sequence; forcing guarantees the re-sync reflects
+  // the winning record (D-03 deterministic freshness leg).
   const client = getSdkClient();
-  const resolved = await client.listFolder(folderIpnsName);
-  const state = await client.ensureFolderLoaded(folderIpnsName);
+  const resolved = await client.listFolder(folderIpnsName, { forceResolve: true });
+  const state = await client.ensureFolderLoaded(folderIpnsName, { forceResolve: true });
 
   store.updateFolderChildren(folderId, resolved);
   if (state) {

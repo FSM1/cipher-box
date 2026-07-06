@@ -151,3 +151,23 @@ export function isFileRef(item: SealedChildRef | ResolvedChild): boolean {
   if ('kind' in item) return item.kind === 'file';
   return false;
 }
+
+/**
+ * Kind classification for a ref against the SDK-resolved listing (68.2-15).
+ *
+ * A bare `SealedChildRef` carries no `.kind` (the per-ipnsName kind-cache was
+ * removed in 68.2-11), so `isFileRef` alone always reports a bare ref as a
+ * folder. Call sites that hold identity-only refs -- selection/context-menu/
+ * download payloads keyed off `rawChildren` -- must classify against the
+ * paired `ResolvedChild` (SDK-READ-02) instead, keyed by `ipnsName`. A
+ * `ResolvedChild` passed directly is read inline; a bare `SealedChildRef` is
+ * looked up in `resolvedByIpnsName` (a miss -- still-loading listing -- stays
+ * folder-safe `false`, preserving the pre-regression default).
+ */
+export function isFileRefResolved(
+  ref: SealedChildRef | ResolvedChild,
+  resolvedByIpnsName: Map<string, ResolvedChild>
+): boolean {
+  if ('kind' in ref) return ref.kind === 'file';
+  return resolvedByIpnsName.get(ref.ipnsName)?.kind === 'file';
+}

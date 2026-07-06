@@ -30,7 +30,7 @@ import {
   isAudioFile,
   isVideoFile,
   isPreviewableFile,
-  isFileRef,
+  isFileRefResolved,
 } from '../../utils/fileTypes';
 import { ContextMenu } from './ContextMenu';
 import { DetailsDialog } from './DetailsDialog';
@@ -560,6 +560,7 @@ export function SharedFileBrowser() {
             x={contextMenu.x}
             y={contextMenu.y}
             item={contextMenu.item}
+            resolvedChildren={resolvedChildren}
             selectedCount={1}
             onClose={contextMenu.hide}
             // TODO(phase 63): SealedChildRef has no .type; download enabled by default for shared items
@@ -662,6 +663,7 @@ export function SharedFileBrowser() {
       {isWritable && multiSelectActive && (
         <SelectionActionBar
           selectedItems={selectedItems}
+          resolvedChildren={resolvedChildren}
           isLoading={isLoading}
           onClearSelection={clearSelection}
           onMove={handleBatchMoveClick}
@@ -769,9 +771,10 @@ export function SharedFileBrowser() {
                   isSelected={selectedIds.has(item.ipnsName)}
                   onSelect={(e) => handleSelect(item.ipnsName, e)}
                   onDoubleClick={() => {
-                    // D-02: kind cache read -- files no-op on double-click (open is a
+                    // D-02: kind classification -- files no-op on double-click (open is a
                     // context-menu action: Preview/Edit/Download), mirroring FileListItem.tsx.
-                    if (!isFileRef(item)) {
+                    // 68.2-15: `item` is a raw ref; classify against the resolved listing.
+                    if (!isFileRefResolved(item, resolvedByIpnsName)) {
                       navigateToSubfolder(item.ipnsName, item.name);
                     }
                   }}
@@ -830,10 +833,13 @@ export function SharedFileBrowser() {
           item={contextMenu.item}
           selectedCount={1}
           onClose={contextMenu.hide}
-          // D-02: kind cache read -- Download is a file-only action, gated on isFileRef
-          // (ContextMenu itself also gates on isFile, this mirrors the working top-level
-          // list context menu's onDownload={handleDownload} — Analog A).
-          onDownload={isFileRef(contextMenu.item) ? handleDownload : undefined}
+          // D-02: Download is a file-only action, gated on kind. 68.2-15: classify the
+          // raw `contextMenu.item` against the resolved listing (ContextMenu itself also
+          // gates on isFile via the resolvedChildren prop below — Analog A).
+          resolvedChildren={resolvedChildren}
+          onDownload={
+            isFileRefResolved(contextMenu.item, resolvedByIpnsName) ? handleDownload : undefined
+          }
           onEdit={isTextFile(contextMenu.item.name) ? handleEditClick : undefined}
           onPreview={isPreviewableFile(contextMenu.item.name) ? handlePreviewClick : undefined}
           onRename={isWritable ? handleRename : () => {}}

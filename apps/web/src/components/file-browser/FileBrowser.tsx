@@ -4,7 +4,7 @@ import { useFolderNavigation } from '../../hooks/useFolderNavigation';
 import { useFolder } from '../../hooks/useFolder';
 import { useFileDownload } from '../../hooks/useFileDownload';
 import { useContextMenu } from '../../hooks/useContextMenu';
-import { useSyncPolling } from '../../hooks/useSyncPolling';
+import { useSyncPolling, invalidateOpenFolder } from '../../hooks/useSyncPolling';
 import { useDeviceRegistrySync } from '../../hooks/useDeviceRegistrySync';
 import { useDropUpload } from '../../hooks/useDropUpload';
 import { isPreviewableFile, isTextFile } from '../../utils/fileTypes';
@@ -80,6 +80,7 @@ export function FileBrowser() {
     currentFolder: currentFolder
       ? { children: rawChildren, folderKey: currentFolder.folderKey }
       : null,
+    resolvedChildren: currentFolder?.children ?? [],
     breadcrumbs,
     navigateTo,
     navigateUp,
@@ -152,7 +153,17 @@ export function FileBrowser() {
             <UploadZone
               folderId={currentFolderId}
               onUploadComplete={() => {
-                void actions.handleSync().catch(() => {});
+                // 68.2-16: refresh the CURRENTLY OPEN folder immediately -- the
+                // upload targets `currentFolderId`, which may be a subfolder,
+                // but `handleSync` only ever resyncs root. Without this the
+                // just-uploaded child never appears in a subfolder view until
+                // the 30s poll's `invalidateOpenFolder` leg happens to fire.
+                // Then run the root/tree + search-index resync (best-effort).
+                void invalidateOpenFolder()
+                  .catch(() => {})
+                  .finally(() => {
+                    void actions.handleSync().catch(() => {});
+                  });
               }}
             />
           </div>
@@ -212,6 +223,7 @@ export function FileBrowser() {
       {actions.multiSelectActive && actions.selectedIds.size > 1 && (
         <SelectionActionBar
           selectedItems={actions.selectedItems}
+          resolvedChildren={currentFolder?.children ?? []}
           isLoading={isOperating || isDownloading}
           onClearSelection={actions.clearSelection}
           onDownload={actions.handleBatchDownload}
@@ -225,6 +237,7 @@ export function FileBrowser() {
           x={contextMenu.x}
           y={contextMenu.y}
           item={contextMenu.item}
+          resolvedChildren={currentFolder?.children ?? []}
           selectedCount={actions.selectedIds.size}
           onClose={contextMenu.hide}
           onDownload={actions.handleDownload}

@@ -18,8 +18,15 @@ import {
   type MouseEvent,
 } from 'react';
 import type { SealedChildRef } from '@cipherbox/core';
+import type { ResolvedChild } from '@cipherbox/sdk';
 import { useDialogState } from '../../hooks/useDialogState';
-import { isImageFile, isPdfFile, isAudioFile, isVideoFile, isFileRef } from '../../utils/fileTypes';
+import {
+  isImageFile,
+  isPdfFile,
+  isAudioFile,
+  isVideoFile,
+  isFileRefResolved,
+} from '../../utils/fileTypes';
 import { useFolderStore } from '../../stores/folder.store';
 import { useSyncStore } from '../../stores/sync.store';
 import { isExternalFileDrag } from '../../hooks/useDropUpload';
@@ -35,6 +42,14 @@ export type FileBrowserActionsParams = {
     children: SealedChildRef[];
     folderKey: Uint8Array;
   } | null;
+  /**
+   * SDK-resolved display listing for the current folder (68.2-15). Carries
+   * per-child `kind` keyed by `ipnsName`; the identity-only `currentFolder.
+   * children` (raw `SealedChildRef[]`) has no `.kind` after the 68.2-11
+   * kind-cache removal, so file-vs-folder classification (download gating,
+   * batch-download filtering) resolves against this instead.
+   */
+  resolvedChildren: ResolvedChild[];
   breadcrumbs: Array<{ id: string; name: string }>;
   navigateTo: (folderId: string) => void;
   navigateUp: () => void;
@@ -84,6 +99,7 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
   const {
     currentFolderId,
     currentFolder,
+    resolvedChildren,
     navigateTo,
     createFolder,
     renameItem,
@@ -98,6 +114,14 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
   } = params;
 
   const children = currentFolder?.children ?? [];
+
+  // 68.2-15: kind lookup for identity-only refs (selection/context-menu items
+  // are raw `SealedChildRef`s with no `.kind`) -- classify against the
+  // SDK-resolved listing keyed by ipnsName (D-02, SDK-READ-02).
+  const resolvedByIpnsName = useMemo(
+    () => new Map(resolvedChildren.map((r) => [r.ipnsName, r])),
+    [resolvedChildren]
+  );
 
   // ---------------------------------------------------------------------------
   // Sync callback
@@ -118,9 +142,18 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
       // GenerationRegressionError) is routed through the same
       // runWithFailureUx classifier so it surfaces the D-05 toast instead of
       // failing silently, matching the prior web-side gate's behavior.
+      //
+      // 68.2-16: `{ forceResolve: true }` on both legs -- this callback fires
+      // after a local write (post-upload refresh via UploadZone.onUploadComplete),
+      // where the freshly-published record may still be within the SDK cache's
+      // ipnsName+sequence window; without forcing, the refresh can return the
+      // pre-write listing and the just-uploaded child never appears (D-03
+      // deterministic freshness leg, mirroring refreshFolderListing/useSyncPolling).
       const client = getSdkClient();
-      const resolved = await runWithFailureUx(() => client.listFolder(rootIpnsName));
-      const state = await client.ensureFolderLoaded(rootIpnsName);
+      const resolved = await runWithFailureUx(() =>
+        client.listFolder(rootIpnsName, { forceResolve: true })
+      );
+      const state = await client.ensureFolderLoaded(rootIpnsName, { forceResolve: true });
 
       // Plan 09 (68.2-09): the store's `children` field is now the SDK's
       // resolved `ResolvedChild[]` display projection (kind/size/modifiedAt
@@ -378,7 +411,7 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
   const handleDownload = useCallback(async () => {
     const item = contextMenu.item;
     if (!item || !currentFolder) return;
-    if (!isFileRef(item)) return; // No folder-archive download feature.
+    if (!isFileRefResolved(item, resolvedByIpnsName)) return; // No folder-archive download feature.
     try {
       const plaintext = await downloadFileFromIpns({
         fileRef: item,
@@ -388,7 +421,7 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
     } catch (err) {
       logger.error(`[FileBrowser] Download failed for ${item.name}:`, err);
     }
-  }, [contextMenu.item, currentFolder]);
+  }, [contextMenu.item, currentFolder, resolvedByIpnsName]);
 
   const handleRenameClick = useCallback(() => {
     if (contextMenu.item) openRenameDialog(contextMenu.item);
@@ -443,7 +476,7 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
 
   const handleBatchDownload = useCallback(async () => {
     if (!currentFolder || selectedItems.length === 0) return;
-    for (const item of selectedItems.filter(isFileRef)) {
+    for (const item of selectedItems.filter((it) => isFileRefResolved(it, resolvedByIpnsName))) {
       try {
         const plaintext = await downloadFileFromIpns({
           fileRef: item,
@@ -454,7 +487,7 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
         logger.error(`[FileBrowser] Batch download failed for ${item.name}:`, err);
       }
     }
-  }, [currentFolder, selectedItems]);
+  }, [currentFolder, selectedItems, resolvedByIpnsName]);
 
   const handleBatchDeleteConfirm = useCallback(async () => {
     const items = batchDeleteDialog.items;
