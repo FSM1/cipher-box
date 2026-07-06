@@ -1,0 +1,1 @@
+could you spin up a git worktree pointed at origin/main? I want to kick off the phase 69 planning/execution in parallel as this should all be fairly independent work.
