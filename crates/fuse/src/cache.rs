@@ -181,19 +181,17 @@ impl ContentCache {
 mod tests {
     use super::*;
 
-    // -- MetadataCache tests --------------------------------------------------
+    // -- MetadataCache tests (node/v3 freshness marker, 69-09 Slice 5c) -------
+    // The legacy `FolderMetadata` payload is gone; the cache is now a pure
+    // per-IPNS-name freshness marker with a best-effort last-published `cid`.
 
     #[test]
     fn test_metadata_cache_set_and_get() {
         let mut cache = MetadataCache::new();
-        let metadata = FolderMetadata {
-            version: "v2".to_string(),
-            children: vec![],
-        };
-        cache.set("k51test", metadata, "bafytest".to_string());
+        cache.set("k51test", "bafytest".to_string());
 
         let entry = cache.get("k51test");
-        assert!(entry.is_some());
+        assert!(entry.is_some(), "fresh entry present within TTL");
         assert_eq!(entry.unwrap().cid, "bafytest");
     }
 
@@ -206,11 +204,7 @@ mod tests {
     #[test]
     fn test_metadata_cache_invalidate() {
         let mut cache = MetadataCache::new();
-        let metadata = FolderMetadata {
-            version: "v2".to_string(),
-            children: vec![],
-        };
-        cache.set("k51test", metadata, "bafytest".to_string());
+        cache.set("k51test", "bafytest".to_string());
         cache.invalidate("k51test");
         assert!(cache.get("k51test").is_none());
     }

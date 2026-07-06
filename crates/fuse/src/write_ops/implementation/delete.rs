@@ -414,17 +414,17 @@ mod tests {
             ino,
             parent_ino: ROOT_INO,
             name: name.to_string(),
+            // node/v3: shareable identity is the plain `ipns_name`; descriptors
+            // (cid/iv) filled, keys moved in.
             kind: InodeKind::File {
+                ipns_name: "k51file-shared".to_string(),
                 cid: "bafyContent".to_string(),
-                encrypted_file_key: "deadbeef".to_string(),
-                iv: "aabbccdd".to_string(),
                 size: 10,
                 encryption_mode: "GCM".to_string(),
-                file_meta_ipns_name: Some("k51file-shared".to_string()),
-                file_meta_resolved: true,
-                file_ipns_private_key: Some(Zeroizing::new(vec![3u8; 32])),
-                file_ipns_key_encrypted_hex: Some("abcd".to_string()),
-                versions: None,
+                iv: "aabbccdd".to_string(),
+                read_key: Zeroizing::new([2u8; 32]),
+                write_key: Zeroizing::new([4u8; 32]),
+                ipns_private_key: Zeroizing::new(vec![3u8; 32]),
             },
             attr: FileAttrs {
                 ino,
@@ -457,9 +457,9 @@ mod tests {
             name: name.to_string(),
             kind: InodeKind::Folder {
                 ipns_name: "k51folder-shared".to_string(),
-                encrypted_folder_key: "abcd".to_string(),
-                folder_key: Zeroizing::new(vec![1u8; 32]),
-                ipns_private_key: Some(Zeroizing::new(vec![5u8; 32])),
+                read_key: Zeroizing::new([1u8; 32]),
+                write_key: Zeroizing::new([6u8; 32]),
+                ipns_private_key: Zeroizing::new(vec![5u8; 32]),
                 children_loaded: true,
             },
             attr: FileAttrs {

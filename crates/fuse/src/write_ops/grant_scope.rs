@@ -216,9 +216,9 @@ mod tests {
             name: name.to_string(),
             kind: InodeKind::Folder {
                 ipns_name: ipns_name.to_string(),
-                encrypted_folder_key: "deadbeef".to_string(),
-                folder_key: Zeroizing::new(vec![0u8; 32]),
-                ipns_private_key: Some(Zeroizing::new(vec![0u8; 32])),
+                read_key: Zeroizing::new([0u8; 32]),
+                write_key: Zeroizing::new([0u8; 32]),
+                ipns_private_key: Zeroizing::new(vec![0u8; 32]),
                 children_loaded: false,
             },
             attr: make_attrs(ino, true),
@@ -238,17 +238,17 @@ mod tests {
             ino,
             parent_ino,
             name: name.to_string(),
+            // node/v3: the file's IPNS identity is the plain `ipns_name` field
+            // (empty == not-yet-published). Descriptors (cid/iv) stay empty here.
             kind: InodeKind::File {
+                ipns_name: file_meta_ipns_name.unwrap_or_default().to_string(),
                 cid: String::new(),
-                encrypted_file_key: String::new(),
-                iv: String::new(),
                 size: 0,
                 encryption_mode: "GCM".to_string(),
-                file_meta_ipns_name: file_meta_ipns_name.map(|s| s.to_string()),
-                file_meta_resolved: file_meta_ipns_name.is_some(),
-                file_ipns_private_key: None,
-                file_ipns_key_encrypted_hex: None,
-                versions: None,
+                iv: String::new(),
+                read_key: Zeroizing::new([0u8; 32]),
+                write_key: Zeroizing::new([0u8; 32]),
+                ipns_private_key: Zeroizing::new(vec![0u8; 32]),
             },
             attr: make_attrs(ino, false),
             children: None,
@@ -262,8 +262,10 @@ mod tests {
         let mut table = InodeTable::new();
         if let Some(root) = table.get_mut(ROOT_INO) {
             root.kind = InodeKind::Root {
-                ipns_private_key: None,
-                ipns_name: Some("k51root".to_string()),
+                ipns_name: "k51root".to_string(),
+                read_key: Zeroizing::new([0u8; 32]),
+                write_key: Zeroizing::new([0u8; 32]),
+                ipns_private_key: Zeroizing::new(Vec::new()),
             };
         }
         let folder_a = table.allocate_ino();

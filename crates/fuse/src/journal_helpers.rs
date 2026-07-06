@@ -532,6 +532,8 @@ fn generate_entry_id() -> String {
 #[cfg(all(test, feature = "fuse"))]
 mod tests {
     use crate::test_support::{make_isolated_journal_dir, make_test_fs_with_keypair};
+    // node/v3: the base64 `Engine` trait must be in scope for `.decode(...)`.
+    use base64::Engine;
     use zeroize::Zeroizing;
 
     /// Generate a real secp256k1 keypair (33-byte compressed pubkey, 32-byte

@@ -625,6 +625,10 @@ mod drain_refresh_completions_tests {
     use crate::events::PendingRefresh;
     use crate::inode::{FileAttrs, InodeData, InodeKind, ROOT_INO};
     use crate::test_support::make_test_fs;
+    // node/v3 (69-09 Slice 5c): the refresh pipeline is driven by the gated owned
+    // listing (`Vec<ResolvedOwnedChild>`), not the legacy `FolderMetadata` payload.
+    use cipherbox_core::node::NodeKind;
+    use cipherbox_sdk::{ResolvedChild, ResolvedOwnedChild};
     use std::time::{Duration, UNIX_EPOCH};
     use zeroize::Zeroizing;
 
@@ -632,6 +636,7 @@ mod drain_refresh_completions_tests {
     const ROOT_IPNS: &str = "k51test-root";
 
     /// Insert a resolved `hello.txt` File child of root with mtime `mtime_ms`.
+    /// "Resolved" == non-empty `cid` (node/v3 descriptors filled).
     fn insert_resolved_file(fs: &mut crate::CipherBoxFS, mtime_ms: u64) -> u64 {
         let ino = fs.inodes.allocate_ino();
         let mtime = UNIX_EPOCH + Duration::from_millis(mtime_ms);
@@ -640,16 +645,14 @@ mod drain_refresh_completions_tests {
             parent_ino: ROOT_INO,
             name: "hello.txt".to_string(),
             kind: InodeKind::File {
+                ipns_name: FILE_IPNS.to_string(),
                 cid: "bafyOLDcid".to_string(),
-                encrypted_file_key: "deadbeef".to_string(),
-                iv: "aabbccdd".to_string(),
                 size: 42,
                 encryption_mode: "GCM".to_string(),
-                file_meta_ipns_name: Some(FILE_IPNS.to_string()),
-                file_meta_resolved: true,
-                file_ipns_private_key: Some(Zeroizing::new(vec![3u8; 32])),
-                file_ipns_key_encrypted_hex: Some("abcd".to_string()),
-                versions: None,
+                iv: "aabbccdd".to_string(),
+                read_key: Zeroizing::new([7u8; 32]),
+                write_key: Zeroizing::new([8u8; 32]),
+                ipns_private_key: Zeroizing::new(vec![3u8; 32]),
             },
             attr: FileAttrs {
                 ino,
@@ -672,42 +675,37 @@ mod drain_refresh_completions_tests {
         ino
     }
 
-    /// Folder metadata listing `hello.txt` at the same IPNS identity with the
-    /// given `modified_at`.
-    fn refresh_metadata(file_mtime_ms: u64) -> cipherbox_core::FolderMetadata {
-        cipherbox_core::FolderMetadata {
-            version: "v2".to_string(),
-            children: vec![cipherbox_core::FolderChild::File(
-                cipherbox_core::FilePointer {
-                    id: "file-1".to_string(),
-                    name: "hello.txt".to_string(),
-                    file_meta_ipns_name: FILE_IPNS.to_string(),
-                    ipns_private_key_encrypted: None,
-                    created_at: 1700000000000,
-                    modified_at: file_mtime_ms,
-                },
-            )],
-        }
+    /// node/v3 owned listing carrying `hello.txt` at the same IPNS identity with
+    /// the given remote `modified_at`.
+    fn refresh_children(file_mtime_ms: u64) -> Vec<ResolvedOwnedChild> {
+        vec![ResolvedOwnedChild {
+            child: ResolvedChild {
+                ipns_name: FILE_IPNS.to_string(),
+                name: "hello.txt".to_string(),
+                kind: NodeKind::File,
+                size: Some(42),
+                modified_at: file_mtime_ms,
+                sequence: 1,
+            },
+            read_key: Zeroizing::new([7u8; 32]),
+            write_key: Zeroizing::new([8u8; 32]),
+            ipns_private_key: Zeroizing::new(vec![3u8; 32]),
+        }]
     }
 
     fn is_unresolved(fs: &crate::CipherBoxFS, ino: u64) -> bool {
         matches!(
             &fs.inodes.get(ino).unwrap().kind,
-            InodeKind::File {
-                file_meta_resolved: false,
-                cid,
-                ..
-            } if cid.is_empty()
+            InodeKind::File { cid, .. } if cid.is_empty()
         )
     }
 
-    fn send_refresh(fs: &crate::CipherBoxFS, metadata: cipherbox_core::FolderMetadata) {
+    fn send_refresh(fs: &crate::CipherBoxFS, children: Vec<ResolvedOwnedChild>) {
         fs.refresh_tx
             .send(PendingRefresh::Success {
                 ino: ROOT_INO,
                 ipns_name: ROOT_IPNS.to_string(),
-                metadata,
-                cid: "bafyREFRESHcid".to_string(),
+                children,
             })
             .unwrap();
     }
@@ -722,7 +720,7 @@ mod drain_refresh_completions_tests {
         fs.mutated_folders
             .insert(ROOT_INO, std::time::Instant::now());
 
-        send_refresh(&fs, refresh_metadata(1700001000000));
+        send_refresh(&fs, refresh_children(1700001000000));
         fs.drain_refresh_completions();
 
         assert!(
@@ -749,7 +747,7 @@ mod drain_refresh_completions_tests {
         fs.mutated_folders
             .insert(ROOT_INO, std::time::Instant::now());
 
-        send_refresh(&fs, refresh_metadata(1700000000000)); // older remote
+        send_refresh(&fs, refresh_children(1700000000000)); // older remote
         fs.drain_refresh_completions();
 
         assert!(
@@ -771,7 +769,7 @@ mod drain_refresh_completions_tests {
         let file_ino = insert_resolved_file(&mut fs, 1700000000000);
         // No mutated_folders / publish_queue entry -> non-gated populate_folder path.
 
-        send_refresh(&fs, refresh_metadata(1700001000000));
+        send_refresh(&fs, refresh_children(1700001000000));
         fs.drain_refresh_completions();
 
         assert!(
