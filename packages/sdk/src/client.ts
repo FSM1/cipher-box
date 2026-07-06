@@ -34,6 +34,8 @@ import {
   generateEd25519Keypair,
   generateRandomBytes,
   deriveIpnsName,
+  decryptAesGcm,
+  decryptAesCtr,
 } from '@cipherbox/crypto';
 import pLimit from 'p-limit';
 import type {
@@ -44,6 +46,7 @@ import type {
   Node as CoreNode,
   NodeContent,
   NodeKind,
+  EncryptionMode,
 } from '@cipherbox/core';
 import {
   sealChildReadKey,
@@ -93,6 +96,35 @@ const UPLOAD_CONCURRENCY = 3;
  * sequentially, so this caps the number of subtrees fetched in parallel.
  */
 const UNENROLL_COLLECT_CONCURRENCY = 8;
+
+/**
+ * Decode a base64 string to raw bytes (68.2-08 hoist from
+ * `apps/web/src/hooks/useSharedNavigationActions.ts` -- decodes
+ * `NodeContent.fileIv`, which is base64-encoded under node/v3, unlike the
+ * legacy hex-encoded fileIv `sdkCore.downloadAndDecrypt` expects).
+ */
+function sharedFileBase64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) {
+    bytes[i] = bin.charCodeAt(i);
+  }
+  return bytes;
+}
+
+/**
+ * Encode raw bytes to base64 (68.2-08 hoist). Bridges the web's hex-encoded
+ * `readDescriptorRef` (API DTO contract) into `navigateReadChain`'s base64
+ * contract (sdk-core's own `issueReadGrant` produces base64 -- the two
+ * encodings diverge at the API boundary).
+ */
+function sharedFileBytesToBase64(bytes: Uint8Array): string {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) {
+    bin += String.fromCharCode(bytes[i]);
+  }
+  return btoa(bin);
+}
 
 /** Thrown when a bin operation is attempted before loadBin() has been called. */
 export class BinNotLoadedError extends Error {
@@ -940,6 +972,74 @@ export class CipherBoxClient {
         );
       } finally {
         mintedReadKey?.fill(0);
+      }
+    });
+  }
+
+  /**
+   * Download and decrypt a shared file's content by walking the full
+   * grant->leaf read-chain (D-07 full-boundary facade, 68.2-08 Rule-2
+   * addition -- not in this plan's original `<files_modified>`, added
+   * because no existing facade covered shared single-file download).
+   *
+   * Wraps `sdkCore.navigateReadChain` (UNCHANGED -- per 68.2-RESEARCH.md's
+   * explicit guidance, this primitive is not modified because it has other
+   * existing callers) plus the fetch+decrypt orchestration that previously
+   * lived directly in `apps/web/src/hooks/useSharedNavigationActions.ts`'s
+   * `downloadSharedFile`/`loadSharedFileContent`. This method only MOVES
+   * that orchestration into the SDK so the web stops importing
+   * `navigateReadChain`/`fetchFromIpfs` (sdk-core) at runtime for shared
+   * file reads.
+   *
+   * `path` is the sequence of ipnsNames strictly between the share root and
+   * the leaf, INCLUSIVE of the leaf -- empty when the share root IS the file
+   * (single-file share) or when the file is a direct child of the currently
+   * viewed folder depth.
+   *
+   * @param args.readDescriptorRef - HEX-encoded ECIES-wrapped share-root
+   *   readKey (the `ReceivedShare`/API DTO wire contract) -- bridged to
+   *   `navigateReadChain`'s base64 contract internally.
+   * @param args.recipientPrivateKey - Caller-owned, NEVER zeroed here (D-09).
+   * @security The minted share-root/intermediate readKeys and the leaf's raw
+   *   fileKey are recovered and zeroed entirely inside `navigateReadChain`
+   *   and this method -- only decrypted plaintext leaves this method.
+   */
+  async downloadSharedFile(args: {
+    readDescriptorRef: string;
+    recipientPrivateKey: Uint8Array;
+    rootIpnsName: string;
+    rootExpectedGeneration: number;
+    path: string[];
+  }): Promise<{ plaintext: Uint8Array; mimeType: string; encryptionMode: EncryptionMode }> {
+    return this.withOperation('downloadSharedFile', async () => {
+      const result = await sdkCore.navigateReadChain({
+        readDescriptorRef: sharedFileBytesToBase64(hexToBytes(args.readDescriptorRef)),
+        recipientPrivKey: args.recipientPrivateKey,
+        rootIpnsName: args.rootIpnsName,
+        rootExpectedGeneration: args.rootExpectedGeneration,
+        path: args.path,
+        ctx: this.ctx,
+      });
+
+      if (result.status === 'revoked') {
+        throw new Error('downloadSharedFile: file is no longer available (revoked)');
+      }
+      if (result.status === 'behind-retry') {
+        throw new Error('downloadSharedFile: share was updated -- please reopen and try again');
+      }
+
+      const { content } = result;
+      try {
+        const ciphertext = await sdkCore.fetchFromIpfs(this.ctx, content.cid);
+        const iv = sharedFileBase64ToBytes(content.fileIv);
+        const plaintext =
+          content.encryptionMode === 'CTR'
+            ? await decryptAesCtr(ciphertext, content.fileKey, iv)
+            : await decryptAesGcm(ciphertext, content.fileKey, iv);
+        return { plaintext, mimeType: content.mimeType, encryptionMode: content.encryptionMode };
+      } finally {
+        // Terminal owner of the raw fileKey recovered inside NodeContent (D-09).
+        content.fileKey.fill(0);
       }
     });
   }
