@@ -31,6 +31,26 @@ enum InodeKind {
 - Drop legacy hex fields for node-to-node keys. KEEP file `cid`/`size`/`iv`/`encryption_mode`.
 - Finalize exact field set in Slice 1; later slices treat it as frozen (note deviations back to this file).
 
+## SLICE 1 OUTCOME (commit 4efcc3ef9) — carry-forward facts for Slices 2-5
+- InodeKind reshaped to the target shape above (all 3 ipns_private_key now NON-Option). Also dropped:
+  file_meta_ipns_name, file_meta_resolved, file_ipns_private_key, file_ipns_key_encrypted_hex, `versions`.
+  ⚠️ `versions` (file versioning, in-scope v1.0) dropped from InodeKind — FLAG for final E2E: confirm version
+  handling isn't regressed (may now live in NodeContent / SealedChildRef.version_floor). Not blocking the grind.
+- CipherBoxFS: added ONE field `pub high_water: cipherbox_sdk::RotationHighWater<cipherbox_sdk::JsonSidecarFloorStore>`,
+  built at each site via `cipherbox_sdk::new_journal_high_water(&journal_dir)` (capture journal_dir before it moves
+  into WriteQueue::new; WriteQueue.journal_dir is pub(crate)-unreachable from fuse). NO `fetcher` field added.
+- ApiNodeFetcher is a BORROW adapter `struct ApiNodeFetcher<'a> { pub api: &'a ApiClient }` — NO ::new. Construct
+  INLINE at each read call site: `let fetcher = cipherbox_sdk::ApiNodeFetcher { api: self.api.as_ref() };`
+  (self.api is Arc<ApiClient>; field wants &ApiClient). Pass parent keys as `&*read_key`/`&*write_key` (deref Zeroizing).
+- Only 3 real CipherBoxFS construction sites: test_support.rs:128, desktop mod.rs (~173), windows/mod.rs:75/207
+  (the runbook's fs.rs/operations.rs/journal_helpers.rs are impl blocks, not constructions).
+- InodeTable::new() Root uses empty placeholders (String::new(), [0u8;32] keys, empty Vec); desktop root-population
+  overwrites in Slice 5. Desktop mod.rs + windows/mod.rs `InodeKind::Root` overrides left RED for Slice 5.
+- 120 downstream errors remain, ALL consumers (zero in enum/struct defs). Signatures for Slice 2:
+  `cipherbox_sdk::list_folder_owned(fetcher, high_water, ipns_name, folder_read_key:&[u8;32], folder_write_key:&[u8;32])
+  -> Result<Vec<ResolvedOwnedChild>, ListingError>`; `ResolvedOwnedChild { child: ResolvedChild, read_key, write_key,
+  ipns_private_key }` (move Zeroizing keys straight into child InodeKind).
+
 ## Slices (sequential, same branch; each: commit even if crate RED elsewhere, that's expected)
 1. **Types + CipherBoxFS wiring** (keystone 1+2): reshape `InodeKind` (inode.rs enum def + its constructors);
    add `high_water: RotationHighWater<JsonSidecarFloorStore>` + `fetcher: ApiNodeFetcher` (or the wired gate)
