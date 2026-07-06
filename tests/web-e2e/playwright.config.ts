@@ -22,9 +22,14 @@ export default defineConfig({
   // No global setup needed - tests handle their own authentication
   // (Removed globalSetup: './global-setup.ts')
 
-  // Run tests sequentially (single session approach)
+  // Parallelize at the file level, not the test level: each spec file provisions
+  // its own isolated wallet identity (unique privateKey -> unique backend userId),
+  // so different files never share user/IPNS/DB state. Keep fullyParallel:false so
+  // tests WITHIN a file still run serially — the describe.serial suites depend on
+  // ordered, stateful steps. Local stays single-worker; CI fans out across files.
+  // Ceiling is Web3Auth Sapphire Devnet tolerance for concurrent DKG, not our infra.
   fullyParallel: false,
-  workers: 1,
+  workers: process.env.CI ? 4 : 1,
 
   // Fail build on CI if tests marked as test.only
   forbidOnly: !!process.env.CI,
