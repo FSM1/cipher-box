@@ -6,14 +6,14 @@ current_phase: 70
 current_phase_name: rotation-soundness-deep-merge-fresh-record-resume-and-durabl
 status: executing
 stopped_at: Phase 70 Plan 03 complete (rotation badge per-root Set + cached IDB connection)
-last_updated: "2026-07-07T20:27:42.338Z"
+last_updated: "2026-07-07T20:45:37.081Z"
 last_activity: 2026-07-07
 last_activity_desc: Phase 70 execution started
 progress:
   total_phases: 15
   completed_phases: 10
   total_plans: 148
-  completed_plans: 143
+  completed_plans: 144
   percent: 67
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 ## Current Position
 
 Phase: 70 (rotation-soundness-deep-merge-fresh-record-resume-and-durabl) — EXECUTING
-Plan: 5 of 8
+Plan: 6 of 8
 Status: Ready to execute
 Last activity: 2026-07-07 — Phase 70 execution started
 
@@ -252,6 +252,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 70 P02 | 45min | 3 tasks | 3 files |
 | Phase 70 P03 | 20min | 2 tasks | 2 files |
 | Phase 70 P04 | 10min | 3 tasks | 3 files |
+| Phase 70 P05 | 20min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -537,6 +538,8 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase 70-03]: progress('rotated'/'complete') defers to persistJob's terminal branch for per-root Set drain (no rootNodeId on that callback); only resets the badge when the set is already empty
 - [Phase ?]: [Phase 70-04]: mergeConcurrentChildren (site A) swapped from remote-wins mergeChildren to local-wins mergeRotatedChildren and returns { published, mergedChildren }; rotateOne captures mergedChildrenForReturn so its final return uses the CAS-merged children
 - [Phase ?]: [Phase 70-04]: updateFolderMetadataAndPublish gained optional mergeChildrenFn param defaulting to mergeChildren (remote-wins unchanged for non-rotation callers); both D-09 batched-republish call sites pass mergeRotatedChildren plus a baseChildrenSnapshot captured at parentTracking.set time; concurrently-added children diffed from publishedChildren are enqueued onto the BFS frontier
+- [Phase ?]: verifySubtreeClean recursion stops below a dirty edge (no crypto recovery path for a key lost to an interrupted prior run); returns key-bearing DirtyFrontierItem shape, consumption wiring deferred to plan 70-06
+- [Phase ?]: Missing root record returns isDirty:true with empty frontier; downstream rotateReadFromNode already re-resolves root and throws a descriptive error on that path
 
 ## Operator Next Steps
 
@@ -544,7 +547,7 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-07T20:26:03.135Z
+**Last session:** 2026-07-07T20:45:07.991Z
 **Stopped at:** Phase 70 Plan 03 complete (rotation badge per-root Set + cached IDB connection)
 **Resume file:** 
 
