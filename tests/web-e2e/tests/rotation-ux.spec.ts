@@ -119,6 +119,94 @@ test.describe.serial('Rotation UX: badge lifecycle + failure-UX toasts', () => {
     await expect(badge).toHaveCount(0);
   });
 
+  test('badge stays active across two concurrent-root rotations and only resets once BOTH finish (SC#6)', async () => {
+    // SCOPE NOTE: same rationale as the D-02 test above -- there is no stable
+    // hook to catch two genuinely concurrent rotations mid-flight from
+    // outside the page. This drives the REAL rotation-driver.service.ts
+    // `persistJob` callback (via `buildRotationClientCallbacks()`, the same
+    // module instance `useAuth.ts` wires into the SDK client) directly, for
+    // two distinct root node ids overlapping in time, proving the per-root
+    // `Set<string>` badge tracking: the badge must NOT reset when the first
+    // root finishes while the second is still mid-walk, and must reset once
+    // the tracking set drains (both roots terminal).
+    const badge = page.locator('.rotation-status-badge');
+    const rootA = `e2e-concurrent-a-${runId}`;
+    const rootB = `e2e-concurrent-b-${runId}`;
+
+    // Root A's first checkpoint: root-cut signal, badge turns on.
+    await page.evaluate(
+      async ({ rootA }) => {
+        const rotationDriverModPath = '/src/services/rotation-driver.service.ts';
+        const mod = await import(rotationDriverModPath);
+        const { persistJob } = mod.buildRotationClientCallbacks();
+        await persistJob({
+          rootNodeId: rootA,
+          status: 'in-progress',
+          completedNodeIds: new Set(),
+          frontier: [],
+        });
+      },
+      { rootA }
+    );
+    await expect(badge).toBeVisible();
+    await expect(badge).toHaveText('Revoking access…');
+
+    // Root B's first checkpoint while root A is still in flight: a SECOND
+    // root entering the tracking set, badge stays active.
+    await page.evaluate(
+      async ({ rootB }) => {
+        const rotationDriverModPath = '/src/services/rotation-driver.service.ts';
+        const mod = await import(rotationDriverModPath);
+        const { persistJob } = mod.buildRotationClientCallbacks();
+        await persistJob({
+          rootNodeId: rootB,
+          status: 'in-progress',
+          completedNodeIds: new Set(),
+          frontier: [],
+        });
+      },
+      { rootB }
+    );
+    await expect(badge).toBeVisible();
+
+    // Root A finishes first -- root B is still mid-walk. The badge MUST NOT
+    // reset (this is the exact bug this plan fixes: a single-scalar tracker
+    // would incorrectly clear the badge here).
+    await page.evaluate(
+      async ({ rootA }) => {
+        const rotationDriverModPath = '/src/services/rotation-driver.service.ts';
+        const mod = await import(rotationDriverModPath);
+        const { persistJob } = mod.buildRotationClientCallbacks();
+        await persistJob({
+          rootNodeId: rootA,
+          status: 'complete',
+          completedNodeIds: new Set(),
+          frontier: [],
+        });
+      },
+      { rootA }
+    );
+    await expect(badge).toBeVisible();
+
+    // Root B finishes last -- the tracking set drains to empty, and ONLY NOW
+    // does the badge reset.
+    await page.evaluate(
+      async ({ rootB }) => {
+        const rotationDriverModPath = '/src/services/rotation-driver.service.ts';
+        const mod = await import(rotationDriverModPath);
+        const { persistJob } = mod.buildRotationClientCallbacks();
+        await persistJob({
+          rootNodeId: rootB,
+          status: 'complete',
+          completedNodeIds: new Set(),
+          frontier: [],
+        });
+      },
+      { rootB }
+    );
+    await expect(badge).toHaveCount(0);
+  });
+
   test('badge shows Resuming revocation… after a reload finds an interrupted rotation job (D-03)', async () => {
     const rootNodeId = `e2e-resume-${runId}`;
 
