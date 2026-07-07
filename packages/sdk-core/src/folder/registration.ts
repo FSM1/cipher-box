@@ -170,12 +170,18 @@ export async function updateFolderMetadataAndPublish(params: {
    * (local-wins) explicitly (SC#1 site B / T-70-01). NEVER change the default
    * — see `rotation/merge.ts`'s module doc for why local-wins must stay
    * syntactically opt-in, not the generic policy.
+   *
+   * May return a `Promise` — the D-09 site wraps `mergeRotatedChildren` in an
+   * async closure that also re-seals any concurrently-added child's
+   * `readKeySealed` under the parent's NEW readKey (Phase 70 correction of the
+   * 70-04 over-reach — see `rotation/engine.ts`'s
+   * `createConcurrentAddResealingMerge`). Sync returns remain fully supported.
    */
   mergeChildrenFn?: (
     base: SealedChildRef[],
     local: SealedChildRef[],
     remote: SealedChildRef[]
-  ) => SealedChildRef[];
+  ) => SealedChildRef[] | Promise<SealedChildRef[]>;
   /** Canonical readKey name (phase 63). */
   readKey?: Uint8Array;
   /** @deprecated Backward-compat alias — use readKey. client.ts callers still pass folderKey. */
@@ -315,7 +321,7 @@ export async function updateFolderMetadataAndPublish(params: {
       return node.children ?? [];
     },
 
-    merge: (
+    merge: async (
       base: SealedChildRef[] | undefined,
       local: SealedChildRef[],
       remote: SealedChildRef[]
@@ -334,8 +340,11 @@ export async function updateFolderMetadataAndPublish(params: {
       // for every non-rotation caller; the rotation engine opts in explicitly
       // via mergeChildrenFn. params.baseChildren is the caller's captured base
       // snapshot (falls back to the CAS base argument, then []).
+      // `await` supports both sync mergeChildren/mergeRotatedChildren and the
+      // async concurrent-add-resealing wrapper the rotation engine's D-09 site
+      // passes (publishWithCas's own `merge` already supports an async return).
       const mergeFn = params.mergeChildrenFn ?? mergeChildren;
-      return { merged: mergeFn(params.baseChildren ?? base ?? [], local, remote) };
+      return { merged: await mergeFn(params.baseChildren ?? base ?? [], local, remote) };
     },
 
     localData: params.children,

@@ -1063,6 +1063,17 @@ export async function rotateReadFromNode(
 
   type ParentTrackingState = {
     parentNewReadKey: Uint8Array;
+    /**
+     * The parent's OLD (pre-rotation) readKey — an engine-owned COPY (never an
+     * alias of a caller/BFS-item buffer that may be zeroed elsewhere before
+     * this state is torn down). Needed by `createConcurrentAddResealingMerge`
+     * (Phase 70 correction of the 70-04 over-reach) to unwrap a concurrently-
+     * added child's `readKeySealed` — it was sealed by the concurrent writer
+     * under the parent's key AS IT STOOD BEFORE this rotation, not the new
+     * one. Zeroed by the engine (terminal owner of this copy) when the
+     * tracking state is torn down in `decrementPendingAndMaybeRepublish`.
+     */
+    parentOldReadKey: Uint8Array;
     parentIpnsName: string;
     parentIpnsPrivateKey?: Uint8Array;
     parentIpnsPublicKey?: Uint8Array;
@@ -1125,43 +1136,116 @@ export async function rotateReadFromNode(
   }> = [];
 
   /**
-   * SC#3 (Plan 70-04): enqueue any concurrently-added child surfaced by the
-   * D-09 batched republish's CAS-409 merge (mergeRotatedChildren, site B)
-   * onto the BFS frontier for its own rotateOne pass. Diffs `publishedChildren`
-   * (the merge's actual result) against the pre-call children snapshot by
-   * ipnsName — anything newly present was added by a concurrent writer during
-   * this walk and was never itself enqueued. The child's readKey is derived
-   * via unsealChildReadKey against the PARENT's now-current (rotated) key,
-   * mirroring the existing root/child enqueue blocks above.
+   * Phase 70 correction of the 70-04 over-reach (SC#3 / ROT-05 / design
+   * §3.7-§4.5 / RR-01): wraps `mergeRotatedChildren`'s three-way merge with an
+   * out-of-band re-seal of any concurrently-added child's
+   * `SealedChildRef.readKeySealed` under the parent's NEW readKey' — WITHOUT
+   * enqueuing the child onto the BFS `queue` for its own `rotateOne` pass.
+   *
+   * ROT-05 only requires that a concurrent add survive the merge (never be
+   * silently dropped); design §3.7/§4.5 + the RR-01 todo call for the
+   * concurrent child to be "picked up" (merged into the parent AND re-sealed
+   * under the new epoch), with a FULL RE-KEY of the child's own node
+   * explicitly deferred as a follow-on concern. The prior implementation
+   * over-reached in two ways: (1) it pushed the concurrent child onto `queue`
+   * for a full `rotateOne` pass, which requires the child's IPNS PRIVATE
+   * (write) key — a concurrently-writing DIFFERENT party's add gives the
+   * rotating party no structural guarantee of holding that key; and (2) it
+   * ran AFTER `parentTracking.delete(...)`, so even a successful re-seal never
+   * reached the parent's own published `SealedChildRef.readKeySealed`
+   * (orphaning navigation parent→child). This version fixes both: only the
+   * WRAPPER (the parent's pointer to the child's UNCHANGED readKey) is
+   * re-sealed, and it happens INSIDE the merge — before the (possibly
+   * CAS-retried) publish that becomes the parent's canonical published body.
+   *
+   * A concurrent writer may have sealed the wrapper under EITHER the parent's
+   * OLD (pre-rotation) key — unaware of the in-flight rotation — OR the
+   * parent's already-current NEW key' — when their write raced the D-09
+   * batched republish AFTER the parent's own rotateOne had already committed
+   * (the common real race: reading+re-sealing the parent's CURRENT published
+   * body necessarily uses whichever key is valid at that moment). Both are
+   * tried (old first); a wrapper already under the new key is left as-is
+   * (no-op, not an error).
+   *
+   * @param parentOldReadKey - the parent's readKey as it stood BEFORE this
+   *   rotation.
+   * @param parentNewReadKey - the parent's freshly minted readKey' (from the
+   *   parent's own rotateOne result) — what the re-sealed wrapper must be
+   *   readable under going forward.
    */
-  async function enqueueConcurrentlyAddedChildren(
-    parentState: ParentTrackingState,
-    preCallChildren: SealedChildRef[],
-    publishedChildren: SealedChildRef[]
-  ): Promise<void> {
-    const preCallNames = new Set(preCallChildren.map((c) => c.ipnsName));
-    for (const childRef of publishedChildren) {
-      if (preCallNames.has(childRef.ipnsName)) continue;
-      const resolved = await resolveChildKeyAndEnvelope(
-        childRef,
-        parentState.parentNewReadKey,
-        ctx
-      );
-      if (!resolved) continue; // child IPNS missing — skip (data inconsistency)
-      const { childPub, childReadKey } = resolved;
-      const childKeys = nodeKeySource?.(childRef.ipnsName);
-      queue.push({
-        childRef,
-        nodeReadKey: childReadKey,
-        parentIpnsName: parentState.parentIpnsName,
-        ipnsPrivateKey: childKeys?.privateKey,
-        ipnsPublicKey: childKeys?.publicKey,
-        nodeWriteKey: childKeys?.writeKey,
-        childPubId: childPub.id,
-        childPubKind: childPub.kind as 'folder' | 'file',
-        enqueuedGeneration: childRef.generation,
-      });
-    }
+  function createConcurrentAddResealingMerge(
+    parentOldReadKey: Uint8Array,
+    parentNewReadKey: Uint8Array
+  ): (
+    base: SealedChildRef[],
+    local: SealedChildRef[],
+    remote: SealedChildRef[]
+  ) => Promise<SealedChildRef[]> {
+    return async (base, local, remote) => {
+      const merged = mergeRotatedChildren(base, local, remote);
+      const baseNames = new Set(base.map((c) => c.ipnsName));
+      const localNames = new Set(local.map((c) => c.ipnsName));
+
+      for (let i = 0; i < merged.length; i++) {
+        const child = merged[i];
+        // Only a REMOTE-only entry (present in neither base nor local) is a
+        // concurrent add needing this re-seal: anything already in `local`
+        // carries the walk's own D-02 re-seal (applied earlier for a normal
+        // rotated child); anything in `base` was already sealed correctly
+        // before this rotation began and local-wins/base-drop already handled
+        // it inside mergeRotatedChildren.
+        if (baseNames.has(child.ipnsName) || localNames.has(child.ipnsName)) continue;
+
+        // A concurrent writer may have sealed this child's readKeySealed under
+        // EITHER the parent's OLD (pre-rotation) key — unaware of the
+        // in-flight rotation — OR the parent's NEW readKey' — when their own
+        // write raced the D-09 batched republish AFTER the parent's own
+        // rotateOne had already committed (reading+re-sealing the parent's
+        // CURRENT published body necessarily uses whichever key is valid at
+        // that moment). `unsealChildReadKey` AEAD-fails closed (throws) on the
+        // wrong key — try old first (needs re-seal), fall back to new
+        // (already correctly sealed — no-op, not an error).
+        let resolved: Awaited<ReturnType<typeof resolveChildKeyAndEnvelope>> = null;
+        let alreadySealedUnderNewKey = false;
+        try {
+          resolved = await resolveChildKeyAndEnvelope(child, parentOldReadKey, ctx);
+        } catch {
+          // Old-key unwrap AEAD-failed — fall through to the new-key attempt.
+        }
+        if (!resolved) {
+          try {
+            resolved = await resolveChildKeyAndEnvelope(child, parentNewReadKey, ctx);
+            alreadySealedUnderNewKey = true;
+          } catch {
+            resolved = null;
+          }
+        }
+        if (!resolved) continue; // neither key unwraps — data inconsistency, leave as-is (not fatal)
+        if (alreadySealedUnderNewKey) {
+          // Already sealed under the parent's current key — nothing to do.
+          resolved.childReadKey.fill(0);
+          continue;
+        }
+        const { childPub, childReadKey } = resolved;
+        try {
+          const reSealed = await sealChildReadKey(
+            childReadKey, // the concurrent child's OWN readKey — unchanged, only re-wrapped
+            parentNewReadKey,
+            childPub.id,
+            childPub.kind as 'folder' | 'file',
+            child.generation
+          );
+          merged[i] = { ...child, readKeySealed: reSealed };
+        } finally {
+          // Transient copy this closure derived via unsealChildReadKey — zero
+          // it, NOT the caller-owned parentOldReadKey/parentNewReadKey
+          // buffers (D-09 terminal-owner rule).
+          childReadKey.fill(0);
+        }
+      }
+
+      return merged;
+    };
   }
 
   /**
@@ -1178,8 +1262,7 @@ export async function rotateReadFromNode(
   ): Promise<void> {
     parentState.pendingChildCount--;
     if (parentState.pendingChildCount === 0) {
-      const preCallChildren = parentState.children;
-      const republishResult = await updateFolderMetadataAndPublish({
+      await updateFolderMetadataAndPublish({
         ipnsName: parentState.parentIpnsName,
         ipnsPrivateKey: parentState.parentIpnsPrivateKey!,
         ipnsPublicKey: parentState.parentIpnsPublicKey,
@@ -1189,16 +1272,18 @@ export async function rotateReadFromNode(
         nodeGeneration: parentState.parentNodeGeneration,
         children: parentState.children,
         baseChildren: parentState.baseChildrenSnapshot,
-        mergeChildrenFn: mergeRotatedChildren,
+        // Phase 70 correction (SC#3): re-seals any concurrently-added child's
+        // readKeySealed under the parent's NEW readKey as part of the CAS-409
+        // merge itself — see createConcurrentAddResealingMerge's docstring.
+        mergeChildrenFn: createConcurrentAddResealingMerge(
+          parentState.parentOldReadKey,
+          parentState.parentNewReadKey
+        ),
         ctx,
       });
-      // SC#1 site B / SC#3: enqueue any concurrently-added child surfaced
-      // by this CAS-merged republish onto the BFS frontier.
-      await enqueueConcurrentlyAddedChildren(
-        parentState,
-        preCallChildren,
-        republishResult.publishedChildren
-      );
+      // Engine-owned copy (see ParentTrackingState.parentOldReadKey) — zero it
+      // here as the terminal owner; never the caller-owned parentNewReadKey.
+      parentState.parentOldReadKey.fill(0);
       parentTracking.delete(parentTrackingKey);
     }
   }
@@ -1281,6 +1366,11 @@ export async function rotateReadFromNode(
       // confirmed by verifySubtreeClean's successful unseal.)
       const rootParentState: ParentTrackingState = {
         parentNewReadKey: rootReadKey,
+        // Dirty-resume: root itself did NOT rotate this run (already committed
+        // in the prior run) — its "old" and "current" readKey are the same
+        // rootReadKey. A concurrent add reaching this parent was sealed under
+        // this same (already-current) key, so old===new is the correct proxy.
+        parentOldReadKey: new Uint8Array(rootReadKey),
         parentIpnsName: rootNodeIpnsName,
         parentIpnsPrivateKey: rootIpnsPrivateKey,
         parentIpnsPublicKey: rootIpnsPublicKey,
@@ -1347,6 +1437,11 @@ export async function rotateReadFromNode(
     if (rootResult.children.length > 0) {
       rootParentState = {
         parentNewReadKey: rootResult.childReadKey,
+        // Root's OLD (pre-rotation) readKey — a defensive copy of the
+        // caller-owned rootReadKey (never zeroed here; D-09), owned by this
+        // tracking state so it can be safely zeroed on teardown below without
+        // touching the caller's buffer.
+        parentOldReadKey: new Uint8Array(rootReadKey),
         parentIpnsName: rootNodeIpnsName,
         parentIpnsPrivateKey: rootIpnsPrivateKey,
         parentIpnsPublicKey: rootIpnsPublicKey,
@@ -1475,6 +1570,13 @@ export async function rotateReadFromNode(
         if (result.children.length > 0) {
           thisNodeParentState = {
             parentNewReadKey: result.childReadKey,
+            // This node's OLD (pre-rotation) readKey — a defensive copy of
+            // item.nodeReadKey, which the `finally` below zeros at the end of
+            // THIS queue-item's processing (this tracking state can outlive
+            // that: its own decrementPendingAndMaybeRepublish only fires once
+            // all of THIS node's children finish, potentially several BFS
+            // iterations later).
+            parentOldReadKey: new Uint8Array(item.nodeReadKey),
             parentIpnsName: item.childRef.ipnsName,
             parentIpnsPrivateKey: item.ipnsPrivateKey,
             parentIpnsPublicKey: item.ipnsPublicKey,
