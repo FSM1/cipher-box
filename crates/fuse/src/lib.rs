@@ -80,8 +80,8 @@ pub use replay::replay_for_vault;
 pub mod content_ops;
 
 // Tier-2 dedup: PollResult enum + poll_filepointer_resolution for read_ops.
-// PollResult is any(fuse,winfsp) so both feature sets can name the type;
-// poll_filepointer_resolution is fuse-only (takes &mut CipherBoxFS, macOS pattern).
+// Both are fuse-only: the winfsp read path has its own inline poll loop and
+// never names PollResult (the module is empty under winfsp).
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub mod poll;
 

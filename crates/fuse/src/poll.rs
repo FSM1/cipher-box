@@ -3,12 +3,12 @@
 //! The macOS read path (`read_ops.rs`) polls for an in-flight async FilePointer
 //! resolution to complete via `poll_filepointer_resolution`. The Windows/WinFsp
 //! read path (`platform/windows/read_ops.rs`) has its own inline polling loop
-//! (different mutex semantics) and does not use this function, so
-//! `poll_filepointer_resolution` is gated `#[cfg(feature = "fuse")]`. The
-//! `PollResult` enum is gated for both feature sets.
+//! (different mutex semantics) and does not use this function, so both
+//! `poll_filepointer_resolution` and the `PollResult` enum it returns are gated
+//! `#[cfg(feature = "fuse")]` (the winfsp read path never names `PollResult`).
 
 /// Why did polling for a FilePointer resolution stop?
-#[cfg(any(feature = "fuse", feature = "winfsp"))]
+#[cfg(feature = "fuse")]
 pub(crate) enum PollResult {
     Resolved,
     TimedOut,

@@ -39,14 +39,17 @@ pub mod prepopulate;
 
 #[cfg(feature = "fuse")]
 use fuser::MountOption;
-#[cfg(any(feature = "fuse", feature = "winfsp"))]
+// These are consumed only by the fuse-gated `mount_filesystem` below; the winfsp
+// mount lives in `windows/mod.rs` with its own imports (narrowed from
+// any(fuse,winfsp) so the winfsp build does not warn on unused imports).
+#[cfg(feature = "fuse")]
 use std::collections::HashMap;
-#[cfg(any(feature = "fuse", feature = "winfsp"))]
+#[cfg(feature = "fuse")]
 use std::sync::Arc;
-#[cfg(any(feature = "fuse", feature = "winfsp"))]
+#[cfg(feature = "fuse")]
 use zeroize::Zeroizing;
 
-#[cfg(any(feature = "fuse", feature = "winfsp"))]
+#[cfg(feature = "fuse")]
 use crate::state::AppState;
 
 /// Maximum retry count for journal entries before they are parked as `Failed`.
