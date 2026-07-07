@@ -117,21 +117,29 @@ pub mod implementation {
         // Check if parent folder metadata is stale and fire background refresh.
         // This mirrors read_directory's staleness check so that file opens also
         // trigger metadata refresh, not only directory listings.
-        let stale_info: Option<(u64, String, zeroize::Zeroizing<Vec<u8>>)> = {
+        // node/v3 (69-14, mirrors 69-09 Slice 5b(d)): refresh needs the folder's
+        // symmetric read_key + write_key for list_folder_owned (not a legacy
+        // folder_key), and InodeKind::Root/Folder's `ipns_name` is a plain
+        // `String` (empty == unset), not `Option<String>`.
+        type RefreshTarget = (String, [u8; 32], [u8; 32]);
+        let stale_info: Option<(u64, RefreshTarget)> = {
             if let Some(parent_inode) = fs.inodes.get(parent_ino) {
                 match &parent_inode.kind {
-                    InodeKind::Root { ipns_name, .. } => {
-                        ipns_name.as_ref().and_then(|name| {
-                            if fs.metadata_cache.get(name).is_none() {
-                                Some((parent_ino, name.clone(), fs.root_folder_key.clone()))
-                            } else {
-                                None
-                            }
-                        })
+                    InodeKind::Root { ipns_name, read_key, write_key, .. } => {
+                        let name = if ipns_name.is_empty() {
+                            fs.root_ipns_name.clone()
+                        } else {
+                            ipns_name.clone()
+                        };
+                        if !name.is_empty() && fs.metadata_cache.get(&name).is_none() {
+                            Some((parent_ino, (name, **read_key, **write_key)))
+                        } else {
+                            None
+                        }
                     }
-                    InodeKind::Folder { ipns_name, folder_key, .. } => {
+                    InodeKind::Folder { ipns_name, read_key, write_key, .. } => {
                         if fs.metadata_cache.get(ipns_name).is_none() {
-                            Some((parent_ino, ipns_name.clone(), folder_key.clone()))
+                            Some((parent_ino, (ipns_name.clone(), **read_key, **write_key)))
                         } else {
                             None
                         }
@@ -143,9 +151,20 @@ pub mod implementation {
             }
         };
 
-        if let Some((refresh_ino, ipns_name, folder_key)) = stale_info.filter(|(_, n, _)| !fs.refreshing_metadata.contains(n)) {
+        if let Some((refresh_ino, (ipns_name, read_key, write_key))) =
+            stale_info.filter(|(_, (n, _, _))| !fs.refreshing_metadata.contains(n))
+        {
             fs.refreshing_metadata.insert(ipns_name.clone());
-            crate::spawn_metadata_refresh(&fs.rt, fs.api.clone(), fs.refresh_tx.clone(), refresh_ino, ipns_name, folder_key);
+            crate::spawn_metadata_refresh(
+                &fs.rt,
+                fs.api.clone(),
+                fs.refresh_tx.clone(),
+                refresh_ino,
+                ipns_name,
+                read_key,
+                write_key,
+                fs.high_water.clone(),
+            );
         }
 
         let inode = fs
@@ -164,19 +183,21 @@ pub mod implementation {
         let is_write = (granted_access & 0x0006) != 0;
 
         if is_write {
-            let (cid, encrypted_file_key, iv, encryption_mode) =
-                match &inode.kind {
-                    InodeKind::File { cid, encrypted_file_key, iv, encryption_mode, .. } => (
-                        cid.clone(), encrypted_file_key.clone(), iv.clone(), encryption_mode.clone(),
-                    ),
-                    _ => return Err(status_invalid_parameter()),
-                };
+            let (cid, ipns_name, read_key) = match &inode.kind {
+                InodeKind::File {
+                    cid,
+                    ipns_name,
+                    read_key,
+                    ..
+                } => (cid.clone(), ipns_name.clone(), **read_key),
+                _ => return Err(status_invalid_parameter()),
+            };
 
             let existing_content = if !cid.is_empty() {
                 if let Some(cached) = fs.content_cache.get(&cid) {
                     Some(cached.to_vec())
                 } else {
-                    match fetch_and_decrypt_file_content(&fs, &cid, &encrypted_file_key, &iv, &encryption_mode) {
+                    match fetch_and_decrypt_file_content(&fs, &ipns_name, &read_key) {
                         Ok(content) => Some(content),
                         Err(e) => {
                             log::error!("Failed to fetch content for write-open: {}", e);
@@ -200,13 +221,15 @@ pub mod implementation {
                 }
             }
         } else {
-            let (cid, encrypted_file_key, iv, encryption_mode) =
-                match &inode.kind {
-                    InodeKind::File { cid, encrypted_file_key, iv, encryption_mode, .. } => (
-                        cid.clone(), encrypted_file_key.clone(), iv.clone(), encryption_mode.clone(),
-                    ),
-                    _ => return Err(status_invalid_parameter()),
-                };
+            let (cid, ipns_name, read_key) = match &inode.kind {
+                InodeKind::File {
+                    cid,
+                    ipns_name,
+                    read_key,
+                    ..
+                } => (cid.clone(), ipns_name.clone(), **read_key),
+                _ => return Err(status_invalid_parameter()),
+            };
 
             if !cid.is_empty()
                 && fs.content_cache.get(&cid).is_none()
@@ -215,9 +238,8 @@ pub mod implementation {
                 spawn_content_prefetch(
                     &mut fs,
                     cid.clone(),
-                    encrypted_file_key.clone(),
-                    iv.clone(),
-                    encryption_mode.clone(),
+                    ipns_name.clone(),
+                    read_key,
                     "Prefetch failed",
                 );
             }
@@ -279,12 +301,21 @@ pub mod implementation {
             }
         }
 
-        let (mut cid, mut encrypted_file_key_hex, mut iv_hex, mut encryption_mode) = {
+        // node/v3 (69-14, mirrors 69-09 Slice 5b): the content descriptors
+        // (encrypted_file_key/iv/encryption_mode) no longer live on the inode —
+        // they are recovered lazily by unsealing the file node's own sealed
+        // read-body. "Unresolved" == empty `cid`; the file's identity
+        // `(ipns_name, read_key)` does not change across resolution, so it is
+        // captured once here.
+        let (mut cid, ipns_name, read_key) = {
             match fs.inodes.get(ino) {
                 Some(inode) => match &inode.kind {
-                    InodeKind::File { cid, encrypted_file_key, iv, encryption_mode, .. } => (
-                        cid.clone(), encrypted_file_key.clone(), iv.clone(), encryption_mode.clone(),
-                    ),
+                    InodeKind::File {
+                        cid,
+                        ipns_name,
+                        read_key,
+                        ..
+                    } => (cid.clone(), ipns_name.clone(), **read_key),
                     _ => return Err(status_invalid_parameter()),
                 },
                 None => return Err(status_object_name_not_found()),
@@ -303,12 +334,11 @@ pub mod implementation {
                 fs.drain_filepointer_completions();
 
                 if let Some(inode) = fs.inodes.get(ino) {
-                    if let InodeKind::File { file_meta_resolved: true, cid: ref c, encrypted_file_key: ref e, iv: ref i, encryption_mode: ref m, .. } = &inode.kind {
-                        cid = c.clone();
-                        encrypted_file_key_hex = e.clone();
-                        iv_hex = i.clone();
-                        encryption_mode = m.clone();
-                        break;
+                    if let InodeKind::File { cid: ref c, .. } = &inode.kind {
+                        if !c.is_empty() {
+                            cid = c.clone();
+                            break;
+                        }
                     }
                 }
                 // Early exit: resolution finished (failed) but inode still unresolved
@@ -370,9 +400,8 @@ pub mod implementation {
             spawn_content_prefetch(
                 &mut fs,
                 cid.clone(),
-                encrypted_file_key_hex.clone(),
-                iv_hex.clone(),
-                encryption_mode.clone(),
+                ipns_name.clone(),
+                read_key,
                 "Read prefetch failed",
             );
         }
