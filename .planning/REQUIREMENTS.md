@@ -70,7 +70,7 @@ Requirements for v2.0. Each maps to exactly one roadmap phase. Categories: CRYPT
 
 - [ ] **TEST-01**: A rotation crash-safety/resume suite (the must-exist-before-merge suite) extends `tests/sdk-e2e` — the only real client→API IPNS publish/resolve round-trip — with abort-and-resume cases
 - [x] **TEST-02**: The TS↔Rust AAD KAT is a single committed fixture asserted by both `packages/crypto/__tests__` and a Rust `#[test]` (a byte mismatch is silent total decryption failure)
-- [ ] **TEST-03**: The winfsp read-path is validated via `Cargo Check & Test (Windows)` (authoritative) and the dispatch-gated desktop E2E is triggered explicitly
+- [x] **TEST-03**: The winfsp read-path is validated via `Cargo Check & Test (Windows)` (authoritative) and the dispatch-gated desktop E2E is triggered explicitly
 
 ### WEB — client/web runtime integration
 
@@ -169,7 +169,7 @@ Which phases cover which requirements. Populated during roadmap creation.
 | SDK-READ-02 | Phase 68.2 | Complete |
 | SDK-READ-03 | Phase 68.2 | Complete |
 | SDK-READ-04 | Phase 68.2 | Complete |
-| TEST-03 | Phase 69 | Pending |
+| TEST-03 | Phase 69 | Complete |
 
 **Coverage:**
 

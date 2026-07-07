@@ -657,7 +657,35 @@ Plans:
 5. The anti-rollback floor store performs an atomic compare-and-set (Rust `bump_floor` guarded; `JsonSidecarFloorStore::put` no blocking RMW on the async executor; corrupt sidecar fails closed, not `unwrap_or_default`); `bumpFloor` on the TS side no longer runs sequentially where it can race
 6. Rotation readKey source buffers are zeroed after use; no module-global `activeRootNodeId` leaks across roots
 
-**Plans**: TBD (run `/gsd-plan-phase 70`)
+**Plans**: 8 plans
+
+Plans:
+
+**Wave 1**
+
+- [ ] 70-01-PLAN.md — SC#1 `mergeRotatedChildren` pure local-wins merge + unit tests
+- [ ] 70-02-PLAN.md — SC#5 atomic/non-blocking/fail-closed Rust floor store + TS parity note
+- [ ] 70-03-PLAN.md — SC#6 web rotation-driver Set-based badge + cached IDB connection
+
+**Wave 2** *(blocked on 70-01)*
+
+- [ ] 70-04-PLAN.md — SC#1/SC#3 wire local-wins at both merge sites + `rotateOne` merged-children return
+
+**Wave 3** *(blocked on 70-04)*
+
+- [ ] 70-05-PLAN.md — SC#2 `verifySubtreeClean` full-subtree recursion + shared traversal helper
+
+**Wave 4** *(blocked on 70-05)*
+
+- [ ] 70-06-PLAN.md — SC#3/SC#4/SC#6 fresh-record resume entry gate + `RootKeyStaleError` + grant threading + fresh-copy return
+
+**Wave 5** *(blocked on 70-06)*
+
+- [ ] 70-07-PLAN.md — SC#3/SC#6 client zeroization + `RootKeyStaleError` re-nav fallback + Open-Q2 trace
+
+**Wave 6** *(blocked on 70-07)*
+
+- [ ] 70-08-PLAN.md — SC#1/SC#3 sdk-e2e phase gate (strengthen test 3 + fresh-record-resume mid-walk crash)
 
 ---
 
@@ -759,6 +787,6 @@ Plans:
 | 66 | API Schema Cutover, Publish Gate, and Tombstone | 9/9 | Complete    | 2026-06-30 |
 | 67 | TEE Lease-Renewer Contract Rewrite | 8/8 | Complete    | 2026-07-01 |
 | 68 | Web Integration — Rotation UX and Durable Client State | 12/12 | Complete    | 2026-07-01 |
-| 69 | FUSE and WinFsp — Rust Integration and Grant-Root Awareness | 25/25 | Complete   | 2026-07-07 |
+| 69 | FUSE and WinFsp — Rust Integration and Grant-Root Awareness | 25/25 | Complete    | 2026-07-07 |
 
 v1.1 history: 45 phases complete (198 plans). See `milestones/v1.1-ROADMAP.md` for full detail.

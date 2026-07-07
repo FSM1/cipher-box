@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
-current_phase: 69
-current_phase_name: fuse-and-winfsp-rust-integration-and-grant-root-awareness
+current_phase: 70
+current_phase_name: Rotation Soundness — Deep Merge, Fresh-Record Resume, and Durable Floor Concurrency
 status: executing
-stopped_at: Phase 69 node/v3 desktop port + root-key recovery; desktop-e2e validating
-last_updated: "2026-07-07T00:54:12.493Z"
+stopped_at: Phase 71 context gathered (discuss complete; uncommitted, awaiting branch decision)
+last_updated: "2026-07-07T19:07:31.540Z"
 last_activity: 2026-07-07
-last_activity_desc: Phase 69 execution resumed (wave continue)
+last_activity_desc: Phase 69 complete, transitioned to Phase 70
 progress:
-  total_phases: 11
+  total_phases: 15
   completed_phases: 10
   total_plans: 140
-  completed_plans: 138
-  percent: 91
+  completed_plans: 139
+  percent: 67
 ---
 
 # Project State
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 
 ## Current Position
 
-Phase: 69 (fuse-and-winfsp-rust-integration-and-grant-root-awareness) — EXECUTING
-Plan: node/v3 desktop port + root-key recovery — 24/25 merged (69-14 WinFsp pending; desktop-e2e validating)
-Status: Executing Phase 69
-Last activity: 2026-07-07 — Phase 69 execution resumed (wave continue)
+Phase: 70 — Rotation Soundness — Deep Merge, Fresh-Record Resume, and Durable Floor Concurrency
+Plan: Not started
+Status: Ready to execute
+Last activity: 2026-07-07 — Phase 69 complete, transitioned to Phase 70
 
 Progress: `██████████` 79 / 79 plans (100%)
 
@@ -534,10 +534,10 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-07T00:00:00.000Z
-**Stopped at:** Phase 69 node/v3 desktop port + root-key recovery; desktop-e2e validating
+**Last session:** 2026-07-07T18:40:04.404Z
+**Stopped at:** Phase 71 context gathered (discuss complete; uncommitted, awaiting branch decision)
 **Resume file:** 
-.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-CONTEXT.md
+.planning/phases/71-share-invite-security-and-ipns-data-integrity-api/71-CONTEXT.md
 
 ### Blockers
 
