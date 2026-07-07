@@ -65,8 +65,11 @@ pub struct UploadJournalResult {
     /// Raw 32-byte AES content key — sealed inside `NodeContent.file_key`
     /// (NOT ECIES-wrapped; node/v3 stores it raw inside the sealed read-body).
     pub file_key: zeroize::Zeroizing<Vec<u8>>,
-    /// Hex-encoded AES-GCM IV (NodeContent.file_iv is HEX — content_ops decodes
-    /// it via `hex::decode`).
+    /// Hex-encoded AES-GCM IV threaded internally through the mount (inode.iv
+    /// display + `publish_file_node`). NOTE: the WIRE field `NodeContent.file_iv`
+    /// is BASE64 (the TS/web read chain does `base64ToBytes(fileIv)`); the seal
+    /// sites convert this hex to base64 (see `publish_file_node` and the journaled
+    /// placeholder above).
     pub iv_hex: String,
     /// MIME type derived from the file name.
     pub mime_type: String,
@@ -279,13 +282,19 @@ impl crate::CipherBoxFS {
 
         // Build the file NodeContent. The content CID is filled at publish time
         // (live path / replay re-upload) — the journal-time seal uses an empty
-        // CID placeholder. `file_iv` is HEX (content_ops decodes via hex::decode);
-        // `file_key` is the RAW 32-byte AES key (sealed inside the read-body).
-        // Versioning history is not reconstructed here (InodeKind dropped
-        // `versions` in Slice 1 — see the file-versioning E2E flag).
+        // CID placeholder. `file_iv` is BASE64 on the wire (the shipped TS/web read
+        // chain — sdk-core downloadFileContent — does base64ToBytes(fileIv)); the
+        // mount threads the IV as hex internally (`iv_hex`) so convert here. The
+        // REPLAY path re-seals from this journaled NodeContent (replay.rs Step 4),
+        // so it must already carry base64 to interoperate with a cross-client TS
+        // reader. `file_key` is the RAW 32-byte AES key (sealed inside the
+        // read-body). Versioning history is not reconstructed here (InodeKind
+        // dropped `versions` in Slice 1 — see the file-versioning E2E flag).
+        let file_iv_b64 = base64::engine::general_purpose::STANDARD
+            .encode(hex::decode(&iv_hex).map_err(|_| "Invalid file IV hex".to_string())?);
         let node_content = NodeContent {
             cid: String::new(),
-            file_iv: iv_hex.clone(),
+            file_iv: file_iv_b64,
             size: file_size,
             mime_type: mime_type.clone(),
             encryption_mode: encryption_mode.clone(),

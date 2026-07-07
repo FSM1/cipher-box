@@ -81,11 +81,13 @@ pub async fn fetch_node_and_decrypt_content(
 }
 
 /// Gated single-node fetch (SC#6) that recovers a file's content DESCRIPTORS
-/// (CID, IV hex, size, encryption mode) WITHOUT downloading the content.
+/// (CID, IV, size, encryption mode) WITHOUT downloading the content.
 ///
 /// Used by the FilePointer-resolution path: an unresolved File inode (empty CID)
 /// is resolved by fetching its own node and unsealing the read-body. Returns
-/// `(cid, iv_hex, size, encryption_mode)`.
+/// `(cid, file_iv, size, encryption_mode)` where `file_iv` is the wire value
+/// (BASE64) stored into the inode's display-only `iv` field (never decoded for
+/// crypto — content decrypt re-reads `content.file_iv` from the fresh node).
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub async fn resolve_file_descriptors(
     api: &cipherbox_api_client::ApiClient,
@@ -135,6 +137,7 @@ pub async fn fetch_and_decrypt_content_async(
     published: &cipherbox_core::node::PublishedNode,
     read_key: &[u8; 32],
 ) -> Result<Vec<u8>, String> {
+    use base64::Engine as _;
     // Recover the file node's content descriptor by SYMMETRIC unseal of its own
     // read-body (node/v3, SC#1) — never ECIES.
     let content = unseal_file_content(published, read_key)?;
@@ -144,15 +147,22 @@ pub async fn fetch_and_decrypt_content_async(
         .map_err(|e| e.to_string())?;
     let file_key_arr = zeroizing_32_from_slice(&content.file_key, "Invalid file key length")?;
 
+    // NodeContent.file_iv is BASE64 on the wire (the shipped TS/web read chain —
+    // sdk-core downloadFileContent — does base64ToBytes(fileIv)). Decode as base64,
+    // never hex: a hex-decoded IV would yield the wrong bytes and fail the GCM tag.
     let plaintext = if content.encryption_mode == "CTR" {
-        let iv = hex::decode(&content.file_iv).map_err(|_| "Invalid file IV hex".to_string())?;
+        let iv = base64::engine::general_purpose::STANDARD
+            .decode(&content.file_iv)
+            .map_err(|_| "Invalid file IV base64".to_string())?;
         let iv_arr: [u8; 16] = iv
             .try_into()
             .map_err(|_| "Invalid CTR IV length (expected 16)".to_string())?;
         cipherbox_crypto::aes_ctr::decrypt_aes_ctr(&encrypted_bytes, &file_key_arr, &iv_arr)
             .map_err(|e| format!("CTR decryption failed: {}", e))?
     } else {
-        let iv = hex::decode(&content.file_iv).map_err(|_| "Invalid file IV hex".to_string())?;
+        let iv = base64::engine::general_purpose::STANDARD
+            .decode(&content.file_iv)
+            .map_err(|_| "Invalid file IV base64".to_string())?;
         let iv_arr: [u8; 12] = iv
             .try_into()
             .map_err(|_| "Invalid GCM IV length (expected 12)".to_string())?;
@@ -209,9 +219,17 @@ pub async fn publish_file_node(
         .as_millis() as u64;
 
     // 1. Re-seal the file node with the real content CID.
+    // NodeContent.file_iv is BASE64 on the wire — the shipped TS/web read chain
+    // (sdk-core downloadFileContent) does base64ToBytes(fileIv). The mount threads
+    // the IV as hex internally (`iv_hex`); convert to base64 at this wire boundary
+    // so a cross-client TS reader recovers the correct 12-byte IV. (Publishing hex
+    // here makes the reader decode 24 hex chars as base64 -> 18 wrong bytes ->
+    // AES-GCM "Decryption failed" — the D-07 desktop-e2e cross-client failure.)
+    let file_iv_b64 = base64::engine::general_purpose::STANDARD
+        .encode(hex::decode(iv_hex).map_err(|_| "Invalid file IV hex".to_string())?);
     let node_content = cipherbox_core::node::NodeContent {
         cid: cid.to_string(),
-        file_iv: iv_hex.to_string(),
+        file_iv: file_iv_b64,
         size,
         mime_type: mime_type.to_string(),
         encryption_mode: encryption_mode.to_string(),
