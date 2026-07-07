@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "devDependencies": {
+    "@cipherbox/core": "workspace:*",
     "@cipherbox/crypto": "workspace:*",
     "@cipherbox/sdk-core": "workspace:*",
     "@types/node": "^22.19.7",
