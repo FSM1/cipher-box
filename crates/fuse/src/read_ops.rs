@@ -310,16 +310,21 @@ pub(crate) mod implementation {
         let (cid, ipns_name, read_key): (String, String, [u8; 32]) = {
             let mut info = file_info.unwrap();
             if info.0.is_empty() {
-                let is_unresolved = fs
-                    .inodes
-                    .get(ino)
-                    .map(|i| {
-                        matches!(
-                            &i.kind,
-                            InodeKind::File { cid, .. } if cid.is_empty()
-                        )
-                    })
-                    .unwrap_or(false);
+                // A file with content buffered locally (pending background
+                // upload) is not an unresolved remote FilePointer — let the
+                // open succeed so the subsequent read serves `pending_content`,
+                // instead of polling → NotInFlight → EIO.
+                let is_unresolved = !fs.pending_content.contains_key(&ino)
+                    && fs
+                        .inodes
+                        .get(ino)
+                        .map(|i| {
+                            matches!(
+                                &i.kind,
+                                InodeKind::File { cid, .. } if cid.is_empty()
+                            )
+                        })
+                        .unwrap_or(false);
 
                 if is_unresolved {
                     log::debug!("open: ino={} is unresolved FilePointer, polling...", ino);
@@ -509,6 +514,24 @@ pub(crate) mod implementation {
         };
 
         if cid.is_empty() {
+            // Read-after-write / empty-file fast path: if this inode has content
+            // buffered locally (awaiting the background upload's UploadComplete),
+            // serve it directly. Without this, the unresolved-FilePointer poll
+            // below — which matches on the SAME empty-cid predicate and so is
+            // always taken — returns NotInFlight → EIO before the buffered
+            // content (and the empty-file fallback further down) is ever
+            // reachable, so a read immediately after a write spuriously fails.
+            if let Some(content) = fs.pending_content.get(&ino) {
+                let start = offset as usize;
+                if start >= content.len() {
+                    reply.data(&[]);
+                } else {
+                    let end = std::cmp::min(start + size as usize, content.len());
+                    reply.data(&content[start..end]);
+                }
+                return;
+            }
+
             let is_unresolved = fs
                 .inodes
                 .get(ino)

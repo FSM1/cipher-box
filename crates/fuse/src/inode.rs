@@ -110,7 +110,12 @@ impl FileAttrs {
 /// owner of these `Zeroizing` keys — they are moved in, never borrowed-then-
 /// zeroed. The legacy node-to-node hex key fields (`encrypted_folder_key`,
 /// `encrypted_file_key`, `folder_key`) are gone: `read_key` replaces them.
-#[derive(Debug, Clone)]
+// NOTE: `Debug` is hand-written below (not derived): every variant carries
+// secret key material (`read_key`/`write_key`/`ipns_private_key`), and
+// `Zeroizing`'s own `Debug` forwards to the inner value rather than redacting,
+// so a derived `Debug` would print raw key bytes in logs / panic output
+// (crypto rule #2). The manual impl prints only non-secret fields.
+#[derive(Clone)]
 pub enum InodeKind {
     /// Root directory of the mounted vault.
     ///
@@ -165,6 +170,53 @@ pub enum InodeKind {
         /// Wrapped in `Zeroizing` for automatic zeroization on drop.
         ipns_private_key: Zeroizing<Vec<u8>>,
     },
+}
+
+impl std::fmt::Debug for InodeKind {
+    /// Redacting `Debug`: prints only non-secret fields; the `read_key`,
+    /// `write_key`, and `ipns_private_key` are shown as `<redacted>` so key
+    /// material can never reach logs or panic output (crypto rule #2).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InodeKind::Root { ipns_name, .. } => f
+                .debug_struct("Root")
+                .field("ipns_name", ipns_name)
+                .field("read_key", &"<redacted>")
+                .field("write_key", &"<redacted>")
+                .field("ipns_private_key", &"<redacted>")
+                .finish(),
+            InodeKind::Folder {
+                ipns_name,
+                children_loaded,
+                ..
+            } => f
+                .debug_struct("Folder")
+                .field("ipns_name", ipns_name)
+                .field("children_loaded", children_loaded)
+                .field("read_key", &"<redacted>")
+                .field("write_key", &"<redacted>")
+                .field("ipns_private_key", &"<redacted>")
+                .finish(),
+            InodeKind::File {
+                ipns_name,
+                cid,
+                size,
+                encryption_mode,
+                iv,
+                ..
+            } => f
+                .debug_struct("File")
+                .field("ipns_name", ipns_name)
+                .field("cid", cid)
+                .field("size", size)
+                .field("encryption_mode", encryption_mode)
+                .field("iv", iv)
+                .field("read_key", &"<redacted>")
+                .field("write_key", &"<redacted>")
+                .field("ipns_private_key", &"<redacted>")
+                .finish(),
+        }
+    }
 }
 
 // -- InodeData ---------------------------------------------------------------
@@ -648,10 +700,11 @@ impl InodeTable {
                 *iv_slot = iv;
                 *size_slot = size;
                 *mode_slot = encryption_mode;
+                // Update attr size for GETATTR/READDIR — only meaningful for
+                // file inodes; folders/root must not have their attr rewritten.
+                inode.attr.size = size;
+                inode.attr.blocks = (size + 511) / 512;
             }
-            // Update attr size for GETATTR/READDIR.
-            inode.attr.size = size;
-            inode.attr.blocks = (size + 511) / 512;
         }
     }
 

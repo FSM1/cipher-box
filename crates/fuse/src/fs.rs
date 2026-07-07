@@ -286,7 +286,15 @@ impl CipherBoxFS {
         let published_bytes = encode_published_node(&published)
             .map_err(|e| format!("encode_published_node failed for {}: {}", folder_ino, e))?;
 
-        let old_cid = self.metadata_cache.get(&ipns_name).map(|c| c.cid.clone());
+        // The metadata cache stores an empty-string `cid` purely as a freshness
+        // marker (drain_refresh_completions), distinct from a real last-published
+        // CID. Filter it out so `""` is never threaded into publish/CAS/unpin as
+        // if it were a previous CID.
+        let old_cid = self
+            .metadata_cache
+            .get(&ipns_name)
+            .map(|c| c.cid.clone())
+            .filter(|c| !c.is_empty());
         Ok((published_bytes, ipns_private_key, ipns_name, old_cid))
     }
 
