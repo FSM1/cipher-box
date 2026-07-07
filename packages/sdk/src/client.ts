@@ -2001,6 +2001,17 @@ export class CipherBoxClient {
         });
         oldFolderKey.fill(0);
       }
+
+      // T-70-13 / SC#6: performScopeExitRotation is the TERMINAL OWNER of
+      // rotationResult.readKey. rotateReadFromNode always hands over a FRESH
+      // COPY on every return path -- including the dirty-resume-republish
+      // branch (plan 70-06) -- never an alias of params.rootReadKey, so
+      // zeroing it here can never corrupt a live caller-owned buffer. The
+      // folderTree entry above already took its OWN independent defensive
+      // copy (`new Uint8Array(rotationResult.readKey)`), so this fill(0)
+      // touches neither that copy nor params.rootReadKey (see the comment
+      // above -- both are distinct buffers from rotationResult.readKey).
+      rotationResult.readKey.fill(0);
     }
   }
 

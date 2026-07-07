@@ -466,6 +466,12 @@ describe('CipherBoxClient — folderTree refresh after scope-exit rotation (Gap 
       publishedChildren: [],
     });
     const rotatedReadKey = new Uint8Array(32).fill(0x99);
+    // Snapshot the expected bytes BEFORE the call: performScopeExitRotation is
+    // now the terminal owner of `rotationResult.readKey` (Task 1, T-70-13) and
+    // zeroes `rotatedReadKey` IN PLACE by the time this resolves, so comparing
+    // against the live `rotatedReadKey` reference post-call would compare
+    // zeroed bytes against themselves.
+    const expectedRotatedBytes = new Uint8Array(rotatedReadKey);
     vi.mocked(sdkCore.rotateReadFromNode).mockResolvedValue({
       readKey: rotatedReadKey,
       generation: 5,
@@ -476,9 +482,62 @@ describe('CipherBoxClient — folderTree refresh after scope-exit rotation (Gap 
 
     const state = client.getFolderTree().get(FOLDER_IPNS);
     expect(state).toBeDefined();
-    expect(state?.folderKey).toEqual(rotatedReadKey);
+    expect(state?.folderKey).toEqual(expectedRotatedBytes);
     expect(state?.sequenceNumber).toBe(10n);
     expect(state?.nodeGeneration).toBe(5);
+  });
+
+  it('T-70-13 / SC#6: zeroes rotationResult.readKey as terminal owner without touching the folderTree copy or the caller-owned rootReadKey (paired zeroization invariant)', async () => {
+    const client = new CipherBoxClient(
+      createTestConfig({
+        rotationCallbacks: {
+          getActiveGrantRootIpnsNames: async () => new Set([FOLDER_IPNS]),
+          getLocalGrantRecord: () => null,
+          persistJob: vi.fn(),
+        },
+      })
+    );
+    setupFolder(client, FOLDER_IPNS); // seeds folderKey = new Uint8Array(32).fill(1)
+
+    // Capture the CALLER-OWNED rootReadKey buffer reference BEFORE the
+    // mutation. `performScopeExitRotation` is invoked with
+    // `rootReadKey: folder.folderKey`, which (until `FolderTree.set`'s
+    // defensive-copy swap replaces the map entry) is the exact same object
+    // reference as this pre-mutation folderTree entry's `folderKey`.
+    const beforeState = client.getFolderTree().get(FOLDER_IPNS)!;
+    const callerRootReadKeyRef = beforeState.folderKey;
+    const callerRootReadKeySnapshot = new Uint8Array(callerRootReadKeyRef);
+
+    vi.mocked(sdkCore.renameInFolder).mockReturnValue({
+      updatedChildren: [],
+      renamedChild: {} as never,
+    });
+    vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
+      cid: 'bafynew',
+      newSequenceNumber: 2n,
+      publishedChildren: [],
+    });
+    const rotationEngineReadKey = new Uint8Array(32).fill(0x77);
+    const rotationEngineReadKeySnapshot = new Uint8Array(rotationEngineReadKey);
+    vi.mocked(sdkCore.rotateReadFromNode).mockResolvedValue({
+      readKey: rotationEngineReadKey,
+      generation: 3,
+      sequenceNumber: 7n,
+    });
+
+    await client.renameItem(FOLDER_IPNS, 'file1', 'new.txt');
+
+    // (a) the engine-returned readKey IS zeroed by its new terminal owner.
+    expect(rotationEngineReadKey).toEqual(new Uint8Array(32).fill(0));
+
+    // (b) the folderTree's OWN independent defensive copy is UNCHANGED --
+    // still holds the rotated bytes, never zeroed.
+    const afterState = client.getFolderTree().get(FOLDER_IPNS);
+    expect(afterState?.folderKey).toEqual(rotationEngineReadKeySnapshot);
+    expect(afterState?.folderKey).not.toBe(rotationEngineReadKey); // distinct buffer
+
+    // (c) the caller-owned rootReadKey buffer is UNCHANGED (never zeroed).
+    expect(callerRootReadKeyRef).toEqual(callerRootReadKeySnapshot);
   });
 
   it('a second same-folder mutation after a covered rotation does NOT throw ReconcileStaleError (self-heals without a page reload)', async () => {
