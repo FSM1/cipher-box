@@ -1,0 +1,60 @@
+/gsd-manager
+
+---
+
+specifically, I would like to dive in to the root ownership question - I would like some flows laid out so that I can better evaluate the options provided
+
+---
+
+<task-notification>
+<task-id>ae239e9c4b029fad6</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/ae239e9c4b029fad6.output</output-file>
+<status>completed</status>
+<summary>Agent "Plan phase 70 (rotation soundness)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The full plan-phase pipeline is complete. Final state is clean and coherent:
+- Branch `feat/rotation-soundness-deep-merge-fresh-record-resume`: 4 commits ahead of origin/main (research → validation → patterns → plans).
+- `main == origin/main`: clean, no Phase-70 contamination.
+- All 11 phase artifacts present (RESEARCH, VALIDATION, PATTERNS, 8 PLANs).
+
+I'm deliberately stopping here and NOT auto-advancing to execute-phase — the task was to plan and report, and execution would run test suites (violating the "static analysis only" constraint). The gap-analysis gate is advisory-only (phase_req_ids is null; this phase is SC-driven).
+
+---
+
+## Phase 70 plan-phase — complete
+
+**Result:** 8 plans, 6 waves, **plan-checker PASSED** (0 blockers; 2 non-blocking cosmetic warnings). All 6 Success Criteria covered; dependency graph acyclic.
+
+**Plan structure:**
+| Plan | Wave | Objective | SCs |
+|---|---|---|---|
+| 70-01 | 1 | New `mergeRotatedChildren` (local-wins 3-way merge) + tests, isolated from generic `mergeChildren` | SC#1 |
+| 70-02 | 1 | Rust `JsonSidecarFloorStore` atomic/non-blocking/fail-closed (`Mutex`+`spawn_blocking`+max-preserving+corrupt-fail-closed) + guarded `bump_floor` | SC#5 |
+| 70-03 | 1 | Web driver `activeRootNodeId`→`Set` badge + cached IndexedDB conn | SC#5/6 |
+| 70-04 | 2 | Wire local-wins at **both** merge sites + `rotateOne` returns merged children (enqueue concurrent adds) | SC#1,3 |
+| 70-05 | 3 | `verifySubtreeClean` full-subtree recursion + key-bearing frontier + missing-root⇒dirty | SC#2 |
+| 70-06 | 4 | Fresh-record resume gate (root-unseal probe) + `RootKeyStaleError` + double-rotation + `grantCallbacks` threading + fresh-copy return | SC#3,4,6 |
+| 70-07 | 5 | Client terminal-owner zeroization (paired test) + `RootKeyStaleError`→top-down re-nav + pure-revoke trace | SC#3,6 |
+| 70-08 | 6 | sdk-e2e gate: strengthen test 3 (navigate+unseal) + new mid-walk-crash fresh-resume | SC#1,3 |
+
+Waves 2→4 serialize on the shared `engine.ts` (inherent, not parallelizable); Wave 1 is fully parallel (zero file overlap).
+
+**Key technical decisions (grounded in research, verified against live code):**
+- SC#1 has **two** merge sites, not one — the e2e-reproducible downgrade fires through `updateFolderMetadataAndPublish`'s inline D-09 merge (`folder/registration.ts`), not just `mergeConcurrentChildren`. Both fixed via a new `rotation/merge.ts`; generic `folder/merge.ts` remote-wins default left untouched.
+- SC#5 atomicity pushed to the **store layer** (`JsonSidecarFloorStore::put`), mirroring the already-correct TS `idbPut`; TS/Rust parity asserted as a shared must_have.
+
+**Gray-area assumptions made autonomously (background `--auto`, no user; treated as locked, documented as residuals):**
+- **SC#3 fresh-resume narrowed:** Phase 68's durable floor stores generation/seq *numbers*, never key *material* — so a genuinely-lost root key has **no** cryptographic recovery. Scoped SC#3 to: drop the `completedNodeIds.size` gate, probe root-unseal viability, surface a distinct `RootKeyStaleError` (→ client falls back to top-down re-nav), and document the lost-key window as an accepted residual. Did **not** implement/claim key recovery.
+- **Open Q2** (pure-revoke ancestor-mirror staleness): scoped to a trace-and-document task, not a redesign.
+- **Concurrent-delete-during-rotation resurrection** (local-wins side-effect): accepted as self-healing residual per the todo's own rule ordering.
+- Convergence uses safe **double-rotation** per design §4.5 (not "never double-bump").
+
+**Two non-blocking checker warnings (accepted):** RESEARCH Open Questions lack `(RESOLVED)` markers (they *are* resolved in plans 70-06/07); VALIDATION `nyquist_compliant:false`/`wave_0_complete:false` are honestly pending-until-execution (Wave 0 test files are authored during execution).
+
+**Operational notes you should know:**
+1. **Write-tool guard / worktree:** this background session is under a worktree-isolation guard that blocks the Write tool on the shared checkout. `EnterWorktree` is unavailable (this session is a cwd-pinned subagent), and per-agent worktree isolation would fragment the planner→checker handoff. So sub-agents authored artifacts via **Bash** (the researcher's approach) — surfaced deliberately, not silently. All artifacts landed correctly on disk and are committed. I did **not** modify settings to disable the guard (config changes are off-limits).
+2. **Branch:** the researcher's RESEARCH.md commit had landed on `main`. I created the phase feature branch `feat/rotation-soundness-deep-merge-fresh-record-resume` (capturing it) and reset local `main` back to `origin/main` — honoring "commits on feature branches, never main." Nothing pushed. **All Phase 70 work is on that branch (4 commits); STATE.md = "Ready to execute".**
+3. **Next step:** `/gsd-execute-phase 70` on that branch (executor must bring up the docker stack + `pnpm --filter @cipherbox/api dev` before the 70-08 sdk-e2e gate).</result>
+<usage><subagent_tokens>247751</subagent_tokens><tool_uses>42</tool_uses><duration_ms>3599060</duration_ms></usage>
+</task-notification>
