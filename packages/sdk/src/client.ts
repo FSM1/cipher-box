@@ -2027,10 +2027,29 @@ export class CipherBoxClient {
             // so ensureFolderLoaded cannot short-circuit on the same stale
             // cached copy and is forced through the network re-derivation.
             this.folderTree.delete(params.rootNodeIpnsName);
+            let recoveryError: unknown;
             const recovered = await this.ensureFolderLoaded(params.rootNodeIpnsName).catch(
-              () => null
+              (e: unknown) => {
+                recoveryError = e;
+                return null;
+              }
             );
             if (!recovered) {
+              if (recoveryError) {
+                // The top-down re-navigation attempt itself threw (network,
+                // auth, unseal, etc.) -- that is a DIFFERENT failure than the
+                // "known residual" case below (which is a clean not-found
+                // resolve, not a thrown error). Surface the real recovery
+                // error as `cause` instead of masking every failure behind
+                // the generic stale-key message.
+                throw new Error(
+                  `Rotation root ${params.rootNodeIpnsName} has a stale local read key ` +
+                    '(RootKeyStaleError) and the top-down folderTree re-navigation ' +
+                    'recovery attempt itself failed. See `cause` for the underlying ' +
+                    'error.',
+                  { cause: recoveryError }
+                );
+              }
               // Open Question 2 residual: rotation never updates its OWN
               // root's ancestor SealedChildRef mirror (see
               // performScopeExitRotation's doc comment above), so a

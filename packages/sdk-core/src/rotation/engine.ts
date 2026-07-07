@@ -1299,7 +1299,16 @@ export async function rotateReadFromNode(
    * double-processed.
    */
   function enqueueDirtyFrontierItem(item: DirtyFrontierItem): void {
-    if (queue.some((q) => q.childRef.ipnsName === item.ipnsName)) return;
+    if (queue.some((q) => q.childRef.ipnsName === item.ipnsName)) {
+      // Deduped against an item already queued (e.g. a depth-1 dirty edge also
+      // covered by the normal children-enqueue loop) — this item is discarded
+      // and its key is never referenced again. Zero it here as the terminal
+      // owner (D-09); do NOT zero below after push, since in that (adopted)
+      // path this same buffer reference becomes the queue item's nodeReadKey
+      // and is zeroed exactly once by the BFS loop's own finally (line ~1629).
+      item.nodeReadKey.fill(0);
+      return;
+    }
     const childKeys = nodeKeySource?.(item.ipnsName);
     queue.push({
       childRef: {
@@ -1384,35 +1393,46 @@ export async function rotateReadFromNode(
       parentTracking.set(rootNodeIpnsName, rootParentState);
 
       for (const frontierItem of frontier) {
-        const childRef = (rootNode.children ?? []).find(
-          (c) => c.ipnsName === frontierItem.ipnsName
-        );
-        if (!childRef) {
-          // SC#3 (Plan 70-06 / T-70-12): fail-closed accounting — a frontier item
-          // whose IPNS name is no longer present in root's current children mirror
-          // must not silently leave pendingChildCount stuck above zero forever.
-          await decrementPendingAndMaybeRepublish(rootParentState, rootNodeIpnsName);
-          continue;
+        try {
+          const childRef = (rootNode.children ?? []).find(
+            (c) => c.ipnsName === frontierItem.ipnsName
+          );
+          if (!childRef) {
+            // SC#3 (Plan 70-06 / T-70-12): fail-closed accounting — a frontier item
+            // whose IPNS name is no longer present in root's current children mirror
+            // must not silently leave pendingChildCount stuck above zero forever.
+            await decrementPendingAndMaybeRepublish(rootParentState, rootNodeIpnsName);
+            continue;
+          }
+          const resolved = await resolveChildKeyAndEnvelope(childRef, rootReadKey, ctx);
+          if (!resolved) {
+            // SC#3 (Plan 70-06 / T-70-12): fail-closed accounting — see above.
+            await decrementPendingAndMaybeRepublish(rootParentState, rootNodeIpnsName);
+            continue;
+          }
+          const { childPub, childReadKey } = resolved;
+          const childKeys = nodeKeySource?.(frontierItem.ipnsName);
+          queue.push({
+            childRef,
+            nodeReadKey: childReadKey,
+            parentIpnsName: rootNodeIpnsName,
+            ipnsPrivateKey: childKeys?.privateKey,
+            ipnsPublicKey: childKeys?.publicKey,
+            nodeWriteKey: childKeys?.writeKey,
+            childPubId: childPub.id,
+            childPubKind: childPub.kind as 'folder' | 'file',
+            enqueuedGeneration: childRef.generation,
+          });
+        } finally {
+          // frontierItem.nodeReadKey (this dirty node's own pre-rotation key,
+          // minted by verifySubtreeClean/collectDirtyFrontier) is NEVER adopted
+          // into `queue` by this loop — the queue item's nodeReadKey above is
+          // always the freshly re-derived childReadKey from
+          // resolveChildKeyAndEnvelope(childRef, rootReadKey, ctx), a distinct
+          // buffer. Zero the frontier item's buffer here as its terminal owner
+          // on every exit path (not-found, resolve-failed, or queued).
+          frontierItem.nodeReadKey.fill(0);
         }
-        const resolved = await resolveChildKeyAndEnvelope(childRef, rootReadKey, ctx);
-        if (!resolved) {
-          // SC#3 (Plan 70-06 / T-70-12): fail-closed accounting — see above.
-          await decrementPendingAndMaybeRepublish(rootParentState, rootNodeIpnsName);
-          continue;
-        }
-        const { childPub, childReadKey } = resolved;
-        const childKeys = nodeKeySource?.(frontierItem.ipnsName);
-        queue.push({
-          childRef,
-          nodeReadKey: childReadKey,
-          parentIpnsName: rootNodeIpnsName,
-          ipnsPrivateKey: childKeys?.privateKey,
-          ipnsPublicKey: childKeys?.publicKey,
-          nodeWriteKey: childKeys?.writeKey,
-          childPubId: childPub.id,
-          childPubKind: childPub.kind as 'folder' | 'file',
-          enqueuedGeneration: childRef.generation,
-        });
       }
 
       // SC#6 (Plan 70-06 / T-70-10): a dirty-resume republish is about to happen
