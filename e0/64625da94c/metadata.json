@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "e064625da94c",
+  "strategy": "manual-commit",
+  "branch": "docs/retire-resolved-todos-61-69",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/ROADMAP.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e0/64625da94c/0/metadata.json",
+      "transcript": "/e0/64625da94c/0/full.jsonl",
+      "content_hash": "/e0/64625da94c/0/content_hash.txt",
+      "prompt": "/e0/64625da94c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 286,
+    "cache_creation_tokens": 16153,
+    "cache_read_tokens": 1234492,
+    "output_tokens": 10721,
+    "api_call_count": 7
+  }
+}
