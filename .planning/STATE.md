@@ -5,15 +5,15 @@ milestone_name: Metadata and Sharing Refactor
 current_phase: 70
 current_phase_name: rotation-soundness-deep-merge-fresh-record-resume-and-durabl
 status: executing
-stopped_at: Phase 70 Plan 03 complete (rotation badge per-root Set + cached IDB connection)
-last_updated: "2026-07-07T21:17:14.630Z"
+stopped_at: Completed 70-07-PLAN.md
+last_updated: "2026-07-07T21:32:34.850Z"
 last_activity: 2026-07-07
 last_activity_desc: Phase 70 execution started
 progress:
   total_phases: 15
   completed_phases: 10
   total_plans: 148
-  completed_plans: 145
+  completed_plans: 146
   percent: 67
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 ## Current Position
 
 Phase: 70 (rotation-soundness-deep-merge-fresh-record-resume-and-durabl) — EXECUTING
-Plan: 7 of 8
+Plan: 8 of 8
 Status: Ready to execute
 Last activity: 2026-07-07 — Phase 70 execution started
 
@@ -254,6 +254,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 70 P04 | 10min | 3 tasks | 3 files |
 | Phase 70 P05 | 20min | 2 tasks | 2 files |
 | Phase 70 P06 | 55min | 3 tasks | 4 files |
+| Phase 70 P07 | 13min | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -544,6 +545,9 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: rotateReadFromNode entry gate probes root-unseal viability before deciding fresh rotateOne(root) vs dirty-tail recovery; RootKeyStaleError is the distinct stale-key error; ROT-06 no-double-bump convergence guard removed in favor of safe double-rotation (design 4.5)
 - [Phase ?]: grantCallbacks/innerGrants threaded through RotationParams into every rotateOne call site (root + BFS loop) so reMintGrantsRootedAt is reachable in the real walk (SC#4)
 - [Phase ?]: Dirty-resume-republish path returns a fresh-copy readKey (new Uint8Array), never aliasing the caller-owned rootReadKey (SC#6/T-70-10)
+- [Phase ?]: performScopeExitRotation is the terminal owner of rotationResult.readKey; zeroes unconditionally once a rotation ran (70-07)
+- [Phase ?]: RootKeyStaleError catch does not retry rotateReadFromNode after re-nav recovery; deferred rotation picked up by the next covered mutation (70-07)
+- [Phase ?]: Pure-revoke never triggers rotation eagerly and rotation never re-seals its own root's ancestor mirror -- accepted residual, documented not fixed (70-07 Open Question 2)
 
 ## Operator Next Steps
 
@@ -551,8 +555,8 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-07T21:17:09.259Z
-**Stopped at:** Phase 70 Plan 03 complete (rotation badge per-root Set + cached IDB connection)
+**Last session:** 2026-07-07T21:32:34.840Z
+**Stopped at:** Completed 70-07-PLAN.md
 **Resume file:** 
 
 None
