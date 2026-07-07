@@ -1,0 +1,127 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "b37f261c24c0",
+  "session_id": "104b3f95-dfa2-44b9-83c6-29d975dacfd6",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-07T17:51:25.901318Z",
+  "branch": "docs/retire-resolved-todos-61-69",
+  "checkpoints_count": 10,
+  "files_touched": [
+    ".planning/ROADMAP.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "566efb0c5ac4",
+  "token_usage": {
+    "input_tokens": 45547,
+    "cache_creation_tokens": 157662,
+    "cache_read_tokens": 2897927,
+    "output_tokens": 35245,
+    "api_call_count": 24
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-capture-2026-07-07T16:54:50.986777Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-capture"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "8b9e8d1f79c4",
+      "timestamp": "2026-07-07T16:54:50.986777Z",
+      "native": {
+        "command": "/gsd-capture"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-capture",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 10
+  },
+  "summary": {
+    "intent": "Audit ~77 pending GSD todos against the code delivered in phases 61-69 to identify which were already resolved, retire the resolved ones, and propose a phased roadmap for addressing the rest.",
+    "outcome": "8 parallel subagents audited all todos against current source; 12 were confirmed fully resolved and retired (moved to completed/), 4 were partial, ~61 remain open. Retirement commit was corrected onto a docs/chore branch after initially landing on main, and Phases 70-73 of the proposed 10-phase roadmap were written into ROADMAP.md on that same branch.",
+    "learnings": {
+      "repo": [
+        "cipher-box main branch is protected against direct commits — docs/chore-only changes (like todo retirement) must go on a docs/* branch, not main.",
+        "client.ts (SDK) has grown to 5,893 LoC (from 2,768), with no pinning.ts/shared-folder.ts/inode/ module split yet — flagged as its own future phase (79) rather than folded into unrelated work.",
+        "Several 'resolved' rotation/durability todos (durability-sc4, update-folder-metadata, move-within-scope) had their code fix land but the todo files were never retired from .planning/todos/pending/, showing bookkeeping lags actual landing."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/rotation/engine.ts",
+          "line": 1084,
+          "finding": "Out-of-band reseal under parent's new key implemented — part of rotation-engine-walk-soundness-phase64, now RESOLVED"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 2735,
+          "finding": "deleteItem still preserves removed child's WriteChildRef verbatim via getWriteBodyParams — write-link removal explicitly deferred to a future plan (68.1-02), todo remains OPEN"
+        },
+        {
+          "path": "apps/api/src/share-invite/share-invite.service.ts",
+          "line": 167,
+          "finding": "claimInvite still returns existing share id with no grant merge/reject logic — share-invite-reclaim-apply-later-grant remains OPEN"
+        },
+        {
+          "path": "apps/web/src/pages/recovery.html",
+          "line": 394,
+          "finding": "Recovery tool still hard-checks vault blob v2 (0x02) format; both recovery-related todos are duplicates of this same unported file"
+        },
+        {
+          "path": "packages/sdk-core/src/rotation/merge.ts",
+          "line": 23,
+          "finding": "mergeChildren is pure remote-wins with no localWins flag — concurrent-add CAS-409 re-merge can downgrade a rotated child's readKeySealed, still OPEN"
+        }
+      ],
+      "workflow": [
+        "Fanning out 8 themed audit subagents in parallel (crypto/codec, rotation, write-plane, web share/nav, web misc, share-invite/API, TEE/IPNS/testing, desktop/fuse/infra) let a 77-item backlog get verified against live code in one pass instead of sequentially.",
+        "Each audit agent returned a verdict table (OPEN/PARTIAL/RESOLVED) with file:line evidence, which made consolidating resolved-vs-open trivial without re-reading source directly."
+      ]
+    },
+    "friction": [
+      "Initial retirement commit was made directly on main, violating branch protection; had to be moved to a new docs/ branch and main reset afterward.",
+      "Waiting on 8 background subagents produced a long stream of task-notifications arriving out of order, requiring careful tracking of which batch had reported vs was still pending."
+    ],
+    "open_items": [
+      "65 todos remain pending; only Phases 70-73 (rotation soundness, SDK write-plane durability, shared write/nav correctness, share-invite/API integrity) have been written to ROADMAP.md so far — Phases 74-79 were proposed but not yet added.",
+      "4 PARTIAL todos left open: web-vitest not in CI, verify-filepointer.mts still missing zeroize, permanent-delete dialog not mode-specific, no-legacy-v1/v2-vault lacking explicit guard comment.",
+      "Backlog candidates (ERC-1271 contract-wallet auth, CRDT-IPNS inbox sharing, async/incremental search index, alternative MFA factors) identified but not yet filed via /gsd-capture --backlog.",
+      "docs/retire-resolved-todos-61-69 branch has retirement + roadmap commits but no PR opened yet.",
+      "Noted dependency ordering for future phases: Phase 77 and 79's client.ts work should run after 70-72 settle; Phase 72 depends on Phase 71's write-plane primitives."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-07T17:50:56.468841Z",
+    "agent_lines": 119,
+    "agent_removed": 2,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 119,
+    "total_lines_changed": 121,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}

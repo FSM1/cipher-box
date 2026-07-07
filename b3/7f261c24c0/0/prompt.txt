@@ -1,0 +1,222 @@
+/gsd-capture --list
+
+---
+
+can we go through a lot of these to see if any have actually been addressed in phases 61-69? Once any already addressed items are marked as complete, please propose a series of phases to address some of these todos.
+
+---
+
+<task-notification>
+<task-id>a6b422e6d113dc611</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/064836b9-90e4-42d5-aabc-ed5fde831a57/tasks/a6b422e6d113dc611.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit crypto/codec/KAT todos" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All 8 todos verified against current code. Every one is still OPEN — none has been addressed in phases 61-69.
+
+| Todo (slug) | Verdict | Evidence |
+|---|---|---|
+| harden-uuid-acceptance-parity-aad-builder | OPEN | LOW-1 divergence remains: `encoding.ts:59-63` strips all hyphens + accepts simple-32-hex/loose-hyphen; `aes.rs:172` `Uuid::parse_str` accepts braced/urn — no shared strict validator (LOW-2's `INVALID_AAD_INPUT` throw is the only part done, and the todo already marks it resolved) |
+| zeroize-local-key-plaintext-copies-in-aes-helpers | OPEN | `encrypt.ts:40-42,101-103` still `new Uint8Array(key/plaintext)` with no `finally`/`fill(0)`; `decrypt.ts` has no `finally` either |
+| node-codec-kat-pin-file-iv-encoding | OPEN | `tests/vectors/node-codec.json:25` `fileIv` still `000102030405060708090a0b` (valid as both hex and base64) — KAT blind spot unfixed; `node-aad.json:10` iv likewise |
+| hoist-base64tobytes-into-crypto-package | OPEN | No `base64ToBytes` export in `packages/crypto/src/`; local copy still at `download.service.ts:8` (+ useFileVersions, useStreamingPreview, version-transforms, VersionHistory) |
+| dedup-base64-helpers-sdk-core-share | OPEN | No `share/codec.ts`; `base64ToBytes` still duplicated at `navigate.ts:59` and `grant.ts:68` |
+| node-codec-base64-helper-dedup | OPEN | No `node/base64.ts`; helpers still duplicated in `encode.ts:25`, `decode.ts:29`, `seal.ts:41/52` |
+| harden-validity-type-and-vector-expiry-lockstep | OPEN | `decode_ipns_cbor_validity` (`ipns.rs:136-162`) still reads only `Validity`, never enforces `ValidityType==0`; TS `ipns/index.ts` has zero `ValidityType` references |
+| ts-resolve-strict-rfc3339-validity-parity | OPEN | `sdk-core/src/ipns/index.ts:297` still uses loose `new Date(validityStr).getTime()`, no strict RFC3339 parser |</result>
+<usage><subagent_tokens>51792</subagent_tokens><tool_uses>18</tool_uses><duration_ms>71121</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>af68fca1b432721b0</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/064836b9-90e4-42d5-aabc-ed5fde831a57/tasks/af68fca1b432721b0.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit share-invite/API todos" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All eight verified against current source. Every one remains unaddressed.
+
+| Todo | Verdict | Evidence |
+|------|---------|----------|
+| share-invite-reclaim-apply-later-grant | OPEN | `claimInvite` still `return { shareId: existingShare.id }` with no grant merge/reject (share-invite.service.ts:167-171) |
+| share-invite-validate-root-ownership | OPEN | `createInvite` copies `dto.rootIpnsName`/`dto.rootNodeId` verbatim, no ownership lookup (share-invite.service.ts:38-41) |
+| share-invites-claim-count-check-constraint | OPEN | No `@Check` on entity and no CHECK in any migration (grep of migrations/ finds only the column decl, latest migration is 1751000000000-ScheduleCollapse) |
+| shares-bulk-revoke-direct-delete | OPEN | Still `manager.find` + `manager.remove(shares)` returning `revokedShares: shares.length` (shares.service.ts:171-189) |
+| restore-shares-module-unit-coverage | OPEN | share-invite.service.spec.ts has only claimInvite describes, no createInvite/getInvitesForItem/revokeInvite; NIT3 fixtures still placeholders (`share-uuid-1`, `k51qzi5uqu5full`, `04sharerkey`) |
+| ipns-first-publish-insert-race | OPEN | First-publish `save(folder)` is a bare call, no QueryFailedError→409 translation (ipns.service.ts:453) |
+| ipns-idempotent-same-seq-cid-equivocation | OPEN | Same-seq path sets `isIdempotentRepublish=true` and overwrites `latestCid: metadataCid` with no CID-equality guard (ipns.service.ts:312-315, 357) |
+| ipns-records-root-uniqueness-index | OPEN | Entity has only `@Unique(['ipnsName'])`; no partial unique index on `(user_id) WHERE is_root` in entity or migrations |</result>
+<usage><subagent_tokens>57754</subagent_tokens><tool_uses>8</tool_uses><duration_ms>63347</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aa9f6c57e41e7ed35</task-id>
+<tool-use-id>toolu_01TqBWWFNgKvCNoLKejxLnA2</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/064836b9-90e4-42d5-aabc-ed5fde831a57/tasks/aa9f6c57e41e7ed35.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit TEE/IPNS/testing todos" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Audit Results
+
+| Todo (slug) | Verdict | Evidence |
+|---|---|---|
+| renew-ipns-record-eol-invariant-and-tests | OPEN | `renewIpnsRecord` (ipns-signer.ts:38-46) still calls `createIpnsRecord(..., lifetimeMs)` with no parse of existing validity, no strictly-later-EOL throw, and no sanitized try/catch wrap — untouched since PR #585. |
+| tee-republish-writepath-error-handling-hardening | OPEN | All 3 findings still live: `renewIpnsRecordEol` catch logs `warn` for real DB errors indistinguishably (republish.service.ts:487-490), `decryptWithFallback` uses bare `catch {}` twice (key-manager.ts:94,104), and republish.ts:94 loops entries with no per-entry null/object guard. |
+| fix-broken-ipns-service-unit-test-mock | RESOLVED | `apps/web/src/services/ipns.service.ts` + its test were deleted in PR #589 (SDK-owned read chain); IPNS resolve + fail-closed assertions now live in `packages/sdk` (CI-covered `Test` job), so the broken mock is moot. |
+| web-vitest-not-in-ci-and-ipns-service-test-broken | PARTIAL | Broken test gone (part 2 resolved via #589), but part 1 still true — ci.yml `Test` job (lines 319-345) still runs only api/crypto/core/sdk-core/sdk/api-client, never `@cipherbox/web`. |
+| reenable-quarantined-sdk-e2e-suites-on-v3 | RESOLVED | Zero `describe.skip`/quarantine markers remain across all 16 `tests/sdk-e2e/src/suites/*.ts`; folder-crud.test.ts carries v3 contract notes and uses `createTestContext` (NODE-03 write-capable bootstrap). |
+| remigrate-filepointer-era-e2e-helper-scripts | RESOLVED | `tsconfig.scripts.json` `exclude: []` (Phase 69 comment); the 3 `.mts` helpers now use `rootReadKey`/`rootWriteKey`/`unsealChildReadKey`/`SealedChildRef` and are back in the compile gate. |
+| e2e-helper-scripts-zeroize-userprivatekey | PARTIAL | `edit-filepointer.mts` now zeroizes in a `finally` (`clearBytes(userPrivateKey)` line 240), but `verify-filepointer.mts` has zero `clearBytes`/`finally` calls — `userPrivateKey` (line 107) and `subFolderKey` are still never cleared. |</result>
+<usage><subagent_tokens>54121</subagent_tokens><tool_uses>9</tool_uses><duration_ms>109853</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a812ed2a864f9e319</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/064836b9-90e4-42d5-aabc-ed5fde831a57/tasks/a812ed2a864f9e319.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit sdk write-plane todos" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>| Todo | Verdict | Evidence |
+|------|---------|----------|
+| delete-should-drop-writechildref | OPEN | `deleteItem` (client.ts:2735) still preserves the chain verbatim via `getWriteBodyParams`; comment: "removed child's WriteChildRef is preserved verbatim — write-link removal is owned by 68.1-02". |
+| getwritebodyparams-transient-resolve-miss | OPEN | Both copies still fail-open: client.ts:1252-1254 and bin/index.ts:84 return `{ writeKey: wk, writeChildren: [] }` on a null resolve when a real writeKey is present (only masked when a `metadata.writeBody` mirror exists). |
+| child-ref-size-modifiedAt-mirror-stale | OPEN | `replaceFile`/`restoreFileVersion` (client.ts:3701, 3784) only call `maybeRepublishFolderForFileMigration` (TEE-key migration); neither updates the parent SealedChildRef `size`/`modifiedAt`. |
+| remove-legacy-moveinsharedfolder-sharekeys-branch | OPEN | The `if (shareKeys.length &gt; 0)` legacy branch (client.ts:5328) and `getShareKeysFn` param (5303) are still present, unchanged. |
+| restore-to-different-parent-write-rehoming | OPEN | `restoreFromBin` (bin/index.ts:583) only re-seals the readKey; comment: "restored child's WriteChildRef insertion is owned by 68.1-02, not this plan" — no WriteChildRef re-homing. |
+| dedupe-sdk-write-plane-helpers | OPEN | bin/index.ts:72 `getWriteBodyParams` still "Mirrors CipherBoxClient.getWriteBodyParams"; `replaceFile`/`restoreFileVersion` remain near-identical; no `walkChildWriteKey` primitive exists. |
+| sdk-client-move-publish-durability | RESOLVED | D-12 dest-before-source publish ordering in `moveItem` (client.ts ~2614); traversals now push only after a successful resolve+unseal (readable push at 2079-2082; `result.push` at 5629 follows child resolve/unseal). |
+| write-chain-e2e-seed-index-stability | OPEN | write-chain-rotation.test.ts:353 still identifies rotated seeds by fixed `capturedKeys[0]`/`[2]` offsets (spies on `getRandomValues`, not `generateEd25519Keypair` by provenance). |
+| upload-batch-test-mock-type-drift | OPEN | upload-batch.test.ts still builds mocks with the retired `type: 'file'` / `fileMetaIpnsName` / `ipnsPrivateKeyEncrypted` shape (lines 70, 76, 100-104, 365-379). |</result>
+<usage><subagent_tokens>69979</subagent_tokens><tool_uses>14</tool_uses><duration_ms>133411</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ab039969dd70c6a31</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/064836b9-90e4-42d5-aabc-ed5fde831a57/tasks/ab039969dd70c6a31.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit web misc/recovery todos" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All todos investigated. Results below.
+
+| Todo (slug) | Verdict | Evidence |
+|---|---|---|
+| rename-ipnsPrivateKeyEncrypted→encryptedIpnsPrivateKey | OPEN | `ipnsPrivateKeyEncrypted` still the return field at `packages/sdk-core/src/upload/index.ts:60` and `file/index.ts:232,352`; ~30 test fixtures unchanged |
+| rename-encryptedIpnsKey-canonical-field | OPEN | TEE wire contract still uses `encryptedIpnsKey`/`upgradedEncryptedKey` at `apps/tee-worker/src/routes/republish.ts:58,70` |
+| download-progress-ux-decision-useFileDownload | OPEN | Dead params still declared (`useFileBrowserActions.ts:79-81`, destructure still omits `downloadFromIpns`:108); `useFileDownload` still imported/consumed (`FileBrowser.tsx:55`); `handleDownload`:417 bypasses any progress store (spinnerless) |
+| drop-discarded-per-upload-ecies-wrapKey | OPEN | `ExternalEncryptFn` still requires `wrappedKey` at `packages/sdk-core/src/upload/index.ts:36` |
+| port-recovery-tool-to-v3-vault-format | OPEN | `recovery.html` still hard-checks `0x02`/`deserializeVaultBlobV2` (:394,400,1160); `recovery.spec.ts:75` still `test.fixme` |
+| recovery-html-vault-v3-migration | OPEN | `recovery.html:1167-1168` still decodes `encryptedRootFolderKey` via v2 blob (duplicate of the port-recovery todo; same unported file) |
+| add-permanent-delete-confirmation-dialog | PARTIAL | A generic delete `ConfirmDialog` fires on single+batch delete, but message (`FileBrowser.tsx:116`) is static "This cannot be undone" — not gated on `deleteBehavior==='permanent'` nor worded "unrecoverable/no recycle bin"; D-02's mode-specific prompt not built (bin/permanent undifferentiated) |
+| retire-dead-sdk-share-scaffolding | OPEN | `ShareCallbacks` + `shareCallbacks?` still in `sdk/src/types.ts:34,129` (+ exported `index.ts:44`); `addShareKeysFn` still in public types/client; `hasActiveShares` still in `share.service.ts:245`; web still passes no-op `addShareKeysFn` (`client.ts:5156`) |
+| 68.2-coderabbit-hardening-backlog | OPEN | None of the 10 items applied: owned path still lacks `listingCache.delete` (only shared path at `client.ts:5044`); `sequence: Number(sequenceNumber)` unguarded (`folder-listing.ts:115`); `resolveChildren` still serial `for` loop, no p-limit (:94); `toResolvedChildView` still defaults `kind:'folder'` (`FileList.tsx:31`); `useFolderNavigation.ts:71-72` still runs both forced resolves concurrently |
+
+Net: 8 OPEN, 1 PARTIAL, 0 RESOLVED. The two recovery todos are effectively duplicates of the same unported `recovery.html`.</result>
+<usage><subagent_tokens>60383</subagent_tokens><tool_uses>8</tool_uses><duration_ms>129709</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a790c9a5e132c9beb</task-id>
+<tool-use-id>toolu_01GcD15bQqy3b4NH8A5uAHcE</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/064836b9-90e4-42d5-aabc-ed5fde831a57/tasks/a790c9a5e132c9beb.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit desktop/fuse/infra/misc todos" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All investigations complete. Here are the verdicts.
+
+| Todo (slug) | Verdict | Evidence |
+|---|---|---|
+| fuse-shared-scope-exit-rotation-live-wiring | OPEN | `rotate_read_on_scope_exit` (grant_scope.rs:269) still logs "not yet live-wired" and returns `Err`; only `FakeDeps` impls `RotationDeps` (engine.rs:1533). Note gate still panics on poisoned lock (`run_scope_exit_gate` `.expect("sent_shares lock poisoned")`), though child_id now correctly sourced from `inode.node_id`. |
+| fuse-publish-and-concurrency-hardening-deferred | OPEN | `spawn_metadata_publish` still runs its own `max_attempts = 5u32` loop (metadata.rs:319), separate from `publish_with_cas_retry`; `MAX_CONCURRENT_FP_RESOLVES` still a per-cycle const (fs.rs:465); Windows write path still keys `child_id = uuid_from_ino(ino)` (write_ops.rs:659), not persisted node_id. |
+| replay-reuse-verified-parent-sequence | RESOLVED | `resolve_ipns_verified` no longer appears in replay.rs (0 hits); the merge fn takes an already-fetched `published` node and does a single `resolve_sequence` at publish (replay.rs:604) — the redundant double-resolve is gone. |
+| vault-init-publish-ordering-preflight | OPEN | Init still publishes vault-key then root-folder sequentially with only per-arm fail-fast `Err` on Conflict (vault.rs:202,249); no up-front preflight resolve of both IPNS names before any write. |
+| desktop-e2e-recycle-bin-test-parity | OPEN | Test 5 still a log-grep proxy: `grep -q "Bin entry published" "$DESKTOP_LOG"` (test-recycle-bin.sh:133); no API IPNS round-trip assertion added. |
+| periodic-kubo-ipfs-gc-on-staging | OPEN | No `GCPeriod`, `--enable-gc`, or `repo gc` cron in docker/docker-compose.staging.yml or docker-compose.yml (only the already-done 3G mem cap present). |
+| large-file-refactor-tier3-residue | OPEN | `client.ts` grew to 5893 LoC (was 2768); no `pinning.ts`/`shared-folder.ts` or `inode/` module dir exists. |
+| harden-statusline-hook-execsync | OPEN | `execSync` calls (statusline.cjs:19,26,36) have only `cwd/encoding/stdio`, no `timeout`; `cwd.split('/')` still used (line 14) instead of `path.basename`. |
+| scrub-staging-ssh-host | OPEN | `76.13.151.200` still present in ~10 tracked docs (STACK.md, INTEGRATIONS.md, baselines, multiple phase VERIFICATION/PLAN/RESEARCH files). |
+| web-logger-redaction-and-faro-transport | OPEN | logger.ts has no `redact()`/`transports[]`; `registerFaroTransport` defined (faro.ts:179) but main.tsx calls only `initFaro()` (line 9), never `registerFaroTransport`. |
+| confirm-no-legacy-v1-v2-vault-blobs | PARTIAL | Auth path is live again (useAuth.ts:173 `deserializeVault`) and `deserializeVaultBlobV3` is called unconditionally with a D-05 hard-cut header comment (vault/index.ts:11); greenfield assumption effectively validated, but no explicit per-call-site "v1/v2 intentionally unsupported" guard comment or migration added. |
+| alternative-mfa-factor-types | OPEN | Research-only todo; no Passkey/PRF/PasswordShare factor implementation in useMfa.ts. |
+| async-incremental-search-index | OPEN | `buildFromFolderTree` still synchronous `void` calling `miniSearch.addAll()` (search-index.service.ts:111,170); no batching/Worker/incremental path. |
+| crdt-ipns-inbox-sharing | OPEN | Research/architecture todo; sharing still uses server-side `shares` tables, no CRDT-over-IPNS inbox. |
+| erc-1271-contract-wallet-authentication | OPEN | siwe.service.ts uses viem `verifyMessage` (EOA-only, line 71) with no `publicClient`/`isValidSignature`/RPC path for contract wallets. |
+
+Two items are effectively addressed: replay double-resolve (RESOLVED) and the v1/v2 vault-blob confirmation (PARTIAL — assumption validated with header docs, minor comment/migration follow-up unfulfilled). All others remain OPEN.</result>
+<usage><subagent_tokens>71426</subagent_tokens><tool_uses>12</tool_uses><duration_ms>143648</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a746e401bdfeaef68</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/064836b9-90e4-42d5-aabc-ed5fde831a57/tasks/a746e401bdfeaef68.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit sdk-core rotation todos" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>| Todo (slug) | Verdict | Evidence |
+|---|---|---|
+| rotation-engine-walk-soundness-phase64 | RESOLVED | All 6 findings fixed: out-of-band reseal under parent's new key `engine.ts:1084`; D-01 fail-closed guard `:596-621` (no PLACEHOLDER_WRITE_KEY); reMint before `completedNodeIds.add` `:716-728`; verifySubtreeClean on resume `:894`; status persisted `:897`; queue key zeroed `:1170` |
+| rotation-concurrent-add-merge-downgrades-child-readkey | OPEN | `mergeChildren` still pure remote-wins (`merge.ts:23-47`), `mergeConcurrentChildren` (`engine.ts:468`) uses it; no `localWins` flag exists |
+| rotation-engine-walk-soundness (fresh-record-resume-and-sc4-double-bump) | OPEN | `verifySubtreeClean` reached only via `if(rootResult.skipped)` (`engine.ts:890`), docstring says fresh resume "not yet wired — needs Phase-68 durable floor" `:486`; still shallow (immediate children only `:510-521`, missing root = clean `:500`) |
+| rotation-coderabbit-followups-deferred | OPEN | Core deferrals unfixed: `rotateOne` returns pre-merge `node.children` not merged (`:735`); shallow verifySubtreeClean; missing-record `continue` desyncs `pendingChildCount` (`:992`); `RotationParams` (`:285`) lacks `grantCallbacks`, so reMint gate `:716` never true in real walk |
+| update-folder-metadata-preserve-node-identity | RESOLVED | `nodeId`/`nodeGeneration` now required, no `?? randomUUID()`/`?? 0` (`registration.ts:185,191,240-265`); all 6 client.ts sites thread stable values; regression test `registration.test.ts:77,144,174` |
+| move-within-scope-reseal-child-readkey | RESOLVED | `client.ts` moveItem re-seals under dest parent `sealChildReadKey(childReadKey, destFolder.folderKey…)` `client.ts:2521`; scope-exit rotation wired `:2695` (gates on `hasCoveringGrant`); test `move-reseal.test.ts` asserts dest-unseal / source-fail |
+| sdk-floor-store-concurrency-atomicity | OPEN | `bump_floor` still read/compare/write no lock (`high_water.rs:117`); `JsonSidecarFloorStore::put` blocking RMW in async, no Mutex/spawn_blocking (`floor_store.rs:104`); corrupt sidecar `unwrap_or_default` `:60` (todo created 2026-07-07, intentionally deferred) |
+| rotation-durability-sc4-relay-replay-unreachable | RESOLVED | SC#4 now an active non-skipped test redesigned to drive `enforceResolved` via IndexedDB floor (`rotation-durability.spec.ts:258`, mechanism note `:236`); DB-canonical floor confirmed `ipns.service.ts:685` (todo file not yet retired) |
+| rotation-hardening-followups-from-pr-review | OPEN | 0 of 6 fixed: sequential `bumpFloor` `rotation-high-water.ts:184`; readKey source never zeroed `engine.ts:1196`; `openJobDB` no close `rotation-driver.service.ts:74`; module-global `activeRootNodeId` `:111`; cached generation `client.ts:1829`; dirty-resume `return undefined` `engine.ts:1193` |
+
+Summary: 4 RESOLVED (walk-soundness-phase64, update-folder-metadata, move-within-scope, durability-sc4), 5 OPEN (concurrent-add-merge, fresh-record-resume, coderabbit-followups, floor-store-concurrency, hardening-followups). The Phase-64 single-node walk-soundness set and the Phase-64 identity/move-reseal fixes landed; the deeper multi-node merge-policy, deep verifySubtreeClean, true fresh-record resume, grant threading, and the Phase-68/69 concurrency-hardening items remain unimplemented on main.
+
+Note: two RESOLVED todos (durability-sc4, and the move/update ones) still physically sit in `.planning/todos/pending/` — bookkeeping not yet retired even though the code deliverable is complete.</result>
+<usage><subagent_tokens>62432</subagent_tokens><tool_uses>5</tool_uses><duration_ms>234702</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a34a4ae8de05fcac3</task-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/064836b9-90e4-42d5-aabc-ed5fde831a57/tasks/a34a4ae8de05fcac3.output</output-file>
+<status>completed</status>
+<summary>Agent "Audit web share/nav todos" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All three groups complete. Consolidated audit of the 11 GSD todos against current main (phases 61-69 merged):
+
+| Todo (slug) | Verdict | Evidence |
+|---|---|---|
+| owner-stale-empty-snapshot-shared-out-folder | RESOLVED | `useFolderNavigation.ts:224-231` — the `isLoaded` fast-path now fires `refreshFolderListing(ipnsName, …)` (`:71-72`, `forceResolve:true`), so navigating into an owned shared-out folder re-resolves IPNS instead of returning cached. |
+| phase68-shared-write-context-publishednode-wiring | RESOLVED | `client.ts:4817` `adoptSharedFolderResult` now persists `publishedNode: result.publishedParent`; live seed callers pass real `published`+`writeKey` (`useSharedNavigationActions.ts:262/257`). `PLACEHOLDER_PUBLISHED_NODE` remains only as an overridden fallback. |
+| phase68-web-share-stubs-gate-ui | RESOLVED | No `"deferred to Phase 68"` throws left in `apps/web/src`; permission change is real (`ShareDialog.tsx:304-349` `sharesControllerUpdateGrant`); `executeLazyRotation`/`createShare`/`updateShareKey` removed. (`fetchShareKeys` still returns `[]` but is a deliberately-dead no-throw path.) |
+| nested-shared-write-key-lost-on-up-breadcrumb | OPEN | `useSharedNavigationActions.ts:493-499`/`:575-581` still re-derive writeKey only at root depth; navStack entry (`:344-353`) stores `folderKey` but no writeKey; deeper subfolders restore with `writeKey:null`. |
+| shared-nav-stack-stale-children-snapshot | OPEN | navStack pushes `children: p.folderChildren` by reference (`:349`), restored by reference on up/breadcrumb (`:466`/`:550`) with no re-resolve or stack invalidation on `sharedFolder:updated`. |
+| remove-dead-getsharekeys-folder-ipns-path | OPEN | `resolveFolderIpnsPrivateKey` still present (`:96-113`), still returns `new Uint8Array(32)`, still threaded into `seedActiveSharedFolder` at 4 sites; mirror `resolveFileIpnsKey` still in `useSharedWriteOps.ts:45-49`. |
+| consolidate-web-shared-navigation-dup | OPEN | No `readSharedContent`/`restoreToBreadcrumbIndex` helpers; `downloadSharedFile`/`loadSharedFileContent` still duplicate read core; `parseRootGeneration` still private in `share.service.ts:86` and copied in `ShareDialog.tsx:44`; orphaned JSDoc still at `:115-137`. |
+| sharedfolderrow-drag-kind-classification | OPEN | `SharedFolderRow.tsx:111/116` still call `isFileRef` on bare `SealedChildRef`s; `isFileRefResolved`/`resolvedByIpnsName` never threaded in. |
+| write03-refresh-access-path-has-no-live-trigger | OPEN | `refreshWriteAccess` has zero production suppliers (`useMutationFailureUx.ts:77`); `publishNodeFn` (`client.ts:4770-4785`) always returns `{tombstoned:false}`, so `CannotWriteUntilRefetchError` is test-only. |
+| d07-boundary-eslint-rule | OPEN | No `no-restricted-imports` rule in the root `eslint.config.js`; `scripts/check-web-sdk-boundary.sh` no longer exists and no CI workflow references it. |
+| gate-non-listing-read-facades | OPEN | `resolveFileMetadata` (`client.ts:3913`), `downloadFromIpns` (`:3969`), `resolveNodeIdentity` (`:1209`) still call `resolvePublishedNode` raw with no `gatedResolveChild`/floor. Test files exist but the gating routing was never applied. |
+
+Summary: 3 RESOLVED (all Phase-68 wiring items), 8 OPEN, 0 PARTIAL. The three resolved are the ones Phase 68 explicitly targeted (owner re-resolve, publishedNode wiring, share-stub gating). The remaining 8 — nested write-key restore, stale nav snapshots, dead-code cleanup, the consolidation refactor, drag-kind classification, WRITE-03 live trigger, the D-07 ESLint rule, and the two non-listing read-facade gates — are all still unaddressed in current source.</result>
+<usage><subagent_tokens>52724</subagent_tokens><tool_uses>5</tool_uses><duration_ms>229328</duration_ms></usage>
+</task-notification>
+
+---
+
+firstly, the completed items should be committed on a docs/chore branch, not against main.
+
+---
+
+please add the phases 70-73 to the current docs branch.
