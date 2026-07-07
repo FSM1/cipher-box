@@ -1,5 +1,5 @@
 /**
- * Rotation crash-safety suite (TEST-01 phase gate) — Phase 64.
+ * Rotation crash-safety suite (TEST-01 phase gate) — Phase 64, strengthened Phase 70.
  *
  * Three scenarios against the live local API stack:
  *   1. Happy-path: depth-2 tree (root → subfolder → file) rotates cleanly;
@@ -11,7 +11,14 @@
  *   3. Concurrent-add merge: a direct IPNS write to a parent between the root
  *      commit and the D-09 batched re-publish forces a CAS-409; the HIGH-4 merge
  *      (ROT-05) absorbs it and the concurrently-added child survives in the final
- *      parent state after the walk.
+ *      parent state after the walk. Strengthened (Plan 70-08 / SC#1 / T-70-15):
+ *      the test also NAVIGATES into the pre-existing rotated child (sub3IpnsName)
+ *      and UNSEALS it with the new root key — proving local-wins (this phase's
+ *      merge fix) keeps the existing rotated child's D-02 re-seal intact, where
+ *      the old remote-wins merge would silently downgrade it to a stale seal that
+ *      AEAD-fails on unseal. Also asserts the concurrent-write injection actually
+ *      ran (fail-fast guard — a silently-skipped injection would make the test
+ *      vacuously pass without exercising the CAS-409 merge path at all).
  *
  * Fault-injection note (D-03):
  *   The abort-and-resume crash is injected via a test-only `persistCallback` that
@@ -43,7 +50,7 @@ import {
   type SdkContext,
   updateFolderMetadataAndPublish,
 } from '@cipherbox/sdk-core';
-import { sealNode, unsealNode } from '@cipherbox/core';
+import { sealNode, unsealChildReadKey, unsealNode } from '@cipherbox/core';
 import type { Node, PublishedNode } from '@cipherbox/core';
 import {
   deriveEd25519PublicKey,
@@ -625,6 +632,11 @@ describe('Rotation crash-safety suite (TEST-01 phase gate)', () => {
     //           → publishWithCas merges: concurrentChild survives
     //   call 3: final status='complete'
     let persistCall3Count = 0;
+    // T-70-15: fail-fast guard — if the injection body never actually runs
+    // (e.g. a refactor changes the persistCallback call count/ordering), this
+    // test must FAIL rather than silently passing without ever exercising the
+    // CAS-409 merge path it claims to prove.
+    let concurrentInjectionRan = false;
     const concurrentAddPersist = async (_job: RotationJobRecord): Promise<void> => {
       persistCall3Count++;
       if (persistCall3Count !== 1) return; // only inject on first call (after root3 commits)
@@ -671,6 +683,7 @@ describe('Rotation crash-safety suite (TEST-01 phase gate)', () => {
         nodeGeneration: pub.generation, // 1 (post-rotation)
         ctx: aliceCtx,
       });
+      concurrentInjectionRan = true;
     };
 
     clearCapturedReadKeys();
@@ -694,6 +707,12 @@ describe('Rotation crash-safety suite (TEST-01 phase gate)', () => {
       nodeKeySource: nodeKeySource3,
     });
     expect(jobRecord3.status).toBe('complete');
+    // 2-node tree (root3, subfolder3): 3 persistCallback checkpoints —
+    // root3 commit, subfolder3 commit, final status='complete'.
+    expect(persistCall3Count).toBe(3);
+    // T-70-15: fail fast if the concurrent-write injection never actually ran —
+    // see the guard declaration above for why this must be asserted explicitly.
+    expect(concurrentInjectionRan).toBe(true);
 
     // --- Assert: concurrent child survives in the final merged root3 ---
     const readKeyPrimeRoot3 = capturedReadKeys[0];
@@ -715,5 +734,34 @@ describe('Rotation crash-safety suite (TEST-01 phase gate)', () => {
     expect(childIpnsNames).toContain(concurrentIpnsName);
     // subfolder3 must also still be present (not dropped by the merge)
     expect(childIpnsNames).toContain(sub3IpnsName);
+
+    // --- T-70-15 (Plan 70-08 / SC#1): navigate into subfolder3 and UNSEAL it
+    // with the NEW root key — proving local-wins kept the pre-existing rotated
+    // child's D-02 re-seal intact.
+    //
+    // Under the OLD remote-wins merge, the `remote` view (the concurrent
+    // write's snapshot, captured BEFORE subfolder3 itself finished rotating)
+    // still pointed subfolder3's SealedChildRef.readKeySealed at subfolder3's
+    // PRE-rotation key. A name-only assertion (childIpnsNames.toContain above)
+    // cannot detect this — the entry survives under either policy, only its
+    // WRAPPED KEY differs. Deriving and unsealing subfolder3's ACTUAL published
+    // (post-rotation) body with that stale pointer AEAD-fails; local-wins (this
+    // phase's fix) keeps rotation's own D-09 view, which points at subfolder3's
+    // POST-rotation key, so the unseal below must succeed.
+    const sub3ChildRef = (root3FinalNode.children ?? []).find((c) => c.ipnsName === sub3IpnsName);
+    expect(sub3ChildRef).toBeDefined();
+    const sub3Pub = await fetchPublishedEnvelope(sub3IpnsName, aliceCtx);
+    expect(sub3Pub.generation).toBe(1); // subfolder3 itself was rotated by the walk
+    const sub3ReadKey = await unsealChildReadKey(
+      sub3ChildRef!.readKeySealed,
+      readKeyPrimeRoot3,
+      sub3Pub.id,
+      sub3Pub.kind,
+      sub3ChildRef!.generation
+    );
+    // The actual unseal — this is what AEAD-fails under the old remote-wins bug.
+    const sub3Node = await unsealNode(sub3Pub, sub3ReadKey);
+    expect(sub3Node.id).toBe(sub3Result.node.id);
+    sub3ReadKey.fill(0);
   }, 120_000);
 });
