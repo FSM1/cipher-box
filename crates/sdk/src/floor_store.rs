@@ -201,6 +201,97 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn concurrent_puts_same_node_id_no_lost_update() {
+        // T-70-03: N tokio tasks race `put` on the SAME node_id with a mix
+        // of high/low values against one shared store handle. No lost
+        // updates: the final floor must be the max of every attempted value,
+        // never a lower one that "won" a race.
+        let dir = make_temp_dir();
+        let store = std::sync::Arc::new(JsonSidecarFloorStore::for_generation(&dir));
+        let values: [u64; 8] = [3, 50, 7, 100, 1, 42, 99, 2];
+
+        let mut handles = Vec::new();
+        for &value in &values {
+            let store = std::sync::Arc::clone(&store);
+            handles.push(tokio::spawn(async move {
+                store.put("node-1", value).await;
+            }));
+        }
+        for handle in handles {
+            handle.await.expect("put task panicked");
+        }
+
+        let expected_max = *values.iter().max().unwrap();
+        assert_eq!(store.get("node-1").await, Some(expected_max));
+    }
+
+    #[tokio::test]
+    async fn concurrent_puts_different_node_ids_no_lost_update() {
+        // T-70-03: N tokio tasks race `put` on DISTINCT node_ids against one
+        // shared store handle. A race-prone whole-map read-modify-write
+        // would clobber the map (each task loads the map before any other
+        // task's insert lands, then overwrites on write). Every node_id
+        // must survive with its own value.
+        let dir = make_temp_dir();
+        let store = std::sync::Arc::new(JsonSidecarFloorStore::for_seq(&dir));
+        let count = 20u64;
+
+        let mut handles = Vec::new();
+        for i in 0..count {
+            let store = std::sync::Arc::clone(&store);
+            let node_id = format!("node-{i}");
+            handles.push(tokio::spawn(async move {
+                store.put(&node_id, i).await;
+            }));
+        }
+        for handle in handles {
+            handle.await.expect("put task panicked");
+        }
+
+        for i in 0..count {
+            let node_id = format!("node-{i}");
+            assert_eq!(store.get(&node_id).await, Some(i));
+        }
+    }
+
+    #[tokio::test]
+    async fn corrupt_sidecar_fails_closed() {
+        // T-70-04: a PRESENT-but-corrupt sidecar (bit-rot / tampering) must
+        // never be silently treated as "no floor known" (cold first
+        // contact) -- that would let a stale/lower generation or seq slip
+        // past `enforce_resolved`. Write garbage bytes directly to the
+        // sidecar path, bypassing `put` entirely.
+        let dir = make_temp_dir();
+        let store = JsonSidecarFloorStore::for_generation(&dir);
+        std::fs::write(&store.path, b"not valid json {{{").expect("write garbage bytes");
+
+        // Direct store read must fail closed, not silently resolve to None
+        // (the "never written" case).
+        assert_ne!(store.get("node-1").await, None);
+
+        // The gate itself (a fresh instance, simulating a daemon restart
+        // over the same on-disk sidecar) must reject rather than apply the
+        // cold-device version_floor gate.
+        let rhw = RotationHighWater::new(
+            JsonSidecarFloorStore::for_generation(&dir),
+            JsonSidecarFloorStore::for_seq(&dir),
+        );
+        let err = rhw
+            .enforce_resolved(EnforceResolvedParams {
+                node_id: "node-1".to_string(),
+                seq: 1,
+                generation: 1,
+                version_floor: 0,
+            })
+            .await
+            .expect_err("corrupt generation sidecar must fail closed, not cold-start");
+        assert!(matches!(
+            err,
+            crate::rotation::RotationError::GenerationRegression { .. }
+        ));
+    }
+
+    #[tokio::test]
     async fn survives_restart_end_to_end_through_rotation_high_water() {
         // End-to-end: enforce_resolved over the real durable store, dropped
         // and reconstructed, still enforces the persisted floor.
