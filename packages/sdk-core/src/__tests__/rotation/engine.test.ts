@@ -17,6 +17,7 @@ import {
   reMintGrantsRootedAt,
   verifySubtreeClean,
   mergeConcurrentChildren,
+  RootKeyStaleError,
   type GrantRemintCallbacks,
   type RotationJobRecord,
   type RotationParams,
@@ -1908,8 +1909,9 @@ describe('rotateReadFromNode — resume guard (Plan 64-07)', () => {
   it('Test 3: resume with dirty child triggers D-09 parent re-publish (does not short-circuit complete)', async () => {
     // Root already in completedNodeIds: rotateOne returns skipped.
     // Child has dirty edge: parent mirror = 0, child published gen = 1.
-    // Expected (GREEN): verifySubtreeClean detects dirty → frontier seeded → convergence guard
-    //   fires for child → D-09 publishWithCas called for root re-publish.
+    // Expected (GREEN): verifySubtreeClean detects dirty → frontier seeded → the child is
+    //   safely double-rotated (Plan 70-06 / design §4.5 — no convergence-skip guard) →
+    //   D-09 publishWithCas called for root re-publish once the child completes.
     // RED: resume guard marks complete immediately → publishWithCas NOT called → FAILS.
     const rootNode = makeFolderNode({
       id: NODE_ID,
@@ -1924,6 +1926,12 @@ describe('rotateReadFromNode — resume guard (Plan 64-07)', () => {
         },
       ],
     });
+    // Plan 70-06: the child is now genuinely re-entered via rotateOne (safe
+    // double-rotation), so unsealNode must return a CHILD-shaped node (distinct
+    // id, no children) for the child's own published envelope — a single static
+    // rootNode return value here would collide nodeId derivation with the ROOT's
+    // id and corrupt the child's own idempotency check.
+    const childNode = makeFolderNode({ id: CHILD_ID, generation: 1, children: [] });
 
     mockFns.resolveIpnsRecord.mockImplementation(async (ipnsName: string) => ({
       cid: ipnsName === NODE_IPNS ? 'bafy-root' : 'bafy-child',
@@ -1936,7 +1944,10 @@ describe('rotateReadFromNode — resume guard (Plan 64-07)', () => {
       // Child is already at generation 1
       return new TextEncoder().encode(JSON.stringify(makePublishedNode(CHILD_ID, 1)));
     });
-    mockFns.unsealNode.mockResolvedValue(rootNode);
+    mockFns.unsealNode.mockImplementation(
+      async (published: import('@cipherbox/core').PublishedNode) =>
+        published.id === NODE_ID ? rootNode : childNode
+    );
     mockFns.sealNode.mockImplementation(async (node: import('@cipherbox/core').Node) =>
       makePublishedNode(node.id, node.generation)
     );
@@ -2031,21 +2042,29 @@ describe('rotateReadFromNode — resume guard (Plan 64-07)', () => {
   });
 });
 
-describe('rotateReadFromNode — no-double-bump convergence guard (Plan 64-07)', () => {
-  it('Test 5: fresh job, child already at baseline+1 — sealNode/publishWithCas NOT invoked for child', async () => {
+const MISSING_CHILD_IPNS_70_06 =
+  'k51missingfrontier00000000000000000000000000000000000000000000000';
+
+describe('rotateReadFromNode — fresh-record resume via safe double-rotation (Plan 70-06 SC#3, supersedes 64-07 no-double-bump guard)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it('Test 1 (Plan 70-06): fresh job, child already at baseline+1 — safe double-rotation recovers it (sealNode/publishWithCas ARE invoked for child, no guard blocks it)', async () => {
     // Fresh job: empty completedNodeIds, root at generation 0.
     // Root's SealedChildRef shows child at generation 0 (baseline).
     // BUT child is ALREADY published at generation 1 (rotated by a prior crashed run).
     //
-    // Expected:
-    // - Root rotates normally (sealNode called for root).
-    // - Convergence guard: child current gen (1) > enqueued baseline (0) → SKIP rotateOne.
-    // - sealNode NOT called with CHILD_ID.
-    // - publishWithCas NOT called with CHILD_IPNS.
+    // Plan 70-06 / design §4.5: crash recovery converges via SAFE DOUBLE-ROTATION,
+    // not a no-double-bump skip. The pre-rotation verifySubtreeClean probe finds
+    // this dirty edge and — since no convergence guard blocks it anymore — the
+    // child DOES get rotated again via the normal rotateOne call.
     //
-    // RED: no convergence guard → rotateOne(child) called → sealNode/publishWithCas invoked → FAILS.
-    // GREEN: convergence guard fires → skip → assertions pass.
-
+    // RED (old 64-07 behavior): a no-double-bump convergence guard skips rotateOne
+    // for the child → sealNode/publishWithCas NEVER called with CHILD_ID/CHILD_IPNS
+    // → these "toContain" assertions FAIL.
+    // GREEN (Plan 70-06): no guard blocks it → sealNode/publishWithCas ARE called
+    // for the child → assertions PASS.
     const rootNode = makeFolderNode({
       id: NODE_ID,
       generation: 0,
@@ -2066,35 +2085,6 @@ describe('rotateReadFromNode — no-double-bump convergence guard (Plan 64-07)',
     const sealNodeCalls: string[] = [];
     const publishWithCasCalls: string[] = [];
 
-    mockFns.resolveIpnsRecord.mockImplementation(async (ipnsName: string) => ({
-      cid: ipnsName === NODE_IPNS ? 'bafy-root' : 'bafy-child',
-      sequenceNumber: 1n,
-      signatureVerified: true,
-    }));
-    mockFns.fetchFromIpfs.mockImplementation(async (_ctx: unknown, cid: string) => {
-      if (cid === 'bafy-root') return new TextEncoder().encode(JSON.stringify(publishedRootGen0));
-      return new TextEncoder().encode(JSON.stringify(publishedChildGen1));
-    });
-    mockFns.unsealNode.mockImplementation(
-      async (published: import('@cipherbox/core').PublishedNode) => {
-        if (published.id === NODE_ID) return rootNode;
-        // Child's body (would only be unsealed if rotateOne is erroneously invoked for child)
-        return makeFolderNode({ id: CHILD_ID, generation: 1, children: [] });
-      }
-    );
-    mockFns.sealNode.mockImplementation(async (node: import('@cipherbox/core').Node) => {
-      sealNodeCalls.push(node.id);
-      return makePublishedNode(node.id, node.generation + 1);
-    });
-    mockFns.sealChildReadKey.mockResolvedValue('newsealed==');
-    mockFns.unsealChildReadKey.mockResolvedValue(new Uint8Array(32).fill(0x42));
-    mockFns.publishWithCas.mockImplementation(async (params: { ipnsName: string }) => {
-      publishWithCasCalls.push(params.ipnsName);
-      return { cid: 'bafy-new', newSequenceNumber: 2n, publishedData: [], prunedCids: [] };
-    });
-
-    vi.resetAllMocks();
-    // Re-set after resetAllMocks
     mockFns.resolveIpnsRecord.mockImplementation(async (ipnsName: string) => ({
       cid: ipnsName === NODE_IPNS ? 'bafy-root' : 'bafy-child',
       sequenceNumber: 1n,
@@ -2139,10 +2129,267 @@ describe('rotateReadFromNode — no-double-bump convergence guard (Plan 64-07)',
 
     // Root MUST rotate (sealNode called with NODE_ID)
     expect(sealNodeCalls).toContain(NODE_ID);
-    // Child must NOT be sealed (convergence guard must skip rotateOne for child)
-    expect(sealNodeCalls).not.toContain(CHILD_ID);
-    // publishWithCas must NOT be called for CHILD_IPNS (child rotation skipped)
-    expect(publishWithCasCalls).not.toContain(CHILD_IPNS);
+    // Child MUST ALSO be rotated again (safe double-rotation — design §4.5) —
+    // no convergence guard skips it.
+    expect(sealNodeCalls).toContain(CHILD_ID);
+    // publishWithCas MUST be called for CHILD_IPNS (child rotation NOT skipped)
+    expect(publishWithCasCalls).toContain(CHILD_IPNS);
+  });
+
+  it('Test 2 (Plan 70-06): stale rootReadKey throws RootKeyStaleError, not a generic AEAD/unseal error', async () => {
+    // Root record EXISTS and resolves, but the caller-supplied rootReadKey cannot
+    // unseal it (the root was rotated by a lost prior run and this client never
+    // saw the new key — the genuinely-unrecoverable window, RESEARCH Pitfall 4).
+    mockFns.resolveIpnsRecord.mockResolvedValue({
+      cid: 'bafy-root',
+      sequenceNumber: 3n,
+      signatureVerified: true,
+    });
+    mockFns.fetchFromIpfs.mockResolvedValue(
+      new TextEncoder().encode(JSON.stringify(makePublishedNode(NODE_ID, 3)))
+    );
+    mockFns.unsealNode.mockRejectedValue(new Error('AEAD authentication failed'));
+
+    const jobRecord = makeJobRecord({ rootNodeId: NODE_ID, completedNodeIds: new Set<string>() });
+
+    // RED (pre-70-06): the probe doesn't exist — rotateOne's own unseal throws the
+    // generic 'AEAD authentication failed' Error verbatim (not RootKeyStaleError,
+    // and not the probe's distinct message) → the name/message assertions below
+    // FAIL. (Not asserted via `.rejects.toThrow(RootKeyStaleError)` alone — with
+    // the pre-70-06 engine.ts not yet exporting RootKeyStaleError at all, that
+    // binding would import as `undefined`, and vitest's toThrow(undefined)
+    // degrades to a vacuous "throws something" check that passes against ANY
+    // thrown error — asserting `.name`/`.message` explicitly avoids that false
+    // green.)
+    // GREEN: the entry-gate probe throws a real RootKeyStaleError, with its own
+    // distinct message, BEFORE rotateOne(root) ever runs → assertions PASS.
+    let caughtError: unknown;
+    try {
+      await rotateReadFromNode({
+        rootNodeId: NODE_ID,
+        rootNodeIpnsName: NODE_IPNS,
+        rootReadKey: T07_ROOT_READ_KEY,
+        rootIpnsPrivateKey: T07_ROOT_IPNS_KEY,
+        jobRecord,
+        ctx: createMockContext(),
+      });
+    } catch (err) {
+      caughtError = err;
+    }
+    expect(caughtError).toBeInstanceOf(Error);
+    expect(caughtError).toBeInstanceOf(RootKeyStaleError);
+    expect((caughtError as Error).name).toBe('RootKeyStaleError');
+    expect((caughtError as Error).message).toMatch(/cannot unseal the currently-published root/i);
+    expect((caughtError as Error).message).not.toBe('AEAD authentication failed');
+
+    // The stale-key probe must fail BEFORE any actual rotation attempt.
+    expect(mockFns.publishWithCas).not.toHaveBeenCalled();
+  });
+
+  it('Test 3 (Plan 70-06 SC#4): grantCallbacks/innerGrants on RotationParams reach queryGrantsFn via the public rotateReadFromNode walk', async () => {
+    // Root-only (no children), fresh job. Driving the PUBLIC rotateReadFromNode
+    // entrypoint (not a direct rotateOne injection) with grantCallbacks +
+    // innerGrants supplied on RotationParams.
+    const rootNode = makeFolderNode({ id: NODE_ID, generation: 0, children: [] });
+
+    mockFns.resolveIpnsRecord.mockResolvedValue({
+      cid: 'bafy-root',
+      sequenceNumber: 1n,
+      signatureVerified: true,
+    });
+    mockFns.fetchFromIpfs.mockResolvedValue(
+      new TextEncoder().encode(JSON.stringify(makePublishedNode(NODE_ID, 0)))
+    );
+    mockFns.unsealNode.mockResolvedValue(rootNode);
+    mockFns.sealNode.mockResolvedValue(makePublishedNode(NODE_ID, 1));
+    mockFns.sealChildReadKey.mockResolvedValue('sealed==');
+    mockFns.publishWithCas.mockResolvedValue({
+      cid: 'bafy-new',
+      newSequenceNumber: 2n,
+      publishedData: [],
+      prunedCids: [],
+    });
+
+    const queryGrantsFn = vi.fn().mockResolvedValue([]);
+    const grantCallbacks: GrantRemintCallbacks = {
+      queryGrantsFn,
+      updateGrantFn: vi.fn(),
+      deleteGrantFn: vi.fn(),
+    };
+
+    const jobRecord = makeJobRecord({ rootNodeId: NODE_ID, completedNodeIds: new Set<string>() });
+
+    // RED: RotationParams has no grantCallbacks/innerGrants fields (or they exist
+    // but are never threaded to rotateOne) → queryGrantsFn is never invoked →
+    // this assertion FAILS.
+    // GREEN: threaded through to rotateOne(root) → reMintGrantsRootedAt runs
+    // (innerGrants non-empty) → queryGrantsFn IS invoked → assertion PASSES.
+    await rotateReadFromNode({
+      rootNodeId: NODE_ID,
+      rootNodeIpnsName: NODE_IPNS,
+      rootReadKey: T07_ROOT_READ_KEY,
+      rootIpnsPrivateKey: T07_ROOT_IPNS_KEY,
+      innerGrants: [{}],
+      grantCallbacks,
+      jobRecord,
+      ctx: createMockContext(),
+    });
+
+    expect(queryGrantsFn).toHaveBeenCalledWith(NODE_ID);
+  });
+
+  it('Test 4 (Plan 70-06 / T-70-12): a missing child IPNS record is fail-closed accounted — the parent still converges via its batched republish', async () => {
+    // Root has TWO children: CHILD_IPNS (resolves fine, rotates normally) and
+    // MISSING_CHILD_IPNS_70_06 (its IPNS record no longer resolves — a data
+    // inconsistency). A silent `continue` that never decrements pendingChildCount
+    // for the missing child leaves the parent's batched D-09 republish stuck
+    // forever (pendingChildCount never reaches 0).
+    const rootNode = makeFolderNode({
+      id: NODE_ID,
+      generation: 0,
+      children: [
+        {
+          name: 'child-a',
+          ipnsName: CHILD_IPNS,
+          generation: 0,
+          versionFloor: 0n,
+          readKeySealed: 'childAsealed==',
+        },
+        {
+          name: 'child-missing',
+          ipnsName: MISSING_CHILD_IPNS_70_06,
+          generation: 0,
+          versionFloor: 0n,
+          readKeySealed: 'missingsealed==',
+        },
+      ],
+    });
+    const publishedRootGen0 = makePublishedNode(NODE_ID, 0);
+    const publishedChildAGen0 = makePublishedNode(CHILD_ID, 0);
+
+    const publishWithCasCalls: string[] = [];
+
+    mockFns.resolveIpnsRecord.mockImplementation(async (ipnsName: string) => {
+      if (ipnsName === NODE_IPNS) {
+        return { cid: 'bafy-root', sequenceNumber: 1n, signatureVerified: true };
+      }
+      if (ipnsName === CHILD_IPNS) {
+        return { cid: 'bafy-child-a', sequenceNumber: 1n, signatureVerified: true };
+      }
+      // MISSING_CHILD_IPNS_70_06: the record was never published / is gone.
+      return null;
+    });
+    mockFns.fetchFromIpfs.mockImplementation(async (_ctx: unknown, cid: string) => {
+      if (cid === 'bafy-root') return new TextEncoder().encode(JSON.stringify(publishedRootGen0));
+      return new TextEncoder().encode(JSON.stringify(publishedChildAGen0));
+    });
+    mockFns.unsealNode.mockImplementation(
+      async (published: import('@cipherbox/core').PublishedNode) => {
+        if (published.id === NODE_ID) return rootNode;
+        return makeFolderNode({ id: CHILD_ID, generation: 0, children: [] });
+      }
+    );
+    mockFns.sealNode.mockImplementation(async (node: import('@cipherbox/core').Node) =>
+      makePublishedNode(node.id, node.generation + 1)
+    );
+    mockFns.sealChildReadKey.mockResolvedValue('newsealed==');
+    mockFns.unsealChildReadKey.mockResolvedValue(new Uint8Array(32).fill(0x42));
+    mockFns.publishWithCas.mockImplementation(async (params: { ipnsName: string }) => {
+      publishWithCasCalls.push(params.ipnsName);
+      return { cid: 'bafy-new', newSequenceNumber: 2n, publishedData: [], prunedCids: [] };
+    });
+
+    const jobRecord = makeJobRecord({ rootNodeId: NODE_ID, completedNodeIds: new Set<string>() });
+
+    await rotateReadFromNode({
+      rootNodeId: NODE_ID,
+      rootNodeIpnsName: NODE_IPNS,
+      rootReadKey: T07_ROOT_READ_KEY,
+      rootIpnsPrivateKey: T07_ROOT_IPNS_KEY,
+      nodeKeySource: () => ({ privateKey: T07_CHILD_IPNS_KEY, publicKey: T07_STUB_PUB_KEY }),
+      jobRecord,
+      ctx: createMockContext(),
+    });
+
+    expect(jobRecord.status).toBe('complete');
+    // RED (silent continue, no accounting): pendingChildCount never reaches 0 —
+    // root's batched republish never fires — NODE_IPNS appears only ONCE
+    // (root's own initial rotation publish) → this assertion FAILS (expects 2).
+    // GREEN (fail-closed accounting): the missing child is explicitly accounted
+    // for — pendingChildCount DOES reach 0 once child-a completes — root's
+    // batched republish fires — NODE_IPNS appears TWICE → assertion PASSES.
+    const rootPublishCount = publishWithCasCalls.filter((n) => n === NODE_IPNS).length;
+    expect(rootPublishCount).toBe(2);
+  });
+
+  it('Test 5 (Plan 70-06 SC#6 / T-70-10): dirty-resume-republish returns a FRESH COPY readKey, never an alias of the caller-owned rootReadKey', async () => {
+    // Same fixture shape as the classic 64-07 dirty-resume test: root already in
+    // completedNodeIds (same-session resume), one dirty child below it.
+    const rootNode = makeFolderNode({
+      id: NODE_ID,
+      generation: 1,
+      children: [
+        {
+          name: 'child',
+          ipnsName: CHILD_IPNS,
+          generation: 0, // parent mirror stale
+          versionFloor: 0n,
+          readKeySealed: 'childsealed==',
+        },
+      ],
+    });
+
+    mockFns.resolveIpnsRecord.mockImplementation(async (ipnsName: string) => ({
+      cid: ipnsName === NODE_IPNS ? 'bafy-root' : 'bafy-child',
+      sequenceNumber: 3n,
+      signatureVerified: true,
+    }));
+    mockFns.fetchFromIpfs.mockImplementation(async (_ctx: unknown, cid: string) => {
+      if (cid === 'bafy-root')
+        return new TextEncoder().encode(JSON.stringify(makePublishedNode(NODE_ID, 1)));
+      return new TextEncoder().encode(JSON.stringify(makePublishedNode(CHILD_ID, 1)));
+    });
+    mockFns.unsealNode.mockResolvedValue(rootNode);
+    mockFns.sealNode.mockImplementation(async (node: import('@cipherbox/core').Node) =>
+      makePublishedNode(node.id, node.generation)
+    );
+    mockFns.sealChildReadKey.mockResolvedValue('resealed==');
+    mockFns.unsealChildReadKey.mockResolvedValue(new Uint8Array(32).fill(0x42));
+    mockFns.publishWithCas.mockResolvedValue({
+      cid: 'bafy-updated',
+      newSequenceNumber: 4n,
+      publishedData: [],
+      prunedCids: [],
+    });
+
+    const jobRecord = makeJobRecord({
+      rootNodeId: NODE_ID,
+      completedNodeIds: new Set([NODE_ID]), // resume: root already committed
+    });
+
+    const rootReadKeyParam = new Uint8Array(32).fill(0x99);
+
+    // RED: the dirty-resume path always returns `undefined` (rootResult.skipped
+    // unconditionally short-circuits the return) → `result` is undefined →
+    // `.toBeDefined()` FAILS.
+    // GREEN: a dirty-resume republish occurred → a truthy RotateReadResult is
+    // returned whose readKey is a FRESH COPY (new Uint8Array), never the SAME
+    // object reference as the caller-supplied rootReadKeyParam.
+    const result = await rotateReadFromNode({
+      rootNodeId: NODE_ID,
+      rootNodeIpnsName: NODE_IPNS,
+      rootReadKey: rootReadKeyParam,
+      rootIpnsPrivateKey: T07_ROOT_IPNS_KEY,
+      nodeKeySource: () => ({ privateKey: T07_CHILD_IPNS_KEY, publicKey: T07_STUB_PUB_KEY }),
+      jobRecord,
+      ctx: createMockContext(),
+    });
+
+    expect(result).toBeDefined();
+    // Buffer-IDENTITY assertion: never the same object as the caller's buffer.
+    expect(result?.readKey).not.toBe(rootReadKeyParam);
+    // But byte-equal (a faithful copy of the root's current valid key).
+    expect(result?.readKey).toEqual(rootReadKeyParam);
   });
 });
 
