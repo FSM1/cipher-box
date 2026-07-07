@@ -5,15 +5,15 @@ milestone_name: Metadata and Sharing Refactor
 current_phase: 70
 current_phase_name: rotation-soundness-deep-merge-fresh-record-resume-and-durabl
 status: executing
-stopped_at: Phase 71 context gathered (discuss complete; uncommitted, awaiting branch decision)
-last_updated: "2026-07-07T20:05:25.117Z"
+stopped_at: Phase 70 Plan 03 complete (rotation badge per-root Set + cached IDB connection)
+last_updated: "2026-07-07T20:13:10.379Z"
 last_activity: 2026-07-07
 last_activity_desc: Phase 70 execution started
 progress:
   total_phases: 15
   completed_phases: 10
   total_plans: 148
-  completed_plans: 141
+  completed_plans: 142
   percent: 67
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 ## Current Position
 
 Phase: 70 (rotation-soundness-deep-merge-fresh-record-resume-and-durabl) — EXECUTING
-Plan: 3 of 8
+Plan: 4 of 8
 Status: Ready to execute
 Last activity: 2026-07-07 — Phase 70 execution started
 
@@ -250,6 +250,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 68.2 P14 | 50min | 2 tasks | 3 files |
 | Phase 70 P01 | 12min | 2 tasks | 3 files |
 | Phase 70 P02 | 45min | 3 tasks | 3 files |
+| Phase 70 P03 | 20min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -532,6 +533,7 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase 70]: mergeRotatedChildren is a wholly separate exported function from folder/merge.ts mergeChildren, not a flag -- closes merge-downgrade Elevation-of-Privilege gap T-70-01
 - [Phase ?]: Corrupt-sidecar fail-closed via a bounded i64::MAX sentinel within the existing HighWaterStore trait shape, avoiding a Result-returning trait change that would ripple into out-of-scope listing.rs/adapter.rs
 - [Phase ?]: TS idbPut verified already max-preserving atomic; no functional TS change needed for SC#5, only a docstring parity note
+- [Phase 70-03]: progress('rotated'/'complete') defers to persistJob's terminal branch for per-root Set drain (no rootNodeId on that callback); only resets the badge when the set is already empty
 
 ## Operator Next Steps
 
@@ -539,10 +541,9 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-07T20:04:59.119Z
-**Stopped at:** Phase 71 context gathered (discuss complete; uncommitted, awaiting branch decision)
+**Last session:** 2026-07-07T20:13:10.372Z
+**Stopped at:** Phase 70 Plan 03 complete (rotation badge per-root Set + cached IDB connection)
 **Resume file:** 
-None
 
 ### Blockers
 
