@@ -37,6 +37,19 @@ a faithful Rust port of the shipped TS `packages/sdk/src/state/rotation-high-wat
   not a Rust-specific regression. A fix should be applied on BOTH sides (cross-language parity) or
   neither.
 
+## Related: corrupt-sidecar → cold-state (Greptile P1, floor_store.rs:60)
+
+`load_map` treats an unparseable sidecar as an empty map (fail-open to "no floor
+known"), so a corrupted generation/seq sidecar silently resets that node to cold
+first-contact state, where `enforce_resolved` then re-applies only the
+owner-vouched `version_floor` gate rather than the last-known warm floor. This is
+the documented fail-closed-to-baseline behavior (a corrupt sidecar can't crash the
+daemon), and a local-disk attacker who can corrupt the sidecar is already outside
+the zero-knowledge model (ADR 0002, same as [T-69-02-03] accepted risk). When
+hardening, consider: (a) an integrity tag on the sidecar so tampering/corruption is
+distinguishable from "never written", and (b) refusing to lower a floor that a
+higher-authority source (IPNS seq already observed) contradicts.
+
 ## Fix (when hardening concurrency / moving off single-daemon)
 
 1. Add per-`node_id` synchronization (or a compare-and-swap `HighWaterStore` API) so
