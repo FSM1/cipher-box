@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "f088c47f65fd",
+  "strategy": "manual-commit",
+  "branch": "feat/fuse-and-winfsp-rust-integration-and-grant-root-awareness",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/todos/pending/2026-07-07-fuse-shared-scope-exit-rotation-live-wiring.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f0/88c47f65fd/0/metadata.json",
+      "transcript": "/f0/88c47f65fd/0/full.jsonl",
+      "content_hash": "/f0/88c47f65fd/0/content_hash.txt",
+      "prompt": "/f0/88c47f65fd/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 451,
+    "cache_creation_tokens": 1297,
+    "cache_read_tokens": 695253,
+    "output_tokens": 911,
+    "api_call_count": 2
+  }
+}
