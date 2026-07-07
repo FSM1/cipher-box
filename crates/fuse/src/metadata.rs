@@ -317,60 +317,70 @@ pub fn spawn_metadata_publish(
             // CAS loop: on conflict, republish the SAME sealed bytes at a fresh
             // sequence (last-writer-wins). Bounded to avoid an unbounded retry.
             let max_attempts = 5u32;
-            let mut attempt = 0u32;
-            loop {
-                let seq = coordinator.resolve_sequence(&api, &ipns_name).await?;
-                let new_seq = seq
-                    .checked_add(1)
-                    .ok_or_else(|| "IPNS sequence number overflow".to_string())?;
-                let record_b64 = make_record(new_seq)?;
-                let req = cipherbox_api_client::IpnsPublishRequest {
-                    ipns_name: ipns_name.clone(),
-                    record: record_b64,
-                    metadata_cid: cid.clone(),
-                    encrypted_ipns_private_key: None,
-                    key_epoch: None,
-                    expected_sequence_number: Some(seq.to_string()),
-                };
-                match cipherbox_api_client::ipns::publish_ipns(&api, &req)
-                    .await
-                    .map_err(|e| format!("{}", e))?
-                {
-                    cipherbox_api_client::PublishResult::Success => {
-                        coordinator.record_publish(&ipns_name, new_seq);
-                        for old in &old_cids {
-                            let _ = cipherbox_api_client::ipfs::unpin_content(&api, old).await;
+            let publish_result: Result<(), String> = async {
+                let mut attempt = 0u32;
+                loop {
+                    let seq = coordinator.resolve_sequence(&api, &ipns_name).await?;
+                    let new_seq = seq
+                        .checked_add(1)
+                        .ok_or_else(|| "IPNS sequence number overflow".to_string())?;
+                    let record_b64 = make_record(new_seq)?;
+                    let req = cipherbox_api_client::IpnsPublishRequest {
+                        ipns_name: ipns_name.clone(),
+                        record: record_b64,
+                        metadata_cid: cid.clone(),
+                        encrypted_ipns_private_key: None,
+                        key_epoch: None,
+                        expected_sequence_number: Some(seq.to_string()),
+                    };
+                    match cipherbox_api_client::ipns::publish_ipns(&api, &req)
+                        .await
+                        .map_err(|e| format!("{}", e))?
+                    {
+                        cipherbox_api_client::PublishResult::Success => {
+                            coordinator.record_publish(&ipns_name, new_seq);
+                            for old in &old_cids {
+                                let _ = cipherbox_api_client::ipfs::unpin_content(&api, old).await;
+                            }
+                            log::info!("Background node/v3 publish succeeded for {}", ipns_name);
+                            return Ok(());
                         }
-                        log::info!("Background node/v3 publish succeeded for {}", ipns_name);
-                        break;
-                    }
-                    cipherbox_api_client::PublishResult::Conflict {
-                        current_sequence_number,
-                    } => {
-                        attempt += 1;
-                        if attempt >= max_attempts {
-                            let _ = cipherbox_api_client::ipfs::unpin_content(&api, &cid).await;
-                            return Err(format!(
-                                "Persistent conflict for {} after {} attempts",
-                                ipns_name, max_attempts
-                            ));
+                        cipherbox_api_client::PublishResult::Conflict {
+                            current_sequence_number,
+                        } => {
+                            attempt += 1;
+                            if attempt >= max_attempts {
+                                return Err(format!(
+                                    "Persistent conflict for {} after {} attempts",
+                                    ipns_name, max_attempts
+                                ));
+                            }
+                            log::warn!(
+                                "Conflict for {} (expected {}, server has {}); retrying at fresh seq",
+                                ipns_name,
+                                seq,
+                                current_sequence_number
+                            );
+                            let jitter_ms = (std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .subsec_nanos()
+                                % 400) as u64
+                                + 100;
+                            tokio::time::sleep(std::time::Duration::from_millis(jitter_ms)).await;
                         }
-                        log::warn!(
-                            "Conflict for {} (expected {}, server has {}); retrying at fresh seq",
-                            ipns_name,
-                            seq,
-                            current_sequence_number
-                        );
-                        let jitter_ms = (std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .subsec_nanos()
-                            % 400) as u64
-                            + 100;
-                        tokio::time::sleep(std::time::Duration::from_millis(jitter_ms)).await;
                     }
                 }
             }
+            .await;
+
+            // Best-effort cleanup: any failure path above leaves the sealed
+            // envelope uploaded+pinned but unreferenced by a published record —
+            // unpin it so a failed publish doesn't leak an orphaned IPFS pin.
+            if publish_result.is_err() {
+                let _ = cipherbox_api_client::ipfs::unpin_content(&api, &cid).await;
+            }
+            publish_result?;
             Ok::<(), String>(())
         });
         if let Err(e) = result {

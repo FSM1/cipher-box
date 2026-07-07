@@ -69,15 +69,17 @@ pub(crate) mod implementation {
         let api = fs.api.clone();
         let high_water = fs.high_water.clone();
         let ipns_owned = ipns_name.to_string();
-        let read_key_owned = *read_key;
         let rt = fs.rt.clone();
 
+        // `block_with_timeout` drives the future to completion synchronously
+        // within this borrow's scope, so the caller-owned `read_key` can be
+        // borrowed directly — no extra un-zeroized 32-byte stack copy (D-09).
         block_with_timeout(&rt, async move {
             crate::content_ops::fetch_node_and_decrypt_content(
                 &api,
                 &high_water,
                 &ipns_owned,
-                &read_key_owned,
+                read_key,
             )
             .await
         })

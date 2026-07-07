@@ -258,7 +258,10 @@ pub async fn publish_file_node(
             (Some(_), None) => {
                 return Err("TEE wrap present but key_epoch missing".to_string());
             }
-            _ => (None, None),
+            (None, Some(_)) => {
+                return Err("TEE key_epoch present but wrap missing".to_string());
+            }
+            (None, None) => (None, None),
         };
         let record = cipherbox_core::ipns::create_ipns_record(&ipns_key_arr, &value, 1, 86_400_000)
             .map_err(|e| format!("File node IPNS record creation failed: {}", e))?;

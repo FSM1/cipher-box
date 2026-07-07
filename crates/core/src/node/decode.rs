@@ -16,7 +16,7 @@ use super::types::{Node, NodeContent, NodeError, NodeWriteBody, PublishedNode, S
 
 /// Wire representation shared by `folder` and `root` kinds.
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct FolderRootWireOwned {
     schema: String,
     kind: String,
@@ -29,7 +29,7 @@ struct FolderRootWireOwned {
 
 /// Wire representation for the `file` kind.
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct FileWireOwned {
     schema: String,
     #[allow(dead_code)]

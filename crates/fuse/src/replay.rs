@@ -240,14 +240,18 @@ fn recover_child_read_write(
     let generation = child_ref.generation;
 
     let read_sealed = decode_b64(&child_ref.read_key_sealed)?;
-    let read_key_vec =
+    // Wrap the unsealed child key material in `Zeroizing` so the raw bytes are
+    // wiped on drop rather than lingering in a plain `Vec<u8>` temporary.
+    let read_key_vec = Zeroizing::new(
         unseal_child_read_key(&read_sealed, parent_read_key, child_id, kind, generation)
-            .map_err(|e| format!("unseal child readKey: {} — retaining entry", e))?;
+            .map_err(|e| format!("unseal child readKey: {} — retaining entry", e))?,
+    );
 
     let write_sealed = decode_b64(&write_child_ref.write_key_sealed)?;
-    let write_key_vec =
+    let write_key_vec = Zeroizing::new(
         unseal_child_write_key(&write_sealed, parent_write_key, child_id, kind, generation)
-            .map_err(|e| format!("unseal child writeKey: {} — retaining entry", e))?;
+            .map_err(|e| format!("unseal child writeKey: {} — retaining entry", e))?,
+    );
 
     let read_key = to_key32(&read_key_vec, "child readKey")?;
     let write_key = to_key32(&write_key_vec, "child writeKey")?;
@@ -336,6 +340,20 @@ async fn publish_child_node(
 
     let ipns_key_arr = to_key32(child_ipns_private_key.as_slice(), "child IPNS signing seed")?;
 
+    // TEE enrollment on first publish (crypto rule #7 keeper ECIES wrap).
+    // Computed BEFORE the content upload: a missing key_epoch or a wrap failure
+    // must fail the operation without leaving an orphaned pinned blob behind.
+    let (encrypted_ipns_for_tee, tee_epoch) = match (tee_public_key, tee_key_epoch) {
+        (Some(tee_key), Some(epoch)) => {
+            let wrapped = cipherbox_crypto::wrap_key(child_ipns_private_key.as_slice(), tee_key)
+                .map_err(|e| format!("TEE key wrapping failed: {}", e))?;
+            (Some(hex::encode(&wrapped)), Some(epoch))
+        }
+        (Some(_), None) => return Err("TEE public key present but key_epoch missing".to_string()),
+        (None, Some(_)) => return Err("TEE key_epoch present but public key missing".to_string()),
+        (None, None) => (None, None),
+    };
+
     let cid = cipherbox_api_client::ipfs::upload_content(api, node_bytes)
         .await
         .map_err(|e| format!("upload child node: {}", e))?;
@@ -345,17 +363,6 @@ async fn publish_child_node(
     let marshaled = cipherbox_core::ipns::marshal_ipns_record(&record)
         .map_err(|e| format!("child IPNS marshal failed: {}", e))?;
     let record_b64 = base64::engine::general_purpose::STANDARD.encode(&marshaled);
-
-    // TEE enrollment on first publish (crypto rule #7 keeper ECIES wrap).
-    let (encrypted_ipns_for_tee, tee_epoch) = match (tee_public_key, tee_key_epoch) {
-        (Some(tee_key), Some(epoch)) => {
-            let wrapped = cipherbox_crypto::wrap_key(child_ipns_private_key.as_slice(), tee_key)
-                .map_err(|e| format!("TEE key wrapping failed: {}", e))?;
-            (Some(hex::encode(&wrapped)), Some(epoch))
-        }
-        (Some(_), None) => return Err("TEE public key present but key_epoch missing".to_string()),
-        _ => (None, None),
-    };
 
     let req = cipherbox_api_client::IpnsPublishRequest {
         ipns_name: child_ipns_name.to_string(),
@@ -520,13 +527,21 @@ where
         }
     };
 
-    // D-06 idempotency: child already present in the read plane -> nothing to do.
+    // D-06 idempotency: skip only when the child is present in BOTH planes.
+    // The read-plane ref (ipns_name) and the write-plane ref (child_id) are
+    // spliced as a PAIR; a shared-write / cross-client state can leave the read
+    // ref present while the write ref is absent, so a read-plane-only check
+    // would wrongly skip re-adding the write ref and drop the pair. Falling
+    // through is safe — the splice below dedups by key before pushing.
     if children
         .iter()
         .any(|c| c.ipns_name == new_child_ref.ipns_name)
+        && write_children
+            .iter()
+            .any(|w| w.child_id == new_write_child_ref.child_id)
     {
         log::info!(
-            "replay: child {} already spliced into parent {} — skipping (idempotent)",
+            "replay: child {} already spliced into parent {} (both planes) — skipping (idempotent)",
             new_child_ref.ipns_name,
             parent_ipns_name
         );
