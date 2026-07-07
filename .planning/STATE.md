@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
 current_phase: 71
-current_phase_name: API
-status: verifying
+current_phase_name: Share-Invite Security and IPNS Data-Integrity (API)
+status: ready_to_plan
 stopped_at: Fixed 70-04 concurrent-add rotation-soundness bug caught by the sdk-e2e gate (commit 7faa0e82835d56368ea87f969d57b083d43ea9a3); rotation-crash-safety suite 4/4 green
 last_updated: "2026-07-07T22:39:09.421Z"
 last_activity: 2026-07-07
@@ -24,7 +24,7 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-27)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 70 — rotation-soundness-deep-merge-fresh-record-resume-and-durabl
+**Current focus:** Phase 71 — Share-Invite Security and IPNS Data-Integrity (API)
 
 ## Current Position
 
