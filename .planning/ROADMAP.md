@@ -657,14 +657,14 @@ Plans:
 5. The anti-rollback floor store performs an atomic compare-and-set (Rust `bump_floor` guarded; `JsonSidecarFloorStore::put` no blocking RMW on the async executor; corrupt sidecar fails closed, not `unwrap_or_default`); `bumpFloor` on the TS side no longer runs sequentially where it can race
 6. Rotation readKey source buffers are zeroed after use; no module-global `activeRootNodeId` leaks across roots
 
-**Plans**: 1/8 plans executed
+**Plans**: 2/8 plans executed
 
 Plans:
 
 **Wave 1**
 
 - [x] 70-01-PLAN.md — SC#1 `mergeRotatedChildren` pure local-wins merge + unit tests
-- [ ] 70-02-PLAN.md — SC#5 atomic/non-blocking/fail-closed Rust floor store + TS parity note
+- [x] 70-02-PLAN.md — SC#5 atomic/non-blocking/fail-closed Rust floor store + TS parity note
 - [ ] 70-03-PLAN.md — SC#6 web rotation-driver Set-based badge + cached IDB connection
 
 **Wave 2** *(blocked on 70-01)*
