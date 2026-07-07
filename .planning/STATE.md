@@ -4,17 +4,17 @@ milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
 current_phase: 70
 current_phase_name: rotation-soundness-deep-merge-fresh-record-resume-and-durabl
-status: executing
+status: verifying
 stopped_at: Completed 70-07-PLAN.md
-last_updated: "2026-07-07T21:32:34.850Z"
+last_updated: "2026-07-07T22:01:08.071Z"
 last_activity: 2026-07-07
 last_activity_desc: Phase 70 execution started
 progress:
   total_phases: 15
-  completed_phases: 10
+  completed_phases: 11
   total_plans: 148
-  completed_plans: 146
-  percent: 67
+  completed_plans: 147
+  percent: 73
 ---
 
 # Project State
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 
 Phase: 70 (rotation-soundness-deep-merge-fresh-record-resume-and-durabl) — EXECUTING
 Plan: 8 of 8
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-07-07 — Phase 70 execution started
 
 Progress: `██████████` 79 / 79 plans (100%)
@@ -255,6 +255,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 70 P05 | 20min | 2 tasks | 2 files |
 | Phase 70 P06 | 55min | 3 tasks | 4 files |
 | Phase 70 P07 | 13min | 3 tasks | 2 files |
+| Phase 70 P08 | 55min | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -548,6 +549,9 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: performScopeExitRotation is the terminal owner of rotationResult.readKey; zeroes unconditionally once a rotation ran (70-07)
 - [Phase ?]: RootKeyStaleError catch does not retry rotateReadFromNode after re-nav recovery; deferred rotation picked up by the next covered mutation (70-07)
 - [Phase ?]: Pure-revoke never triggers rotation eagerly and rotation never re-seals its own root's ancestor mirror -- accepted residual, documented not fixed (70-07 Open Question 2)
+- [Phase ?]: Test 3's strengthened assertion derives subfolder3's key via unsealChildReadKey against the new root key and unseals its ACTUAL published body, proving local-wins keeps the D-02 re-seal intact
+- [Phase ?]: Test 4 uses a deliberately childless (single file node) rotation root — a traced D-02/D-09 timing analysis shows any multi-level tree crash before the walk's final persist hits an unrecoverable AEAD mismatch via this suite's persistCallback-only fault-injection model
+- [Phase ?]: Test 4 crashes on the FIRST persistCallback call and resumes with EMPTY completedNodeIds plus the CURRENT valid rootReadKey (captured via the existing spy), converging via safe double-rotation
 
 ## Operator Next Steps
 
@@ -555,7 +559,7 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-07T21:32:34.840Z
+**Last session:** 2026-07-07T22:00:46.031Z
 **Stopped at:** Completed 70-07-PLAN.md
 **Resume file:** 
 

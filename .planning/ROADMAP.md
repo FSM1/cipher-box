@@ -69,7 +69,7 @@
 - [x] **Phase 67: TEE Lease-Renewer Contract Rewrite** — TEE becomes a record-lease-renewer (no CID origination, no sequence increment), internal epoch derivation, name↔key binding, tombstone guard (completed 2026-07-01)
 - [x] **Phase 68: Web Integration — Rotation UX and Durable Client State** — Replace `executeLazyRotation` with `rotateReadFromNode`, durable IndexedDB generation + seq high-water (M1 defense, survives restart), `folderTree` reconcile-before-rotate (all 12 plans executed 2026-07-01; verification passed 14/14 after 68-11/68-12 gap closure, see 68-VERIFICATION.md) (completed 2026-07-01)
 - [x] **Phase 69: FUSE and WinFsp — Rust Integration and Grant-Root Awareness** — Symmetric child-key unwrap, `spawn_file_meta_reencrypt` deletion from both callers, grant-root scope computation, durable client floors, `Node` Rust enum, Rust SDK-owned read chain (Phase 68.2 parity), Windows CI gate (completed 2026-07-06)
-- [ ] **Phase 70: Rotation Soundness — Deep Merge, Fresh-Record Resume, and Durable Floor Concurrency** — Local-wins merge for rotated child keys, deep `verifySubtreeClean`, true fresh-record crash-resume, grant-callback threading through the real walk, and an atomic/async-safe anti-rollback floor store (5 deferred CodeRabbit/PR-review todos)
+- [x] **Phase 70: Rotation Soundness — Deep Merge, Fresh-Record Resume, and Durable Floor Concurrency** — Local-wins merge for rotated child keys, deep `verifySubtreeClean`, true fresh-record crash-resume, grant-callback threading through the real walk, and an atomic/async-safe anti-rollback floor store (5 deferred CodeRabbit/PR-review todos) (completed 2026-07-07)
 - [ ] **Phase 71: Share-Invite Security and IPNS Data-Integrity (API)** — Validate sharer root ownership, apply-or-reject later invite grants, `claim_count` CHECK constraint, partial unique index on `ipns_records(user_id) WHERE is_root`, first-publish INSERT-race 409, same-seq CID equivocation decision, direct bulk-revoke DELETE, and `ShareInviteService` lifecycle unit coverage (8 todos)
 - [ ] **Phase 72: SDK Write-Plane Durability and Correctness** — Delete drops the removed child's `WriteChildRef`, fail-closed `getWriteBodyParams` on transient resolve miss, restore-to-different-parent re-homing, `SealedChildRef` size/modifiedAt mirror refresh, legacy `moveInSharedFolder` branch removal, write-plane helper dedup, and two write-chain test-fidelity fixes (8 todos)
 - [ ] **Phase 73: Shared Write/Navigation Correctness (Web)** — Preserve nested write capability across navigate-up/breadcrumb restore, invalidate stale nav-stack child snapshots, gate the non-listing read facades with the ROT-07 floor, give WRITE-03 refresh-access a live production trigger, and route drag-payload kind through the resolved listing (5 todos)
@@ -657,7 +657,7 @@ Plans:
 5. The anti-rollback floor store performs an atomic compare-and-set (Rust `bump_floor` guarded; `JsonSidecarFloorStore::put` no blocking RMW on the async executor; corrupt sidecar fails closed, not `unwrap_or_default`); `bumpFloor` on the TS side no longer runs sequentially where it can race
 6. Rotation readKey source buffers are zeroed after use; no module-global `activeRootNodeId` leaks across roots
 
-**Plans**: 7/8 plans executed
+**Plans**: 8/8 plans complete
 
 Plans:
 
@@ -685,7 +685,7 @@ Plans:
 
 **Wave 6** *(blocked on 70-07)*
 
-- [ ] 70-08-PLAN.md — SC#1/SC#3 sdk-e2e phase gate (strengthen test 3 + fresh-record-resume mid-walk crash)
+- [x] 70-08-PLAN.md — SC#1/SC#3 sdk-e2e phase gate (strengthen test 3 + fresh-record-resume mid-walk crash)
 
 ---
 
