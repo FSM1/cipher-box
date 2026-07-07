@@ -5,10 +5,10 @@ milestone_name: Metadata and Sharing Refactor
 current_phase: 70
 current_phase_name: rotation-soundness-deep-merge-fresh-record-resume-and-durabl
 status: verifying
-stopped_at: Completed 70-07-PLAN.md
-last_updated: "2026-07-07T22:01:08.071Z"
-last_activity: 2026-07-07
-last_activity_desc: Phase 70 execution started
+stopped_at: Fixed 70-04 concurrent-add rotation-soundness bug caught by sdk-e2e gate
+last_updated: "2026-07-08T00:27:22.000Z"
+last_activity: 2026-07-08
+last_activity_desc: Fixed rotation D-09 concurrent-add over-reach (commit 7faa0e828)
 progress:
   total_phases: 15
   completed_phases: 11
@@ -552,6 +552,7 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: Test 3's strengthened assertion derives subfolder3's key via unsealChildReadKey against the new root key and unseals its ACTUAL published body, proving local-wins keeps the D-02 re-seal intact
 - [Phase ?]: Test 4 uses a deliberately childless (single file node) rotation root — a traced D-02/D-09 timing analysis shows any multi-level tree crash before the walk's final persist hits an unrecoverable AEAD mismatch via this suite's persistCallback-only fault-injection model
 - [Phase ?]: Test 4 crashes on the FIRST persistCallback call and resumes with EMPTY completedNodeIds plus the CURRENT valid rootReadKey (captured via the existing spy), converging via safe double-rotation
+- [Phase 70 post-gate fix]: 70-04's enqueueConcurrentlyAddedChildren over-reached ROT-05 by pushing a concurrently-added child onto the BFS queue for its own rotateOne pass (requires an IPNS write key the rotating party may not hold) and ran after parentTracking teardown so the re-seal never reached the parent's published SealedChildRef; replaced with createConcurrentAddResealingMerge, an async mergeChildrenFn wrapper invoked inside the D-09 CAS-409 merge that re-seals only the concurrent child's readKeySealed wrapper (trying both the parent's old and already-current key) without rotating the child's own node -- commit 7faa0e82835d56368ea87f969d57b083d43ea9a3; sdk-e2e rotation-crash-safety 4/4 green, sdk-core unit 355/355 green
 
 ## Operator Next Steps
 
@@ -559,8 +560,8 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-07T22:00:46.031Z
-**Stopped at:** Completed 70-07-PLAN.md
+**Last session:** 2026-07-08T00:27:22.000Z
+**Stopped at:** Fixed 70-04 concurrent-add rotation-soundness bug caught by the sdk-e2e gate (commit 7faa0e82835d56368ea87f969d57b083d43ea9a3); rotation-crash-safety suite 4/4 green
 **Resume file:** 
 
 None
