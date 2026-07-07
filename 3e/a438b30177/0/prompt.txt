@@ -1,0 +1,9 @@
+The worktree on that branch can be cleaned up (everything should have been committed) and then switch to that branch here.
+
+---
+
+/ship-phase 69
+
+---
+
+I think that the full desktop e2e in CI should also be added as one of the gates for this phase
