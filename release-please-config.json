@@ -140,7 +140,7 @@
       "component": "cipherbox-core",
       "include-component-in-tag": true,
       "bump-minor-pre-major": true,
-      "release-as": "0.7.1"
+      "release-as": "0.8.0"
     },
     "crates/api-client": {
       "release-type": "rust",
@@ -154,14 +154,14 @@
       "component": "cipherbox-fuse",
       "include-component-in-tag": true,
       "bump-minor-pre-major": true,
-      "release-as": "0.10.2"
+      "release-as": "0.11.0"
     },
     "crates/sdk": {
       "release-type": "rust",
       "component": "cipherbox-sdk",
       "include-component-in-tag": true,
       "bump-minor-pre-major": true,
-      "release-as": "0.8.1"
+      "release-as": "0.9.0"
     }
   }
 }
