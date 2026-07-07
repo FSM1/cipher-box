@@ -22,3 +22,5 @@ export {
   type ScopeExitResult,
   type ScopeExitDeps,
 } from './scope';
+
+export { mergeRotatedChildren } from './merge';
