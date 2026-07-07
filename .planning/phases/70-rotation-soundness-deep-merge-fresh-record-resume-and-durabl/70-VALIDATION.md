@@ -1,11 +1,14 @@
 ---
 phase: 70
 slug: rotation-soundness-deep-merge-fresh-record-resume-and-durable-floor-concurrency
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: passed
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-07-07
+verified: 2026-07-08
 ---
+
+> **Verified 2026-07-08:** All six SC validation commands pass. Unit: sdk-core rotation 86/86, sdk client-rotation 29/29, Rust floor_store 9/9 + high_water 10/10. Live gate: `tests/sdk-e2e/rotation-crash-safety` 4/4 against the docker+API stack. See 70-VERIFICATION.md (status: passed, 6/6).
 
 # Phase 70 — Validation Strategy
 

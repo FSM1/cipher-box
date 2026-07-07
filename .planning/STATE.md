@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
-current_phase: 70
-current_phase_name: rotation-soundness-deep-merge-fresh-record-resume-and-durabl
+current_phase: 71
+current_phase_name: API
 status: verifying
-stopped_at: Fixed 70-04 concurrent-add rotation-soundness bug caught by sdk-e2e gate
-last_updated: "2026-07-08T00:27:22.000Z"
-last_activity: 2026-07-08
-last_activity_desc: Fixed rotation D-09 concurrent-add over-reach (commit 7faa0e828)
+stopped_at: Fixed 70-04 concurrent-add rotation-soundness bug caught by the sdk-e2e gate (commit 7faa0e82835d56368ea87f969d57b083d43ea9a3); rotation-crash-safety suite 4/4 green
+last_updated: "2026-07-07T22:39:09.421Z"
+last_activity: 2026-07-07
+last_activity_desc: Phase 70 complete, transitioned to Phase 71
 progress:
   total_phases: 15
   completed_phases: 11
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 
 ## Current Position
 
-Phase: 70 (rotation-soundness-deep-merge-fresh-record-resume-and-durabl) — EXECUTING
-Plan: 8 of 8
+Phase: 71 — Share-Invite Security and IPNS Data-Integrity (API)
+Plan: Not started
 Status: Phase complete — ready for verification
-Last activity: 2026-07-07 — Phase 70 execution started
+Last activity: 2026-07-07 — Phase 70 complete, transitioned to Phase 71
 
 Progress: `██████████` 79 / 79 plans (100%)
 
