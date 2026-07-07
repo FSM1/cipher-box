@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "91dda672b133",
+  "strategy": "manual-commit",
+  "branch": "feat/rotation-soundness-deep-merge-fresh-record-resume",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/70-rotation-soundness-deep-merge-fresh-record-resume-and-durabl/70-PATTERNS.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/91/dda672b133/0/metadata.json",
+      "transcript": "/91/dda672b133/0/full.jsonl",
+      "content_hash": "/91/dda672b133/0/content_hash.txt",
+      "prompt": "/91/dda672b133/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 28732,
+    "cache_creation_tokens": 157596,
+    "cache_read_tokens": 4363888,
+    "output_tokens": 55673,
+    "api_call_count": 38
+  }
+}
