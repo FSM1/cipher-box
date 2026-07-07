@@ -1,0 +1,127 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "8a7fbdffdfde",
+  "session_id": "1df3ecfc-c665-42cd-8775-cdb6ef61523a",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-07T21:29:25.482063Z",
+  "branch": "feat/rotation-soundness-deep-merge-fresh-record-resume-and-durabl",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/sdk/src/__tests__/client-rotation.test.ts",
+    "packages/sdk/src/client.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "e5135bcc65e6",
+  "checkpoint_transcript_start": 499,
+  "transcript_lines_at_start": 499,
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-manager-2026-07-07T18:03:15.221007Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-manager"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "8bc89b5e12d4",
+      "timestamp": "2026-07-07T18:03:15.221007Z",
+      "native": {
+        "command": "/gsd-manager"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-manager",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01BAALwG2npPFsynhrVuzu9G",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-discuss-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "e5135bcc65e6",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 127,
+        "end": 128,
+        "entry_ids": [
+          "9086f460-a072-4bb0-840f-12ba3e2333c5"
+        ],
+        "tool_use_id": "toolu_01BAALwG2npPFsynhrVuzu9G"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01BAALwG2npPFsynhrVuzu9G"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-discuss-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_019qT8PTHHWKwPxrgSfWZ39K",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "e5135bcc65e6",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 369,
+        "end": 370,
+        "entry_ids": [
+          "60eee2ce-d99e-46f1-ac09-3f0c7d121b82"
+        ],
+        "tool_use_id": "toolu_019qT8PTHHWKwPxrgSfWZ39K"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_019qT8PTHHWKwPxrgSfWZ39K"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-07T21:29:25.454306Z",
+    "agent_lines": 173,
+    "agent_removed": 9,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 173,
+    "total_lines_changed": 182,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
