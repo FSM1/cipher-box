@@ -1929,6 +1929,46 @@ export class CipherBoxClient {
    * name(s) -- the coverage check still correctly detects a grant rooted AT
    * the mutated node itself. Extending to a full multi-level ancestor walk
    * requires `FolderTree` parent tracking, deferred to a later plan.
+   *
+   * ---
+   * Plan 70-07 Task 3 trace (Open Question 2) -- PURE-REVOKE ANCESTOR-MIRROR
+   * STALENESS, accepted residual, NOT fixed this phase:
+   *
+   * All FIVE call sites of this method (`createSubfolder`, `renameItem`,
+   * `moveItem` [source only], `deleteItem`, `deleteToBin`) invoke it with
+   * `rootNodeIpnsName` equal to the folder that was JUST DIRECTLY MUTATED --
+   * never a distinct share root reached transitively. `revokeShare` (a PURE
+   * revoke -- the shared node's own position in the tree never moves) does
+   * NOT call this method at all: it only soft-deletes the share row via the
+   * API (`shareOps.revokeShare`). Rotation of that root's read key is
+   * therefore entirely DEFERRED to whichever LATER direct mutation
+   * (rename/delete/move-out/create-child-under-it) eventually targets that
+   * SAME folder -- there is no eager rotation on revoke.
+   *
+   * Even once that later mutation DOES trigger rotation on the folder,
+   * `rotateReadFromNode` (sdk-core `engine.ts`) never re-seals the rotation
+   * ROOT's own real ancestor's `SealedChildRef` mirror: `parentTracking` is
+   * seeded keyed by `rootNodeIpnsName` itself (to track updates to the
+   * root's OWN children), never for the root's true parent -- no
+   * `parentTracking` entry is ever created for a node ABOVE the rotation
+   * root. So the root's entry inside ITS OWN PARENT's `children[]` still
+   * seals the OLD (pre-rotation) key after rotation completes.
+   *
+   * Consequence for the RootKeyStaleError top-down re-navigation fallback
+   * (Task 2, above): a walk from the vault root down through the ancestor
+   * chain succeeds through every hop ABOVE the rotation root (their own
+   * keys never changed), but is blocked exactly at the LAST hop --
+   * parent-to-rotated-root -- because the parent's stored
+   * `SealedChildRef.readKeySealed` for that child still seals the stale key.
+   * This is the "one hop earlier" residual Task 2's fallback documents.
+   *
+   * This is an ACCEPTED residual, per the phase's explicit "no redesign"
+   * mandate -- making rotation additionally re-seal its own root's ancestor
+   * mirror is a larger structural change (rotation would need to learn its
+   * caller's parent-chain context, which it does not track today) and is
+   * NOT undertaken in this plan. A follow-up todo candidate, not a phase-70
+   * scope item.
+   * ---
    */
   private async performScopeExitRotation(params: {
     ancestorIpnsNames: string[];
