@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "086bedc26077",
+  "strategy": "manual-commit",
+  "branch": "feat/rotation-soundness-deep-merge-fresh-record-resume",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/REQUIREMENTS.md",
+    ".planning/ROADMAP.md",
+    ".planning/STATE.md",
+    ".planning/phases/70-rotation-soundness-deep-merge-fresh-record-resume-and-durabl/70-01-PLAN.md",
+    ".planning/phases/70-rotation-soundness-deep-merge-fresh-record-resume-and-durabl/70-02-PLAN.md",
+    ".planning/phases/70-rotation-soundness-deep-merge-fresh-record-resume-and-durabl/70-03-PLAN.md",
+    ".planning/phases/70-rotation-soundness-deep-merge-fresh-record-resume-and-durabl/70-04-PLAN.md",
+    ".planning/phases/70-rotation-soundness-deep-merge-fresh-record-resume-and-durabl/70-05-PLAN.md",
+    ".planning/phases/70-rotation-soundness-deep-merge-fresh-record-resume-and-durabl/70-06-PLAN.md",
+    ".planning/phases/70-rotation-soundness-deep-merge-fresh-record-resume-and-durabl/70-07-PLAN.md",
+    ".planning/phases/70-rotation-soundness-deep-merge-fresh-record-resume-and-durabl/70-08-PLAN.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/08/6bedc26077/0/metadata.json",
+      "transcript": "/08/6bedc26077/0/full.jsonl",
+      "content_hash": "/08/6bedc26077/0/content_hash.txt",
+      "prompt": "/08/6bedc26077/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 28964,
+    "cache_creation_tokens": 166463,
+    "cache_read_tokens": 5093124,
+    "output_tokens": 61591,
+    "api_call_count": 42
+  }
+}
