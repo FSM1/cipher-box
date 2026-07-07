@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "1cd9a5b51e69",
+  "strategy": "manual-commit",
+  "branch": "feat/fuse-and-winfsp-rust-integration-and-grant-root-awareness",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/1c/d9a5b51e69/0/metadata.json",
+      "transcript": "/1c/d9a5b51e69/0/full.jsonl",
+      "content_hash": "/1c/d9a5b51e69/0/content_hash.txt",
+      "prompt": "/1c/d9a5b51e69/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 63880,
+    "cache_creation_tokens": 1470575,
+    "cache_read_tokens": 74590274,
+    "output_tokens": 280179,
+    "api_call_count": 260
+  }
+}
