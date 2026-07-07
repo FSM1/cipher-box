@@ -12,6 +12,7 @@ import { CipherBoxClient, ReconcileStaleError } from '../client';
 import { createTestConfig, setupFolder } from './helpers';
 import { SequenceRegressionError } from '../state/rotation-high-water';
 import type { RotationHighWater } from '../state/rotation-high-water';
+import type { FolderState } from '../types';
 
 // ── crypto mock ──────────────────────────────────────────────────────────
 vi.mock('@cipherbox/crypto', () => ({
@@ -609,6 +610,125 @@ describe('CipherBoxClient — folderTree refresh after scope-exit rotation (Gap 
     expect(after?.folderKey).toEqual(beforeFolderKeyCopy);
     expect(after?.nodeGeneration).toBe(0);
     expect(after?.sequenceNumber).toBe(2n); // advanced only by the mutation's own publish
+  });
+});
+
+describe('CipherBoxClient — RootKeyStaleError top-down re-navigation fallback (Plan 70-07 Task 2)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockResolveMatching(1n); // reconcile always agrees in these tests
+  });
+
+  function rotationCoveredConfig() {
+    return createTestConfig({
+      rotationCallbacks: {
+        getActiveGrantRootIpnsNames: async () => new Set([FOLDER_IPNS]),
+        getLocalGrantRecord: () => null,
+        persistJob: vi.fn(),
+      },
+    });
+  }
+
+  it('recovers via top-down re-navigation and does not fail the (already-published) mutation', async () => {
+    const client = new CipherBoxClient(rotationCoveredConfig());
+    setupFolder(client, FOLDER_IPNS);
+    vi.mocked(sdkCore.renameInFolder).mockReturnValue({
+      updatedChildren: [],
+      renamedChild: {} as never,
+    });
+    vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
+      cid: 'bafynew',
+      newSequenceNumber: 2n,
+      publishedChildren: [],
+    });
+    vi.mocked(sdkCore.rotateReadFromNode).mockRejectedValue(
+      new sdkCore.RootKeyStaleError('root record exists but unseal failed with the supplied key')
+    );
+    // Only the FALLBACK call (triggered from inside performScopeExitRotation's
+    // catch block) is stubbed — the FIRST call (requireFolder's own
+    // pre-mutation cache-hit load) must call through to the real
+    // implementation, or `folder` would come back missing folderKey/nodeId/
+    // ipnsKeypair and the mutation itself could never proceed.
+    const realEnsureFolderLoaded = client.ensureFolderLoaded.bind(client);
+    let ensureFolderLoadedCalls = 0;
+    const ensureFolderLoadedSpy = vi
+      .spyOn(client, 'ensureFolderLoaded')
+      .mockImplementation(async (ipnsName, opts) => {
+        ensureFolderLoadedCalls += 1;
+        if (ensureFolderLoadedCalls === 1) return realEnsureFolderLoaded(ipnsName, opts);
+        return { ipnsName: FOLDER_IPNS } as FolderState;
+      });
+
+    await expect(client.renameItem(FOLDER_IPNS, 'file1', 'new.txt')).resolves.toBeUndefined();
+
+    // The mutation (rename) itself already published successfully BEFORE
+    // performScopeExitRotation ran — the stale-key recovery on the SECONDARY
+    // rotation step must not fail it (Gap-2's folderTree refresh is simply
+    // skipped on this path: rotationResult stays undefined, and rotation
+    // itself is deferred to the NEXT covered scope-exit mutation).
+    expect(sdkCore.rotateReadFromNode).toHaveBeenCalledTimes(1);
+    expect(ensureFolderLoadedSpy).toHaveBeenCalledWith(FOLDER_IPNS);
+  });
+
+  it('surfaces a clear, actionable error (not a generic AEAD failure) when top-down re-navigation also cannot recover the root', async () => {
+    const client = new CipherBoxClient(rotationCoveredConfig());
+    setupFolder(client, FOLDER_IPNS);
+    vi.mocked(sdkCore.renameInFolder).mockReturnValue({
+      updatedChildren: [],
+      renamedChild: {} as never,
+    });
+    vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
+      cid: 'bafynew',
+      newSequenceNumber: 2n,
+      publishedChildren: [],
+    });
+    const staleErr = new sdkCore.RootKeyStaleError(
+      'root record exists but unseal failed with the supplied key'
+    );
+    vi.mocked(sdkCore.rotateReadFromNode).mockRejectedValue(staleErr);
+    // As above: only the FALLBACK call resolves null (unrecoverable); the
+    // FIRST call (requireFolder's pre-mutation load) calls through for real.
+    const realEnsureFolderLoaded = client.ensureFolderLoaded.bind(client);
+    let ensureFolderLoadedCalls = 0;
+    const ensureFolderLoadedSpy = vi
+      .spyOn(client, 'ensureFolderLoaded')
+      .mockImplementation(async (ipnsName, opts) => {
+        ensureFolderLoadedCalls += 1;
+        if (ensureFolderLoadedCalls === 1) return realEnsureFolderLoaded(ipnsName, opts);
+        return null;
+      });
+
+    await expect(client.renameItem(FOLDER_IPNS, 'file1', 'new.txt')).rejects.toThrow(
+      /top-down|re-navigation|vault root/i
+    );
+    expect(ensureFolderLoadedSpy).toHaveBeenCalledWith(FOLDER_IPNS);
+  });
+
+  it('does not catch a non-RootKeyStaleError from rotateReadFromNode — propagates as-is without attempting re-navigation', async () => {
+    const client = new CipherBoxClient(rotationCoveredConfig());
+    setupFolder(client, FOLDER_IPNS);
+    vi.mocked(sdkCore.renameInFolder).mockReturnValue({
+      updatedChildren: [],
+      renamedChild: {} as never,
+    });
+    vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
+      cid: 'bafynew',
+      newSequenceNumber: 2n,
+      publishedChildren: [],
+    });
+    vi.mocked(sdkCore.rotateReadFromNode).mockRejectedValue(
+      new Error('AEAD authentication failed')
+    );
+    const ensureFolderLoadedSpy = vi.spyOn(client, 'ensureFolderLoaded');
+
+    await expect(client.renameItem(FOLDER_IPNS, 'file1', 'new.txt')).rejects.toThrow(
+      'AEAD authentication failed'
+    );
+    // requireFolder's OWN earlier ensureFolderLoaded call (cache hit) happens
+    // regardless — assert the fallback path's SECOND call never fires by
+    // checking it was never called with a fresh mock-return override tied to
+    // recovery (i.e. call count stays at the single pre-rotation load).
+    expect(ensureFolderLoadedSpy).toHaveBeenCalledTimes(1);
   });
 });
 

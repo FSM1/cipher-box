@@ -1963,15 +1963,59 @@ export class CipherBoxClient {
             frontier: [],
             persistCallback: callbacks.persistJob,
           };
-          rotationResult = await sdkCore.rotateReadFromNode({
-            rootNodeId: params.rootNodeId,
-            rootNodeIpnsName: params.rootNodeIpnsName,
-            rootReadKey: params.rootReadKey,
-            rootIpnsPrivateKey: params.rootIpnsPrivateKey,
-            rootIpnsPublicKey: params.rootIpnsPublicKey,
-            jobRecord,
-            ctx: this.ctx,
-          });
+          try {
+            rotationResult = await sdkCore.rotateReadFromNode({
+              rootNodeId: params.rootNodeId,
+              rootNodeIpnsName: params.rootNodeIpnsName,
+              rootReadKey: params.rootReadKey,
+              rootIpnsPrivateKey: params.rootIpnsPrivateKey,
+              rootIpnsPublicKey: params.rootIpnsPublicKey,
+              jobRecord,
+              ctx: this.ctx,
+            });
+          } catch (err) {
+            if (!(err instanceof sdkCore.RootKeyStaleError)) throw err;
+
+            // T-70-14 / Open Question 1: the in-memory rootReadKey is stale --
+            // this root was rotated by a lost prior session and there is NO
+            // cryptographic key-recovery path from the key alone (Pitfall 4).
+            // Fall back to a full top-down folderTree re-navigation from the
+            // vault root so the client rediscovers the CURRENT key via the
+            // parent chain, rather than letting the mutation fail on an
+            // opaque unseal error. The stale folderTree entry is dropped
+            // FIRST (FolderTree.delete zeroes it as its own terminal owner)
+            // so ensureFolderLoaded cannot short-circuit on the same stale
+            // cached copy and is forced through the network re-derivation.
+            this.folderTree.delete(params.rootNodeIpnsName);
+            const recovered = await this.ensureFolderLoaded(params.rootNodeIpnsName).catch(
+              () => null
+            );
+            if (!recovered) {
+              // Open Question 2 residual: rotation never updates its OWN
+              // root's ancestor SealedChildRef mirror (see
+              // performScopeExitRotation's doc comment above), so a
+              // pure-revoke root whose ancestor mirror was never re-sealed
+              // blocks this top-down re-nav one hop earlier -- it cannot
+              // reach the current key either. Surface a clear, actionable
+              // error instead of a generic AEAD/unseal failure.
+              throw new Error(
+                `Rotation root ${params.rootNodeIpnsName} has a stale local read key ` +
+                  '(RootKeyStaleError) and could not be recovered via top-down ' +
+                  'folderTree re-navigation from the vault root. This is a known ' +
+                  'residual of the unrecoverable crash window (Phase 70 Open ' +
+                  'Question 1/2) -- reload the app to re-resolve the folder tree ' +
+                  'from the vault root.',
+                { cause: err }
+              );
+            }
+            // Recovery succeeded: folderTree now holds the CURRENT
+            // key/generation/sequenceNumber for this root. rotationResult
+            // stays undefined -- the caller's mutation already published
+            // successfully; rotation itself is retried on the NEXT covered
+            // scope-exit mutation against the now-current state.
+            callbacks.progress?.('rotation-key-stale-recovered');
+            return;
+          }
           callbacks.progress?.('rotated');
         },
       }
