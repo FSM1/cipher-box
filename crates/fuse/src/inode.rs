@@ -884,6 +884,12 @@ mod tests {
         assert_eq!(table.find_child(ROOT_INO, "gone"), None);
     }
 
+    // `normalize_name` (69-14): under `fuse` it NFC-composes (macOS/Linux); under
+    // `winfsp` WITHOUT `fuse` it lowercases instead (WinFsp's own case-insensitive
+    // lookup owns Unicode normalization). The two tests below are feature-gated
+    // to their respective, mutually-exclusive normalization behaviors — this test
+    // asserting NFC-composition only holds when `feature = "fuse"` is active.
+    #[cfg(feature = "fuse")]
     #[test]
     fn test_find_child_nfc_normalizes_unicode() {
         let mut table = InodeTable::new();
@@ -893,6 +899,19 @@ mod tests {
         table.insert(data);
         // NFD form must resolve to the same inode via NFC normalization.
         assert_eq!(table.find_child(ROOT_INO, "cafe\u{0301}"), Some(ino));
+    }
+
+    /// On Windows (`winfsp`, no `fuse`), `normalize_name` folds to lowercase for
+    /// case-insensitive matching rather than NFC-composing.
+    #[cfg(all(feature = "winfsp", not(feature = "fuse")))]
+    #[test]
+    fn test_find_child_case_insensitive_on_windows() {
+        let mut table = InodeTable::new();
+        let data = folder_inode(&table, ROOT_INO, "Documents", "k51case");
+        let ino = data.ino;
+        table.insert(data);
+        assert_eq!(table.find_child(ROOT_INO, "documents"), Some(ino));
+        assert_eq!(table.find_child(ROOT_INO, "DOCUMENTS"), Some(ino));
     }
 
     // ── node/v3 apply_owned_children (sync-apply refresh half) ──────────────

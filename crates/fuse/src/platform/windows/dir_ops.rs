@@ -69,8 +69,10 @@ pub mod implementation {
             _ => None,
         };
 
-        // Drop inode borrow so we can mutably borrow fs
-        drop(inode);
+        // `inode` (a `&InodeData` borrow of `fs.inodes`) is no longer used past
+        // this point; NLL ends its borrow here so `fs` can be mutably borrowed
+        // below.
+        let _ = inode;
 
         if let Some((ipns_name, read_key, write_key)) =
             stale_info.filter(|(n, _, _)| !fs.refreshing_metadata.contains(n))
