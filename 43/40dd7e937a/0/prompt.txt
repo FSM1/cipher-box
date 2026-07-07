@@ -1,0 +1,50 @@
+<task-notification>
+<task-id>a380ba22e96877469</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/064836b9-90e4-42d5-aabc-ed5fde831a57/tasks/a380ba22e96877469.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify phase 69 threat mitigations" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>API Error: Response stalled mid-stream. The response above may be incomplete.</result>
+<usage><subagent_tokens>138</subagent_tokens><tool_uses>17</tool_uses><duration_ms>457647</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b23zwf5m2</task-id>
+<tool-use-id>toolu_017m4E7dNBUjte9vxr7X7vw4</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/064836b9-90e4-42d5-aabc-ed5fde831a57/tasks/b23zwf5m2.output</output-file>
+<status>completed</status>
+<summary>Background command "Run CodeRabbit CLI review" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bb9gzo4jm</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/064836b9-90e4-42d5-aabc-ed5fde831a57/tasks/bb9gzo4jm.output</output-file>
+<status>completed</status>
+<summary>Background command "CodeRabbit review scoped to crates/sdk" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bj099c7um</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/064836b9-90e4-42d5-aabc-ed5fde831a57/tasks/bj099c7um.output</output-file>
+<status>failed</status>
+<summary>Background command "Poll until CodeRabbit review lands" failed with exit code 1</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bxanfsemg</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/064836b9-90e4-42d5-aabc-ed5fde831a57/tasks/bxanfsemg.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll until CodeRabbit lands (fixed var)" completed (exit code 0)</summary>
+</task-notification>

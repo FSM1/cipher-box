@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "4340dd7e937a",
+  "strategy": "manual-commit",
+  "branch": "feat/fuse-and-winfsp-rust-integration-and-grant-root-awareness",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/todos/pending/2026-07-07-sdk-floor-store-concurrency-atomicity.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/43/40dd7e937a/0/metadata.json",
+      "transcript": "/43/40dd7e937a/0/full.jsonl",
+      "content_hash": "/43/40dd7e937a/0/content_hash.txt",
+      "prompt": "/43/40dd7e937a/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 9416,
+    "cache_creation_tokens": 80398,
+    "cache_read_tokens": 14682693,
+    "output_tokens": 44989,
+    "api_call_count": 39
+  }
+}
