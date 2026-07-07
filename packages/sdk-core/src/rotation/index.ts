@@ -8,11 +8,14 @@ export {
   mergeConcurrentChildren,
   verifySubtreeClean,
   rotateWriteFromNode,
+  RootKeyStaleError,
   type RotationJobRecord,
   type RotationStatus,
   type RotationParams,
   type RotateReadResult,
   type WriteRevocationCallbacks,
+  type GrantRemintCallbacks,
+  type DirtyFrontierItem,
 } from './engine';
 
 export {

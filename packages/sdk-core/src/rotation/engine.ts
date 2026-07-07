@@ -281,6 +281,31 @@ export type RotateReadResult = {
   sequenceNumber: bigint;
 };
 
+/**
+ * Thrown by `rotateReadFromNode`'s entry-gate root-unseal PROBE (Plan 70-06 / SC#3 /
+ * RESEARCH Pitfall 4 / Open Question 1) when the caller-supplied `rootReadKey` cannot
+ * unseal the CURRENTLY-published root record.
+ *
+ * This is the genuinely-unrecoverable crash window: the root was rotated by a lost
+ * prior run (its readKey' was minted, published, and never durably persisted — the
+ * durable floor (`rotation-high-water.ts` / `high_water.rs`) stores generation/
+ * sequence NUMBERS only, never key material — D-09/T-68-83). There is NO
+ * cryptographic recovery path client-side using only the stale key. Distinct from a
+ * generic AEAD/unseal error so callers (e.g. `performScopeExitRotation`) can catch
+ * this specific error and fall back to a full top-down `folderTree` re-navigation
+ * from the vault root, instead of surfacing an opaque decryption failure.
+ *
+ * A MISSING root record is a different, unrelated scenario (data inconsistency, not
+ * a stale key) and does NOT throw this error — see `rotateOne`'s own
+ * "not found in IPNS" throw and `verifySubtreeClean`'s `isDirty: true` handling.
+ */
+export class RootKeyStaleError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'RootKeyStaleError';
+  }
+}
+
 /** Parameters for the resumable frontier walk. */
 export type RotationParams = {
   rootNodeId: string;
@@ -307,6 +332,23 @@ export type RotationParams = {
   nodeKeySource?: (
     ipnsName: string
   ) => { privateKey: Uint8Array; publicKey: Uint8Array; writeKey?: Uint8Array } | undefined;
+  /**
+   * Non-empty when the caller knows there are inner grants rooted at the ROOT node.
+   * Threaded to EVERY `rotateOne` call site in the walk (Plan 70-06 / SC#4 / T-70-09)
+   * so `reMintGrantsRootedAt` is reachable from the real (non-test) walk, not only via
+   * direct `rotateOne` injection in unit tests. MUST be absent on the clean happy-path
+   * (D-01 conditional invocation).
+   *
+   * Production note: Phase 66 will refine this to per-node granularity (querying which
+   * nodes in the walk actually have grants rooted at them); this phase only wires the
+   * plumbing so the seam is reachable end-to-end.
+   */
+  innerGrants?: ReadonlyArray<unknown>;
+  /**
+   * Optional injectable callbacks for the `reMintGrantsRootedAt` seam (D-04), threaded
+   * to every `rotateOne` call site alongside `innerGrants` (Plan 70-06 / SC#4).
+   */
+  grantCallbacks?: GrantRemintCallbacks;
 };
 
 // ---------------------------------------------------------------------------
@@ -641,6 +683,17 @@ async function collectDirtyFrontier(
         frontier
       );
     }
+
+    // D-09 (Plan 70-06): a CLEAN edge's derived key is scoped entirely to this
+    // read-only verify walk — it is never returned to any caller (only a DIRTY
+    // edge's key survives, pushed onto `frontier` above and explicitly NOT
+    // zeroed here). This function derived it (via resolveChildKeyAndEnvelope);
+    // it is the terminal owner once the edge is fully processed (leaf, or after
+    // the recursive call above returns). Defensive instanceof guard: some unit
+    // tests stub `unsealChildReadKey` without a return value.
+    if (childReadKey instanceof Uint8Array) {
+      childReadKey.fill(0);
+    }
   }
 }
 
@@ -896,17 +949,24 @@ export async function rotateOne(
  *
  * The job record is advisory (D-10). The optional `persistCallback` is called
  * after every per-node commit so the host can checkpoint progress durably.
- * A fresh run (completedNodeIds empty) does NOT call verifySubtreeClean —
- * that is the Phase-64 resume seam (D-01/D-10).
+ *
+ * Plan 70-06 (SC#3): the entry gate no longer branches on `completedNodeIds.size`.
+ * A read-only root-unseal PROBE runs first (throwing {@link RootKeyStaleError} on
+ * failure), then a `verifySubtreeClean`-driven dirty-tail check runs UNCONDITIONALLY
+ * — including on a genuinely FRESH record (`completedNodeIds` empty) — so a dirty
+ * tail left by a lost prior run is recovered via safe double-rotation (design §4.5)
+ * even when this job has no memory of that prior run.
  *
  * Host-agnostic (D-02): no FUSE / Tauri / web import.
  *
  * @security Does NOT zero `rootReadKey` — caller is terminal owner (D-09).
  *
- * @returns {@link RotateReadResult} — the root's post-rotation readKey/
- * generation/sequenceNumber — when a fresh rotation actually occurred this
- * run. Returns `undefined` on the resume/skip path (root already completed
- * in a prior run; there is no freshly-minted root key to hand back).
+ * @returns {@link RotateReadResult} — the root's readKey/generation/sequenceNumber
+ * — either the root's freshly minted key (a fresh rotation occurred this run) or,
+ * on the dirty-resume-republish path (root itself did not rotate this run, but a
+ * dirty tail below it was recovered), a FRESH COPY of the caller-supplied
+ * `rootReadKey` (never an alias — SC#6 / T-70-10). Returns `undefined` only when
+ * NOTHING changed this run (root already done AND the subtree is fully clean).
  */
 export async function rotateReadFromNode(
   params: RotationParams
@@ -920,13 +980,52 @@ export async function rotateReadFromNode(
     jobRecord,
     ctx,
     nodeKeySource,
+    innerGrants,
+    grantCallbacks,
   } = params;
 
   jobRecord.status = 'in-progress';
 
+  // ---------------------------------------------------------------------------
+  // SC#3 (Plan 70-06 / RESEARCH Pitfall 4 / Open Question 1): restructured entry
+  // gate. Probe root-unseal viability with the supplied rootReadKey BEFORE deciding
+  // fresh rotateOne(root) vs dirty-tail-only recovery — regardless of
+  // completedNodeIds.size. A MISSING root record is a distinct scenario (handled
+  // downstream by rotateOne's own "not found in IPNS" throw); only an unseal
+  // FAILURE against an EXISTING published root is the genuinely-unrecoverable
+  // stale-key window (no cryptographic recovery from the durable floor — it stores
+  // generation/sequence numbers only, never key material).
+  const rootProbePub = await resolveAndFetchNode(rootNodeIpnsName, ctx);
+  if (rootProbePub) {
+    try {
+      await unsealNode(rootProbePub, rootReadKey);
+    } catch (probeErr) {
+      throw new RootKeyStaleError(
+        `rotateReadFromNode: rootReadKey cannot unseal the currently-published root ` +
+          `${rootNodeIpnsName}. The root was likely rotated by a lost prior run — no ` +
+          'cryptographic recovery is possible from the durable floor (it stores ' +
+          'generation/sequence numbers only, never key material). Fall back to a ' +
+          'top-down re-navigation from the vault root.',
+        { cause: probeErr }
+      );
+    }
+  }
+
+  // SC#3: verifySubtreeClean-driven dirty-tail detection now runs UNCONDITIONALLY
+  // (not gated on completedNodeIds.size) using the just-confirmed-valid rootReadKey,
+  // BEFORE root itself rotates this run. rotateOne(root) does not mutate the
+  // children mirror (only re-seals root's OWN body), so this frontier — derived via
+  // 70-05's key-bearing recursive walk — remains valid for BOTH branches below.
+  const preRotationDirtyFrontier: DirtyFrontierItem[] = rootProbePub
+    ? (await verifySubtreeClean(rootNodeIpnsName, rootReadKey, ctx)).frontier
+    : [];
+
   // §4.2: Rotate the scope-root FIRST.
   // This is the actual cut: once the root's readKey is rotated and published,
   // a revoked grantee can no longer derive any child key from their old grant.
+  // Safe double-rotation (design §4.5): if the root was already rotated by a lost
+  // prior run and the probe above confirmed rootReadKey is still current, this
+  // mints ANOTHER new key — an extra rotation only strengthens revocation.
   const rootResult = await rotateOne({
     nodeId: rootNodeId,
     nodeIpnsName: rootNodeIpnsName,
@@ -939,6 +1038,10 @@ export async function rotateReadFromNode(
     parentCurrentSeq: 0n, // unused in Phase 63 (parent-link publish deferred to Phase 64)
     jobRecord,
     ctx,
+    // SC#4 (Plan 70-06): thread grantCallbacks/innerGrants so reMintGrantsRootedAt
+    // is reachable from the real (non-test) walk.
+    innerGrants,
+    grantCallbacks,
   });
 
   // ---------------------------------------------------------------------------
@@ -1014,18 +1117,12 @@ export async function rotateReadFromNode(
     childPubKind: 'folder' | 'file';
     /**
      * SealedChildRef.generation captured at enqueue time (parent mirror).
-     * Convergence guard (ROT-06): if child's current published generation exceeds
-     * this baseline at dequeue time, skip rotateOne to avoid double-bump.
+     * Plan 70-06: no longer used to gate a convergence-skip (design §4.5 safe
+     * double-rotation removed the no-double-bump guard) — retained only as
+     * D-02 AAD-binding metadata carried alongside each queue item.
      */
     enqueuedGeneration: number;
   }> = [];
-
-  // Helper: resolve an IPNS name → fetch the IPFS CID → parse PublishedNode envelope.
-  // Used to obtain id/kind from the child's plaintext envelope before deriving its readKey.
-  // Delegates to the module-level shared helper (also used by verifySubtreeClean — Pitfall 3).
-  async function resolveAndFetch(ipnsName: string): Promise<PublishedNode | null> {
-    return resolveAndFetchNode(ipnsName, ctx);
-  }
 
   /**
    * SC#3 (Plan 70-04): enqueue any concurrently-added child surfaced by the
@@ -1067,11 +1164,90 @@ export async function rotateReadFromNode(
     }
   }
 
+  /**
+   * D-09 shared tail: decrement a parent's pending-child counter and, once it
+   * reaches zero, perform the batched parent re-publish exactly once. Used both
+   * for a NORMAL child completion and — Plan 70-06 / SC#3 / T-70-12 — for the
+   * fail-closed accounting path below, so a missing child record still lets the
+   * parent converge instead of leaving `pendingChildCount` stuck above zero
+   * forever (a silent `continue` that desyncs the counter).
+   */
+  async function decrementPendingAndMaybeRepublish(
+    parentState: ParentTrackingState,
+    parentTrackingKey: string
+  ): Promise<void> {
+    parentState.pendingChildCount--;
+    if (parentState.pendingChildCount === 0) {
+      const preCallChildren = parentState.children;
+      const republishResult = await updateFolderMetadataAndPublish({
+        ipnsName: parentState.parentIpnsName,
+        ipnsPrivateKey: parentState.parentIpnsPrivateKey!,
+        ipnsPublicKey: parentState.parentIpnsPublicKey,
+        sequenceNumber: parentState.parentLastSeq,
+        readKey: parentState.parentNewReadKey,
+        nodeId: parentState.parentNodeId,
+        nodeGeneration: parentState.parentNodeGeneration,
+        children: parentState.children,
+        baseChildren: parentState.baseChildrenSnapshot,
+        mergeChildrenFn: mergeRotatedChildren,
+        ctx,
+      });
+      // SC#1 site B / SC#3: enqueue any concurrently-added child surfaced
+      // by this CAS-merged republish onto the BFS frontier.
+      await enqueueConcurrentlyAddedChildren(
+        parentState,
+        preCallChildren,
+        republishResult.publishedChildren
+      );
+      parentTracking.delete(parentTrackingKey);
+    }
+  }
+
+  /**
+   * SC#3 (Plan 70-06): seed the BFS queue directly from a `DirtyFrontierItem`
+   * discovered by `verifySubtreeClean`'s recursive walk (consuming plan 70-05's
+   * key-bearing frontier shape). Builds a minimal `SealedChildRef` stub — only
+   * `ipnsName`/`generation` are read by the BFS loop itself; `readKeySealed` is
+   * never re-derived from this stub (the item already carries an engine-derived
+   * `nodeReadKey`). Deduped by ipnsName against items already queued so a
+   * depth-1 dirty edge (also covered by the normal children-enqueue loop) is not
+   * double-processed.
+   */
+  function enqueueDirtyFrontierItem(item: DirtyFrontierItem): void {
+    if (queue.some((q) => q.childRef.ipnsName === item.ipnsName)) return;
+    const childKeys = nodeKeySource?.(item.ipnsName);
+    queue.push({
+      childRef: {
+        name: item.ipnsName,
+        ipnsName: item.ipnsName,
+        generation: item.enqueuedGeneration,
+        versionFloor: 0n,
+        readKeySealed: '',
+      },
+      nodeReadKey: item.nodeReadKey,
+      parentIpnsName: item.parentIpnsName,
+      ipnsPrivateKey: childKeys?.privateKey,
+      ipnsPublicKey: childKeys?.publicKey,
+      nodeWriteKey: childKeys?.writeKey,
+      childPubId: item.nodeId,
+      childPubKind: item.childPubKind,
+      enqueuedGeneration: item.enqueuedGeneration,
+    });
+  }
+
+  // SC#6 (Plan 70-06 / T-70-10): captures a fresh-copy result to hand back on the
+  // dirty-resume-republish path (root itself did not rotate THIS run, but a dirty
+  // tail below it WAS recovered) — never the caller-owned rootReadKey buffer.
+  let dirtyResumeResult: RotateReadResult | undefined;
+
   if (rootResult.skipped) {
-    // Resume path: root already committed in a prior run.
-    // ROT-06: call verifySubtreeClean to check for dirty edges.
-    // Published IPNS records are source of truth (D-10); advisory job record may be stale.
-    const { isDirty, frontier } = await verifySubtreeClean(rootNodeIpnsName, rootReadKey, ctx);
+    // Resume path: root already committed (in completedNodeIds) — a same-session/
+    // same-job resume. `preRotationDirtyFrontier` was already computed above
+    // (BEFORE rotateOne(root) ran, which was a no-op on this branch since it
+    // skipped) using the exact same rootReadKey — reuse it rather than re-running
+    // verifySubtreeClean a second time (SC#3 / Plan 70-06).
+    const frontier = preRotationDirtyFrontier;
+    const isDirty = frontier.length > 0;
     if (!isDirty) {
       // Subtree fully converged — no dirty edges to process.
       jobRecord.status = 'complete';
@@ -1103,7 +1279,7 @@ export async function rotateReadFromNode(
       // Set up parent tracking for root using rootReadKey as the readKey proxy.
       // (Root was rotated in a prior run; rootReadKey unseals the current sealed body as
       // confirmed by verifySubtreeClean's successful unseal.)
-      parentTracking.set(rootNodeIpnsName, {
+      const rootParentState: ParentTrackingState = {
         parentNewReadKey: rootReadKey,
         parentIpnsName: rootNodeIpnsName,
         parentIpnsPrivateKey: rootIpnsPrivateKey,
@@ -1114,15 +1290,26 @@ export async function rotateReadFromNode(
         children: [...(rootNode.children ?? [])],
         baseChildrenSnapshot: [...(rootNode.children ?? [])],
         pendingChildCount: frontier.length,
-      });
+      };
+      parentTracking.set(rootNodeIpnsName, rootParentState);
 
       for (const frontierItem of frontier) {
         const childRef = (rootNode.children ?? []).find(
           (c) => c.ipnsName === frontierItem.ipnsName
         );
-        if (!childRef) continue;
+        if (!childRef) {
+          // SC#3 (Plan 70-06 / T-70-12): fail-closed accounting — a frontier item
+          // whose IPNS name is no longer present in root's current children mirror
+          // must not silently leave pendingChildCount stuck above zero forever.
+          await decrementPendingAndMaybeRepublish(rootParentState, rootNodeIpnsName);
+          continue;
+        }
         const resolved = await resolveChildKeyAndEnvelope(childRef, rootReadKey, ctx);
-        if (!resolved) continue;
+        if (!resolved) {
+          // SC#3 (Plan 70-06 / T-70-12): fail-closed accounting — see above.
+          await decrementPendingAndMaybeRepublish(rootParentState, rootNodeIpnsName);
+          continue;
+        }
         const { childPub, childReadKey } = resolved;
         const childKeys = nodeKeySource?.(frontierItem.ipnsName);
         queue.push({
@@ -1137,6 +1324,16 @@ export async function rotateReadFromNode(
           enqueuedGeneration: childRef.generation,
         });
       }
+
+      // SC#6 (Plan 70-06 / T-70-10): a dirty-resume republish is about to happen
+      // (or already fully happened via the fail-closed accounting above) — surface
+      // a truthy result so the caller can refresh its own cache. `readKey` is
+      // ALWAYS a fresh copy, never an alias of the caller-owned `rootReadKey`.
+      dirtyResumeResult = {
+        readKey: new Uint8Array(rootReadKey),
+        generation: rootNode.generation,
+        sequenceNumber: rootResolved.sequenceNumber,
+      };
     }
     // Fall through to BFS loop.
   } else {
@@ -1146,8 +1343,9 @@ export async function rotateReadFromNode(
     if (jobRecord.persistCallback) await jobRecord.persistCallback(jobRecord);
 
     // Set up parent tracking for root's children (D-02/D-09).
+    let rootParentState: ParentTrackingState | undefined;
     if (rootResult.children.length > 0) {
-      parentTracking.set(rootNodeIpnsName, {
+      rootParentState = {
         parentNewReadKey: rootResult.childReadKey,
         parentIpnsName: rootNodeIpnsName,
         parentIpnsPrivateKey: rootIpnsPrivateKey,
@@ -1158,7 +1356,8 @@ export async function rotateReadFromNode(
         children: [...rootResult.children], // mutable copy for in-place SealedChildRef updates
         baseChildrenSnapshot: [...rootResult.children],
         pendingChildCount: rootResult.children.length,
-      });
+      };
+      parentTracking.set(rootNodeIpnsName, rootParentState);
     }
 
     // Enqueue root's children: derive each child's readKey from the root's OLD readKey.
@@ -1167,7 +1366,16 @@ export async function rotateReadFromNode(
       // root's OLD readKey (still valid; never zeroed — D-09); parent-mirror
       // generation (§2.6 D-07 invariant 1) is the AAD bound by resolveChildKeyAndEnvelope.
       const resolved = await resolveChildKeyAndEnvelope(childRef, rootReadKey, ctx);
-      if (!resolved) continue; // child IPNS missing — skip (data inconsistency)
+      if (!resolved) {
+        // SC#3 (Plan 70-06 / T-70-12): fail-closed accounting — a missing child
+        // record must not silently leave pendingChildCount stuck above zero
+        // forever (data inconsistency, but the parent must still be able to
+        // converge for every OTHER child that DOES resolve).
+        if (rootParentState) {
+          await decrementPendingAndMaybeRepublish(rootParentState, rootNodeIpnsName);
+        }
+        continue;
+      }
       const { childPub, childReadKey } = resolved;
       // Thread per-node IPNS key from nodeKeySource (D-01 / Phase 64 seam).
       // Phase 65 also threads writeKey via the same seam.
@@ -1184,6 +1392,16 @@ export async function rotateReadFromNode(
         enqueuedGeneration: childRef.generation,
       });
     }
+
+    // SC#3 (Plan 70-06): merge in any dirty-tail items discovered by the
+    // pre-rotation verifySubtreeClean probe — a dirty depth-1 edge is deduped
+    // against the loop above; a dirty edge below a CLEAN depth-1 parent would
+    // otherwise never be reachable (that parent's own children are only
+    // discovered once IT rotates, which the normal walk still does since dirty
+    // items are no longer convergence-skipped — see the BFS loop below).
+    for (const dirtyItem of preRotationDirtyFrontier) {
+      enqueueDirtyFrontierItem(dirtyItem);
+    }
   }
 
   // Process the frontier BFS.
@@ -1191,53 +1409,14 @@ export async function rotateReadFromNode(
     const item = queue.shift()!;
 
     try {
-      // Convergence guard (ROT-06 no-double-bump): compare child's current published
-      // generation against the baseline captured at enqueue time (parent mirror).
-      // If the child already rotated beyond the baseline, skip rotateOne.
-      const currentPub = await resolveAndFetch(item.childRef.ipnsName);
-      if (currentPub && currentPub.generation > item.enqueuedGeneration) {
-        // Child already rotated in a prior run — skip rotateOne.
-        // Still handle D-09: update generation witness and decrement pending count.
-        const parentState = parentTracking.get(item.parentIpnsName);
-        if (parentState) {
-          const childIdx = parentState.children.findIndex(
-            (c) => c.ipnsName === item.childRef.ipnsName
-          );
-          if (childIdx !== -1) {
-            parentState.children[childIdx] = {
-              ...parentState.children[childIdx],
-              generation: currentPub.generation,
-            };
-          }
-          parentState.pendingChildCount--;
-          if (parentState.pendingChildCount === 0) {
-            const preCallChildren = parentState.children;
-            const republishResult = await updateFolderMetadataAndPublish({
-              ipnsName: parentState.parentIpnsName,
-              ipnsPrivateKey: parentState.parentIpnsPrivateKey!,
-              ipnsPublicKey: parentState.parentIpnsPublicKey,
-              sequenceNumber: parentState.parentLastSeq,
-              readKey: parentState.parentNewReadKey,
-              nodeId: parentState.parentNodeId,
-              nodeGeneration: parentState.parentNodeGeneration,
-              children: parentState.children,
-              baseChildren: parentState.baseChildrenSnapshot,
-              mergeChildrenFn: mergeRotatedChildren,
-              ctx,
-            });
-            // SC#1 site B / SC#3: enqueue any concurrently-added child surfaced
-            // by this CAS-merged republish onto the BFS frontier.
-            await enqueueConcurrentlyAddedChildren(
-              parentState,
-              preCallChildren,
-              republishResult.publishedChildren
-            );
-            parentTracking.delete(item.parentIpnsName);
-          }
-        }
-        continue;
-      }
-
+      // Plan 70-06 / SC#3: NO convergence-skip guard here anymore. Design §4.5's
+      // crash-recovery model is safe DOUBLE-ROTATION — a node already rotated
+      // (by a lost prior run OR discovered via the dirty-tail frontier merge
+      // above) is rotated AGAIN via the normal rotateOne call below. An extra
+      // rotation only strengthens revocation and costs one republish; rotateOne's
+      // OWN completedNodeIds idempotency check already makes a genuinely-already-
+      // handled-THIS-session node a cheap no-op (RotateOneSkipped). Do NOT
+      // reintroduce a no-double-bump guard here (T-70-*/design §4.5).
       const result = await rotateOne({
         // nodeId is absent: it will be derived from the unsealed node's id inside rotateOne.
         nodeIpnsName: item.childRef.ipnsName,
@@ -1250,6 +1429,10 @@ export async function rotateReadFromNode(
         parentCurrentSeq: 0n,
         jobRecord,
         ctx,
+        // SC#4 (Plan 70-06): thread grantCallbacks/innerGrants so reMintGrantsRootedAt
+        // is reachable from the real (non-test) walk.
+        innerGrants,
+        grantCallbacks,
       });
 
       if (!result.skipped) {
@@ -1284,41 +1467,13 @@ export async function rotateReadFromNode(
           }
 
           // D-09: decrement pending count; republish parent exactly once when all children done.
-          parentState.pendingChildCount--;
-          if (parentState.pendingChildCount === 0) {
-            // Batched parent re-publish: advance the IPNS sequence counter once, carrying
-            // the updated SealedChildRef array so unsealChildReadKey on next read succeeds.
-            // nodeGeneration is the parent's generation from ITS rotateOne — NOT bumped again.
-            const preCallChildren = parentState.children;
-            const republishResult = await updateFolderMetadataAndPublish({
-              ipnsName: parentState.parentIpnsName,
-              // parentIpnsPrivateKey is non-null: the D-01 guard in rotateOne already
-              // verified the parent had a key when it rotated.
-              ipnsPrivateKey: parentState.parentIpnsPrivateKey!,
-              ipnsPublicKey: parentState.parentIpnsPublicKey,
-              sequenceNumber: parentState.parentLastSeq,
-              readKey: parentState.parentNewReadKey,
-              nodeId: parentState.parentNodeId,
-              nodeGeneration: parentState.parentNodeGeneration,
-              children: parentState.children,
-              baseChildren: parentState.baseChildrenSnapshot,
-              mergeChildrenFn: mergeRotatedChildren,
-              ctx,
-            });
-            // SC#1 site B / SC#3: enqueue any concurrently-added child surfaced
-            // by this CAS-merged republish onto the BFS frontier.
-            await enqueueConcurrentlyAddedChildren(
-              parentState,
-              preCallChildren,
-              republishResult.publishedChildren
-            );
-            parentTracking.delete(item.parentIpnsName);
-          }
+          await decrementPendingAndMaybeRepublish(parentState, item.parentIpnsName);
         }
 
         // Set up parent tracking for this node's children (recursive D-02/D-09).
+        let thisNodeParentState: ParentTrackingState | undefined;
         if (result.children.length > 0) {
-          parentTracking.set(item.childRef.ipnsName, {
+          thisNodeParentState = {
             parentNewReadKey: result.childReadKey,
             parentIpnsName: item.childRef.ipnsName,
             parentIpnsPrivateKey: item.ipnsPrivateKey,
@@ -1329,7 +1484,8 @@ export async function rotateReadFromNode(
             children: [...result.children],
             baseChildrenSnapshot: [...result.children],
             pendingChildCount: result.children.length,
-          });
+          };
+          parentTracking.set(item.childRef.ipnsName, thisNodeParentState);
         }
 
         // Enqueue this node's children using THIS node's pre-rotation readKey.
@@ -1338,7 +1494,13 @@ export async function rotateReadFromNode(
           // THIS node's old readKey (seals its children's readKeys) — item.nodeReadKey
           // is NOT zeroed by rotateOne (D-09), still valid here.
           const resolved = await resolveChildKeyAndEnvelope(childRef, item.nodeReadKey, ctx);
-          if (!resolved) continue;
+          if (!resolved) {
+            // SC#3 (Plan 70-06 / T-70-12): fail-closed accounting — see above.
+            if (thisNodeParentState) {
+              await decrementPendingAndMaybeRepublish(thisNodeParentState, item.childRef.ipnsName);
+            }
+            continue;
+          }
           const { childPub, childReadKey } = resolved;
           // Thread per-node IPNS key from nodeKeySource (D-01 / Phase 64 seam).
           // Phase 65 also threads writeKey via the same seam.
@@ -1366,20 +1528,26 @@ export async function rotateReadFromNode(
     }
   }
 
-  // Terminal status: all nodes rotated (or skipped via convergence guard).
+  // Terminal status: all nodes rotated (every queued item — fresh or dirty-tail —
+  // now goes through rotateOne; safe double-rotation replaced the old convergence
+  // guard's skip behavior — Plan 70-06 / design §4.5).
   // Persist the complete status so the host can safely discard the job record
   // (Pitfall 5: never mark complete without persisting — the resumable walk gate
   // in verifySubtreeClean relies on the persisted status being accurate).
   jobRecord.status = 'complete';
   if (jobRecord.persistCallback) await jobRecord.persistCallback(jobRecord);
 
-  // ROT-07 Gap 2: surface the root's post-rotation state to the caller so it can
-  // refresh its own folder cache (e.g. performScopeExitRotation → folderTree.set).
-  // `rootResult.skipped` covers BOTH the dirty-resume fall-through (root rotated
-  // in a PRIOR run) and any other path where the root itself did not freshly
-  // rotate this call — no fresh readKey exists to hand back in that case.
+  // ROT-07 Gap 2 / SC#3 / SC#6 (Plan 70-06): surface the root's post-rotation state
+  // to the caller so it can refresh its own folder cache (e.g.
+  // performScopeExitRotation → folderTree.set).
+  //   - Root rotated fresh THIS run → its freshly minted readKey (unchanged contract).
+  //   - Root was skipped this run but a dirty-resume republish occurred below it →
+  //     `dirtyResumeResult`, a FRESH COPY of the caller-supplied rootReadKey (never
+  //     an alias — SC#6 / T-70-10 / Anti-Patterns).
+  //   - Root was skipped AND nothing below it needed recovery → undefined (nothing
+  //     changed this run; no state to refresh).
   if (rootResult.skipped) {
-    return undefined;
+    return dirtyResumeResult;
   }
   return {
     readKey: rootResult.childReadKey,
