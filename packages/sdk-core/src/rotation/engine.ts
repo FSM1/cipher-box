@@ -44,7 +44,7 @@ import { resolveIpnsRecord, createAndPublishIpnsRecord } from '../ipns';
 import { fetchFromIpfs, addToIpfs } from '../ipfs';
 import type { SdkContext } from '../types';
 import { updateFolderMetadataAndPublish } from '../folder/registration';
-import { mergeChildren } from '../folder/merge';
+import { mergeRotatedChildren } from './merge';
 
 // ---------------------------------------------------------------------------
 // Types — string-literal unions, never TypeScript enums (project convention)
@@ -430,15 +430,19 @@ export async function reMintGrantsRootedAt(
 /**
  * Re-seal a node after merging concurrently-added children on CAS-409.
  *
- * Phase 64 implementation (ROT-05/HIGH-4): on a rotation CAS-409, the remote
- * winner may contain child refs added concurrently that are absent from the
- * local rotation result. This function:
+ * Phase 70 implementation (SC#1 site A / T-70-01): on a rotation CAS-409, the
+ * remote winner may contain child refs added concurrently that are absent
+ * from the local rotation result — AND the remote may still hold a stale
+ * (pre-rotation) seal for a child rotation already re-sealed. This function:
  *   1. Unseals `basePub` under `oldReadKey` to recover the base children list.
  *   2. Unseals `remotePub` under `oldReadKey` to recover the remote children list.
- *   3. Three-way merges (base, local, remote) via `mergeChildren` so that any
- *      child added only in the remote is preserved (never silently dropped).
- *   4. Re-seals the merged node under `newReadKey` (readKey-prime) and returns
- *      the new PublishedNode.
+ *   3. Three-way merges (base, local, remote) via `mergeRotatedChildren` —
+ *      LOCAL WINS on conflict (preserves the rotation's own re-seal; never
+ *      re-adopts a stale/remote seal), remote-only entries are concurrent
+ *      adds (included), base-only entries are intentional deletes (dropped).
+ *      NEVER use the generic remote-wins `mergeChildren` here — see
+ *      `rotation/merge.ts`'s module doc for why this is a separate function.
+ *   4. Re-seals the merged node under `newReadKey` (readKey-prime).
  *
  * Invoked ONLY from the `rotateOne` CAS-409 merge callback (conditional — D-01).
  *
@@ -447,6 +451,11 @@ export async function reMintGrantsRootedAt(
  *   - `localChildren` must come from the node's pre-rotation children (closure over
  *     the unsealed node), NOT from the sealed `localPub`. This avoids an extra
  *     unseal round-trip and an unnecessary dependency on `newReadKey` during merge.
+ *
+ * @returns `published` — the re-sealed merged node's PublishedNode envelope.
+ *   `mergedChildren` — the plaintext merged children, so `rotateOne` can return
+ *   the CAS-merged set (including any remote-added child) to the BFS caller
+ *   instead of the pre-merge `node.children` snapshot (SC#3).
  */
 export async function mergeConcurrentChildren(
   basePub: PublishedNode,
@@ -457,15 +466,17 @@ export async function mergeConcurrentChildren(
   localNode: Node,
   generationPrime: number,
   writeKey: Uint8Array
-): Promise<PublishedNode> {
+): Promise<{ published: PublishedNode; mergedChildren: SealedChildRef[] }> {
   // 1. Unseal base snapshot under the old (pre-rotation) readKey.
   const baseNodeDecoded = await unsealNode(basePub, oldReadKey);
 
   // 2. Unseal remote node under the old readKey — it was sealed before rotation.
   const remoteNodeDecoded = await unsealNode(remotePub, oldReadKey);
 
-  // 3. Three-way merge: union by ipnsName, remote wins, honour intentional deletes.
-  const mergedChildren = mergeChildren(
+  // 3. Rotation-only local-wins three-way merge (T-70-01): local's re-seal
+  //    survives a conflict against a remote still holding the stale seal;
+  //    remote-only concurrent adds are preserved; base-only deletes are dropped.
+  const mergedChildren = mergeRotatedChildren(
     baseNodeDecoded.children ?? [],
     localChildren,
     remoteNodeDecoded.children ?? []
@@ -473,7 +484,8 @@ export async function mergeConcurrentChildren(
 
   // 4. Re-seal merged node under readKey-prime (the rotation's new key).
   const mergedNode: Node = { ...localNode, generation: generationPrime, children: mergedChildren };
-  return sealNode(mergedNode, newReadKey, writeKey);
+  const published = await sealNode(mergedNode, newReadKey, writeKey);
+  return { published, mergedChildren };
 }
 
 /**
@@ -629,6 +641,13 @@ export async function rotateOne(
   // failure path can zero it without touching the caller-owned old fileKey (D-09).
   let fileKeyMinted = false;
 
+  // SC#3 (Plan 70-04): captures the plaintext CAS-merged children when the
+  // publish's merge closure below actually ran (CAS-409). Mirrors
+  // registration.ts's `currentWriteChildren` outer-scope-capture idiom. Used
+  // by the final return below so a concurrent add surfaced by the merge is
+  // handed back to the BFS caller instead of the pre-merge `node.children`.
+  let mergedChildrenForReturn: SealedChildRef[] | undefined;
+
   try {
     // Step 5: SEAM — content-key rotation for file nodes (Phase 64 — ROT-03/CRIT-1)
     // Invoked CONDITIONALLY — clean happy-path (folder node) NEVER reaches this.
@@ -691,7 +710,7 @@ export async function rotateOne(
           const mergedNode: Node = { ...node, generation: generationPrime };
           return { merged: await sealNode(mergedNode, readKeyPrime, writeKeyForReseal) };
         }
-        const mergedPublished = await mergeConcurrentChildren(
+        const mergedResult = await mergeConcurrentChildren(
           base,
           remote,
           parentReadKey, // OLD readKey — remote was sealed under this key
@@ -701,7 +720,9 @@ export async function rotateOne(
           generationPrime,
           writeKeyForReseal
         );
-        return { merged: mergedPublished };
+        // SC#3: capture the plaintext merged children for the final return below.
+        mergedChildrenForReturn = mergedResult.mergedChildren;
+        return { merged: mergedResult.published };
       },
       localData: resealedPublished,
       baseData: published,
@@ -732,7 +753,10 @@ export async function rotateOne(
       childReadKey: readKeyPrime,
       newGeneration: generationPrime,
       newReadKeySealed,
-      children: node.children ?? [],
+      // SC#3: use the CAS-merged children (when a 409 merge ran) instead of the
+      // pre-merge node.children snapshot, so a concurrently-added child gets
+      // enqueued by the BFS caller rather than silently forgotten.
+      children: mergedChildrenForReturn ?? node.children ?? [],
       newSequenceNumber: casResult.newSequenceNumber,
     };
   } catch (err) {
