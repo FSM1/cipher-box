@@ -70,9 +70,9 @@
 - [x] **Phase 68: Web Integration — Rotation UX and Durable Client State** — Replace `executeLazyRotation` with `rotateReadFromNode`, durable IndexedDB generation + seq high-water (M1 defense, survives restart), `folderTree` reconcile-before-rotate (all 12 plans executed 2026-07-01; verification passed 14/14 after 68-11/68-12 gap closure, see 68-VERIFICATION.md) (completed 2026-07-01)
 - [x] **Phase 69: FUSE and WinFsp — Rust Integration and Grant-Root Awareness** — Symmetric child-key unwrap, `spawn_file_meta_reencrypt` deletion from both callers, grant-root scope computation, durable client floors, `Node` Rust enum, Rust SDK-owned read chain (Phase 68.2 parity), Windows CI gate (completed 2026-07-06)
 - [ ] **Phase 70: Rotation Soundness — Deep Merge, Fresh-Record Resume, and Durable Floor Concurrency** — Local-wins merge for rotated child keys, deep `verifySubtreeClean`, true fresh-record crash-resume, grant-callback threading through the real walk, and an atomic/async-safe anti-rollback floor store (5 deferred CodeRabbit/PR-review todos)
-- [ ] **Phase 71: SDK Write-Plane Durability and Correctness** — Delete drops the removed child's `WriteChildRef`, fail-closed `getWriteBodyParams` on transient resolve miss, restore-to-different-parent re-homing, `SealedChildRef` size/modifiedAt mirror refresh, legacy `moveInSharedFolder` branch removal, write-plane helper dedup, and two write-chain test-fidelity fixes (8 todos)
-- [ ] **Phase 72: Shared Write/Navigation Correctness (Web)** — Preserve nested write capability across navigate-up/breadcrumb restore, invalidate stale nav-stack child snapshots, gate the non-listing read facades with the ROT-07 floor, give WRITE-03 refresh-access a live production trigger, and route drag-payload kind through the resolved listing (5 todos)
-- [ ] **Phase 73: Share-Invite Security and IPNS Data-Integrity (API)** — Validate sharer root ownership, apply-or-reject later invite grants, `claim_count` CHECK constraint, partial unique index on `ipns_records(user_id) WHERE is_root`, first-publish INSERT-race 409, same-seq CID equivocation decision, direct bulk-revoke DELETE, and `ShareInviteService` lifecycle unit coverage (8 todos)
+- [ ] **Phase 71: Share-Invite Security and IPNS Data-Integrity (API)** — Validate sharer root ownership, apply-or-reject later invite grants, `claim_count` CHECK constraint, partial unique index on `ipns_records(user_id) WHERE is_root`, first-publish INSERT-race 409, same-seq CID equivocation decision, direct bulk-revoke DELETE, and `ShareInviteService` lifecycle unit coverage (8 todos)
+- [ ] **Phase 72: SDK Write-Plane Durability and Correctness** — Delete drops the removed child's `WriteChildRef`, fail-closed `getWriteBodyParams` on transient resolve miss, restore-to-different-parent re-homing, `SealedChildRef` size/modifiedAt mirror refresh, legacy `moveInSharedFolder` branch removal, write-plane helper dedup, and two write-chain test-fidelity fixes (8 todos)
+- [ ] **Phase 73: Shared Write/Navigation Correctness (Web)** — Preserve nested write capability across navigate-up/breadcrumb restore, invalidate stale nav-stack child snapshots, gate the non-listing read facades with the ROT-07 floor, give WRITE-03 refresh-access a live production trigger, and route drag-payload kind through the resolved listing (5 todos)
 
 ## Phase Details
 
@@ -661,7 +661,37 @@ Plans:
 
 ---
 
-### Phase 71: SDK Write-Plane Durability and Correctness
+### Phase 71: Share-Invite Security and IPNS Data-Integrity (API)
+
+**Goal**: The API enforces share-invite authorization and cleans up its IPNS/share data-integrity edges: the sharer must own the root before an invite is issued, a later invite's grant is applied-or-explicitly-rejected when a share already exists, DB constraints defend `claim_count` and root uniqueness, the first-publish INSERT race returns a clean 409, the same-seq CID equivocation question is decided, bulk-revoke is a direct DELETE, and `ShareInviteService` gains lifecycle unit coverage.
+
+**Depends on**: Phase 66 (schema cutover), Phase 65 (invite claim)
+
+**Source todos**:
+
+- `.planning/todos/pending/2026-06-30-share-invite-validate-root-ownership.md`
+- `.planning/todos/pending/2026-06-30-share-invite-reclaim-apply-later-grant.md`
+- `.planning/todos/pending/2026-06-30-share-invites-claim-count-check-constraint.md`
+- `.planning/todos/pending/2026-06-30-ipns-records-root-uniqueness-index.md`
+- `.planning/todos/pending/2026-06-30-ipns-first-publish-insert-race.md`
+- `.planning/todos/pending/2026-06-30-ipns-idempotent-same-seq-cid-equivocation.md`
+- `.planning/todos/pending/2026-06-30-shares-bulk-revoke-direct-delete.md`
+- `.planning/todos/pending/2026-06-30-restore-shares-module-unit-coverage.md`
+
+**Success Criteria** (what must be TRUE):
+
+1. `createInvite` rejects when the caller does not own `rootIpnsName`/`rootNodeId` (ownership lookup, not verbatim copy from the DTO)
+2. `claimInvite` against an already-existing share applies the later invite's grant or explicitly rejects it (no silent `return { shareId }` that drops the grant)
+3. A DB CHECK constraint keeps `share_invites.claim_count` within `[0, max_claims]`, and a partial unique index on `ipns_records(user_id) WHERE is_root` exists (both via migration)
+4. The IPNS first-publish INSERT race translates the unique-violation into a 409 (not a 500), and the same-seq idempotent-republish path either guards CID equality or documents the accepted equivocation (D-09 decision recorded)
+5. `bulkRevoke` issues a single DELETE (not `find` + `remove`)
+6. `ShareInviteService` has unit coverage for `createInvite`, `getInvitesForItem`, and `revokeInvite` with realistic fixtures (not placeholder strings)
+
+**Plans**: TBD (run `/gsd-plan-phase 71`)
+
+---
+
+### Phase 72: SDK Write-Plane Durability and Correctness
 
 **Goal**: The SDK write plane no longer grows or corrupts the write-chain on delete/move/restore/replace, fails closed on a transient resolve miss instead of sealing an empty write-body, keeps the display mirror fresh after in-place edits, and drops a latent wrong-key branch — with the duplicated write-plane helper sequences consolidated and two write-chain tests hardened.
 
@@ -687,15 +717,15 @@ Plans:
 5. The unreachable `moveInSharedFolder` `shareKeys.length > 0` branch (and its `getShareKeysFn` param) is removed, eliminating the latent wrong-key bug
 6. The near-identical write-plane helpers (`client.ts` ↔ `bin/index.ts` `getWriteBodyParams`, `replaceFile`/`restoreFileVersion`) share one primitive; `write-chain-rotation.test.ts` identifies rotated seeds by provenance (not fixed `capturedKeys` offsets); `upload-batch.test.ts` mocks use the current `SealedChildRef` shape
 
-**Plans**: TBD (run `/gsd-plan-phase 71`)
+**Plans**: TBD (run `/gsd-plan-phase 72`)
 
 ---
 
-### Phase 72: Shared Write/Navigation Correctness (Web)
+### Phase 73: Shared Write/Navigation Correctness (Web)
 
 **Goal**: The web app preserves write capability and fresh listings when navigating shared folders — nested write-shares keep their writeKey across navigate-up/breadcrumb restore, the nav-stack no longer serves stale child snapshots, the non-listing read facades are floor-gated, WRITE-03 refresh-access has a real production trigger, and drag-payload kind comes from the resolved listing.
 
-**Depends on**: Phase 68.1, Phase 68.2 (SDK-owned read chain), Phase 71 (write-plane primitives)
+**Depends on**: Phase 68.1, Phase 68.2 (SDK-owned read chain), Phase 72 (write-plane primitives)
 
 **Source todos**:
 
@@ -712,36 +742,6 @@ Plans:
 3. `resolveFileMetadata`, `downloadFromIpns`, and `resolveNodeIdentity` route through the ROT-07 anti-rollback floor gate (not raw `resolvePublishedNode`)
 4. WRITE-03 `refreshWriteAccess` / `CannotWriteUntilRefetchError` has at least one live production supplier (`publishNodeFn` can surface a tombstone), not test-only
 5. `SharedFolderRow` drag-payload kind is derived from the resolved listing (`isFileRefResolved`/`resolvedByIpnsName`), not `isFileRef` on a bare `SealedChildRef`
-
-**Plans**: TBD (run `/gsd-plan-phase 72`)
-
----
-
-### Phase 73: Share-Invite Security and IPNS Data-Integrity (API)
-
-**Goal**: The API enforces share-invite authorization and cleans up its IPNS/share data-integrity edges: the sharer must own the root before an invite is issued, a later invite's grant is applied-or-explicitly-rejected when a share already exists, DB constraints defend `claim_count` and root uniqueness, the first-publish INSERT race returns a clean 409, the same-seq CID equivocation question is decided, bulk-revoke is a direct DELETE, and `ShareInviteService` gains lifecycle unit coverage.
-
-**Depends on**: Phase 66 (schema cutover), Phase 65 (invite claim)
-
-**Source todos**:
-
-- `.planning/todos/pending/2026-06-30-share-invite-validate-root-ownership.md`
-- `.planning/todos/pending/2026-06-30-share-invite-reclaim-apply-later-grant.md`
-- `.planning/todos/pending/2026-06-30-share-invites-claim-count-check-constraint.md`
-- `.planning/todos/pending/2026-06-30-ipns-records-root-uniqueness-index.md`
-- `.planning/todos/pending/2026-06-30-ipns-first-publish-insert-race.md`
-- `.planning/todos/pending/2026-06-30-ipns-idempotent-same-seq-cid-equivocation.md`
-- `.planning/todos/pending/2026-06-30-shares-bulk-revoke-direct-delete.md`
-- `.planning/todos/pending/2026-06-30-restore-shares-module-unit-coverage.md`
-
-**Success Criteria** (what must be TRUE):
-
-1. `createInvite` rejects when the caller does not own `rootIpnsName`/`rootNodeId` (ownership lookup, not verbatim copy from the DTO)
-2. `claimInvite` against an already-existing share applies the later invite's grant or explicitly rejects it (no silent `return { shareId }` that drops the grant)
-3. A DB CHECK constraint keeps `share_invites.claim_count` within `[0, max_claims]`, and a partial unique index on `ipns_records(user_id) WHERE is_root` exists (both via migration)
-4. The IPNS first-publish INSERT race translates the unique-violation into a 409 (not a 500), and the same-seq idempotent-republish path either guards CID equality or documents the accepted equivocation (D-09 decision recorded)
-5. `bulkRevoke` issues a single DELETE (not `find` + `remove`)
-6. `ShareInviteService` has unit coverage for `createInvite`, `getInvitesForItem`, and `revokeInvite` with realistic fixtures (not placeholder strings)
 
 **Plans**: TBD (run `/gsd-plan-phase 73`)
 
