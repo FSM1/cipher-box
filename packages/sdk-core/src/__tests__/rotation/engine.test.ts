@@ -16,6 +16,7 @@ import {
   mintFileKeyOnRotate,
   reMintGrantsRootedAt,
   verifySubtreeClean,
+  mergeConcurrentChildren,
   type GrantRemintCallbacks,
   type RotationJobRecord,
   type RotationParams,
@@ -1329,6 +1330,141 @@ describe('CAS-409 concurrent-add merge — ROT-05/HIGH-4 (Plan 64-06)', () => {
     // No merge invocation: unsealNode called once (initial fetch), sealNode called once (initial seal)
     expect(mockFns.unsealNode).toHaveBeenCalledTimes(1);
     expect(mockFns.sealNode).toHaveBeenCalledTimes(1);
+  });
+
+  it('Test 5 (Plan 70-04): local wins on conflict — merged child keeps the LOCAL (new-key) readKeySealed over remote stale seal', async () => {
+    const basePub = makePublishedNode(NODE_ID, 2);
+    const remotePub = { ...makePublishedNode(NODE_ID, 2), readSealed: 'remoteSealed==' };
+    const localPub = makePublishedNode(NODE_ID, 3);
+
+    // Local carries the rotation's own re-sealed child ref (LOCAL_CHILD_REF, new-key seal).
+    const localNode = makeFolderNode({ id: NODE_ID, generation: 2, children: [LOCAL_CHILD_REF] });
+    const baseNode = makeFolderNode({ id: NODE_ID, generation: 2, children: [LOCAL_CHILD_REF] });
+    // Remote still holds the SAME child under a stale (pre-rotation) seal — a concurrent
+    // writer republished without picking up the rotation's re-seal.
+    const REMOTE_STALE_CHILD_REF = { ...LOCAL_CHILD_REF, readKeySealed: 'remoteStaleSealed==' };
+    const remoteNode = makeFolderNode({
+      id: NODE_ID,
+      generation: 2,
+      children: [REMOTE_STALE_CHILD_REF],
+    });
+
+    mockFns.unsealNode
+      .mockResolvedValueOnce(localNode)
+      .mockResolvedValueOnce(baseNode)
+      .mockResolvedValueOnce(remoteNode);
+
+    const capturedSealNodes: import('@cipherbox/core').Node[] = [];
+    mockFns.sealNode.mockImplementation(async (node: import('@cipherbox/core').Node) => {
+      capturedSealNodes.push(node);
+      return makePublishedNode(node.id, node.generation);
+    });
+
+    setupCas409Mock(basePub, localPub, remotePub);
+
+    await expect(
+      rotateOne({
+        nodeId: NODE_ID,
+        nodeIpnsName: NODE_IPNS,
+        nodeIpnsPrivateKey: FAKE_NODE_KEY_06,
+        parentReadKey: PARENT_READ_KEY,
+        parentIpnsName: PARENT_IPNS,
+        parentCurrentSeq: 3n,
+        jobRecord: makeJobRecord(),
+        ctx: createMockContext(),
+      })
+    ).resolves.toBeDefined();
+
+    const lastSeal = capturedSealNodes[capturedSealNodes.length - 1];
+    const mergedChild = lastSeal.children?.find((c) => c.ipnsName === CHILD_IPNS);
+    expect(mergedChild).toBeDefined();
+    // Local wins: the merged child keeps LOCAL's readKeySealed, not remote's stale seal.
+    expect(mergedChild?.readKeySealed).toBe(LOCAL_CHILD_REF.readKeySealed);
+    expect(mergedChild?.readKeySealed).not.toBe(REMOTE_STALE_CHILD_REF.readKeySealed);
+  });
+
+  it('Test 6 (Plan 70-04): rotateOne returns the MERGED children (incl. remote add), not the pre-merge node.children snapshot', async () => {
+    const basePub = makePublishedNode(NODE_ID, 2);
+    const remotePub = { ...makePublishedNode(NODE_ID, 2), readSealed: 'remoteSealed==' };
+    const localPub = makePublishedNode(NODE_ID, 3);
+
+    const localNode = makeFolderNode({ id: NODE_ID, generation: 2, children: [LOCAL_CHILD_REF] });
+    const baseNode = makeFolderNode({ id: NODE_ID, generation: 2, children: [LOCAL_CHILD_REF] });
+    const remoteNode = makeFolderNode({
+      id: NODE_ID,
+      generation: 2,
+      children: [LOCAL_CHILD_REF, CONCURRENT_CHILD_REF],
+    });
+
+    mockFns.unsealNode
+      .mockResolvedValueOnce(localNode)
+      .mockResolvedValueOnce(baseNode)
+      .mockResolvedValueOnce(remoteNode);
+
+    mockFns.sealNode.mockImplementation(async (node: import('@cipherbox/core').Node) =>
+      makePublishedNode(node.id, node.generation)
+    );
+
+    setupCas409Mock(basePub, localPub, remotePub);
+
+    const result = await rotateOne({
+      nodeId: NODE_ID,
+      nodeIpnsName: NODE_IPNS,
+      nodeIpnsPrivateKey: FAKE_NODE_KEY_06,
+      parentReadKey: PARENT_READ_KEY,
+      parentIpnsName: PARENT_IPNS,
+      parentCurrentSeq: 3n,
+      jobRecord: makeJobRecord(),
+      ctx: createMockContext(),
+    });
+
+    expect(result.skipped).toBe(false);
+    if (!result.skipped) {
+      const returnedIpnsNames = result.children.map((c) => c.ipnsName);
+      // RED: node.children (pre-merge snapshot) only has LOCAL_CHILD_REF — the
+      // concurrently-added remote child is missing from the return.
+      // GREEN: rotateOne captures and returns the CAS-merged set.
+      expect(returnedIpnsNames).toContain(CONCURRENT_CHILD_IPNS);
+      expect(returnedIpnsNames).toContain(CHILD_IPNS);
+    }
+  });
+
+  it('Test 7 (Plan 70-04): mergeConcurrentChildren returns { published, mergedChildren } reflecting local-wins + concurrent-add merge', async () => {
+    const basePub = makePublishedNode(NODE_ID, 2);
+    const remotePub = makePublishedNode(NODE_ID, 2);
+
+    const baseNode = makeFolderNode({ id: NODE_ID, generation: 2, children: [LOCAL_CHILD_REF] });
+    const remoteNode = makeFolderNode({
+      id: NODE_ID,
+      generation: 2,
+      children: [LOCAL_CHILD_REF, CONCURRENT_CHILD_REF],
+    });
+
+    mockFns.unsealNode.mockResolvedValueOnce(baseNode).mockResolvedValueOnce(remoteNode);
+    mockFns.sealNode.mockImplementation(async (node: import('@cipherbox/core').Node) =>
+      makePublishedNode(node.id, node.generation)
+    );
+
+    const localNode = makeFolderNode({ id: NODE_ID, generation: 2, children: [LOCAL_CHILD_REF] });
+    const newReadKey = new Uint8Array(32).fill(0x99);
+    const writeKey = new Uint8Array(0);
+
+    const result = await mergeConcurrentChildren(
+      basePub,
+      remotePub,
+      PARENT_READ_KEY,
+      localNode.children ?? [],
+      newReadKey,
+      localNode,
+      3,
+      writeKey
+    );
+
+    expect(result).toHaveProperty('published');
+    expect(result).toHaveProperty('mergedChildren');
+    const mergedIpnsNames = result.mergedChildren.map((c) => c.ipnsName);
+    expect(mergedIpnsNames).toContain(CHILD_IPNS);
+    expect(mergedIpnsNames).toContain(CONCURRENT_CHILD_IPNS);
   });
 });
 
