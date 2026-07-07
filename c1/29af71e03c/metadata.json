@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "c129af71e03c",
+  "strategy": "manual-commit",
+  "branch": "feat/rotation-soundness-deep-merge-fresh-record-resume-and-durabl",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/c1/29af71e03c/0/metadata.json",
+      "transcript": "/c1/29af71e03c/0/full.jsonl",
+      "content_hash": "/c1/29af71e03c/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 26,
+    "cache_creation_tokens": 4264,
+    "cache_read_tokens": 275650,
+    "output_tokens": 2756,
+    "api_call_count": 1
+  }
+}
