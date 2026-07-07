@@ -6,14 +6,14 @@ current_phase: 70
 current_phase_name: rotation-soundness-deep-merge-fresh-record-resume-and-durabl
 status: executing
 stopped_at: Phase 70 Plan 03 complete (rotation badge per-root Set + cached IDB connection)
-last_updated: "2026-07-07T20:13:10.379Z"
+last_updated: "2026-07-07T20:27:42.338Z"
 last_activity: 2026-07-07
 last_activity_desc: Phase 70 execution started
 progress:
   total_phases: 15
   completed_phases: 10
   total_plans: 148
-  completed_plans: 142
+  completed_plans: 143
   percent: 67
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 ## Current Position
 
 Phase: 70 (rotation-soundness-deep-merge-fresh-record-resume-and-durabl) — EXECUTING
-Plan: 4 of 8
+Plan: 5 of 8
 Status: Ready to execute
 Last activity: 2026-07-07 — Phase 70 execution started
 
@@ -251,6 +251,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 70 P01 | 12min | 2 tasks | 3 files |
 | Phase 70 P02 | 45min | 3 tasks | 3 files |
 | Phase 70 P03 | 20min | 2 tasks | 2 files |
+| Phase 70 P04 | 10min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -534,6 +535,8 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: Corrupt-sidecar fail-closed via a bounded i64::MAX sentinel within the existing HighWaterStore trait shape, avoiding a Result-returning trait change that would ripple into out-of-scope listing.rs/adapter.rs
 - [Phase ?]: TS idbPut verified already max-preserving atomic; no functional TS change needed for SC#5, only a docstring parity note
 - [Phase 70-03]: progress('rotated'/'complete') defers to persistJob's terminal branch for per-root Set drain (no rootNodeId on that callback); only resets the badge when the set is already empty
+- [Phase ?]: [Phase 70-04]: mergeConcurrentChildren (site A) swapped from remote-wins mergeChildren to local-wins mergeRotatedChildren and returns { published, mergedChildren }; rotateOne captures mergedChildrenForReturn so its final return uses the CAS-merged children
+- [Phase ?]: [Phase 70-04]: updateFolderMetadataAndPublish gained optional mergeChildrenFn param defaulting to mergeChildren (remote-wins unchanged for non-rotation callers); both D-09 batched-republish call sites pass mergeRotatedChildren plus a baseChildrenSnapshot captured at parentTracking.set time; concurrently-added children diffed from publishedChildren are enqueued onto the BFS frontier
 
 ## Operator Next Steps
 
@@ -541,11 +544,11 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-07T20:13:10.372Z
+**Last session:** 2026-07-07T20:26:03.135Z
 **Stopped at:** Phase 70 Plan 03 complete (rotation badge per-root Set + cached IDB connection)
 **Resume file:** 
 
-### Blockers
+None
 
 - GAP-1 (68.1-13): resolveFileMetadata AEAD Decryption-failed for CTR/streaming video preview and post-upload batch-download -- needs dedicated crypto debugging
 - GAP-2 (68.1-13): full-workflow.spec.ts 3.8 cold-reload multi-level IPNS DFS resolve times out -- needs retry-budget tuning or propagation investigation

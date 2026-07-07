@@ -657,7 +657,7 @@ Plans:
 5. The anti-rollback floor store performs an atomic compare-and-set (Rust `bump_floor` guarded; `JsonSidecarFloorStore::put` no blocking RMW on the async executor; corrupt sidecar fails closed, not `unwrap_or_default`); `bumpFloor` on the TS side no longer runs sequentially where it can race
 6. Rotation readKey source buffers are zeroed after use; no module-global `activeRootNodeId` leaks across roots
 
-**Plans**: 3/8 plans executed
+**Plans**: 4/8 plans executed
 
 Plans:
 
@@ -669,7 +669,7 @@ Plans:
 
 **Wave 2** *(blocked on 70-01)*
 
-- [ ] 70-04-PLAN.md — SC#1/SC#3 wire local-wins at both merge sites + `rotateOne` merged-children return
+- [x] 70-04-PLAN.md — SC#1/SC#3 wire local-wins at both merge sites + `rotateOne` merged-children return
 
 **Wave 3** *(blocked on 70-04)*
 
