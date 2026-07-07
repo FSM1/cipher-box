@@ -747,27 +747,24 @@ jobs:
           fi
           echo "SC#6 gate: OK — all crates/fuse/src reads route through the gated entrypoints (list_folder / list_shared_folder / list_folder_owned / fetch_node_gated)"
 
-      # SC#2 re-encrypt-on-move deletion (69-13). Each node/v3 node self-seals
-      # under its OWN readKey, so a cross-folder move is a pure SealedChildRef
-      # relink — the legacy re-encrypt-on-move helper is dead by construction and
-      # was deleted from the non-Windows tree. This gate keeps it gone. The lone
-      # remaining caller lives under crates/fuse/src/platform/windows (feature
-      # `winfsp`, never compiled by the default `fuse` build); 69-14 deletes it
-      # and promotes this gate to the whole tree by dropping the `grep -v`.
-      - name: SC#2 re-encrypt-on-move deletion grep gate (crates/fuse/src, non-Windows)
+      # SC#2 re-encrypt-on-move deletion (69-13/69-14, whole tree). Each node/v3
+      # node self-seals under its OWN readKey, so a cross-folder move is a pure
+      # SealedChildRef relink — the legacy re-encrypt-on-move helper is dead by
+      # construction. 69-13 deleted the non-Windows caller; 69-14 deleted the
+      # lone remaining Windows caller (platform/windows/write_ops.rs handle_rename)
+      # and promoted this gate to the WHOLE tree (no `platform/windows` carve-out).
+      - name: SC#2 re-encrypt-on-move deletion grep gate (crates/fuse/src, whole tree)
         run: |
-          # Filter out the Windows caller (69-14's) and any line whose CONTENT
-          # (after the `file:lineno:` prefix) is a Rust comment, so a doc/comment
-          # mention can never re-trip the gate.
+          # Filter out any line whose CONTENT (after the `file:lineno:` prefix)
+          # is a Rust comment, so a doc/comment mention can never re-trip the gate.
           hits=$(grep -rn 'spawn_file_meta_reencrypt' crates/fuse/src \
-            | grep -v 'platform/windows' \
             | grep -vE ':[0-9]+:[[:space:]]*//' || true)
           if [ -n "$hits" ]; then
-            echo "::error::SC#2 violation — re-encrypt-on-move symbol still present in the non-Windows tree:"
+            echo "::error::SC#2 violation — re-encrypt-on-move symbol still present:"
             echo "$hits"
             exit 1
           fi
-          echo "SC#2 gate: OK — re-encrypt-on-move is gone from the non-Windows crates/fuse/src tree"
+          echo "SC#2 gate: OK — re-encrypt-on-move is gone from the whole crates/fuse/src tree"
 
       - name: Cargo check (workspace)
         run: cargo check --workspace --no-default-features --features fuse

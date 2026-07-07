@@ -14,7 +14,7 @@ mod mount_impl {
 
     use crate::fuse::{
         cache, inode, CipherBoxFS, PendingContent, PendingFilePointer, PendingRefresh,
-        PublishCoordinator, UploadComplete,
+        PublishCoordinator,
     };
     use crate::state::AppState;
 
