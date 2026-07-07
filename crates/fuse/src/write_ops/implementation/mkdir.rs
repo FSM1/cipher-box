@@ -4,9 +4,7 @@ use std::time::SystemTime;
 
 use crate::helpers::is_platform_special;
 use crate::inode::{FileAttrs, InodeData, InodeKind};
-use crate::operations::implementation::{
-    current_gid, current_uid, DIR_TTL,
-};
+use crate::operations::implementation::{current_gid, current_uid, DIR_TTL};
 use crate::CipherBoxFS;
 
 /// Create a new directory.
@@ -46,7 +44,11 @@ pub fn handle_mkdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Repl
     log::debug!("mkdir: {} in parent {}", name_str, parent);
 
     let result = (|| -> Result<fuser::FileAttr, String> {
-        let folder_key = cipherbox_crypto::utils::generate_file_key();
+        // node/v3: mint the child folder's OWN symmetric read/write keys +
+        // Ed25519 IPNS signing seed. The former user-ECIES `folder_key` wrap is
+        // gone — node-to-node keys are only sealed under the parent keys.
+        let read_key = cipherbox_crypto::utils::generate_file_key();
+        let write_key = cipherbox_crypto::utils::generate_file_key();
 
         let (ipns_public_key, ipns_private_key) = cipherbox_crypto::generate_ed25519_keypair();
 
@@ -56,12 +58,6 @@ pub fn handle_mkdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Repl
             .map_err(|_| "Invalid IPNS public key length".to_string())?;
         let ipns_name = cipherbox_core::ipns::derive_ipns_name(&ipns_pub_arr)
             .map_err(|e| format!("Failed to derive IPNS name: {}", e))?;
-
-        let wrapped_folder_key = cipherbox_crypto::wrap_key(&folder_key, &fs.public_key)
-            .map_err(|e| format!("Folder key wrapping failed: {}", e))?;
-        let encrypted_folder_key_hex = hex::encode(&wrapped_folder_key);
-        // Clone for use in the journal entry (original is moved into the inode below).
-        let encrypted_folder_key_hex_for_journal = encrypted_folder_key_hex.clone();
 
         let ino = fs.inodes.allocate_ino();
         let now = SystemTime::now();
@@ -82,13 +78,16 @@ pub fn handle_mkdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Repl
 
         let inode = InodeData {
             ino,
+            // Fresh folder: its stable id is uuid_from_ino(ino); the child folder
+            // node is first published (mkdir journal) under this same id.
+            node_id: crate::fs::uuid_from_ino(ino),
             parent_ino: parent,
             name: name_str.to_string(),
             kind: InodeKind::Folder {
                 ipns_name: ipns_name.clone(),
-                encrypted_folder_key: encrypted_folder_key_hex,
-                folder_key: zeroize::Zeroizing::new(folder_key.to_vec()),
-                ipns_private_key: Some(ipns_private_key.clone()),
+                read_key: zeroize::Zeroizing::new(read_key),
+                write_key: zeroize::Zeroizing::new(write_key),
+                ipns_private_key: zeroize::Zeroizing::new(ipns_private_key.to_vec()),
                 children_loaded: true,
             },
             attr,
@@ -119,10 +118,10 @@ pub fn handle_mkdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Repl
             parent,
             ino,
             name_str,
-            &folder_key,
+            &read_key,
+            &write_key,
             &ipns_name,
             ipns_private_key.clone(),
-            &encrypted_folder_key_hex_for_journal,
         ) {
             Ok(result) => result,
             Err(e) => {
@@ -141,14 +140,13 @@ pub fn handle_mkdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Repl
         }
 
         let crate::journal_helpers::MkdirJournalResult {
-            json_bytes,
-            ipns_private_key: ipns_private_key_zeroized,
+            child_published_node,
+            child_ipns_private_key: ipns_private_key_zeroized,
             encrypted_ipns_for_tee,
             tee_key_epoch,
-            ipns_name: ipns_name_clone,
-            parent_metadata,
-            parent_folder_key,
-            parent_ipns_key,
+            child_ipns_name: ipns_name_clone,
+            parent_published_node,
+            parent_ipns_private_key,
             parent_ipns_name,
             parent_old_cid,
             ..
@@ -164,7 +162,7 @@ pub fn handle_mkdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Repl
         std::thread::spawn(move || {
             let result = rt.block_on(async {
                 let initial_cid = cipherbox_api_client::ipfs::upload_content(
-                    &api, &json_bytes,
+                    &api, &child_published_node,
                 ).await.map_err(|e| format!("{}", e))?;
 
                 let ipns_key_arr: [u8; 32] = (*ipns_private_key_zeroized).clone().try_into()
@@ -203,17 +201,15 @@ pub fn handle_mkdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Repl
                 let lock = coordinator.get_lock(&parent_ipns_name);
                 let _guard = lock.lock().await;
 
-                let parent_json = crate::encrypt_metadata_to_json(
-                    &parent_metadata, &parent_folder_key,
-                )?;
-
                 let seq = coordinator.resolve_sequence(&api, &parent_ipns_name).await?;
 
+                // node/v3: upload the re-sealed parent PublishedNode bytes verbatim
+                // (the new child is already spliced into BOTH planes).
                 let parent_meta_cid = cipherbox_api_client::ipfs::upload_content(
-                    &api, &parent_json,
+                    &api, &parent_published_node,
                 ).await.map_err(|e| format!("{}", e))?;
 
-                let parent_key_arr: [u8; 32] = parent_ipns_key.try_into()
+                let parent_key_arr: [u8; 32] = parent_ipns_private_key.try_into()
                     .map_err(|_| "Invalid parent IPNS key length".to_string())?;
                 let new_seq = seq + 1;
                 let parent_value = format!("/ipfs/{}", parent_meta_cid);

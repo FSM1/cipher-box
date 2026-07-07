@@ -1,10 +1,6 @@
 //! File metadata types.
 //!
-//! Re-exports file-related types from the folder module for convenience.
-//! FileMetadata, FilePointer, and VersionEntry are defined in folder.rs
-//! since they share the same encryption context (parent folder's AES key).
+//! Re-exports the file version-history type from the folder module for
+//! convenience. `VersionEntry` is defined in folder.rs.
 
-pub use crate::folder::{
-    FileMetadata, FilePointer, VersionEntry,
-    encrypt_file_metadata, decrypt_file_metadata,
-};
+pub use crate::folder::VersionEntry;

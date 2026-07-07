@@ -14,7 +14,7 @@ mod mount_impl {
 
     use crate::fuse::{
         cache, inode, CipherBoxFS, PendingContent, PendingFilePointer, PendingRefresh,
-        PublishCoordinator, UploadComplete,
+        PublishCoordinator,
     };
     use crate::state::AppState;
 
@@ -39,6 +39,8 @@ mod mount_impl {
         private_key: Vec<u8>,
         public_key: Vec<u8>,
         root_folder_key: Zeroizing<Vec<u8>>,
+        root_read_key: Zeroizing<Vec<u8>>,
+        root_write_key: Zeroizing<Vec<u8>>,
         root_ipns_name: String,
         root_ipns_private_key: Option<Vec<u8>>,
         tee_public_key: Option<Vec<u8>>,
@@ -53,7 +55,11 @@ mod mount_impl {
         if mount_path.exists() {
             match std::fs::remove_dir_all(&mount_path) {
                 Ok(()) => log::info!("Cleaned stale mount point: {}", mount_path.display()),
-                Err(e) => log::warn!("Failed to clean stale mount point {}: {}", mount_path.display(), e),
+                Err(e) => log::warn!(
+                    "Failed to clean stale mount point {}: {}",
+                    mount_path.display(),
+                    e
+                ),
             }
         }
 
@@ -66,16 +72,45 @@ mod mount_impl {
         let journal_dir = crate::fuse::default_journal_dir();
         std::fs::create_dir_all(&journal_dir)
             .map_err(|e| format!("Failed to create journal directory: {}", e))?;
+        // node/v3 anti-rollback gate: sidecars live adjacent to the write journal
+        // (69-09 Slice 1). Capture before `journal_dir` is moved into WriteQueue.
+        let high_water = cipherbox_sdk::new_journal_high_water(&journal_dir);
+        // Replay rebuilds its own high-water gate from this dir; clone before move.
+        let replay_journal_dir = journal_dir.clone();
         let journal = cipherbox_sdk::WriteQueue::new(journal_dir, crate::fuse::JOURNAL_MAX_RETRIES);
+
+        // node/v3 root symmetric keys (read_key/write_key) for the root node.
+        // Mirrors the fuse (macOS/Linux) mount: the REAL node/v3 root keys are
+        // recovered into desktop KeyState at login (69-22 fields, populated by
+        // 69-23) and threaded in by post_auth_finalize. The earlier legacy
+        // placeholder that fabricated the two keys from root_folder_key is
+        // retired. We only narrow the passed 32-byte state keys into fixed
+        // [u8; 32] locals — no derivation. See fuse/mod.rs for the full note.
+        let root_read_key: Zeroizing<[u8; 32]> = {
+            let mut k = [0u8; 32];
+            let src = root_read_key.as_slice();
+            let n = src.len().min(32);
+            k[..n].copy_from_slice(&src[..n]);
+            Zeroizing::new(k)
+        };
+        let root_write_key: Zeroizing<[u8; 32]> = {
+            let mut k = [0u8; 32];
+            let src = root_write_key.as_slice();
+            let n = src.len().min(32);
+            k[..n].copy_from_slice(&src[..n]);
+            Zeroizing::new(k)
+        };
 
         // Build the inode table
         let mut inodes = inode::InodeTable::new();
 
-        // Set root inode's IPNS data
+        // Set root inode's node/v3 key material + IPNS data
         if let Some(root) = inodes.get_mut(inode::ROOT_INO) {
             root.kind = inode::InodeKind::Root {
-                ipns_private_key: root_ipns_private_key.map(Zeroizing::new),
-                ipns_name: Some(root_ipns_name.clone()),
+                ipns_name: root_ipns_name.clone(),
+                read_key: root_read_key.clone(),
+                write_key: root_write_key.clone(),
+                ipns_private_key: Zeroizing::new(root_ipns_private_key.clone().unwrap_or_default()),
             };
         }
 
@@ -85,18 +120,18 @@ mod mount_impl {
         let (filepointer_tx, filepointer_rx) = std::sync::mpsc::channel::<PendingFilePointer>();
         let (upload_tx, upload_rx) = std::sync::mpsc::channel::<cipherbox_fuse::FsEvent>();
 
-        // Pre-populate root folder and subfolders via shared prepopulate helper.
-        // Returns initial_sequences for seeding the PublishCoordinator.
+        // Pre-populate root folder and subfolders via shared prepopulate helper
+        // (node/v3 gated owned listing). Returns initial_sequences for seeding the
+        // PublishCoordinator (empty under node/v3 — see prepopulate module docs).
         // CR-06: mirroring apps/desktop/src-tauri/src/fuse/mod.rs pre-populate pattern.
-        let mut metadata_cache = cache::MetadataCache::new();
+        let metadata_cache = cache::MetadataCache::new();
         let initial_sequences = crate::fuse::prepopulate::prepopulate_filesystem(
             &state.sdk.api,
             &mut inodes,
-            &mut metadata_cache,
+            &high_water,
             &root_ipns_name,
-            root_folder_key.as_slice(),
-            &private_key,
-            &public_key,
+            &root_read_key,
+            &root_write_key,
         )
         .await;
 
@@ -108,7 +143,10 @@ mod mount_impl {
                 coord.record_publish(name, *seq);
             }
             if !initial_sequences.is_empty() {
-                log::info!("PublishCoordinator seeded with {} sequence(s) from pre-populate", initial_sequences.len());
+                log::info!(
+                    "PublishCoordinator seeded with {} sequence(s) from pre-populate",
+                    initial_sequences.len()
+                );
             }
             coord
         };
@@ -133,15 +171,16 @@ mod mount_impl {
         // replay_for_vault) and the mount proceeds immediately. Errors are logged inside
         // replay and never fail the mount. Mirrors apps/desktop/src-tauri/src/fuse/mod.rs.
         //
-        // Clone every borrowed argument into owned values BEFORE the key bytes are moved into
-        // CipherBoxFS (wrapped in Zeroizing) below. Replay sends no FsEvent::UploadComplete,
+        // Copy every argument into owned values for the replay task: the node/v3 root
+        // read/write keys are `Copy` [u8;32]s and `replay_journal_dir` was cloned before
+        // the journal dir moved into WriteQueue::new. Replay sends no FsEvent::UploadComplete,
         // so spawning before CipherBoxFS construction is race-free.
         {
             let replay_journal = journal.clone();
             let replay_api = state.sdk.api.clone();
-            let replay_private_key = private_key.clone();
-            let replay_public_key = public_key.clone();
-            let replay_root_folder_key = root_folder_key.clone();
+            let replay_journal_dir = replay_journal_dir;
+            let replay_root_read_key = *root_read_key;
+            let replay_root_write_key = *root_write_key;
             let replay_root_ipns_name = root_ipns_name.clone();
             let replay_coordinator = publish_coordinator.clone();
             let replay_tee_public_key = tee_public_key.clone();
@@ -150,9 +189,9 @@ mod mount_impl {
                 cipherbox_fuse::replay_for_vault(
                     &replay_journal,
                     replay_api,
-                    &replay_private_key,
-                    &replay_public_key,
-                    &replay_root_folder_key,
+                    replay_journal_dir,
+                    &replay_root_read_key,
+                    &replay_root_write_key,
                     &replay_root_ipns_name,
                     replay_coordinator,
                     replay_tee_public_key.as_deref(),
@@ -194,23 +233,32 @@ mod mount_impl {
             upload_rx,
             upload_tx,
             journal,
+            high_water,
             mutated_folders: HashMap::new(),
             publish_coordinator,
             publish_queue: HashMap::new(),
+            sent_shares: std::sync::RwLock::new(
+                cipherbox_fuse::write_ops::grant_scope::SentSharesCache::empty(),
+            ),
         };
 
         // Create WinFsp context with Arc<Mutex<>> for interior mutability
-        let context = cipherbox_fuse::platform::windows::operations::implementation::WinFspContext {
-            inner: Arc::new(Mutex::new(fs)),
-            rt: rt.clone(),
-        };
+        let context =
+            cipherbox_fuse::platform::windows::operations::implementation::WinFspContext {
+                inner: Arc::new(Mutex::new(fs)),
+                rt: rt.clone(),
+            };
 
         // Initialize WinFsp runtime
         // NOTE: winfsp_init_or_die() calls std::process::exit() on failure,
         // killing the process silently. Use winfsp_init() instead for proper error handling.
         log::info!("Initializing WinFsp runtime...");
-        let _init = winfsp::winfsp_init()
-            .map_err(|e| format!("WinFsp initialization failed (is WinFsp installed?): {:?}", e))?;
+        let _init = winfsp::winfsp_init().map_err(|e| {
+            format!(
+                "WinFsp initialization failed (is WinFsp installed?): {:?}",
+                e
+            )
+        })?;
         log::info!("WinFsp runtime initialized successfully");
 
         // Create volume params
@@ -223,11 +271,8 @@ mod mount_impl {
             .case_preserved_names(true);
 
         log::info!("Creating WinFsp FileSystemHost...");
-        let mut host = winfsp::host::FileSystemHost::new(
-            volume_params,
-            context,
-        )
-        .map_err(|e| format!("Failed to create WinFsp host: {:?}", e))?;
+        let mut host = winfsp::host::FileSystemHost::new(volume_params, context)
+            .map_err(|e| format!("Failed to create WinFsp host: {:?}", e))?;
         log::info!("WinFsp FileSystemHost created");
 
         // Set mount point
@@ -329,7 +374,11 @@ mod mount_impl {
         // If it's still there after a crash, clean it up.
         if mount_path.exists() {
             if let Err(e) = std::fs::remove_dir_all(&mount_path) {
-                log::warn!("Failed to remove stale mount path {}: {}", mount_path.display(), e);
+                log::warn!(
+                    "Failed to remove stale mount path {}: {}",
+                    mount_path.display(),
+                    e
+                );
             }
         }
 

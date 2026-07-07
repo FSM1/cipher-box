@@ -13,12 +13,7 @@ use crate::CipherBoxFS;
 /// The caller supplies a closure that receives `(parent_ipns_name, parent_path)`
 /// and returns the fully-populated `BinEntry`.  The closure is only called when
 /// the parent IPNS name is non-empty (i.e. the publish is not skipped).
-fn publish_bin_entry_on_delete<F>(
-    fs: &mut CipherBoxFS,
-    parent: u64,
-    op: &str,
-    make_entry: F,
-)
+fn publish_bin_entry_on_delete<F>(fs: &mut CipherBoxFS, parent: u64, op: &str, make_entry: F)
 where
     F: FnOnce(String, String) -> cipherbox_core::bin::BinEntry,
 {
@@ -26,7 +21,7 @@ where
         .inodes
         .get(parent)
         .map(|p| match &p.kind {
-            InodeKind::Root { ipns_name, .. } => ipns_name.clone().unwrap_or_default(),
+            InodeKind::Root { ipns_name, .. } => ipns_name.clone(),
             InodeKind::Folder { ipns_name, .. } => ipns_name.clone(),
             _ => String::new(),
         })
@@ -72,73 +67,116 @@ pub fn handle_unlink(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Rep
         }
     };
 
-    // Capture the file's own metadata IPNS name (for fail-closed share
-    // revocation ahead of the destructive removal) and the bin-entry data in a
-    // single inode lookup. The revoke name is empty when the file was loaded
-    // from remote metadata before its IPNS resolve — in that case nothing was
-    // ever shared under a name, so there is nothing to revoke (and we skip the
-    // bin entry too, matching the existing behaviour). Mirrors the rmdir
-    // pattern of carrying the revoke name out of the same match.
-    let (file_meta_ipns_name, bin_entry_data) = match fs.inodes.get(child_ino) {
+    // Capture the PARENT read/write keys (borrow → copy into owned arrays) so
+    // the D-07 dual child-ref can be sealed under the parent planes. Terminal-
+    // owner (D-09): the parent inode owns these buffers; we copy the 32 bytes
+    // and NEVER zero the inode-owned originals.
+    let parent_keys: Option<([u8; 32], [u8; 32])> =
+        fs.inodes.get(parent).and_then(|p| match &p.kind {
+            InodeKind::Root {
+                read_key,
+                write_key,
+                ..
+            }
+            | InodeKind::Folder {
+                read_key,
+                write_key,
+                ..
+            } => Some((**read_key, **write_key)),
+            _ => None,
+        });
+
+    // Capture the bin-entry data in a single inode lookup. The child's node/v3
+    // read/write keys are re-sealed under the PARENT keys into the D-07 dual
+    // ref here — the SC#3 grant-scope gate below reads the mutated node's
+    // ancestry directly from the inode table, not from a name carried out of
+    // this match.
+    let bin_entry_data = match fs.inodes.get(child_ino) {
         Some(inode) => match &inode.kind {
+            // node/v3: the file carries a plain `ipns_name` + symmetric
+            // read/write keys (the D-07 dual-plane material).
             InodeKind::File {
-                file_meta_ipns_name,
-                file_ipns_key_encrypted_hex,
+                ipns_name,
+                read_key,
+                write_key,
                 size,
                 cid,
-                versions,
                 ..
             } => {
-                let revoke_ipns_name = file_meta_ipns_name.clone().unwrap_or_default();
-                let now_ms = SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u64;
-                let created_ms = inode
-                    .attr
-                    .crtime
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u64;
-
-                let meta_ipns = match file_meta_ipns_name {
-                    Some(name) if !name.is_empty() => Some(name.clone()),
-                    _ => {
-                        // file_meta_ipns_name is optional for files loaded from
-                        // remote metadata before IPNS resolve. Since bin publishing
-                        // is best-effort, skip creating a bin entry when it's missing
-                        // instead of failing the unlink.
-                        log::warn!(
-                            "unlink: missing file_meta_ipns_name for ino {}, skipping bin entry",
-                            child_ino
-                        );
-                        None
-                    }
+                let meta_ipns = if ipns_name.is_empty() {
+                    // A never-published file (no IPNS identity yet). Bin publishing
+                    // is best-effort — skip the bin entry rather than fail the unlink.
+                    log::warn!(
+                        "unlink: missing ipns_name for ino {}, skipping bin entry",
+                        child_ino
+                    );
+                    None
+                } else {
+                    Some(ipns_name.clone())
                 };
 
-                let bin_data = if let Some(meta_ipns) = meta_ipns {
-                    let file_pointer = cipherbox_core::folder::FilePointer {
-                        id: cipherbox_crypto::utils::generate_uuid_v4(),
-                        name: inode.name.clone(),
-                        file_meta_ipns_name: meta_ipns,
-                        ipns_private_key_encrypted: file_ipns_key_encrypted_hex.clone(),
-                        created_at: if created_ms > 0 { created_ms } else { now_ms },
-                        modified_at: now_ms,
-                    };
+                let bin_data = if let (Some(meta_ipns), Some((parent_read_key, parent_write_key))) =
+                    (meta_ipns, parent_keys)
+                {
+                    // D-07 dual ref captured from the inode's OWN node/v3 keys:
+                    // SealedChildRef.ipns_name = the child ipns_name (READ plane,
+                    // a k51) and WriteChildRef.child_id = uuid_from_ino(child_ino)
+                    // (WRITE plane, a UUID) — the two key spaces are NEVER
+                    // conflated.
+                    // SECURITY-REVIEW: D-07 dual-keying — childId(UUID) vs ipnsName
+                    // must not be conflated. childId is the inode's STORED node_id
+                    // (its real published.id), NOT uuid_from_ino(child_ino): a
+                    // materialized-then-deleted file keeps its creator's id, so the
+                    // bin entry's WriteChildRef pairs correctly on restore.
+                    let child_id = inode.node_id.clone();
+                    let refs = cipherbox_sdk::build_child_refs(
+                        &**read_key,
+                        &**write_key,
+                        &parent_read_key,
+                        &parent_write_key,
+                        &child_id,
+                        &meta_ipns,
+                        &inode.name,
+                        cipherbox_core::node::NodeKind::File,
+                        0,
+                        0,
+                    );
 
-                    let ver_cids = crate::helpers::versions_to_bin_entries(versions);
-                    Some((
-                        inode.name.clone(),
-                        *size,
-                        file_pointer,
-                        cid.clone(),
-                        ver_cids,
-                    ))
+                    match refs {
+                        Ok((child_ref, write_child_ref)) => {
+                            // Best-effort published-node keeper: the single-thread
+                            // FUSE callback forbids blocking I/O, so we cannot
+                            // re-seal the child envelope here → empty-string keeper
+                            // (restore re-derives it from the live record).
+                            let child_published_node = String::new();
+                            // Version history now lives in the sealed NodeContent,
+                            // not the inode (Slice 1) — version CIDs are not
+                            // captured here (file-versioning restore E2E flag).
+                            let ver_cids: Option<Vec<cipherbox_core::bin::VersionCidEntry>> = None;
+                            Some((
+                                inode.name.clone(),
+                                *size,
+                                child_ref,
+                                write_child_ref,
+                                child_published_node,
+                                cid.clone(),
+                                ver_cids,
+                            ))
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "unlink: build_child_refs failed for ino {}, skipping bin entry: {}",
+                                child_ino,
+                                e
+                            );
+                            None
+                        }
+                    }
                 } else {
                     None
                 };
 
-                (revoke_ipns_name, bin_data)
+                bin_data
             }
             _ => {
                 reply.error(libc::EISDIR);
@@ -153,10 +191,13 @@ pub fn handle_unlink(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Rep
 
     log::debug!("unlink: {} from parent {}", name_str, parent);
 
-    // Fail-closed share cutoff: revoke any shares/invites for this file BEFORE
-    // the destructive removal so a deleted-then-unpinned file can't leave a
-    // sharee with read access. Aborts the unlink (item stays put) on failure.
-    if crate::metadata::revoke_shares_blocking(&fs.api, &fs.rt, &file_meta_ipns_name).is_err() {
+    // SC#3 grant-scope gate (research landmine 9): the unconditional
+    // `revoke_shares_blocking` is REPLACED, not augmented. A private delete (no
+    // covering grant) is a pure relink with ZERO rotation — the
+    // `update_folder_metadata(parent)` below is the only durable effect. A
+    // shared-scope exit rotates the read key from the matched grant-root
+    // ancestor EXACTLY ONCE. Fail-closed: rotation failure aborts the unlink.
+    if crate::write_ops::grant_scope::run_scope_exit_gate(fs, child_ino).is_err() {
         reply.error(libc::EIO);
         return;
     }
@@ -175,18 +216,16 @@ pub fn handle_unlink(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Rep
     }
 
     // Create bin entry and publish to bin IPNS (fire-and-forget)
-    if let Some((item_name, file_size, file_pointer, content_cid, ver_cids)) = bin_entry_data {
-        // Capture the file's parent folderKey (ECIES-wrapped to the user)
-        // so a later restore can re-encrypt the FileMetadata to a different
-        // destination folder — including when the original parent folder no
-        // longer exists. Mirrors the SDK `addToBin` capture.
-        let original_folder_key_encrypted = fs
-            .get_folder_key(parent)
-            .and_then(|fk| {
-                cipherbox_crypto::ecies::wrap_key(&fk, fs.public_key.as_slice()).ok()
-            })
-            .map(hex::encode);
-
+    if let Some((
+        item_name,
+        file_size,
+        child_ref,
+        write_child_ref,
+        child_published_node,
+        content_cid,
+        ver_cids,
+    )) = bin_entry_data
+    {
         let deleted_at = now
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -205,15 +244,15 @@ pub fn handle_unlink(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Rep
                 name: item_name.clone(),
                 original_parent_ipns_name: parent_ipns_name,
                 original_path: parent_path,
-                original_folder_key_encrypted,
                 deleted_at,
                 size: file_size,
                 mime_type: mime,
                 content_cid: content_cid_opt,
                 content_size: Some(file_size),
                 version_cids: ver_cids,
-                file_pointer: Some(file_pointer),
-                folder_entry: None,
+                child_published_node,
+                child_ref,
+                write_child_ref,
             }
         });
     }
@@ -239,14 +278,34 @@ pub fn handle_rmdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Repl
         }
     };
 
+    // Capture the PARENT read/write keys (borrow → copy) for the D-07 dual
+    // child-ref seal. Terminal-owner (D-09): copy the bytes, never zero the
+    // inode-owned buffers.
+    let parent_keys: Option<([u8; 32], [u8; 32])> =
+        fs.inodes.get(parent).and_then(|p| match &p.kind {
+            InodeKind::Root {
+                read_key,
+                write_key,
+                ..
+            }
+            | InodeKind::Folder {
+                read_key,
+                write_key,
+                ..
+            } => Some((**read_key, **write_key)),
+            _ => None,
+        });
+
     // Capture folder data for bin entry before inode removal
     let bin_entry_data = match fs.inodes.get(child_ino) {
         Some(inode) => {
             match &inode.kind {
+                // node/v3: the folder carries symmetric read/write keys + a raw
+                // signing seed (non-Option).
                 InodeKind::Folder {
                     ipns_name,
-                    encrypted_folder_key,
-                    ipns_private_key,
+                    read_key,
+                    write_key,
                     ..
                 } => {
                     // Check for non-empty folder (POSIX requirement)
@@ -257,51 +316,63 @@ pub fn handle_rmdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Repl
                         }
                     }
 
-                    let now_ms = SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis() as u64;
-                    let created_ms = inode
-                        .attr
-                        .crtime
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis() as u64;
-
-                    // Build the ECIES-wrapped IPNS private key for the FolderEntry
-                    let ipns_key_encrypted = match ipns_private_key {
-                        Some(key) => match cipherbox_crypto::wrap_key(key, &fs.public_key) {
-                            Ok(wrapped) => hex::encode(&wrapped),
+                    if ipns_name.is_empty() {
+                        log::warn!(
+                            "rmdir: missing ipns_name for ino {}, skipping bin entry",
+                            child_ino
+                        );
+                        None
+                    } else if let Some((parent_read_key, parent_write_key)) = parent_keys {
+                        // D-07 dual ref from the folder's OWN node/v3 keys:
+                        // SealedChildRef.ipns_name = the folder ipns_name (READ
+                        // plane, a k51), WriteChildRef.child_id =
+                        // uuid_from_ino(child_ino) (WRITE plane, a UUID) — never
+                        // conflated.
+                        // SECURITY-REVIEW: D-07 dual-keying — childId(UUID) vs
+                        // ipnsName must not be conflated. childId is the inode's
+                        // STORED node_id (its real published.id), NOT
+                        // uuid_from_ino(child_ino), so a materialized-then-removed
+                        // folder's bin entry pairs correctly on restore.
+                        let child_id = inode.node_id.clone();
+                        match cipherbox_sdk::build_child_refs(
+                            &**read_key,
+                            &**write_key,
+                            &parent_read_key,
+                            &parent_write_key,
+                            &child_id,
+                            ipns_name,
+                            &inode.name,
+                            cipherbox_core::node::NodeKind::Folder,
+                            0,
+                            0,
+                        ) {
+                            Ok((child_ref, write_child_ref)) => {
+                                // Best-effort published-node keeper: no blocking
+                                // I/O in the FUSE callback → empty-string keeper.
+                                let child_published_node = String::new();
+                                Some((
+                                    inode.name.clone(),
+                                    child_ref,
+                                    write_child_ref,
+                                    child_published_node,
+                                ))
+                            }
                             Err(e) => {
-                                log::error!(
-                                    "rmdir: failed to wrap IPNS key for bin entry: {}",
+                                log::warn!(
+                                    "rmdir: build_child_refs failed for ino {}, skipping bin entry: {}",
+                                    child_ino,
                                     e
                                 );
-                                reply.error(libc::EIO);
-                                return;
+                                None
                             }
-                        },
-                        None => {
-                            log::error!(
-                                "rmdir: missing folder IPNS private key for ino {}",
-                                child_ino
-                            );
-                            reply.error(libc::EIO);
-                            return;
                         }
-                    };
-
-                    let folder_entry = cipherbox_core::folder::FolderEntry {
-                        id: cipherbox_crypto::utils::generate_uuid_v4(),
-                        name: inode.name.clone(),
-                        ipns_name: ipns_name.clone(),
-                        folder_key_encrypted: encrypted_folder_key.clone(),
-                        ipns_private_key_encrypted: ipns_key_encrypted,
-                        created_at: if created_ms > 0 { created_ms } else { now_ms },
-                        modified_at: now_ms,
-                    };
-
-                    Some((inode.name.clone(), folder_entry, ipns_name.clone()))
+                    } else {
+                        log::warn!(
+                            "rmdir: missing parent keys for ino {}, skipping bin entry",
+                            child_ino
+                        );
+                        None
+                    }
                 }
                 _ => {
                     reply.error(libc::ENOTDIR);
@@ -317,16 +388,15 @@ pub fn handle_rmdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Repl
 
     log::debug!("rmdir: {} from parent {}", name_str, parent);
 
-    // Fail-closed share cutoff: revoke any shares/invites for this folder BEFORE
-    // the destructive removal. The directory is guaranteed empty here (ENOTEMPTY
-    // returned above otherwise), so revoking the folder's own ipns_name is
-    // complete coverage — there are no descendant nodes to revoke. Aborts the
-    // rmdir (folder stays put) on failure.
-    let folder_ipns_name = bin_entry_data
-        .as_ref()
-        .map(|(_, _, ipns_name)| ipns_name.clone())
-        .unwrap_or_default();
-    if crate::metadata::revoke_shares_blocking(&fs.api, &fs.rt, &folder_ipns_name).is_err() {
+    // SC#3 grant-scope gate (research landmine 9): the unconditional
+    // `revoke_shares_blocking` is REPLACED. The directory is guaranteed empty
+    // here (ENOTEMPTY returned above otherwise), so its own ancestry is the
+    // complete coverage set — there are no descendant nodes. A private rmdir is
+    // a pure relink with ZERO rotation (the `update_folder_metadata(parent)`
+    // below is the only durable effect); a shared-scope exit rotates the read
+    // key from the matched grant-root ancestor EXACTLY ONCE. Fail-closed:
+    // rotation failure aborts the rmdir (folder stays put).
+    if crate::write_ops::grant_scope::run_scope_exit_gate(fs, child_ino).is_err() {
         reply.error(libc::EIO);
         return;
     }
@@ -348,7 +418,7 @@ pub fn handle_rmdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Repl
     }
 
     // Create bin entry and publish to bin IPNS (fire-and-forget)
-    if let Some((item_name, folder_entry, _ipns_name)) = bin_entry_data {
+    if let Some((item_name, child_ref, write_child_ref, child_published_node)) = bin_entry_data {
         let deleted_at = now
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -361,16 +431,15 @@ pub fn handle_rmdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Repl
                 name: item_name,
                 original_parent_ipns_name: parent_ipns_name,
                 original_path: parent_path,
-                // Folders keep their own key on restore; nothing to capture.
-                original_folder_key_encrypted: None,
                 deleted_at,
                 size: 0,
                 mime_type: String::new(),
                 content_cid: None,
                 content_size: None,
                 version_cids: None,
-                file_pointer: None,
-                folder_entry: Some(folder_entry),
+                child_published_node,
+                child_ref,
+                write_child_ref,
             }
         });
     }
@@ -397,26 +466,47 @@ mod tests {
         )
     }
 
+    /// Seed the local sent-shares cache with a single grant rooted at
+    /// `root_ipns_name` so a delete whose ancestry contains that name is a
+    /// SHARED-scope exit (covering grant present).
+    fn seed_sent_share(fs: &crate::CipherBoxFS, root_ipns_name: &str) {
+        use cipherbox_api_client::shares::SentShareResponse;
+        let share = SentShareResponse {
+            share_id: "s1".to_string(),
+            recipient_public_key: "0x04".to_string(),
+            read_descriptor_ref: "ref".to_string(),
+            write_descriptor_ref: None,
+            root_node_id: "n1".to_string(),
+            root_ipns_name: root_ipns_name.to_string(),
+            root_generation: "1".to_string(),
+            item_name_encrypted: None,
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+        };
+        *fs.sent_shares.write().expect("sent_shares lock poisoned") =
+            crate::write_ops::grant_scope::SentSharesCache::from_sent_shares(&[share]);
+    }
+
     /// Insert a `secret.txt` File child of root carrying a non-empty
-    /// `file_meta_ipns_name` (so it has a shareable identity to revoke).
+    /// `ipns_name` (so it has an IPNS identity in its ancestry chain).
     fn insert_file_child(fs: &mut crate::CipherBoxFS, name: &str) -> u64 {
         let ino = fs.inodes.allocate_ino();
         let t = UNIX_EPOCH + Duration::from_millis(1_700_000_000_000);
         fs.inodes.insert(InodeData {
             ino,
+            node_id: crate::fs::uuid_from_ino(ino),
             parent_ino: ROOT_INO,
             name: name.to_string(),
+            // node/v3: shareable identity is the plain `ipns_name`; descriptors
+            // (cid/iv) filled, keys moved in.
             kind: InodeKind::File {
+                ipns_name: "k51file-shared".to_string(),
                 cid: "bafyContent".to_string(),
-                encrypted_file_key: "deadbeef".to_string(),
-                iv: "aabbccdd".to_string(),
                 size: 10,
                 encryption_mode: "GCM".to_string(),
-                file_meta_ipns_name: Some("k51file-shared".to_string()),
-                file_meta_resolved: true,
-                file_ipns_private_key: Some(Zeroizing::new(vec![3u8; 32])),
-                file_ipns_key_encrypted_hex: Some("abcd".to_string()),
-                versions: None,
+                iv: "aabbccdd".to_string(),
+                read_key: Zeroizing::new([2u8; 32]),
+                write_key: Zeroizing::new([4u8; 32]),
+                ipns_private_key: Zeroizing::new(vec![3u8; 32]),
             },
             attr: FileAttrs {
                 ino,
@@ -445,13 +535,14 @@ mod tests {
         let t = UNIX_EPOCH + Duration::from_millis(1_700_000_000_000);
         fs.inodes.insert(InodeData {
             ino,
+            node_id: crate::fs::uuid_from_ino(ino),
             parent_ino: ROOT_INO,
             name: name.to_string(),
             kind: InodeKind::Folder {
                 ipns_name: "k51folder-shared".to_string(),
-                encrypted_folder_key: "abcd".to_string(),
-                folder_key: Zeroizing::new(vec![1u8; 32]),
-                ipns_private_key: Some(Zeroizing::new(vec![5u8; 32])),
+                read_key: Zeroizing::new([1u8; 32]),
+                write_key: Zeroizing::new([6u8; 32]),
+                ipns_private_key: Zeroizing::new(vec![5u8; 32]),
                 children_loaded: true,
             },
             attr: FileAttrs {
@@ -479,7 +570,7 @@ mod tests {
     /// Build a multi-thread runtime, construct the fs inside its context (so the
     /// `Handle::current()` in `make_test_fs_with_keypair` resolves), and return
     /// both. The caller invokes the handler on the TEST thread — which is NOT a
-    /// runtime worker — so `revoke_shares_blocking`'s `rt.block_on` is valid,
+    /// runtime worker — so the grant-scope gate's `rt.block_on` is valid,
     /// faithfully reproducing the production mount thread (the fuser callback
     /// thread is likewise not a tokio worker). A `#[tokio::test]` would instead
     /// run the body ON a worker thread and panic ("Cannot start a runtime from
@@ -496,14 +587,16 @@ mod tests {
         (rt, fs)
     }
 
-    /// FAIL-CLOSED: when share revocation fails (backend unreachable — the test
-    /// harness points the API client at an unroutable host), handle_unlink must
-    /// return EIO and leave the file inode in place. No share is left stranded
-    /// active because the destructive removal never happens.
+    /// SC#3 / ROT-02 zero-rotation invariant (PRIVATE delete): with an EMPTY
+    /// sent-shares cache the file has NO covering grant, so `handle_unlink` is a
+    /// pure relink — it succeeds (error code 0) and removes the inode WITHOUT
+    /// any rotation. This is the behaviour the unconditional `revoke_shares_blocking`
+    /// wrongly prevented (research landmine 9): a private delete must not abort.
     #[test]
-    fn unlink_aborts_with_eio_when_revoke_fails() {
+    fn unlink_private_delete_succeeds_with_zero_rotation() {
         let (_rt, mut fs) = fs_on_runtime();
         let child = insert_file_child(&mut fs, "secret.txt");
+        // No sent shares seeded → private delete (no covering grant).
 
         let buf = Arc::new(Mutex::new(Vec::new()));
         let reply = <fuser::ReplyEmpty as Reply>::new(1, CaptureSender(buf.clone()));
@@ -511,19 +604,19 @@ mod tests {
 
         assert_eq!(
             reply_error_code(&buf),
-            -libc::EIO,
-            "unlink must abort with EIO when share revocation fails"
+            0,
+            "a private unlink (no covering grant) must succeed with zero rotation"
         );
         assert!(
-            fs.inodes.get(child).is_some(),
-            "file inode must remain (delete aborted) so its shares are not stranded"
+            fs.inodes.get(child).is_none(),
+            "the file inode must be removed on a successful private unlink"
         );
     }
 
-    /// FAIL-CLOSED: handle_rmdir on an empty, shareable folder must return EIO
-    /// and keep the folder inode when revocation fails.
+    /// PRIVATE rmdir on an empty folder with no covering grant succeeds (error
+    /// code 0) and removes the inode — zero rotation.
     #[test]
-    fn rmdir_aborts_with_eio_when_revoke_fails() {
+    fn rmdir_private_delete_succeeds_with_zero_rotation() {
         let (_rt, mut fs) = fs_on_runtime();
         let child = insert_empty_folder_child(&mut fs, "subdir");
 
@@ -533,19 +626,48 @@ mod tests {
 
         assert_eq!(
             reply_error_code(&buf),
-            -libc::EIO,
-            "rmdir must abort with EIO when share revocation fails"
+            0,
+            "a private rmdir (no covering grant) must succeed with zero rotation"
         );
         assert!(
-            fs.inodes.get(child).is_some(),
-            "folder inode must remain (delete aborted) so its shares are not stranded"
+            fs.inodes.get(child).is_none(),
+            "the folder inode must be removed on a successful private rmdir"
         );
     }
 
-    /// The non-empty rmdir guard (ENOTEMPTY) still fires BEFORE the revoke, so a
-    /// populated directory is rejected without a wasted revoke round-trip.
+    /// SHARED-scope exit routes through read-key rotation. With a covering grant
+    /// seeded on the file's ancestry (the vault root is a grant root), the gate
+    /// invokes the rotation seam. That seam is not yet live-wired (no production
+    /// `RotationDeps`), so it fails CLOSED: `handle_unlink` returns EIO and the
+    /// inode remains — a removed reader is never silently left with access. This
+    /// documents the deferred live-wiring residual (flagged in the SUMMARY).
     #[test]
-    fn rmdir_non_empty_returns_enotempty_before_revoke() {
+    fn unlink_shared_scope_exit_fails_closed_until_rotation_wired() {
+        let (_rt, mut fs) = fs_on_runtime();
+        let child = insert_file_child(&mut fs, "secret.txt");
+        // The vault root ("k51test-root") is a grant root → covering grant on
+        // the file's ancestry → shared-scope exit → rotation seam invoked.
+        seed_sent_share(&fs, "k51test-root");
+
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let reply = <fuser::ReplyEmpty as Reply>::new(1, CaptureSender(buf.clone()));
+        handle_unlink(&mut fs, ROOT_INO, OsStr::new("secret.txt"), reply);
+
+        assert_eq!(
+            reply_error_code(&buf),
+            -libc::EIO,
+            "a shared-scope exit fails closed (EIO) until read-key rotation is live-wired"
+        );
+        assert!(
+            fs.inodes.get(child).is_some(),
+            "the file inode must remain when the shared-scope-exit rotation cannot complete"
+        );
+    }
+
+    /// The non-empty rmdir guard (ENOTEMPTY) still fires BEFORE the grant-scope
+    /// gate, so a populated directory is rejected without touching the gate.
+    #[test]
+    fn rmdir_non_empty_returns_enotempty_before_gate() {
         let (_rt, mut fs) = fs_on_runtime();
         let dir = insert_empty_folder_child(&mut fs, "subdir");
         // Make it non-empty.
@@ -560,8 +682,130 @@ mod tests {
         assert_eq!(
             reply_error_code(&buf),
             -libc::ENOTEMPTY,
-            "non-empty rmdir must return ENOTEMPTY before attempting revocation"
+            "non-empty rmdir must return ENOTEMPTY before the grant-scope gate"
         );
         assert!(fs.inodes.get(dir).is_some(), "non-empty folder must remain");
+    }
+
+    /// Restore-sufficiency + D-07 non-conflation: the bin-write captures the
+    /// SAME D-07 dual ref the delete path builds (`build_child_refs`). This
+    /// re-splices BOTH planes into a FRESH target parent node (the restore op —
+    /// there is no live Rust restore command today, so this pure round-trip is
+    /// the reachable proof) and asserts (a) the child's `ipns_name` reappears in
+    /// the recovered parent children (read plane), (b) the parent write-body
+    /// carries the child's `write_child_ref` keyed by the UUID (write plane),
+    /// and (c) `write_child_ref.child_id` (a UUID) is never equal to
+    /// `child_ref.ipns_name` (a k51).
+    #[test]
+    fn bin_dual_refs_are_restore_sufficient_and_d07_distinct() {
+        use base64::Engine as _;
+        use cipherbox_core::node::{
+            decode_node, decode_write_body,
+            seal::{seal_published_node, unseal_node},
+            Node, NodeKind, NodeWriteBody,
+        };
+
+        let parent_read_key = [7u8; 32];
+        let parent_write_key = [9u8; 32];
+        let child_read_key = [2u8; 32];
+        let child_write_key = [4u8; 32];
+        let child_ipns_name = "k51childfolder";
+        // The write plane is keyed by uuid_from_ino — the exact source the
+        // delete path uses.
+        let child_id = crate::fs::uuid_from_ino(42);
+
+        let (child_ref, write_child_ref) = cipherbox_sdk::build_child_refs(
+            &child_read_key,
+            &child_write_key,
+            &parent_read_key,
+            &parent_write_key,
+            &child_id,
+            child_ipns_name,
+            "restore-me",
+            NodeKind::Folder,
+            0,
+            0,
+        )
+        .expect("build_child_refs must succeed");
+
+        // (c) D-07: the two key spaces are structurally distinct.
+        assert_ne!(
+            write_child_ref.child_id, child_ref.ipns_name,
+            "D-07: WriteChildRef.child_id (UUID) must never equal SealedChildRef.ipns_name (k51)"
+        );
+        assert_eq!(
+            write_child_ref.child_id, child_id,
+            "write plane keyed by UUID"
+        );
+        assert_eq!(
+            child_ref.ipns_name, child_ipns_name,
+            "read plane keyed by ipnsName"
+        );
+
+        // Re-splice BOTH captured refs into a FRESH target parent node.
+        let parent_id = crate::fs::uuid_from_ino(1);
+        let parent_node = Node::Folder {
+            id: parent_id.clone(),
+            generation: 0,
+            created_at: 0,
+            modified_at: 0,
+            children: vec![child_ref.clone()],
+        };
+        let write_body = NodeWriteBody {
+            ipns_private_key: vec![0u8; 32],
+            write_children: vec![write_child_ref.clone()],
+        };
+        let published = seal_published_node(
+            &parent_node,
+            &parent_read_key,
+            &parent_write_key,
+            Some(&write_body),
+        )
+        .expect("seal_published_node must succeed");
+
+        // (a) Read plane: unseal the parent read-body → child ipns_name present.
+        let read_sealed = base64::engine::general_purpose::STANDARD
+            .decode(&published.read_sealed)
+            .expect("valid base64");
+        let read_body = unseal_node(
+            &read_sealed,
+            &parent_read_key,
+            &parent_id,
+            NodeKind::Folder,
+            0,
+        )
+        .expect("unseal parent read-body");
+        let recovered = decode_node(&read_body).expect("decode parent node");
+        match recovered {
+            Node::Folder { children, .. } => {
+                assert!(
+                    children.iter().any(|c| c.ipns_name == child_ipns_name),
+                    "the re-spliced child must be recovered in the parent read plane"
+                );
+            }
+            other => panic!("expected a recovered Folder node, got {:?}", other.kind()),
+        }
+
+        // (b) Write plane: unseal the parent write-body → child_id present.
+        let write_sealed_b64 = published.write_sealed.expect("write_sealed present");
+        let write_sealed = base64::engine::general_purpose::STANDARD
+            .decode(write_sealed_b64)
+            .expect("valid base64");
+        let wb_bytes = unseal_node(
+            &write_sealed,
+            &parent_write_key,
+            &parent_id,
+            NodeKind::Folder,
+            0,
+        )
+        .expect("unseal parent write-body");
+        let recovered_wb = decode_write_body(&wb_bytes).expect("decode write body");
+        assert!(
+            recovered_wb
+                .write_children
+                .iter()
+                .any(|w| w.child_id == child_id),
+            "the re-spliced child must be recovered in the parent write plane (keyed by UUID)"
+        );
     }
 }

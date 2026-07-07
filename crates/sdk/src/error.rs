@@ -12,6 +12,10 @@ pub enum SdkError {
     Ipns(#[from] cipherbox_core::ipns::IpnsError),
     #[error("API error: {0}")]
     Api(#[from] cipherbox_api_client::ApiError),
+    /// Node (`node/v3`) codec/seal failure — surfaced by `crate::emit`'s
+    /// `seal_published_node`/`encode_published_node`/`seal_child_*_key` calls.
+    #[error("Node error: {0}")]
+    Node(#[from] cipherbox_core::node::NodeError),
     #[error("Sync error: {0}")]
     SyncError(String),
     #[error("Queue error: {0}")]
@@ -20,6 +24,10 @@ pub enum SdkError {
     RegistryError(String),
     #[error("Key state error: {0}")]
     KeyStateError(String),
+    /// A `crate::emit` invariant violation (e.g. a minted key/id whose byte
+    /// length does not match its expected fixed size).
+    #[error("Emit error: {0}")]
+    Emit(String),
     #[error("Not authenticated")]
     NotAuthenticated,
 }

@@ -22,25 +22,12 @@ pub mod implementation {
     use widestring::U16CStr;
     use winfsp::filesystem::{DirMarker, FileInfo, FileSecurity, FileSystemContext, OpenFileInfo};
     use winfsp::FspError;
-    use zeroize::Zeroizing;
 
     use crate::inode::{FileAttrs, ROOT_INO};
     use crate::CipherBoxFS;
 
     // Re-export is_windows_special so sub-modules can import from here
     pub use crate::helpers::is_windows_special;
-
-    /// Build a `Zeroizing<[u8; 32]>` from a slice without ever materializing a
-    /// plain `[u8; 32]` temporary (preallocate-then-copy). A `try_into()` would
-    /// briefly leave an un-zeroed copy of sensitive key material on the stack.
-    fn zeroizing_32_from_slice(bytes: &[u8], message: &str) -> Result<Zeroizing<[u8; 32]>, String> {
-        if bytes.len() != 32 {
-            return Err(message.to_string());
-        }
-        let mut out = Zeroizing::new([0_u8; 32]);
-        out.copy_from_slice(bytes);
-        Ok(out)
-    }
 
     // ── NTSTATUS error helpers ─────────────────────────────────────────
     // FspError::IO cannot be used in const context since ErrorKind may not be
@@ -213,63 +200,48 @@ pub mod implementation {
 
     // ── Helper functions ───────────────────────────────────────────────────
 
-    /// Fetch, decrypt, and return file content synchronously.
+    /// Synchronous (WinFsp-callback-thread) node/v3 content fetch + decrypt.
+    ///
+    /// SC#1 (69-14): the former node-to-node ECIES file-content-key unwrap is
+    /// GONE. node/v3 recovers the content descriptors + file_key by SYMMETRIC
+    /// unseal of the file node's OWN read-body — this now takes the file's
+    /// `ipns_name` + its `read_key` and resolves the node through the gated
+    /// [`cipherbox_sdk::fetch_node_gated`] wrapper (SC#6) via
+    /// `crate::content_ops::fetch_node_and_decrypt_content`. `read_key` is a
+    /// caller-owned borrow (D-09). Bounded by the Windows 10s
+    /// `crate::block_with_timeout` (A2 scope narrowing — the macOS FUSE path
+    /// keeps its own private 3s timeout copy in operations.rs).
     pub fn fetch_and_decrypt_file_content(
         fs: &CipherBoxFS,
-        cid: &str,
-        encrypted_file_key_hex: &str,
-        iv_hex: &str,
-        encryption_mode: &str,
+        ipns_name: &str,
+        read_key: &[u8; 32],
     ) -> Result<Vec<u8>, String> {
         let api = fs.api.clone();
-        let private_key = fs.private_key.clone();
-        let cid_owned = cid.to_string();
-        let key_hex = encrypted_file_key_hex.to_string();
-        let iv_hex_owned = iv_hex.to_string();
-        let mode = encryption_mode.to_string();
+        let high_water = fs.high_water.clone();
+        let ipns_owned = ipns_name.to_string();
+        let read_key_owned = *read_key;
         let rt = fs.rt.clone();
 
-        crate::block_with_timeout(&rt, async {
-            let encrypted_bytes = cipherbox_api_client::ipfs::fetch_content(&api, &cid_owned)
-                .await
-                .map_err(|e| e.to_string())?;
-            let encrypted_file_key =
-                hex::decode(&key_hex).map_err(|_| "Invalid file key hex".to_string())?;
-            // unwrap_key returns Zeroizing<Vec<u8>> (S3/D-05).
-            let file_key = cipherbox_crypto::ecies::unwrap_key(&encrypted_file_key, &private_key)
-                .map_err(|e| format!("File key unwrap failed: {}", e))?;
-            let file_key_arr =
-                zeroizing_32_from_slice(file_key.as_slice(), "Invalid file key length")?;
-
-            let plaintext = if mode == "CTR" {
-                let iv =
-                    hex::decode(&iv_hex_owned).map_err(|_| "Invalid file IV hex".to_string())?;
-                let iv_arr: [u8; 16] = iv
-                    .try_into()
-                    .map_err(|_| "Invalid CTR IV length (expected 16)".to_string())?;
-                cipherbox_crypto::aes_ctr::decrypt_aes_ctr(&encrypted_bytes, &file_key_arr, &iv_arr)
-                    .map_err(|e| format!("CTR file decryption failed: {}", e))?
-            } else {
-                let iv =
-                    hex::decode(&iv_hex_owned).map_err(|_| "Invalid file IV hex".to_string())?;
-                let iv_arr: [u8; 12] = iv
-                    .try_into()
-                    .map_err(|_| "Invalid GCM IV length (expected 12)".to_string())?;
-                cipherbox_crypto::aes::decrypt_aes_gcm(&encrypted_bytes, &file_key_arr, &iv_arr)
-                    .map_err(|e| format!("GCM file decryption failed: {}", e))?
-            };
-
-            Ok(plaintext)
+        crate::block_with_timeout(&rt, async move {
+            crate::content_ops::fetch_node_and_decrypt_content(
+                &api,
+                &high_water,
+                &ipns_owned,
+                &read_key_owned,
+            )
+            .await
         })
     }
 
     // Re-export shared async helpers from content_ops (Tier-2 dedup, Plan 55-03).
-    // fetch_and_decrypt_content_async and publish_file_metadata are identical
-    // between macOS and Windows; they are now in the shared content_ops module.
+    // fetch_node_and_decrypt_content and publish_file_node are identical between
+    // macOS and Windows; they are now in the shared content_ops module.
     // fetch_and_decrypt_file_content (sync wrapper, uses crate::block_with_timeout
     // with 10s timeout) stays defined locally here; the macOS path uses its own
-    // 3s timeout copy in operations.rs (A2 scope narrowing).
-    pub use crate::content_ops::{fetch_and_decrypt_content_async, publish_file_metadata};
+    // 3s timeout copy in operations.rs (A2 scope narrowing). publish_file_metadata
+    // (the legacy per-file publish) is gone — publish_file_node is the single
+    // per-file node/v3 publish path on both platforms (SC#2/SC#1, 69-14).
+    pub use crate::content_ops::{fetch_node_and_decrypt_content, publish_file_node};
 
     // ── FileSystemContext Implementation (delegates to sub-modules) ──────
 

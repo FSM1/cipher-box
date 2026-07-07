@@ -4,8 +4,8 @@ use tauri::{Manager, State};
 use zeroize::Zeroizing;
 
 use crate::keychain;
-use cipherbox_api_client;
 use crate::state::AppState;
+use cipherbox_api_client;
 
 use super::util::{derive_public_key, extract_user_id_from_jwt};
 use super::vault::{fetch_and_decrypt_vault, initialize_vault};
@@ -203,6 +203,26 @@ async fn post_auth_finalize(
             .as_ref()
             .ok_or("Root folder key not available for filesystem mount")?
             .clone();
+        // node/v3 root read/write keys recovered into KeyState at login
+        // (69-22 fields, populated by 69-23 vault init/recovery). These are the
+        // REAL persisted keys — the mount consumes them directly (the legacy
+        // root_folder_key placeholder bridge is retired in fuse/mod.rs).
+        let root_read_key = state
+            .sdk
+            .root_read_key
+            .read()
+            .await
+            .as_ref()
+            .ok_or("Root read key not available for filesystem mount")?
+            .clone();
+        let root_write_key = state
+            .sdk
+            .root_write_key
+            .read()
+            .await
+            .as_ref()
+            .ok_or("Root write key not available for filesystem mount")?
+            .clone();
         let root_ipns_name = state
             .sdk
             .root_ipns_name
@@ -215,9 +235,9 @@ async fn post_auth_finalize(
 
         // Extract TEE keys for new folder creation
         let tee_keys = state.sdk.tee_keys.read().await;
-        let tee_public_key = tee_keys.as_ref().and_then(|tk| {
-            hex::decode(&tk.current_public_key).ok()
-        });
+        let tee_public_key = tee_keys
+            .as_ref()
+            .and_then(|tk| hex::decode(&tk.current_public_key).ok());
         let tee_key_epoch = tee_keys.as_ref().map(|tk| tk.current_epoch);
         drop(tee_keys);
 
@@ -235,17 +255,24 @@ async fn post_auth_finalize(
             private_key,
             public_key,
             root_folder_key,
+            root_read_key,
+            root_write_key,
             root_ipns_name,
             root_ipns_private_key,
             tee_public_key,
             tee_key_epoch,
             max_versions,
             cooldown_ms,
-        ).await {
+        )
+        .await
+        {
             Ok(_handle) => {
                 *state.mount_status.write().await = crate::state::MountStatus::Mounted;
                 let _ = crate::tray::update_tray_status(app, &crate::tray::TrayStatus::Synced);
-                log::info!("Filesystem mounted at {}", crate::fuse::mount_point().display());
+                log::info!(
+                    "Filesystem mounted at {}",
+                    crate::fuse::mount_point().display()
+                );
 
                 // Start the background sync daemon now that the vault is mounted.
                 // Every auth flow (OAuth, email, session-restore, dev-key test-login)
@@ -284,13 +311,8 @@ async fn post_auth_finalize(
                     return;
                 }
             };
-            match crate::registry::register_device(
-                &reg_api,
-                &pk_arr,
-                &reg_public_key,
-                &reg_user_id,
-            )
-            .await
+            match crate::registry::register_device(&reg_api, &pk_arr, &reg_public_key, &reg_user_id)
+                .await
             {
                 Ok(()) => log::info!("Device registry updated"),
                 Err(e) => log::warn!("Device registry update failed (non-blocking): {}", e),
@@ -436,7 +458,11 @@ pub async fn try_silent_refresh(state: State<'_, AppState>) -> Result<bool, Stri
         .map_err(|e| format!("Failed to parse refresh response: {}", e))?;
 
     // Store new tokens
-    state.sdk.api.set_access_token(refresh_resp.access_token).await;
+    state
+        .sdk
+        .api
+        .set_access_token(refresh_resp.access_token)
+        .await;
     keychain::store_refresh_token(&user_id, &refresh_resp.refresh_token)
         .map_err(|e| format!("Keychain store failed: {}", e))?;
     *state.sdk.user_id.write().await = Some(user_id.clone());

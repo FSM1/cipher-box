@@ -90,47 +90,26 @@ pub fn handle_rename(
         newparent,
     );
 
-    // Cross-folder FILE moves must re-encrypt the per-file FileMetadata to the
-    // destination folderKey (it is sealed with the parent folderKey). Capture
-    // the inputs now, before any inode mutation. Folder moves need nothing — a
-    // folder keeps its own key, as do the files inside it.
-    let reencrypt_inputs: Option<(
-        String,
-        zeroize::Zeroizing<Vec<u8>>,
-        zeroize::Zeroizing<Vec<u8>>,
-        zeroize::Zeroizing<Vec<u8>>,
-    )> = if parent != newparent {
-        match fs.inodes.get(source_ino).map(|i| &i.kind) {
-            Some(InodeKind::File {
-                file_meta_ipns_name: Some(meta_ipns),
-                file_ipns_private_key: Some(key),
-                ..
-            }) if !meta_ipns.is_empty() => {
-                match (fs.get_folder_key(parent), fs.get_folder_key(newparent)) {
-                    (Some(src_key), Some(dst_key)) => {
-                        Some((meta_ipns.clone(), key.clone(), src_key, dst_key))
-                    }
-                    _ => {
-                        log::warn!(
-                                "rename: cross-folder move missing folder key(s) for ino {}; skipping metadata re-encrypt",
-                                source_ino
-                            );
-                        None
-                    }
-                }
-            }
-            Some(InodeKind::File { .. }) => {
-                log::warn!(
-                        "rename: cross-folder file move for ino {} missing IPNS name/key; skipping metadata re-encrypt",
-                        source_ino
-                    );
-                None
-            }
-            _ => None,
-        }
-    } else {
-        None
-    };
+    // SC#3 grant-scope gate for a cross-folder move (a scope-exit for the source
+    // subtree). A same-folder rename is NOT a scope exit — the node stays in
+    // place, so no rotation. Computed on the SOURCE ancestry BEFORE any inode
+    // mutation so a fail-closed rotation aborts the move cleanly (item stays
+    // put). Private move → pure `SealedChildRef` relink of both parents (ZERO
+    // rotation, D-08 unlink+bin-equivalent with no cross-principal revoke);
+    // shared-scope exit → rotate the read key from the matched grant-root
+    // ancestor EXACTLY ONCE. D-07 dual-keying is threaded inside the driver.
+    if parent != newparent
+        && crate::write_ops::grant_scope::run_scope_exit_gate(fs, source_ino).is_err()
+    {
+        reply.error(libc::EIO);
+        return;
+    }
+
+    // SC#2: a cross-folder move is now a PURE `SealedChildRef` relink — each
+    // node self-seals under its OWN readKey, so there is no per-file metadata to
+    // re-encrypt on move (the legacy re-encrypt-on-move path is dead by
+    // construction and deleted). The read-scope cut for a shared move is handled
+    // by the grant-scope gate above (rotation), not by re-keying the moved file.
 
     // If destination exists, handle replacement
     if let Some(dest_ino) = fs.inodes.find_child(newparent, newname_str) {
@@ -174,8 +153,8 @@ pub fn handle_rename(
                         let cid_clone = cid.clone();
                         let api = fs.api.clone();
                         fs.rt.spawn(async move {
-                            let _ = cipherbox_api_client::ipfs::unpin_content(&api, &cid_clone)
-                                .await;
+                            let _ =
+                                cipherbox_api_client::ipfs::unpin_content(&api, &cid_clone).await;
                         });
                     }
                 }
@@ -239,23 +218,6 @@ pub fn handle_rename(
         if let Err(e) = fs.update_folder_metadata(parent) {
             log::error!("Failed to update parent metadata after rename: {}", e);
         }
-    }
-
-    // Re-encrypt the moved file's metadata to the destination folderKey
-    // (fire-and-forget). Without this, every fresh resolve under the new
-    // folder's key fails to decrypt.
-    if let Some((meta_ipns, file_ipns_key, src_key, dst_key)) = reencrypt_inputs {
-        crate::spawn_file_meta_reencrypt(
-            fs.api.clone(),
-            fs.rt.clone(),
-            meta_ipns,
-            file_ipns_key,
-            src_key,
-            dst_key,
-            fs.publish_coordinator.clone(),
-            fs.tee_public_key.clone(),
-            fs.tee_key_epoch,
-        );
     }
 
     reply.ok();

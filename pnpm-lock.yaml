@@ -610,6 +610,9 @@ importers:
 
   tests/desktop-e2e:
     devDependencies:
+      '@cipherbox/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@cipherbox/crypto':
         specifier: workspace:*
         version: link:../../packages/crypto

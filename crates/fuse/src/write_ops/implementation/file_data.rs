@@ -5,9 +5,7 @@ use std::time::SystemTime;
 use crate::file_handle::OpenFileHandle;
 use crate::helpers::is_platform_special;
 use crate::inode::{FileAttrs, InodeData, InodeKind};
-use crate::operations::implementation::{
-    current_gid, current_uid, ttl_for_is_dir, FILE_TTL,
-};
+use crate::operations::implementation::{current_gid, current_uid, ttl_for_is_dir, FILE_TTL};
 use crate::CipherBoxFS;
 
 /// Set file attributes (handles truncate via size parameter).
@@ -203,46 +201,42 @@ pub fn handle_create(
     let verifying_key = signing_key.verifying_key();
     let file_ipns_private_key = signing_key.to_bytes().to_vec();
     let file_ipns_public_key_bytes: [u8; 32] = verifying_key.to_bytes();
-    let file_ipns_name =
-        match cipherbox_core::ipns::derive_ipns_name(&file_ipns_public_key_bytes) {
-            Ok(name) => name,
-            Err(e) => {
-                log::error!(
-                    "create: IPNS name derivation from random keypair failed: {}",
-                    e
-                );
-                reply.error(libc::EIO);
-                return;
-            }
-        };
-
-    let ipns_key_encrypted_hex = match cipherbox_crypto::wrap_key(
-        &file_ipns_private_key,
-        &fs.public_key,
-    ) {
-        Ok(wrapped) => Some(hex::encode(&wrapped)),
+    let file_ipns_name = match cipherbox_core::ipns::derive_ipns_name(&file_ipns_public_key_bytes) {
+        Ok(name) => name,
         Err(e) => {
-            log::error!("create: failed to ECIES-wrap IPNS key: {}. Cannot proceed without wrapped key.", e);
+            log::error!(
+                "create: IPNS name derivation from random keypair failed: {}",
+                e
+            );
             reply.error(libc::EIO);
             return;
         }
     };
 
+    // node/v3: mint the file node's OWN symmetric read/write keys. The file's
+    // content key is minted per-write in build_upload_journal_entry; these keys
+    // seal the file NODE (read-body / write-body). The former user-ECIES wrap of
+    // the IPNS key is gone — the raw signing seed lives in the inode (zeroized
+    // on drop) and is TEE-wrapped only at publish time (rule #7).
+    let read_key = cipherbox_crypto::utils::generate_file_key();
+    let write_key = cipherbox_crypto::utils::generate_file_key();
+
     let inode = InodeData {
         ino,
+        // Fresh file: its stable id is uuid_from_ino(ino); the file node is first
+        // published with this id (see the per-file publish + upload journal).
+        node_id: crate::fs::uuid_from_ino(ino),
         parent_ino: parent,
         name: name_str.to_string(),
         kind: InodeKind::File {
+            ipns_name: file_ipns_name,
             cid: String::new(),
-            encrypted_file_key: String::new(),
-            iv: String::new(),
             size: 0,
             encryption_mode: "GCM".to_string(),
-            file_meta_ipns_name: Some(file_ipns_name),
-            file_meta_resolved: true,
-            file_ipns_private_key: Some(zeroize::Zeroizing::new(file_ipns_private_key)),
-            file_ipns_key_encrypted_hex: ipns_key_encrypted_hex,
-            versions: None,
+            iv: String::new(),
+            read_key: zeroize::Zeroizing::new(read_key),
+            write_key: zeroize::Zeroizing::new(write_key),
+            ipns_private_key: zeroize::Zeroizing::new(file_ipns_private_key),
         },
         attr,
         children: None,
@@ -292,7 +286,7 @@ pub fn handle_create(
 #[cfg(all(test, feature = "fuse"))]
 mod tests {
     use super::*;
-    use crate::inode::{InodeData, InodeKind, FileAttrs, ROOT_INO};
+    use crate::inode::{FileAttrs, InodeData, InodeKind, ROOT_INO};
     use crate::test_support::{make_test_fs, reply_error_code, CaptureSender};
     use std::sync::{Arc, Mutex};
     use std::time::SystemTime;
@@ -338,13 +332,14 @@ mod tests {
         };
         let inode = InodeData {
             ino: child_ino,
+            node_id: crate::fs::uuid_from_ino(child_ino),
             parent_ino: ROOT_INO,
             name: "dup".to_string(),
             kind: InodeKind::Folder {
                 ipns_name: "k51test-dup".to_string(),
-                encrypted_folder_key: String::new(),
-                folder_key: zeroize::Zeroizing::new(vec![0u8; 32]),
-                ipns_private_key: None,
+                read_key: zeroize::Zeroizing::new([0u8; 32]),
+                write_key: zeroize::Zeroizing::new([0u8; 32]),
+                ipns_private_key: zeroize::Zeroizing::new(vec![0u8; 32]),
                 children_loaded: false,
             },
             attr,

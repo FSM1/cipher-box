@@ -13,7 +13,6 @@ pub(crate) mod implementation {
     };
     use std::ffi::OsStr;
     use std::time::{Duration, SystemTime};
-    use zeroize::Zeroizing;
 
     use crate::CipherBoxFS;
 
@@ -29,18 +28,6 @@ pub(crate) mod implementation {
         } else {
             FILE_TTL
         }
-    }
-
-    /// Build a `Zeroizing<[u8; 32]>` from a slice without ever materializing a
-    /// plain `[u8; 32]` temporary (preallocate-then-copy). A `try_into()` would
-    /// briefly leave an un-zeroed copy of sensitive key material on the stack.
-    fn zeroizing_32_from_slice(bytes: &[u8], message: &str) -> Result<Zeroizing<[u8; 32]>, String> {
-        if bytes.len() != 32 {
-            return Err(message.to_string());
-        }
-        let mut out = Zeroizing::new([0_u8; 32]);
-        out.copy_from_slice(bytes);
-        Ok(out)
     }
 
     pub fn current_uid() -> u32 {
@@ -65,51 +52,36 @@ pub(crate) mod implementation {
         })
     }
 
+    /// Synchronous (FUSE-callback-thread) node/v3 content fetch + decrypt.
+    ///
+    /// SIGNATURE CHANGE (69-09 Slice 5b): the former
+    /// `(cid, encrypted_file_key_hex, iv_hex, encryption_mode)` params are gone.
+    /// node/v3 recovers the content descriptors + file_key by SYMMETRIC unseal of
+    /// the file node's OWN read-body — so this now takes the file's `ipns_name` +
+    /// its `read_key` and resolves the node through the gated
+    /// [`cipherbox_sdk::fetch_node_gated`] wrapper (SC#6). `read_key` is a
+    /// caller-owned borrow (D-09). Bounded by the macOS 3s `NETWORK_TIMEOUT`.
     pub fn fetch_and_decrypt_file_content(
         fs: &CipherBoxFS,
-        cid: &str,
-        encrypted_file_key_hex: &str,
-        iv_hex: &str,
-        encryption_mode: &str,
+        ipns_name: &str,
+        read_key: &[u8; 32],
     ) -> Result<Vec<u8>, String> {
         let api = fs.api.clone();
-        let private_key = fs.private_key.clone();
-        let cid_owned = cid.to_string();
-        let key_hex = encrypted_file_key_hex.to_string();
-        let iv_hex_owned = iv_hex.to_string();
-        let mode = encryption_mode.to_string();
+        let high_water = fs.high_water.clone();
+        let ipns_owned = ipns_name.to_string();
         let rt = fs.rt.clone();
 
-        block_with_timeout(&rt, async {
-            let encrypted_bytes = cipherbox_api_client::ipfs::fetch_content(&api, &cid_owned)
-                .await
-                .map_err(|e| format!("{}", e))?;
-            let encrypted_file_key =
-                hex::decode(&key_hex).map_err(|_| "Invalid file key hex".to_string())?;
-            // unwrap_key returns Zeroizing<Vec<u8>> (S3/D-05).
-            let file_key = cipherbox_crypto::unwrap_key(&encrypted_file_key, &private_key)
-                .map_err(|e| format!("File key unwrap failed: {}", e))?;
-            let file_key_arr =
-                zeroizing_32_from_slice(file_key.as_slice(), "Invalid file key length")?;
-
-            let plaintext = if mode == "CTR" {
-                let iv =
-                    hex::decode(&iv_hex_owned).map_err(|_| "Invalid file IV hex".to_string())?;
-                let iv_arr: [u8; 16] = iv
-                    .try_into()
-                    .map_err(|_| "Invalid CTR IV length (expected 16)".to_string())?;
-                cipherbox_crypto::decrypt_aes_ctr(&encrypted_bytes, &file_key_arr, &iv_arr)
-                    .map_err(|e| format!("CTR file decryption failed: {}", e))?
-            } else {
-                let iv =
-                    hex::decode(&iv_hex_owned).map_err(|_| "Invalid file IV hex".to_string())?;
-                let iv_arr: [u8; 12] = iv
-                    .try_into()
-                    .map_err(|_| "Invalid GCM IV length (expected 12)".to_string())?;
-                cipherbox_crypto::decrypt_aes_gcm(&encrypted_bytes, &file_key_arr, &iv_arr)
-                    .map_err(|e| format!("GCM file decryption failed: {}", e))?
-            };
-            Ok(plaintext)
+        // `block_with_timeout` drives the future to completion synchronously
+        // within this borrow's scope, so the caller-owned `read_key` can be
+        // borrowed directly — no extra un-zeroized 32-byte stack copy (D-09).
+        block_with_timeout(&rt, async move {
+            crate::content_ops::fetch_node_and_decrypt_content(
+                &api,
+                &high_water,
+                &ipns_owned,
+                read_key,
+            )
+            .await
         })
     }
 
@@ -117,7 +89,10 @@ pub(crate) mod implementation {
     // fetch_and_decrypt_file_content is NOT re-exported here: it uses a private
     // NETWORK_TIMEOUT = 3s (vs 10s in crate::block_with_timeout) which is
     // intentional for the macOS sync FUSE callback path (A2 scope narrowing).
-    pub use crate::content_ops::{fetch_and_decrypt_content_async, publish_file_metadata};
+    // publish_file_metadata (the legacy per-file publish) is NOT re-exported on
+    // the Unix path: after the SC#2 re-encrypt-on-move deletion (69-13) it has no
+    // Unix caller — only the Windows write handlers use it, via their own module.
+    pub use crate::content_ops::{fetch_node_and_decrypt_content, publish_file_node};
 
     impl Filesystem for CipherBoxFS {
         fn init(

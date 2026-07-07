@@ -10,22 +10,30 @@
 // advance a name is to publish a properly-signed record -- which is exactly what
 // a legitimate second device does.
 //
-// This re-publishes the root folder's CURRENT metadata UNCHANGED at sequence+1:
-// it derives the deterministic vault IPNS keypair from the test identity's
-// private key (same derivation the app uses), loads the current children, and
-// republishes them via the SDK's CAS path. Non-destructive -- the desktop's next
-// publish then sees a stale sequence, hits a 409, re-syncs, and retries, which is
-// the conflict-resolution behavior test-conflict-detection exercises.
+// node/v3 model: the vault root is a Node (not legacy folder metadata). This
+// script loads the two-key root read/write keys from the v3 vault key blob,
+// resolves + unseals the current root Node (read + write body), and republishes
+// that SAME Node UNCHANGED at sequence+1 via the node/v3 CAS publish path,
+// signed with the root's own IPNS private key (recovered from the sealed
+// write-body -- the authoritative vault IPNS signing key). Passing
+// baseChildren === children makes the three-way merge a no-op, and preserving
+// the write-body (writeKey + writeChildren) verbatim keeps the write plane
+// intact. Non-destructive -- the desktop's next publish then sees a stale
+// sequence, hits a 409, re-syncs, and retries, which is the conflict-resolution
+// behavior test-conflict-detection exercises.
 //
 // Usage: tsx bump-ipns-sequence.ts --api-url <url> [--email <email>]
 // Env:   TEST_SECRET (required) -- shared secret for /auth/test-login.
 
 import {
   loadVaultKeyBlob,
-  loadFolderMetadata,
   updateFolderMetadataAndPublish,
+  resolveIpnsRecord,
+  fetchFromIpfs,
+  type SdkContext,
 } from '@cipherbox/sdk-core';
-import { deriveVaultIpnsKeypair, clearBytes } from '@cipherbox/crypto';
+import { unsealNode, type Node, type PublishedNode } from '@cipherbox/core';
+import { clearBytes } from '@cipherbox/crypto';
 import { authenticate, buildSdkContext, parseCliArgs } from '../../e2e-helpers/auth';
 
 // The desktop launches with --dev-key, which maps to this fixed test identity.
@@ -47,55 +55,87 @@ function parseArgs(argv: string[]): { apiUrl: string; secret: string; email: str
   return { apiUrl, secret, email };
 }
 
+/**
+ * Resolve an IPNS name and return the raw node/v3 PublishedNode envelope + its
+ * IPNS sequence number. The envelope id/kind/generation are plaintext AAD
+ * inputs (mirrors packages/sdk-core/src/share/navigate.ts).
+ */
+async function fetchPublishedNode(
+  ipnsName: string,
+  ctx: SdkContext
+): Promise<{ published: PublishedNode; sequenceNumber: bigint }> {
+  const resolved = await resolveIpnsRecord(ipnsName, ctx);
+  if (!resolved) {
+    throw new Error(`IPNS record not found for ${ipnsName}`);
+  }
+  const raw = await fetchFromIpfs(ctx, resolved.cid);
+  const published = JSON.parse(new TextDecoder().decode(raw)) as PublishedNode;
+  return { published, sequenceNumber: resolved.sequenceNumber };
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const auth = await authenticate(args.apiUrl, args.email, args.secret);
   const accessToken = auth.accessToken;
   const userPrivateKey = Uint8Array.from(Buffer.from(auth.privateKeyHex, 'hex'));
 
-  const ctx = buildSdkContext(args.apiUrl, accessToken);
+  const ctx: SdkContext = buildSdkContext(args.apiUrl, accessToken);
   const axiosInstance = ctx.axiosInstance;
   if (!axiosInstance) {
-    throw new Error('SDK context missing axios instance');
+    throw new Error('SdkContext missing axiosInstance');
   }
 
-  // 1. Vault key blob (rootFolderKey) + root IPNS name.
+  // 1. Load node/v3 vault key blob → rootReadKey + rootWriteKey.
   const vaultKeyBlob = await loadVaultKeyBlob({ userPrivateKey, ctx });
   if (!vaultKeyBlob) {
     throw new Error('Vault key blob not found');
   }
+  const { rootReadKey, rootWriteKey } = vaultKeyBlob;
+
+  // 2. Vault info → rootIpnsName.
   const vaultResponse = await axiosInstance.get('/vault');
   const rootIpnsName = vaultResponse.data.rootIpnsName;
   if (!rootIpnsName) {
     throw new Error('Vault response missing rootIpnsName');
   }
 
-  // 2. Current root folder metadata (children + sequence).
-  const folder = await loadFolderMetadata({
-    ipnsName: rootIpnsName,
-    folderKey: vaultKeyBlob.rootFolderKey,
-    ctx,
-  });
-  if (!folder) {
-    throw new Error(`Root folder metadata not found for ${rootIpnsName}`);
+  // 3. Resolve + unseal the current root Node (read + write body). The write
+  //    body carries the root IPNS signing key and the WriteChildRef chain.
+  const { published: rootPublished, sequenceNumber: rootSequenceNumber } = await fetchPublishedNode(
+    rootIpnsName,
+    ctx
+  );
+  const rootNode: Node = await unsealNode(rootPublished, rootReadKey, rootWriteKey);
+  if (!rootNode.children || !rootNode.writeBody) {
+    throw new Error('Root node is missing children or write-body');
   }
 
-  // 3. Republish the SAME children at sequence+1 with a valid signature. Passing
-  //    baseChildren === children makes the 3-way merge a no-op (no resurrection).
-  const rootIpnsKeypair = await deriveVaultIpnsKeypair(userPrivateKey);
+  // 4. Republish the SAME root Node UNCHANGED at sequence+1 with a valid
+  //    signature. children === baseChildren makes the three-way merge a no-op
+  //    (no resurrection); the write-body (writeKey + writeChildren) is preserved
+  //    verbatim (D-03), and the root's own ipnsPrivateKey (from the sealed
+  //    write-body) signs the record — the authoritative vault IPNS key.
+  //    updateFolderMetadataAndPublish does NOT zero the key material it is
+  //    handed (callers are terminal owners, D-09), so we zero in `finally`.
   let newSequenceNumber: bigint;
   try {
     ({ newSequenceNumber } = await updateFolderMetadataAndPublish({
-      children: folder.metadata.children,
-      baseChildren: folder.metadata.children,
-      folderKey: vaultKeyBlob.rootFolderKey,
-      ipnsPrivateKey: rootIpnsKeypair.privateKey,
+      children: rootNode.children,
+      baseChildren: rootNode.children,
+      readKey: rootReadKey,
+      writeKey: rootWriteKey,
+      writeChildren: rootNode.writeBody.writeChildren,
+      ipnsPrivateKey: rootNode.writeBody.ipnsPrivateKey,
       ipnsName: rootIpnsName,
-      sequenceNumber: folder.sequenceNumber,
+      sequenceNumber: rootSequenceNumber,
+      nodeId: rootNode.id,
+      nodeGeneration: rootNode.generation,
       ctx,
     }));
   } finally {
-    rootIpnsKeypair.privateKey.fill(0);
+    clearBytes(rootNode.writeBody.ipnsPrivateKey);
+    clearBytes(rootReadKey);
+    clearBytes(rootWriteKey);
     clearBytes(userPrivateKey);
   }
 

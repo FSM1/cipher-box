@@ -250,7 +250,7 @@ embedded as the `readSealed` field of the file node's `PublishedNode` envelope.
 | Field            | Type                    | Encoding      | Description                                                                   |
 | ---------------- | ----------------------- | ------------- | ----------------------------------------------------------------------------- |
 | `cid`            | string                  | CIDv1         | IPFS content identifier of the encrypted file                                 |
-| `fileIv`         | string                  | hex           | 12-byte IV used for file content encryption (24 hex chars)                    |
+| `fileIv`         | string                  | base64        | 12-byte IV used for file content encryption (base64 of the raw IV)            |
 | `size`           | number                  | --            | Original unencrypted file size in bytes                                       |
 | `mimeType`       | string                  | --            | MIME type of the original file                                                |
 | `encryptionMode` | `'GCM' \| 'CTR'`        | --            | **Mandatory** -- `'CTR'` supports large-file range reads                      |
@@ -280,7 +280,7 @@ independently decrypt that version.
 | ---------------- | ----------------------- | ------------- | ----------------------------------------------------------------------------- |
 | `versionId`      | string                  | UUID          | Unique identifier for this version                                            |
 | `cid`            | string                  | CIDv1         | IPFS content identifier of the encrypted file for this version                |
-| `fileIv`         | string                  | hex           | 12-byte IV for this version's file content (24 hex chars)                     |
+| `fileIv`         | string                  | base64        | 12-byte IV for this version's file content (base64 of the raw IV)             |
 | `size`           | number                  | --            | Original unencrypted file size for this version                               |
 | `createdAt`      | number                  | --            | When this version was created (Unix ms)                                       |
 | `encryptionMode` | `'GCM' \| 'CTR'`        | --            | **Mandatory** -- encryption mode used for this version                        |

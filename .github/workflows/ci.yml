@@ -718,6 +718,54 @@ jobs:
           key: linux-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: linux-cargo-
 
+      # SC#6 single-gated-read discipline (69-09). Every node/v3 metadata/content
+      # read in crates/fuse/src MUST route through the sanctioned gated entrypoints
+      # (list_folder / list_shared_folder / list_folder_owned / fetch_node_gated),
+      # which enforce the anti-rollback high-water gate before returning. A raw
+      # `resolve_ipns_verified` / `resolve_published_node` CALL bypasses that gate,
+      # so any such call must carry an inline `// sc6-allow:` marker documenting its
+      # non-read-path role. Two sites are sanctioned today: the replay sequence
+      # resolve (resolve_ipns_for_replay in publish.rs) and the legacy recycle-bin
+      # publish (spawn_bin_entry_publish in metadata.rs). The 69-13 file-meta
+      # reencrypt path was deleted (SC#2), removing its former sc6-allow site.
+      - name: SC#6 single-gated-read grep gate (crates/fuse/src)
+        run: |
+          # A raw resolve is sanctioned when a `// sc6-allow:` marker sits within one
+          # line of the call (same line, or the standalone comment rustfmt lands
+          # directly above/below it). Anything else is a bypass of the anti-rollback gate.
+          fail=0
+          while IFS=: read -r file lineno _; do
+            win=$(sed -n "$(( lineno > 1 ? lineno - 1 : 1 )),$(( lineno + 1 ))p" "$file")
+            if ! printf '%s\n' "$win" | grep -q 'sc6-allow'; then
+              echo "::error file=$file,line=$lineno::SC#6 violation — unsanctioned raw IPNS resolve. Route reads through list_folder_owned/fetch_node_gated, or add a '// sc6-allow: <reason>' marker for a non-read-path site."
+              echo "  $file:$lineno"
+              fail=1
+            fi
+          done < <(grep -rnE 'resolve_ipns_verified\(|resolve_published_node\(' crates/fuse/src)
+          if [ "$fail" -ne 0 ]; then
+            exit 1
+          fi
+          echo "SC#6 gate: OK — all crates/fuse/src reads route through the gated entrypoints (list_folder / list_shared_folder / list_folder_owned / fetch_node_gated)"
+
+      # SC#2 re-encrypt-on-move deletion (69-13/69-14, whole tree). Each node/v3
+      # node self-seals under its OWN readKey, so a cross-folder move is a pure
+      # SealedChildRef relink — the legacy re-encrypt-on-move helper is dead by
+      # construction. 69-13 deleted the non-Windows caller; 69-14 deleted the
+      # lone remaining Windows caller (platform/windows/write_ops.rs handle_rename)
+      # and promoted this gate to the WHOLE tree (no `platform/windows` carve-out).
+      - name: SC#2 re-encrypt-on-move deletion grep gate (crates/fuse/src, whole tree)
+        run: |
+          # Filter out any line whose CONTENT (after the `file:lineno:` prefix)
+          # is a Rust comment, so a doc/comment mention can never re-trip the gate.
+          hits=$(grep -rn 'spawn_file_meta_reencrypt' crates/fuse/src \
+            | grep -vE ':[0-9]+:[[:space:]]*//' || true)
+          if [ -n "$hits" ]; then
+            echo "::error::SC#2 violation — re-encrypt-on-move symbol still present:"
+            echo "$hits"
+            exit 1
+          fi
+          echo "SC#2 gate: OK — re-encrypt-on-move is gone from the whole crates/fuse/src tree"
+
       - name: Cargo check (workspace)
         run: cargo check --workspace --no-default-features --features fuse
 

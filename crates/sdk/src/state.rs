@@ -47,6 +47,22 @@ pub struct KeyState {
     /// 32-byte AES-256 root folder encryption key.
     pub root_folder_key: RwLock<Option<zeroize::Zeroizing<Vec<u8>>>>,
 
+    /// 32-byte AES-256 node/v3 root READ key (seals the root read body).
+    ///
+    /// One of the two independent random root keys of the node/v3 model
+    /// (research §Q1): never derived from `root_write_key` or `root_folder_key`.
+    /// Landing slot filled by the desktop recovery (69-23) and read by the
+    /// mount (69-24). Zeroed on `clear()`.
+    pub root_read_key: RwLock<Option<zeroize::Zeroizing<Vec<u8>>>>,
+
+    /// 32-byte AES-256 node/v3 root WRITE key (seals the root write body).
+    ///
+    /// The second independent random root key of the node/v3 model
+    /// (research §Q1): never derived from `root_read_key` or `root_folder_key`.
+    /// Landing slot filled by the desktop recovery (69-23) and read by the
+    /// mount (69-24). Zeroed on `clear()`.
+    pub root_write_key: RwLock<Option<zeroize::Zeroizing<Vec<u8>>>>,
+
     /// Root folder IPNS name (base36 CIDv1 string, e.g., k51...).
     pub root_ipns_name: RwLock<Option<String>>,
 
@@ -76,6 +92,8 @@ impl KeyState {
             private_key: RwLock::new(None),
             public_key: RwLock::new(None),
             root_folder_key: RwLock::new(None),
+            root_read_key: RwLock::new(None),
+            root_write_key: RwLock::new(None),
             root_ipns_name: RwLock::new(None),
             root_ipns_private_key: RwLock::new(None),
             user_id: RwLock::new(None),
@@ -118,6 +136,20 @@ impl KeyState {
             *key = None;
         }
         {
+            let mut key = self.root_read_key.write().await;
+            if let Some(ref mut k) = *key {
+                k.zeroize();
+            }
+            *key = None;
+        }
+        {
+            let mut key = self.root_write_key.write().await;
+            if let Some(ref mut k) = *key {
+                k.zeroize();
+            }
+            *key = None;
+        }
+        {
             let mut key = self.root_ipns_private_key.write().await;
             if let Some(ref mut k) = *key {
                 k.zeroize();
@@ -152,6 +184,8 @@ mod tests {
         assert!(state.private_key.read().await.is_none());
         assert!(state.public_key.read().await.is_none());
         assert!(state.root_folder_key.read().await.is_none());
+        assert!(state.root_read_key.read().await.is_none());
+        assert!(state.root_write_key.read().await.is_none());
         assert!(state.root_ipns_name.read().await.is_none());
         assert!(state.root_ipns_private_key.read().await.is_none());
         assert!(state.user_id.read().await.is_none());
@@ -167,6 +201,8 @@ mod tests {
         *state.private_key.write().await = Some(vec![1, 2, 3]);
         *state.public_key.write().await = Some(vec![4, 5, 6]);
         *state.root_folder_key.write().await = Some(zeroize::Zeroizing::new(vec![7, 8, 9]));
+        *state.root_read_key.write().await = Some(zeroize::Zeroizing::new(vec![13, 14, 15]));
+        *state.root_write_key.write().await = Some(zeroize::Zeroizing::new(vec![16, 17, 18]));
         *state.root_ipns_name.write().await = Some("k51test".to_string());
         *state.root_ipns_private_key.write().await = Some(vec![10, 11, 12]);
         *state.user_id.write().await = Some("user-123".to_string());
@@ -177,6 +213,14 @@ mod tests {
         assert_eq!(
             *state.root_folder_key.read().await,
             Some(zeroize::Zeroizing::new(vec![7, 8, 9]))
+        );
+        assert_eq!(
+            *state.root_read_key.read().await,
+            Some(zeroize::Zeroizing::new(vec![13, 14, 15]))
+        );
+        assert_eq!(
+            *state.root_write_key.read().await,
+            Some(zeroize::Zeroizing::new(vec![16, 17, 18]))
         );
         assert_eq!(*state.root_ipns_name.read().await, Some("k51test".to_string()));
         assert_eq!(*state.root_ipns_private_key.read().await, Some(vec![10, 11, 12]));
@@ -192,6 +236,8 @@ mod tests {
         *state.private_key.write().await = Some(vec![0xFF; 32]);
         *state.public_key.write().await = Some(vec![0xAA; 65]);
         *state.root_folder_key.write().await = Some(zeroize::Zeroizing::new(vec![0xBB; 32]));
+        *state.root_read_key.write().await = Some(zeroize::Zeroizing::new(vec![0xDD; 32]));
+        *state.root_write_key.write().await = Some(zeroize::Zeroizing::new(vec![0xEE; 32]));
         *state.root_ipns_private_key.write().await = Some(vec![0xCC; 32]);
         *state.root_ipns_name.write().await = Some("k51name".to_string());
         *state.user_id.write().await = Some("user-abc".to_string());
@@ -212,6 +258,8 @@ mod tests {
         assert!(state.private_key.read().await.is_none());
         assert!(state.public_key.read().await.is_none());
         assert!(state.root_folder_key.read().await.is_none());
+        assert!(state.root_read_key.read().await.is_none());
+        assert!(state.root_write_key.read().await.is_none());
         assert!(state.root_ipns_private_key.read().await.is_none());
         assert!(state.root_ipns_name.read().await.is_none());
         assert!(state.user_id.read().await.is_none());

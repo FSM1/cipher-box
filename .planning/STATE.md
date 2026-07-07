@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
-current_phase: 68.2
-current_phase_name: sdk-owned-read-chain-and-resolved-folder-listings
-status: verifying
-stopped_at: Completed 68.2-13-PLAN.md
-last_updated: "2026-07-06T09:47:49.127Z"
-last_activity: 2026-07-05
-last_activity_desc: Phase 68.2 execution started
+current_phase: 69
+current_phase_name: fuse-and-winfsp-rust-integration-and-grant-root-awareness
+status: executing
+stopped_at: Phase 69 node/v3 desktop port + root-key recovery; desktop-e2e validating
+last_updated: "2026-07-07T00:54:12.493Z"
+last_activity: 2026-07-07
+last_activity_desc: Phase 69 execution resumed (wave continue)
 progress:
   total_phases: 11
   completed_phases: 10
-  total_plans: 112
-  completed_plans: 112
+  total_plans: 140
+  completed_plans: 138
   percent: 91
 ---
 
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-27)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 68.2 — sdk-owned-read-chain-and-resolved-folder-listings
+**Current focus:** Phase 69 — fuse-and-winfsp-rust-integration-and-grant-root-awareness
 
 ## Current Position
 
-Phase: 68.2 (sdk-owned-read-chain-and-resolved-folder-listings) — SHIPPING
-Plan: 14 of 14
-Status: Phase complete — verified, secured, validated; PR #589 open
-Last activity: 2026-07-06 — Phase 68.2 gap-closure + ship review
+Phase: 69 (fuse-and-winfsp-rust-integration-and-grant-root-awareness) — EXECUTING
+Plan: node/v3 desktop port + root-key recovery — 24/25 merged (69-14 WinFsp pending; desktop-e2e validating)
+Status: Executing Phase 69
+Last activity: 2026-07-07 — Phase 69 execution resumed (wave continue)
 
 Progress: `██████████` 79 / 79 plans (100%)
 
@@ -534,10 +534,10 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-06T09:47:11.448Z
-**Stopped at:** Completed 68.2-13-PLAN.md
+**Last session:** 2026-07-07T00:00:00.000Z
+**Stopped at:** Phase 69 node/v3 desktop port + root-key recovery; desktop-e2e validating
 **Resume file:** 
-None
+.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-CONTEXT.md
 
 ### Blockers
 

@@ -15,7 +15,7 @@ pub mod implementation {
 
     // Versioning constants now read from CipherBoxFS fields (user-configurable)
     use super::super::operations::implementation::{
-        filetime_to_systemtime, fill_file_info, is_windows_special, publish_file_metadata,
+        filetime_to_systemtime, fill_file_info, is_windows_special, publish_file_node,
         resolve_path, split_path, status_access_denied, status_directory_not_empty,
         status_invalid_handle, status_invalid_parameter, status_io_device_error,
         status_object_name_collision, status_object_name_not_found, WinFspContext,
@@ -78,9 +78,14 @@ pub mod implementation {
         let is_dir = (create_options & 0x00000001) != 0;
 
         if is_dir {
-            // Create directory
+            // Create directory. node/v3 (69-14, mirrors write_ops/implementation/
+            // mkdir.rs): mint the child folder's OWN symmetric read/write keys +
+            // Ed25519 IPNS signing seed. The former user-ECIES `folder_key` wrap
+            // is gone — node-to-node keys are only sealed under the parent keys
+            // (via build_mkdir_journal_entry's D-07 dual splice).
             let result = (|| -> Result<(FileAttrs, u64), String> {
-                let folder_key = cipherbox_crypto::utils::generate_file_key();
+                let read_key = cipherbox_crypto::utils::generate_file_key();
+                let write_key = cipherbox_crypto::utils::generate_file_key();
                 let (ipns_public_key, ipns_private_key) =
                     cipherbox_crypto::ed25519::generate_ed25519_keypair();
                 let ipns_pub_arr: [u8; 32] = ipns_public_key
@@ -89,13 +94,6 @@ pub mod implementation {
                     .map_err(|_| "Invalid IPNS public key length".to_string())?;
                 let ipns_name = cipherbox_core::ipns::derive_ipns_name(&ipns_pub_arr)
                     .map_err(|e| format!("Failed to derive IPNS name: {}", e))?;
-                let wrapped_folder_key =
-                    cipherbox_crypto::ecies::wrap_key(&folder_key, &fs.public_key)
-                        .map_err(|e| format!("Folder key wrapping failed: {}", e))?;
-                let encrypted_folder_key_hex = hex::encode(&wrapped_folder_key);
-                // Clone before the value is moved into InodeKind::Folder below (same
-                // pattern as fuser plan deviation 4 fix).
-                let encrypted_folder_key_hex_for_journal = encrypted_folder_key_hex.clone();
 
                 let ino = fs.inodes.allocate_ino();
                 let now = SystemTime::now();
@@ -115,13 +113,17 @@ pub mod implementation {
 
                 let inode = InodeData {
                     ino,
+                    // Fresh folder: its stable id is uuid_from_ino(ino); the child
+                    // folder node is first published (mkdir journal) under this
+                    // same id.
+                    node_id: crate::fs::uuid_from_ino(ino),
                     parent_ino,
                     name: name.to_string(),
                     kind: InodeKind::Folder {
                         ipns_name: ipns_name.clone(),
-                        encrypted_folder_key: encrypted_folder_key_hex,
-                        folder_key: zeroize::Zeroizing::new(folder_key.to_vec()),
-                        ipns_private_key: Some(ipns_private_key.clone()),
+                        read_key: zeroize::Zeroizing::new(read_key),
+                        write_key: zeroize::Zeroizing::new(write_key),
+                        ipns_private_key: zeroize::Zeroizing::new(ipns_private_key.to_vec()),
                         children_loaded: true,
                     },
                     attr: attr.clone(),
@@ -139,9 +141,9 @@ pub mod implementation {
                 }
 
                 // Build the JournalEntry via the shared helper (journal_helpers.rs).
-                // The helper handles: initial metadata encryption, TEE-wrap,
-                // build_folder_metadata, ECIES-wrap of parent + child IPNS keys,
-                // and JournalOp::MkdirPublish construction.
+                // The helper handles: sealing the fresh child folder PublishedNode,
+                // TEE-wrap of the child IPNS key, the D-07 dual parent splice (via
+                // build_folder_metadata), and JournalOp::MkdirPublish construction.
                 // Roll back the in-memory inode insert + parent children/mtime update if the
                 // journal entry can't be built or fsynced. Otherwise a failed mkdir returns an
                 // error to WinFsp but leaves a ghost directory in the inode table with no
@@ -151,10 +153,10 @@ pub mod implementation {
                     parent_ino,
                     ino,
                     name,
-                    &folder_key,
+                    &read_key,
+                    &write_key,
                     &ipns_name,
                     ipns_private_key.clone(),
-                    &encrypted_folder_key_hex_for_journal,
                 ) {
                     Ok(result) => result,
                     Err(e) => {
@@ -173,14 +175,13 @@ pub mod implementation {
                 }
 
                 let crate::journal_helpers::MkdirJournalResult {
-                    json_bytes,
-                    ipns_private_key: ipns_private_key_zeroized,
+                    child_published_node,
+                    child_ipns_private_key: ipns_private_key_zeroized,
                     encrypted_ipns_for_tee,
                     tee_key_epoch,
-                    ipns_name: ipns_name_clone,
-                    parent_metadata,
-                    parent_folder_key,
-                    parent_ipns_key,
+                    child_ipns_name: ipns_name_clone,
+                    parent_published_node,
+                    parent_ipns_private_key,
                     parent_ipns_name,
                     parent_old_cid,
                     ..
@@ -195,7 +196,7 @@ pub mod implementation {
 
                 std::thread::spawn(move || {
                     let result = rt.block_on(async {
-                        let initial_cid = cipherbox_api_client::ipfs::upload_content(&api, &json_bytes).await.map_err(|e| e.to_string())?;
+                        let initial_cid = cipherbox_api_client::ipfs::upload_content(&api, &child_published_node).await.map_err(|e| e.to_string())?;
                         let ipns_key_arr: [u8; 32] = (*ipns_private_key_zeroized).clone().try_into()
                             .map_err(|_| "Invalid IPNS key length".to_string())?;
                         let value = format!("/ipfs/{}", initial_cid);
@@ -227,12 +228,12 @@ pub mod implementation {
 
                         let lock = coordinator.get_lock(&parent_ipns_name);
                         let _guard = lock.lock().await;
-                        let parent_json = crate::encrypt_metadata_to_json(
-                            &parent_metadata, &parent_folder_key,
-                        )?;
                         let seq = coordinator.resolve_sequence(&api, &parent_ipns_name).await?;
-                        let parent_meta_cid = cipherbox_api_client::ipfs::upload_content(&api, &parent_json).await.map_err(|e| e.to_string())?;
-                        let parent_key_arr: [u8; 32] = parent_ipns_key.try_into()
+                        // node/v3: upload the re-sealed parent PublishedNode bytes
+                        // verbatim (the new child is already spliced into BOTH
+                        // planes by build_mkdir_journal_entry / build_folder_metadata).
+                        let parent_meta_cid = cipherbox_api_client::ipfs::upload_content(&api, &parent_published_node).await.map_err(|e| e.to_string())?;
+                        let parent_key_arr: [u8; 32] = parent_ipns_private_key.try_into()
                             .map_err(|_| "Invalid parent IPNS key length".to_string())?;
                         let new_seq = seq + 1;
                         let parent_value = format!("/ipfs/{}", parent_meta_cid);
@@ -331,30 +332,30 @@ pub mod implementation {
                     }
                 };
 
-            let ipns_key_encrypted_hex =
-                match cipherbox_crypto::ecies::wrap_key(&file_ipns_private_key, &fs.public_key) {
-                    Ok(wrapped) => Some(hex::encode(&wrapped)),
-                    Err(e) => {
-                        log::error!("create: failed to ECIES-wrap IPNS key: {}", e);
-                        return Err(status_io_device_error());
-                    }
-                };
+            // node/v3 (69-14, mirrors write_ops/implementation/file_data.rs
+            // handle_create): mint the file node's OWN symmetric read/write
+            // keys. The file's content key is minted per-write in
+            // build_upload_journal_entry; these keys seal the file NODE
+            // (read-body/write-body). The former user-ECIES wrap of the IPNS
+            // key is gone — the raw signing seed lives in the inode (zeroized
+            // on drop) and is TEE-wrapped only at publish time (rule #7).
+            let read_key = cipherbox_crypto::utils::generate_file_key();
+            let write_key = cipherbox_crypto::utils::generate_file_key();
 
             let inode = InodeData {
                 ino,
+                node_id: crate::fs::uuid_from_ino(ino),
                 parent_ino,
                 name: name.to_string(),
                 kind: InodeKind::File {
+                    ipns_name: file_ipns_name,
                     cid: String::new(),
-                    encrypted_file_key: String::new(),
-                    iv: String::new(),
                     size: 0,
                     encryption_mode: "GCM".to_string(),
-                    file_meta_ipns_name: Some(file_ipns_name),
-                    file_meta_resolved: true,
-                    file_ipns_private_key: Some(zeroize::Zeroizing::new(file_ipns_private_key)),
-                    file_ipns_key_encrypted_hex: ipns_key_encrypted_hex,
-                    versions: None,
+                    iv: String::new(),
+                    read_key: zeroize::Zeroizing::new(read_key),
+                    write_key: zeroize::Zeroizing::new(write_key),
+                    ipns_private_key: zeroize::Zeroizing::new(file_ipns_private_key),
                 },
                 attr: attr.clone(),
                 children: None,
@@ -618,120 +619,134 @@ pub mod implementation {
                 None => return,
             };
 
-            // Capture bin entry data for file or folder before removal
-            let bin_file_data: Option<(
+            // Capture the PARENT read/write keys (node/v3 D-07 dual-ref seal
+            // material). Terminal-owner (D-09): copy the bytes, never zero the
+            // inode-owned buffers.
+            let parent_keys: Option<([u8; 32], [u8; 32])> =
+                fs.inodes.get(parent_ino).and_then(|p| match &p.kind {
+                    InodeKind::Root {
+                        read_key,
+                        write_key,
+                        ..
+                    }
+                    | InodeKind::Folder {
+                        read_key,
+                        write_key,
+                        ..
+                    } => Some((**read_key, **write_key)),
+                    _ => None,
+                });
+
+            // Capture the D-07 dual ref for a File or Folder child from its OWN
+            // node/v3 keys, mirroring the FUSE handle_unlink/handle_rmdir path:
+            // SealedChildRef.ipns_name (READ plane, a k51) and
+            // WriteChildRef.child_id = uuid_from_ino(ino) (WRITE plane, a UUID)
+            // — never conflated. Tuple: (name, size, item_type, content_cid,
+            // child_ref, write_child_ref, child_published_node).
+            let bin_capture: Option<(
                 String,
                 u64,
-                cipherbox_core::folder::FilePointer,
+                cipherbox_core::bin::BinItemType,
                 String,
-                Option<Vec<cipherbox_core::bin::VersionCidEntry>>,
+                cipherbox_core::node::SealedChildRef,
+                cipherbox_core::node::WriteChildRef,
+                String,
             )> = match fs.inodes.get(ino) {
-                Some(inode) => match &inode.kind {
-                    InodeKind::File {
-                        file_meta_ipns_name,
-                        file_ipns_key_encrypted_hex,
-                        size,
-                        cid,
-                        versions,
-                        ..
-                    } => {
-                        let created_ms = inode
-                            .attr
-                            .crtime
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_millis() as u64;
-
-                        match file_meta_ipns_name {
-                            Some(name) if !name.is_empty() => {
-                                let file_pointer = cipherbox_core::folder::FilePointer {
-                                    id: cipherbox_crypto::utils::generate_uuid_v4(),
-                                    name: inode.name.clone(),
-                                    file_meta_ipns_name: name.clone(),
-                                    ipns_private_key_encrypted: file_ipns_key_encrypted_hex.clone(),
-                                    created_at: if created_ms > 0 { created_ms } else { now_ms },
-                                    modified_at: now_ms,
-                                };
-                                let ver_cids = crate::helpers::versions_to_bin_entries(versions);
-                                Some((
-                                    inode.name.clone(),
-                                    *size,
-                                    file_pointer,
-                                    cid.clone(),
-                                    ver_cids,
-                                ))
-                            }
-                            _ => {
+                Some(inode) => {
+                    // WRITE plane is keyed by the child UUID (uuid_from_ino).
+                    let child_id = crate::fs::uuid_from_ino(ino);
+                    match &inode.kind {
+                        InodeKind::File {
+                            ipns_name,
+                            read_key,
+                            write_key,
+                            size,
+                            cid,
+                            ..
+                        } => {
+                            if ipns_name.is_empty() {
                                 log::warn!(
-                                        "cleanup delete: missing file_meta_ipns_name for ino {}, skipping bin entry",
-                                        ino
-                                    );
+                                    "cleanup delete: missing ipns_name for ino {}, skipping bin entry",
+                                    ino
+                                );
+                                None
+                            } else if let Some((pr, pw)) = parent_keys {
+                                // SECURITY-REVIEW: D-07 dual-keying — childId(UUID
+                                // via uuid_from_ino) vs ipnsName must not be
+                                // conflated.
+                                cipherbox_sdk::build_child_refs(
+                                    &**read_key,
+                                    &**write_key,
+                                    &pr,
+                                    &pw,
+                                    &child_id,
+                                    ipns_name,
+                                    &inode.name,
+                                    cipherbox_core::node::NodeKind::File,
+                                    0,
+                                    0,
+                                )
+                                .ok()
+                                .map(|(cr, wr)| {
+                                    (
+                                        inode.name.clone(),
+                                        *size,
+                                        cipherbox_core::bin::BinItemType::File,
+                                        cid.clone(),
+                                        cr,
+                                        wr,
+                                        String::new(),
+                                    )
+                                })
+                            } else {
                                 None
                             }
                         }
-                    }
-                    _ => None,
-                },
-                None => None,
-            };
-
-            let bin_folder_data: Option<(String, cipherbox_core::folder::FolderEntry)> =
-                if bin_file_data.is_none() {
-                    match fs.inodes.get(ino) {
-                        Some(inode) => {
-                            match &inode.kind {
-                                InodeKind::Folder {
+                        InodeKind::Folder {
+                            ipns_name,
+                            read_key,
+                            write_key,
+                            ..
+                        } => {
+                            if ipns_name.is_empty() {
+                                None
+                            } else if let Some((pr, pw)) = parent_keys {
+                                // SECURITY-REVIEW: D-07 dual-keying — childId(UUID
+                                // via uuid_from_ino) vs ipnsName must not be
+                                // conflated.
+                                cipherbox_sdk::build_child_refs(
+                                    &**read_key,
+                                    &**write_key,
+                                    &pr,
+                                    &pw,
+                                    &child_id,
                                     ipns_name,
-                                    encrypted_folder_key,
-                                    ipns_private_key,
-                                    ..
-                                } => {
-                                    let created_ms = inode
-                                        .attr
-                                        .crtime
-                                        .duration_since(UNIX_EPOCH)
-                                        .unwrap_or_default()
-                                        .as_millis()
-                                        as u64;
-
-                                    match ipns_private_key {
-                                        Some(key) => {
-                                            match cipherbox_crypto::ecies::wrap_key(
-                                                key,
-                                                &fs.public_key,
-                                            ) {
-                                                Ok(wrapped) => {
-                                                    let folder_entry = cipherbox_core::folder::FolderEntry {
-                                                    id: cipherbox_crypto::utils::generate_uuid_v4(),
-                                                    name: inode.name.clone(),
-                                                    ipns_name: ipns_name.clone(),
-                                                    folder_key_encrypted: encrypted_folder_key.clone(),
-                                                    ipns_private_key_encrypted: hex::encode(&wrapped),
-                                                    created_at: if created_ms > 0 { created_ms } else { now_ms },
-                                                    modified_at: now_ms,
-                                                };
-                                                    Some((inode.name.clone(), folder_entry))
-                                                }
-                                                Err(e) => {
-                                                    log::error!("cleanup delete: failed to wrap IPNS key: {}", e);
-                                                    None
-                                                }
-                                            }
-                                        }
-                                        None => {
-                                            log::error!("cleanup delete: missing IPNS private key for ino {}", ino);
-                                            None
-                                        }
-                                    }
-                                }
-                                _ => None,
+                                    &inode.name,
+                                    cipherbox_core::node::NodeKind::Folder,
+                                    0,
+                                    0,
+                                )
+                                .ok()
+                                .map(|(cr, wr)| {
+                                    (
+                                        inode.name.clone(),
+                                        0u64,
+                                        cipherbox_core::bin::BinItemType::Folder,
+                                        String::new(),
+                                        cr,
+                                        wr,
+                                        String::new(),
+                                    )
+                                })
+                            } else {
+                                None
                             }
                         }
-                        None => None,
+                        _ => None,
                     }
-                } else {
-                    None
-                };
+                }
+                None => None,
+            };
 
             fs.publish_queue.remove(&ino);
             fs.inodes.remove(ino);
@@ -750,7 +765,7 @@ pub mod implementation {
                 .inodes
                 .get(parent_ino)
                 .map(|p| match &p.kind {
-                    InodeKind::Root { ipns_name, .. } => ipns_name.clone().unwrap_or_default(),
+                    InodeKind::Root { ipns_name, .. } => ipns_name.clone(),
                     InodeKind::Folder { ipns_name, .. } => ipns_name.clone(),
                     _ => String::new(),
                 })
@@ -759,49 +774,39 @@ pub mod implementation {
             if !parent_ipns_name.is_empty() {
                 let parent_path = crate::helpers::build_folder_path(&fs, parent_ino);
 
-                let bin_entry = if let Some((name, size, fp, cid, ver_cids)) = bin_file_data {
-                    // Capture the file's parent folderKey (ECIES-wrapped) so a later
-                    // restore can re-encrypt the FileMetadata to a different
-                    // destination folder. Mirrors the FUSE handle_unlink path.
-                    let original_folder_key_encrypted = fs
-                        .get_folder_key(parent_ino)
-                        .and_then(|fk| {
-                            cipherbox_crypto::ecies::wrap_key(&fk, fs.public_key.as_slice()).ok()
-                        })
-                        .map(hex::encode);
+                let bin_entry = if let Some((
+                    name,
+                    size,
+                    item_type,
+                    cid,
+                    child_ref,
+                    write_child_ref,
+                    child_published_node,
+                )) = bin_capture
+                {
+                    let (content_cid, content_size, mime_type) = match item_type {
+                        cipherbox_core::bin::BinItemType::File => (
+                            if cid.is_empty() { None } else { Some(cid) },
+                            Some(size),
+                            cipherbox_crypto::utils::mime_from_extension(&name).to_string(),
+                        ),
+                        cipherbox_core::bin::BinItemType::Folder => (None, None, String::new()),
+                    };
                     Some(cipherbox_core::bin::BinEntry {
                         id: cipherbox_crypto::utils::generate_uuid_v4(),
-                        item_type: cipherbox_core::bin::BinItemType::File,
-                        name: name.clone(),
-                        original_parent_ipns_name: parent_ipns_name,
-                        original_path: parent_path,
-                        original_folder_key_encrypted,
-                        deleted_at: now_ms,
-                        size,
-                        mime_type: cipherbox_crypto::utils::mime_from_extension(&name).to_string(),
-                        content_cid: if cid.is_empty() { None } else { Some(cid) },
-                        content_size: Some(size),
-                        version_cids: ver_cids,
-                        file_pointer: Some(fp),
-                        folder_entry: None,
-                    })
-                } else if let Some((name, fe)) = bin_folder_data {
-                    Some(cipherbox_core::bin::BinEntry {
-                        id: cipherbox_crypto::utils::generate_uuid_v4(),
-                        item_type: cipherbox_core::bin::BinItemType::Folder,
+                        item_type,
                         name,
                         original_parent_ipns_name: parent_ipns_name,
                         original_path: parent_path,
-                        // Folders keep their own key on restore; nothing to capture.
-                        original_folder_key_encrypted: None,
                         deleted_at: now_ms,
-                        size: 0,
-                        mime_type: String::new(),
-                        content_cid: None,
-                        content_size: None,
+                        size,
+                        mime_type,
+                        content_cid,
+                        content_size,
                         version_cids: None,
-                        file_pointer: None,
-                        folder_entry: Some(fe),
+                        child_published_node,
+                        child_ref,
+                        write_child_ref,
                     })
                 } else {
                     None
@@ -875,27 +880,27 @@ pub mod implementation {
                         // crash-before-spawn data loss.
                         fs.journal.put(&result.entry)?;
 
-                        // CR-04: journal durably committed — now apply the in-memory write.
+                        // CR-04: journal durably committed — now apply the in-memory
+                        // write. node/v3 (69-14, mirrors read_ops.rs handle_release):
+                        // the file inode already owns its node identity (ipns_name +
+                        // read/write keys + signing seed) from handle_create /
+                        // populate_folder. Update ONLY the content descriptors in
+                        // place, clearing the CID (filled by the live publish's
+                        // UploadComplete), and PRESERVE the moved-in keys (D-09).
                         if let Some(inode) = fs.inodes.get_mut(ino) {
-                            let cached_hex = match &inode.kind {
-                                InodeKind::File {
-                                    file_ipns_key_encrypted_hex,
-                                    ..
-                                } => file_ipns_key_encrypted_hex.clone(),
-                                _ => None,
-                            };
-                            inode.kind = InodeKind::File {
-                                cid: String::new(),
-                                encrypted_file_key: result.encrypted_file_key_hex.clone(),
-                                iv: result.iv_hex.clone(),
-                                size: result.file_size,
-                                encryption_mode: "GCM".to_string(),
-                                file_meta_ipns_name: result.file_meta_ipns_name.clone(),
-                                file_meta_resolved: true,
-                                file_ipns_private_key: result.file_ipns_private_key.clone(),
-                                file_ipns_key_encrypted_hex: cached_hex,
-                                versions: result.versions_for_meta.clone(),
-                            };
+                            if let InodeKind::File {
+                                cid,
+                                iv,
+                                size,
+                                encryption_mode,
+                                ..
+                            } = &mut inode.kind
+                            {
+                                cid.clear();
+                                *iv = result.iv_hex.clone();
+                                *size = result.file_size;
+                                *encryption_mode = result.encryption_mode.clone();
+                            }
                             // Bump generation so stale background uploads (from a
                             // prior truncate-to-zero flush) are rejected by
                             // drain_upload_completions.
@@ -921,15 +926,36 @@ pub mod implementation {
                         // that happened inside the build_result closure above.
                         let write_gen = fs.inodes.get(ino).map(|i| i.write_generation).unwrap_or(0);
 
+                        // node/v3 (69-14, mirrors read_ops.rs handle_release): the
+                        // file node's canonical id (D-07), matching the parent's
+                        // WriteChildRef.child_id + the read-body AAD. Sourced from
+                        // the inode's STORED node_id (its real published.id) — NOT
+                        // uuid_from_ino(ino): a file materialized from a remote
+                        // listing then written via the mount keeps the id its
+                        // creator published under.
+                        let child_id = fs
+                            .inodes
+                            .get(ino)
+                            .map(|i| i.node_id.clone())
+                            .unwrap_or_else(|| crate::fs::uuid_from_ino(ino));
+
                         let crate::journal_helpers::UploadJournalResult {
                             ciphertext,
-                            file_meta,
+                            file_read_key,
+                            file_write_key,
                             file_ipns_private_key,
-                            file_meta_ipns_name,
-                            folder_key_for_file_meta,
+                            file_ipns_name,
+                            file_key,
+                            iv_hex,
+                            mime_type,
+                            encryption_mode,
+                            encrypted_ipns_for_tee,
+                            tee_key_epoch,
+                            file_size,
                             old_file_cid,
                             pruned_cids,
                             parent_ino,
+                            is_first_publish,
                             ..
                         } = result;
 
@@ -937,8 +963,6 @@ pub mod implementation {
                         let rt = fs.rt.clone();
                         let upload_tx = fs.upload_tx.clone();
                         let coordinator = fs.publish_coordinator.clone();
-                        let tee_public_key = fs.tee_public_key.clone();
-                        let tee_key_epoch = fs.tee_key_epoch;
                         let spawn_journal = fs.journal.clone();
 
                         // D-05: zeroize and delete plaintext temp file BEFORE spawning.
@@ -963,38 +987,46 @@ pub mod implementation {
                                 ));
 
                                 // CR-08 mirror, mechanism b: the upload thread never removes
-                                // the journal entry — files without per-file IPNS keys would
-                                // otherwise be removed after upload_content alone, before the
-                                // debounced parent-pointer publish, reopening the orphan
-                                // window. Replay on next mount is the authoritative cleanup
-                                // path (idempotent already_present check), matching the fuser
-                                // path in read_ops.rs.
-                                if let (Some(ipns_key), Some(ipns_name), Some(folder_key)) = (
-                                    &file_ipns_private_key,
-                                    &file_meta_ipns_name,
-                                    &folder_key_for_file_meta,
-                                ) {
-                                    let mut file_meta_with_cid = file_meta;
-                                    file_meta_with_cid.cid = file_cid;
-                                    if let Err(e) = publish_file_metadata(
+                                // the journal entry — the parent folder pointer is published
+                                // by the debounced publisher AFTER this thread exits. Replay
+                                // on next mount is the authoritative cleanup path (idempotent
+                                // already_present check), matching the fuser path in
+                                // read_ops.rs.
+                                if !file_ipns_name.is_empty() {
+                                    // Live per-file node/v3 publish: re-seal the file
+                                    // node with the real content CID and publish its
+                                    // per-file IPNS record (first-publish or CAS update).
+                                    if let Err(e) = publish_file_node(
                                         &api,
-                                        &file_meta_with_cid,
-                                        folder_key,
-                                        ipns_key,
-                                        ipns_name,
+                                        &file_ipns_name,
+                                        &child_id,
+                                        &file_cid,
+                                        &file_key,
+                                        &iv_hex,
+                                        file_size,
+                                        &mime_type,
+                                        &encryption_mode,
+                                        &file_read_key,
+                                        &file_write_key,
+                                        &file_ipns_private_key,
                                         &coordinator,
-                                        tee_public_key.as_deref(),
+                                        encrypted_ipns_for_tee.as_deref(),
                                         tee_key_epoch,
-                                        is_new_file,
+                                        is_first_publish,
                                     )
                                     .await
                                     {
                                         log::warn!(
-                                            "Per-file IPNS publish failed for ino {}: {}",
+                                            "Per-file node publish failed for ino {}: {}",
                                             ino,
                                             e
                                         );
                                     }
+                                } else {
+                                    log::warn!(
+                                        "cleanup: skipping per-file node publish for ino {} (missing file ipns_name)",
+                                        ino
+                                    );
                                 }
 
                                 Ok::<(), String>(())
@@ -1050,50 +1082,27 @@ pub mod implementation {
         let (new_parent_ino, _) =
             resolve_path(&fs, new_parent_path).ok_or(status_object_name_not_found())?;
 
-        // Cross-folder FILE moves must re-encrypt the per-file FileMetadata to the
-        // destination folderKey (it is sealed with the parent folderKey). Capture
-        // the inputs before any inode mutation. See the FUSE handle_rename path for
-        // the full rationale. Folder moves need nothing.
-        let reencrypt_inputs: Option<(
-            String,
-            zeroize::Zeroizing<Vec<u8>>,
-            zeroize::Zeroizing<Vec<u8>>,
-            zeroize::Zeroizing<Vec<u8>>,
-        )> = if old_parent_ino != new_parent_ino {
-            match fs.inodes.get(source_ino).map(|i| &i.kind) {
-                Some(InodeKind::File {
-                    file_meta_ipns_name: Some(meta_ipns),
-                    file_ipns_private_key: Some(key),
-                    ..
-                }) if !meta_ipns.is_empty() => {
-                    match (
-                        fs.get_folder_key(old_parent_ino),
-                        fs.get_folder_key(new_parent_ino),
-                    ) {
-                        (Some(src_key), Some(dst_key)) => {
-                            Some((meta_ipns.clone(), key.clone(), src_key, dst_key))
-                        }
-                        _ => {
-                            log::warn!(
-                                    "rename: cross-folder move missing folder key(s) for ino {}; skipping metadata re-encrypt",
-                                    source_ino
-                                );
-                            None
-                        }
-                    }
-                }
-                Some(InodeKind::File { .. }) => {
-                    log::warn!(
-                            "rename: cross-folder file move for ino {} missing IPNS name/key; skipping metadata re-encrypt",
-                            source_ino
-                        );
-                    None
-                }
-                _ => None,
-            }
-        } else {
-            None
-        };
+        // SC#3 grant-scope gate (69-14, mirrors write_ops/implementation/rename.rs)
+        // for a cross-folder move (a scope-exit for the source subtree). A
+        // same-folder rename is NOT a scope exit — the node stays in place, so
+        // no rotation. Computed on the SOURCE ancestry BEFORE any inode mutation
+        // so a fail-closed rotation aborts the move cleanly (item stays put).
+        // Private move -> pure SealedChildRef relink of both parents (ZERO
+        // rotation, D-08 unlink+bin-equivalent with no cross-principal revoke);
+        // shared-scope exit -> rotate the read key from the matched grant-root
+        // ancestor EXACTLY ONCE. D-07 dual-keying is threaded inside the driver.
+        //
+        // SC#2: a cross-folder move is now a PURE SealedChildRef relink — each
+        // node self-seals under its OWN readKey, so there is no per-file
+        // metadata to re-encrypt on move (the legacy re-encrypt-on-move path is
+        // dead by construction and deleted). The read-scope cut for a shared
+        // move is handled by the grant-scope gate below (rotation), not by
+        // re-keying the moved file.
+        if old_parent_ino != new_parent_ino
+            && crate::write_ops::grant_scope::run_scope_exit_gate(&fs, source_ino).is_err()
+        {
+            return Err(status_io_device_error());
+        }
 
         if let Some(dest_ino) = fs.inodes.find_child(new_parent_ino, new_name) {
             if !replace_if_exists {
@@ -1176,50 +1185,42 @@ pub mod implementation {
             }
         }
 
-        // Re-encrypt the moved file's metadata to the destination folderKey
-        // (fire-and-forget). Without this, every fresh resolve under the new
-        // folder's key fails to decrypt.
-        if let Some((meta_ipns, file_ipns_key, src_key, dst_key)) = reencrypt_inputs {
-            crate::spawn_file_meta_reencrypt(
-                fs.api.clone(),
-                fs.rt.clone(),
-                meta_ipns,
-                file_ipns_key,
-                src_key,
-                dst_key,
-                fs.publish_coordinator.clone(),
-                fs.tee_public_key.clone(),
-                fs.tee_key_epoch,
-            );
-        }
+        // SC#2: no per-file metadata re-encrypt on move — each node self-seals
+        // under its OWN readKey (the legacy re-encrypt-on-move helper is dead
+        // by construction and deleted). See the grant-scope gate above.
 
         Ok(())
     }
 
     /// set_delete handler.
     ///
-    /// This is the Windows fail-closed share-revocation point. WinFsp calls
-    /// `set_delete` BEFORE the actual delete-on-close runs in `handle_cleanup`
-    /// (which returns `()` and cannot abort), and unlike cleanup this callback
-    /// returns `Result<(), FspError>`, so returning `Err` rejects the delete.
-    /// We mirror the unix `handle_unlink`/`handle_rmdir` contract: revoke any
-    /// shares/invites for the node BEFORE it is destroyed, and on failure reject
-    /// the delete (`STATUS_ACCESS_DENIED`) so the item stays put and no sharee is
-    /// left with access to soon-to-be-orphaned content.
+    /// This is the Windows fail-closed grant-scope gate point (SC#3, 69-14).
+    /// WinFsp calls `set_delete` BEFORE the actual delete-on-close runs in
+    /// `handle_cleanup` (which returns `()` and cannot abort), and unlike
+    /// cleanup this callback returns `Result<(), FspError>`, so returning `Err`
+    /// rejects the delete. We mirror the Unix `handle_unlink`/`handle_rmdir`
+    /// contract: CONSUME the shared `crate::write_ops::grant_scope` module (69-07)
+    /// BEFORE the node is destroyed — a private delete (no covering grant) is a
+    /// pure relink with ZERO rotation; a shared-scope exit rotates the read key
+    /// from the matched grant-root ancestor EXACTLY ONCE via
+    /// `rotate_read_on_scope_exit` (69-08). On rotation failure the delete is
+    /// rejected (`STATUS_ACCESS_DENIED`) so the item stays put and no sharee is
+    /// left with access to soon-to-be-orphaned content (fail-closed).
     ///
     /// When `delete_file` is `false` WinFsp is clearing a previously-set delete
-    /// flag (an un-delete); there is nothing to revoke, so we accept it.
+    /// flag (an un-delete); there is nothing to gate, so we accept it.
     ///
     /// Known gap (accepted): `set_delete(true)` followed by `set_delete(false)`
-    /// (an application setting then cancelling `DELETE_ON_CLOSE`) revokes shares
-    /// eagerly on the `true` call and does not restore them on the cancel — the
-    /// node survives but its shares are gone. We accept this because `set_delete`
-    /// is the only WinFsp callback that can *reject* a delete; deferring to
+    /// (an application setting then cancelling `DELETE_ON_CLOSE`) runs the
+    /// scope-exit gate (and any resulting rotation) eagerly on the `true` call
+    /// and does not undo it on the cancel — the node survives but a shared-scope
+    /// rotation already happened. We accept this because `set_delete` is the
+    /// only WinFsp callback that can *reject* a delete; deferring to
     /// `handle_cleanup` (the real deletion point) is impossible since cleanup
     /// returns `()` and cannot abort. The cancelled-delete window is rare, and
-    /// the owner can always re-share; this trade favours TRUE fail-closed
-    /// revocation (never leaving a sharee with access to deleted content) over
-    /// avoiding the occasional spurious revoke on a cancelled delete.
+    /// this trade favours TRUE fail-closed revocation (never leaving a removed
+    /// reader with continued access) over avoiding an occasional spurious
+    /// rotation on a cancelled delete.
     pub fn handle_set_delete(
         ctx: &WinFspContext,
         context: &WinFspFileContext,
@@ -1239,36 +1240,19 @@ pub mod implementation {
             return Ok(());
         }
 
-        // Resolve the node's own IPNS name under the lock, then drop the lock
-        // BEFORE blocking on the network revoke so we never hold the FS mutex
-        // across a (potentially 15s) round-trip. For a File this is the file's
-        // file_meta_ipns_name; for a Folder it is the folder's own ipns_name.
-        // Folder deletes only reach cleanup when empty, so the folder's own
-        // ipns_name is complete coverage (no descendants to revoke).
-        let (ipns_name, api, rt) = {
-            let fs = ctx.inner.lock().unwrap();
-            let ipns_name = match fs.inodes.get(context.ino) {
-                Some(inode) => match &inode.kind {
-                    InodeKind::File {
-                        file_meta_ipns_name,
-                        ..
-                    } => file_meta_ipns_name.clone().unwrap_or_default(),
-                    InodeKind::Folder { ipns_name, .. } => ipns_name.clone(),
-                    // Root is never deleted; nothing to revoke.
-                    _ => String::new(),
-                },
-                None => {
-                    // Inode already gone — nothing to revoke; let the delete
-                    // proceed (the cleanup path will no-op).
-                    String::new()
-                }
-            };
-            (ipns_name, fs.api.clone(), fs.rt.clone())
-        };
-
-        if crate::metadata::revoke_shares_blocking(&api, &rt, &ipns_name).is_err() {
+        // SC#3 grant-scope gate (69-14, mirrors write_ops/implementation/delete.rs
+        // handle_unlink/handle_rmdir): the unconditional `revoke_shares_blocking`
+        // is REPLACED, not augmented. A private delete (no covering grant) is a
+        // pure relink with ZERO rotation — the parent metadata republish (in
+        // handle_cleanup) is the only durable effect. A shared-scope exit
+        // rotates the read key from the matched grant-root ancestor EXACTLY
+        // ONCE. Fail-closed: rotation failure rejects the delete
+        // (STATUS_ACCESS_DENIED) so the item stays put and no sharee is left
+        // with access to soon-to-be-orphaned content.
+        let fs = ctx.inner.lock().unwrap();
+        if crate::write_ops::grant_scope::run_scope_exit_gate(&fs, context.ino).is_err() {
             log::error!(
-                "set_delete: share revocation failed for ino {} (rejecting delete)",
+                "set_delete: grant-scope gate failed for ino {} (rejecting delete)",
                 context.ino
             );
             return Err(status_access_denied());

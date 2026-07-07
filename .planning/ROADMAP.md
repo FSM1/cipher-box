@@ -596,7 +596,37 @@ Plans:
 5. (TEST-03 / §7.3 test 21) `Cargo Check & Test (Windows)` CI gate passes; the dispatch-gated desktop E2E is triggered explicitly via `gh workflow run "CI E2E Tests" --ref <branch>` and passes before phase sign-off
 6. (Phase 68.2 parity) The Rust read-chain resolve + durable anti-rollback floor gate + node unseal + child-metadata resolution live in `crates/core` (and/or a dedicated Rust SDK crate); `crates/fuse` and the WinFsp paths consume a resolved child-listing API and contain no duplicated IPNS-resolve/unseal/anti-rollback logic — the read chain exists once in the Rust core, not reimplemented per client
 
-**Plans**: TBD
+**Plans**: 25/25 plans complete
+
+- [x] 69-21-PLAN.md
+- [x] 69-22-PLAN.md
+- [x] 69-23-PLAN.md
+- [x] 69-24-PLAN.md
+- [x] 69-25-PLAN.md
+
+- [x] 69-19-PLAN.md
+- [x] 69-20-PLAN.md
+
+- [x] 69-17-PLAN.md
+- [x] 69-18-PLAN.md
+
+- [x] 69-15-PLAN.md
+- [x] 69-16-PLAN.md
+
+- [x] 69-01-PLAN.md
+- [x] 69-02-PLAN.md
+- [x] 69-03-PLAN.md
+- [x] 69-04-PLAN.md
+- [x] 69-05-PLAN.md
+- [x] 69-06-PLAN.md
+- [x] 69-07-PLAN.md
+- [x] 69-08-PLAN.md
+- [x] 69-09-PLAN.md
+- [x] 69-10-PLAN.md
+- [x] 69-11-PLAN.md
+- [x] 69-12-PLAN.md
+- [x] 69-13-PLAN.md
+- [x] 69-14-PLAN.md
 
 ---
 
@@ -612,6 +642,6 @@ Plans:
 | 66 | API Schema Cutover, Publish Gate, and Tombstone | 9/9 | Complete    | 2026-06-30 |
 | 67 | TEE Lease-Renewer Contract Rewrite | 8/8 | Complete    | 2026-07-01 |
 | 68 | Web Integration — Rotation UX and Durable Client State | 12/12 | Complete    | 2026-07-01 |
-| 69 | FUSE and WinFsp — Rust Integration and Grant-Root Awareness | 0/? | Not started | - |
+| 69 | FUSE and WinFsp — Rust Integration and Grant-Root Awareness | 25/25 | Complete   | 2026-07-07 |
 
 v1.1 history: 45 phases complete (198 plans). See `milestones/v1.1-ROADMAP.md` for full detail.

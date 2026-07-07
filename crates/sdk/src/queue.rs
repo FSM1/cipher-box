@@ -3,8 +3,10 @@
 //! Every FUSE write fsync-commits a `JournalEntry` to disk before acking the OS.
 //! A crash after the fsync is recoverable on next mount via replay.
 //!
-//! The journal stores only ciphertext + ECIES-wrapped keys — never plaintext
-//! or raw key bytes (zero-knowledge constraint, D-05).
+//! The journal stores only ciphertext + node/v3 symmetric seals (the child
+//! `PublishedNode` bytes + the parent `SealedChildRef.read_key_sealed` /
+//! `WriteChildRef.write_key_sealed`) — never plaintext or raw/user-ECIES
+//! node-to-node key bytes (zero-knowledge constraint, D-05 / NODE-06).
 
 use serde::{Deserialize, Serialize};
 use std::io::Write as _;
@@ -45,6 +47,13 @@ fn deser_opt_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Str
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum JournalOp {
     /// A file upload awaiting IPFS pin + folder metadata update.
+    ///
+    /// node/v3 shape (Phase 69, P1a-3): the KEY/metadata fields carry the freshly
+    /// emitted child `PublishedNode` bytes + the D-07 dual-keyed parent read/write
+    /// splices — NEVER a hex-ECIES-under-user-key node-to-node key. Node-to-node keys
+    /// live ONLY inside the symmetric seals `SealedChildRef.read_key_sealed` /
+    /// `WriteChildRef.write_key_sealed` (crypto rule #7 / NODE-06). The D-01/WR-06
+    /// sidecar-ciphertext mechanism and the routing/timestamp fields are RETAINED.
     UploadFile {
         /// Absolute path to the ciphertext sidecar `<journal_dir>/<id>.bin` (D-01).
         ///
@@ -75,77 +84,85 @@ pub enum JournalOp {
         /// `#[serde(default)]` lets newer entries (no `ciphertext_b64`) deserialize, and
         /// `#[serde(skip_serializing)]` ensures it is NEVER written back to disk — once an
         /// entry is re-`put`, it persists in the sidecar shape with this field empty.
+        ///
+        /// This is a RETAINED D-01/WR-06 sidecar keeper (NOT a node-to-node key field); its
+        /// existing compat is preserved. D-04's clean-flag-day ban on compat applies ONLY to
+        /// the reshaped node/v3 crypto fields below.
         #[serde(default, alias = "ciphertext_b64", skip_serializing)]
         legacy_ciphertext_b64: String,
-        /// ECIES-wrapped file key, hex-encoded.
-        wrapped_key_hex: String,
-        /// AES-GCM IV, hex-encoded.
-        iv_hex: String,
+        /// Base64 of the freshly emitted child `PublishedNode` bytes (node/v3, P1a-3).
+        ///
+        /// Exactly `base64(encode_published_node(&child.published_node))` from `emit.rs`
+        /// (69-16): the sealed node envelope replay re-publishes for this file. Base64
+        /// (not a `Vec<u8>` number array) for JSON compactness, matching the crate's
+        /// existing hex/base64 convention. No `#[serde(alias)]`/`#[serde(default)]` — a
+        /// stale pre-cutover entry that lacks this field MUST fail serde and be skipped,
+        /// never bridged (D-04 clean flag-day).
+        child_published_node: String,
+        /// Parent read-plane splice (node/v3, D-07 — read plane keyed by ipnsName).
+        ///
+        /// The updated `SealedChildRef` for this child inside the parent's read-body:
+        /// `{name, ipns_name, generation, version_floor, read_key_sealed}`. The
+        /// node-to-node read key lives ONLY inside the symmetric `read_key_sealed`
+        /// (base64 AES-256-GCM seal under the parent readKey) — never a plaintext or
+        /// user-ECIES key. NEVER conflated with the write plane below (childId != ipnsName).
+        /// No serde compat (D-04) — a stale entry fails serde and is skipped.
+        parent_child_ref: cipherbox_core::node::SealedChildRef,
+        /// Parent write-plane splice (node/v3, D-07 — write plane keyed by childId UUID).
+        ///
+        /// The `WriteChildRef` `{child_id, write_key_sealed}` for this child inside the
+        /// parent's write-body. The node-to-node write key lives ONLY inside the symmetric
+        /// `write_key_sealed` (base64 AES-256-GCM seal under the parent writeKey). Distinct
+        /// key space from `parent_child_ref` (a hyphenated UUID, not a k51 ipnsName) so
+        /// replay re-splices BOTH planes. No serde compat (D-04).
+        parent_write_child_ref: cipherbox_core::node::WriteChildRef,
         /// Per-file IPNS name for metadata pointer (stable across remount, D-02).
         ///
         /// `None` when the inode has no per-file IPNS record. Replaces the former
         /// empty-string sentinel. The compat deserializer (`deser_opt_string`) maps
         /// legacy `""` values from pre-Phase-45 on-disk journals to `None` so old
-        /// entries still replay (T-45-03-INT).
+        /// entries still replay (T-45-03-INT). RETAINED routing keeper — keeps its
+        /// existing compat.
         #[serde(default, deserialize_with = "deser_opt_string")]
         file_meta_ipns_name: Option<String>,
-        /// Optional per-file IPNS private key hex (present when key must be published).
-        file_ipns_key_hex: Option<String>,
-        /// Parent folder IPNS name (stable cross-remount, D-02).
+        /// Parent folder IPNS name (stable cross-remount, D-02) — the parent node identity.
+        ///
+        /// This is the parent node's read-plane identity replay routes the re-splice to.
+        /// The parent IPNS *signing* seed replay needs to re-publish the parent record is
+        /// NOT a node-to-node key hop and is deliberately NOT carried here as a user-ECIES
+        /// field (D-04 / crypto rule #7): replay recovers the parent's `ipns_private_key`
+        /// via the owned read chain (`list_folder_owned`, 69-17) at replay time from this
+        /// identity. If 69-09's fuse write path proves it must thread the signing seed more
+        /// directly, THIS ONE field is finalized against 69-09's constructor site.
         parent_folder_ipns_name: String,
-        /// User-ECIES-wrapped parent folder IPNS private key, hex-encoded.
-        ///
-        /// This is the same form stored in `FolderEntry.ipns_private_key_encrypted`
-        /// everywhere in the metadata: wrapped with the user's EC public key via ECIES
-        /// (`cipherbox_crypto::wrap_key`). Only the user's private key can unwrap it at
-        /// replay time. Never raw, never TEE-wrapped. Required for CR-01 (replay must
-        /// sign and publish the parent IPNS record). Part of the D-04 zero-knowledge family.
-        parent_ipns_key_hex: String,
-        /// ECIES-encrypted original filename, hex-encoded (D-04, IN-03).
-        ///
-        /// The filename is wrapped with the user's EC public key
-        /// (`cipherbox_crypto::ecies::wrap_key`) at write time and decrypted only
-        /// transiently at replay — no plaintext filename persists at rest.
-        ///
-        /// `#[serde(alias = "filename")]` lets pre-Phase-52 entries (which stored the
-        /// plaintext `filename`) still deserialize: such a value is NOT valid hex, so the
-        /// replay name-decrypt helper detects it as legacy plaintext and uses it once
-        /// (passthrough-once), never re-persisting it.
-        #[serde(alias = "filename")]
-        filename_encrypted_hex: String,
         /// File size in bytes.
         size: u64,
         /// Creation timestamp, milliseconds since Unix epoch (serializable; replaces Instant).
         created_at_ms: u64,
     },
     /// A directory creation awaiting IPNS publish + parent folder metadata update.
+    ///
+    /// node/v3 shape (Phase 69, P1a-3): same reshape as `UploadFile` — the child
+    /// `PublishedNode` bytes + the D-07 dual parent splices replace the former
+    /// hex-ECIES-under-user-key folder/IPNS key + encrypted-name fields.
     MkdirPublish {
-        /// New child folder IPNS name.
+        /// New child folder IPNS name (routing keeper — the child node identity to publish).
         child_ipns_name: String,
-        /// Encrypted folder key hex.
-        child_folder_key_hex: String,
-        /// User-ECIES-wrapped child folder IPNS private key, hex-encoded.
+        /// Base64 of the freshly emitted child folder `PublishedNode` bytes (node/v3).
         ///
-        /// Matches `FolderEntry.ipns_private_key_encrypted` — user-ECIES-wrapped via
-        /// `cipherbox_crypto::wrap_key(&child_ipns_private_key, &user_public_key)`.
-        /// Never TEE-wrapped (CR-03 fix). Replay writes this directly into
-        /// `FolderEntry.ipns_private_key_encrypted` without re-wrapping.
-        child_ipns_key_hex: String,
-        /// Parent folder IPNS name.
+        /// Same semantics as `UploadFile::child_published_node`. No serde compat (D-04).
+        child_published_node: String,
+        /// Parent read-plane splice (node/v3, D-07 — read plane keyed by ipnsName).
+        ///
+        /// Same semantics as `UploadFile::parent_child_ref`. No serde compat (D-04).
+        parent_child_ref: cipherbox_core::node::SealedChildRef,
+        /// Parent write-plane splice (node/v3, D-07 — write plane keyed by childId UUID).
+        ///
+        /// Same semantics as `UploadFile::parent_write_child_ref`. No serde compat (D-04).
+        parent_write_child_ref: cipherbox_core::node::WriteChildRef,
+        /// Parent folder IPNS name — the parent node identity (see
+        /// `UploadFile::parent_folder_ipns_name` for the deferred parent-signing-seed note).
         parent_folder_ipns_name: String,
-        /// User-ECIES-wrapped parent folder IPNS private key, hex-encoded.
-        ///
-        /// Same semantics as `UploadFile::parent_ipns_key_hex`: unwrappable only with
-        /// the user's private key at replay time. Required for CR-01. Part of D-04 family.
-        parent_ipns_key_hex: String,
-        /// ECIES-encrypted directory name, hex-encoded (D-04, IN-03).
-        ///
-        /// Same semantics as `UploadFile::filename_encrypted_hex`: wrapped with the user's
-        /// EC public key at write time, decrypted only transiently at replay.
-        /// `#[serde(alias = "name")]` lets pre-Phase-52 entries (plaintext `name`)
-        /// deserialize and replay once via the passthrough-once legacy-compat path.
-        #[serde(alias = "name")]
-        name_encrypted_hex: String,
         /// Creation timestamp, milliseconds since Unix epoch.
         created_at_ms: u64,
     },
@@ -318,8 +335,8 @@ impl WriteQueue {
             .map_err(|e| format!("Journal sidecar open failed: {}", e))?;
 
         const CHUNK: usize = 1024 * 1024; // 1 MiB
-        // On any write/fsync failure, remove the partial sidecar before returning so no orphan
-        // `.bin` is left for a later GC pass (Pitfall 2).
+                                          // On any write/fsync failure, remove the partial sidecar before returning so no orphan
+                                          // `.bin` is left for a later GC pass (Pitfall 2).
         let sidecar_write = (|| -> Result<(), String> {
             for chunk in ciphertext.chunks(CHUNK) {
                 bin_file
@@ -525,7 +542,11 @@ impl WriteQueue {
                     }
                 }
                 Err(e) => {
-                    log::warn!("Journal GC: malformed entry at {:?}: {} — skipping", path, e);
+                    log::warn!(
+                        "Journal GC: malformed entry at {:?}: {} — skipping",
+                        path,
+                        e
+                    );
                 }
             }
         }
@@ -550,7 +571,10 @@ impl WriteQueue {
 
         // Pass 2: size purge — oldest-first until under budget.
         survivors.sort_by_key(|e| e.op.created_at_ms());
-        let mut total_size: u64 = survivors.iter().map(|e| self.entry_on_disk_size(&e.id)).sum();
+        let mut total_size: u64 = survivors
+            .iter()
+            .map(|e| self.entry_on_disk_size(&e.id))
+            .sum();
         let mut idx = 0;
         while total_size > total_size_budget && idx < survivors.len() {
             let entry = &survivors[idx];
@@ -783,6 +807,54 @@ mod tests {
 
     // ---- Helper builders ----
 
+    use cipherbox_core::node::{PublishedNode, SealedChildRef, WriteChildRef};
+
+    /// Base64-encode arbitrary bytes with the standard alphabet (matches the crate's
+    /// on-wire seal/PublishedNode convention).
+    fn b64(bytes: &[u8]) -> String {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    }
+
+    /// A base64-encoded child `PublishedNode` envelope, as `child_published_node` carries
+    /// on the node/v3 wire (`base64(encode_published_node(..))`, 69-16). `read_sealed` /
+    /// `write_sealed` are opaque base64 seals — never a plaintext node-to-node key.
+    fn sample_child_published_node_b64() -> String {
+        let node = PublishedNode {
+            schema: "cipherbox/node@3".to_string(),
+            kind: "file".to_string(),
+            id: "11111111-1111-1111-1111-111111111111".to_string(),
+            generation: 0,
+            aead_version: 1,
+            read_sealed: b64(b"opaque-read-sealed-body"),
+            write_sealed: Some(b64(b"opaque-write-sealed-body")),
+        };
+        let bytes = cipherbox_core::node::encode_published_node(&node).expect("encode node");
+        b64(&bytes)
+    }
+
+    /// The D-07 read-plane splice: `SealedChildRef` keyed by ipnsName (k51), carrying the
+    /// child readKey inside the symmetric base64 `read_key_sealed`.
+    fn sample_parent_child_ref() -> SealedChildRef {
+        SealedChildRef {
+            name: "child".to_string(),
+            ipns_name: "k51childreadplane".to_string(),
+            generation: 0,
+            version_floor: 1,
+            read_key_sealed: b64(b"symmetric-read-key-seal"),
+        }
+    }
+
+    /// The D-07 write-plane splice: `WriteChildRef` keyed by childId (UUID) — a DISTINCT
+    /// key space from the read plane's ipnsName — carrying the child writeKey inside the
+    /// symmetric base64 `write_key_sealed`.
+    fn sample_parent_write_child_ref() -> WriteChildRef {
+        WriteChildRef {
+            child_id: "22222222-2222-2222-2222-222222222222".to_string(),
+            write_key_sealed: b64(b"symmetric-write-key-seal"),
+        }
+    }
+
     fn make_upload_entry(id: &str, vault: &str) -> JournalEntry {
         JournalEntry {
             id: id.to_string(),
@@ -791,14 +863,11 @@ mod tests {
                 sidecar_path: std::path::PathBuf::from(format!("/tmp/{}.bin", id)),
                 sidecar_sha256: hex::encode([0u8; 32]),
                 legacy_ciphertext_b64: String::new(),
-                wrapped_key_hex: hex::encode(b"wrappedkey"),
-                iv_hex: hex::encode(b"iv123456"),
+                child_published_node: sample_child_published_node_b64(),
+                parent_child_ref: sample_parent_child_ref(),
+                parent_write_child_ref: sample_parent_write_child_ref(),
                 file_meta_ipns_name: Some("k51filemetaipns".to_string()),
-                file_ipns_key_hex: None,
                 parent_folder_ipns_name: "k51parentfolder".to_string(),
-                parent_ipns_key_hex: hex::encode(b"ecies-wrapped-parent-ipns-key"),
-                // Hex ciphertext (D-04 at-rest encryption); not the plaintext "test.txt".
-                filename_encrypted_hex: hex::encode(b"enc-test.txt"),
                 size: 42,
                 created_at_ms: 1_700_000_000_000,
             },
@@ -813,11 +882,10 @@ mod tests {
             vault_root_ipns: vault.to_string(),
             op: JournalOp::MkdirPublish {
                 child_ipns_name: "k51childipns".to_string(),
-                child_folder_key_hex: hex::encode(b"folderkey"),
-                child_ipns_key_hex: hex::encode(b"ipnskey"),
+                child_published_node: sample_child_published_node_b64(),
+                parent_child_ref: sample_parent_child_ref(),
+                parent_write_child_ref: sample_parent_write_child_ref(),
                 parent_folder_ipns_name: "k51parentfolder".to_string(),
-                parent_ipns_key_hex: hex::encode(b"ecies-wrapped-parent-ipns-key"),
-                name_encrypted_hex: hex::encode(b"enc-my_dir"),
                 created_at_ms: 1_700_000_000_001,
             },
             retries: 0,
@@ -853,12 +921,24 @@ mod tests {
         assert_eq!(back.vault_root_ipns, entry.vault_root_ipns);
         assert_eq!(back.retries, entry.retries);
         if let JournalOp::UploadFile {
-            filename_encrypted_hex,
+            child_published_node,
+            parent_child_ref,
+            parent_write_child_ref,
             size,
             ..
         } = &back.op
         {
-            assert_eq!(filename_encrypted_hex, &hex::encode(b"enc-test.txt"));
+            // node/v3 fields survive serde intact.
+            assert_eq!(child_published_node, &sample_child_published_node_b64());
+            assert_eq!(parent_child_ref, &sample_parent_child_ref());
+            assert_eq!(parent_write_child_ref, &sample_parent_write_child_ref());
+            // the base64 child PublishedNode decodes back to a valid envelope.
+            use base64::Engine;
+            let node_bytes = base64::engine::general_purpose::STANDARD
+                .decode(child_published_node)
+                .expect("child_published_node must be base64");
+            cipherbox_core::node::decode_published_node(&node_bytes)
+                .expect("child_published_node must decode to a PublishedNode");
             assert_eq!(*size, 42);
         } else {
             panic!("Expected UploadFile op");
@@ -873,26 +953,53 @@ mod tests {
         assert_eq!(back.id, entry.id);
         assert_eq!(back.vault_root_ipns, entry.vault_root_ipns);
         if let JournalOp::MkdirPublish {
-            name_encrypted_hex, ..
+            child_published_node,
+            parent_child_ref,
+            parent_write_child_ref,
+            ..
         } = &back.op
         {
-            assert_eq!(name_encrypted_hex, &hex::encode(b"enc-my_dir"));
+            assert_eq!(child_published_node, &sample_child_published_node_b64());
+            assert_eq!(parent_child_ref, &sample_parent_child_ref());
+            assert_eq!(parent_write_child_ref, &sample_parent_write_child_ref());
         } else {
             panic!("Expected MkdirPublish op");
         }
     }
 
-    /// D-05: journal must not persist plaintext or raw key bytes.
+    /// D-05 / NODE-06 (retargeted at the node/v3 fields): the journal must carry only
+    /// symmetric base64 seals + the base64 child PublishedNode — never a plaintext or
+    /// user-ECIES node-to-node key. A known raw key marker sealed into `read_key_sealed`
+    /// must appear ONLY in its base64 form, never as the raw plaintext bytes.
     #[test]
     fn journal_no_plaintext() {
-        let entry = make_upload_entry("noplain", "k51vault");
+        let raw_node_key = b"raw_node_to_node_key_secret_bytes";
+        let sealed_b64 = b64(raw_node_key);
+        let mut entry = make_upload_entry("noplain", "k51vault");
+        if let JournalOp::UploadFile {
+            parent_child_ref,
+            parent_write_child_ref,
+            ..
+        } = &mut entry.op
+        {
+            parent_child_ref.read_key_sealed = sealed_b64.clone();
+            parent_write_child_ref.write_key_sealed = sealed_b64.clone();
+        }
         let json = serde_json::to_vec(&entry).expect("serialize");
         let json_str = String::from_utf8(json).expect("utf8");
-        // Keys must be stored encoded, never as raw bytes: make_upload_entry wraps the
-        // raw bytes b"wrappedkey", so the literal must not appear — only its hex form.
+        // The node-to-node key is only ever the symmetric base64 seal.
         assert!(
-            !json_str.contains("wrappedkey"),
-            "Journal must store keys hex-encoded, not as raw bytes"
+            json_str.contains(&sealed_b64),
+            "the symmetric base64 seal must be present on the wire"
+        );
+        assert!(
+            !json_str.contains("raw_node_to_node_key_secret"),
+            "Journal must never carry a raw/plaintext node-to-node key"
+        );
+        // The D-07 dual splices are present under their camelCase wire names.
+        assert!(
+            json_str.contains("readKeySealed") && json_str.contains("writeKeySealed"),
+            "both symmetric seals must be present (D-07 dual splice)"
         );
         assert!(
             !json_str.contains("\"plaintext\""),
@@ -1051,77 +1158,146 @@ mod tests {
         assert_eq!(loaded[0].id, "valid1");
     }
 
-    // ---- Task 4: parent_ipns_key_hex round-trip + ordering by created_at_ms tests ----
-
-    /// CR-01/D-04: UploadFile entry with parent_ipns_key_hex set round-trips unchanged.
+    /// T-69-18-01 (D-04 clean flag-day): a STALE pre-cutover on-disk entry — well-formed
+    /// JSON in the OLD hex-ECIES JournalOp shape, carrying NONE of the node/v3 crypto fields
+    /// (child_published_node/parent_child_ref/parent_write_child_ref) — must fail serde under
+    /// the reshaped types and be `log::warn!`+SKIPPED by `load_all_for_vault`, never bridged
+    /// and never panicked.
+    ///
+    /// This proves the reshape added NO dual-format deserializer: because Task 1 added no
+    /// `#[serde(alias)]`/`#[serde(default)]` compat for the node/v3 fields, the legacy entry
+    /// hits the EXISTING serde Err-skip loop (the same idiom as
+    /// `malformed_json_is_skipped_not_panicked`) with zero new migration/bridge code. A
+    /// current node/v3 entry written alongside still loads, proving the skip is selective.
     #[test]
-    fn upload_entry_parent_ipns_key_hex_round_trips() {
-        let parent_key_hex = hex::encode(b"ecies-wrapped-parent-ipns-key-bytes-here");
-        let entry = JournalEntry {
-            id: "pk-upload".to_string(),
-            vault_root_ipns: "k51vault".to_string(),
-            op: JournalOp::UploadFile {
-                sidecar_path: std::path::PathBuf::from("/tmp/pk-upload.bin"),
-                sidecar_sha256: hex::encode([0u8; 32]),
-                legacy_ciphertext_b64: String::new(),
-                wrapped_key_hex: hex::encode(b"wk"),
-                iv_hex: hex::encode(b"iv"),
-                file_meta_ipns_name: Some("k51file".to_string()),
-                file_ipns_key_hex: None,
-                parent_folder_ipns_name: "k51parent".to_string(),
-                parent_ipns_key_hex: parent_key_hex.clone(),
-                filename_encrypted_hex: hex::encode(b"enc-f.txt"),
-                size: 1,
-                created_at_ms: 1_000,
+    fn stale_legacy_shaped_entry_fails_closed() {
+        let (q, dir) = make_temp_queue();
+
+        // A well-formed JSON in the PRE-CUTOVER UploadFile shape: old hex-ECIES key fields,
+        // no node/v3 fields. Authored by hand because the reshaped type can no longer PRODUCE
+        // this shape. It is valid JSON but does not match the node/v3 JournalOp.
+        let legacy_upload = r#"{
+            "id": "stale-legacy-upload",
+            "vault_root_ipns": "k51vaultstale",
+            "op": {
+                "UploadFile": {
+                    "ciphertext_b64": "Y3Q=",
+                    "wrapped_key_hex": "776b",
+                    "iv_hex": "6976",
+                    "file_meta_ipns_name": "k51file",
+                    "file_ipns_key_hex": null,
+                    "parent_folder_ipns_name": "k51parent",
+                    "parent_ipns_key_hex": "6563696573",
+                    "filename": "report.txt",
+                    "size": 1,
+                    "created_at_ms": 1000
+                }
             },
-            retries: 0,
-            status: JournalEntryStatus::Pending,
-        };
+            "retries": 0,
+            "status": "Pending"
+        }"#;
+        std::fs::write(dir.join("stale-legacy-upload.json"), legacy_upload)
+            .expect("write stale upload");
+
+        // A stale pre-cutover MkdirPublish, likewise old-shaped.
+        let legacy_mkdir = r#"{
+            "id": "stale-legacy-mkdir",
+            "vault_root_ipns": "k51vaultstale",
+            "op": {
+                "MkdirPublish": {
+                    "child_ipns_name": "k51child",
+                    "child_folder_key_hex": "666b",
+                    "child_ipns_key_hex": "636b",
+                    "parent_folder_ipns_name": "k51parent",
+                    "parent_ipns_key_hex": "6563696573",
+                    "name": "folder1",
+                    "created_at_ms": 1000
+                }
+            },
+            "retries": 0,
+            "status": "Pending"
+        }"#;
+        std::fs::write(dir.join("stale-legacy-mkdir.json"), legacy_mkdir)
+            .expect("write stale mkdir");
+
+        // Only the two stale entries exist → load returns EMPTY (both skipped, no panic).
+        let loaded = q
+            .load_all_for_vault("k51vaultstale")
+            .expect("load must not panic on stale entries");
+        assert!(
+            loaded.is_empty(),
+            "stale pre-cutover entries must be skipped (fail closed), not deserialized"
+        );
+
+        // A current node/v3 entry written alongside the stale ones still loads — the skip is
+        // selective (per-entry serde Err), not a blanket load failure.
+        q.put(&make_upload_entry("fresh-v3", "k51vaultstale"))
+            .expect("put fresh node/v3 entry");
+        let loaded2 = q
+            .load_all_for_vault("k51vaultstale")
+            .expect("load with fresh entry");
+        assert_eq!(loaded2.len(), 1, "only the fresh node/v3 entry loads");
+        assert_eq!(loaded2[0].id, "fresh-v3");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- node/v3 D-07 dual-plane round-trip + ordering by created_at_ms tests ----
+
+    /// D-07: an UploadFile entry carries BOTH a read-plane SealedChildRef (keyed by
+    /// ipnsName) AND a write-plane WriteChildRef (keyed by childId UUID); the two are
+    /// distinct key spaces (childId != ipnsName) and both survive serde unchanged.
+    #[test]
+    fn upload_entry_dual_plane_round_trips() {
+        let entry = make_upload_entry("d07-upload", "k51vault");
+        // Pre-flight: the write-plane childId is never the read-plane ipnsName.
+        if let JournalOp::UploadFile {
+            parent_child_ref,
+            parent_write_child_ref,
+            ..
+        } = &entry.op
+        {
+            assert_ne!(
+                parent_write_child_ref.child_id, parent_child_ref.ipns_name,
+                "D-07: write-plane childId must never equal read-plane ipnsName"
+            );
+        } else {
+            panic!("Expected UploadFile");
+        }
         let json = serde_json::to_vec(&entry).expect("serialize");
         let back: JournalEntry = serde_json::from_slice(&json).expect("deserialize");
         if let JournalOp::UploadFile {
-            parent_ipns_key_hex,
+            parent_child_ref,
+            parent_write_child_ref,
             ..
         } = &back.op
         {
-            assert_eq!(
-                *parent_ipns_key_hex, parent_key_hex,
-                "parent_ipns_key_hex must round-trip unchanged"
-            );
+            assert_eq!(parent_child_ref, &sample_parent_child_ref());
+            assert_eq!(parent_write_child_ref, &sample_parent_write_child_ref());
+            // The two planes remain distinct after the round-trip.
+            assert_ne!(parent_write_child_ref.child_id, parent_child_ref.ipns_name);
         } else {
             panic!("Expected UploadFile");
         }
     }
 
-    /// CR-01/D-04: MkdirPublish entry with parent_ipns_key_hex set round-trips unchanged.
+    /// D-07: a MkdirPublish entry carries the same distinct read/write splices.
     #[test]
-    fn mkdir_entry_parent_ipns_key_hex_round_trips() {
-        let parent_key_hex = hex::encode(b"ecies-wrapped-parent-ipns-key-mkdir");
-        let entry = JournalEntry {
-            id: "pk-mkdir".to_string(),
-            vault_root_ipns: "k51vault".to_string(),
-            op: JournalOp::MkdirPublish {
-                child_ipns_name: "k51child".to_string(),
-                child_folder_key_hex: hex::encode(b"fk"),
-                child_ipns_key_hex: hex::encode(b"ck"),
-                parent_folder_ipns_name: "k51parent".to_string(),
-                parent_ipns_key_hex: parent_key_hex.clone(),
-                name_encrypted_hex: hex::encode(b"enc-newdir"),
-                created_at_ms: 2_000,
-            },
-            retries: 0,
-            status: JournalEntryStatus::Pending,
-        };
+    fn mkdir_entry_dual_plane_round_trips() {
+        let entry = make_mkdir_entry("d07-mkdir", "k51vault");
         let json = serde_json::to_vec(&entry).expect("serialize");
         let back: JournalEntry = serde_json::from_slice(&json).expect("deserialize");
         if let JournalOp::MkdirPublish {
-            parent_ipns_key_hex,
+            parent_child_ref,
+            parent_write_child_ref,
             ..
         } = &back.op
         {
-            assert_eq!(
-                *parent_ipns_key_hex, parent_key_hex,
-                "parent_ipns_key_hex must round-trip unchanged"
+            assert_eq!(parent_child_ref, &sample_parent_child_ref());
+            assert_eq!(parent_write_child_ref, &sample_parent_write_child_ref());
+            assert_ne!(
+                parent_write_child_ref.child_id, parent_child_ref.ipns_name,
+                "D-07: write-plane childId must never equal read-plane ipnsName"
             );
         } else {
             panic!("Expected MkdirPublish");
@@ -1179,41 +1355,40 @@ mod tests {
         assert_eq!(ordered[3].id, "up-2000", "latest upload must be fourth");
     }
 
-    /// D-05 extended: parent_ipns_key_hex in journal must be hex string, never raw bytes.
+    /// D-05 extended / NODE-06: the node-to-node keys the journal carries live ONLY inside
+    /// the symmetric base64 seals (SealedChildRef.read_key_sealed / WriteChildRef
+    /// .write_key_sealed) — a raw key marker must appear only as its base64 seal, never as
+    /// plaintext, and no user-ECIES-under-user-key node-to-node key is re-introduced.
     #[test]
-    fn journal_no_plaintext_with_parent_ipns_key() {
-        let raw_secret = b"raw_ipns_key_secret_bytes_12345678";
-        let wrapped_hex = hex::encode(raw_secret); // simulates user-ECIES-wrapped key
-        let entry = JournalEntry {
-            id: "noplain2".to_string(),
-            vault_root_ipns: "k51vault".to_string(),
-            op: JournalOp::UploadFile {
-                sidecar_path: std::path::PathBuf::from("/tmp/noplain2.bin"),
-                sidecar_sha256: hex::encode([0u8; 32]),
-                legacy_ciphertext_b64: String::new(),
-                wrapped_key_hex: hex::encode(b"wk"),
-                iv_hex: hex::encode(b"iv"),
-                file_meta_ipns_name: Some("k51file".to_string()),
-                file_ipns_key_hex: None,
-                parent_folder_ipns_name: "k51parent".to_string(),
-                parent_ipns_key_hex: wrapped_hex.clone(),
-                filename_encrypted_hex: hex::encode(b"enc-g.txt"),
-                size: 1,
-                created_at_ms: 1,
-            },
-            retries: 0,
-            status: JournalEntryStatus::Pending,
-        };
+    fn journal_no_plaintext_node_to_node_key() {
+        let raw_read_secret = b"raw_read_key_secret_bytes_12345678";
+        let raw_write_secret = b"raw_write_key_secret_bytes_9876543";
+        let read_sealed = b64(raw_read_secret); // symmetric AES-GCM seal (base64), not ECIES
+        let write_sealed = b64(raw_write_secret);
+        let mut entry = make_upload_entry("noplain2", "k51vault");
+        if let JournalOp::UploadFile {
+            parent_child_ref,
+            parent_write_child_ref,
+            ..
+        } = &mut entry.op
+        {
+            parent_child_ref.read_key_sealed = read_sealed.clone();
+            parent_write_child_ref.write_key_sealed = write_sealed.clone();
+        }
         let json_str = String::from_utf8(serde_json::to_vec(&entry).unwrap()).unwrap();
-        // The field must be present and be the hex string.
+        // The seals appear on the wire only in their base64 form.
         assert!(
-            json_str.contains(&wrapped_hex),
-            "parent_ipns_key_hex hex must appear in JSON"
+            json_str.contains(&read_sealed) && json_str.contains(&write_sealed),
+            "symmetric base64 seals must appear in JSON"
         );
-        // Must not contain the raw bytes interpreted as a string.
+        // The raw key bytes must never appear as plaintext.
         assert!(
-            !json_str.contains("raw_ipns_key_secret_bytes"),
-            "Journal must not contain raw key material as plaintext string"
+            !json_str.contains("raw_read_key_secret_bytes"),
+            "Journal must not contain a raw read key as plaintext"
+        );
+        assert!(
+            !json_str.contains("raw_write_key_secret_bytes"),
+            "Journal must not contain a raw write key as plaintext"
         );
     }
 
@@ -1357,13 +1532,11 @@ mod tests {
                 sidecar_path: std::path::PathBuf::from("/tmp/t4504-none.bin"),
                 sidecar_sha256: hex::encode([0u8; 32]),
                 legacy_ciphertext_b64: String::new(),
-                wrapped_key_hex: hex::encode(b"wk"),
-                iv_hex: hex::encode(b"iv"),
+                child_published_node: sample_child_published_node_b64(),
+                parent_child_ref: sample_parent_child_ref(),
+                parent_write_child_ref: sample_parent_write_child_ref(),
                 file_meta_ipns_name: None,
-                file_ipns_key_hex: None,
                 parent_folder_ipns_name: "k51parent4504".to_string(),
-                parent_ipns_key_hex: hex::encode(b"ecies-parent"),
-                filename_encrypted_hex: hex::encode(b"enc-t4504.txt"),
                 size: 0,
                 created_at_ms: 1_000,
             },
@@ -1386,42 +1559,32 @@ mod tests {
         }
     }
 
-    /// T-45-04-compat: a JSON payload written by the OLD build (which stored
-    /// `"file_meta_ipns_name": ""`) must deserialize to `None` under the new
-    /// `Option<String>` type via the `deser_opt_string` compat shim.
+    /// T-45-04-compat (node/v3): the `file_meta_ipns_name` routing keeper retains its
+    /// `deser_opt_string` compat shim — an entry authored with a legacy empty-string
+    /// sentinel (but ALL node/v3 crypto fields present) still loads that ONE field as
+    /// `None`, while a real name loads as `Some(name)`.
     ///
-    /// Also asserts that a real name `"file_meta_ipns_name": "k51..."` loads as
-    /// `Some("k51...")`, and that a missing field (`#[serde(default)]`) also loads
-    /// as `None`.
-    ///
-    /// The JSON is hand-written (raw string literal) because the new type can no
-    /// longer PRODUCE `""` — old bytes must be authored by hand to simulate
-    /// pre-Phase-45 on-disk journal entries.
+    /// This proves the reshape preserved the sidecar/routing keepers' existing compat
+    /// (D-04's clean-flag-day ban applies only to the node/v3 crypto fields, which this
+    /// JSON supplies in full). A fully legacy (pre-cutover) crypto-shaped entry is covered
+    /// by the fail-closed stale-skip test instead.
     #[test]
     fn legacy_empty_string_ipns_loads_as_none() {
-        // Case 1: old build stored "".
-        let old_json = r#"{
-            "id": "t4504-compat-empty",
-            "vault_root_ipns": "k51vault4504compat",
-            "op": {
-                "UploadFile": {
-                    "ciphertext_b64": "Y3Q=",
-                    "wrapped_key_hex": "776b",
-                    "iv_hex": "6976",
-                    "file_meta_ipns_name": "",
-                    "file_ipns_key_hex": null,
-                    "parent_folder_ipns_name": "k51parent",
-                    "parent_ipns_key_hex": "6563696573",
-                    "filename": "old.txt",
-                    "size": 1,
-                    "created_at_ms": 1000
-                }
-            },
-            "retries": 0,
-            "status": "Pending"
-        }"#;
-        let entry: JournalEntry =
-            serde_json::from_str(old_json).expect("old-format JSON must deserialize");
+        // Author a node/v3-shaped entry that carries a legacy "" file_meta_ipns_name.
+        let mut none_entry = make_upload_entry("t4504-compat-empty", "k51vault4504compat");
+        if let JournalOp::UploadFile {
+            file_meta_ipns_name,
+            ..
+        } = &mut none_entry.op
+        {
+            *file_meta_ipns_name = None;
+        }
+        // Serialize, then splice a literal empty-string sentinel back in to mimic what an
+        // older build wrote for the absent field.
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&serde_json::to_vec(&none_entry).unwrap()).unwrap();
+        value["op"]["UploadFile"]["file_meta_ipns_name"] = serde_json::Value::String(String::new());
+        let entry: JournalEntry = serde_json::from_value(value).expect("empty-sentinel loads");
         if let JournalOp::UploadFile {
             file_meta_ipns_name,
             ..
@@ -1435,33 +1598,14 @@ mod tests {
             panic!("Expected UploadFile");
         }
 
-        // Case 2: real name must load as Some(...).
-        let real_name_json = r#"{
-            "id": "t4504-compat-real",
-            "vault_root_ipns": "k51vault4504compat",
-            "op": {
-                "UploadFile": {
-                    "ciphertext_b64": "Y3Q=",
-                    "wrapped_key_hex": "776b",
-                    "iv_hex": "6976",
-                    "file_meta_ipns_name": "k51filemetaipns",
-                    "file_ipns_key_hex": null,
-                    "parent_folder_ipns_name": "k51parent",
-                    "parent_ipns_key_hex": "6563696573",
-                    "filename": "real.txt",
-                    "size": 1,
-                    "created_at_ms": 1000
-                }
-            },
-            "retries": 0,
-            "status": "Pending"
-        }"#;
-        let entry2: JournalEntry =
-            serde_json::from_str(real_name_json).expect("real-name JSON must deserialize");
+        // A real name must load as Some(...).
+        let real_entry = make_upload_entry("t4504-compat-real", "k51vault4504compat");
+        let back: JournalEntry =
+            serde_json::from_slice(&serde_json::to_vec(&real_entry).unwrap()).unwrap();
         if let JournalOp::UploadFile {
             file_meta_ipns_name,
             ..
-        } = &entry2.op
+        } = &back.op
         {
             assert_eq!(
                 *file_meta_ipns_name,
@@ -1526,134 +1670,14 @@ mod tests {
         );
     }
 
-    // ---- Phase 52 Plan 02: sidecar + encrypted-name journal shape (D-01, D-04) ----
-
-    fn generate_test_keypair() -> (Vec<u8>, Vec<u8>) {
-        let (sk, pk) = ecies::utils::generate_keypair();
-        (sk.serialize().to_vec(), pk.serialize().to_vec())
-    }
-
-    /// D-04 compat: a pre-Phase-52 entry that stored a plaintext `"filename"` (and inline
-    /// `"ciphertext_b64"`, no sidecar) must still deserialize via the `#[serde(alias)]` +
-    /// `#[serde(default)]` shims so it can replay once (passthrough-once).
-    #[test]
-    fn legacy_plaintext_filename_compat() {
-        // Old UploadFile shape: inline ciphertext_b64, plaintext filename, no sidecar fields.
-        let old_upload = r#"{
-            "id": "legacy-upload",
-            "vault_root_ipns": "k51legacy",
-            "op": {
-                "UploadFile": {
-                    "ciphertext_b64": "Y3Q=",
-                    "wrapped_key_hex": "776b",
-                    "iv_hex": "6976",
-                    "file_meta_ipns_name": "k51file",
-                    "file_ipns_key_hex": null,
-                    "parent_folder_ipns_name": "k51parent",
-                    "parent_ipns_key_hex": "6563696573",
-                    "filename": "report.txt",
-                    "size": 1,
-                    "created_at_ms": 1000
-                }
-            },
-            "retries": 0,
-            "status": "Pending"
-        }"#;
-        let entry: JournalEntry =
-            serde_json::from_str(old_upload).expect("legacy UploadFile must deserialize");
-        if let JournalOp::UploadFile {
-            filename_encrypted_hex,
-            sidecar_path,
-            legacy_ciphertext_b64,
-            ..
-        } = &entry.op
-        {
-            // The old plaintext value is carried into the renamed field for one-time replay.
-            assert_eq!(filename_encrypted_hex, "report.txt");
-            // No sidecar on a legacy entry → default (empty) path.
-            assert_eq!(sidecar_path, &std::path::PathBuf::new());
-            // The old inline ciphertext is captured for a one-time passthrough replay.
-            assert_eq!(legacy_ciphertext_b64, "Y3Q=");
-        } else {
-            panic!("Expected UploadFile");
-        }
-
-        // Old MkdirPublish shape: plaintext name.
-        let old_mkdir = r#"{
-            "id": "legacy-mkdir",
-            "vault_root_ipns": "k51legacy",
-            "op": {
-                "MkdirPublish": {
-                    "child_ipns_name": "k51child",
-                    "child_folder_key_hex": "666b",
-                    "child_ipns_key_hex": "636b",
-                    "parent_folder_ipns_name": "k51parent",
-                    "parent_ipns_key_hex": "6563696573",
-                    "name": "folder1",
-                    "created_at_ms": 1000
-                }
-            },
-            "retries": 0,
-            "status": "Pending"
-        }"#;
-        let mentry: JournalEntry =
-            serde_json::from_str(old_mkdir).expect("legacy MkdirPublish must deserialize");
-        if let JournalOp::MkdirPublish {
-            name_encrypted_hex, ..
-        } = &mentry.op
-        {
-            assert_eq!(name_encrypted_hex, "folder1");
-        } else {
-            panic!("Expected MkdirPublish");
-        }
-    }
-
-    /// D-04: a serialized UploadFile entry whose `filename_encrypted_hex` is hex ciphertext
-    /// must NOT contain the plaintext filename and must NOT carry a `ciphertext_b64` key.
-    #[test]
-    fn journal_no_plaintext_filename() {
-        let mut entry = make_upload_entry("noplainname", "k51vault");
-        if let JournalOp::UploadFile {
-            filename_encrypted_hex,
-            ..
-        } = &mut entry.op
-        {
-            // Simulate a real ECIES-wrapped filename: hex of some ciphertext bytes.
-            *filename_encrypted_hex = hex::encode(b"\x00\x01wrapped-ciphertext-of-report.txt");
-        }
-        let json = String::from_utf8(serde_json::to_vec(&entry).unwrap()).unwrap();
-        assert!(
-            !json.contains("report.txt"),
-            "serialized journal must not contain the plaintext filename"
-        );
-        assert!(
-            !json.contains("ciphertext_b64"),
-            "serialized journal must not carry a ciphertext_b64 key"
-        );
-        assert!(
-            json.contains("filename_encrypted_hex"),
-            "serialized journal must carry filename_encrypted_hex"
-        );
-    }
-
-    /// D-04 (VALIDATION row D-04-b): the write-side filename encryption shape is decryptable
-    /// by the replay side — `wrap_key` → hex → store → hex::decode → `unwrap_key` round-trips.
-    #[test]
-    fn filename_encryption_round_trips() {
-        let (private_key, public_key) = generate_test_keypair();
-        let name = b"report.txt";
-
-        let filename_encrypted_hex =
-            hex::encode(cipherbox_crypto::ecies::wrap_key(name, &public_key).unwrap());
-
-        let decoded = hex::decode(&filename_encrypted_hex).unwrap();
-        let unwrapped = cipherbox_crypto::ecies::unwrap_key(&decoded, &private_key).unwrap();
-        assert_eq!(
-            String::from_utf8(unwrapped.to_vec()).unwrap(),
-            "report.txt",
-            "filename must survive wrap→hex→decode→unwrap"
-        );
-    }
+    // ---- Phase 52 Plan 02: sidecar journal shape (D-01) ----
+    //
+    // The former plaintext-filename / inline-ciphertext legacy-compat and filename-ECIES
+    // round-trip tests were retired with the node/v3 reshape (Phase 69, P1a-3): the
+    // encrypted-filename field is gone from the journal, and D-04's clean flag-day forbids
+    // a dual-format deserializer for the reshaped crypto fields (a stale entry fails serde
+    // and is skipped — see `stale_legacy_shaped_entry_fails_closed`). The sidecar-ciphertext
+    // mechanism below is RETAINED unchanged.
 
     /// D-01: `put_with_sidecar` streams ciphertext to a 0600 `<id>.bin`, writes a
     /// ciphertext-free `.json`, and `remove` deletes both files idempotently.
@@ -1672,7 +1696,8 @@ mod tests {
             *sidecar_path = q.sidecar_path_for(id);
         }
 
-        q.put_with_sidecar(&entry, ciphertext).expect("put_with_sidecar");
+        q.put_with_sidecar(&entry, ciphertext)
+            .expect("put_with_sidecar");
 
         let bin_path = dir.join(format!("{}.bin", id));
         let json_path = dir.join(format!("{}.json", id));
@@ -1686,9 +1711,7 @@ mod tests {
         let json_bytes = std::fs::read(&json_path).unwrap();
         let needle = b"this-is-the-secret-ciphertext-blob";
         assert!(
-            !json_bytes
-                .windows(needle.len())
-                .any(|w| w == needle),
+            !json_bytes.windows(needle.len()).any(|w| w == needle),
             ".json must not contain the raw ciphertext"
         );
 
@@ -1769,9 +1792,27 @@ mod tests {
     fn purge_vault_removes_all() {
         let (q, dir) = make_temp_queue();
 
-        let a1 = make_sidecar_entry(&q, "purge-a1", "vault-A", JournalEntryStatus::Pending, 1_000);
-        let a2 = make_sidecar_entry(&q, "purge-a2", "vault-A", JournalEntryStatus::Pending, 2_000);
-        let b1 = make_sidecar_entry(&q, "purge-b1", "vault-B", JournalEntryStatus::Pending, 3_000);
+        let a1 = make_sidecar_entry(
+            &q,
+            "purge-a1",
+            "vault-A",
+            JournalEntryStatus::Pending,
+            1_000,
+        );
+        let a2 = make_sidecar_entry(
+            &q,
+            "purge-a2",
+            "vault-A",
+            JournalEntryStatus::Pending,
+            2_000,
+        );
+        let b1 = make_sidecar_entry(
+            &q,
+            "purge-b1",
+            "vault-B",
+            JournalEntryStatus::Pending,
+            3_000,
+        );
         q.put_with_sidecar(&a1, b"a1-cipher").expect("put a1");
         q.put_with_sidecar(&a2, b"a2-cipher").expect("put a2");
         q.put_with_sidecar(&b1, b"b1-cipher").expect("put b1");
@@ -1780,7 +1821,11 @@ mod tests {
         assert_eq!(removed, 2, "two vault-A entries removed");
 
         for id in ["purge-a1", "purge-a2"] {
-            assert!(!dir.join(format!("{}.json", id)).exists(), "{}.json gone", id);
+            assert!(
+                !dir.join(format!("{}.json", id)).exists(),
+                "{}.json gone",
+                id
+            );
             assert!(!dir.join(format!("{}.bin", id)).exists(), "{}.bin gone", id);
         }
         assert!(dir.join("purge-b1.json").exists(), "vault-B .json survives");
@@ -1807,11 +1852,18 @@ mod tests {
         // Old Failed (40 days old), recent Failed (1 day old), and a Pending (old but not Failed).
         let old = make_sidecar_entry(&q, "gc-old", "v", failed.clone(), now - 40 * day_ms);
         let recent = make_sidecar_entry(&q, "gc-recent", "v", failed.clone(), now - day_ms);
-        let pending =
-            make_sidecar_entry(&q, "gc-pending", "v", JournalEntryStatus::Pending, now - 40 * day_ms);
+        let pending = make_sidecar_entry(
+            &q,
+            "gc-pending",
+            "v",
+            JournalEntryStatus::Pending,
+            now - 40 * day_ms,
+        );
         q.put_with_sidecar(&old, b"old-cipher").expect("put old");
-        q.put_with_sidecar(&recent, b"recent-cipher").expect("put recent");
-        q.put_with_sidecar(&pending, b"pending-cipher").expect("put pending");
+        q.put_with_sidecar(&recent, b"recent-cipher")
+            .expect("put recent");
+        q.put_with_sidecar(&pending, b"pending-cipher")
+            .expect("put pending");
 
         let removed = q
             .gc_failed_entries(JOURNAL_GC_MAX_AGE_DAYS, u64::MAX)
@@ -1820,7 +1872,10 @@ mod tests {
 
         assert!(!dir.join("gc-old.json").exists(), "old Failed .json gone");
         assert!(!dir.join("gc-old.bin").exists(), "old Failed .bin gone");
-        assert!(dir.join("gc-recent.json").exists(), "recent Failed survives");
+        assert!(
+            dir.join("gc-recent.json").exists(),
+            "recent Failed survives"
+        );
         assert!(dir.join("gc-pending.json").exists(), "Pending never GC'd");
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -1887,13 +1942,30 @@ mod tests {
         std::fs::write(dir.join("gc-torn.json"), b"{ this is not valid json")
             .expect("write torn .json");
 
-        let removed = q.gc_failed_entries(JOURNAL_GC_MAX_AGE_DAYS, u64::MAX).expect("gc");
+        let removed = q
+            .gc_failed_entries(JOURNAL_GC_MAX_AGE_DAYS, u64::MAX)
+            .expect("gc");
 
-        assert_eq!(removed, 1, "only the orphaned (malformed-json) sidecar is reaped");
-        assert!(!bad_bin.exists(), "sidecar with unparseable .json must be reaped");
-        assert!(dir.join("gc-torn.json").exists(), "the malformed .json itself is left in place");
-        assert!(dir.join("gc-live.json").exists(), "well-formed entry survives");
-        assert!(dir.join("gc-live.bin").exists(), "well-formed entry's sidecar is preserved");
+        assert_eq!(
+            removed, 1,
+            "only the orphaned (malformed-json) sidecar is reaped"
+        );
+        assert!(
+            !bad_bin.exists(),
+            "sidecar with unparseable .json must be reaped"
+        );
+        assert!(
+            dir.join("gc-torn.json").exists(),
+            "the malformed .json itself is left in place"
+        );
+        assert!(
+            dir.join("gc-live.json").exists(),
+            "well-formed entry survives"
+        );
+        assert!(
+            dir.join("gc-live.bin").exists(),
+            "well-formed entry's sidecar is preserved"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1925,30 +1997,59 @@ mod tests {
         // Persist the JSON (skip_serializing drops legacy_ciphertext_b64 on disk, exactly
         // as a real pre-52 entry behaves once reloaded).
         q.put(&entry).expect("put legacy entry");
-        assert!(!dir.join("legacy-mig.bin").exists(), "no sidecar before migration");
+        assert!(
+            !dir.join("legacy-mig.bin").exists(),
+            "no sidecar before migration"
+        );
 
         // A transient replay failure: record_failure must migrate the inline bytes first.
-        let status = q.record_failure(&entry, "transient upload error").expect("record_failure");
-        assert!(matches!(status, JournalEntryStatus::Pending), "below max → Pending retry");
+        let status = q
+            .record_failure(&entry, "transient upload error")
+            .expect("record_failure");
+        assert!(
+            matches!(status, JournalEntryStatus::Pending),
+            "below max → Pending retry"
+        );
 
         // The canonical sidecar now exists with the exact ciphertext, and the reloaded
         // entry carries the derived path + hash (so the next mount uses the sidecar branch).
         let bin_path = q.sidecar_path_for("legacy-mig");
-        assert!(bin_path.exists(), "inline ciphertext must be migrated to the .bin sidecar");
-        assert_eq!(std::fs::read(&bin_path).unwrap(), ciphertext, "sidecar bytes must round-trip");
+        assert!(
+            bin_path.exists(),
+            "inline ciphertext must be migrated to the .bin sidecar"
+        );
+        assert_eq!(
+            std::fs::read(&bin_path).unwrap(),
+            ciphertext,
+            "sidecar bytes must round-trip"
+        );
 
         let reloaded = q.load_all_for_vault("v").expect("reload");
-        let mig = reloaded.iter().find(|e| e.id == "legacy-mig").expect("entry present");
+        let mig = reloaded
+            .iter()
+            .find(|e| e.id == "legacy-mig")
+            .expect("entry present");
         assert_eq!(mig.retries, 1, "retry counter advanced");
-        if let JournalOp::UploadFile { sidecar_path, sidecar_sha256, .. } = &mig.op {
-            assert_eq!(sidecar_path, &bin_path, "persisted sidecar_path is the canonical path");
+        if let JournalOp::UploadFile {
+            sidecar_path,
+            sidecar_sha256,
+            ..
+        } = &mig.op
+        {
+            assert_eq!(
+                sidecar_path, &bin_path,
+                "persisted sidecar_path is the canonical path"
+            );
             let expected = {
                 use sha2::{Digest, Sha256};
                 let mut h = Sha256::new();
                 h.update(&ciphertext);
                 hex::encode(h.finalize())
             };
-            assert_eq!(sidecar_sha256, &expected, "persisted sha256 matches the ciphertext");
+            assert_eq!(
+                sidecar_sha256, &expected,
+                "persisted sha256 matches the ciphertext"
+            );
         } else {
             panic!("expected UploadFile op");
         }
