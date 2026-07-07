@@ -489,50 +489,159 @@ export async function mergeConcurrentChildren(
 }
 
 /**
+ * Shared key-chain-walk helper (RESEARCH.md Pitfall 3 / Anti-Patterns): resolve
+ * an IPNS name, fetch its content-addressed CID from IPFS, and parse the
+ * PublishedNode envelope. Used by BOTH `verifySubtreeClean`'s recursive
+ * read-only walk and `rotateReadFromNode`'s mutating BFS so envelope
+ * resolution has exactly ONE implementation.
+ */
+async function resolveAndFetchNode(
+  ipnsName: string,
+  ctx: SdkContext
+): Promise<PublishedNode | null> {
+  const resolved = await resolveIpnsRecord(ipnsName, ctx);
+  if (!resolved) return null;
+  const raw = await fetchFromIpfs(ctx, resolved.cid);
+  return JSON.parse(new TextDecoder().decode(raw)) as PublishedNode;
+}
+
+/**
+ * Shared key-chain-walk helper (RESEARCH.md Pitfall 3 / Anti-Patterns): resolve
+ * a child's published envelope AND derive its readKey from the PARENT's
+ * readKey via `unsealChildReadKey` (AAD binds the child's id/kind and the
+ * PARENT-MIRRORED generation — `childRef.generation`, not the child's own
+ * published generation). Used by BOTH `verifySubtreeClean` (read-only) and
+ * the main BFS (mutating) so this key-derivation logic has exactly ONE
+ * implementation — recursing `verifySubtreeClean` without this shared helper
+ * would duplicate the BFS's resolve+unseal logic with subtly different bugs.
+ *
+ * @returns `null` when the child's IPNS record cannot be resolved (missing —
+ *   a non-root data inconsistency; callers treat this as "unreachable", not
+ *   "dirty" — only a MISSING ROOT is surfaced as dirty, per SC#2/T-70-08).
+ */
+async function resolveChildKeyAndEnvelope(
+  childRef: SealedChildRef,
+  parentReadKey: Uint8Array,
+  ctx: SdkContext
+): Promise<{ childPub: PublishedNode; childReadKey: Uint8Array } | null> {
+  const childPub = await resolveAndFetchNode(childRef.ipnsName, ctx);
+  if (!childPub) return null;
+  const childReadKey = await unsealChildReadKey(
+    childRef.readKeySealed,
+    parentReadKey,
+    childPub.id,
+    childPub.kind,
+    childRef.generation
+  );
+  return { childPub, childReadKey };
+}
+
+/**
+ * A dirty frontier node discovered by `verifySubtreeClean`'s recursive walk —
+ * carries everything a BFS caller needs to seed its queue directly at this
+ * node, at ANY depth (RESEARCH.md Pitfall 3): the consumer no longer needs to
+ * re-derive keys assuming the dirty node is an immediate child of the root.
+ */
+export type DirtyFrontierItem = {
+  ipnsName: string;
+  nodeId: string;
+  /** IPNS name of this node's actual parent (may be any depth below root). */
+  parentIpnsName: string;
+  /** This node's own pre-rotation readKey, engine-derived via the shared key-chain walk. */
+  nodeReadKey: Uint8Array;
+  childPubKind: 'folder' | 'file';
+  /** Parent-mirror generation captured when this dirty edge was found. */
+  enqueuedGeneration: number;
+};
+
+/**
  * SEAM: Verify the subtree is clean before a resume walk.
  *
- * Phase 64 implementation: re-resolve every node in the subtree against the
- * published IPNS records to rebuild an authoritative frontier from the committed
- * truth (crash-recovery convergence per §4.5).
+ * Recurses the FULL subtree (not just the root's immediate children — SC#2 /
+ * T-70-08): resolves every node's published IPNS record and compares each
+ * parent-mirror generation (`SealedChildRef.generation`) against the child's
+ * own published envelope generation to collect dirty frontier nodes at ANY
+ * depth. A missing root record is treated as DIRTY/surfaced — never
+ * short-circuited to "clean" — since a resume must never assume convergence
+ * when it cannot even see the current published truth. The caller
+ * (`rotateReadFromNode`'s dirty-resume block) re-resolves the root itself on
+ * the `isDirty: true` path and throws a descriptive, actionable error when it
+ * too finds the root missing.
  *
- * Invoked ONLY on resume (when `completedNodeIds` is non-empty at walk start —
- * conditional per D-01/D-10); never on a fresh run. NOTE: a true fresh-record
- * resume (empty `completedNodeIds`) is not yet wired here — it needs the Phase-68
- * durable client floor (see todo `rotation-fresh-record-resume-and-sc4-double-bump`).
+ * Recursion only descends below CLEAN edges: a dirty edge's derived readKey
+ * is the child's STALE pre-rotation key (from the still-unrefreshed parent
+ * mirror), which cannot unseal that child's CURRENT published body to
+ * discover further descendants — there is no cryptographic recovery path for
+ * a key genuinely lost to an interrupted prior run (RESEARCH.md Pitfall 4). A
+ * dirty node is recorded in the frontier and left for the BFS's own
+ * convergence-guard witness-refresh to resolve safely on resume.
+ *
+ * Invoked ONLY on resume (when the root is found already-committed at walk
+ * start — conditional per D-01/D-10); never on a fresh run.
  */
 export async function verifySubtreeClean(
   rootIpnsName: string,
   rootReadKey: Uint8Array,
   ctx: SdkContext
-): Promise<{ isDirty: boolean; frontier: Array<{ ipnsName: string; nodeId: string }> }> {
-  const frontier: Array<{ ipnsName: string; nodeId: string }> = [];
+): Promise<{ isDirty: boolean; frontier: DirtyFrontierItem[] }> {
+  // 1. Resolve root → fetch PublishedNode envelope. Missing root ⇒ dirty (SC#2).
+  const rootPub = await resolveAndFetchNode(rootIpnsName, ctx);
+  if (!rootPub) return { isDirty: true, frontier: [] };
 
-  // 1. Resolve root → fetch PublishedNode envelope
-  const rootResolved = await resolveIpnsRecord(rootIpnsName, ctx);
-  if (!rootResolved) return { isDirty: false, frontier: [] };
-
-  const rootRaw = await fetchFromIpfs(ctx, rootResolved.cid);
-  const rootPub = JSON.parse(new TextDecoder().decode(rootRaw)) as PublishedNode;
-
-  // 2. Unseal root to get the SealedChildRef list
+  // 2. Unseal root to walk its SealedChildRef list.
   const rootNode = await unsealNode(rootPub, rootReadKey);
 
-  // 3. Compare parent mirror (SealedChildRef.generation) vs child's published generation.
-  // Published IPNS records are the source of truth (D-10).
-  for (const childRef of rootNode.children ?? []) {
-    const childResolved = await resolveIpnsRecord(childRef.ipnsName, ctx);
-    if (!childResolved) continue; // child IPNS missing — skip
-
-    const childRaw = await fetchFromIpfs(ctx, childResolved.cid);
-    const childPub = JSON.parse(new TextDecoder().decode(childRaw)) as PublishedNode;
-
-    // Dirty edge: child has rotated further than parent's mirror records
-    if (childPub.generation > childRef.generation) {
-      frontier.push({ ipnsName: childRef.ipnsName, nodeId: childPub.id });
-    }
-  }
+  // 3. Recurse the FULL subtree to collect dirty frontier nodes at ANY depth.
+  const frontier: DirtyFrontierItem[] = [];
+  await collectDirtyFrontier(rootIpnsName, rootNode.children ?? [], rootReadKey, ctx, frontier);
 
   return { isDirty: frontier.length > 0, frontier };
+}
+
+/**
+ * Recursive full-subtree dirty-edge walk backing `verifySubtreeClean` (SC#2).
+ * See `verifySubtreeClean`'s docstring for why recursion stops below a dirty
+ * edge. Published IPNS records are the source of truth (D-10).
+ */
+async function collectDirtyFrontier(
+  parentIpnsName: string,
+  children: SealedChildRef[],
+  parentReadKey: Uint8Array,
+  ctx: SdkContext,
+  frontier: DirtyFrontierItem[]
+): Promise<void> {
+  for (const childRef of children) {
+    const resolved = await resolveChildKeyAndEnvelope(childRef, parentReadKey, ctx);
+    if (!resolved) continue; // missing non-root child — data inconsistency, not root-dirty
+    const { childPub, childReadKey } = resolved;
+
+    // Dirty edge: parent's mirror generation lags the child's actual published state.
+    if (childPub.generation > childRef.generation) {
+      frontier.push({
+        ipnsName: childRef.ipnsName,
+        nodeId: childPub.id,
+        parentIpnsName,
+        nodeReadKey: childReadKey,
+        childPubKind: childPub.kind as 'folder' | 'file',
+        enqueuedGeneration: childRef.generation,
+      });
+      continue; // cannot recurse further below a dirty edge — see module docstring
+    }
+
+    // Clean edge: the derived key IS provably the child's current valid key
+    // (parent mirror is up to date) — recurse into folder children to find
+    // dirty edges deeper in the subtree.
+    if (childPub.kind === 'folder') {
+      const childNode = await unsealNode(childPub, childReadKey);
+      await collectDirtyFrontier(
+        childRef.ipnsName,
+        childNode.children ?? [],
+        childReadKey,
+        ctx,
+        frontier
+      );
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -913,11 +1022,9 @@ export async function rotateReadFromNode(
 
   // Helper: resolve an IPNS name → fetch the IPFS CID → parse PublishedNode envelope.
   // Used to obtain id/kind from the child's plaintext envelope before deriving its readKey.
+  // Delegates to the module-level shared helper (also used by verifySubtreeClean — Pitfall 3).
   async function resolveAndFetch(ipnsName: string): Promise<PublishedNode | null> {
-    const resolved = await resolveIpnsRecord(ipnsName, ctx);
-    if (!resolved) return null;
-    const raw = await fetchFromIpfs(ctx, resolved.cid);
-    return JSON.parse(new TextDecoder().decode(raw)) as PublishedNode;
+    return resolveAndFetchNode(ipnsName, ctx);
   }
 
   /**
@@ -938,15 +1045,13 @@ export async function rotateReadFromNode(
     const preCallNames = new Set(preCallChildren.map((c) => c.ipnsName));
     for (const childRef of publishedChildren) {
       if (preCallNames.has(childRef.ipnsName)) continue;
-      const childPub = await resolveAndFetch(childRef.ipnsName);
-      if (!childPub) continue; // child IPNS missing — skip (data inconsistency)
-      const childReadKey = await unsealChildReadKey(
-        childRef.readKeySealed,
+      const resolved = await resolveChildKeyAndEnvelope(
+        childRef,
         parentState.parentNewReadKey,
-        childPub.id,
-        childPub.kind,
-        childRef.generation
+        ctx
       );
+      if (!resolved) continue; // child IPNS missing — skip (data inconsistency)
+      const { childPub, childReadKey } = resolved;
       const childKeys = nodeKeySource?.(childRef.ipnsName);
       queue.push({
         childRef,
@@ -1016,15 +1121,9 @@ export async function rotateReadFromNode(
           (c) => c.ipnsName === frontierItem.ipnsName
         );
         if (!childRef) continue;
-        const childPub = await resolveAndFetch(frontierItem.ipnsName);
-        if (!childPub) continue;
-        const childReadKey = await unsealChildReadKey(
-          childRef.readKeySealed,
-          rootReadKey,
-          childPub.id,
-          childPub.kind,
-          childRef.generation
-        );
+        const resolved = await resolveChildKeyAndEnvelope(childRef, rootReadKey, ctx);
+        if (!resolved) continue;
+        const { childPub, childReadKey } = resolved;
         const childKeys = nodeKeySource?.(frontierItem.ipnsName);
         queue.push({
           childRef,
@@ -1065,15 +1164,11 @@ export async function rotateReadFromNode(
     // Enqueue root's children: derive each child's readKey from the root's OLD readKey.
     // rootReadKey is the root's own (pre-rotation) key and is NOT zeroed by rotateOne (D-09).
     for (const childRef of rootResult.children) {
-      const childPub = await resolveAndFetch(childRef.ipnsName);
-      if (!childPub) continue; // child IPNS missing — skip (data inconsistency)
-      const childReadKey = await unsealChildReadKey(
-        childRef.readKeySealed,
-        rootReadKey, // root's OLD readKey (still valid; never zeroed — D-09)
-        childPub.id,
-        childPub.kind,
-        childRef.generation // parent-mirror (§2.6 D-07 invariant 1)
-      );
+      // root's OLD readKey (still valid; never zeroed — D-09); parent-mirror
+      // generation (§2.6 D-07 invariant 1) is the AAD bound by resolveChildKeyAndEnvelope.
+      const resolved = await resolveChildKeyAndEnvelope(childRef, rootReadKey, ctx);
+      if (!resolved) continue; // child IPNS missing — skip (data inconsistency)
+      const { childPub, childReadKey } = resolved;
       // Thread per-node IPNS key from nodeKeySource (D-01 / Phase 64 seam).
       // Phase 65 also threads writeKey via the same seam.
       const childKeys = nodeKeySource?.(childRef.ipnsName);
@@ -1240,15 +1335,11 @@ export async function rotateReadFromNode(
         // Enqueue this node's children using THIS node's pre-rotation readKey.
         // item.nodeReadKey is NOT zeroed by rotateOne (D-09) — still valid here.
         for (const childRef of result.children) {
-          const childPub = await resolveAndFetch(childRef.ipnsName);
-          if (!childPub) continue;
-          const childReadKey = await unsealChildReadKey(
-            childRef.readKeySealed,
-            item.nodeReadKey, // THIS node's old readKey (seals its children's readKeys)
-            childPub.id,
-            childPub.kind,
-            childRef.generation
-          );
+          // THIS node's old readKey (seals its children's readKeys) — item.nodeReadKey
+          // is NOT zeroed by rotateOne (D-09), still valid here.
+          const resolved = await resolveChildKeyAndEnvelope(childRef, item.nodeReadKey, ctx);
+          if (!resolved) continue;
+          const { childPub, childReadKey } = resolved;
           // Thread per-node IPNS key from nodeKeySource (D-01 / Phase 64 seam).
           // Phase 65 also threads writeKey via the same seam.
           const grandchildKeys = nodeKeySource?.(childRef.ipnsName);
