@@ -1662,8 +1662,13 @@ describe('verifySubtreeClean — BFS dirty-edge frontier (Plan 64-07 ROT-06)', (
       signatureVerified: true,
     }));
     mockFns.fetchFromIpfs.mockImplementation(async (_ctx: unknown, cid: string) => {
-      const id = cid === 'bafy-root' ? NODE_ID : CHILD_ID;
-      return new TextEncoder().encode(JSON.stringify(makePublishedNode(id, 1)));
+      if (cid === 'bafy-root')
+        return new TextEncoder().encode(JSON.stringify(makePublishedNode(NODE_ID, 1)));
+      // Plan 70-05: child's kind is explicitly 'file' so the new recursive
+      // verifySubtreeClean does not attempt to descend past this leaf — the static
+      // unsealNode mock below returns the SAME rootNode for every call, which would
+      // otherwise infinite-loop if recursion were attempted into a 'folder' child.
+      return new TextEncoder().encode(JSON.stringify(makePublishedNode(CHILD_ID, 1, 'file')));
     });
     mockFns.unsealNode.mockResolvedValue(rootNode);
 
@@ -1710,6 +1715,188 @@ describe('verifySubtreeClean — BFS dirty-edge frontier (Plan 64-07 ROT-06)', (
     expect(result.frontier).toHaveLength(1);
     expect(result.frontier[0].ipnsName).toBe(CHILD_IPNS);
     expect(result.frontier[0].nodeId).toBe(CHILD_ID);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Plan 70-05 Task 1 RED — verifySubtreeClean full-subtree recursion (SC#2)
+// ---------------------------------------------------------------------------
+
+// Shared IPNS/id constants for the depth-2 fixture (root -> subfolder -> grandchild).
+const P05_SUBFOLDER_ID = 'subfolder-2222-3333-4444-555555555555';
+const P05_SUBFOLDER_IPNS = 'k51subfolder0000000000000000000000000000000000000000000000000000';
+const P05_GRANDCHILD_ID = 'grandchild-3333-4444-5555-666666666666';
+const P05_GRANDCHILD_IPNS = 'k51grandchildp05000000000000000000000000000000000000000000000000';
+const P05_SUBFOLDER_READ_KEY = new Uint8Array(32).fill(0x21);
+const P05_GRANDCHILD_READ_KEY = new Uint8Array(32).fill(0x22);
+
+describe('verifySubtreeClean — full-subtree recursion (Plan 70-05 SC#2)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it('Test 1 (Plan 70-05): dirty at depth 2 — grandchild dirty edge carries a usable engine-derived nodeReadKey', async () => {
+    // root -[clean edge]-> subfolder -[dirty edge]-> grandchild
+    const rootFolderNode = makeFolderNode({
+      id: NODE_ID,
+      generation: 5,
+      children: [
+        {
+          name: 'subfolder',
+          ipnsName: P05_SUBFOLDER_IPNS,
+          generation: 3, // matches subfolder's published generation (clean edge) — recurse into it
+          versionFloor: 0n,
+          readKeySealed: 'subfoldersealed==',
+        },
+      ],
+    });
+    const subfolderNode = makeFolderNode({
+      id: P05_SUBFOLDER_ID,
+      generation: 3,
+      children: [
+        {
+          name: 'grandchild',
+          ipnsName: P05_GRANDCHILD_IPNS,
+          generation: 1, // parent (subfolder) mirror is stale — grandchild already rotated to 2
+          versionFloor: 0n,
+          readKeySealed: 'grandchildsealed==',
+        },
+      ],
+    });
+
+    mockFns.resolveIpnsRecord.mockImplementation(async (ipnsName: string) => {
+      const cidByIpns: Record<string, string> = {
+        [NODE_IPNS]: 'bafy-root',
+        [P05_SUBFOLDER_IPNS]: 'bafy-subfolder',
+        [P05_GRANDCHILD_IPNS]: 'bafy-grandchild',
+      };
+      const cid = cidByIpns[ipnsName];
+      if (!cid) return null;
+      return { cid, sequenceNumber: 1n, signatureVerified: true };
+    });
+    mockFns.fetchFromIpfs.mockImplementation(async (_ctx: unknown, cid: string) => {
+      if (cid === 'bafy-root')
+        return new TextEncoder().encode(JSON.stringify(makePublishedNode(NODE_ID, 5, 'folder')));
+      if (cid === 'bafy-subfolder')
+        return new TextEncoder().encode(
+          JSON.stringify(makePublishedNode(P05_SUBFOLDER_ID, 3, 'folder'))
+        );
+      // Grandchild's own publish already advanced to generation 2 — dirty relative to
+      // subfolder's stale mirror (generation 1).
+      return new TextEncoder().encode(
+        JSON.stringify(makePublishedNode(P05_GRANDCHILD_ID, 2, 'file'))
+      );
+    });
+    mockFns.unsealNode.mockImplementation(
+      async (published: import('@cipherbox/core').PublishedNode) => {
+        if (published.id === NODE_ID) return rootFolderNode;
+        if (published.id === P05_SUBFOLDER_ID) return subfolderNode;
+        throw new Error(`unexpected unsealNode call for ${published.id}`);
+      }
+    );
+    mockFns.unsealChildReadKey.mockImplementation(async (sealed: string) => {
+      if (sealed === 'subfoldersealed==') return P05_SUBFOLDER_READ_KEY;
+      if (sealed === 'grandchildsealed==') return P05_GRANDCHILD_READ_KEY;
+      throw new Error(`unexpected sealed value: ${sealed}`);
+    });
+
+    // RED (depth-1-only implementation): root's only immediate child (subfolder) is a
+    // CLEAN edge (generation 3 === 3), so the old implementation never looks past it —
+    // returns { isDirty: false, frontier: [] }, missing the depth-2 dirty grandchild.
+    // GREEN: recurses into the clean subfolder edge and finds the dirty grandchild edge.
+    const result = await verifySubtreeClean(NODE_IPNS, T07_ROOT_READ_KEY, createMockContext());
+
+    expect(result.isDirty).toBe(true);
+    expect(result.frontier).toHaveLength(1);
+    expect(result.frontier[0]).toMatchObject({
+      ipnsName: P05_GRANDCHILD_IPNS,
+      nodeId: P05_GRANDCHILD_ID,
+      parentIpnsName: P05_SUBFOLDER_IPNS,
+      childPubKind: 'file',
+      enqueuedGeneration: 1,
+    });
+    expect(result.frontier[0].nodeReadKey).toEqual(P05_GRANDCHILD_READ_KEY);
+  });
+
+  it('Test 2 (Plan 70-05): missing root IPNS record surfaces as dirty, never silently clean', async () => {
+    mockFns.resolveIpnsRecord.mockResolvedValue(null);
+
+    // RED: old implementation explicitly returns { isDirty: false, frontier: [] } on a
+    // missing root — this assertion fails against that behavior.
+    // GREEN: missing root ⇒ isDirty: true.
+    const result = await verifySubtreeClean(NODE_IPNS, T07_ROOT_READ_KEY, createMockContext());
+
+    expect(result.isDirty).toBe(true);
+    expect(mockFns.fetchFromIpfs).not.toHaveBeenCalled();
+  });
+
+  it('Test 3 (Plan 70-05): clean multi-level tree — no dirty edges at any depth returns isDirty false', async () => {
+    // root -[clean]-> subfolder -[clean]-> grandchild (file, leaf)
+    const rootFolderNode = makeFolderNode({
+      id: NODE_ID,
+      generation: 5,
+      children: [
+        {
+          name: 'subfolder',
+          ipnsName: P05_SUBFOLDER_IPNS,
+          generation: 3,
+          versionFloor: 0n,
+          readKeySealed: 'subfoldersealed==',
+        },
+      ],
+    });
+    const subfolderNode = makeFolderNode({
+      id: P05_SUBFOLDER_ID,
+      generation: 3,
+      children: [
+        {
+          name: 'grandchild',
+          ipnsName: P05_GRANDCHILD_IPNS,
+          generation: 2, // matches grandchild's own published generation — clean
+          versionFloor: 0n,
+          readKeySealed: 'grandchildsealed==',
+        },
+      ],
+    });
+
+    mockFns.resolveIpnsRecord.mockImplementation(async (ipnsName: string) => {
+      const cidByIpns: Record<string, string> = {
+        [NODE_IPNS]: 'bafy-root',
+        [P05_SUBFOLDER_IPNS]: 'bafy-subfolder',
+        [P05_GRANDCHILD_IPNS]: 'bafy-grandchild',
+      };
+      const cid = cidByIpns[ipnsName];
+      if (!cid) return null;
+      return { cid, sequenceNumber: 1n, signatureVerified: true };
+    });
+    mockFns.fetchFromIpfs.mockImplementation(async (_ctx: unknown, cid: string) => {
+      if (cid === 'bafy-root')
+        return new TextEncoder().encode(JSON.stringify(makePublishedNode(NODE_ID, 5, 'folder')));
+      if (cid === 'bafy-subfolder')
+        return new TextEncoder().encode(
+          JSON.stringify(makePublishedNode(P05_SUBFOLDER_ID, 3, 'folder'))
+        );
+      return new TextEncoder().encode(
+        JSON.stringify(makePublishedNode(P05_GRANDCHILD_ID, 2, 'file'))
+      );
+    });
+    mockFns.unsealNode.mockImplementation(
+      async (published: import('@cipherbox/core').PublishedNode) => {
+        if (published.id === NODE_ID) return rootFolderNode;
+        if (published.id === P05_SUBFOLDER_ID) return subfolderNode;
+        throw new Error(`unexpected unsealNode call for ${published.id}`);
+      }
+    );
+    mockFns.unsealChildReadKey.mockImplementation(async (sealed: string) => {
+      if (sealed === 'subfoldersealed==') return P05_SUBFOLDER_READ_KEY;
+      if (sealed === 'grandchildsealed==') return P05_GRANDCHILD_READ_KEY;
+      throw new Error(`unexpected sealed value: ${sealed}`);
+    });
+
+    const result = await verifySubtreeClean(NODE_IPNS, T07_ROOT_READ_KEY, createMockContext());
+
+    expect(result.isDirty).toBe(false);
+    expect(result.frontier).toHaveLength(0);
   });
 });
 
@@ -1810,7 +1997,11 @@ describe('rotateReadFromNode — resume guard (Plan 64-07)', () => {
     mockFns.fetchFromIpfs.mockImplementation(async (_ctx: unknown, cid: string) => {
       if (cid === 'bafy-root')
         return new TextEncoder().encode(JSON.stringify(makePublishedNode(NODE_ID, 1)));
-      return new TextEncoder().encode(JSON.stringify(makePublishedNode(CHILD_ID, 1)));
+      // Plan 70-05: child's kind is explicitly 'file' so the new recursive
+      // verifySubtreeClean does not attempt to descend past this leaf — the static
+      // unsealNode mock below returns the SAME rootNode for every call, which would
+      // otherwise infinite-loop if recursion were attempted into a 'folder' child.
+      return new TextEncoder().encode(JSON.stringify(makePublishedNode(CHILD_ID, 1, 'file')));
     });
     mockFns.unsealNode.mockResolvedValue(rootNode);
     mockFns.publishWithCas.mockResolvedValue({
