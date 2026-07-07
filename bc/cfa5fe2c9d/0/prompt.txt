@@ -1,1 +1,5 @@
 /gsd-manager
+
+---
+
+specifically, I would like to dive in to the root ownership question - I would like some flows laid out so that I can better evaluate the options provided
