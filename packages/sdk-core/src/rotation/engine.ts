@@ -858,6 +858,15 @@ export async function rotateReadFromNode(
     parentNodeGeneration: number;
     parentLastSeq: bigint;
     children: SealedChildRef[]; // mutable copy updated as children rotate
+    /**
+     * Snapshot of the parent's children captured at `parentTracking.set(...)`
+     * time — BEFORE any child-driven mutation (D-02 re-seals). Passed as
+     * `baseChildren` to `updateFolderMetadataAndPublish` at the D-09 batched
+     * republish call sites so `mergeRotatedChildren`'s base-only-omission
+     * check is computed against the true CAS base, not an empty default
+     * (SC#1 site B / SC#3 coupling).
+     */
+    baseChildrenSnapshot: SealedChildRef[];
     pendingChildCount: number;
   };
 
@@ -911,6 +920,48 @@ export async function rotateReadFromNode(
     return JSON.parse(new TextDecoder().decode(raw)) as PublishedNode;
   }
 
+  /**
+   * SC#3 (Plan 70-04): enqueue any concurrently-added child surfaced by the
+   * D-09 batched republish's CAS-409 merge (mergeRotatedChildren, site B)
+   * onto the BFS frontier for its own rotateOne pass. Diffs `publishedChildren`
+   * (the merge's actual result) against the pre-call children snapshot by
+   * ipnsName — anything newly present was added by a concurrent writer during
+   * this walk and was never itself enqueued. The child's readKey is derived
+   * via unsealChildReadKey against the PARENT's now-current (rotated) key,
+   * mirroring the existing root/child enqueue blocks above.
+   */
+  async function enqueueConcurrentlyAddedChildren(
+    parentState: ParentTrackingState,
+    preCallChildren: SealedChildRef[],
+    publishedChildren: SealedChildRef[]
+  ): Promise<void> {
+    const preCallNames = new Set(preCallChildren.map((c) => c.ipnsName));
+    for (const childRef of publishedChildren) {
+      if (preCallNames.has(childRef.ipnsName)) continue;
+      const childPub = await resolveAndFetch(childRef.ipnsName);
+      if (!childPub) continue; // child IPNS missing — skip (data inconsistency)
+      const childReadKey = await unsealChildReadKey(
+        childRef.readKeySealed,
+        parentState.parentNewReadKey,
+        childPub.id,
+        childPub.kind,
+        childRef.generation
+      );
+      const childKeys = nodeKeySource?.(childRef.ipnsName);
+      queue.push({
+        childRef,
+        nodeReadKey: childReadKey,
+        parentIpnsName: parentState.parentIpnsName,
+        ipnsPrivateKey: childKeys?.privateKey,
+        ipnsPublicKey: childKeys?.publicKey,
+        nodeWriteKey: childKeys?.writeKey,
+        childPubId: childPub.id,
+        childPubKind: childPub.kind as 'folder' | 'file',
+        enqueuedGeneration: childRef.generation,
+      });
+    }
+  }
+
   if (rootResult.skipped) {
     // Resume path: root already committed in a prior run.
     // ROT-06: call verifySubtreeClean to check for dirty edges.
@@ -956,6 +1007,7 @@ export async function rotateReadFromNode(
         parentNodeGeneration: rootNode.generation,
         parentLastSeq: rootResolved.sequenceNumber,
         children: [...(rootNode.children ?? [])],
+        baseChildrenSnapshot: [...(rootNode.children ?? [])],
         pendingChildCount: frontier.length,
       });
 
@@ -1005,6 +1057,7 @@ export async function rotateReadFromNode(
         parentNodeGeneration: rootResult.newGeneration,
         parentLastSeq: rootResult.newSequenceNumber,
         children: [...rootResult.children], // mutable copy for in-place SealedChildRef updates
+        baseChildrenSnapshot: [...rootResult.children],
         pendingChildCount: rootResult.children.length,
       });
     }
@@ -1063,7 +1116,8 @@ export async function rotateReadFromNode(
           }
           parentState.pendingChildCount--;
           if (parentState.pendingChildCount === 0) {
-            await updateFolderMetadataAndPublish({
+            const preCallChildren = parentState.children;
+            const republishResult = await updateFolderMetadataAndPublish({
               ipnsName: parentState.parentIpnsName,
               ipnsPrivateKey: parentState.parentIpnsPrivateKey!,
               ipnsPublicKey: parentState.parentIpnsPublicKey,
@@ -1072,8 +1126,17 @@ export async function rotateReadFromNode(
               nodeId: parentState.parentNodeId,
               nodeGeneration: parentState.parentNodeGeneration,
               children: parentState.children,
+              baseChildren: parentState.baseChildrenSnapshot,
+              mergeChildrenFn: mergeRotatedChildren,
               ctx,
             });
+            // SC#1 site B / SC#3: enqueue any concurrently-added child surfaced
+            // by this CAS-merged republish onto the BFS frontier.
+            await enqueueConcurrentlyAddedChildren(
+              parentState,
+              preCallChildren,
+              republishResult.publishedChildren
+            );
             parentTracking.delete(item.parentIpnsName);
           }
         }
@@ -1131,7 +1194,8 @@ export async function rotateReadFromNode(
             // Batched parent re-publish: advance the IPNS sequence counter once, carrying
             // the updated SealedChildRef array so unsealChildReadKey on next read succeeds.
             // nodeGeneration is the parent's generation from ITS rotateOne — NOT bumped again.
-            await updateFolderMetadataAndPublish({
+            const preCallChildren = parentState.children;
+            const republishResult = await updateFolderMetadataAndPublish({
               ipnsName: parentState.parentIpnsName,
               // parentIpnsPrivateKey is non-null: the D-01 guard in rotateOne already
               // verified the parent had a key when it rotated.
@@ -1142,8 +1206,17 @@ export async function rotateReadFromNode(
               nodeId: parentState.parentNodeId,
               nodeGeneration: parentState.parentNodeGeneration,
               children: parentState.children,
+              baseChildren: parentState.baseChildrenSnapshot,
+              mergeChildrenFn: mergeRotatedChildren,
               ctx,
             });
+            // SC#1 site B / SC#3: enqueue any concurrently-added child surfaced
+            // by this CAS-merged republish onto the BFS frontier.
+            await enqueueConcurrentlyAddedChildren(
+              parentState,
+              preCallChildren,
+              republishResult.publishedChildren
+            );
             parentTracking.delete(item.parentIpnsName);
           }
         }
@@ -1159,6 +1232,7 @@ export async function rotateReadFromNode(
             parentNodeGeneration: result.newGeneration,
             parentLastSeq: result.newSequenceNumber,
             children: [...result.children],
+            baseChildrenSnapshot: [...result.children],
             pendingChildCount: result.children.length,
           });
         }
