@@ -125,3 +125,7 @@ None - no external service configuration required.
 ---
 *Phase: 70-rotation-soundness-deep-merge-fresh-record-resume-and-durabl*
 *Completed: 2026-07-07*
+
+## Self-Check: PASSED
+
+All created/modified files found on disk; all 3 commits (cb9a9907e, e5f5f7c0e, 9e400ad93) verified present in git log.

@@ -3,17 +3,17 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
 current_phase: 70
-current_phase_name: Rotation Soundness — Deep Merge, Fresh-Record Resume, and Durable Floor Concurrency
+current_phase_name: rotation-soundness-deep-merge-fresh-record-resume-and-durabl
 status: executing
 stopped_at: Phase 71 context gathered (discuss complete; uncommitted, awaiting branch decision)
-last_updated: "2026-07-07T19:07:31.540Z"
+last_updated: "2026-07-07T19:50:21.807Z"
 last_activity: 2026-07-07
-last_activity_desc: Phase 69 complete, transitioned to Phase 70
+last_activity_desc: Phase 70 execution started
 progress:
   total_phases: 15
   completed_phases: 10
-  total_plans: 140
-  completed_plans: 139
+  total_plans: 148
+  completed_plans: 140
   percent: 67
 ---
 
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-27)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 69 — fuse-and-winfsp-rust-integration-and-grant-root-awareness
+**Current focus:** Phase 70 — rotation-soundness-deep-merge-fresh-record-resume-and-durabl
 
 ## Current Position
 
-Phase: 70 — Rotation Soundness — Deep Merge, Fresh-Record Resume, and Durable Floor Concurrency
-Plan: Not started
+Phase: 70 (rotation-soundness-deep-merge-fresh-record-resume-and-durabl) — EXECUTING
+Plan: 2 of 8
 Status: Ready to execute
-Last activity: 2026-07-07 — Phase 69 complete, transitioned to Phase 70
+Last activity: 2026-07-07 — Phase 70 execution started
 
 Progress: `██████████` 79 / 79 plans (100%)
 
@@ -248,6 +248,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 68.2 P12 | 130 | - tasks | - files |
 | Phase 68.2 P13 | 8min | 2 tasks | 2 files |
 | Phase 68.2 P14 | 50min | 2 tasks | 3 files |
+| Phase 70 P01 | 12min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -527,6 +528,7 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase 68.2-13]: doReresolveFolderInPlace sources RotationHighWater generation from existing.nodeGeneration (never the freshly relay-served envelope generation) and gates versionFloor:0, mirroring ensureRootFolderState/dfsFindFolder
 - [Phase 68.2-13]: reresolveFolderInPlace/doReresolveFolderInPlace split into two private methods so the reresolveInFlight dedup map is registered synchronously before the first await, making concurrent forceResolve calls observe the same in-flight promise
 - [Phase ?]: [Phase 68.2-14]: SDK-READ-03 marked [x] on the strength of shared-folder-desync.spec.ts step 3.1 passing cleanly (4/4 isolated); full-web-e2e-green portion documented as CI-fresh-container-authoritative-pending, not force-passed
+- [Phase 70]: mergeRotatedChildren is a wholly separate exported function from folder/merge.ts mergeChildren, not a flag -- closes merge-downgrade Elevation-of-Privilege gap T-70-01
 
 ## Operator Next Steps
 
@@ -534,10 +536,10 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-07T18:40:04.404Z
+**Last session:** 2026-07-07T19:47:25.680Z
 **Stopped at:** Phase 71 context gathered (discuss complete; uncommitted, awaiting branch decision)
 **Resume file:** 
-.planning/phases/71-share-invite-security-and-ipns-data-integrity-api/71-CONTEXT.md
+None
 
 ### Blockers
 
