@@ -7,6 +7,17 @@
 //! D-03) — the FUSE single-daemon model means this file is small
 //! (one `u64` per node) and read-modify-write on every access is cheap
 //! relative to an IPNS resolve.
+//!
+//! `get`/`put` (T-70-03/T-70-04) hold a `tokio::sync::Mutex` for the whole
+//! load-modify-write critical section — mirroring the TS `idbPut` reference
+//! (`apps/web/src/services/rotation-state.service.ts`, SC#5) — with all
+//! blocking filesystem work run inside `tokio::task::spawn_blocking` so the
+//! executor is never blocked while the lock is held. `put` computes
+//! `max(existing, candidate)` INSIDE that locked section (not relying on a
+//! caller's outer, non-atomic read), so concurrent `put`s on the same OR
+//! different `node_id`s can never lost-update each other or the map. A
+//! PRESENT-but-unparseable sidecar fails closed rather than degrading to a
+//! silent empty map (see [`CORRUPT_SIDECAR_FAIL_CLOSED_FLOOR`]).
 
 use crate::rotation::HighWaterStore;
 use std::collections::HashMap;
@@ -14,6 +25,90 @@ use std::io::Write as _;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+/// Fail-closed sentinel floor value (T-70-04): once a sidecar is found
+/// PRESENT-but-corrupt, we no longer know any individual node's true
+/// persisted floor, so every node under this store is reported as
+/// maximally floored rather than "no floor known" — this forces
+/// `enforce_resolved`'s generation/seq comparisons to reject until the
+/// sidecar is repaired or removed, instead of silently treating corruption
+/// as a cold first-contact bypass (the exact regression Greptile flagged
+/// against the prior `unwrap_or_default()` fallback).
+///
+/// Deliberately kept within `i64::MAX` (not `u64::MAX`): `high_water.rs`'s
+/// regression checks cast a stored floor `as i64` for comparison against
+/// live `i64` input. `u64::MAX as i64` wraps to `-1`, which would make
+/// every `attempted < floor` comparison FALSE — defeating every regression
+/// check instead of forcing one. `i64::MAX` stays positive under that cast
+/// and is larger than any legitimate live input, guaranteeing rejection.
+const CORRUPT_SIDECAR_FAIL_CLOSED_FLOOR: u64 = i64::MAX as u64;
+
+/// Outcome of loading the sidecar map from disk (blocking).
+enum LoadOutcome {
+    /// The sidecar has never been written — genuinely "no floor known".
+    Empty,
+    /// The sidecar parsed successfully.
+    Map(HashMap<String, u64>),
+    /// A PRESENT sidecar failed to parse — fail-closed (T-70-04).
+    Corrupt,
+}
+
+/// Load the whole `{ nodeId: value }` map from `path` (blocking; must run
+/// inside `spawn_blocking`). Distinguishes "never written" (empty map, not
+/// an error) from "present but unparseable" (`Corrupt`, fail-closed) — see
+/// [`CORRUPT_SIDECAR_FAIL_CLOSED_FLOOR`].
+fn load_map_blocking(path: &Path) -> LoadOutcome {
+    match std::fs::read(path) {
+        Ok(bytes) => match serde_json::from_slice::<HashMap<String, u64>>(&bytes) {
+            Ok(map) => LoadOutcome::Map(map),
+            Err(e) => {
+                log::error!(
+                    "JsonSidecarFloorStore: corrupt sidecar at {}: {} -- failing closed (T-70-04)",
+                    path.display(),
+                    e
+                );
+                LoadOutcome::Corrupt
+            }
+        },
+        Err(_) => LoadOutcome::Empty,
+    }
+}
+
+/// Write the whole map atomically to `path` (blocking; must run inside
+/// `spawn_blocking`): serialize to a sibling `.tmp` file (0600 perms,
+/// fsync'd), then `rename()` over the real path. A crash mid-write leaves
+/// the `.tmp` file orphaned but the real sidecar untouched — never a
+/// partially-written/torn JSON file (mirrors `WriteQueue::put`'s
+/// fsync-then-durable-rename discipline, with the rename step added for
+/// true all-or-nothing atomicity across the existing-file-being-overwritten
+/// case).
+fn write_map_atomic_blocking(path: &Path, map: &HashMap<String, u64>) -> std::io::Result<()> {
+    let json = serde_json::to_vec(map)?;
+
+    let tmp_path = path.with_extension("tmp");
+
+    let mut open_opts = std::fs::OpenOptions::new();
+    open_opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    open_opts.mode(0o600);
+
+    let mut file = open_opts.open(&tmp_path)?;
+    file.write_all(&json)?;
+    file.sync_all()?;
+    drop(file);
+
+    std::fs::rename(&tmp_path, path)?;
+
+    // Best-effort: fsync the parent dir so the rename's directory entry
+    // is durable on crash (matches WriteQueue::put's WR-03b discipline).
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::File::open(parent).and_then(|d| d.sync_all());
+    }
+
+    Ok(())
+}
 
 /// A durable `HighWaterStore` backed by a single JSON sidecar file.
 ///
@@ -23,6 +118,13 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone)]
 pub struct JsonSidecarFloorStore {
     path: PathBuf,
+    /// Serializes the whole load-modify-write critical section of `get`/
+    /// `put` (T-70-03). `Arc`-wrapped so every `Clone` of this store shares
+    /// the SAME lock — two independently-constructed instances pointed at
+    /// the same sidecar path do NOT share this in-process lock (they only
+    /// ever coordinate through the sidecar file itself), matching this
+    /// crate's single-daemon-per-journal-dir model.
+    lock: Arc<Mutex<()>>,
 }
 
 impl JsonSidecarFloorStore {
@@ -33,6 +135,7 @@ impl JsonSidecarFloorStore {
     pub fn new(journal_dir: impl AsRef<Path>, file_name: &str) -> Self {
         Self {
             path: journal_dir.as_ref().join(file_name),
+            lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -47,73 +150,77 @@ impl JsonSidecarFloorStore {
     pub fn for_seq(journal_dir: impl AsRef<Path>) -> Self {
         Self::new(journal_dir, "rotation-high-water-seq.json")
     }
-
-    /// Load the whole `{ nodeId: value }` map from disk. Returns an empty
-    /// map if the sidecar does not exist yet or fails to parse (fail-closed:
-    /// a corrupt sidecar is treated as "no floor known" rather than
-    /// crashing the daemon — `enforce_resolved`'s cold-device versionFloor
-    /// gate then re-applies as if this were first contact).
-    fn load_map(&self) -> HashMap<String, u64> {
-        match std::fs::read(&self.path) {
-            Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
-            Err(_) => HashMap::new(),
-        }
-    }
-
-    /// Write the whole map atomically: serialize to a sibling `.tmp` file
-    /// (0600 perms, fsync'd), then `rename()` over the real path. A crash
-    /// mid-write leaves the `.tmp` file orphaned but the real sidecar
-    /// untouched — never a partially-written/torn JSON file (mirrors
-    /// `WriteQueue::put`'s fsync-then-durable-rename discipline, with the
-    /// rename step added for true all-or-nothing atomicity across the
-    /// existing-file-being-overwritten case).
-    fn write_map_atomic(&self, map: &HashMap<String, u64>) -> std::io::Result<()> {
-        let json = serde_json::to_vec(map)?;
-
-        let tmp_path = self.path.with_extension("tmp");
-
-        let mut open_opts = std::fs::OpenOptions::new();
-        open_opts.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        open_opts.mode(0o600);
-
-        let mut file = open_opts.open(&tmp_path)?;
-        file.write_all(&json)?;
-        file.sync_all()?;
-        drop(file);
-
-        std::fs::rename(&tmp_path, &self.path)?;
-
-        // Best-effort: fsync the parent dir so the rename's directory entry
-        // is durable on crash (matches WriteQueue::put's WR-03b discipline).
-        if let Some(parent) = self.path.parent() {
-            let _ = std::fs::File::open(parent).and_then(|d| d.sync_all());
-        }
-
-        Ok(())
-    }
 }
 
 impl HighWaterStore for JsonSidecarFloorStore {
     async fn get(&self, node_id: &str) -> Option<u64> {
-        self.load_map().get(node_id).copied()
+        // Hold the lock across the whole (blocking) read so a concurrent
+        // put's load-modify-write critical section can't observe a
+        // half-written state -- the rename in write_map_atomic_blocking is
+        // itself atomic, but the lock keeps this store's own concurrent
+        // callers serialized with put's critical section too.
+        let _guard = self.lock.lock().await;
+        let path = self.path.clone();
+        let node_id = node_id.to_string();
+        tokio::task::spawn_blocking(move || match load_map_blocking(&path) {
+            LoadOutcome::Map(map) => map.get(&node_id).copied(),
+            LoadOutcome::Empty => None,
+            LoadOutcome::Corrupt => Some(CORRUPT_SIDECAR_FAIL_CLOSED_FLOOR),
+        })
+        .await
+        .expect("JsonSidecarFloorStore: get's blocking task panicked")
     }
 
     async fn put(&self, node_id: &str, value: u64) {
-        let mut map = self.load_map();
-        map.insert(node_id.to_string(), value);
+        let _guard = self.lock.lock().await;
+        let path = self.path.clone();
+        let node_id_owned = node_id.to_string();
+        let result = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+            let mut map = match load_map_blocking(&path) {
+                LoadOutcome::Map(map) => map,
+                LoadOutcome::Empty => HashMap::new(),
+                LoadOutcome::Corrupt => {
+                    // Refuse to write over an unreadable sidecar: a blind
+                    // overwrite would silently drop every OTHER node's
+                    // floor (T-70-04). Leave the corrupt file untouched;
+                    // get() keeps fail-closing until it is repaired/removed.
+                    log::error!(
+                        "JsonSidecarFloorStore: refusing to write over corrupt sidecar at {} for node {}",
+                        path.display(),
+                        node_id_owned
+                    );
+                    return Ok(());
+                }
+            };
+            // Max-preserving write computed INSIDE the locked critical
+            // section (SC#5 / T-70-03): a concurrent put with a lower
+            // candidate can never clobber a higher persisted floor, and two
+            // different-node_id puts serialize instead of lost-updating —
+            // mirrors the TS `idbPut` reference (rotation-state.service.ts).
+            let entry = map.entry(node_id_owned).or_insert(0);
+            *entry = (*entry).max(value);
+            write_map_atomic_blocking(&path, &map)
+        })
+        .await;
+
         // A write failure here is a durability defect, not a correctness
         // one: enforce_resolved has already decided the resolve is valid
         // (fail-open on the in-memory decision) but the floor bump did not
         // persist. This mirrors the `Promise<void>`-shaped TS contract:
         // errors are exceptional and logged, not silently threaded through
         // every call site's Result.
-        if let Err(e) = self.write_map_atomic(&map) {
-            log::error!(
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => log::error!(
                 "JsonSidecarFloorStore: failed to persist floor for node {}: {}",
                 node_id,
                 e
-            );
+            ),
+            Err(e) => log::error!(
+                "JsonSidecarFloorStore: put's blocking task panicked for node {}: {}",
+                node_id,
+                e
+            ),
         }
     }
 }
