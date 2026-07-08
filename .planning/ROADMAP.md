@@ -714,16 +714,16 @@ Plans:
 7. The Rust rotation-engine twin (`crates/sdk/src/rotation/engine.rs`, desktop FUSE/WinFsp) reaches the same read-plane soundness contract as the TS engine — depth-aware dirty-frontier consumption (SC#1/SC#2), already-rotated-dirty-node convergence + ECIES key-checkpoint (SC#3), fed from the shared durable plane (SC#4) — plus its structural catch-up (recursive `verify_subtree_clean`, missing-root-treated-as-dirty), with unit-tier (`FakeDeps`) crash-resume coverage adapting the four D-10 assertions (scope decision 2026-07-08 / D-11..D-13)
 8. Desktop FUSE shared-scope-exit rotation is live-wired: a production `RotationDeps` adapter (real IPNS resolve-verify + node fetch/unseal + CAS publish + wire→`GrantRow` decode + advisory job persistence) drives `rotate_read_on_scope_exit` so a covered scope-exit delete/move completes and publishes exactly one rotation instead of failing closed (EIO); the bundled gate-correctness fixes ship with it (CRITICAL `SentSharesCache::empty()` fail-open via a cache-authoritativeness flag; MAJOR ancestor-walk fail-open, poisoned-lock panic, and `delete.rs`/`rename.rs` gate ordering + rename dest-gating); a revoked recipient can no longer read the rotated subtree; private deletes stay pure relinks; verified by a FUSE/desktop-e2e leg (scope decision 2026-07-08 / D-14..D-17, absorbing the `2026-07-07-fuse-shared-scope-exit-rotation-live-wiring` todo)
 
-**Plans**: 13 plans
+**Plans**: 4/13 plans executed
 
 Plans:
 
 **Wave 1** *(foundations — parallel, no file overlap)*
 
-- [ ] 70.1-01-PLAN.md — TS engine SC#1/SC#2 depth-aware dirty-resume consumption + normal-branch ordering (engine.ts) [TDD]
-- [ ] 70.1-02-PLAN.md — TS combined IndexedDB floor record + migration + wrapped-key accessors (SC#4/D-06/D-07, SC#3 durable plane) [TDD]
-- [ ] 70.1-03-PLAN.md — Rust combined floor record + fail-closed `put` + consumer sweep (SC#4/D-06/D-07/D-08) [TDD]
-- [ ] 70.1-04-PLAN.md — Rust engine structural catch-up: widen `DirtyFrontierEntry`, recursive `verify_subtree_clean`, missing-root-dirty (SC#7/D-12) [TDD]
+- [x] 70.1-01-PLAN.md — TS engine SC#1/SC#2 depth-aware dirty-resume consumption + normal-branch ordering (engine.ts) [TDD]
+- [x] 70.1-02-PLAN.md — TS combined IndexedDB floor record + migration + wrapped-key accessors (SC#4/D-06/D-07, SC#3 durable plane) [TDD]
+- [x] 70.1-03-PLAN.md — Rust combined floor record + fail-closed `put` + consumer sweep (SC#4/D-06/D-07/D-08) [TDD]
+- [x] 70.1-04-PLAN.md — Rust engine structural catch-up: widen `DirtyFrontierEntry`, recursive `verify_subtree_clean`, missing-root-dirty (SC#7/D-12) [TDD]
 
 **Wave 2** *(blocked on Wave 1)*
 
