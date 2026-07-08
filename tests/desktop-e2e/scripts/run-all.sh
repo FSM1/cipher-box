@@ -130,6 +130,27 @@ else
 fi
 echo ""
 
+# ---- Step 8: Shared scope-exit rotation acceptance (D-16) ----
+# Real-mount smoke for the FUSE shared-scope-exit rotation live-wiring
+# (2026-07-07-fuse-shared-scope-exit-rotation-live-wiring.md / Phase 70.1
+# SC#8). Invoked via node + tsx's JS CLI entry (NOT the node_modules/.bin/tsx
+# shell shim) per project convention for .mts helpers.
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+echo "--- Step 8: Shared scope-exit rotation acceptance (D-16) ---"
+set +e
+TEST_SECRET="$TEST_SECRET" node "$REPO_ROOT/node_modules/tsx/dist/cli.mjs" \
+  "$SCRIPT_DIR/shared-scope-exit-rotation.mts" --mount "$MOUNT_POINT" --api-url "$API_URL"
+ROTATION_FAILURES=$?
+set -e
+
+if [ "$ROTATION_FAILURES" -eq 0 ]; then
+  echo "Shared scope-exit rotation: PASSED"
+else
+  echo "Shared scope-exit rotation: FAILED"
+  TOTAL_FAIL=$((TOTAL_FAIL + ROTATION_FAILURES))
+fi
+echo ""
+
 # ---- Summary ----
 echo "============================================"
 echo "  Summary"
