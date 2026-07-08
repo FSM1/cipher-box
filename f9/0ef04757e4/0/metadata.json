@@ -1,0 +1,134 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "f90ef04757e4",
+  "session_id": "a4ed1cb9-4e4c-4d71-bc03-3c2c6b4e70a3",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-08T14:29:24.002114Z",
+  "branch": "feat/rotation-read-plane-durability-and-deep-crash-resume-soundne",
+  "checkpoints_count": 2,
+  "save_step_count": 1,
+  "files_touched": [
+    ".planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-VALIDATION.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "5ba758e73869",
+  "token_usage": {
+    "input_tokens": 15984,
+    "cache_creation_tokens": 497039,
+    "cache_read_tokens": 7017496,
+    "output_tokens": 79585,
+    "api_call_count": 43
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-plan-phase-2026-07-08T13:42:46.030418Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "0eb6f9cbb31b",
+      "timestamp": "2026-07-08T13:42:46.030418Z",
+      "native": {
+        "command": "/gsd-plan-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-plan-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Run the gsd-plan-phase orchestrator workflow end-to-end for CipherBox phase 70.1 (rotation read-plane durability and crash-resume soundness) — research the domain, resolve scope questions, and produce planner-ready CONTEXT/RESEARCH/VALIDATION artifacts before spawning the planner.",
+    "outcome": "Research pass 1 and 2 completed and committed, scope was expanded twice via user decisions (Rust engine.rs twin fixes, then folding in the previously-orphaned RotationDeps live-wiring todo plus its 4 bundled gate fixes), CONTEXT/ROADMAP/VALIDATION were updated and committed accordingly, but the session ended mid-flow while a third research extension (SQ7 live-wiring grounding) was still running in the background — the actual gsd-planner/gsd-plan-checker steps and PLAN.md generation had not yet run.",
+    "learnings": {
+      "repo": [
+        "CipherBox's plan-phase workflow never auto-commits PATTERNS.md after the pattern-mapper agent runs — must be committed explicitly by the orchestrator.",
+        "The plan:pre hooks `--raw` JSON output contains literal newlines inside string fragments, making it invalid strict JSON; must read the hook JSON file directly instead of parsing --raw output.",
+        "Intel API-SURFACE regeneration currently yields symbolCount=0 for this monorepo — its configured globs produce an empty surface, so the planner hint is a no-op and grounding must come from direct code reads.",
+        "crates/sdk/src/rotation/engine.rs is a full Rust twin of the TS rotation engine used by desktop FUSE/WinFsp, and shares (and compounds) the same depth-1-only dirty-frontier consumption bug as the TS engine.",
+        "The Rust rotation engine's production path fails closed: the only impl of RotationDeps in the workspace is the test FakeDeps (engine.rs:1533), so crates/fuse/src/write_ops/grant_scope.rs returns Err (EIO) today rather than silently skipping rotation — a deliberate deferred residual documented as 'LIVE-WIRING RESIDUAL' / ROT-07, referenced in the 69-13 SUMMARY.",
+        "There's an existing pending todo (.planning/todos/pending/2026-07-07-fuse-shared-scope-exit-rotation-live-wiring.md) tracking the RotationDeps live-wiring gap, bundled with a CRITICAL fail-open (empty sent-shares cache treated as private/no-rotation) and 3 MAJOR gate bugs (ancestor-walk fail-open, poisoned-lock panic, rename dest-gating/ordering) that become live revocation-bypass vectors once rotation is wired.",
+        "The per-rootNodeId job checkpoint plane deliberately documents 'never key material' as a boundary — the ECIES wrapped-key checkpoint (D-01) must fold into the per-nodeId high-water plane instead."
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/write_ops/grant_scope.rs",
+          "line": 269,
+          "end_line": 287,
+          "finding": "Returns Err/EIO for shared scope-exit rotation because no production RotationDeps impl exists yet."
+        },
+        {
+          "path": "crates/sdk/src/rotation/engine.rs",
+          "line": 1533,
+          "finding": "FakeDeps is the only impl of RotationDeps in the workspace — the production path is unwired."
+        },
+        {
+          "path": "crates/sdk/src/rotation/engine.rs",
+          "line": 781,
+          "finding": "DirtyFrontierEntry uses a naive 2-field shape lacking parent_ipns_name/node_read_key, unlike the TS engine."
+        },
+        {
+          "path": "crates/sdk/src/rotation/engine.rs",
+          "line": 813,
+          "end_line": 850,
+          "finding": "verify_subtree_clean is non-recursive and treats a missing root as clean, a correctness gap vs. the TS engine."
+        },
+        {
+          "path": "crates/sdk/src/rotation/engine.rs",
+          "line": 1287,
+          "end_line": 1290,
+          "finding": "republish_parent fails closed on CAS-409 with no merge-retry — the Rust twin never got Phase-70's createConcurrentAddResealingMerge."
+        },
+        {
+          "path": "crates/crypto/src/ecies.rs",
+          "line": 21,
+          "end_line": 38,
+          "finding": "wrap_key/unwrap_key primitives confirmed byte-compatible with the TS eciesjs twin; unwrap_key returns self-zeroing Zeroizing<Vec<u8>>."
+        }
+      ],
+      "workflow": [
+        "A researcher subagent can be resumed via SendMessage to extend an existing RESEARCH.md incrementally rather than respawning from scratch — used twice in this session to deepen Rust-engine and then live-wiring grounding.",
+        "Independent, non-conflicting steps (e.g. intel API-SURFACE regen, VALIDATION.md edits) can be run while a resumed researcher works in the background, as long as they touch different files.",
+        "Before accepting a 'defer this to a future phase' framing, check whether any already-outlined future phase actually claims the work — discovering the todo was roadmap-orphaned (not covered by phases 71-73) reversed the scoping recommendation.",
+        "A prompt-injection scanner flagged legitimate ROADMAP prose ('...assertions as the four...') as a false positive; worth a quick sanity check before treating such warnings as blocking."
+      ]
+    },
+    "friction": [
+      "plan:pre hooks --raw JSON output is not valid strict JSON (literal newlines in fragments), forcing a fallback to reading the hook file directly.",
+      "Commit helper reported 'commit_failed' as a false negative even though the commit (lint-staged run) actually succeeded, requiring a git log verification step.",
+      "Drift precheck surfaced 143 non-blocking elements, mostly unrelated never-mapped repo-root files, adding noise to triage.",
+      "Injection-warning false positive fired on a legitimate ROADMAP.md edit due to incidental phrasing.",
+      "Scope expanded twice mid-workflow (Rust engine twin, then RotationDeps live-wiring), each requiring a round-trip of CONTEXT/ROADMAP edits, commits, and re-spawning research before planning could even begin — the planner had still not run by session end."
+    ],
+    "open_items": [
+      "Researcher's SQ7 grounding of the live-wiring surface (production RotationDeps adapter, 4 gate fixes, desktop-e2e harness) was still running in the background at session end — not yet verified or committed.",
+      "gsd-planner has not yet been spawned; no PLAN.md files exist yet for phase 70.1 despite CONTEXT/RESEARCH/VALIDATION being ready.",
+      "gsd-plan-checker verification loop has not run.",
+      "Desktop-e2e acceptance leg for SC#8 (live-wiring) still needs to be designed/confirmed as dispatch-gated coverage distinct from 70.1's unit/sdk-e2e tiers.",
+      "Todo 2026-07-07-fuse-shared-scope-exit-rotation-live-wiring.md was marked folded into 70.1 in its frontmatter — confirm this stays consistent once the phase actually plans/executes."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-08T14:28:31.32918Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 7,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 7,
+    "total_lines_changed": 7,
+    "agent_percentage": 0,
+    "metric_version": 2
+  }
+}
