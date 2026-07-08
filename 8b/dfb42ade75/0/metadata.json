@@ -1,0 +1,157 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "8bdfb42ade75",
+  "session_id": "a4ed1cb9-4e4c-4d71-bc03-3c2c6b4e70a3",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-08T18:52:04.235629Z",
+  "branch": "feat/rotation-read-plane-durability-and-deep-crash-resume-soundne",
+  "checkpoints_count": 2,
+  "save_step_count": 1,
+  "files_touched": [
+    ".planning/ROADMAP.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "d626d869f2eb",
+  "token_usage": {
+    "input_tokens": 48061,
+    "cache_creation_tokens": 1278609,
+    "cache_read_tokens": 37339752,
+    "output_tokens": 300887,
+    "api_call_count": 165
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-plan-phase-2026-07-08T13:42:46.030418Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "0eb6f9cbb31b",
+      "timestamp": "2026-07-08T13:42:46.030418Z",
+      "native": {
+        "command": "/gsd-plan-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-gsd-execute-phase-2026-07-08T15:12:58.253651Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "1b22299d3cb2",
+      "timestamp": "2026-07-08T15:12:58.253651Z",
+      "native": {
+        "command": "/gsd-execute-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 18
+  },
+  "summary": {
+    "intent": "Execute all 13 planned PLAN.md files for CipherBox Phase 70.1 (rotation read-plane durability + Rust engine twin + desktop FUSE live-wiring) using wave-based parallel execution with isolated git worktrees for concurrent plans.",
+    "outcome": "Waves 1-4 (10 of 13 plans) merged and gated green, including a hoisted CI-covered IndexedDB adapter and a live-wiring FUSE adapter; the depth-3 anti-vacuous e2e gate caught a genuine product bug (decrypt-before-dirtiness-check ordering flaw) in both TS and Rust engines, which was diagnosed, fixed in both engines with fail-closed semantics, and independently re-verified at 6/6 before Wave 5 resumed.",
+    "learnings": {
+      "repo": [
+        "Worktree agents start with node_modules absent (gitignored) and must run `pnpm i`; new devDeps (fake-indexeddb, @noble/secp256k1) added by one plan require the main checkout to `pnpm i` again after merge before post-merge gates can pass.",
+        "Scoping `cargo fmt`/`cargo clippy` to `-p <crate>` (not workspace-wide) avoids stranding unrelated out-of-scope formatting drift in the worktree that blocks `cleanup-wave` merges with `worktree_dirty`.",
+        "sdk-core and sdk are separate packages with separate dist builds; changing sdk-core in one wave and only rebuilding sdk-core's own dist (not sdk's) leaves sdk vitest running against a stale dist, producing false cross-plan failures that look like regressions.",
+        "tests/sdk-e2e's vitest config has no dotenv loader and its `test` script is bare `vitest run` — `.env` (TEST_LOGIN_SECRET etc.) is only loaded if the calling shell sources it first; otherwise the harness silently falls back to a default secret and login 401s.",
+        "sdk-core's rotation unit-test mocks made `unsealChildReadKey` unconditionally succeed regardless of key argument, which masked a real AEAD key-mismatch bug for years — real-crypto e2e fixtures were needed to surface it.",
+        "`packages/sdk-core/src/rotation/engine.ts`'s `collectDirtyFrontier`/`resolveChildKeyAndEnvelope` decrypted a child's sealed ref before checking plaintext generation dirtiness, causing spurious CryptoError on any edge where the parent also rotated in the same walk; the Rust twin (`engine.rs`) had the identical bug.",
+        "The `state.planned-phase` and similar STATE-update CLI tools can silently no-op (`updated: []`) if STATE.md's format doesn't match their expected anchors, requiring manual editing as a fallback.",
+        "The gsd decision-coverage parser only accepts three D-NN bullet forms (`- **D-NN:**`, `- **D-NN — title**`, `- **D-NN: Title.**`); a period-before-`**` form causes a total parse failure across ALL bullets, not just the malformed one."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/rotation/engine.ts",
+          "line": 815,
+          "finding": "collectDirtyFrontier called resolveChildKeyAndEnvelope (which unconditionally decrypts) before comparing childPub.generation > childRef.generation; fixed by reordering so plaintext generation check runs first via resolveAndFetchNode, with decrypt (unsealChildReadKeyFromPub) only attempted on confirmed-clean edges."
+        },
+        {
+          "path": "crates/fuse/src/write_ops/grant_scope.rs",
+          "line": 269,
+          "end_line": 287,
+          "finding": "rotate_read_on_scope_exit previously returned Err unconditionally (fail-closed stub, no live RotationDeps impl existed besides test FakeDeps); Plan 09 wired it to the new production FuseRotationDeps adapter."
+        },
+        {
+          "path": "crates/sdk/src/rotation/engine.rs",
+          "line": 781,
+          "finding": "DirtyFrontierEntry was originally a naive 2-field shape lacking parent_ipns_name/node_read_key; Plan 04 widened it and made verify_subtree_clean recursive, also fixing a bug where a missing root record was treated as clean rather than dirty."
+        }
+      ],
+      "workflow": [
+        "When re-tasking a subagent that already ran (e.g. via SendMessage resume), use it for corrections that build on the agent's own context rather than spawning a fresh agent, but explicitly instruct it not to touch orchestrator-owned files (STATE.md/ROADMAP.md).",
+        "Running a single-plan 'canary' worktree execution first (rather than fanning out all N concurrently) to validate the worktree-create→commit→SUMMARY→merge cycle is a reasonable risk mitigation, but should be explicitly flagged to the user as a deliberate choice rather than silently deviating from a requested 'all N concurrent' instruction.",
+        "When a live e2e/integration test surfaces a failure after a merge, delegate a scientific-method diagnostic subagent instructed to explicitly distinguish 'fixture bug' (fix it) from 'product bug' (report only, no papering over) before attempting any fix.",
+        "Independently re-verify a subagent's fix-and-test claims (rebuild dists, re-run the gate yourself) rather than trusting the reported pass/fail, especially for a phase's core soundness claim."
+      ]
+    },
+    "friction": [
+      "gsd_run loop render-hooks plan:pre --raw produced invalid JSON (literal newlines in fragments), requiring a workaround of reading the hooks file directly.",
+      "gsd commit helper reported a false-negative 'commit_failed' (lint-staged noise) despite the commit landing, requiring git log verification per standing memory.",
+      "decision-coverage gate failed with an opaque '0/15 covered' message caused by a single malformed D-09/D-10 bullet elsewhere in CONTEXT.md, requiring parser source inspection to diagnose.",
+      "state.planned-phase tool silently no-op'd (updated: []) instead of erroring, requiring manual STATE.md edits.",
+      "ROADMAP annotate returned updated:false (non-blocking no-op), not clearly actionable.",
+      "Cross-plan dist staleness (sdk consuming an unrebuilt sdk-core dist) produced 3 false-failing tests that looked like a regression until diagnosed.",
+      "sdk-e2e login 401 due to missing .env sourcing (no dotenv loader in vitest config) cost a diagnostic detour before the real depth-3 crypto bug could even be observed.",
+      "A worktree agent's returned <worktree_metadata> mislabeled expected_base as its own final commit rather than the true fork base, requiring manual verification against the branch-check guard.",
+      "Two dangling worktree-agent-* branches from a prior crashed session were found mid-run; deferred cleanup to phase end to avoid perturbing .git during active agent commits."
+    ],
+    "open_items": [
+      "Wave 5-7 (plans 11, 12, 13) not yet executed as of end of transcript: gate-correctness fixes (D-15a/b/c), gate ordering + test inversion (D-15d), and the desktop-e2e human-checkpoint acceptance leg (D-16, autonomous:false).",
+      "ROT-04 (no orphaned inner grant) desktop-grant-remint is explicitly deferred/undocumented as trait no-ops per Plan 09's sanctioned scope decision — inner sub-share re-mint not enforced on desktop path.",
+      "Untracked debug session file .planning/debug/rotation-crash-safety-depth3.md left in place, to be handled at phase end.",
+      "Two dangling worktree-agent-* branches from a prior crashed session still present, to be swept at phase end.",
+      "findParentNodeByIpnsName in both engines was re-audited and fixed alongside collectDirtyFrontier for the same decrypt-before-check flaw, but flagged in the debugger's report as 'worth re-checking against a tree with multiple independent dirty edges at different depths' — not fully stress-tested beyond the fix's own verification.",
+      "Plan 09's IPNS signing-key sourcing from the local InodeTable (fail-closed for non-materialized nodes) was a real gap RESEARCH didn't specify a source for; documented as a scope decision but not raised to the user."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-08T18:51:24.28953Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 3,
+    "human_removed": 0,
+    "total_committed": 0,
+    "total_lines_changed": 3,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 98,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/debug/rotation-crash-safety-depth3.md": 97
+      }
+    }
+  ]
+}
