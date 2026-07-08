@@ -48,19 +48,23 @@ use crate::inode::{InodeKind, InodeTable, ROOT_INO};
 /// up the tree already held in memory. NO IPNS resolve / api-client / network
 /// call (design §3.9; the anti-pattern this guards against is resolving
 /// ancestry over the network).
-pub fn ancestor_ipns_chain(inodes: &InodeTable, start_ino: u64) -> Vec<String> {
-    let mut chain = Vec::new();
+pub fn ancestor_ipns_chain(inodes: &InodeTable, start_ino: u64) -> AncestorChain {
+    let mut names = Vec::new();
     let mut visited = HashSet::new();
     let mut current_ino = start_ino;
+    let mut reached_root = false;
 
     loop {
         // Cycle guard: a well-formed tree never revisits an inode, but this
         // keeps the walk O(depth)-bounded even over corrupt/synthetic state
-        // rather than looping forever.
+        // rather than looping forever. A cycle means the walk did NOT reach
+        // ROOT_INO cleanly (D-15b) — `reached_root` stays `false`.
         if !visited.insert(current_ino) {
             break;
         }
 
+        // A missing inode (dangling `parent_ino`, corrupt/synthetic state)
+        // also means the walk did NOT reach ROOT_INO cleanly (D-15b).
         let Some(inode) = inodes.get(current_ino) else {
             break;
         };
@@ -73,18 +77,39 @@ pub fn ancestor_ipns_chain(inodes: &InodeTable, start_ino: u64) -> Vec<String> {
             | InodeKind::Folder { ipns_name, .. }
             | InodeKind::File { ipns_name, .. } => {
                 if !ipns_name.is_empty() {
-                    chain.push(ipns_name.clone());
+                    names.push(ipns_name.clone());
                 }
             }
         }
 
         if current_ino == ROOT_INO {
+            reached_root = true;
             break;
         }
         current_ino = inode.parent_ino;
     }
 
-    chain
+    AncestorChain {
+        names,
+        reached_root,
+    }
+}
+
+/// Result of walking a mutated node's ancestor chain up to `ROOT_INO`.
+///
+/// `reached_root` distinguishes a CLEAN walk (terminated at `ROOT_INO`) from
+/// one that broke early on a missing inode or a cycle. [`gate_scope_exit`]
+/// treats `reached_root == false` as fail-closed (D-15b MAJOR) — a partial
+/// chain must NEVER be treated as a clean "no grant found" walk, since it may
+/// have omitted the true grant-root ancestor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AncestorChain {
+    /// Leaf-first IPNS-name chain: the mutated node itself first, the vault
+    /// root last (when `reached_root` is `true`).
+    pub names: Vec<String>,
+    /// `true` only if the walk reached `ROOT_INO` cleanly — no missing
+    /// inode, no cycle.
+    pub reached_root: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -99,21 +124,39 @@ pub fn ancestor_ipns_chain(inodes: &InodeTable, start_ino: u64) -> Vec<String> {
 #[derive(Debug, Clone, Default)]
 pub struct SentSharesCache {
     root_ipns_names: HashSet<String>,
+    /// D-15a (CRITICAL): `true` only after a successful `/shares/sent`
+    /// refresh has completed this session ([`Self::from_sent_shares`]).
+    /// `false` for [`Self::empty`] / [`Default::default`] — the
+    /// pre-first-refresh (or failed-refresh) state.
+    ///
+    /// [`gate_scope_exit`] fails closed (`Err` -> EIO) while this is
+    /// `false`, REGARDLESS of whether `root_ipns_names` happens to be
+    /// empty (Pitfall 8: the trigger is authoritativeness, NOT emptiness —
+    /// a naive "empty -> Err" would incorrectly block every private delete
+    /// once the cache has legitimately refreshed to zero shares).
+    is_authoritative: bool,
 }
 
 impl SentSharesCache {
-    /// An empty cache — the state before the first refresh completes.
+    /// An empty, NON-authoritative cache — the state before the first
+    /// refresh completes (or after a failed refresh). [`gate_scope_exit`]
+    /// fails closed on this state (D-15a).
     pub fn empty() -> Self {
         Self {
             root_ipns_names: HashSet::new(),
+            is_authoritative: false,
         }
     }
 
     /// Build a cache from a raw `collect_sent_shares` response. Pure and
-    /// synchronous so it is unit-testable without a live HTTP server.
+    /// synchronous so it is unit-testable without a live HTTP server. A
+    /// successful refresh is ALWAYS authoritative, even when `shares` is
+    /// empty — a genuinely-empty refreshed cache still allows private
+    /// deletes with zero rotation (D-15a / Pitfall 8).
     pub fn from_sent_shares(shares: &[SentShareResponse]) -> Self {
         Self {
             root_ipns_names: shares.iter().map(|s| s.root_ipns_name.clone()).collect(),
+            is_authoritative: true,
         }
     }
 
@@ -211,6 +254,22 @@ pub fn grant_root_for(ancestors: &[String], params: &CoverageParams) -> Option<S
 /// the sdk `maybe_rotate_on_scope_exit` spy pattern). A `rotate` error
 /// propagates as `Err` — fail-closed, never swallowed.
 ///
+/// # Fail-closed gate-correctness (D-15a/b, CodeRabbit Phase 69 ship review)
+/// Two conditions surface `Err` BEFORE the coverage check ever runs, so a
+/// genuinely-uncertain state can never be silently mistaken for "no covering
+/// grant":
+/// - **D-15a:** `sent_cache` is NOT authoritative (no successful
+///   `/shares/sent` refresh has completed this session, or the last one
+///   failed) — an empty-looking cache in that state may just mean "not yet
+///   refreshed", not "nothing is shared". A legitimately-empty
+///   AUTHORITATIVE cache still proceeds to the coverage check (and yields
+///   `NoRotation`) — the trigger is authoritativeness, never emptiness
+///   (Pitfall 8).
+/// - **D-15b:** the ancestor walk did NOT reach `ROOT_INO` cleanly (a
+///   missing inode or a cycle) — a partial chain may have omitted the true
+///   grant-root ancestor, so it is treated as unsafe rather than
+///   `NoRotation`.
+///
 /// # Security
 /// D-07 dual-keying: the grant-root passed to `rotate` is a READ-plane key
 /// (`SealedChildRef.ipns_name`). The caller is responsible for threading the
@@ -226,9 +285,34 @@ where
     F: FnOnce(String) -> Fut,
     Fut: Future<Output = Result<(), RotationError>>,
 {
-    let ancestors = ancestor_ipns_chain(inodes, start_ino);
-    let params = build_coverage_params(&ancestors, sent_cache);
-    match grant_root_for(&ancestors, &params) {
+    let chain = ancestor_ipns_chain(inodes, start_ino);
+
+    // D-15b: an incomplete ancestor walk must never be treated as a clean
+    // "no covering grant" result — it may have silently dropped the true
+    // grant-root ancestor.
+    if !chain.reached_root {
+        return Err(RotationError::RotateFailed(format!(
+            "scope-exit gate: ancestor walk from ino={start_ino} did not reach ROOT_INO \
+             (missing inode or cycle) — failing closed rather than risking a silent \
+             revocation bypass (D-15b)"
+        )));
+    }
+
+    // D-15a: a non-authoritative sent-shares cache must never look like "no
+    // shares -> private -> NoRotation". The gate fails closed until a
+    // successful refresh has completed — NEVER gated on
+    // `root_ipns_names().is_empty()` (Pitfall 8).
+    if !sent_cache.is_authoritative {
+        return Err(RotationError::RotateFailed(
+            "scope-exit gate: sent-shares cache is not authoritative (no successful \
+             refresh has completed yet, or the last refresh failed) — failing closed \
+             rather than risking a silent revocation bypass (D-15a)"
+                .to_string(),
+        ));
+    }
+
+    let params = build_coverage_params(&chain.names, sent_cache);
+    match grant_root_for(&chain.names, &params) {
         // ROT-02 / SC#3: no covering grant → zero rotation, zero extra
         // publishes. The caller's parent relink is the entire durable effect.
         None => Ok(ScopeExitResult::NoRotation),
@@ -342,13 +426,26 @@ pub async fn rotate_read_on_scope_exit(
 /// spaces are threaded as SEPARATE values into [`rotate_read_on_scope_exit`]
 /// and MUST NEVER be conflated. `crates/fuse/src/write_ops/` is flagged for
 /// explicit security review.
+///
+/// # D-15c (MAJOR) — poisoned-lock handling
+/// A poisoned `sent_shares` `RwLock` (a prior holder panicked while writing
+/// it) returns `Err(())` here — NEVER `.expect(...)`-panics the calling
+/// fuser callback thread, which would wedge the mount (a denial of service).
+/// This is consistent with the surrounding `Result<(), ()>` flow: a poisoned
+/// cache is treated the same as any other fail-closed gate outcome.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub fn run_scope_exit_gate(fs: &crate::CipherBoxFS, ino: u64) -> Result<(), ()> {
-    let sent_cache = fs
-        .sent_shares
-        .read()
-        .expect("sent_shares lock poisoned")
-        .clone();
+    let sent_cache = match fs.sent_shares.read() {
+        Ok(guard) => guard.clone(),
+        Err(_poisoned) => {
+            log::error!(
+                "scope-exit gate: sent_shares RwLock is poisoned (a prior writer \
+                 panicked while holding it) — failing closed (EIO) rather than \
+                 panicking the fuser callback thread (D-15c)"
+            );
+            return Err(());
+        }
+    };
     // Write-plane key (D-07): the mutated node's stable id (its stored node_id ==
     // real published.id), kept DISTINCT from the read-plane grant-root ipns_name
     // threaded into the rotate seam below. Sourced from the inode, NOT
@@ -479,8 +576,9 @@ mod tests {
 
         let chain = ancestor_ipns_chain(&table, file_c);
 
+        assert!(chain.reached_root, "a clean tree walk must reach ROOT_INO");
         assert_eq!(
-            chain,
+            chain.names,
             vec![
                 "k51fileC".to_string(),
                 "k51folderB".to_string(),
@@ -496,8 +594,9 @@ mod tests {
         let (table, folder_a, folder_b, _file_c) = build_nested_tree();
 
         let chain = ancestor_ipns_chain(&table, folder_b);
+        assert!(chain.reached_root);
         assert_eq!(
-            chain,
+            chain.names,
             vec![
                 "k51folderB".to_string(),
                 "k51folderA".to_string(),
@@ -506,8 +605,9 @@ mod tests {
         );
 
         let chain_a = ancestor_ipns_chain(&table, folder_a);
+        assert!(chain_a.reached_root);
         assert_eq!(
-            chain_a,
+            chain_a.names,
             vec!["k51folderA".to_string(), "k51root".to_string()]
         );
     }
@@ -519,7 +619,7 @@ mod tests {
         // function signature takes no ApiClient/runtime handle at all.
         let (table, _a, _b, file_c) = build_nested_tree();
         let chain = ancestor_ipns_chain(&table, file_c);
-        assert!(!chain.is_empty());
+        assert!(!chain.names.is_empty());
     }
 
     #[test]
@@ -536,10 +636,11 @@ mod tests {
                 "k51folderA".to_string(),
                 "k51root".to_string(),
             ]),
+            is_authoritative: true,
         };
-        let params = build_coverage_params(&ancestors, &cache);
+        let params = build_coverage_params(&ancestors.names, &cache);
 
-        let selected = grant_root_for(&ancestors, &params);
+        let selected = grant_root_for(&ancestors.names, &params);
         assert_eq!(
             selected,
             Some("k51folderB".to_string()),
@@ -549,9 +650,9 @@ mod tests {
         // Sanity: dropping folderB from ancestors (walk from folder_b's own ino
         // gives FolderA as the closest match once FolderB is excluded).
         let ancestors_from_a = ancestor_ipns_chain(&table, _folder_a);
-        let params_a = build_coverage_params(&ancestors_from_a, &cache);
+        let params_a = build_coverage_params(&ancestors_from_a.names, &cache);
         assert_eq!(
-            grant_root_for(&ancestors_from_a, &params_a),
+            grant_root_for(&ancestors_from_a.names, &params_a),
             Some("k51folderA".to_string())
         );
         let _ = folder_b;
@@ -562,9 +663,9 @@ mod tests {
         let (table, _a, _b, file_c) = build_nested_tree();
         let ancestors = ancestor_ipns_chain(&table, file_c);
         let cache = SentSharesCache::empty();
-        let params = build_coverage_params(&ancestors, &cache);
+        let params = build_coverage_params(&ancestors.names, &cache);
 
-        assert_eq!(grant_root_for(&ancestors, &params), None);
+        assert_eq!(grant_root_for(&ancestors.names, &params), None);
         assert!(!has_covering_grant(&params));
     }
 
@@ -584,7 +685,7 @@ mod tests {
             created_at: "2024-01-01T00:00:00Z".to_string(),
         }]);
 
-        let params = build_coverage_params(&ancestors, &cache);
+        let params = build_coverage_params(&ancestors.names, &cache);
         assert!(params.active_grant_root_ipns_names.contains("k51folderA"));
         assert_eq!(
             params.local_grant_record,
@@ -603,12 +704,16 @@ mod tests {
     use std::sync::Mutex;
 
     /// SC#3 / ROT-02 zero-rotation invariant: a PRIVATE delete (no covering
-    /// grant — empty sent-shares cache) invokes the rotate spy ZERO times and
-    /// returns `NoRotation`. This is the signature invariant of the phase.
+    /// grant — an AUTHORITATIVE but genuinely-empty sent-shares cache)
+    /// invokes the rotate spy ZERO times and returns `NoRotation`. This is
+    /// the signature invariant of the phase. Uses `from_sent_shares(&[])`
+    /// (authoritative-empty), NOT `SentSharesCache::empty()` (non-
+    /// authoritative) — the latter now fails closed per D-15a; see
+    /// `gate_scope_exit_non_authoritative_cache_fails_closed` below.
     #[tokio::test]
     async fn gate_scope_exit_private_delete_triggers_zero_rotations() {
         let (table, _a, _b, file_c) = build_nested_tree();
-        let cache = SentSharesCache::empty();
+        let cache = SentSharesCache::from_sent_shares(&[]);
         let spy = AtomicUsize::new(0);
 
         let result = gate_scope_exit(&table, file_c, &cache, |_grant_root| {
@@ -639,6 +744,7 @@ mod tests {
         // NOT, so the gate must rotate FROM folderA, not the leaf.
         let cache = SentSharesCache {
             root_ipns_names: HashSet::from(["k51folderA".to_string()]),
+            is_authoritative: true,
         };
         let spy = AtomicUsize::new(0);
         let captured: Mutex<Option<String>> = Mutex::new(None);
@@ -679,6 +785,7 @@ mod tests {
                 "k51folderA".to_string(),
                 "k51root".to_string(),
             ]),
+            is_authoritative: true,
         };
         let spy = AtomicUsize::new(0);
 
@@ -703,6 +810,7 @@ mod tests {
         let (table, _a, _b, file_c) = build_nested_tree();
         let cache = SentSharesCache {
             root_ipns_names: HashSet::from(["k51folderA".to_string()]),
+            is_authoritative: true,
         };
 
         let result = gate_scope_exit(&table, file_c, &cache, |_grant_root| async {
@@ -725,11 +833,12 @@ mod tests {
         let ancestors = ancestor_ipns_chain(&table, file_c);
         let cache = SentSharesCache {
             root_ipns_names: HashSet::from(["k51folderA".to_string()]),
+            is_authoritative: true,
         };
-        let params = build_coverage_params(&ancestors, &cache);
+        let params = build_coverage_params(&ancestors.names, &cache);
 
         // Read plane: the grant-root IPNS name the rotation is rooted at.
-        let read_plane = grant_root_for(&ancestors, &params).expect("covered");
+        let read_plane = grant_root_for(&ancestors.names, &params).expect("covered");
         // Write plane: the mutated node's UUID (WriteChildRef.child_id).
         let write_plane = crate::fs::uuid_from_ino(file_c);
 

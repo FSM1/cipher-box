@@ -110,7 +110,25 @@ impl CipherBoxFS {
     /// `sent_shares` (see `write_ops::grant_scope::build_coverage_params`).
     pub async fn refresh_sent_shares(&self) -> Result<(), cipherbox_api_client::ApiError> {
         let cache = crate::write_ops::grant_scope::refresh_sent_shares(&self.api).await?;
-        *self.sent_shares.write().expect("sent_shares lock poisoned") = cache;
+        // D-15c: a poisoned `sent_shares` lock must never panic this
+        // background refresh task. A fresh, successfully-refreshed
+        // (authoritative) cache is always safe to install regardless of any
+        // prior poisoning — recover the guard via `into_inner` and clear the
+        // poison flag so subsequent reads (`run_scope_exit_gate`) resume
+        // normal fail-open-on-authoritative-cache operation instead of
+        // permanently failing closed until remount.
+        match self.sent_shares.write() {
+            Ok(mut guard) => *guard = cache,
+            Err(poisoned) => {
+                log::error!(
+                    "refresh_sent_shares: sent_shares RwLock was poisoned by a prior \
+                     panicked holder — installing the freshly-refreshed authoritative \
+                     cache and clearing the poison flag (D-15c)"
+                );
+                *poisoned.into_inner() = cache;
+                self.sent_shares.clear_poison();
+            }
+        }
         Ok(())
     }
 
