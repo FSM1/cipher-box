@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "29d80117a191",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-70.1-rotation-read-plane-durability",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-RESEARCH.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/29/d80117a191/0/metadata.json",
+      "transcript": "/29/d80117a191/0/full.jsonl",
+      "content_hash": "/29/d80117a191/0/content_hash.txt",
+      "prompt": "/29/d80117a191/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 14474,
+    "cache_creation_tokens": 108061,
+    "cache_read_tokens": 1045237,
+    "output_tokens": 19050,
+    "api_call_count": 11
+  }
+}
