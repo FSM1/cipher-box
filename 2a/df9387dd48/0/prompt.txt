@@ -1,0 +1,31 @@
+<task-notification>
+<task-id>a96d38d1bd6709df1</task-id>
+<tool-use-id>toolu_014Lyxd1edk5v4miC5vZfmKH</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a96d38d1bd6709df1.output</output-file>
+<status>completed</status>
+<summary>Agent "Research Phase 70.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The extension is complete. Not committing per your instruction — you'll verify and commit.
+
+## RESEARCH COMPLETE
+
+**Phase:** 70.1 — extended with Rust-half grounding (D-11/D-12/D-13)
+**Confidence:** HIGH (every Rust line number re-read against the live tree this session)
+
+### What I added (all EXTENSIONS — nothing shrunk or rewritten)
+
+- **New `## Sharp Question 6 — Rust Rotation-Engine Twin (engine.rs) In-Scope Grounding`** with 6 subsections at TS-level fidelity: 6.0 top-of-section landmine (production path not live-wired), 6.1 consumption path (SC#1/#2), 6.2 structural catch-up (D-12), 6.3 `rotate_one`+ECIES seam (SC#3/D-01..D-07), 6.4 shared durable plane (D-06/D-07), 6.5 Rust-path SC#6 coverage (D-13).
+- **6 new Test-Map rows** for the Rust half (SC#1/#2 Rust, SC#2/D-12, SC#3 Rust, SC#6/D-13, SC#4 combined-record), all `cargo test -p cipherbox-sdk`-tier, none sdk-e2e.
+- **Wave 0 Gaps + Recommended Project Structure** updated to include `crates/sdk/src/rotation/engine.rs` and the prerequisite `DirtyFrontierEntry` widening.
+- **Open Questions Q1 + Q2 marked RESOLVED** (Q1 → D-11/D-12/D-13 in scope; Q2 → per-nodeId high-water plane adopted); Assumptions Log A2 marked resolved, new A4 added; Architectural Responsibility Map + Pitfall 5 rewritten to reflect the resolved scope.
+
+### New engine.rs landmines the planner needs (not in CONTEXT)
+
+1. **The Rust production path fails closed and has NO live wiring** — `crates/fuse/src/write_ops/grant_scope.rs:269-287` returns `Err` because the ONLY `impl RotationDeps` in the workspace is the test `FakeDeps` (`engine.rs:1533`). D-13 is therefore UNIT-tier `FakeDeps` work, not sdk-e2e; desktop soundness is a logic claim, not a live claim.
+2. **The Rust twin is structurally naiver than TS even pre-fix:** `DirtyFrontierEntry` is the naive 2-field shape (`:781`, no `parent_ipns_name`/`node_read_key`), `verify_subtree_clean` is non-recursive AND treats missing-root as clean (`:813-815`, `:838-850`), `ParentTrackingState` lacks `parent_old_read_key`/`base_children_snapshot`, and the dirty frontier is NEVER folded into the fresh/normal walk (only the resume arm). The type-widening + recursion must land BEFORE the consumption fix or it won't compile.
+3. **`republish_parent` fails closed on CAS-409 with no merge-retry** (`:1287-1290`) — the Rust twin never got Phase-70's `createConcurrentAddResealingMerge`. A depth-3 multi-dirty-edge fixture that races the parent republish will hard-error where TS would merge; recommended the Rust SC#6 variant test the lost-key window, not the concurrent-add-at-republish window, and flagged the merge-retry port as a known remaining divergence.
+4. Confirmed the Rust ECIES primitives (`cipherbox_crypto::wrap_key`/`unwrap_key`, `crates/crypto/src/ecies.rs:21/38`, `unwrap_key` returns self-zeroing `Zeroizing&lt;Vec&lt;u8&gt;&gt;`, byte-compatible with the TS `eciesjs` twin) and that the `RotationDeps` trait already has the default-no-op grant seam to mirror for the new `persist/get/delete_wrapped_key` methods. Recommended wrapping inside the concrete `RotationDeps` impl (keeps the engine key-material-free) — flagged as Claude's Discretion (A4).
+
+Ready for the planner. The file is staged-but-uncommitted for your verification.</result>
+<usage><subagent_tokens>308619</subagent_tokens><tool_uses>24</tool_uses><duration_ms>344188</duration_ms></usage>
+</task-notification>
