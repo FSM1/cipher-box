@@ -36,6 +36,7 @@ import type { Node, NodeKind, PublishedNode, SealedChildRef } from '@cipherbox/c
 import {
   generateRandomBytes,
   wrapKey,
+  unwrapKey,
   generateEd25519Keypair,
   deriveIpnsName,
 } from '@cipherbox/crypto';
@@ -104,6 +105,51 @@ export type WriteRevocationCallbacks = {
   teeUnenrollFn: (oldIpnsName: string) => Promise<void>;
   deleteWriteGrantFn: (shareId: string) => Promise<void>;
 };
+
+/**
+ * Injectable callbacks for the ECIES key-checkpoint seam (D-01 transport seam,
+ * Plan 70.1-05 / SC#3 / RESEARCH Sharp Question 2).
+ *
+ * Closes the crash window where `rotateOne` mints a fresh `readKeyPrime` but a
+ * failure between the mint and the child's IPNS publish would otherwise strand
+ * that key forever (RESEARCH Pitfall 4's prior "no recovery" stance). The
+ * wrapped ciphertext is durably persisted BEFORE the publish (D-03) and
+ * consumed on resume by the BFS's dirty-item repair path (D-05) — GC'd only
+ * after the parent's `SealedChildRef` mirror commits (D-04).
+ *
+ * Callback contract:
+ *   - `persistWrappedKey(nodeId, wrappedKeyB64)` — durably commits the
+ *     ECIES-wrapped (owner-pubkey) `readKeyPrime` BEFORE the child publish.
+ *   - `getWrappedKey(nodeId)` — returns the checkpointed ciphertext (base64),
+ *     or `undefined` when none exists (genuinely lost / already GC'd — D-05).
+ *   - `deleteWrappedKey(nodeId)` — removes the checkpoint once no longer needed.
+ *
+ * @security
+ *   The ciphertext is ECIES-wrapped under the OWNER's OWN public key — never
+ *   routed through any API endpoint (client-side plane only). Plaintext key
+ *   material is NEVER persisted or logged (CLAUDE.md Rules 2/3/6).
+ */
+export type KeyCheckpointCallbacks = {
+  persistWrappedKey: (nodeId: string, wrappedKeyB64: string) => Promise<void>;
+  getWrappedKey: (nodeId: string) => Promise<string | undefined>;
+  deleteWrappedKey: (nodeId: string) => Promise<void>;
+};
+
+/**
+ * Thrown when an already-rotated dirty node's ECIES key-checkpoint cannot be
+ * recovered — the checkpoint was never persisted (a genuinely lost prior run
+ * that crashed before D-03's persist-before-publish completed) or has already
+ * been GC'd (D-04). Distinct from {@link RootKeyStaleError} (root-only, no
+ * checkpoint plane exists for the root) — this is the child-level D-05
+ * fallback: there is no cryptographic recovery path for a key never
+ * checkpointed and lost to an interrupted prior run.
+ */
+export class DirtyNodeUnrecoverableError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'DirtyNodeUnrecoverableError';
+  }
+}
 
 /** Advisory status of a rotation job. */
 export type RotationStatus = 'pending' | 'in-progress' | 'complete' | 'failed';
@@ -244,6 +290,22 @@ type RotateOneParams = {
    */
   grantCallbacks?: GrantRemintCallbacks;
   /**
+   * Owner's OWN secp256k1 public key (Plan 70.1-05 / SC#3 / D-01). Required
+   * when `keyCheckpointCallbacks` is supplied — `rotateOne` wraps the freshly
+   * minted `readKeyPrime` under this key via ECIES before checkpointing it.
+   * MUST be absent when `keyCheckpointCallbacks` is absent (D-01 conditional
+   * invocation — the clean happy-path never reaches the checkpoint seam).
+   */
+  ownerPublicKey?: Uint8Array;
+  /**
+   * Optional injectable callbacks for the ECIES key-checkpoint seam (D-01/D-03,
+   * Plan 70.1-05). When supplied, `rotateOne` durably persists the wrapped
+   * `readKeyPrime` BEFORE the child publish (Step 8) so a crash between mint
+   * and publish never strands the key. When absent, this is a clean no-op
+   * mirroring `reMintGrantsRootedAt`'s D-04 contract.
+   */
+  keyCheckpointCallbacks?: KeyCheckpointCallbacks;
+  /**
    * Write key for this node's write-body (optional).
    *
    * When the node's published envelope has `writeSealed`, this key is required:
@@ -349,6 +411,30 @@ export type RotationParams = {
    * to every `rotateOne` call site alongside `innerGrants` (Plan 70-06 / SC#4).
    */
   grantCallbacks?: GrantRemintCallbacks;
+  /**
+   * Owner's OWN secp256k1 public key (Plan 70.1-05 / SC#3 / D-01), threaded to
+   * every `rotateOne` call site so the ECIES key-checkpoint seam can wrap
+   * `readKeyPrime` under it. Required when `keyCheckpointCallbacks` is supplied.
+   */
+  ownerPublicKey?: Uint8Array;
+  /**
+   * Owner's OWN secp256k1 private key (Plan 70.1-05 / SC#3 / D-05), used ONLY
+   * by the BFS's dirty-item repair path to `unwrapKey` a checkpointed
+   * `readKeyPrime` on resume. NEVER zeroed by this function (caller is
+   * terminal owner — D-09). Required when `keyCheckpointCallbacks` is supplied
+   * and a dirty (already-rotated) node needs repair.
+   */
+  ownerPrivateKey?: Uint8Array;
+  /**
+   * Optional injectable callbacks for the ECIES key-checkpoint seam (D-01/D-03,
+   * Plan 70.1-05). When supplied: (1) every `rotateOne` call site persists its
+   * minted `readKeyPrime` before publish, and (2) the BFS routes any
+   * already-rotated dirty item to the checkpoint-repair path instead of
+   * feeding its stale pre-rotation key into `rotateOne`/`unsealNode` (D-05).
+   * When absent, both behaviors are clean no-ops — dirty items fall through to
+   * the pre-existing safe-double-rotation behavior (Plan 70-06 / design §4.5).
+   */
+  keyCheckpointCallbacks?: KeyCheckpointCallbacks;
 };
 
 // ---------------------------------------------------------------------------
@@ -367,6 +453,20 @@ function bytesToBase64(bytes: Uint8Array): string {
     binary += String.fromCharCode(...bytes.subarray(i, Math.min(i + chunkSize, bytes.length)));
   }
   return btoa(binary);
+}
+
+/**
+ * Decode a base64 string back to a Uint8Array — the inverse of `bytesToBase64`.
+ * Used to recover the ECIES-wrapped ciphertext bytes from a checkpointed
+ * `keyCheckpointCallbacks.getWrappedKey` result (Plan 70.1-05 / SC#3).
+ */
+function base64ToBytes(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
 }
 
 /** Fetch a PublishedNode envelope from IPFS by CID. */
@@ -807,6 +907,8 @@ export async function rotateOne(
     ctx,
     innerGrants,
     grantCallbacks,
+    ownerPublicKey,
+    keyCheckpointCallbacks,
     nodeWriteKey,
   } = params;
 
@@ -884,6 +986,28 @@ export async function rotateOne(
   let mergedChildrenForReturn: SealedChildRef[] | undefined;
 
   try {
+    // D-01/D-03 (Plan 70.1-05 / SC#3): durably checkpoint the ECIES-wrapped
+    // readKeyPrime BEFORE the child publish (Step 8, below) — closes the
+    // minted-then-lost crash window (RESEARCH Pitfall 4). Conditional seam
+    // invocation (D-01/D-04): a clean happy-path with no keyCheckpointCallbacks
+    // supplied invokes ZERO seam work, mirroring reMintGrantsRootedAt's no-op
+    // contract. MUST NOT be moved after publishWithCas or near
+    // completedNodeIds.add (Pitfall 3 / D-03) — this await MUST complete first.
+    if (keyCheckpointCallbacks) {
+      if (!(ownerPublicKey instanceof Uint8Array) || ownerPublicKey.length === 0) {
+        throw new Error(
+          `rotateOne: keyCheckpointCallbacks supplied for ${nodeIpnsName} but no ` +
+            'ownerPublicKey to wrap under — provide via RotationParams.ownerPublicKey ' +
+            '(D-01 fail-closed)'
+        );
+      }
+      // T-70.1-13: ECIES-wrap under the OWNER's OWN pubkey — ciphertext-only at
+      // rest, never routed through any API endpoint (client-side plane only).
+      const wrappedBytes = await wrapKey(readKeyPrime, ownerPublicKey);
+      const wrappedKeyB64 = bytesToBase64(wrappedBytes);
+      await keyCheckpointCallbacks.persistWrappedKey(nodeId, wrappedKeyB64);
+    }
+
     // Step 5: SEAM — content-key rotation for file nodes (Phase 64 — ROT-03/CRIT-1)
     // Invoked CONDITIONALLY — clean happy-path (folder node) NEVER reaches this.
     if (node.kind === 'file') {
@@ -1055,6 +1179,9 @@ export async function rotateReadFromNode(
     nodeKeySource,
     innerGrants,
     grantCallbacks,
+    ownerPublicKey,
+    ownerPrivateKey,
+    keyCheckpointCallbacks,
   } = params;
 
   jobRecord.status = 'in-progress';
@@ -1115,6 +1242,10 @@ export async function rotateReadFromNode(
     // is reachable from the real (non-test) walk.
     innerGrants,
     grantCallbacks,
+    // SC#3 (Plan 70.1-05): thread the key-checkpoint seam to every rotateOne
+    // call site, starting with the root.
+    ownerPublicKey,
+    keyCheckpointCallbacks,
   });
 
   // ---------------------------------------------------------------------------
@@ -1206,6 +1337,20 @@ export async function rotateReadFromNode(
      * D-02 AAD-binding metadata carried alongside each queue item.
      */
     enqueuedGeneration: number;
+    /**
+     * Plan 70.1-05 (SC#3/D-05): true ONLY for items discovered by
+     * `verifySubtreeClean`/`collectDirtyFrontier` and enqueued via
+     * `enqueueDirtyFrontierItem` — i.e. an ALREADY-ROTATED node whose
+     * `nodeReadKey` is the STALE pre-rotation key. Normal-path enqueues
+     * (root's/a node's own just-discovered children) are always `false`.
+     * When `true` AND `keyCheckpointCallbacks` is supplied, the BFS routes
+     * this item to the checkpoint-repair path INSTEAD of feeding
+     * `nodeReadKey` into `rotateOne`/`unsealNode` (T1 AEAD crash). When
+     * `keyCheckpointCallbacks` is absent, this flag is ignored and the item
+     * falls through to the pre-existing safe-double-rotation behavior
+     * (Plan 70-06 / design §4.5) — fully backward compatible.
+     */
+    isDirtyItem: boolean;
   }> = [];
 
   /**
@@ -1455,7 +1600,154 @@ export async function rotateReadFromNode(
       childPubId: item.nodeId,
       childPubKind: item.childPubKind,
       enqueuedGeneration: item.enqueuedGeneration,
+      // SC#3 (Plan 70.1-05): this item was discovered via verifySubtreeClean's
+      // dirty-edge detection — its nodeReadKey is the STALE pre-rotation key.
+      isDirtyItem: true,
     });
+  }
+
+  /**
+   * SC#3 (Plan 70.1-05 / D-01..D-05): repair an already-rotated dirty node
+   * WITHOUT ever feeding its STALE pre-rotation `item.nodeReadKey` into
+   * `rotateOne`/`unsealNode` (T1 AEAD crash — RESEARCH Sharp Question 2 /
+   * Pitfall 1). Recovers the checkpointed `readKeyPrime` (persisted by a PRIOR
+   * `rotateOne` call before it crashed — D-01/D-03), re-seals ONLY the
+   * parent's `SealedChildRef.readKeySealed` mirror (D-02), seeds this node's
+   * own `ParentTrackingState` so its children still enqueue, and GCs the
+   * checkpoint once the parent mirror commits (D-04).
+   *
+   * Only ever called when `keyCheckpointCallbacks` is supplied (see the BFS
+   * loop's call site) — `keyCheckpointCallbacks!` non-null assertions below
+   * are therefore safe.
+   *
+   * @security
+   *   Never zeros `ownerPrivateKey` (caller-owned, D-09). The recovered
+   *   `readKeyPrime` is used as this node's `ParentTrackingState.parentNewReadKey`
+   *   going forward — it is zeroed ONLY at that tracking state's own teardown
+   *   (`decrementPendingAndMaybeRepublish`), NEVER inside this function
+   *   (Pitfall 2 / callee-zeroes-shared-buffer), mirroring the exact
+   *   dirty-resume-root precedent (old===new since the node was already
+   *   rotated by the lost prior run, not by this walk).
+   */
+  async function repairDirtyNode(item: (typeof queue)[number]): Promise<void> {
+    if (!ownerPrivateKey) {
+      throw new DirtyNodeUnrecoverableError(
+        `rotateReadFromNode: dirty node ${item.childRef.ipnsName} requires ` +
+          'RotationParams.ownerPrivateKey to repair via the ECIES checkpoint — none supplied'
+      );
+    }
+
+    const wrappedKeyB64 = await keyCheckpointCallbacks!.getWrappedKey(item.childPubId);
+    if (wrappedKeyB64 === undefined) {
+      // D-05 fallback: the checkpoint is genuinely gone (GC'd, or never
+      // persisted by the lost prior run before it crashed) — no cryptographic
+      // recovery is possible from the durable floor.
+      throw new DirtyNodeUnrecoverableError(
+        `rotateReadFromNode: no checkpointed key for already-rotated dirty node ` +
+          `${item.childPubId} (${item.childRef.ipnsName}) — key genuinely lost, cannot recover`
+      );
+    }
+
+    // D-01/D-05: recover readKeyPrime — the node's CURRENT valid key (it was
+    // already rotated by the lost prior run). NEVER the stale item.nodeReadKey.
+    const readKeyPrime = await unwrapKey(base64ToBytes(wrappedKeyB64), ownerPrivateKey);
+
+    const resolved = await resolveIpnsRecord(item.childRef.ipnsName, ctx);
+    if (!resolved) {
+      // Fail-closed accounting (mirrors the missing-child-record convention
+      // elsewhere in this file, T-70-12) — the parent must still converge.
+      const parentState = parentTracking.get(item.parentIpnsName);
+      if (parentState) {
+        await decrementPendingAndMaybeRepublish(parentState, item.parentIpnsName);
+      }
+      return;
+    }
+    const childPub = await fetchPublishedNode(resolved.cid, ctx);
+    // Unseal with the RECOVERED key — this IS the node's current valid key
+    // (never the stale mirror-derived item.nodeReadKey).
+    const node = await unsealNode(childPub, readKeyPrime);
+
+    // D-02: re-seal ONLY the parent's SealedChildRef mirror.
+    let parentState = parentTracking.get(item.parentIpnsName);
+    if (!parentState) {
+      parentState = await resolveParentTrackingState(item.parentIpnsName);
+      if (parentState) parentState.pendingChildCount = 1;
+    }
+    if (parentState) {
+      const updatedChildReadKeySealed = await sealChildReadKey(
+        readKeyPrime,
+        parentState.parentNewReadKey,
+        item.childPubId,
+        item.childPubKind,
+        childPub.generation
+      );
+      const childIdx = parentState.children.findIndex((c) => c.ipnsName === item.childRef.ipnsName);
+      if (childIdx !== -1) {
+        parentState.children[childIdx] = {
+          ...parentState.children[childIdx],
+          readKeySealed: updatedChildReadKeySealed,
+          generation: childPub.generation,
+        };
+      }
+      // D-09: decrement the parent's pending count; republish once every
+      // child (including this repaired one) is accounted for.
+      await decrementPendingAndMaybeRepublish(parentState, item.parentIpnsName);
+    }
+
+    // D-04: GC the checkpoint only AFTER the parent mirror above has
+    // committed (the in-memory update, plus any triggered republish).
+    await keyCheckpointCallbacks!.deleteWrappedKey(item.childPubId);
+
+    // Seed this node's OWN ParentTrackingState so its children still enqueue
+    // (D-02/D-09 for its own subtree) — readKeyPrime IS the current valid key
+    // going forward (old===new: the node was already rotated by the lost
+    // prior run, not by this walk — mirrors the dirty-resume-root precedent).
+    const children = node.children ?? [];
+    if (children.length > 0) {
+      const thisNodeParentState: ParentTrackingState = {
+        parentNewReadKey: readKeyPrime,
+        parentOldReadKey: new Uint8Array(readKeyPrime),
+        parentIpnsName: item.childRef.ipnsName,
+        parentIpnsPrivateKey: item.ipnsPrivateKey,
+        parentIpnsPublicKey: item.ipnsPublicKey,
+        parentNodeId: item.childPubId,
+        parentNodeGeneration: childPub.generation,
+        parentLastSeq: resolved.sequenceNumber,
+        children: [...children],
+        baseChildrenSnapshot: [...children],
+        pendingChildCount: children.length,
+      };
+      parentTracking.set(item.childRef.ipnsName, thisNodeParentState);
+
+      for (const childRef of children) {
+        const resolvedChild = await resolveChildKeyAndEnvelope(childRef, readKeyPrime, ctx);
+        if (!resolvedChild) {
+          await decrementPendingAndMaybeRepublish(thisNodeParentState, item.childRef.ipnsName);
+          continue;
+        }
+        const { childPub: grandchildPub, childReadKey: grandchildReadKey } = resolvedChild;
+        const grandchildKeys = nodeKeySource?.(childRef.ipnsName);
+        queue.push({
+          childRef,
+          nodeReadKey: grandchildReadKey,
+          parentIpnsName: item.childRef.ipnsName,
+          ipnsPrivateKey: grandchildKeys?.privateKey,
+          ipnsPublicKey: grandchildKeys?.publicKey,
+          nodeWriteKey: grandchildKeys?.writeKey,
+          childPubId: grandchildPub.id,
+          childPubKind: grandchildPub.kind as 'folder' | 'file',
+          enqueuedGeneration: childRef.generation,
+          isDirtyItem: false,
+        });
+      }
+      // Terminal-owner zero happens at thisNodeParentState's OWN teardown
+      // (decrementPendingAndMaybeRepublish, once all of ITS children finish)
+      // — never here (Pitfall 2 / callee-zeroes-shared-buffer).
+    }
+    // No children: nothing will ever decrement a tracking entry for this node
+    // — mirrors the existing leaf-node convention elsewhere in this file
+    // (a freshly minted/recovered "current" key for a childless node is not
+    // defensively zeroed; it is simply never referenced again).
   }
 
   // SC#6 (Plan 70-06 / T-70-10): captures a fresh-copy result to hand back on the
@@ -1632,6 +1924,7 @@ export async function rotateReadFromNode(
         childPubId: childPub.id,
         childPubKind: childPub.kind as 'folder' | 'file',
         enqueuedGeneration: childRef.generation,
+        isDirtyItem: false,
       });
     }
 
@@ -1670,6 +1963,19 @@ export async function rotateReadFromNode(
     }
 
     try {
+      // SC#3 (Plan 70.1-05 / D-05): route an already-rotated dirty item to the
+      // ECIES-checkpoint repair path — ONLY when keyCheckpointCallbacks is
+      // wired (D-01 conditional invocation). Never feeds the STALE
+      // item.nodeReadKey into rotateOne/unsealNode (T1 AEAD crash). When
+      // keyCheckpointCallbacks is absent, fall through unchanged to the
+      // pre-existing safe-double-rotation behavior below (Plan 70-06 /
+      // design §4.5) — fully backward compatible for callers who have not
+      // yet wired the checkpoint plane.
+      if (item.isDirtyItem && keyCheckpointCallbacks) {
+        await repairDirtyNode(item);
+        continue;
+      }
+
       // Plan 70-06 / SC#3: NO convergence-skip guard here anymore. Design §4.5's
       // crash-recovery model is safe DOUBLE-ROTATION — a node already rotated
       // (by a lost prior run OR discovered via the dirty-tail frontier merge
@@ -1694,6 +2000,10 @@ export async function rotateReadFromNode(
         // is reachable from the real (non-test) walk.
         innerGrants,
         grantCallbacks,
+        // SC#3 (Plan 70.1-05): thread the key-checkpoint seam to every rotateOne
+        // call site in the BFS, not just the root.
+        ownerPublicKey,
+        keyCheckpointCallbacks,
       });
 
       if (!result.skipped) {
@@ -1802,6 +2112,7 @@ export async function rotateReadFromNode(
             childPubId: childPub.id,
             childPubKind: childPub.kind as 'folder' | 'file',
             enqueuedGeneration: childRef.generation,
+            isDirtyItem: false,
           });
         }
       } else {

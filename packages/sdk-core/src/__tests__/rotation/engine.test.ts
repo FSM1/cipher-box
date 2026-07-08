@@ -10,6 +10,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import * as secp256k1 from '@noble/secp256k1';
+import { unwrapKey } from '@cipherbox/crypto';
 import {
   rotateOne,
   rotateReadFromNode,
@@ -18,7 +20,9 @@ import {
   verifySubtreeClean,
   mergeConcurrentChildren,
   RootKeyStaleError,
+  DirtyNodeUnrecoverableError,
   type GrantRemintCallbacks,
+  type KeyCheckpointCallbacks,
   type RotationJobRecord,
   type RotationParams,
 } from '../../rotation/engine';
@@ -2858,5 +2862,321 @@ describe('rotateReadFromNode — terminal persist and child-key zeroization (Pla
     // In GREEN: zeroed → all bytes are 0 → assertion passes.
     expect(capturedChildReadKeys.length).toBeGreaterThan(0);
     expect(capturedChildReadKeys[0].every((b) => b === 0)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Plan 70.1-05 Task 1 RED — keyCheckpoint call-order + pre-rotateOne
+// dirty-item repair (SC#3 / D-01..D-05)
+//
+// @cipherbox/crypto is NOT mocked in this file (see module mocks above — only
+// @cipherbox/core is intercepted), so wrapKey/unwrapKey below are the REAL
+// ECIES implementations. A genuine on-curve secp256k1 keypair is required.
+// ---------------------------------------------------------------------------
+
+function generateOwnerKeypair(): { publicKey: Uint8Array; privateKey: Uint8Array } {
+  const privateKey = secp256k1.utils.randomPrivateKey();
+  const publicKey = secp256k1.getPublicKey(privateKey, false); // uncompressed, 0x04 prefix
+  return { publicKey, privateKey };
+}
+
+function base64ToBytesTest(b64: string): Uint8Array {
+  return new Uint8Array(Buffer.from(b64, 'base64'));
+}
+
+describe('SC#3 keyCheckpoint seam + repair (Plan 70.1-05)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it("Test A (D-03): persistWrappedKey is called and RESOLVES before publishWithCas fires, wrapping under the owner's own pubkey", async () => {
+    const owner = generateOwnerKeypair();
+    const callOrder: string[] = [];
+
+    mockFns.resolveIpnsRecord.mockResolvedValue({
+      cid: 'bafy-node-cid',
+      sequenceNumber: 3n,
+      signatureVerified: true,
+    });
+    mockFns.fetchFromIpfs.mockResolvedValue(
+      new TextEncoder().encode(JSON.stringify(makePublishedNode(NODE_ID, 2)))
+    );
+    mockFns.unsealNode.mockResolvedValue(makeFolderNode({ children: [] }));
+    mockFns.sealNode.mockResolvedValue(makePublishedNode(NODE_ID, 3));
+    mockFns.sealChildReadKey.mockResolvedValue('newchildsealed==');
+    mockFns.publishWithCas.mockImplementation(async () => {
+      callOrder.push('publishWithCas');
+      return { cid: 'bafy-new-cid', newSequenceNumber: 4n, publishedData: [], prunedCids: [] };
+    });
+
+    const persistWrappedKey = vi.fn(async (_nodeId: string, _wrappedB64: string) => {
+      // Deliberately delayed so an un-awaited (fire-and-forget) call in the
+      // implementation would let publishWithCas race ahead of this resolving —
+      // catching a real ordering bug, not just a code-position coincidence.
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      callOrder.push('persistWrappedKey');
+    });
+    const keyCheckpointCallbacks: KeyCheckpointCallbacks = {
+      persistWrappedKey,
+      getWrappedKey: vi.fn(),
+      deleteWrappedKey: vi.fn(),
+    };
+
+    const jobRecord = makeJobRecord();
+    const ctx = createMockContext();
+    const FAKE_NODE_KEY = new Uint8Array(32).fill(0x11);
+
+    await rotateOne({
+      nodeId: NODE_ID,
+      nodeIpnsName: NODE_IPNS,
+      nodeIpnsPrivateKey: FAKE_NODE_KEY,
+      parentReadKey: PARENT_READ_KEY,
+      parentIpnsName: PARENT_IPNS,
+      parentCurrentSeq: 5n,
+      jobRecord,
+      ctx,
+      ownerPublicKey: owner.publicKey,
+      keyCheckpointCallbacks,
+    });
+
+    // D-03: persistWrappedKey must be called, and must complete BEFORE publishWithCas.
+    expect(persistWrappedKey).toHaveBeenCalledTimes(1);
+    expect(persistWrappedKey).toHaveBeenCalledWith(NODE_ID, expect.any(String));
+    expect(callOrder).toEqual(['persistWrappedKey', 'publishWithCas']);
+
+    // The wrapped ciphertext must unwrap under the owner's own private key to
+    // exactly the SAME readKeyPrime that was sealed for the parent's mirror
+    // (sealChildReadKey's first argument is the plaintext readKeyPrime).
+    const [wrappedB64] = persistWrappedKey.mock.calls[0].slice(1) as [string];
+    const unwrapped = await unwrapKey(base64ToBytesTest(wrappedB64), owner.privateKey);
+    const readKeyPrimeUsedForSeal = mockFns.sealChildReadKey.mock.calls[0][0] as Uint8Array;
+    expect(unwrapped).toEqual(readKeyPrimeUsedForSeal);
+  });
+
+  it("Test B (D-01/D-02/D-04/D-05): an already-rotated dirty node is repaired via the checkpoint — rotateOne/unsealNode never see the stale key, the parent mirror is re-sealed, and the checkpoint is GC'd after", async () => {
+    const owner = generateOwnerKeypair();
+
+    const KC_NODE_ID = 'kc-node-1111-2222-3333-444444444444';
+    const KC_NODE_IPNS = 'k51kcnode00000000000000000000000000000000000000000000000000000000';
+    const KC_ROOT_READ_KEY = new Uint8Array(32).fill(0xee);
+    const KC_ROOT_IPNS_KEY = new Uint8Array(32).fill(0x10);
+    // Distinct marker so we can prove this STALE key is never fed into unsealNode.
+    const STALE_KEY_MARKER = new Uint8Array(32).fill(0xde);
+    // The REAL current key for KC_NODE, recovered from the checkpoint.
+    const REAL_READ_KEY_PRIME = new Uint8Array(32).fill(0xaa);
+
+    const wrappedBytes = await (
+      await import('@cipherbox/crypto')
+    ).wrapKey(REAL_READ_KEY_PRIME, owner.publicKey);
+    const wrappedKeyB64 = Buffer.from(wrappedBytes).toString('base64');
+
+    const rootNode = makeFolderNode({
+      id: NODE_ID,
+      generation: 1,
+      children: [
+        {
+          name: 'kc-child',
+          ipnsName: KC_NODE_IPNS,
+          generation: 0, // parent mirror stale — actual published generation is 1
+          versionFloor: 0n,
+          readKeySealed: 'kc-child-sealed==',
+        },
+      ],
+    });
+
+    const callOrder: string[] = [];
+    const publishWithCasCalls: string[] = [];
+
+    mockFns.resolveIpnsRecord.mockImplementation(async (ipnsName: string) => ({
+      cid: ipnsName === NODE_IPNS ? 'bafy-kc-root' : 'bafy-kc-child',
+      sequenceNumber: 5n,
+      signatureVerified: true,
+    }));
+    mockFns.fetchFromIpfs.mockImplementation(async (_ctx: unknown, cid: string) => {
+      if (cid === 'bafy-kc-root')
+        return new TextEncoder().encode(JSON.stringify(makePublishedNode(NODE_ID, 1)));
+      // KC_NODE published at generation 1 — ALREADY rotated (dirty edge).
+      return new TextEncoder().encode(JSON.stringify(makePublishedNode(KC_NODE_ID, 1, 'folder')));
+    });
+    mockFns.unsealNode.mockImplementation(
+      async (published: import('@cipherbox/core').PublishedNode, key: Uint8Array) => {
+        if (published.id === KC_NODE_ID) {
+          // MUST never be called with the STALE mirror-derived key.
+          expect(key).not.toEqual(STALE_KEY_MARKER);
+          expect(key).toEqual(REAL_READ_KEY_PRIME);
+          return makeFolderNode({ id: KC_NODE_ID, generation: 1, children: [] });
+        }
+        return rootNode;
+      }
+    );
+    mockFns.unsealChildReadKey.mockImplementation(async () => new Uint8Array(STALE_KEY_MARKER));
+    mockFns.sealChildReadKey.mockImplementation(async (readKey: Uint8Array) => {
+      callOrder.push('sealChildReadKey');
+      // Prove the repair path seals the RECOVERED key, not the stale one.
+      expect(readKey).toEqual(REAL_READ_KEY_PRIME);
+      return 'kc-resealed==';
+    });
+    mockFns.sealNode.mockImplementation(async (node: import('@cipherbox/core').Node) =>
+      makePublishedNode(node.id, node.generation)
+    );
+    mockFns.publishWithCas.mockImplementation(async (params: { ipnsName: string }) => {
+      publishWithCasCalls.push(params.ipnsName);
+      return { cid: 'bafy-kc-new', newSequenceNumber: 6n, publishedData: [], prunedCids: [] };
+    });
+
+    const getWrappedKey = vi.fn(async (nodeId: string) => {
+      callOrder.push('getWrappedKey');
+      expect(nodeId).toBe(KC_NODE_ID);
+      return wrappedKeyB64;
+    });
+    const deleteWrappedKey = vi.fn(async (nodeId: string) => {
+      callOrder.push('deleteWrappedKey');
+      expect(nodeId).toBe(KC_NODE_ID);
+    });
+    const keyCheckpointCallbacks: KeyCheckpointCallbacks = {
+      persistWrappedKey: vi.fn(),
+      getWrappedKey,
+      deleteWrappedKey,
+    };
+
+    const jobRecord = makeJobRecord({
+      rootNodeId: NODE_ID,
+      completedNodeIds: new Set([NODE_ID]), // resume: root already committed
+    });
+
+    await rotateReadFromNode({
+      rootNodeId: NODE_ID,
+      rootNodeIpnsName: NODE_IPNS,
+      rootReadKey: KC_ROOT_READ_KEY,
+      rootIpnsPrivateKey: KC_ROOT_IPNS_KEY,
+      ownerPrivateKey: owner.privateKey,
+      keyCheckpointCallbacks,
+      jobRecord,
+      ctx: createMockContext(),
+    });
+
+    // rotateOne/unsealNode never ran a FULL rotation for KC_NODE — no sealNode/
+    // publishWithCas call for KC_NODE_ID/KC_NODE_IPNS (only the parent republishes).
+    expect(publishWithCasCalls).not.toContain(KC_NODE_IPNS);
+    expect(publishWithCasCalls).toContain(NODE_IPNS);
+
+    // Repair path ordering: recover key -> re-seal parent mirror -> GC checkpoint.
+    expect(callOrder).toEqual(['getWrappedKey', 'sealChildReadKey', 'deleteWrappedKey']);
+    expect(getWrappedKey).toHaveBeenCalledWith(KC_NODE_ID);
+    expect(deleteWrappedKey).toHaveBeenCalledWith(KC_NODE_ID);
+  });
+
+  it('Test C (D-04): a clean happy-path rotation with NO keyCheckpointCallbacks invokes zero seam work', async () => {
+    mockFns.resolveIpnsRecord.mockResolvedValue({
+      cid: 'bafy-node-cid',
+      sequenceNumber: 3n,
+      signatureVerified: true,
+    });
+    mockFns.fetchFromIpfs.mockResolvedValue(
+      new TextEncoder().encode(JSON.stringify(makePublishedNode(NODE_ID, 2)))
+    );
+    mockFns.unsealNode.mockResolvedValue(makeFolderNode({ children: [] }));
+    mockFns.sealNode.mockResolvedValue(makePublishedNode(NODE_ID, 3));
+    mockFns.sealChildReadKey.mockResolvedValue('newchildsealed==');
+    mockFns.publishWithCas.mockResolvedValue({
+      cid: 'bafy-new-cid',
+      newSequenceNumber: 4n,
+      publishedData: [],
+      prunedCids: [],
+    });
+
+    const jobRecord = makeJobRecord();
+    const ctx = createMockContext();
+    const FAKE_NODE_KEY = new Uint8Array(32).fill(0x11);
+
+    // No ownerPublicKey, no keyCheckpointCallbacks supplied at all.
+    await expect(
+      rotateOne({
+        nodeId: NODE_ID,
+        nodeIpnsName: NODE_IPNS,
+        nodeIpnsPrivateKey: FAKE_NODE_KEY,
+        parentReadKey: PARENT_READ_KEY,
+        parentIpnsName: PARENT_IPNS,
+        parentCurrentSeq: 5n,
+        jobRecord,
+        ctx,
+      })
+    ).resolves.toBeDefined();
+  });
+
+  it("Test D (D-05 fallback): a truly-expired/GC'd checkpoint surfaces DirtyNodeUnrecoverableError, not an AEAD crash", async () => {
+    const owner = generateOwnerKeypair();
+
+    const KC_NODE_ID = 'kc-gone-1111-2222-3333-444444444444';
+    const KC_NODE_IPNS = 'k51kcgone000000000000000000000000000000000000000000000000000000000';
+    const STALE_KEY_MARKER = new Uint8Array(32).fill(0xde);
+
+    const rootNode = makeFolderNode({
+      id: NODE_ID,
+      generation: 1,
+      children: [
+        {
+          name: 'kc-gone-child',
+          ipnsName: KC_NODE_IPNS,
+          generation: 0,
+          versionFloor: 0n,
+          readKeySealed: 'kc-gone-sealed==',
+        },
+      ],
+    });
+
+    mockFns.resolveIpnsRecord.mockImplementation(async (ipnsName: string) => ({
+      cid: ipnsName === NODE_IPNS ? 'bafy-kc-gone-root' : 'bafy-kc-gone-child',
+      sequenceNumber: 5n,
+      signatureVerified: true,
+    }));
+    mockFns.fetchFromIpfs.mockImplementation(async (_ctx: unknown, cid: string) => {
+      if (cid === 'bafy-kc-gone-root')
+        return new TextEncoder().encode(JSON.stringify(makePublishedNode(NODE_ID, 1)));
+      return new TextEncoder().encode(JSON.stringify(makePublishedNode(KC_NODE_ID, 1, 'folder')));
+    });
+    mockFns.unsealNode.mockImplementation(
+      async (published: import('@cipherbox/core').PublishedNode) => {
+        if (published.id === KC_NODE_ID) {
+          throw new Error('unsealNode must never be reached for an unrecoverable dirty node');
+        }
+        return rootNode;
+      }
+    );
+    mockFns.unsealChildReadKey.mockImplementation(async () => new Uint8Array(STALE_KEY_MARKER));
+
+    const getWrappedKey = vi.fn(async () => undefined); // genuinely lost / GC'd
+    const deleteWrappedKey = vi.fn();
+    const keyCheckpointCallbacks: KeyCheckpointCallbacks = {
+      persistWrappedKey: vi.fn(),
+      getWrappedKey,
+      deleteWrappedKey,
+    };
+
+    const jobRecord = makeJobRecord({
+      rootNodeId: NODE_ID,
+      completedNodeIds: new Set([NODE_ID]),
+    });
+
+    let caughtError: unknown;
+    try {
+      await rotateReadFromNode({
+        rootNodeId: NODE_ID,
+        rootNodeIpnsName: NODE_IPNS,
+        rootReadKey: new Uint8Array(32).fill(0xee),
+        rootIpnsPrivateKey: new Uint8Array(32).fill(0x10),
+        ownerPrivateKey: owner.privateKey,
+        keyCheckpointCallbacks,
+        jobRecord,
+        ctx: createMockContext(),
+      });
+    } catch (err) {
+      caughtError = err;
+    }
+
+    expect(caughtError).toBeInstanceOf(DirtyNodeUnrecoverableError);
+    expect((caughtError as Error).name).toBe('DirtyNodeUnrecoverableError');
+    expect(deleteWrappedKey).not.toHaveBeenCalled();
+    expect(mockFns.publishWithCas).not.toHaveBeenCalled();
   });
 });
