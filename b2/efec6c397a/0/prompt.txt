@@ -1,0 +1,38 @@
+<task-notification>
+<task-id>a96d38d1bd6709df1</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a96d38d1bd6709df1.output</output-file>
+<status>completed</status>
+<summary>Agent "Research Phase 70.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The extension is complete and structurally coherent (789 lines, all 7 Sharp Questions + 8 Pitfalls + SC#8 test rows present). Not committed, per your instruction — the file is modified-but-uncommitted for your verification.
+
+## RESEARCH COMPLETE
+
+**Phase:** 70.1 — extended with desktop FUSE rotation live-wiring grounding (SC#8 / D-14..D-17)
+**Confidence:** HIGH (every FUSE/adapter signature and line number re-read against the live tree this session)
+
+### What I added (all EXTENSIONS — nothing shrunk)
+
+- **New `## Sharp Question 7`** with 5 subsections at full line-level fidelity:
+  - **7.1** — the complete `RotationDeps` trait contract (10 methods incl. the 3 new key-checkpoint ones) as a table, each mapped to the EXISTING primitive it delegates to (`resolve_ipns_verified` `ipns.rs:169`, `fetch_content` `ipfs.rs:14`+`decode_published_node`, `publish_ipns` `ipns.rs:401`, `collect_sent_shares`→`GrantRow`), plus adapter location (`crates/fuse/src/write_ops/rotation_deps.rs`) and how it sources `api`/owner keypair/rt from `CipherBoxFS` (`fs.rs:32-37`).
+  - **7.2** — the exact `rotate_read_on_scope_exit` stub (`grant_scope.rs:269-287`), the two missing inputs (`root_node_id`, `root_read_key`) it must thread, and the already-correct `fs.rt.block_on` async bridge (`:326-334`).
+  - **7.3** — all 4 D-15 gate fixes with exact sites: (a) `SentSharesCache::empty()` fail-open (`:99-110`, `:310-314`), (b) `ancestor_ipns_chain` early-break fail-open (`:60-66` vs clean `:81-83`), (c) poisoned-lock `.expect(...)` panic (`:310-314`), (d) delete.rs bin-ref-before-gate (`:94-203`/`:300-402`) + rename.rs POSIX-after-gate + dest_ino gap (`:101-166`).
+  - **7.4** — two-tier harness (cheap `cargo test -p cipherbox-fuse` reusing the existing `delete.rs:450-811` harness for all 4 gate fixes + adapter-over-faked-transport; expensive dispatch-gated desktop-e2e for one real-mount smoke).
+  - **7.5** — D-17 sequencing confirmed + full consumer blast radius (7 files, incl. the test that must INVERT).
+- **8 new SC#8 test-map rows** (D-15a/b/c/d, D-14 adapter, D-16 acceptance, D-14 inversion).
+- **3 new Pitfalls** (6: D-17 sequencing violation; 7: 409 conflict-shape mismatch; 8: over-correcting the cache fix).
+- Updated Recommended Project Structure, Wave 0 Gaps, Architectural Responsibility Map, and 4 new Security-Domain STRIDE rows (incl. the CRITICAL revocation-bypass).
+
+### Adapter landmines (things that must be BUILT, not just assembled)
+
+1. **The production `RotationDeps` adapter does not exist at all** — only the test `FakeDeps`. It's an assembly job (every method has an existing primitive) EXCEPT the key-checkpoint seam plumbing from SQ6, which is genuinely new.
+2. **409 conflict-shape mismatch (Pitfall 7):** the engine's `PublishAttempt::Conflict` needs the `remote: PublishedNode`, but `publish_ipns`'s `PublishResult::Conflict` returns only `current_sequence_number: String`. The adapter must do a follow-up resolve+fetch to materialize `remote` — an extra round-trip that's easy to miss and silently breaks concurrent-add merge.
+3. **CRITICAL fail-open (D-15a):** `SentSharesCache` is `Default`/`empty()` → an unrefreshed cache makes every shared delete look private → revocation bypass. The fix must key on "successfully refreshed once," not "set is non-empty" (Pitfall 8), or it breaks legitimate zero-share private deletes.
+4. **`ancestor_ipns_chain` and the gate return `Vec`/panic** — no way to express "fail closed" today; both need signature changes (`Result`/authoritativeness bit) before the fixes are expressible.
+5. **Grant re-mint on desktop (`query_grants_rooted_at`/`update_grant`/`delete_grant`) can start as the trait's default no-ops** — but then ROT-04 (no orphaned inner grant) isn't enforced on desktop; flagged as an explicit scope choice for the planner.
+6. **One existing test inverts** (`unlink_shared_scope_exit_fails_closed_until_rotation_wired`, `delete.rs:644`, currently asserts EIO) and two private-delete tests must switch to authoritative-empty seeding.
+
+File is modified-but-uncommitted for your verification and commit.</result>
+<usage><subagent_tokens>362088</subagent_tokens><tool_uses>17</tool_uses><duration_ms>345872</duration_ms></usage>
+</task-notification>

@@ -1,0 +1,185 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "b2efec6c397a",
+  "session_id": "a4ed1cb9-4e4c-4d71-bc03-3c2c6b4e70a3",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-08T14:35:22.326398Z",
+  "branch": "feat/rotation-read-plane-durability-and-deep-crash-resume-soundne",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-RESEARCH.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "a48141b9484b",
+  "checkpoint_transcript_start": 347,
+  "transcript_lines_at_start": 347,
+  "token_usage": {
+    "input_tokens": 2,
+    "cache_creation_tokens": 220750,
+    "cache_read_tokens": 22753,
+    "output_tokens": 3636,
+    "api_call_count": 1
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-plan-phase-2026-07-08T13:42:46.030418Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "0eb6f9cbb31b",
+      "timestamp": "2026-07-08T13:42:46.030418Z",
+      "native": {
+        "command": "/gsd-plan-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-plan-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Extend the CipherBox Phase 70.1 planning research doc (.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-RESEARCH.md) with grounded findings on desktop FUSE rotation live-wiring (SC#8 / D-14..D-17), then verify and commit the extension.",
+    "outcome": "Background research agent extended the RESEARCH.md to 789 lines (added Sharp Question 7 with 5 subsections, 8 new SC#8 test-map rows, 3 new pitfalls, updated architecture/STRIDE sections) at HIGH confidence with every line reference re-checked against the live tree; the assistant then ran verify+commit on the file.",
+    "learnings": {
+      "repo": [
+        "CipherBox planning docs live under .planning/phases/<phase>/<phase>-RESEARCH.md and follow a structured format: Sharp Questions, Pitfalls, and an SC# (Scenario/Coverage) test map.",
+        "The production RotationDeps adapter for FUSE rotation does not exist yet — only a test FakeDeps implementation exists; building the real adapter is an assembly job except for the key-checkpoint seam, which is genuinely new.",
+        "publish_ipns's PublishResult::Conflict only returns current_sequence_number, not the full PublishedNode the rotation engine's PublishAttempt::Conflict expects — any adapter must do an extra resolve+fetch round-trip to materialize `remote`, or concurrent-add merge silently breaks.",
+        "SentSharesCache defaults to Default/empty(), which currently makes an unrefreshed cache treat every shared delete as private — a fail-open revocation bypass; the fix must key off 'successfully refreshed once' rather than 'set is non-empty'.",
+        "ancestor_ipns_chain and the rotation gate currently return Vec/panic on failure with no way to express 'fail closed' — both need signature changes (Result or an authoritativeness bit) before the fail-closed fixes are even expressible."
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/write_ops/rotation_deps.rs",
+          "finding": "Intended location for the production RotationDeps adapter; currently unimplemented, only FakeDeps exists in tests."
+        },
+        {
+          "path": "ipns.rs",
+          "line": 169,
+          "finding": "resolve_ipns_verified — primitive backing RotationDeps' resolve method."
+        },
+        {
+          "path": "ipfs.rs",
+          "line": 14,
+          "finding": "fetch_content — primitive backing RotationDeps' fetch method (paired with decode_published_node)."
+        },
+        {
+          "path": "ipns.rs",
+          "line": 401,
+          "finding": "publish_ipns — backs RotationDeps publish; its Conflict variant only returns current_sequence_number, missing the full PublishedNode needed by PublishAttempt::Conflict (409 conflict-shape mismatch, Pitfall 7)."
+        },
+        {
+          "path": "fs.rs",
+          "line": 32,
+          "end_line": 37,
+          "finding": "CipherBoxFS sources the api client, owner keypair, and tokio runtime that the RotationDeps adapter needs to close over."
+        },
+        {
+          "path": "grant_scope.rs",
+          "line": 269,
+          "end_line": 287,
+          "finding": "rotate_read_on_scope_exit stub — missing root_node_id and root_read_key inputs that must be threaded through."
+        },
+        {
+          "path": "grant_scope.rs",
+          "line": 326,
+          "end_line": 334,
+          "finding": "fs.rt.block_on async bridge — already correctly implemented for calling into async rotation code from sync FUSE ops."
+        },
+        {
+          "path": "delete.rs",
+          "line": 99,
+          "end_line": 110,
+          "finding": "SentSharesCache::empty() fail-open path (D-15a)."
+        },
+        {
+          "path": "delete.rs",
+          "line": 310,
+          "end_line": 314,
+          "finding": "Poisoned-lock .expect(...) panic on the cache, and second fail-open site for D-15a."
+        },
+        {
+          "path": "delete.rs",
+          "line": 94,
+          "end_line": 203,
+          "finding": "Bin-ref-before-gate ordering bug feeding into D-15d."
+        },
+        {
+          "path": "delete.rs",
+          "line": 300,
+          "end_line": 402,
+          "finding": "Second bin-ref-before-gate site for D-15d fix."
+        },
+        {
+          "path": "rename.rs",
+          "line": 101,
+          "end_line": 166,
+          "finding": "POSIX-after-gate ordering bug plus a dest_ino gap (D-15d)."
+        },
+        {
+          "path": "delete.rs",
+          "line": 450,
+          "end_line": 811,
+          "finding": "Existing test harness reused as the cheap two-tier test target for all 4 gate fixes plus the adapter-over-faked-transport test."
+        },
+        {
+          "path": "delete.rs",
+          "line": 644,
+          "finding": "Test unlink_shared_scope_exit_fails_closed_until_rotation_wired currently asserts EIO; this is the one existing test that must invert once rotation is wired."
+        }
+      ],
+      "workflow": [
+        "GSD-style phase research is delegated to a background research subagent that re-verifies every referenced line number against the live tree before reporting HIGH confidence.",
+        "Per explicit user instruction, the research file was left modified-but-uncommitted for user verification before the assistant proceeded to a separate verify+commit step.",
+        "Non-blocking scope decisions surfaced by research (e.g., desktop grant re-mint defaults) are routed to the planner phase rather than interrupting the user directly."
+      ]
+    },
+    "friction": [],
+    "open_items": [
+      "Production RotationDeps adapter (crates/fuse/src/write_ops/rotation_deps.rs) still needs to be built — currently only test FakeDeps exists.",
+      "409 conflict-shape mismatch: adapter must add a follow-up resolve+fetch to materialize PublishedNode for PublishAttempt::Conflict.",
+      "CRITICAL fail-open fix (D-15a): SentSharesCache must be reworked to key on 'refreshed once' rather than 'non-empty', without breaking legitimate zero-share private deletes.",
+      "ancestor_ipns_chain and the rotation gate need signature changes (Result/authoritativeness bit) to make fail-closed behavior expressible.",
+      "Desktop grant re-mint (query_grants_rooted_at/update_grant/delete_grant) can start as trait no-ops but leaves ROT-04 (no orphaned inner grant) unenforced on desktop — flagged for the planner to make an explicit documented scope decision.",
+      "Test delete.rs:644 (unlink_shared_scope_exit_fails_closed_until_rotation_wired) must be inverted from asserting EIO once rotation is wired; two other private-delete tests must switch to authoritative-empty seeding.",
+      "Commit of the RESEARCH.md extension was initiated via Bash but the transcript ends before confirming the commit succeeded."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-08T14:34:19.954554Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 0,
+    "total_lines_changed": 0,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 117,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-RESEARCH.md": 116
+      }
+    }
+  ]
+}
