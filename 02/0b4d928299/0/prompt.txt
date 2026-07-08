@@ -1,0 +1,33 @@
+move the completed todos and /resolve-pr-reviews
+
+---
+
+should the @.planning/todos/pending/2026-07-08-rotation-crash-resume-depth2-soundness-gap.md be dealt with separately, or rolled in to one of the other already planned phases? if dealt with separately, maybe a phase 70.1 should be inserted to deal with this gap as well as the 2 hardening followup open items?
+
+---
+
+yeah please insert phase 70.1
+
+---
+
+ok please create a PR for this
+
+---
+
+do you think this phase needs a discussion?
+
+---
+
+/gsd-discuss-phase 70.1
+
+---
+
+What `surfaced the typed error plus top down re resolution` means? 
+
+What sequence of user/system actions triggers this situation
+
+How narrow is the data loss window?
+
+---
+
+can the new key not be stored encrypted (ECIES) temporarily for the duration of the rotation to prevent this scenario or make it resumable?
