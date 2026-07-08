@@ -773,15 +773,190 @@ struct QueueItem {
 // Rust twin of engine.ts's verifySubtreeClean)
 // ---------------------------------------------------------------------------
 
-/// One dirty edge discovered by [`verify_subtree_clean`]: a child whose OWN
-/// published `generation` is strictly greater than the generation recorded
-/// in the ROOT's `SealedChildRef` mirror — i.e. the child individually
-/// committed its own rotation in a prior (crashed) run, but the parent's
-/// batched republish that would reconcile the mirror never landed.
+/// One dirty edge discovered by [`verify_subtree_clean`], at ANY depth
+/// (D-12): a child whose OWN published `generation` is strictly greater than
+/// the generation recorded in its PARENT's `SealedChildRef` mirror — i.e.
+/// the child individually committed its own rotation in a prior (crashed)
+/// run, but the parent's batched republish that would reconcile the mirror
+/// never landed.
+///
+/// Widened (D-12, Rust twin of TS's `DirtyFrontierItem`, `engine.ts:587-597`)
+/// to carry everything a depth-aware consumer needs to seed its BFS queue
+/// directly at this node, without assuming it is an immediate child of the
+/// scope root:
+/// - `parent_ipns_name` — this node's REAL parent (may be any depth below
+///   root), not necessarily the scope root.
+/// - `node_read_key` — this node's own pre-rotation read key, already
+///   derived via the shared read-only key-chain walk (D-09: owned
+///   `Zeroizing`, dropped/zeroed automatically once a consumer is done with
+///   it, or explicitly by the terminal owner).
+/// - `child_pub_kind` / `enqueued_generation` — the child's published kind
+///   and the parent-mirror generation captured when this dirty edge was
+///   found.
 #[derive(Debug, Clone)]
 pub struct DirtyFrontierEntry {
     pub ipns_name: String,
     pub node_id: String,
+    pub parent_ipns_name: String,
+    pub node_read_key: Zeroizing<[u8; 32]>,
+    pub child_pub_kind: NodeKind,
+    pub enqueued_generation: u32,
+}
+
+/// Outcome of a [`verify_subtree_clean`] walk (D-12) — Rust twin of the TS
+/// `{ isDirty, frontier }` return shape (`engine.ts:648-653`).
+///
+/// `is_dirty` is the DISTINCT signal a caller must check instead of
+/// `frontier.is_empty()`: a missing root is `{ is_dirty: true, frontier: []
+/// }` — the same empty `Vec` shape as a genuinely fully-converged subtree,
+/// but NOT the same meaning. Conflating the two (the pre-D-12 bug) silently
+/// treats "the root record is gone" as "nothing left to reconcile."
+#[derive(Debug, Clone)]
+pub struct VerifySubtreeOutcome {
+    pub is_dirty: bool,
+    pub frontier: Vec<DirtyFrontierEntry>,
+}
+
+/// Read-only child read-key derivation shared by [`enqueue_child`] (the BFS
+/// walk driver) and [`collect_dirty_frontier`] (the verify walk) — D-12.
+/// Both derive a child's own pre-rotation read key from its parent's read
+/// key via [`unseal_child_read_key`], using the child's plaintext `id`/
+/// `kind` for the AAD binding and the PARENT's mirror `generation` (never
+/// the child's own envelope generation) as the generation-source rule
+/// requires.
+fn derive_child_read_key(
+    parent_read_key: &[u8],
+    child_ref: &SealedChildRef,
+    child_id: &str,
+    child_kind: NodeKind,
+) -> Result<Zeroizing<[u8; 32]>, RotationError> {
+    let parent_read_key_arr = zeroizing_32_from_slice(parent_read_key)?;
+    let sealed_bytes = decode_b64(&child_ref.read_key_sealed)?;
+
+    let mut child_read_key_raw = unseal_child_read_key(
+        &sealed_bytes,
+        &parent_read_key_arr,
+        child_id,
+        child_kind,
+        child_ref.generation,
+    )
+    .map_err(|e| {
+        RotationError::RotateFailed(format!(
+            "derive_child_read_key: unseal_child_read_key failed for {}: {e}",
+            child_ref.ipns_name
+        ))
+    })?;
+
+    if child_read_key_raw.len() != 32 {
+        child_read_key_raw.zeroize();
+        return Err(RotationError::RotateFailed(format!(
+            "derive_child_read_key: unsealed read key for {} is not 32 bytes",
+            child_ref.ipns_name
+        )));
+    }
+    let mut child_read_key = Zeroizing::new([0u8; 32]);
+    child_read_key.copy_from_slice(&child_read_key_raw);
+    child_read_key_raw.zeroize();
+
+    Ok(child_read_key)
+}
+
+/// Recursive full-subtree dirty-edge walk backing [`verify_subtree_clean`]
+/// (D-12) — Rust twin of the TS `collectDirtyFrontier` recursion CONTRACT
+/// (`engine.ts:648-704`): recurse below CLEAN folder edges only, STOP below
+/// a DIRTY edge (its derived key is the child's STALE pre-rotation key from
+/// the still-unrefreshed parent mirror, which cannot unseal that child's
+/// CURRENT published body to discover further descendants — there is no
+/// cryptographic recovery path for a key genuinely lost to an interrupted
+/// prior run, RESEARCH.md Pitfall 4).
+///
+/// Implemented as an explicit work-stack rather than a literally recursive
+/// `async fn` (Rust cannot size a self-referential `async fn`'s state
+/// machine without heap-boxing every recursive call); traversal order is
+/// otherwise immaterial — every reachable node below a clean edge is still
+/// visited exactly once.
+///
+/// @security Read-only: never mints, seals, or publishes anything itself. A
+/// CLEAN edge's derived key is scoped entirely to this walk and is zeroed
+/// (via `Zeroizing`'s `Drop`) once it falls out of scope, since this walk is
+/// never its terminal owner (D-09); a DIRTY edge's key is moved into its
+/// frontier entry instead of being dropped here.
+async fn collect_dirty_frontier<D: RotationDeps>(
+    deps: &D,
+    root_ipns_name: &str,
+    root_children: &[SealedChildRef],
+    root_read_key: &Zeroizing<[u8; 32]>,
+    frontier: &mut Vec<DirtyFrontierEntry>,
+) -> Result<(), RotationError> {
+    let mut stack: Vec<(String, SealedChildRef, Zeroizing<[u8; 32]>)> = root_children
+        .iter()
+        .map(|c| (root_ipns_name.to_string(), c.clone(), root_read_key.clone()))
+        .collect();
+
+    while let Some((parent_ipns_name, child_ref, parent_read_key)) = stack.pop() {
+        let Some(child_resolved) = deps.resolve(&child_ref.ipns_name).await? else {
+            continue; // missing non-root child — data inconsistency, not root-dirty (mirrors the TS reference).
+        };
+        let child_pub = deps.fetch_node(&child_resolved.cid).await?;
+        let child_kind = node_kind_from_str(&child_pub.kind)?;
+
+        let child_read_key = derive_child_read_key(
+            parent_read_key.as_slice(),
+            &child_ref,
+            &child_pub.id,
+            child_kind,
+        )?;
+
+        // Dirty edge: child has rotated further than the parent's mirror.
+        if child_pub.generation > child_ref.generation {
+            frontier.push(DirtyFrontierEntry {
+                ipns_name: child_ref.ipns_name.clone(),
+                node_id: child_pub.id.clone(),
+                parent_ipns_name,
+                node_read_key: child_read_key,
+                child_pub_kind: child_kind,
+                enqueued_generation: child_ref.generation,
+            });
+            continue; // MUST NOT descend below a dirty edge — see docstring.
+        }
+
+        // Clean edge: the derived key IS provably the child's current valid
+        // key (parent mirror is up to date) — recurse into folder children
+        // only to find dirty edges deeper in the subtree.
+        if child_kind == NodeKind::Folder {
+            let read_sealed_bytes = decode_b64(&child_pub.read_sealed)?;
+            let child_body = unseal_node(
+                &read_sealed_bytes,
+                &child_read_key,
+                &child_pub.id,
+                child_kind,
+                child_pub.generation,
+            )
+            .map_err(|e| {
+                RotationError::RotateFailed(format!(
+                    "collect_dirty_frontier: unseal failed for {}: {e}",
+                    child_ref.ipns_name
+                ))
+            })?;
+            let child_node = decode_node(&child_body).map_err(|e| {
+                RotationError::RotateFailed(format!(
+                    "collect_dirty_frontier: decode failed for {}: {e}",
+                    child_ref.ipns_name
+                ))
+            })?;
+            for grandchild_ref in node_children(&child_node) {
+                stack.push((
+                    child_ref.ipns_name.clone(),
+                    grandchild_ref,
+                    child_read_key.clone(),
+                ));
+            }
+        }
+        // `child_read_key` drops (and zeroizes) here for a CLEAN edge — this
+        // walk never returns a clean edge's key to any caller (D-09).
+    }
+
+    Ok(())
 }
 
 /// Rebuilds the dirty frontier for `root_ipns_name`'s subtree from PUBLISHED
@@ -794,24 +969,31 @@ pub struct DirtyFrontierEntry {
 /// CURRENT (already-rotated) read key — the same key that unseals the root's
 /// presently-published envelope — not its pre-rotation key.
 ///
-/// A child is "dirty" when its own published `generation` exceeds the
-/// generation recorded in the root's `SealedChildRef` mirror (`PublishedNode
-/// .generation` is a plaintext wire field on both sides — no child unsealing
-/// is needed to make this comparison, D-10). Returns an empty frontier (and
-/// thus "fully converged, nothing left to reconcile") when the root has no
-/// published record at all, matching the TS reference's fail-open-to-clean
-/// default for a torn-down subtree.
+/// Recurses the FULL subtree (D-12, not just the root's immediate children):
+/// a child is "dirty" when its own published `generation` exceeds the
+/// generation recorded in its PARENT's `SealedChildRef` mirror
+/// (`PublishedNode.generation` is a plaintext wire field on both sides — no
+/// child unsealing is needed to make this comparison, D-10). A MISSING root
+/// record is surfaced as `is_dirty: true` (D-12) — never silently treated as
+/// "fully converged" — matching the TS reference's `{ isDirty: true,
+/// frontier: [] }` contract (`engine.ts:631`); the caller's dirty-resume
+/// branch re-resolves the root itself and raises a descriptive,
+/// actionable error when it too finds the root missing.
 ///
 /// @security Read-only: never mints, seals, or publishes anything itself.
 pub async fn verify_subtree_clean<D: RotationDeps>(
     deps: &D,
     root_ipns_name: &str,
     root_read_key: &[u8],
-) -> Result<Vec<DirtyFrontierEntry>, RotationError> {
-    let mut frontier = Vec::new();
-
+) -> Result<VerifySubtreeOutcome, RotationError> {
     let Some(root_resolved) = deps.resolve(root_ipns_name).await? else {
-        return Ok(frontier);
+        // D-12 / T-70.1-10: a missing root MUST NOT be conflated with
+        // "clean" — surface it as dirty with an empty (nothing discoverable)
+        // frontier.
+        return Ok(VerifySubtreeOutcome {
+            is_dirty: true,
+            frontier: Vec::new(),
+        });
     };
     let root_pub = deps.fetch_node(&root_resolved.cid).await?;
     let root_kind = node_kind_from_str(&root_pub.kind)?;
@@ -835,21 +1017,20 @@ pub async fn verify_subtree_clean<D: RotationDeps>(
         ))
     })?;
 
-    for child_ref in node_children(&root_node) {
-        let Some(child_resolved) = deps.resolve(&child_ref.ipns_name).await? else {
-            continue; // child IPNS missing — skip (matches the TS reference).
-        };
-        let child_pub = deps.fetch_node(&child_resolved.cid).await?;
-        // Dirty edge: child has rotated further than the parent's mirror.
-        if child_pub.generation > child_ref.generation {
-            frontier.push(DirtyFrontierEntry {
-                ipns_name: child_ref.ipns_name.clone(),
-                node_id: child_pub.id.clone(),
-            });
-        }
-    }
+    let mut frontier = Vec::new();
+    collect_dirty_frontier(
+        deps,
+        root_ipns_name,
+        &node_children(&root_node),
+        &root_read_key_arr,
+        &mut frontier,
+    )
+    .await?;
 
-    Ok(frontier)
+    Ok(VerifySubtreeOutcome {
+        is_dirty: !frontier.is_empty(),
+        frontier,
+    })
 }
 
 /// Rotates the read key for every node in the subtree rooted at
@@ -944,15 +1125,19 @@ pub async fn rotate_read_from_node<D: RotationDeps>(
             // already committed in a prior run. Rebuild the dirty frontier
             // from PUBLISHED records (D-10) rather than trusting the
             // advisory job record, which may have been lost in the crash.
-            let frontier = verify_subtree_clean(deps, root_ipns_name, root_read_key).await?;
-            if frontier.is_empty() {
+            let verify_outcome = verify_subtree_clean(deps, root_ipns_name, root_read_key).await?;
+            if !verify_outcome.is_dirty {
                 // Fully converged already (or the root has no published
                 // children at all) — nothing dirty to reconcile, and nothing
                 // further gets minted or published. No double-bump risk.
+                // (D-12: checked via `is_dirty`, NOT `frontier.is_empty()` —
+                // a missing root is `is_dirty: true` with an empty frontier,
+                // a DISTINCT outcome from "fully converged".)
                 job_record.status = RotationStatus::Complete;
                 deps.persist_job(job_record).await;
                 return Ok(None);
             }
+            let frontier = verify_outcome.frontier;
 
             // Dirty resume: re-fetch the root's CURRENT published state.
             // `root_read_key` is the root's POST-rotation key here — the
@@ -1142,33 +1327,10 @@ async fn enqueue_child<D: RotationDeps>(
 ) -> Result<(), RotationError> {
     let child_pub = resolve_and_fetch(deps, &child_ref.ipns_name).await?;
     let child_kind = node_kind_from_str(&child_pub.kind)?;
-    let parent_old_read_key_arr = zeroizing_32_from_slice(parent_old_read_key)?;
-    let sealed_bytes = decode_b64(&child_ref.read_key_sealed)?;
 
-    let mut child_read_key_raw = unseal_child_read_key(
-        &sealed_bytes,
-        &parent_old_read_key_arr,
-        &child_pub.id,
-        child_kind,
-        child_ref.generation,
-    )
-    .map_err(|e| {
-        RotationError::RotateFailed(format!(
-            "enqueue_child: unseal_child_read_key failed for {}: {e}",
-            child_ref.ipns_name
-        ))
-    })?;
-
-    if child_read_key_raw.len() != 32 {
-        child_read_key_raw.zeroize();
-        return Err(RotationError::RotateFailed(format!(
-            "enqueue_child: unsealed read key for {} is not 32 bytes",
-            child_ref.ipns_name
-        )));
-    }
-    let mut child_read_key = Zeroizing::new([0u8; 32]);
-    child_read_key.copy_from_slice(&child_read_key_raw);
-    child_read_key_raw.zeroize();
+    // D-12: shared with `collect_dirty_frontier`'s read-only verify walk.
+    let child_read_key =
+        derive_child_read_key(parent_old_read_key, child_ref, &child_pub.id, child_kind)?;
 
     queue.push_back(QueueItem {
         child_ref: child_ref.clone(),
@@ -2098,12 +2260,18 @@ mod rotate_read_from_node {
 
         // Nothing has rotated yet -- both children's published generations
         // match the root's mirror exactly.
-        let frontier = verify_subtree_clean(&deps, "k51/root", &root_read_key)
+        let outcome = verify_subtree_clean(&deps, "k51/root", &root_read_key)
             .await
             .unwrap();
         assert!(
-            frontier.is_empty(),
-            "expected a clean subtree, got: {frontier:?}"
+            !outcome.is_dirty,
+            "expected a clean subtree, got: {:?}",
+            outcome.frontier
+        );
+        assert!(
+            outcome.frontier.is_empty(),
+            "expected a clean subtree, got: {:?}",
+            outcome.frontier
         );
     }
 
@@ -2126,9 +2294,11 @@ mod rotate_read_from_node {
             seal_for_seed(&bumped_child, &[10u8; 32]),
         );
 
-        let frontier = verify_subtree_clean(&deps, "k51/root", &root_read_key)
+        let outcome = verify_subtree_clean(&deps, "k51/root", &root_read_key)
             .await
             .unwrap();
+        assert!(outcome.is_dirty);
+        let frontier = outcome.frontier;
         assert_eq!(
             frontier.len(),
             1,
@@ -2136,6 +2306,10 @@ mod rotate_read_from_node {
         );
         assert_eq!(frontier[0].ipns_name, "k51/child-0");
         assert_eq!(frontier[0].node_id, child_uuid(0));
+        assert_eq!(
+            frontier[0].parent_ipns_name, "k51/root",
+            "child-0's parent is the root at this depth"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -2174,7 +2348,12 @@ mod rotate_read_from_node {
         // committed its own rotation before a crash truncated the batched
         // republish chain that would have bumped B's mirror of it.
         let c_node = folder(&c_id, 1, vec![]);
-        deps.seed("k51/deep-c", "cid-deep-c-1", 1, seal_for_seed(&c_node, &c_key));
+        deps.seed(
+            "k51/deep-c",
+            "cid-deep-c-1",
+            1,
+            seal_for_seed(&c_node, &c_key),
+        );
 
         let b_sealed_key = seal_child_read_key(&b_key, &a_key, &b_id, NodeKind::Folder, 0).unwrap();
         let b_ref = SealedChildRef {
@@ -2185,7 +2364,12 @@ mod rotate_read_from_node {
             read_key_sealed: base64_encode(&b_sealed_key),
         };
         let b_node = folder(&b_id, 0, vec![c_ref]);
-        deps.seed("k51/mid-b", "cid-mid-b-0", 0, seal_for_seed(&b_node, &b_key));
+        deps.seed(
+            "k51/mid-b",
+            "cid-mid-b-0",
+            0,
+            seal_for_seed(&b_node, &b_key),
+        );
 
         let a_sealed_key =
             seal_child_read_key(&a_key, &root_read_key, &a_id, NodeKind::Folder, 0).unwrap();
@@ -2197,7 +2381,12 @@ mod rotate_read_from_node {
             read_key_sealed: base64_encode(&a_sealed_key),
         };
         let a_node = folder(&a_id, 0, vec![b_ref]);
-        deps.seed("k51/mid-a", "cid-mid-a-0", 0, seal_for_seed(&a_node, &a_key));
+        deps.seed(
+            "k51/mid-a",
+            "cid-mid-a-0",
+            0,
+            seal_for_seed(&a_node, &a_key),
+        );
 
         let root_node = folder(ROOT_ID, 0, vec![a_ref]);
         deps.seed(
