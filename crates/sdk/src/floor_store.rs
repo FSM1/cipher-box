@@ -1,11 +1,12 @@
-//! Durable JSON-sidecar `HighWaterStore` implementation (D-03).
+//! Durable JSON-sidecar `HighWaterStore` implementation (D-03/D-06/D-08).
 //!
-//! Persists the `{ nodeId: value }` floor map as a single JSON sidecar file
-//! adjacent to the FUSE journal dir, written atomically (temp file + rename,
-//! 0600 perms) mirroring the [`crate::queue::WriteQueue`] sidecar
-//! convention. No new storage dependency (sled/redb/rusqlite rejected per
-//! D-03) — the FUSE single-daemon model means this file is small
-//! (one `u64` per node) and read-modify-write on every access is cheap
+//! Persists ONE combined `{ nodeId: CombinedFloorRecord }` map — where
+//! `CombinedFloorRecord` holds `{ generation, seq, wrapped_key_checkpoint }`
+//! — as a single JSON sidecar file adjacent to the FUSE journal dir, written
+//! atomically (temp file + rename, 0600 perms) mirroring the
+//! [`crate::queue::WriteQueue`] sidecar convention. No new storage dependency
+//! (sled/redb/rusqlite rejected per D-03) — the FUSE single-daemon model
+//! means this file is small and read-modify-write on every access is cheap
 //! relative to an IPNS resolve.
 //!
 //! `get`/`put` (T-70-03/T-70-04) hold a `tokio::sync::Mutex` for the whole
@@ -18,8 +19,24 @@
 //! different `node_id`s can never lost-update each other or the map. A
 //! PRESENT-but-unparseable sidecar fails closed rather than degrading to a
 //! silent empty map (see [`CORRUPT_SIDECAR_FAIL_CLOSED_FLOOR`]).
+//!
+//! `JsonSidecarFloorStore::for_generation`/`for_seq` (D-06) both point at
+//! the SAME combined sidecar file — they differ only in which
+//! `CombinedFloorRecord` field they read/write — so the generation and seq
+//! floors for a nodeId can never diverge across two independent files the
+//! way the old two-sidecar-file shape could. A device upgrading from that
+//! old shape has its two files folded forward into the combined record on
+//! first read (Pitfall 4) — see [`fold_legacy_two_file_shape`].
+//!
+//! `persist_wrapped_key`/`get_wrapped_key`/`delete_wrapped_key` (D-07 Rust
+//! half) persist the wrapped-key checkpoint ciphertext into the SAME
+//! per-nodeId combined record, independent of the generation/seq fields —
+//! this is the concrete durable target the FUSE production `RotationDeps`
+//! adapter (Plan 09) delegates to. `persist_wrapped_key`/`delete_wrapped_key`
+//! fail closed on a write failure exactly like `put` (D-08) — a lost
+//! checkpoint write would defeat D-01.
 
-use crate::rotation::HighWaterStore;
+use crate::rotation::{HighWaterStore, RotationError};
 use std::collections::HashMap;
 use std::io::Write as _;
 #[cfg(unix)]
@@ -45,23 +62,104 @@ use tokio::sync::Mutex;
 /// and is larger than any legitimate live input, guaranteeing rejection.
 const CORRUPT_SIDECAR_FAIL_CLOSED_FLOOR: u64 = i64::MAX as u64;
 
+/// The combined per-nodeId durable record (D-06/D-07): both anti-rollback
+/// floors plus the optional wrapped-key checkpoint ciphertext, persisted
+/// together in ONE sidecar file so they can never diverge across two
+/// independent files the way the old two-sidecar-file shape could.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct CombinedFloorRecord {
+    #[serde(default)]
+    pub generation: u64,
+    #[serde(default)]
+    pub seq: u64,
+    /// Ciphertext only — never plaintext key material (CLAUDE.md Rule 6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wrapped_key_checkpoint: Option<Vec<u8>>,
+}
+
+/// Which `CombinedFloorRecord` field a given `JsonSidecarFloorStore`
+/// instance's `HighWaterStore::get`/`put` reads/writes. Both
+/// [`JsonSidecarFloorStore::for_generation`] and
+/// [`JsonSidecarFloorStore::for_seq`] point at the SAME combined sidecar
+/// file — this tag is what makes the two behave like independent floors
+/// while both filing into one durable record (D-06).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FloorField {
+    Generation,
+    Seq,
+}
+
+impl FloorField {
+    fn read(self, record: &CombinedFloorRecord) -> u64 {
+        match self {
+            FloorField::Generation => record.generation,
+            FloorField::Seq => record.seq,
+        }
+    }
+
+    /// Max-preserving write (SC#5/T-70-03): never lowers the field's
+    /// current value.
+    fn bump_max(self, record: &mut CombinedFloorRecord, value: u64) {
+        match self {
+            FloorField::Generation => record.generation = record.generation.max(value),
+            FloorField::Seq => record.seq = record.seq.max(value),
+        }
+    }
+}
+
+const COMBINED_FILE_NAME: &str = "rotation-high-water.json";
+const LEGACY_GENERATION_FILE_NAME: &str = "rotation-high-water-generation.json";
+const LEGACY_SEQ_FILE_NAME: &str = "rotation-high-water-seq.json";
+
 /// Outcome of loading the sidecar map from disk (blocking).
 enum LoadOutcome {
     /// The sidecar has never been written — genuinely "no floor known".
     Empty,
     /// The sidecar parsed successfully.
-    Map(HashMap<String, u64>),
+    Map(HashMap<String, CombinedFloorRecord>),
     /// A PRESENT sidecar failed to parse — fail-closed (T-70-04).
     Corrupt,
 }
 
-/// Load the whole `{ nodeId: value }` map from `path` (blocking; must run
-/// inside `spawn_blocking`). Distinguishes "never written" (empty map, not
-/// an error) from "present but unparseable" (`Corrupt`, fail-closed) — see
-/// [`CORRUPT_SIDECAR_FAIL_CLOSED_FLOOR`].
+/// Pitfall 4: folds the OLD two-file `{ nodeId: u64 }` shape (separate
+/// generation/seq sidecars) forward into a combined map. Only ever invoked
+/// when the new combined sidecar is absent (upgrade path). Returns `None`
+/// when NEITHER legacy file is present — a genuinely cold, never-migrated
+/// device, not a migration case.
+fn fold_legacy_two_file_shape(journal_dir: &Path) -> Option<HashMap<String, CombinedFloorRecord>> {
+    let gen_map = std::fs::read(journal_dir.join(LEGACY_GENERATION_FILE_NAME))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<HashMap<String, u64>>(&bytes).ok());
+    let seq_map = std::fs::read(journal_dir.join(LEGACY_SEQ_FILE_NAME))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<HashMap<String, u64>>(&bytes).ok());
+
+    if gen_map.is_none() && seq_map.is_none() {
+        return None;
+    }
+
+    let mut combined: HashMap<String, CombinedFloorRecord> = HashMap::new();
+    if let Some(map) = gen_map {
+        for (node_id, generation) in map {
+            combined.entry(node_id).or_default().generation = generation;
+        }
+    }
+    if let Some(map) = seq_map {
+        for (node_id, seq) in map {
+            combined.entry(node_id).or_default().seq = seq;
+        }
+    }
+    Some(combined)
+}
+
+/// Load the whole `{ nodeId: CombinedFloorRecord }` map from `path`
+/// (blocking; must run inside `spawn_blocking`). Distinguishes "never
+/// written" (folds the legacy two-file shape forward if present, else empty
+/// map — neither is an error) from "present but unparseable" (`Corrupt`,
+/// fail-closed) — see [`CORRUPT_SIDECAR_FAIL_CLOSED_FLOOR`].
 fn load_map_blocking(path: &Path) -> LoadOutcome {
     match std::fs::read(path) {
-        Ok(bytes) => match serde_json::from_slice::<HashMap<String, u64>>(&bytes) {
+        Ok(bytes) => match serde_json::from_slice::<HashMap<String, CombinedFloorRecord>>(&bytes) {
             Ok(map) => LoadOutcome::Map(map),
             Err(e) => {
                 log::error!(
@@ -73,12 +171,18 @@ fn load_map_blocking(path: &Path) -> LoadOutcome {
             }
         },
         // Only "no such file" genuinely means "never written" -- a cold
-        // start with no floor known yet. Any OTHER read error (permission
-        // denied, transient I/O failure, etc.) on a sidecar path that DOES
-        // exist must NOT be silently treated as cold-start (T3): that would
-        // bypass the anti-rollback regression check exactly like a corrupt
-        // sidecar would, so it fails closed the same way.
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => LoadOutcome::Empty,
+        // start with no floor known yet (modulo the legacy fold-forward
+        // below). Any OTHER read error (permission denied, transient I/O
+        // failure, etc.) on a sidecar path that DOES exist must NOT be
+        // silently treated as cold-start (T3): that would bypass the
+        // anti-rollback regression check exactly like a corrupt sidecar
+        // would, so it fails closed the same way.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            match path.parent().and_then(fold_legacy_two_file_shape) {
+                Some(migrated) => LoadOutcome::Map(migrated),
+                None => LoadOutcome::Empty,
+            }
+        }
         Err(e) => {
             log::error!(
                 "JsonSidecarFloorStore: read error for sidecar at {}: {} -- failing closed, not cold-starting",
@@ -97,8 +201,12 @@ fn load_map_blocking(path: &Path) -> LoadOutcome {
 /// partially-written/torn JSON file (mirrors `WriteQueue::put`'s
 /// fsync-then-durable-rename discipline, with the rename step added for
 /// true all-or-nothing atomicity across the existing-file-being-overwritten
-/// case).
-fn write_map_atomic_blocking(path: &Path, map: &HashMap<String, u64>) -> std::io::Result<()> {
+/// case). Every write serializes the WHOLE combined record for each node in
+/// the map, not just the field that changed (D-06).
+fn write_map_atomic_blocking(
+    path: &Path,
+    map: &HashMap<String, CombinedFloorRecord>,
+) -> std::io::Result<()> {
     let json = serde_json::to_vec(map)?;
 
     let tmp_path = path.with_extension("tmp");
@@ -124,11 +232,14 @@ fn write_map_atomic_blocking(path: &Path, map: &HashMap<String, u64>) -> std::io
     Ok(())
 }
 
-/// A durable `HighWaterStore` backed by a single JSON sidecar file.
+/// A durable `HighWaterStore` backed by a single combined JSON sidecar file
+/// (D-06).
 ///
-/// Two independent floors (generation, seq) require two independent
-/// instances of this store, each pointed at a different sidecar file — see
-/// [`JsonSidecarFloorStore::for_generation`] / [`JsonSidecarFloorStore::for_seq`].
+/// The two floors (generation, seq) are two `JsonSidecarFloorStore`
+/// instances constructed via [`JsonSidecarFloorStore::for_generation`] /
+/// [`JsonSidecarFloorStore::for_seq`] — both point at the SAME sidecar file
+/// and differ only in which `CombinedFloorRecord` field they read/write, so
+/// the two floors can never diverge across independent files.
 #[derive(Debug, Clone)]
 pub struct JsonSidecarFloorStore {
     path: PathBuf,
@@ -136,33 +247,151 @@ pub struct JsonSidecarFloorStore {
     /// `put` (T-70-03). `Arc`-wrapped so every `Clone` of this store shares
     /// the SAME lock — two independently-constructed instances pointed at
     /// the same sidecar path do NOT share this in-process lock (they only
-    /// ever coordinate through the sidecar file itself), matching this
-    /// crate's single-daemon-per-journal-dir model.
+    /// ever coordinate through the sidecar file itself, whose writes are
+    /// each individually atomic, and through `RotationHighWater`'s own
+    /// `bump_lock` which serializes every real mutating call), matching
+    /// this crate's single-daemon-per-journal-dir model.
     lock: Arc<Mutex<()>>,
+    /// Which field of the combined record this instance reads/writes.
+    field: FloorField,
 }
 
 impl JsonSidecarFloorStore {
-    /// Construct a floor store backed by `<journal_dir>/<file_name>`.
+    /// Construct a floor store backed by `<journal_dir>/<file_name>`,
+    /// scoped to a single `CombinedFloorRecord` field.
     ///
     /// The journal dir must already exist; this constructor does not create
     /// it (matches `WriteQueue::new`'s contract).
-    pub fn new(journal_dir: impl AsRef<Path>, file_name: &str) -> Self {
+    fn new(journal_dir: impl AsRef<Path>, file_name: &str, field: FloorField) -> Self {
         Self {
             path: journal_dir.as_ref().join(file_name),
             lock: Arc::new(Mutex::new(())),
+            field,
         }
     }
 
-    /// Convenience constructor for the generation-floor sidecar
-    /// (`<journal_dir>/rotation-high-water-generation.json`).
+    /// Convenience constructor for the generation-floor view of the
+    /// combined sidecar (`<journal_dir>/rotation-high-water.json`).
     pub fn for_generation(journal_dir: impl AsRef<Path>) -> Self {
-        Self::new(journal_dir, "rotation-high-water-generation.json")
+        Self::new(journal_dir, COMBINED_FILE_NAME, FloorField::Generation)
     }
 
-    /// Convenience constructor for the seq-floor sidecar
-    /// (`<journal_dir>/rotation-high-water-seq.json`).
+    /// Convenience constructor for the seq-floor view of the combined
+    /// sidecar (`<journal_dir>/rotation-high-water.json`).
     pub fn for_seq(journal_dir: impl AsRef<Path>) -> Self {
-        Self::new(journal_dir, "rotation-high-water-seq.json")
+        Self::new(journal_dir, COMBINED_FILE_NAME, FloorField::Seq)
+    }
+
+    /// Persists the wrapped-key checkpoint ciphertext into the combined
+    /// record for `node_id` (D-07 Rust half). Fails closed on a write
+    /// failure exactly like `put` (D-08) — a lost checkpoint write would
+    /// defeat D-01, so it MUST NOT log-and-return-Ok.
+    pub async fn persist_wrapped_key(
+        &self,
+        node_id: &str,
+        ciphertext: Vec<u8>,
+    ) -> Result<(), RotationError> {
+        let _guard = self.lock.lock().await;
+        let path = self.path.clone();
+        let node_id_owned = node_id.to_string();
+        let result = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+            let mut map = load_map_or_refuse_corrupt(&path, &node_id_owned)?;
+            map.entry(node_id_owned).or_default().wrapped_key_checkpoint = Some(ciphertext);
+            write_map_atomic_blocking(&path, &map)
+        })
+        .await;
+        map_persist_result(node_id, result)
+    }
+
+    /// Reads the wrapped-key checkpoint ciphertext for `node_id`, or `None`
+    /// if never persisted (or the sidecar is absent/corrupt — the
+    /// generation/seq fail-closed floor already blocks any resolve that
+    /// would otherwise consult a corrupt device's checkpoint).
+    pub async fn get_wrapped_key(&self, node_id: &str) -> Option<Vec<u8>> {
+        let _guard = self.lock.lock().await;
+        let path = self.path.clone();
+        let node_id_owned = node_id.to_string();
+        tokio::task::spawn_blocking(move || match load_map_blocking(&path) {
+            LoadOutcome::Map(map) => map
+                .get(&node_id_owned)
+                .and_then(|record| record.wrapped_key_checkpoint.clone()),
+            LoadOutcome::Empty | LoadOutcome::Corrupt => None,
+        })
+        .await
+        .expect("JsonSidecarFloorStore: get_wrapped_key's blocking task panicked")
+    }
+
+    /// Clears the wrapped-key checkpoint for `node_id`, leaving the
+    /// generation/seq floors in the same combined record untouched. Fails
+    /// closed on a write failure (D-08), matching `persist_wrapped_key`.
+    pub async fn delete_wrapped_key(&self, node_id: &str) -> Result<(), RotationError> {
+        let _guard = self.lock.lock().await;
+        let path = self.path.clone();
+        let node_id_owned = node_id.to_string();
+        let result = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+            let mut map = load_map_or_refuse_corrupt(&path, &node_id_owned)?;
+            if let Some(record) = map.get_mut(&node_id_owned) {
+                record.wrapped_key_checkpoint = None;
+            }
+            write_map_atomic_blocking(&path, &map)
+        })
+        .await;
+        map_persist_result(node_id, result)
+    }
+}
+
+/// Shared load step for the wrapped-key mutating paths: loads the combined
+/// map, refusing (as an `Err`, not a silent `Ok`) to write over a corrupt
+/// sidecar — a blind overwrite would drop every other node's floor and
+/// checkpoint (D-08 extended: this refusal must ALSO fail closed, not just
+/// genuine I/O errors).
+fn load_map_or_refuse_corrupt(
+    path: &Path,
+    node_id: &str,
+) -> std::io::Result<HashMap<String, CombinedFloorRecord>> {
+    match load_map_blocking(path) {
+        LoadOutcome::Map(map) => Ok(map),
+        LoadOutcome::Empty => Ok(HashMap::new()),
+        LoadOutcome::Corrupt => Err(std::io::Error::other(format!(
+            "refusing to write over corrupt sidecar at {} for node {}",
+            path.display(),
+            node_id
+        ))),
+    }
+}
+
+/// Maps a blocking-task result to the fail-closed `RotationError` contract
+/// (D-08): a write failure — whether a genuine I/O error or a panicked
+/// blocking task — is returned as `Err`, never swallowed via a
+/// log-and-return-Ok path.
+fn map_persist_result(
+    node_id: &str,
+    result: Result<std::io::Result<()>, tokio::task::JoinError>,
+) -> Result<(), RotationError> {
+    match result {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => {
+            log::error!(
+                "JsonSidecarFloorStore: failed to persist for node {}: {}",
+                node_id,
+                e
+            );
+            Err(RotationError::PersistFailed {
+                node_id: node_id.to_string(),
+                message: e.to_string(),
+            })
+        }
+        Err(e) => {
+            log::error!(
+                "JsonSidecarFloorStore: persist blocking task panicked for node {}: {}",
+                node_id,
+                e
+            );
+            Err(RotationError::PersistFailed {
+                node_id: node_id.to_string(),
+                message: format!("blocking task panicked: {e}"),
+            })
+        }
     }
 }
 
@@ -176,8 +405,9 @@ impl HighWaterStore for JsonSidecarFloorStore {
         let _guard = self.lock.lock().await;
         let path = self.path.clone();
         let node_id = node_id.to_string();
+        let field = self.field;
         tokio::task::spawn_blocking(move || match load_map_blocking(&path) {
-            LoadOutcome::Map(map) => map.get(&node_id).copied(),
+            LoadOutcome::Map(map) => map.get(&node_id).map(|record| field.read(record)),
             LoadOutcome::Empty => None,
             LoadOutcome::Corrupt => Some(CORRUPT_SIDECAR_FAIL_CLOSED_FLOOR),
         })
@@ -185,57 +415,28 @@ impl HighWaterStore for JsonSidecarFloorStore {
         .expect("JsonSidecarFloorStore: get's blocking task panicked")
     }
 
-    async fn put(&self, node_id: &str, value: u64) {
+    async fn put(&self, node_id: &str, value: u64) -> Result<(), RotationError> {
         let _guard = self.lock.lock().await;
         let path = self.path.clone();
         let node_id_owned = node_id.to_string();
+        let field = self.field;
         let result = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
-            let mut map = match load_map_blocking(&path) {
-                LoadOutcome::Map(map) => map,
-                LoadOutcome::Empty => HashMap::new(),
-                LoadOutcome::Corrupt => {
-                    // Refuse to write over an unreadable sidecar: a blind
-                    // overwrite would silently drop every OTHER node's
-                    // floor (T-70-04). Leave the corrupt file untouched;
-                    // get() keeps fail-closing until it is repaired/removed.
-                    log::error!(
-                        "JsonSidecarFloorStore: refusing to write over corrupt sidecar at {} for node {}",
-                        path.display(),
-                        node_id_owned
-                    );
-                    return Ok(());
-                }
-            };
+            let mut map = load_map_or_refuse_corrupt(&path, &node_id_owned)?;
             // Max-preserving write computed INSIDE the locked critical
             // section (SC#5 / T-70-03): a concurrent put with a lower
             // candidate can never clobber a higher persisted floor, and two
             // different-node_id puts serialize instead of lost-updating —
             // mirrors the TS `idbPut` reference (rotation-state.service.ts).
-            let entry = map.entry(node_id_owned).or_insert(0);
-            *entry = (*entry).max(value);
+            let entry = map.entry(node_id_owned).or_default();
+            field.bump_max(entry, value);
             write_map_atomic_blocking(&path, &map)
         })
         .await;
 
-        // A write failure here is a durability defect, not a correctness
-        // one: enforce_resolved has already decided the resolve is valid
-        // (fail-open on the in-memory decision) but the floor bump did not
-        // persist. This mirrors the `Promise<void>`-shaped TS contract:
-        // errors are exceptional and logged, not silently threaded through
-        // every call site's Result.
-        match result {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => log::error!(
-                "JsonSidecarFloorStore: failed to persist floor for node {}: {}",
-                node_id,
-                e
-            ),
-            Err(e) => log::error!(
-                "JsonSidecarFloorStore: put's blocking task panicked for node {}: {}",
-                node_id,
-                e
-            ),
-        }
+        // D-08: a write failure is now a fail-closed Err, never a
+        // log-and-return-Ok swallow — enforce_resolved (via bump_floor)
+        // propagates this verbatim.
+        map_persist_result(node_id, result)
     }
 }
 
@@ -268,7 +469,7 @@ mod tests {
     async fn put_then_get_round_trips_in_the_same_instance() {
         let dir = make_temp_dir();
         let store = JsonSidecarFloorStore::for_seq(&dir);
-        store.put("node-1", 42).await;
+        store.put("node-1", 42).await.expect("put");
         assert_eq!(store.get("node-1").await, Some(42));
     }
 
@@ -280,7 +481,7 @@ mod tests {
         let dir = make_temp_dir();
         {
             let store = JsonSidecarFloorStore::for_generation(&dir);
-            store.put("node-restart", 7).await;
+            store.put("node-restart", 7).await.expect("put");
         } // store dropped here
 
         let reloaded = JsonSidecarFloorStore::for_generation(&dir);
@@ -288,16 +489,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn generation_and_seq_sidecars_are_independent_files() {
+    async fn generation_and_seq_are_independent_fields_of_the_combined_record() {
         let dir = make_temp_dir();
         let gen_store = JsonSidecarFloorStore::for_generation(&dir);
         let seq_store = JsonSidecarFloorStore::for_seq(&dir);
 
-        gen_store.put("node-1", 3).await;
-        seq_store.put("node-1", 99).await;
+        gen_store.put("node-1", 3).await.expect("put generation");
+        seq_store.put("node-1", 99).await.expect("put seq");
 
         // Each floor is independently addressable -- writing one must not
-        // clobber or leak into the other's sidecar file.
+        // clobber the other's field of the SAME combined record (D-06).
         assert_eq!(gen_store.get("node-1").await, Some(3));
         assert_eq!(seq_store.get("node-1").await, Some(99));
     }
@@ -306,15 +507,16 @@ mod tests {
     async fn no_partial_json_survives_a_write() {
         let dir = make_temp_dir();
         let store = JsonSidecarFloorStore::for_generation(&dir);
-        store.put("node-1", 1).await;
-        store.put("node-2", 2).await;
+        store.put("node-1", 1).await.expect("put");
+        store.put("node-2", 2).await.expect("put");
 
         // The on-disk file must always parse as valid, complete JSON --
         // never a torn/partial write (the atomic rename guarantees this).
         let bytes = std::fs::read(&store.path).expect("sidecar exists");
-        let map: HashMap<String, u64> = serde_json::from_slice(&bytes).expect("valid JSON");
-        assert_eq!(map.get("node-1"), Some(&1));
-        assert_eq!(map.get("node-2"), Some(&2));
+        let map: HashMap<String, CombinedFloorRecord> =
+            serde_json::from_slice(&bytes).expect("valid JSON");
+        assert_eq!(map.get("node-1").map(|r| r.generation), Some(1));
+        assert_eq!(map.get("node-2").map(|r| r.generation), Some(2));
 
         // The temp file must not be left behind after a successful write.
         let tmp_path = store.path.with_extension("tmp");
@@ -335,7 +537,7 @@ mod tests {
         for &value in &values {
             let store = std::sync::Arc::clone(&store);
             handles.push(tokio::spawn(async move {
-                store.put("node-1", value).await;
+                store.put("node-1", value).await.expect("put");
             }));
         }
         for handle in handles {
@@ -362,7 +564,7 @@ mod tests {
             let store = std::sync::Arc::clone(&store);
             let node_id = format!("node-{i}");
             handles.push(tokio::spawn(async move {
-                store.put(&node_id, i).await;
+                store.put(&node_id, i).await.expect("put");
             }));
         }
         for handle in handles {
@@ -478,7 +680,10 @@ mod tests {
         gen_store.put("node-1", 3).await.expect("put generation");
         seq_store.put("node-1", 99).await.expect("put seq");
 
-        assert_eq!(gen_store.path, seq_store.path, "must share ONE sidecar file");
+        assert_eq!(
+            gen_store.path, seq_store.path,
+            "must share ONE sidecar file"
+        );
 
         let bytes = std::fs::read(&gen_store.path).expect("combined sidecar exists");
         let map: HashMap<String, CombinedFloorRecord> =
@@ -502,8 +707,11 @@ mod tests {
             br#"{"node-1":4}"#,
         )
         .expect("seed legacy generation sidecar");
-        std::fs::write(dir.join("rotation-high-water-seq.json"), br#"{"node-1":12}"#)
-            .expect("seed legacy seq sidecar");
+        std::fs::write(
+            dir.join("rotation-high-water-seq.json"),
+            br#"{"node-1":12}"#,
+        )
+        .expect("seed legacy seq sidecar");
 
         let gen_store = JsonSidecarFloorStore::for_generation(&dir);
         let seq_store = JsonSidecarFloorStore::for_seq(&dir);
