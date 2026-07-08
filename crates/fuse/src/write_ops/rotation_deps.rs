@@ -59,10 +59,23 @@
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
+use zeroize::Zeroizing;
 
-use cipherbox_core::node::PublishedNode;
+use cipherbox_api_client::ipns::{resolve_ipns_verified, VerifyError};
+use cipherbox_api_client::{ApiClient, ApiError, IpnsPublishRequest, PublishResult};
+use cipherbox_core::node::{decode_published_node, encode_published_node, PublishedNode};
 use cipherbox_sdk::rotation::PublishAttempt;
-use cipherbox_sdk::{JsonSidecarFloorStore, PublishOutcome, ResolvedRecord, RotationDeps, RotationError, RotationJobRecord};
+use cipherbox_sdk::{
+    JsonSidecarFloorStore, PublishOutcome, ResolvedRecord, RotationDeps, RotationError,
+    RotationJobRecord,
+};
+
+use crate::inode::{InodeKind, InodeTable};
+
+/// TTL for a rotation republish's IPNS record — matches the existing
+/// `replay.rs`/first-publish convention (24h) rather than inventing a new
+/// value.
+const IPNS_RECORD_LIFETIME_MS: u64 = 86_400_000;
 
 // ---------------------------------------------------------------------------
 // RotationTransport — the injectable resolve/fetch/publish seam
@@ -154,6 +167,321 @@ impl<T: RotationTransport> FuseRotationDeps<T> {
     }
 }
 
+// impl RotationDeps for FuseRotationDeps<T> — the production adapter (D-14):
+// generic over T so the same impl serves both `ApiClientTransport` (real)
+// and the test module's `FakeTransport`.
+impl<T: RotationTransport> RotationDeps for FuseRotationDeps<T> {
+    async fn resolve(&self, ipns_name: &str) -> Result<Option<ResolvedRecord>, RotationError> {
+        self.transport.resolve(ipns_name).await
+    }
+
+    async fn fetch_node(&self, cid: &str) -> Result<PublishedNode, RotationError> {
+        self.transport.fetch_node(cid).await
+    }
+
+    /// Pitfall 7 (T-70.1-22): on a 409, performs a follow-up `resolve` +
+    /// `fetch_node` to materialize the REAL winning `remote` before
+    /// returning `PublishAttempt::Conflict` — never a fabricated
+    /// placeholder (a fabricated remote silently breaks the engine's
+    /// CAS-409 concurrent-add merge).
+    async fn publish_with_cas(
+        &self,
+        ipns_name: &str,
+        expected_sequence_number: u64,
+        node: &PublishedNode,
+    ) -> Result<PublishAttempt, RotationError> {
+        match self
+            .transport
+            .publish(ipns_name, node, expected_sequence_number)
+            .await?
+        {
+            TransportPublishOutcome::Published {
+                new_sequence_number,
+            } => Ok(PublishAttempt::Published(PublishOutcome {
+                new_sequence_number,
+            })),
+            TransportPublishOutcome::Conflict {
+                current_sequence_number,
+            } => {
+                let resolved = self.transport.resolve(ipns_name).await?.ok_or_else(|| {
+                    RotationError::RotateFailed(format!(
+                        "publish_with_cas: 409 conflict for {ipns_name} but a follow-up resolve found nothing"
+                    ))
+                })?;
+                let remote = self.transport.fetch_node(&resolved.cid).await?;
+                Ok(PublishAttempt::Conflict {
+                    remote,
+                    current_sequence_number,
+                })
+            }
+        }
+    }
+
+    /// Advisory (D-10) — published IPNS records remain the source of truth.
+    /// A durable Rust job checkpoint is not required for correctness
+    /// (RESEARCH Sharp Question 7.1); this is a no-op logger.
+    async fn persist_job(&self, job: &RotationJobRecord) {
+        log::debug!(
+            "rotation job checkpoint (advisory, D-10): root_node_id={} completed_nodes={} status={:?}",
+            job.root_node_id,
+            job.completed_node_ids.len(),
+            job.status
+        );
+    }
+
+    // `query_grants_rooted_at`/`update_grant`/`delete_grant` are left at the
+    // trait's DEFAULT no-op — the ROT-04 desktop-grant-remint deferral this
+    // plan's <verification> block explicitly sanctions (see
+    // 70.1-09-SUMMARY.md "ROT-04 deferral").
+
+    /// D-01/D-03: ECIES-wraps `wrapped_b64`'s raw key material under the
+    /// owner's OWN public key before persisting ciphertext-only to the
+    /// combined floor store (Plan 70.1-03). Fails closed (D-08) on any
+    /// step.
+    async fn persist_wrapped_key(
+        &self,
+        node_id: &str,
+        wrapped_b64: &str,
+    ) -> Result<(), RotationError> {
+        let raw = STANDARD.decode(wrapped_b64).map_err(|e| {
+            RotationError::RotateFailed(format!(
+                "persist_wrapped_key: base64 decode failed for {node_id}: {e}"
+            ))
+        })?;
+        let ciphertext = cipherbox_crypto::wrap_key(&raw, &self.owner_public_key).map_err(|e| {
+            RotationError::RotateFailed(format!(
+                "persist_wrapped_key: wrap_key failed for {node_id}: {e}"
+            ))
+        })?;
+        self.floor_store
+            .persist_wrapped_key(node_id, ciphertext)
+            .await
+    }
+
+    /// Recovers a checkpoint (if any) and ECIES-unwraps it under the
+    /// owner's OWN private key, returning the raw key material as base64 —
+    /// the engine's `get_wrapped_key` contract per RESEARCH option (b): this
+    /// adapter does the ECIES wrap/unwrap itself, keeping the engine
+    /// key-material-free.
+    async fn get_wrapped_key(&self, node_id: &str) -> Result<Option<String>, RotationError> {
+        let Some(ciphertext) = self.floor_store.get_wrapped_key(node_id).await else {
+            return Ok(None);
+        };
+        let raw =
+            cipherbox_crypto::unwrap_key(&ciphertext, &self.owner_private_key).map_err(|e| {
+                RotationError::RotateFailed(format!(
+                    "get_wrapped_key: unwrap_key failed for {node_id}: {e}"
+                ))
+            })?;
+        Ok(Some(STANDARD.encode(raw.as_slice())))
+    }
+
+    /// D-04: GC's a checkpoint once it is no longer needed.
+    async fn delete_wrapped_key(&self, node_id: &str) -> Result<(), RotationError> {
+        self.floor_store.delete_wrapped_key(node_id).await
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ApiClientTransport — production RotationTransport over the real ApiClient
+// ---------------------------------------------------------------------------
+
+/// Production [`RotationTransport`] implementor, backed by the real
+/// `cipherbox_api_client::ipns`/`ipfs` primitives (RESEARCH Sharp Question
+/// 7.1's method->primitive map):
+/// - `resolve` -> `resolve_ipns_verified` (the verified/signature-checked
+///   fail-closed chokepoint, D-08).
+/// - `fetch_node` -> `fetch_content` + `decode_published_node`.
+/// - `publish` -> `upload_content` + `create_ipns_record` +
+///   `publish_ipns` (request-build precedent: `replay.rs:367/617`).
+///
+/// `inodes` sources the per-node IPNS signing seed from the ALREADY-MOUNTED
+/// `InodeTable` — see the module doc comment's "Known limitation" section
+/// for why, and its documented fail-closed behavior when a target node is
+/// not locally materialized.
+pub struct ApiClientTransport<'a> {
+    pub api: &'a ApiClient,
+    pub inodes: &'a InodeTable,
+}
+
+impl RotationTransport for ApiClientTransport<'_> {
+    async fn resolve(&self, ipns_name: &str) -> Result<Option<ResolvedRecord>, RotationError> {
+        match resolve_ipns_verified(self.api, ipns_name).await {
+            Ok(v) => Ok(Some(ResolvedRecord {
+                cid: v.cid,
+                sequence_number: v.sequence_number,
+            })),
+            Err(VerifyError::Api(ApiError::IpnsNotFound(_))) => Ok(None),
+            Err(VerifyError::Api(e)) => Err(RotationError::RotateFailed(format!(
+                "resolve: API error for {ipns_name}: {e}"
+            ))),
+            Err(VerifyError::Invalid(msg)) => Err(RotationError::RotateFailed(format!(
+                "resolve: verification failed for {ipns_name}: {msg}"
+            ))),
+        }
+    }
+
+    async fn fetch_node(&self, cid: &str) -> Result<PublishedNode, RotationError> {
+        let bytes = cipherbox_api_client::ipfs::fetch_content(self.api, cid)
+            .await
+            .map_err(|e| {
+                RotationError::RotateFailed(format!(
+                    "fetch_node: fetch_content failed for {cid}: {e}"
+                ))
+            })?;
+        decode_published_node(&bytes).map_err(|e| {
+            RotationError::RotateFailed(format!(
+                "fetch_node: decode_published_node failed for {cid}: {e}"
+            ))
+        })
+    }
+
+    async fn publish(
+        &self,
+        ipns_name: &str,
+        node: &PublishedNode,
+        expected_sequence_number: u64,
+    ) -> Result<TransportPublishOutcome, RotationError> {
+        // Known limitation (see module doc comment): the signing seed is
+        // sourced from the locally-mounted InodeTable — fails CLOSED if
+        // this node has not been materialized locally.
+        let signing_seed = find_ipns_private_key(self.inodes, ipns_name).ok_or_else(|| {
+            RotationError::RotateFailed(format!(
+                "publish: no locally-cached IPNS signing key for {ipns_name} \
+                 (node not materialized in the local inode table)"
+            ))
+        })?;
+        let seed_arr = to_key32(&signing_seed, "IPNS signing seed")?;
+
+        let node_bytes = encode_published_node(node).map_err(|e| {
+            RotationError::RotateFailed(format!(
+                "publish: encode_published_node failed for {ipns_name}: {e}"
+            ))
+        })?;
+        let cid = cipherbox_api_client::ipfs::upload_content(self.api, &node_bytes)
+            .await
+            .map_err(|e| {
+                RotationError::RotateFailed(format!(
+                    "publish: upload_content failed for {ipns_name}: {e}"
+                ))
+            })?;
+
+        let new_seq = expected_sequence_number.checked_add(1).ok_or_else(|| {
+            RotationError::RotateFailed(format!("publish: sequence overflow for {ipns_name}"))
+        })?;
+        let value = format!("/ipfs/{cid}");
+        let record =
+            cipherbox_core::create_ipns_record(&seed_arr, &value, new_seq, IPNS_RECORD_LIFETIME_MS)
+                .map_err(|e| {
+                    RotationError::RotateFailed(format!(
+                        "publish: create_ipns_record failed for {ipns_name}: {e}"
+                    ))
+                })?;
+        let marshaled = cipherbox_core::marshal_ipns_record(&record).map_err(|e| {
+            RotationError::RotateFailed(format!(
+                "publish: marshal_ipns_record failed for {ipns_name}: {e}"
+            ))
+        })?;
+        let record_b64 = STANDARD.encode(&marshaled);
+
+        let req = IpnsPublishRequest {
+            ipns_name: ipns_name.to_string(),
+            record: record_b64,
+            metadata_cid: cid,
+            encrypted_ipns_private_key: None,
+            key_epoch: None,
+            expected_sequence_number: Some(expected_sequence_number.to_string()),
+        };
+        match cipherbox_api_client::ipns::publish_ipns(self.api, &req)
+            .await
+            .map_err(|e| {
+                RotationError::RotateFailed(format!(
+                    "publish: publish_ipns failed for {ipns_name}: {e}"
+                ))
+            })? {
+            PublishResult::Success => Ok(TransportPublishOutcome::Published {
+                new_sequence_number: new_seq,
+            }),
+            PublishResult::Conflict {
+                current_sequence_number,
+            } => {
+                let parsed = current_sequence_number.parse::<u64>().map_err(|e| {
+                    RotationError::RotateFailed(format!(
+                        "publish: failed to parse conflicting sequence number for {ipns_name}: {e}"
+                    ))
+                })?;
+                Ok(TransportPublishOutcome::Conflict {
+                    current_sequence_number: parsed,
+                })
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Local InodeTable lookups (signing-key sourcing + grant-root state)
+// ---------------------------------------------------------------------------
+
+/// Copies a slice into a fixed 32-byte array, failing closed (rather than
+/// panicking) on the wrong length.
+fn to_key32(bytes: &[u8], what: &str) -> Result<[u8; 32], RotationError> {
+    bytes.try_into().map_err(|_| {
+        RotationError::RotateFailed(format!(
+            "{what} has wrong length (got {}, expected 32)",
+            bytes.len()
+        ))
+    })
+}
+
+/// Scans the locally-mounted `InodeTable` for a node whose OWN `ipns_name`
+/// matches, returning its cached (plaintext, in-memory) IPNS signing seed —
+/// see the module doc comment's "Known limitation" section.
+fn find_ipns_private_key(inodes: &InodeTable, ipns_name: &str) -> Option<Zeroizing<Vec<u8>>> {
+    inodes.inodes.values().find_map(|inode| {
+        let (candidate_name, key) = match &inode.kind {
+            InodeKind::Root {
+                ipns_name,
+                ipns_private_key,
+                ..
+            } => (ipns_name, ipns_private_key),
+            InodeKind::Folder {
+                ipns_name,
+                ipns_private_key,
+                ..
+            } => (ipns_name, ipns_private_key),
+            InodeKind::File {
+                ipns_name,
+                ipns_private_key,
+                ..
+            } => (ipns_name, ipns_private_key),
+        };
+        (candidate_name == ipns_name && !key.is_empty()).then(|| Zeroizing::new(key.to_vec()))
+    })
+}
+
+/// Scans the locally-mounted `InodeTable` for the grant-root inode matching
+/// `ipns_name`, returning its stable `node_id` + current `read_key` — the
+/// two inputs `rotate_read_on_scope_exit`'s stub lacked (RESEARCH Sharp
+/// Question 7.2).
+pub(crate) fn find_grant_root_state(
+    inodes: &InodeTable,
+    ipns_name: &str,
+) -> Option<(String, Zeroizing<[u8; 32]>)> {
+    inodes.inodes.values().find_map(|inode| match &inode.kind {
+        InodeKind::Root {
+            ipns_name: n,
+            read_key,
+            ..
+        } if n == ipns_name => Some((inode.node_id.clone(), Zeroizing::new(**read_key))),
+        InodeKind::Folder {
+            ipns_name: n,
+            read_key,
+            ..
+        } if n == ipns_name => Some((inode.node_id.clone(), Zeroizing::new(**read_key))),
+        _ => None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -243,7 +571,9 @@ mod tests {
                 .blobs
                 .get(cid)
                 .cloned()
-                .ok_or_else(|| RotationError::RotateFailed(format!("FakeTransport: no blob for cid {cid}")))
+                .ok_or_else(|| {
+                    RotationError::RotateFailed(format!("FakeTransport: no blob for cid {cid}"))
+                })
         }
 
         async fn publish(
@@ -323,11 +653,13 @@ mod tests {
         );
 
         let (owner_pub, owner_priv) = owner_keypair();
-        let deps = FuseRotationDeps::new(transport.clone(), owner_pub, owner_priv, temp_floor_store());
+        let deps =
+            FuseRotationDeps::new(transport.clone(), owner_pub, owner_priv, temp_floor_store());
         let mut job = RotationJobRecord::new(ROOT_ID);
 
         let result =
-            cipherbox_sdk::rotate_read_from_node(&deps, ROOT_ID, "k51root", &read_key, &mut job).await;
+            cipherbox_sdk::rotate_read_from_node(&deps, ROOT_ID, "k51root", &read_key, &mut job)
+                .await;
 
         assert!(result.is_ok(), "rotation must succeed: {:?}", result.err());
         assert_eq!(
@@ -391,7 +723,9 @@ mod tests {
 
         assert!(deps.get_wrapped_key(ROOT_ID).await.unwrap().is_none());
 
-        deps.persist_wrapped_key(ROOT_ID, &wrapped_b64).await.unwrap();
+        deps.persist_wrapped_key(ROOT_ID, &wrapped_b64)
+            .await
+            .unwrap();
 
         let recovered_b64 = deps
             .get_wrapped_key(ROOT_ID)
