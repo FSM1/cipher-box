@@ -1795,9 +1795,15 @@ describe('verifySubtreeClean — full-subtree recursion (Plan 70-05 SC#2)', () =
         throw new Error(`unexpected unsealNode call for ${published.id}`);
       }
     );
+    // Return fresh copies, not the shared module-level constants: a clean
+    // edge's derived key is zeroed in-place by collectDirtyFrontier (T7), so
+    // returning the constant directly would mutate it for every later test
+    // in this file AND make the toEqual assertion below compare the SAME
+    // (possibly-zeroed) object against itself — a false-green that could
+    // never catch a regression (T6).
     mockFns.unsealChildReadKey.mockImplementation(async (sealed: string) => {
-      if (sealed === 'subfoldersealed==') return P05_SUBFOLDER_READ_KEY;
-      if (sealed === 'grandchildsealed==') return P05_GRANDCHILD_READ_KEY;
+      if (sealed === 'subfoldersealed==') return new Uint8Array(P05_SUBFOLDER_READ_KEY);
+      if (sealed === 'grandchildsealed==') return new Uint8Array(P05_GRANDCHILD_READ_KEY);
       throw new Error(`unexpected sealed value: ${sealed}`);
     });
 
@@ -1888,9 +1894,13 @@ describe('verifySubtreeClean — full-subtree recursion (Plan 70-05 SC#2)', () =
         throw new Error(`unexpected unsealNode call for ${published.id}`);
       }
     );
+    // Fresh copies per call — see the Test 1 comment above (T6): both edges
+    // are clean here, so both derived keys get zeroed by collectDirtyFrontier;
+    // without copies that would mutate the shared module-level constants for
+    // every later test in this describe block.
     mockFns.unsealChildReadKey.mockImplementation(async (sealed: string) => {
-      if (sealed === 'subfoldersealed==') return P05_SUBFOLDER_READ_KEY;
-      if (sealed === 'grandchildsealed==') return P05_GRANDCHILD_READ_KEY;
+      if (sealed === 'subfoldersealed==') return new Uint8Array(P05_SUBFOLDER_READ_KEY);
+      if (sealed === 'grandchildsealed==') return new Uint8Array(P05_GRANDCHILD_READ_KEY);
       throw new Error(`unexpected sealed value: ${sealed}`);
     });
 

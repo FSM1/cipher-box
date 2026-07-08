@@ -783,10 +783,16 @@ describe('Rotation crash-safety suite (TEST-01 phase gate)', () => {
       sub3Pub.kind,
       sub3ChildRef!.generation
     );
-    // The actual unseal — this is what AEAD-fails under the old remote-wins bug.
-    const sub3Node = await unsealNode(sub3Pub, sub3ReadKey);
-    expect(sub3Node.id).toBe(sub3Result.node.id);
-    sub3ReadKey.fill(0);
+    // try/finally so this owned key buffer is still zeroed if the assertion
+    // below throws (T9) — a bare trailing `.fill(0)` after the assertion is
+    // skipped entirely on failure, leaking the key material.
+    try {
+      // The actual unseal — this is what AEAD-fails under the old remote-wins bug.
+      const sub3Node = await unsealNode(sub3Pub, sub3ReadKey);
+      expect(sub3Node.id).toBe(sub3Result.node.id);
+    } finally {
+      sub3ReadKey.fill(0);
+    }
   }, 120_000);
 
   // ---------------------------------------------------------------------------
@@ -919,69 +925,79 @@ describe('Rotation crash-safety suite (TEST-01 phase gate)', () => {
     clearCapturedReadKeys();
     let resumeError4: unknown;
     let resumeResult4: Awaited<ReturnType<typeof rotateReadFromNode>> = undefined;
+    // try/finally so every owned key buffer from this fresh-resume path
+    // (readKeyPrimeRoot4, resumeResult4.readKey, and any buffers captured
+    // into `capturedReadKeys` during the resume's own rotation) is zeroed
+    // even if an assertion below throws (T9) — a bare trailing `.fill(0)`
+    // after the assertions is skipped entirely on failure, leaking the key
+    // material for the rest of the suite run.
     try {
-      resumeResult4 = await rotateReadFromNode({
-        rootNodeId: root4Node.id,
-        rootNodeIpnsName: root4IpnsName,
-        rootReadKey: readKeyPrimeRoot4, // CURRENT valid key, not the original
-        rootIpnsPrivateKey: root4Keypair.privateKey,
-        rootIpnsPublicKey: root4Keypair.publicKey,
-        jobRecord: freshJob4,
-        ctx: aliceCtx,
+      try {
+        resumeResult4 = await rotateReadFromNode({
+          rootNodeId: root4Node.id,
+          rootNodeIpnsName: root4IpnsName,
+          rootReadKey: readKeyPrimeRoot4, // CURRENT valid key, not the original
+          rootIpnsPrivateKey: root4Keypair.privateKey,
+          rootIpnsPublicKey: root4Keypair.publicKey,
+          jobRecord: freshJob4,
+          ctx: aliceCtx,
+        });
+      } catch (err) {
+        resumeError4 = err;
+      }
+      expect(resumeError4).toBeUndefined(); // must converge without throwing
+      expect(freshJob4.status).toBe('complete');
+
+      // Safe double-rotation: root4 is now at generation 2 (double-rotated), not
+      // stuck at 1 — the opposite of scenario 2's no-double-bump assertion.
+      const rootPub4AfterResume = await fetchPublishedEnvelope(root4IpnsName, aliceCtx);
+      expect(rootPub4AfterResume.generation).toBe(2);
+
+      // rotateReadFromNode returns the root's freshly minted key (root was NOT
+      // skipped this run — a genuinely new rotation, not a dirty-resume republish).
+      expect(resumeResult4).toBeDefined();
+      expect(resumeResult4!.generation).toBe(2);
+      expect(resumeResult4!.readKey).toBeInstanceOf(Uint8Array);
+      // A genuinely NEW key was minted — not the same buffer/value as the
+      // crash-run's key (proves an actual second rotation occurred, not a no-op).
+      expect(resumeResult4!.readKey).not.toEqual(readKeyPrimeRoot4);
+
+      // Pre-rotation grant remains cut after the resume's root step.
+      const revokedNavAfterResume = await navigateReadChain({
+        readDescriptorRef: preGrant4,
+        recipientPrivKey: bob.privateKey,
+        rootIpnsName: root4IpnsName,
+        rootExpectedGeneration: 0,
+        path: [],
+        ctx: bobCtx,
       });
-    } catch (err) {
-      resumeError4 = err;
+      expect(revokedNavAfterResume.status).toBe('behind-retry');
+
+      // A freshly issued grant using the resume's new key navigates successfully.
+      const { readDescriptorRef: freshGrant4 } = await issueReadGrant({
+        shareRootReadKey: resumeResult4!.readKey,
+        recipientPublicKey: bob.publicKey,
+        rootNodeId: root4Node.id,
+        rootIpnsName: root4IpnsName,
+        rootGeneration: 2,
+        insertShareFn: async (_p) => ({ shareId: crypto.randomUUID() }),
+      });
+      const postResumeNav4 = await navigateReadChain({
+        readDescriptorRef: freshGrant4,
+        recipientPrivKey: bob.privateKey,
+        rootIpnsName: root4IpnsName,
+        rootExpectedGeneration: 2,
+        path: [],
+        ctx: bobCtx,
+      });
+      expect(postResumeNav4.status).toBe('ok');
+      if (postResumeNav4.status === 'ok') {
+        expect(postResumeNav4.content?.cid).toBeTruthy();
+      }
+    } finally {
+      readKeyPrimeRoot4.fill(0);
+      resumeResult4?.readKey.fill(0);
+      clearCapturedReadKeys();
     }
-    expect(resumeError4).toBeUndefined(); // must converge without throwing
-    expect(freshJob4.status).toBe('complete');
-
-    // Safe double-rotation: root4 is now at generation 2 (double-rotated), not
-    // stuck at 1 — the opposite of scenario 2's no-double-bump assertion.
-    const rootPub4AfterResume = await fetchPublishedEnvelope(root4IpnsName, aliceCtx);
-    expect(rootPub4AfterResume.generation).toBe(2);
-
-    // rotateReadFromNode returns the root's freshly minted key (root was NOT
-    // skipped this run — a genuinely new rotation, not a dirty-resume republish).
-    expect(resumeResult4).toBeDefined();
-    expect(resumeResult4!.generation).toBe(2);
-    expect(resumeResult4!.readKey).toBeInstanceOf(Uint8Array);
-    // A genuinely NEW key was minted — not the same buffer/value as the
-    // crash-run's key (proves an actual second rotation occurred, not a no-op).
-    expect(resumeResult4!.readKey).not.toEqual(readKeyPrimeRoot4);
-
-    // Pre-rotation grant remains cut after the resume's root step.
-    const revokedNavAfterResume = await navigateReadChain({
-      readDescriptorRef: preGrant4,
-      recipientPrivKey: bob.privateKey,
-      rootIpnsName: root4IpnsName,
-      rootExpectedGeneration: 0,
-      path: [],
-      ctx: bobCtx,
-    });
-    expect(revokedNavAfterResume.status).toBe('behind-retry');
-
-    // A freshly issued grant using the resume's new key navigates successfully.
-    const { readDescriptorRef: freshGrant4 } = await issueReadGrant({
-      shareRootReadKey: resumeResult4!.readKey,
-      recipientPublicKey: bob.publicKey,
-      rootNodeId: root4Node.id,
-      rootIpnsName: root4IpnsName,
-      rootGeneration: 2,
-      insertShareFn: async (_p) => ({ shareId: crypto.randomUUID() }),
-    });
-    const postResumeNav4 = await navigateReadChain({
-      readDescriptorRef: freshGrant4,
-      recipientPrivKey: bob.privateKey,
-      rootIpnsName: root4IpnsName,
-      rootExpectedGeneration: 2,
-      path: [],
-      ctx: bobCtx,
-    });
-    expect(postResumeNav4.status).toBe('ok');
-    if (postResumeNav4.status === 'ok') {
-      expect(postResumeNav4.content?.cid).toBeTruthy();
-    }
-
-    readKeyPrimeRoot4.fill(0);
   }, 120_000);
 });

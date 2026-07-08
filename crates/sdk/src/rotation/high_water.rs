@@ -224,6 +224,22 @@ impl<S: HighWaterStore> RotationHighWater<S> {
             });
         }
 
+        // 2-4. Floor reads, regression checks, and the monotonic-max bump
+        // must all execute as ONE atomic critical section: a concurrent
+        // `enforce_resolved` call must never be able to read the floor
+        // BEFORE a racing call's bump lands, then pass its own (now-stale)
+        // regression check and return Ok after the other call already
+        // raised the floor higher — that would accept a rollback under
+        // concurrency. Acquiring `bump_lock` here (before the reads in
+        // steps 2/3, not just around the bumps in step 4) makes the whole
+        // read-check-bump sequence atomic against every other call that
+        // also goes through this same lock (`bump_generation`, `bump_seq`,
+        // `seed_from_grant`, and any other concurrent `enforce_resolved`).
+        // Single lock, single acquire per call, released at the end of this
+        // scope — no nested/re-entrant acquisition anywhere in this type,
+        // so this cannot deadlock.
+        let _guard = self.bump_lock.lock().await;
+
         // 2. Generation-floor check.
         let generation_floor = read_floor(&self.generation_store, &node_id).await;
         if let Some(floor) = generation_floor {
@@ -263,14 +279,13 @@ impl<S: HighWaterStore> RotationHighWater<S> {
             }
         }
 
-        // 4. Bump both floors monotonic-max, guarded so this read-compare-
-        // write cannot interleave against a concurrent bump on this same
-        // instance (T-70-03).
-        {
-            let _guard = self.bump_lock.lock().await;
-            bump_floor(&self.generation_store, &node_id, generation).await;
-            bump_floor(&self.seq_store, &node_id, seq).await;
-        }
+        // 4. Bump both floors monotonic-max. Still inside the same
+        // `_guard` critical section acquired above, so this cannot
+        // interleave against a concurrent bump or another
+        // `enforce_resolved`'s read-check-bump on this same instance
+        // (T-70-03, widened per T5).
+        bump_floor(&self.generation_store, &node_id, generation).await;
+        bump_floor(&self.seq_store, &node_id, seq).await;
 
         Ok(())
     }

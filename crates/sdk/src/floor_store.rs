@@ -72,7 +72,21 @@ fn load_map_blocking(path: &Path) -> LoadOutcome {
                 LoadOutcome::Corrupt
             }
         },
-        Err(_) => LoadOutcome::Empty,
+        // Only "no such file" genuinely means "never written" -- a cold
+        // start with no floor known yet. Any OTHER read error (permission
+        // denied, transient I/O failure, etc.) on a sidecar path that DOES
+        // exist must NOT be silently treated as cold-start (T3): that would
+        // bypass the anti-rollback regression check exactly like a corrupt
+        // sidecar would, so it fails closed the same way.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => LoadOutcome::Empty,
+        Err(e) => {
+            log::error!(
+                "JsonSidecarFloorStore: read error for sidecar at {}: {} -- failing closed, not cold-starting",
+                path.display(),
+                e
+            );
+            LoadOutcome::Corrupt
+        }
     }
 }
 

@@ -673,26 +673,32 @@ async function collectDirtyFrontier(
     // Clean edge: the derived key IS provably the child's current valid key
     // (parent mirror is up to date) — recurse into folder children to find
     // dirty edges deeper in the subtree.
-    if (childPub.kind === 'folder') {
-      const childNode = await unsealNode(childPub, childReadKey);
-      await collectDirtyFrontier(
-        childRef.ipnsName,
-        childNode.children ?? [],
-        childReadKey,
-        ctx,
-        frontier
-      );
-    }
-
+    //
     // D-09 (Plan 70-06): a CLEAN edge's derived key is scoped entirely to this
     // read-only verify walk — it is never returned to any caller (only a DIRTY
     // edge's key survives, pushed onto `frontier` above and explicitly NOT
     // zeroed here). This function derived it (via resolveChildKeyAndEnvelope);
     // it is the terminal owner once the edge is fully processed (leaf, or after
-    // the recursive call above returns). Defensive instanceof guard: some unit
-    // tests stub `unsealChildReadKey` without a return value.
-    if (childReadKey instanceof Uint8Array) {
-      childReadKey.fill(0);
+    // the recursive call below returns). The zero happens in `finally` so it
+    // still runs if `unsealNode`/the recursive call throws — otherwise a thrown
+    // error skips the zero and leaves this locally-derived key live. Defensive
+    // instanceof guard: some unit tests stub `unsealChildReadKey` without a
+    // return value.
+    try {
+      if (childPub.kind === 'folder') {
+        const childNode = await unsealNode(childPub, childReadKey);
+        await collectDirtyFrontier(
+          childRef.ipnsName,
+          childNode.children ?? [],
+          childReadKey,
+          ctx,
+          frontier
+        );
+      }
+    } finally {
+      if (childReadKey instanceof Uint8Array) {
+        childReadKey.fill(0);
+      }
     }
   }
 }
