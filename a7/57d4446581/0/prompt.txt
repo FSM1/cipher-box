@@ -1,0 +1,1 @@
+/gsd-execute-phase 70.1 with independent worktrees for the concurrent plans. worktrees should `pnpm i`

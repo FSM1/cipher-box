@@ -1,0 +1,140 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "a757d4446581",
+  "session_id": "a4ed1cb9-4e4c-4d71-bc03-3c2c6b4e70a3",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-08T15:19:35.75306Z",
+  "branch": "feat/rotation-read-plane-durability-and-deep-crash-resume-soundne",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "1b22299d3cb2",
+  "token_usage": {
+    "input_tokens": 34646,
+    "cache_creation_tokens": 881205,
+    "cache_read_tokens": 13687942,
+    "output_tokens": 142738,
+    "api_call_count": 75
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-plan-phase-2026-07-08T13:42:46.030418Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "0eb6f9cbb31b",
+      "timestamp": "2026-07-08T13:42:46.030418Z",
+      "native": {
+        "command": "/gsd-plan-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-gsd-execute-phase-2026-07-08T15:12:58.253651Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "1b22299d3cb2",
+      "timestamp": "2026-07-08T15:12:58.253651Z",
+      "native": {
+        "command": "/gsd-execute-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "summary": {
+    "intent": "Run the GSD `/gsd-plan-phase 70.1` workflow to produce executable PLAN.md files for CipherBox Phase 70.1 (rotation read-plane durability), then continue into `/gsd-execute-phase 70.1` to execute the 13 resulting plans across 7 waves using isolated git worktrees for concurrent plans.",
+    "outcome": "Phase 70.1 was researched (2 extensions covering the Rust engine.rs twin and desktop FUSE live-wiring), scope-expanded twice per user decisions, planned into 13 PLAN.md files across 7 waves (all gates passed: plan-checker PASSED, decision-coverage 17/17), and CONTEXT/ROADMAP/VALIDATION/STATE were reconciled and committed; execution then began with wave/branch/worktree safety checks confirmed sound before dispatching Wave 1 subagents.",
+    "learnings": {
+      "repo": [
+        "gsd plan-phase decision-coverage gate parses CONTEXT.md `- **D-NN ...**` bullets with only 3 accepted formats (`- **D-NN:** text`, `- **D-NN — title** body`, `- **D-NN: Title.** body`); a single malformed bullet (e.g. period-before-closing-`**` like `- **D-09 (title).**`) causes ALL decisions to fail parsing, not just the offending one — parser code lives in `.claude/gsd-core/bin/lib/decisions.cjs`",
+        "gsd commit helper can report `commit_failed` with lint-staged output even when the commit actually succeeded — always verify via `git log`, never blindly retry (matches existing memory feedback-gsd-commit-reword-verify-first)",
+        "`gsd_run loop render-hooks plan:pre --raw` emits invalid JSON (literal newlines embedded in fragments) — read the underlying hooks JSON file directly instead of relying on --raw output",
+        "the `state.planned-phase` and roadmap `annotate` tools can silently no-op (`updated: []` / `updated: false`) when STATE.md/ROADMAP.md don't match their expected anchor format — always verify the target file changed, don't trust the tool's success echo",
+        "execute-phase init computes `branch_name` and there's a known auto-degrade path (#683) where worktree parallelization silently falls back to sequential if HEAD diverged from the worktree fork base — check `worktree.baseRef` and `shouldDegrade` explicitly before assuming worktrees will engage",
+        "in this pnpm+cargo monorepo, root `build_command`/`test_command` are effectively empty, so the generic post-merge gate falls back to root `npm test` (= `pnpm --parallel -r run test`, heavy, includes docker-dependent suites, risks 5-min timeout) — use a targeted per-wave gate matching VALIDATION.md instead",
+        "worktrees for this repo are gitignored `node_modules`-less — concurrent-plan worktrees must run `pnpm i` (not symlink) before executor work starts",
+        "`crates/fuse/src/write_ops/grant_scope.rs` has a documented 'LIVE-WIRING RESIDUAL' stub for `rotate_read_on_scope_exit` (~lines 255-300) that fails closed (EIO) because no production `RotationDeps` impl exists — only test `FakeDeps` does",
+        "Rust `RotationDeps`/`engine.rs` twin was structurally behind the TS engine even before this phase: non-recursive `verify_subtree_clean` treating missing-root as clean, 2-field `DirtyFrontierEntry` missing key fields, dirty frontier never folded into fresh/normal walk, `republish_parent` lacks the TS CAS-409 merge-retry",
+        "engine's `PublishAttempt::Conflict` needs `remote: PublishedNode` but Rust's `publish_ipns` only returns `current_sequence_number` — a production adapter must do an extra resolve+fetch round-trip to reconcile this shape mismatch (easy to silently break concurrent-add merge)",
+        "`SentSharesCache::empty()`/unrefreshed state is fail-open (empty set treated as 'no shares' → skips rotation on shared deletes) — the correct fix keys the check on 'successfully refreshed once', not 'non-empty', or it breaks legitimate zero-share private deletes"
+      ],
+      "code": [
+        {
+          "path": ".planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-CONTEXT.md",
+          "finding": "D-09/D-10 bullets used `- **D-NN (title).** body` (period before closing bold marker) which the decision-coverage parser rejects; fixed by changing to `- **D-NN (title):** body`"
+        },
+        {
+          "path": "crates/fuse/src/write_ops/grant_scope.rs",
+          "line": 269,
+          "end_line": 287,
+          "finding": "rotate_read_on_scope_exit stub returns Err(RotationError::RotateFailed) unconditionally — desktop FUSE rotation fails closed with no live RotationDeps implementor wired in"
+        },
+        {
+          "path": "crates/fuse/src/write_ops/rotation_deps.rs",
+          "finding": "New file planned (not yet created) to hold the production RotationDeps adapter, sourcing api/owner-keypair/rt from CipherBoxFS (fs.rs:32-37)"
+        }
+      ],
+      "workflow": [
+        "When a subagent is resumed via SendMessage mid-task, instruct it explicitly not to commit so the orchestrator can verify+commit itself — used successfully twice for the researcher extensions",
+        "For multi-surface phase scope expansions, thread the decision through CONTEXT.md (decisions), ROADMAP.md (success criteria + source todos), VALIDATION.md (test map), RESEARCH.md (grounding), and any related todo frontmatter together, then commit as one reconciliation pass — keeps the decision-coverage gate and downstream planner/execution consistent",
+        "Before spawning parallel worktree-isolated subagents for a wave, check intra-wave `files_modified` overlap across plans as a mandatory safety gate — only dispatch concurrently when file sets are fully disjoint",
+        "Route non-blocking secondary scope questions (e.g. ROT-04 desktop grant re-mint) to the planner as a documented deferral-with-rationale rather than interrupting the user a third time, when the ambiguity doesn't gate the plan shape",
+        "Prompt-injection heuristic scanners can false-positive on legitimate prose matching patterns like `act as (a|an|the)` in documentation-style content (e.g. ROADMAP phase descriptions) — inspect content directly before treating as a real injection"
+      ]
+    },
+    "friction": [
+      "render-hooks --raw output was invalid JSON, requiring a workaround (reading the file directly) instead of parsing tool output as intended",
+      "decision-coverage gate failure only reported '0/15 covered, malformed bullets' without pointing at the specific offending line, requiring manual regex-matching every D-NN bullet against three parser forms to isolate D-09/D-10",
+      "state.planned-phase and roadmap annotate tools silently no-op on STATE.md/ROADMAP.md formats that don't match their expected anchors, requiring manual file edits as a fallback and extra verification steps to catch the silent failure",
+      "git status quoting bug in orchestrator's own check caused a false 'tree is dirty' read, requiring a second check to correct course",
+      "execute-phase init's computed branch_name didn't match the actual current branch on first glance, requiring manual verification that the current branch was a superset (9 commits ahead) before proceeding, to avoid forking a fresh branch off origin/main and stranding 13 plan commits"
+    ],
+    "open_items": [
+      "Desktop-e2e acceptance leg (Plan 13, autonomous:false) requires human sign-off and dispatch-gated CI round-trip — deferred until Wave 7 is reached",
+      "ROT-04 (no orphaned inner grant enforcement) on the desktop path may start as trait no-op methods (query_grants_rooted_at/update_grant/delete_grant) — Plan 09 documents this as an explicit deferral-with-rationale, not fully resolved",
+      "Post-merge build/test gate needs a targeted per-wave replacement (matching VALIDATION.md) since generic root npm test is mis-tuned for this pnpm+cargo monorepo — approach decided but not yet implemented/verified across all waves",
+      "Cosmetic heading inconsistency in Plan 01 ('...this phase produces (master index)' vs '...this plan produces' elsewhere) left unfixed as non-blocking",
+      "ROADMAP.md annotate for wave dependencies returned updated:false (0 cross-cutting detected) — left as-is, non-blocking per orchestrator's own assessment",
+      "Execution of Waves 1-7 (worktree pnpm i, dispatch, merge, post-merge gate, Wave 7 human checkpoint) was still in progress / not yet completed at transcript end"
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
