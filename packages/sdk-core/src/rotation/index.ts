@@ -9,12 +9,14 @@ export {
   verifySubtreeClean,
   rotateWriteFromNode,
   RootKeyStaleError,
+  DirtyNodeUnrecoverableError,
   type RotationJobRecord,
   type RotationStatus,
   type RotationParams,
   type RotateReadResult,
   type WriteRevocationCallbacks,
   type GrantRemintCallbacks,
+  type KeyCheckpointCallbacks,
   type DirtyFrontierItem,
 } from './engine';
 
