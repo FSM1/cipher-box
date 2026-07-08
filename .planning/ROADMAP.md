@@ -714,7 +714,7 @@ Plans:
 7. The Rust rotation-engine twin (`crates/sdk/src/rotation/engine.rs`, desktop FUSE/WinFsp) reaches the same read-plane soundness contract as the TS engine — depth-aware dirty-frontier consumption (SC#1/SC#2), already-rotated-dirty-node convergence + ECIES key-checkpoint (SC#3), fed from the shared durable plane (SC#4) — plus its structural catch-up (recursive `verify_subtree_clean`, missing-root-treated-as-dirty), with unit-tier (`FakeDeps`) crash-resume coverage adapting the four D-10 assertions (scope decision 2026-07-08 / D-11..D-13)
 8. Desktop FUSE shared-scope-exit rotation is live-wired: a production `RotationDeps` adapter (real IPNS resolve-verify + node fetch/unseal + CAS publish + wire→`GrantRow` decode + advisory job persistence) drives `rotate_read_on_scope_exit` so a covered scope-exit delete/move completes and publishes exactly one rotation instead of failing closed (EIO); the bundled gate-correctness fixes ship with it (CRITICAL `SentSharesCache::empty()` fail-open via a cache-authoritativeness flag; MAJOR ancestor-walk fail-open, poisoned-lock panic, and `delete.rs`/`rename.rs` gate ordering + rename dest-gating); a revoked recipient can no longer read the rotated subtree; private deletes stay pure relinks; verified by a FUSE/desktop-e2e leg (scope decision 2026-07-08 / D-14..D-17, absorbing the `2026-07-07-fuse-shared-scope-exit-rotation-live-wiring` todo)
 
-**Plans**: 8/13 plans executed
+**Plans**: 10/13 plans executed
 
 Plans:
 
@@ -737,8 +737,8 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3)*
 
-- [ ] 70.1-09-PLAN.md — FUSE production `RotationDeps` adapter + wire `rotate_read_on_scope_exit` (SC#8/D-14; ROT-04 desktop-grant-remint deferral documented)
-- [ ] 70.1-10-PLAN.md — TS SC#6 depth-3 fan-out≥2 sdk-e2e crash-resume fixture (D-10, anti-vacuous gate)
+- [x] 70.1-09-PLAN.md — FUSE production `RotationDeps` adapter + wire `rotate_read_on_scope_exit` (SC#8/D-14; ROT-04 desktop-grant-remint deferral documented)
+- [x] 70.1-10-PLAN.md — TS SC#6 depth-3 fan-out≥2 sdk-e2e crash-resume fixture (D-10, anti-vacuous gate)
 
 **Wave 5** *(blocked on Wave 4)*
 
