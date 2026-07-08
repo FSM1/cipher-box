@@ -1,0 +1,196 @@
+/gsd-execute-phase 70.1 with independent worktrees for the concurrent plans. worktrees should `pnpm i`
+
+---
+
+<task-notification>
+<task-id>a2dccbc7f08719ebd</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a2dccbc7f08719ebd.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 04 of phase 70.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 70.1-04
+**Tasks:** 2/2 complete
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a2dccbc7f08719ebd/.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-04-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"70.1-04","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a2dccbc7f08719ebd","branch":"worktree-agent-a2dccbc7f08719ebd","expected_base":"727c65a09e46e346a918d5e94d972e2b53a5967a"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `c3a73c8a2` — test(70.1-04): failing recursive verify plus missing-root-dirty tests (RED)
+- `eadf590d5` — feat(sdk): widen DirtyFrontierEntry and recurse verify_subtree_clean (GREEN)
+- `c2cd109b1` — docs(70.1-04): complete Rust rotation-engine D-12 structural catch-up plan (SUMMARY)
+
+**Key file:** `crates/sdk/src/rotation/engine.rs`
+
+**What shipped:**
+- `DirtyFrontierEntry` widened: `{ ipns_name, node_id, parent_ipns_name, node_read_key: Zeroizing&lt;[u8;32]&gt;, child_pub_kind: NodeKind, enqueued_generation: u32 }` (Rust twin of TS `DirtyFrontierItem`).
+- `verify_subtree_clean` now recurses the full subtree via a new explicit-work-stack helper `collect_dirty_frontier` (descend below clean folder edges, stop below dirty edges), and returns a new `VerifySubtreeOutcome { is_dirty, frontier }` shape.
+- Missing root now surfaces as `is_dirty: true` with an empty frontier — distinct from a fully-converged (also empty) frontier. This fixes a real latent bug in `rotate_read_from_node`'s resume branch, which previously checked `frontier.is_empty()` and would mark the job `Complete` when the root record was simply gone.
+- Extracted `derive_child_read_key`, shared between `enqueue_child` and the new verify walk.
+- Deliberately left the depth&gt;=2 consumption bug in `rotate_read_from_node`'s resume branch untouched — that's Plan 06 scope.
+
+**Verification:** `cargo test -p cipherbox-sdk` — 137 passed, 0 failed. `cargo clippy -p cipherbox-sdk --all-targets` — no new warnings from this plan's changes (pre-existing warnings elsewhere untouched). `cargo fmt -p cipherbox-sdk -- --check` — only pre-existing out-of-scope drift remains (not touched, per repo convention).
+
+**Duration:** ~30 min (not precisely timed — start timestamp was not captured before work began).</result>
+<usage><subagent_tokens>179566</subagent_tokens><tool_uses>61</tool_uses><duration_ms>504231</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a2dccbc7f08719ebd</worktreePath><worktreeBranch>worktree-agent-a2dccbc7f08719ebd</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a3caeb6e9c02a7bf9</task-id>
+<tool-use-id>toolu_01Jxtindc6euw5WoN5wc1qpx</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a3caeb6e9c02a7bf9.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 03 of phase 70.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 70.1-03
+**Tasks:** 3/3
+**SUMMARY:** `.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-03-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+worktree_path: /Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a3caeb6e9c02a7bf9
+branch: worktree-agent-a3caeb6e9c02a7bf9
+base: 727c65a09e46e346a918d5e94d972e2b53a5967a
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `7b8e9dae` test(70.1-03): failing fail-closed put + combined-record + migration tests
+- `2c20036e` feat(sdk): combined per-node floor record with fail-closed durable put
+- `cb7bc18f` fix(sdk): sweep HighWaterStore::put consumers for the new Result signature
+- `ba8f195f` docs(70.1-03): add plan summary for combined fail-closed floor store
+
+**Duration:** ~50 min
+
+Summary of what was built:
+- `crates/sdk/src/floor_store.rs` — `CombinedFloorRecord { generation, seq, wrapped_key_checkpoint }` collapsed the two independent sidecar files (`rotation-high-water-generation.json` / `rotation-high-water-seq.json`) into ONE `rotation-high-water.json`, with legacy fold-forward migration and `persist_wrapped_key`/`get_wrapped_key`/`delete_wrapped_key` accessors.
+- `crates/sdk/src/rotation/high_water.rs` — `HighWaterStore::put` now returns `Result&lt;(), RotationError&gt;` (new `PersistFailed` variant); `bump_floor`/`bump_generation`/`bump_seq`/`seed_from_grant`/`enforce_resolved` all propagate fail-closed.
+- Consumer sweep across `crates/sdk/src/{adapter,lib,listing,emit}.rs` and `crates/fuse/src/fs.rs`; `content_ops.rs`/`inode.rs`/`events.rs`/`replay.rs` needed no changes (verified via clean `cargo check`).
+- `cargo test -p cipherbox-sdk` (139 passed), `cargo test -p cipherbox-fuse --features fuse` (96+1 passed), `cargo clippy` clean on all touched files.
+
+No modifications were made to STATE.md/ROADMAP.md per instructions — those remain for the orchestrator.</result>
+<usage><subagent_tokens>274704</subagent_tokens><tool_uses>106</tool_uses><duration_ms>992036</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a3caeb6e9c02a7bf9</worktreePath><worktreeBranch>worktree-agent-a3caeb6e9c02a7bf9</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a8fb46a1ed345f273</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a8fb46a1ed345f273.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 01 of phase 70.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 70.1-01
+**Tasks:** 2/2
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a8fb46a1ed345f273/.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-01-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"70.1-01","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a8fb46a1ed345f273","branch":"worktree-agent-a8fb46a1ed345f273","expected_base":"727c65a09e46e346a918d5e94d972e2b53a5967a"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `628c61d5b`: test(70.1-01): failing depth&gt;=2 dirty-resume consumption tests
+- `bdd7108f7`: feat(70.1-01): depth-aware dirty-resume consumption + normal-branch ordering fix
+- `c975ba048`: docs(70.1-01): complete depth-aware dirty-resume consumption plan
+- `6ea616ca1`: docs(70.1-01): append self-check results to SUMMARY.md
+
+**Duration:** ~38 min
+
+Key files:
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a8fb46a1ed345f273/packages/sdk-core/src/rotation/engine.ts` — Bug A (dirty-resume mis-attribution) and Bug B (normal-branch ordering) fixes; new `findParentNodeByIpnsName` + `resolveParentTrackingState` helpers
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a8fb46a1ed345f273/packages/sdk-core/src/__tests__/rotation/engine.test.ts` — new SC#1/SC#2 depth-2/depth-3 test cases
+
+Full `sdk-core` suite: 357/357 passing (355 pre-existing + 2 new), no regressions. No deviations from plan. STATE.md/ROADMAP.md/REQUIREMENTS.md intentionally left untouched per worktree-mode contract — orchestrator owns those after the wave completes.</result>
+<usage><subagent_tokens>459240</subagent_tokens><tool_uses>80</tool_uses><duration_ms>2140015</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a8fb46a1ed345f273</worktreePath><worktreeBranch>worktree-agent-a8fb46a1ed345f273</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a68f7fb5c3bab94ad</task-id>
+<tool-use-id>toolu_01KLEtT3bvHvfK8YfGsKKAGf</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a68f7fb5c3bab94ad.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 02 of phase 70.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Clean working tree, all commits in place. Per instructions, I do not update STATE.md/ROADMAP.md — the orchestrator owns that after the wave completes.
+
+## PLAN COMPLETE
+
+**Plan:** 70.1-02
+**Tasks:** 3/3
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a68f7fb5c3bab94ad/.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-02-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"70.1-02","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a68f7fb5c3bab94ad","branch":"worktree-agent-a68f7fb5c3bab94ad","expected_base":"727c65a09e46e346a918d5e94d972e2b53a5967a"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- 96c079613: test(70.1-02): failing combined floor-record atomicity tests
+- 6e89d4473: feat(70.1-02): collapse web rotation floors into one combined IndexedDB store
+- 2758f6ee0: feat(70.1-02): enforceResolved writes both floors in one combined record
+- dfae54daf: docs(70.1-02): complete combined rotation floor record plan
+
+**Duration:** ~12 min
+
+Key files:
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a68f7fb5c3bab94ad/packages/sdk/src/state/rotation-high-water.ts`
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a68f7fb5c3bab94ad/packages/sdk/src/index.ts`
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a68f7fb5c3bab94ad/packages/sdk/src/__tests__/rotation-high-water.test.ts`
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a68f7fb5c3bab94ad/apps/web/src/services/rotation-state.service.ts`
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a68f7fb5c3bab94ad/apps/web/src/services/rotation-state.service.test.ts` (new)
+
+Notable deviation: Test B (wrapped-key round trip) and Test C (migration-preservation) live in a new colocated `apps/web/src/services/rotation-state.service.test.ts` rather than `packages/sdk`'s test file, since that logic is inherently browser-only IndexedDB code — the plan's own RESEARCH pre-authorized this placement. Full detail and rationale documented in the SUMMARY's Deviations section.</result>
+<usage><subagent_tokens>341484</subagent_tokens><tool_uses>103</tool_uses><duration_ms>1205297</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a68f7fb5c3bab94ad</worktreePath><worktreeBranch>worktree-agent-a68f7fb5c3bab94ad</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a68f7fb5c3bab94ad</task-id>
+<tool-use-id>toolu_01MReM9NpPXYBhuoEVNsXRTp</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a68f7fb5c3bab94ad.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 02 of phase 70.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Clean working tree, all correction commits in place. The reviewer's hoist is complete.
+
+## CORRECTION COMPLETE
+
+**Plan:** 70.1-02 (post-review correction)
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a68f7fb5c3bab94ad/.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-02-SUMMARY.md`
+
+What the correction did:
+- Hoisted the entire IndexedDB adapter (open + `onupgradeneeded` legacy fold + transactional get/put + wrapped-key accessors + D-08 degradation) from `apps/web` into new `packages/sdk/src/state/rotation-idb-store.ts`, exposed via a `createIndexedDbHighWaterStore()` factory.
+- Lazy global `indexedDB` (function-body only); exported as its own tsup entry + `@cipherbox/sdk/state/rotation-idb-store` subpath, **not** in the main barrel — tree-shakeable, no IndexedDB pulled into desktop/node consumers.
+- New `packages/sdk/src/__tests__/rotation-idb-store.test.ts` (13 tests, `fake-indexeddb`) — migration fold + legacy-store deletion, max-preserving `put`, wrapped-key round trip, D-08 degradation — running under `pnpm --filter @cipherbox/sdk test` (CI-covered).
+- Moved `fake-indexeddb` devDependency from `apps/web` to `packages/sdk`; thinned the web service to wiring; deleted the never-CI-run web test.
+
+Verification: SDK suite 359 passed / 49 skipped / 0 failed (rotation-idb-store 13/13, rotation-high-water 29/29); SDK build emits the subpath dist; `apps/web` `tsc -b` clean; all touched files lint-clean.
+
+**New commits (on top of prior 4):**
+- `2f8e27802` feat(70.1-02): hoist rotation IndexedDB adapter into the SDK for CI coverage
+- `f7d17b8f7` refactor(70.1-02): thin web rotation service to SDK adapter wiring
+- `276e07071` docs(70.1-02): record IndexedDB adapter hoist into CI-covered SDK suite
+
+&lt;worktree_metadata&gt;
+worktree_path: /Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a68f7fb5c3bab94ad
+branch: worktree-agent-a68f7fb5c3bab94ad
+base: 727c65a09e46e346a918d5e94d972e2b53a5967a
+&lt;/worktree_metadata&gt;</result>
+<usage><subagent_tokens>332888</subagent_tokens><tool_uses>142</tool_uses><duration_ms>481196</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a68f7fb5c3bab94ad</worktreePath><worktreeBranch>worktree-agent-a68f7fb5c3bab94ad</worktreeBranch></worktree>
+</task-notification>
