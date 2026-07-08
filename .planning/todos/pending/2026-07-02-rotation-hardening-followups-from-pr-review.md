@@ -9,6 +9,10 @@ files:
   - apps/web/src/services/rotation-driver.service.ts
 ---
 
+## Phase 70 disposition (2026-07-08)
+
+Partially closed by Phase 70. **Closed:** item 2 (RotateReadResult.readKey terminal-owner zeroization → SC#6, 70-07), item 3 (per-call IndexedDB connections → cached conn, 70-03), item 4 (single-root badge → Set-keyed, 70-03), item 6 (dirty-resume republish result silently dropped → fresh-copy truthy return, 70-06). **Still open (kept in pending):** item 1 (cross-store bump atomicity — explicitly documented out of scope for SC#5 store-layer atomicity at `rotation-high-water.ts:35-46`; needs an atomic multi-store transaction API) and item 5 (reconcile gate feeds cached `nodeGeneration` at `client.ts:1341`, not the freshly-resolved generation). Retarget items 1 + 5 to a future durability phase.
+
 ## Problem
 
 Four CodeRabbit findings from the Phase 68 ship review were real but too architectural/risky for a ship-time hot patch:
