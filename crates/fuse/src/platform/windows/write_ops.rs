@@ -1099,7 +1099,7 @@ pub mod implementation {
         // move is handled by the grant-scope gate below (rotation), not by
         // re-keying the moved file.
         if old_parent_ino != new_parent_ino
-            && crate::write_ops::grant_scope::run_scope_exit_gate(&fs, source_ino).is_err()
+            && crate::write_ops::grant_scope::run_scope_exit_gate(&mut fs, source_ino).is_err()
         {
             return Err(status_io_device_error());
         }
@@ -1249,8 +1249,8 @@ pub mod implementation {
         // ONCE. Fail-closed: rotation failure rejects the delete
         // (STATUS_ACCESS_DENIED) so the item stays put and no sharee is left
         // with access to soon-to-be-orphaned content.
-        let fs = ctx.inner.lock().unwrap();
-        if crate::write_ops::grant_scope::run_scope_exit_gate(&fs, context.ino).is_err() {
+        let mut fs = ctx.inner.lock().unwrap();
+        if crate::write_ops::grant_scope::run_scope_exit_gate(&mut fs, context.ino).is_err() {
             log::error!(
                 "set_delete: grant-scope gate failed for ino {} (rejecting delete)",
                 context.ino

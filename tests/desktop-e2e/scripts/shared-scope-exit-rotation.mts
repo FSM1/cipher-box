@@ -351,20 +351,34 @@ async function main(): Promise<void> {
     } else {
       console.log('PASS: shared-scope-exit delete completed with no EIO');
 
+      // COALESCED PUBLISH COUNT (70.1-13a): a covered scope-exit delete of the
+      // grant-root's only child now publishes the grant-root EXACTLY ONCE — the
+      // rotation republishes it with the post-delete (empty) child list under
+      // the new key as the single authoritative publish, and the plain
+      // stale-key relink is SUPPRESSED. Before the fix this was +2 (rotate_one +
+      // batched republish_parent) followed by a +1 old-key relink (the
+      // revocation bypass). The SECURITY invariants below (pre-rotation key
+      // dead, Bob cut off) are the primary D-16 gate; this count check guards
+      // the coalescing.
       const seqAfterDelete = await pollSequenceBump(grantRootIpnsName, seqBeforeDelete, ownerCtx);
       if (seqAfterDelete === seqBeforeDelete + 1n) {
         console.log(
           `PASS: grant-root ${grantRootIpnsName} sequence bumped by exactly 1 ` +
-            `(${seqBeforeDelete} -> ${seqAfterDelete}) -- exactly one rotation publish`
+            `(${seqBeforeDelete} -> ${seqAfterDelete}) -- coalesced single rotation publish`
         );
       } else {
         console.error(
           `FAIL: grant-root ${grantRootIpnsName} sequence bumped by ${seqAfterDelete - seqBeforeDelete}, ` +
-            `expected exactly 1 (${seqBeforeDelete} -> ${seqAfterDelete})`
+            `expected exactly 1 (${seqBeforeDelete} -> ${seqAfterDelete}) -- coalescing regressed ` +
+            '(rotation double-published, or the stale-key relink was not suppressed)'
         );
         failed = true;
       }
 
+      // SECURITY INVARIANT 1: the newest grant-root record is NOT decryptable by
+      // the pre-rotation key. This is resolved AFTER pollSequenceBump has
+      // settled on the post-delete record, so it reflects the final published
+      // state (not a transient mid-rotation record).
       const preRotationKeyStillWorks = await canRead(
         grantRootIpnsName,
         sharedFolderReadKey,
@@ -376,11 +390,15 @@ async function main(): Promise<void> {
         );
       } else {
         console.error(
-          'FAIL: the pre-rotation read key still decrypts the grant-root -- no rotation occurred'
+          'FAIL: the pre-rotation read key still decrypts the grant-root -- the newest record ' +
+            'is sealed under the OLD key (stale-key relink revocation bypass regressed)'
         );
         failed = true;
       }
 
+      // SECURITY INVARIANT 2: the revoked recipient (Bob) is cut off. Bob's key
+      // is byte-identical to the owner's pre-rotation key, so this fails iff the
+      // newest published record is under the old key (the bypass).
       const bobCanReadAfterRotation = await canRead(grantRootIpnsName, bobFolderReadKey, bobCtx);
       if (!bobCanReadAfterRotation) {
         console.log(

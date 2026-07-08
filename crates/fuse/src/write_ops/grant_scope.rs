@@ -27,10 +27,12 @@ use std::future::Future;
 
 use cipherbox_api_client::shares::{collect_sent_shares, SentShareResponse};
 use cipherbox_api_client::{ApiClient, ApiError};
+use cipherbox_core::node::SealedChildRef;
 use cipherbox_sdk::rotation::scope::{
     has_covering_grant, CoverageParams, LocalGrantRecord, ScopeExitResult,
 };
 use cipherbox_sdk::rotation::RotationError;
+use cipherbox_sdk::RotateReadResult;
 
 use crate::inode::{InodeKind, InodeTable, ROOT_INO};
 
@@ -358,6 +360,39 @@ where
     F: FnOnce(String) -> Fut,
     Fut: Future<Output = Result<(), RotationError>>,
 {
+    match detect_scope_exit(inodes, start_ino, sent_cache)? {
+        // ROT-02 / SC#3: no covering grant → zero rotation, zero extra
+        // publishes. The caller's parent relink is the entire durable effect.
+        None => Ok(ScopeExitResult::NoRotation),
+        // Covered scope-exit: rotate the read key from the matched grant-root
+        // ancestor EXACTLY ONCE. `detect_scope_exit`/`grant_root_for`
+        // short-circuits at the first (closest, leaf-first) matching ancestor,
+        // so this fires once per scope-exit regardless of how many ancestors
+        // are grant roots.
+        Some(grant_root_ipns_name) => {
+            rotate(grant_root_ipns_name).await?;
+            Ok(ScopeExitResult::Rotated)
+        }
+    }
+}
+
+/// The DETECTION half of the scope-exit gate (70.1-13a split): walks the
+/// mutated node's leaf-first ancestor chain and cross-checks it against the
+/// local sent-shares cache, returning the grant-root ipns to rotate FROM
+/// (`Some`) or `None` for a private mutation. Fails closed (`Err`) on the
+/// D-15a/D-15b conditions BEFORE any coverage decision.
+///
+/// Purely synchronous and side-effect-free (no rotation, no network) so it can
+/// be run under an IMMUTABLE `&InodeTable` borrow, then dropped before the
+/// caller takes a `&mut CipherBoxFS` borrow to perform the rotation +
+/// post-rotation inode-key refresh ([`rotate_read_on_scope_exit`]). This split
+/// is what makes the borrow-checker-safe `&mut` threading (and the coalescing
+/// reorder) possible without weakening any gate check.
+pub fn detect_scope_exit(
+    inodes: &InodeTable,
+    start_ino: u64,
+    sent_cache: &SentSharesCache,
+) -> Result<Option<String>, RotationError> {
     let chain = ancestor_ipns_chain(inodes, start_ino);
 
     // D-15b: an incomplete ancestor walk must never be treated as a clean
@@ -385,19 +420,7 @@ where
     }
 
     let params = build_coverage_params(&chain.names, sent_cache);
-    match grant_root_for(&chain.names, &params) {
-        // ROT-02 / SC#3: no covering grant → zero rotation, zero extra
-        // publishes. The caller's parent relink is the entire durable effect.
-        None => Ok(ScopeExitResult::NoRotation),
-        // Covered scope-exit: rotate the read key from the matched grant-root
-        // ancestor EXACTLY ONCE. `grant_root_for` short-circuits at the first
-        // (closest, leaf-first) matching ancestor, so this fires once per
-        // scope-exit regardless of how many ancestors are grant roots.
-        Some(grant_root_ipns_name) => {
-            rotate(grant_root_ipns_name).await?;
-            Ok(ScopeExitResult::Rotated)
-        }
-    }
+    Ok(grant_root_for(&chain.names, &params))
 }
 
 /// Live read-key rotation for a shared-scope exit (SC#3): rotate the read key
@@ -422,10 +445,28 @@ where
 /// at the caller) — never a silent no-rotation, which would leave a removed
 /// reader with continued access (the exact revocation-bypass this gate
 /// exists to prevent). Private deletes never reach this seam.
+/// # Coalescing + revocation-bypass fix (70.1-13a)
+/// Takes `&mut CipherBoxFS` so that, after a successful rotation, the
+/// grant-root inode's in-memory `read_key` is refreshed to the freshly-minted
+/// post-rotation key (the caller contract `RotateReadResult` documents,
+/// `engine.rs`). Without this refresh, a later local relink of that folder
+/// reseals it under the STALE pre-rotation key, republishing a record the
+/// revoked reader can still decrypt — the exact Bob-bypass this fixes.
+///
+/// `root_children_override`, when `Some`, is the grant-root's POST-delete
+/// read-plane child list (a covered scope-exit delete where the grant-root IS
+/// the deleted node's direct parent). The rotation then republishes the
+/// grant-root already reflecting the deletion under the new key as the SINGLE
+/// authoritative publish, so the caller SKIPS the separate parent relink
+/// (no stale-key record, minimal publishes). `None` preserves the prior
+/// behavior (rename / deep scope-exit / WinFsp), where the caller still runs
+/// its own post-rotation relink (now correctly resealed under the refreshed
+/// key).
 pub async fn rotate_read_on_scope_exit(
-    fs: &crate::CipherBoxFS,
+    fs: &mut crate::CipherBoxFS,
     grant_root_ipns_name: &str,
     deleted_child_id: &str,
+    root_children_override: Option<Vec<SealedChildRef>>,
 ) -> Result<(), RotationError> {
     // ipns_name (read plane) and child UUID (write plane) are PUBLIC
     // identifiers, not key material — safe to log (CLAUDE.md rule 2).
@@ -438,27 +479,53 @@ pub async fn rotate_read_on_scope_exit(
         )));
     };
 
-    let deps = crate::write_ops::rotation_deps::FuseRotationDeps::new(
-        crate::write_ops::rotation_deps::ApiClientTransport {
-            api: fs.api.as_ref(),
-            inodes: &fs.inodes,
-        },
-        fs.public_key.to_vec(),
-        fs.private_key.to_vec(),
-        fs.rotation_checkpoint_store.clone(),
-    );
-    let mut job = cipherbox_sdk::RotationJobRecord::new(root_node_id.clone());
+    // Scope the immutable `deps` borrow of `fs` so it is dropped BEFORE the
+    // post-rotation `&mut fs.inodes` refresh below (no overlapping borrows).
+    let outcome = {
+        let deps = crate::write_ops::rotation_deps::FuseRotationDeps::new(
+            crate::write_ops::rotation_deps::ApiClientTransport {
+                api: fs.api.as_ref(),
+                inodes: &fs.inodes,
+            },
+            fs.public_key.to_vec(),
+            fs.private_key.to_vec(),
+            fs.rotation_checkpoint_store.clone(),
+        );
+        let mut job = cipherbox_sdk::RotationJobRecord::new(root_node_id.clone());
+        match root_children_override {
+            Some(children) => {
+                cipherbox_sdk::rotate_read_from_node_with_root_children(
+                    &deps,
+                    &root_node_id,
+                    grant_root_ipns_name,
+                    root_read_key.as_slice(),
+                    &mut job,
+                    children,
+                )
+                .await
+            }
+            None => {
+                cipherbox_sdk::rotate_read_from_node(
+                    &deps,
+                    &root_node_id,
+                    grant_root_ipns_name,
+                    root_read_key.as_slice(),
+                    &mut job,
+                )
+                .await
+            }
+        }
+    };
 
-    match cipherbox_sdk::rotate_read_from_node(
-        &deps,
-        &root_node_id,
-        grant_root_ipns_name,
-        root_read_key.as_slice(),
-        &mut job,
-    )
-    .await
-    {
-        Ok(_) => {
+    match outcome {
+        Ok(maybe_result) => {
+            // 70.1-13a (revocation-bypass fix): refresh the grant-root inode's
+            // in-memory read key so any subsequent local publish reseals under
+            // the NEW key. `fresh_root` is `None` on a resume-skip; nothing to
+            // refresh in that case.
+            if let Some(result) = maybe_result {
+                refresh_grant_root_read_key(&mut fs.inodes, grant_root_ipns_name, &result);
+            }
             log::info!(
                 "shared-scope-exit read-key rotation completed \
                  (read-plane grant_root ipns={}, write-plane child_id={})",
@@ -478,6 +545,65 @@ pub async fn rotate_read_on_scope_exit(
             Err(e)
         }
     }
+}
+
+/// 70.1-13a (revocation-bypass fix): overwrite the grant-root inode's in-memory
+/// `read_key` with the freshly-minted post-rotation key. D-09 terminal-owner:
+/// the inode owns its `Zeroizing` buffer; the 32 bytes are overwritten in place
+/// (the old key is thereby discarded). `result.read_key` is NOT zeroed here —
+/// `RotateReadResult` owns it and self-zeroes on drop. Key bytes are NEVER
+/// logged.
+fn refresh_grant_root_read_key(
+    inodes: &mut InodeTable,
+    grant_root_ipns_name: &str,
+    result: &RotateReadResult,
+) {
+    for inode in inodes.inodes.values_mut() {
+        match &mut inode.kind {
+            InodeKind::Root {
+                ipns_name,
+                read_key,
+                ..
+            }
+            | InodeKind::Folder {
+                ipns_name,
+                read_key,
+                ..
+            } if ipns_name.as_str() == grant_root_ipns_name => {
+                read_key.copy_from_slice(result.read_key.as_slice());
+                return;
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Detection-only half of the scope-exit gate for a mutation of `ino`, run
+/// under an immutable `&CipherBoxFS` borrow (70.1-13a). Returns the grant-root
+/// ipns to rotate FROM (`Some`) or `None` for a private mutation; `Err(())`
+/// on a poisoned cache (D-15c) or a fail-closed D-15a/D-15b condition. The
+/// caller then takes a `&mut` borrow to perform the rotation
+/// ([`rotate_read_on_scope_exit`]) — this split keeps the ancestor walk's
+/// immutable borrow disjoint from the rotation's mutable inode-key refresh.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+pub fn detect_scope_exit_grant_root(
+    fs: &crate::CipherBoxFS,
+    ino: u64,
+) -> Result<Option<String>, ()> {
+    let sent_cache = match fs.sent_shares.read() {
+        Ok(guard) => guard.clone(),
+        Err(_poisoned) => {
+            log::error!(
+                "scope-exit gate: sent_shares RwLock is poisoned (a prior writer \
+                 panicked while holding it) — failing closed (EIO) rather than \
+                 panicking the fuser callback thread (D-15c)"
+            );
+            return Err(());
+        }
+    };
+    detect_scope_exit(&fs.inodes, ino, &sent_cache).map_err(|e| {
+        log::error!("scope-exit gate failed (fail-closed): {}", e);
+    })
 }
 
 /// Drive the SC#3 scope-exit gate for a mutation of `ino` (unlink / rmdir /
@@ -507,18 +633,7 @@ pub async fn rotate_read_on_scope_exit(
 /// This is consistent with the surrounding `Result<(), ()>` flow: a poisoned
 /// cache is treated the same as any other fail-closed gate outcome.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
-pub fn run_scope_exit_gate(fs: &crate::CipherBoxFS, ino: u64) -> Result<(), ()> {
-    let sent_cache = match fs.sent_shares.read() {
-        Ok(guard) => guard.clone(),
-        Err(_poisoned) => {
-            log::error!(
-                "scope-exit gate: sent_shares RwLock is poisoned (a prior writer \
-                 panicked while holding it) — failing closed (EIO) rather than \
-                 panicking the fuser callback thread (D-15c)"
-            );
-            return Err(());
-        }
-    };
+pub fn run_scope_exit_gate(fs: &mut crate::CipherBoxFS, ino: u64) -> Result<(), ()> {
     // Write-plane key (D-07): the mutated node's stable id (its stored node_id ==
     // real published.id), kept DISTINCT from the read-plane grant-root ipns_name
     // threaded into the rotate seam below. Sourced from the inode, NOT
@@ -529,19 +644,27 @@ pub fn run_scope_exit_gate(fs: &crate::CipherBoxFS, ino: u64) -> Result<(), ()> 
         .get(ino)
         .map(|i| i.node_id.clone())
         .unwrap_or_else(|| crate::fs::uuid_from_ino(ino));
-    fs.rt
-        .block_on(gate_scope_exit(
-            &fs.inodes,
-            ino,
-            &sent_cache,
-            move |grant_root_ipns_name| async move {
-                rotate_read_on_scope_exit(fs, &grant_root_ipns_name, &child_id).await
-            },
-        ))
-        .map(|_| ())
-        .map_err(|e| {
-            log::error!("scope-exit gate failed (fail-closed): {}", e);
-        })
+
+    // 70.1-13a: detect coverage under an immutable borrow FIRST (D-15a/b/c
+    // fail-closed preserved), then rotate under a `&mut` borrow so the
+    // post-rotation inode-key refresh can run. `rt` is cloned so `block_on`
+    // does not itself borrow `fs`, leaving the closure free to take `&mut fs`.
+    let grant_root_ipns_name = match detect_scope_exit_grant_root(fs, ino)? {
+        // Private mutation: zero rotation. The caller's own relink is the
+        // entire durable effect (ROT-02 / SC#3 zero-rotation invariant).
+        None => return Ok(()),
+        Some(name) => name,
+    };
+    let rt = fs.rt.clone();
+    rt.block_on(rotate_read_on_scope_exit(
+        fs,
+        &grant_root_ipns_name,
+        &child_id,
+        None,
+    ))
+    .map_err(|e| {
+        log::error!("scope-exit gate failed (fail-closed): {}", e);
+    })
 }
 
 #[cfg(test)]
@@ -1078,7 +1201,7 @@ mod tests {
         assert!(fs.sent_shares.is_poisoned(), "lock must now be poisoned");
 
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_scope_exit_gate(&fs, child)
+            run_scope_exit_gate(&mut fs, child)
         }));
 
         assert!(

@@ -320,6 +320,92 @@ impl CipherBoxFS {
         Ok((published_bytes, ipns_private_key, ipns_name, old_cid))
     }
 
+    /// 70.1-13a coalescing: build the grant-root's POST-delete read-plane
+    /// `SealedChildRef` list — the parent's current children EXCLUDING
+    /// `exclude_ino` — sealed under the parent's CURRENT (pre-rotation) read
+    /// key, for a covered scope-exit rotation's `root_children_override`. The
+    /// rotation then republishes the grant-root already reflecting the deletion
+    /// under the NEW key as the SINGLE authoritative publish (no stale-key
+    /// relink afterward — the revocation-bypass fix).
+    ///
+    /// Purely read-only (NO inode mutation): fail-closed discipline means the
+    /// child is only removed after the rotation succeeds. Mirrors the read-plane
+    /// half of [`Self::build_folder_metadata`]'s child loop; the refs are sealed
+    /// under the parent's pre-rotation read key so the rotation BFS can still
+    /// derive each surviving child's key via `unseal_child_read_key`.
+    pub fn build_scope_exit_child_override(
+        &self,
+        parent_ino: u64,
+        exclude_ino: u64,
+    ) -> Vec<cipherbox_core::node::SealedChildRef> {
+        use cipherbox_core::node::NodeKind;
+        let Some(parent) = self.inodes.get(parent_ino) else {
+            return Vec::new();
+        };
+        let (parent_read_key, parent_write_key) = match &parent.kind {
+            crate::inode::InodeKind::Root {
+                read_key,
+                write_key,
+                ..
+            }
+            | crate::inode::InodeKind::Folder {
+                read_key,
+                write_key,
+                ..
+            } => (**read_key, **write_key),
+            _ => return Vec::new(),
+        };
+        let child_inos = parent.children.clone().unwrap_or_default();
+        let mut sealed_children = Vec::new();
+        for child_ino in child_inos {
+            if child_ino == exclude_ino {
+                continue;
+            }
+            let Some(child) = self.inodes.get(child_ino) else {
+                continue;
+            };
+            let (kind, child_ipns, child_read_key, child_write_key) = match &child.kind {
+                crate::inode::InodeKind::Folder {
+                    ipns_name,
+                    read_key,
+                    write_key,
+                    ..
+                } => (NodeKind::Folder, ipns_name.clone(), **read_key, **write_key),
+                crate::inode::InodeKind::File {
+                    ipns_name,
+                    read_key,
+                    write_key,
+                    ..
+                } => (NodeKind::File, ipns_name.clone(), **read_key, **write_key),
+                _ => continue,
+            };
+            if child_ipns.is_empty() {
+                continue;
+            }
+            let child_id = child.node_id.clone();
+            match cipherbox_sdk::build_child_refs(
+                &child_read_key,
+                &child_write_key,
+                &parent_read_key,
+                &parent_write_key,
+                &child_id,
+                &child_ipns,
+                &child.name,
+                kind,
+                0,
+                0,
+            ) {
+                Ok((sealed_ref, _write_ref)) => sealed_children.push(sealed_ref),
+                Err(e) => log::warn!(
+                    "build_scope_exit_child_override: build_child_refs failed for child {}: {}",
+                    child_ino,
+                    e
+                ),
+            }
+        }
+        sealed_children
+    }
+
     pub fn update_folder_metadata(&mut self, folder_ino: u64) -> Result<(), String> {
         self.mutated_folders
             .insert(folder_ino, std::time::Instant::now());

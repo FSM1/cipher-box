@@ -669,6 +669,204 @@ mod tests {
         );
     }
 
+    /// DIAGNOSIS PROOF (scope-exit-part-a-fail, Defect 1 / the "+2" bump): the
+    /// grant-root that the D-16 desktop-e2e rotates STILL HAS A CHILD at
+    /// rotation time (the delete removes it AFTER the scope-exit gate runs).
+    /// A grant-root WITH a child is published TWICE by the rotation walk —
+    /// `rotate_one(root)` (engine.rs:1418) publishes the root once, then the
+    /// batched `republish_parent(root)` (engine.rs:2115) publishes it AGAIN
+    /// after the child rotates and is re-sealed into the parent's child
+    /// mirror. Both publishes are under the parent's NEW read key. This is why
+    /// the e2e sees a `+2` IPNS sequence bump on the grant-root even though it
+    /// asserts `+1` ("exactly one rotation publish"): that expectation is only
+    /// correct for a CHILDLESS scope root (the test above), not for a
+    /// scope-root that has a child at rotation time. This is deterministic and
+    /// independent of the desktop delete-relink republish.
+    #[tokio::test]
+    async fn covered_scope_exit_with_a_child_publishes_the_grant_root_twice() {
+        use cipherbox_core::node::{Node, NodeKind, SealedChildRef};
+
+        const CHILD_ID: &str = "22222222-2222-2222-2222-222222222222";
+        let child_ipns = "k51child";
+
+        let transport = FakeTransport::default();
+        let root_read_key = [7u8; 32];
+        let root_write_key = [8u8; 32];
+        let child_read_key = [9u8; 32];
+        let child_write_key = [10u8; 32];
+
+        // The grant-root's child ref, sealed under the ROOT's keys (generation
+        // 0) exactly as `build_folder_metadata` would have produced it.
+        let (child_ref, _wref): (SealedChildRef, _) = cipherbox_sdk::build_child_refs(
+            &child_read_key,
+            &child_write_key,
+            &root_read_key,
+            &root_write_key,
+            CHILD_ID,
+            child_ipns,
+            "secret-sub",
+            NodeKind::Folder,
+            0,
+            0,
+        )
+        .expect("build_child_refs");
+
+        // Seed the child (an empty folder) sealed under its OWN read key.
+        let child_node = Node::Folder {
+            id: CHILD_ID.to_string(),
+            generation: 0,
+            created_at: 1_000,
+            modified_at: 1_000,
+            children: vec![],
+        };
+        transport.seed(
+            child_ipns,
+            "cid-child-v1",
+            1,
+            seal_for_seed(&child_node, &child_read_key),
+        );
+
+        // Seed the grant-root folder holding that one child, sealed under the
+        // root read key.
+        let root_node = Node::Folder {
+            id: ROOT_ID.to_string(),
+            generation: 0,
+            created_at: 1_000,
+            modified_at: 1_000,
+            children: vec![child_ref],
+        };
+        transport.seed(
+            "k51root",
+            "cid-root-v1",
+            1,
+            seal_for_seed(&root_node, &root_read_key),
+        );
+
+        let (owner_pub, owner_priv) = owner_keypair();
+        let deps =
+            FuseRotationDeps::new(transport.clone(), owner_pub, owner_priv, temp_floor_store());
+        let mut job = RotationJobRecord::new(ROOT_ID);
+
+        let result = cipherbox_sdk::rotate_read_from_node(
+            &deps,
+            ROOT_ID,
+            "k51root",
+            &root_read_key,
+            &mut job,
+        )
+        .await;
+
+        assert!(result.is_ok(), "rotation must succeed: {:?}", result.err());
+        assert_eq!(
+            transport.publish_count_for("k51root"),
+            2,
+            "REGRESSION PROOF: a grant-root that still has a child at rotation time is published \
+             TWICE (rotate_one + batched republish_parent), so the desktop-e2e '+1 exactly one \
+             rotation publish' assertion is violated (observed +2). Contrast the childless case \
+             above, which publishes exactly once."
+        );
+        // The child rotates exactly once (its own ipns), confirming the second
+        // grant-root publish is the batched parent re-mirror, not a child leak.
+        assert_eq!(
+            transport.publish_count_for(child_ipns),
+            1,
+            "the child rotates exactly once on its own ipns"
+        );
+    }
+
+    /// 70.1-13a COALESCED FIX (through the production `FuseRotationDeps`
+    /// adapter): a covered scope-exit delete of the grant-root's ONLY child
+    /// passes an EMPTY `root_children` override, so the rotation publishes the
+    /// grant-root EXACTLY ONCE (empty, under the new key) and never rotates the
+    /// deleted child. This is the coalesced replacement for the `..._twice`
+    /// case above (rotate_one + republish_parent) PLUS the suppressed stale-key
+    /// relink — the single, revocation-correct publish the D-16 leg now asserts.
+    #[tokio::test]
+    async fn covered_scope_exit_with_empty_override_publishes_the_grant_root_once() {
+        use cipherbox_core::node::{Node, NodeKind, SealedChildRef};
+
+        const CHILD_ID: &str = "22222222-2222-2222-2222-222222222222";
+        let child_ipns = "k51child";
+
+        let transport = FakeTransport::default();
+        let root_read_key = [7u8; 32];
+        let root_write_key = [8u8; 32];
+        let child_read_key = [9u8; 32];
+        let child_write_key = [10u8; 32];
+
+        let (child_ref, _wref): (SealedChildRef, _) = cipherbox_sdk::build_child_refs(
+            &child_read_key,
+            &child_write_key,
+            &root_read_key,
+            &root_write_key,
+            CHILD_ID,
+            child_ipns,
+            "secret-sub",
+            NodeKind::Folder,
+            0,
+            0,
+        )
+        .expect("build_child_refs");
+
+        let child_node = Node::Folder {
+            id: CHILD_ID.to_string(),
+            generation: 0,
+            created_at: 1_000,
+            modified_at: 1_000,
+            children: vec![],
+        };
+        transport.seed(
+            child_ipns,
+            "cid-child-v1",
+            1,
+            seal_for_seed(&child_node, &child_read_key),
+        );
+        // The grant-root still HAS the child in its published record at rotation
+        // time (the delete removes it only after the gate).
+        let root_node = Node::Folder {
+            id: ROOT_ID.to_string(),
+            generation: 0,
+            created_at: 1_000,
+            modified_at: 1_000,
+            children: vec![child_ref],
+        };
+        transport.seed(
+            "k51root",
+            "cid-root-v1",
+            1,
+            seal_for_seed(&root_node, &root_read_key),
+        );
+
+        let (owner_pub, owner_priv) = owner_keypair();
+        let deps =
+            FuseRotationDeps::new(transport.clone(), owner_pub, owner_priv, temp_floor_store());
+        let mut job = RotationJobRecord::new(ROOT_ID);
+
+        // The coalesced covered-delete path: empty post-delete child list.
+        let result = cipherbox_sdk::rotate_read_from_node_with_root_children(
+            &deps,
+            ROOT_ID,
+            "k51root",
+            &root_read_key,
+            &mut job,
+            Vec::new(),
+        )
+        .await;
+
+        assert!(result.is_ok(), "rotation must succeed: {:?}", result.err());
+        assert_eq!(
+            transport.publish_count_for("k51root"),
+            1,
+            "COALESCED: the covered scope-exit publishes the grant-root exactly ONCE \
+             (post-delete, new key) — no batched republish_parent, no stale-key relink"
+        );
+        assert_eq!(
+            transport.publish_count_for(child_ipns),
+            0,
+            "the deleted child is excluded from the override, so it is never rotated"
+        );
+    }
+
     /// Test B (Pitfall 7): on a faked 409 (publish returns Conflict with
     /// only a sequence), the adapter performs a follow-up resolve+fetch_node
     /// and returns `PublishAttempt::Conflict { remote, .. }` with a REAL
