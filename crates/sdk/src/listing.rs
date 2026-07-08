@@ -738,8 +738,9 @@ mod tests {
             self.0.lock().unwrap().get(node_id).copied()
         }
 
-        async fn put(&self, node_id: &str, value: u64) {
+        async fn put(&self, node_id: &str, value: u64) -> Result<(), RotationError> {
             self.0.lock().unwrap().insert(node_id.to_string(), value);
+            Ok(())
         }
     }
 
@@ -991,7 +992,10 @@ mod tests {
         ]));
 
         let high_water = rhw();
-        high_water.bump_generation("ipns-child-x", 5).await;
+        high_water
+            .bump_generation("ipns-child-x", 5)
+            .await
+            .expect("bump_generation");
 
         let result =
             list_folder(&fetcher, &high_water, "ipns-parent", &parent_read_key, None).await;
@@ -1058,7 +1062,10 @@ mod tests {
         ]));
 
         let high_water = rhw();
-        high_water.bump_generation("ipns-child-y", 10).await;
+        high_water
+            .bump_generation("ipns-child-y", 10)
+            .await
+            .expect("bump_generation");
 
         let result =
             list_folder(&fetcher, &high_water, "ipns-parent", &parent_read_key, None).await;
@@ -1794,7 +1801,8 @@ mod tests {
         let high_water = rhw();
         high_water
             .bump_generation(&file_emission.ipns_name, 5)
-            .await;
+            .await
+            .expect("bump_generation");
 
         let result = list_folder_owned(
             &fetcher,
