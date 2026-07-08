@@ -1033,6 +1033,210 @@ pub async fn verify_subtree_clean<D: RotationDeps>(
     })
 }
 
+// ---------------------------------------------------------------------------
+// SC#1/SC#2 (Plan 70.1-06, D-11): depth-aware dirty-frontier CONSUMPTION.
+//
+// Bug A: the pre-70.1-06 dirty-resume loop seeded ONE root-only
+// `ParentTrackingState` and matched each frontier entry against
+// `root_children` — any depth>=2 entry's real parent is an INTERMEDIATE
+// node, never found there, so it was silently `continue`d (dropped, worse
+// than TS — not even decremented, wedging `pending_child_count` forever).
+//
+// Bug B: `complete_pending_child` silently no-ops when the parent isn't
+// tracked instead of seeding it — a depth>=2 entry's real (intermediate)
+// parent's batched republish would never fire even if the entry itself WERE
+// somehow enqueued.
+//
+// Fix shape (Rust twin of `engine.ts`'s `findParentNodeByIpnsName` /
+// `resolveParentTrackingState`, `engine.ts:602-646` / `:1387-1418`): a
+// "seed-or-find `ParentTrackingState` for an arbitrary `parent_ipns_name`"
+// primitive, built on a walk-from-root helper that generalizes the
+// root-only seed to ANY depth.
+// ---------------------------------------------------------------------------
+
+/// Result of locating an arbitrary node by walking down from the scope root
+/// (SC#1, D-11): the unsealed [`Node`], its resolved IPNS record, and its
+/// OWN read key (an owned `Zeroizing` — the caller becomes its terminal
+/// owner, D-09).
+struct FoundNode {
+    node: Node,
+    resolved: ResolvedRecord,
+    read_key: Zeroizing<[u8; 32]>,
+}
+
+/// Walks from `start_ipns_name` (the scope root, using `start_read_key`)
+/// down to `target_ipns_name`, deriving each level's read key via the SAME
+/// key-chain primitive [`collect_dirty_frontier`] uses
+/// ([`derive_child_read_key`]). By construction, every ancestor between the
+/// scope root and a [`DirtyFrontierEntry`]'s real parent IS clean
+/// (`collect_dirty_frontier` stops recursing below a dirty edge), so this
+/// walk always finds a resolvable path down to a target sourced from the
+/// frontier.
+///
+/// Implemented as an explicit work-stack rather than literal recursion — the
+/// same reason [`collect_dirty_frontier`] is (Rust cannot size a
+/// self-referential `async fn`'s state machine without heap-boxing every
+/// recursive call); traversal order is otherwise immaterial.
+///
+/// @security Read-only: never mints, seals, or publishes anything itself.
+/// Every level's derived key except the MATCH's own is dropped (and thus
+/// zeroized) once that stack frame's iteration ends without being pushed
+/// onward — mirrors `collect_dirty_frontier`'s own zeroization discipline.
+///
+/// Returns `Ok(None)` when the target cannot be found (data inconsistency)
+/// — callers apply the file's existing fail-closed accounting convention.
+async fn find_node_by_ipns_name<D: RotationDeps>(
+    deps: &D,
+    start_ipns_name: &str,
+    start_read_key: &Zeroizing<[u8; 32]>,
+    target_ipns_name: &str,
+) -> Result<Option<FoundNode>, RotationError> {
+    let mut stack: Vec<(String, Zeroizing<[u8; 32]>)> =
+        vec![(start_ipns_name.to_string(), start_read_key.clone())];
+
+    while let Some((ipns_name, read_key)) = stack.pop() {
+        let Some(resolved) = deps.resolve(&ipns_name).await? else {
+            continue; // missing node -- data inconsistency, fail-closed skip.
+        };
+        let published = deps.fetch_node(&resolved.cid).await?;
+        let kind = node_kind_from_str(&published.kind)?;
+        let read_sealed_bytes = decode_b64(&published.read_sealed)?;
+        let body = unseal_node(
+            &read_sealed_bytes,
+            &read_key,
+            &published.id,
+            kind,
+            published.generation,
+        )
+        .map_err(|e| {
+            RotationError::RotateFailed(format!(
+                "find_node_by_ipns_name: unseal failed for {ipns_name}: {e}"
+            ))
+        })?;
+        let node = decode_node(&body).map_err(|e| {
+            RotationError::RotateFailed(format!(
+                "find_node_by_ipns_name: decode failed for {ipns_name}: {e}"
+            ))
+        })?;
+
+        if ipns_name == target_ipns_name {
+            return Ok(Some(FoundNode {
+                node,
+                resolved,
+                read_key,
+            }));
+        }
+
+        if kind == NodeKind::Folder || kind == NodeKind::Root {
+            for child_ref in node_children(&node) {
+                let child_pub = resolve_and_fetch(deps, &child_ref.ipns_name).await?;
+                let child_kind = node_kind_from_str(&child_pub.kind)?;
+                let child_key = derive_child_read_key(
+                    read_key.as_slice(),
+                    &child_ref,
+                    &child_pub.id,
+                    child_kind,
+                )?;
+                stack.push((child_ref.ipns_name.clone(), child_key));
+            }
+        }
+        // `read_key` drops (and zeroizes) here for every non-matching level.
+    }
+
+    Ok(None)
+}
+
+/// SC#1 (Bug A fix, D-11): given an arbitrary `parent_ipns_name` discovered
+/// via a [`DirtyFrontierEntry`] at ANY depth, resolve+unseal that parent
+/// (walking down from `root_ipns_name` via [`find_node_by_ipns_name`]) and
+/// produce-or-find its [`ParentTrackingState`]. Generalizes the root-only
+/// seed previously inlined in the dirty-resume branch — root itself is just
+/// another entry in `parent_tracking`.
+///
+/// Returns `Ok(true)` when `parent_tracking` now has (or already had) an
+/// entry for `parent_ipns_name`; `Ok(false)` when the parent could not be
+/// found walking from root (data inconsistency) — callers apply the file's
+/// existing fail-closed accounting convention (drop this frontier entry's
+/// count, matching the missing-child-record precedent elsewhere in this
+/// file, e.g. `collect_dirty_frontier`'s missing-child skip).
+///
+/// `pending_child_count` is seeded to 0 — callers set the real count (the
+/// frontier-group size for the dirty-resume branch, or 1 for a single lazy
+/// decrement in the BFS loop's fallback) after this returns, since the
+/// correct count depends on the caller's own context.
+async fn seed_or_find_parent_tracking_state<D: RotationDeps>(
+    deps: &D,
+    root_ipns_name: &str,
+    root_read_key: &Zeroizing<[u8; 32]>,
+    parent_tracking: &mut HashMap<String, ParentTrackingState>,
+    parent_ipns_name: &str,
+) -> Result<bool, RotationError> {
+    if parent_tracking.contains_key(parent_ipns_name) {
+        return Ok(true);
+    }
+
+    let Some(found) =
+        find_node_by_ipns_name(deps, root_ipns_name, root_read_key, parent_ipns_name).await?
+    else {
+        return Ok(false);
+    };
+
+    let kind = found.node.kind();
+    let (created_at, modified_at) = node_timestamps(&found.node);
+    let children = node_children(&found.node);
+    parent_tracking.insert(
+        parent_ipns_name.to_string(),
+        ParentTrackingState {
+            parent_ipns_name: parent_ipns_name.to_string(),
+            parent_new_read_key: found.read_key,
+            parent_node_id: found.node.id().to_string(),
+            parent_kind: kind,
+            parent_generation: found.node.generation(),
+            parent_created_at: created_at,
+            parent_modified_at: modified_at,
+            parent_last_seq: found.resolved.sequence_number,
+            children,
+            pending_child_count: 0,
+        },
+    );
+    Ok(true)
+}
+
+/// Enqueues a [`DirtyFrontierEntry`] directly onto the BFS queue (SC#1,
+/// D-11) — the entry already carries its own pre-rotation read key
+/// (engine-derived via `collect_dirty_frontier`'s shared key-chain walk), so
+/// no additional resolve/unseal is needed here, unlike [`enqueue_child`].
+/// Builds a minimal `SealedChildRef` stub — only `ipns_name`/`generation`
+/// are read by the BFS loop itself (`rotate_one` re-derives the node's real
+/// id/kind from its own unsealed envelope); `read_key_sealed` is never
+/// re-derived from this stub.
+///
+/// Deduped by `ipns_name` against an item already queued (e.g. a depth-1
+/// dirty edge ALSO covered by the normal children-enqueue loop in the
+/// fresh/committed branch) so it is not double-processed.
+fn enqueue_dirty_frontier_entry(entry: DirtyFrontierEntry, queue: &mut VecDeque<QueueItem>) {
+    if queue
+        .iter()
+        .any(|q| q.child_ref.ipns_name == entry.ipns_name)
+    {
+        // Deduped -- `entry.node_read_key` drops (and zeroizes) here; this
+        // walk never returns or reuses a discarded frontier entry's key
+        // (D-09).
+        return;
+    }
+    queue.push_back(QueueItem {
+        child_ref: SealedChildRef {
+            name: entry.ipns_name.clone(),
+            ipns_name: entry.ipns_name,
+            generation: entry.enqueued_generation,
+            version_floor: 0,
+            read_key_sealed: String::new(),
+        },
+        node_read_key: entry.node_read_key,
+        parent_ipns_name: entry.parent_ipns_name,
+    });
+}
+
 /// Rotates the read key for every node in the subtree rooted at
 /// `root_node_id`.
 ///
@@ -1060,6 +1264,18 @@ pub async fn verify_subtree_clean<D: RotationDeps>(
 /// records (ROT-06 crash-safety resume, 69-11): an empty frontier converges
 /// immediately with zero further side effects; a non-empty frontier is
 /// folded into the same BFS walk used by the fresh-run path below.
+///
+/// SC#1/SC#2 (Plan 70.1-06, D-11): the pre-rotation dirty-frontier probe now
+/// runs UNCONDITIONALLY — not only on a resume-Skip — mirroring `engine.ts`'s
+/// `preRotationDirtyFrontier` computed BEFORE `rotateOne(root)`
+/// (`engine.ts:1092-1094`). `rotate_one` never mutates a node's CHILDREN
+/// mirror (only re-seals its OWN body), so the same frontier remains valid
+/// for BOTH branches below: reused as-is on a Skip, and folded into the
+/// normal/fresh walk so a dirty tail left by a lost prior run is recovered
+/// even on a genuinely fresh job record with no memory of that prior run.
+/// Depth-aware consumption (a depth>=2 entry's real parent is an
+/// intermediate node, not necessarily root) is handled by
+/// [`seed_or_find_parent_tracking_state`] / [`enqueue_dirty_frontier_entry`].
 pub async fn rotate_read_from_node<D: RotationDeps>(
     deps: &D,
     root_node_id: &str,
@@ -1068,6 +1284,10 @@ pub async fn rotate_read_from_node<D: RotationDeps>(
     job_record: &mut RotationJobRecord,
 ) -> Result<Option<RotateReadResult>, RotationError> {
     job_record.status = RotationStatus::InProgress;
+
+    let pre_rotation_frontier = verify_subtree_clean(deps, root_ipns_name, root_read_key)
+        .await?
+        .frontier;
 
     // §4.2: rotate the scope-root FIRST — the actual revocation cut.
     let root_outcome = rotate_one(
@@ -1087,6 +1307,14 @@ pub async fn rotate_read_from_node<D: RotationDeps>(
     // reconciliation below performs further publishing work underneath it
     // (matches the TS reference: `rootResult.skipped` always means `undefined`).
     let mut fresh_root: Option<CommittedRotation> = None;
+
+    // An owned, defensive copy of root's CURRENTLY-valid read key — needed
+    // by `seed_or_find_parent_tracking_state`'s walk-from-root primitive on
+    // BOTH branches below (root did not rotate on the Skip branch; on the
+    // Committed branch this is still root's key AT THE TIME the frontier
+    // above was computed, which is what a lazily-discovered intermediate
+    // parent's own `SealedChildRef` mirror is sealed under).
+    let root_read_key_owned = zeroizing_32_from_slice(root_read_key)?;
 
     match root_outcome {
         RotateOneOutcome::Committed(root_committed) => {
@@ -1118,26 +1346,37 @@ pub async fn rotate_read_from_node<D: RotationDeps>(
                 enqueue_child(deps, root_ipns_name, root_read_key, child_ref, &mut queue).await?;
             }
 
+            // SC#1/SC#2 (D-11): fold the pre-rotation dirty frontier into the
+            // normal/fresh walk too — closes the Rust structural gap the TS
+            // engine already closed (a dirty tail left by a lost prior run,
+            // discovered even though THIS job record has no memory of it). A
+            // dirty depth-1 edge is deduped against the loop above; a dirty
+            // edge below a CLEAN depth-1 parent is otherwise only reachable
+            // once that parent's OWN rotation discovers its real children —
+            // the shared BFS loop below no longer convergence-skips a
+            // dirty-tail item, so this still converges.
+            for entry in pre_rotation_frontier {
+                enqueue_dirty_frontier_entry(entry, &mut queue);
+            }
+
             fresh_root = Some(root_committed);
         }
         RotateOneOutcome::Skipped { .. } => {
             // Resume path (ROT-06 crash-safety resume, 69-11): the root was
-            // already committed in a prior run. Rebuild the dirty frontier
-            // from PUBLISHED records (D-10) rather than trusting the
-            // advisory job record, which may have been lost in the crash.
-            let verify_outcome = verify_subtree_clean(deps, root_ipns_name, root_read_key).await?;
-            if !verify_outcome.is_dirty {
+            // already committed in a prior run. Reuse the ALREADY-COMPUTED
+            // pre-rotation frontier (SC#1/SC#2, D-11) instead of re-running
+            // verify_subtree_clean a second time — root_read_key is
+            // unchanged on this branch (root did not rotate this run), so
+            // the frontier computed above with it remains valid.
+            let frontier = pre_rotation_frontier;
+            if frontier.is_empty() {
                 // Fully converged already (or the root has no published
                 // children at all) — nothing dirty to reconcile, and nothing
                 // further gets minted or published. No double-bump risk.
-                // (D-12: checked via `is_dirty`, NOT `frontier.is_empty()` —
-                // a missing root is `is_dirty: true` with an empty frontier,
-                // a DISTINCT outcome from "fully converged".)
                 job_record.status = RotationStatus::Complete;
                 deps.persist_job(job_record).await;
                 return Ok(None);
             }
-            let frontier = verify_outcome.frontier;
 
             // Dirty resume: re-fetch the root's CURRENT published state.
             // `root_read_key` is the root's POST-rotation key here — the
@@ -1150,7 +1389,7 @@ pub async fn rotate_read_from_node<D: RotationDeps>(
             })?;
             let root_pub = deps.fetch_node(&root_resolved.cid).await?;
             let root_kind = node_kind_from_str(&root_pub.kind)?;
-            let root_read_key_arr = zeroizing_32_from_slice(root_read_key)?;
+            let root_read_key_arr = root_read_key_owned.clone();
             let read_sealed_bytes = decode_b64(&root_pub.read_sealed)?;
             let root_body = unseal_node(
                 &read_sealed_bytes,
@@ -1172,12 +1411,9 @@ pub async fn rotate_read_from_node<D: RotationDeps>(
             let root_children = node_children(&root_node);
             let (root_created_at, root_modified_at) = node_timestamps(&root_node);
 
-            // M1: `pending_child_count` is seeded from the DIRTY FRONTIER's
-            // length, not the full children list — already-converged
-            // siblings are simply absent from `frontier` and must not be
-            // re-touched (they would otherwise wedge this gate forever,
-            // since they will never again dequeue from `queue` to decrement
-            // it).
+            // SC#1 (Bug A fix, D-11): seed a `ParentTrackingState` per
+            // DISTINCT REAL parent in the frontier — generalizes the
+            // previous root-only seed. Root itself is just another entry.
             parent_tracking.insert(
                 root_ipns_name.to_string(),
                 ParentTrackingState {
@@ -1190,23 +1426,83 @@ pub async fn rotate_read_from_node<D: RotationDeps>(
                     parent_modified_at: root_modified_at,
                     parent_last_seq: root_resolved.sequence_number,
                     children: root_children.clone(),
-                    pending_child_count: frontier.len(),
+                    // Seeded to 0, not frontier.len() — a depth>=2 entry's
+                    // real parent is an intermediate node, NOT root; mixing
+                    // every depth into root's own counter is the exact
+                    // mis-attribution Bug A fix removes. Set to the count of
+                    // root-DIRECT dirty items only, below (0 if none).
+                    pending_child_count: 0,
                 },
             );
 
+            let mut count_by_parent: HashMap<String, usize> = HashMap::new();
             for entry in &frontier {
-                let Some(child_ref) = root_children
-                    .iter()
-                    .find(|c| c.ipns_name == entry.ipns_name)
-                else {
+                *count_by_parent
+                    .entry(entry.parent_ipns_name.clone())
+                    .or_insert(0) += 1;
+            }
+
+            for (parent_name, count) in &count_by_parent {
+                if parent_name.as_str() == root_ipns_name {
+                    if let Some(state) = parent_tracking.get_mut(root_ipns_name) {
+                        state.pending_child_count = *count;
+                    }
                     continue;
-                };
-                enqueue_child(deps, root_ipns_name, root_read_key, child_ref, &mut queue).await?;
+                }
+                let found = seed_or_find_parent_tracking_state(
+                    deps,
+                    root_ipns_name,
+                    &root_read_key_owned,
+                    &mut parent_tracking,
+                    parent_name,
+                )
+                .await?;
+                if found {
+                    if let Some(state) = parent_tracking.get_mut(parent_name) {
+                        state.pending_child_count = *count;
+                    }
+                }
+                // else: fail-closed drop (data inconsistency — the parent
+                // could not be resolved walking from root); matches the
+                // file's existing convention for a missing/unresolvable node
+                // elsewhere (e.g. collect_dirty_frontier's missing-child skip).
+            }
+
+            if let Some(state) = parent_tracking.get(root_ipns_name) {
+                if state.pending_child_count == 0 {
+                    // No root-direct dirty items this run — root's own
+                    // mirror needs no update. Nothing will ever decrement
+                    // this entry to trigger teardown, so clean it up now
+                    // instead of leaving a live tracking entry for the rest
+                    // of this call.
+                    parent_tracking.remove(root_ipns_name);
+                }
+            }
+
+            for entry in frontier {
+                enqueue_dirty_frontier_entry(entry, &mut queue);
             }
         }
     }
 
     while let Some(item) = queue.pop_front() {
+        // SC#2 (Bug B fix, D-11): guarantee a depth>=2 item's parent has a
+        // chance to seed its OWN parent_tracking entry before this item is
+        // genuinely consumed. The normal-branch fold enqueues root's
+        // children FIRST, then appends every pre-rotation dirty-frontier
+        // item regardless of depth — so a deep dirty node can dequeue
+        // before its own (also not-yet-processed) parent. Root-direct items
+        // are NEVER deferred, so this recursion is bounded by tree depth.
+        if item.parent_ipns_name != root_ipns_name
+            && !parent_tracking.contains_key(&item.parent_ipns_name)
+            && queue
+                .iter()
+                .any(|q| q.child_ref.ipns_name == item.parent_ipns_name)
+        {
+            queue.push_back(item);
+            continue;
+        }
+
         let outcome = rotate_one(
             deps,
             None,
@@ -1229,6 +1525,35 @@ pub async fn rotate_read_from_node<D: RotationDeps>(
             RotateOneOutcome::Committed(child) => {
                 // Advisory checkpoint after every per-node commit (D-10).
                 deps.persist_job(job_record).await;
+
+                // SC#2 (Bug B fix, D-11): the requeue guard above handles the
+                // COMMON ordering race; as a defensive fallback (e.g. an
+                // orphaned/unreachable parent_ipns_name the guard couldn't
+                // wait on), lazily resolve+seed the parent via the shared
+                // primitive instead of silently dropping this entire
+                // re-seal+decrement block (the pre-70.1-06 no-op this fix
+                // closes).
+                if !parent_tracking.contains_key(&item.parent_ipns_name) {
+                    let found = seed_or_find_parent_tracking_state(
+                        deps,
+                        root_ipns_name,
+                        &root_read_key_owned,
+                        &mut parent_tracking,
+                        &item.parent_ipns_name,
+                    )
+                    .await?;
+                    if found {
+                        // Lazily discovered — this decrement accounts for
+                        // exactly this one child. If a sibling dirty item
+                        // under the same parent is discovered later,
+                        // seed_or_find_parent_tracking_state returns this
+                        // SAME entry (as long as it has not already reached
+                        // zero and torn down).
+                        if let Some(state) = parent_tracking.get_mut(&item.parent_ipns_name) {
+                            state.pending_child_count = 1;
+                        }
+                    }
+                }
 
                 // D-02: reseal the child's new read key' under the PARENT's
                 // NEW read key' (out-of-band — rotate_one does not do this;
