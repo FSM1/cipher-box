@@ -130,9 +130,13 @@ async function pollFindChild(
   parentReadKey: Uint8Array,
   name: string,
   ctx: SdkContext,
-  attempts = 18,
+  // Budget widened (18->40 @5s = 200s) after CI showed the two-hop publish chain
+  // (own IPNS publish + parent children-list republish) can take ~40-47s even on a
+  // warm machine — slow CI runners (cold Kubo, shared vCPUs) blow a 90s budget.
+  attempts = 40,
   delayMs = 5000
 ): Promise<SealedChildRef> {
+  const started = Date.now();
   let lastError: unknown;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
@@ -142,14 +146,20 @@ async function pollFindChild(
         ctx,
       });
       const match = folder?.metadata.children?.find((c) => c.name === name);
-      if (match) return match;
+      if (match) {
+        console.log(
+          `  pollFindChild: "${name}" appeared after ${((Date.now() - started) / 1000).toFixed(1)}s (attempt ${attempt}/${attempts})`
+        );
+        return match;
+      }
     } catch (err) {
       lastError = err;
     }
     await sleep(delayMs);
   }
   throw new Error(
-    `pollFindChild: "${name}" never appeared under ${parentIpnsName} after ${attempts} attempts` +
+    `pollFindChild: "${name}" never appeared under ${parentIpnsName} after ${attempts} attempts ` +
+      `(${((Date.now() - started) / 1000).toFixed(1)}s)` +
       (lastError ? ` (last error: ${String(lastError)})` : '')
   );
 }
@@ -159,18 +169,23 @@ async function pollSequenceBump(
   ipnsName: string,
   floor: bigint,
   ctx: SdkContext,
-  attempts = 18,
+  attempts = 40,
   delayMs = 5000
 ): Promise<bigint> {
+  const started = Date.now();
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     const resolved = await resolveIpnsRecord(ipnsName, ctx);
     if (resolved && resolved.sequenceNumber > floor) {
+      console.log(
+        `  pollSequenceBump: ${ipnsName} exceeded ${floor} -> ${resolved.sequenceNumber} after ${((Date.now() - started) / 1000).toFixed(1)}s (attempt ${attempt}/${attempts})`
+      );
       return resolved.sequenceNumber;
     }
     await sleep(delayMs);
   }
   throw new Error(
-    `pollSequenceBump: sequence for ${ipnsName} never exceeded ${floor} after ${attempts} attempts`
+    `pollSequenceBump: sequence for ${ipnsName} never exceeded ${floor} after ${attempts} attempts ` +
+      `(${((Date.now() - started) / 1000).toFixed(1)}s)`
   );
 }
 
