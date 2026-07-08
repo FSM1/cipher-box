@@ -42,7 +42,7 @@ use std::io::Write as _;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use tokio::sync::Mutex;
 
 /// Fail-closed sentinel floor value (T-70-04): once a sidecar is found
@@ -244,16 +244,60 @@ fn write_map_atomic_blocking(
 pub struct JsonSidecarFloorStore {
     path: PathBuf,
     /// Serializes the whole load-modify-write critical section of `get`/
-    /// `put` (T-70-03). `Arc`-wrapped so every `Clone` of this store shares
-    /// the SAME lock — two independently-constructed instances pointed at
-    /// the same sidecar path do NOT share this in-process lock (they only
-    /// ever coordinate through the sidecar file itself, whose writes are
-    /// each individually atomic, and through `RotationHighWater`'s own
-    /// `bump_lock` which serializes every real mutating call), matching
-    /// this crate's single-daemon-per-journal-dir model.
+    /// `put`/`persist_wrapped_key`/`get_wrapped_key`/`delete_wrapped_key`
+    /// (T-70-03). `Arc`-wrapped so every `Clone` of this store shares the
+    /// SAME lock -- AND every OTHER instance independently constructed over
+    /// the SAME sidecar path shares it too, via the process-global
+    /// [`SIDECAR_LOCKS`] registry consulted in `new()`. This is required
+    /// because `CipherBoxFS` (`crates/fuse/src/fs.rs`) holds THREE
+    /// independently-constructed instances pointed at the same combined
+    /// `rotation-high-water.json` (`high_water`'s generation + seq stores
+    /// and `rotation_checkpoint_store`): without a shared lock, two of them
+    /// writing concurrently race on the SAME deterministic
+    /// `write_map_atomic_blocking` `.tmp` path -- the loser's `rename()`
+    /// hits ENOENT once the winner has already renamed its temp file away,
+    /// and even when no ENOENT occurs, two un-serialized read-modify-writes
+    /// can lose an update (a higher floor clobbered by a lower one racing
+    /// in), defeating the whole anti-rollback purpose of this store.
     lock: Arc<Mutex<()>>,
     /// Which field of the combined record this instance reads/writes.
     field: FloorField,
+}
+
+/// Process-global registry mapping a normalized sidecar path to the shared
+/// lock every `JsonSidecarFloorStore` instance constructed over that path
+/// uses. See the `lock` field's doc for why this must be shared across
+/// independently-constructed instances, not just `Clone`s of one instance.
+static SIDECAR_LOCKS: OnceLock<StdMutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
+
+/// Normalize `path` for use as a [`SIDECAR_LOCKS`] key so relative and
+/// absolute forms of the same on-disk path map to the SAME lock. The
+/// sidecar file itself may legitimately not exist yet at construction time
+/// (a cold store is a normal, non-error state), so this canonicalizes the
+/// PARENT directory -- which `new()`'s contract requires to already exist
+/// -- and rejoins the file name, rather than canonicalizing the
+/// (possibly-absent) file path directly.
+fn normalize_lock_key(path: &Path) -> PathBuf {
+    match (
+        path.parent().and_then(|p| p.canonicalize().ok()),
+        path.file_name(),
+    ) {
+        (Some(parent), Some(file_name)) => parent.join(file_name),
+        // Fall back to the raw path if canonicalization fails (e.g. the
+        // parent dir is missing, violating the constructor's own contract)
+        // -- degrades to no cross-instance sharing rather than panicking.
+        _ => path.to_path_buf(),
+    }
+}
+
+/// Look up (or lazily insert) the shared lock for `path`'s normalized key.
+fn shared_lock_for(path: &Path) -> Arc<Mutex<()>> {
+    let key = normalize_lock_key(path);
+    let registry = SIDECAR_LOCKS.get_or_init(|| StdMutex::new(HashMap::new()));
+    let mut guard = registry
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    Arc::clone(guard.entry(key).or_insert_with(|| Arc::new(Mutex::new(()))))
 }
 
 impl JsonSidecarFloorStore {
@@ -261,13 +305,13 @@ impl JsonSidecarFloorStore {
     /// scoped to a single `CombinedFloorRecord` field.
     ///
     /// The journal dir must already exist; this constructor does not create
-    /// it (matches `WriteQueue::new`'s contract).
+    /// it (matches `WriteQueue::new`'s contract). The returned store's lock
+    /// is shared (via [`shared_lock_for`]) with every other instance ever
+    /// constructed over the same on-disk path, in this process.
     fn new(journal_dir: impl AsRef<Path>, file_name: &str, field: FloorField) -> Self {
-        Self {
-            path: journal_dir.as_ref().join(file_name),
-            lock: Arc::new(Mutex::new(())),
-            field,
-        }
+        let path = journal_dir.as_ref().join(file_name);
+        let lock = shared_lock_for(&path);
+        Self { path, lock, field }
     }
 
     /// Convenience constructor for the generation-floor view of the
@@ -792,5 +836,98 @@ mod tests {
             err,
             crate::rotation::RotationError::SequenceRegression { .. }
         ));
+    }
+
+    // -----------------------------------------------------------------
+    // Post-hoc regression (Phase 70.1 live repro): three independently
+    // constructed `JsonSidecarFloorStore` instances over the SAME sidecar
+    // path must share ONE lock, mirroring exactly how `CipherBoxFS` (in
+    // `crates/fuse/src/fs.rs`) holds `high_water.generation_store`,
+    // `high_water.seq_store`, and `rotation_checkpoint_store` -- all three
+    // pointed at `<journal_dir>/rotation-high-water.json`.
+    // -----------------------------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn multiple_instances_over_the_same_path_share_one_lock_and_never_lose_an_update() {
+        // Before the fix, each `JsonSidecarFloorStore::new()` built its own
+        // `Arc<Mutex<()>>`, so two of these THREE independently-constructed
+        // instances writing concurrently would race on the SAME
+        // deterministic `write_map_atomic_blocking` `.tmp` path: the
+        // loser's `rename()` hits ENOENT once the winner has already
+        // renamed its temp file away (the exact live-repro'd error:
+        // "failed to persist for node ...: No such file or directory (os
+        // error 2)"). Even runs that avoided the ENOENT could still lose an
+        // update via two un-serialized read-modify-writes. This test must
+        // FAIL (either a persist `Err` or a lost update) before the
+        // shared-lock fix and PASS after it.
+        let dir = make_temp_dir();
+        let gen_store = std::sync::Arc::new(JsonSidecarFloorStore::for_generation(&dir));
+        let seq_store = std::sync::Arc::new(JsonSidecarFloorStore::for_seq(&dir));
+        // Mirrors fs.rs's `rotation_checkpoint_store`, which arbitrarily
+        // reuses `for_generation`'s field tag -- the checkpoint accessors
+        // ignore it, they only care that the sidecar PATH matches.
+        let checkpoint_store = std::sync::Arc::new(JsonSidecarFloorStore::for_generation(&dir));
+
+        assert_eq!(
+            gen_store.path, seq_store.path,
+            "all three instances must point at the SAME sidecar path"
+        );
+        assert_eq!(gen_store.path, checkpoint_store.path);
+
+        let node_id = "node-race";
+        let gen_values: [u64; 10] = [3, 50, 7, 100, 1, 42, 99, 2, 77, 12];
+        let seq_values: [u64; 10] = [8, 4, 60, 2, 91, 33, 5, 70, 9, 44];
+        let expected_gen_max = *gen_values.iter().max().unwrap();
+        let expected_seq_max = *seq_values.iter().max().unwrap();
+
+        let mut handles: Vec<tokio::task::JoinHandle<Result<(), RotationError>>> = Vec::new();
+
+        for &value in &gen_values {
+            let store = std::sync::Arc::clone(&gen_store);
+            handles.push(tokio::spawn(async move { store.put(node_id, value).await }));
+        }
+        for &value in &seq_values {
+            let store = std::sync::Arc::clone(&seq_store);
+            handles.push(tokio::spawn(async move { store.put(node_id, value).await }));
+        }
+        for i in 0..10u8 {
+            let store = std::sync::Arc::clone(&checkpoint_store);
+            let ciphertext = vec![i; 5];
+            handles.push(tokio::spawn(async move {
+                store.persist_wrapped_key(node_id, ciphertext).await
+            }));
+        }
+
+        let mut errors = Vec::new();
+        for handle in handles {
+            if let Err(e) = handle.await.expect("task panicked") {
+                errors.push(e);
+            }
+        }
+        assert!(
+            errors.is_empty(),
+            "no persist should fail under concurrent multi-instance writes over the same path: {errors:?}"
+        );
+
+        // No lost updates: the final floor is the max of every attempted
+        // value, regardless of which instance's write "won" the race.
+        assert_eq!(gen_store.get(node_id).await, Some(expected_gen_max));
+        assert_eq!(seq_store.get(node_id).await, Some(expected_seq_max));
+
+        // The checkpoint field is independent of the generation/seq fields
+        // (D-06/D-07) -- confirm it survived the race and still round
+        // trips correctly, proving the combined record was never
+        // wholesale-clobbered by a racing writer.
+        let final_ciphertext = vec![9u8, 8, 7, 6, 5];
+        checkpoint_store
+            .persist_wrapped_key(node_id, final_ciphertext.clone())
+            .await
+            .expect("final checkpoint persist");
+        assert_eq!(
+            checkpoint_store.get_wrapped_key(node_id).await,
+            Some(final_ciphertext)
+        );
+        assert_eq!(gen_store.get(node_id).await, Some(expected_gen_max));
+        assert_eq!(seq_store.get(node_id).await, Some(expected_seq_max));
     }
 }
