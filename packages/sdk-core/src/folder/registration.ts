@@ -162,6 +162,26 @@ export async function createSubfolder(params: {
 export async function updateFolderMetadataAndPublish(params: {
   children: SealedChildRef[];
   baseChildren?: SealedChildRef[];
+  /**
+   * Optional injectable conflict-resolution policy for the CAS-409 merge
+   * closure below. Defaults to `mergeChildren` (remote-wins) — every
+   * non-rotation caller (add/move/rename) is byte-unchanged. The rotation
+   * engine's two D-09 batched-republish call sites pass `mergeRotatedChildren`
+   * (local-wins) explicitly (SC#1 site B / T-70-01). NEVER change the default
+   * — see `rotation/merge.ts`'s module doc for why local-wins must stay
+   * syntactically opt-in, not the generic policy.
+   *
+   * May return a `Promise` — the D-09 site wraps `mergeRotatedChildren` in an
+   * async closure that also re-seals any concurrently-added child's
+   * `readKeySealed` under the parent's NEW readKey (Phase 70 correction of the
+   * 70-04 over-reach — see `rotation/engine.ts`'s
+   * `createConcurrentAddResealingMerge`). Sync returns remain fully supported.
+   */
+  mergeChildrenFn?: (
+    base: SealedChildRef[],
+    local: SealedChildRef[],
+    remote: SealedChildRef[]
+  ) => SealedChildRef[] | Promise<SealedChildRef[]>;
   /** Canonical readKey name (phase 63). */
   readKey?: Uint8Array;
   /** @deprecated Backward-compat alias — use readKey. client.ts callers still pass folderKey. */
@@ -301,7 +321,7 @@ export async function updateFolderMetadataAndPublish(params: {
       return node.children ?? [];
     },
 
-    merge: (
+    merge: async (
       base: SealedChildRef[] | undefined,
       local: SealedChildRef[],
       remote: SealedChildRef[]
@@ -316,7 +336,15 @@ export async function updateFolderMetadataAndPublish(params: {
         for (const wc of remoteWriteChildren) byChildId.set(wc.childId, wc);
         currentWriteChildren = Array.from(byChildId.values());
       }
-      return { merged: mergeChildren(base ?? [], local, remote) };
+      // SC#1 site B / T-70-01: defaults to the generic remote-wins mergeChildren
+      // for every non-rotation caller; the rotation engine opts in explicitly
+      // via mergeChildrenFn. params.baseChildren is the caller's captured base
+      // snapshot (falls back to the CAS base argument, then []).
+      // `await` supports both sync mergeChildren/mergeRotatedChildren and the
+      // async concurrent-add-resealing wrapper the rotation engine's D-09 site
+      // passes (publishWithCas's own `merge` already supports an async return).
+      const mergeFn = params.mergeChildrenFn ?? mergeChildren;
+      return { merged: await mergeFn(params.baseChildren ?? base ?? [], local, remote) };
     },
 
     localData: params.children,

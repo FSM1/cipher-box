@@ -1,7 +1,7 @@
 /**
- * Rotation crash-safety suite (TEST-01 phase gate) — Phase 64.
+ * Rotation crash-safety suite (TEST-01 phase gate) — Phase 64, strengthened Phase 70.
  *
- * Three scenarios against the live local API stack:
+ * Four scenarios against the live local API stack:
  *   1. Happy-path: depth-2 tree (root → subfolder → file) rotates cleanly;
  *      multi-level D-02 re-seal proven by post-rotation read-chain navigation.
  *   2. Abort-and-resume: rotation crashes at the final persist callback (after
@@ -11,15 +11,46 @@
  *   3. Concurrent-add merge: a direct IPNS write to a parent between the root
  *      commit and the D-09 batched re-publish forces a CAS-409; the HIGH-4 merge
  *      (ROT-05) absorbs it and the concurrently-added child survives in the final
- *      parent state after the walk.
+ *      parent state after the walk. Strengthened (Plan 70-08 / SC#1 / T-70-15):
+ *      the test also NAVIGATES into the pre-existing rotated child (sub3IpnsName)
+ *      and UNSEALS it with the new root key — proving local-wins (this phase's
+ *      merge fix) keeps the existing rotated child's D-02 re-seal intact, where
+ *      the old remote-wins merge would silently downgrade it to a stale seal that
+ *      AEAD-fails on unseal. Also asserts the concurrent-write injection actually
+ *      ran (fail-fast guard — a silently-skipped injection would make the test
+ *      vacuously pass without exercising the CAS-409 merge path at all).
+ *   4. Genuine fresh-record resume, mid-walk crash (Plan 70-08 / SC#3 / T-70-16):
+ *      rotation crashes immediately after the root's OWN commit — earlier than
+ *      scenario 2's final-persist crash — then resumes with a BRAND-NEW
+ *      RotationJobRecord (empty completedNodeIds, no seeded state) and the
+ *      CURRENT valid rootReadKey (captured via the crypto spy, standing in for a
+ *      caller that legitimately still knows the current key — Open Question 1's
+ *      narrowed scope). The root is a single file (no children) by deliberate
+ *      design: any node WITH children whose own D-09 batched parent-republish has
+ *      not yet fired leaves its SealedChildRef[...].readKeySealed entries wrapped
+ *      under that node's PRE-rotation key, which cannot be re-derived from its
+ *      POST-rotation "current" key — an unrecoverable AEAD-mismatch window
+ *      documented in RESEARCH.md Pitfall 4 (no cryptographic recovery from the
+ *      durable floor, which stores generation/sequence numbers only). A childless
+ *      root sidesteps that window entirely while still proving the SC#3
+ *      entry-gate's safe-double-rotation control flow end to end: the resume
+ *      does NOT skip (fresh job, empty completedNodeIds) and re-rotates the root
+ *      a SECOND time (generation 1 → 2), converging without seeding
+ *      completedNodeIds or synthesizing a key — and the pre-rotation grant is cut
+ *      (behind-retry) after the root step.
  *
  * Fault-injection note (D-03):
- *   The abort-and-resume crash is injected via a test-only `persistCallback` that
- *   throws after the final (4th) call — i.e. after all 3 nodes have committed and
- *   all D-09 parent re-publishes have completed. This is the only crash point at
- *   which the dirty-resume path (verifySubtreeClean) can reconstruct the frontier
- *   without needing the intermediate key material. The engine's resume path works
- *   correctly in this scenario: isDirty=false, no double-bump.
+ *   The abort-and-resume crash (scenario 2) is injected via a test-only
+ *   `persistCallback` that throws after the final (4th) call — i.e. after all 3
+ *   nodes have committed and all D-09 parent re-publishes have completed. This is
+ *   the only crash point at which the dirty-resume path (verifySubtreeClean) can
+ *   reconstruct the frontier without needing the intermediate key material. The
+ *   engine's resume path works correctly in this scenario: isDirty=false, no
+ *   double-bump.
+ *   The genuine fresh-record-resume crash (scenario 4) is injected via the SAME
+ *   `persistCallback` mechanism, but throws on the FIRST call (right after the
+ *   root's own commit) — see scenario 4's note above for why the root is
+ *   deliberately childless.
  *
  * No production fault-injection code is added to any package under packages/.
  *
@@ -43,7 +74,7 @@ import {
   type SdkContext,
   updateFolderMetadataAndPublish,
 } from '@cipherbox/sdk-core';
-import { sealNode, unsealNode } from '@cipherbox/core';
+import { sealNode, unsealChildReadKey, unsealNode } from '@cipherbox/core';
 import type { Node, PublishedNode } from '@cipherbox/core';
 import {
   deriveEd25519PublicKey,
@@ -625,6 +656,11 @@ describe('Rotation crash-safety suite (TEST-01 phase gate)', () => {
     //           → publishWithCas merges: concurrentChild survives
     //   call 3: final status='complete'
     let persistCall3Count = 0;
+    // T-70-15: fail-fast guard — if the injection body never actually runs
+    // (e.g. a refactor changes the persistCallback call count/ordering), this
+    // test must FAIL rather than silently passing without ever exercising the
+    // CAS-409 merge path it claims to prove.
+    let concurrentInjectionRan = false;
     const concurrentAddPersist = async (_job: RotationJobRecord): Promise<void> => {
       persistCall3Count++;
       if (persistCall3Count !== 1) return; // only inject on first call (after root3 commits)
@@ -671,6 +707,7 @@ describe('Rotation crash-safety suite (TEST-01 phase gate)', () => {
         nodeGeneration: pub.generation, // 1 (post-rotation)
         ctx: aliceCtx,
       });
+      concurrentInjectionRan = true;
     };
 
     clearCapturedReadKeys();
@@ -694,6 +731,12 @@ describe('Rotation crash-safety suite (TEST-01 phase gate)', () => {
       nodeKeySource: nodeKeySource3,
     });
     expect(jobRecord3.status).toBe('complete');
+    // 2-node tree (root3, subfolder3): 3 persistCallback checkpoints —
+    // root3 commit, subfolder3 commit, final status='complete'.
+    expect(persistCall3Count).toBe(3);
+    // T-70-15: fail fast if the concurrent-write injection never actually ran —
+    // see the guard declaration above for why this must be asserted explicitly.
+    expect(concurrentInjectionRan).toBe(true);
 
     // --- Assert: concurrent child survives in the final merged root3 ---
     const readKeyPrimeRoot3 = capturedReadKeys[0];
@@ -715,5 +758,246 @@ describe('Rotation crash-safety suite (TEST-01 phase gate)', () => {
     expect(childIpnsNames).toContain(concurrentIpnsName);
     // subfolder3 must also still be present (not dropped by the merge)
     expect(childIpnsNames).toContain(sub3IpnsName);
+
+    // --- T-70-15 (Plan 70-08 / SC#1): navigate into subfolder3 and UNSEAL it
+    // with the NEW root key — proving local-wins kept the pre-existing rotated
+    // child's D-02 re-seal intact.
+    //
+    // Under the OLD remote-wins merge, the `remote` view (the concurrent
+    // write's snapshot, captured BEFORE subfolder3 itself finished rotating)
+    // still pointed subfolder3's SealedChildRef.readKeySealed at subfolder3's
+    // PRE-rotation key. A name-only assertion (childIpnsNames.toContain above)
+    // cannot detect this — the entry survives under either policy, only its
+    // WRAPPED KEY differs. Deriving and unsealing subfolder3's ACTUAL published
+    // (post-rotation) body with that stale pointer AEAD-fails; local-wins (this
+    // phase's fix) keeps rotation's own D-09 view, which points at subfolder3's
+    // POST-rotation key, so the unseal below must succeed.
+    const sub3ChildRef = (root3FinalNode.children ?? []).find((c) => c.ipnsName === sub3IpnsName);
+    expect(sub3ChildRef).toBeDefined();
+    const sub3Pub = await fetchPublishedEnvelope(sub3IpnsName, aliceCtx);
+    expect(sub3Pub.generation).toBe(1); // subfolder3 itself was rotated by the walk
+    const sub3ReadKey = await unsealChildReadKey(
+      sub3ChildRef!.readKeySealed,
+      readKeyPrimeRoot3,
+      sub3Pub.id,
+      sub3Pub.kind,
+      sub3ChildRef!.generation
+    );
+    // try/finally so this owned key buffer is still zeroed if the assertion
+    // below throws (T9) — a bare trailing `.fill(0)` after the assertion is
+    // skipped entirely on failure, leaking the key material.
+    try {
+      // The actual unseal — this is what AEAD-fails under the old remote-wins bug.
+      const sub3Node = await unsealNode(sub3Pub, sub3ReadKey);
+      expect(sub3Node.id).toBe(sub3Result.node.id);
+    } finally {
+      sub3ReadKey.fill(0);
+    }
+  }, 120_000);
+
+  // ---------------------------------------------------------------------------
+  // Test 4: Genuine fresh-record resume — mid-walk crash (Plan 70-08 / SC#3)
+  // ---------------------------------------------------------------------------
+
+  it('fresh-record resume: mid-walk crash → resume with EMPTY completedNodeIds + current key → safe double-rotation → revocation cut', async () => {
+    const alice = fixture.accounts.get('alice')!;
+    const bob = fixture.accounts.get('bob')!;
+    const aliceCtx = alice.client.getContext();
+    const bobCtx = bob.client.getContext();
+
+    // --- Build a single-node "tree": root4 is a FILE, no children.
+    //
+    // Deliberate scope (see the file-header comment for scenario 4, and
+    // RESEARCH.md Pitfall 4): a childless root is the only crash point in this
+    // suite's persistCallback-only fault-injection model for which a fresh
+    // (empty completedNodeIds) resume with the CURRENT valid rootReadKey is
+    // cryptographically guaranteed to converge. Any node with children whose
+    // own D-09 batched parent-republish has not yet fired leaves its
+    // SealedChildRef[...].readKeySealed entries wrapped under that node's
+    // PRE-rotation key — unrecoverable from the node's POST-rotation "current"
+    // key with no cryptographic recovery path (Pitfall 4). This still proves
+    // the SC#3 entry-gate's actual target: a fresh job record with empty
+    // completedNodeIds must NOT get stuck (skip-gated) and must converge via
+    // safe double-rotation using whatever key is genuinely current.
+    const { node: root4Node, readKey: root4ReadKey } = makeFileNode();
+    const { ipnsName: root4IpnsName, keypair: root4Keypair } = await publishFileNode(
+      root4Node,
+      root4ReadKey,
+      aliceCtx
+    );
+
+    // Pre-rotation grant to Bob (will become stale after the crash-run's root commit).
+    const { readDescriptorRef: preGrant4 } = await issueReadGrant({
+      shareRootReadKey: root4ReadKey,
+      recipientPublicKey: bob.publicKey,
+      rootNodeId: root4Node.id,
+      rootIpnsName: root4IpnsName,
+      rootGeneration: 0,
+      insertShareFn: async (_p) => ({ shareId: crypto.randomUUID() }),
+    });
+
+    // --- Crash run: throw on the FIRST persistCallback call — i.e. immediately
+    // after root4's own commit. For a single-node tree this is the ONLY
+    // checkpoint before the final status='complete' persist, so this is
+    // strictly earlier than scenario 2's 4th/final-call crash.
+    let persistCall4Count = 0;
+    const crashingPersistMidWalk = (_job: RotationJobRecord): void => {
+      persistCall4Count++;
+      if (persistCall4Count >= 1) {
+        throw new Error('simulated-crash-mid-walk-after-root-commit');
+      }
+    };
+
+    clearCapturedReadKeys();
+    const jobRecord4: RotationJobRecord = {
+      rootNodeId: root4Node.id,
+      status: 'pending',
+      completedNodeIds: new Set(),
+      frontier: [],
+      persistCallback: crashingPersistMidWalk,
+    };
+
+    let crashed4 = false;
+    try {
+      await rotateReadFromNode({
+        rootNodeId: root4Node.id,
+        rootNodeIpnsName: root4IpnsName,
+        rootReadKey: root4ReadKey,
+        rootIpnsPrivateKey: root4Keypair.privateKey,
+        rootIpnsPublicKey: root4Keypair.publicKey,
+        jobRecord: jobRecord4,
+        ctx: aliceCtx,
+      });
+    } catch (err) {
+      crashed4 = true;
+      expect((err as Error).message).toContain('simulated-crash-mid-walk-after-root-commit');
+    }
+    expect(crashed4).toBe(true);
+    expect(persistCall4Count).toBe(1); // root4's commit checkpoint, nothing further
+
+    // root4's own rotateOne CAS-publish committed BEFORE persistCallback threw
+    // (checkpoint fires after the commit, per the walk's own ordering) — the
+    // root cut already happened, this crash only interrupted the job's own
+    // bookkeeping.
+    const rootPub4AfterCrash = await fetchPublishedEnvelope(root4IpnsName, aliceCtx);
+    expect(rootPub4AfterCrash.generation).toBe(1);
+
+    // readKeyPrime_root4 captured before the persistCallback (spy fires inside
+    // rotateOne, BEFORE mintFileKeyOnRotate's own 32-byte content-key mint —
+    // capturedReadKeys[0] is always the node's own readKeyPrime, per the spy's
+    // module docstring). .slice() makes an independent copy since
+    // clearCapturedReadKeys() below zeros the array's buffers in place.
+    const readKeyPrimeRoot4 = capturedReadKeys[0].slice();
+    expect(readKeyPrimeRoot4).toBeInstanceOf(Uint8Array);
+    expect(readKeyPrimeRoot4.length).toBe(32);
+
+    // Pre-rotation grant is already cut (root committed → published gen=1 > expected gen=0).
+    const revokedNav4 = await navigateReadChain({
+      readDescriptorRef: preGrant4,
+      recipientPrivKey: bob.privateKey,
+      rootIpnsName: root4IpnsName,
+      rootExpectedGeneration: 0,
+      path: [],
+      ctx: bobCtx,
+    });
+    expect(revokedNav4.status).toBe('behind-retry');
+
+    // --- Genuine fresh-record resume: BRAND-NEW job record (empty
+    // completedNodeIds — NOT seeded from jobRecord4's crash-time state) + the
+    // CURRENT valid rootReadKey (readKeyPrimeRoot4 — root4's ACTUAL published
+    // key right now; NOT the original pre-crash-run key, which would fail the
+    // entry gate's stale-key probe since root4 already rotated once).
+    //
+    // Since completedNodeIds is empty, root4's own idempotency check
+    // (rotateOne) does NOT skip it — root4 is rotated AGAIN (SAFE
+    // DOUBLE-ROTATION, design §4.5 / Plan 70-06): generation 1 → 2. This is the
+    // opposite of scenario 2's "no double-bump" assertion, by design — scenario
+    // 2 seeds completedNodeIds (root already marked done, skipped); this
+    // scenario deliberately does NOT, to prove the fresh-record path converges
+    // on its own instead of getting stuck behind an empty-completedNodeIds gate.
+    const freshJob4: RotationJobRecord = {
+      rootNodeId: root4Node.id,
+      status: 'pending',
+      completedNodeIds: new Set(), // EMPTY — genuinely fresh, not seeded
+      frontier: [],
+    };
+
+    clearCapturedReadKeys();
+    let resumeError4: unknown;
+    let resumeResult4: Awaited<ReturnType<typeof rotateReadFromNode>> = undefined;
+    // try/finally so every owned key buffer from this fresh-resume path
+    // (readKeyPrimeRoot4, resumeResult4.readKey, and any buffers captured
+    // into `capturedReadKeys` during the resume's own rotation) is zeroed
+    // even if an assertion below throws (T9) — a bare trailing `.fill(0)`
+    // after the assertions is skipped entirely on failure, leaking the key
+    // material for the rest of the suite run.
+    try {
+      try {
+        resumeResult4 = await rotateReadFromNode({
+          rootNodeId: root4Node.id,
+          rootNodeIpnsName: root4IpnsName,
+          rootReadKey: readKeyPrimeRoot4, // CURRENT valid key, not the original
+          rootIpnsPrivateKey: root4Keypair.privateKey,
+          rootIpnsPublicKey: root4Keypair.publicKey,
+          jobRecord: freshJob4,
+          ctx: aliceCtx,
+        });
+      } catch (err) {
+        resumeError4 = err;
+      }
+      expect(resumeError4).toBeUndefined(); // must converge without throwing
+      expect(freshJob4.status).toBe('complete');
+
+      // Safe double-rotation: root4 is now at generation 2 (double-rotated), not
+      // stuck at 1 — the opposite of scenario 2's no-double-bump assertion.
+      const rootPub4AfterResume = await fetchPublishedEnvelope(root4IpnsName, aliceCtx);
+      expect(rootPub4AfterResume.generation).toBe(2);
+
+      // rotateReadFromNode returns the root's freshly minted key (root was NOT
+      // skipped this run — a genuinely new rotation, not a dirty-resume republish).
+      expect(resumeResult4).toBeDefined();
+      expect(resumeResult4!.generation).toBe(2);
+      expect(resumeResult4!.readKey).toBeInstanceOf(Uint8Array);
+      // A genuinely NEW key was minted — not the same buffer/value as the
+      // crash-run's key (proves an actual second rotation occurred, not a no-op).
+      expect(resumeResult4!.readKey).not.toEqual(readKeyPrimeRoot4);
+
+      // Pre-rotation grant remains cut after the resume's root step.
+      const revokedNavAfterResume = await navigateReadChain({
+        readDescriptorRef: preGrant4,
+        recipientPrivKey: bob.privateKey,
+        rootIpnsName: root4IpnsName,
+        rootExpectedGeneration: 0,
+        path: [],
+        ctx: bobCtx,
+      });
+      expect(revokedNavAfterResume.status).toBe('behind-retry');
+
+      // A freshly issued grant using the resume's new key navigates successfully.
+      const { readDescriptorRef: freshGrant4 } = await issueReadGrant({
+        shareRootReadKey: resumeResult4!.readKey,
+        recipientPublicKey: bob.publicKey,
+        rootNodeId: root4Node.id,
+        rootIpnsName: root4IpnsName,
+        rootGeneration: 2,
+        insertShareFn: async (_p) => ({ shareId: crypto.randomUUID() }),
+      });
+      const postResumeNav4 = await navigateReadChain({
+        readDescriptorRef: freshGrant4,
+        recipientPrivKey: bob.privateKey,
+        rootIpnsName: root4IpnsName,
+        rootExpectedGeneration: 2,
+        path: [],
+        ctx: bobCtx,
+      });
+      expect(postResumeNav4.status).toBe('ok');
+      if (postResumeNav4.status === 'ok') {
+        expect(postResumeNav4.content?.cid).toBeTruthy();
+      }
+    } finally {
+      readKeyPrimeRoot4.fill(0);
+      resumeResult4?.readKey.fill(0);
+      clearCapturedReadKeys();
+    }
   }, 120_000);
 });

@@ -69,7 +69,7 @@
 - [x] **Phase 67: TEE Lease-Renewer Contract Rewrite** — TEE becomes a record-lease-renewer (no CID origination, no sequence increment), internal epoch derivation, name↔key binding, tombstone guard (completed 2026-07-01)
 - [x] **Phase 68: Web Integration — Rotation UX and Durable Client State** — Replace `executeLazyRotation` with `rotateReadFromNode`, durable IndexedDB generation + seq high-water (M1 defense, survives restart), `folderTree` reconcile-before-rotate (all 12 plans executed 2026-07-01; verification passed 14/14 after 68-11/68-12 gap closure, see 68-VERIFICATION.md) (completed 2026-07-01)
 - [x] **Phase 69: FUSE and WinFsp — Rust Integration and Grant-Root Awareness** — Symmetric child-key unwrap, `spawn_file_meta_reencrypt` deletion from both callers, grant-root scope computation, durable client floors, `Node` Rust enum, Rust SDK-owned read chain (Phase 68.2 parity), Windows CI gate (completed 2026-07-06)
-- [ ] **Phase 70: Rotation Soundness — Deep Merge, Fresh-Record Resume, and Durable Floor Concurrency** — Local-wins merge for rotated child keys, deep `verifySubtreeClean`, true fresh-record crash-resume, grant-callback threading through the real walk, and an atomic/async-safe anti-rollback floor store (5 deferred CodeRabbit/PR-review todos)
+- [x] **Phase 70: Rotation Soundness — Deep Merge, Fresh-Record Resume, and Durable Floor Concurrency** — Local-wins merge for rotated child keys, deep `verifySubtreeClean`, true fresh-record crash-resume, grant-callback threading through the real walk, and an atomic/async-safe anti-rollback floor store (5 deferred CodeRabbit/PR-review todos) (completed 2026-07-07)
 - [ ] **Phase 71: Share-Invite Security and IPNS Data-Integrity (API)** — Validate sharer root ownership, apply-or-reject later invite grants, `claim_count` CHECK constraint, partial unique index on `ipns_records(user_id) WHERE is_root`, first-publish INSERT-race 409, same-seq CID equivocation decision, direct bulk-revoke DELETE, and `ShareInviteService` lifecycle unit coverage (8 todos)
 - [ ] **Phase 72: SDK Write-Plane Durability and Correctness** — Delete drops the removed child's `WriteChildRef`, fail-closed `getWriteBodyParams` on transient resolve miss, restore-to-different-parent re-homing, `SealedChildRef` size/modifiedAt mirror refresh, legacy `moveInSharedFolder` branch removal, write-plane helper dedup, and two write-chain test-fidelity fixes (8 todos)
 - [ ] **Phase 73: Shared Write/Navigation Correctness (Web)** — Preserve nested write capability across navigate-up/breadcrumb restore, invalidate stale nav-stack child snapshots, gate the non-listing read facades with the ROT-07 floor, give WRITE-03 refresh-access a live production trigger, and route drag-payload kind through the resolved listing (5 todos)
@@ -657,7 +657,35 @@ Plans:
 5. The anti-rollback floor store performs an atomic compare-and-set (Rust `bump_floor` guarded; `JsonSidecarFloorStore::put` no blocking RMW on the async executor; corrupt sidecar fails closed, not `unwrap_or_default`); `bumpFloor` on the TS side no longer runs sequentially where it can race
 6. Rotation readKey source buffers are zeroed after use; no module-global `activeRootNodeId` leaks across roots
 
-**Plans**: TBD (run `/gsd-plan-phase 70`)
+**Plans**: 8/8 plans complete
+
+Plans:
+
+**Wave 1**
+
+- [x] 70-01-PLAN.md — SC#1 `mergeRotatedChildren` pure local-wins merge + unit tests
+- [x] 70-02-PLAN.md — SC#5 atomic/non-blocking/fail-closed Rust floor store + TS parity note
+- [x] 70-03-PLAN.md — SC#6 web rotation-driver Set-based badge + cached IDB connection
+
+**Wave 2** *(blocked on 70-01)*
+
+- [x] 70-04-PLAN.md — SC#1/SC#3 wire local-wins at both merge sites + `rotateOne` merged-children return
+
+**Wave 3** *(blocked on 70-04)*
+
+- [x] 70-05-PLAN.md — SC#2 `verifySubtreeClean` full-subtree recursion + shared traversal helper
+
+**Wave 4** *(blocked on 70-05)*
+
+- [x] 70-06-PLAN.md — SC#3/SC#4/SC#6 fresh-record resume entry gate + `RootKeyStaleError` + grant threading + fresh-copy return
+
+**Wave 5** *(blocked on 70-06)*
+
+- [x] 70-07-PLAN.md — SC#3/SC#6 client zeroization + `RootKeyStaleError` re-nav fallback + Open-Q2 trace
+
+**Wave 6** *(blocked on 70-07)*
+
+- [x] 70-08-PLAN.md — SC#1/SC#3 sdk-e2e phase gate (strengthen test 3 + fresh-record-resume mid-walk crash)
 
 ---
 
@@ -759,6 +787,6 @@ Plans:
 | 66 | API Schema Cutover, Publish Gate, and Tombstone | 9/9 | Complete    | 2026-06-30 |
 | 67 | TEE Lease-Renewer Contract Rewrite | 8/8 | Complete    | 2026-07-01 |
 | 68 | Web Integration — Rotation UX and Durable Client State | 12/12 | Complete    | 2026-07-01 |
-| 69 | FUSE and WinFsp — Rust Integration and Grant-Root Awareness | 25/25 | Complete   | 2026-07-07 |
+| 69 | FUSE and WinFsp — Rust Integration and Grant-Root Awareness | 25/25 | Complete    | 2026-07-07 |
 
 v1.1 history: 45 phases complete (198 plans). See `milestones/v1.1-ROADMAP.md` for full detail.

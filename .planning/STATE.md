@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
-current_phase: 69
-current_phase_name: fuse-and-winfsp-rust-integration-and-grant-root-awareness
-status: executing
-stopped_at: Phase 69 node/v3 desktop port + root-key recovery; desktop-e2e validating
-last_updated: "2026-07-07T00:54:12.493Z"
+current_phase: 71
+current_phase_name: Share-Invite Security and IPNS Data-Integrity (API)
+status: ready_to_plan
+stopped_at: Fixed 70-04 concurrent-add rotation-soundness bug caught by the sdk-e2e gate (commit 7faa0e82835d56368ea87f969d57b083d43ea9a3); rotation-crash-safety suite 4/4 green
+last_updated: "2026-07-07T22:39:09.421Z"
 last_activity: 2026-07-07
-last_activity_desc: Phase 69 execution resumed (wave continue)
+last_activity_desc: Phase 70 complete, transitioned to Phase 71
 progress:
-  total_phases: 11
-  completed_phases: 10
-  total_plans: 140
-  completed_plans: 138
-  percent: 91
+  total_phases: 15
+  completed_phases: 11
+  total_plans: 148
+  completed_plans: 147
+  percent: 73
 ---
 
 # Project State
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-27)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 69 — fuse-and-winfsp-rust-integration-and-grant-root-awareness
+**Current focus:** Phase 71 — Share-Invite Security and IPNS Data-Integrity (API)
 
 ## Current Position
 
-Phase: 69 (fuse-and-winfsp-rust-integration-and-grant-root-awareness) — EXECUTING
-Plan: node/v3 desktop port + root-key recovery — 24/25 merged (69-14 WinFsp pending; desktop-e2e validating)
-Status: Executing Phase 69
-Last activity: 2026-07-07 — Phase 69 execution resumed (wave continue)
+Phase: 71 — Share-Invite Security and IPNS Data-Integrity (API)
+Plan: Not started
+Status: Phase complete — ready for verification
+Last activity: 2026-07-07 — Phase 70 complete, transitioned to Phase 71
 
 Progress: `██████████` 79 / 79 plans (100%)
 
@@ -248,6 +248,14 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 68.2 P12 | 130 | - tasks | - files |
 | Phase 68.2 P13 | 8min | 2 tasks | 2 files |
 | Phase 68.2 P14 | 50min | 2 tasks | 3 files |
+| Phase 70 P01 | 12min | 2 tasks | 3 files |
+| Phase 70 P02 | 45min | 3 tasks | 3 files |
+| Phase 70 P03 | 20min | 2 tasks | 2 files |
+| Phase 70 P04 | 10min | 3 tasks | 3 files |
+| Phase 70 P05 | 20min | 2 tasks | 2 files |
+| Phase 70 P06 | 55min | 3 tasks | 4 files |
+| Phase 70 P07 | 13min | 3 tasks | 2 files |
+| Phase 70 P08 | 55min | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -527,6 +535,24 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase 68.2-13]: doReresolveFolderInPlace sources RotationHighWater generation from existing.nodeGeneration (never the freshly relay-served envelope generation) and gates versionFloor:0, mirroring ensureRootFolderState/dfsFindFolder
 - [Phase 68.2-13]: reresolveFolderInPlace/doReresolveFolderInPlace split into two private methods so the reresolveInFlight dedup map is registered synchronously before the first await, making concurrent forceResolve calls observe the same in-flight promise
 - [Phase ?]: [Phase 68.2-14]: SDK-READ-03 marked [x] on the strength of shared-folder-desync.spec.ts step 3.1 passing cleanly (4/4 isolated); full-web-e2e-green portion documented as CI-fresh-container-authoritative-pending, not force-passed
+- [Phase 70]: mergeRotatedChildren is a wholly separate exported function from folder/merge.ts mergeChildren, not a flag -- closes merge-downgrade Elevation-of-Privilege gap T-70-01
+- [Phase ?]: Corrupt-sidecar fail-closed via a bounded i64::MAX sentinel within the existing HighWaterStore trait shape, avoiding a Result-returning trait change that would ripple into out-of-scope listing.rs/adapter.rs
+- [Phase ?]: TS idbPut verified already max-preserving atomic; no functional TS change needed for SC#5, only a docstring parity note
+- [Phase 70-03]: progress('rotated'/'complete') defers to persistJob's terminal branch for per-root Set drain (no rootNodeId on that callback); only resets the badge when the set is already empty
+- [Phase ?]: [Phase 70-04]: mergeConcurrentChildren (site A) swapped from remote-wins mergeChildren to local-wins mergeRotatedChildren and returns { published, mergedChildren }; rotateOne captures mergedChildrenForReturn so its final return uses the CAS-merged children
+- [Phase ?]: [Phase 70-04]: updateFolderMetadataAndPublish gained optional mergeChildrenFn param defaulting to mergeChildren (remote-wins unchanged for non-rotation callers); both D-09 batched-republish call sites pass mergeRotatedChildren plus a baseChildrenSnapshot captured at parentTracking.set time; concurrently-added children diffed from publishedChildren are enqueued onto the BFS frontier
+- [Phase ?]: verifySubtreeClean recursion stops below a dirty edge (no crypto recovery path for a key lost to an interrupted prior run); returns key-bearing DirtyFrontierItem shape, consumption wiring deferred to plan 70-06
+- [Phase ?]: Missing root record returns isDirty:true with empty frontier; downstream rotateReadFromNode already re-resolves root and throws a descriptive error on that path
+- [Phase ?]: rotateReadFromNode entry gate probes root-unseal viability before deciding fresh rotateOne(root) vs dirty-tail recovery; RootKeyStaleError is the distinct stale-key error; ROT-06 no-double-bump convergence guard removed in favor of safe double-rotation (design 4.5)
+- [Phase ?]: grantCallbacks/innerGrants threaded through RotationParams into every rotateOne call site (root + BFS loop) so reMintGrantsRootedAt is reachable in the real walk (SC#4)
+- [Phase ?]: Dirty-resume-republish path returns a fresh-copy readKey (new Uint8Array), never aliasing the caller-owned rootReadKey (SC#6/T-70-10)
+- [Phase ?]: performScopeExitRotation is the terminal owner of rotationResult.readKey; zeroes unconditionally once a rotation ran (70-07)
+- [Phase ?]: RootKeyStaleError catch does not retry rotateReadFromNode after re-nav recovery; deferred rotation picked up by the next covered mutation (70-07)
+- [Phase ?]: Pure-revoke never triggers rotation eagerly and rotation never re-seals its own root's ancestor mirror -- accepted residual, documented not fixed (70-07 Open Question 2)
+- [Phase ?]: Test 3's strengthened assertion derives subfolder3's key via unsealChildReadKey against the new root key and unseals its ACTUAL published body, proving local-wins keeps the D-02 re-seal intact
+- [Phase ?]: Test 4 uses a deliberately childless (single file node) rotation root — a traced D-02/D-09 timing analysis shows any multi-level tree crash before the walk's final persist hits an unrecoverable AEAD mismatch via this suite's persistCallback-only fault-injection model
+- [Phase ?]: Test 4 crashes on the FIRST persistCallback call and resumes with EMPTY completedNodeIds plus the CURRENT valid rootReadKey (captured via the existing spy), converging via safe double-rotation
+- [Phase 70 post-gate fix]: 70-04's enqueueConcurrentlyAddedChildren over-reached ROT-05 by pushing a concurrently-added child onto the BFS queue for its own rotateOne pass (requires an IPNS write key the rotating party may not hold) and ran after parentTracking teardown so the re-seal never reached the parent's published SealedChildRef; replaced with createConcurrentAddResealingMerge, an async mergeChildrenFn wrapper invoked inside the D-09 CAS-409 merge that re-seals only the concurrent child's readKeySealed wrapper (trying both the parent's old and already-current key) without rotating the child's own node -- commit 7faa0e82835d56368ea87f969d57b083d43ea9a3; sdk-e2e rotation-crash-safety 4/4 green, sdk-core unit 355/355 green
 
 ## Operator Next Steps
 
@@ -534,12 +560,11 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-07T00:00:00.000Z
-**Stopped at:** Phase 69 node/v3 desktop port + root-key recovery; desktop-e2e validating
+**Last session:** 2026-07-08T00:27:22.000Z
+**Stopped at:** Fixed 70-04 concurrent-add rotation-soundness bug caught by the sdk-e2e gate (commit 7faa0e82835d56368ea87f969d57b083d43ea9a3); rotation-crash-safety suite 4/4 green
 **Resume file:** 
-.planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-CONTEXT.md
 
-### Blockers
+None
 
 - GAP-1 (68.1-13): resolveFileMetadata AEAD Decryption-failed for CTR/streaming video preview and post-upload batch-download -- needs dedicated crypto debugging
 - GAP-2 (68.1-13): full-workflow.spec.ts 3.8 cold-reload multi-level IPNS DFS resolve times out -- needs retry-budget tuning or propagation investigation

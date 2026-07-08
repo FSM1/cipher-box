@@ -135,6 +135,16 @@ async fn bump_floor<S: HighWaterStore>(store: &S, node_id: &str, candidate: i64)
 pub struct RotationHighWater<S: HighWaterStore> {
     generation_store: S,
     seq_store: S,
+    /// Serializes every `bump_floor` read-compare-write against this
+    /// instance (T-70-03): the authoritative max-preserving atomicity lives
+    /// in the concrete store's own `put` (e.g.
+    /// [`crate::floor_store::JsonSidecarFloorStore`], per RESEARCH A3), so
+    /// the persisted floor is always correct even without this guard --
+    /// this additionally keeps `bump_floor`'s own read-then-decide window
+    /// (and its return value) from interleaving with a concurrent bump on
+    /// the SAME `RotationHighWater` instance. `Arc`-wrapped so `Clone`d
+    /// instances (e.g. owned prefetch clones) still serialize together.
+    bump_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
 }
 
 impl<S: HighWaterStore> RotationHighWater<S> {
@@ -144,6 +154,7 @@ impl<S: HighWaterStore> RotationHighWater<S> {
         Self {
             generation_store,
             seq_store,
+            bump_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -152,12 +163,14 @@ impl<S: HighWaterStore> RotationHighWater<S> {
     }
 
     pub async fn bump_generation(&self, node_id: &str, generation: i64) {
+        let _guard = self.bump_lock.lock().await;
         bump_floor(&self.generation_store, node_id, generation).await;
     }
 
     /// Owner-vouched first-contact seed — raises the generation floor only
     /// if higher (never lowers it).
     pub async fn seed_from_grant(&self, node_id: &str, root_generation: i64) {
+        let _guard = self.bump_lock.lock().await;
         bump_floor(&self.generation_store, node_id, root_generation).await;
     }
 
@@ -166,6 +179,7 @@ impl<S: HighWaterStore> RotationHighWater<S> {
     }
 
     pub async fn bump_seq(&self, node_id: &str, seq: i64) {
+        let _guard = self.bump_lock.lock().await;
         bump_floor(&self.seq_store, node_id, seq).await;
     }
 
@@ -210,6 +224,22 @@ impl<S: HighWaterStore> RotationHighWater<S> {
             });
         }
 
+        // 2-4. Floor reads, regression checks, and the monotonic-max bump
+        // must all execute as ONE atomic critical section: a concurrent
+        // `enforce_resolved` call must never be able to read the floor
+        // BEFORE a racing call's bump lands, then pass its own (now-stale)
+        // regression check and return Ok after the other call already
+        // raised the floor higher — that would accept a rollback under
+        // concurrency. Acquiring `bump_lock` here (before the reads in
+        // steps 2/3, not just around the bumps in step 4) makes the whole
+        // read-check-bump sequence atomic against every other call that
+        // also goes through this same lock (`bump_generation`, `bump_seq`,
+        // `seed_from_grant`, and any other concurrent `enforce_resolved`).
+        // Single lock, single acquire per call, released at the end of this
+        // scope — no nested/re-entrant acquisition anywhere in this type,
+        // so this cannot deadlock.
+        let _guard = self.bump_lock.lock().await;
+
         // 2. Generation-floor check.
         let generation_floor = read_floor(&self.generation_store, &node_id).await;
         if let Some(floor) = generation_floor {
@@ -249,7 +279,11 @@ impl<S: HighWaterStore> RotationHighWater<S> {
             }
         }
 
-        // 4. Bump both floors monotonic-max.
+        // 4. Bump both floors monotonic-max. Still inside the same
+        // `_guard` critical section acquired above, so this cannot
+        // interleave against a concurrent bump or another
+        // `enforce_resolved`'s read-check-bump on this same instance
+        // (T-70-03, widened per T5).
         bump_floor(&self.generation_store, &node_id, generation).await;
         bump_floor(&self.seq_store, &node_id, seq).await;
 

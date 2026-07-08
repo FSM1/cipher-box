@@ -1929,6 +1929,46 @@ export class CipherBoxClient {
    * name(s) -- the coverage check still correctly detects a grant rooted AT
    * the mutated node itself. Extending to a full multi-level ancestor walk
    * requires `FolderTree` parent tracking, deferred to a later plan.
+   *
+   * ---
+   * Plan 70-07 Task 3 trace (Open Question 2) -- PURE-REVOKE ANCESTOR-MIRROR
+   * STALENESS, accepted residual, NOT fixed this phase:
+   *
+   * All FIVE call sites of this method (`createSubfolder`, `renameItem`,
+   * `moveItem` [source only], `deleteItem`, `deleteToBin`) invoke it with
+   * `rootNodeIpnsName` equal to the folder that was JUST DIRECTLY MUTATED --
+   * never a distinct share root reached transitively. `revokeShare` (a PURE
+   * revoke -- the shared node's own position in the tree never moves) does
+   * NOT call this method at all: it only soft-deletes the share row via the
+   * API (`shareOps.revokeShare`). Rotation of that root's read key is
+   * therefore entirely DEFERRED to whichever LATER direct mutation
+   * (rename/delete/move-out/create-child-under-it) eventually targets that
+   * SAME folder -- there is no eager rotation on revoke.
+   *
+   * Even once that later mutation DOES trigger rotation on the folder,
+   * `rotateReadFromNode` (sdk-core `engine.ts`) never re-seals the rotation
+   * ROOT's own real ancestor's `SealedChildRef` mirror: `parentTracking` is
+   * seeded keyed by `rootNodeIpnsName` itself (to track updates to the
+   * root's OWN children), never for the root's true parent -- no
+   * `parentTracking` entry is ever created for a node ABOVE the rotation
+   * root. So the root's entry inside ITS OWN PARENT's `children[]` still
+   * seals the OLD (pre-rotation) key after rotation completes.
+   *
+   * Consequence for the RootKeyStaleError top-down re-navigation fallback
+   * (Task 2, above): a walk from the vault root down through the ancestor
+   * chain succeeds through every hop ABOVE the rotation root (their own
+   * keys never changed), but is blocked exactly at the LAST hop --
+   * parent-to-rotated-root -- because the parent's stored
+   * `SealedChildRef.readKeySealed` for that child still seals the stale key.
+   * This is the "one hop earlier" residual Task 2's fallback documents.
+   *
+   * This is an ACCEPTED residual, per the phase's explicit "no redesign"
+   * mandate -- making rotation additionally re-seal its own root's ancestor
+   * mirror is a larger structural change (rotation would need to learn its
+   * caller's parent-chain context, which it does not track today) and is
+   * NOT undertaken in this plan. A follow-up todo candidate, not a phase-70
+   * scope item.
+   * ---
    */
   private async performScopeExitRotation(params: {
     ancestorIpnsNames: string[];
@@ -1963,15 +2003,78 @@ export class CipherBoxClient {
             frontier: [],
             persistCallback: callbacks.persistJob,
           };
-          rotationResult = await sdkCore.rotateReadFromNode({
-            rootNodeId: params.rootNodeId,
-            rootNodeIpnsName: params.rootNodeIpnsName,
-            rootReadKey: params.rootReadKey,
-            rootIpnsPrivateKey: params.rootIpnsPrivateKey,
-            rootIpnsPublicKey: params.rootIpnsPublicKey,
-            jobRecord,
-            ctx: this.ctx,
-          });
+          try {
+            rotationResult = await sdkCore.rotateReadFromNode({
+              rootNodeId: params.rootNodeId,
+              rootNodeIpnsName: params.rootNodeIpnsName,
+              rootReadKey: params.rootReadKey,
+              rootIpnsPrivateKey: params.rootIpnsPrivateKey,
+              rootIpnsPublicKey: params.rootIpnsPublicKey,
+              jobRecord,
+              ctx: this.ctx,
+            });
+          } catch (err) {
+            if (!(err instanceof sdkCore.RootKeyStaleError)) throw err;
+
+            // T-70-14 / Open Question 1: the in-memory rootReadKey is stale --
+            // this root was rotated by a lost prior session and there is NO
+            // cryptographic key-recovery path from the key alone (Pitfall 4).
+            // Fall back to a full top-down folderTree re-navigation from the
+            // vault root so the client rediscovers the CURRENT key via the
+            // parent chain, rather than letting the mutation fail on an
+            // opaque unseal error. The stale folderTree entry is dropped
+            // FIRST (FolderTree.delete zeroes it as its own terminal owner)
+            // so ensureFolderLoaded cannot short-circuit on the same stale
+            // cached copy and is forced through the network re-derivation.
+            this.folderTree.delete(params.rootNodeIpnsName);
+            let recoveryError: unknown;
+            const recovered = await this.ensureFolderLoaded(params.rootNodeIpnsName).catch(
+              (e: unknown) => {
+                recoveryError = e;
+                return null;
+              }
+            );
+            if (!recovered) {
+              if (recoveryError) {
+                // The top-down re-navigation attempt itself threw (network,
+                // auth, unseal, etc.) -- that is a DIFFERENT failure than the
+                // "known residual" case below (which is a clean not-found
+                // resolve, not a thrown error). Surface the real recovery
+                // error as `cause` instead of masking every failure behind
+                // the generic stale-key message.
+                throw new Error(
+                  `Rotation root ${params.rootNodeIpnsName} has a stale local read key ` +
+                    '(RootKeyStaleError) and the top-down folderTree re-navigation ' +
+                    'recovery attempt itself failed. See `cause` for the underlying ' +
+                    'error.',
+                  { cause: recoveryError }
+                );
+              }
+              // Open Question 2 residual: rotation never updates its OWN
+              // root's ancestor SealedChildRef mirror (see
+              // performScopeExitRotation's doc comment above), so a
+              // pure-revoke root whose ancestor mirror was never re-sealed
+              // blocks this top-down re-nav one hop earlier -- it cannot
+              // reach the current key either. Surface a clear, actionable
+              // error instead of a generic AEAD/unseal failure.
+              throw new Error(
+                `Rotation root ${params.rootNodeIpnsName} has a stale local read key ` +
+                  '(RootKeyStaleError) and could not be recovered via top-down ' +
+                  'folderTree re-navigation from the vault root. This is a known ' +
+                  'residual of the unrecoverable crash window (Phase 70 Open ' +
+                  'Question 1/2) -- reload the app to re-resolve the folder tree ' +
+                  'from the vault root.',
+                { cause: err }
+              );
+            }
+            // Recovery succeeded: folderTree now holds the CURRENT
+            // key/generation/sequenceNumber for this root. rotationResult
+            // stays undefined -- the caller's mutation already published
+            // successfully; rotation itself is retried on the NEXT covered
+            // scope-exit mutation against the now-current state.
+            callbacks.progress?.('rotation-key-stale-recovered');
+            return;
+          }
           callbacks.progress?.('rotated');
         },
       }
@@ -2001,6 +2104,17 @@ export class CipherBoxClient {
         });
         oldFolderKey.fill(0);
       }
+
+      // T-70-13 / SC#6: performScopeExitRotation is the TERMINAL OWNER of
+      // rotationResult.readKey. rotateReadFromNode always hands over a FRESH
+      // COPY on every return path -- including the dirty-resume-republish
+      // branch (plan 70-06) -- never an alias of params.rootReadKey, so
+      // zeroing it here can never corrupt a live caller-owned buffer. The
+      // folderTree entry above already took its OWN independent defensive
+      // copy (`new Uint8Array(rotationResult.readKey)`), so this fill(0)
+      // touches neither that copy nor params.rootReadKey (see the comment
+      // above -- both are distinct buffers from rotationResult.readKey).
+      rotationResult.readKey.fill(0);
     }
   }
 

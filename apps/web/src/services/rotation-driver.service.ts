@@ -56,8 +56,23 @@ type DurableJobCheckpoint = {
   updatedAt: number;
 };
 
+/**
+ * Cached shared connection promise (mirrors `rotation-state.service.ts`'s
+ * `openRotationDB` connection-caching idiom): checkpoint calls previously
+ * opened a FRESH `indexedDB.open` connection every call and never closed it,
+ * leaking one connection per persist/delete/getAll invocation for the
+ * lifetime of the tab. Callers now share this single open connection.
+ *
+ * Invalidated (set back to `null`) on `onversionchange`/`onclose` — e.g. a
+ * second tab upgrading the DB version, or the connection being force-closed —
+ * so the NEXT call transparently reopens rather than reusing a dead handle.
+ */
+let jobDBPromise: Promise<IDBDatabase> | null = null;
+
 function openJobDB(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
+  if (jobDBPromise) return jobDBPromise;
+
+  jobDBPromise = new Promise((resolve, reject) => {
     const request = indexedDB.open(JOB_DB_NAME, JOB_DB_VERSION);
     request.onupgradeneeded = () => {
       const db = request.result;
@@ -65,9 +80,47 @@ function openJobDB(): Promise<IDBDatabase> {
         db.createObjectStore(JOB_STORE_NAME, { keyPath: 'rootNodeId' });
       }
     };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const db = request.result;
+      // Another connection (another tab) wants to upgrade the DB version, or
+      // this connection was closed out from under us — drop the cache so the
+      // next caller reopens a fresh connection instead of using a dead one.
+      db.onversionchange = () => {
+        db.close();
+        jobDBPromise = null;
+      };
+      db.onclose = () => {
+        jobDBPromise = null;
+      };
+      resolve(db);
+    };
+    request.onerror = () => {
+      jobDBPromise = null;
+      reject(request.error);
+    };
   });
+
+  return jobDBPromise;
+}
+
+/**
+ * Close the cached job-DB connection, if open, and drop the cache so the
+ * next checkpoint call reopens fresh. Exposed for callers that want to
+ * release the handle on logout (mirrors the `onversionchange`/`onclose`
+ * invalidation above) — not currently wired into the app's logout flow
+ * (`lib/clear-user-stores.ts` is outside this plan's scope), but available
+ * for that future wiring without another change to this module.
+ */
+export async function closeJobDB(): Promise<void> {
+  if (!jobDBPromise) return;
+  try {
+    const db = await jobDBPromise;
+    db.close();
+  } catch {
+    // Connection never successfully opened — nothing to close.
+  } finally {
+    jobDBPromise = null;
+  }
 }
 
 async function putJobCheckpoint(checkpoint: DurableJobCheckpoint): Promise<void> {
@@ -105,10 +158,14 @@ async function getAllJobCheckpoints(): Promise<DurableJobCheckpoint[]> {
 // ---------------------------------------------------------------------------
 
 /**
- * The root currently driving the badge, so a later `persistJob` call for the
- * SAME root is recognised as tail-walk progress rather than a fresh root cut.
+ * The roots currently driving the badge, so a later `persistJob` call for a
+ * root already in this set is recognised as tail-walk progress rather than a
+ * fresh root cut. Per-root Set (not a single scalar) so concurrent rotations
+ * on DIFFERENT root node ids don't clobber each other's badge state: the
+ * badge resets only when the LAST active root finishes, not when the first
+ * one does (SC#6 concurrent-root fix).
  */
-let activeRootNodeId: string | null = null;
+const activeRootNodeIds = new Set<string>();
 
 const TERMINAL_STATUSES: ReadonlySet<RotationJobRecord['status']> = new Set(['complete', 'failed']);
 
@@ -121,11 +178,17 @@ const TERMINAL_STATUSES: ReadonlySet<RotationJobRecord['status']> = new Set(['co
  */
 async function persistJob(job: RotationJobRecord): Promise<void> {
   if (TERMINAL_STATUSES.has(job.status)) {
-    // Rotation finished (or failed) for this root — published IPNS records are
-    // the source of truth from here (D-10); the durable checkpoint is only
-    // useful while the walk is in flight, so drop it and reset the badge.
-    activeRootNodeId = null;
-    useRotationStore.getState().reset();
+    // Rotation finished (or failed) for THIS root — published IPNS records
+    // are the source of truth from here (D-10); the durable checkpoint is
+    // only useful while the walk is in flight, so drop it. The badge resets
+    // ONLY when the active-root set drains: another root may still be
+    // mid-walk, and a finishing root must not clobber its badge (SC#6).
+    // Durable checkpoint keying is unaffected — still the finished job's own
+    // rootNodeId (see module prohibitions).
+    activeRootNodeIds.delete(job.rootNodeId);
+    if (activeRootNodeIds.size === 0) {
+      useRotationStore.getState().reset();
+    }
     try {
       await deleteJobCheckpoint(job.rootNodeId);
     } catch (error) {
@@ -134,11 +197,11 @@ async function persistJob(job: RotationJobRecord): Promise<void> {
     return;
   }
 
-  if (activeRootNodeId !== job.rootNodeId) {
+  if (!activeRootNodeIds.has(job.rootNodeId)) {
     // First non-terminal persistJob call for this root: fired immediately
     // after the root commits (the engine's "high-value early checkpoint") —
     // treat this as the root-cut signal (see module doc security note).
-    activeRootNodeId = job.rootNodeId;
+    activeRootNodeIds.add(job.rootNodeId);
     useRotationStore.getState().beginRootCut();
   } else {
     // Subsequent calls for the same root are per-node tail-walk commits.
@@ -182,8 +245,15 @@ function progress(status: string): void {
       break;
     case 'rotated':
     case 'complete':
-      activeRootNodeId = null;
-      useRotationStore.getState().reset();
+      // This callback carries no rootNodeId, so it cannot surgically remove
+      // a single root from `activeRootNodeIds` — `persistJob`'s terminal
+      // branch already owns that per-root bookkeeping and drains the set.
+      // Only reset the badge here if the set is ALREADY empty (i.e.
+      // persistJob's terminal call already ran); otherwise defer to
+      // persistJob so an unrelated in-flight root's badge isn't clobbered.
+      if (activeRootNodeIds.size === 0) {
+        useRotationStore.getState().reset();
+      }
       break;
     default:
       // Unknown/forward-compatible status string — no-op.
@@ -255,7 +325,9 @@ export async function resumeInterruptedRotation(): Promise<void> {
   const inProgress = checkpoints.filter((checkpoint) => !TERMINAL_STATUSES.has(checkpoint.status));
   if (inProgress.length === 0) return;
 
-  activeRootNodeId = inProgress[0].rootNodeId;
+  for (const checkpoint of inProgress) {
+    activeRootNodeIds.add(checkpoint.rootNodeId);
+  }
   useRotationStore.getState().markResuming();
 
   // Run under the tail-walk leader lock so a multi-tab reload doesn't race

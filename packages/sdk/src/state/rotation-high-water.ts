@@ -18,6 +18,33 @@
  * enforceResolved is a pure pass/throw pre-unseal gate -- it never returns
  * or computes any AAD/unseal parameter. The AAD generation is sourced from
  * the parent mirror in the unrelated unseal path.
+ *
+ * TS/Rust behavioral-equivalence contract (SC#5, T-70-03/T-70-04): this
+ * orchestration layer's `bumpFloor` is a non-atomic read-then-put, exactly
+ * like the Rust twin's `bump_floor` (`crates/sdk/src/rotation/high_water.rs`).
+ * Atomicity is NOT this layer's job on either side -- it is owned by the
+ * concrete `HighWaterStore` adapter: the browser's `idbPut`
+ * (`apps/web/src/services/rotation-state.service.ts`) already reads the
+ * existing value back INSIDE the same IndexedDB `readwrite` transaction and
+ * writes `Math.max(existing, value)`, so a concurrent tab's higher write can
+ * never be clobbered by a lower one -- matching the Rust store's
+ * `tokio::sync::Mutex`-guarded, max-preserving `JsonSidecarFloorStore::put`.
+ * No functional change was needed on this side; `idbPut` was already
+ * correct (verified 2026-07-07).
+ *
+ * `enforceResolved`'s cross-store sequencing (`bumpFloor(generationStore)`
+ * then `bumpFloor(seqStore)`, awaited sequentially, not in one transaction)
+ * is a DOC-ONLY residual, not a fix target: both floors only ever rise
+ * (monotonic-max), so if the second bump's write were to fail after the
+ * first succeeds, the two floors merely diverge until the next successful
+ * resolve re-aligns them -- under-protective, never rollback-accepting (see
+ * `.planning/todos/pending/2026-07-02-rotation-hardening-followups-from-pr-review.md`
+ * item 1). An atomic multi-store transaction spanning both floors would
+ * require a new `HighWaterStore` seam capable of a joint compare-and-set
+ * across two IndexedDB object stores (and the Rust twin's two sidecar
+ * files) while still surviving the D-08 in-memory degradation path -- out
+ * of scope for this phase's SC#5 (store-layer atomicity), which is
+ * satisfied by `idbPut`/`JsonSidecarFloorStore::put` alone.
  */
 
 /** A durable key-value seam for a single high-water floor (generation or seq). */
