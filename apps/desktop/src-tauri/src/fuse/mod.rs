@@ -380,6 +380,7 @@ pub async fn mount_filesystem(
         publish_coordinator,
         publish_queue: HashMap::new(),
         sent_shares,
+        coalesced_scope_exit_relink_suppressed: std::collections::HashSet::new(),
     };
 
     let mount_path_clone = mount_path.clone();

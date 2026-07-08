@@ -283,6 +283,7 @@ mod mount_impl {
             publish_coordinator,
             publish_queue: HashMap::new(),
             sent_shares,
+            coalesced_scope_exit_relink_suppressed: std::collections::HashSet::new(),
         };
 
         // Create WinFsp context with Arc<Mutex<>> for interior mutability

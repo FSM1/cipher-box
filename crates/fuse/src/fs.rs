@@ -103,6 +103,15 @@ pub struct CipherBoxFS {
     /// FUSE `fs` and the refresh task share the SAME lock.
     pub sent_shares:
         std::sync::Arc<std::sync::RwLock<crate::write_ops::grant_scope::SentSharesCache>>,
+    /// 70.1-13a coalescing hand-off for the WinFsp split delete flow: inos whose
+    /// covered scope-exit rotation (in `set_delete`) already republished the
+    /// grant-root with the post-delete child list, so `handle_cleanup` MUST
+    /// SKIP its plain `update_folder_metadata(parent)` relink (avoiding the
+    /// double-publish the fuser path avoids inline). Populated by
+    /// `handle_set_delete`, consumed (removed) by `handle_cleanup`. The fuser
+    /// unlink/rmdir path does NOT use this (its gate + relink are one call, so
+    /// it carries the flag in a local variable) — it stays empty there.
+    pub coalesced_scope_exit_relink_suppressed: std::collections::HashSet<u64>,
 }
 
 #[cfg(any(feature = "fuse", feature = "winfsp"))]

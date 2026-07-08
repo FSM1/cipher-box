@@ -96,60 +96,22 @@ pub fn handle_unlink(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Rep
     // pre-rotation parent state. Fix A refreshes the grant-root inode key here,
     // so that capture (and any relink) reseals under the POST-rotation key.
     //
-    // 70.1-13a: detect coverage under an immutable borrow, then rotate. When the
-    // grant-root IS this file's DIRECT parent (the shallow scope-exit the D-16
-    // leg exercises), pass the POST-delete child list so the rotation is the
+    // 70.1-13a: the shared coalesced gate (`run_scope_exit_gate_coalesced`,
+    // identical logic used by the WinFsp path). When the grant-root IS this
+    // file's DIRECT parent (the shallow scope-exit the D-16 leg exercises) it
+    // drives the rotation with the POST-delete child list so the rotation is the
     // SINGLE authoritative grant-root publish (secret.txt removed, new key) and
-    // the plain parent relink below is SUPPRESSED — the coalescing that turns
-    // the old rotate_one + republish_parent (+2) + stale-key relink (+1) into a
-    // minimal, revocation-correct publish.
-    let mut relink_suppressed = false;
-    match crate::write_ops::grant_scope::detect_scope_exit_grant_root(fs, child_ino) {
-        Err(()) => {
-            reply.error(libc::EIO);
-            return;
-        }
-        Ok(None) => { /* private delete: zero rotation, relink below is the effect */ }
-        Ok(Some(grant_root_ipns)) => {
-            let child_id = fs
-                .inodes
-                .get(child_ino)
-                .map(|i| i.node_id.clone())
-                .unwrap_or_else(|| crate::fs::uuid_from_ino(child_ino));
-            let parent_ipns = fs
-                .inodes
-                .get(parent)
-                .map(|p| match &p.kind {
-                    InodeKind::Root { ipns_name, .. } | InodeKind::Folder { ipns_name, .. } => {
-                        ipns_name.clone()
-                    }
-                    _ => String::new(),
-                })
-                .unwrap_or_default();
-            // Build the post-delete override BEFORE any mutation (fail-closed:
-            // the child inode is only removed after the rotation succeeds).
-            let root_children_override =
-                if !parent_ipns.is_empty() && parent_ipns == grant_root_ipns {
-                    Some(fs.build_scope_exit_child_override(parent, child_ino))
-                } else {
-                    None
-                };
-            relink_suppressed = root_children_override.is_some();
-            let rt = fs.rt.clone();
-            if rt
-                .block_on(crate::write_ops::grant_scope::rotate_read_on_scope_exit(
-                    fs,
-                    &grant_root_ipns,
-                    &child_id,
-                    root_children_override,
-                ))
-                .is_err()
-            {
+    // returns `true` to SUPPRESS the plain parent relink below — turning the old
+    // rotate_one + republish_parent (+2) + stale-key relink (+1) into a minimal,
+    // revocation-correct publish. Fail-closed on `Err`.
+    let relink_suppressed =
+        match crate::write_ops::grant_scope::run_scope_exit_gate_coalesced(fs, child_ino, parent) {
+            Ok(suppressed) => suppressed,
+            Err(()) => {
                 reply.error(libc::EIO);
                 return;
             }
-        }
-    }
+        };
 
     // D-15d: capture the PARENT read/write keys (borrow → copy into owned
     // arrays) AFTER the gate has run, so the D-07 dual child-ref below seals
@@ -394,51 +356,14 @@ pub fn handle_rmdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Repl
     // handle_unlink: a shallow scope-exit passes the post-delete child list so
     // the rotation is the single authoritative grant-root publish and the plain
     // relink is suppressed.
-    let mut relink_suppressed = false;
-    match crate::write_ops::grant_scope::detect_scope_exit_grant_root(fs, child_ino) {
-        Err(()) => {
-            reply.error(libc::EIO);
-            return;
-        }
-        Ok(None) => { /* private rmdir: zero rotation, relink below is the effect */ }
-        Ok(Some(grant_root_ipns)) => {
-            let child_id = fs
-                .inodes
-                .get(child_ino)
-                .map(|i| i.node_id.clone())
-                .unwrap_or_else(|| crate::fs::uuid_from_ino(child_ino));
-            let parent_ipns = fs
-                .inodes
-                .get(parent)
-                .map(|p| match &p.kind {
-                    InodeKind::Root { ipns_name, .. } | InodeKind::Folder { ipns_name, .. } => {
-                        ipns_name.clone()
-                    }
-                    _ => String::new(),
-                })
-                .unwrap_or_default();
-            let root_children_override =
-                if !parent_ipns.is_empty() && parent_ipns == grant_root_ipns {
-                    Some(fs.build_scope_exit_child_override(parent, child_ino))
-                } else {
-                    None
-                };
-            relink_suppressed = root_children_override.is_some();
-            let rt = fs.rt.clone();
-            if rt
-                .block_on(crate::write_ops::grant_scope::rotate_read_on_scope_exit(
-                    fs,
-                    &grant_root_ipns,
-                    &child_id,
-                    root_children_override,
-                ))
-                .is_err()
-            {
+    let relink_suppressed =
+        match crate::write_ops::grant_scope::run_scope_exit_gate_coalesced(fs, child_ino, parent) {
+            Ok(suppressed) => suppressed,
+            Err(()) => {
                 reply.error(libc::EIO);
                 return;
             }
-        }
-    }
+        };
 
     // D-15d: capture the PARENT read/write keys (borrow → copy) AFTER the
     // gate has run, so the D-07 dual child-ref below seals under

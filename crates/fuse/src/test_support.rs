@@ -133,6 +133,7 @@ pub(crate) fn make_test_fs_with_keypair(
         sent_shares: std::sync::Arc::new(std::sync::RwLock::new(
             crate::write_ops::grant_scope::SentSharesCache::empty(),
         )),
+        coalesced_scope_exit_relink_suppressed: HashSet::new(),
     }
 }
 

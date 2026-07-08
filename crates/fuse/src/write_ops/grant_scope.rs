@@ -667,6 +667,85 @@ pub fn run_scope_exit_gate(fs: &mut crate::CipherBoxFS, ino: u64) -> Result<(), 
     })
 }
 
+/// 70.1-13a COALESCED scope-exit gate for a DELETE of `child_ino` whose direct
+/// parent is `parent_ino` (unlink / rmdir / WinFsp set_delete). This is the
+/// SINGLE shared implementation used by BOTH the fuser `delete.rs` handlers and
+/// the WinFsp `write_ops.rs` handlers, so the coalescing logic cannot drift
+/// between platforms.
+///
+/// Behaviour = [`run_scope_exit_gate`] plus coalescing: on a SHALLOW covered
+/// scope-exit (the matched grant-root IS `parent_ino`), the rotation is driven
+/// with the POST-delete child list ([`crate::CipherBoxFS::build_scope_exit_child_override`],
+/// which mutates NO state — fail-closed until the rotation succeeds), so the
+/// rotation republishes the grant-root as the SINGLE authoritative publish
+/// (post-delete, new key) and the caller MUST suppress its own parent relink.
+/// A deep scope-exit, a private delete, or a non-covered mutation returns
+/// `Ok(false)` and the caller performs its normal relink (now resealed under
+/// the Fix-A-refreshed key when a rotation ran).
+///
+/// Returns:
+/// - `Ok(true)`  — shallow covered scope-exit coalesced; the caller MUST SKIP
+///   its plain `update_folder_metadata(parent)` relink.
+/// - `Ok(false)` — private / deep / non-covered; the caller relinks as normal.
+/// - `Err(())`   — fail-closed (poisoned cache / D-15a / D-15b / rotation
+///   failure); the caller maps this to EIO / STATUS_ACCESS_DENIED and aborts.
+///
+/// D-07 dual-keying and the D-15a/b/c fail-closed conditions are preserved
+/// exactly as in [`run_scope_exit_gate`].
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+pub fn run_scope_exit_gate_coalesced(
+    fs: &mut crate::CipherBoxFS,
+    child_ino: u64,
+    parent_ino: u64,
+) -> Result<bool, ()> {
+    // Write-plane key (D-07): the mutated node's stable id, kept DISTINCT from
+    // the read-plane grant-root ipns_name.
+    let child_id = fs
+        .inodes
+        .get(child_ino)
+        .map(|i| i.node_id.clone())
+        .unwrap_or_else(|| crate::fs::uuid_from_ino(child_ino));
+
+    // Detect coverage under an immutable borrow FIRST (D-15a/b/c fail-closed).
+    let grant_root_ipns_name = match detect_scope_exit_grant_root(fs, child_ino)? {
+        None => return Ok(false),
+        Some(name) => name,
+    };
+
+    // Shallow scope-exit? (the grant-root IS the deleted node's direct parent).
+    // If so, build the post-delete child list WITHOUT mutating state (the child
+    // inode is only removed after the rotation succeeds — fail-closed) and drive
+    // the coalesced single publish.
+    let parent_ipns = fs
+        .inodes
+        .get(parent_ino)
+        .map(|p| match &p.kind {
+            InodeKind::Root { ipns_name, .. } | InodeKind::Folder { ipns_name, .. } => {
+                ipns_name.clone()
+            }
+            _ => String::new(),
+        })
+        .unwrap_or_default();
+    let root_children_override = if !parent_ipns.is_empty() && parent_ipns == grant_root_ipns_name {
+        Some(fs.build_scope_exit_child_override(parent_ino, child_ino))
+    } else {
+        None
+    };
+    let coalesced = root_children_override.is_some();
+
+    let rt = fs.rt.clone();
+    rt.block_on(rotate_read_on_scope_exit(
+        fs,
+        &grant_root_ipns_name,
+        &child_id,
+        root_children_override,
+    ))
+    .map(|()| coalesced)
+    .map_err(|e| {
+        log::error!("scope-exit gate failed (fail-closed): {}", e);
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
