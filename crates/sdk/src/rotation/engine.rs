@@ -383,6 +383,38 @@ pub async fn rotate_one<D: RotationDeps>(
     parent_read_key: &[u8],
     job_record: &mut RotationJobRecord,
 ) -> Result<RotateOneOutcome, RotationError> {
+    // Public entry point: no child-list override (BFS children + every existing
+    // caller publish the node's own resolved children — the common case).
+    rotate_one_inner(
+        deps,
+        node_id,
+        node_ipns_name,
+        parent_read_key,
+        job_record,
+        None,
+    )
+    .await
+}
+
+/// Implementation of [`rotate_one`] with an optional `children_override`
+/// (70.1-13a coalescing): when `Some`, the node is re-sealed and published
+/// with THIS `SealedChildRef` list instead of the one decoded from its
+/// currently-published record. Used ONLY for the scope-root of a covered
+/// scope-exit delete, so the rotation republishes the grant-root already
+/// reflecting the post-delete child list (secret.txt removed) under the new
+/// key — the single authoritative publish, with NO stale-key relink afterward
+/// (the revocation-bypass fix). The override refs MUST be sealed under the
+/// node's OWN pre-rotation (`parent_read_key`) read key, exactly as its
+/// currently-published children are, so the BFS still derives each surviving
+/// child's key via `unseal_child_read_key`.
+async fn rotate_one_inner<D: RotationDeps>(
+    deps: &D,
+    node_id: Option<&str>,
+    node_ipns_name: &str,
+    parent_read_key: &[u8],
+    job_record: &mut RotationJobRecord,
+    children_override: Option<&[SealedChildRef]>,
+) -> Result<RotateOneOutcome, RotationError> {
     // Fast idempotency path — BEFORE any resolve/fetch.
     if let Some(id) = node_id {
         if job_record.completed_node_ids.contains(id) {
@@ -483,6 +515,7 @@ pub async fn rotate_one<D: RotationDeps>(
         &read_key_prime,
         &parent_read_key_arr,
         file_key_prime.as_deref(),
+        children_override,
     )
     .await
     {
@@ -686,13 +719,18 @@ async fn seal_and_publish<D: RotationDeps>(
     read_key_prime: &[u8; 32],
     old_read_key: &[u8; 32],
     file_key_prime: Option<&[u8; 32]>,
+    children_override: Option<&[SealedChildRef]>,
 ) -> Result<(u64, Vec<SealedChildRef>), RotationError> {
     /// HIGH-4 (T-69-12-03): bounds the CAS-409 retry-merge loop so a
     /// pathologically contended node cannot spin forever (mirrors the TS
     /// reference's `publishWithCas({ maxAttempts: 3 })`).
     const MAX_CAS_MERGE_ATTEMPTS: u32 = 3;
 
-    let mut current_children = node_children(node);
+    // 70.1-13a: the caller-supplied post-delete child list (covered scope-exit
+    // coalescing) takes precedence over the node's own resolved children, so
+    // the rotation republishes the grant-root already reflecting the deletion.
+    let mut current_children =
+        children_override.map_or_else(|| node_children(node), <[SealedChildRef]>::to_vec);
     let mut current_expected_seq = expected_sequence_number;
 
     for attempt in 1..=MAX_CAS_MERGE_ATTEMPTS {
@@ -1408,6 +1446,56 @@ pub async fn rotate_read_from_node<D: RotationDeps>(
     root_read_key: &[u8],
     job_record: &mut RotationJobRecord,
 ) -> Result<Option<RotateReadResult>, RotationError> {
+    rotate_read_from_node_inner(
+        deps,
+        root_node_id,
+        root_ipns_name,
+        root_read_key,
+        job_record,
+        None,
+    )
+    .await
+}
+
+/// 70.1-13a coalescing variant: rotates the scope-root's subtree but publishes
+/// the ROOT's own record with `root_children` in place of its
+/// currently-published child list. Used by the covered scope-exit delete path
+/// so the rotation is the SINGLE authoritative grant-root publish that already
+/// reflects the deletion (secret.txt removed) under the new read key — no
+/// separate, stale-key parent relink afterward (the revocation-bypass fix).
+///
+/// `root_children` MUST be sealed under `root_read_key` (the root's
+/// pre-rotation key), exactly as the root's currently-published children are,
+/// so the BFS derives each surviving child's key via `unseal_child_read_key`.
+/// A surviving child absent from `root_children` (the deleted node) is neither
+/// republished in the root body nor enqueued for rotation.
+pub async fn rotate_read_from_node_with_root_children<D: RotationDeps>(
+    deps: &D,
+    root_node_id: &str,
+    root_ipns_name: &str,
+    root_read_key: &[u8],
+    job_record: &mut RotationJobRecord,
+    root_children: Vec<SealedChildRef>,
+) -> Result<Option<RotateReadResult>, RotationError> {
+    rotate_read_from_node_inner(
+        deps,
+        root_node_id,
+        root_ipns_name,
+        root_read_key,
+        job_record,
+        Some(root_children),
+    )
+    .await
+}
+
+async fn rotate_read_from_node_inner<D: RotationDeps>(
+    deps: &D,
+    root_node_id: &str,
+    root_ipns_name: &str,
+    root_read_key: &[u8],
+    job_record: &mut RotationJobRecord,
+    root_children_override: Option<Vec<SealedChildRef>>,
+) -> Result<Option<RotateReadResult>, RotationError> {
     job_record.status = RotationStatus::InProgress;
 
     let pre_rotation_frontier = verify_subtree_clean(deps, root_ipns_name, root_read_key)
@@ -1415,12 +1503,16 @@ pub async fn rotate_read_from_node<D: RotationDeps>(
         .frontier;
 
     // §4.2: rotate the scope-root FIRST — the actual revocation cut.
-    let root_outcome = rotate_one(
+    // 70.1-13a: on a covered scope-exit delete the root is republished with the
+    // post-delete child list (`root_children_override`), so this single publish
+    // already reflects the deletion under the new key.
+    let root_outcome = rotate_one_inner(
         deps,
         Some(root_node_id),
         root_ipns_name,
         root_read_key,
         job_record,
+        root_children_override.as_deref(),
     )
     .await?;
 
@@ -2968,6 +3060,110 @@ mod rotate_read_from_node {
         assert!(
             root_first_index < first_child_index,
             "expected root's own publish before any child's publish, got log: {log:?}"
+        );
+    }
+
+    /// 70.1-13a coalescing: a covered scope-exit delete of the grant-root's
+    /// ONLY child passes an EMPTY `root_children` override, so the rotation
+    /// publishes the grant-root EXACTLY ONCE (empty, under the new key) — no
+    /// batched `republish_parent` (there are no surviving children to track),
+    /// and the deleted child is NOT enqueued/republished. This is the single
+    /// authoritative publish that replaces the old rotate_one + republish_parent
+    /// (+2) + stale-key relink (+1) sequence.
+    #[tokio::test]
+    async fn override_empty_children_publishes_root_once_and_skips_deleted_child() {
+        let deps = FakeDeps::new();
+        let root_read_key = [1u8; 32];
+        // Grant-root has ONE child (the file about to be deleted).
+        seed_root_with_children(&deps, &root_read_key, 1);
+
+        let mut job = RotationJobRecord::new(ROOT_ID);
+        let result = rotate_read_from_node_with_root_children(
+            &deps,
+            ROOT_ID,
+            "k51/root",
+            &root_read_key,
+            &mut job,
+            Vec::new(), // post-delete child list: empty
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            result.is_some(),
+            "a fresh root rotation returns its new key"
+        );
+        assert_eq!(
+            deps.publish_count_for("k51/root"),
+            1,
+            "coalesced covered scope-exit publishes the grant-root exactly once"
+        );
+        assert_eq!(
+            deps.publish_count_for("k51/child-0"),
+            0,
+            "the deleted child is excluded from the override, so it is never rotated/republished"
+        );
+    }
+
+    /// 70.1-13a: with a SURVIVING sibling, the override drops only the deleted
+    /// child. The grant-root is published twice (rotate_one + the batched
+    /// republish_parent that re-mirrors the rotated sibling under the new key),
+    /// the surviving sibling is rotated once, and the deleted child is never
+    /// touched. This is the correct, non-clobbering mirror the stale-key relink
+    /// could never produce.
+    #[tokio::test]
+    async fn override_drops_only_the_deleted_child_and_rekeys_survivors() {
+        let deps = FakeDeps::new();
+        let root_read_key = [1u8; 32];
+        // Two children: child-0 (deleted) and child-1 (survives).
+        let _child_keys = seed_root_with_children(&deps, &root_read_key, 2);
+
+        // Rebuild the survivor's ref (child-1) exactly as it was sealed under
+        // the OLD root key, so the BFS can derive its key.
+        let survivor_id = child_uuid(1);
+        let survivor_key = [11u8; 32];
+        let survivor_sealed = seal_child_read_key(
+            &survivor_key,
+            &root_read_key,
+            &survivor_id,
+            NodeKind::Folder,
+            0,
+        )
+        .unwrap();
+        let override_children = vec![SealedChildRef {
+            name: "child-1".to_string(),
+            ipns_name: "k51/child-1".to_string(),
+            generation: 0,
+            version_floor: 0,
+            read_key_sealed: base64_encode(&survivor_sealed),
+        }];
+
+        let mut job = RotationJobRecord::new(ROOT_ID);
+        rotate_read_from_node_with_root_children(
+            &deps,
+            ROOT_ID,
+            "k51/root",
+            &root_read_key,
+            &mut job,
+            override_children,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            deps.publish_count_for("k51/root"),
+            2,
+            "root: rotate_one + one batched republish_parent to re-mirror the survivor"
+        );
+        assert_eq!(
+            deps.publish_count_for("k51/child-1"),
+            1,
+            "the surviving sibling is rotated exactly once"
+        );
+        assert_eq!(
+            deps.publish_count_for("k51/child-0"),
+            0,
+            "the deleted child is never rotated/republished"
         );
     }
 

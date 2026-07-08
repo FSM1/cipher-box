@@ -35,9 +35,10 @@ pub use queue::{
 };
 pub use rotation::{
     has_covering_grant, maybe_rotate_on_scope_exit, rotate_one, rotate_read_from_node,
-    CommittedRotation, CoverageParams, EnforceResolvedParams, HighWaterStore, LocalGrantRecord,
-    PublishOutcome, ResolvedRecord, RotateOneOutcome, RotateReadResult, RotationDeps,
-    RotationError, RotationHighWater, RotationJobRecord, RotationStatus, ScopeExitResult,
+    rotate_read_from_node_with_root_children, CommittedRotation, CoverageParams,
+    EnforceResolvedParams, HighWaterStore, LocalGrantRecord, PublishOutcome, ResolvedRecord,
+    RotateOneOutcome, RotateReadResult, RotationDeps, RotationError, RotationHighWater,
+    RotationJobRecord, RotationStatus, ScopeExitResult,
 };
 pub use state::{KeyState, SyncStatus};
 pub use sync::SyncDaemon;
