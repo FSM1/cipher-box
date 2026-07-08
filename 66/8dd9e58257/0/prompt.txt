@@ -1,0 +1,567 @@
+/gsd-execute-phase 70.1 with independent worktrees for the concurrent plans. worktrees should `pnpm i`
+
+---
+
+<task-notification>
+<task-id>a2dccbc7f08719ebd</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a2dccbc7f08719ebd.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 04 of phase 70.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 70.1-04
+**Tasks:** 2/2 complete
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a2dccbc7f08719ebd/.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-04-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"70.1-04","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a2dccbc7f08719ebd","branch":"worktree-agent-a2dccbc7f08719ebd","expected_base":"727c65a09e46e346a918d5e94d972e2b53a5967a"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `c3a73c8a2` — test(70.1-04): failing recursive verify plus missing-root-dirty tests (RED)
+- `eadf590d5` — feat(sdk): widen DirtyFrontierEntry and recurse verify_subtree_clean (GREEN)
+- `c2cd109b1` — docs(70.1-04): complete Rust rotation-engine D-12 structural catch-up plan (SUMMARY)
+
+**Key file:** `crates/sdk/src/rotation/engine.rs`
+
+**What shipped:**
+- `DirtyFrontierEntry` widened: `{ ipns_name, node_id, parent_ipns_name, node_read_key: Zeroizing&lt;[u8;32]&gt;, child_pub_kind: NodeKind, enqueued_generation: u32 }` (Rust twin of TS `DirtyFrontierItem`).
+- `verify_subtree_clean` now recurses the full subtree via a new explicit-work-stack helper `collect_dirty_frontier` (descend below clean folder edges, stop below dirty edges), and returns a new `VerifySubtreeOutcome { is_dirty, frontier }` shape.
+- Missing root now surfaces as `is_dirty: true` with an empty frontier — distinct from a fully-converged (also empty) frontier. This fixes a real latent bug in `rotate_read_from_node`'s resume branch, which previously checked `frontier.is_empty()` and would mark the job `Complete` when the root record was simply gone.
+- Extracted `derive_child_read_key`, shared between `enqueue_child` and the new verify walk.
+- Deliberately left the depth&gt;=2 consumption bug in `rotate_read_from_node`'s resume branch untouched — that's Plan 06 scope.
+
+**Verification:** `cargo test -p cipherbox-sdk` — 137 passed, 0 failed. `cargo clippy -p cipherbox-sdk --all-targets` — no new warnings from this plan's changes (pre-existing warnings elsewhere untouched). `cargo fmt -p cipherbox-sdk -- --check` — only pre-existing out-of-scope drift remains (not touched, per repo convention).
+
+**Duration:** ~30 min (not precisely timed — start timestamp was not captured before work began).</result>
+<usage><subagent_tokens>179566</subagent_tokens><tool_uses>61</tool_uses><duration_ms>504231</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a2dccbc7f08719ebd</worktreePath><worktreeBranch>worktree-agent-a2dccbc7f08719ebd</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a3caeb6e9c02a7bf9</task-id>
+<tool-use-id>toolu_01Jxtindc6euw5WoN5wc1qpx</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a3caeb6e9c02a7bf9.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 03 of phase 70.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 70.1-03
+**Tasks:** 3/3
+**SUMMARY:** `.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-03-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+worktree_path: /Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a3caeb6e9c02a7bf9
+branch: worktree-agent-a3caeb6e9c02a7bf9
+base: 727c65a09e46e346a918d5e94d972e2b53a5967a
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `7b8e9dae` test(70.1-03): failing fail-closed put + combined-record + migration tests
+- `2c20036e` feat(sdk): combined per-node floor record with fail-closed durable put
+- `cb7bc18f` fix(sdk): sweep HighWaterStore::put consumers for the new Result signature
+- `ba8f195f` docs(70.1-03): add plan summary for combined fail-closed floor store
+
+**Duration:** ~50 min
+
+Summary of what was built:
+- `crates/sdk/src/floor_store.rs` — `CombinedFloorRecord { generation, seq, wrapped_key_checkpoint }` collapsed the two independent sidecar files (`rotation-high-water-generation.json` / `rotation-high-water-seq.json`) into ONE `rotation-high-water.json`, with legacy fold-forward migration and `persist_wrapped_key`/`get_wrapped_key`/`delete_wrapped_key` accessors.
+- `crates/sdk/src/rotation/high_water.rs` — `HighWaterStore::put` now returns `Result&lt;(), RotationError&gt;` (new `PersistFailed` variant); `bump_floor`/`bump_generation`/`bump_seq`/`seed_from_grant`/`enforce_resolved` all propagate fail-closed.
+- Consumer sweep across `crates/sdk/src/{adapter,lib,listing,emit}.rs` and `crates/fuse/src/fs.rs`; `content_ops.rs`/`inode.rs`/`events.rs`/`replay.rs` needed no changes (verified via clean `cargo check`).
+- `cargo test -p cipherbox-sdk` (139 passed), `cargo test -p cipherbox-fuse --features fuse` (96+1 passed), `cargo clippy` clean on all touched files.
+
+No modifications were made to STATE.md/ROADMAP.md per instructions — those remain for the orchestrator.</result>
+<usage><subagent_tokens>274704</subagent_tokens><tool_uses>106</tool_uses><duration_ms>992036</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a3caeb6e9c02a7bf9</worktreePath><worktreeBranch>worktree-agent-a3caeb6e9c02a7bf9</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a8fb46a1ed345f273</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a8fb46a1ed345f273.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 01 of phase 70.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 70.1-01
+**Tasks:** 2/2
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a8fb46a1ed345f273/.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-01-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"70.1-01","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a8fb46a1ed345f273","branch":"worktree-agent-a8fb46a1ed345f273","expected_base":"727c65a09e46e346a918d5e94d972e2b53a5967a"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `628c61d5b`: test(70.1-01): failing depth&gt;=2 dirty-resume consumption tests
+- `bdd7108f7`: feat(70.1-01): depth-aware dirty-resume consumption + normal-branch ordering fix
+- `c975ba048`: docs(70.1-01): complete depth-aware dirty-resume consumption plan
+- `6ea616ca1`: docs(70.1-01): append self-check results to SUMMARY.md
+
+**Duration:** ~38 min
+
+Key files:
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a8fb46a1ed345f273/packages/sdk-core/src/rotation/engine.ts` — Bug A (dirty-resume mis-attribution) and Bug B (normal-branch ordering) fixes; new `findParentNodeByIpnsName` + `resolveParentTrackingState` helpers
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a8fb46a1ed345f273/packages/sdk-core/src/__tests__/rotation/engine.test.ts` — new SC#1/SC#2 depth-2/depth-3 test cases
+
+Full `sdk-core` suite: 357/357 passing (355 pre-existing + 2 new), no regressions. No deviations from plan. STATE.md/ROADMAP.md/REQUIREMENTS.md intentionally left untouched per worktree-mode contract — orchestrator owns those after the wave completes.</result>
+<usage><subagent_tokens>459240</subagent_tokens><tool_uses>80</tool_uses><duration_ms>2140015</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a8fb46a1ed345f273</worktreePath><worktreeBranch>worktree-agent-a8fb46a1ed345f273</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a68f7fb5c3bab94ad</task-id>
+<tool-use-id>toolu_01KLEtT3bvHvfK8YfGsKKAGf</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a68f7fb5c3bab94ad.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 02 of phase 70.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Clean working tree, all commits in place. Per instructions, I do not update STATE.md/ROADMAP.md — the orchestrator owns that after the wave completes.
+
+## PLAN COMPLETE
+
+**Plan:** 70.1-02
+**Tasks:** 3/3
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a68f7fb5c3bab94ad/.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-02-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"70.1-02","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a68f7fb5c3bab94ad","branch":"worktree-agent-a68f7fb5c3bab94ad","expected_base":"727c65a09e46e346a918d5e94d972e2b53a5967a"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- 96c079613: test(70.1-02): failing combined floor-record atomicity tests
+- 6e89d4473: feat(70.1-02): collapse web rotation floors into one combined IndexedDB store
+- 2758f6ee0: feat(70.1-02): enforceResolved writes both floors in one combined record
+- dfae54daf: docs(70.1-02): complete combined rotation floor record plan
+
+**Duration:** ~12 min
+
+Key files:
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a68f7fb5c3bab94ad/packages/sdk/src/state/rotation-high-water.ts`
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a68f7fb5c3bab94ad/packages/sdk/src/index.ts`
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a68f7fb5c3bab94ad/packages/sdk/src/__tests__/rotation-high-water.test.ts`
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a68f7fb5c3bab94ad/apps/web/src/services/rotation-state.service.ts`
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a68f7fb5c3bab94ad/apps/web/src/services/rotation-state.service.test.ts` (new)
+
+Notable deviation: Test B (wrapped-key round trip) and Test C (migration-preservation) live in a new colocated `apps/web/src/services/rotation-state.service.test.ts` rather than `packages/sdk`'s test file, since that logic is inherently browser-only IndexedDB code — the plan's own RESEARCH pre-authorized this placement. Full detail and rationale documented in the SUMMARY's Deviations section.</result>
+<usage><subagent_tokens>341484</subagent_tokens><tool_uses>103</tool_uses><duration_ms>1205297</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a68f7fb5c3bab94ad</worktreePath><worktreeBranch>worktree-agent-a68f7fb5c3bab94ad</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a68f7fb5c3bab94ad</task-id>
+<tool-use-id>toolu_01MReM9NpPXYBhuoEVNsXRTp</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a68f7fb5c3bab94ad.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 02 of phase 70.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Clean working tree, all correction commits in place. The reviewer's hoist is complete.
+
+## CORRECTION COMPLETE
+
+**Plan:** 70.1-02 (post-review correction)
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a68f7fb5c3bab94ad/.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-02-SUMMARY.md`
+
+What the correction did:
+- Hoisted the entire IndexedDB adapter (open + `onupgradeneeded` legacy fold + transactional get/put + wrapped-key accessors + D-08 degradation) from `apps/web` into new `packages/sdk/src/state/rotation-idb-store.ts`, exposed via a `createIndexedDbHighWaterStore()` factory.
+- Lazy global `indexedDB` (function-body only); exported as its own tsup entry + `@cipherbox/sdk/state/rotation-idb-store` subpath, **not** in the main barrel — tree-shakeable, no IndexedDB pulled into desktop/node consumers.
+- New `packages/sdk/src/__tests__/rotation-idb-store.test.ts` (13 tests, `fake-indexeddb`) — migration fold + legacy-store deletion, max-preserving `put`, wrapped-key round trip, D-08 degradation — running under `pnpm --filter @cipherbox/sdk test` (CI-covered).
+- Moved `fake-indexeddb` devDependency from `apps/web` to `packages/sdk`; thinned the web service to wiring; deleted the never-CI-run web test.
+
+Verification: SDK suite 359 passed / 49 skipped / 0 failed (rotation-idb-store 13/13, rotation-high-water 29/29); SDK build emits the subpath dist; `apps/web` `tsc -b` clean; all touched files lint-clean.
+
+**New commits (on top of prior 4):**
+- `2f8e27802` feat(70.1-02): hoist rotation IndexedDB adapter into the SDK for CI coverage
+- `f7d17b8f7` refactor(70.1-02): thin web rotation service to SDK adapter wiring
+- `276e07071` docs(70.1-02): record IndexedDB adapter hoist into CI-covered SDK suite
+
+&lt;worktree_metadata&gt;
+worktree_path: /Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a68f7fb5c3bab94ad
+branch: worktree-agent-a68f7fb5c3bab94ad
+base: 727c65a09e46e346a918d5e94d972e2b53a5967a
+&lt;/worktree_metadata&gt;</result>
+<usage><subagent_tokens>332888</subagent_tokens><tool_uses>142</tool_uses><duration_ms>481196</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a68f7fb5c3bab94ad</worktreePath><worktreeBranch>worktree-agent-a68f7fb5c3bab94ad</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a3aa93ef31bf3bf5f</task-id>
+<tool-use-id>toolu_01LDKKBos3QV9cJiipuSVXGx</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a3aa93ef31bf3bf5f.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 05 of phase 70.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All committed cleanly, working tree clean. Per the orchestrator's instructions, I do NOT update STATE.md/ROADMAP.md — that's the orchestrator's job after all wave agents complete.
+
+## PLAN COMPLETE
+
+**Plan:** 70.1-05
+**Tasks:** 2/2 complete
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a3aa93ef31bf3bf5f/.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-05-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"70.1-05","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a3aa93ef31bf3bf5f","branch":"worktree-agent-a3aa93ef31bf3bf5f","expected_base":"8c541dac3e597c507a557fdc4804b7487982d1db"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `c9a1e9aad`: test(70.1-05): failing keyCheckpoint call-order + dirty-item repair tests
+- `f8bdbb100`: feat(70.1-05): keyCheckpoint seam + persist-before-publish + dirty-item repair path
+- `e67c97ef6`: docs(70.1-05): complete keyCheckpoint seam plan
+
+**Duration:** ~55 min
+
+Key files:
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a3aa93ef31bf3bf5f/packages/sdk-core/src/rotation/engine.ts` — `KeyCheckpointCallbacks`, `DirtyNodeUnrecoverableError`, persist-before-publish in `rotateOne`, `isDirtyItem` BFS routing, `repairDirtyNode`
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a3aa93ef31bf3bf5f/packages/sdk/src/types.ts` — `RotationClientCallbacks.keyCheckpoint` seam
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a3aa93ef31bf3bf5f/packages/sdk-core/src/__tests__/rotation/engine.test.ts` — SC#3 test block (Tests A–D)
+
+Notable deviation: the dirty-item repair path is gated on `keyCheckpointCallbacks` being supplied (D-01 conditional invocation), so existing tests exercising dirty items without the checkpoint plane wired (Plan 70-06's safe-double-rotation test, Plan 70.1-01's SC#1/SC#2) continue to pass unmodified — documented in full in the SUMMARY's Deviations section, along with the RED/GREEN git-workflow correction and the `@noble/secp256k1` devDependency addition needed for real ECIES test keypairs.</result>
+<usage><subagent_tokens>346550</subagent_tokens><tool_uses>103</tool_uses><duration_ms>1431016</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a3aa93ef31bf3bf5f</worktreePath><worktreeBranch>worktree-agent-a3aa93ef31bf3bf5f</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aa9ed8baec9ede06e</task-id>
+<tool-use-id>toolu_014fTK6Luwezhf3UhFFdxhgr</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/aa9ed8baec9ede06e.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 06 of phase 70.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Clean working tree, all committed. Plan execution complete.
+
+## PLAN COMPLETE
+
+**Plan:** 70.1-06
+**Tasks:** 2/2
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-aa9ed8baec9ede06e/.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-06-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+worktree_path: /Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-aa9ed8baec9ede06e
+branch: worktree-agent-aa9ed8baec9ede06e
+base: 8c541dac3e597c507a557fdc4804b7487982d1db
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `64d09c37d`: test(70.1-06): failing depth&gt;=2 Rust dirty-resume consumption tests
+- `a4a1f9daa`: fix(sdk): depth-aware Rust dirty-resume consumption for read rotation
+- `c24f785d3`: docs(70.1-06): complete depth-aware Rust dirty-resume consumption plan
+
+**Duration:** ~26 min
+
+Key file: `crates/sdk/src/rotation/engine.rs` — added `find_node_by_ipns_name` (walk-from-root primitive) and `seed_or_find_parent_tracking_state` (generalized parent-tracking seed, Rust twin of `engine.ts`'s `findParentNodeByIpnsName`/`resolveParentTrackingState`), `enqueue_dirty_frontier_entry`, a BFS requeue-guard, and restructured `rotate_read_from_node` to compute the pre-rotation dirty frontier unconditionally and consume depth&gt;=2 dirty entries against their real (not root-hardcoded) parent. All 143 `cipherbox-sdk` unit tests pass, including the two new `sc1_`/`sc2_` depth-aware consumption cases. No STATE.md/ROADMAP.md changes made (orchestrator-owned).</result>
+<usage><subagent_tokens>330720</subagent_tokens><tool_uses>64</tool_uses><duration_ms>1507395</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-aa9ed8baec9ede06e</worktreePath><worktreeBranch>worktree-agent-aa9ed8baec9ede06e</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>abe16a565b4d6462f</task-id>
+<tool-use-id>toolu_0195F79CdQDxx8cg18rQjkTt</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/abe16a565b4d6462f.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 07 of phase 70.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 70.1-07
+**Tasks:** 3/3 complete
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-abe16a565b4d6462f/.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-07-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"70.1-07","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-abe16a565b4d6462f","branch":"worktree-agent-abe16a565b4d6462f","expected_base":"c50e6e2f9bdc5fb2542844239b282308b6541fb5"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `e6f58e795`: test(70.1-07): failing freshly-resolved-generation reconcile test
+- `2be1db70a`: feat(70.1-07): thread folder read key into reconcileFolderSequence gate
+- `73f759840`: feat(70.1-07): thread keyCheckpointCallbacks + existing seams through performScopeExitRotation
+- `85fbd361c`: docs(70.1-07): add plan 07 execution summary
+
+**Duration:** ~25 min (18:53 → 19:06)
+
+Key files touched (absolute paths):
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-abe16a565b4d6462f/packages/sdk/src/client.ts` — `reconcileFolderSequence` fetch+unseal gate (SC#5/D-09), read-key threading at 6 call sites, `performScopeExitRotation` keyCheckpoint/nodeKeySource/grantCallbacks/innerGrants wiring, `DirtyNodeUnrecoverableError` catch
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-abe16a565b4d6462f/packages/sdk/src/__tests__/reconcile-generation-gate.test.ts` — new SC#5 test suite (3 tests)
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-abe16a565b4d6462f/packages/sdk/src/__tests__/client-rotation.test.ts` — Rule-3 mock fix (crypto `importOriginal` + real sealed-node fixture)
+
+Full `@cipherbox/sdk` vitest suite: 362 passed, 0 failed. Typecheck and lint clean on all modified/created files (pre-existing unrelated quarantined-test type errors untouched). Working tree clean.
+
+One design deviation worth flagging to the reviewer: `keyCheckpointCallbacks`/owner ECIES keys/`nodeKeySource` are derived once inside `performScopeExitRotation`'s body (from `this.config`/`this.folderTree`) rather than threaded as new parameters at each of its 5 call sites — documented with rationale in the SUMMARY's Decisions section.</result>
+<usage><subagent_tokens>347962</subagent_tokens><tool_uses>128</tool_uses><duration_ms>1098182</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-abe16a565b4d6462f</worktreePath><worktreeBranch>worktree-agent-abe16a565b4d6462f</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a864b9932bcd17dd5</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a864b9932bcd17dd5.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 08 of phase 70.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Clean working tree, all committed.
+
+## PLAN COMPLETE
+
+**Plan:** 70.1-08
+**Tasks:** 2/2
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a864b9932bcd17dd5/.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-08-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"70.1-08","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a864b9932bcd17dd5","branch":"worktree-agent-a864b9932bcd17dd5","expected_base":"c50e6e2f9bdc5fb2542844239b282308b6541fb5"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `1b9941420` test(70.1-08): failing depth-3 Rust crash-resume + ECIES checkpoint lifecycle tests
+- `3d0867d6e` feat(70.1-08): RotationDeps checkpoint methods + persist-before-publish + dirty-item repair
+- `5aa68f7a4` docs(70.1-08): complete ECIES key-checkpoint seam and dirty-node repair plan
+
+**Duration:** ~6 min (RED to GREEN commit)
+
+Key files modified:
+- `crates/sdk/src/rotation/engine.rs` — checkpoint seam, persist-before-publish, dirty-item repair path, D-13 tests
+- `crates/sdk/src/rotation/high_water.rs` — `RotationError::DirtyNodeUnrecoverable`
+
+One notable deviation (Rule 1 bug fix, documented in SUMMARY): the repair path is gated on `get_wrapped_key` actually returning a checkpoint rather than unconditionally routing every dirty item through repair — an unconditional design broke Plan 70.1-06's pre-existing SC#1/SC#2 "safe double-rotation" tests. The gated design (mirroring the already-shipped TS twin, Plan 70.1-05) keeps `cargo test -p cipherbox-sdk` fully green (145/145).
+
+`cargo fmt -p cipherbox-sdk` / `cargo clippy -p cipherbox-sdk` were scoped correctly; incidental out-of-scope formatting drift in `client.rs`/`registry.rs`/`state.rs`/`sync.rs` was reverted before each commit, leaving only `engine.rs` + `high_water.rs` committed.</result>
+<usage><subagent_tokens>340195</subagent_tokens><tool_uses>116</tool_uses><duration_ms>1502623</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a864b9932bcd17dd5</worktreePath><worktreeBranch>worktree-agent-a864b9932bcd17dd5</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a271b3324139460cc</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a271b3324139460cc.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 10 of phase 70.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 70.1-10
+**Tasks:** 1/1 complete
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a271b3324139460cc/.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-10-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"70.1-10","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a271b3324139460cc","branch":"worktree-agent-a271b3324139460cc","expected_base":"9be080e8674085a7a49bb8829e9b6f3e375fbe25"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `c63332e06`: test(sdk-e2e): add depth-3 anti-vacuous crash-resume fixture
+- `0a7a2f421`: docs(70.1-10): complete depth-3 anti-vacuous crash-resume plan
+
+**Duration:** ~40 min
+
+**Key file:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a271b3324139460cc/tests/sdk-e2e/src/suites/rotation-crash-safety.test.ts`
+
+**Summary of work:**
+- Added Test 5: depth-3, fan-out≥2 tree (`root5 -&gt; [subA5, subB5]`, `subA5 -&gt; [fileA5]`), crashing at the exact D-01 post-publish/pre-parent-republish window on the deep grandchild (fileA5), then resuming and asserting all 4 D-10 properties.
+- Added Test 6: multi-dirty-edge variant (`root6 -&gt; [c1_6, c2_6]`) where 2 siblings publish while root6's own batch is still open, repaired via a single batched republish on resume.
+- Wired the Plan 70.1-05 `keyCheckpointCallbacks` ECIES seam via a new test-local `createKeyCheckpointStub()` Map-backed stub, and recovered post-rotation keys by unwrapping each node's own checkpoint with the owner's private key (avoiding interference with the suite's shared `crypto.getRandomValues` spy, since ECIES `wrapKey` consumes additional random bytes).
+- "No spurious root decrement" was asserted concretely via IPNS `sequenceNumber` deltas across the crash/resume boundary rather than internal engine state.
+
+**Verification performed (scoped per instructions — no docker/API stack in this worktree):**
+- `pnpm i`, then built `@cipherbox/crypto` → `@cipherbox/core` → `@cipherbox/api-client` → `@cipherbox/sdk-core` → `@cipherbox/sdk` dists in dependency order.
+- `tsc --noEmit -p tests/sdk-e2e/tsconfig.json` — zero new errors (3 pre-existing, unrelated baseline errors in `bin-operations.test.ts`).
+- `eslint` on the file — clean.
+- `prettier --check` — clean.
+- **Live e2e run deferred to the orchestrator** (needs docker stack + API :3000) — noted explicitly in the SUMMARY.
+
+No modifications were made to STATE.md or ROADMAP.md, per instructions.</result>
+<usage><subagent_tokens>256667</subagent_tokens><tool_uses>71</tool_uses><duration_ms>972369</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a271b3324139460cc</worktreePath><worktreeBranch>worktree-agent-a271b3324139460cc</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a16f833b99c769abf</task-id>
+<tool-use-id>toolu_01Q3foHKhhUGamuKkcxZsJzh</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a16f833b99c769abf.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 09 of phase 70.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 70.1-09
+**Tasks:** 3/3
+**SUMMARY:** `.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-09-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"70.1-09","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a16f833b99c769abf","branch":"worktree-agent-a16f833b99c769abf","expected_base":"beab04a4bfe09dd562b4ca047a7ff097b9e79283"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `4c545aa1f`: test(70.1-09): failing production RotationDeps adapter tests
+- `e48acf307`: feat(70.1-09): implement the production RotationDeps adapter
+- `7bb155c39`: feat(70.1-09): wire rotate_read_on_scope_exit to the production adapter
+- `beab04a4b`: docs(70.1-09): complete production RotationDeps adapter plan
+
+**Duration:** ~55 min
+
+Key files:
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a16f833b99c769abf/crates/fuse/src/write_ops/rotation_deps.rs` (new — `FuseRotationDeps`, `ApiClientTransport`, `RotationTransport`)
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a16f833b99c769abf/crates/fuse/src/write_ops/grant_scope.rs` (live-wired `rotate_read_on_scope_exit`)
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a16f833b99c769abf/crates/fuse/src/fs.rs` (new `rotation_checkpoint_store` field)
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a16f833b99c769abf/crates/fuse/src/test_support.rs`, `apps/desktop/src-tauri/src/fuse/mod.rs`, `apps/desktop/src-tauri/src/fuse/windows/mod.rs` (construction-site wiring)
+
+All 99 `cipherbox-fuse` tests pass (`cargo test -p cipherbox-fuse --features fuse`), `cipherbox-desktop` compiles clean. Two documented scope decisions (not stubs blocking this plan's own goal): the ROT-04 desktop-grant-remint deferral (explicitly sanctioned by the plan) and IPNS signing-key sourcing from the local `InodeTable` with fail-closed behavior for non-materialized nodes (a real gap RESEARCH didn't specify a source for — full detail and rationale in the SUMMARY's "Decisions Made"/"Known Limitations" sections).</result>
+<usage><subagent_tokens>417278</subagent_tokens><tool_uses>141</tool_uses><duration_ms>1642331</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a16f833b99c769abf</worktreePath><worktreeBranch>worktree-agent-a16f833b99c769abf</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ad867c90dd073c8f6</task-id>
+<tool-use-id>toolu_01Bzh3gzNCgRcF2iiQZQ38zy</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/ad867c90dd073c8f6.output</output-file>
+<status>completed</status>
+<summary>Agent "Diagnose depth-3 crash-resume decryption failure" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Verdict: PRODUCT BUG (not a fixture bug)
+
+The two new depth-3 fixtures are correctly written and correctly exposed a genuine, previously-undetected engine bug. No product or test code was changed — the working tree is clean (confirmed via `git diff --stat` and `git status --porcelain` on `packages/sdk-core`, `packages/sdk`, `tests/sdk-e2e`).
+
+### Root cause
+
+`collectDirtyFrontier` in `packages/sdk-core/src/rotation/engine.ts` (~line 815, calling `resolveChildKeyAndEnvelope` at ~line 664) determines whether a child edge is "dirty" by comparing `childPub.generation` (plaintext, from the child's own published IPNS envelope) against `childRef.generation` (the parent's mirrored generation) — but it does this check **after** unconditionally attempting to `unsealChildReadKey` (AEAD-decrypt) the child's `SealedChildRef.readKeySealed` with the parent's **current** readKey, with no try/catch. `resolveChildKeyAndEnvelope` bundles "fetch child's public envelope" and "decrypt the child's key" into one call, so the dirtiness check never gets a chance to run before the decrypt is attempted.
+
+A genuinely dirty edge is, by definition, one whose ref hasn't been re-sealed to reflect the child's rotation. When the parent has **also** rotated in the same walk (the normal case — every node in a full-subtree `rotateReadFromNode` walk rotates, including every intermediate parent), the parent's current key differs from the old key the stale ref is still sealed under, so decrypting it with the current key **must** cryptographically fail. This is an ordering bug, not a crypto bug: the plaintext generation check should run first (no decryption required — `childPub.generation` is already available from `resolveAndFetchNode` alone), and the decrypt should only be attempted on a confirmed-clean edge.
+
+This class of bug was structurally invisible to the sdk-core unit-test suite (`packages/sdk-core/src/__tests__/rotation/engine.test.ts`, `verifySubtreeClean — full-subtree recursion` describe block) because its mocks make `unsealChildReadKey` unconditionally succeed regardless of the key argument passed in — masking exactly the AEAD key-mismatch this bug produces with real crypto. The Plan 70.1-10 depth-3/multi-dirty-edge sdk-e2e fixtures are the first real-crypto test to exercise a genuinely-dirty, parent-also-rotated edge, which is exactly why Phase 70's crash-safety gate "passed vacuously" before.
+
+### Evidence (live instrumentation, reverted after confirmation)
+
+I temporarily added fingerprint-only (SHA-256, no key material) diagnostics around the `unsealChildReadKey` call in `resolveChildKeyAndEnvelope`, rebuilt `sdk-core`/`sdk` dist, and re-ran both failing tests individually:
+
+- Test 5: `FAIL ipnsName=...b0zb childId=4701aa2d... childPubGen=1 childRefGen=0 ... err=Decryption failed` — this is fileA5, resolved via subA5's mirror. `childPubGen=1` (fileA5 really rotated/published) vs `childRefGen=0` (subA5's own mirror of fileA5 is stale) is precisely the dirty condition, but the decrypt attempt (using subA5's current/new key) throws before the comparison runs.
+- Test 6: `FAIL ipnsName=...x85f childId=2c6e114d... childPubGen=1 childRefGen=0 ... err=Decryption failed` — same signature, one level shallower (root6's own children c1_6/c2_6), since root6 already rotated and its own D-09 batch never fired for either child before the crash.
+
+Instrumentation was fully reverted (`git diff --stat packages/sdk-core/src/rotation/engine.ts` is empty) and dist rebuilt from clean source afterward.
+
+### Recommended fix direction (not applied)
+
+Restructure `collectDirtyFrontier`/`resolveChildKeyAndEnvelope` so the dirty check runs on plaintext data first:
+1. Fetch `childPub` via `resolveAndFetchNode` alone (no decrypt).
+2. If `childPub.generation &gt; childRef.generation` → dirty: push a `DirtyFrontierItem` **without** calling `unsealChildReadKey` at all — it's neither guaranteed to succeed nor needed, since `repairDirtyNode` (the consumer when `keyCheckpointCallbacks` is wired) already recovers the correct key via the ECIES checkpoint plane keyed by `childPub.id`, never via `item.nodeReadKey`. `DirtyFrontierItem.nodeReadKey` would need to become optional/placeholder for this path.
+3. Only if clean, call `unsealChildReadKey` (expected to succeed) and recurse as today.
+
+This is currently blocking the whole point of Phase 70.1's checkpoint plane: `verifySubtreeClean` throws before `rotateReadFromNode` ever gets a chance to route the item to `repairDirtyNode`. Secondary item to re-audit once fixed: `findParentNodeByIpnsName` (~line 702) uses the same `resolveChildKeyAndEnvelope` helper while walking from root — should be safe today (only descends via provably-clean edges) but worth re-checking against a tree with multiple independent dirty edges at different depths.
+
+### Final test result
+
+`npx vitest run --no-coverage rotation-crash-safety`: **4 passed / 2 failed** (unchanged from the reported starting state) — tests 1–4 pass, test 5 and test 6 fail with `CryptoError: Decryption failed`, exactly as before investigation.
+
+### Commits
+
+None. No product or test code changes were made — this is a genuine product bug requiring an orchestrator/design decision, not a mechanical fix.
+
+### Files
+
+- `/Users/myankelev/Code/random/cipher-box/packages/sdk-core/src/rotation/engine.ts` — offending code path (`collectDirtyFrontier` ~line 815, `resolveChildKeyAndEnvelope` ~line 664); untouched (reverted).
+- `/Users/myankelev/Code/random/cipher-box/tests/sdk-e2e/src/suites/rotation-crash-safety.test.ts` — the two correct fixtures (test 5 at line 1063, test 6 at line 1358) exposing the bug; untouched.
+- `/Users/myankelev/Code/random/cipher-box/packages/sdk-core/src/__tests__/rotation/engine.test.ts` — unit-test mocks (`verifySubtreeClean — full-subtree recursion` describe, ~line 1738) that mask this class of bug; not modified, flagged for awareness.
+- `/Users/myankelev/Code/random/cipher-box/.planning/debug/rotation-crash-safety-depth3.md` — debug session file with full evidence trail (created this session; not archived, since unresolved by design).</result>
+<usage><subagent_tokens>204650</subagent_tokens><tool_uses>33</tool_uses><duration_ms>517273</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a73fb96e14c693339</task-id>
+<tool-use-id>toolu_01QZBjrc5jT1B9homL71Bm6o</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a73fb96e14c693339.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix dirty-frontier ordering bug both engines" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All green across the board. Final summary:
+
+## What changed
+
+**`packages/sdk-core/src/rotation/engine.ts`** (commit `afaaf80ad`)
+- `collectDirtyFrontier`: now fetches the child's plaintext envelope via `resolveAndFetchNode` and compares `childPub.generation &gt; childRef.generation` **before** any decrypt. Only a confirmed-clean edge is decrypted (new `unsealChildReadKeyFromPub` helper factored out of `resolveChildKeyAndEnvelope`). A dirty edge is pushed to the frontier with `nodeReadKey: undefined` — no decrypt attempted at all.
+- `findParentNodeByIpnsName`: same reorder — skips a dirty sibling branch without attempting the unseal (it shared the flaw, per the audit requirement).
+- `DirtyFrontierItem.nodeReadKey` and the BFS `queue` item's `nodeReadKey` are now `Uint8Array | undefined`. The BFS routes a dirty item to `repairDirtyNode` (ECIES checkpoint) when `keyCheckpointCallbacks` is wired, and now **fails closed with `DirtyNodeUnrecoverableError`** instead of the old (actually-unsafe) decrypt-then-double-rotate fallback when it isn't.
+- `repairDirtyNode` now marks the repaired node in `jobRecord.completedNodeIds` (mirroring `rotateOne`'s own idempotency marking) so a node discovered both via the dirty-frontier merge and via its parent's normal children-enqueue loop isn't double-processed.
+- Zeroization guards (`instanceof Uint8Array` checks) added everywhere `nodeReadKey` is read/zeroed, since it can now be absent.
+
+**`packages/sdk-core/src/__tests__/rotation/engine.test.ts`** (commit `dccd69647`)
+- Added `keyAwareUnsealChildReadKey` — throws on a key mismatch instead of the old unconditional-success mock that masked the bug.
+- Updated the existing depth-2 dirty test and added a new one reproducing the exact regression (dirty edge whose parent also rotated in the same walk) at the unit tier.
+- Updated the SC#1/SC#2/Test-5 dirty-resume fixtures to wire `keyCheckpointCallbacks` (since the unsafe fallback they implicitly relied on no longer exists), and added a `Test 3b` proving the fail-closed `DirtyNodeUnrecoverableError` path.
+
+**`crates/sdk/src/rotation/engine.rs`** (commit `96022c7d8`)
+- Same reorder in `collect_dirty_frontier` and `find_node_by_ipns_name` (confirmed via re-audit these shared the identical flaw).
+- `DirtyFrontierEntry.node_read_key` / `QueueItem.node_read_key` changed to `Option&lt;Zeroizing&lt;[u8;32]&gt;&gt;`; the BFS loop fails closed with `RotationError::DirtyNodeUnrecoverable` when no checkpoint is found (removed the old fallback-to-`rotate_one` design).
+- Fixed the two now-broken `sc1_*`/`sc2_*` tests by seeding a real checkpoint (via a simulated prior `rotate_one` commit) instead of a directly-seeded dirty fixture, and added `plan_70_1_10_dirty_edge_whose_parent_also_rotated_never_attempts_decrypt`.
+
+## Verification results
+- e2e gate: `rotation-crash-safety.test.ts` — **6 passed / 0 failed** (all 6, including Test 5 depth-3 and Test 6 multi-dirty-edge).
+- `pnpm --filter @cipherbox/sdk-core test`: 363 passed, 12 skipped, 0 failed.
+- `pnpm --filter @cipherbox/sdk test`: 362 passed, 49 skipped, 0 failed.
+- `cargo test -p cipherbox-sdk`: 146 passed, 0 failed.
+- Scoped `cargo fmt -p cipherbox-sdk` / `cargo clippy -p cipherbox-sdk --all-targets`: clean (no new warnings in `rotation/engine.rs`); an accidental fmt touch to unrelated files (`client.rs`, `registry.rs`, `state.rs`, `sync.rs`) was reverted before committing to keep the diff scoped.
+
+## Commits
+- `afaaf80ad` — `fix(sdk-core): check edge dirtiness before decrypt in collectDirtyFrontier`
+- `dccd69647` — `test(sdk-core): harden verifySubtreeClean mocks to model AEAD key-mismatch`
+- `96022c7d8` — `fix(sdk): reorder Rust dirty-frontier check before decrypt`
+
+All on branch `feat/rotation-read-plane-durability-and-deep-crash-resume-soundne` in the main checkout (no worktree used). `.planning/debug/rotation-crash-safety-depth3.md` is a pre-existing untracked file unrelated to this task — left untouched.</result>
+<usage><subagent_tokens>434477</subagent_tokens><tool_uses>155</tool_uses><duration_ms>2354313</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aaac4dbcb96f798e5</task-id>
+<tool-use-id>toolu_01YWkA6PY3uwnR3cUmcDNnNQ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/aaac4dbcb96f798e5.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 11 of phase 70.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Clean tree (only the pre-existing untracked debug file remains, left untouched as instructed). STATE.md and ROADMAP.md were not touched, per instructions — the orchestrator owns those.
+
+## PLAN COMPLETE
+
+**Plan:** 70.1-11
+**Tasks:** 2/2 complete
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-11-SUMMARY.md`
+
+**Commits:**
+- `3bc44c6a3`: test(70.1-11): failing gate-correctness fail-closed tests (RED — compile-error signal)
+- `119c6b363`: fix(fuse): fail closed on non-authoritative cache incomplete ancestry and poisoned lock (GREEN)
+- `16dc96b4c`: docs(70.1-11): complete grant-scope gate fail-closed correctness plan (SUMMARY)
+- `5b64c5553`: docs(70.1-11): append self-check result to SUMMARY
+
+**Files modified:**
+- `/Users/myankelev/Code/random/cipher-box/crates/fuse/src/write_ops/grant_scope.rs`
+- `/Users/myankelev/Code/random/cipher-box/crates/fuse/src/fs.rs`
+
+**Verification:** `cargo test -p cipherbox-fuse --features fuse grant_scope` → 16/16 pass (all D-15a/b/c cases green, plus 10 updated pre-existing tests). `cargo check -p cipherbox-fuse --features fuse` compiles clean. Scoped `rustfmt --check` clean on both modified files; scoped clippy shows no new warnings (the pre-existing `result_unit_err` lint on `run_scope_exit_gate`'s signature predates this plan).
+
+**Known deferred regression (explicitly scoped to Plan 12, documented in SUMMARY):** `crates/fuse/src/write_ops/implementation/delete.rs`'s two private-delete tests (`unlink_private_delete_succeeds_with_zero_rotation`, `rmdir_private_delete_succeeds_with_zero_rotation`) now fail — they seed a non-authoritative cache and the fail-closed gate correctly returns EIO. This file is outside this plan's `files_modified` and the plan's own `key_links` explicitly defers this reseeding to Plan 12.
+
+**Duration:** ~25 min</result>
+<usage><subagent_tokens>189353</subagent_tokens><tool_uses>64</tool_uses><duration_ms>874020</duration_ms></usage>
+</task-notification>
