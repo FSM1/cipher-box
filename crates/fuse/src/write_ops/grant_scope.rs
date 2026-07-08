@@ -746,4 +746,205 @@ mod tests {
             "write plane is a UUID, not an IPNS name"
         );
     }
+
+    // -----------------------------------------------------------------
+    // D-15a/b/c — gate-correctness fail-closed tests (CodeRabbit findings,
+    // 2026-07-07-fuse-shared-scope-exit-rotation-live-wiring.md)
+    // -----------------------------------------------------------------
+
+    /// D-15a (CRITICAL): a NON-authoritative sent-shares cache (the state
+    /// before the first `/shares/sent` refresh completes, or after a failed
+    /// refresh) must NEVER look like "no shares -> private -> NoRotation" —
+    /// the gate fails closed (`Err` -> EIO) instead, even though the raw
+    /// `root_ipns_names` set happens to be empty (Pitfall 8: the trigger is
+    /// authoritativeness, NOT emptiness).
+    #[tokio::test]
+    async fn gate_scope_exit_non_authoritative_cache_fails_closed() {
+        let (table, _a, _b, file_c) = build_nested_tree();
+        let cache = SentSharesCache::empty(); // never refreshed -> not authoritative
+        assert!(!cache.is_authoritative, "empty() must be non-authoritative");
+        let spy = AtomicUsize::new(0);
+
+        let result = gate_scope_exit(&table, file_c, &cache, |_grant_root| {
+            let spy = &spy;
+            async move {
+                spy.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        })
+        .await;
+
+        assert!(
+            result.is_err(),
+            "a non-authoritative cache must fail closed (EIO), never a silent NoRotation"
+        );
+        assert_eq!(
+            spy.load(Ordering::SeqCst),
+            0,
+            "a fail-closed gate must never invoke rotate"
+        );
+    }
+
+    /// D-15a: the flip side — a REFRESHED (authoritative) cache that is
+    /// legitimately empty (the user has shared nothing) must still allow a
+    /// private delete to succeed with ZERO rotation. Naively mapping
+    /// "empty -> Err" would break every private delete once the client HAS
+    /// refreshed and genuinely has no shares (Pitfall 8).
+    #[tokio::test]
+    async fn gate_scope_exit_authoritative_empty_cache_allows_private_delete() {
+        let (table, _a, _b, file_c) = build_nested_tree();
+        let cache = SentSharesCache::from_sent_shares(&[]); // refreshed, genuinely empty
+        assert!(
+            cache.is_authoritative,
+            "a completed refresh (even of zero shares) must be authoritative"
+        );
+        let spy = AtomicUsize::new(0);
+
+        let result = gate_scope_exit(&table, file_c, &cache, |_grant_root| {
+            let spy = &spy;
+            async move {
+                spy.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(result, ScopeExitResult::NoRotation);
+        assert_eq!(
+            spy.load(Ordering::SeqCst),
+            0,
+            "a legitimately-empty AUTHORITATIVE cache must not rotate"
+        );
+    }
+
+    /// D-15b (MAJOR): an ancestor walk that does NOT reach `ROOT_INO`
+    /// cleanly (a dangling `parent_ino` pointing at a missing inode) must
+    /// fail closed — never be treated as a clean "no grant found" walk.
+    #[tokio::test]
+    async fn gate_scope_exit_incomplete_ancestor_walk_fails_closed() {
+        let mut table = InodeTable::new();
+        // A folder whose parent_ino points at an inode that was never
+        // inserted (dangling/corrupt state) — the walk cannot reach ROOT_INO.
+        let dangling_parent = 9_999;
+        let orphan = table.allocate_ino();
+        insert_folder(&mut table, orphan, dangling_parent, "orphan", "k51orphan");
+
+        let chain = ancestor_ipns_chain(&table, orphan);
+        assert!(
+            !chain.reached_root,
+            "a walk through a missing inode must not report reaching ROOT_INO"
+        );
+
+        let cache = SentSharesCache::from_sent_shares(&[]); // authoritative, irrelevant here
+        let spy = AtomicUsize::new(0);
+
+        let result = gate_scope_exit(&table, orphan, &cache, |_grant_root| {
+            let spy = &spy;
+            async move {
+                spy.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        })
+        .await;
+
+        assert!(
+            result.is_err(),
+            "an incomplete ancestor walk must fail closed (EIO), never NoRotation"
+        );
+        assert_eq!(spy.load(Ordering::SeqCst), 0);
+    }
+
+    /// D-15b: a cycle in the ancestor chain (corrupt/synthetic state) must
+    /// also fail closed rather than being silently treated as a clean walk.
+    #[tokio::test]
+    async fn gate_scope_exit_cyclic_ancestor_walk_fails_closed() {
+        let mut table = InodeTable::new();
+        let ino_a = table.allocate_ino();
+        let ino_b = table.allocate_ino();
+        // ino_a's parent is ino_b, and ino_b's parent is ino_a: a cycle that
+        // never reaches ROOT_INO.
+        insert_folder(&mut table, ino_a, ino_b, "a", "k51a");
+        insert_folder(&mut table, ino_b, ino_a, "b", "k51b");
+
+        let chain = ancestor_ipns_chain(&table, ino_a);
+        assert!(!chain.reached_root, "a cyclic walk must not reach ROOT_INO");
+
+        let cache = SentSharesCache::from_sent_shares(&[]);
+        let result = gate_scope_exit(&table, ino_a, &cache, |_grant_root| async { Ok(()) }).await;
+        assert!(result.is_err(), "a cyclic ancestor walk must fail closed");
+    }
+
+    /// D-15c (MAJOR): a poisoned `sent_shares` `RwLock` must return
+    /// `Err(())` (-> EIO) from `run_scope_exit_gate`, NEVER panic the fuser
+    /// callback thread (a panic there would wedge the mount).
+    #[test]
+    fn run_scope_exit_gate_poisoned_lock_returns_err_not_panic() {
+        let (_rt, mut fs) = fs_on_runtime_for_gate_test();
+        let child = insert_root_file_child(&mut fs, "secret.txt");
+
+        // Poison the lock: panic while holding the write guard, caught
+        // locally so the test process itself does not abort.
+        let poison_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = fs.sent_shares.write().expect("acquire for poisoning");
+            panic!("intentionally poisoning sent_shares for D-15c test");
+        }));
+        assert!(
+            poison_result.is_err(),
+            "the poisoning panic must have fired"
+        );
+        assert!(fs.sent_shares.is_poisoned(), "lock must now be poisoned");
+
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_scope_exit_gate(&fs, child)
+        }));
+
+        assert!(
+            outcome.is_ok(),
+            "run_scope_exit_gate must NOT panic on a poisoned lock (D-15c)"
+        );
+        assert_eq!(
+            outcome.unwrap(),
+            Err(()),
+            "a poisoned lock must fail closed (EIO), not silently succeed"
+        );
+    }
+
+    /// Real secp256k1 keypair so the fs harness matches production shape
+    /// (mirrors `delete.rs`'s `real_keypair`).
+    fn real_keypair_for_gate_test() -> (Zeroizing<Vec<u8>>, Zeroizing<Vec<u8>>) {
+        let (sk, pk) = ecies::utils::generate_keypair();
+        (
+            Zeroizing::new(sk.serialize().to_vec()),
+            Zeroizing::new(pk.serialize().to_vec()),
+        )
+    }
+
+    /// Build a multi-thread runtime and construct a `CipherBoxFS` inside its
+    /// context (mirrors `delete.rs`'s `fs_on_runtime` harness) so
+    /// `run_scope_exit_gate`'s `fs.rt.block_on` is valid when invoked from
+    /// the TEST thread (not a runtime worker) — the same shape as the real
+    /// fuser callback thread.
+    fn fs_on_runtime_for_gate_test() -> (tokio::runtime::Runtime, crate::CipherBoxFS) {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = rt.enter();
+        let (private_key, public_key) = real_keypair_for_gate_test();
+        let fs = crate::test_support::make_test_fs_with_keypair(private_key, public_key);
+        (rt, fs)
+    }
+
+    /// Insert a File child of ROOT_INO into an already-constructed `fs`'s
+    /// inode table (mirrors `delete.rs`'s `insert_file_child`).
+    fn insert_root_file_child(fs: &mut crate::CipherBoxFS, name: &str) -> u64 {
+        let ino = fs.inodes.allocate_ino();
+        insert_file(&mut fs.inodes, ino, ROOT_INO, name, Some("k51gatetest"));
+        if let Some(root) = fs.inodes.get_mut(ROOT_INO) {
+            root.children.get_or_insert_with(Vec::new).push(ino);
+        }
+        ino
+    }
 }
