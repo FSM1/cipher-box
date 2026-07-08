@@ -1,0 +1,170 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "1e8053745b2d",
+  "session_id": "a4ed1cb9-4e4c-4d71-bc03-3c2c6b4e70a3",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-08T21:53:45.182114Z",
+  "branch": "feat/rotation-read-plane-durability-and-deep-crash-resume-soundne",
+  "checkpoints_count": 3,
+  "save_step_count": 1,
+  "files_touched": [
+    "crates/sdk/src/queue.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "b8a092c12e50",
+  "token_usage": {
+    "input_tokens": 62186,
+    "cache_creation_tokens": 1453705,
+    "cache_read_tokens": 64736990,
+    "output_tokens": 426143,
+    "api_call_count": 224
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-plan-phase-2026-07-08T13:42:46.030418Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "0eb6f9cbb31b",
+      "timestamp": "2026-07-08T13:42:46.030418Z",
+      "native": {
+        "command": "/gsd-plan-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-gsd-execute-phase-2026-07-08T15:12:58.253651Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "1b22299d3cb2",
+      "timestamp": "2026-07-08T15:12:58.253651Z",
+      "native": {
+        "command": "/gsd-execute-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 30
+  },
+  "summary": {
+    "intent": "Orchestrate the GSD plan-phase and execute-phase workflows for CipherBox Phase 70.1 (rotation read-plane durability and deep crash-resume soundness), including two user-driven scope expansions (Rust engine.rs twin, desktop FUSE RotationDeps live-wiring), then execute all 13 resulting plans across 7 waves using worktree-isolated parallel subagents, culminating in a real desktop-e2e CI acceptance run.",
+    "outcome": "All 13 plans landed and merged with green unit/e2e gates (sdk-core 363, sdk 362, cargo cipherbox-sdk 146, cargo cipherbox-fuse 106); two genuine product bugs were found and fixed (dirty-frontier decrypt-before-check ordering in both engines, and missing desktop sent_shares refresh causing fail-closed EIO on all deletes). The final D-16 real-mount desktop-e2e CI run failed on macOS/Linux (Step 8 setup timeout) while Windows didn't even execute Step 8 (missing from run-all.ps1); a debugger investigating locally could not reproduce the timeout but found and is fixing an unrelated but real JsonSidecarFloorStore multi-writer race condition (ENOENT on rename) introduced by Plan 03's combined-sidecar design — fix still in progress at session end.",
+    "learnings": {
+      "repo": [
+        "GSD decision-coverage parser (.claude/gsd-core/bin/lib/decisions.cjs) only accepts three D-NN bullet forms (`**D-NN:**`, `**D-NN — title**`, `**D-NN: Title.**`); a bullet like `**D-NN (title).**` (period before closing `**`) causes ALL bullets in the file to be reported as 0/N covered, not just the malformed one",
+        "gsd_run loop render-hooks plan:pre --raw emits invalid JSON (literal newlines in fragments) — read the hooks file directly with Read instead of parsing --raw output",
+        "plan-phase never auto-commits PATTERNS.md — orchestrator must commit it explicitly after the pattern-mapper agent returns",
+        "state.planned-phase and roadmap annotate tools can silently no-op (return updated:[] / updated:false) when STATE.md/ROADMAP.md don't match their expected anchor fields — always verify with git status/git diff after calling them, don't trust the echoed success",
+        "CipherBox rotation gate keys off 'sent shares' (direct user-to-user grants via /shares/sent), not share-invites (claimable links); an unclaimed invite has granted no key access yet so isn't relevant to the scope-exit rotation decision",
+        "CipherBox delete is a soft-delete (moves to private recycle bin, re-seals keys under bin plane) — structurally equivalent to a cross-folder move, which is why it triggers scope-exit rotation just like a real move; same-folder rename does not rotate since parent==newparent",
+        "Rotation is forward-looking only — it re-keys the remaining tree but does not unpublish/re-encrypt already-published content CIDs (kept pinned for bin recovery), so a recipient who cached a key before deletion could still fetch that one old ciphertext out-of-band",
+        "crates/fuse crate has TWO independent gate-ordering/pattern implementations: crates/fuse/src/write_ops/implementation/*.rs (macOS/Linux, buildable) and crates/fuse/src/platform/windows/write_ops.rs (WinFsp, cannot even `cargo check` on macOS since winfsp-sys needs Windows COM APIs) — fixes must be mirrored manually to both, easy to miss the Windows side",
+        "desktop-e2e CI (.github/workflows/desktop-e2e.yml) has two separate harness scripts per platform: run-all.sh (macOS/Linux) and run-all.ps1 (Windows) — a new test step added to one is silently absent on the other unless mirrored explicitly",
+        "CipherBoxFS holds three independently-constructed JsonSidecarFloorStore instances (generation, seq, checkpoint) that all point at the same rotation-high-water.json file but each JsonSidecarFloorStore::new() builds its own separate Arc<Mutex<()>>, and write_map_atomic_blocking always writes to the same deterministic .tmp path before rename — concurrent writers race and the loser's rename() gets ENOENT",
+        "WriteQueue::load_all_for_vault and gc_failed_entries scan every *.json in cb-journal/ and try to deserialize as JournalEntry; the rotation-high-water*.json floor sidecar co-located there fails that parse (missing field 'id') and is warn+skipped every load/GC — benign (GC only deletes by entry.id from successfully-parsed Failed entries, orphan cleanup only touches .bin files) but noisy, pre-existing since Phase 69",
+        "GSD gsd commit helper can report commit_failed on a lint-staged timeout/false-negative even though the commit actually landed — memory-documented behavior: verify with git log, never blind-retry"
+      ],
+      "code": [
+        {
+          "path": "crates/sdk/src/floor_store.rs",
+          "line": 265,
+          "end_line": 271,
+          "finding": "Every JsonSidecarFloorStore::new() call builds its own fresh Arc<Mutex<()>>, so multiple store instances pointed at the same underlying JSON path never actually share a lock — root cause of the ENOENT rename race across generation/seq/checkpoint stores."
+        },
+        {
+          "path": "crates/sdk/src/floor_store.rs",
+          "line": 206,
+          "end_line": 233,
+          "finding": "write_map_atomic_blocking always writes to the same deterministic path.with_extension('tmp') then renames — with independent locks per store instance, two concurrent writers to the same underlying file collide on this shared tmp path."
+        },
+        {
+          "path": "packages/sdk-core/src/rotation/engine.ts",
+          "line": 664,
+          "end_line": 815,
+          "finding": "collectDirtyFrontier/resolveChildKeyAndEnvelope unconditionally attempted AEAD-decrypt (unsealChildReadKey) of a child's sealed ref with the parent's current key BEFORE checking childPub.generation > childRef.generation (plaintext dirtiness check); for a genuinely dirty edge whose parent also rotated in the same walk, decrypt throws before the check ever runs. Fixed by reordering: fetch plaintext envelope, compare generations, only decrypt on confirmed-clean edges; dirty edges pushed to frontier with nodeReadKey: undefined and recovered via the ECIES checkpoint plane instead."
+        },
+        {
+          "path": "crates/fuse/src/write_ops/grant_scope.rs",
+          "line": 269,
+          "end_line": 287,
+          "finding": "rotate_read_on_scope_exit originally stubbed as Err(RotationError::RotateFailed(...)) — fails closed (EIO) because the only impl RotationDeps in the workspace was the test FakeDeps; this was the documented LIVE-WIRING RESIDUAL deferred from the 69-13 summary, later wired to production FuseRotationDeps in Plan 09."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/fuse/mod.rs",
+          "line": 382,
+          "end_line": 382,
+          "finding": "sent_shares was seeded to SentSharesCache::empty() at mount construction with no refresh call site anywhere in the codebase — combined with Plan 11's D-15a fail-closed fix, this made every desktop mount delete/rename return EIO regardless of private/shared status; fixed by wiring a bounded 5s initial refresh plus a 30s periodic background refresh via Arc<RwLock<>>."
+        }
+      ],
+      "workflow": [
+        "When dispatching multiple worktree-isolated subagents, fire Agent tool calls one message at a time rather than batched in parallel — simultaneous `git worktree add` calls race on .git/config.lock; agents run concurrently in the background regardless of dispatch order once each worktree exists",
+        "Run a single-plan synchronous canary through the full worktree→commit→SUMMARY→merge cycle before fanning out a wave, especially when the harness has known worktree-merge failure modes",
+        "Scope cargo fmt to the specific package (-p <crate>) inside worktree executors, not workspace-wide `cargo fmt --all` — an unscoped fmt reformats unrelated out-of-scope files and leaves them uncommitted, blocking cleanup-wave merges with worktree_dirty",
+        "After merging a wave that touches a package whose dist other packages consume, rebuild all affected dists before running the next package's test suite — stale dist causes phantom cross-plan test failures that look like real regressions",
+        "Delegate diagnosis of a failing gate to a dedicated debugger subagent using strict scientific-method framing (must distinguish fixture bug from product bug, must not hack the test green) rather than debugging inline — keeps orchestrator context lean and produces an evidence-backed verdict",
+        "When a subagent's returned worktree_metadata expected_base doesn't match the wave's actual fork base, don't trust the label blindly — verify against the branch-check guard/manifest before merging",
+        "Avoid editing shared source files (e.g. queue.rs) in the orchestrator while a debugger subagent is running a live build/mount against the same checkout — compiling in an uncommitted change mid-debug can corrupt the debugger's diagnosis",
+        "Command-line numeric output can come back wrapped in ANSI color codes from Node.js colorized logging, causing naive string equality checks to falsely fail — strip escape codes or use a numeric comparison instead"
+      ]
+    },
+    "friction": [
+      "render-hooks --raw output was invalid JSON, forcing a workaround of reading the hooks file directly",
+      "decision-coverage gate failed opaquely (0/15 covered) due to a single malformed bullet elsewhere in the file, requiring manual regex archaeology to find the offending D-09/D-10 bullets",
+      "state.planned-phase and ROADMAP annotate tools silently no-op'd, requiring manual STATE.md edits and extra verification steps",
+      "Wave 1 cleanup-wave merge blocked on worktree_dirty caused by an unscoped cargo fmt --all leaving ~13 unrelated files reformatted and uncommitted in plan 03's worktree",
+      "Post-merge sdk vitest gate showed 3 false-positive failures caused by a stale sdk-core dist after a Wave 2 merge, requiring dist rebuild to confirm they weren't real regressions",
+      "sdk-e2e suite failed at setup with a 401 'Invalid test login secret' because vitest.config has no dotenv loader and the .env must be manually sourced into the shell before running — not obvious from the harness itself",
+      "Depth-3 sdk-e2e fixture (plan 10) exposed a real product bug (decrypt-before-dirtiness-check ordering) that unit-test mocks had been masking by making unsealChildReadKey unconditionally succeed regardless of key mismatch",
+      "Plan 13's static verification passed but the desktop mount's missing refresh_sent_shares call site meant the phase's core deliverable (D-16) would EIO on every real-world delete — a gap invisible to any of the automated non-live-mount test tiers",
+      "Live-mount desktop-e2e CI run failed on macOS/Linux at Step 8 setup (secret.txt propagation timeout) and didn't run at all on Windows because plan 13 only added the leg to run-all.sh, not run-all.ps1",
+      "A gsd commit helper 2-minute timeout on a large ROADMAP.md update (slow lint-staged hook) looked like a failure but the commit had actually landed, requiring git log verification per prior learned experience",
+      "JsonSidecarFloorStore multi-writer race could not be reproduced identically across two local debug runs — run #1 showed a different, unconfirmed anomaly (grant-root sequence bumped +2 instead of +1) suggesting the underlying race has multiple failure signatures"
+    ],
+    "open_items": [
+      "Fix JsonSidecarFloorStore multi-writer race: give all instances pointed at the same underlying path a shared Arc<Mutex<()>> (or per-call-unique temp filenames) — fixer subagent dispatched, in progress at session end",
+      "Apply the journal-sidecar-skip fix (skip rotation-high-water* filenames in WriteQueue::load_all_for_vault and gc_failed_entries scan loops) — root-caused and tracked as task #10, deferred until after the race fixer completes to avoid concurrent queue.rs edits",
+      "Commit the widened .mts poll-budget change (pollFindChild/pollSequenceBump 18→40 attempts + timing logs) once the fixer's crates/sdk commits land",
+      "Investigate the unconfirmed secondary anomaly from debugger run #1: grant-root sequence bumped +2 instead of +1 with a revocation-bypass-shaped result, possibly a symptom of the same un-serialized double-bump race",
+      "Re-push branch and re-run desktop-e2e CI across all three platforms once the race fix + poll-budget widening + Windows Step 8 are all committed, to get a genuine D-16 verdict",
+      "Todo: WinFsp D-15d gate-ordering parity — Plan 12's fix to write_ops/implementation/*.rs was not mirrored to platform/windows/write_ops.rs (captured as .planning/todos/pending/2026-07-08-winfsp-d15d-gate-ordering-parity.md)",
+      "Todo: desktop query_grants_rooted_at is still a no-op — a scope-exit rotation currently de-authorizes ALL recipients rather than selectively re-minting inner grants (captured as .planning/todos/pending/2026-07-08-desktop-query-grants-rooted-at-remint-noop.md); affects the D-16 'recipient cut off' assertion's interpretation",
+      "Final D-16 human/CI sign-off (autonomous:false checkpoint on plan 13, task 2) remains unresolved pending the above fixes and a clean CI re-run"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-08T21:52:48.850619Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 222,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 222,
+    "total_lines_changed": 222,
+    "agent_percentage": 0,
+    "metric_version": 2
+  }
+}
