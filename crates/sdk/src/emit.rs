@@ -454,7 +454,7 @@ fn now_ms() -> u64 {
 mod tests {
     use super::*;
     use crate::listing::{list_folder, FetchedRecord, ListingError, NodeFetcher};
-    use crate::rotation::{HighWaterStore, RotationHighWater};
+    use crate::rotation::{HighWaterStore, RotationError, RotationHighWater};
     use cipherbox_core::node::seal as core_seal;
     use std::collections::HashMap;
     use std::sync::Mutex;
@@ -468,8 +468,9 @@ mod tests {
             self.0.lock().unwrap().get(node_id).copied()
         }
 
-        async fn put(&self, node_id: &str, value: u64) {
+        async fn put(&self, node_id: &str, value: u64) -> Result<(), RotationError> {
             self.0.lock().unwrap().insert(node_id.to_string(), value);
+            Ok(())
         }
     }
 

@@ -13,9 +13,10 @@
 //! only — the untrusted bytes the gated resolve later decodes.
 //!
 //! `new_journal_high_water` (A3) is the factory returning a
-//! `RotationHighWater<JsonSidecarFloorStore>` wired to the generation + seq
-//! sidecars adjacent to a journal dir; the FUSE daemon (P1b) supplies the
-//! concrete path. This crate only homes the factory.
+//! `RotationHighWater<JsonSidecarFloorStore>` wired to the combined
+//! generation+seq sidecar (D-06, a single `rotation-high-water.json`
+//! adjacent to a journal dir); the FUSE daemon (P1b) supplies the concrete
+//! path. This crate only homes the factory.
 //!
 //! No new Cargo dependency: `crates/sdk` already depends on
 //! `cipherbox-api-client` (used by `registry.rs`).
@@ -75,10 +76,10 @@ fn map_verify_err(ipns_name: &str, e: VerifyError) -> ListingError {
 }
 
 /// A3: factory constructing the `RotationHighWater<JsonSidecarFloorStore>`
-/// wired to the generation + seq sidecars adjacent to `journal_dir`
-/// (`rotation-high-water-generation.json` / `rotation-high-water-seq.json`).
-/// The FUSE daemon (P1b, 69-09) supplies the concrete journal-dir path; this
-/// crate only homes the factory (Open Question A3).
+/// wired to the combined generation+seq sidecar (D-06) adjacent to
+/// `journal_dir` (`rotation-high-water.json`). The FUSE daemon (P1b, 69-09)
+/// supplies the concrete journal-dir path; this crate only homes the
+/// factory (Open Question A3).
 pub fn new_journal_high_water(
     journal_dir: impl AsRef<std::path::Path>,
 ) -> RotationHighWater<JsonSidecarFloorStore> {

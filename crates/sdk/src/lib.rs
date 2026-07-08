@@ -23,7 +23,7 @@ pub use emit::{
     create_folder_node, FileEmission, FolderEmission, TeeEnrollment,
 };
 pub use error::SdkError;
-pub use floor_store::JsonSidecarFloorStore;
+pub use floor_store::{CombinedFloorRecord, JsonSidecarFloorStore};
 pub use listing::{
     fetch_node_gated, list_folder, list_folder_owned, list_shared_folder, FetchedRecord,
     FolderUpdatedCallback, FolderUpdatedEvent, ListingError, NodeFetcher, ResolvedChild,

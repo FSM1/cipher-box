@@ -862,7 +862,7 @@ mod d07_write_plane_pairing_tests {
         NodeWriteBody, VersionEntry,
     };
     use cipherbox_sdk::{
-        list_folder_owned, FetchedRecord, HighWaterStore, ListingError, NodeFetcher,
+        list_folder_owned, FetchedRecord, HighWaterStore, ListingError, NodeFetcher, RotationError,
         RotationHighWater,
     };
     use std::collections::HashMap;
@@ -877,8 +877,9 @@ mod d07_write_plane_pairing_tests {
         async fn get(&self, node_id: &str) -> Option<u64> {
             self.0.lock().unwrap().get(node_id).copied()
         }
-        async fn put(&self, node_id: &str, value: u64) {
+        async fn put(&self, node_id: &str, value: u64) -> Result<(), RotationError> {
             self.0.lock().unwrap().insert(node_id.to_string(), value);
+            Ok(())
         }
     }
 
@@ -941,8 +942,7 @@ mod d07_write_plane_pairing_tests {
             ipns_private_key: ipns_private_key.to_vec(),
             write_children: Vec::new(),
         };
-        let published =
-            seal_published_node(&node, read_key, write_key, Some(&write_body)).unwrap();
+        let published = seal_published_node(&node, read_key, write_key, Some(&write_body)).unwrap();
         encode_published_node(&published).unwrap()
     }
 
