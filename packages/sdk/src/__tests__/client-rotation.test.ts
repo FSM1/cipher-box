@@ -13,13 +13,22 @@ import { createTestConfig, setupFolder } from './helpers';
 import { SequenceRegressionError } from '../state/rotation-high-water';
 import type { RotationHighWater } from '../state/rotation-high-water';
 import type { FolderState } from '../types';
+import { sealNode } from '@cipherbox/core';
 
 // ── crypto mock ──────────────────────────────────────────────────────────
-vi.mock('@cipherbox/crypto', () => ({
-  clearBytes: vi.fn((arr: Uint8Array) => arr.fill(0)),
-  unwrapKey: vi.fn().mockResolvedValue(new Uint8Array(64).fill(0x55)),
-  hexToBytes: vi.fn((hex: string) => new Uint8Array(hex.length / 2)),
-}));
+// Keeps the REAL AEAD primitives (sealAesGcmAad/unsealAesGcmAad/buildNodeAad/
+// CryptoError) via importOriginal -- reconcileFolderSequence's SC#5/D-09
+// fetch+unseal now calls the real unsealNode (from the un-mocked
+// @cipherbox/core below), which in turn needs these real primitives.
+vi.mock('@cipherbox/crypto', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@cipherbox/crypto')>();
+  return {
+    ...actual,
+    clearBytes: vi.fn((arr: Uint8Array) => arr.fill(0)),
+    unwrapKey: vi.fn().mockResolvedValue(new Uint8Array(64).fill(0x55)),
+    hexToBytes: vi.fn((hex: string) => new Uint8Array(hex.length / 2)),
+  };
+});
 
 // ── sdk-core mock ────────────────────────────────────────────────────────
 vi.mock('@cipherbox/sdk-core', async (importOriginal) => {
@@ -76,6 +85,31 @@ function mockResolveMatching(sequenceNumber: bigint) {
     sequenceNumber,
     signatureVerified: true,
   });
+}
+
+/**
+ * Mocks fetchFromIpfs to return a real, AAD-bound PublishedNode envelope at
+ * `generation`, sealed under `folderKey` -- so reconcileFolderSequence's
+ * SC#5/D-09 fetch+unseal (a REAL unsealNode call, not mocked) succeeds and
+ * yields exactly `generation` to the enforceResolved gate.
+ */
+async function mockFetchResolvedGeneration(generation: number, folderKey: Uint8Array) {
+  const published = await sealNode(
+    {
+      schema: 'node/v3',
+      kind: 'folder',
+      id: '11111111-1111-4111-8111-111111111111',
+      generation,
+      createdAt: 0,
+      modifiedAt: 0,
+      children: [],
+    },
+    folderKey,
+    new Uint8Array(32) // dummy writeKey -- no writeBody present, so unused
+  );
+  vi.mocked(sdkCore.fetchFromIpfs).mockResolvedValue(
+    new TextEncoder().encode(JSON.stringify(published))
+  );
 }
 
 describe('CipherBoxClient — reconcile-before-publish (SC#3 / D-04, Task 1)', () => {
@@ -840,6 +874,9 @@ describe('CipherBoxClient — reconcile-time enforceResolved fail-closed (Gap 1 
       renamedChild: {} as never,
     });
     mockResolveMatching(1n); // agrees with expectedSequence -- enforceResolved is the sole gate here
+    // SC#5/D-09: reconcileFolderSequence now fetches+unseals the resolved
+    // CID under the folder read key BEFORE calling enforceResolved.
+    await mockFetchResolvedGeneration(0, new Uint8Array(32).fill(1));
 
     await expect(client.renameItem(FOLDER_IPNS, 'file1', 'new.txt')).rejects.toThrow(
       SequenceRegressionError
@@ -858,6 +895,9 @@ describe('CipherBoxClient — reconcile-time enforceResolved fail-closed (Gap 1 
       renamedChild: {} as never,
     });
     mockResolveMatching(1n);
+    // SC#5/D-09: fetch+unseal must yield generation 0, matching setupFolder's
+    // nodeGeneration, so the enforceResolved assertion below stays meaningful.
+    await mockFetchResolvedGeneration(0, new Uint8Array(32).fill(1));
     vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
       cid: 'bafynew',
       newSequenceNumber: 2n,

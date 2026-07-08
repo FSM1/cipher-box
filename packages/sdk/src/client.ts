@@ -1785,8 +1785,23 @@ export class CipherBoxClient {
    * error) is likewise treated as inconclusive rather than blocking the
    * mutation on a transient check -- the underlying CAS-guarded publish
    * remains the authoritative conflict detector.
+   *
+   * SC#5/D-09: when a `RotationHighWater` is configured, the durable
+   * generation gate MUST be fed the record's ACTUAL generation -- fetched
+   * from IPFS and unsealed with `folderReadKey` -- not the in-memory
+   * `folderTree.get(ipnsName)?.nodeGeneration`, which only reflects the
+   * client's OWN last successful load/publish and can equivocate against a
+   * self-inflicted lower-generation republish at a higher sequence. The
+   * fetch+unseal happens ONLY on this write-path reconcile, never on the 30s
+   * poll. A failed unseal (wrong/absent read key, tampered body) fails
+   * closed -- it is NEVER treated as "nothing to reconcile against" the way
+   * a resolve() miss/failure above is.
    */
-  private async reconcileFolderSequence(ipnsName: string, expectedSequence: bigint): Promise<void> {
+  private async reconcileFolderSequence(
+    ipnsName: string,
+    expectedSequence: bigint,
+    folderReadKey: Uint8Array
+  ): Promise<void> {
     let resolved: { cid: string; sequenceNumber: bigint; signatureVerified: boolean } | null;
     try {
       resolved = await sdkCore.resolveIpnsRecord(ipnsName, this.ctx);
@@ -1824,11 +1839,21 @@ export class CipherBoxClient {
           `IPNS sequence number for ${ipnsName} exceeds Number.MAX_SAFE_INTEGER -- refusing lossy floor conversion`
         );
       }
-      const nodeGeneration = this.folderTree.get(ipnsName)?.nodeGeneration ?? 0;
+      // SC#5/D-09: fetch the resolved CID and unseal it with the folder read
+      // key to recover the record's ACTUAL generation. `resolveIpnsRecord`
+      // returns no generation field -- generation lives inside the sealed
+      // read-body, not the plaintext IPNS envelope -- so the cached
+      // folderTree value is never a substitute for this. Any failure here
+      // (network, malformed envelope, or AEAD/unseal failure under the
+      // supplied key) propagates and fails the reconcile closed -- it must
+      // NEVER be swallowed into a fallback on the cached generation.
+      const rawNode = await sdkCore.fetchFromIpfs(this.ctx, resolved.cid);
+      const publishedNode = JSON.parse(new TextDecoder().decode(rawNode)) as PublishedNode;
+      const unsealedNode = await unsealNode(publishedNode, folderReadKey);
       await this.config.rotationHighWater.enforceResolved({
         nodeId: ipnsName,
         seq: Number(resolved.sequenceNumber),
-        generation: nodeGeneration,
+        generation: unsealedNode.generation,
         versionFloor: Number(expectedSequence),
       });
     }
@@ -2273,7 +2298,7 @@ export class CipherBoxClient {
       }
 
       // Reconcile-before-publish (SC#3 / D-04): defer on any sequence mismatch.
-      await this.reconcileFolderSequence(parentIpnsName, parent.sequenceNumber);
+      await this.reconcileFolderSequence(parentIpnsName, parent.sequenceNumber, parent.folderKey);
 
       // Preserve the parent's existing write chain — augmented below with the
       // new child's WriteChildRef.
@@ -2497,7 +2522,7 @@ export class CipherBoxClient {
 
       // 1b. Reconcile-before-publish (SC#3 / D-04): defer on any sequence
       // mismatch, never publish (metadata OR rotation) against possibly-superseded state.
-      await this.reconcileFolderSequence(folderIpnsName, folder.sequenceNumber);
+      await this.reconcileFolderSequence(folderIpnsName, folder.sequenceNumber, folder.folderKey);
 
       // 1c. Preserve the folder's existing write-body on republish (D-03).
       const writeBodyParams = await this.getWriteBodyParams(folder);
@@ -2588,8 +2613,16 @@ export class CipherBoxClient {
       // Reconcile-before-publish (SC#3 / D-04): both folders are about to be
       // published; defer on ANY mismatch (source OR dest) rather than
       // publishing (metadata OR rotation) against possibly-superseded state.
-      await this.reconcileFolderSequence(sourceIpnsName, sourceFolder.sequenceNumber);
-      await this.reconcileFolderSequence(destIpnsName, destFolder.sequenceNumber);
+      await this.reconcileFolderSequence(
+        sourceIpnsName,
+        sourceFolder.sequenceNumber,
+        sourceFolder.folderKey
+      );
+      await this.reconcileFolderSequence(
+        destIpnsName,
+        destFolder.sequenceNumber,
+        destFolder.folderKey
+      );
 
       // FLAG-63-U2: Re-seal the moved child's readKeySealed under the DEST parent readKey.
       // sdkCore.moveItem() is a pure link rewrite — the moved ref still carries a
@@ -2843,7 +2876,7 @@ export class CipherBoxClient {
 
       // 1b. Reconcile-before-publish (SC#3 / D-04): defer on any sequence
       // mismatch, never publish (metadata OR rotation) against possibly-superseded state.
-      await this.reconcileFolderSequence(folderIpnsName, folder.sequenceNumber);
+      await this.reconcileFolderSequence(folderIpnsName, folder.sequenceNumber, folder.folderKey);
 
       // 1c. Preserve the folder's existing write-body on republish (D-03). The
       // removed child's WriteChildRef is preserved verbatim — write-link removal
@@ -4497,7 +4530,7 @@ export class CipherBoxClient {
       // folder internally, so the check must run BEFORE calling it -- defer on
       // any sequence mismatch rather than publishing (metadata OR rotation)
       // against possibly-superseded state.
-      await this.reconcileFolderSequence(folderIpnsName, folder.sequenceNumber);
+      await this.reconcileFolderSequence(folderIpnsName, folder.sequenceNumber, folder.folderKey);
 
       const { updatedBinState } = await binOps.addToBin({
         folderIpnsName,

@@ -51,8 +51,13 @@ import * as sdkCore from '@cipherbox/sdk-core';
 
 const TEST_NODE_UUID = '11111111-1111-4111-8111-111111111111';
 
-/** Narrow type exposing the private method under test without an `any` cast. */
-type ClientWithReconcile = CipherBoxClient & {
+/**
+ * Narrow structural type exposing the private method under test. Deliberately
+ * NOT intersected with `CipherBoxClient` -- intersecting a private class
+ * member with a public structural re-declaration collapses to `never`
+ * (TS2339), so this type stands alone and the cast goes through `unknown`.
+ */
+type ClientWithReconcile = {
   reconcileFolderSequence(
     ipnsName: string,
     expectedSequence: bigint,
