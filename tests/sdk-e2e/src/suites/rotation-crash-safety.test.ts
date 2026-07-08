@@ -38,6 +38,31 @@
  *      a SECOND time (generation 1 → 2), converging without seeding
  *      completedNodeIds or synthesizing a key — and the pre-rotation grant is cut
  *      (behind-retry) after the root step.
+ *   5. Depth-3 fan-out>=2 anti-vacuous crash-resume (Plan 70.1-10 / SC#6 / D-10):
+ *      Phase 70's crash-safety gate passed VACUOUSLY on a childless root (see
+ *      scenario 4's note above). This scenario builds a real multi-level tree
+ *      (root5 -> [subA5, subB5], subA5 -> [fileA5], fan-out=2 at root, depth=3
+ *      via fileA5) and wires the ECIES `keyCheckpointCallbacks` seam (Plan
+ *      70.1-05) with a test-local Map-backed stub. The crash is injected at
+ *      fileA5's OWN post-publish persistCallback checkpoint — precisely the
+ *      D-01 lost-key window: fileA5 is durably published but its parent
+ *      (subA5)'s own D-09 batched re-publish has NOT yet mirrored fileA5's new
+ *      key. Resume proves all 4 D-10 properties: (1) the owner navigates
+ *      root5 -> subA5 -> fileA5 and unseals with the NEW root key; (2) the
+ *      revoked reader's OLD key fails (revocation held); (3) root5 (whose OWN
+ *      batch already closed before the crash) sees NO further republish, while
+ *      subA5 (the REAL parent of the dirty edge) republishes exactly once; (4)
+ *      fileA5's ECIES checkpoint is persisted-before-publish, still live at
+ *      crash time, consumed by the dirty-repair path on resume, and GC'd after
+ *      subA5's mirror commits.
+ *   6. Multi-dirty-edge variant (Plan 70.1-10 / SC#6 / D-10): root6 has two
+ *      FILE children (fan-out=2, depth=2); the crash fires after BOTH children
+ *      have individually committed (published) but BEFORE root6's own D-09
+ *      batch (which only fires once ALL children finish) ever republishes —
+ *      leaving TWO simultaneous dirty edges under the SAME still-open parent.
+ *      Resume must discover and repair both dirty edges and collapse them into
+ *      a SINGLE batched root6 republish (not two), asserting the same 4 D-10
+ *      properties across both siblings at once.
  *
  * Fault-injection note (D-03):
  *   The abort-and-resume crash (scenario 2) is injected via a test-only
@@ -70,6 +95,7 @@ import {
   navigateReadChain,
   resolveIpnsRecord,
   rotateReadFromNode,
+  type KeyCheckpointCallbacks,
   type RotationJobRecord,
   type SdkContext,
   updateFolderMetadataAndPublish,
@@ -81,6 +107,7 @@ import {
   deriveIpnsName,
   generateEd25519Keypair,
   generateRandomBytes,
+  unwrapKey,
 } from '@cipherbox/crypto';
 import { type MultiAccountFixture, createMultiAccountFixture } from '../fixtures/multi-account';
 
@@ -192,6 +219,34 @@ async function publishFileNode(
     ctx,
   });
   return { ipnsName, keypair };
+}
+
+/** Base64-decode via Node's global `Buffer` (test-only; engine.ts's own
+ * `bytesToBase64`/`base64ToBytes` are module-private, not exported) — used to
+ * recover a checkpointed ECIES ciphertext for `unwrapKey`. */
+function b64ToBytes(b64: string): Uint8Array {
+  return new Uint8Array(Buffer.from(b64, 'base64'));
+}
+
+/**
+ * In-memory `KeyCheckpointCallbacks` stub (D-10 assertion 4): backs the ECIES
+ * wrapped-key checkpoint plane with a plain `Map` so tests can directly assert
+ * the persist-before-publish / consumed-on-resume / GC'd-after-commit
+ * lifecycle without standing up a real durable store. `store` is exposed so
+ * tests can inspect presence/absence before and after a crash+resume pair.
+ */
+function createKeyCheckpointStub(): KeyCheckpointCallbacks & { store: Map<string, string> } {
+  const store = new Map<string, string>();
+  return {
+    store,
+    persistWrappedKey: async (nodeId, wrappedKeyB64) => {
+      store.set(nodeId, wrappedKeyB64);
+    },
+    getWrappedKey: async (nodeId) => store.get(nodeId),
+    deleteWrappedKey: async (nodeId) => {
+      store.delete(nodeId);
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -999,5 +1054,558 @@ describe('Rotation crash-safety suite (TEST-01 phase gate)', () => {
       resumeResult4?.readKey.fill(0);
       clearCapturedReadKeys();
     }
+  }, 120_000);
+
+  // ---------------------------------------------------------------------------
+  // Test 5: Depth-3 fan-out>=2 anti-vacuous crash-resume (Plan 70.1-10 / SC#6 / D-10)
+  // ---------------------------------------------------------------------------
+
+  it('depth-3 fan-out>=2 mid-walk crash at a DEEP child resumes and converges (D-10 anti-vacuous gate)', async () => {
+    const alice = fixture.accounts.get('alice')!;
+    const bob = fixture.accounts.get('bob')!;
+    const aliceCtx = alice.client.getContext();
+    const bobCtx = bob.client.getContext();
+
+    // --- Build tree: root5 -> [subA5, subB5] (fan-out=2); subA5 -> [fileA5] (depth=3).
+    //
+    // fileA5 is the DEEP child: a grandchild of root5, reached via subA5. The
+    // crash below is injected at fileA5's OWN post-publish/pre-parent-republish
+    // checkpoint (b) — the exact D-01 lost-key window — NOT at root's own commit
+    // (checkpoint a) or the walk's final status persist (checkpoint c). A
+    // childless root (Phase 70's vacuous shape) is deliberately never used here.
+
+    const root5Result = await createSubfolder({ name: 'd3-root', ctx: aliceCtx });
+    const root5IpnsPublicKey = deriveEd25519PublicKey(root5Result.ipnsPrivateKey);
+    const root5IpnsName = await deriveIpnsName(root5IpnsPublicKey);
+
+    const subA5Result = await createSubfolder({ name: 'd3-subA', ctx: aliceCtx });
+    const subA5IpnsPublicKey = deriveEd25519PublicKey(subA5Result.ipnsPrivateKey);
+    const subA5IpnsName = await deriveIpnsName(subA5IpnsPublicKey);
+
+    const subB5Result = await createSubfolder({ name: 'd3-subB', ctx: aliceCtx });
+    const subB5IpnsPublicKey = deriveEd25519PublicKey(subB5Result.ipnsPrivateKey);
+    const subB5IpnsName = await deriveIpnsName(subB5IpnsPublicKey);
+
+    const { node: fileA5Node, readKey: fileA5ReadKey } = makeFileNode();
+    const { ipnsName: fileA5IpnsName, keypair: fileA5Keypair } = await publishFileNode(
+      fileA5Node,
+      fileA5ReadKey,
+      aliceCtx
+    );
+
+    // Link fileA5 -> subA5 (the depth-3 leaf).
+    const { updatedChildren: subA5Children } = await addFilePointerToFolder({
+      children: [],
+      childReadKey: fileA5ReadKey,
+      parentReadKey: subA5Result.rootReadKey,
+      childId: fileA5Node.id,
+      childKind: 'file',
+      childGeneration: 0,
+      name: 'fileA5.txt',
+      ipnsName: fileA5IpnsName,
+      versionFloor: 0n,
+    });
+    await updateFolderMetadataAndPublish({
+      children: subA5Children,
+      readKey: subA5Result.rootReadKey,
+      ipnsPrivateKey: subA5Result.ipnsPrivateKey,
+      ipnsPublicKey: subA5IpnsPublicKey,
+      ipnsName: subA5IpnsName,
+      sequenceNumber: 1n,
+      nodeId: subA5Result.node.id,
+      nodeGeneration: subA5Result.node.generation,
+      ctx: aliceCtx,
+    });
+
+    // Link subA5 then subB5 -> root5 (fan-out=2; array order = BFS enqueue order).
+    const { updatedChildren: root5ChildrenStep1 } = await addFilePointerToFolder({
+      children: [],
+      childReadKey: subA5Result.rootReadKey,
+      parentReadKey: root5Result.rootReadKey,
+      childId: subA5Result.node.id,
+      childKind: 'folder',
+      childGeneration: 0,
+      name: 'subA5',
+      ipnsName: subA5IpnsName,
+      versionFloor: 0n,
+    });
+    const { updatedChildren: root5Children } = await addFilePointerToFolder({
+      children: root5ChildrenStep1,
+      childReadKey: subB5Result.rootReadKey,
+      parentReadKey: root5Result.rootReadKey,
+      childId: subB5Result.node.id,
+      childKind: 'folder',
+      childGeneration: 0,
+      name: 'subB5',
+      ipnsName: subB5IpnsName,
+      versionFloor: 0n,
+    });
+    await updateFolderMetadataAndPublish({
+      children: root5Children,
+      readKey: root5Result.rootReadKey,
+      ipnsPrivateKey: root5Result.ipnsPrivateKey,
+      ipnsPublicKey: root5IpnsPublicKey,
+      ipnsName: root5IpnsName,
+      sequenceNumber: 1n,
+      nodeId: root5Result.node.id,
+      nodeGeneration: root5Result.node.generation,
+      ctx: aliceCtx,
+    });
+
+    const keyMap5 = new Map([
+      [root5IpnsName, { privateKey: root5Result.ipnsPrivateKey, publicKey: root5IpnsPublicKey }],
+      [subA5IpnsName, { privateKey: subA5Result.ipnsPrivateKey, publicKey: subA5IpnsPublicKey }],
+      [subB5IpnsName, { privateKey: subB5Result.ipnsPrivateKey, publicKey: subB5IpnsPublicKey }],
+      [
+        fileA5IpnsName,
+        { privateKey: fileA5Keypair.privateKey, publicKey: fileA5Keypair.publicKey },
+      ],
+    ]);
+    const nodeKeySource5 = (name: string) => keyMap5.get(name);
+
+    // Pre-rotation grant to Bob, rooted at root5, reaching the DEEP fileA5 leaf.
+    const { readDescriptorRef: preGrant5 } = await issueReadGrant({
+      shareRootReadKey: root5Result.rootReadKey,
+      recipientPublicKey: bob.publicKey,
+      rootNodeId: root5Result.node.id,
+      rootIpnsName: root5IpnsName,
+      rootGeneration: 0,
+      insertShareFn: async (_p) => ({ shareId: crypto.randomUUID() }),
+    });
+
+    // --- ECIES key-checkpoint plane (D-01/D-03/D-04/D-05) — backs D-10 assertion 4.
+    const checkpoint5 = createKeyCheckpointStub();
+
+    // --- Crash run: throw at the 4th persistCallback call — fileA5's OWN
+    // post-publish checkpoint (b), BEFORE subA5's re-seal/decrement.
+    //
+    // BFS order for this tree (FIFO, children enqueued in [subA5, subB5] order):
+    //   call 1: after root5's own commit
+    //   call 2: after subA5 commits (root5 pendingChildCount 2->1; subA5's own
+    //           child fileA5 enqueued)
+    //   call 3: after subB5 commits (root5 pendingChildCount 1->0 -> root5's
+    //           OWN batched republish fires HERE, mirroring subA5+subB5's new
+    //           keys — root5's batch is CLOSED before the crash below)
+    //   call 4: after fileA5 commits — THROW HERE. fileA5 is published
+    //           (post-publish) but subA5's OWN batched republish (which would
+    //           mirror fileA5's new key into subA5's SealedChildRef) has NOT
+    //           fired yet (pre-parent-republish) — the exact D-01 window.
+    let persistCallCount5 = 0;
+    const crashingPersist5 = (_job: RotationJobRecord): void => {
+      persistCallCount5++;
+      if (persistCallCount5 >= 4) {
+        throw new Error('simulated-crash-deep-child-post-publish-pre-parent-republish');
+      }
+    };
+
+    clearCapturedReadKeys();
+    const jobRecord5: RotationJobRecord = {
+      rootNodeId: root5Result.node.id,
+      status: 'pending',
+      completedNodeIds: new Set(),
+      frontier: [],
+      persistCallback: crashingPersist5,
+    };
+
+    let crashed5 = false;
+    try {
+      await rotateReadFromNode({
+        rootNodeId: root5Result.node.id,
+        rootNodeIpnsName: root5IpnsName,
+        rootReadKey: root5Result.rootReadKey,
+        rootIpnsPrivateKey: root5Result.ipnsPrivateKey,
+        rootIpnsPublicKey: root5IpnsPublicKey,
+        jobRecord: jobRecord5,
+        ctx: aliceCtx,
+        nodeKeySource: nodeKeySource5,
+        ownerPublicKey: alice.publicKey,
+        ownerPrivateKey: alice.privateKey,
+        keyCheckpointCallbacks: checkpoint5,
+      });
+    } catch (err) {
+      crashed5 = true;
+      expect((err as Error).message).toContain(
+        'simulated-crash-deep-child-post-publish-pre-parent-republish'
+      );
+    }
+    expect(crashed5).toBe(true);
+    expect(persistCallCount5).toBe(4);
+
+    // fileA5 IS committed (post-publish) — completedNodeIds.add ran inside
+    // rotateOne BEFORE persistCallback threw (D-03 ordering).
+    expect(jobRecord5.completedNodeIds.has(fileA5Node.id)).toBe(true);
+    const fileA5PubAtCrash = await fetchPublishedEnvelope(fileA5IpnsName, aliceCtx);
+    expect(fileA5PubAtCrash.generation).toBe(1);
+
+    // D-10 assertion 4 (part 1): fileA5's ECIES checkpoint was persisted BEFORE
+    // the publish (D-03) and is still live (not yet GC'd — the parent
+    // republish that would trigger GC never fired before the crash).
+    const fileA5WrappedAtCrash = checkpoint5.store.get(fileA5Node.id);
+    expect(fileA5WrappedAtCrash).toBeDefined();
+
+    // root5's checkpoint also exists (persisted unconditionally on every
+    // rotateOne when keyCheckpointCallbacks is wired) — root5's mirror is
+    // already durably correct (its OWN batch closed at call 3), so this
+    // checkpoint is simply never consumed by any dirty-repair path.
+    const rootWrappedAtCrash = checkpoint5.store.get(root5Result.node.id);
+    expect(rootWrappedAtCrash).toBeDefined();
+
+    // Capture root5/subA5 sequence numbers at crash time for the "no spurious
+    // root decrement" assertion below (D-10 assertion 3).
+    const root5ResolvedAtCrash = await resolveIpnsRecord(root5IpnsName, aliceCtx);
+    const subA5ResolvedAtCrash = await resolveIpnsRecord(subA5IpnsName, aliceCtx);
+    expect(root5ResolvedAtCrash).not.toBeNull();
+    expect(subA5ResolvedAtCrash).not.toBeNull();
+
+    // Recover root5's post-rotation readKey from its OWN checkpoint (avoids
+    // depending on the shared crypto-spy's capture ordering, which
+    // `keyCheckpointCallbacks` perturbs via ECIES ephemeral-key generation
+    // inside `wrapKey`).
+    const readKeyPrimeRoot5 = await unwrapKey(b64ToBytes(rootWrappedAtCrash!), alice.privateKey);
+    expect(readKeyPrimeRoot5).toBeInstanceOf(Uint8Array);
+    expect(readKeyPrimeRoot5.length).toBe(32);
+
+    // --- Genuine resume: fresh job record seeded with crash-time
+    // completedNodeIds (root5 IS in it -> rootResult.skipped=true -> dirty-
+    // resume branch), the SAME keyCheckpointCallbacks (durably persisted
+    // across the "crash" in this in-process model), and root5's recovered
+    // current key.
+    const freshJob5: RotationJobRecord = {
+      rootNodeId: root5Result.node.id,
+      status: 'pending',
+      completedNodeIds: new Set(jobRecord5.completedNodeIds),
+      frontier: [],
+    };
+
+    let resumeError5: unknown;
+    try {
+      await rotateReadFromNode({
+        rootNodeId: root5Result.node.id,
+        rootNodeIpnsName: root5IpnsName,
+        rootReadKey: readKeyPrimeRoot5,
+        rootIpnsPrivateKey: root5Result.ipnsPrivateKey,
+        rootIpnsPublicKey: root5IpnsPublicKey,
+        jobRecord: freshJob5,
+        ctx: aliceCtx,
+        nodeKeySource: nodeKeySource5,
+        ownerPublicKey: alice.publicKey,
+        ownerPrivateKey: alice.privateKey,
+        keyCheckpointCallbacks: checkpoint5,
+      });
+    } catch (err) {
+      resumeError5 = err;
+    }
+    expect(resumeError5).toBeUndefined(); // must converge without throwing
+    expect(freshJob5.status).toBe('complete');
+
+    // --- D-10 assertion 3: NO spurious root pendingChildCount decrement.
+    // root5's OWN batch already closed before the crash (call 3) — resume must
+    // NOT republish root5 again. subA5 (the REAL parent of the dirty fileA5
+    // edge) must republish EXACTLY ONCE (the deferred D-09 batch this resume
+    // repairs).
+    const root5ResolvedAfterResume = await resolveIpnsRecord(root5IpnsName, aliceCtx);
+    const subA5ResolvedAfterResume = await resolveIpnsRecord(subA5IpnsName, aliceCtx);
+    expect(root5ResolvedAfterResume!.sequenceNumber).toBe(root5ResolvedAtCrash!.sequenceNumber);
+    expect(subA5ResolvedAfterResume!.sequenceNumber).toBe(
+      subA5ResolvedAtCrash!.sequenceNumber + 1n
+    );
+
+    // --- D-10 assertion 4 (part 2): fileA5's checkpoint is GC'd AFTER the
+    // parent (subA5) mirror commit — repairDirtyNode's deleteWrappedKey call.
+    expect(checkpoint5.store.has(fileA5Node.id)).toBe(false);
+
+    // --- D-10 assertion 1: owner navigates root5 -> subA5 -> fileA5 and
+    // unseals with the NEW root key.
+    const { readDescriptorRef: freshGrant5 } = await issueReadGrant({
+      shareRootReadKey: readKeyPrimeRoot5,
+      recipientPublicKey: bob.publicKey,
+      rootNodeId: root5Result.node.id,
+      rootIpnsName: root5IpnsName,
+      rootGeneration: 1,
+      insertShareFn: async (_p) => ({ shareId: crypto.randomUUID() }),
+    });
+    const navResult5 = await navigateReadChain({
+      readDescriptorRef: freshGrant5,
+      recipientPrivKey: bob.privateKey,
+      rootIpnsName: root5IpnsName,
+      rootExpectedGeneration: 1,
+      path: [subA5IpnsName, fileA5IpnsName],
+      ctx: bobCtx,
+    });
+    expect(navResult5.status).toBe('ok');
+    if (navResult5.status === 'ok') {
+      expect(navResult5.content?.cid).toBeTruthy();
+      expect(navResult5.content?.fileKey).toBeInstanceOf(Uint8Array);
+    }
+
+    // --- D-10 assertion 2: the revoked reader's OLD key FAILS (revocation held).
+    const revokedNav5 = await navigateReadChain({
+      readDescriptorRef: preGrant5,
+      recipientPrivKey: bob.privateKey,
+      rootIpnsName: root5IpnsName,
+      rootExpectedGeneration: 0,
+      path: [subA5IpnsName, fileA5IpnsName],
+      ctx: bobCtx,
+    });
+    expect(revokedNav5.status).toBe('behind-retry');
+  }, 120_000);
+
+  // ---------------------------------------------------------------------------
+  // Test 6: Multi-dirty-edge variant — 2+ siblings published, parent batch
+  // still open (Plan 70.1-10 / SC#6 / D-10)
+  // ---------------------------------------------------------------------------
+
+  it('multi-dirty-edge: 2 siblings published while parent batch still open resumes via a single batched repair', async () => {
+    const alice = fixture.accounts.get('alice')!;
+    const bob = fixture.accounts.get('bob')!;
+    const aliceCtx = alice.client.getContext();
+    const bobCtx = bob.client.getContext();
+
+    // --- Build tree: root6 -> [c1_6, c2_6] (fan-out=2, both files, depth=2).
+    //
+    // Unlike Test 5 (a single deep dirty edge under an INTERMEDIATE parent),
+    // this variant leaves TWO SIBLING dirty edges under the SAME parent
+    // (root6 itself) simultaneously — root6's OWN batched republish never
+    // fires for EITHER child before the crash, since it only fires once
+    // pendingChildCount reaches zero (both children done, not just one).
+
+    const root6Result = await createSubfolder({ name: 'mde-root', ctx: aliceCtx });
+    const root6IpnsPublicKey = deriveEd25519PublicKey(root6Result.ipnsPrivateKey);
+    const root6IpnsName = await deriveIpnsName(root6IpnsPublicKey);
+
+    const { node: c1_6Node, readKey: c1_6ReadKey } = makeFileNode();
+    const { ipnsName: c1_6IpnsName, keypair: c1_6Keypair } = await publishFileNode(
+      c1_6Node,
+      c1_6ReadKey,
+      aliceCtx
+    );
+    const { node: c2_6Node, readKey: c2_6ReadKey } = makeFileNode();
+    const { ipnsName: c2_6IpnsName, keypair: c2_6Keypair } = await publishFileNode(
+      c2_6Node,
+      c2_6ReadKey,
+      aliceCtx
+    );
+
+    const { updatedChildren: root6ChildrenStep1 } = await addFilePointerToFolder({
+      children: [],
+      childReadKey: c1_6ReadKey,
+      parentReadKey: root6Result.rootReadKey,
+      childId: c1_6Node.id,
+      childKind: 'file',
+      childGeneration: 0,
+      name: 'c1.txt',
+      ipnsName: c1_6IpnsName,
+      versionFloor: 0n,
+    });
+    const { updatedChildren: root6Children } = await addFilePointerToFolder({
+      children: root6ChildrenStep1,
+      childReadKey: c2_6ReadKey,
+      parentReadKey: root6Result.rootReadKey,
+      childId: c2_6Node.id,
+      childKind: 'file',
+      childGeneration: 0,
+      name: 'c2.txt',
+      ipnsName: c2_6IpnsName,
+      versionFloor: 0n,
+    });
+    await updateFolderMetadataAndPublish({
+      children: root6Children,
+      readKey: root6Result.rootReadKey,
+      ipnsPrivateKey: root6Result.ipnsPrivateKey,
+      ipnsPublicKey: root6IpnsPublicKey,
+      ipnsName: root6IpnsName,
+      sequenceNumber: 1n,
+      nodeId: root6Result.node.id,
+      nodeGeneration: root6Result.node.generation,
+      ctx: aliceCtx,
+    });
+
+    const keyMap6 = new Map([
+      [root6IpnsName, { privateKey: root6Result.ipnsPrivateKey, publicKey: root6IpnsPublicKey }],
+      [c1_6IpnsName, { privateKey: c1_6Keypair.privateKey, publicKey: c1_6Keypair.publicKey }],
+      [c2_6IpnsName, { privateKey: c2_6Keypair.privateKey, publicKey: c2_6Keypair.publicKey }],
+    ]);
+    const nodeKeySource6 = (name: string) => keyMap6.get(name);
+
+    const { readDescriptorRef: preGrant6 } = await issueReadGrant({
+      shareRootReadKey: root6Result.rootReadKey,
+      recipientPublicKey: bob.publicKey,
+      rootNodeId: root6Result.node.id,
+      rootIpnsName: root6IpnsName,
+      rootGeneration: 0,
+      insertShareFn: async (_p) => ({ shareId: crypto.randomUUID() }),
+    });
+
+    const checkpoint6 = createKeyCheckpointStub();
+
+    // --- Crash run: throw at the 3rd persistCallback call — c2_6's OWN
+    // post-publish checkpoint (b), BEFORE its re-seal/decrement.
+    //
+    // BFS order (2-node fan-out, both direct children of root6):
+    //   call 1: after root6's own commit
+    //   call 2: after c1_6 commits (root6 pendingChildCount 2->1, NOT zero ->
+    //           root6's batch does NOT publish yet; c1_6's re-seal is only an
+    //           IN-MEMORY parentState.children[] update, lost on this crash)
+    //   call 3: after c2_6 commits — THROW HERE, before c2_6's own
+    //           re-seal/decrement. root6's DURABLE published mirror still
+    //           shows BOTH c1_6 and c2_6 at their pre-rotation generation —
+    //           TWO simultaneous dirty edges under the SAME still-open parent.
+    let persistCallCount6 = 0;
+    const crashingPersist6 = (_job: RotationJobRecord): void => {
+      persistCallCount6++;
+      if (persistCallCount6 >= 3) {
+        throw new Error('simulated-crash-multi-dirty-edge-parent-batch-open');
+      }
+    };
+
+    clearCapturedReadKeys();
+    const jobRecord6: RotationJobRecord = {
+      rootNodeId: root6Result.node.id,
+      status: 'pending',
+      completedNodeIds: new Set(),
+      frontier: [],
+      persistCallback: crashingPersist6,
+    };
+
+    let crashed6 = false;
+    try {
+      await rotateReadFromNode({
+        rootNodeId: root6Result.node.id,
+        rootNodeIpnsName: root6IpnsName,
+        rootReadKey: root6Result.rootReadKey,
+        rootIpnsPrivateKey: root6Result.ipnsPrivateKey,
+        rootIpnsPublicKey: root6IpnsPublicKey,
+        jobRecord: jobRecord6,
+        ctx: aliceCtx,
+        nodeKeySource: nodeKeySource6,
+        ownerPublicKey: alice.publicKey,
+        ownerPrivateKey: alice.privateKey,
+        keyCheckpointCallbacks: checkpoint6,
+      });
+    } catch (err) {
+      crashed6 = true;
+      expect((err as Error).message).toContain(
+        'simulated-crash-multi-dirty-edge-parent-batch-open'
+      );
+    }
+    expect(crashed6).toBe(true);
+    expect(persistCallCount6).toBe(3);
+
+    // Both siblings ARE individually published (post-commit) — the "2+
+    // siblings published" half of this variant's name.
+    expect(jobRecord6.completedNodeIds.has(c1_6Node.id)).toBe(true);
+    expect(jobRecord6.completedNodeIds.has(c2_6Node.id)).toBe(true);
+    const c1_6PubAtCrash = await fetchPublishedEnvelope(c1_6IpnsName, aliceCtx);
+    const c2_6PubAtCrash = await fetchPublishedEnvelope(c2_6IpnsName, aliceCtx);
+    expect(c1_6PubAtCrash.generation).toBe(1);
+    expect(c2_6PubAtCrash.generation).toBe(1);
+
+    // D-10 assertion 4 (part 1): BOTH children's checkpoints were persisted
+    // before publish and are still live (root6's batch — which would GC them
+    // — never fired before the crash).
+    const c1_6WrappedAtCrash = checkpoint6.store.get(c1_6Node.id);
+    const c2_6WrappedAtCrash = checkpoint6.store.get(c2_6Node.id);
+    expect(c1_6WrappedAtCrash).toBeDefined();
+    expect(c2_6WrappedAtCrash).toBeDefined();
+
+    const rootWrappedAtCrash6 = checkpoint6.store.get(root6Result.node.id);
+    expect(rootWrappedAtCrash6).toBeDefined();
+    const readKeyPrimeRoot6 = await unwrapKey(b64ToBytes(rootWrappedAtCrash6!), alice.privateKey);
+
+    // root6's batch is "still open" — its published mirror is unchanged since
+    // its OWN rotate-commit. Capture the sequence number now for the "single
+    // batched republish" assertion below (root6 must advance by EXACTLY 1, not
+    // 2 — proving resume collapses both repairs into ONE republish rather than
+    // firing root6's mirror update twice).
+    const root6ResolvedAtCrash = await resolveIpnsRecord(root6IpnsName, aliceCtx);
+    expect(root6ResolvedAtCrash).not.toBeNull();
+
+    // --- Genuine resume: fresh job seeded with crash-time completedNodeIds.
+    const freshJob6: RotationJobRecord = {
+      rootNodeId: root6Result.node.id,
+      status: 'pending',
+      completedNodeIds: new Set(jobRecord6.completedNodeIds),
+      frontier: [],
+    };
+
+    let resumeError6: unknown;
+    try {
+      await rotateReadFromNode({
+        rootNodeId: root6Result.node.id,
+        rootNodeIpnsName: root6IpnsName,
+        rootReadKey: readKeyPrimeRoot6,
+        rootIpnsPrivateKey: root6Result.ipnsPrivateKey,
+        rootIpnsPublicKey: root6IpnsPublicKey,
+        jobRecord: freshJob6,
+        ctx: aliceCtx,
+        nodeKeySource: nodeKeySource6,
+        ownerPublicKey: alice.publicKey,
+        ownerPrivateKey: alice.privateKey,
+        keyCheckpointCallbacks: checkpoint6,
+      });
+    } catch (err) {
+      resumeError6 = err;
+    }
+    expect(resumeError6).toBeUndefined();
+    expect(freshJob6.status).toBe('complete');
+
+    // --- D-10 assertion 3: root6 republishes EXACTLY ONCE for BOTH repaired
+    // siblings (the single batched D-09 republish), never twice (no spurious
+    // extra decrement/publish per sibling).
+    const root6ResolvedAfterResume = await resolveIpnsRecord(root6IpnsName, aliceCtx);
+    expect(root6ResolvedAfterResume!.sequenceNumber).toBe(
+      root6ResolvedAtCrash!.sequenceNumber + 1n
+    );
+
+    // --- D-10 assertion 4 (part 2): both checkpoints GC'd after the single
+    // batched mirror commit.
+    expect(checkpoint6.store.has(c1_6Node.id)).toBe(false);
+    expect(checkpoint6.store.has(c2_6Node.id)).toBe(false);
+
+    // --- D-10 assertion 1: owner navigates root6 -> c1_6 AND root6 -> c2_6
+    // and unseals both with the NEW root key.
+    const { readDescriptorRef: freshGrant6 } = await issueReadGrant({
+      shareRootReadKey: readKeyPrimeRoot6,
+      recipientPublicKey: bob.publicKey,
+      rootNodeId: root6Result.node.id,
+      rootIpnsName: root6IpnsName,
+      rootGeneration: 1,
+      insertShareFn: async (_p) => ({ shareId: crypto.randomUUID() }),
+    });
+    const navC1_6 = await navigateReadChain({
+      readDescriptorRef: freshGrant6,
+      recipientPrivKey: bob.privateKey,
+      rootIpnsName: root6IpnsName,
+      rootExpectedGeneration: 1,
+      path: [c1_6IpnsName],
+      ctx: bobCtx,
+    });
+    expect(navC1_6.status).toBe('ok');
+    if (navC1_6.status === 'ok') {
+      expect(navC1_6.content?.cid).toBeTruthy();
+    }
+    const navC2_6 = await navigateReadChain({
+      readDescriptorRef: freshGrant6,
+      recipientPrivKey: bob.privateKey,
+      rootIpnsName: root6IpnsName,
+      rootExpectedGeneration: 1,
+      path: [c2_6IpnsName],
+      ctx: bobCtx,
+    });
+    expect(navC2_6.status).toBe('ok');
+    if (navC2_6.status === 'ok') {
+      expect(navC2_6.content?.cid).toBeTruthy();
+    }
+
+    // --- D-10 assertion 2: the revoked reader's OLD key FAILS (revocation held).
+    const revokedNav6 = await navigateReadChain({
+      readDescriptorRef: preGrant6,
+      recipientPrivKey: bob.privateKey,
+      rootIpnsName: root6IpnsName,
+      rootExpectedGeneration: 0,
+      path: [c1_6IpnsName],
+      ctx: bobCtx,
+    });
+    expect(revokedNav6.status).toBe('behind-retry');
   }, 120_000);
 });
