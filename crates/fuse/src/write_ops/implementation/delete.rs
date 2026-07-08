@@ -67,10 +67,43 @@ pub fn handle_unlink(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Rep
         }
     };
 
-    // Capture the PARENT read/write keys (borrow → copy into owned arrays) so
-    // the D-07 dual child-ref can be sealed under the parent planes. Terminal-
-    // owner (D-09): the parent inode owns these buffers; we copy the 32 bytes
-    // and NEVER zero the inode-owned originals.
+    // Pre-gate POSIX validation (D-15d): unlink only ever targets a File —
+    // reject a directory (EISDIR) BEFORE the scope-exit gate runs, so a
+    // doomed-to-fail unlink never triggers a rotation attempt.
+    match fs.inodes.get(child_ino).map(|i| &i.kind) {
+        Some(InodeKind::File { .. }) => {}
+        Some(_) => {
+            reply.error(libc::EISDIR);
+            return;
+        }
+        None => {
+            reply.error(libc::ENOENT);
+            return;
+        }
+    }
+
+    log::debug!("unlink: {} from parent {}", name_str, parent);
+
+    // SC#3 grant-scope gate (research landmine 9): the unconditional
+    // `revoke_shares_blocking` is REPLACED, not augmented. A private delete (no
+    // covering grant) is a pure relink with ZERO rotation — the
+    // `update_folder_metadata(parent)` below is the only durable effect. A
+    // shared-scope exit rotates the read key from the matched grant-root
+    // ancestor EXACTLY ONCE. Fail-closed: rotation failure aborts the unlink.
+    //
+    // D-15d: this gate runs BEFORE the D-07 bin-ref capture below — a shared-
+    // scope-exit rotation must never be raced by a bin ref sealed under stale
+    // pre-rotation parent state.
+    if crate::write_ops::grant_scope::run_scope_exit_gate(fs, child_ino).is_err() {
+        reply.error(libc::EIO);
+        return;
+    }
+
+    // D-15d: capture the PARENT read/write keys (borrow → copy into owned
+    // arrays) AFTER the gate has run, so the D-07 dual child-ref below seals
+    // under post-rotation parent state, never a stale pre-rotation key.
+    // Terminal-owner (D-09): the parent inode owns these buffers; we copy the
+    // 32 bytes and NEVER zero the inode-owned originals.
     let parent_keys: Option<([u8; 32], [u8; 32])> =
         fs.inodes.get(parent).and_then(|p| match &p.kind {
             InodeKind::Root {
@@ -86,11 +119,13 @@ pub fn handle_unlink(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Rep
             _ => None,
         });
 
-    // Capture the bin-entry data in a single inode lookup. The child's node/v3
-    // read/write keys are re-sealed under the PARENT keys into the D-07 dual
-    // ref here — the SC#3 grant-scope gate below reads the mutated node's
-    // ancestry directly from the inode table, not from a name carried out of
-    // this match.
+    // Capture the bin-entry data in a single inode lookup, now that the gate
+    // has run. The child's node/v3 read/write keys are re-sealed under the
+    // PARENT keys into the D-07 dual ref here. The kind was already validated
+    // File above, so the non-File arm below is unreachable in practice (no
+    // concurrent mutator exists in the single-threaded FUSE callback) — kept
+    // exhaustive and fail-soft (skip the bin entry) rather than re-erroring
+    // after the destructive gate has already run.
     let bin_entry_data = match fs.inodes.get(child_ino) {
         Some(inode) => match &inode.kind {
             // node/v3: the file carries a plain `ipns_name` + symmetric
@@ -178,29 +213,10 @@ pub fn handle_unlink(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Rep
 
                 bin_data
             }
-            _ => {
-                reply.error(libc::EISDIR);
-                return;
-            }
+            _ => None,
         },
-        None => {
-            reply.error(libc::ENOENT);
-            return;
-        }
+        None => None,
     };
-
-    log::debug!("unlink: {} from parent {}", name_str, parent);
-
-    // SC#3 grant-scope gate (research landmine 9): the unconditional
-    // `revoke_shares_blocking` is REPLACED, not augmented. A private delete (no
-    // covering grant) is a pure relink with ZERO rotation — the
-    // `update_folder_metadata(parent)` below is the only durable effect. A
-    // shared-scope exit rotates the read key from the matched grant-root
-    // ancestor EXACTLY ONCE. Fail-closed: rotation failure aborts the unlink.
-    if crate::write_ops::grant_scope::run_scope_exit_gate(fs, child_ino).is_err() {
-        reply.error(libc::EIO);
-        return;
-    }
 
     let now = SystemTime::now();
 
@@ -278,9 +294,53 @@ pub fn handle_rmdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Repl
         }
     };
 
-    // Capture the PARENT read/write keys (borrow → copy) for the D-07 dual
-    // child-ref seal. Terminal-owner (D-09): copy the bytes, never zero the
-    // inode-owned buffers.
+    // Pre-gate POSIX validation (unchanged position, D-15d): ENOTDIR (not a
+    // folder) / ENOTEMPTY (non-empty folder) must reject BEFORE the
+    // scope-exit gate runs, so a doomed-to-fail rmdir never triggers a
+    // rotation attempt.
+    match fs.inodes.get(child_ino) {
+        Some(inode) => match &inode.kind {
+            InodeKind::Folder { .. } => {
+                if let Some(ref children) = inode.children {
+                    if !children.is_empty() {
+                        reply.error(libc::ENOTEMPTY);
+                        return;
+                    }
+                }
+            }
+            _ => {
+                reply.error(libc::ENOTDIR);
+                return;
+            }
+        },
+        None => {
+            reply.error(libc::ENOENT);
+            return;
+        }
+    }
+
+    log::debug!("rmdir: {} from parent {}", name_str, parent);
+
+    // SC#3 grant-scope gate (research landmine 9): the unconditional
+    // `revoke_shares_blocking` is REPLACED. The directory is guaranteed empty
+    // here (ENOTEMPTY returned above otherwise), so its own ancestry is the
+    // complete coverage set — there are no descendant nodes. A private rmdir is
+    // a pure relink with ZERO rotation (the `update_folder_metadata(parent)`
+    // below is the only durable effect); a shared-scope exit rotates the read
+    // key from the matched grant-root ancestor EXACTLY ONCE. Fail-closed:
+    // rotation failure aborts the rmdir (folder stays put).
+    //
+    // D-15d: this gate runs BEFORE the D-07 bin-ref capture below — see
+    // handle_unlink's identical rationale.
+    if crate::write_ops::grant_scope::run_scope_exit_gate(fs, child_ino).is_err() {
+        reply.error(libc::EIO);
+        return;
+    }
+
+    // D-15d: capture the PARENT read/write keys (borrow → copy) AFTER the
+    // gate has run, so the D-07 dual child-ref below seals under
+    // post-rotation parent state. Terminal-owner (D-09): copy the bytes,
+    // never zero the inode-owned buffers.
     let parent_keys: Option<([u8; 32], [u8; 32])> =
         fs.inodes.get(parent).and_then(|p| match &p.kind {
             InodeKind::Root {
@@ -296,7 +356,10 @@ pub fn handle_rmdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Repl
             _ => None,
         });
 
-    // Capture folder data for bin entry before inode removal
+    // Capture folder data for the bin entry, now that the gate has run. The
+    // POSIX shape was already validated above, so the non-Folder arm below is
+    // unreachable in practice (single-threaded FUSE callback) — kept
+    // exhaustive and fail-soft rather than re-erroring post-gate.
     let bin_entry_data = match fs.inodes.get(child_ino) {
         Some(inode) => {
             match &inode.kind {
@@ -308,14 +371,6 @@ pub fn handle_rmdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Repl
                     write_key,
                     ..
                 } => {
-                    // Check for non-empty folder (POSIX requirement)
-                    if let Some(ref children) = inode.children {
-                        if !children.is_empty() {
-                            reply.error(libc::ENOTEMPTY);
-                            return;
-                        }
-                    }
-
                     if ipns_name.is_empty() {
                         log::warn!(
                             "rmdir: missing ipns_name for ino {}, skipping bin entry",
@@ -374,32 +429,11 @@ pub fn handle_rmdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Repl
                         None
                     }
                 }
-                _ => {
-                    reply.error(libc::ENOTDIR);
-                    return;
-                }
+                _ => None,
             }
         }
-        None => {
-            reply.error(libc::ENOENT);
-            return;
-        }
+        None => None,
     };
-
-    log::debug!("rmdir: {} from parent {}", name_str, parent);
-
-    // SC#3 grant-scope gate (research landmine 9): the unconditional
-    // `revoke_shares_blocking` is REPLACED. The directory is guaranteed empty
-    // here (ENOTEMPTY returned above otherwise), so its own ancestry is the
-    // complete coverage set — there are no descendant nodes. A private rmdir is
-    // a pure relink with ZERO rotation (the `update_folder_metadata(parent)`
-    // below is the only durable effect); a shared-scope exit rotates the read
-    // key from the matched grant-root ancestor EXACTLY ONCE. Fail-closed:
-    // rotation failure aborts the rmdir (folder stays put).
-    if crate::write_ops::grant_scope::run_scope_exit_gate(fs, child_ino).is_err() {
-        reply.error(libc::EIO);
-        return;
-    }
 
     let now = SystemTime::now();
 

@@ -90,29 +90,11 @@ pub fn handle_rename(
         newparent,
     );
 
-    // SC#3 grant-scope gate for a cross-folder move (a scope-exit for the source
-    // subtree). A same-folder rename is NOT a scope exit — the node stays in
-    // place, so no rotation. Computed on the SOURCE ancestry BEFORE any inode
-    // mutation so a fail-closed rotation aborts the move cleanly (item stays
-    // put). Private move → pure `SealedChildRef` relink of both parents (ZERO
-    // rotation, D-08 unlink+bin-equivalent with no cross-principal revoke);
-    // shared-scope exit → rotate the read key from the matched grant-root
-    // ancestor EXACTLY ONCE. D-07 dual-keying is threaded inside the driver.
-    if parent != newparent
-        && crate::write_ops::grant_scope::run_scope_exit_gate(fs, source_ino).is_err()
-    {
-        reply.error(libc::EIO);
-        return;
-    }
-
-    // SC#2: a cross-folder move is now a PURE `SealedChildRef` relink — each
-    // node self-seals under its OWN readKey, so there is no per-file metadata to
-    // re-encrypt on move (the legacy re-encrypt-on-move path is dead by
-    // construction and deleted). The read-scope cut for a shared move is handled
-    // by the grant-scope gate above (rotation), not by re-keying the moved file.
-
-    // If destination exists, handle replacement
-    if let Some(dest_ino) = fs.inodes.find_child(newparent, newname_str) {
+    // D-15d: destination-REPLACEMENT POSIX validation runs BEFORE any
+    // scope-exit gate. A rename that will fail ENOTDIR/EISDIR/ENOTEMPTY must
+    // never trigger a rotation — validate first, gate second, mutate third.
+    let dest_ino = fs.inodes.find_child(newparent, newname_str);
+    if let Some(dest_ino) = dest_ino {
         // Self-replace (rename "a" to "a" in same dir): no-op
         if dest_ino == source_ino {
             reply.ok();
@@ -139,26 +121,65 @@ pub fn handle_rename(
                 return;
             }
 
-            match &dest_inode.kind {
-                InodeKind::Folder { .. } => {
-                    if let Some(ref children) = dest_inode.children {
-                        if !children.is_empty() {
-                            reply.error(libc::ENOTEMPTY);
-                            return;
-                        }
+            if let InodeKind::Folder { .. } = &dest_inode.kind {
+                if let Some(ref children) = dest_inode.children {
+                    if !children.is_empty() {
+                        reply.error(libc::ENOTEMPTY);
+                        return;
                     }
                 }
-                InodeKind::File { cid, .. } => {
-                    if !cid.is_empty() {
-                        let cid_clone = cid.clone();
-                        let api = fs.api.clone();
-                        fs.rt.spawn(async move {
-                            let _ =
-                                cipherbox_api_client::ipfs::unpin_content(&api, &cid_clone).await;
-                        });
-                    }
+            }
+        }
+    }
+
+    // SC#3 grant-scope gate for a cross-folder move (a scope-exit for the source
+    // subtree). A same-folder rename is NOT a scope exit — the node stays in
+    // place, so no rotation. Computed on the SOURCE ancestry AFTER the
+    // destination-replacement POSIX validation above (D-15d) but BEFORE any
+    // inode mutation, so a fail-closed rotation aborts the move cleanly (item
+    // stays put). Private move → pure `SealedChildRef` relink of both parents
+    // (ZERO rotation, D-08 unlink+bin-equivalent with no cross-principal
+    // revoke); shared-scope exit → rotate the read key from the matched
+    // grant-root ancestor EXACTLY ONCE. D-07 dual-keying is threaded inside
+    // the driver.
+    if parent != newparent
+        && crate::write_ops::grant_scope::run_scope_exit_gate(fs, source_ino).is_err()
+    {
+        reply.error(libc::EIO);
+        return;
+    }
+
+    // D-15d: gate the OVERWRITTEN destination's OWN scope-exit too. Replacing
+    // a destination removes dest_ino outright — that is itself a scope-exit
+    // for dest_ino's subtree whenever dest_ino is (or roots) a shared node,
+    // regardless of whether the move is same-folder or cross-folder. Runs
+    // AFTER the POSIX validation above (a doomed rename never reaches here)
+    // and independently of the source gate (two independent scope-exits).
+    if let Some(dest_ino) = dest_ino {
+        if crate::write_ops::grant_scope::run_scope_exit_gate(fs, dest_ino).is_err() {
+            reply.error(libc::EIO);
+            return;
+        }
+    }
+
+    // SC#2: a cross-folder move is now a PURE `SealedChildRef` relink — each
+    // node self-seals under its OWN readKey, so there is no per-file metadata to
+    // re-encrypt on move (the legacy re-encrypt-on-move path is dead by
+    // construction and deleted). The read-scope cut for a shared move is handled
+    // by the grant-scope gate above (rotation), not by re-keying the moved file.
+
+    // Destination replacement mutation (validated + gated above): unpin the
+    // replaced file's content (fire-and-forget) and remove its inode.
+    if let Some(dest_ino) = dest_ino {
+        if let Some(dest_inode) = fs.inodes.get(dest_ino) {
+            if let InodeKind::File { cid, .. } = &dest_inode.kind {
+                if !cid.is_empty() {
+                    let cid_clone = cid.clone();
+                    let api = fs.api.clone();
+                    fs.rt.spawn(async move {
+                        let _ = cipherbox_api_client::ipfs::unpin_content(&api, &cid_clone).await;
+                    });
                 }
-                _ => {}
             }
         }
         fs.publish_queue.remove(&dest_ino);
