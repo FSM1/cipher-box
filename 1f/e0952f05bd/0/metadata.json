@@ -1,0 +1,155 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "1fe0952f05bd",
+  "session_id": "a4ed1cb9-4e4c-4d71-bc03-3c2c6b4e70a3",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-08T21:09:56.492618Z",
+  "branch": "feat/rotation-read-plane-durability-and-deep-crash-resume-soundne",
+  "checkpoints_count": 3,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "a9da85e9f8d0",
+  "token_usage": {
+    "input_tokens": 60483,
+    "cache_creation_tokens": 1400773,
+    "cache_read_tokens": 55669634,
+    "output_tokens": 386758,
+    "api_call_count": 207
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-plan-phase-2026-07-08T13:42:46.030418Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "0eb6f9cbb31b",
+      "timestamp": "2026-07-08T13:42:46.030418Z",
+      "native": {
+        "command": "/gsd-plan-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-gsd-execute-phase-2026-07-08T15:12:58.253651Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "1b22299d3cb2",
+      "timestamp": "2026-07-08T15:12:58.253651Z",
+      "native": {
+        "command": "/gsd-execute-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 27
+  },
+  "summary": {
+    "intent": "Execute all 13 plans of Phase 70.1 (rotation read-plane durability + Rust engine twin + desktop FUSE live-wiring) using wave-based parallel execution with independent git worktrees for concurrent plans, then validate the phase via a real-mount desktop-e2e acceptance run.",
+    "outcome": "All 13 plans landed across 7 waves with green gates (depth-3 crash-safety e2e 6/6, sdk-core 363, sdk 362, cargo cipherbox-sdk 146, cargo cipherbox-fuse 106); two genuine product bugs were found and fixed (dirty-frontier decrypt-before-check ordering in both engines, and desktop sent_shares cache never refreshing causing universal EIO). The CI desktop-e2e run against the pushed branch failed on macOS/Linux at the new Step 8 leg (shared file never propagated to recipient), Windows didn't run Step 8 at all (only run-all.sh had it, not run-all.ps1) — mid-fix for Windows parity when the transcript ends, with a debugger about to be spawned to repro Part A locally via headless UAT.",
+    "learnings": {
+      "repo": [
+        "Desktop E2E has two separate harnesses: macOS/Linux use tests/desktop-e2e/scripts/run-all.sh, Windows uses run-all.ps1 — a new test step must be added to both or it silently doesn't run on Windows.",
+        "crates/sdk's anti-rollback floor sidecar (rotation-high-water.json) lives inside the cb-journal/ directory; WriteQueue::load_all scans all *.json there and logs benign 'missing field id' warnings for it — pre-existing since Phase 69, not a bug.",
+        "CipherBox delete is a soft-delete (moves to private recycle bin, re-seals keys) — structurally equivalent to a cross-folder move, which is why it triggers scope-exit rotation even though hard-delete semantics might suggest otherwise.",
+        "Rotation only fires on cross-folder moves/deletes (parent != newparent in rename.rs:134-135); same-folder renames never rotate since the node stays in scope.",
+        "'sent shares' (GET /shares/sent, Share entity) are live user-to-user grants; 'share-invites' are unclaimed link-based invites that only become a Share on claim — the rotation gate correctly keys off sent shares since only active grants need revocation.",
+        "crates/fuse's CipherBoxFS::refresh_sent_shares had zero call sites before this phase — mount init seeded SentSharesCache::empty() and never refreshed it, so Plan 11's new fail-closed gate (D-15a) caused every desktop delete/rename to EIO until wired with a bounded mount-init seed + 30s periodic refresh.",
+        "Desktop's query_grants_rooted_at is a no-op — a scope-exit rotation on desktop currently de-authorizes ALL recipients rather than selectively re-minting for still-valid ones (ROT-04 gap).",
+        "platform/windows/write_ops.rs duplicates the FUSE gate-ordering logic but can't be cargo-checked on macOS (winfsp-sys needs Windows COM APIs) — fixes to crates/fuse/src/write_ops don't automatically propagate there.",
+        "rust-analyzer diagnostics can be stale mid-edit false positives; the authoritative signal is `cargo check`/`cargo test` output, not IDE-reported errors.",
+        "sdk-core unit test mocks for unsealChildReadKey unconditionally succeeded regardless of key material, masking a real AEAD key-mismatch bug that only real crypto (via sdk-e2e) could catch — a class of bug structurally invisible to mocked unit tests."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/rotation/engine.ts",
+          "line": 815,
+          "finding": "collectDirtyFrontier called resolveChildKeyAndEnvelope (which unconditionally AEAD-decrypts) before checking childPub.generation > childRef.generation for dirtiness; fixed to check plaintext generation first and skip decryption entirely for dirty edges (nodeReadKey becomes optional/undefined, recovered later via ECIES checkpoint in repairDirtyNode)."
+        },
+        {
+          "path": "crates/sdk/src/rotation/engine.rs",
+          "line": 781,
+          "finding": "DirtyFrontierEntry widened to include parent_ipns_name/node_read_key/child_pub_kind/enqueued_generation; verify_subtree_clean made recursive via new collect_dirty_frontier stack-based walker; missing root now correctly returns is_dirty:true instead of being treated as clean."
+        },
+        {
+          "path": "crates/fuse/src/write_ops/grant_scope.rs",
+          "line": 269,
+          "finding": "rotate_read_on_scope_exit originally stubbed to always Err (fail-closed, EIO) since only a test FakeDeps implemented RotationDeps; Plan 09 added production FuseRotationDeps adapter and live-wired this call."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/fuse/mod.rs",
+          "line": 382,
+          "finding": "sent_shares field converted from plain RwLock to Arc<RwLock<..>> so a spawned periodic refresh task and the mounted fs can share one lock; mount init does a bounded 5s best-effort authoritative seed then spawns a 30s periodic refresh."
+        }
+      ],
+      "workflow": [
+        "When dispatching multiple worktree-isolated subagents, fire Agent calls one message at a time (not batched in parallel) to avoid a `.git/config.lock` race during simultaneous `git worktree add` — they still execute concurrently once each worktree exists.",
+        "Run a synchronous single-plan 'canary' through the full worktree→commit→SUMMARY→merge cycle before fanning out a large wave, to validate the merge mechanics work before committing to N concurrent agents.",
+        "Scope `cargo fmt`/`cargo clippy` to the specific crate (`-p <crate>`) inside worktree executors, not workspace-wide — an unscoped `cargo fmt --all` leaves unrelated files reformatted-but-uncommitted, which blocks the wave-merge helper with a 'worktree_dirty' error.",
+        "After merging a wave that touched a package other than the one immediately under test, rebuild all dependent package dists before running downstream package test suites — a stale dist causes false-negative cross-package test failures that look like real regressions.",
+        "For infra-dependent e2e tests (needing live docker/API), have worktree executors write+typecheck the fixture only and defer the actual live run to the orchestrator on the main checkout, keeping worktrees concurrent while controlling the flaky infra-sensitive part centrally.",
+        "When a product bug is found by a gate the phase itself introduced (e.g. an anti-vacuous e2e test), delegate a scientific-method diagnosis subagent that must explicitly distinguish 'fixture bug' from 'product bug' before any fix is attempted, and must not paper over failures to get tests green.",
+        "Long-running git commit commands that report a tool-level timeout should be verified via `git log` before retrying — the commit frequently already landed and the timeout was just a slow hook (e.g. lint-staged on a large file)."
+      ]
+    },
+    "friction": [
+      "`gsd_run loop render-hooks plan:pre --raw` emits invalid JSON with literal newlines; had to read the underlying file directly instead.",
+      "The GSD commit helper reports false-negative `commit_failed` even when lint-staged actually completed successfully — required verifying via `git log` each time rather than trusting the tool's own status.",
+      "Decision-coverage gate failed with an opaque '0/15 covered, malformed bullets' message that gave no indication which bullet was malformed; required manually testing every `**D-` bullet against the parser's three accepted regex forms to find the D-09/D-10 period-vs-colon issue.",
+      "`state.planned-phase` tool silently no-op'd (`updated: []`) because STATE.md's format didn't match its expected anchor fields, requiring a manual STATE.md edit.",
+      "ROADMAP.md annotate tool also returned `updated: false` (non-blocking) for wave-dependency annotation.",
+      "A prompt-injection false-positive fired on a legitimate ROADMAP.md edit (matched an 'act as' pattern in ordinary phase-definition prose).",
+      "Cross-plan Rust dist/compile risk: plan 03 (HighWaterStore::put signature change) and plan 04 (engine.rs) forked from different bases and had to be integration-tested together post-merge to catch a possible compile break.",
+      "Wave 3 post-merge sdk vitest suite showed 3 spurious failures due to stale sdk-core dist in the main checkout (never rebuilt after Wave 2), which looked like a real cross-plan regression until dists were rebuilt.",
+      "sdk-e2e vitest has no dotenv loader wired into its config; running it without first sourcing `.env` causes a silent auth fallback to a default secret and a misleading 401 'Invalid test login secret' error.",
+      "Plan 13's agent kept receiving `AskUserQuestion` menu re-fires that the user answered by asking clarifying questions instead of picking an option, requiring the orchestrator to re-issue the same decision three times before the user gave a direct instruction.",
+      "CI desktop-e2e run failed on macOS and Linux at the newly authored Step 8 leg (file never propagated to recipient within 18 poll attempts) — a bug in the brand-new leg's setup/poll logic or a real regression, still being triaged when the transcript ends.",
+      "Windows leg of desktop-e2e didn't exercise Step 8 at all because plan 13 only added the step to run-all.sh, not run-all.ps1 — a platform-coverage gap discovered only after CI ran."
+    ],
+    "open_items": [
+      "Reproduce and fix the desktop-e2e Step 8 Part A failure (secret.txt never appears under recipient IPNS after 18 poll attempts) on macOS/Linux via local headless-desktop UAT — debugger spawn was in progress when transcript ends.",
+      "Add Step 8 (shared-scope-exit rotation leg) to run-all.ps1 for Windows parity — edit made but not yet verified/committed at transcript end.",
+      "WinFsp D-15d gate-ordering parity: platform/windows/write_ops.rs still has the old ordering the D-15d fix corrected in the Unix path; captured as todo 2026-07-08-winfsp-d15d-gate-ordering-parity.md.",
+      "Desktop ROT-04 gap: query_grants_rooted_at is a no-op, so scope-exit rotation currently de-authorizes ALL recipients instead of selectively re-minting; captured as todo 2026-07-08-desktop-query-grants-rooted-at-remint-noop.md.",
+      "D-16 real-mount desktop-e2e human sign-off is still pending — CI run failed, so the 4 D-16 assertions (no-EIO delete, exactly-one rotation, recipient cut off, private-delete zero-rotation) have not yet been confirmed green.",
+      "Cosmetic heading inconsistency in Plan 01 ('Artifacts this phase produces (master index)' vs '...this plan produces') flagged by plan-checker as non-blocking, not yet cleaned up.",
+      "Journal 'missing field id' warning noise for rotation-high-water.json in cb-journal/ scan flagged as worth a cleanup todo but not filed."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
