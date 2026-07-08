@@ -524,11 +524,11 @@ async fn re_mint_grants_rooted_at<D: RotationDeps>(
         } else {
             let wrapped = cipherbox_crypto::wrap_key(new_read_key, &grant.recipient_public_key)
                 .map_err(|e| {
-                RotationError::RotateFailed(format!(
-                    "re_mint_grants_rooted_at: wrap_key failed for share {}: {e}",
-                    grant.share_id
-                ))
-            })?;
+                    RotationError::RotateFailed(format!(
+                        "re_mint_grants_rooted_at: wrap_key failed for share {}: {e}",
+                        grant.share_id
+                    ))
+                })?;
             let read_descriptor_ref = base64_encode(&wrapped);
             deps.update_grant(&grant.share_id, &read_descriptor_ref, new_generation)
                 .await?;
@@ -651,8 +651,8 @@ async fn seal_and_publish<D: RotationDeps>(
                 "rotate_one: encode failed for {node_ipns_name}: {e}"
             ))
         })?;
-        let resealed =
-            seal_node(&read_body, read_key_prime, node_id, kind, new_generation).map_err(|e| {
+        let resealed = seal_node(&read_body, read_key_prime, node_id, kind, new_generation)
+            .map_err(|e| {
                 RotationError::RotateFailed(format!(
                     "rotate_one: seal failed for {node_ipns_name}: {e}"
                 ))
@@ -1827,7 +1827,10 @@ mod test_support {
         }
 
         async fn delete_grant(&self, share_id: &str) -> Result<(), RotationError> {
-            self.deleted_grants.lock().unwrap().push(share_id.to_string());
+            self.deleted_grants
+                .lock()
+                .unwrap()
+                .push(share_id.to_string());
             Ok(())
         }
     }
@@ -2049,8 +2052,7 @@ mod rotate_one {
         let new_key_arr = zeroizing_32_from_slice(&new_file_key).unwrap();
         let iv = [1u8; 12];
         let plaintext = b"next version content";
-        let ciphertext =
-            cipherbox_crypto::encrypt_aes_gcm(plaintext, &new_key_arr, &iv).unwrap();
+        let ciphertext = cipherbox_crypto::encrypt_aes_gcm(plaintext, &new_key_arr, &iv).unwrap();
         assert!(
             cipherbox_crypto::decrypt_aes_gcm(&ciphertext, &old_key_arr, &iv).is_err(),
             "CRIT-1: old fileKey must NOT decrypt content encrypted under the new fileKey"
@@ -2441,6 +2443,209 @@ mod rotate_read_from_node {
         );
     }
 
+    // -----------------------------------------------------------------------
+    // SC#1/SC#2 (Plan 70.1-06, D-11): depth-aware dirty-resume CONSUMPTION --
+    // Bug A (the dirty-resume loop's `root_children.iter().find(...)` +
+    // `continue` silently drops any depth>=2 entry) and Bug B
+    // (`complete_pending_child` silently no-ops instead of the REAL
+    // intermediate parent republishing) exercised end-to-end through
+    // `rotate_read_from_node`'s Skip-root resume branch -- not just
+    // `verify_subtree_clean`'s detection, which the D-12 tests above already
+    // cover. Modeled on `resume_after_crash_converges_without_double_bump_when_seeded`
+    // below.
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn sc1_depth2_dirty_entry_consumption_republishes_real_intermediate_parent_not_root() {
+        let deps = FakeDeps::new();
+        let root_read_key = [40u8; 32];
+
+        // depth-1: A, clean, direct child of root.
+        let a_id = child_uuid(200);
+        let a_key = [41u8; 32];
+        // depth-2: B, DIRTY, child of A -- A's own mirror of B is stale
+        // (generation 0) while B's OWN published node individually committed
+        // its own rotation to generation 1 (same "same key, bumped
+        // generation" simplification the D-12 tests above use -- only the
+        // generation comparison and the consumption wiring are under test
+        // here, not a second independently-derived key).
+        let b_id = child_uuid(201);
+        let b_key = [42u8; 32];
+
+        let b_node = folder(&b_id, 1, vec![]);
+        deps.seed("k51/b", "cid-b-1", 1, seal_for_seed(&b_node, &b_key));
+
+        let b_sealed_key = seal_child_read_key(&b_key, &a_key, &b_id, NodeKind::Folder, 0).unwrap();
+        let b_ref = SealedChildRef {
+            name: "b".to_string(),
+            ipns_name: "k51/b".to_string(),
+            generation: 0,
+            version_floor: 0,
+            read_key_sealed: base64_encode(&b_sealed_key),
+        };
+        let a_node = folder(&a_id, 0, vec![b_ref]);
+        deps.seed("k51/a", "cid-a-0", 0, seal_for_seed(&a_node, &a_key));
+
+        let a_sealed_key =
+            seal_child_read_key(&a_key, &root_read_key, &a_id, NodeKind::Folder, 0).unwrap();
+        let a_ref = SealedChildRef {
+            name: "a".to_string(),
+            ipns_name: "k51/a".to_string(),
+            generation: 0,
+            version_floor: 0,
+            read_key_sealed: base64_encode(&a_sealed_key),
+        };
+        let root_node = folder(ROOT_ID, 0, vec![a_ref]);
+        deps.seed(
+            "k51/root",
+            "cid-root-0",
+            0,
+            seal_for_seed(&root_node, &root_read_key),
+        );
+
+        // Resume: root already committed (fast-path Skip) -- the dirty tail
+        // below it (B, real parent A) is what this run must reconcile.
+        let mut job = RotationJobRecord::new(ROOT_ID);
+        job.completed_node_ids.insert(ROOT_ID.to_string());
+
+        rotate_read_from_node(&deps, ROOT_ID, "k51/root", &root_read_key, &mut job)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            deps.publish_count_for("k51/b"),
+            1,
+            "the depth-2 dirty entry itself must be consumed (rotated) exactly once"
+        );
+        assert_eq!(
+            deps.publish_count_for("k51/a"),
+            1,
+            "A (B's REAL parent) must republish exactly once to absorb B's decrement -- \
+             Bug A's root_children.find(...) drop would leave this at 0"
+        );
+        assert_eq!(
+            deps.publish_count_for("k51/root"),
+            0,
+            "root must NOT carry a wedged or mis-attributed pending count -- root itself \
+             was a pure resume-skip with no root-direct dirty children this run"
+        );
+
+        // Confirm A's mirror of B was actually fixed (not just "some publish
+        // happened") -- unseal A's newly-republished body and check B's ref
+        // now reflects B's CURRENT generation.
+        let a_resolved = deps.resolve("k51/a").await.unwrap().unwrap();
+        let a_pub = deps.fetch_node(&a_resolved.cid).await.unwrap();
+        let a_sealed_bytes = decode_b64(&a_pub.read_sealed).unwrap();
+        let a_body = unseal_node(
+            &a_sealed_bytes,
+            &a_key,
+            &a_id,
+            NodeKind::Folder,
+            a_pub.generation,
+        )
+        .unwrap();
+        let a_node_after = decode_node(&a_body).unwrap();
+        let b_ref_after = node_children(&a_node_after)
+            .into_iter()
+            .find(|c| c.ipns_name == "k51/b")
+            .unwrap();
+        assert_eq!(
+            b_ref_after.generation, 2,
+            "A's mirror of B must reflect B's freshly-rotated generation (1 -> 2)"
+        );
+    }
+
+    #[tokio::test]
+    async fn sc2_depth3_dirty_entry_decrement_is_not_dropped_across_two_intermediate_hops() {
+        let deps = FakeDeps::new();
+        let root_read_key = [50u8; 32];
+
+        // depth-1: A, clean, direct child of root.
+        let a_id = child_uuid(210);
+        let a_key = [51u8; 32];
+        // depth-2: A2, clean, child of A -- found only by walking THROUGH A
+        // (exercises the seed-or-find primitive's multi-hop descent, not a
+        // single root->child hop like the SC#1 test above).
+        let a2_id = child_uuid(211);
+        let a2_key = [52u8; 32];
+        // depth-3: C, DIRTY, child of A2.
+        let c_id = child_uuid(212);
+        let c_key = [53u8; 32];
+
+        let c_node = folder(&c_id, 1, vec![]);
+        deps.seed("k51/c", "cid-c-1", 1, seal_for_seed(&c_node, &c_key));
+
+        let c_sealed_key =
+            seal_child_read_key(&c_key, &a2_key, &c_id, NodeKind::Folder, 0).unwrap();
+        let c_ref = SealedChildRef {
+            name: "c".to_string(),
+            ipns_name: "k51/c".to_string(),
+            generation: 0,
+            version_floor: 0,
+            read_key_sealed: base64_encode(&c_sealed_key),
+        };
+        let a2_node = folder(&a2_id, 0, vec![c_ref]);
+        deps.seed("k51/a2", "cid-a2-0", 0, seal_for_seed(&a2_node, &a2_key));
+
+        let a2_sealed_key =
+            seal_child_read_key(&a2_key, &a_key, &a2_id, NodeKind::Folder, 0).unwrap();
+        let a2_ref = SealedChildRef {
+            name: "a2".to_string(),
+            ipns_name: "k51/a2".to_string(),
+            generation: 0,
+            version_floor: 0,
+            read_key_sealed: base64_encode(&a2_sealed_key),
+        };
+        let a_node = folder(&a_id, 0, vec![a2_ref]);
+        deps.seed("k51/a", "cid-a-0", 0, seal_for_seed(&a_node, &a_key));
+
+        let a_sealed_key =
+            seal_child_read_key(&a_key, &root_read_key, &a_id, NodeKind::Folder, 0).unwrap();
+        let a_ref = SealedChildRef {
+            name: "a".to_string(),
+            ipns_name: "k51/a".to_string(),
+            generation: 0,
+            version_floor: 0,
+            read_key_sealed: base64_encode(&a_sealed_key),
+        };
+        let root_node = folder(ROOT_ID, 0, vec![a_ref]);
+        deps.seed(
+            "k51/root",
+            "cid-root-0",
+            0,
+            seal_for_seed(&root_node, &root_read_key),
+        );
+
+        let mut job = RotationJobRecord::new(ROOT_ID);
+        job.completed_node_ids.insert(ROOT_ID.to_string());
+
+        rotate_read_from_node(&deps, ROOT_ID, "k51/root", &root_read_key, &mut job)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            deps.publish_count_for("k51/c"),
+            1,
+            "the depth-3 dirty entry must be consumed exactly once"
+        );
+        assert_eq!(
+            deps.publish_count_for("k51/a2"),
+            1,
+            "A2 (C's REAL parent, itself found by walking THROUGH A) must republish \
+             exactly once -- complete_pending_child must not drop this decrement"
+        );
+        assert_eq!(
+            deps.publish_count_for("k51/a"),
+            0,
+            "A must not be touched -- it has no root-direct dirty children this run"
+        );
+        assert_eq!(
+            deps.publish_count_for("k51/root"),
+            0,
+            "root must not carry a mis-attributed pending count"
+        );
+    }
+
     #[tokio::test]
     async fn resume_after_crash_converges_without_double_bump_when_seeded() {
         let deps = FakeDeps::new();
@@ -2731,7 +2936,9 @@ mod rotate_read_from_node {
         let children = node_children(&root_node);
 
         assert!(
-            children.iter().any(|c| c.ipns_name == "k51/child-concurrent"),
+            children
+                .iter()
+                .any(|c| c.ipns_name == "k51/child-concurrent"),
             "HIGH-4: a child added concurrently mid-rotation must be present \
              in the completed parent, got: {children:?}"
         );
