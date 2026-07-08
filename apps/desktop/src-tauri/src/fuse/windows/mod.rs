@@ -207,6 +207,45 @@ mod mount_impl {
             });
         }
 
+        // Grant-root awareness (SC#3 / SC#8): build the shared sent-shares
+        // cache, seed it authoritatively at mount init (best-effort, bounded so
+        // a slow/unreachable relay can never hang the mount), then drive a
+        // periodic background refresh. Until a refresh succeeds the cache stays
+        // non-authoritative and the delete/rename scope-exit gate fails CLOSED
+        // (EIO) — safe (never a silent revocation bypass), never fail-open.
+        let sent_shares = Arc::new(std::sync::RwLock::new(
+            cipherbox_fuse::write_ops::grant_scope::SentSharesCache::empty(),
+        ));
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            cipherbox_fuse::write_ops::grant_scope::refresh_sent_shares(&state.sdk.api),
+        )
+        .await
+        {
+            Ok(Ok(cache)) => {
+                cipherbox_fuse::write_ops::grant_scope::install_sent_shares_cache(
+                    &sent_shares,
+                    cache,
+                );
+                log::info!("Mount init: sent-shares cache seeded (authoritative)");
+            }
+            Ok(Err(e)) => log::warn!(
+                "Mount init: sent-shares refresh failed (scope-exit gate fails closed until \
+                 periodic refresh): {}",
+                e
+            ),
+            Err(_) => log::warn!(
+                "Mount init: sent-shares refresh timed out (scope-exit gate fails closed until \
+                 periodic refresh)"
+            ),
+        }
+        cipherbox_fuse::write_ops::grant_scope::spawn_periodic_sent_shares_refresh(
+            &rt,
+            state.sdk.api.clone(),
+            sent_shares.clone(),
+            cipherbox_fuse::write_ops::grant_scope::SENT_SHARES_REFRESH_INTERVAL,
+        );
+
         let fs = CipherBoxFS {
             inodes,
             metadata_cache,
@@ -243,9 +282,7 @@ mod mount_impl {
             mutated_folders: HashMap::new(),
             publish_coordinator,
             publish_queue: HashMap::new(),
-            sent_shares: std::sync::RwLock::new(
-                cipherbox_fuse::write_ops::grant_scope::SentSharesCache::empty(),
-            ),
+            sent_shares,
         };
 
         // Create WinFsp context with Arc<Mutex<>> for interior mutability

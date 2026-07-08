@@ -178,6 +178,79 @@ pub async fn refresh_sent_shares(api: &ApiClient) -> Result<SentSharesCache, Api
     Ok(SentSharesCache::from_sent_shares(&shares))
 }
 
+/// Cadence for the background sent-shares refresh (grant-root awareness).
+/// Matches the app's 30s IPNS-poll rhythm: short enough that a folder shared
+/// AFTER mount is covered by the scope-exit gate within one cycle (closing the
+/// stale-cache fail-open window), without hammering `/shares/sent`.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+pub const SENT_SHARES_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Install a freshly-refreshed [`SentSharesCache`] into a shared slot,
+/// recovering a poisoned lock (D-15c).
+///
+/// A successfully-refreshed AUTHORITATIVE cache is always safe to install
+/// regardless of any prior poisoning, so recover the guard via `into_inner`
+/// and clear the poison flag rather than panicking or leaving the gate
+/// permanently failing closed until remount. Shared by
+/// [`crate::CipherBoxFS::refresh_sent_shares`] and the periodic background
+/// task ([`spawn_periodic_sent_shares_refresh`]) so both use identical
+/// poison-recovery semantics.
+pub fn install_sent_shares_cache(
+    slot: &std::sync::RwLock<SentSharesCache>,
+    cache: SentSharesCache,
+) {
+    match slot.write() {
+        Ok(mut guard) => *guard = cache,
+        Err(poisoned) => {
+            log::error!(
+                "install_sent_shares_cache: sent_shares RwLock was poisoned by a prior \
+                 panicked holder — installing the freshly-refreshed authoritative cache \
+                 and clearing the poison flag (D-15c)"
+            );
+            *poisoned.into_inner() = cache;
+            slot.clear_poison();
+        }
+    }
+}
+
+/// Spawn the periodic background sent-shares refresh on `rt`.
+///
+/// Refreshes `sent_shares` every `interval` from `GET /shares/sent`, keeping
+/// grant-root awareness fresh so a folder shared AFTER mount is still covered
+/// by the scope-exit gate — closing the stale-cache fail-open window that a
+/// one-shot mount-init refresh alone would leave. A failed refresh keeps the
+/// prior cache (logged, non-fatal); this is NEVER the per-mutation hot path
+/// (Pitfall 2 / T-69-07-01).
+///
+/// The first tick fires immediately (default `tokio::time::interval`
+/// behavior), so the loop also RECOVERS a failed/timed-out mount-init refresh
+/// promptly rather than waiting a full `interval`. Fire-and-forget: the task
+/// lives for the mount's lifetime and is torn down when the runtime shuts
+/// down at unmount.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+pub fn spawn_periodic_sent_shares_refresh(
+    rt: &tokio::runtime::Handle,
+    api: std::sync::Arc<ApiClient>,
+    sent_shares: std::sync::Arc<std::sync::RwLock<SentSharesCache>>,
+    interval: std::time::Duration,
+) {
+    rt.spawn(async move {
+        let mut ticker = tokio::time::interval(interval);
+        loop {
+            ticker.tick().await;
+            match refresh_sent_shares(&api).await {
+                Ok(cache) => install_sent_shares_cache(&sent_shares, cache),
+                Err(e) => {
+                    log::warn!(
+                        "periodic sent-shares refresh failed (keeping prior cache): {}",
+                        e
+                    )
+                }
+            }
+        }
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Coverage-params builder + grant-root selection — wrap has_covering_grant
 // ---------------------------------------------------------------------------
