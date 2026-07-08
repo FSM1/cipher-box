@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "b65e7c88bc74",
+  "strategy": "manual-commit",
+  "branch": "docs/phase-70.1-rotation-read-plane-durability",
+  "checkpoints_count": 3,
+  "files_touched": [
+    ".planning/STATE.md",
+    ".planning/todos/pending/2026-07-02-rotation-hardening-followups-from-pr-review.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/b6/5e7c88bc74/0/metadata.json",
+      "transcript": "/b6/5e7c88bc74/0/full.jsonl",
+      "content_hash": "/b6/5e7c88bc74/0/content_hash.txt",
+      "prompt": "/b6/5e7c88bc74/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 41328,
+    "cache_creation_tokens": 1054913,
+    "cache_read_tokens": 46183795,
+    "output_tokens": 251952,
+    "api_call_count": 156
+  }
+}
