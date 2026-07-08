@@ -111,6 +111,26 @@ const COMBINED_FILE_NAME: &str = "rotation-high-water.json";
 const LEGACY_GENERATION_FILE_NAME: &str = "rotation-high-water-generation.json";
 const LEGACY_SEQ_FILE_NAME: &str = "rotation-high-water-seq.json";
 
+/// Returns `true` if `file_name` is one of the reserved floor-sidecar file
+/// names (current combined shape or either legacy pre-70.1-03 shape) that
+/// live inside the same journal directory as `WriteQueue`'s own `<id>.json`
+/// entries.
+///
+/// `WriteQueue::load_all_for_vault`/`gc_failed_entries` (`crate::queue`)
+/// scan every `*.json` file in the journal dir and attempt to parse each as
+/// a `JournalEntry`. A floor sidecar is not one and will never parse as
+/// one, so without this check every scan logs a benign-but-noisy
+/// "malformed entry ... missing field 'id' — skipping" warning for it. This
+/// is purely a scan-time filter: it does not change GC deletion behavior
+/// (GC pass 3 only ever removes orphaned `.bin` sidecars, never touches
+/// this file).
+pub(crate) fn is_reserved_floor_sidecar(file_name: &str) -> bool {
+    matches!(
+        file_name,
+        COMBINED_FILE_NAME | LEGACY_GENERATION_FILE_NAME | LEGACY_SEQ_FILE_NAME
+    )
+}
+
 /// Outcome of loading the sidecar map from disk (blocking).
 enum LoadOutcome {
     /// The sidecar has never been written — genuinely "no floor known".
@@ -929,5 +949,14 @@ mod tests {
         );
         assert_eq!(gen_store.get(node_id).await, Some(expected_gen_max));
         assert_eq!(seq_store.get(node_id).await, Some(expected_seq_max));
+    }
+
+    #[test]
+    fn is_reserved_floor_sidecar_recognizes_combined_and_legacy_names() {
+        assert!(is_reserved_floor_sidecar(COMBINED_FILE_NAME));
+        assert!(is_reserved_floor_sidecar(LEGACY_GENERATION_FILE_NAME));
+        assert!(is_reserved_floor_sidecar(LEGACY_SEQ_FILE_NAME));
+        assert!(!is_reserved_floor_sidecar("some-journal-entry-id.json"));
+        assert!(!is_reserved_floor_sidecar("rotation-high-water.tmp"));
     }
 }
