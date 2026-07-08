@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "6bcca5fd0a84",
+  "strategy": "manual-commit",
+  "branch": "feat/rotation-read-plane-durability-and-deep-crash-resume-soundne",
+  "checkpoints_count": 2,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/6b/cca5fd0a84/0/metadata.json",
+      "transcript": "/6b/cca5fd0a84/0/full.jsonl",
+      "content_hash": "/6b/cca5fd0a84/0/content_hash.txt",
+      "prompt": "/6b/cca5fd0a84/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 46713,
+    "cache_creation_tokens": 1233907,
+    "cache_read_tokens": 31688359,
+    "output_tokens": 266870,
+    "api_call_count": 149
+  }
+}
