@@ -11,7 +11,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as secp256k1 from '@noble/secp256k1';
-import { unwrapKey } from '@cipherbox/crypto';
+import { unwrapKey, wrapKey } from '@cipherbox/crypto';
 import {
   rotateOne,
   rotateReadFromNode,
@@ -1735,12 +1735,40 @@ const P05_GRANDCHILD_IPNS = 'k51grandchildp0500000000000000000000000000000000000
 const P05_SUBFOLDER_READ_KEY = new Uint8Array(32).fill(0x21);
 const P05_GRANDCHILD_READ_KEY = new Uint8Array(32).fill(0x22);
 
+/**
+ * Key-aware `unsealChildReadKey` mock (Plan 70.1-10 / T1 AEAD-crash
+ * regression hardening): models a REAL AEAD failure — throws when the
+ * supplied `parentKey` does not match the key a given `sealed` value was
+ * actually sealed under. The un-hardened unconditional-success mock
+ * previously used in this describe block MASKED the root-cause bug (decrypt
+ * attempted before the plaintext dirtiness check): it let a dirty edge's
+ * `SealedChildRef.readKeySealed` "decrypt" successfully under ANY key,
+ * including one it was never actually sealed under.
+ */
+function keyAwareUnsealChildReadKey(
+  registry: Record<string, { validUnder: Uint8Array; returns: Uint8Array }>
+): (sealed: string, parentKey: Uint8Array) => Promise<Uint8Array> {
+  return async (sealed, parentKey) => {
+    const entry = registry[sealed];
+    if (!entry) throw new Error(`unexpected sealed value: ${sealed}`);
+    const matches =
+      parentKey.length === entry.validUnder.length &&
+      parentKey.every((b, i) => b === entry.validUnder[i]);
+    if (!matches) {
+      throw new Error(
+        `CryptoError: Decryption failed — ${sealed} is not sealed under the supplied key`
+      );
+    }
+    return new Uint8Array(entry.returns);
+  };
+}
+
 describe('verifySubtreeClean — full-subtree recursion (Plan 70-05 SC#2)', () => {
   beforeEach(() => {
     vi.resetAllMocks();
   });
 
-  it('Test 1 (Plan 70-05): dirty at depth 2 — grandchild dirty edge carries a usable engine-derived nodeReadKey', async () => {
+  it('Test 1 (Plan 70-05 / hardened for 70.1-10): dirty at depth 2 — grandchild dirty edge is detected WITHOUT ever decrypting it', async () => {
     // root -[clean edge]-> subfolder -[dirty edge]-> grandchild
     const rootFolderNode = makeFolderNode({
       id: NODE_ID,
@@ -1799,22 +1827,29 @@ describe('verifySubtreeClean — full-subtree recursion (Plan 70-05 SC#2)', () =
         throw new Error(`unexpected unsealNode call for ${published.id}`);
       }
     );
-    // Return fresh copies, not the shared module-level constants: a clean
-    // edge's derived key is zeroed in-place by collectDirtyFrontier (T7), so
-    // returning the constant directly would mutate it for every later test
-    // in this file AND make the toEqual assertion below compare the SAME
-    // (possibly-zeroed) object against itself — a false-green that could
-    // never catch a regression (T6).
-    mockFns.unsealChildReadKey.mockImplementation(async (sealed: string) => {
-      if (sealed === 'subfoldersealed==') return new Uint8Array(P05_SUBFOLDER_READ_KEY);
-      if (sealed === 'grandchildsealed==') return new Uint8Array(P05_GRANDCHILD_READ_KEY);
-      throw new Error(`unexpected sealed value: ${sealed}`);
-    });
+    // Plan 70.1-10 hardening (T1 AEAD-crash regression): key-aware mock — only
+    // 'subfoldersealed==' (a CLEAN edge, decrypted under the root's key) is
+    // ever expected to be decrypted. 'grandchildsealed==' is registered as
+    // only valid under P05_GRANDCHILD_READ_KEY's OWN made-up "sealing" key
+    // (deliberately never supplied as a parentKey anywhere in this test) —
+    // if the fix regresses and collectDirtyFrontier attempts to decrypt the
+    // dirty grandchild edge at all, this mock throws instead of silently
+    // succeeding like the old unconditional-success mock did.
+    mockFns.unsealChildReadKey.mockImplementation(
+      keyAwareUnsealChildReadKey({
+        'subfoldersealed==': { validUnder: T07_ROOT_READ_KEY, returns: P05_SUBFOLDER_READ_KEY },
+        'grandchildsealed==': {
+          validUnder: new Uint8Array(32).fill(0xff), // never actually supplied
+          returns: P05_GRANDCHILD_READ_KEY,
+        },
+      })
+    );
 
     // RED (depth-1-only implementation): root's only immediate child (subfolder) is a
     // CLEAN edge (generation 3 === 3), so the old implementation never looks past it —
     // returns { isDirty: false, frontier: [] }, missing the depth-2 dirty grandchild.
-    // GREEN: recurses into the clean subfolder edge and finds the dirty grandchild edge.
+    // GREEN: recurses into the clean subfolder edge and finds the dirty grandchild edge
+    // WITHOUT ever attempting to decrypt it (Plan 70.1-10 fix).
     const result = await verifySubtreeClean(NODE_IPNS, T07_ROOT_READ_KEY, createMockContext());
 
     expect(result.isDirty).toBe(true);
@@ -1826,7 +1861,124 @@ describe('verifySubtreeClean — full-subtree recursion (Plan 70-05 SC#2)', () =
       childPubKind: 'file',
       enqueuedGeneration: 1,
     });
-    expect(result.frontier[0].nodeReadKey).toEqual(P05_GRANDCHILD_READ_KEY);
+    // Plan 70.1-10 fix: a dirty edge never carries decrypted key material —
+    // repairDirtyNode recovers the real key via the ECIES checkpoint instead.
+    expect(result.frontier[0].nodeReadKey).toBeUndefined();
+    // Prove the decrypt was never even attempted for the dirty edge — if it
+    // HAD been (the regression this test guards against), the key-aware mock
+    // above would have thrown and this whole call would have rejected.
+    expect(mockFns.unsealChildReadKey).not.toHaveBeenCalledWith(
+      'grandchildsealed==',
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it('Test 4 (Plan 70.1-10): depth-2 dirty edge whose parent ALSO rotated in this walk — decrypt never attempted, edge still correctly detected as dirty', async () => {
+    // root -[clean edge]-> subfolder -[DIRTY edge]-> grandchild
+    //
+    // Reproduces the T1 AEAD-crash regression directly: subfolder's grandchild
+    // mirror entry ('grandchildsealed==') is ONLY valid under subfolder's OLD
+    // (pre-rotation) key — NOT under P05_SUBFOLDER_READ_KEY, subfolder's
+    // CURRENT key (the one collectDirtyFrontier derives to recurse into
+    // subfolder). The pre-fix implementation decrypted 'grandchildsealed=='
+    // with the CURRENT key BEFORE comparing generations, throwing an AEAD
+    // "Decryption failed" error instead of ever discovering the dirty edge.
+    const SUBFOLDER_OLD_READ_KEY = new Uint8Array(32).fill(0x99);
+
+    const rootFolderNode = makeFolderNode({
+      id: NODE_ID,
+      generation: 5,
+      children: [
+        {
+          name: 'subfolder',
+          ipnsName: P05_SUBFOLDER_IPNS,
+          generation: 3, // clean edge — matches subfolder's published generation
+          versionFloor: 0n,
+          readKeySealed: 'subfoldersealed==',
+        },
+      ],
+    });
+    const subfolderNode = makeFolderNode({
+      id: P05_SUBFOLDER_ID,
+      generation: 3,
+      children: [
+        {
+          name: 'grandchild',
+          ipnsName: P05_GRANDCHILD_IPNS,
+          generation: 1, // parent (subfolder) mirror stale — grandchild already at gen 2
+          versionFloor: 0n,
+          readKeySealed: 'grandchildsealed==',
+        },
+      ],
+    });
+
+    mockFns.resolveIpnsRecord.mockImplementation(async (ipnsName: string) => {
+      const cidByIpns: Record<string, string> = {
+        [NODE_IPNS]: 'bafy-root',
+        [P05_SUBFOLDER_IPNS]: 'bafy-subfolder',
+        [P05_GRANDCHILD_IPNS]: 'bafy-grandchild',
+      };
+      const cid = cidByIpns[ipnsName];
+      if (!cid) return null;
+      return { cid, sequenceNumber: 1n, signatureVerified: true };
+    });
+    mockFns.fetchFromIpfs.mockImplementation(async (_ctx: unknown, cid: string) => {
+      if (cid === 'bafy-root')
+        return new TextEncoder().encode(JSON.stringify(makePublishedNode(NODE_ID, 5, 'folder')));
+      if (cid === 'bafy-subfolder')
+        return new TextEncoder().encode(
+          JSON.stringify(makePublishedNode(P05_SUBFOLDER_ID, 3, 'folder'))
+        );
+      return new TextEncoder().encode(
+        JSON.stringify(makePublishedNode(P05_GRANDCHILD_ID, 2, 'file'))
+      );
+    });
+    mockFns.unsealNode.mockImplementation(
+      async (published: import('@cipherbox/core').PublishedNode) => {
+        if (published.id === NODE_ID) return rootFolderNode;
+        if (published.id === P05_SUBFOLDER_ID) return subfolderNode;
+        throw new Error(`unexpected unsealNode call for ${published.id}`);
+      }
+    );
+    // Key-aware mock: 'grandchildsealed==' is ONLY valid under
+    // SUBFOLDER_OLD_READ_KEY, never under P05_SUBFOLDER_READ_KEY (the CURRENT
+    // key collectDirtyFrontier derives and would use if it attempted the
+    // decrypt at all).
+    mockFns.unsealChildReadKey.mockImplementation(
+      keyAwareUnsealChildReadKey({
+        'subfoldersealed==': { validUnder: T07_ROOT_READ_KEY, returns: P05_SUBFOLDER_READ_KEY },
+        'grandchildsealed==': {
+          validUnder: SUBFOLDER_OLD_READ_KEY,
+          returns: P05_GRANDCHILD_READ_KEY,
+        },
+      })
+    );
+
+    // Pre-fix, this call would REJECT with the key-aware mock's simulated
+    // AEAD failure (reproducing the real regression). Post-fix, it resolves
+    // and correctly reports the dirty edge.
+    const result = await verifySubtreeClean(NODE_IPNS, T07_ROOT_READ_KEY, createMockContext());
+
+    expect(result.isDirty).toBe(true);
+    expect(result.frontier).toHaveLength(1);
+    expect(result.frontier[0]).toMatchObject({
+      ipnsName: P05_GRANDCHILD_IPNS,
+      nodeId: P05_GRANDCHILD_ID,
+      parentIpnsName: P05_SUBFOLDER_IPNS,
+      childPubKind: 'file',
+      enqueuedGeneration: 1,
+    });
+    expect(result.frontier[0].nodeReadKey).toBeUndefined();
+    expect(mockFns.unsealChildReadKey).not.toHaveBeenCalledWith(
+      'grandchildsealed==',
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.anything()
+    );
   });
 
   it('Test 2 (Plan 70-05): missing root IPNS record surfaces as dirty, never silently clean', async () => {
@@ -1920,13 +2072,18 @@ describe('rotateReadFromNode — resume guard (Plan 64-07)', () => {
     vi.resetAllMocks();
   });
 
-  it('Test 3: resume with dirty child triggers D-09 parent re-publish (does not short-circuit complete)', async () => {
+  it('Test 3: resume with dirty child triggers D-09 parent re-publish via the ECIES checkpoint repair path (does not short-circuit complete)', async () => {
     // Root already in completedNodeIds: rotateOne returns skipped.
     // Child has dirty edge: parent mirror = 0, child published gen = 1.
-    // Expected (GREEN): verifySubtreeClean detects dirty → frontier seeded → the child is
-    //   safely double-rotated (Plan 70-06 / design §4.5 — no convergence-skip guard) →
-    //   D-09 publishWithCas called for root re-publish once the child completes.
-    // RED: resume guard marks complete immediately → publishWithCas NOT called → FAILS.
+    //
+    // Plan 70.1-10 fix (T1 AEAD-crash regression): `collectDirtyFrontier` no
+    // longer decrypts a dirty edge at all — a dirty child therefore carries no
+    // key material, so the OLD "safe double-rotation" fallback (rotateOne
+    // fed a decrypted-but-possibly-stale key) is no longer reachable. This
+    // test now wires `keyCheckpointCallbacks`/`ownerPublicKey`/
+    // `ownerPrivateKey` so the dirty child is repaired via the ECIES
+    // checkpoint plane (`repairDirtyNode`) instead — the D-09 parent
+    // re-publish assertion below is unchanged; only the recovery mechanism is.
     const rootNode = makeFolderNode({
       id: NODE_ID,
       generation: 1,
@@ -1940,12 +2097,17 @@ describe('rotateReadFromNode — resume guard (Plan 64-07)', () => {
         },
       ],
     });
-    // Plan 70-06: the child is now genuinely re-entered via rotateOne (safe
-    // double-rotation), so unsealNode must return a CHILD-shaped node (distinct
-    // id, no children) for the child's own published envelope — a single static
-    // rootNode return value here would collide nodeId derivation with the ROOT's
-    // id and corrupt the child's own idempotency check.
+    // The child's own published body — repairDirtyNode never re-rotates it
+    // (no sealNode/publishWithCas call for CHILD_IPNS), only re-seals the
+    // parent's mirror entry, so this shape only needs to be unseal-able.
     const childNode = makeFolderNode({ id: CHILD_ID, generation: 1, children: [] });
+
+    const owner = generateOwnerKeypair();
+    // The child's CURRENT valid key, recoverable ONLY via the checkpoint —
+    // never via a decrypted (and, post-fix, nonexistent) stale mirror key.
+    const REAL_CHILD_READ_KEY_PRIME = new Uint8Array(32).fill(0xaa);
+    const wrappedBytes = await wrapKey(REAL_CHILD_READ_KEY_PRIME, owner.publicKey);
+    const wrappedKeyB64 = Buffer.from(wrappedBytes).toString('base64');
 
     mockFns.resolveIpnsRecord.mockImplementation(async (ipnsName: string) => ({
       cid: ipnsName === NODE_IPNS ? 'bafy-root' : 'bafy-child',
@@ -1966,13 +2128,23 @@ describe('rotateReadFromNode — resume guard (Plan 64-07)', () => {
       makePublishedNode(node.id, node.generation)
     );
     mockFns.sealChildReadKey.mockResolvedValue('resealed==');
-    mockFns.unsealChildReadKey.mockResolvedValue(new Uint8Array(32).fill(0x42));
     mockFns.publishWithCas.mockResolvedValue({
       cid: 'bafy-updated',
       newSequenceNumber: 4n,
       publishedData: [],
       prunedCids: [],
     });
+
+    const getWrappedKey = vi.fn(async (nodeId: string) => {
+      expect(nodeId).toBe(CHILD_ID);
+      return wrappedKeyB64;
+    });
+    const deleteWrappedKey = vi.fn();
+    const keyCheckpointCallbacks: KeyCheckpointCallbacks = {
+      persistWrappedKey: vi.fn(),
+      getWrappedKey,
+      deleteWrappedKey,
+    };
 
     const jobRecord = makeJobRecord({
       rootNodeId: NODE_ID,
@@ -1985,14 +2157,78 @@ describe('rotateReadFromNode — resume guard (Plan 64-07)', () => {
       rootReadKey: T07_ROOT_READ_KEY,
       rootIpnsPrivateKey: T07_ROOT_IPNS_KEY,
       nodeKeySource: () => ({ privateKey: T07_CHILD_IPNS_KEY, publicKey: T07_STUB_PUB_KEY }),
+      ownerPublicKey: owner.publicKey,
+      ownerPrivateKey: owner.privateKey,
+      keyCheckpointCallbacks,
       jobRecord,
       ctx: createMockContext(),
     });
 
-    // In RED: publishWithCas NOT called (resume guard marks complete immediately).
-    // In GREEN: publishWithCas IS called for D-09 parent re-publish after dirty frontier BFS.
+    // D-09 parent re-publish still fires once the dirty child is repaired.
     expect(mockFns.publishWithCas).toHaveBeenCalled();
     expect(jobRecord.status).toBe('complete');
+    expect(getWrappedKey).toHaveBeenCalledWith(CHILD_ID);
+    expect(deleteWrappedKey).toHaveBeenCalledWith(CHILD_ID);
+  });
+
+  it('Test 3b (Plan 70.1-10): resume with dirty child and NO keyCheckpointCallbacks fails closed with DirtyNodeUnrecoverableError', async () => {
+    // Same dirty-child fixture as Test 3, but keyCheckpointCallbacks is
+    // deliberately omitted. Plan 70.1-10 fix: since collectDirtyFrontier never
+    // decrypts a dirty edge, there is no key material left to fall back to a
+    // "safe double rotation" with — the walk must fail closed instead of
+    // silently misbehaving (or, pre-fix, crashing with an opaque AEAD error).
+    const rootNode = makeFolderNode({
+      id: NODE_ID,
+      generation: 1,
+      children: [
+        {
+          name: 'child',
+          ipnsName: CHILD_IPNS,
+          generation: 0, // parent mirror stale
+          versionFloor: 0n,
+          readKeySealed: 'childsealed==',
+        },
+      ],
+    });
+
+    mockFns.resolveIpnsRecord.mockImplementation(async (ipnsName: string) => ({
+      cid: ipnsName === NODE_IPNS ? 'bafy-root' : 'bafy-child',
+      sequenceNumber: 3n,
+      signatureVerified: true,
+    }));
+    mockFns.fetchFromIpfs.mockImplementation(async (_ctx: unknown, cid: string) => {
+      if (cid === 'bafy-root')
+        return new TextEncoder().encode(JSON.stringify(makePublishedNode(NODE_ID, 1)));
+      return new TextEncoder().encode(JSON.stringify(makePublishedNode(CHILD_ID, 1)));
+    });
+    mockFns.unsealNode.mockImplementation(
+      async (published: import('@cipherbox/core').PublishedNode) => {
+        if (published.id === NODE_ID) return rootNode;
+        throw new Error('unsealNode must never be reached for an unrecoverable dirty node');
+      }
+    );
+
+    const jobRecord = makeJobRecord({
+      rootNodeId: NODE_ID,
+      completedNodeIds: new Set([NODE_ID]), // resume: root already committed
+    });
+
+    await expect(
+      rotateReadFromNode({
+        rootNodeId: NODE_ID,
+        rootNodeIpnsName: NODE_IPNS,
+        rootReadKey: T07_ROOT_READ_KEY,
+        rootIpnsPrivateKey: T07_ROOT_IPNS_KEY,
+        nodeKeySource: () => ({ privateKey: T07_CHILD_IPNS_KEY, publicKey: T07_STUB_PUB_KEY }),
+        // No ownerPublicKey/ownerPrivateKey/keyCheckpointCallbacks supplied.
+        jobRecord,
+        ctx: createMockContext(),
+      })
+    ).rejects.toThrow(DirtyNodeUnrecoverableError);
+
+    // The decrypt (and any rotation) must never be attempted for the child.
+    expect(mockFns.unsealChildReadKey).not.toHaveBeenCalled();
+    expect(mockFns.publishWithCas).not.toHaveBeenCalled();
   });
 
   it('Test 4: clean resume (isDirty: false) sets status complete and calls persistCallback', async () => {
@@ -2339,6 +2575,12 @@ describe('rotateReadFromNode — fresh-record resume via safe double-rotation (P
   it('Test 5 (Plan 70-06 SC#6 / T-70-10): dirty-resume-republish returns a FRESH COPY readKey, never an alias of the caller-owned rootReadKey', async () => {
     // Same fixture shape as the classic 64-07 dirty-resume test: root already in
     // completedNodeIds (same-session resume), one dirty child below it.
+    //
+    // Plan 70.1-10 fix: the dirty child carries no decrypted key material
+    // (collectDirtyFrontier never attempts the decrypt), so this now wires
+    // keyCheckpointCallbacks to repair it via the ECIES checkpoint plane —
+    // this test's own assertion (dirty-resume-republish returns a fresh-copy
+    // readKey) is otherwise unchanged.
     const rootNode = makeFolderNode({
       id: NODE_ID,
       generation: 1,
@@ -2352,6 +2594,12 @@ describe('rotateReadFromNode — fresh-record resume via safe double-rotation (P
         },
       ],
     });
+    const childNode = makeFolderNode({ id: CHILD_ID, generation: 1, children: [] });
+
+    const owner = generateOwnerKeypair();
+    const REAL_CHILD_READ_KEY_PRIME = new Uint8Array(32).fill(0xaa);
+    const wrappedBytes = await wrapKey(REAL_CHILD_READ_KEY_PRIME, owner.publicKey);
+    const wrappedKeyB64 = Buffer.from(wrappedBytes).toString('base64');
 
     mockFns.resolveIpnsRecord.mockImplementation(async (ipnsName: string) => ({
       cid: ipnsName === NODE_IPNS ? 'bafy-root' : 'bafy-child',
@@ -2363,18 +2611,26 @@ describe('rotateReadFromNode — fresh-record resume via safe double-rotation (P
         return new TextEncoder().encode(JSON.stringify(makePublishedNode(NODE_ID, 1)));
       return new TextEncoder().encode(JSON.stringify(makePublishedNode(CHILD_ID, 1)));
     });
-    mockFns.unsealNode.mockResolvedValue(rootNode);
+    mockFns.unsealNode.mockImplementation(
+      async (published: import('@cipherbox/core').PublishedNode) =>
+        published.id === NODE_ID ? rootNode : childNode
+    );
     mockFns.sealNode.mockImplementation(async (node: import('@cipherbox/core').Node) =>
       makePublishedNode(node.id, node.generation)
     );
     mockFns.sealChildReadKey.mockResolvedValue('resealed==');
-    mockFns.unsealChildReadKey.mockResolvedValue(new Uint8Array(32).fill(0x42));
     mockFns.publishWithCas.mockResolvedValue({
       cid: 'bafy-updated',
       newSequenceNumber: 4n,
       publishedData: [],
       prunedCids: [],
     });
+
+    const keyCheckpointCallbacks: KeyCheckpointCallbacks = {
+      persistWrappedKey: vi.fn(),
+      getWrappedKey: vi.fn(async () => wrappedKeyB64),
+      deleteWrappedKey: vi.fn(),
+    };
 
     const jobRecord = makeJobRecord({
       rootNodeId: NODE_ID,
@@ -2395,6 +2651,9 @@ describe('rotateReadFromNode — fresh-record resume via safe double-rotation (P
       rootReadKey: rootReadKeyParam,
       rootIpnsPrivateKey: T07_ROOT_IPNS_KEY,
       nodeKeySource: () => ({ privateKey: T07_CHILD_IPNS_KEY, publicKey: T07_STUB_PUB_KEY }),
+      ownerPublicKey: owner.publicKey,
+      ownerPrivateKey: owner.privateKey,
+      keyCheckpointCallbacks,
       jobRecord,
       ctx: createMockContext(),
     });
@@ -2416,7 +2675,7 @@ const D01_A_IPNS = 'k51deptha000000000000000000000000000000000000000000000000000
 const D01_B_ID = 'depth2-b-1111-2222-3333-444444444444';
 const D01_B_IPNS = 'k51depthb000000000000000000000000000000000000000000000000000000';
 const D01_A_READ_KEY = new Uint8Array(32).fill(0x31);
-const D01_B_READ_KEY = new Uint8Array(32).fill(0x32);
+// D01_B_READ_KEY removed (Plan 70.1-10): B is a dirty edge, never decrypted.
 
 const D01_P1_ID = 'depth3-p1-111-2222-3333-444444444444';
 const D01_P1_IPNS = 'k51depth3p1000000000000000000000000000000000000000000000000000000';
@@ -2474,6 +2733,15 @@ describe('SC#1/SC#2 depth>=2 dirty-resume consumption (Plan 70.1-01)', () => {
 
     const publishWithCasCalls: string[] = [];
 
+    // Plan 70.1-10 fix: B is a DIRTY edge (A's mirror stale) — collectDirtyFrontier
+    // never decrypts it, so this test now wires keyCheckpointCallbacks/owner keys
+    // so B is repaired via the ECIES checkpoint plane. The assertions below
+    // (A republishes exactly once, root does not) are otherwise unchanged.
+    const owner = generateOwnerKeypair();
+    const REAL_B_READ_KEY_PRIME = new Uint8Array(32).fill(0xbb);
+    const wrappedBBytes = await wrapKey(REAL_B_READ_KEY_PRIME, owner.publicKey);
+    const wrappedBKeyB64 = Buffer.from(wrappedBBytes).toString('base64');
+
     mockFns.resolveIpnsRecord.mockImplementation(async (ipnsName: string) => {
       const cidByIpns: Record<string, string> = {
         [NODE_IPNS]: 'bafy-d01-root',
@@ -2501,7 +2769,7 @@ describe('SC#1/SC#2 depth>=2 dirty-resume consumption (Plan 70.1-01)', () => {
     );
     mockFns.unsealChildReadKey.mockImplementation(async (sealed: string) => {
       if (sealed === 'd01-a-sealed==') return new Uint8Array(D01_A_READ_KEY);
-      if (sealed === 'd01-b-sealed==') return new Uint8Array(D01_B_READ_KEY);
+      // d01-b-sealed== must never be decrypted (B is a dirty edge — Plan 70.1-10 fix).
       throw new Error(`unexpected sealed value: ${sealed}`);
     });
     mockFns.sealNode.mockImplementation(async (node: import('@cipherbox/core').Node) =>
@@ -2512,6 +2780,15 @@ describe('SC#1/SC#2 depth>=2 dirty-resume consumption (Plan 70.1-01)', () => {
       publishWithCasCalls.push(params.ipnsName);
       return { cid: 'bafy-d01-new', newSequenceNumber: 9n, publishedData: [], prunedCids: [] };
     });
+
+    const keyCheckpointCallbacks: KeyCheckpointCallbacks = {
+      persistWrappedKey: vi.fn(),
+      getWrappedKey: vi.fn(async (nodeId: string) => {
+        expect(nodeId).toBe(D01_B_ID);
+        return wrappedBKeyB64;
+      }),
+      deleteWrappedKey: vi.fn(),
+    };
 
     const jobRecord = makeJobRecord({
       rootNodeId: NODE_ID,
@@ -2527,6 +2804,9 @@ describe('SC#1/SC#2 depth>=2 dirty-resume consumption (Plan 70.1-01)', () => {
         ipnsName === D01_B_IPNS
           ? { privateKey: T07_CHILD_IPNS_KEY, publicKey: T07_STUB_PUB_KEY }
           : undefined,
+      ownerPublicKey: owner.publicKey,
+      ownerPrivateKey: owner.privateKey,
+      keyCheckpointCallbacks,
       jobRecord,
       ctx: createMockContext(),
     });
@@ -2590,6 +2870,15 @@ describe('SC#1/SC#2 depth>=2 dirty-resume consumption (Plan 70.1-01)', () => {
     });
     const dNode = makeFolderNode({ id: D01_D_ID, generation: 1, children: [] });
 
+    // Plan 70.1-10 fix: D is a DIRTY edge (P2's mirror stale) — collectDirtyFrontier
+    // never decrypts it, so this test now wires keyCheckpointCallbacks/owner keys
+    // so D is repaired via the ECIES checkpoint plane. The republish-count
+    // assertion below is otherwise unchanged.
+    const owner = generateOwnerKeypair();
+    const REAL_D_READ_KEY_PRIME = new Uint8Array(32).fill(0xdd);
+    const wrappedDBytes = await wrapKey(REAL_D_READ_KEY_PRIME, owner.publicKey);
+    const wrappedDKeyB64 = Buffer.from(wrappedDBytes).toString('base64');
+
     const publishWithCasCalls: string[] = [];
 
     mockFns.resolveIpnsRecord.mockImplementation(async (ipnsName: string) => {
@@ -2636,6 +2925,15 @@ describe('SC#1/SC#2 depth>=2 dirty-resume consumption (Plan 70.1-01)', () => {
       return { cid: 'bafy-d01-new2', newSequenceNumber: 2n, publishedData: [], prunedCids: [] };
     });
 
+    const keyCheckpointCallbacks: KeyCheckpointCallbacks = {
+      persistWrappedKey: vi.fn(),
+      getWrappedKey: vi.fn(async (nodeId: string) => {
+        expect(nodeId).toBe(D01_D_ID);
+        return wrappedDKeyB64;
+      }),
+      deleteWrappedKey: vi.fn(),
+    };
+
     const jobRecord = makeJobRecord({
       rootNodeId: NODE_ID,
       completedNodeIds: new Set<string>(), // fresh walk — root NOT resumed
@@ -2655,6 +2953,9 @@ describe('SC#1/SC#2 depth>=2 dirty-resume consumption (Plan 70.1-01)', () => {
         const key = keys[ipnsName];
         return key ? { privateKey: key, publicKey: T07_STUB_PUB_KEY } : undefined;
       },
+      ownerPublicKey: owner.publicKey,
+      ownerPrivateKey: owner.privateKey,
+      keyCheckpointCallbacks,
       jobRecord,
       ctx: createMockContext(),
     });
