@@ -2138,6 +2138,120 @@ mod rotate_read_from_node {
         assert_eq!(frontier[0].node_id, child_uuid(0));
     }
 
+    // -----------------------------------------------------------------------
+    // D-12 structural catch-up (70.1-04): a `parent_ipns_name`-carrying
+    // frontier, a recursive `verify_subtree_clean` (recurse below clean
+    // edges, stop below dirty edges), and missing-root-treated-as-dirty.
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn verify_subtree_clean_recurses_and_reports_a_deep_dirty_edge_with_its_real_parent() {
+        let deps = FakeDeps::new();
+        let root_read_key = [20u8; 32];
+
+        // depth-1: A, clean, child of root.
+        let a_id = child_uuid(100);
+        let a_key = [21u8; 32];
+        // depth-2: B, clean, child of A.
+        let b_id = child_uuid(101);
+        let b_key = [22u8; 32];
+        // depth-3: C, DIRTY, child of B -- outpaces B's mirror. A non-
+        // recursive verify (the current naive implementation) would never
+        // descend past A's own immediate children and would miss this
+        // entirely.
+        let c_id = child_uuid(102);
+        let c_key = [23u8; 32];
+
+        let c_sealed_key = seal_child_read_key(&c_key, &b_key, &c_id, NodeKind::Folder, 0).unwrap();
+        let c_ref = SealedChildRef {
+            name: "c".to_string(),
+            ipns_name: "k51/deep-c".to_string(),
+            generation: 0,
+            version_floor: 0,
+            read_key_sealed: base64_encode(&c_sealed_key),
+        };
+        // C's OWN published node is at generation 1 -- it individually
+        // committed its own rotation before a crash truncated the batched
+        // republish chain that would have bumped B's mirror of it.
+        let c_node = folder(&c_id, 1, vec![]);
+        deps.seed("k51/deep-c", "cid-deep-c-1", 1, seal_for_seed(&c_node, &c_key));
+
+        let b_sealed_key = seal_child_read_key(&b_key, &a_key, &b_id, NodeKind::Folder, 0).unwrap();
+        let b_ref = SealedChildRef {
+            name: "b".to_string(),
+            ipns_name: "k51/mid-b".to_string(),
+            generation: 0,
+            version_floor: 0,
+            read_key_sealed: base64_encode(&b_sealed_key),
+        };
+        let b_node = folder(&b_id, 0, vec![c_ref]);
+        deps.seed("k51/mid-b", "cid-mid-b-0", 0, seal_for_seed(&b_node, &b_key));
+
+        let a_sealed_key =
+            seal_child_read_key(&a_key, &root_read_key, &a_id, NodeKind::Folder, 0).unwrap();
+        let a_ref = SealedChildRef {
+            name: "a".to_string(),
+            ipns_name: "k51/mid-a".to_string(),
+            generation: 0,
+            version_floor: 0,
+            read_key_sealed: base64_encode(&a_sealed_key),
+        };
+        let a_node = folder(&a_id, 0, vec![b_ref]);
+        deps.seed("k51/mid-a", "cid-mid-a-0", 0, seal_for_seed(&a_node, &a_key));
+
+        let root_node = folder(ROOT_ID, 0, vec![a_ref]);
+        deps.seed(
+            "k51/root",
+            "cid-root-0",
+            0,
+            seal_for_seed(&root_node, &root_read_key),
+        );
+
+        let outcome = verify_subtree_clean(&deps, "k51/root", &root_read_key)
+            .await
+            .unwrap();
+
+        assert!(
+            outcome.is_dirty,
+            "a depth-3 dirty edge must mark the whole outcome dirty"
+        );
+        assert_eq!(
+            outcome.frontier.len(),
+            1,
+            "a non-recursive verify would miss the depth-3 edge entirely, got: {:?}",
+            outcome.frontier
+        );
+        let entry = &outcome.frontier[0];
+        assert_eq!(entry.ipns_name, "k51/deep-c");
+        assert_eq!(entry.node_id, c_id);
+        assert_eq!(
+            entry.parent_ipns_name, "k51/mid-b",
+            "the dirty edge's real parent is B (depth-2), not the scope root"
+        );
+    }
+
+    #[tokio::test]
+    async fn verify_subtree_clean_treats_a_missing_root_as_dirty_not_converged() {
+        let deps = FakeDeps::new();
+        let root_read_key = [24u8; 32];
+        // No seed for "k51/ghost-root" at all -- the root has no published
+        // record (e.g. a torn-down subtree, or a crash before the very
+        // first publish).
+
+        let outcome = verify_subtree_clean(&deps, "k51/ghost-root", &root_read_key)
+            .await
+            .unwrap();
+
+        assert!(
+            outcome.is_dirty,
+            "a missing root must be surfaced as dirty, never an empty converged frontier"
+        );
+        assert!(
+            outcome.frontier.is_empty(),
+            "a missing root has no discoverable frontier -- but MUST NOT be conflated with clean"
+        );
+    }
+
     #[tokio::test]
     async fn resume_after_crash_converges_without_double_bump_when_seeded() {
         let deps = FakeDeps::new();
