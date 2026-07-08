@@ -431,8 +431,21 @@ export type RotationParams = {
    * minted `readKeyPrime` before publish, and (2) the BFS routes any
    * already-rotated dirty item to the checkpoint-repair path instead of
    * feeding its stale pre-rotation key into `rotateOne`/`unsealNode` (D-05).
-   * When absent, both behaviors are clean no-ops — dirty items fall through to
-   * the pre-existing safe-double-rotation behavior (Plan 70-06 / design §4.5).
+   *
+   * @security Plan 70.1-10 fix: a dirty edge is now identified via a
+   *   PLAINTEXT generation comparison alone (`childPub.generation >
+   *   childRef.generation`) — the engine never attempts to decrypt a dirty
+   *   edge's `SealedChildRef.readKeySealed` (it may be sealed under a key that
+   *   no longer matches the current parent chain, e.g. when the parent ALSO
+   *   rotated in the same walk — this used to throw an AEAD "Decryption
+   *   failed" error before the dirtiness check ever ran). Consequently a
+   *   dirty item carries NO usable pre-rotation key any more, so the OLD
+   *   "safe double-rotation" fallback (Plan 70-06 / design §4.5) for a dirty
+   *   item is no longer reachable: when `keyCheckpointCallbacks` is absent,
+   *   the BFS fails closed with {@link DirtyNodeUnrecoverableError} instead of
+   *   attempting a rotation with no key material. `keyCheckpointCallbacks` is
+   *   therefore effectively REQUIRED for any resume that can encounter a
+   *   dirty (already-rotated-by-a-lost-prior-run) non-root node.
    */
   keyCheckpointCallbacks?: KeyCheckpointCallbacks;
 };
@@ -648,6 +661,35 @@ async function resolveAndFetchNode(
 }
 
 /**
+ * Decrypt a child's readKey given an ALREADY-RESOLVED `childPub` envelope.
+ *
+ * @security Plan 70.1-10 fix (T1 AEAD-crash regression): callers MUST have
+ *   independently established that `parentReadKey` is provably the correct
+ *   key to unseal `childRef.readKeySealed` with — e.g. a CLEAN edge, where
+ *   `childPub.generation === childRef.generation` (the parent mirror is up to
+ *   date). Calling this on a DIRTY edge (parent mirror stale) is unsafe: the
+ *   stale ref may be sealed under a key that no longer matches
+ *   `parentReadKey` (the parent may have ALSO rotated in the same walk),
+ *   which throws an AEAD "Decryption failed" error. Always run the plaintext
+ *   `childPub.generation > childRef.generation` dirtiness check FIRST and
+ *   only call this on the clean branch (see `collectDirtyFrontier` /
+ *   `findParentNodeByIpnsName`).
+ */
+async function unsealChildReadKeyFromPub(
+  childRef: SealedChildRef,
+  parentReadKey: Uint8Array,
+  childPub: PublishedNode
+): Promise<Uint8Array> {
+  return unsealChildReadKey(
+    childRef.readKeySealed,
+    parentReadKey,
+    childPub.id,
+    childPub.kind,
+    childRef.generation
+  );
+}
+
+/**
  * Shared key-chain-walk helper (RESEARCH.md Pitfall 3 / Anti-Patterns): resolve
  * a child's published envelope AND derive its readKey from the PARENT's
  * readKey via `unsealChildReadKey` (AAD binds the child's id/kind and the
@@ -656,6 +698,12 @@ async function resolveAndFetchNode(
  * the main BFS (mutating) so this key-derivation logic has exactly ONE
  * implementation — recursing `verifySubtreeClean` without this shared helper
  * would duplicate the BFS's resolve+unseal logic with subtly different bugs.
+ *
+ * @security Only call this on a provably CLEAN edge (see
+ *   `unsealChildReadKeyFromPub`'s docstring) — `collectDirtyFrontier` and
+ *   `findParentNodeByIpnsName` both run the plaintext dirtiness check
+ *   themselves before reaching for this helper; do not add a new call site
+ *   that skips that check.
  *
  * @returns `null` when the child's IPNS record cannot be resolved (missing —
  *   a non-root data inconsistency; callers treat this as "unreachable", not
@@ -668,13 +716,7 @@ async function resolveChildKeyAndEnvelope(
 ): Promise<{ childPub: PublishedNode; childReadKey: Uint8Array } | null> {
   const childPub = await resolveAndFetchNode(childRef.ipnsName, ctx);
   if (!childPub) return null;
-  const childReadKey = await unsealChildReadKey(
-    childRef.readKeySealed,
-    parentReadKey,
-    childPub.id,
-    childPub.kind,
-    childRef.generation
-  );
+  const childReadKey = await unsealChildReadKeyFromPub(childRef, parentReadKey, childPub);
   return { childPub, childReadKey };
 }
 
@@ -716,28 +758,32 @@ async function findParentNodeByIpnsName(
   }
 
   for (const childRef of node.children ?? []) {
-    const childResolved = await resolveChildKeyAndEnvelope(childRef, candidateReadKey, ctx);
-    if (!childResolved) continue;
-    if (childResolved.childPub.kind !== 'folder') {
-      childResolved.childReadKey.fill(0);
-      continue;
-    }
+    // Plaintext dirty check FIRST (Plan 70.1-10 fix / T1 AEAD-crash
+    // regression): resolve the child's envelope WITHOUT decrypting anything —
+    // both generations are plaintext fields. A dirty sibling branch (parent
+    // mirror stale) can never lead to the search target — by
+    // `collectDirtyFrontier`'s own contract every `DirtyFrontierItem`'s real
+    // parent is reached via a provably CLEAN path from root — so skip it
+    // without attempting the unseal (which could throw an AEAD failure if
+    // this branch's stale ref is sealed under a different key than
+    // `candidateReadKey`).
+    const childPub = await resolveAndFetchNode(childRef.ipnsName, ctx);
+    if (!childPub) continue;
+    if (childPub.generation > childRef.generation) continue;
+    if (childPub.kind !== 'folder') continue;
+
+    const childReadKey = await unsealChildReadKeyFromPub(childRef, candidateReadKey, childPub);
     let result: Awaited<ReturnType<typeof findParentNodeByIpnsName>>;
     try {
-      result = await findParentNodeByIpnsName(
-        childRef.ipnsName,
-        childResolved.childReadKey,
-        targetIpnsName,
-        ctx
-      );
+      result = await findParentNodeByIpnsName(childRef.ipnsName, childReadKey, targetIpnsName, ctx);
     } finally {
       // Zero this level's derived key once the deeper search below it has
       // returned — UNLESS it IS the match's own key (a different variable
       // binding at any intermediate ancestor level, so this check is always
       // safe: the target match returns `candidateReadKey` from ITS OWN call
-      // frame, which is `childResolved.childReadKey` from ITS PARENT's frame).
-      if (!(result && result.readKey === childResolved.childReadKey)) {
-        childResolved.childReadKey.fill(0);
+      // frame, which is `childReadKey` from ITS PARENT's frame).
+      if (!(result && result.readKey === childReadKey)) {
+        childReadKey.fill(0);
       }
     }
     if (result) return result;
@@ -756,8 +802,20 @@ export type DirtyFrontierItem = {
   nodeId: string;
   /** IPNS name of this node's actual parent (may be any depth below root). */
   parentIpnsName: string;
-  /** This node's own pre-rotation readKey, engine-derived via the shared key-chain walk. */
-  nodeReadKey: Uint8Array;
+  /**
+   * Always `undefined` (Plan 70.1-10 fix / T1 AEAD-crash regression):
+   * `collectDirtyFrontier` identifies a dirty edge via a PLAINTEXT generation
+   * comparison alone and never attempts to decrypt the dirty edge's
+   * `SealedChildRef.readKeySealed` — that stale ref may be sealed under a key
+   * that no longer matches the current parent chain (e.g. the parent ALSO
+   * rotated in this same walk), which throws an AEAD "Decryption failed"
+   * error before the dirtiness check would ever run. `repairDirtyNode`
+   * recovers this node's CURRENT valid key via the ECIES checkpoint plane
+   * keyed by `nodeId` — NEVER via this field. Retained (rather than removed)
+   * so the BFS queue item shape stays uniform between dirty and normal
+   * entries; consumers MUST NOT rely on it being populated.
+   */
+  nodeReadKey: Uint8Array | undefined;
   childPubKind: 'folder' | 'file';
   /** Parent-mirror generation captured when this dirty edge was found. */
   enqueuedGeneration: number;
@@ -777,13 +835,18 @@ export type DirtyFrontierItem = {
  * the `isDirty: true` path and throws a descriptive, actionable error when it
  * too finds the root missing.
  *
- * Recursion only descends below CLEAN edges: a dirty edge's derived readKey
- * is the child's STALE pre-rotation key (from the still-unrefreshed parent
- * mirror), which cannot unseal that child's CURRENT published body to
- * discover further descendants — there is no cryptographic recovery path for
- * a key genuinely lost to an interrupted prior run (RESEARCH.md Pitfall 4). A
- * dirty node is recorded in the frontier and left for the BFS's own
- * convergence-guard witness-refresh to resolve safely on resume.
+ * Recursion only descends below CLEAN edges — dirtiness is determined via a
+ * PLAINTEXT generation comparison alone (Plan 70.1-10 fix / T1 AEAD-crash
+ * regression): NO decryption is attempted for a dirty edge. The dirty edge's
+ * `SealedChildRef.readKeySealed` may be sealed under a key that no longer
+ * matches the current parent chain (e.g. the parent ALSO rotated in this same
+ * walk) — attempting the decrypt anyway throws an AEAD "Decryption failed"
+ * error before the dirtiness comparison would ever run, which is exactly the
+ * bug this ordering fixes. There is no cryptographic recovery path for a key
+ * genuinely lost to an interrupted prior run from this read-only walk alone
+ * (RESEARCH.md Pitfall 4) — a dirty node is recorded in the frontier (with no
+ * key material — see `DirtyFrontierItem.nodeReadKey`) and left for the BFS's
+ * own checkpoint-repair path (`repairDirtyNode`) to resolve safely on resume.
  *
  * Invoked ONLY on resume (when the root is found already-committed at walk
  * start — conditional per D-01/D-10); never on a fresh run.
@@ -820,9 +883,16 @@ async function collectDirtyFrontier(
   frontier: DirtyFrontierItem[]
 ): Promise<void> {
   for (const childRef of children) {
-    const resolved = await resolveChildKeyAndEnvelope(childRef, parentReadKey, ctx);
-    if (!resolved) continue; // missing non-root child — data inconsistency, not root-dirty
-    const { childPub, childReadKey } = resolved;
+    // Plan 70.1-10 fix (T1 AEAD-crash regression): resolve the child's
+    // envelope WITHOUT decrypting anything first — `childPub.generation` and
+    // `childRef.generation` are both plaintext fields, so the dirtiness
+    // comparison never needs the parent readKey. Only a CONFIRMED-clean edge
+    // is safe to decrypt: a dirty edge's stale ref may be sealed under a key
+    // that no longer matches `parentReadKey` (the parent may have ALSO
+    // rotated in this same walk), which used to throw an AEAD "Decryption
+    // failed" error before this comparison ever ran.
+    const childPub = await resolveAndFetchNode(childRef.ipnsName, ctx);
+    if (!childPub) continue; // missing non-root child — data inconsistency, not root-dirty
 
     // Dirty edge: parent's mirror generation lags the child's actual published state.
     if (childPub.generation > childRef.generation) {
@@ -830,27 +900,33 @@ async function collectDirtyFrontier(
         ipnsName: childRef.ipnsName,
         nodeId: childPub.id,
         parentIpnsName,
-        nodeReadKey: childReadKey,
+        // No decrypt attempted (see DirtyFrontierItem.nodeReadKey docstring) —
+        // repairDirtyNode recovers the current key via the ECIES checkpoint.
+        nodeReadKey: undefined,
         childPubKind: childPub.kind as 'folder' | 'file',
         enqueuedGeneration: childRef.generation,
       });
       continue; // cannot recurse further below a dirty edge — see module docstring
     }
 
-    // Clean edge: the derived key IS provably the child's current valid key
+    // Clean edge: parent mirror is up to date, so childRef.readKeySealed is
+    // PROVABLY sealed under parentReadKey — safe to decrypt now.
+    const childReadKey = await unsealChildReadKeyFromPub(childRef, parentReadKey, childPub);
+
+    // The derived key IS provably the child's current valid key
     // (parent mirror is up to date) — recurse into folder children to find
     // dirty edges deeper in the subtree.
     //
     // D-09 (Plan 70-06): a CLEAN edge's derived key is scoped entirely to this
-    // read-only verify walk — it is never returned to any caller (only a DIRTY
-    // edge's key survives, pushed onto `frontier` above and explicitly NOT
-    // zeroed here). This function derived it (via resolveChildKeyAndEnvelope);
-    // it is the terminal owner once the edge is fully processed (leaf, or after
-    // the recursive call below returns). The zero happens in `finally` so it
-    // still runs if `unsealNode`/the recursive call throws — otherwise a thrown
-    // error skips the zero and leaves this locally-derived key live. Defensive
-    // instanceof guard: some unit tests stub `unsealChildReadKey` without a
-    // return value.
+    // read-only verify walk — it is never returned to any caller (a DIRTY
+    // edge never has a derived key at all — Plan 70.1-10 fix, see
+    // `DirtyFrontierItem.nodeReadKey`). This function derived it (via
+    // `unsealChildReadKeyFromPub`); it is the terminal owner once the edge is
+    // fully processed (leaf, or after the recursive call below returns). The
+    // zero happens in `finally` so it still runs if `unsealNode`/the
+    // recursive call throws — otherwise a thrown error skips the zero and
+    // leaves this locally-derived key live. Defensive instanceof guard: some
+    // unit tests stub `unsealChildReadKey` without a return value.
     try {
       if (childPub.kind === 'folder') {
         const childNode = await unsealNode(childPub, childReadKey);
@@ -1319,8 +1395,15 @@ export async function rotateReadFromNode(
   //   to unseal the parent (D-09: never zeroed by rotateOne).
   const queue: Array<{
     childRef: SealedChildRef;
-    /** The node's own pre-rotation readKey — used by rotateOne to unseal the node. */
-    nodeReadKey: Uint8Array;
+    /**
+     * The node's own pre-rotation readKey — used by rotateOne to unseal the
+     * node. `undefined` ONLY for a dirty item (`isDirtyItem: true` — Plan
+     * 70.1-10 fix): `collectDirtyFrontier` never decrypts a dirty edge (see
+     * `DirtyFrontierItem.nodeReadKey`), so this is never fed into
+     * `rotateOne`/`unsealNode` for a dirty item — `repairDirtyNode` recovers
+     * the real key via the ECIES checkpoint instead.
+     */
+    nodeReadKey: Uint8Array | undefined;
     parentIpnsName: string;
     ipnsPrivateKey?: Uint8Array;
     ipnsPublicKey?: Uint8Array;
@@ -1341,14 +1424,19 @@ export async function rotateReadFromNode(
      * Plan 70.1-05 (SC#3/D-05): true ONLY for items discovered by
      * `verifySubtreeClean`/`collectDirtyFrontier` and enqueued via
      * `enqueueDirtyFrontierItem` — i.e. an ALREADY-ROTATED node whose
-     * `nodeReadKey` is the STALE pre-rotation key. Normal-path enqueues
-     * (root's/a node's own just-discovered children) are always `false`.
+     * `nodeReadKey` is `undefined` (Plan 70.1-10 fix — no key was ever
+     * decrypted for this edge). Normal-path enqueues (root's/a node's own
+     * just-discovered children) are always `false` and always carry a real
+     * `nodeReadKey`.
+     *
      * When `true` AND `keyCheckpointCallbacks` is supplied, the BFS routes
-     * this item to the checkpoint-repair path INSTEAD of feeding
-     * `nodeReadKey` into `rotateOne`/`unsealNode` (T1 AEAD crash). When
-     * `keyCheckpointCallbacks` is absent, this flag is ignored and the item
-     * falls through to the pre-existing safe-double-rotation behavior
-     * (Plan 70-06 / design §4.5) — fully backward compatible.
+     * this item to the checkpoint-repair path (`repairDirtyNode`), which
+     * NEVER reads `nodeReadKey` — it recovers the real key via the ECIES
+     * checkpoint plane instead. When `keyCheckpointCallbacks` is absent,
+     * there is no key material left to fall back to a "safe double rotation"
+     * with (Plan 70.1-10 fix removed the old — actually unsafe —
+     * decrypt-then-double-rotate path), so the BFS fails closed with
+     * {@link DirtyNodeUnrecoverableError} instead.
      */
     isDirtyItem: boolean;
   }> = [];
@@ -1567,20 +1655,21 @@ export async function rotateReadFromNode(
    * discovered by `verifySubtreeClean`'s recursive walk (consuming plan 70-05's
    * key-bearing frontier shape). Builds a minimal `SealedChildRef` stub — only
    * `ipnsName`/`generation` are read by the BFS loop itself; `readKeySealed` is
-   * never re-derived from this stub (the item already carries an engine-derived
-   * `nodeReadKey`). Deduped by ipnsName against items already queued so a
-   * depth-1 dirty edge (also covered by the normal children-enqueue loop) is not
-   * double-processed.
+   * never re-derived from this stub. `nodeReadKey` is always `undefined` for a
+   * dirty item (Plan 70.1-10 fix) — there is nothing to zero. Deduped by
+   * ipnsName against items already queued so a depth-1 dirty edge (also
+   * covered by the normal children-enqueue loop) is not double-processed.
    */
   function enqueueDirtyFrontierItem(item: DirtyFrontierItem): void {
     if (queue.some((q) => q.childRef.ipnsName === item.ipnsName)) {
       // Deduped against an item already queued (e.g. a depth-1 dirty edge also
-      // covered by the normal children-enqueue loop) — this item is discarded
-      // and its key is never referenced again. Zero it here as the terminal
-      // owner (D-09); do NOT zero below after push, since in that (adopted)
-      // path this same buffer reference becomes the queue item's nodeReadKey
-      // and is zeroed exactly once by the BFS loop's own finally (line ~1629).
-      item.nodeReadKey.fill(0);
+      // covered by the normal children-enqueue loop) — this item is discarded.
+      // Defensive guard only: `item.nodeReadKey` is always undefined for a
+      // dirty item post-Plan-70.1-10, but a caller-owned buffer must never be
+      // assumed absent — zero it here as the terminal owner (D-09) if present.
+      if (item.nodeReadKey instanceof Uint8Array) {
+        item.nodeReadKey.fill(0);
+      }
       return;
     }
     const childKeys = nodeKeySource?.(item.ipnsName);
@@ -1601,7 +1690,7 @@ export async function rotateReadFromNode(
       childPubKind: item.childPubKind,
       enqueuedGeneration: item.enqueuedGeneration,
       // SC#3 (Plan 70.1-05): this item was discovered via verifySubtreeClean's
-      // dirty-edge detection — its nodeReadKey is the STALE pre-rotation key.
+      // dirty-edge detection — nodeReadKey is always undefined (Plan 70.1-10 fix).
       isDirtyItem: true,
     });
   }
@@ -1697,6 +1786,16 @@ export async function rotateReadFromNode(
     // D-04: GC the checkpoint only AFTER the parent mirror above has
     // committed (the in-memory update, plus any triggered republish).
     await keyCheckpointCallbacks!.deleteWrappedKey(item.childPubId);
+
+    // Mark this node done (mirrors rotateOne's own Step 9 idempotency marking).
+    // Without this, a SECOND queue entry for the same node — e.g. the same
+    // dirty node discovered both via the pre-rotation dirty-frontier merge AND
+    // via its own (now-clean-from-this-repair) parent's normal
+    // children-enqueue loop — would re-enter `rotateOne` for a node whose key
+    // was only ever RECOVERED here, never re-rotated, silently double-processing
+    // it and mis-attributing an extra parent republish to a lazily re-resolved
+    // ParentTrackingState.
+    jobRecord.completedNodeIds.add(item.childPubId);
 
     // Seed this node's OWN ParentTrackingState so its children still enqueue
     // (D-02/D-09 for its own subtree) — readKeyPrime IS the current valid key
@@ -1965,25 +2064,46 @@ export async function rotateReadFromNode(
     try {
       // SC#3 (Plan 70.1-05 / D-05): route an already-rotated dirty item to the
       // ECIES-checkpoint repair path — ONLY when keyCheckpointCallbacks is
-      // wired (D-01 conditional invocation). Never feeds the STALE
-      // item.nodeReadKey into rotateOne/unsealNode (T1 AEAD crash). When
-      // keyCheckpointCallbacks is absent, fall through unchanged to the
-      // pre-existing safe-double-rotation behavior below (Plan 70-06 /
-      // design §4.5) — fully backward compatible for callers who have not
-      // yet wired the checkpoint plane.
-      if (item.isDirtyItem && keyCheckpointCallbacks) {
-        await repairDirtyNode(item);
-        continue;
+      // wired (D-01 conditional invocation). Never feeds `item.nodeReadKey`
+      // into rotateOne/unsealNode (T1 AEAD crash).
+      //
+      // Plan 70.1-10 fix: `collectDirtyFrontier` no longer decrypts a dirty
+      // edge at all (see `DirtyFrontierItem.nodeReadKey`), so a dirty item
+      // never carries usable key material. When `keyCheckpointCallbacks` is
+      // absent there is therefore no cryptographically safe way to recover
+      // this node's current key — the OLD "safe double-rotation" fallback
+      // (Plan 70-06 / design §4.5) assumed a decrypted (but possibly stale)
+      // key was always available, which is no longer true. Fail closed with
+      // {@link DirtyNodeUnrecoverableError} instead of silently misbehaving.
+      if (item.isDirtyItem) {
+        if (keyCheckpointCallbacks) {
+          await repairDirtyNode(item);
+          continue;
+        }
+        throw new DirtyNodeUnrecoverableError(
+          `rotateReadFromNode: dirty node ${item.childRef.ipnsName} was found already ` +
+            'rotated by a prior run, but no RotationParams.keyCheckpointCallbacks were ' +
+            'supplied to repair it. Provide keyCheckpointCallbacks/ownerPublicKey/' +
+            'ownerPrivateKey, or perform a top-down re-navigation from the vault root.'
+        );
       }
 
       // Plan 70-06 / SC#3: NO convergence-skip guard here anymore. Design §4.5's
       // crash-recovery model is safe DOUBLE-ROTATION — a node already rotated
-      // (by a lost prior run OR discovered via the dirty-tail frontier merge
-      // above) is rotated AGAIN via the normal rotateOne call below. An extra
-      // rotation only strengthens revocation and costs one republish; rotateOne's
-      // OWN completedNodeIds idempotency check already makes a genuinely-already-
-      // handled-THIS-session node a cheap no-op (RotateOneSkipped). Do NOT
-      // reintroduce a no-double-bump guard here (T-70-*/design §4.5).
+      // (by a lost prior run) is rotated AGAIN via the normal rotateOne call
+      // below. An extra rotation only strengthens revocation and costs one
+      // republish; rotateOne's OWN completedNodeIds idempotency check already
+      // makes a genuinely-already-handled-THIS-session node a cheap no-op
+      // (RotateOneSkipped). Do NOT reintroduce a no-double-bump guard here
+      // (T-70-*/design §4.5). This branch only ever handles a NON-dirty item
+      // (isDirtyItem is false here) — `nodeReadKey` is therefore always defined.
+      const nodeReadKey = item.nodeReadKey;
+      if (!(nodeReadKey instanceof Uint8Array)) {
+        throw new Error(
+          `rotateReadFromNode: internal invariant violated — non-dirty queue item for ` +
+            `${item.childRef.ipnsName} has no nodeReadKey`
+        );
+      }
       const result = await rotateOne({
         // nodeId is absent: it will be derived from the unsealed node's id inside rotateOne.
         nodeIpnsName: item.childRef.ipnsName,
@@ -1991,7 +2111,7 @@ export async function rotateReadFromNode(
         nodeIpnsPublicKey: item.ipnsPublicKey,
         // Thread the write key sourced at enqueue time (Phase 65).
         nodeWriteKey: item.nodeWriteKey,
-        parentReadKey: item.nodeReadKey, // this node's own (pre-rotation) readKey
+        parentReadKey: nodeReadKey, // this node's own (pre-rotation) readKey
         parentIpnsName: item.parentIpnsName,
         parentCurrentSeq: 0n,
         jobRecord,
@@ -2066,12 +2186,12 @@ export async function rotateReadFromNode(
           thisNodeParentState = {
             parentNewReadKey: result.childReadKey,
             // This node's OLD (pre-rotation) readKey — a defensive copy of
-            // item.nodeReadKey, which the `finally` below zeros at the end of
+            // nodeReadKey, which the `finally` below zeros at the end of
             // THIS queue-item's processing (this tracking state can outlive
             // that: its own decrementPendingAndMaybeRepublish only fires once
             // all of THIS node's children finish, potentially several BFS
             // iterations later).
-            parentOldReadKey: new Uint8Array(item.nodeReadKey),
+            parentOldReadKey: new Uint8Array(nodeReadKey),
             parentIpnsName: item.childRef.ipnsName,
             parentIpnsPrivateKey: item.ipnsPrivateKey,
             parentIpnsPublicKey: item.ipnsPublicKey,
@@ -2086,11 +2206,11 @@ export async function rotateReadFromNode(
         }
 
         // Enqueue this node's children using THIS node's pre-rotation readKey.
-        // item.nodeReadKey is NOT zeroed by rotateOne (D-09) — still valid here.
+        // nodeReadKey is NOT zeroed by rotateOne (D-09) — still valid here.
         for (const childRef of result.children) {
-          // THIS node's old readKey (seals its children's readKeys) — item.nodeReadKey
+          // THIS node's old readKey (seals its children's readKeys) — nodeReadKey
           // is NOT zeroed by rotateOne (D-09), still valid here.
-          const resolved = await resolveChildKeyAndEnvelope(childRef, item.nodeReadKey, ctx);
+          const resolved = await resolveChildKeyAndEnvelope(childRef, nodeReadKey, ctx);
           if (!resolved) {
             // SC#3 (Plan 70-06 / T-70-12): fail-closed accounting — see above.
             if (thisNodeParentState) {
@@ -2139,7 +2259,11 @@ export async function rotateReadFromNode(
       // all grandchildren have been enqueued (unsealChildReadKey used item.nodeReadKey
       // above). This node's item.nodeReadKey was minted by the parent's unsealChildReadKey
       // — the engine is the terminal owner. Never zero caller-supplied rootReadKey (D-09).
-      item.nodeReadKey.fill(0);
+      // Guarded: a dirty item (Plan 70.1-10 fix) has no nodeReadKey at all — the
+      // repair path above (or the fail-closed throw) never populates one.
+      if (item.nodeReadKey instanceof Uint8Array) {
+        item.nodeReadKey.fill(0);
+      }
     }
   }
 
