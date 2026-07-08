@@ -2404,6 +2404,268 @@ describe('rotateReadFromNode — fresh-record resume via safe double-rotation (P
 });
 
 // ---------------------------------------------------------------------------
+// Plan 70.1-01 Task 1 RED — SC#1/SC#2 depth>=2 dirty-resume consumption
+// ---------------------------------------------------------------------------
+
+const D01_A_ID = 'depth2-a-1111-2222-3333-444444444444';
+const D01_A_IPNS = 'k51deptha000000000000000000000000000000000000000000000000000000';
+const D01_B_ID = 'depth2-b-1111-2222-3333-444444444444';
+const D01_B_IPNS = 'k51depthb000000000000000000000000000000000000000000000000000000';
+const D01_A_READ_KEY = new Uint8Array(32).fill(0x31);
+const D01_B_READ_KEY = new Uint8Array(32).fill(0x32);
+
+const D01_P1_ID = 'depth3-p1-111-2222-3333-444444444444';
+const D01_P1_IPNS = 'k51depth3p1000000000000000000000000000000000000000000000000000000';
+const D01_P2_ID = 'depth3-p2-111-2222-3333-444444444444';
+const D01_P2_IPNS = 'k51depth3p2000000000000000000000000000000000000000000000000000000';
+const D01_D_ID = 'depth3-d-1111-2222-3333-444444444444';
+const D01_D_IPNS = 'k51depth3d0000000000000000000000000000000000000000000000000000000';
+const D01_P1_READ_KEY = new Uint8Array(32).fill(0x41);
+const D01_P2_READ_KEY = new Uint8Array(32).fill(0x42);
+const D01_D_READ_KEY = new Uint8Array(32).fill(0x43);
+const D01_P1_IPNS_KEY = new Uint8Array(32).fill(0x51);
+const D01_P2_IPNS_KEY = new Uint8Array(32).fill(0x52);
+const D01_D_IPNS_KEY = new Uint8Array(32).fill(0x53);
+
+describe('SC#1/SC#2 depth>=2 dirty-resume consumption (Plan 70.1-01)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it('SC#1 (Bug A): depth-2 dirty-resume — intermediate parent A republishes exactly once, no spurious root decrement', async () => {
+    // root -[clean]-> A (folder) -[dirty]-> B (folder, leaf)
+    // Root already committed (resume). The buggy dirty-resume branch does
+    // `rootNode.children.find(ipnsName === B)` (only finds depth-1 children),
+    // never finds B (B's real parent is A, not root), hits the fail-closed
+    // branch, and decrements ROOT's pendingChildCount for a node that isn't
+    // even root's child — a spurious root republish, and B is dropped
+    // (never enqueued, A's mirror never re-sealed).
+    const rootNode = makeFolderNode({
+      id: NODE_ID,
+      generation: 5,
+      children: [
+        {
+          name: 'a',
+          ipnsName: D01_A_IPNS,
+          generation: 3, // matches A's actual published generation — clean edge
+          versionFloor: 0n,
+          readKeySealed: 'd01-a-sealed==',
+        },
+      ],
+    });
+    const aNode = makeFolderNode({
+      id: D01_A_ID,
+      generation: 3,
+      children: [
+        {
+          name: 'b',
+          ipnsName: D01_B_IPNS,
+          generation: 1, // STALE — B's actual published generation is 2 (dirty edge)
+          versionFloor: 0n,
+          readKeySealed: 'd01-b-sealed==',
+        },
+      ],
+    });
+    const bNode = makeFolderNode({ id: D01_B_ID, generation: 2, children: [] });
+
+    const publishWithCasCalls: string[] = [];
+
+    mockFns.resolveIpnsRecord.mockImplementation(async (ipnsName: string) => {
+      const cidByIpns: Record<string, string> = {
+        [NODE_IPNS]: 'bafy-d01-root',
+        [D01_A_IPNS]: 'bafy-d01-a',
+        [D01_B_IPNS]: 'bafy-d01-b',
+      };
+      const cid = cidByIpns[ipnsName];
+      if (!cid) return null;
+      return { cid, sequenceNumber: 5n, signatureVerified: true };
+    });
+    mockFns.fetchFromIpfs.mockImplementation(async (_ctx: unknown, cid: string) => {
+      if (cid === 'bafy-d01-root')
+        return new TextEncoder().encode(JSON.stringify(makePublishedNode(NODE_ID, 5, 'folder')));
+      if (cid === 'bafy-d01-a')
+        return new TextEncoder().encode(JSON.stringify(makePublishedNode(D01_A_ID, 3, 'folder')));
+      return new TextEncoder().encode(JSON.stringify(makePublishedNode(D01_B_ID, 2, 'folder')));
+    });
+    mockFns.unsealNode.mockImplementation(
+      async (published: import('@cipherbox/core').PublishedNode) => {
+        if (published.id === NODE_ID) return rootNode;
+        if (published.id === D01_A_ID) return aNode;
+        if (published.id === D01_B_ID) return bNode;
+        throw new Error(`unexpected unsealNode call for ${published.id}`);
+      }
+    );
+    mockFns.unsealChildReadKey.mockImplementation(async (sealed: string) => {
+      if (sealed === 'd01-a-sealed==') return new Uint8Array(D01_A_READ_KEY);
+      if (sealed === 'd01-b-sealed==') return new Uint8Array(D01_B_READ_KEY);
+      throw new Error(`unexpected sealed value: ${sealed}`);
+    });
+    mockFns.sealNode.mockImplementation(async (node: import('@cipherbox/core').Node) =>
+      makePublishedNode(node.id, node.generation)
+    );
+    mockFns.sealChildReadKey.mockResolvedValue('d01-resealed==');
+    mockFns.publishWithCas.mockImplementation(async (params: { ipnsName: string }) => {
+      publishWithCasCalls.push(params.ipnsName);
+      return { cid: 'bafy-d01-new', newSequenceNumber: 9n, publishedData: [], prunedCids: [] };
+    });
+
+    const jobRecord = makeJobRecord({
+      rootNodeId: NODE_ID,
+      completedNodeIds: new Set([NODE_ID]), // resume: root already committed
+    });
+
+    await rotateReadFromNode({
+      rootNodeId: NODE_ID,
+      rootNodeIpnsName: NODE_IPNS,
+      rootReadKey: T07_ROOT_READ_KEY,
+      rootIpnsPrivateKey: T07_ROOT_IPNS_KEY,
+      nodeKeySource: (ipnsName: string) =>
+        ipnsName === D01_B_IPNS
+          ? { privateKey: T07_CHILD_IPNS_KEY, publicKey: T07_STUB_PUB_KEY }
+          : undefined,
+      jobRecord,
+      ctx: createMockContext(),
+    });
+
+    // A's mirror was re-sealed and republished exactly once (bearing B's
+    // freshly re-sealed readKeySealed) — the depth-2 parent, NOT root.
+    const aPublishCalls = publishWithCasCalls.filter((n) => n === D01_A_IPNS);
+    expect(aPublishCalls).toHaveLength(1);
+
+    // No spurious republish of ROOT attributable to this depth-2 item — root
+    // has no root-direct dirty children this run, so it must not republish.
+    const rootPublishCalls = publishWithCasCalls.filter((n) => n === NODE_IPNS);
+    expect(rootPublishCalls).toHaveLength(0);
+  });
+
+  it('SC#2 (Bug B): depth-3 ordering — a deep dirty node dequeued before its parent still lets the parent republish (guard-drop and skipped-idempotency paths both fixed)', async () => {
+    // root -[clean]-> P1 -[clean]-> P2 -[dirty]-> D
+    // Fresh walk (root NOT resumed). D is discovered via the pre-rotation
+    // dirty-frontier merge and queued directly, AHEAD of P2 (P2 is only
+    // discovered once P1 itself commits and enqueues ITS children) — the
+    // classic ordering race: D can dequeue before P2's own parentTracking
+    // entry exists.
+    const rootNode = makeFolderNode({
+      id: NODE_ID,
+      generation: 0,
+      children: [
+        {
+          name: 'p1',
+          ipnsName: D01_P1_IPNS,
+          generation: 0,
+          versionFloor: 0n,
+          readKeySealed: 'd01-p1-sealed==',
+        },
+      ],
+    });
+    const p1Node = makeFolderNode({
+      id: D01_P1_ID,
+      generation: 0,
+      children: [
+        {
+          name: 'p2',
+          ipnsName: D01_P2_IPNS,
+          generation: 0,
+          versionFloor: 0n,
+          readKeySealed: 'd01-p2-sealed==',
+        },
+      ],
+    });
+    const p2Node = makeFolderNode({
+      id: D01_P2_ID,
+      generation: 0,
+      children: [
+        {
+          name: 'd',
+          ipnsName: D01_D_IPNS,
+          generation: 0, // STALE — D's actual published generation is 1 (dirty edge)
+          versionFloor: 0n,
+          readKeySealed: 'd01-d-sealed==',
+        },
+      ],
+    });
+    const dNode = makeFolderNode({ id: D01_D_ID, generation: 1, children: [] });
+
+    const publishWithCasCalls: string[] = [];
+
+    mockFns.resolveIpnsRecord.mockImplementation(async (ipnsName: string) => {
+      const cidByIpns: Record<string, string> = {
+        [NODE_IPNS]: 'bafy-d01-root2',
+        [D01_P1_IPNS]: 'bafy-d01-p1',
+        [D01_P2_IPNS]: 'bafy-d01-p2',
+        [D01_D_IPNS]: 'bafy-d01-d',
+      };
+      const cid = cidByIpns[ipnsName];
+      if (!cid) return null;
+      return { cid, sequenceNumber: 1n, signatureVerified: true };
+    });
+    mockFns.fetchFromIpfs.mockImplementation(async (_ctx: unknown, cid: string) => {
+      if (cid === 'bafy-d01-root2')
+        return new TextEncoder().encode(JSON.stringify(makePublishedNode(NODE_ID, 0, 'folder')));
+      if (cid === 'bafy-d01-p1')
+        return new TextEncoder().encode(JSON.stringify(makePublishedNode(D01_P1_ID, 0, 'folder')));
+      if (cid === 'bafy-d01-p2')
+        return new TextEncoder().encode(JSON.stringify(makePublishedNode(D01_P2_ID, 0, 'folder')));
+      return new TextEncoder().encode(JSON.stringify(makePublishedNode(D01_D_ID, 1, 'folder')));
+    });
+    mockFns.unsealNode.mockImplementation(
+      async (published: import('@cipherbox/core').PublishedNode) => {
+        if (published.id === NODE_ID) return rootNode;
+        if (published.id === D01_P1_ID) return p1Node;
+        if (published.id === D01_P2_ID) return p2Node;
+        if (published.id === D01_D_ID) return dNode;
+        throw new Error(`unexpected unsealNode call for ${published.id}`);
+      }
+    );
+    mockFns.unsealChildReadKey.mockImplementation(async (sealed: string) => {
+      if (sealed === 'd01-p1-sealed==') return new Uint8Array(D01_P1_READ_KEY);
+      if (sealed === 'd01-p2-sealed==') return new Uint8Array(D01_P2_READ_KEY);
+      if (sealed === 'd01-d-sealed==') return new Uint8Array(D01_D_READ_KEY);
+      throw new Error(`unexpected sealed value: ${sealed}`);
+    });
+    mockFns.sealNode.mockImplementation(async (node: import('@cipherbox/core').Node) =>
+      makePublishedNode(node.id, node.generation)
+    );
+    mockFns.sealChildReadKey.mockResolvedValue('d01-resealed2==');
+    mockFns.publishWithCas.mockImplementation(async (params: { ipnsName: string }) => {
+      publishWithCasCalls.push(params.ipnsName);
+      return { cid: 'bafy-d01-new2', newSequenceNumber: 2n, publishedData: [], prunedCids: [] };
+    });
+
+    const jobRecord = makeJobRecord({
+      rootNodeId: NODE_ID,
+      completedNodeIds: new Set<string>(), // fresh walk — root NOT resumed
+    });
+
+    await rotateReadFromNode({
+      rootNodeId: NODE_ID,
+      rootNodeIpnsName: NODE_IPNS,
+      rootReadKey: T07_ROOT_READ_KEY,
+      rootIpnsPrivateKey: T07_ROOT_IPNS_KEY,
+      nodeKeySource: (ipnsName: string) => {
+        const keys: Record<string, Uint8Array> = {
+          [D01_P1_IPNS]: D01_P1_IPNS_KEY,
+          [D01_P2_IPNS]: D01_P2_IPNS_KEY,
+          [D01_D_IPNS]: D01_D_IPNS_KEY,
+        };
+        const key = keys[ipnsName];
+        return key ? { privateKey: key, publicKey: T07_STUB_PUB_KEY } : undefined;
+      },
+      jobRecord,
+      ctx: createMockContext(),
+    });
+
+    // P2 must republish TWICE: once for its own rotateOne commit, and once
+    // for the D-09 batched republish reflecting D's re-sealed readKeySealed —
+    // proving D's pending-child decrement against P2 was neither dropped by
+    // the missing-parentTracking guard (D dequeued before P2 existed) nor by
+    // the skipped-result idempotency path (D re-enqueued by P2 itself).
+    const p2PublishCalls = publishWithCasCalls.filter((n) => n === D01_P2_IPNS);
+    expect(p2PublishCalls).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Plan 64-07 Task 2 RED — D-07 job-record ordering, terminal persist, zeroization
 // ---------------------------------------------------------------------------
 
