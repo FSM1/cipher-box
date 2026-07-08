@@ -255,35 +255,72 @@ where
 /// (project invariant). Both are threaded here as separate parameters.
 /// `crates/fuse/src/write_ops/` is flagged for explicit security review.
 ///
-/// # LIVE-WIRING RESIDUAL (deferred — flagged in the 69-13 SUMMARY)
-/// A production `cipherbox_sdk::rotation::engine::RotationDeps` implementor
-/// (IPNS resolve-verify + node fetch/unseal + CAS publish + wire→`GrantRow`
-/// decode + advisory job persistence) does NOT yet exist anywhere in this
-/// workspace — only the engine's in-crate `FakeDeps` test double. Constructing
-/// it (and its own test coverage) is a standalone live-wiring plan, matching
-/// the known ROT-07 live-wiring gap. Until it lands, a covered scope-exit fails
-/// CLOSED here (`Err` → EIO at the caller) rather than completing the
-/// delete/move WITHOUT rotating the read key — which would leave a removed
-/// reader with continued access, the exact revocation-bypass this gate exists
-/// to prevent. Private deletes never reach this seam.
+/// # LIVE-WIRED (D-14, Plan 70.1-09)
+/// Constructs the production `crate::write_ops::rotation_deps::
+/// FuseRotationDeps` adapter (over `ApiClientTransport`) from `fs`, resolves
+/// the grant-root's stable `node_id` + current `read_key` from the
+/// locally-mounted inode table, and drives
+/// `cipherbox_sdk::rotate_read_from_node`. A rotation failure (including the
+/// grant-root not being found locally) still fails CLOSED here (`Err` → EIO
+/// at the caller) — never a silent no-rotation, which would leave a removed
+/// reader with continued access (the exact revocation-bypass this gate
+/// exists to prevent). Private deletes never reach this seam.
 pub async fn rotate_read_on_scope_exit(
-    _api: &ApiClient,
+    fs: &crate::CipherBoxFS,
     grant_root_ipns_name: &str,
     deleted_child_id: &str,
 ) -> Result<(), RotationError> {
     // ipns_name (read plane) and child UUID (write plane) are PUBLIC
     // identifiers, not key material — safe to log (CLAUDE.md rule 2).
-    log::error!(
-        "shared-scope-exit read-key rotation is not yet live-wired \
-         (read-plane grant_root ipns={}, write-plane child_id={}): failing closed",
-        grant_root_ipns_name,
-        deleted_child_id,
+    let Some((root_node_id, root_read_key)) =
+        crate::write_ops::rotation_deps::find_grant_root_state(&fs.inodes, grant_root_ipns_name)
+    else {
+        return Err(RotationError::RotateFailed(format!(
+            "rotate_read_on_scope_exit: grant-root {grant_root_ipns_name} not found in the \
+             local inode table (write-plane child_id={deleted_child_id})"
+        )));
+    };
+
+    let deps = crate::write_ops::rotation_deps::FuseRotationDeps::new(
+        crate::write_ops::rotation_deps::ApiClientTransport {
+            api: fs.api.as_ref(),
+            inodes: &fs.inodes,
+        },
+        fs.public_key.to_vec(),
+        fs.private_key.to_vec(),
+        fs.rotation_checkpoint_store.clone(),
     );
-    Err(RotationError::RotateFailed(
-        "read-key rotation on shared-scope exit not yet live-wired \
-         (production RotationDeps implementor pending)"
-            .to_string(),
-    ))
+    let mut job = cipherbox_sdk::RotationJobRecord::new(root_node_id.clone());
+
+    match cipherbox_sdk::rotate_read_from_node(
+        &deps,
+        &root_node_id,
+        grant_root_ipns_name,
+        root_read_key.as_slice(),
+        &mut job,
+    )
+    .await
+    {
+        Ok(_) => {
+            log::info!(
+                "shared-scope-exit read-key rotation completed \
+                 (read-plane grant_root ipns={}, write-plane child_id={})",
+                grant_root_ipns_name,
+                deleted_child_id,
+            );
+            Ok(())
+        }
+        Err(e) => {
+            log::error!(
+                "shared-scope-exit read-key rotation FAILED (read-plane grant_root ipns={}, \
+                 write-plane child_id={}): {} — failing closed",
+                grant_root_ipns_name,
+                deleted_child_id,
+                e,
+            );
+            Err(e)
+        }
+    }
 }
 
 /// Drive the SC#3 scope-exit gate for a mutation of `ino` (unlink / rmdir /
@@ -312,7 +349,6 @@ pub fn run_scope_exit_gate(fs: &crate::CipherBoxFS, ino: u64) -> Result<(), ()> 
         .read()
         .expect("sent_shares lock poisoned")
         .clone();
-    let api = fs.api.clone();
     // Write-plane key (D-07): the mutated node's stable id (its stored node_id ==
     // real published.id), kept DISTINCT from the read-plane grant-root ipns_name
     // threaded into the rotate seam below. Sourced from the inode, NOT
@@ -329,7 +365,7 @@ pub fn run_scope_exit_gate(fs: &crate::CipherBoxFS, ino: u64) -> Result<(), ()> 
             ino,
             &sent_cache,
             move |grant_root_ipns_name| async move {
-                rotate_read_on_scope_exit(&api, &grant_root_ipns_name, &child_id).await
+                rotate_read_on_scope_exit(fs, &grant_root_ipns_name, &child_id).await
             },
         ))
         .map(|_| ())

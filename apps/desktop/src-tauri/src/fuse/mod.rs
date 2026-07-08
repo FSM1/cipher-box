@@ -179,6 +179,11 @@ pub async fn mount_filesystem(
     // Replay needs the journal dir to rebuild its own high-water gate; capture a
     // clone before `journal_dir` is moved into WriteQueue::new below.
     let replay_journal_dir = journal_dir.clone();
+    // D-01/D-03 (Plan 70.1-09): the production RotationDeps adapter's
+    // wrapped-key-checkpoint handle — points at the SAME combined sidecar as
+    // `high_water` above. Capture before `journal_dir` moves.
+    let rotation_checkpoint_store =
+        cipherbox_sdk::JsonSidecarFloorStore::for_generation(&journal_dir);
     let journal = cipherbox_sdk::WriteQueue::new(journal_dir, JOURNAL_MAX_RETRIES);
 
     // node/v3 root symmetric keys (read_key/write_key) for the root node.
@@ -334,6 +339,7 @@ pub async fn mount_filesystem(
         upload_tx,
         journal,
         high_water,
+        rotation_checkpoint_store,
         mutated_folders: HashMap::new(),
         publish_coordinator,
         publish_queue: HashMap::new(),
