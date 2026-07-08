@@ -3,16 +3,16 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
 current_phase: 70.1
-current_phase_name: Rotation Read-Plane Durability and Deep Crash-Resume Soundness
-status: ready_to_execute
+current_phase_name: rotation-read-plane-durability-and-deep-crash-resume-soundne
+status: executing
 stopped_at: Phase 70.1 planned (13 plans, 7 waves)
-last_updated: "2026-07-08T16:40:00.000Z"
+last_updated: "2026-07-08T15:18:16.155Z"
 last_activity: 2026-07-08
-last_activity_desc: "Phase 70.1 planned — 13 plans / 7 waves (scope expanded twice: Rust engine twin SC#7, desktop FUSE live-wiring SC#8); plan-checker PASSED, decision coverage 17/17"
+last_activity_desc: Phase 70.1 execution started
 progress:
   total_phases: 16
   completed_phases: 11
-  total_plans: 148
+  total_plans: 161
   completed_plans: 147
   percent: 69
 ---
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-27)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 70.1 — Rotation Read-Plane Durability and Deep Crash-Resume Soundness
+**Current focus:** Phase 70.1 — rotation-read-plane-durability-and-deep-crash-resume-soundne
 
 ## Current Position
 
-Phase: 70.1 — Rotation Read-Plane Durability and Deep Crash-Resume Soundness
-Plan: 13 plans across 7 waves — ready to execute (`/gsd-execute-phase 70.1`)
-Status: Planned & verified (plan-checker PASSED; decision coverage 17/17). Scope expanded twice by user decision — SC#7 Rust engine.rs twin, SC#8 desktop FUSE rotation live-wiring (absorbs the fuse-shared-scope-exit-rotation-live-wiring todo)
-Last activity: 2026-07-08 — Phase 70.1 planned (13 plans, 7 waves)
+Phase: 70.1 (rotation-read-plane-durability-and-deep-crash-resume-soundne) — EXECUTING
+Plan: 1 of 13
+Status: Executing Phase 70.1
+Last activity: 2026-07-08 — Phase 70.1 execution started
 
 Progress: `██████████` 79 / 79 plans (100%)
 
