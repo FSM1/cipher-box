@@ -95,6 +95,14 @@ pub enum RotationError {
     /// line.
     #[error("Failed to persist floor for node {node_id}: {message}")]
     PersistFailed { node_id: String, message: String },
+    /// D-05 (70.1-08, ECIES key-checkpoint repair): an already-rotated
+    /// dirty node's checkpoint is missing (expired, GC'd, or never
+    /// persisted) — there is no cryptographic recovery path for a key lost
+    /// to an interrupted prior run without one. Fail-closed: the dirty node
+    /// is never fed into `rotate_one`/`unseal_node` with its stale
+    /// pre-rotation key as a fallback.
+    #[error("Dirty node {node_id} is unrecoverable: no ECIES key checkpoint found")]
+    DirtyNodeUnrecoverable { node_id: String },
 }
 
 /// Validates a live input or stored candidate value. Fail-closed (V5):

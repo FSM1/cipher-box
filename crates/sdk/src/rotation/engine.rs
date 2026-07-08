@@ -197,6 +197,43 @@ pub trait RotationDeps {
     async fn delete_grant(&self, _share_id: &str) -> Result<(), RotationError> {
         Ok(())
     }
+
+    /// ECIES key-checkpoint seam (D-01/D-03, T-70.1-19, 70.1-08): persists a
+    /// durable, recoverable checkpoint of a freshly minted `read_key_prime`
+    /// BEFORE its owning node's publish lands, closing the
+    /// "minted-then-lost-on-crash" window. Default no-op: a host with no
+    /// checkpoint plane wired pays zero cost (mirrors the grant seam's own
+    /// D-01 conditional-invocation-by-default-no-op contract).
+    ///
+    /// `wrapped_b64` is base64 of the raw key material FROM THE ENGINE'S
+    /// PERSPECTIVE — per RESEARCH option (b) (Sharp Question 6.3), this
+    /// engine stays key-material-free w.r.t. ECIES: a concrete production
+    /// `RotationDeps` impl is the one that ECIES-wraps this under the
+    /// owner's own pubkey before writing it at rest (and unwraps it again
+    /// inside its own `get_wrapped_key`), so ciphertext — never plaintext —
+    /// ever crosses this seam's actual storage boundary (T-70.1-21).
+    async fn persist_wrapped_key(
+        &self,
+        _node_id: &str,
+        _wrapped_b64: &str,
+    ) -> Result<(), RotationError> {
+        Ok(())
+    }
+
+    /// Recovers a previously persisted checkpoint (see `persist_wrapped_key`),
+    /// returning `None` when nothing is checkpointed for `node_id` (expired,
+    /// GC'd, or never persisted) — the caller surfaces
+    /// [`RotationError::DirtyNodeUnrecoverable`] in that case (D-05).
+    async fn get_wrapped_key(&self, _node_id: &str) -> Result<Option<String>, RotationError> {
+        Ok(None)
+    }
+
+    /// Garbage-collects a checkpoint once it is no longer needed — called
+    /// AFTER the node's parent mirror durably commits the node's current
+    /// key (D-01), never before.
+    async fn delete_wrapped_key(&self, _node_id: &str) -> Result<(), RotationError> {
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1943,7 +1980,19 @@ mod test_support {
     use super::*;
     use std::sync::Mutex;
 
-    #[derive(Default)]
+    /// One entry in [`FakeDeps::call_log`] — a chronologically ordered
+    /// record spanning BOTH the checkpoint seam and `publish_with_cas`, used
+    /// to assert cross-call ordering invariants (D-13: persist-before-
+    /// publish, consumed-on-resume, GC'd-after-mirror-commit) that separate
+    /// per-verb logs (`publish_log`, etc.) cannot express on their own.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum CallLogEvent {
+        Publish(String),
+        PersistWrappedKey(String),
+        GetWrappedKey(String),
+        DeleteWrappedKey(String),
+    }
+
     pub struct FakeDeps {
         /// ipns_name -> (cid, sequence_number)
         records: Mutex<HashMap<String, (String, u64)>>,
@@ -1978,11 +2027,41 @@ mod test_support {
         pub updated_grants: Mutex<Vec<(String, String, u32)>>,
         /// Ordered log of every `delete_grant` call's `share_id`.
         pub deleted_grants: Mutex<Vec<String>>,
+        /// node_id -> base64(ECIES ciphertext) — the ECIES key-checkpoint
+        /// store (D-01/D-03, 70.1-08). Wrapped here (not by the engine,
+        /// which stays key-material-free per RESEARCH option (b)) using
+        /// `owner_pk`/`owner_sk`, simulating what a production
+        /// `RotationDeps` impl's own checkpoint store would do.
+        checkpoints: Mutex<HashMap<String, String>>,
+        /// Chronologically ordered cross-verb call log — see
+        /// [`CallLogEvent`].
+        pub call_log: Mutex<Vec<CallLogEvent>>,
+        /// This fake's own ECIES identity keypair, standing in for the
+        /// production adapter's vault/owner keypair (70.1-08 checkpoint
+        /// seam). Generated fresh per `FakeDeps` instance.
+        owner_sk: ecies::SecretKey,
+        owner_pk: ecies::PublicKey,
     }
 
     impl FakeDeps {
         pub fn new() -> Self {
-            Self::default()
+            let (owner_sk, owner_pk) = ecies::utils::generate_keypair();
+            Self {
+                records: Mutex::new(HashMap::new()),
+                blobs: Mutex::new(HashMap::new()),
+                publish_log: Mutex::new(Vec::new()),
+                resolve_log: Mutex::new(Vec::new()),
+                persist_log: Mutex::new(Vec::new()),
+                fail_publish_for: Mutex::new(None),
+                inject_conflict_for: Mutex::new(None),
+                grants_by_node: Mutex::new(HashMap::new()),
+                updated_grants: Mutex::new(Vec::new()),
+                deleted_grants: Mutex::new(Vec::new()),
+                checkpoints: Mutex::new(HashMap::new()),
+                call_log: Mutex::new(Vec::new()),
+                owner_sk,
+                owner_pk,
+            }
         }
 
         /// Seeds a published node at `ipns_name` with the given CID/sequence.
@@ -2111,6 +2190,10 @@ mod test_support {
                 .unwrap()
                 .insert(ipns_name.to_string(), (new_cid, new_seq));
             self.publish_log.lock().unwrap().push(ipns_name.to_string());
+            self.call_log
+                .lock()
+                .unwrap()
+                .push(CallLogEvent::Publish(ipns_name.to_string()));
 
             Ok(PublishAttempt::Published(PublishOutcome {
                 new_sequence_number: new_seq,
@@ -2156,6 +2239,65 @@ mod test_support {
                 .lock()
                 .unwrap()
                 .push(share_id.to_string());
+            Ok(())
+        }
+
+        /// ECIES-wraps the incoming raw key (base64, from the engine's
+        /// key-material-free perspective) under `owner_pk` and stores the
+        /// resulting ciphertext — simulating a production adapter's own
+        /// checkpoint store (RESEARCH option (b), Sharp Question 6.3).
+        async fn persist_wrapped_key(
+            &self,
+            node_id: &str,
+            wrapped_b64: &str,
+        ) -> Result<(), RotationError> {
+            let raw = decode_b64(wrapped_b64).map_err(|e| {
+                RotationError::RotateFailed(format!("persist_wrapped_key: bad base64: {e}"))
+            })?;
+            let ciphertext =
+                cipherbox_crypto::wrap_key(&raw, &self.owner_pk.serialize()).map_err(|e| {
+                    RotationError::RotateFailed(format!("persist_wrapped_key: wrap failed: {e}"))
+                })?;
+            self.checkpoints
+                .lock()
+                .unwrap()
+                .insert(node_id.to_string(), base64_encode(&ciphertext));
+            self.call_log
+                .lock()
+                .unwrap()
+                .push(CallLogEvent::PersistWrappedKey(node_id.to_string()));
+            Ok(())
+        }
+
+        /// Looks up the checkpoint (if any) and ECIES-unwraps it via
+        /// `owner_sk`, returning the raw key material as base64 (already
+        /// unwrapped — the engine's repair path never touches ECIES itself,
+        /// per the same key-material-free boundary as `persist_wrapped_key`).
+        async fn get_wrapped_key(&self, node_id: &str) -> Result<Option<String>, RotationError> {
+            self.call_log
+                .lock()
+                .unwrap()
+                .push(CallLogEvent::GetWrappedKey(node_id.to_string()));
+            let Some(ciphertext_b64) = self.checkpoints.lock().unwrap().get(node_id).cloned()
+            else {
+                return Ok(None);
+            };
+            let ciphertext = decode_b64(&ciphertext_b64).map_err(|e| {
+                RotationError::RotateFailed(format!("get_wrapped_key: bad base64: {e}"))
+            })?;
+            let raw = cipherbox_crypto::unwrap_key(&ciphertext, &self.owner_sk.serialize())
+                .map_err(|e| {
+                    RotationError::RotateFailed(format!("get_wrapped_key: unwrap failed: {e}"))
+                })?;
+            Ok(Some(base64_encode(raw.as_slice())))
+        }
+
+        async fn delete_wrapped_key(&self, node_id: &str) -> Result<(), RotationError> {
+            self.checkpoints.lock().unwrap().remove(node_id);
+            self.call_log
+                .lock()
+                .unwrap()
+                .push(CallLogEvent::DeleteWrappedKey(node_id.to_string()));
             Ok(())
         }
     }
@@ -3270,6 +3412,432 @@ mod rotate_read_from_node {
         assert!(
             children.iter().any(|c| c.ipns_name == "k51/child-0"),
             "the original child must also survive the merge"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // D-13 (Plan 70.1-08): ECIES key-checkpoint seam + dirty-node repair.
+    // An already-rotated dirty node's STALE (parent-mirror-derived) key must
+    // NEVER be fed into `rotate_one`/`unseal_node` (T-70.1-20) -- the BFS
+    // must detect it and repair via the checkpoint instead.
+    // -----------------------------------------------------------------------
+
+    use super::test_support::CallLogEvent;
+
+    #[tokio::test]
+    async fn d13_depth3_post_crash_dirty_node_converges_via_ecies_checkpoint_repair() {
+        let deps = FakeDeps::new();
+        let root_read_key = [60u8; 32];
+
+        // depth-1: A, clean, direct child of root.
+        let a_id = child_uuid(300);
+        let a_key = [61u8; 32];
+        // depth-2: B, clean (as far as A's mirror knows) -- but B is the
+        // REAL parent of the depth-3 dirty node C, and also has a second,
+        // untouched clean child D (fan-out >= 2).
+        let b_id = child_uuid(301);
+        let b_key = [62u8; 32];
+        // depth-3: C -- individually rotated below (simulating the crashed
+        // prior run) BEFORE the resumed walk -- its OWN key changes to a
+        // genuinely fresh, independently minted value, but B's mirror of it
+        // is left stale (the crash truncates the batched parent republish
+        // that would have reconciled it).
+        let c_id = child_uuid(302);
+        let c_key_old = [63u8; 32];
+        // depth-3: D, B's OTHER child -- untouched, proves fan-out >= 2 does
+        // not cause a spurious extra republish or touch root/A.
+        let d_id = child_uuid(303);
+        let d_key = [64u8; 32];
+
+        deps.seed(
+            "k51/deep-d",
+            "cid-deep-d-0",
+            0,
+            seal_for_seed(&folder(&d_id, 0, vec![]), &d_key),
+        );
+        deps.seed(
+            "k51/deep-c",
+            "cid-deep-c-0",
+            0,
+            seal_for_seed(&folder(&c_id, 0, vec![]), &c_key_old),
+        );
+
+        let c_sealed_key =
+            seal_child_read_key(&c_key_old, &b_key, &c_id, NodeKind::Folder, 0).unwrap();
+        let c_ref = SealedChildRef {
+            name: "deep-c".to_string(),
+            ipns_name: "k51/deep-c".to_string(),
+            generation: 0,
+            version_floor: 0,
+            read_key_sealed: base64_encode(&c_sealed_key),
+        };
+        let d_sealed_key = seal_child_read_key(&d_key, &b_key, &d_id, NodeKind::Folder, 0).unwrap();
+        let d_ref = SealedChildRef {
+            name: "deep-d".to_string(),
+            ipns_name: "k51/deep-d".to_string(),
+            generation: 0,
+            version_floor: 0,
+            read_key_sealed: base64_encode(&d_sealed_key),
+        };
+        deps.seed(
+            "k51/mid-b",
+            "cid-mid-b-0",
+            0,
+            seal_for_seed(&folder(&b_id, 0, vec![c_ref, d_ref]), &b_key),
+        );
+
+        let b_sealed_key = seal_child_read_key(&b_key, &a_key, &b_id, NodeKind::Folder, 0).unwrap();
+        let b_ref = SealedChildRef {
+            name: "mid-b".to_string(),
+            ipns_name: "k51/mid-b".to_string(),
+            generation: 0,
+            version_floor: 0,
+            read_key_sealed: base64_encode(&b_sealed_key),
+        };
+        deps.seed(
+            "k51/mid-a",
+            "cid-mid-a-0",
+            0,
+            seal_for_seed(&folder(&a_id, 0, vec![b_ref]), &a_key),
+        );
+
+        let a_sealed_key =
+            seal_child_read_key(&a_key, &root_read_key, &a_id, NodeKind::Folder, 0).unwrap();
+        let a_ref = SealedChildRef {
+            name: "mid-a".to_string(),
+            ipns_name: "k51/mid-a".to_string(),
+            generation: 0,
+            version_floor: 0,
+            read_key_sealed: base64_encode(&a_sealed_key),
+        };
+        deps.seed(
+            "k51/root",
+            "cid-root-0",
+            0,
+            seal_for_seed(&folder(ROOT_ID, 0, vec![a_ref]), &root_read_key),
+        );
+
+        // --- STEP 1: simulate the crashed prior run -- C individually
+        // commits its OWN rotation (mint + persist checkpoint + publish),
+        // but the crash happens before B's batched republish reconciles
+        // B's mirror of C.
+        let mut prior_job = RotationJobRecord::new(c_id.clone());
+        let prior_outcome =
+            rotate_one(&deps, Some(&c_id), "k51/deep-c", &c_key_old, &mut prior_job)
+                .await
+                .unwrap();
+        let c_key_new = match prior_outcome {
+            RotateOneOutcome::Committed(c) => {
+                assert_eq!(c.new_generation, 1);
+                c.read_key_prime.clone()
+            }
+            RotateOneOutcome::Skipped { .. } => panic!("expected C's prior run to commit"),
+        };
+
+        // --- STEP 2: resume the FULL walk. Root already committed
+        // pre-crash (fast-path Skip); the dirty tail (C, real parent B) is
+        // what this run must reconcile.
+        let mut job = RotationJobRecord::new(ROOT_ID);
+        job.completed_node_ids.insert(ROOT_ID.to_string());
+
+        let result = rotate_read_from_node(&deps, ROOT_ID, "k51/root", &root_read_key, &mut job)
+            .await
+            .unwrap();
+        assert!(
+            result.is_none(),
+            "root was a pure resume-skip -- no fresh root key"
+        );
+
+        // --- Assertion 1: owner navigability -- a normal owner who only
+        // knows the ROOT's read key can still navigate the FULL updated
+        // chain down to C's CURRENT published body.
+        let root_resolved = deps.resolve("k51/root").await.unwrap().unwrap();
+        let root_pub = deps.fetch_node(&root_resolved.cid).await.unwrap();
+        let root_body = unseal_node(
+            &decode_b64(&root_pub.read_sealed).unwrap(),
+            &root_read_key,
+            ROOT_ID,
+            NodeKind::Folder,
+            root_pub.generation,
+        )
+        .unwrap();
+        let a_ref_now = node_children(&decode_node(&root_body).unwrap())
+            .into_iter()
+            .find(|c| c.ipns_name == "k51/mid-a")
+            .unwrap();
+        let a_key_derived =
+            derive_child_read_key(&root_read_key, &a_ref_now, &a_id, NodeKind::Folder).unwrap();
+        assert_eq!(&*a_key_derived, &a_key);
+
+        let a_resolved = deps.resolve("k51/mid-a").await.unwrap().unwrap();
+        let a_pub = deps.fetch_node(&a_resolved.cid).await.unwrap();
+        let a_body = unseal_node(
+            &decode_b64(&a_pub.read_sealed).unwrap(),
+            &a_key_derived,
+            &a_id,
+            NodeKind::Folder,
+            a_pub.generation,
+        )
+        .unwrap();
+        let b_ref_now = node_children(&decode_node(&a_body).unwrap())
+            .into_iter()
+            .find(|c| c.ipns_name == "k51/mid-b")
+            .unwrap();
+        let b_key_derived = derive_child_read_key(
+            a_key_derived.as_slice(),
+            &b_ref_now,
+            &b_id,
+            NodeKind::Folder,
+        )
+        .unwrap();
+        assert_eq!(&*b_key_derived, &b_key);
+
+        let b_resolved = deps.resolve("k51/mid-b").await.unwrap().unwrap();
+        let b_pub = deps.fetch_node(&b_resolved.cid).await.unwrap();
+        let b_body = unseal_node(
+            &decode_b64(&b_pub.read_sealed).unwrap(),
+            &b_key_derived,
+            &b_id,
+            NodeKind::Folder,
+            b_pub.generation,
+        )
+        .unwrap();
+        let b_children_now = node_children(&decode_node(&b_body).unwrap());
+        let c_ref_now = b_children_now
+            .iter()
+            .find(|c| c.ipns_name == "k51/deep-c")
+            .unwrap();
+        assert_eq!(
+            c_ref_now.generation, 1,
+            "B's mirror of C must be repaired to reflect C's CURRENT generation"
+        );
+        let d_ref_now = b_children_now
+            .iter()
+            .find(|c| c.ipns_name == "k51/deep-d")
+            .unwrap();
+        assert_eq!(
+            d_ref_now.generation, 0,
+            "D (B's untouched sibling) must be left alone"
+        );
+
+        let c_key_derived =
+            derive_child_read_key(b_key_derived.as_slice(), c_ref_now, &c_id, NodeKind::Folder)
+                .unwrap();
+        let c_resolved = deps.resolve("k51/deep-c").await.unwrap().unwrap();
+        let c_pub = deps.fetch_node(&c_resolved.cid).await.unwrap();
+        let c_sealed_bytes = decode_b64(&c_pub.read_sealed).unwrap();
+        unseal_node(
+            &c_sealed_bytes,
+            &c_key_derived,
+            &c_id,
+            NodeKind::Folder,
+            c_pub.generation,
+        )
+        .expect("owner navigability: the repaired chain must unseal C's CURRENT body");
+        assert_eq!(&*c_key_derived, &*c_key_new);
+
+        // --- Assertion 2: revoked-reader cut -- the STALE pre-crash key
+        // (c_key_old, still what a stale/revoked reader would hold) MUST
+        // NOT unseal C's CURRENT published body.
+        assert!(
+            unseal_node(
+                &c_sealed_bytes,
+                &c_key_old,
+                &c_id,
+                NodeKind::Folder,
+                c_pub.generation
+            )
+            .is_err(),
+            "the OLD (pre-rotation) key must fail to unseal C's CURRENT body"
+        );
+
+        // --- Assertion 3: no spurious extra republish / root+A untouched.
+        assert_eq!(deps.publish_count_for("k51/root"), 0);
+        assert_eq!(deps.publish_count_for("k51/mid-a"), 0);
+        assert_eq!(
+            deps.publish_count_for("k51/mid-b"),
+            1,
+            "B must republish EXACTLY once to absorb C's repair, despite fan-out >= 2"
+        );
+
+        // --- Assertion 4: ECIES checkpoint lifecycle, via the ordered call
+        // log (persisted-before-publish, consumed-on-resume,
+        // GC'd-after-mirror-commit).
+        let log = deps.call_log.lock().unwrap().clone();
+        let persist_idx = log
+            .iter()
+            .position(|e| *e == CallLogEvent::PersistWrappedKey(c_id.clone()))
+            .expect("persist_wrapped_key must have been called for C");
+        let step1_publish_idx = log
+            .iter()
+            .position(|e| *e == CallLogEvent::Publish("k51/deep-c".to_string()))
+            .expect("C's own (step-1) publish must be in the log");
+        assert!(
+            persist_idx < step1_publish_idx,
+            "the checkpoint MUST be persisted BEFORE C's own publish (D-03), got: {log:?}"
+        );
+
+        let get_idx = log
+            .iter()
+            .position(|e| *e == CallLogEvent::GetWrappedKey(c_id.clone()))
+            .expect("get_wrapped_key must be consumed on resume");
+        assert!(
+            get_idx > step1_publish_idx,
+            "checkpoint must be consumed AFTER it was persisted"
+        );
+
+        let mid_b_publish_idx = log
+            .iter()
+            .rposition(|e| *e == CallLogEvent::Publish("k51/mid-b".to_string()))
+            .expect("B's republish must be in the log");
+        let delete_idx = log
+            .iter()
+            .position(|e| *e == CallLogEvent::DeleteWrappedKey(c_id.clone()))
+            .expect("delete_wrapped_key must GC the checkpoint");
+        assert!(
+            delete_idx > mid_b_publish_idx,
+            "the checkpoint must be GC'd AFTER the parent mirror commit, got: {log:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn d13_multi_dirty_edge_lost_key_window_repairs_both_children_with_one_republish() {
+        let deps = FakeDeps::new();
+        let root_read_key = [80u8; 32];
+
+        let b_id = child_uuid(320);
+        let b_key = [81u8; 32];
+        let c1_id = child_uuid(321);
+        let c1_key_old = [82u8; 32];
+        let c2_id = child_uuid(322);
+        let c2_key_old = [83u8; 32];
+
+        deps.seed(
+            "k51/multi-c1",
+            "cid-multi-c1-0",
+            0,
+            seal_for_seed(&folder(&c1_id, 0, vec![]), &c1_key_old),
+        );
+        deps.seed(
+            "k51/multi-c2",
+            "cid-multi-c2-0",
+            0,
+            seal_for_seed(&folder(&c2_id, 0, vec![]), &c2_key_old),
+        );
+
+        let c1_sealed_key =
+            seal_child_read_key(&c1_key_old, &b_key, &c1_id, NodeKind::Folder, 0).unwrap();
+        let c1_ref = SealedChildRef {
+            name: "multi-c1".to_string(),
+            ipns_name: "k51/multi-c1".to_string(),
+            generation: 0,
+            version_floor: 0,
+            read_key_sealed: base64_encode(&c1_sealed_key),
+        };
+        let c2_sealed_key =
+            seal_child_read_key(&c2_key_old, &b_key, &c2_id, NodeKind::Folder, 0).unwrap();
+        let c2_ref = SealedChildRef {
+            name: "multi-c2".to_string(),
+            ipns_name: "k51/multi-c2".to_string(),
+            generation: 0,
+            version_floor: 0,
+            read_key_sealed: base64_encode(&c2_sealed_key),
+        };
+        deps.seed(
+            "k51/multi-b",
+            "cid-multi-b-0",
+            0,
+            seal_for_seed(&folder(&b_id, 0, vec![c1_ref, c2_ref]), &b_key),
+        );
+
+        let b_sealed_key =
+            seal_child_read_key(&b_key, &root_read_key, &b_id, NodeKind::Folder, 0).unwrap();
+        let b_ref = SealedChildRef {
+            name: "multi-b".to_string(),
+            ipns_name: "k51/multi-b".to_string(),
+            generation: 0,
+            version_floor: 0,
+            read_key_sealed: base64_encode(&b_sealed_key),
+        };
+        deps.seed(
+            "k51/root",
+            "cid-multi-root-0",
+            0,
+            seal_for_seed(&folder(ROOT_ID, 0, vec![b_ref]), &root_read_key),
+        );
+
+        // Simulate the crashed prior run individually rotating BOTH
+        // children (the LOST-KEY window this variant targets -- NOT a
+        // concurrent-add race against `republish_parent`'s own CAS-409
+        // fail-closed path, which stays untouched by this plan).
+        let mut prior_job1 = RotationJobRecord::new(c1_id.clone());
+        rotate_one(
+            &deps,
+            Some(&c1_id),
+            "k51/multi-c1",
+            &c1_key_old,
+            &mut prior_job1,
+        )
+        .await
+        .unwrap();
+        let mut prior_job2 = RotationJobRecord::new(c2_id.clone());
+        rotate_one(
+            &deps,
+            Some(&c2_id),
+            "k51/multi-c2",
+            &c2_key_old,
+            &mut prior_job2,
+        )
+        .await
+        .unwrap();
+
+        let mut job = RotationJobRecord::new(ROOT_ID);
+        job.completed_node_ids.insert(ROOT_ID.to_string());
+        let result = rotate_read_from_node(&deps, ROOT_ID, "k51/root", &root_read_key, &mut job)
+            .await
+            .unwrap();
+        assert!(result.is_none());
+
+        assert_eq!(deps.publish_count_for("k51/root"), 0);
+        assert_eq!(
+            deps.publish_count_for("k51/multi-b"),
+            1,
+            "B must republish EXACTLY once even with TWO dirty children \
+             (T-69-08-03 DoS mitigation extends to the repair path)"
+        );
+
+        let log = deps.call_log.lock().unwrap().clone();
+        assert!(log.contains(&CallLogEvent::GetWrappedKey(c1_id.clone())));
+        assert!(log.contains(&CallLogEvent::GetWrappedKey(c2_id.clone())));
+        assert!(log.contains(&CallLogEvent::DeleteWrappedKey(c1_id.clone())));
+        assert!(log.contains(&CallLogEvent::DeleteWrappedKey(c2_id.clone())));
+
+        let b_resolved = deps.resolve("k51/multi-b").await.unwrap().unwrap();
+        let b_pub = deps.fetch_node(&b_resolved.cid).await.unwrap();
+        let b_body = unseal_node(
+            &decode_b64(&b_pub.read_sealed).unwrap(),
+            &b_key,
+            &b_id,
+            NodeKind::Folder,
+            b_pub.generation,
+        )
+        .unwrap();
+        let children_now = node_children(&decode_node(&b_body).unwrap());
+        assert_eq!(
+            children_now
+                .iter()
+                .find(|c| c.ipns_name == "k51/multi-c1")
+                .unwrap()
+                .generation,
+            1
+        );
+        assert_eq!(
+            children_now
+                .iter()
+                .find(|c| c.ipns_name == "k51/multi-c2")
+                .unwrap()
+                .generation,
+            1
         );
     }
 }
