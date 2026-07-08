@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "570d1b905004",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-70.1-rotation-read-plane-durability",
+  "checkpoints_count": 6,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/57/0d1b905004/0/metadata.json",
+      "transcript": "/57/0d1b905004/0/full.jsonl",
+      "content_hash": "/57/0d1b905004/0/content_hash.txt",
+      "prompt": "/57/0d1b905004/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 63848,
+    "cache_creation_tokens": 1214106,
+    "cache_read_tokens": 52560105,
+    "output_tokens": 312087,
+    "api_call_count": 190
+  }
+}
