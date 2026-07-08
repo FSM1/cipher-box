@@ -868,8 +868,8 @@ mod d07_write_plane_pairing_tests {
     use crate::inode::{FileAttrs, InodeData, InodeKind, ROOT_INO};
     use crate::test_support::make_test_fs;
     use cipherbox_core::node::{
-        encode_published_node, seal::seal_published_node, Node, NodeContent, NodeKind,
-        NodeWriteBody, VersionEntry,
+        encode_published_node, seal::seal_published_node, Node, NodeContent, NodeWriteBody,
+        VersionEntry,
     };
     use cipherbox_sdk::{
         list_folder_owned, FetchedRecord, HighWaterStore, ListingError, NodeFetcher, RotationError,
