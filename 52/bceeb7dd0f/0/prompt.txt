@@ -1,0 +1,5 @@
+has that todo (@.planning/todos/pending/2026-07-07-fuse-shared-scope-exit-rotation-live-wiring.md) been scoped in to any of the already outlined phases (71-73)?
+
+---
+
+lets implement the wiring of RotationDeps adapter as part of this phase

@@ -1,0 +1,141 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "52bceeb7dd0f",
+  "session_id": "a4ed1cb9-4e4c-4d71-bc03-3c2c6b4e70a3",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-08T14:27:13.282466Z",
+  "branch": "feat/rotation-read-plane-durability-and-deep-crash-resume-soundne",
+  "checkpoints_count": 2,
+  "save_step_count": 1,
+  "files_touched": [
+    ".planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-CONTEXT.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "5ba758e73869",
+  "token_usage": {
+    "input_tokens": 15726,
+    "cache_creation_tokens": 488305,
+    "cache_read_tokens": 5841688,
+    "output_tokens": 71567,
+    "api_call_count": 38
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-plan-phase-2026-07-08T13:42:46.030418Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "0eb6f9cbb31b",
+      "timestamp": "2026-07-08T13:42:46.030418Z",
+      "native": {
+        "command": "/gsd-plan-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-plan-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Orchestrate the GSD plan-phase workflow for cipher-box phase 70.1 (rotation read-plane durability and crash-resume soundness) — research the domain, then generate an executable PLAN.md via research → plan → verify.",
+    "outcome": "Completed two rounds of research (TS engine, then Rust engine.rs twin) and, via user Q&A, expanded phase scope twice — first to include the Rust rotation-engine twin (D-11–D-13), then to fold in the previously-orphaned RotationDeps live-wiring todo plus its bundled security gate fixes (SC#8/D-14–D-17). CONTEXT.md, ROADMAP.md, VALIDATION.md, and the source todo were updated and committed, but the actual planner (gsd-planner) had not yet been spawned when the session ended — the researcher was being re-grounded on the live-wiring surface next.",
+    "learnings": {
+      "repo": [
+        "gsd-core plan-phase workflow never auto-commits PATTERNS.md after pattern-mapper runs — must be committed explicitly by the orchestrator.",
+        "The `--raw` hook JSON output from plan:pre hook rendering contains literal newlines inside inline fragments, making it invalid strict JSON — must read the underlying hook file directly instead of parsing --raw output.",
+        "cipher-box's drift precheck routinely flags ~140 'never-mapped' repo-root elements (landing/, .learnings/, etc.) that are unrelated noise, not real drift, for phase-scoped planning work.",
+        "Intel API-SURFACE regeneration can yield symbolCount=0 in this monorepo depending on glob scope — treat as a no-op hint rather than a signal of a real empty surface.",
+        "`crates/sdk/src/rotation/engine.rs` is a full Rust twin of the TS rotation engine (desktop FUSE/WinFsp) and was structurally behind it (non-recursive verify_subtree_clean, missing-root treated as clean, no CAS-409 merge-retry, naive 2-field DirtyFrontierEntry).",
+        "The Rust rotation engine's production path fails closed (EIO) because the only `impl RotationDeps` in the workspace is the test `FakeDeps` (engine.rs:1533) — desktop FUSE scope-exit rotation is not live-wired at all.",
+        "grant_scope.rs (crates/fuse/src/write_ops/grant_scope.rs:269-287) already documents this as a deliberately-deferred 'LIVE-WIRING RESIDUAL' matching the known ROT-07 gap, tracked in a pending todo (2026-07-07-fuse-shared-scope-exit-rotation-live-wiring.md)."
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/write_ops/grant_scope.rs",
+          "line": 269,
+          "end_line": 287,
+          "finding": "Returns Err/EIO because no production RotationDeps impl exists; docstring self-documents this as a deferred live-wiring residual."
+        },
+        {
+          "path": "crates/sdk/src/rotation/engine.rs",
+          "line": 781,
+          "end_line": 781,
+          "finding": "DirtyFrontierEntry is a naive 2-field struct lacking parent_ipns_name/node_read_key present in the TS twin."
+        },
+        {
+          "path": "crates/sdk/src/rotation/engine.rs",
+          "line": 813,
+          "end_line": 850,
+          "finding": "verify_subtree_clean is non-recursive and treats a missing root as clean, a structural soundness gap vs. the TS engine."
+        },
+        {
+          "path": "crates/sdk/src/rotation/engine.rs",
+          "line": 1287,
+          "end_line": 1290,
+          "finding": "republish_parent fails closed on CAS-409 with no merge-retry; TS twin has createConcurrentAddResealingMerge but Rust never got the port."
+        },
+        {
+          "path": "crates/crypto/src/ecies.rs",
+          "line": 21,
+          "end_line": 38,
+          "finding": "wrap_key/unwrap_key ECIES primitives confirmed byte-compatible with the TS eciesjs twin; unwrap_key returns self-zeroing Zeroizing<Vec<u8>>."
+        }
+      ],
+      "workflow": [
+        "When a user question ('has this todo been scoped into other phases?') surfaces that a piece of work is roadmap-orphaned, re-present the scope tradeoff — orphaned status can flip the earlier recommendation (here: from 'keep deferred' to 'fold in').",
+        "Use AskUserQuestion at genuine scope-fork decision points (e.g., whether an out-of-CONTEXT-scope sibling implementation should be included) rather than silently deciding for the user.",
+        "After scope expansion mid-workflow, the correct sequence is: record new locked decisions in CONTEXT.md → update ROADMAP.md and any source todos → re-ground via researcher → extend VALIDATION.md → then proceed to planner, each step committed separately."
+      ]
+    },
+    "friction": [
+      "plan:pre hook --raw JSON rendering produced invalid JSON (literal newlines) requiring a workaround of reading the hook file directly.",
+      "Commit helper reported a 'commit_failed' false negative (already known/memorized issue) requiring manual git log verification instead of retrying.",
+      "A prompt-injection warning false-triggered on legitimate ROADMAP.md phase-definition prose during an edit.",
+      "Intel API-SURFACE regeneration returned symbolCount=0, effectively a no-op due to monorepo glob scoping.",
+      "Scope kept expanding mid-session (TS engine → Rust twin → RotationDeps live-wiring), each requiring a fresh research/grounding pass, extending the workflow well past the original single research→plan→verify pass envisioned."
+    ],
+    "open_items": [
+      "gsd-planner has not yet been spawned for phase 70.1 — planning was still pending re-grounding on the newly folded-in RotationDeps live-wiring surface (SC#8/D-14–D-17) when the session ended.",
+      "VALIDATION.md needs to be extended again to cover the live-wiring surface (desktop-e2e acceptance leg) before planning proceeds.",
+      "The bundled CRITICAL fail-open (empty sent-shares cache misread as private) and 3 MAJOR gate bugs (ancestor-walk fail-open, poisoned-lock panic, rename dest-gating/ordering) must be fixed as part of the now-expanded phase 70.1 scope, each needing its own desktop-e2e coverage.",
+      "The dedicated todo 2026-07-07-fuse-shared-scope-exit-rotation-live-wiring.md was marked as folded into 70.1 — confirm no other phase/doc still references it as a standalone follow-on.",
+      "Researcher was being resumed (SendMessage) to deepen grounding on the production RotationDeps adapter (real IPNS resolve/publish/unseal, wire→GrantRow decode, job persistence) at the point the transcript ends."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-08T14:26:33.130898Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 17,
+    "human_modified": 2,
+    "human_removed": 0,
+    "total_committed": 17,
+    "total_lines_changed": 19,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
