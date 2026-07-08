@@ -9,6 +9,10 @@ files:
   - apps/web/src/services/rotation-driver.service.ts
 ---
 
+## Retargeted to Phase 70.1 (2026-07-08)
+
+Open items 1 (cross-store bump atomicity) and 5 (reconcile cached generation) are folded into **Phase 70.1** (Rotation Read-Plane Durability), alongside the depth>=2 crash-resume gap and the CodeRabbit floor-write-propagation finding. Close this todo only after verifying items 1 + 5 are actually delivered by 70.1 (no `resolves_phase` marker here on purpose — only 2 of the 6 items remain, so it must not auto-close).
+
 ## Phase 70 disposition (2026-07-08)
 
 Partially closed by Phase 70. **Closed:** item 2 (RotateReadResult.readKey terminal-owner zeroization → SC#6, 70-07), item 3 (per-call IndexedDB connections → cached conn, 70-03), item 4 (single-root badge → Set-keyed, 70-03), item 6 (dirty-resume republish result silently dropped → fresh-copy truthy return, 70-06). **Still open (kept in pending):** item 1 (cross-store bump atomicity — explicitly documented out of scope for SC#5 store-layer atomicity at `rotation-high-water.ts:35-46`; needs an atomic multi-store transaction API) and item 5 (reconcile gate feeds cached `nodeGeneration` at `client.ts:1341`, not the freshly-resolved generation). Retarget items 1 + 5 to a future durability phase.
