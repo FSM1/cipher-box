@@ -15,23 +15,21 @@
 //      produces ZERO rotation publishes -- the parent's read key is
 //      UNCHANGED after the delete (only a plain relink republish occurs).
 //
-// KNOWN BLOCKER (read before running): as of this writing, NO call site in
-// the desktop binary (`apps/desktop/src-tauri/src/fuse/mod.rs`) ever invokes
-// `CipherBoxFS::refresh_sent_shares`. `sent_shares` is seeded once at mount
-// init to `SentSharesCache::empty()` (non-authoritative) and never
-// refreshed. Because `gate_scope_exit`/`run_scope_exit_gate`
-// (`crates/fuse/src/write_ops/grant_scope.rs`) fails CLOSED (EIO) while the
-// cache is non-authoritative (D-15a), EVERY delete/rename on a real mount --
-// private or shared -- currently returns EIO, unconditionally. Part 1 of
-// this script (the shared-scope-exit leg) CANNOT pass until a follow-up
-// wires a `refresh_sent_shares()` call into the mount lifecycle (mount init
-// + periodic background refresh, mirroring the existing
-// `spawn_bin_entry_publish` pattern in `fuse/mod.rs`). Part 2 (private
-// delete) is ALSO blocked by the same gap, since the private path hits the
-// identical non-authoritative-cache gate before ever reaching the
-// private/shared branch. See this plan's SUMMARY.md for the full writeup.
-// This script fails loudly and diagnostically (not silently) if that gap is
-// still open, distinguishing it from a genuine regression.
+// MOUNT-INIT DEPENDENCY (read before diagnosing an EIO): the scope-exit gate
+// (`gate_scope_exit`/`run_scope_exit_gate`, `crates/fuse/src/write_ops/
+// grant_scope.rs`) fails CLOSED (EIO) until `CipherBoxFS.sent_shares` is
+// AUTHORITATIVE, i.e. until a `/shares/sent` refresh has succeeded this
+// session. The desktop mount now seeds that cache at mount init (bounded,
+// best-effort) and drives a 30s periodic background refresh
+// (`spawn_periodic_sent_shares_refresh`, wired in `fuse/mod.rs` +
+// `fuse/windows/mod.rs`). So a delete/rename issued in the first moments
+// after mount -- before the init refresh completes, or if it failed and the
+// periodic task has not yet recovered -- can transiently EIO by design; the
+// retry loops below (6 attempts x 15s) absorb that window. A PERSISTENT EIO
+// across all retries means either the init+periodic refresh is failing to
+// reach the relay (check the desktop log for "sent-shares refresh failed")
+// or a genuine gate regression -- NOT the old "never-wired" gap, which is
+// now closed. This script fails loudly and diagnostically, never silently.
 //
 // Usage: node node_modules/tsx/dist/cli.mjs shared-scope-exit-rotation.mts \
 //          --mount <path> --api-url <url>
@@ -251,12 +249,14 @@ async function main(): Promise<void> {
     // Confirm the file landed inside the shared folder before measuring.
     await pollFindChild(grantRootIpnsName, sharedFolderReadKey, sharedFileName, ownerCtx);
 
-    const seqBeforeDelete = await resolveIpnsRecord(grantRootIpnsName, ownerCtx).then((r) => {
-      if (!r) throw new Error(`grant-root ${grantRootIpnsName} did not resolve before delete`);
-      return r.sequenceNumber;
-    });
-
     // Grant Bob read access to the shared folder via ECIES (v3 CreateShareDto).
+    // The grant MUST stay ACTIVE through the delete: the scope-exit gate keys
+    // off the mount's sent_shares cache (GET /shares/sent), and revoke is a
+    // hard DELETE, so revoking here would drop the covering grant and the
+    // delete would look PRIVATE (no rotation). Bob is cut off by the ROTATION
+    // itself (the desktop rotation re-mints the folder key and, since
+    // query_grants_rooted_at is a desktop no-op, does NOT re-wrap Bob's grant)
+    // — the explicit revoke below is cleanup after the rotation is proven.
     const wrappedForBob = await wrapKey(sharedFolderReadKey, bobPublicKey);
     const shareRes = await axiosInstance.post('/shares', {
       recipientPublicKey: '0x' + bytesToHex(bobPublicKey),
@@ -267,9 +267,9 @@ async function main(): Promise<void> {
     const shareId: string = shareRes.data.shareId;
     console.log(`Created share ${shareId} for ${bobEmail} rooted at ${grantRootIpnsName}`);
 
-    // Bob unwraps his copy of the key WHILE the share is still active -- a
-    // positive control proving the grant genuinely worked before revocation
-    // (so "cut off after rotation" isn't just "never worked").
+    // Bob unwraps his copy of the key WHILE the share is active -- a positive
+    // control proving the grant genuinely worked (so "cut off after rotation"
+    // isn't just "never worked").
     const receivedRes = await bobCtx.axiosInstance!.get('/shares/received');
     const receivedShare = (
       receivedRes.data.shares as Array<{ shareId: string; readDescriptorRef: string }>
@@ -281,27 +281,30 @@ async function main(): Promise<void> {
       hexToBytes(receivedShare.readDescriptorRef),
       bobPrivateKey
     );
-    const bobCouldReadBeforeRevocation = await canRead(grantRootIpnsName, bobFolderReadKey, bobCtx);
-    if (!bobCouldReadBeforeRevocation) {
+    const bobCouldReadWhileActive = await canRead(grantRootIpnsName, bobFolderReadKey, bobCtx);
+    if (!bobCouldReadWhileActive) {
       throw new Error(
-        'PRECONDITION FAILED: Bob could not decrypt the shared folder BEFORE revocation -- ' +
-          'the share never worked, so a post-rotation failure below would not prove anything'
+        'PRECONDITION FAILED: Bob could not decrypt the shared folder while the share was ' +
+          'ACTIVE -- the share never worked, so a post-rotation failure below would prove nothing'
       );
     }
-    console.log('PASS: Bob could decrypt the shared folder before revocation (positive control)');
+    console.log(
+      'PASS: Bob could decrypt the shared folder while the grant was active (positive control)'
+    );
 
-    // Revoke Bob's grant BEFORE the scope-exit mutation.
-    const revokeRes = await axiosInstance.delete(`/shares/${shareId}`);
-    if (revokeRes.status !== 204) {
-      throw new Error(`Revoking share ${shareId} failed with status ${revokeRes.status}`);
-    }
-    console.log(`Revoked share ${shareId}`);
+    // Wait for the mount's sent_shares cache to observe the ACTIVE grant
+    // (periodic refresh runs every 30s; mount init also seeds it once). One
+    // full cycle guarantees the just-created share is visible to the gate, so
+    // the covered scope-exit actually rotates rather than looking private.
+    await sleep(35000);
 
-    // Give the desktop mount's sent_shares cache every opportunity to
-    // observe the (now-revoked) grant before the scope-exit mutation. NOTE:
-    // as of this writing NOTHING calls CipherBoxFS::refresh_sent_shares, so
-    // this delete is expected to EIO until that gap is closed (see header).
-    await sleep(15000);
+    // Measure the grant-root sequence immediately before the delete (after the
+    // folder/file publishes have settled) so the +1 assertion isolates the
+    // rotation's single publish.
+    const seqBeforeDelete = await resolveIpnsRecord(grantRootIpnsName, ownerCtx).then((r) => {
+      if (!r) throw new Error(`grant-root ${grantRootIpnsName} did not resolve before delete`);
+      return r.sequenceNumber;
+    });
 
     // Perform the covered scope-exit delete THROUGH THE MOUNT.
     const ATTEMPTS = 6;
@@ -324,11 +327,10 @@ async function main(): Promise<void> {
       console.error(
         `FAIL: shared-scope-exit delete of ${sharedFileName} did not succeed after ${ATTEMPTS} attempts. ` +
           `Last error: ${String(lastDeleteError)}\n` +
-          '  This is EXPECTED to EIO today: no call site in apps/desktop/src-tauri/src/fuse/mod.rs ' +
-          'ever invokes CipherBoxFS::refresh_sent_shares, so sent_shares never becomes authoritative ' +
-          'and gate_scope_exit fails closed unconditionally (see script header + this plan SUMMARY.md). ' +
-          'If refresh_sent_shares HAS since been wired in and this still fails, treat it as a genuine ' +
-          'regression, not the known gap.'
+          "  A PERSISTENT EIO here means the mount's sent_shares cache never became authoritative " +
+          '(check the desktop log for "sent-shares refresh failed"/"timed out" — the relay was ' +
+          'unreachable at mount init AND across the periodic refresh cycles), or a genuine ' +
+          'scope-exit gate regression. See the script header + this plan SUMMARY.md.'
       );
       failed = true;
     } else {
@@ -366,13 +368,23 @@ async function main(): Promise<void> {
 
       const bobCanReadAfterRotation = await canRead(grantRootIpnsName, bobFolderReadKey, bobCtx);
       if (!bobCanReadAfterRotation) {
-        console.log('PASS: revoked recipient (Bob) can no longer decrypt the rotated subtree');
+        console.log(
+          'PASS: recipient (Bob) can no longer decrypt the rotated subtree with the key that ' +
+            'worked while active -- the scope-exit rotation cut the reader off'
+        );
       } else {
         console.error(
-          'FAIL: revoked recipient (Bob) can STILL decrypt the rotated subtree -- revocation bypass'
+          'FAIL: recipient (Bob) can STILL decrypt the rotated subtree -- revocation bypass'
         );
         failed = true;
       }
+    }
+
+    // Cleanup: revoke Bob's (now-stale) grant. The rotation above already cut
+    // Bob off; this hard-deletes the share row so a later re-run starts clean.
+    const revokeRes = await axiosInstance.delete(`/shares/${shareId}`);
+    if (revokeRes.status !== 204) {
+      console.warn(`Cleanup: revoking share ${shareId} returned ${revokeRes.status} (non-fatal)`);
     }
 
     clearBytes(sharedFolderReadKey);
@@ -431,8 +443,9 @@ async function main(): Promise<void> {
       console.error(
         `FAIL: private delete of ${privateFileName} did not succeed after ${ATTEMPTS} attempts. ` +
           `Last error: ${String(lastPrivateDeleteError)}\n` +
-          '  Same known blocker as Part A applies here too -- a non-authoritative sent_shares ' +
-          'cache fails EVERY delete closed, private or shared, until refresh_sent_shares is wired in.'
+          '  The scope-exit gate fails closed for private deletes too until sent_shares is ' +
+          'authoritative; by Part B the mount has been up >1min, so a persistent EIO here means ' +
+          'the sent_shares refresh is not reaching the relay, or a gate regression.'
       );
       failed = true;
     } else {
