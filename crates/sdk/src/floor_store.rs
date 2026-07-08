@@ -412,6 +412,141 @@ mod tests {
         ));
     }
 
+    // -----------------------------------------------------------------
+    // RED (70.1-03 Task 1): fail-closed put, combined-record atomicity,
+    // old-two-file migration, and wrapped-key checkpoint round-trip.
+    // These deliberately reference production items that do not exist yet
+    // (`RotationError::PersistFailed`, `CombinedFloorRecord`,
+    // `persist_wrapped_key`/`get_wrapped_key`/`delete_wrapped_key`) so the
+    // suite is RED until Task 2 lands.
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn put_fails_closed_on_write_failure_and_enforce_resolved_surfaces_it() {
+        // D-08: a write failure must surface as Err, never be swallowed by
+        // a log-and-return-Ok path.
+        let dir = make_temp_dir();
+        let store = JsonSidecarFloorStore::for_generation(&dir);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&dir).expect("stat dir").permissions();
+            perms.set_mode(0o500); // r-x: creating a file inside must fail
+            std::fs::set_permissions(&dir, perms).expect("chmod dir read-only");
+        }
+
+        let err = store
+            .put("node-1", 5)
+            .await
+            .expect_err("write failure must be Err, not swallowed (D-08)");
+        assert!(matches!(
+            err,
+            crate::rotation::RotationError::PersistFailed { .. }
+        ));
+
+        // enforce_resolved must surface the SAME fail-closed Err when the
+        // underlying floor bump can't be persisted -- not silently accept
+        // the in-memory decision while the durable write is lost.
+        let rhw = RotationHighWater::new(
+            JsonSidecarFloorStore::for_generation(&dir),
+            JsonSidecarFloorStore::for_seq(&dir),
+        );
+        let err = rhw
+            .enforce_resolved(EnforceResolvedParams {
+                node_id: "node-2".to_string(),
+                seq: 1,
+                generation: 1,
+                version_floor: 0,
+            })
+            .await
+            .expect_err("enforce_resolved must surface the durable write failure");
+        assert!(matches!(
+            err,
+            crate::rotation::RotationError::PersistFailed { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn combined_record_is_written_as_one_atomic_file_and_never_torn() {
+        // D-06: generation + seq (+ wrapped_key_checkpoint) for a nodeId live
+        // in ONE combined record in ONE sidecar file -- never two files.
+        let dir = make_temp_dir();
+        let gen_store = JsonSidecarFloorStore::for_generation(&dir);
+        let seq_store = JsonSidecarFloorStore::for_seq(&dir);
+
+        gen_store.put("node-1", 3).await.expect("put generation");
+        seq_store.put("node-1", 99).await.expect("put seq");
+
+        assert_eq!(gen_store.path, seq_store.path, "must share ONE sidecar file");
+
+        let bytes = std::fs::read(&gen_store.path).expect("combined sidecar exists");
+        let map: HashMap<String, CombinedFloorRecord> =
+            serde_json::from_slice(&bytes).expect("valid, non-torn combined JSON");
+        let record = map.get("node-1").expect("node-1 record present");
+        assert_eq!(record.generation, 3);
+        assert_eq!(record.seq, 99);
+
+        let tmp_path = gen_store.path.with_extension("tmp");
+        assert!(!tmp_path.exists(), "no orphaned temp file after success");
+    }
+
+    #[tokio::test]
+    async fn old_two_file_shape_folds_forward_into_the_combined_record() {
+        // Pitfall 4: a device upgrading from the old two-sidecar-file shape
+        // must not reset either floor to zero -- both values fold forward
+        // into the new combined record on first read.
+        let dir = make_temp_dir();
+        std::fs::write(
+            dir.join("rotation-high-water-generation.json"),
+            br#"{"node-1":4}"#,
+        )
+        .expect("seed legacy generation sidecar");
+        std::fs::write(dir.join("rotation-high-water-seq.json"), br#"{"node-1":12}"#)
+            .expect("seed legacy seq sidecar");
+
+        let gen_store = JsonSidecarFloorStore::for_generation(&dir);
+        let seq_store = JsonSidecarFloorStore::for_seq(&dir);
+
+        assert_eq!(
+            gen_store.get("node-1").await,
+            Some(4),
+            "generation floor must fold forward, not reset"
+        );
+        assert_eq!(
+            seq_store.get("node-1").await,
+            Some(12),
+            "seq floor must fold forward, not reset"
+        );
+    }
+
+    #[tokio::test]
+    async fn wrapped_key_checkpoint_round_trips_in_the_combined_record() {
+        // D-07 (Rust half): the wrapped-key checkpoint persists/reads/
+        // deletes from the SAME per-nodeId combined record, independent of
+        // the generation/seq floors.
+        let dir = make_temp_dir();
+        let store = JsonSidecarFloorStore::for_generation(&dir);
+        store.put("node-1", 7).await.expect("seed a floor first");
+
+        let ciphertext = vec![9u8, 8, 7, 6, 5];
+        store
+            .persist_wrapped_key("node-1", ciphertext.clone())
+            .await
+            .expect("persist wrapped key");
+        assert_eq!(store.get_wrapped_key("node-1").await, Some(ciphertext));
+
+        store
+            .delete_wrapped_key("node-1")
+            .await
+            .expect("delete wrapped key");
+        assert_eq!(store.get_wrapped_key("node-1").await, None);
+
+        // The floor set before the wrapped-key round trip must survive
+        // untouched (delete only clears its own field).
+        assert_eq!(store.get("node-1").await, Some(7));
+    }
+
     #[tokio::test]
     async fn survives_restart_end_to_end_through_rotation_high_water() {
         // End-to-end: enforce_resolved over the real durable store, dropped
