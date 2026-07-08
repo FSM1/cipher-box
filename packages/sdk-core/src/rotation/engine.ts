@@ -579,6 +579,73 @@ async function resolveChildKeyAndEnvelope(
 }
 
 /**
+ * SC#1 (Plan 70.1-01 dirty-resume depth>=2 fix — RESEARCH Sharp Question 1
+ * shared primitive): walks the tree from `candidateIpnsName` down looking for
+ * `targetIpnsName`, using the SAME `resolveChildKeyAndEnvelope` key-chain
+ * primitive `collectDirtyFrontier` uses, so a caller can resolve+unseal an
+ * ARBITRARY parent (any depth below root) instead of assuming the depth-1
+ * `rootNode.children.find(...)` shape.
+ *
+ * Only ever recurses below CLEAN edges reachable via `node.children` — by
+ * construction, every ancestor between root and a `DirtyFrontierItem`'s real
+ * parent IS clean (`collectDirtyFrontier` stops recursing below a dirty
+ * edge), so this walk always finds a resolvable, non-dirty path down to the
+ * target when called from the dirty-resume branch.
+ *
+ * Zeroization: each intermediate ancestor's derived key is zeroed once the
+ * search below it returns, UNLESS it IS the target's own key (returned to the
+ * caller as `readKey` — the caller becomes its terminal owner).
+ *
+ * @returns `undefined` when the target cannot be found (data inconsistency —
+ *   callers apply the file's existing fail-closed accounting convention).
+ */
+async function findParentNodeByIpnsName(
+  candidateIpnsName: string,
+  candidateReadKey: Uint8Array,
+  targetIpnsName: string,
+  ctx: SdkContext
+): Promise<{ node: Node; resolved: { sequenceNumber: bigint }; readKey: Uint8Array } | undefined> {
+  const resolved = await resolveIpnsRecord(candidateIpnsName, ctx);
+  if (!resolved) return undefined;
+  const raw = await fetchFromIpfs(ctx, resolved.cid);
+  const pub = JSON.parse(new TextDecoder().decode(raw)) as PublishedNode;
+  const node = await unsealNode(pub, candidateReadKey);
+
+  if (candidateIpnsName === targetIpnsName) {
+    return { node, resolved, readKey: candidateReadKey };
+  }
+
+  for (const childRef of node.children ?? []) {
+    const childResolved = await resolveChildKeyAndEnvelope(childRef, candidateReadKey, ctx);
+    if (!childResolved) continue;
+    if (childResolved.childPub.kind !== 'folder') {
+      childResolved.childReadKey.fill(0);
+      continue;
+    }
+    let result: Awaited<ReturnType<typeof findParentNodeByIpnsName>>;
+    try {
+      result = await findParentNodeByIpnsName(
+        childRef.ipnsName,
+        childResolved.childReadKey,
+        targetIpnsName,
+        ctx
+      );
+    } finally {
+      // Zero this level's derived key once the deeper search below it has
+      // returned — UNLESS it IS the match's own key (a different variable
+      // binding at any intermediate ancestor level, so this check is always
+      // safe: the target match returns `candidateReadKey` from ITS OWN call
+      // frame, which is `childResolved.childReadKey` from ITS PARENT's frame).
+      if (!(result && result.readKey === childResolved.childReadKey)) {
+        childResolved.childReadKey.fill(0);
+      }
+    }
+    if (result) return result;
+  }
+  return undefined;
+}
+
+/**
  * A dirty frontier node discovered by `verifySubtreeClean`'s recursive walk —
  * carries everything a BFS caller needs to seed its queue directly at this
  * node, at ANY depth (RESEARCH.md Pitfall 3): the consumer no longer needs to
@@ -1295,6 +1362,62 @@ export async function rotateReadFromNode(
   }
 
   /**
+   * SC#1 (Plan 70.1-01): given an arbitrary `parentIpnsName` discovered via a
+   * `DirtyFrontierItem` at ANY depth, resolve+unseal that parent (walking
+   * down from root via `findParentNodeByIpnsName`, the SAME
+   * `resolveChildKeyAndEnvelope` key-chain primitive `collectDirtyFrontier`
+   * uses) and produce-or-find its `ParentTrackingState`. Generalizes the
+   * root-specific seed logic previously inlined at the top of the
+   * dirty-resume branch — root itself is just another entry in `parentTracking`.
+   *
+   * Returns the EXISTING tracking entry when already seeded (never re-derives
+   * or re-walks twice for the same parentIpnsName within one
+   * `rotateReadFromNode` call).
+   *
+   * `pendingChildCount` is seeded to 0 — callers set the real count (the
+   * frontier-group size for the dirty-resume branch, or 1 for a single lazy
+   * decrement in the normal-branch fallback) after this returns, since the
+   * correct count depends on the caller's own context.
+   *
+   * Returns `undefined` when the parent cannot be found walking from root
+   * (data inconsistency) — callers apply the file's existing fail-closed
+   * accounting convention (accept the drop, matching the missing-child-record
+   * precedent elsewhere in this file).
+   */
+  async function resolveParentTrackingState(
+    parentIpnsName: string
+  ): Promise<ParentTrackingState | undefined> {
+    const existing = parentTracking.get(parentIpnsName);
+    if (existing) return existing;
+
+    const found = await findParentNodeByIpnsName(
+      rootNodeIpnsName,
+      rootReadKey,
+      parentIpnsName,
+      ctx
+    );
+    if (!found) return undefined;
+
+    const { node, resolved, readKey } = found;
+    const parentKeys = nodeKeySource?.(parentIpnsName);
+    const newState: ParentTrackingState = {
+      parentNewReadKey: readKey,
+      parentOldReadKey: new Uint8Array(readKey),
+      parentIpnsName,
+      parentIpnsPrivateKey: parentKeys?.privateKey,
+      parentIpnsPublicKey: parentKeys?.publicKey,
+      parentNodeId: node.id,
+      parentNodeGeneration: node.generation,
+      parentLastSeq: resolved.sequenceNumber,
+      children: [...(node.children ?? [])],
+      baseChildrenSnapshot: [...(node.children ?? [])],
+      pendingChildCount: 0,
+    };
+    parentTracking.set(parentIpnsName, newState);
+    return newState;
+  }
+
+  /**
    * SC#3 (Plan 70-06): seed the BFS queue directly from a `DirtyFrontierItem`
    * discovered by `verifySubtreeClean`'s recursive walk (consuming plan 70-05's
    * key-bearing frontier shape). Builds a minimal `SealedChildRef` stub — only
@@ -1394,51 +1517,49 @@ export async function rotateReadFromNode(
         parentLastSeq: rootResolved.sequenceNumber,
         children: [...(rootNode.children ?? [])],
         baseChildrenSnapshot: [...(rootNode.children ?? [])],
-        pendingChildCount: frontier.length,
+        // SC#1 (Plan 70.1-01 Bug A fix): seeded to 0, not frontier.length — a
+        // depth>=2 frontier item's real parent is an intermediate node, NOT
+        // root; mixing every depth into root's own counter is the exact
+        // mis-attribution bug. The grouping loop below sets this to the
+        // COUNT of root-DIRECT dirty items only (0 if none).
+        pendingChildCount: 0,
       };
       parentTracking.set(rootNodeIpnsName, rootParentState);
 
-      for (const frontierItem of frontier) {
-        try {
-          const childRef = (rootNode.children ?? []).find(
-            (c) => c.ipnsName === frontierItem.ipnsName
-          );
-          if (!childRef) {
-            // SC#3 (Plan 70-06 / T-70-12): fail-closed accounting — a frontier item
-            // whose IPNS name is no longer present in root's current children mirror
-            // must not silently leave pendingChildCount stuck above zero forever.
-            await decrementPendingAndMaybeRepublish(rootParentState, rootNodeIpnsName);
-            continue;
-          }
-          const resolved = await resolveChildKeyAndEnvelope(childRef, rootReadKey, ctx);
-          if (!resolved) {
-            // SC#3 (Plan 70-06 / T-70-12): fail-closed accounting — see above.
-            await decrementPendingAndMaybeRepublish(rootParentState, rootNodeIpnsName);
-            continue;
-          }
-          const { childPub, childReadKey } = resolved;
-          const childKeys = nodeKeySource?.(frontierItem.ipnsName);
-          queue.push({
-            childRef,
-            nodeReadKey: childReadKey,
-            parentIpnsName: rootNodeIpnsName,
-            ipnsPrivateKey: childKeys?.privateKey,
-            ipnsPublicKey: childKeys?.publicKey,
-            nodeWriteKey: childKeys?.writeKey,
-            childPubId: childPub.id,
-            childPubKind: childPub.kind as 'folder' | 'file',
-            enqueuedGeneration: childRef.generation,
-          });
-        } finally {
-          // frontierItem.nodeReadKey (this dirty node's own pre-rotation key,
-          // minted by verifySubtreeClean/collectDirtyFrontier) is NEVER adopted
-          // into `queue` by this loop — the queue item's nodeReadKey above is
-          // always the freshly re-derived childReadKey from
-          // resolveChildKeyAndEnvelope(childRef, rootReadKey, ctx), a distinct
-          // buffer. Zero the frontier item's buffer here as its terminal owner
-          // on every exit path (not-found, resolve-failed, or queued).
-          frontierItem.nodeReadKey.fill(0);
+      // SC#1 (Plan 70.1-01 Bug A fix): group frontier items by their REAL
+      // immediate parent (item.parentIpnsName) — a depth>=2 item's parent may
+      // be any intermediate node, not just root. Seed each DISTINCT parent's
+      // ParentTrackingState via the shared resolveParentTrackingState helper
+      // (generalizing the root-only seed above to arbitrary depth), then
+      // enqueue every frontier item via the existing enqueueDirtyFrontierItem
+      // helper — it already correctly threads item.parentIpnsName/
+      // item.nodeReadKey; only the SEEDING of intermediate parents was
+      // missing. Never decrement rootParentState for a non-root child (the
+      // :1406-1412 fail-closed mis-attribution this fix removes).
+      const countByParent = new Map<string, number>();
+      for (const item of frontier) {
+        countByParent.set(item.parentIpnsName, (countByParent.get(item.parentIpnsName) ?? 0) + 1);
+      }
+      for (const [parentIpnsName, count] of countByParent) {
+        if (parentIpnsName === rootNodeIpnsName) {
+          rootParentState.pendingChildCount = count;
+          continue;
         }
+        const state = await resolveParentTrackingState(parentIpnsName);
+        if (!state) continue; // fail-closed: parent unresolvable — data inconsistency
+        state.pendingChildCount = count;
+      }
+      if (rootParentState.pendingChildCount === 0) {
+        // No root-direct dirty items this run — root's own mirror needs no
+        // update. Nothing will ever decrement this entry to trigger teardown,
+        // so clean it up now (terminal-owner zeroization, D-09) instead of
+        // leaving a live, un-zeroed proxy copy for the rest of this call.
+        rootParentState.parentOldReadKey.fill(0);
+        parentTracking.delete(rootNodeIpnsName);
+      }
+
+      for (const frontierItem of frontier) {
+        enqueueDirtyFrontierItem(frontierItem);
       }
 
       // SC#6 (Plan 70-06 / T-70-10): a dirty-resume republish is about to happen
@@ -1529,6 +1650,25 @@ export async function rotateReadFromNode(
   while (queue.length > 0) {
     const item = queue.shift()!;
 
+    // SC#2 (Plan 70.1-01 Bug B fix): guarantee a depth>=2 item's parent has a
+    // chance to seed its OWN parentTracking entry before this item is
+    // genuinely consumed. The normal-branch merge enqueues root's children
+    // FIRST, then appends every preRotationDirtyFrontier item regardless of
+    // depth — so a deep dirty node can dequeue before its own (also
+    // not-yet-processed) parent. If the parent hasn't been tracked yet AND is
+    // still waiting somewhere in this queue, defer this item (push to the
+    // back) instead of calling rotateOne now — root-direct items
+    // (parentIpnsName === rootNodeIpnsName) are NEVER deferred, so this
+    // recursion is bounded by tree depth and always terminates.
+    if (
+      item.parentIpnsName !== rootNodeIpnsName &&
+      !parentTracking.has(item.parentIpnsName) &&
+      queue.some((q) => q.childRef.ipnsName === item.parentIpnsName)
+    ) {
+      queue.push(item);
+      continue;
+    }
+
     try {
       // Plan 70-06 / SC#3: NO convergence-skip guard here anymore. Design §4.5's
       // crash-recovery model is safe DOUBLE-ROTATION — a node already rotated
@@ -1565,7 +1705,26 @@ export async function rotateReadFromNode(
         // old readKey — correct for the child's own identity binding but wrong for the
         // parent's SealedChildRef (which must be sealed under the parent's NEW readKey'
         // for `unsealChildReadKey` to authenticate). This out-of-band call is the fix.
-        const parentState = parentTracking.get(item.parentIpnsName);
+        //
+        // SC#2 (Plan 70.1-01 Bug B fix): the requeue guard above handles the
+        // COMMON ordering race, but as a defensive fallback (e.g. an
+        // orphaned/unreachable parentIpnsName the requeue guard couldn't wait
+        // on), lazily resolve+seed the parent via the shared
+        // resolveParentTrackingState helper instead of silently dropping this
+        // entire re-seal+decrement block (the :1568-1569 guard-drop this fix
+        // closes).
+        let parentState = parentTracking.get(item.parentIpnsName);
+        if (!parentState) {
+          parentState = await resolveParentTrackingState(item.parentIpnsName);
+          if (parentState) {
+            // Lazily discovered — this decrement accounts for exactly this
+            // one child. If a sibling dirty item under the same parent is
+            // discovered later, resolveParentTrackingState returns this SAME
+            // entry (as long as it has not already reached zero and torn
+            // down).
+            parentState.pendingChildCount = 1;
+          }
+        }
         if (parentState) {
           const updatedChildReadKeySealed = await sealChildReadKey(
             result.childReadKey, // child's freshly minted readKey'
@@ -1644,6 +1803,23 @@ export async function rotateReadFromNode(
             childPubKind: childPub.kind as 'folder' | 'file',
             enqueuedGeneration: childRef.generation,
           });
+        }
+      } else {
+        // SC#2 (Plan 70.1-01 Bug B fix): an idempotency-hit (this node
+        // already committed earlier THIS session, reached again via a
+        // second enqueue path — e.g. the ordering race where a dirty-tail
+        // item was merged onto the queue before its real parent had a
+        // chance to seed its own tracking) must still let the parent's
+        // pendingChildCount reach zero — otherwise the parent's batched
+        // republish (D-09) is silently dropped a SECOND time (RESEARCH Bug
+        // B). No re-seal happens here — result.childReadKey is a placeholder
+        // on this branch (rotateOne never returns a real key on skip); the
+        // node's own real processing already performed its re-seal at that
+        // time. A missing parentTracking entry here means nothing is owed
+        // (already-converged or never seeded) — a harmless no-op.
+        const parentState = parentTracking.get(item.parentIpnsName);
+        if (parentState) {
+          await decrementPendingAndMaybeRepublish(parentState, item.parentIpnsName);
         }
       }
     } finally {
