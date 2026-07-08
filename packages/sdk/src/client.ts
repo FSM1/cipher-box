@@ -2037,8 +2037,69 @@ export class CipherBoxClient {
               rootIpnsPublicKey: params.rootIpnsPublicKey,
               jobRecord,
               ctx: this.ctx,
+              // Phase 65 write-body-derived per-node IPNS keys: every folder
+              // already loaded into folderTree carries its OWN real
+              // ipnsKeypair + writeKey (populated by ensureFolderLoaded's
+              // write-chain recovery), so this is genuine production key
+              // material -- not the Phase-64 test-only fixture the
+              // RotationParams doc warns against. Nodes not yet loaded into
+              // folderTree simply return undefined here (unchanged fallback
+              // behavior for those nodes).
+              nodeKeySource: (ipnsName) => {
+                const folder = this.folderTree.get(ipnsName);
+                if (!folder) return undefined;
+                return {
+                  publicKey: folder.ipnsKeypair.publicKey,
+                  privateKey: folder.ipnsKeypair.privateKey,
+                  writeKey: folder.writeKey,
+                };
+              },
+              // SC#4 (Plan 70-06) seam plumbing: no CipherBoxClientConfig seam
+              // supplies grant-remint callbacks/inner-grants today (Phase 66
+              // is the host-wiring follow-up per RESEARCH) -- threading the
+              // fields here (currently always undefined) makes them
+              // structurally reachable from the real walk without requiring
+              // a new config surface in this plan.
+              innerGrants: undefined,
+              grantCallbacks: undefined,
+              // SC#3 (Plan 70.1-05 / D-01..D-05): the owner's OWN vault
+              // keypair wraps/unwraps the ECIES key-checkpoint. keyCheckpoint
+              // is the seam Plan 70.1-05 added to RotationClientCallbacks --
+              // wired by the host (apps/web) to the Plan-02 combined-store
+              // IndexedDB accessors (persistWrappedKey/getWrappedKey/
+              // deleteWrappedKey). Absent -> zero seam work (unchanged
+              // pre-Plan-70.1-05 behavior), matching the NOOP default.
+              ownerPublicKey: this.config.vaultKeypair.publicKey,
+              ownerPrivateKey: this.config.vaultKeypair.privateKey,
+              keyCheckpointCallbacks: callbacks.keyCheckpoint,
             });
           } catch (err) {
+            if (err instanceof sdkCore.DirtyNodeUnrecoverableError) {
+              // D-05 fallback (child-level, distinct from RootKeyStaleError
+              // below): an already-rotated dirty CHILD node's ECIES
+              // key-checkpoint was never persisted (a genuinely lost prior
+              // run that crashed before D-03's persist-before-publish
+              // completed) or has already been GC'd (D-04) -- there is no
+              // cryptographic recovery path for a key never checkpointed.
+              // Unlike RootKeyStaleError's full top-down re-navigation from
+              // the vault root, this residual is scoped to ONE subtree edge:
+              // a full repair would re-derive that SPECIFIC node's parent
+              // mirror, not re-navigate the entire tree. The error carries no
+              // structured node/parent identifier, so that narrower per-node
+              // repair is not attempted here -- surface a clear, actionable
+              // error instead of an opaque AEAD/unseal failure, consistent
+              // with the RootKeyStaleError residual documented below (Phase
+              // 70 Open Question 1/2).
+              throw new Error(
+                `Rotation for root ${params.rootNodeIpnsName} hit an unrecoverable ` +
+                  'dirty child (DirtyNodeUnrecoverableError): its ECIES key ' +
+                  'checkpoint was never persisted or has already been ' +
+                  'garbage-collected, and there is no cryptographic recovery path. ' +
+                  'This is a known residual -- reload the app to re-resolve the ' +
+                  'affected subtree from the vault root.',
+                { cause: err }
+              );
+            }
             if (!(err instanceof sdkCore.RootKeyStaleError)) throw err;
 
             // T-70-14 / Open Question 1: the in-memory rootReadKey is stale --
