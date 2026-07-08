@@ -58,9 +58,9 @@ export type { ResolvedChild } from './folder-listing';
 export { SharedFolderTree } from './state/shared-folder-tree';
 
 // Durable rotation high-water state machine (ROT-07) -- monotonic-max
-// generation + seq floors over an injected HighWaterStore seam, and the
-// enforceResolved fail-closed regression gate. apps/web supplies the
-// IndexedDB-backed HighWaterStore (68-06).
+// generation + seq floors over a SINGLE combined injected HighWaterStore
+// seam (SC#4/D-06), and the enforceResolved fail-closed regression gate.
+// apps/web supplies the IndexedDB-backed HighWaterStore (68-06, 70.1-02).
 export {
   createRotationHighWater,
   GenerationRegressionError,
@@ -70,6 +70,7 @@ export type {
   HighWaterStore,
   RotationHighWater,
   EnforceResolvedParams,
+  CombinedFloorRecord,
 } from './state/rotation-high-water';
 
 // Events
