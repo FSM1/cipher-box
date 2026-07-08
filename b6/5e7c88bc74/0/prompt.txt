@@ -1,1 +1,9 @@
 move the completed todos and /resolve-pr-reviews
+
+---
+
+should the @.planning/todos/pending/2026-07-08-rotation-crash-resume-depth2-soundness-gap.md be dealt with separately, or rolled in to one of the other already planned phases? if dealt with separately, maybe a phase 70.1 should be inserted to deal with this gap as well as the 2 hardening followup open items?
+
+---
+
+yeah please insert phase 70.1
