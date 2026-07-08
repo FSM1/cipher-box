@@ -457,6 +457,21 @@ pub async fn rotate_one<D: RotationDeps>(
     };
     let content_rekey_pending = file_key_prime.is_some();
 
+    // D-01/D-03 (T-70.1-19, 70.1-08): persist the ECIES checkpoint BEFORE
+    // the child publish — closes the "minted-then-lost-on-crash" window. A
+    // host with no checkpoint plane wired pays zero cost (default no-op).
+    // `read_key_prime` crosses this seam as raw base64 — per RESEARCH
+    // option (b), this engine stays key-material-free w.r.t. ECIES; a
+    // concrete `RotationDeps` impl is the one that ECIES-wraps it under the
+    // owner's own pubkey before writing it at rest.
+    if let Err(e) = deps
+        .persist_wrapped_key(&resolved_node_id, &base64_encode(read_key_prime.as_slice()))
+        .await
+    {
+        read_key_prime.zeroize();
+        return Err(e);
+    }
+
     match seal_and_publish(
         deps,
         node_ipns_name,
@@ -790,6 +805,13 @@ struct ParentTrackingState {
     /// zero, regardless of how many children the parent has (T-69-08-03 /
     /// DoS mitigation: exactly one republish per parent).
     pending_child_count: usize,
+    /// Node ids with a pending ECIES checkpoint (D-01, 70.1-08) that must be
+    /// GC'd via `delete_wrapped_key` once THIS parent's batched republish
+    /// actually lands — never eagerly before that commit is durable.
+    /// Populated for both a normally-committed child (`rotate_one` always
+    /// persists a checkpoint before its own publish) and a repaired dirty
+    /// child (`repair_dirty_node`).
+    pending_checkpoint_node_ids: Vec<String>,
 }
 
 /// One BFS frontier entry.
@@ -803,6 +825,19 @@ struct QueueItem {
     /// reference achieves manually with a `finally { .fill(0) }` block.
     node_read_key: Zeroizing<[u8; 32]>,
     parent_ipns_name: String,
+    /// This node's own stable UUID — known at enqueue time for both a
+    /// normal child (`enqueue_child` already resolves+fetches to derive the
+    /// AAD-binding id) and a dirty-frontier item (`DirtyFrontierEntry`
+    /// already carries it). Used by [`repair_dirty_node`] to address the
+    /// ECIES checkpoint seam (`RotationDeps::get_wrapped_key`) without a
+    /// redundant extra resolve.
+    node_id: String,
+    /// `true` only for an item enqueued via [`enqueue_dirty_frontier_entry`]
+    /// (D-05, 70.1-08): its `node_read_key` is a STALE, parent-mirror-
+    /// derived key that must NEVER be fed into `rotate_one`/`unseal_node` —
+    /// the BFS routes it to [`repair_dirty_node`] instead. Always `false`
+    /// for a normal [`enqueue_child`] item.
+    is_dirty_item: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -1234,6 +1269,7 @@ async fn seed_or_find_parent_tracking_state<D: RotationDeps>(
             parent_last_seq: found.resolved.sequence_number,
             children,
             pending_child_count: 0,
+            pending_checkpoint_node_ids: Vec::new(),
         },
     );
     Ok(true)
@@ -1271,6 +1307,8 @@ fn enqueue_dirty_frontier_entry(entry: DirtyFrontierEntry, queue: &mut VecDeque<
         },
         node_read_key: entry.node_read_key,
         parent_ipns_name: entry.parent_ipns_name,
+        node_id: entry.node_id,
+        is_dirty_item: true,
     });
 }
 
@@ -1358,6 +1396,11 @@ pub async fn rotate_read_from_node<D: RotationDeps>(
             // Persist after the root commit (D-10 — the high-value early checkpoint).
             deps.persist_job(job_record).await;
 
+            // D-01 (70.1-08): the root has no parent mirror to wait on — its
+            // own publish above IS the durable landing, so its checkpoint is
+            // GC'd immediately rather than deferred to a batched republish.
+            deps.delete_wrapped_key(&root_committed.node_id).await?;
+
             if !root_committed.children.is_empty() {
                 parent_tracking.insert(
                     root_ipns_name.to_string(),
@@ -1372,6 +1415,7 @@ pub async fn rotate_read_from_node<D: RotationDeps>(
                         parent_last_seq: root_committed.new_sequence_number,
                         children: root_committed.children.clone(),
                         pending_child_count: root_committed.children.len(),
+                        pending_checkpoint_node_ids: Vec::new(),
                     },
                 );
             }
@@ -1469,6 +1513,7 @@ pub async fn rotate_read_from_node<D: RotationDeps>(
                     // mis-attribution Bug A fix removes. Set to the count of
                     // root-DIRECT dirty items only, below (0 if none).
                     pending_child_count: 0,
+                    pending_checkpoint_node_ids: Vec::new(),
                 },
             );
 
@@ -1540,6 +1585,40 @@ pub async fn rotate_read_from_node<D: RotationDeps>(
             continue;
         }
 
+        // D-05 (T-70.1-20): an already-rotated dirty node's `node_read_key`
+        // is STALE (derived from its PARENT's still-unrefreshed mirror) —
+        // its OWN prior (crashed) run already re-sealed its published body
+        // under a genuinely fresh, independently minted key that this stale
+        // derived key can no longer unseal. Route it to the ECIES
+        // checkpoint repair path instead of feeding it into
+        // `rotate_one`/`unseal_node`, which would fail closed with an
+        // opaque AEAD authentication error.
+        //
+        // D-01 conditional invocation (mirrors the TS reference, 70.1-05):
+        // repair only actually engages when a checkpoint is genuinely
+        // FOUND (`get_wrapped_key` returns `Some`). A host with no
+        // checkpoint plane wired (default no-op seam, always `None`) falls
+        // through unchanged to the pre-existing behavior below — this is
+        // what keeps Plan 70.1-06's SC#1/SC#2 "safe double-rotation"
+        // fixtures (a dirty edge whose stale derived key still happens to
+        // unseal its current body) passing unmodified.
+        if item.is_dirty_item {
+            if let Some(raw_b64) = deps.get_wrapped_key(&item.node_id).await? {
+                repair_dirty_node(
+                    deps,
+                    &item,
+                    &raw_b64,
+                    root_ipns_name,
+                    &root_read_key_owned,
+                    &mut parent_tracking,
+                    &mut queue,
+                )
+                .await?;
+                complete_pending_child(deps, &mut parent_tracking, &item.parent_ipns_name).await?;
+                continue;
+            }
+        }
+
         let outcome = rotate_one(
             deps,
             None,
@@ -1547,7 +1626,21 @@ pub async fn rotate_read_from_node<D: RotationDeps>(
             item.node_read_key.as_slice(),
             job_record,
         )
-        .await?;
+        .await
+        .map_err(|e| {
+            if item.is_dirty_item {
+                // D-05 fallback: no checkpoint was found AND the stale
+                // derived key ALSO failed to unseal this dirty node's
+                // current body — there is no cryptographic recovery path
+                // left. Surface the distinct, actionable error instead of
+                // the raw opaque AEAD failure.
+                RotationError::DirtyNodeUnrecoverable {
+                    node_id: item.node_id.clone(),
+                }
+            } else {
+                e
+            }
+        })?;
 
         match outcome {
             RotateOneOutcome::Skipped { .. } => {
@@ -1617,6 +1710,13 @@ pub async fn rotate_read_from_node<D: RotationDeps>(
                         state.children[idx].read_key_sealed = base64_encode(&sealed);
                         state.children[idx].generation = child.new_generation;
                     }
+                    // D-01 (70.1-08): this child's checkpoint (persisted by
+                    // rotate_one's own persist-before-publish step) is only
+                    // GC'd once THIS parent's batched republish lands —
+                    // registered here, consumed in `complete_pending_child`.
+                    state
+                        .pending_checkpoint_node_ids
+                        .push(child.node_id.clone());
                 }
                 complete_pending_child(deps, &mut parent_tracking, &item.parent_ipns_name).await?;
 
@@ -1636,6 +1736,7 @@ pub async fn rotate_read_from_node<D: RotationDeps>(
                             parent_last_seq: child.new_sequence_number,
                             children: child.children.clone(),
                             pending_child_count: child.children.len(),
+                            pending_checkpoint_node_ids: Vec::new(),
                         },
                     );
                 }
@@ -1675,6 +1776,163 @@ pub async fn rotate_read_from_node<D: RotationDeps>(
     }))
 }
 
+/// D-05 (T-70.1-20, 70.1-08): repairs an already-rotated dirty node —
+/// discovered by `verify_subtree_clean`/`collect_dirty_frontier` and
+/// enqueued via [`enqueue_dirty_frontier_entry`] — via the ECIES key
+/// checkpoint (`RotationDeps::get_wrapped_key`), instead of feeding its
+/// STALE `item.node_read_key` into `rotate_one`/`unseal_node`. That stale
+/// key is derived from the REAL parent's still-unrefreshed `SealedChildRef`
+/// mirror; the node's OWN prior (crashed) run already re-sealed its
+/// published body under a genuinely fresh, independently minted key the
+/// stale derived key can no longer unseal — feeding it in would fail closed
+/// with an opaque AEAD authentication error.
+///
+/// Recovers the node's ACTUAL current read key from the checkpoint,
+/// re-seals ONLY the real parent's `SealedChildRef` mirror under it
+/// (mirroring the normal Committed branch's out-of-band reseal in
+/// [`rotate_read_from_node`]), and seeds the repaired node's OWN
+/// `ParentTrackingState` so its children still enqueue this same walk. The
+/// checkpoint itself is registered onto the parent's
+/// `pending_checkpoint_node_ids` for GC once that parent's mirror commit
+/// actually lands (`complete_pending_child`/`republish_parent`) — never
+/// eagerly here, before that commit is durable.
+///
+/// Called ONLY when the caller has already confirmed a checkpoint exists
+/// (`get_wrapped_key` returned `Some(raw_b64)`) — the caller (the BFS loop
+/// in [`rotate_read_from_node`]) owns the conditional-invocation gate (D-01)
+/// and the `None` (no checkpoint) fallback path: falling through to the
+/// pre-existing `rotate_one` call, surfacing
+/// [`RotationError::DirtyNodeUnrecoverable`] only if THAT also fails —
+/// there is no cryptographic recovery path for a key lost to an
+/// interrupted prior run with no checkpoint (mirrors
+/// `collect_dirty_frontier`'s own stop-below-a-dirty-edge convention: this
+/// file never claims a recovery path it cannot cryptographically back).
+///
+/// @security Read-only w.r.t. the STALE key: `item.node_read_key` is never
+/// touched here at all (it drops, and is thus zeroed, when the caller's
+/// `item` goes out of scope). The RECOVERED key is the node's own current
+/// (correct, not stale) key — using it to `unseal_node` is expected and
+/// safe, unlike feeding in the stale one.
+async fn repair_dirty_node<D: RotationDeps>(
+    deps: &D,
+    item: &QueueItem,
+    raw_b64: &str,
+    root_ipns_name: &str,
+    root_read_key: &Zeroizing<[u8; 32]>,
+    parent_tracking: &mut HashMap<String, ParentTrackingState>,
+    queue: &mut VecDeque<QueueItem>,
+) -> Result<(), RotationError> {
+    let raw_bytes = decode_b64(raw_b64)?;
+    let recovered_key = zeroizing_32_from_slice(&raw_bytes)?;
+
+    let resolved = deps
+        .resolve(&item.child_ref.ipns_name)
+        .await?
+        .ok_or_else(|| {
+            RotationError::RotateFailed(format!(
+                "repair_dirty_node: {} not found in IPNS during repair",
+                item.child_ref.ipns_name
+            ))
+        })?;
+    let published = deps.fetch_node(&resolved.cid).await?;
+    let kind = node_kind_from_str(&published.kind)?;
+    let read_sealed_bytes = decode_b64(&published.read_sealed)?;
+    let body = unseal_node(
+        &read_sealed_bytes,
+        &recovered_key,
+        &published.id,
+        kind,
+        published.generation,
+    )
+    .map_err(|e| {
+        RotationError::RotateFailed(format!(
+            "repair_dirty_node: recovered checkpoint failed to unseal {}: {e}",
+            item.child_ref.ipns_name
+        ))
+    })?;
+    let node = decode_node(&body).map_err(|e| {
+        RotationError::RotateFailed(format!(
+            "repair_dirty_node: decode failed for {}: {e}",
+            item.child_ref.ipns_name
+        ))
+    })?;
+    let children = node_children(&node);
+    let (created_at, modified_at) = node_timestamps(&node);
+
+    // SC#2-style defensive fallback (D-11 precedent): the ordering guard in
+    // the BFS loop handles the common case, but a repair item's real parent
+    // may still be unreached here (e.g. an orphaned parent_ipns_name) —
+    // lazily resolve+seed it via the shared primitive rather than silently
+    // dropping this entire reseal.
+    if !parent_tracking.contains_key(&item.parent_ipns_name) {
+        seed_or_find_parent_tracking_state(
+            deps,
+            root_ipns_name,
+            root_read_key,
+            parent_tracking,
+            &item.parent_ipns_name,
+        )
+        .await?;
+    }
+
+    if let Some(state) = parent_tracking.get_mut(&item.parent_ipns_name) {
+        let sealed = seal_child_read_key(
+            &recovered_key,
+            &state.parent_new_read_key,
+            &published.id,
+            kind,
+            published.generation,
+        )
+        .map_err(|e| {
+            RotationError::RotateFailed(format!(
+                "repair_dirty_node: reseal failed for {} under parent {}: {e}",
+                published.id, item.parent_ipns_name
+            ))
+        })?;
+        if let Some(idx) = state
+            .children
+            .iter()
+            .position(|c| c.ipns_name == item.child_ref.ipns_name)
+        {
+            state.children[idx].read_key_sealed = base64_encode(&sealed);
+            state.children[idx].generation = published.generation;
+        }
+        state.pending_checkpoint_node_ids.push(published.id.clone());
+    }
+
+    if !children.is_empty() {
+        parent_tracking.insert(
+            item.child_ref.ipns_name.clone(),
+            ParentTrackingState {
+                parent_ipns_name: item.child_ref.ipns_name.clone(),
+                parent_new_read_key: recovered_key.clone(),
+                parent_node_id: published.id.clone(),
+                parent_kind: kind,
+                parent_generation: published.generation,
+                parent_created_at: created_at,
+                parent_modified_at: modified_at,
+                parent_last_seq: resolved.sequence_number,
+                children: children.clone(),
+                pending_child_count: children.len(),
+                pending_checkpoint_node_ids: Vec::new(),
+            },
+        );
+    }
+
+    for grandchild_ref in &children {
+        enqueue_child(
+            deps,
+            &item.child_ref.ipns_name,
+            recovered_key.as_slice(),
+            grandchild_ref,
+            queue,
+        )
+        .await?;
+    }
+
+    Ok(())
+}
+
 /// Resolves `child_ref`'s IPNS name, derives its own pre-rotation read key
 /// from `parent_old_read_key` (using the child's plaintext `id`/`kind` for
 /// the AAD binding — the generation-source rule: `child_ref.generation`,
@@ -1698,13 +1956,16 @@ async fn enqueue_child<D: RotationDeps>(
         child_ref: child_ref.clone(),
         node_read_key: child_read_key,
         parent_ipns_name: parent_ipns_name.to_string(),
+        node_id: child_pub.id,
+        is_dirty_item: false,
     });
 
     Ok(())
 }
 
 /// Decrements `parent_ipns_name`'s pending-child counter; when it reaches
-/// zero, fires the batched republish exactly once (T-69-08-03) and removes
+/// zero, fires the batched republish exactly once (T-69-08-03), GCs every
+/// checkpoint the now-durable republish covers (D-01, 70.1-08), and removes
 /// the tracking entry.
 async fn complete_pending_child<D: RotationDeps>(
     deps: &D,
@@ -1721,6 +1982,11 @@ async fn complete_pending_child<D: RotationDeps>(
     if should_republish {
         if let Some(state) = parent_tracking.remove(parent_ipns_name) {
             republish_parent(deps, &state).await?;
+            // D-01: only GC a checkpoint AFTER the parent mirror that
+            // covers it durably commits — never before.
+            for node_id in &state.pending_checkpoint_node_ids {
+                deps.delete_wrapped_key(node_id).await?;
+            }
         }
     }
 
