@@ -80,6 +80,16 @@ pub struct CipherBoxFS {
     /// self-referential struct. Read-path call sites (Slice 2) construct
     /// `ApiNodeFetcher { api: &self.api }` inline instead.
     pub high_water: cipherbox_sdk::RotationHighWater<cipherbox_sdk::JsonSidecarFloorStore>,
+    /// D-01/D-03 (Plan 70.1-09): combined per-nodeId sidecar handle backing
+    /// the production `RotationDeps` adapter's
+    /// `persist_wrapped_key`/`get_wrapped_key`/`delete_wrapped_key` seam
+    /// (`crate::write_ops::rotation_deps::FuseRotationDeps`). Points at the
+    /// SAME combined `rotation-high-water.json` sidecar as `high_water`
+    /// (Plan 70.1-03) — the wrapped-key-checkpoint field is independent of
+    /// the generation/seq fields that view reads/writes, so this handle
+    /// deliberately uses `for_generation`'s field tag (arbitrary — the
+    /// checkpoint accessors ignore it).
+    pub rotation_checkpoint_store: cipherbox_sdk::JsonSidecarFloorStore,
     /// Local cache of the authenticated user's sent shares (grant-root
     /// awareness, SC#3 / 69-07). Refreshed out-of-band via
     /// [`CipherBoxFS::refresh_sent_shares`] — mount init / periodic, NEVER a

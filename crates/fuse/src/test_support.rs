@@ -126,6 +126,9 @@ pub(crate) fn make_test_fs_with_keypair(
         publish_coordinator: Arc::new(crate::PublishCoordinator::new()),
         publish_queue: HashMap::new(),
         high_water: cipherbox_sdk::new_journal_high_water(&journal_dir),
+        rotation_checkpoint_store: cipherbox_sdk::JsonSidecarFloorStore::for_generation(
+            &journal_dir,
+        ),
         journal: cipherbox_sdk::WriteQueue::new(journal_dir, 5),
         sent_shares: std::sync::RwLock::new(crate::write_ops::grant_scope::SentSharesCache::empty()),
     }

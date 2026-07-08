@@ -9,6 +9,12 @@
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub mod grant_scope;
 
+/// Production `RotationDeps` adapter (D-14, SC#8, Plan 70.1-09) — platform-
+/// agnostic like `grant_scope`, since both the Unix and Windows write paths
+/// consume `rotate_read_on_scope_exit`.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+pub mod rotation_deps;
+
 #[cfg(feature = "fuse")]
 pub(crate) mod implementation {
     mod file_data;
