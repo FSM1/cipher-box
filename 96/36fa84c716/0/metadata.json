@@ -1,0 +1,171 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "9636fa84c716",
+  "session_id": "a4ed1cb9-4e4c-4d71-bc03-3c2c6b4e70a3",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-08T20:27:05.053794Z",
+  "branch": "feat/rotation-read-plane-durability-and-deep-crash-resume-soundne",
+  "checkpoints_count": 4,
+  "save_step_count": 1,
+  "files_touched": [
+    "crates/fuse/src/fs.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "00b5afa820cd",
+  "token_usage": {
+    "input_tokens": 53458,
+    "cache_creation_tokens": 1331811,
+    "cache_read_tokens": 45384011,
+    "output_tokens": 338826,
+    "api_call_count": 185
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-plan-phase-2026-07-08T13:42:46.030418Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "0eb6f9cbb31b",
+      "timestamp": "2026-07-08T13:42:46.030418Z",
+      "native": {
+        "command": "/gsd-plan-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-gsd-execute-phase-2026-07-08T15:12:58.253651Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "1b22299d3cb2",
+      "timestamp": "2026-07-08T15:12:58.253651Z",
+      "native": {
+        "command": "/gsd-execute-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 24
+  },
+  "summary": {
+    "intent": "Run the GSD `/gsd-plan-phase 70.1` and `/gsd-execute-phase 70.1` workflows for CipherBox to produce and then execute PLAN.md files for Phase 70.1 (rotation read-plane durability + crash-resume soundness), using wave-based parallel execution with independent git worktrees for concurrent plans.",
+    "outcome": "Planning completed with 13 plans across 7 waves after two user-driven scope expansions (Rust engine.rs twin, then desktop FUSE RotationDeps live-wiring); execution merged Waves 1-6 cleanly (including fixing a genuine product bug the D-10 anti-vacuous e2e gate caught: decrypt-before-dirtiness-check ordering in the rotation engine, fixed in both TS and Rust), but Wave 7's desktop-e2e plan surfaced that `refresh_sent_shares()` is never wired into the desktop mount lifecycle, so the new D-15a fail-closed gate returns EIO on every real desktop delete/rename — session ended mid-clarification with the user before a fix-now-vs-defer decision was made.",
+    "learnings": {
+      "repo": [
+        "GSD decision-coverage parser (.claude/gsd-core/bin/lib/decisions.cjs) accepts only three D-NN bullet forms; a `- **D-NN (title).** body` (period before closing **) form silently fails to parse and blocks the whole gate at 0/N covered",
+        "GSD commit helper can report `commit_failed` as a false negative when lint-staged just runs long (e.g. on large ROADMAP.md) — always verify with `git log`, never blind-retry",
+        "`gsd_run loop render-hooks plan:pre --raw` emits invalid JSON (literal newlines in fragments) — read the hooks file directly instead",
+        "`state.planned-phase` / STATE-update tools can silently no-op (`updated: []`) if STATE.md's frontmatter/section anchors don't match what the tool expects — requires manual edit",
+        "Worktree agents doing `cargo fmt --all` (unscoped) strand unrelated files as uncommitted drift and block `cleanup-wave` merges with `worktree_dirty`; must scope fmt to `-p <crate>`",
+        "After merging a wave that touched a package other packages depend on (e.g. sdk-core), the main checkout's stale `dist/` causes false test failures in dependent packages (sdk) until dists are rebuilt",
+        "`apps/web/*.test.ts` files are not run by CI (web is web-e2e-gated only) — logic needing CI coverage should live in `packages/sdk` behind an injectable storage/IDB seam, not in the web app",
+        "`tests/sdk-e2e` vitest config has no dotenv loader and its `test` script is bare `vitest run` — `.env` (incl. `TEST_LOGIN_SECRET`) must be sourced into the shell manually or the harness silently falls back to a default secret and gets 401",
+        "CipherBox's rotation scope-exit gate keys off `sent shares` (direct user-to-user grants, `GET /shares/sent`), not `share-invites` (unclaimed link-based invites) — only active grants need the revocation-lever rotation",
+        "CipherBox delete is a soft-delete (moves to the private recycle bin), which is structurally a move-out-of-shared-scope — that's why it triggers rotation even though it looks like a delete",
+        "Same-folder rename does NOT trigger scope-exit rotation (gate only fires when parent != newparent in rename.rs); rotation is forward-looking only and doesn't retroactively revoke already-published/cached ciphertext",
+        "`CipherBoxFS::refresh_sent_shares()` has zero call sites anywhere in the repo — desktop mount (apps/desktop/src-tauri/src/fuse/mod.rs) seeds `sent_shares` to `SentSharesCache::empty()` at mount and never refreshes it, so it stays non-authoritative forever",
+        "`crates/fuse/src/platform/windows/write_ops.rs` has an independent duplicate of the gate-ordering pattern that Rust fixes (D-15d) don't reach, and it can't even be `cargo check`ed on macOS (winfsp-sys needs Windows COM APIs) — a real WinFsp-parity gap"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/rotation/engine.ts",
+          "line": 664,
+          "end_line": 815,
+          "finding": "collectDirtyFrontier/resolveChildKeyAndEnvelope AEAD-decrypted a child's sealed ref with the parent's current key BEFORE checking plaintext generation for dirtiness, causing CryptoError on any genuinely-dirty edge whose parent also rotated in the same walk; fixed by reordering the plaintext check first and pushing dirty items with nodeReadKey: undefined for repairDirtyNode to resolve via the ECIES checkpoint"
+        },
+        {
+          "path": "crates/fuse/src/write_ops/grant_scope.rs",
+          "line": 269,
+          "end_line": 287,
+          "finding": "rotate_read_on_scope_exit originally a stub returning Err (fail-closed EIO) — Plan 09 wired it to the new production FuseRotationDeps adapter"
+        },
+        {
+          "path": "crates/fuse/src/fs.rs",
+          "line": 871,
+          "finding": "unused NodeKind import left over from merged 03/09 edits; removed as post-merge cleanup"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/fuse/mod.rs",
+          "finding": "sent_shares cache seeded to SentSharesCache::empty() at mount construction with no periodic or init-time refresh; combined with Plan 11's fail-closed D-15a fix, every desktop delete/rename now returns EIO regardless of private vs shared"
+        }
+      ],
+      "workflow": [
+        "When dispatching parallel worktree agents, fire each `git worktree add`-triggering Agent call in its own message/turn to avoid a `.git/config.lock` race; they still run truly concurrently once created",
+        "Running the first plan of a wave synchronously as a canary to validate the worktree→commit→merge cycle is reasonable given prior merge-failure scars, but must be explicitly communicated to the user as intentional, not silently done — user had to ask why only 1/4 plans was running",
+        "When a decision-coverage or plan-checker gate fails with a parse-shaped error, diagnose the parser/regex directly rather than assuming a real coverage gap",
+        "Delegate suspicious e2e failures to a scientific-method debugging subagent with an explicit instruction to distinguish 'fixture bug' (fix it) from 'product bug' (report precisely, don't hack green) — this correctly surfaced a real latent engine bug instead of a masked fixture issue",
+        "Generic post-merge build/test gates default to root `npm test`, which is mis-tuned for a mixed pnpm+cargo monorepo (heavy, pulls in docker-dependent suites) — use targeted per-package/per-crate commands matching VALIDATION.md instead",
+        "Treat rust-analyzer/LSP-reported compile errors as provisional; confirm with the actual `cargo check`/`cargo test` compiler output before spending time chasing what may be a stale-index false positive"
+      ]
+    },
+    "friction": [
+      "User had to correct the assistant for silently running only 1 of 4 Wave-1 plans as an unannounced canary instead of the requested full concurrency",
+      "render-hooks --raw produced invalid JSON, requiring a workaround (reading the file directly)",
+      "Decision-coverage gate blocked entirely (0/15) due to a cosmetic D-09/D-10 bullet-format mismatch predating this session's edits",
+      "state.planned-phase tool silently no-op'd instead of updating STATE.md, requiring manual edit",
+      "Wave 1 merge blocked mid-flight by unscoped cargo fmt drift from plan 03's worktree",
+      "Cross-package dist staleness caused 3 false test failures after Wave 3 merge, requiring a rebuild-and-rediagnose detour",
+      "sdk-e2e suite failed with a 401 at setup due to missing .env sourcing, masking as an auth bug before being traced to a config/env-loading gap",
+      "A rust-analyzer stale diagnostic (macros.rs AncestorChain type mismatch) caused a false-alarm investigation before being dismissed against the authoritative compiler",
+      "A tracking commit hit the 2-minute Bash timeout on the large ROADMAP.md's lint-staged hook, requiring verification via git log rather than retry",
+      "Wave 7's plan-13 agent surfaced a critical, previously-unknown integration gap (never-refreshed sent_shares cache) only at the very last plan of a 13-plan phase, after 12 plans were already merged — a late-discovered blocker",
+      "Multiple rounds of AskUserQuestion were deflected/re-asked as the user probed the rotation semantics and mount-init gap before committing to a decision, leaving the session open-ended"
+    ],
+    "open_items": [
+      "Decide and implement the fix for CipherBoxFS::refresh_sent_shares() never being wired into the desktop mount lifecycle (blocking real desktop deletes/renames) — fix now within 70.1 vs. defer as a follow-up todo",
+      "Run the D-16 real-mount desktop-e2e acceptance leg (dispatch-gated CI or local UAT) and obtain human sign-off on the 4 required assertions",
+      "WinFsp parity gap in crates/fuse/src/platform/windows/write_ops.rs (duplicate gate-ordering pattern not updated by D-15d) — flagged as a Windows-only follow-up, can't be verified on macOS",
+      "Two dangling worktree-agent-* branches from a prior crashed session were noted but left unswept, deferred to phase end",
+      ".planning/debug/rotation-crash-safety-depth3.md untracked debug file left in place, not archived",
+      "ROT-04 desktop-grant-remint (query_grants_rooted_at/update_grant/delete_grant as trait no-ops) remains a documented, sanctioned deferral from Plan 09 — inner sub-share re-mint not enforced on desktop"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-08T20:26:00.76443Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 147,
+    "human_modified": 20,
+    "human_removed": 0,
+    "total_committed": 147,
+    "total_lines_changed": 174,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 98,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/debug/rotation-crash-safety-depth3.md": 97
+      }
+    }
+  ]
+}
