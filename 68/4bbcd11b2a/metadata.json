@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "684bbcd11b2a",
+  "strategy": "manual-commit",
+  "branch": "feat/rotation-read-plane-durability-and-deep-crash-resume-soundne",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/todos/pending/2026-07-08-winfsp-d15d-gate-ordering-parity.md",
+    "crates/fuse/src/fs.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/68/4bbcd11b2a/0/metadata.json",
+      "transcript": "/68/4bbcd11b2a/0/full.jsonl",
+      "content_hash": "/68/4bbcd11b2a/0/content_hash.txt",
+      "prompt": "/68/4bbcd11b2a/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 82538,
+    "cache_creation_tokens": 1628323,
+    "cache_read_tokens": 74635497,
+    "output_tokens": 485003,
+    "api_call_count": 279
+  }
+}
