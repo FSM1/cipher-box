@@ -1,0 +1,153 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "31296a2b1fc9",
+  "session_id": "a4ed1cb9-4e4c-4d71-bc03-3c2c6b4e70a3",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-08T20:37:53.926571Z",
+  "branch": "feat/rotation-read-plane-durability-and-deep-crash-resume-soundne",
+  "checkpoints_count": 4,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "1e74ee698a51",
+  "token_usage": {
+    "input_tokens": 58757,
+    "cache_creation_tokens": 1352182,
+    "cache_read_tokens": 47592623,
+    "output_tokens": 351583,
+    "api_call_count": 190
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-plan-phase-2026-07-08T13:42:46.030418Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "0eb6f9cbb31b",
+      "timestamp": "2026-07-08T13:42:46.030418Z",
+      "native": {
+        "command": "/gsd-plan-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-gsd-execute-phase-2026-07-08T15:12:58.253651Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "1b22299d3cb2",
+      "timestamp": "2026-07-08T15:12:58.253651Z",
+      "native": {
+        "command": "/gsd-execute-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 24
+  },
+  "summary": {
+    "intent": "Run the GSD plan-phase workflow to create executable PLAN.md files for CipherBox Phase 70.1 (rotation read-plane durability), then run the execute-phase workflow to implement all resulting plans via wave-based parallel worktree execution.",
+    "outcome": "Planning produced 13 plans across 7 waves (decision coverage 17/17, plan-checker passed) after two user-driven scope expansions (Rust engine twin, desktop FUSE live-wiring). Execution completed and gated 12/13 plans (waves 1-6 all green), fixed a real product bug the new depth-3 e2e gate uncovered (decrypt-before-dirtiness-check ordering in both TS/Rust engines) and a critical missing `refresh_sent_shares` wiring gap on the desktop mount; only Wave 7's human sign-off for the real-mount desktop-e2e acceptance run remains.",
+    "learnings": {
+      "repo": [
+        "GSD decision-coverage parser only accepts three D-NN bullet formats (`- **D-NN:**`, `- **D-NN — title**`, `- **D-NN: Title.**`); a single malformed bullet anywhere in CONTEXT.md fails the whole gate silently with '0/N covered'.",
+        "Worktree executors must scope `cargo fmt`/`clippy` to `-p <package>`, not workspace-wide — an unscoped `cargo fmt --all` leaves large out-of-scope reformatting drift uncommitted in the worktree, which blocks the merge helper with `worktree_dirty`.",
+        "GSD's commit helper can report `commit_failed` on slow lint-staged runs even though the commit landed — always verify via `git log`, never blind-retry.",
+        "`gsd_run loop render-hooks plan:pre --raw` emits invalid JSON (literal newlines in fragments); read the hooks file directly instead of parsing the raw output.",
+        "`state.planned-phase` / similar STATE.md update tools can silently no-op (`updated: []`) if STATE.md's anchor fields don't match the expected format — must verify with a follow-up read, not trust the echoed success.",
+        "sdk-e2e's vitest config has no dotenv loader and its `test` script is bare `vitest run` — `.env` (incl. `SDK_E2E_SECRET`) must be sourced into the shell manually before running locally, or the harness silently falls back to a default secret and login 401s.",
+        "After changing sdk-core mid-phase, the `sdk` package's consumer dist must be rebuilt too — running vitest against a stale cross-package dist produces false failures indistinguishable from real regressions.",
+        "CipherBox delete is a soft-delete (item moves to the owner's private recycle bin, keys re-sealed under the bin plane) — structurally identical to a cross-folder move, which is why deletes (not just renames) trigger scope-exit rotation.",
+        "The scope-exit rotation gate only fires on cross-folder rename (`parent != newparent`); same-folder renames are explicitly excluded since the node never leaves scope.",
+        "Desktop FUSE mount (`apps/desktop/src-tauri/src/fuse/mod.rs`) never called `CipherBoxFS::refresh_sent_shares`, so `sent_shares` stayed non-authoritative — combined with the phase's new fail-closed gate, this caused every real-mount delete/rename to EIO."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/rotation/engine.ts",
+          "line": 664,
+          "end_line": 815,
+          "finding": "collectDirtyFrontier/resolveChildKeyAndEnvelope unconditionally AEAD-decrypted a child's sealed ref with the parent's current key before checking plaintext generation for dirtiness — a genuinely dirty edge whose parent also rotated always threw CryptoError; fix reorders the plaintext generation check before any decrypt attempt."
+        },
+        {
+          "path": "crates/fuse/src/write_ops/grant_scope.rs",
+          "line": 269,
+          "end_line": 287,
+          "finding": "rotate_read_on_scope_exit originally stubbed with Err (fail-closed EIO); Plan 09 wired it to a new production FuseRotationDeps adapter."
+        },
+        {
+          "path": "crates/fuse/src/write_ops/implementation/rename.rs",
+          "line": 134,
+          "end_line": 135,
+          "finding": "Scope-exit gate only invoked when parent != newparent, confirming same-folder renames never rotate."
+        },
+        {
+          "path": "crates/fuse/src/write_ops/implementation/delete.rs",
+          "line": 644,
+          "end_line": 644,
+          "finding": "unlink_shared_scope_exit_fails_closed_until_rotation_wired test needed inversion once live-wiring landed; required an in-process mock IPNS server built to avoid fabricating a false pass."
+        }
+      ],
+      "workflow": [
+        "When running parallel worktree waves, dispatch one Agent call per message rather than batching simultaneous `git worktree add` calls — concurrent creation races on `.git/config.lock`.",
+        "Running a single plan as a synchronous 'canary' before fanning out a full wave is a reasonable risk-reduction tactic for worktree-merge mechanics, but must be explicitly flagged to the user since it looks like under-parallelizing.",
+        "When a gate the phase specifically built (like an anti-vacuous e2e fixture) fails, treat it as a signal to investigate for a genuine product bug rather than assuming a fixture/env issue — spawn a scientific-method debugging subagent that is explicitly forbidden from patching the test to pass.",
+        "Post-merge integration gates should be run centrally by the orchestrator (not per-worktree) after merging concurrent plans, since cross-plan compile/behavior interactions only surface once both diffs are combined."
+      ]
+    },
+    "friction": [
+      "Decision-coverage gate blocked on pre-existing D-09/D-10 bullets with a period-before-`**` format, requiring a parser deep-dive to diagnose",
+      "render-hooks --raw JSON output was unparseable due to literal newlines",
+      "state.planned-phase tool silently no-op'd, requiring manual STATE.md edits",
+      "Worktree merge blocked by unscoped cargo fmt drift in plan 03's worktree",
+      "Stale cross-package dist caused 3 false test failures after Wave 3 merge, requiring rebuild-and-recheck",
+      "sdk-e2e login 401'd due to missing .env sourcing, requiring root-cause tracing through vitest config",
+      "Stale rust-analyzer diagnostics (macros.rs, fs.rs NodeKind) triggered unnecessary investigation before being dismissed as false positives",
+      "User challenged the orchestrator for only running 1 of 4 Wave 1 plans concurrently; orchestrator had to admit it was an unflagged canary run",
+      "Mid-planning scope crept twice (Rust engine twin, then FUSE live-wiring), each requiring CONTEXT/ROADMAP/VALIDATION/todo rework and re-research",
+      "Plan 13's checkpoint agent surfaced a critical unwired refresh_sent_shares gap mid-execution, forcing an unplanned fix before the human sign-off could even be meaningfully requested"
+    ],
+    "open_items": [
+      "Wave 7 (Plan 13) still needs human sign-off on the real-mount desktop-e2e acceptance run (dispatch-gated CI or local UAT) before Phase 70.1 can be marked complete",
+      "WinFsp parity gap: platform/windows/write_ops.rs duplicates the pre-D-15d gate ordering and wasn't fixed (can't build/test on macOS) — captured as todo 2026-07-08-winfsp-d15d-gate-ordering-parity",
+      "Desktop query_grants_rooted_at remains a no-op — scope-exit rotation de-authorizes all recipients rather than re-minting inner grants (ROT-04 deferred) — captured as todo 2026-07-08-desktop-query-grants-rooted-at-remint-noop",
+      "Dangling worktree-agent-* branches from a prior crashed session left unswept, deferred to phase end cleanup",
+      "Cosmetic heading inconsistency in Plan 01 ('this phase produces' vs 'this plan produces') left unfixed as non-blocking"
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 98,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/debug/rotation-crash-safety-depth3.md": 97
+      }
+    }
+  ]
+}
