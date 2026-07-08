@@ -3,6 +3,7 @@ created: 2026-07-08
 title: Rotation crash-resume is unsound for depth>=2 trees — dirty-frontier consumption is depth-1-only and reuses a stale child key
 area: sdk-core
 severity: high
+resolves_phase: "70.1"
 source: PR #596 review (greptile P1 + CodeRabbit critical/major)
 files:
   - packages/sdk-core/src/rotation/engine.ts

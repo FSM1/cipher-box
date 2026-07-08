@@ -689,6 +689,30 @@ Plans:
 
 ---
 
+### Phase 70.1: Rotation Read-Plane Durability and Deep Crash-Resume Soundness
+
+**Goal**: The read-key rotation engine is sound for multi-level trees under crash-resume, and the anti-rollback floor plane is durable under write failure and concurrency. A mid-walk crash on a depth>=2 tree resumes correctly — the dirty-frontier consumption path seeds `parentTracking` for intermediate parents (not just the root) so no deep dirty node is silently dropped, an already-rotated dirty node is treated as converged (repairing only the parent mirror, never re-unsealing with the unrecoverable stale key), the floor store surfaces write failures and keeps its cross-store bumps atomic, and the reconcile gate is fed the freshly-resolved generation. Closes the rotation read-plane debt disclosed at Phase 70 ship (PR #596 review).
+
+**Depends on**: Phase 70
+
+**Source todos**:
+
+- `.planning/todos/pending/2026-07-08-rotation-crash-resume-depth2-soundness-gap.md`
+- `.planning/todos/pending/2026-07-02-rotation-hardening-followups-from-pr-review.md` (open items 1 + 5 only; items 2/3/4/6 closed by Phase 70)
+
+**Context**: Phase 70 made `verifySubtreeClean`/`collectDirtyFrontier` recurse the full subtree, but the *consumption* paths remained depth-1-only, and the Phase 70 sdk-e2e gate passed vacuously (Test 4 used a childless root by design). PR #596 review (greptile P1 + CodeRabbit critical/major) confirmed the gap by trace. SC#2/SC#3 from Phase 70 are proven only for depth-1/childless-root as shipped; this phase makes them sound for multi-level trees and closes the associated floor-durability follow-ups. Scope is the rotation READ plane only (`packages/sdk-core/src/rotation/engine.ts`, `crates/sdk` + `packages/sdk/src/state/rotation-high-water.ts`, `packages/sdk/src/client.ts` reconcile gate) — not the write plane (Phase 72) or the API/web layers.
+
+**Success Criteria** (what must be TRUE):
+
+1. A depth>=2 mid-walk-crash fresh-record resume converges: the dirty-resume consumption path uses each `DirtyFrontierItem.parentIpnsName` (not `rootNode.children` only) and seeds `parentTracking` for every intermediate parent, so a deep dirty node is enqueued and its real parent mirror is re-sealed under the new key — no spurious decrement of the root `pendingChildCount`
+2. The normal-branch ordering gap is closed: a dirty node is never processed before its parent has a `parentTracking` entry, and the `skipped`-result path no longer drops the parent's pending-child decrement (parent always republishes when it should)
+3. An already-rotated dirty node (`childPub.generation > childRef.generation`) is treated as node-converged — rotation does not feed the unrecoverable stale pre-rotation key into `rotateOne`/`unsealNode`; only the parent mirror is repaired, from a defined key source
+4. `crates/sdk` floor store surfaces write failures through `HighWaterStore::put`/`bump_floor` (fails closed on persistence failure rather than logging and returning Ok), and the generation+seq cross-store bumps in `enforceResolved` are atomic (no divergence window on partial failure)
+5. `reconcileFolderSequence` gates on the freshly-resolved generation of the record it just resolved (not `folderTree`'s cached `nodeGeneration`), or the cached-fallback contract is made explicit and safe
+6. `tests/sdk-e2e/src/suites/rotation-crash-safety.test.ts` gains a depth-2 (and depth-3) mid-walk-crash case that navigates into and unseals the deep subtree after resume with the new root key — the coverage Phase 70's gate lacked — and the full suite passes against the live stack
+
+**Plans**: TBD (run `/gsd-plan-phase 70.1`)
+
 ### Phase 71: Share-Invite Security and IPNS Data-Integrity (API)
 
 **Goal**: The API enforces share-invite authorization and cleans up its IPNS/share data-integrity edges: the sharer must own the root before an invite is issued, a later invite's grant is applied-or-explicitly-rejected when a share already exists, DB constraints defend `claim_count` and root uniqueness, the first-publish INSERT race returns a clean 409, the same-seq CID equivocation question is decided, bulk-revoke is a direct DELETE, and `ShareInviteService` gains lifecycle unit coverage.
