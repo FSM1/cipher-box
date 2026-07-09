@@ -243,11 +243,13 @@ impl<T: RotationTransport> RotationDeps for FuseRotationDeps<T> {
         node_id: &str,
         wrapped_b64: &str,
     ) -> Result<(), RotationError> {
-        let raw = STANDARD.decode(wrapped_b64).map_err(|e| {
+        // Decoded plaintext key material: hold it in `Zeroizing` so the buffer
+        // is wiped on drop, matching `get_wrapped_key`/`find_ipns_private_key`.
+        let raw = Zeroizing::new(STANDARD.decode(wrapped_b64).map_err(|e| {
             RotationError::RotateFailed(format!(
                 "persist_wrapped_key: base64 decode failed for {node_id}: {e}"
             ))
-        })?;
+        })?);
         let ciphertext = cipherbox_crypto::wrap_key(&raw, &self.owner_public_key).map_err(|e| {
             RotationError::RotateFailed(format!(
                 "persist_wrapped_key: wrap_key failed for {node_id}: {e}"
