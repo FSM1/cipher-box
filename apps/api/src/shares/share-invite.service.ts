@@ -180,9 +180,37 @@ export class ShareInviteService {
       });
 
       if (existingShare) {
-        this.logger.warn(
-          `Invite claim for ${invite.shareRootIpnsName}: share already exists between ${invite.sharerId} and ${claimerId}`
-        );
+        // D-07/SC#2: a re-claim over an already-existing share applies the later
+        // invite's grant ONLY if it WIDENS authority (read→write, or a higher
+        // rootGeneration). A same-level or lower re-claim is a true no-op — no
+        // manager.save, no field mutation. Write authority is presence-derived
+        // (T-66-E1): every field write below is individually gated so a
+        // non-widening re-claim can never null out an existing encryptedWriteKey.
+        // This runs AFTER the atomic claim UPDATE above (already committed inside
+        // this same transaction manager) — the invite is validly consumed for a
+        // legitimate widen, and a redundant re-claim still burns the invite without
+        // silently dropping (or downgrading) the existing grant.
+        const inviteGrantsWrite = invite.encryptedWriteKey !== null;
+        const existingHasWrite = existingShare.encryptedWriteKey !== null;
+        const isWriteUpgrade = inviteGrantsWrite && !existingHasWrite;
+        const isGenerationBump =
+          BigInt(invite.rootGeneration) > BigInt(existingShare.rootGeneration);
+
+        if (isWriteUpgrade || isGenerationBump) {
+          existingShare.encryptedReadKey = Buffer.from(dto.encryptedReadKey, 'hex');
+          if (isWriteUpgrade && dto.encryptedWriteKey) {
+            existingShare.encryptedWriteKey = Buffer.from(dto.encryptedWriteKey, 'hex');
+          }
+          if (isGenerationBump) {
+            existingShare.rootGeneration = invite.rootGeneration;
+          }
+          await manager.save(existingShare);
+        } else {
+          this.logger.warn(
+            `Invite claim for ${invite.shareRootIpnsName}: share already exists between ${invite.sharerId} and ${claimerId} and does not widen authority — no-op`
+          );
+        }
+
         return { shareId: existingShare.id };
       }
 
