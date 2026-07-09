@@ -1379,6 +1379,17 @@ export async function rotateReadFromNode(
      */
     baseChildrenSnapshot: SealedChildRef[];
     pendingChildCount: number;
+    /**
+     * D-04 (70.1 parity fix): node ids of dirty children repaired under this
+     * parent whose ECIES key-checkpoints must be GC'd ONLY AFTER the parent's
+     * batched republish DURABLY commits — flushed in
+     * `decrementPendingAndMaybeRepublish`'s `=== 0` branch. Mirrors the Rust
+     * twin's `pending_checkpoint_node_ids`. GC-ing a checkpoint earlier (before
+     * the parent mirror is published) would, on a crash in that window, destroy
+     * the ONLY recovery source for an already-rotated child, surfacing as an
+     * unrecoverable dirty edge on resume.
+     */
+    pendingCheckpointNodeIds: string[];
   };
 
   // keyed by parent IPNS name (the IPNS name of the node that just rotated)
@@ -1595,6 +1606,16 @@ export async function rotateReadFromNode(
         ),
         ctx,
       });
+      // D-04: the parent mirror is now DURABLY republished — safe to GC the
+      // ECIES checkpoints of every dirty child repaired under it. Deferred to
+      // here (never in repairDirtyNode) so a crash before this publish leaves
+      // the checkpoints intact for recovery on resume (parity with the Rust
+      // twin's complete_pending_child flush).
+      if (keyCheckpointCallbacks) {
+        for (const nodeId of parentState.pendingCheckpointNodeIds) {
+          await keyCheckpointCallbacks.deleteWrappedKey(nodeId);
+        }
+      }
       // Engine-owned copy (see ParentTrackingState.parentOldReadKey) — zero it
       // here as the terminal owner; never the caller-owned parentNewReadKey.
       parentState.parentOldReadKey.fill(0);
@@ -1653,6 +1674,7 @@ export async function rotateReadFromNode(
       children: [...(node.children ?? [])],
       baseChildrenSnapshot: [...(node.children ?? [])],
       pendingChildCount: 0,
+      pendingCheckpointNodeIds: [],
     };
     parentTracking.set(parentIpnsName, newState);
     return newState;
@@ -1786,14 +1808,20 @@ export async function rotateReadFromNode(
           generation: childPub.generation,
         };
       }
+      // D-04 (70.1 parity fix): DEFER GC of this child's checkpoint until the
+      // parent's batched republish DURABLY commits. Queue the id on the parent
+      // state; `decrementPendingAndMaybeRepublish` flushes the queue only after
+      // `updateFolderMetadataAndPublish` returns (count reaches 0). GC-ing here —
+      // before a `pendingChildCount > 1` parent actually republishes — would, on
+      // a crash in that window, destroy the ONLY recovery key for this
+      // already-rotated child (rediscovered dirty on resume with no checkpoint =>
+      // DirtyNodeUnrecoverableError). Mirrors the Rust twin's
+      // `pending_checkpoint_node_ids` / `complete_pending_child` ordering.
+      parentState.pendingCheckpointNodeIds.push(item.childPubId);
       // D-09: decrement the parent's pending count; republish once every
       // child (including this repaired one) is accounted for.
       await decrementPendingAndMaybeRepublish(parentState, item.parentIpnsName);
     }
-
-    // D-04: GC the checkpoint only AFTER the parent mirror above has
-    // committed (the in-memory update, plus any triggered republish).
-    await keyCheckpointCallbacks!.deleteWrappedKey(item.childPubId);
 
     // Mark this node done (mirrors rotateOne's own Step 9 idempotency marking).
     // Without this, a SECOND queue entry for the same node — e.g. the same
@@ -1823,6 +1851,7 @@ export async function rotateReadFromNode(
         children: [...children],
         baseChildrenSnapshot: [...children],
         pendingChildCount: children.length,
+        pendingCheckpointNodeIds: [],
       };
       parentTracking.set(item.childRef.ipnsName, thisNodeParentState);
 
@@ -1925,6 +1954,7 @@ export async function rotateReadFromNode(
         // mis-attribution bug. The grouping loop below sets this to the
         // COUNT of root-DIRECT dirty items only (0 if none).
         pendingChildCount: 0,
+        pendingCheckpointNodeIds: [],
       };
       parentTracking.set(rootNodeIpnsName, rootParentState);
 
@@ -2000,6 +2030,7 @@ export async function rotateReadFromNode(
         children: [...rootResult.children], // mutable copy for in-place SealedChildRef updates
         baseChildrenSnapshot: [...rootResult.children],
         pendingChildCount: rootResult.children.length,
+        pendingCheckpointNodeIds: [],
       };
       parentTracking.set(rootNodeIpnsName, rootParentState);
     }
@@ -2212,6 +2243,7 @@ export async function rotateReadFromNode(
             children: [...result.children],
             baseChildrenSnapshot: [...result.children],
             pendingChildCount: result.children.length,
+            pendingCheckpointNodeIds: [],
           };
           parentTracking.set(item.childRef.ipnsName, thisNodeParentState);
         }
