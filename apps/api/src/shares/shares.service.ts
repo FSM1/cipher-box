@@ -6,7 +6,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource, In } from 'typeorm';
+import { Repository, DataSource } from 'typeorm';
 import { Share } from './entities/share.entity';
 import { ShareInvite } from './entities/share-invite.entity';
 import { User } from '../auth/entities/user.entity';
@@ -182,12 +182,13 @@ export class SharesService {
     }
 
     return this.dataSource.transaction(async (manager) => {
-      const shares = await manager.find(Share, {
-        where: { sharerId, shareRootIpnsName: In(uniqueNames) },
-      });
-      if (shares.length > 0) {
-        await manager.remove(shares);
-      }
+      const shareResult = await manager
+        .createQueryBuilder()
+        .delete()
+        .from(Share)
+        .where('sharer_id = :sharerId', { sharerId })
+        .andWhere('share_root_ipns_name IN (:...names)', { names: uniqueNames })
+        .execute();
 
       // Mark active invites for these items as revoked
       const inviteResult = await manager
@@ -200,7 +201,7 @@ export class SharesService {
         .execute();
 
       return {
-        revokedShares: shares.length,
+        revokedShares: shareResult.affected ?? 0,
         revokedInvites: inviteResult.affected ?? 0,
       };
     });
