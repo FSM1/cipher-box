@@ -1,0 +1,87 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "55a647000ed8",
+  "session_id": "4d78f8a5-6112-418c-85c3-c6241359b1fb",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-09T22:03:21.802775Z",
+  "branch": "feat/share-invite-security-and-ipns-data-integrity-api",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "e93310433337",
+  "token_usage": {
+    "input_tokens": 17317,
+    "cache_creation_tokens": 331347,
+    "cache_read_tokens": 6028609,
+    "output_tokens": 65978,
+    "api_call_count": 43
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Execute all 9 plans of phase 71 (Share-Invite Security & IPNS Data-Integrity API) in cipher-box using GSD's wave-based parallel executor workflow, dispatching subagents per wave and merging results.",
+    "outcome": "Waves 1 and 2 (7 of 9 plans: 71-01, 71-04, 71-02, 71-03, 71-06) completed, merged to the phase branch, and passed post-merge integration gates (typecheck, cargo check --all-targets, 886/886 api tests); Waves 3-4 (71-05 checkpoint, 71-07, 71-08, 71-09) were not yet reached when the transcript ends.",
+    "learnings": {
+      "repo": [
+        "cipher-box's execute-phase config has no build/test commands set, so the post-merge gate would default to `npm test`/`npm run build`, which is wrong for this pnpm monorepo — must inspect root package.json scripts and scope commands manually",
+        "`pnpm typecheck` is the real cross-plan integration check for this phase, but Wave 1 intentionally leaves TS consumers (sdk/web) broken until Wave 2 renames them — post-merge gates must be scoped to each wave's actual blast radius, not run blindly against the final target state",
+        "Worktree base-check resolves reason `baseref-head`, meaning worktrees fork from live HEAD, so all 4 waves of a multi-wave phase keep parallel worktree isolation without degrading across waves",
+        "The tracking-commit helper can report `commit_failed` as a false negative even when the commit actually lands — always verify via `git log`/`git status` before trusting it",
+        "The codebase-drift advisory gate flags large false-positive drift (143 items) when `last_mapped_commit` is null, i.e. the repo was never run through `/gsd-map-codebase` — this is baseline noise, not new drift from the wave",
+        "`requirements.mark-complete` is a no-op for phases whose requirement IDs use CONTEXT.md decision-ID naming (e.g. D-10) rather than the global REQUIREMENTS.md REQ-ID scheme",
+        "`pnpm --filter test --` wrapper silently drops the jest pattern argument due to double `--` wrapping; use `npx jest --testPathPattern=...` directly instead",
+        "Rust compiler diagnostics (e.g. E0560) reported by an executor subagent from an intermediate worktree state can be stale LSP noise that doesn't reflect the actual committed/merged tree — must re-verify with `cargo check --all-targets` on the merged branch before treating it as a real error"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "finding": "D-05 same-seq CID equivocation guard and D-06 first-publish 23505→409 ConflictException translation added in plan 71-04"
+        },
+        {
+          "path": "crates/fuse/src/write_ops/implementation/delete.rs",
+          "line": 543,
+          "end_line": 546,
+          "finding": "Transient E0560 diagnostic referencing old descriptor field names during 71-03 — turned out to be stale intermediate-worktree noise, not a real error after merge"
+        },
+        {
+          "path": "crates/fuse/src/write_ops/implementation/rename.rs",
+          "line": 294,
+          "end_line": 297,
+          "finding": "Same stale E0560 diagnostic pattern as delete.rs, resolved clean at `cargo check --all-targets` on merged tree"
+        }
+      ],
+      "workflow": [
+        "When dispatching multiple parallel subagents in the same wave, verify the previous agent's worktree was actually created (and its .git/config.lock released) before spawning the next, to avoid a config-lock race",
+        "Don't trust an individual executor subagent's self-reported build/test success as proof of cross-plan integration — re-run the relevant checks against the merged tree at the post-merge gate before proceeding to the next wave",
+        "Flag ambiguous/concerning subagent diagnostics explicitly and defer judgment to a later verification step rather than acting on them immediately"
+      ]
+    },
+    "friction": [
+      "Build/test commands were unset in the execute-phase config, requiring extra manual steps (reading root package.json) to determine appropriate pnpm commands for a monorepo",
+      "71-03's reported cargo diagnostics (E0560 in delete.rs/rename.rs) created uncertainty about whether Wave 2 actually broke Rust compilation, requiring an extra dedicated re-check at post-merge",
+      "Tracking-commit step reported `commit_failed` when the commit had actually landed, requiring manual git verification to rule out a real failure",
+      "Codebase-drift advisory gate produced noisy baseline flags (143 pre-existing structural elements) unrelated to the wave's actual changes",
+      "`requirements.mark-complete D-10 D-04 \"SC#3\"` call in 71-01 was a silent no-op due to a naming-scheme mismatch (decision IDs vs REQ-IDs)"
+    ],
+    "open_items": [
+      "Waves 3 (71-05 with user checkpoint, 71-07, 71-08) and 4 (71-09) still need to be executed to finish phase 71",
+      "71-05 requires an interactive checkpoint (autonomous:false) — orchestrator will need to pause for user input when reached",
+      "D-04's CHECK constraint backstop requires live Postgres verification (mocked in Jest for now) — manual psql verification recipe was recorded in the 71-01 SUMMARY but not yet executed",
+      "sdk-e2e share/invite suites from 71-02 typecheck cleanly but were not run end-to-end against a live API stack (no docker stack available in the worktree) — recommended before final merge to main"
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
