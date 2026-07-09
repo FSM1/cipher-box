@@ -80,13 +80,38 @@ pub struct CipherBoxFS {
     /// self-referential struct. Read-path call sites (Slice 2) construct
     /// `ApiNodeFetcher { api: &self.api }` inline instead.
     pub high_water: cipherbox_sdk::RotationHighWater<cipherbox_sdk::JsonSidecarFloorStore>,
+    /// D-01/D-03 (Plan 70.1-09): combined per-nodeId sidecar handle backing
+    /// the production `RotationDeps` adapter's
+    /// `persist_wrapped_key`/`get_wrapped_key`/`delete_wrapped_key` seam
+    /// (`crate::write_ops::rotation_deps::FuseRotationDeps`). Points at the
+    /// SAME combined `rotation-high-water.json` sidecar as `high_water`
+    /// (Plan 70.1-03) — the wrapped-key-checkpoint field is independent of
+    /// the generation/seq fields that view reads/writes, so this handle
+    /// deliberately uses `for_generation`'s field tag (arbitrary — the
+    /// checkpoint accessors ignore it).
+    pub rotation_checkpoint_store: cipherbox_sdk::JsonSidecarFloorStore,
     /// Local cache of the authenticated user's sent shares (grant-root
     /// awareness, SC#3 / 69-07). Refreshed out-of-band via
     /// [`CipherBoxFS::refresh_sent_shares`] — mount init / periodic, NEVER a
     /// per-mutation network call (Pitfall 2 / T-69-07-01). Delete/rename
     /// scope-exit checks (69-11/69-14) read this synchronously via
     /// `crate::write_ops::grant_scope::build_coverage_params`.
-    pub sent_shares: std::sync::RwLock<crate::write_ops::grant_scope::SentSharesCache>,
+    ///
+    /// `Arc` so a clone can be handed to the periodic background refresh task
+    /// ([`crate::write_ops::grant_scope::spawn_periodic_sent_shares_refresh`])
+    /// while the `CipherBoxFS` itself is moved into the mount thread — the
+    /// FUSE `fs` and the refresh task share the SAME lock.
+    pub sent_shares:
+        std::sync::Arc<std::sync::RwLock<crate::write_ops::grant_scope::SentSharesCache>>,
+    /// 70.1-13a coalescing hand-off for the WinFsp split delete flow: inos whose
+    /// covered scope-exit rotation (in `set_delete`) already republished the
+    /// grant-root with the post-delete child list, so `handle_cleanup` MUST
+    /// SKIP its plain `update_folder_metadata(parent)` relink (avoiding the
+    /// double-publish the fuser path avoids inline). Populated by
+    /// `handle_set_delete`, consumed (removed) by `handle_cleanup`. The fuser
+    /// unlink/rmdir path does NOT use this (its gate + relink are one call, so
+    /// it carries the flag in a local variable) — it stays empty there.
+    pub coalesced_scope_exit_relink_suppressed: std::collections::HashSet<u64>,
 }
 
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
@@ -100,7 +125,13 @@ impl CipherBoxFS {
     /// `sent_shares` (see `write_ops::grant_scope::build_coverage_params`).
     pub async fn refresh_sent_shares(&self) -> Result<(), cipherbox_api_client::ApiError> {
         let cache = crate::write_ops::grant_scope::refresh_sent_shares(&self.api).await?;
-        *self.sent_shares.write().expect("sent_shares lock poisoned") = cache;
+        // D-15c poison recovery is shared with the periodic background task
+        // (`spawn_periodic_sent_shares_refresh`) so both install paths behave
+        // identically: a freshly-refreshed authoritative cache is always safe
+        // to install regardless of prior poisoning, and reads
+        // (`run_scope_exit_gate`) resume normal operation instead of failing
+        // closed until remount.
+        crate::write_ops::grant_scope::install_sent_shares_cache(&self.sent_shares, cache);
         Ok(())
     }
 
@@ -296,6 +327,109 @@ impl CipherBoxFS {
             .map(|c| c.cid.clone())
             .filter(|c| !c.is_empty());
         Ok((published_bytes, ipns_private_key, ipns_name, old_cid))
+    }
+
+    /// 70.1-13a coalescing: build the grant-root's POST-delete read-plane
+    /// `SealedChildRef` list — the parent's current children EXCLUDING
+    /// `exclude_ino` — sealed under the parent's CURRENT (pre-rotation) read
+    /// key, for a covered scope-exit rotation's `root_children_override`. The
+    /// rotation then republishes the grant-root already reflecting the deletion
+    /// under the NEW key as the SINGLE authoritative publish (no stale-key
+    /// relink afterward — the revocation-bypass fix).
+    ///
+    /// Purely read-only (NO inode mutation): fail-closed discipline means the
+    /// child is only removed after the rotation succeeds. Mirrors the read-plane
+    /// half of [`Self::build_folder_metadata`]'s child loop; the refs are sealed
+    /// under the parent's pre-rotation read key so the rotation BFS can still
+    /// derive each surviving child's key via `unseal_child_read_key`.
+    ///
+    /// Fail-closed (70.1 CodeRabbit finding 6): because the override REPLACES the
+    /// grant-root's published child list, any child that a normal relink-republish
+    /// would have linked but this loop drops would be silently orphaned from the
+    /// read plane. So this mirrors [`Self::build_folder_metadata`]'s child-loop
+    /// discipline EXACTLY — a missing child inode or a `build_child_refs` failure
+    /// is fatal (propagated as `Err`, mapped to EIO by the caller), while the same
+    /// legitimately-unlinkable children that path skips (non-File/Folder inodes and
+    /// never-published children with an empty `ipns_name`) are skipped here too, so
+    /// the coalesced override matches what a normal republish would produce.
+    pub fn build_scope_exit_child_override(
+        &self,
+        parent_ino: u64,
+        exclude_ino: u64,
+    ) -> Result<Vec<cipherbox_core::node::SealedChildRef>, String> {
+        use cipherbox_core::node::NodeKind;
+        let parent = self.inodes.get(parent_ino).ok_or_else(|| {
+            format!("build_scope_exit_child_override: parent inode {parent_ino} not found")
+        })?;
+        let (parent_read_key, parent_write_key) = match &parent.kind {
+            crate::inode::InodeKind::Root {
+                read_key,
+                write_key,
+                ..
+            }
+            | crate::inode::InodeKind::Folder {
+                read_key,
+                write_key,
+                ..
+            } => (**read_key, **write_key),
+            _ => {
+                return Err(format!(
+                    "build_scope_exit_child_override: parent inode {parent_ino} is not a Root/Folder"
+                ))
+            }
+        };
+        let child_inos = parent.children.clone().unwrap_or_default();
+        let mut sealed_children = Vec::new();
+        for child_ino in child_inos {
+            if child_ino == exclude_ino {
+                continue;
+            }
+            let child = self.inodes.get(child_ino).ok_or_else(|| {
+                format!("build_scope_exit_child_override: child inode {child_ino} not found")
+            })?;
+            let (kind, child_ipns, child_read_key, child_write_key) = match &child.kind {
+                crate::inode::InodeKind::Folder {
+                    ipns_name,
+                    read_key,
+                    write_key,
+                    ..
+                } => (NodeKind::Folder, ipns_name.clone(), **read_key, **write_key),
+                crate::inode::InodeKind::File {
+                    ipns_name,
+                    read_key,
+                    write_key,
+                    ..
+                } => (NodeKind::File, ipns_name.clone(), **read_key, **write_key),
+                // Non-File/Folder inodes are not read-plane children — the normal
+                // republish path skips them too (`build_folder_metadata`).
+                _ => continue,
+            };
+            // Never-published child (no IPNS identity yet): nothing to link into
+            // the read chain — the normal republish path skips it too.
+            if child_ipns.is_empty() {
+                continue;
+            }
+            let child_id = child.node_id.clone();
+            let (sealed_ref, _write_ref) = cipherbox_sdk::build_child_refs(
+                &child_read_key,
+                &child_write_key,
+                &parent_read_key,
+                &parent_write_key,
+                &child_id,
+                &child_ipns,
+                &child.name,
+                kind,
+                0,
+                0,
+            )
+            .map_err(|e| {
+                format!(
+                    "build_scope_exit_child_override: build_child_refs failed for child {child_ino}: {e}"
+                )
+            })?;
+            sealed_children.push(sealed_ref);
+        }
+        Ok(sealed_children)
     }
 
     pub fn update_folder_metadata(&mut self, folder_ino: u64) -> Result<(), String> {
@@ -837,6 +971,77 @@ mod drain_refresh_completions_tests {
     }
 }
 
+/// Idle-mount publish-queue backstop (macos-first-publish-timeout).
+///
+/// A file written through the mount enqueues its parent-folder republish in the
+/// EDGE-TRIGGERED `publish_queue`; `flush_publish_queue` runs only when a FUSE op
+/// reaches `drain_upload_completions`. On FUSE-T the file `release` that enqueues
+/// it can be deferred past the point a client stops touching the mount, so the
+/// desktop `fuse-publish-pump` thread periodically issues a lookup to generate one
+/// such op. These tests pin the contract that thread relies on: a SINGLE drain
+/// (one pump poke) flushes a queued republish once it is past the debounce /
+/// safety-valve, and NOT before. Pure in-memory: the flushed folder ino is
+/// synthetic so `build_folder_metadata` errors out before any network publish.
+#[cfg(all(test, feature = "fuse"))]
+mod publish_queue_backstop_tests {
+    use crate::publish::PublishQueueEntry;
+    use crate::test_support::make_test_fs;
+    use std::time::{Duration, Instant};
+
+    // A folder ino with no inode entry: flush removes the queue entry (fs.rs:515)
+    // BEFORE build_folder_metadata (which Errs "not found"), so no publish spawns.
+    const SYNTH_FOLDER_INO: u64 = 987_654;
+
+    fn queue_with_age(fs: &mut crate::CipherBoxFS, pending_uploads: usize, age: Duration) {
+        fs.publish_queue.insert(
+            SYNTH_FOLDER_INO,
+            PublishQueueEntry {
+                first_dirty: Instant::now() - age,
+                pending_uploads,
+            },
+        );
+    }
+
+    /// One drain (== one pump poke / one getattr) flushes a republish whose upload
+    /// has completed once it is past the 1.5s debounce — no second FUSE op needed.
+    #[tokio::test]
+    async fn single_drain_flushes_past_debounce() {
+        let mut fs = make_test_fs();
+        queue_with_age(&mut fs, 0, Duration::from_secs(2));
+        fs.drain_upload_completions();
+        assert!(
+            !fs.publish_queue.contains_key(&SYNTH_FOLDER_INO),
+            "a debounce-elapsed republish must flush on a single drain (the pump poke)"
+        );
+    }
+
+    /// The 10s safety valve flushes even if an upload never completes
+    /// (pending_uploads stuck > 0) — the backstop cannot wedge on a lost upload.
+    #[tokio::test]
+    async fn single_drain_flushes_stuck_upload_past_safety_valve() {
+        let mut fs = make_test_fs();
+        queue_with_age(&mut fs, 1, Duration::from_secs(11));
+        fs.drain_upload_completions();
+        assert!(
+            !fs.publish_queue.contains_key(&SYNTH_FOLDER_INO),
+            "the safety valve must flush a stuck-upload republish on a single drain"
+        );
+    }
+
+    /// A fresh republish (within the debounce window, upload not yet done) is NOT
+    /// flushed — the backstop poke must not defeat the coalescing debounce.
+    #[tokio::test]
+    async fn fresh_entry_is_not_flushed_within_debounce() {
+        let mut fs = make_test_fs();
+        queue_with_age(&mut fs, 1, Duration::from_millis(100));
+        fs.drain_upload_completions();
+        assert!(
+            fs.publish_queue.contains_key(&SYNTH_FOLDER_INO),
+            "a within-debounce republish must survive a drain (no premature publish)"
+        );
+    }
+}
+
 /// D-07 write-plane pairing regression (desktop-e2e "Cross-client sync" / "Move
 /// content" failure): a parent re-published by the FUSE write path
 /// (`build_folder_metadata`) must key its child's `WriteChildRef.child_id` by the
@@ -858,11 +1063,11 @@ mod d07_write_plane_pairing_tests {
     use crate::inode::{FileAttrs, InodeData, InodeKind, ROOT_INO};
     use crate::test_support::make_test_fs;
     use cipherbox_core::node::{
-        encode_published_node, seal::seal_published_node, Node, NodeContent, NodeKind,
-        NodeWriteBody, VersionEntry,
+        encode_published_node, seal::seal_published_node, Node, NodeContent, NodeWriteBody,
+        VersionEntry,
     };
     use cipherbox_sdk::{
-        list_folder_owned, FetchedRecord, HighWaterStore, ListingError, NodeFetcher,
+        list_folder_owned, FetchedRecord, HighWaterStore, ListingError, NodeFetcher, RotationError,
         RotationHighWater,
     };
     use std::collections::HashMap;
@@ -877,8 +1082,9 @@ mod d07_write_plane_pairing_tests {
         async fn get(&self, node_id: &str) -> Option<u64> {
             self.0.lock().unwrap().get(node_id).copied()
         }
-        async fn put(&self, node_id: &str, value: u64) {
+        async fn put(&self, node_id: &str, value: u64) -> Result<(), RotationError> {
             self.0.lock().unwrap().insert(node_id.to_string(), value);
+            Ok(())
         }
     }
 
@@ -941,8 +1147,7 @@ mod d07_write_plane_pairing_tests {
             ipns_private_key: ipns_private_key.to_vec(),
             write_children: Vec::new(),
         };
-        let published =
-            seal_published_node(&node, read_key, write_key, Some(&write_body)).unwrap();
+        let published = seal_published_node(&node, read_key, write_key, Some(&write_body)).unwrap();
         encode_published_node(&published).unwrap()
     }
 

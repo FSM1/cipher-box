@@ -58,6 +58,19 @@ use crate::state::AppState;
 /// Defined once here so the two call sites cannot silently drift.
 pub const JOURNAL_MAX_RETRIES: u32 = 5;
 
+/// Interval for the idle-mount publish-queue pump (see `mount_filesystem`).
+///
+/// A file written through the mount enqueues its parent-folder republish in the
+/// FUSE crate's EDGE-TRIGGERED `publish_queue`, which only drains when a FUSE op
+/// reaches `drain_upload_completions`/`flush_publish_queue`. On FUSE-T (macOS/SMB)
+/// the file `release` that enqueues it can be deferred tens of seconds past the
+/// write, so on a subsequently-idle mount the republish never fires. This interval
+/// bounds how long a queued republish can wait on an otherwise-idle mount: chosen
+/// small relative to the 10s publish safety-valve but large enough to be
+/// negligible traffic (one uncacheable lookup per tick).
+#[cfg(feature = "fuse")]
+pub const PUBLISH_PUMP_INTERVAL_SECS: u64 = 2;
+
 /// Return the canonical on-disk journal directory for this installation.
 ///
 /// Resolves to `<data_local_dir>/cipherbox/cb-journal` with a `temp_dir` fallback
@@ -179,6 +192,11 @@ pub async fn mount_filesystem(
     // Replay needs the journal dir to rebuild its own high-water gate; capture a
     // clone before `journal_dir` is moved into WriteQueue::new below.
     let replay_journal_dir = journal_dir.clone();
+    // D-01/D-03 (Plan 70.1-09): the production RotationDeps adapter's
+    // wrapped-key-checkpoint handle — points at the SAME combined sidecar as
+    // `high_water` above. Capture before `journal_dir` moves.
+    let rotation_checkpoint_store =
+        cipherbox_sdk::JsonSidecarFloorStore::for_generation(&journal_dir);
     let journal = cipherbox_sdk::WriteQueue::new(journal_dir, JOURNAL_MAX_RETRIES);
 
     // node/v3 root symmetric keys (read_key/write_key) for the root node.
@@ -302,6 +320,42 @@ pub async fn mount_filesystem(
         });
     }
 
+    // Grant-root awareness (SC#3 / SC#8): build the shared sent-shares cache,
+    // seed it authoritatively at mount init (best-effort, bounded so a slow or
+    // unreachable relay can never hang the mount), then drive a periodic
+    // background refresh. Until a refresh succeeds the cache stays
+    // non-authoritative and the delete/rename scope-exit gate fails CLOSED
+    // (EIO) — safe (never a silent revocation bypass), never fail-open.
+    let sent_shares = std::sync::Arc::new(std::sync::RwLock::new(
+        cipherbox_fuse::write_ops::grant_scope::SentSharesCache::empty(),
+    ));
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        cipherbox_fuse::write_ops::grant_scope::refresh_sent_shares(&state.sdk.api),
+    )
+    .await
+    {
+        Ok(Ok(cache)) => {
+            cipherbox_fuse::write_ops::grant_scope::install_sent_shares_cache(&sent_shares, cache);
+            log::info!("Mount init: sent-shares cache seeded (authoritative)");
+        }
+        Ok(Err(e)) => log::warn!(
+            "Mount init: sent-shares refresh failed (scope-exit gate fails closed until \
+             periodic refresh): {}",
+            e
+        ),
+        Err(_) => log::warn!(
+            "Mount init: sent-shares refresh timed out (scope-exit gate fails closed until \
+             periodic refresh)"
+        ),
+    }
+    cipherbox_fuse::write_ops::grant_scope::spawn_periodic_sent_shares_refresh(
+        &rt,
+        state.sdk.api.clone(),
+        sent_shares.clone(),
+        cipherbox_fuse::write_ops::grant_scope::SENT_SHARES_REFRESH_INTERVAL,
+    );
+
     let fs = CipherBoxFS {
         inodes,
         metadata_cache,
@@ -334,12 +388,12 @@ pub async fn mount_filesystem(
         upload_tx,
         journal,
         high_water,
+        rotation_checkpoint_store,
         mutated_folders: HashMap::new(),
         publish_coordinator,
         publish_queue: HashMap::new(),
-        sent_shares: std::sync::RwLock::new(
-            cipherbox_fuse::write_ops::grant_scope::SentSharesCache::empty(),
-        ),
+        sent_shares,
+        coalesced_scope_exit_relink_suppressed: std::collections::HashSet::new(),
     };
 
     let mount_path_clone = mount_path.clone();
@@ -360,12 +414,55 @@ pub async fn mount_filesystem(
         MountOption::RW,
     ];
 
+    // Idle-mount publish-queue backstop (macos-first-publish-timeout).
+    // `fs` is moved into `fuser::mount2` and is owned exclusively by the FS thread,
+    // so the only race-free way to drive the edge-triggered publish-queue drain
+    // (`drain_upload_completions`/`flush_publish_queue`, crates/fuse/src/fs.rs) is
+    // to generate a FUSE op. This pump periodically issues a lookup of a UNIQUE,
+    // non-existent name under the mount root: a fresh name each tick is uncacheable
+    // by the FUSE-T/SMB attribute cache, so it always reaches `handle_lookup`
+    // (crates/fuse/src/read_ops.rs), which drains the queue on the FS thread. The
+    // probe returns ENOENT and is a no-op otherwise; its result is ignored. Without
+    // this, a file written just before the mount goes idle stays absent from its
+    // parent folder's IPNS metadata until the next mount's journal replay. Harmless
+    // on Linux fuser (prompt release makes it a rarely-needed backstop).
+    let pump_active = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    {
+        let pump_active = pump_active.clone();
+        let pump_path = mount_path.clone();
+        if let Err(e) = std::thread::Builder::new()
+            .name("fuse-publish-pump".to_string())
+            .spawn(move || {
+                let mut probe: u64 = 0;
+                while pump_active.load(std::sync::atomic::Ordering::Relaxed) {
+                    std::thread::sleep(std::time::Duration::from_secs(PUBLISH_PUMP_INTERVAL_SECS));
+                    if !pump_active.load(std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    }
+                    probe = probe.wrapping_add(1);
+                    // Fresh, guaranteed-absent name -> uncacheable lookup -> drains the
+                    // publish queue on the FS thread. Result intentionally ignored.
+                    let _ =
+                        std::fs::symlink_metadata(pump_path.join(format!(".cb-pub-pump-{probe}")));
+                }
+            })
+        {
+            // Non-fatal: the mount still works; only the idle-mount backstop is absent.
+            log::warn!("Failed to spawn fuse-publish-pump thread: {}", e);
+        }
+    }
+
     let (tx, rx) = std::sync::mpsc::sync_channel::<Result<(), String>>(1);
+    let mount_pump_active = pump_active;
     let handle = std::thread::Builder::new()
         .name("fuse-mount".to_string())
         .spawn(move || {
             log::info!("Mounting CipherBoxFS at {}", mount_path_clone.display());
-            match fuser::mount2(fs, &mount_path_clone, &options) {
+            let mount_result = fuser::mount2(fs, &mount_path_clone, &options);
+            // Stop the idle-mount publish pump the instant the mount ends so it never
+            // outlives the mount (fires for both clean unmount and mount error).
+            mount_pump_active.store(false, std::sync::atomic::Ordering::Relaxed);
+            match mount_result {
                 Ok(()) => {
                     log::info!("FUSE filesystem unmounted cleanly");
                     let _ = tx.send(Ok(()));

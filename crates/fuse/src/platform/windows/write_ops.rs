@@ -605,6 +605,14 @@ pub mod implementation {
         let ino = context.ino;
         let fh = context.fh;
 
+        // 70.1-13a: consume the coalescing hand-off from handle_set_delete. When
+        // set (a shallow covered scope-exit), the rotation already republished
+        // the grant-root with the post-delete child list, so the plain relink
+        // below MUST be suppressed to avoid a redundant second publish (the
+        // fuser path suppresses its relink inline in the same call). Always
+        // removed so no stale entry leaks.
+        let relink_suppressed = fs.coalesced_scope_exit_relink_suppressed.remove(&ino);
+
         // FspCleanupDelete = 0x01
         if flags & 0x01 != 0 {
             let now = SystemTime::now();
@@ -756,8 +764,14 @@ pub mod implementation {
                 parent_inode.attr.ctime = now;
             }
 
-            if let Err(e) = fs.update_folder_metadata(parent_ino) {
-                log::error!("Failed to update folder metadata after delete: {}", e);
+            // 70.1-13a: suppress the plain relink when the covered scope-exit
+            // rotation already republished the grant-root with the post-delete
+            // child list (shallow scope-exit). Deep/private/non-covered deletes
+            // still relink (now resealed under the Fix-A-refreshed key).
+            if !relink_suppressed {
+                if let Err(e) = fs.update_folder_metadata(parent_ino) {
+                    log::error!("Failed to update folder metadata after delete: {}", e);
+                }
             }
 
             // Create bin entry and publish (fire-and-forget) -- CIDs stay pinned for recovery
@@ -1099,7 +1113,7 @@ pub mod implementation {
         // move is handled by the grant-scope gate below (rotation), not by
         // re-keying the moved file.
         if old_parent_ino != new_parent_ino
-            && crate::write_ops::grant_scope::run_scope_exit_gate(&fs, source_ino).is_err()
+            && crate::write_ops::grant_scope::run_scope_exit_gate(&mut fs, source_ino).is_err()
         {
             return Err(status_io_device_error());
         }
@@ -1249,13 +1263,42 @@ pub mod implementation {
         // ONCE. Fail-closed: rotation failure rejects the delete
         // (STATUS_ACCESS_DENIED) so the item stays put and no sharee is left
         // with access to soon-to-be-orphaned content.
-        let fs = ctx.inner.lock().unwrap();
-        if crate::write_ops::grant_scope::run_scope_exit_gate(&fs, context.ino).is_err() {
-            log::error!(
-                "set_delete: grant-scope gate failed for ino {} (rejecting delete)",
-                context.ino
-            );
-            return Err(status_access_denied());
+        let mut fs = ctx.inner.lock().unwrap();
+        // 70.1-13a: the deleted node's DIRECT parent (child still present here).
+        // A missing inode makes the ancestor walk inside the gate fail closed.
+        let parent_ino = fs
+            .inodes
+            .get(context.ino)
+            .map(|i| i.parent_ino)
+            .unwrap_or(0);
+        // Shared coalesced gate (identical logic to the fuser delete.rs path).
+        // On a shallow covered scope-exit the rotation republishes the
+        // grant-root with the post-delete child list as the SINGLE authoritative
+        // publish; record the ino so handle_cleanup SKIPS its plain relink
+        // (the WinFsp split's equivalent of the fuser path's local
+        // `relink_suppressed`). Fail-closed → STATUS_ACCESS_DENIED.
+        match crate::write_ops::grant_scope::run_scope_exit_gate_coalesced(
+            &mut fs,
+            context.ino,
+            parent_ino,
+        ) {
+            Ok(true) => {
+                fs.coalesced_scope_exit_relink_suppressed
+                    .insert(context.ino);
+            }
+            Ok(false) => {
+                // Private / deep / non-covered: clear any stale flag so cleanup
+                // performs its normal relink.
+                fs.coalesced_scope_exit_relink_suppressed
+                    .remove(&context.ino);
+            }
+            Err(()) => {
+                log::error!(
+                    "set_delete: grant-scope gate failed for ino {} (rejecting delete)",
+                    context.ino
+                );
+                return Err(status_access_denied());
+            }
         }
 
         Ok(())

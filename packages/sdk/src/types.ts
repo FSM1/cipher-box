@@ -10,6 +10,7 @@ import type {
   PinningMode,
   ExternalProviderConfig,
   RotationJobRecord,
+  KeyCheckpointCallbacks,
 } from '@cipherbox/sdk-core';
 import type { AxiosInstance } from '@cipherbox/api-client';
 import type { SealedChildRef, Node, PublishedNode } from '@cipherbox/core';
@@ -71,6 +72,15 @@ export type RotationClientCallbacks = {
   persistJob: (job: RotationJobRecord) => void | Promise<void>;
   /** Optional progress/status hook for UI badges and toasts. */
   progress?: (status: string) => void;
+  /**
+   * Optional injection seam for the ECIES key-checkpoint plane (Plan 70.1-05 /
+   * SC#3). When supplied, `rotateReadFromNode` durably persists each minted
+   * `readKeyPrime` (ECIES-wrapped under the owner's own public key) BEFORE the
+   * child publish, and recovers it on resume to repair an already-rotated
+   * dirty node instead of crashing (D-01..D-05). Omitted -> zero seam work,
+   * identical to pre-Plan-70.1-05 behavior.
+   */
+  keyCheckpoint?: KeyCheckpointCallbacks;
 };
 
 /**

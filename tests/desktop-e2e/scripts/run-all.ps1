@@ -154,6 +154,31 @@ if ($MoveExitCode -eq 0) {
 }
 Write-Host ""
 
+# ---- Step 8: Shared scope-exit rotation acceptance (D-16) ----
+# Real-mount smoke for the shared-scope-exit rotation live-wiring (Phase 70.1
+# SC#8), shared with macOS/Linux (shared-scope-exit-rotation.mts). Invoked via
+# node + tsx's JS CLI entry (NOT the .bin/tsx shim) per project convention for
+# .mts helpers. Exercises the WinFsp rotation path on Windows.
+Write-Host "--- Step 8: Shared scope-exit rotation acceptance (D-16) ---"
+$RepoRoot = (Resolve-Path "$PSScriptRoot\..\..\..").Path
+$RotationExitCode = 0
+try {
+    $env:TEST_SECRET = $TestSecret
+    & node "$RepoRoot\node_modules\tsx\dist\cli.mjs" "$PSScriptRoot\shared-scope-exit-rotation.mts" --mount $MountPoint --api-url $ApiUrl
+    $RotationExitCode = $LASTEXITCODE
+} catch {
+    Write-Host "Shared scope-exit rotation script error: $($_.Exception.Message)"
+    $RotationExitCode = 1
+}
+
+if ($RotationExitCode -eq 0) {
+    Write-Host "Shared scope-exit rotation: PASSED"
+} else {
+    Write-Host "Shared scope-exit rotation: FAILED"
+    $TotalFail += $RotationExitCode
+}
+Write-Host ""
+
 # ---- Summary ----
 Write-Host "============================================"
 Write-Host "  Summary"

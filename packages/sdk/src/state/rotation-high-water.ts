@@ -10,47 +10,73 @@
  *   - generation: the M1 cross-generation rollback defense (design §4.3)
  *   - seq: the within-generation sequence rollback defense (design §6.5)
  *
- * Both floors are read through an injected HighWaterStore seam on every
- * access -- there is NO in-instance cache -- so a fresh state machine
- * constructed over the SAME backing store observes previously-written
- * floors (the restart/persistence semantics proven at the logic tier).
+ * Both floors -- plus the optional SC#3 ECIES wrapped-key checkpoint -- are
+ * read through a SINGLE injected `HighWaterStore` seam on every access --
+ * there is NO in-instance cache -- so a fresh state machine constructed over
+ * the SAME backing store observes previously-written floors (the
+ * restart/persistence semantics proven at the logic tier).
  *
  * enforceResolved is a pure pass/throw pre-unseal gate -- it never returns
  * or computes any AAD/unseal parameter. The AAD generation is sourced from
  * the parent mirror in the unrelated unseal path.
  *
  * TS/Rust behavioral-equivalence contract (SC#5, T-70-03/T-70-04): this
- * orchestration layer's `bumpFloor` is a non-atomic read-then-put, exactly
- * like the Rust twin's `bump_floor` (`crates/sdk/src/rotation/high_water.rs`).
- * Atomicity is NOT this layer's job on either side -- it is owned by the
- * concrete `HighWaterStore` adapter: the browser's `idbPut`
- * (`apps/web/src/services/rotation-state.service.ts`) already reads the
- * existing value back INSIDE the same IndexedDB `readwrite` transaction and
- * writes `Math.max(existing, value)`, so a concurrent tab's higher write can
- * never be clobbered by a lower one -- matching the Rust store's
- * `tokio::sync::Mutex`-guarded, max-preserving `JsonSidecarFloorStore::put`.
- * No functional change was needed on this side; `idbPut` was already
- * correct (verified 2026-07-07).
+ * orchestration layer's field-bump helper is a non-atomic read-then-put,
+ * exactly like the Rust twin's `bump_floor` (`crates/sdk/src/rotation/high_water.rs`).
+ * Atomicity is NOT this layer's job -- it is owned by the concrete
+ * `HighWaterStore` adapter: the browser's `idbPutFloors`/`idbPersistWrappedKey`
+ * (`apps/web/src/services/rotation-state.service.ts`) already read the
+ * existing COMBINED record back INSIDE the same IndexedDB `readwrite`
+ * transaction and write `Math.max(existing, value)` per numeric field, so a
+ * concurrent tab's higher write can never be clobbered by a lower one --
+ * matching the Rust store's `tokio::sync::Mutex`-guarded, max-preserving
+ * `JsonSidecarFloorStore::put`.
  *
- * `enforceResolved`'s cross-store sequencing (`bumpFloor(generationStore)`
- * then `bumpFloor(seqStore)`, awaited sequentially, not in one transaction)
- * is a DOC-ONLY residual, not a fix target: both floors only ever rise
- * (monotonic-max), so if the second bump's write were to fail after the
- * first succeeds, the two floors merely diverge until the next successful
- * resolve re-aligns them -- under-protective, never rollback-accepting (see
- * `.planning/todos/pending/2026-07-02-rotation-hardening-followups-from-pr-review.md`
- * item 1). An atomic multi-store transaction spanning both floors would
- * require a new `HighWaterStore` seam capable of a joint compare-and-set
- * across two IndexedDB object stores (and the Rust twin's two sidecar
- * files) while still surviving the D-08 in-memory degradation path -- out
- * of scope for this phase's SC#5 (store-layer atomicity), which is
- * satisfied by `idbPut`/`JsonSidecarFloorStore::put` alone.
+ * SC#4/D-06 (CLOSED, 70.1-02): `enforceResolved`'s cross-store sequencing --
+ * formerly `bumpFloor(generationStore)` THEN `bumpFloor(seqStore)`, two
+ * separate non-atomic writes to two separate IndexedDB object stores -- was
+ * a DOC-ONLY residual flagged by Phase 70
+ * (`.planning/todos/pending/2026-07-02-rotation-hardening-followups-from-pr-review.md`
+ * item 1). This phase collapses BOTH floors into ONE combined per-nodeId
+ * record (`CombinedFloorRecord`) written via a SINGLE `store.put` call --
+ * the cross-store sequencing window no longer exists because there is only
+ * one store. D-07 additionally folds the SC#3 wrapped-key checkpoint
+ * ciphertext into this SAME combined record (see
+ * `apps/web/src/services/rotation-state.service.ts`'s
+ * `persistWrappedKey`/`getWrappedKey`/`deleteWrappedKey`).
  */
 
-/** A durable key-value seam for a single high-water floor (generation or seq). */
+/**
+ * Persisted combined per-nodeId record (SC#4/D-06, SC#3/D-07): both
+ * anti-rollback floors PLUS the optional ECIES wrapped-key checkpoint
+ * ciphertext, all in ONE record so a single store write is atomic across
+ * all three fields. `wrappedKeyCheckpoint` is a ciphertext blob -- it is
+ * never numerically compared/maxed, only overwritten or cleared.
+ */
+export interface CombinedFloorRecord {
+  generation?: number;
+  seq?: number;
+  wrappedKeyCheckpoint?: string;
+}
+
+/**
+ * A durable key-value seam for the COMBINED per-nodeId floor record. Replaces
+ * the prior two-store (`generationStore`/`seqStore`) seam: one get/put pair
+ * now carries generation, seq, AND the optional wrapped-key checkpoint in a
+ * single record, so `enforceResolved` writes both floors atomically.
+ */
 export interface HighWaterStore {
-  get(nodeId: string): Promise<number | undefined>;
-  put(nodeId: string, value: number): Promise<void>;
+  get(nodeId: string): Promise<CombinedFloorRecord | undefined>;
+  /**
+   * Writes the FULL combined record for `nodeId`. Concrete adapters (e.g.
+   * the browser's IndexedDB-backed store) MUST max-preserve `generation`/
+   * `seq` against any existing record inside the SAME write transaction --
+   * this orchestration layer already computes the candidate max before
+   * calling `put`, but a concurrent writer (another tab) may have raised the
+   * floor since this layer's own read, so the concrete store's own
+   * max-preserving write is the real safety net.
+   */
+  put(nodeId: string, record: CombinedFloorRecord): Promise<void>;
 }
 
 /** Parameters supplied to enforceResolved for a freshly-resolved IPNS record. */
@@ -97,35 +123,42 @@ function isValidFloorValue(value: unknown): value is number {
 }
 
 /**
- * Reads a floor from the store, applying V5 fail-closed validation.
- * A malformed stored value (negative, fractional, NaN, non-numeric) is
- * treated as absent -- never coerced to a low floor.
+ * Reads the combined record from the store, applying V5 fail-closed
+ * validation independently to `generation` and `seq` -- a malformed value in
+ * ONE field never poisons the other, and never poisons the ciphertext blob.
  */
-async function readFloor(store: HighWaterStore, nodeId: string): Promise<number | undefined> {
+async function readCombined(store: HighWaterStore, nodeId: string): Promise<CombinedFloorRecord> {
   const raw = await store.get(nodeId);
-  return isValidFloorValue(raw) ? raw : undefined;
+  return {
+    generation: isValidFloorValue(raw?.generation) ? raw?.generation : undefined,
+    seq: isValidFloorValue(raw?.seq) ? raw?.seq : undefined,
+    wrappedKeyCheckpoint:
+      typeof raw?.wrappedKeyCheckpoint === 'string' ? raw.wrappedKeyCheckpoint : undefined,
+  };
 }
 
 /**
- * Conditionally raises a floor to `candidate` only if it is higher than the
- * current stored value (monotonic-max). Returns the resulting floor.
+ * Conditionally raises ONE field of the combined record to `candidate`, only
+ * if it is higher than the current stored value (monotonic-max) -- writing
+ * the FULL combined record back (preserving the other field and the
+ * wrapped-key checkpoint untouched) via a single `store.put` call.
  */
-async function bumpFloor(
+async function bumpField(
   store: HighWaterStore,
   nodeId: string,
+  field: 'generation' | 'seq',
   candidate: number
-): Promise<number> {
-  const current = await readFloor(store, nodeId);
+): Promise<void> {
   // V5 applies to writes too: never persist a malformed candidate (NaN,
   // negative, fractional) -- the floor stays where it is.
   if (!isValidFloorValue(candidate)) {
-    return current ?? 0;
+    return;
   }
-  if (current === undefined || candidate > current) {
-    await store.put(nodeId, candidate);
-    return candidate;
+  const current = await readCombined(store, nodeId);
+  const currentValue = current[field];
+  if (currentValue === undefined || candidate > currentValue) {
+    await store.put(nodeId, { ...current, [field]: candidate });
   }
-  return current;
 }
 
 /** The durable rotation high-water state machine returned by createRotationHighWater. */
@@ -140,7 +173,9 @@ export interface RotationHighWater {
    * Fail-closed pre-unseal gate: compares a freshly-resolved seq/generation
    * against the stored floors. Throws a distinguishable regression error on
    * any regression; on first contact (no local seq floor) applies the
-   * cold-device versionFloor gate; otherwise bumps both floors monotonic-max.
+   * cold-device versionFloor gate; otherwise bumps both floors monotonic-max
+   * in ONE combined-record write (SC#4/D-06 -- no cross-store sequencing
+   * window).
    *
    * This is a pure pass/throw decision -- it never returns or computes any
    * AAD/unseal parameter.
@@ -149,34 +184,30 @@ export interface RotationHighWater {
 }
 
 /**
- * Creates a durable rotation high-water state machine over two injected
- * HighWaterStore seams -- one for the generation floor, one for the seq
- * floor. Holds no in-instance cache: every read/write goes through the
- * injected stores.
+ * Creates a durable rotation high-water state machine over a SINGLE injected
+ * combined `HighWaterStore` seam (SC#4/D-06). Holds no in-instance cache:
+ * every read/write goes through the injected store.
  */
-export function createRotationHighWater(
-  generationStore: HighWaterStore,
-  seqStore: HighWaterStore
-): RotationHighWater {
+export function createRotationHighWater(store: HighWaterStore): RotationHighWater {
   return {
     async getGenerationFloor(nodeId) {
-      return readFloor(generationStore, nodeId);
+      return (await readCombined(store, nodeId)).generation;
     },
 
     async bumpGeneration(nodeId, generation) {
-      await bumpFloor(generationStore, nodeId, generation);
+      await bumpField(store, nodeId, 'generation', generation);
     },
 
     async seedFromGrant(nodeId, rootGeneration) {
-      await bumpFloor(generationStore, nodeId, rootGeneration);
+      await bumpField(store, nodeId, 'generation', rootGeneration);
     },
 
     async getSeqFloor(nodeId) {
-      return readFloor(seqStore, nodeId);
+      return (await readCombined(store, nodeId)).seq;
     },
 
     async bumpSeq(nodeId, seq) {
-      await bumpFloor(seqStore, nodeId, seq);
+      await bumpField(store, nodeId, 'seq', seq);
     },
 
     async enforceResolved({ nodeId, seq, generation, versionFloor }) {
@@ -191,25 +222,31 @@ export function createRotationHighWater(
         throw new SequenceRegressionError(nodeId, -1, seq);
       }
 
-      const generationFloor = await readFloor(generationStore, nodeId);
-      if (generationFloor !== undefined && generation < generationFloor) {
-        throw new GenerationRegressionError(nodeId, generationFloor, generation);
+      const current = await readCombined(store, nodeId);
+
+      if (current.generation !== undefined && generation < current.generation) {
+        throw new GenerationRegressionError(nodeId, current.generation, generation);
       }
 
-      const seqFloor = await readFloor(seqStore, nodeId);
-      if (seqFloor === undefined) {
+      if (current.seq === undefined) {
         // Cold-device / first-contact: apply the owner-vouched versionFloor
         // gate. A malformed versionFloor is rejected rather than treated as
         // "no gate" -- first contact is exactly when the gate matters most.
         if (!isValidFloorValue(versionFloor) || seq < versionFloor) {
           throw new SequenceRegressionError(nodeId, versionFloor, seq);
         }
-      } else if (seq < seqFloor) {
-        throw new SequenceRegressionError(nodeId, seqFloor, seq);
+      } else if (seq < current.seq) {
+        throw new SequenceRegressionError(nodeId, current.seq, seq);
       }
 
-      await bumpFloor(generationStore, nodeId, generation);
-      await bumpFloor(seqStore, nodeId, seq);
+      // SC#4/D-06: bump BOTH floors in ONE combined-record write -- CLOSED,
+      // no cross-store sequencing window remains (see module doc above).
+      const nextGeneration =
+        current.generation === undefined || generation > current.generation
+          ? generation
+          : current.generation;
+      const nextSeq = current.seq === undefined || seq > current.seq ? seq : current.seq;
+      await store.put(nodeId, { ...current, generation: nextGeneration, seq: nextSeq });
     },
   };
 }

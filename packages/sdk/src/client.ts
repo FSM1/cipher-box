@@ -1785,8 +1785,23 @@ export class CipherBoxClient {
    * error) is likewise treated as inconclusive rather than blocking the
    * mutation on a transient check -- the underlying CAS-guarded publish
    * remains the authoritative conflict detector.
+   *
+   * SC#5/D-09: when a `RotationHighWater` is configured, the durable
+   * generation gate MUST be fed the record's ACTUAL generation -- fetched
+   * from IPFS and unsealed with `folderReadKey` -- not the in-memory
+   * `folderTree.get(ipnsName)?.nodeGeneration`, which only reflects the
+   * client's OWN last successful load/publish and can equivocate against a
+   * self-inflicted lower-generation republish at a higher sequence. The
+   * fetch+unseal happens ONLY on this write-path reconcile, never on the 30s
+   * poll. A failed unseal (wrong/absent read key, tampered body) fails
+   * closed -- it is NEVER treated as "nothing to reconcile against" the way
+   * a resolve() miss/failure above is.
    */
-  private async reconcileFolderSequence(ipnsName: string, expectedSequence: bigint): Promise<void> {
+  private async reconcileFolderSequence(
+    ipnsName: string,
+    expectedSequence: bigint,
+    folderReadKey: Uint8Array
+  ): Promise<void> {
     let resolved: { cid: string; sequenceNumber: bigint; signatureVerified: boolean } | null;
     try {
       resolved = await sdkCore.resolveIpnsRecord(ipnsName, this.ctx);
@@ -1824,11 +1839,21 @@ export class CipherBoxClient {
           `IPNS sequence number for ${ipnsName} exceeds Number.MAX_SAFE_INTEGER -- refusing lossy floor conversion`
         );
       }
-      const nodeGeneration = this.folderTree.get(ipnsName)?.nodeGeneration ?? 0;
+      // SC#5/D-09: fetch the resolved CID and unseal it with the folder read
+      // key to recover the record's ACTUAL generation. `resolveIpnsRecord`
+      // returns no generation field -- generation lives inside the sealed
+      // read-body, not the plaintext IPNS envelope -- so the cached
+      // folderTree value is never a substitute for this. Any failure here
+      // (network, malformed envelope, or AEAD/unseal failure under the
+      // supplied key) propagates and fails the reconcile closed -- it must
+      // NEVER be swallowed into a fallback on the cached generation.
+      const rawNode = await sdkCore.fetchFromIpfs(this.ctx, resolved.cid);
+      const publishedNode = JSON.parse(new TextDecoder().decode(rawNode)) as PublishedNode;
+      const unsealedNode = await unsealNode(publishedNode, folderReadKey);
       await this.config.rotationHighWater.enforceResolved({
         nodeId: ipnsName,
         seq: Number(resolved.sequenceNumber),
-        generation: nodeGeneration,
+        generation: unsealedNode.generation,
         versionFloor: Number(expectedSequence),
       });
     }
@@ -2012,8 +2037,69 @@ export class CipherBoxClient {
               rootIpnsPublicKey: params.rootIpnsPublicKey,
               jobRecord,
               ctx: this.ctx,
+              // Phase 65 write-body-derived per-node IPNS keys: every folder
+              // already loaded into folderTree carries its OWN real
+              // ipnsKeypair + writeKey (populated by ensureFolderLoaded's
+              // write-chain recovery), so this is genuine production key
+              // material -- not the Phase-64 test-only fixture the
+              // RotationParams doc warns against. Nodes not yet loaded into
+              // folderTree simply return undefined here (unchanged fallback
+              // behavior for those nodes).
+              nodeKeySource: (ipnsName) => {
+                const folder = this.folderTree.get(ipnsName);
+                if (!folder) return undefined;
+                return {
+                  publicKey: folder.ipnsKeypair.publicKey,
+                  privateKey: folder.ipnsKeypair.privateKey,
+                  writeKey: folder.writeKey,
+                };
+              },
+              // SC#4 (Plan 70-06) seam plumbing: no CipherBoxClientConfig seam
+              // supplies grant-remint callbacks/inner-grants today (Phase 66
+              // is the host-wiring follow-up per RESEARCH) -- threading the
+              // fields here (currently always undefined) makes them
+              // structurally reachable from the real walk without requiring
+              // a new config surface in this plan.
+              innerGrants: undefined,
+              grantCallbacks: undefined,
+              // SC#3 (Plan 70.1-05 / D-01..D-05): the owner's OWN vault
+              // keypair wraps/unwraps the ECIES key-checkpoint. keyCheckpoint
+              // is the seam Plan 70.1-05 added to RotationClientCallbacks --
+              // wired by the host (apps/web) to the Plan-02 combined-store
+              // IndexedDB accessors (persistWrappedKey/getWrappedKey/
+              // deleteWrappedKey). Absent -> zero seam work (unchanged
+              // pre-Plan-70.1-05 behavior), matching the NOOP default.
+              ownerPublicKey: this.config.vaultKeypair.publicKey,
+              ownerPrivateKey: this.config.vaultKeypair.privateKey,
+              keyCheckpointCallbacks: callbacks.keyCheckpoint,
             });
           } catch (err) {
+            if (err instanceof sdkCore.DirtyNodeUnrecoverableError) {
+              // D-05 fallback (child-level, distinct from RootKeyStaleError
+              // below): an already-rotated dirty CHILD node's ECIES
+              // key-checkpoint was never persisted (a genuinely lost prior
+              // run that crashed before D-03's persist-before-publish
+              // completed) or has already been GC'd (D-04) -- there is no
+              // cryptographic recovery path for a key never checkpointed.
+              // Unlike RootKeyStaleError's full top-down re-navigation from
+              // the vault root, this residual is scoped to ONE subtree edge:
+              // a full repair would re-derive that SPECIFIC node's parent
+              // mirror, not re-navigate the entire tree. The error carries no
+              // structured node/parent identifier, so that narrower per-node
+              // repair is not attempted here -- surface a clear, actionable
+              // error instead of an opaque AEAD/unseal failure, consistent
+              // with the RootKeyStaleError residual documented below (Phase
+              // 70 Open Question 1/2).
+              throw new Error(
+                `Rotation for root ${params.rootNodeIpnsName} hit an unrecoverable ` +
+                  'dirty child (DirtyNodeUnrecoverableError): its ECIES key ' +
+                  'checkpoint was never persisted or has already been ' +
+                  'garbage-collected, and there is no cryptographic recovery path. ' +
+                  'This is a known residual -- reload the app to re-resolve the ' +
+                  'affected subtree from the vault root.',
+                { cause: err }
+              );
+            }
             if (!(err instanceof sdkCore.RootKeyStaleError)) throw err;
 
             // T-70-14 / Open Question 1: the in-memory rootReadKey is stale --
@@ -2273,7 +2359,7 @@ export class CipherBoxClient {
       }
 
       // Reconcile-before-publish (SC#3 / D-04): defer on any sequence mismatch.
-      await this.reconcileFolderSequence(parentIpnsName, parent.sequenceNumber);
+      await this.reconcileFolderSequence(parentIpnsName, parent.sequenceNumber, parent.folderKey);
 
       // Preserve the parent's existing write chain — augmented below with the
       // new child's WriteChildRef.
@@ -2497,7 +2583,7 @@ export class CipherBoxClient {
 
       // 1b. Reconcile-before-publish (SC#3 / D-04): defer on any sequence
       // mismatch, never publish (metadata OR rotation) against possibly-superseded state.
-      await this.reconcileFolderSequence(folderIpnsName, folder.sequenceNumber);
+      await this.reconcileFolderSequence(folderIpnsName, folder.sequenceNumber, folder.folderKey);
 
       // 1c. Preserve the folder's existing write-body on republish (D-03).
       const writeBodyParams = await this.getWriteBodyParams(folder);
@@ -2588,8 +2674,16 @@ export class CipherBoxClient {
       // Reconcile-before-publish (SC#3 / D-04): both folders are about to be
       // published; defer on ANY mismatch (source OR dest) rather than
       // publishing (metadata OR rotation) against possibly-superseded state.
-      await this.reconcileFolderSequence(sourceIpnsName, sourceFolder.sequenceNumber);
-      await this.reconcileFolderSequence(destIpnsName, destFolder.sequenceNumber);
+      await this.reconcileFolderSequence(
+        sourceIpnsName,
+        sourceFolder.sequenceNumber,
+        sourceFolder.folderKey
+      );
+      await this.reconcileFolderSequence(
+        destIpnsName,
+        destFolder.sequenceNumber,
+        destFolder.folderKey
+      );
 
       // FLAG-63-U2: Re-seal the moved child's readKeySealed under the DEST parent readKey.
       // sdkCore.moveItem() is a pure link rewrite — the moved ref still carries a
@@ -2843,7 +2937,7 @@ export class CipherBoxClient {
 
       // 1b. Reconcile-before-publish (SC#3 / D-04): defer on any sequence
       // mismatch, never publish (metadata OR rotation) against possibly-superseded state.
-      await this.reconcileFolderSequence(folderIpnsName, folder.sequenceNumber);
+      await this.reconcileFolderSequence(folderIpnsName, folder.sequenceNumber, folder.folderKey);
 
       // 1c. Preserve the folder's existing write-body on republish (D-03). The
       // removed child's WriteChildRef is preserved verbatim — write-link removal
@@ -4497,7 +4591,7 @@ export class CipherBoxClient {
       // folder internally, so the check must run BEFORE calling it -- defer on
       // any sequence mismatch rather than publishing (metadata OR rotation)
       // against possibly-superseded state.
-      await this.reconcileFolderSequence(folderIpnsName, folder.sequenceNumber);
+      await this.reconcileFolderSequence(folderIpnsName, folder.sequenceNumber, folder.folderKey);
 
       const { updatedBinState } = await binOps.addToBin({
         folderIpnsName,

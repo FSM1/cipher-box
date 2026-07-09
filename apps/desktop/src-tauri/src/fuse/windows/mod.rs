@@ -77,6 +77,11 @@ mod mount_impl {
         let high_water = cipherbox_sdk::new_journal_high_water(&journal_dir);
         // Replay rebuilds its own high-water gate from this dir; clone before move.
         let replay_journal_dir = journal_dir.clone();
+        // D-01/D-03 (Plan 70.1-09): the production RotationDeps adapter's
+        // wrapped-key-checkpoint handle — points at the SAME combined sidecar
+        // as `high_water` above. Capture before `journal_dir` moves.
+        let rotation_checkpoint_store =
+            cipherbox_sdk::JsonSidecarFloorStore::for_generation(&journal_dir);
         let journal = cipherbox_sdk::WriteQueue::new(journal_dir, crate::fuse::JOURNAL_MAX_RETRIES);
 
         // node/v3 root symmetric keys (read_key/write_key) for the root node.
@@ -202,6 +207,45 @@ mod mount_impl {
             });
         }
 
+        // Grant-root awareness (SC#3 / SC#8): build the shared sent-shares
+        // cache, seed it authoritatively at mount init (best-effort, bounded so
+        // a slow/unreachable relay can never hang the mount), then drive a
+        // periodic background refresh. Until a refresh succeeds the cache stays
+        // non-authoritative and the delete/rename scope-exit gate fails CLOSED
+        // (EIO) — safe (never a silent revocation bypass), never fail-open.
+        let sent_shares = Arc::new(std::sync::RwLock::new(
+            cipherbox_fuse::write_ops::grant_scope::SentSharesCache::empty(),
+        ));
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            cipherbox_fuse::write_ops::grant_scope::refresh_sent_shares(&state.sdk.api),
+        )
+        .await
+        {
+            Ok(Ok(cache)) => {
+                cipherbox_fuse::write_ops::grant_scope::install_sent_shares_cache(
+                    &sent_shares,
+                    cache,
+                );
+                log::info!("Mount init: sent-shares cache seeded (authoritative)");
+            }
+            Ok(Err(e)) => log::warn!(
+                "Mount init: sent-shares refresh failed (scope-exit gate fails closed until \
+                 periodic refresh): {}",
+                e
+            ),
+            Err(_) => log::warn!(
+                "Mount init: sent-shares refresh timed out (scope-exit gate fails closed until \
+                 periodic refresh)"
+            ),
+        }
+        cipherbox_fuse::write_ops::grant_scope::spawn_periodic_sent_shares_refresh(
+            &rt,
+            state.sdk.api.clone(),
+            sent_shares.clone(),
+            cipherbox_fuse::write_ops::grant_scope::SENT_SHARES_REFRESH_INTERVAL,
+        );
+
         let fs = CipherBoxFS {
             inodes,
             metadata_cache,
@@ -234,12 +278,12 @@ mod mount_impl {
             upload_tx,
             journal,
             high_water,
+            rotation_checkpoint_store,
             mutated_folders: HashMap::new(),
             publish_coordinator,
             publish_queue: HashMap::new(),
-            sent_shares: std::sync::RwLock::new(
-                cipherbox_fuse::write_ops::grant_scope::SentSharesCache::empty(),
-            ),
+            sent_shares,
+            coalesced_scope_exit_relink_suppressed: std::collections::HashSet::new(),
         };
 
         // Create WinFsp context with Arc<Mutex<>> for interior mutability

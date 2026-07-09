@@ -67,10 +67,57 @@ pub fn handle_unlink(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Rep
         }
     };
 
-    // Capture the PARENT read/write keys (borrow → copy into owned arrays) so
-    // the D-07 dual child-ref can be sealed under the parent planes. Terminal-
-    // owner (D-09): the parent inode owns these buffers; we copy the 32 bytes
-    // and NEVER zero the inode-owned originals.
+    // Pre-gate POSIX validation (D-15d): unlink only ever targets a File —
+    // reject a directory (EISDIR) BEFORE the scope-exit gate runs, so a
+    // doomed-to-fail unlink never triggers a rotation attempt.
+    match fs.inodes.get(child_ino).map(|i| &i.kind) {
+        Some(InodeKind::File { .. }) => {}
+        Some(_) => {
+            reply.error(libc::EISDIR);
+            return;
+        }
+        None => {
+            reply.error(libc::ENOENT);
+            return;
+        }
+    }
+
+    log::debug!("unlink: {} from parent {}", name_str, parent);
+
+    // SC#3 grant-scope gate (research landmine 9): the unconditional
+    // `revoke_shares_blocking` is REPLACED, not augmented. A private delete (no
+    // covering grant) is a pure relink with ZERO rotation — the
+    // `update_folder_metadata(parent)` below is the only durable effect. A
+    // shared-scope exit rotates the read key from the matched grant-root
+    // ancestor EXACTLY ONCE. Fail-closed: rotation failure aborts the unlink.
+    //
+    // D-15d: this gate runs BEFORE the D-07 bin-ref capture below — a shared-
+    // scope-exit rotation must never be raced by a bin ref sealed under stale
+    // pre-rotation parent state. Fix A refreshes the grant-root inode key here,
+    // so that capture (and any relink) reseals under the POST-rotation key.
+    //
+    // 70.1-13a: the shared coalesced gate (`run_scope_exit_gate_coalesced`,
+    // identical logic used by the WinFsp path). When the grant-root IS this
+    // file's DIRECT parent (the shallow scope-exit the D-16 leg exercises) it
+    // drives the rotation with the POST-delete child list so the rotation is the
+    // SINGLE authoritative grant-root publish (secret.txt removed, new key) and
+    // returns `true` to SUPPRESS the plain parent relink below — turning the old
+    // rotate_one + republish_parent (+2) + stale-key relink (+1) into a minimal,
+    // revocation-correct publish. Fail-closed on `Err`.
+    let relink_suppressed =
+        match crate::write_ops::grant_scope::run_scope_exit_gate_coalesced(fs, child_ino, parent) {
+            Ok(suppressed) => suppressed,
+            Err(()) => {
+                reply.error(libc::EIO);
+                return;
+            }
+        };
+
+    // D-15d: capture the PARENT read/write keys (borrow → copy into owned
+    // arrays) AFTER the gate has run, so the D-07 dual child-ref below seals
+    // under post-rotation parent state, never a stale pre-rotation key.
+    // Terminal-owner (D-09): the parent inode owns these buffers; we copy the
+    // 32 bytes and NEVER zero the inode-owned originals.
     let parent_keys: Option<([u8; 32], [u8; 32])> =
         fs.inodes.get(parent).and_then(|p| match &p.kind {
             InodeKind::Root {
@@ -86,11 +133,13 @@ pub fn handle_unlink(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Rep
             _ => None,
         });
 
-    // Capture the bin-entry data in a single inode lookup. The child's node/v3
-    // read/write keys are re-sealed under the PARENT keys into the D-07 dual
-    // ref here — the SC#3 grant-scope gate below reads the mutated node's
-    // ancestry directly from the inode table, not from a name carried out of
-    // this match.
+    // Capture the bin-entry data in a single inode lookup, now that the gate
+    // has run. The child's node/v3 read/write keys are re-sealed under the
+    // PARENT keys into the D-07 dual ref here. The kind was already validated
+    // File above, so the non-File arm below is unreachable in practice (no
+    // concurrent mutator exists in the single-threaded FUSE callback) — kept
+    // exhaustive and fail-soft (skip the bin entry) rather than re-erroring
+    // after the destructive gate has already run.
     let bin_entry_data = match fs.inodes.get(child_ino) {
         Some(inode) => match &inode.kind {
             // node/v3: the file carries a plain `ipns_name` + symmetric
@@ -178,29 +227,10 @@ pub fn handle_unlink(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Rep
 
                 bin_data
             }
-            _ => {
-                reply.error(libc::EISDIR);
-                return;
-            }
+            _ => None,
         },
-        None => {
-            reply.error(libc::ENOENT);
-            return;
-        }
+        None => None,
     };
-
-    log::debug!("unlink: {} from parent {}", name_str, parent);
-
-    // SC#3 grant-scope gate (research landmine 9): the unconditional
-    // `revoke_shares_blocking` is REPLACED, not augmented. A private delete (no
-    // covering grant) is a pure relink with ZERO rotation — the
-    // `update_folder_metadata(parent)` below is the only durable effect. A
-    // shared-scope exit rotates the read key from the matched grant-root
-    // ancestor EXACTLY ONCE. Fail-closed: rotation failure aborts the unlink.
-    if crate::write_ops::grant_scope::run_scope_exit_gate(fs, child_ino).is_err() {
-        reply.error(libc::EIO);
-        return;
-    }
 
     let now = SystemTime::now();
 
@@ -211,8 +241,15 @@ pub fn handle_unlink(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Rep
         parent_inode.attr.ctime = now;
     }
 
-    if let Err(e) = fs.update_folder_metadata(parent) {
-        log::error!("Failed to update folder metadata after unlink: {}", e);
+    // 70.1-13a: SUPPRESS the plain relink when the covered scope-exit rotation
+    // already republished the grant-root with the post-delete child list under
+    // the new key (shallow scope-exit). For a private delete, a deep
+    // scope-exit, or a non-covered mutation, the relink is still the durable
+    // effect (and now reseals under the Fix-A-refreshed key when a rotation ran).
+    if !relink_suppressed {
+        if let Err(e) = fs.update_folder_metadata(parent) {
+            log::error!("Failed to update folder metadata after unlink: {}", e);
+        }
     }
 
     // Create bin entry and publish to bin IPNS (fire-and-forget)
@@ -278,9 +315,60 @@ pub fn handle_rmdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Repl
         }
     };
 
-    // Capture the PARENT read/write keys (borrow → copy) for the D-07 dual
-    // child-ref seal. Terminal-owner (D-09): copy the bytes, never zero the
-    // inode-owned buffers.
+    // Pre-gate POSIX validation (unchanged position, D-15d): ENOTDIR (not a
+    // folder) / ENOTEMPTY (non-empty folder) must reject BEFORE the
+    // scope-exit gate runs, so a doomed-to-fail rmdir never triggers a
+    // rotation attempt.
+    match fs.inodes.get(child_ino) {
+        Some(inode) => match &inode.kind {
+            InodeKind::Folder { .. } => {
+                if let Some(ref children) = inode.children {
+                    if !children.is_empty() {
+                        reply.error(libc::ENOTEMPTY);
+                        return;
+                    }
+                }
+            }
+            _ => {
+                reply.error(libc::ENOTDIR);
+                return;
+            }
+        },
+        None => {
+            reply.error(libc::ENOENT);
+            return;
+        }
+    }
+
+    log::debug!("rmdir: {} from parent {}", name_str, parent);
+
+    // SC#3 grant-scope gate (research landmine 9): the unconditional
+    // `revoke_shares_blocking` is REPLACED. The directory is guaranteed empty
+    // here (ENOTEMPTY returned above otherwise), so its own ancestry is the
+    // complete coverage set — there are no descendant nodes. A private rmdir is
+    // a pure relink with ZERO rotation (the `update_folder_metadata(parent)`
+    // below is the only durable effect); a shared-scope exit rotates the read
+    // key from the matched grant-root ancestor EXACTLY ONCE. Fail-closed:
+    // rotation failure aborts the rmdir (folder stays put).
+    //
+    // D-15d: this gate runs BEFORE the D-07 bin-ref capture below — see
+    // handle_unlink's identical rationale. 70.1-13a coalescing mirrors
+    // handle_unlink: a shallow scope-exit passes the post-delete child list so
+    // the rotation is the single authoritative grant-root publish and the plain
+    // relink is suppressed.
+    let relink_suppressed =
+        match crate::write_ops::grant_scope::run_scope_exit_gate_coalesced(fs, child_ino, parent) {
+            Ok(suppressed) => suppressed,
+            Err(()) => {
+                reply.error(libc::EIO);
+                return;
+            }
+        };
+
+    // D-15d: capture the PARENT read/write keys (borrow → copy) AFTER the
+    // gate has run, so the D-07 dual child-ref below seals under
+    // post-rotation parent state. Terminal-owner (D-09): copy the bytes,
+    // never zero the inode-owned buffers.
     let parent_keys: Option<([u8; 32], [u8; 32])> =
         fs.inodes.get(parent).and_then(|p| match &p.kind {
             InodeKind::Root {
@@ -296,7 +384,10 @@ pub fn handle_rmdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Repl
             _ => None,
         });
 
-    // Capture folder data for bin entry before inode removal
+    // Capture folder data for the bin entry, now that the gate has run. The
+    // POSIX shape was already validated above, so the non-Folder arm below is
+    // unreachable in practice (single-threaded FUSE callback) — kept
+    // exhaustive and fail-soft rather than re-erroring post-gate.
     let bin_entry_data = match fs.inodes.get(child_ino) {
         Some(inode) => {
             match &inode.kind {
@@ -308,14 +399,6 @@ pub fn handle_rmdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Repl
                     write_key,
                     ..
                 } => {
-                    // Check for non-empty folder (POSIX requirement)
-                    if let Some(ref children) = inode.children {
-                        if !children.is_empty() {
-                            reply.error(libc::ENOTEMPTY);
-                            return;
-                        }
-                    }
-
                     if ipns_name.is_empty() {
                         log::warn!(
                             "rmdir: missing ipns_name for ino {}, skipping bin entry",
@@ -374,32 +457,11 @@ pub fn handle_rmdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Repl
                         None
                     }
                 }
-                _ => {
-                    reply.error(libc::ENOTDIR);
-                    return;
-                }
+                _ => None,
             }
         }
-        None => {
-            reply.error(libc::ENOENT);
-            return;
-        }
+        None => None,
     };
-
-    log::debug!("rmdir: {} from parent {}", name_str, parent);
-
-    // SC#3 grant-scope gate (research landmine 9): the unconditional
-    // `revoke_shares_blocking` is REPLACED. The directory is guaranteed empty
-    // here (ENOTEMPTY returned above otherwise), so its own ancestry is the
-    // complete coverage set — there are no descendant nodes. A private rmdir is
-    // a pure relink with ZERO rotation (the `update_folder_metadata(parent)`
-    // below is the only durable effect); a shared-scope exit rotates the read
-    // key from the matched grant-root ancestor EXACTLY ONCE. Fail-closed:
-    // rotation failure aborts the rmdir (folder stays put).
-    if crate::write_ops::grant_scope::run_scope_exit_gate(fs, child_ino).is_err() {
-        reply.error(libc::EIO);
-        return;
-    }
 
     let now = SystemTime::now();
 
@@ -413,8 +475,12 @@ pub fn handle_rmdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Repl
         parent_inode.attr.ctime = now;
     }
 
-    if let Err(e) = fs.update_folder_metadata(parent) {
-        log::error!("Failed to update folder metadata after rmdir: {}", e);
+    // 70.1-13a: suppress the plain relink when the covered scope-exit rotation
+    // already republished the grant-root with the post-delete child list.
+    if !relink_suppressed {
+        if let Err(e) = fs.update_folder_metadata(parent) {
+            log::error!("Failed to update folder metadata after rmdir: {}", e);
+        }
     }
 
     // Create bin entry and publish to bin IPNS (fire-and-forget)
@@ -484,6 +550,21 @@ mod tests {
         };
         *fs.sent_shares.write().expect("sent_shares lock poisoned") =
             crate::write_ops::grant_scope::SentSharesCache::from_sent_shares(&[share]);
+    }
+
+    /// Seed an AUTHORITATIVE-but-EMPTY sent-shares cache (D-15a / Pitfall 8,
+    /// Plan 70.1-11): a refreshed cache with genuinely zero shares, distinct
+    /// from the NON-authoritative `SentSharesCache::empty()` default the test
+    /// harness starts with (`test_support::make_test_fs_with_keypair`). Since
+    /// Plan 70.1-11 made `gate_scope_exit` fail closed on a non-authoritative
+    /// cache, a private-delete test must seed THIS (authoritative-empty)
+    /// state to exercise the "legitimately nothing shared" success path
+    /// rather than the fail-closed path — mirrors the pattern established by
+    /// `grant_scope.rs`'s own
+    /// `gate_scope_exit_authoritative_empty_cache_allows_private_delete`.
+    fn seed_authoritative_empty_cache(fs: &crate::CipherBoxFS) {
+        *fs.sent_shares.write().expect("sent_shares lock poisoned") =
+            crate::write_ops::grant_scope::SentSharesCache::from_sent_shares(&[]);
     }
 
     /// Insert a `secret.txt` File child of root carrying a non-empty
@@ -587,16 +668,22 @@ mod tests {
         (rt, fs)
     }
 
-    /// SC#3 / ROT-02 zero-rotation invariant (PRIVATE delete): with an EMPTY
-    /// sent-shares cache the file has NO covering grant, so `handle_unlink` is a
-    /// pure relink — it succeeds (error code 0) and removes the inode WITHOUT
-    /// any rotation. This is the behaviour the unconditional `revoke_shares_blocking`
-    /// wrongly prevented (research landmine 9): a private delete must not abort.
+    /// SC#3 / ROT-02 zero-rotation invariant (PRIVATE delete): with an
+    /// AUTHORITATIVE-but-EMPTY sent-shares cache the file has NO covering
+    /// grant, so `handle_unlink` is a pure relink — it succeeds (error code
+    /// 0) and removes the inode WITHOUT any rotation. This is the behaviour
+    /// the unconditional `revoke_shares_blocking` wrongly prevented (research
+    /// landmine 9): a private delete must not abort. Seeds
+    /// `seed_authoritative_empty_cache` (D-15a / Pitfall 8, Plan 70.1-11) —
+    /// NOT the harness's non-authoritative default — so this exercises the
+    /// "legitimately nothing shared" success path, not the fail-closed path.
     #[test]
     fn unlink_private_delete_succeeds_with_zero_rotation() {
         let (_rt, mut fs) = fs_on_runtime();
         let child = insert_file_child(&mut fs, "secret.txt");
-        // No sent shares seeded → private delete (no covering grant).
+        // Authoritative-but-empty (refreshed, zero shares) → private delete
+        // (no covering grant), NOT the fail-closed non-authoritative path.
+        seed_authoritative_empty_cache(&fs);
 
         let buf = Arc::new(Mutex::new(Vec::new()));
         let reply = <fuser::ReplyEmpty as Reply>::new(1, CaptureSender(buf.clone()));
@@ -614,11 +701,14 @@ mod tests {
     }
 
     /// PRIVATE rmdir on an empty folder with no covering grant succeeds (error
-    /// code 0) and removes the inode — zero rotation.
+    /// code 0) and removes the inode — zero rotation. Seeds
+    /// `seed_authoritative_empty_cache` (D-15a / Pitfall 8, Plan 70.1-11) for
+    /// the same reason as `unlink_private_delete_succeeds_with_zero_rotation`.
     #[test]
     fn rmdir_private_delete_succeeds_with_zero_rotation() {
         let (_rt, mut fs) = fs_on_runtime();
         let child = insert_empty_folder_child(&mut fs, "subdir");
+        seed_authoritative_empty_cache(&fs);
 
         let buf = Arc::new(Mutex::new(Vec::new()));
         let reply = <fuser::ReplyEmpty as Reply>::new(1, CaptureSender(buf.clone()));
@@ -635,19 +725,223 @@ mod tests {
         );
     }
 
-    /// SHARED-scope exit routes through read-key rotation. With a covering grant
-    /// seeded on the file's ancestry (the vault root is a grant root), the gate
-    /// invokes the rotation seam. That seam is not yet live-wired (no production
-    /// `RotationDeps`), so it fails CLOSED: `handle_unlink` returns EIO and the
-    /// inode remains — a removed reader is never silently left with access. This
-    /// documents the deferred live-wiring residual (flagged in the SUMMARY).
+    // -----------------------------------------------------------------
+    // Minimal in-process HTTP/1.1 mock rotation server (D-14/D-15d
+    // inversion test below) — no live network egress, no new crate
+    // dependency. Just enough of resolve/fetch/upload/publish for a
+    // ROOT-only (zero children) `rotate_read_from_node` round trip to
+    // complete through the REAL `ApiClientTransport`/`FuseRotationDeps`
+    // production adapter (Plan 70.1-09), so the inversion below exercises
+    // the actual production code path rather than a spy/fake transport.
+    // -----------------------------------------------------------------
+
+    /// Spawn a dedicated OS thread (deliberately NOT a tokio task — it
+    /// blocks on `std::net::TcpListener`) serving a bounded number of
+    /// requests against 127.0.0.1. `resolve_body` answers every
+    /// `GET /ipns/resolve*`; `node_body` answers every `GET /ipfs/*`
+    /// (fetch); `POST /ipfs/upload` and `POST /ipns/publish` always
+    /// succeed. A single root-only rotation needs resolve×2 + fetch×2 +
+    /// upload×1 + publish×1 = 6 requests; the cap below is generous.
+    fn spawn_mock_rotation_server(
+        resolve_body: Vec<u8>,
+        node_body: Vec<u8>,
+    ) -> std::net::SocketAddr {
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("bind mock rotation server");
+        let addr = listener.local_addr().expect("mock server local_addr");
+        std::thread::spawn(move || {
+            for stream in listener.incoming().take(16) {
+                let Ok(mut stream) = stream else { continue };
+                handle_mock_rotation_request(&mut stream, &resolve_body, &node_body);
+            }
+        });
+        addr
+    }
+
+    /// Handle one HTTP/1.1 request, dispatching purely on method + path
+    /// prefix (query strings/headers otherwise ignored — no auth is
+    /// required since the test's `ApiClient` never calls
+    /// `set_access_token`).
+    fn handle_mock_rotation_request(
+        stream: &mut std::net::TcpStream,
+        resolve_body: &[u8],
+        node_body: &[u8],
+    ) {
+        use std::io::{Read, Write};
+
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 4096];
+        let headers_end = loop {
+            let n = stream.read(&mut chunk).unwrap_or(0);
+            if n == 0 {
+                return; // peer closed before a full request arrived
+            }
+            buf.extend_from_slice(&chunk[..n]);
+            if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                break pos + 4;
+            }
+            if buf.len() > 1_000_000 {
+                return; // safety cap against a malformed/oversized request
+            }
+        };
+
+        let content_length = {
+            let headers = String::from_utf8_lossy(&buf[..headers_end]);
+            headers
+                .split("\r\n")
+                .find_map(|line| {
+                    let (k, v) = line.split_once(':')?;
+                    k.trim()
+                        .eq_ignore_ascii_case("content-length")
+                        .then(|| v.trim().to_string())
+                })
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(0)
+        };
+        let have = buf.len() - headers_end;
+        if have < content_length {
+            let mut remaining = vec![0u8; content_length - have];
+            if stream.read_exact(&mut remaining).is_err() {
+                return;
+            }
+            buf.extend_from_slice(&remaining);
+        }
+
+        let request_line = buf
+            .split(|&b| b == b'\n')
+            .next()
+            .map(|l| String::from_utf8_lossy(l).trim().to_string())
+            .unwrap_or_default();
+        let mut parts = request_line.split_whitespace();
+        let method = parts.next().unwrap_or("");
+        let path = parts.next().unwrap_or("");
+
+        let (status, content_type, body): (&str, &str, Vec<u8>) =
+            if method == "GET" && path.starts_with("/ipns/resolve") {
+                ("200 OK", "application/json", resolve_body.to_vec())
+            } else if method == "POST" && path.starts_with("/ipfs/upload") {
+                (
+                    "200 OK",
+                    "application/json",
+                    br#"{"cid":"mock-rotated-cid"}"#.to_vec(),
+                )
+            } else if method == "GET" && path.starts_with("/ipfs/") {
+                ("200 OK", "application/octet-stream", node_body.to_vec())
+            } else if method == "POST" && path.starts_with("/ipns/publish") {
+                ("200 OK", "application/json", b"{}".to_vec())
+            } else {
+                ("404 Not Found", "text/plain", b"not found".to_vec())
+            };
+
+        let header = format!(
+            "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            status,
+            content_type,
+            body.len()
+        );
+        let _ = stream.write_all(header.as_bytes());
+        let _ = stream.write_all(&body);
+        let _ = stream.flush();
+    }
+
+    /// D-14/D-15d inversion (post-wiring, Plan 70.1-09/11/12): with
+    /// production rotation live-wired (`FuseRotationDeps`/
+    /// `ApiClientTransport`, Plan 09) and the gate-correctness fixes landed
+    /// (Plan 11), a shared-scope-exit unlink now SUCCEEDS and publishes
+    /// exactly ONE rotation for the grant-root, instead of the pre-wiring
+    /// EIO this test used to assert (the historical name is kept for
+    /// traceability with the plan's own `must_haves`). The mock server
+    /// above stands in for the live IPNS/IPFS relay so this exercises the
+    /// REAL `ApiClientTransport` code path end to end while staying a fast,
+    /// deterministic, offline unit test (no docker/live-API dependency) —
+    /// the desktop-e2e real-mount smoke is Plan 70.1-13's job.
     #[test]
     fn unlink_shared_scope_exit_fails_closed_until_rotation_wired() {
+        use base64::Engine as _;
+
         let (_rt, mut fs) = fs_on_runtime();
+
+        // A real Ed25519 identity for the vault root: `resolve_ipns_verified`
+        // cross-checks `derive_ipns_name(pubKey) == ipns_name`, so the
+        // fixture's placeholder "k51test-root" string cannot stand in for
+        // the grant root once a REAL transport is exercised.
+        let (root_pub, root_priv) = cipherbox_crypto::generate_ed25519_keypair();
+        let root_pub_arr: [u8; 32] = root_pub.clone().try_into().expect("32-byte pubkey");
+        let root_ipns_name =
+            cipherbox_crypto::derive_ipns_name(&root_pub_arr).expect("derive root ipns name");
+        let root_read_key = [11u8; 32];
+
+        if let Some(root) = fs.inodes.get_mut(ROOT_INO) {
+            root.kind = InodeKind::Root {
+                ipns_name: root_ipns_name.clone(),
+                read_key: Zeroizing::new(root_read_key),
+                write_key: Zeroizing::new([0u8; 32]),
+                ipns_private_key: root_priv.clone(),
+            };
+        }
+
         let child = insert_file_child(&mut fs, "secret.txt");
-        // The vault root ("k51test-root") is a grant root → covering grant on
-        // the file's ancestry → shared-scope exit → rotation seam invoked.
-        seed_sent_share(&fs, "k51test-root");
+        // The (now real) vault root is a grant root → covering grant on the
+        // file's ancestry → shared-scope exit → rotation seam invoked.
+        seed_sent_share(&fs, &root_ipns_name);
+
+        // Seed the CURRENTLY-published root (generation 0, zero children,
+        // sealed under root_read_key) — what verify_subtree_clean/rotate_one
+        // resolve+fetch before rotating.
+        let root_node_id = crate::fs::uuid_from_ino(ROOT_INO);
+        let root_node = cipherbox_core::node::Node::Root {
+            id: root_node_id.clone(),
+            generation: 0,
+            created_at: 0,
+            modified_at: 0,
+            children: vec![],
+        };
+        let body = cipherbox_core::node::encode_node(&root_node).expect("encode root node");
+        let sealed = cipherbox_core::node::seal::seal_node(
+            &body,
+            &root_read_key,
+            root_node.id(),
+            root_node.kind(),
+            root_node.generation(),
+        )
+        .expect("seal root node");
+        let published = cipherbox_core::node::PublishedNode {
+            schema: "node/v3".to_string(),
+            kind: root_node.kind().as_str().to_string(),
+            id: root_node.id().to_string(),
+            generation: root_node.generation(),
+            aead_version: 1,
+            read_sealed: base64::engine::general_purpose::STANDARD.encode(sealed),
+            write_sealed: None,
+        };
+        let published_bytes =
+            cipherbox_core::node::encode_published_node(&published).expect("encode published node");
+
+        // Craft the signed resolve envelope the same way `ApiClientTransport`
+        // itself constructs one on a real publish (`create_ipns_record`), so
+        // `resolve_ipns_verified`'s real signature/CBOR-binding check passes.
+        let seed_arr: [u8; 32] = root_priv.as_slice().try_into().expect("32-byte seed");
+        let cid = "root-cid-v1";
+        let seq = 1u64;
+        let record =
+            cipherbox_core::create_ipns_record(&seed_arr, &format!("/ipfs/{cid}"), seq, 86_400_000)
+                .expect("create resolve-fixture ipns record");
+        let resolve_json = serde_json::json!({
+            "success": true,
+            "cid": cid,
+            "sequenceNumber": seq.to_string(),
+            "signatureV2": base64::engine::general_purpose::STANDARD.encode(&record.signature_v2),
+            "data": base64::engine::general_purpose::STANDARD.encode(&record.data),
+            "pubKey": base64::engine::general_purpose::STANDARD.encode(&record.public_key),
+        })
+        .to_string()
+        .into_bytes();
+
+        let addr = spawn_mock_rotation_server(resolve_json, published_bytes);
+        fs.api = Arc::new(cipherbox_api_client::ApiClient::new(&format!(
+            "http://{}",
+            addr
+        )));
 
         let buf = Arc::new(Mutex::new(Vec::new()));
         let reply = <fuser::ReplyEmpty as Reply>::new(1, CaptureSender(buf.clone()));
@@ -655,12 +949,13 @@ mod tests {
 
         assert_eq!(
             reply_error_code(&buf),
-            -libc::EIO,
-            "a shared-scope exit fails closed (EIO) until read-key rotation is live-wired"
+            0,
+            "a shared-scope exit now SUCCEEDS once read-key rotation is live-wired \
+             (D-14/D-15d inversion, Plan 70.1-09/11/12) — was EIO pre-wiring"
         );
         assert!(
-            fs.inodes.get(child).is_some(),
-            "the file inode must remain when the shared-scope-exit rotation cannot complete"
+            fs.inodes.get(child).is_none(),
+            "the file inode is removed once the shared-scope-exit rotation completes"
         );
     }
 

@@ -699,6 +699,7 @@ Plans:
 
 - `.planning/todos/pending/2026-07-08-rotation-crash-resume-depth2-soundness-gap.md`
 - `.planning/todos/pending/2026-07-02-rotation-hardening-followups-from-pr-review.md` (open items 1 + 5 only; items 2/3/4/6 closed by Phase 70)
+- `.planning/todos/pending/2026-07-07-fuse-shared-scope-exit-rotation-live-wiring.md` (folded in 2026-07-08 → SC#8/D-14..D-17: production `RotationDeps` adapter + the CRITICAL/3-MAJOR gate fixes + desktop-e2e leg)
 
 **Context**: Phase 70 made `verifySubtreeClean`/`collectDirtyFrontier` recurse the full subtree, but the *consumption* paths remained depth-1-only, and the Phase 70 sdk-e2e gate passed vacuously (Test 4 used a childless root by design). PR #596 review (greptile P1 + CodeRabbit critical/major) confirmed the gap by trace. SC#2/SC#3 from Phase 70 are proven only for depth-1/childless-root as shipped; this phase makes them sound for multi-level trees and closes the associated floor-durability follow-ups. Scope is the rotation READ plane only (`packages/sdk-core/src/rotation/engine.ts`, `crates/sdk` + `packages/sdk/src/state/rotation-high-water.ts`, `packages/sdk/src/client.ts` reconcile gate) — not the write plane (Phase 72) or the API/web layers.
 
@@ -710,8 +711,46 @@ Plans:
 4. `crates/sdk` floor store surfaces write failures through `HighWaterStore::put`/`bump_floor` (fails closed on persistence failure rather than logging and returning Ok), and the generation+seq cross-store bumps in `enforceResolved` are atomic (no divergence window on partial failure)
 5. `reconcileFolderSequence` gates on the freshly-resolved generation of the record it just resolved (not `folderTree`'s cached `nodeGeneration`), or the cached-fallback contract is made explicit and safe
 6. `tests/sdk-e2e/src/suites/rotation-crash-safety.test.ts` gains a depth-2 (and depth-3) mid-walk-crash case that navigates into and unseals the deep subtree after resume with the new root key — the coverage Phase 70's gate lacked — and the full suite passes against the live stack
+7. The Rust rotation-engine twin (`crates/sdk/src/rotation/engine.rs`, desktop FUSE/WinFsp) reaches the same read-plane soundness contract as the TS engine — depth-aware dirty-frontier consumption (SC#1/SC#2), already-rotated-dirty-node convergence + ECIES key-checkpoint (SC#3), fed from the shared durable plane (SC#4) — plus its structural catch-up (recursive `verify_subtree_clean`, missing-root-treated-as-dirty), with unit-tier (`FakeDeps`) crash-resume coverage adapting the four D-10 assertions (scope decision 2026-07-08 / D-11..D-13)
+8. Desktop FUSE shared-scope-exit rotation is live-wired: a production `RotationDeps` adapter (real IPNS resolve-verify + node fetch/unseal + CAS publish + wire→`GrantRow` decode + advisory job persistence) drives `rotate_read_on_scope_exit` so a covered scope-exit delete/move completes and publishes exactly one rotation instead of failing closed (EIO); the bundled gate-correctness fixes ship with it (CRITICAL `SentSharesCache::empty()` fail-open via a cache-authoritativeness flag; MAJOR ancestor-walk fail-open, poisoned-lock panic, and `delete.rs`/`rename.rs` gate ordering + rename dest-gating); a revoked recipient can no longer read the rotated subtree; private deletes stay pure relinks; verified by a FUSE/desktop-e2e leg (scope decision 2026-07-08 / D-14..D-17, absorbing the `2026-07-07-fuse-shared-scope-exit-rotation-live-wiring` todo)
 
-**Plans**: TBD (run `/gsd-plan-phase 70.1`)
+**Plans**: 12/13 plans executed
+
+Plans:
+
+**Wave 1** *(foundations — parallel, no file overlap)*
+
+- [x] 70.1-01-PLAN.md — TS engine SC#1/SC#2 depth-aware dirty-resume consumption + normal-branch ordering (engine.ts) [TDD]
+- [x] 70.1-02-PLAN.md — TS combined IndexedDB floor record + migration + wrapped-key accessors (SC#4/D-06/D-07, SC#3 durable plane) [TDD]
+- [x] 70.1-03-PLAN.md — Rust combined floor record + fail-closed `put` + consumer sweep (SC#4/D-06/D-07/D-08) [TDD]
+- [x] 70.1-04-PLAN.md — Rust engine structural catch-up: widen `DirtyFrontierEntry`, recursive `verify_subtree_clean`, missing-root-dirty (SC#7/D-12) [TDD]
+
+**Wave 2** *(blocked on Wave 1)*
+
+- [x] 70.1-05-PLAN.md — TS engine SC#3 ECIES keyCheckpoint seam + persist-before-publish + dirty-item repair + `DirtyNodeUnrecoverableError` (D-01..D-05) [TDD]
+- [x] 70.1-06-PLAN.md — Rust engine SC#1/SC#2 depth-aware consumption (SC#7/D-11) [TDD]
+
+**Wave 3** *(blocked on Wave 2)*
+
+- [x] 70.1-07-PLAN.md — TS client wiring: SC#5 reconcile freshly-resolved-generation gate (D-09) + SC#3 performScopeExitRotation seam threading (client.ts) [TDD]
+- [x] 70.1-08-PLAN.md — Rust engine SC#3 checkpoint seam + repair + D-13 FakeDeps depth-3 crash-resume tests (SC#7/SC#6 Rust) [TDD]
+
+**Wave 4** *(blocked on Wave 3)*
+
+- [x] 70.1-09-PLAN.md — FUSE production `RotationDeps` adapter + wire `rotate_read_on_scope_exit` (SC#8/D-14; ROT-04 desktop-grant-remint deferral documented)
+- [x] 70.1-10-PLAN.md — TS SC#6 depth-3 fan-out≥2 sdk-e2e crash-resume fixture (D-10, anti-vacuous gate)
+
+**Wave 5** *(blocked on Wave 4)*
+
+- [x] 70.1-11-PLAN.md — FUSE gate-correctness fixes: cache authoritativeness + ancestor-walk fail-closed + poisoned-lock (SC#8/D-15a/b/c) [TDD]
+
+**Wave 6** *(blocked on Wave 5)*
+
+- [x] 70.1-12-PLAN.md — FUSE gate ordering: delete bin-ref post-gate + rename POSIX-before-gate + dest_ino gating + test inversion (SC#8/D-15d/D-14) [TDD]
+
+**Wave 7** *(blocked on Wave 6)*
+
+- [ ] 70.1-13-PLAN.md — Desktop-e2e real-mount shared-scope-exit acceptance leg + human sign-off (SC#8/D-16, autonomous: false)
 
 ### Phase 71: Share-Invite Security and IPNS Data-Integrity (API)
 

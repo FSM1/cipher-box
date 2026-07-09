@@ -422,6 +422,18 @@ impl WriteQueue {
                 continue;
             }
 
+            // Skip the co-located floor-sidecar file(s) -- they live in the
+            // SAME journal dir but are not `JournalEntry` records and will
+            // never parse as one. Without this, every scan logged a benign
+            // "malformed entry ... missing field 'id'" warning for them.
+            if path
+                .file_name()
+                .and_then(|f| f.to_str())
+                .is_some_and(crate::floor_store::is_reserved_floor_sidecar)
+            {
+                continue;
+            }
+
             let bytes = match std::fs::read(&path) {
                 Ok(b) => b,
                 Err(e) => {
@@ -521,6 +533,18 @@ impl WriteQueue {
             };
             let path = dir_entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            // Skip the co-located floor-sidecar file(s) -- see the matching
+            // skip in `load_all_for_vault` above for why. GC's `parseable_stems`
+            // tracking intentionally does NOT need to include these: they
+            // never own a `.bin` sidecar, so pass 3's orphan check is
+            // unaffected either way.
+            if path
+                .file_name()
+                .and_then(|f| f.to_str())
+                .is_some_and(crate::floor_store::is_reserved_floor_sidecar)
+            {
                 continue;
             }
             let bytes = match std::fs::read(&path) {
@@ -804,6 +828,58 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- Log-capture test harness ----
+    //
+    // Proves the floor-sidecar-skip fix actually silences the
+    // "malformed entry ... missing field 'id'" warning, not just that the
+    // entry count comes out right (which it already did BEFORE the fix,
+    // via the pre-existing serde-Err-skip path -- the skip is purely a
+    // noise fix, not a functional one). `log::set_logger` is process-global
+    // and can only be installed once, but capture is scoped per-thread via
+    // a thread-local buffer, so concurrently-running tests (cargo test
+    // runs each test on its own thread by default) never see each other's
+    // captured messages.
+    thread_local! {
+        static CAPTURED_LOG_MESSAGES: std::cell::RefCell<Option<Vec<String>>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    struct ThreadLocalCapturingLogger;
+
+    impl log::Log for ThreadLocalCapturingLogger {
+        fn enabled(&self, _metadata: &log::Metadata) -> bool {
+            true
+        }
+        fn log(&self, record: &log::Record) {
+            CAPTURED_LOG_MESSAGES.with(|cell| {
+                if let Some(buf) = cell.borrow_mut().as_mut() {
+                    buf.push(record.args().to_string());
+                }
+            });
+        }
+        fn flush(&self) {}
+    }
+
+    static CAPTURING_LOGGER: ThreadLocalCapturingLogger = ThreadLocalCapturingLogger;
+    static INIT_CAPTURING_LOGGER: std::sync::Once = std::sync::Once::new();
+
+    /// Runs `f`, capturing every `log::*!` message emitted on the CURRENT thread
+    /// during its execution, and returns them. Other threads' concurrent log
+    /// calls are unaffected (their own thread-local buffer stays `None`, so the
+    /// logger silently drops their messages instead of capturing them).
+    fn capture_log_messages(f: impl FnOnce()) -> Vec<String> {
+        INIT_CAPTURING_LOGGER.call_once(|| {
+            // Ignore "already set" -- some other test binary/harness may have
+            // installed a logger first; either way our thread-local gate below
+            // still only captures messages logged during THIS call.
+            let _ = log::set_logger(&CAPTURING_LOGGER);
+            log::set_max_level(log::LevelFilter::Warn);
+        });
+        CAPTURED_LOG_MESSAGES.with(|cell| *cell.borrow_mut() = Some(Vec::new()));
+        f();
+        CAPTURED_LOG_MESSAGES.with(|cell| cell.borrow_mut().take().unwrap_or_default())
+    }
 
     // ---- Helper builders ----
 
@@ -1156,6 +1232,69 @@ mod tests {
             .expect("load with bad file");
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].id, "valid1");
+    }
+
+    /// Regression: the durable rotation floor sidecar (`rotation-high-water.json`
+    /// and its two legacy pre-70.1-03 shapes) lives in the SAME journal dir
+    /// as `WriteQueue`'s own `<id>.json` entries. It is not a `JournalEntry`
+    /// and will never parse as one -- before the
+    /// `crate::floor_store::is_reserved_floor_sidecar` skip, every scan
+    /// logged a spurious "malformed entry ... missing field 'id'" warning
+    /// for it (benign, but noisy: `load_all_for_vault` already returned the
+    /// correct entries even without the skip, via the pre-existing
+    /// serde-Err-skip path -- this fix is purely about silencing the
+    /// warning, not fixing a functional bug). Uses `capture_log_messages`
+    /// to prove the warning is genuinely gone, not just that the entry
+    /// count is unaffected (which was already true before this fix).
+    #[test]
+    fn load_all_for_vault_skips_the_floor_sidecar_without_a_malformed_warning() {
+        let (q, dir) = make_temp_queue();
+
+        std::fs::write(
+            dir.join("rotation-high-water.json"),
+            br#"{"node-1":{"generation":3,"seq":9}}"#,
+        )
+        .expect("write floor sidecar");
+        std::fs::write(
+            dir.join("rotation-high-water-generation.json"),
+            br#"{"node-1":3}"#,
+        )
+        .expect("write legacy generation sidecar");
+        std::fs::write(dir.join("rotation-high-water-seq.json"), br#"{"node-1":9}"#)
+            .expect("write legacy seq sidecar");
+
+        q.put(&make_upload_entry("valid1", "k51vault"))
+            .expect("put valid");
+
+        let mut loaded_len = 0;
+        let mut loaded_id = String::new();
+        let messages = capture_log_messages(|| {
+            let loaded = q
+                .load_all_for_vault("k51vault")
+                .expect("load alongside floor sidecars");
+            loaded_len = loaded.len();
+            loaded_id = loaded[0].id.clone();
+        });
+
+        assert_eq!(loaded_len, 1);
+        assert_eq!(loaded_id, "valid1");
+        assert!(
+            !messages.iter().any(|m| m.contains("malformed entry")),
+            "floor sidecar must not trigger a malformed-entry warning: {messages:?}"
+        );
+
+        // Harness sanity check: a GENUINELY malformed file on the same scan
+        // still logs the warning -- proving the absence above is because
+        // the floor sidecar is skipped, not because the harness fails to
+        // capture anything.
+        std::fs::write(dir.join("truly-bad.json"), b"not valid json {{{{").expect("write bad json");
+        let messages = capture_log_messages(|| {
+            let _ = q.load_all_for_vault("k51vault").expect("load again");
+        });
+        assert!(
+            messages.iter().any(|m| m.contains("malformed entry")),
+            "a genuinely malformed entry must still warn: {messages:?}"
+        );
     }
 
     /// T-69-18-01 (D-04 clean flag-day): a STALE pre-cutover on-disk entry — well-formed
@@ -1965,6 +2104,60 @@ mod tests {
         assert!(
             dir.join("gc-live.bin").exists(),
             "well-formed entry's sidecar is preserved"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Regression (matches `load_all_for_vault_skips_the_floor_sidecar_without_a_malformed_warning`):
+    /// `gc_failed_entries` scans every `*.json` in the journal dir too, so it must ALSO skip the
+    /// floor sidecar rather than logging a spurious "malformed entry" warning for it -- and must
+    /// never remove it (it owns no `.bin`, so pass 3's orphan check is unaffected either way).
+    #[test]
+    fn gc_failed_entries_skips_the_floor_sidecar_without_a_malformed_warning() {
+        let (q, dir) = make_temp_queue();
+        let now = now_ms();
+        let failed = JournalEntryStatus::Failed {
+            last_error: "x".to_string(),
+        };
+        let live = make_sidecar_entry(&q, "gc-floor-live", "v", failed, now - 1_000);
+        q.put_with_sidecar(&live, b"live-cipher").expect("put live");
+
+        let floor_sidecar = dir.join("rotation-high-water.json");
+        std::fs::write(&floor_sidecar, br#"{"node-1":{"generation":3,"seq":9}}"#)
+            .expect("write floor sidecar");
+
+        let mut removed = 0;
+        let messages = capture_log_messages(|| {
+            removed = q
+                .gc_failed_entries(JOURNAL_GC_MAX_AGE_DAYS, u64::MAX)
+                .expect("gc");
+        });
+
+        assert_eq!(removed, 0, "nothing eligible for GC yet");
+        assert!(
+            floor_sidecar.exists(),
+            "floor sidecar must never be touched by GC"
+        );
+        assert!(dir.join("gc-floor-live.json").exists());
+        assert!(dir.join("gc-floor-live.bin").exists());
+        assert!(
+            !messages.iter().any(|m| m.contains("malformed entry")),
+            "floor sidecar must not trigger a malformed-entry warning during GC: {messages:?}"
+        );
+
+        // Harness sanity check: a GENUINELY malformed file still warns during
+        // GC's scan, proving the absence above is a real skip, not a harness
+        // gap.
+        std::fs::write(dir.join("truly-bad.json"), b"not valid json {{{{").expect("write bad json");
+        let messages = capture_log_messages(|| {
+            let _ = q
+                .gc_failed_entries(JOURNAL_GC_MAX_AGE_DAYS, u64::MAX)
+                .expect("gc again");
+        });
+        assert!(
+            messages.iter().any(|m| m.contains("malformed entry")),
+            "a genuinely malformed entry must still warn during GC: {messages:?}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

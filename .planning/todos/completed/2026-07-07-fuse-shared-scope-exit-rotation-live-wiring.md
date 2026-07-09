@@ -3,7 +3,9 @@ created: 2026-07-07T00:00:00.000Z
 title: FUSE shared-scope-exit read-key rotation is fail-closed, not live-wired
 area: desktop-fuse-rotation
 severity: medium
+resolves_phase: "70.1"
 source: Phase 69 SC#3 (69-VERIFICATION.md notes); matches known ROT-07 live-wiring gap (69-13-SUMMARY); verified against live code 2026-07-07
+folded: 2026-07-08 into Phase 70.1 SC#8 / D-14..D-17 (depends on the Rust engine.rs soundness fixes D-11..D-13 landing first)
 files:
   - crates/fuse/src/write_ops/grant_scope.rs
   - crates/fuse/src/write_ops/implementation/delete.rs

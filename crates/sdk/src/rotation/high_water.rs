@@ -32,8 +32,10 @@ use thiserror::Error;
 pub trait HighWaterStore {
     /// Read the current floor for `node_id`, or `None` if never set.
     async fn get(&self, node_id: &str) -> Option<u64>;
-    /// Persist a new floor value for `node_id`.
-    async fn put(&self, node_id: &str, value: u64);
+    /// Persist a new floor value for `node_id`. Fail-closed (D-08): a
+    /// durable write failure MUST surface as `Err`, never be swallowed by a
+    /// log-and-return-Ok path.
+    async fn put(&self, node_id: &str, value: u64) -> Result<(), RotationError>;
 }
 
 /// Parameters supplied to `enforce_resolved` for a freshly-resolved IPNS record.
@@ -86,6 +88,21 @@ pub enum RotationError {
     /// `rotate_read_from_node` call fails. Fail-closed: never swallowed.
     #[error("Rotation failed: {0}")]
     RotateFailed(String),
+    /// A durable floor/checkpoint write failed to persist (D-08). Surfaced
+    /// verbatim from `HighWaterStore::put`/`JsonSidecarFloorStore`'s
+    /// wrapped-key accessors through `bump_floor`/`enforce_resolved` — a
+    /// failed durable write is a fail-closed signal, never a swallowed log
+    /// line.
+    #[error("Failed to persist floor for node {node_id}: {message}")]
+    PersistFailed { node_id: String, message: String },
+    /// D-05 (70.1-08, ECIES key-checkpoint repair): an already-rotated
+    /// dirty node's checkpoint is missing (expired, GC'd, or never
+    /// persisted) — there is no cryptographic recovery path for a key lost
+    /// to an interrupted prior run without one. Fail-closed: the dirty node
+    /// is never fed into `rotate_one`/`unseal_node` with its stale
+    /// pre-rotation key as a fallback.
+    #[error("Dirty node {node_id} is unrecoverable: no ECIES key checkpoint found")]
+    DirtyNodeUnrecoverable { node_id: String },
 }
 
 /// Validates a live input or stored candidate value. Fail-closed (V5):
@@ -111,17 +128,25 @@ async fn read_floor<S: HighWaterStore>(store: &S, node_id: &str) -> Option<u64> 
 ///
 /// A malformed candidate (negative) is never persisted — the floor stays
 /// where it is (mirrors TS `bumpFloor`'s V5-on-writes guard).
-async fn bump_floor<S: HighWaterStore>(store: &S, node_id: &str, candidate: i64) -> u64 {
+///
+/// Fail-closed (D-08): a durable write failure is propagated verbatim, not
+/// swallowed — the caller (`enforce_resolved`) must reject rather than
+/// silently accept an unpersisted floor bump.
+async fn bump_floor<S: HighWaterStore>(
+    store: &S,
+    node_id: &str,
+    candidate: i64,
+) -> Result<u64, RotationError> {
     let current = read_floor(store, node_id).await;
     if !is_valid_floor_value(candidate) {
-        return current.unwrap_or(0);
+        return Ok(current.unwrap_or(0));
     }
     let candidate_u64 = candidate as u64;
     match current {
-        Some(cur) if candidate_u64 <= cur => cur,
+        Some(cur) if candidate_u64 <= cur => Ok(cur),
         _ => {
-            store.put(node_id, candidate_u64).await;
-            candidate_u64
+            store.put(node_id, candidate_u64).await?;
+            Ok(candidate_u64)
         }
     }
 }
@@ -162,25 +187,36 @@ impl<S: HighWaterStore> RotationHighWater<S> {
         read_floor(&self.generation_store, node_id).await
     }
 
-    pub async fn bump_generation(&self, node_id: &str, generation: i64) {
+    pub async fn bump_generation(
+        &self,
+        node_id: &str,
+        generation: i64,
+    ) -> Result<(), RotationError> {
         let _guard = self.bump_lock.lock().await;
-        bump_floor(&self.generation_store, node_id, generation).await;
+        bump_floor(&self.generation_store, node_id, generation).await?;
+        Ok(())
     }
 
     /// Owner-vouched first-contact seed — raises the generation floor only
     /// if higher (never lowers it).
-    pub async fn seed_from_grant(&self, node_id: &str, root_generation: i64) {
+    pub async fn seed_from_grant(
+        &self,
+        node_id: &str,
+        root_generation: i64,
+    ) -> Result<(), RotationError> {
         let _guard = self.bump_lock.lock().await;
-        bump_floor(&self.generation_store, node_id, root_generation).await;
+        bump_floor(&self.generation_store, node_id, root_generation).await?;
+        Ok(())
     }
 
     pub async fn get_seq_floor(&self, node_id: &str) -> Option<u64> {
         read_floor(&self.seq_store, node_id).await
     }
 
-    pub async fn bump_seq(&self, node_id: &str, seq: i64) {
+    pub async fn bump_seq(&self, node_id: &str, seq: i64) -> Result<(), RotationError> {
         let _guard = self.bump_lock.lock().await;
-        bump_floor(&self.seq_store, node_id, seq).await;
+        bump_floor(&self.seq_store, node_id, seq).await?;
+        Ok(())
     }
 
     /// Fail-closed pre-unseal gate: compares a freshly-resolved seq/generation
@@ -283,9 +319,12 @@ impl<S: HighWaterStore> RotationHighWater<S> {
         // `_guard` critical section acquired above, so this cannot
         // interleave against a concurrent bump or another
         // `enforce_resolved`'s read-check-bump on this same instance
-        // (T-70-03, widened per T5).
-        bump_floor(&self.generation_store, &node_id, generation).await;
-        bump_floor(&self.seq_store, &node_id, seq).await;
+        // (T-70-03, widened per T5). Fail-closed (D-08): a durable write
+        // failure on EITHER bump propagates verbatim via `?` — the
+        // in-memory decision to accept this resolve must not silently
+        // diverge from what actually persisted.
+        bump_floor(&self.generation_store, &node_id, generation).await?;
+        bump_floor(&self.seq_store, &node_id, seq).await?;
 
         Ok(())
     }
@@ -307,8 +346,9 @@ mod tests {
             self.0.lock().unwrap().get(node_id).copied()
         }
 
-        async fn put(&self, node_id: &str, value: u64) {
+        async fn put(&self, node_id: &str, value: u64) -> Result<(), RotationError> {
             self.0.lock().unwrap().insert(node_id.to_string(), value);
+            Ok(())
         }
     }
 
@@ -368,7 +408,7 @@ mod tests {
     async fn warm_device_applies_seq_floor_not_version_floor() {
         let rhw = rhw();
         // Seed a seq floor of 10 (warm device).
-        rhw.bump_seq("node-1", 10).await;
+        rhw.bump_seq("node-1", 10).await.expect("bump_seq");
 
         // A resolve with seq=11 (>= floor) and a LOW version_floor (0) still
         // passes -- version_floor is ignored once warm.
@@ -387,7 +427,7 @@ mod tests {
     #[tokio::test]
     async fn warm_device_rejects_seq_regression() {
         let rhw = rhw();
-        rhw.bump_seq("node-1", 10).await;
+        rhw.bump_seq("node-1", 10).await.expect("bump_seq");
 
         let err = rhw
             .enforce_resolved(EnforceResolvedParams {
@@ -413,7 +453,9 @@ mod tests {
     #[tokio::test]
     async fn generation_regression_is_rejected_even_with_valid_seq() {
         let rhw = rhw();
-        rhw.bump_generation("node-1", 3).await;
+        rhw.bump_generation("node-1", 3)
+            .await
+            .expect("bump_generation");
 
         let err = rhw
             .enforce_resolved(EnforceResolvedParams {
@@ -442,7 +484,9 @@ mod tests {
         let rhw = rhw();
         // Seed a generation floor so a false-positive "pass" would be
         // detectable via floor mutation.
-        rhw.bump_generation("node-1", 5).await;
+        rhw.bump_generation("node-1", 5)
+            .await
+            .expect("bump_generation");
 
         let err = rhw
             .enforce_resolved(EnforceResolvedParams {
@@ -519,11 +563,17 @@ mod tests {
     #[tokio::test]
     async fn seed_from_grant_never_lowers_the_generation_floor() {
         let rhw = rhw();
-        rhw.bump_generation("node-1", 5).await;
-        rhw.seed_from_grant("node-1", 2).await;
+        rhw.bump_generation("node-1", 5)
+            .await
+            .expect("bump_generation");
+        rhw.seed_from_grant("node-1", 2)
+            .await
+            .expect("seed_from_grant");
         assert_eq!(rhw.get_generation_floor("node-1").await, Some(5));
 
-        rhw.seed_from_grant("node-1", 9).await;
+        rhw.seed_from_grant("node-1", 9)
+            .await
+            .expect("seed_from_grant");
         assert_eq!(rhw.get_generation_floor("node-1").await, Some(9));
     }
 }
