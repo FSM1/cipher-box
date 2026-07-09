@@ -24,17 +24,29 @@ Fixed scope = ROADMAP.md Phase 71 six Success Criteria:
 <decisions>
 ## Implementation Decisions
 
-### D-01 — Root-ownership source (SC#1)
-Validate root ownership by looking up the **`vaults` entity**, not `ipns_records`:
+### D-01 — Root-ownership source (SC#1) — AMENDED 2026-07-09
+
+**Verify the sharer registered the shared node by looking up `ipns_records`, keyed by the shared node's own IPNS name:**
 
 ```sql
-SELECT 1 FROM vaults WHERE owner_id = :req.user.id AND root_ipns_name = :dto.rootIpnsName
+SELECT 1 FROM ipns_records WHERE ipns_name = :dto.rootIpnsName AND user_id = :req.user.id
 ```
 
-- `vaults.owner_id` is a real FK to `users` and is `@Index({ unique: true })` (one vault per user) — `apps/api/src/vault/entities/vault.entity.ts:19-38`.
-- This is the purpose-built binding ("Root folder is tracked in Vault entity"); it does not fight the `ipns_records` model, which deliberately makes authority signature-based and calls `user_id` a mere "denormalized creator marker" (`ipns-record.entity.ts:15-19`).
-- Rejected **Flow A** (check `ipns_records.is_root` + `user_id`) — trusts the non-authoritative creator marker. Rejected **Flow B** (elevate `ipns_records.user_id` to authoritative) — invasive, redundant with the vault, fights the documented design.
-- Cost: one indexed lookup added to `createInvite` before persist.
+Reject with `ForbiddenException` (403) if no row. Apply to **BOTH** `createInvite` (`share-invite.service.ts:40`) and `createShare` (`shares.service.ts:69`) — identical verbatim-DTO-copy vulnerability.
+
+**Why this REVERSES the original vaults-based decision (Flow C):** The original D-01 (query `vaults`) rested on a **false assumption** — that `dto.rootIpnsName` is the caller's *vault root*. Verified false against live code (2026-07-09):
+
+- Sharing is a **children-only** action: the web share/invite flow is a context-menu action on a listing item (`ContextMenu.tsx:366`), and `dto.rootIpnsName = params.item.ipnsName` (`invite.service.ts:172`, `ShareDialog.tsx:216`) is always a **child** node's IPNS name — never the vault root.
+- `vaults` holds exactly **one** row per user, the top-level vault root only (inserted once at `/vault/init`; children publish with `isRoot:false` and never touch `vaults`).
+- Therefore `vaults WHERE root_ipns_name = dto.rootIpnsName` **never matches a real (child) share**: the literal whitelist would 403 every share (regressing shipped subfolder/file sharing), and a "conflict-only" variant would be a **no-op** that protects nothing. `vaults` is structurally incapable of verifying child-share ownership.
+
+**The only server-side child-ownership signal is `ipns_records.user_id`** — the creator marker set at first publish (`ipns.service.ts:437`, `userId, ipnsName, isRoot:false`). This is the former **Flow A**, originally rejected as "non-authoritative"; that rejection is void because it assumed `vaults` could do the job. With `vaults` out, the real choice was "`ipns_records` creator marker (weak but works) vs. nothing," and we chose the check.
+
+**Ownership ceiling (unchanged posture, documented):** `ipns_records.user_id` is a denormalized creator marker; the record's Ed25519 signature is the true update-authority (`ipns-record.entity.ts:15-19`). This check is **defense-in-depth** layered atop the real cryptographic access boundary — a sharer can only wrap keys they hold into the descriptor refs (`resolveShareWriteDescriptor` requires the parent folder's keys via the SDK client), so a forged share/invite for content the caller lacks keys to is **cryptographically inert**. D-01 raises server-side ownership from *nothing* to *"the authenticated user who registered this node."* A cryptographic key-possession challenge remains the real fix (deferred — see Deferred Ideas).
+
+- Rejected **Flow B** (elevate `ipns_records.user_id` to authoritative / add a global uniqueness authority) — invasive, fights the signature-based design. We only *read* the creator marker for a cheap anti-spoof gate; we do not elevate it to authority.
+- **Wiring note (supersedes the PATTERNS.md `Vault` forFeature finding):** the DI dependency is now an `ipns_records` repository, not `Vault`. `ShareInviteService`/`SharesService` must be able to query `ipns_records` (inject the repo via `@InjectRepository(IpnsRecord)` and register `IpnsRecord` in `shares.module.ts`'s `TypeOrmModule.forFeature([...])`, OR depend on an existing IPNS read path). Planner to resolve the exact wiring; the `Vault`-forFeature task from PATTERNS.md is NO LONGER needed.
+- Cost: one indexed lookup (`ipns_name` is `@Unique`-indexed, `user_id` is `@Index`) before persist, on both create paths.
 
 ### D-02 — rootNodeId validation (SC#1)
 **Validate `rootIpnsName` ownership only.** `rootNodeId` stays client-asserted for this phase.
@@ -141,7 +153,7 @@ All 8 ROADMAP source todos are folded into this phase's scope (they define it):
 ## Existing Code Insights
 
 ### Reusable Assets
-- `Vault` entity + `VaultService` — already the authoritative user→root binding; D-01 reuses it via a single `vaultRepo` lookup rather than any new schema.
+- `ipns_records` (`IpnsRecord` entity) — D-01 (AMENDED) reads its `user_id` creator marker via a single indexed `findOne({ where: { ipnsName, userId } })` rather than any new schema. (`vaults`/`VaultService` is NOT usable for D-01 — it records only the vault root, never the shared child nodes.)
 - Existing CAS `ConflictException` path in `ipns.service.ts` (~404) — the 409 translation pattern for D-06 mirrors this.
 - `share-invite.service.spec.ts` scaffolding — extend, don't rebuild (D-09).
 
@@ -151,7 +163,7 @@ All 8 ROADMAP source todos are folded into this phase's scope (they define it):
 - Write-authority is presence-derived (`writeDescriptorRef !== null`), invariant T-66-E1 — D-07 must preserve widen-only semantics.
 
 ### Integration Points
-- `createInvite` gains a `vaults` ownership lookup before `inviteRepo.save` (D-01).
+- `createInvite` AND `createShare` gain an `ipns_records` creator-marker lookup (`ipnsName` + `userId`) before persist (D-01, AMENDED — see decision for why `vaults` cannot serve this).
 - `claimInvite` existing-share branch gains grant-merge logic sequenced around the atomic claim UPDATE (D-07).
 - `upsertIpnsRecord` same-seq branch gains a CID-equality guard (D-05); first-publish insert gains 23505→409 (D-06).
 
