@@ -1,0 +1,107 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "1881e6c31e04",
+  "session_id": "4d78f8a5-6112-418c-85c3-c6241359b1fb",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-09T23:18:44.67574Z",
+  "branch": "feat/share-invite-security-and-ipns-data-integrity-api",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/src/ipns/ipns.service.ts",
+    "apps/api/src/ipns/ipns.service.spec.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "34559f5bc681",
+  "checkpoint_transcript_start": 846,
+  "transcript_lines_at_start": 846,
+  "token_usage": {
+    "input_tokens": 4028,
+    "cache_creation_tokens": 72478,
+    "cache_read_tokens": 12580645,
+    "output_tokens": 46865,
+    "api_call_count": 30
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-ship-phase-2026-07-09T22:59:42.56172Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "34559f5bc681",
+      "timestamp": "2026-07-09T22:59:42.56172Z",
+      "native": {
+        "command": "/ship-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/ship-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 11
+  },
+  "summary": {
+    "intent": "Diagnose and fix 3 SDK E2E test failures blocking the phase-71 merge gate, distinguishing real regressions from pre-existing/environmental failures.",
+    "outcome": "Identified tee-republish failures as environmental (no TEE simulator on :3002) and rotation-crash-safety as a real phase-71 regression in the new D-05 equivocation guard; fixed it, added a companion unit test, validated with 6/6 e2e passes and 110 passing ipns unit tests, and committed the fix.",
+    "learnings": {
+      "repo": [
+        "commitlint's subject-no-parens rule is enforced only on the PR title via pr-title.yml, not on individual commits in CI — no need to reword 60 historical commit subjects containing parens.",
+        "sdk-e2e's tee-republish tests require a TEE worker/simulator on :3002 which is not part of standard sdk-e2e prereqs; failures there log 'TEE worker unavailable — expected without a simulator' and are environmental, not regressions.",
+        "To capture the exact reason for a handled 4xx (API doesn't log it), temporarily instrument packages/api-client/src/instance.ts's customInstance with a response interceptor, rebuild the client chain, repro, then revert — this is the established recipe for this repo."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 321,
+          "finding": "D-05 same-seq CID-equivocation guard throws 400 whenever embeddedSeq === dbSeq && metadataCid !== existing.latestCid, but this also fires for a legitimate forward-CAS attempt that lost a race (writer intended embeddedSeq = its_view+1 with expectedSequenceNumber = its_view, but a concurrent writer advanced dbSeq first). Fixed by falling through to the CAS UPDATE (→ 409) when expectedSequenceNumber === embeddedSeq - 1, preserving equivocation protection for the true idempotent-republish case (no expectedSequenceNumber sent)."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 391,
+          "end_line": 420,
+          "finding": "CAS UPDATE mechanism returns 409 when expected (expectedSequenceNumber) doesn't match the DB sequence — this is the path the D-05 guard was incorrectly short-circuiting before it could run."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.spec.ts",
+          "line": 2122,
+          "finding": "Existing D-05 equivocation unit test sends no expectedSequenceNumber, so it correctly remains a 400 after the fix (unchanged); new companion test added just before the idempotent-republish test to lock in the forward-CAS-race case (same-seq, different CID, expectedSequenceNumber === embeddedSeq-1) as a 409."
+        },
+        {
+          "path": "tests/sdk-e2e/src/suites/rotation-crash-safety.test.ts",
+          "finding": "Concurrent-add test deliberately triggers a concurrent republish expecting a 409 CAS-merge ('CAS-409 is merged internally'); the 71-02 rename of this test was pure rename with no logic change, so it wasn't the source of the regression."
+        }
+      ],
+      "workflow": [
+        "When an E2E gate fails, classify each failure by checking whether the touched file/logic was changed in the current phase's commits vs origin/main before assuming a regression.",
+        "For timing-sensitive concurrent tests, re-run the suite multiple times to distinguish deterministic regressions from flakes before investing in a fix."
+      ]
+    },
+    "friction": [
+      "sdk-e2e gate reported 3 failures with no direct indication of which were pre-existing vs new, requiring manual git-blame-style investigation per failure.",
+      "API doesn't log handled 4xx responses, requiring a temporary interceptor instrumentation + client rebuild just to see the actual error body/reason."
+    ],
+    "open_items": []
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-09T23:18:22.487298Z",
+    "agent_lines": 74,
+    "agent_removed": 14,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 74,
+    "total_lines_changed": 88,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
