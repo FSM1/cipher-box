@@ -130,6 +130,18 @@ async function pollFindChild(
   parentReadKey: Uint8Array,
   name: string,
   ctx: SdkContext,
+  // Paths to nudge (statSync/readdirSync) at the START of every poll iteration.
+  // A file written through the mount enqueues its parent-folder republish in the
+  // FUSE crate's EDGE-TRIGGERED publish_queue, which only drains when a FUSE op
+  // reaches `drain_upload_completions`/`flush_publish_queue` (crates/fuse/src/fs.rs).
+  // On FUSE-T (macOS/SMB) the file `release` that enqueues it can be deferred tens
+  // of seconds past the write — landing AFTER this script stops touching the mount
+  // — so polling the folder's IPNS alone (no mount I/O) can wait forever for a
+  // child that is stuck un-republished. Nudging the folder each iteration
+  // generates the FUSE op that drains the queue, mirroring a real client that
+  // keeps using the mount. (The product-side backstop for a fully-idle mount lives
+  // in apps/desktop fuse mount: the fuse-publish-pump thread.)
+  nudgePaths: string[] = [],
   // Budget widened (18->40 @5s = 200s) after CI showed the two-hop publish chain
   // (own IPNS publish + parent children-list republish) can take ~40-47s even on a
   // warm machine — slow CI runners (cold Kubo, shared vCPUs) blow a 90s budget.
@@ -139,6 +151,9 @@ async function pollFindChild(
   const started = Date.now();
   let lastError: unknown;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    if (nudgePaths.length > 0) {
+      nudge(...nudgePaths);
+    }
     try {
       const folder = await loadFolderMetadata({
         ipnsName: parentIpnsName,
@@ -261,8 +276,12 @@ async function main(): Promise<void> {
     const grantRootIpnsName = sharedRef.ipnsName;
     const grantRootNodeId = sharedFolderPublished.id;
 
-    // Confirm the file landed inside the shared folder before measuring.
-    await pollFindChild(grantRootIpnsName, sharedFolderReadKey, sharedFileName, ownerCtx);
+    // Confirm the file landed inside the shared folder before measuring. Nudge the
+    // folder each iteration so a FUSE-T-deferred `release` still drains the parent
+    // republish (see pollFindChild's nudgePaths doc).
+    await pollFindChild(grantRootIpnsName, sharedFolderReadKey, sharedFileName, ownerCtx, [
+      join(args.mount, sharedFolderName),
+    ]);
 
     // Grant Bob read access to the shared folder via ECIES (v3 CreateShareDto).
     // The grant MUST stay ACTIVE through the delete: the scope-exit gate keys
@@ -448,7 +467,10 @@ async function main(): Promise<void> {
     );
     const privateFolderIpnsName = privateRef.ipnsName;
 
-    await pollFindChild(privateFolderIpnsName, privateFolderReadKey, privateFileName, ownerCtx);
+    // Nudge the folder each iteration (same FUSE-T-deferred-release reason as Part A).
+    await pollFindChild(privateFolderIpnsName, privateFolderReadKey, privateFileName, ownerCtx, [
+      join(args.mount, privateFolderName),
+    ]);
 
     const seqBeforePrivateDelete = await resolveIpnsRecord(privateFolderIpnsName, ownerCtx).then(
       (r) => {
