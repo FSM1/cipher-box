@@ -1,0 +1,98 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "3973045802f3",
+  "session_id": "4d78f8a5-6112-418c-85c3-c6241359b1fb",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-09T23:21:59.673363Z",
+  "branch": "feat/share-invite-security-and-ipns-data-integrity-api",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "34559f5bc681",
+  "token_usage": {
+    "input_tokens": 28966,
+    "cache_creation_tokens": 915204,
+    "cache_read_tokens": 47250684,
+    "output_tokens": 249136,
+    "api_call_count": 166
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-ship-phase-2026-07-09T22:59:42.56172Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "34559f5bc681",
+      "timestamp": "2026-07-09T22:59:42.56172Z",
+      "native": {
+        "command": "/ship-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/ship-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 11
+  },
+  "summary": {
+    "intent": "Execute all 9 plans across 4 waves of GSD phase 71 (Share-Invite Security & IPNS Data-Integrity API) via wave-based parallel subagent orchestration, then run the full autonomous post-execution ship loop (verify, secure, validate, simplify, SDK E2E gate, CodeRabbit, ship, resolve PR reviews, extract learnings).",
+    "outcome": "All 9 plans executed and merged across 4 waves with every gate green (typecheck, 894/894 api tests, cargo check, sdk-core/sdk tests); phase verification passed 16/16 truths with 0 gaps. In the ship loop, verify/secure/validate/simplify steps completed, but the SDK E2E gate caught a real regression (D-05 same-seq CID guard incorrectly rejecting a legitimate forward-CAS race with 400 instead of 409) which was diagnosed and fixed with a companion unit test; work was cut off mid-gate while classifying two remaining TEE-related failures as environmental.",
+    "learnings": {
+      "repo": [
+        "execute-phase worktrees fork from live HEAD (baseref-head), so all waves keep parallel isolation without inter-wave degrade",
+        "Root package.json has no top-level test/build scripts; pnpm typecheck is the real cross-plan integration check but intentionally fails mid-migration (e.g. Wave 1 renames API before Wave 2 fixes TS consumers) — must scope post-merge gates to each wave's actual blast radius",
+        "CI's Typecheck job runs root `pnpm typecheck` which excludes `apps/api tsc --noEmit`, so apps/api-only tsc errors are not CI-gated",
+        "sdk-e2e reads SDK_E2E_SECRET (default 'e2e-test-secret-do-not-use-in-production'); vitest doesn't auto-load .env, so mismatched secrets vs API's TEST_LOGIN_SECRET cause 401 that cascade-skips later suites",
+        "Throttle limits are relaxed under NODE_ENV=test (apps/api/src/app.module.ts:56), so THROTTLE_BYPASS_SECRET is unneeded when API runs with NODE_ENV=test",
+        "API does not log handled 4xx responses; to see the real reason, temporarily add an axios response interceptor in packages/api-client/src/instance.ts logging err.response.data, rebuild the client chain, run once, then revert",
+        "commitlint's subject-no-parens rule is enforced only via pr-title.yml on the PR title, not on individual commits — no CI job lints per-commit subjects, and the local commit-msg hook is disabled",
+        "tee-worker (:3002) health check can be 200 while /public-key returns 401, breaking tee_key_state sync after a DB reset — this silently breaks tee-republish e2e tests unrelated to the phase under test"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 321,
+          "finding": "D-05 same-seq CID-equivocation guard (added phase 71) threw a blanket 400 whenever embeddedSeq===dbSeq && metadataCid differs, but this also fires for a legitimate forward-CAS race (writer intended embeddedSeq=view+1 with expectedSequenceNumber=view, lost race to a concurrent writer). Fixed to fall through to the CAS UPDATE (→409) when expectedSequenceNumber === embeddedSeq - 1, preserving equivocation protection for true same-seq republish while letting genuine CAS races reach the correct 409 path."
+        },
+        {
+          "path": "apps/api/src/shares/share-invite.service.ts",
+          "line": 36,
+          "finding": "createInvite's root-ownership gate (D-01/SC#1) duplicates ~7 lines of logic also present in shares.service.ts createShare — flagged as extractable but deferred as a post-ship todo rather than refactored on verified security-critical code."
+        }
+      ],
+      "workflow": [
+        "Never trust a subagent's own compile/test claims when diagnostics (e.g. LSP E0560) disagree — settle correctness at the merged-tree post-merge gate with the full command (cargo check --all-targets), not the subagent's narrower in-worktree check",
+        "When merging parallel wave worktrees, verify disjoint files_modified before dispatch to guarantee conflict-free merges; still re-run integration gates post-merge because worktree-local checks can miss cross-plan interactions",
+        "A DB reset done to get a clean live-stack test run can have collateral effects on unrelated subsystems (e.g. wiped tee_key_state broke tee-republish tests) — worth a bounded diagnosis before blindly deferring as 'environmental'",
+        "Deterministic vs flaky regression triage: re-run the same failing test 2+ times before concluding it's a real regression vs timing flake",
+        "The commit helper in this workflow can report commit_failed while the commit actually lands — always verify via git log rather than retrying blindly (matches prior known-issue memory)"
+      ]
+    },
+    "friction": [
+      "Tracking-commit helper repeatedly reported false-negative commit_failed across multiple waves despite commits landing, requiring manual git log verification each time",
+      "71-03's Rust rename produced misleading E0560 diagnostics from stale LSP/intermediate worktree state that turned out to be non-issues once the merged tree was checked with cargo check --all-targets",
+      "sdk-e2e run against live stack initially failed entirely due to SDK_E2E_SECRET/TEST_LOGIN_SECRET mismatch (401 cascade-skip), requiring investigation via grep/source reading since .env values couldn't be dumped directly (secret-pattern guard blocked grep)",
+      "Stale compiled API process was already listening on :3000 (pre-phase-71 build), which would have produced a false 500 in the live D-06 race test had it not been detected and restarted from current code",
+      "Large number of non-conventional-looking commit subjects (parens in description, auto-generated merge/docs commits) triggered uncertainty about whether a filter-branch reword was needed, requiring extra investigation into CI's actual commitlint scope"
+    ],
+    "open_items": [
+      "Todo: extract-assert-root-ownership-helper — dedupe the 7-line root-ownership gate duplicated in createInvite and createShare (.planning/todos/pending/2026-07-10-extract-assert-root-ownership-helper.md)",
+      "Todo: restore-tee-key-state-for-sdk-e2e-tee-republish — tee-worker :3002 /public-key returns 401 and tee_key_state never repopulated after DB reset, causing 2 tee-republish sdk-e2e failures unrelated to phase 71 (.planning/todos/pending/2026-07-10-restore-tee-key-state-for-sdk-e2e-tee-republish.md)",
+      "Pre-existing non-CI-gated tsc errors in ipns-verify-cache.spec.ts and http-metrics.interceptor.spec.ts, logged in deferred-items.md, left unfixed as out of phase scope",
+      "Ship loop steps 6-11 (CodeRabbit review, commit reword decision, /gsd-ship, PR review resolution, final CI confirmation, extract-learnings) were not yet reached when the transcript ends mid-Step-5 (SDK E2E gate)",
+      "Session-spawned API process on :3000 (PID ~92572) and locally reset/migrated postgres DB were left running/fresh for the user after the execute-phase run, noted but not cleaned up"
+    ]
+  }
+}
