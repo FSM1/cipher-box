@@ -1,0 +1,9 @@
+is there anything unclear in phase 71? is a discussion necessary?
+
+---
+
+wait a second, I think I have already discussed phase 71 and the discussion log should be on a branch
+
+---
+
+Let the GSD tooling deal with any roadmap updates rather. jump straight in to planning
