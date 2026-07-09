@@ -1,0 +1,26 @@
+<task-notification>
+<task-id>a6caa3df29c5f1c56</task-id>
+<tool-use-id>toolu_01SHxVic46rbJLbH3dVQ3LA4</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/4d78f8a5-6112-418c-85c3-c6241359b1fb/tasks/a6caa3df29c5f1c56.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify phase 71 goal achievement" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Verification Complete
+
+**Status:** passed
+**Score:** 16/16 truths verified (0 present-behavior-unverified)
+**Report:** `/Users/myankelev/Code/random/cipher-box/.planning/phases/71-share-invite-security-and-ipns-data-integrity-api/71-VERIFICATION.md`
+
+All must-haves from all 9 plans (D-01 through D-10, SC#1 through SC#6) verified against actual source, not SUMMARY claims:
+
+- **D-01/SC#1** — `createInvite` (`apps/api/src/shares/share-invite.service.ts:36-47`) and `createShare` (`apps/api/src/shares/shares.service.ts:33-45`) both gate on `ipns_records` creator marker, throw `ForbiddenException` (403) on miss, with unit test coverage for reject/accept.
+- **D-04 CHECK constraint (SC#3)** — confirmed *live* against the already-running `cipherbox-postgres` Docker container (not started by me) inside a `BEGIN…ROLLBACK` transaction: raw `UPDATE claim_count = -1` raised SQLSTATE 23514 exactly as documented, then rolled back with zero residual data. This was previously only a documented-manual backstop in the SUMMARY — I upgraded it to directly-observed behavioral evidence.
+- **D-05/D-06** — same-seq CID equivocation guard and first-publish 409 translation both present in `apps/api/src/ipns/ipns.service.ts` with matching unit tests; D-06's live concurrent-race proof (Test 21) accepted per the phase's documented `71-05-SUMMARY.md` live-stack pass.
+- **D-07/SC#2** — widen-only merge in `claimInvite`'s existing-share branch, including the explicit "never downgrades encryptedWriteKey" backstop test.
+- **D-08/SC#5** — `revokeForItems` confirmed as a single `createQueryBuilder().delete()`, no `manager.find`/`manager.remove`.
+- **D-09/SC#6** — `getInvitesForItem`/`revokeInvite`/`createInvite` all have real unit coverage; `shares.controller.spec.ts` placeholder fixtures replaced with contract-valid UUIDs/keys.
+- **D-10** — "descriptor" purged from `apps/api/src/shares` (zero hits) and across sdk-core/sdk/web/sdk-e2e/Rust; remaining `descriptor` string hits elsewhere are confirmed-unrelated concepts (file-content descriptors, Windows security descriptors, one cosmetic test filename) — matches what the SUMMARY documented, verified independently by reading each hit.
+
+No anti-patterns (TBD/FIXME/XXX/TODO/HACK/placeholder) found in touched files. Working tree clean, all commits present. No gaps, no human verification items. Ready to proceed.</result>
+<usage><subagent_tokens>165452</subagent_tokens><tool_uses>58</tool_uses><duration_ms>275259</duration_ms></usage>
+</task-notification>

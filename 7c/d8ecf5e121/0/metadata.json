@@ -1,0 +1,94 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "7cd8ecf5e121",
+  "session_id": "4d78f8a5-6112-418c-85c3-c6241359b1fb",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-09T22:44:55.898502Z",
+  "branch": "feat/share-invite-security-and-ipns-data-integrity-api",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/STATE.md",
+    ".planning/phases/71-share-invite-security-and-ipns-data-integrity-api/71-VERIFICATION.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "4fcd32935669",
+  "checkpoint_transcript_start": 636,
+  "transcript_lines_at_start": 636,
+  "token_usage": {
+    "input_tokens": 156,
+    "cache_creation_tokens": 2517,
+    "cache_read_tokens": 642705,
+    "output_tokens": 2605,
+    "api_call_count": 2
+  },
+  "session_metrics": {
+    "turn_count": 10
+  },
+  "summary": {
+    "intent": "Verify that phase 71 (\"share-invite-security-and-ipns-data-integrity-api\") of the cipher-box project met all its planned must-haves, then close out the phase in the GSD workflow.",
+    "outcome": "Verification agent confirmed 16/16 truths against actual source (not just SUMMARY claims), including a live database test proving the claim_count CHECK constraint (SQLSTATE 23514) inside a rolled-back transaction; phase 71 was marked complete with no warnings and the project advanced to phase 72.",
+    "learnings": {
+      "repo": [
+        "Invite/share creation (createInvite, createShare) is gated on an ipns_records creator marker and throws ForbiddenException (403) on mismatch.",
+        "claim_count on ipns_records has a live-enforced Postgres CHECK constraint (SQLSTATE 23514) preventing negative values — verified directly against the running cipherbox-postgres container, not just documented.",
+        "revokeForItems uses a single createQueryBuilder().delete() call rather than manager.find/remove, for efficient bulk revocation.",
+        "claimInvite's existing-share merge path is widen-only and explicitly never downgrades encryptedWriteKey.",
+        "The term 'descriptor' was fully purged from apps/api/src/shares and across sdk-core/sdk/web/sdk-e2e/Rust as part of this phase's cleanup (D-10)."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/shares/share-invite.service.ts",
+          "line": 36,
+          "end_line": 47,
+          "finding": "createInvite gates on ipns_records creator marker, throws ForbiddenException (403) on mismatch"
+        },
+        {
+          "path": "apps/api/src/shares/shares.service.ts",
+          "line": 33,
+          "end_line": 45,
+          "finding": "createShare has matching creator-marker gate and 403 behavior as createInvite"
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "finding": "Contains same-seq CID equivocation guard and first-publish 409 translation (D-05/D-06), with unit tests and a live concurrent-race proof (Test 21)"
+        }
+      ],
+      "workflow": [
+        "GSD phase verification independently re-derives evidence from source code rather than trusting the phase's own SUMMARY.md, and can upgrade a documented-manual backstop claim to directly-observed behavioral evidence (e.g., running a live SQL test in BEGIN…ROLLBACK).",
+        "Phase completion checks for anti-pattern markers (TBD/FIXME/XXX/TODO/HACK/placeholder) in touched files as part of the passing criteria.",
+        "A task-notification for a background verification agent can fire once it stops with no live children; the same task-id may notify again if resumed."
+      ]
+    },
+    "friction": [],
+    "open_items": [
+      "Proceed to phase 72 now that phase 71 is closed out.",
+      "SHARE-WRITE-KEY threading gap noted in prior project memory (collectChildKeys superseded) remains open and wasn't addressed by this phase's verification."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-09T22:44:36.397025Z",
+    "agent_lines": 11,
+    "agent_removed": 11,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 11,
+    "total_lines_changed": 22,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 120,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/phases/71-share-invite-security-and-ipns-data-integrity-api/71-VERIFICATION.md": 119
+      }
+    }
+  ]
+}
