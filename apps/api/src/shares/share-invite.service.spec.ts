@@ -308,12 +308,19 @@ describe('ShareInviteService — claimInvite security invariants', () => {
     });
   });
 
-  // ------------------------------------------------------------------ Idempotent re-claim
-  describe('idempotent re-claim', () => {
-    it('returns the existing shareId without minting a duplicate when a Share already exists', async () => {
-      mockInviteRepo.findOne.mockResolvedValue(makeInvite());
+  // ------------------------------------------------------------------ D-07 widen-only re-claim merge (SC#2)
+  describe('re-claim over an existing share — widen-only merge (D-07/SC#2)', () => {
+    it('same-level re-claim is a no-op', async () => {
+      // Both invite and existing share are read-only at the same rootGeneration.
+      mockInviteRepo.findOne.mockResolvedValue(
+        makeInvite({ encryptedWriteKey: null, rootGeneration })
+      );
 
-      const existingShare = { id: 'existing-share-id' } as Share;
+      const existingShare = {
+        id: 'existing-share-id',
+        encryptedWriteKey: null,
+        rootGeneration,
+      } as unknown as Share;
       mockManager.findOne.mockResolvedValue(existingShare);
 
       const dto: ClaimInviteDto = { encryptedReadKey: READ_HEX };
@@ -321,8 +328,82 @@ describe('ShareInviteService — claimInvite security invariants', () => {
       const result = await service.claimInvite(token, claimerId, dto);
 
       expect(result).toEqual({ shareId: 'existing-share-id' });
-      // manager.create should NOT have been called to mint a new share
       expect(mockManager.create).not.toHaveBeenCalled();
+      expect(mockManager.save).not.toHaveBeenCalled();
+    });
+
+    it('read→write widen upgrades the existing share and calls manager.save', async () => {
+      // Invite grants write; existing share is currently read-only.
+      mockInviteRepo.findOne.mockResolvedValue(
+        makeInvite({ encryptedWriteKey: Buffer.from('ff'.repeat(64), 'hex'), rootGeneration })
+      );
+
+      const existingShare = {
+        id: 'existing-share-id',
+        encryptedWriteKey: null,
+        rootGeneration,
+      } as unknown as Share;
+      mockManager.findOne.mockResolvedValue(existingShare);
+
+      const dto: ClaimInviteDto = { encryptedReadKey: READ_HEX, encryptedWriteKey: WRITE_HEX };
+
+      const result = await service.claimInvite(token, claimerId, dto);
+
+      expect(result).toEqual({ shareId: 'existing-share-id' });
+      expect(mockManager.save).toHaveBeenCalledTimes(1);
+      const savedShare = mockManager.save.mock.calls[0][0] as Share;
+      expect(savedShare.id).toBe('existing-share-id');
+      expect(savedShare.encryptedWriteKey).toEqual(Buffer.from(WRITE_HEX, 'hex'));
+    });
+
+    it('generation-bump widen advances rootGeneration and calls manager.save', async () => {
+      // Invite carries a higher rootGeneration than the existing (read-only) share.
+      mockInviteRepo.findOne.mockResolvedValue(
+        makeInvite({ encryptedWriteKey: null, rootGeneration: '3' })
+      );
+
+      const existingShare = {
+        id: 'existing-share-id',
+        encryptedWriteKey: null,
+        rootGeneration: '1',
+        encryptedReadKey: Buffer.from('cc'.repeat(64), 'hex'),
+      } as unknown as Share;
+      mockManager.findOne.mockResolvedValue(existingShare);
+
+      const dto: ClaimInviteDto = { encryptedReadKey: READ_HEX };
+
+      const result = await service.claimInvite(token, claimerId, dto);
+
+      expect(result).toEqual({ shareId: 'existing-share-id' });
+      expect(mockManager.save).toHaveBeenCalledTimes(1);
+      const savedShare = mockManager.save.mock.calls[0][0] as Share;
+      expect(savedShare.rootGeneration).toBe('3');
+      expect(savedShare.encryptedReadKey).toEqual(Buffer.from(READ_HEX, 'hex'));
+    });
+
+    it('BACKSTOP: a read-only re-claim over a write-capable share never downgrades encryptedWriteKey', async () => {
+      // Invite is read-only (no write grant); existing share already has write access.
+      mockInviteRepo.findOne.mockResolvedValue(
+        makeInvite({ encryptedWriteKey: null, rootGeneration })
+      );
+
+      const existingWriteKey = Buffer.from('ee'.repeat(64), 'hex');
+      const existingShare = {
+        id: 'existing-share-id',
+        encryptedWriteKey: existingWriteKey,
+        rootGeneration,
+      } as unknown as Share;
+      mockManager.findOne.mockResolvedValue(existingShare);
+
+      const dto: ClaimInviteDto = { encryptedReadKey: READ_HEX };
+
+      const result = await service.claimInvite(token, claimerId, dto);
+
+      expect(result).toEqual({ shareId: 'existing-share-id' });
+      expect(mockManager.save).not.toHaveBeenCalled();
+      // Never downgraded to null nor otherwise mutated.
+      expect(existingShare.encryptedWriteKey).toEqual(existingWriteKey);
+      expect(existingShare.encryptedWriteKey).not.toBeNull();
     });
   });
 });
