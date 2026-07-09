@@ -24,6 +24,19 @@ Fixed scope = ROADMAP.md Phase 71 six Success Criteria:
 <decisions>
 ## Implementation Decisions
 
+**Decision index** — full detail in the sections below; this bullet list is the machine-readable decision record:
+
+- **D-01:** Root-ownership source (SC#1, AMENDED) — verify the sharer registered the shared node via `ipns_records` (ipnsName + userId), NOT `vaults`; applied to `createInvite` + `createShare`.
+- **D-02:** rootNodeId validation (SC#1) — validate `shareRootIpnsName` ownership only; `rootNodeId` stays client-asserted (documented gap).
+- **D-03:** SC#3 root-uniqueness index — SKIP (already covered by `vaults.owner_id` uniqueness); documented drop.
+- **D-04:** `claim_count` CHECK (SC#3, AMENDED) — fold the CHECK into the greenfield cutover `CREATE TABLE` in place + entity `@Check`; no separate forward migration.
+- **D-05:** Same-seq CID equivocation (SC#4) — HARD-GUARD 400 when incoming CID differs at equal sequence; same-CID idempotent retries still pass; rewrite the Pitfall-4 test.
+- **D-06:** First-publish INSERT race (SC#4) — translate the `23505` unique-violation to a 409; unit + sdk-e2e concurrent-race backstop.
+- **D-07:** Re-claim later-grant (SC#2) — widen-only merge (read→write), never downgrade; preserve invariant T-66-E1.
+- **D-08:** Bulk-revoke (SC#5) — `revokeForItems` issues a single `createQueryBuilder().delete()` instead of find+remove.
+- **D-09:** ShareInviteService coverage (SC#6) — real unit tests for `createInvite`/`getInvitesForItem`/`revokeInvite` + contract-valid controller fixtures.
+- **D-10:** Full share-plane rename (NEW) — purge "descriptor" end-to-end (columns + TS fields/methods/types + Rust + api-client); greenfield edit-in-place; surgical `rootIpnsName→shareRootIpnsName` (share-domain only); `root_generation` untouched.
+
 ### D-01 — Root-ownership source (SC#1) — AMENDED 2026-07-09
 
 **Verify the sharer registered the shared node by looking up `ipns_records`, keyed by the shared node's own IPNS name:**
