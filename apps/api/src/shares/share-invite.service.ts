@@ -10,6 +10,7 @@ import { Repository, DataSource } from 'typeorm';
 import { randomBytes } from 'crypto';
 import { Share } from './entities/share.entity';
 import { ShareInvite } from './entities/share-invite.entity';
+import { IpnsRecord } from '../ipns/entities/ipns-record.entity';
 import { CreateInviteDto } from './dto/create-invite.dto';
 import { ClaimInviteDto } from './dto/claim-invite.dto';
 
@@ -23,6 +24,8 @@ export class ShareInviteService {
   constructor(
     @InjectRepository(ShareInvite)
     private readonly inviteRepo: Repository<ShareInvite>,
+    @InjectRepository(IpnsRecord)
+    private readonly ipnsRecordRepo: Repository<IpnsRecord>,
     private readonly dataSource: DataSource
   ) {}
 
@@ -31,6 +34,18 @@ export class ShareInviteService {
    * The encryptedReadKey is the root readKey wrapped with an ephemeral public key.
    */
   async createInvite(sharerId: string, dto: CreateInviteDto): Promise<ShareInvite> {
+    // D-01/SC#1 root-ownership gate (defense-in-depth, non-authoritative): reads the
+    // ipns_records creator marker to reject callers who never registered this node.
+    // The true access boundary is cryptographic (the sharer can only wrap keys they
+    // hold) — this is a cheap anti-spoof check atop that boundary. Per D-02, only
+    // shareRootIpnsName ownership is verified here; rootNodeId stays client-asserted.
+    const owned = await this.ipnsRecordRepo.findOne({
+      where: { ipnsName: dto.shareRootIpnsName, userId: sharerId },
+    });
+    if (!owned) {
+      throw new ForbiddenException('You are not the registered owner of this node');
+    }
+
     const token = randomBytes(16).toString('base64url');
     const expiresAt = new Date(Date.now() + INVITE_EXPIRY_MS);
 

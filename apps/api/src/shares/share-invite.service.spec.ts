@@ -6,12 +6,14 @@
  */
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { ShareInviteService } from './share-invite.service';
 import { ShareInvite } from './entities/share-invite.entity';
 import { Share } from './entities/share.entity';
+import { IpnsRecord } from '../ipns/entities/ipns-record.entity';
 import { ClaimInviteDto } from './dto/claim-invite.dto';
+import { CreateInviteDto } from './dto/create-invite.dto';
 
 const sharerId = '550e8400-e29b-41d4-a716-446655440000';
 const claimerId = '660e8400-e29b-41d4-a716-446655440001';
@@ -57,6 +59,7 @@ describe('ShareInviteService — claimInvite security invariants', () => {
     create: jest.Mock;
     find: jest.Mock;
   };
+  let mockIpnsRecordRepo: { findOne: jest.Mock };
   let mockDataSource: { transaction: jest.Mock };
   let mockManager: {
     createQueryBuilder: jest.Mock;
@@ -112,15 +115,70 @@ describe('ShareInviteService — claimInvite security invariants', () => {
         .mockImplementation((cb: (m: typeof mockManager) => unknown) => cb(mockManager)),
     };
 
+    // Default: caller IS the registered owner of the shared node (D-01/SC#1).
+    // Individual root-ownership tests override this per-case.
+    mockIpnsRecordRepo = {
+      findOne: jest.fn().mockResolvedValue({ id: 'ipns-record-1' }),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ShareInviteService,
         { provide: getRepositoryToken(ShareInvite), useValue: mockInviteRepo },
+        { provide: getRepositoryToken(IpnsRecord), useValue: mockIpnsRecordRepo },
         { provide: DataSource, useValue: mockDataSource },
       ],
     }).compile();
 
     service = module.get<ShareInviteService>(ShareInviteService);
+  });
+
+  // ------------------------------------------------------------------ createInvite — root-ownership gate (D-01/SC#1)
+  describe('createInvite — root-ownership gate (D-01/SC#1)', () => {
+    function makeCreateInviteDto(overrides: Partial<CreateInviteDto> = {}): CreateInviteDto {
+      return {
+        shareRootIpnsName,
+        rootNodeId,
+        encryptedReadKey: READ_HEX,
+        ...overrides,
+      } as CreateInviteDto;
+    }
+
+    it('throws ForbiddenException when the caller did not register shareRootIpnsName in ipns_records', async () => {
+      mockIpnsRecordRepo.findOne.mockResolvedValue(null);
+
+      await expect(service.createInvite(sharerId, makeCreateInviteDto())).rejects.toThrow(
+        ForbiddenException
+      );
+      expect(mockInviteRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('persists the invite when the caller IS the registered owner of shareRootIpnsName', async () => {
+      mockIpnsRecordRepo.findOne.mockResolvedValue({ id: 'ipns-record-1' });
+
+      await service.createInvite(sharerId, makeCreateInviteDto());
+
+      expect(mockIpnsRecordRepo.findOne).toHaveBeenCalledWith({
+        where: { ipnsName: shareRootIpnsName, userId: sharerId },
+      });
+      expect(mockInviteRepo.save).toHaveBeenCalledTimes(1);
+    });
+
+    it('generates a token, sets a future expiresAt, and copies DTO fields (mechanics, D-09)', async () => {
+      const dto = makeCreateInviteDto();
+
+      const result = await service.createInvite(sharerId, dto);
+
+      expect(typeof result.token).toBe('string');
+      expect(result.token.length).toBeGreaterThan(0);
+      expect(result.expiresAt.getTime()).toBeGreaterThan(Date.now());
+      expect(result.sharerId).toBe(sharerId);
+      expect(result.shareRootIpnsName).toBe(dto.shareRootIpnsName);
+      expect(result.rootNodeId).toBe(dto.rootNodeId);
+      expect(result.status).toBe('active');
+      expect(result.maxClaims).toBe(1);
+      expect(result.claimCount).toBe(0);
+    });
   });
 
   // ------------------------------------------------------------------ T-66-E1 (priority)
