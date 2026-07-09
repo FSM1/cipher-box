@@ -123,3 +123,12 @@ None - no external service configuration required.
 ---
 *Phase: 71-share-invite-security-and-ipns-data-integrity-api*
 *Completed: 2026-07-09*
+
+## Self-Check: PASSED
+
+- FOUND: apps/api/src/ipns/ipns.service.ts
+- FOUND: apps/api/src/ipns/ipns.service.spec.ts
+- FOUND: .planning/phases/71-share-invite-security-and-ipns-data-integrity-api/71-04-SUMMARY.md
+- FOUND commit: fce56a073 (Task 1)
+- FOUND commit: f97326e6c (Task 2)
+- FOUND commit: 890da9b22 (SUMMARY.md)
