@@ -125,6 +125,15 @@ None - no external service configuration required.
 - `crates/fuse` full unit-test suite: 111/111 passed. `crates/sdk` full unit-test suite: 152/152 passed (including all 26 `rotation::engine` tests, notably `high3_inner_grant_at_a_child_is_re_minted_and_revoked_recipient_is_cut`)
 - Per the plan's own verification note, `crates/fuse/src/platform/windows/*` compiles CI-only on macOS — the Windows-target build (`Cargo Check & Test (Windows)` CI job) is the authoritative confirmation that the surgical exclusion holds on the real Windows target; local verification here was a `grep` count-match (13 hits, unchanged) since the Windows platform module cannot compile in this environment
 
+## Self-Check: PASSED
+
+- FOUND: commit 714758cd4 (Task 1)
+- FOUND: commit 1aa72437c (Task 2)
+- FOUND: commit 087be65b4 (docs: plan summary)
+- FOUND: crates/api-client/src/shares.rs
+- FOUND: crates/sdk/src/rotation/engine.rs
+- FOUND: .planning/phases/71-share-invite-security-and-ipns-data-integrity-api/71-03-SUMMARY.md
+
 ---
 *Phase: 71-share-invite-security-and-ipns-data-integrity-api*
 *Completed: 2026-07-09*
