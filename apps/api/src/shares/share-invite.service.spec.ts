@@ -16,7 +16,7 @@ import { ClaimInviteDto } from './dto/claim-invite.dto';
 const sharerId = '550e8400-e29b-41d4-a716-446655440000';
 const claimerId = '660e8400-e29b-41d4-a716-446655440001';
 const rootNodeId = '770e8400-e29b-41d4-a716-446655440002';
-const rootIpnsName = 'k51qzi5uqu5dg12345abcdef';
+const shareRootIpnsName = 'k51qzi5uqu5dg12345abcdef';
 const rootGeneration = '3';
 const token = 'test-token-abc';
 
@@ -33,11 +33,11 @@ function makeInvite(overrides: Partial<ShareInvite> = {}): ShareInvite {
     sharerId,
     sharer: {} as never,
     rootNodeId,
-    rootIpnsName,
+    shareRootIpnsName,
     rootGeneration,
     itemNameEncrypted: null,
-    encryptedKey: Buffer.from('cc'.repeat(64), 'hex'),
-    writeDescriptorRef: null,
+    encryptedReadKey: Buffer.from('cc'.repeat(64), 'hex'),
+    encryptedWriteKey: null,
     status: 'active',
     maxClaims: 1,
     claimCount: 0,
@@ -125,56 +125,56 @@ describe('ShareInviteService — claimInvite security invariants', () => {
 
   // ------------------------------------------------------------------ T-66-E1 (priority)
   describe('T-66-E1: read-only invite cannot yield a write grant', () => {
-    it('minted Share.writeDescriptorRef is null when invite.writeDescriptorRef is null, even if claimer supplies writeDescriptorRef', async () => {
-      // Arrange: read-only invite (writeDescriptorRef === null)
-      mockInviteRepo.findOne.mockResolvedValue(makeInvite({ writeDescriptorRef: null }));
+    it('minted Share.encryptedWriteKey is null when invite.encryptedWriteKey is null, even if claimer supplies encryptedWriteKey', async () => {
+      // Arrange: read-only invite (encryptedWriteKey === null)
+      mockInviteRepo.findOne.mockResolvedValue(makeInvite({ encryptedWriteKey: null }));
 
       const dto: ClaimInviteDto = {
-        readDescriptorRef: READ_HEX,
-        writeDescriptorRef: WRITE_HEX, // attacker-supplied — must be ignored
+        encryptedReadKey: READ_HEX,
+        encryptedWriteKey: WRITE_HEX, // attacker-supplied — must be ignored
       };
 
       // Act
       await service.claimInvite(token, claimerId, dto);
 
-      // Assert: manager.create was called and the share data has writeDescriptorRef === null
+      // Assert: manager.create was called and the share data has encryptedWriteKey === null
       expect(mockManager.create).toHaveBeenCalled();
       const createCall = mockManager.create.mock.calls[0];
       const shareData = createCall[1] as Partial<Share>;
-      expect(shareData.writeDescriptorRef).toBeNull();
+      expect(shareData.encryptedWriteKey).toBeNull();
     });
   });
 
   // ------------------------------------------------------------------ T-66-E1 positive
   describe('T-66-E1 positive: write invite propagates write grant from claimer ref', () => {
-    it('minted Share.writeDescriptorRef is set from claimer dto when invite.writeDescriptorRef is non-null', async () => {
+    it('minted Share.encryptedWriteKey is set from claimer dto when invite.encryptedWriteKey is non-null', async () => {
       // Arrange: write invite
       mockInviteRepo.findOne.mockResolvedValue(
-        makeInvite({ writeDescriptorRef: Buffer.from('ff'.repeat(64), 'hex') })
+        makeInvite({ encryptedWriteKey: Buffer.from('ff'.repeat(64), 'hex') })
       );
 
       const dto: ClaimInviteDto = {
-        readDescriptorRef: READ_HEX,
-        writeDescriptorRef: WRITE_HEX,
+        encryptedReadKey: READ_HEX,
+        encryptedWriteKey: WRITE_HEX,
       };
 
       // Act
       await service.claimInvite(token, claimerId, dto);
 
-      // Assert: writeDescriptorRef is the claimer's re-wrapped ref
+      // Assert: encryptedWriteKey is the claimer's re-wrapped ref
       const createCall = mockManager.create.mock.calls[0];
       const shareData = createCall[1] as Partial<Share>;
-      expect(shareData.writeDescriptorRef).toEqual(Buffer.from(WRITE_HEX, 'hex'));
+      expect(shareData.encryptedWriteKey).toEqual(Buffer.from(WRITE_HEX, 'hex'));
     });
   });
 
   // ------------------------------------------------------------------ T-66-S1
   describe('T-66-S1: root identity is sourced from the invite row, not claimer input', () => {
-    it('minted Share carries rootNodeId, rootIpnsName, rootGeneration from the invite', async () => {
+    it('minted Share carries rootNodeId, shareRootIpnsName, rootGeneration from the invite', async () => {
       const invite = makeInvite();
       mockInviteRepo.findOne.mockResolvedValue(invite);
 
-      const dto: ClaimInviteDto = { readDescriptorRef: READ_HEX };
+      const dto: ClaimInviteDto = { encryptedReadKey: READ_HEX };
 
       await service.claimInvite(token, claimerId, dto);
 
@@ -182,7 +182,7 @@ describe('ShareInviteService — claimInvite security invariants', () => {
       const shareData = createCall[1] as Partial<Share>;
 
       expect(shareData.rootNodeId).toBe(rootNodeId);
-      expect(shareData.rootIpnsName).toBe(rootIpnsName);
+      expect(shareData.shareRootIpnsName).toBe(shareRootIpnsName);
       expect(shareData.rootGeneration).toBe(rootGeneration);
     });
   });
@@ -192,7 +192,7 @@ describe('ShareInviteService — claimInvite security invariants', () => {
     it('throws ConflictException when claimerId === invite.sharerId', async () => {
       mockInviteRepo.findOne.mockResolvedValue(makeInvite());
 
-      const dto: ClaimInviteDto = { readDescriptorRef: READ_HEX };
+      const dto: ClaimInviteDto = { encryptedReadKey: READ_HEX };
 
       await expect(service.claimInvite(token, sharerId, dto)).rejects.toThrow(ConflictException);
     });
@@ -203,7 +203,7 @@ describe('ShareInviteService — claimInvite security invariants', () => {
     it('throws NotFoundException for an expired active invite', async () => {
       mockInviteRepo.findOne.mockResolvedValue(makeInvite({ expiresAt: pastDate }));
 
-      const dto: ClaimInviteDto = { readDescriptorRef: READ_HEX };
+      const dto: ClaimInviteDto = { encryptedReadKey: READ_HEX };
 
       await expect(service.claimInvite(token, claimerId, dto)).rejects.toThrow(NotFoundException);
     });
@@ -211,7 +211,7 @@ describe('ShareInviteService — claimInvite security invariants', () => {
     it('throws NotFoundException for a claimed invite', async () => {
       mockInviteRepo.findOne.mockResolvedValue(makeInvite({ status: 'claimed' }));
 
-      const dto: ClaimInviteDto = { readDescriptorRef: READ_HEX };
+      const dto: ClaimInviteDto = { encryptedReadKey: READ_HEX };
 
       await expect(service.claimInvite(token, claimerId, dto)).rejects.toThrow(NotFoundException);
     });
@@ -219,7 +219,7 @@ describe('ShareInviteService — claimInvite security invariants', () => {
     it('throws NotFoundException for a revoked invite', async () => {
       mockInviteRepo.findOne.mockResolvedValue(makeInvite({ status: 'revoked' }));
 
-      const dto: ClaimInviteDto = { readDescriptorRef: READ_HEX };
+      const dto: ClaimInviteDto = { encryptedReadKey: READ_HEX };
 
       await expect(service.claimInvite(token, claimerId, dto)).rejects.toThrow(NotFoundException);
     });
@@ -227,7 +227,7 @@ describe('ShareInviteService — claimInvite security invariants', () => {
     it('throws NotFoundException when invite row is not found', async () => {
       mockInviteRepo.findOne.mockResolvedValue(null);
 
-      const dto: ClaimInviteDto = { readDescriptorRef: READ_HEX };
+      const dto: ClaimInviteDto = { encryptedReadKey: READ_HEX };
 
       await expect(service.claimInvite(token, claimerId, dto)).rejects.toThrow(NotFoundException);
     });
@@ -243,7 +243,7 @@ describe('ShareInviteService — claimInvite security invariants', () => {
       mockInviteRepo.findOne.mockResolvedValue(makeInvite());
       mockQb.execute.mockResolvedValue({ affected: 0 });
 
-      const dto: ClaimInviteDto = { readDescriptorRef: READ_HEX };
+      const dto: ClaimInviteDto = { encryptedReadKey: READ_HEX };
 
       await expect(service.claimInvite(token, claimerId, dto)).rejects.toThrow(ConflictException);
       expect(mockManager.create).not.toHaveBeenCalled();
@@ -258,7 +258,7 @@ describe('ShareInviteService — claimInvite security invariants', () => {
       const existingShare = { id: 'existing-share-id' } as Share;
       mockManager.findOne.mockResolvedValue(existingShare);
 
-      const dto: ClaimInviteDto = { readDescriptorRef: READ_HEX };
+      const dto: ClaimInviteDto = { encryptedReadKey: READ_HEX };
 
       const result = await service.claimInvite(token, claimerId, dto);
 

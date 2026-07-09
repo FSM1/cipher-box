@@ -4,32 +4,32 @@ import { IsString, IsOptional, Matches, MaxLength, MinLength } from 'class-valid
 export class ClaimInviteDto {
   @ApiProperty({
     description:
-      'Hex-encoded ECIES descriptor ref for read access re-wrapped for the recipient ' +
+      'Hex-encoded ECIES encrypted key for read access re-wrapped for the recipient ' +
       '(claimer re-wraps the root readKey from the ephemeral key to their own pubkey). ' +
       'Server never sees plaintext (zero-knowledge).',
   })
   @IsString()
   @Matches(/^(?:[0-9a-fA-F]{2})+$/, {
-    message: 'readDescriptorRef must be an even-length hex string',
+    message: 'encryptedReadKey must be an even-length hex string',
   })
   @MinLength(64)
   @MaxLength(4096)
-  readDescriptorRef!: string;
+  encryptedReadKey!: string;
 
   @ApiProperty({
     description:
-      'Hex-encoded ECIES descriptor ref for write access re-wrapped for the recipient. ' +
+      'Hex-encoded ECIES encrypted key for write access re-wrapped for the recipient. ' +
       'Omit for read-only claim.',
     required: false,
   })
   @IsString()
   @Matches(/^(?:[0-9a-fA-F]{2})+$/, {
-    message: 'writeDescriptorRef must be an even-length hex string',
+    message: 'encryptedWriteKey must be an even-length hex string',
   })
   @MinLength(64)
   @MaxLength(4096)
   @IsOptional()
-  writeDescriptorRef?: string;
+  encryptedWriteKey?: string;
 
   @ApiProperty({
     description:

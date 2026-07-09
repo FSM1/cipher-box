@@ -8,7 +8,7 @@
 
 export interface CreateInviteDto {
   /** IPNS name (k51...) of the root shared node */
-  rootIpnsName: string;
+  shareRootIpnsName: string;
   /** UUID of the root shared node */
   rootNodeId: string;
   /** Generation of the root node at invite creation (numeric string) */
@@ -16,7 +16,7 @@ export interface CreateInviteDto {
   /** Hex-encoded ECIES ciphertext of the display name wrapped with the ephemeral public key. Server never sees plaintext (zero-knowledge). */
   itemNameEncrypted?: string;
   /** Hex-encoded root readKey wrapped with the EPHEMERAL public key via ECIES. Server never sees the ephemeral private key — it lives only in the URL fragment. */
-  encryptedKey: string;
-  /** Hex-encoded ECIES descriptor ref for write access wrapped with the EPHEMERAL public key. Omit for read-only invites. */
-  writeDescriptorRef?: string;
+  encryptedReadKey: string;
+  /** Hex-encoded ECIES encrypted key for write access wrapped with the EPHEMERAL public key. Omit for read-only invites. */
+  encryptedWriteKey?: string;
 }

@@ -8,22 +8,22 @@ export class CreateShareResponseDto {
   recipientPublicKey!: string;
 
   @ApiProperty({
-    description: 'Hex-encoded ECIES descriptor ref for read access',
+    description: 'Hex-encoded ECIES encrypted key for read access',
   })
-  readDescriptorRef!: string;
+  encryptedReadKey!: string;
 
   @ApiProperty({
-    description: 'Hex-encoded ECIES descriptor ref for write access, or null for read-only shares',
+    description: 'Hex-encoded ECIES encrypted key for write access, or null for read-only shares',
     type: String,
     nullable: true,
   })
-  writeDescriptorRef!: string | null;
+  encryptedWriteKey!: string | null;
 
   @ApiProperty({ description: 'UUID of the root shared node' })
   rootNodeId!: string;
 
   @ApiProperty({ description: 'IPNS name (k51...) of the root shared node' })
-  rootIpnsName!: string;
+  shareRootIpnsName!: string;
 
   @ApiProperty({ description: 'Generation of the root node at share creation (numeric string)' })
   rootGeneration!: string;
@@ -47,22 +47,22 @@ export class ReceivedShareResponseDto {
   sharerPublicKey!: string;
 
   @ApiProperty({
-    description: 'Hex-encoded ECIES descriptor ref for read access',
+    description: 'Hex-encoded ECIES encrypted key for read access',
   })
-  readDescriptorRef!: string;
+  encryptedReadKey!: string;
 
   @ApiProperty({
-    description: 'Hex-encoded ECIES descriptor ref for write access, or null for read-only shares',
+    description: 'Hex-encoded ECIES encrypted key for write access, or null for read-only shares',
     type: String,
     nullable: true,
   })
-  writeDescriptorRef!: string | null;
+  encryptedWriteKey!: string | null;
 
   @ApiProperty({ description: 'UUID of the root shared node' })
   rootNodeId!: string;
 
   @ApiProperty({ description: 'IPNS name (k51...) of the root shared node' })
-  rootIpnsName!: string;
+  shareRootIpnsName!: string;
 
   @ApiProperty({ description: 'Generation of the root node at share creation (numeric string)' })
   rootGeneration!: string;
@@ -86,22 +86,22 @@ export class SentShareResponseDto {
   recipientPublicKey!: string;
 
   @ApiProperty({
-    description: 'Hex-encoded ECIES descriptor ref for read access',
+    description: 'Hex-encoded ECIES encrypted key for read access',
   })
-  readDescriptorRef!: string;
+  encryptedReadKey!: string;
 
   @ApiProperty({
-    description: 'Hex-encoded ECIES descriptor ref for write access, or null for read-only shares',
+    description: 'Hex-encoded ECIES encrypted key for write access, or null for read-only shares',
     type: String,
     nullable: true,
   })
-  writeDescriptorRef!: string | null;
+  encryptedWriteKey!: string | null;
 
   @ApiProperty({ description: 'UUID of the root shared node' })
   rootNodeId!: string;
 
   @ApiProperty({ description: 'IPNS name (k51...) of the root shared node' })
-  rootIpnsName!: string;
+  shareRootIpnsName!: string;
 
   @ApiProperty({ description: 'Generation of the root node at share creation (numeric string)' })
   rootGeneration!: string;

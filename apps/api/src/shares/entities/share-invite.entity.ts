@@ -6,10 +6,12 @@ import {
   ManyToOne,
   JoinColumn,
   Index,
+  Check,
 } from 'typeorm';
 import { User } from '../../auth/entities/user.entity';
 
 @Entity('share_invites')
+@Check('CHK_share_invites_claim_count', '"claim_count" >= 0 AND "claim_count" <= "max_claims"')
 export class ShareInvite {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
@@ -28,8 +30,8 @@ export class ShareInvite {
   /**
    * IPNS name (k51...) of the root shared node.
    */
-  @Column({ type: 'varchar', length: 255, name: 'root_ipns_name' })
-  rootIpnsName!: string;
+  @Column({ type: 'varchar', length: 255, name: 'share_root_ipns_name' })
+  shareRootIpnsName!: string;
 
   /**
    * UUID of the root shared node.
@@ -55,15 +57,15 @@ export class ShareInvite {
    * The root readKey wrapped with the EPHEMERAL public key.
    * Server never sees the ephemeral private key — it lives only in the URL fragment.
    */
-  @Column({ type: 'bytea', name: 'encrypted_key' })
-  encryptedKey!: Buffer;
+  @Column({ type: 'bytea', name: 'encrypted_read_key' })
+  encryptedReadKey!: Buffer;
 
   /**
-   * ECIES descriptor ref for write access wrapped with EPHEMERAL public key.
+   * ECIES-wrapped root writeKey for write access, wrapped with EPHEMERAL public key.
    * NULL for read-only invites.
    */
-  @Column({ type: 'bytea', name: 'write_descriptor_ref', nullable: true })
-  writeDescriptorRef!: Buffer | null;
+  @Column({ type: 'bytea', name: 'encrypted_write_key', nullable: true })
+  encryptedWriteKey!: Buffer | null;
 
   @Column({ type: 'varchar', length: 20, default: 'active' })
   status!: 'active' | 'claimed' | 'revoked';

@@ -5,7 +5,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  *
  * Drop-recreate strategy (D-01 greenfield waiver — staging DB wiped on each deploy):
  *   1. DROP share_keys (removes FK dependency before shares is dropped)
- *   2. DROP + CREATE shares (descriptor-ref schema; D-06/D-09/D-11)
+ *   2. DROP + CREATE shares (encrypted-key schema; D-06/D-09/D-11)
  *   3. DROP + CREATE share_invites (slimmed; single ephemeral-wrapped readKey; D-05)
  *   4. DROP folder_ipns (no external SQL FKs confirmed by FK-map research)
  *   5. CREATE ipns_records (no public_key; adds tombstoned_at + generation; D-02/D-10)
@@ -28,11 +28,11 @@ export class ApiSchemaCutover1750000000000 implements MigrationInterface {
     await queryRunner.query(`DROP TABLE IF EXISTS "share_keys" CASCADE`);
 
     // ──────────────────────────────────────────────────────────────────────────
-    // Step 2: Drop and recreate shares (descriptor-ref schema)
+    // Step 2: Drop and recreate shares (encrypted-key schema)
     //
     // Target columns (from share.entity.ts — 66-03):
-    //   id, sharer_id, recipient_id, read_descriptor_ref, write_descriptor_ref,
-    //   root_node_id, root_ipns_name, root_generation, item_name_encrypted,
+    //   id, sharer_id, recipient_id, encrypted_read_key, encrypted_write_key,
+    //   root_node_id, share_root_ipns_name, root_generation, item_name_encrypted,
     //   hidden_by_recipient, created_at, updated_at
     //
     // Unique: (sharer_id, recipient_id, root_node_id) — plain, no partial index (D-11)
@@ -45,10 +45,10 @@ export class ApiSchemaCutover1750000000000 implements MigrationInterface {
         "id"                   uuid NOT NULL DEFAULT uuid_generate_v4(),
         "sharer_id"            uuid NOT NULL,
         "recipient_id"         uuid NOT NULL,
-        "read_descriptor_ref"  bytea NOT NULL,
-        "write_descriptor_ref" bytea,
+        "encrypted_read_key"   bytea NOT NULL,
+        "encrypted_write_key"  bytea,
         "root_node_id"         uuid NOT NULL,
-        "root_ipns_name"       varchar(255) NOT NULL,
+        "share_root_ipns_name" varchar(255) NOT NULL,
         "root_generation"      bigint NOT NULL DEFAULT 0,
         "item_name_encrypted"  bytea,
         "hidden_by_recipient"  boolean NOT NULL DEFAULT false,
@@ -78,8 +78,8 @@ export class ApiSchemaCutover1750000000000 implements MigrationInterface {
     // Step 3: Drop and recreate share_invites (slimmed; D-05)
     //
     // Target columns (from share-invite.entity.ts — 66-03):
-    //   id, token, sharer_id, root_ipns_name, root_node_id, root_generation,
-    //   item_name_encrypted, encrypted_key, write_descriptor_ref,
+    //   id, token, sharer_id, share_root_ipns_name, root_node_id, root_generation,
+    //   item_name_encrypted, encrypted_read_key, encrypted_write_key,
     //   status, max_claims, claim_count, claimed_by, expires_at, created_at
     //
     // Dropped: encrypted_child_keys (jsonb column from pre-66 schema)
@@ -93,12 +93,12 @@ export class ApiSchemaCutover1750000000000 implements MigrationInterface {
         "id"                   uuid NOT NULL DEFAULT uuid_generate_v4(),
         "token"                varchar(44) NOT NULL,
         "sharer_id"            uuid NOT NULL,
-        "root_ipns_name"       varchar(255) NOT NULL,
+        "share_root_ipns_name" varchar(255) NOT NULL,
         "root_node_id"         uuid NOT NULL,
         "root_generation"      bigint NOT NULL DEFAULT 0,
         "item_name_encrypted"  bytea,
-        "encrypted_key"        bytea NOT NULL,
-        "write_descriptor_ref" bytea,
+        "encrypted_read_key"   bytea NOT NULL,
+        "encrypted_write_key"  bytea,
         "status"               varchar(20) NOT NULL DEFAULT 'active',
         "max_claims"           integer NOT NULL DEFAULT 1,
         "claim_count"          integer NOT NULL DEFAULT 0,
@@ -106,7 +106,8 @@ export class ApiSchemaCutover1750000000000 implements MigrationInterface {
         "expires_at"           TIMESTAMP NOT NULL,
         "created_at"           TIMESTAMP NOT NULL DEFAULT now(),
         CONSTRAINT "PK_share_invites" PRIMARY KEY ("id"),
-        CONSTRAINT "UQ_share_invites_token" UNIQUE ("token")
+        CONSTRAINT "UQ_share_invites_token" UNIQUE ("token"),
+        CONSTRAINT "CHK_share_invites_claim_count" CHECK ("claim_count" >= 0 AND "claim_count" <= "max_claims")
       )
     `);
 

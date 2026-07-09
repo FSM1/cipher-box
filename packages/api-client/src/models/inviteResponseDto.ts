@@ -13,7 +13,7 @@ export interface InviteResponseDto {
   /** Invite token (URL-safe base64) */
   token: string;
   /** IPNS name of the root shared node */
-  rootIpnsName: string;
+  shareRootIpnsName: string;
   /** UUID of the root shared node */
   rootNodeId: string;
   /** Generation of the root node at invite creation (numeric string) */

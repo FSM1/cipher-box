@@ -10,5 +10,5 @@ export type ShareInvitesControllerListInvitesParams = {
   /**
    * IPNS name of the root shared node
    */
-  rootIpnsName: string;
+  shareRootIpnsName: string;
 };

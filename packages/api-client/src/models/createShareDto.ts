@@ -9,14 +9,14 @@
 export interface CreateShareDto {
   /** Recipient secp256k1 public key (uncompressed, 0x04... format) */
   recipientPublicKey: string;
-  /** Hex-encoded ECIES descriptor ref for read access (wrapped root readKey + metadata). Server never sees plaintext (zero-knowledge). */
-  readDescriptorRef: string;
-  /** Hex-encoded ECIES descriptor ref for write access. Presence signals a write grant (D-09). Omit for read-only shares. */
-  writeDescriptorRef?: string;
+  /** Hex-encoded ECIES encrypted key for read access (wrapped root readKey + metadata). Server never sees plaintext (zero-knowledge). */
+  encryptedReadKey: string;
+  /** Hex-encoded ECIES encrypted key for write access. Presence signals a write grant (D-09). Omit for read-only shares. */
+  encryptedWriteKey?: string;
   /** UUID of the root shared node (folder or file) */
   rootNodeId: string;
   /** IPNS name (k51...) of the root shared node */
-  rootIpnsName: string;
+  shareRootIpnsName: string;
   /** Generation of the root node at share time (numeric string) */
   rootGeneration?: string;
   /** Hex-encoded ECIES ciphertext of the display name wrapped for recipient. Optional: omit if recipient can derive the name from their filesystem. */

@@ -24,12 +24,12 @@ describe('ShareInvitesController', () => {
       token: 'tok_abc123',
       sharerId: mockUser.id,
       sharer: undefined as never,
-      rootIpnsName: 'k51qzi5uqu5testrootipnsname',
+      shareRootIpnsName: 'k51qzi5uqu5testrootipnsname',
       rootNodeId: 'node-uuid-1',
       rootGeneration: '0',
       itemNameEncrypted: Buffer.from('deadbeef', 'hex'),
-      encryptedKey: Buffer.from('cafe', 'hex'),
-      writeDescriptorRef: null,
+      encryptedReadKey: Buffer.from('cafe', 'hex'),
+      encryptedWriteKey: null,
       status: 'active',
       maxClaims: 1,
       claimCount: 0,
@@ -71,11 +71,11 @@ describe('ShareInvitesController', () => {
 
   describe('createInvite', () => {
     const dto: CreateInviteDto = {
-      rootIpnsName: 'k51qzi5uqu5testrootipnsname',
+      shareRootIpnsName: 'k51qzi5uqu5testrootipnsname',
       rootNodeId: 'node-uuid-1',
       rootGeneration: '3',
       itemNameEncrypted: 'deadbeef',
-      encryptedKey: 'a'.repeat(260),
+      encryptedReadKey: 'a'.repeat(260),
     };
 
     it('forwards req.user.id and dto to the service', async () => {
@@ -101,7 +101,7 @@ describe('ShareInvitesController', () => {
       expect(result).toEqual({
         id: 'invite-uuid-9',
         token: 'tok_xyz',
-        rootIpnsName: invite.rootIpnsName,
+        shareRootIpnsName: invite.shareRootIpnsName,
         rootNodeId: invite.rootNodeId,
         rootGeneration: '5',
         itemNameEncrypted: 'deadbeef',
@@ -127,23 +127,23 @@ describe('ShareInvitesController', () => {
   });
 
   describe('listInvites', () => {
-    const rootIpnsName = 'k51qzi5uqu5testrootipnsname';
+    const shareRootIpnsName = 'k51qzi5uqu5testrootipnsname';
 
-    it('forwards req.user.id and rootIpnsName to the service', async () => {
+    it('forwards req.user.id and shareRootIpnsName to the service', async () => {
       shareInviteService.getInvitesForItem.mockResolvedValue([]);
 
-      await controller.listInvites(mockRequest, { rootIpnsName });
+      await controller.listInvites(mockRequest, { shareRootIpnsName });
 
       expect(shareInviteService.getInvitesForItem).toHaveBeenCalledWith(
         'sharer-uuid-1',
-        rootIpnsName
+        shareRootIpnsName
       );
     });
 
     it('returns an empty array when there are no active invites', async () => {
       shareInviteService.getInvitesForItem.mockResolvedValue([]);
 
-      const result = await controller.listInvites(mockRequest, { rootIpnsName });
+      const result = await controller.listInvites(mockRequest, { shareRootIpnsName });
 
       expect(result).toEqual([]);
     });
@@ -159,7 +159,7 @@ describe('ShareInvitesController', () => {
       });
       shareInviteService.getInvitesForItem.mockResolvedValue([withName, withoutName]);
 
-      const result = await controller.listInvites(mockRequest, { rootIpnsName });
+      const result = await controller.listInvites(mockRequest, { shareRootIpnsName });
 
       expect(result).toHaveLength(2);
       expect(result[0]).toMatchObject({ id: 'invite-uuid-a', itemNameEncrypted: '00ff' });

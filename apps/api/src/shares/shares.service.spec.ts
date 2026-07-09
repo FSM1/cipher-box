@@ -25,10 +25,10 @@ function createMockShare(overrides: Partial<Share> = {}): Share {
     id: 'share-uuid-1',
     sharerId: SHARER_ID,
     recipientId: RECIPIENT_ID,
-    readDescriptorRef: Buffer.from('aa'.repeat(32), 'hex'),
-    writeDescriptorRef: null,
+    encryptedReadKey: Buffer.from('aa'.repeat(32), 'hex'),
+    encryptedWriteKey: null,
     rootNodeId: 'root-node-uuid-1',
-    rootIpnsName: 'k51qzi5uqu5test',
+    shareRootIpnsName: 'k51qzi5uqu5test',
     rootGeneration: '0',
     itemNameEncrypted: null,
     hiddenByRecipient: false,
@@ -41,9 +41,9 @@ function createMockShare(overrides: Partial<Share> = {}): Share {
 function createDto(overrides: Partial<CreateShareDto> = {}): CreateShareDto {
   return {
     recipientPublicKey: BARE_PUBKEY,
-    readDescriptorRef: 'aa'.repeat(32),
+    encryptedReadKey: 'aa'.repeat(32),
     rootNodeId: 'root-node-uuid-1',
-    rootIpnsName: 'k51qzi5uqu5test',
+    shareRootIpnsName: 'k51qzi5uqu5test',
     ...overrides,
   } as CreateShareDto;
 }
@@ -129,13 +129,13 @@ describe('SharesService', () => {
       expect(result).toBe(built);
       // Recipient looked up by bare hex pubkey
       expect(userRepo.findOne).toHaveBeenCalledWith({ where: { publicKey: BARE_PUBKEY } });
-      // Read-only: writeDescriptorRef null, itemNameEncrypted null, rootGeneration defaulted
+      // Read-only: encryptedWriteKey null, itemNameEncrypted null, rootGeneration defaulted
       expect(shareRepo.create).toHaveBeenCalledWith(
         expect.objectContaining({
           sharerId: SHARER_ID,
           recipientId: RECIPIENT_ID,
-          readDescriptorRef: Buffer.from('aa'.repeat(32), 'hex'),
-          writeDescriptorRef: null,
+          encryptedReadKey: Buffer.from('aa'.repeat(32), 'hex'),
+          encryptedWriteKey: null,
           rootGeneration: '0',
           itemNameEncrypted: null,
           hiddenByRecipient: false,
@@ -166,7 +166,7 @@ describe('SharesService', () => {
       await service.createShare(
         SHARER_ID,
         createDto({
-          writeDescriptorRef: 'bb'.repeat(32),
+          encryptedWriteKey: 'bb'.repeat(32),
           rootGeneration: '7',
           itemNameEncrypted: 'cc'.repeat(8),
         })
@@ -174,7 +174,7 @@ describe('SharesService', () => {
 
       expect(shareRepo.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          writeDescriptorRef: Buffer.from('bb'.repeat(32), 'hex'),
+          encryptedWriteKey: Buffer.from('bb'.repeat(32), 'hex'),
           rootGeneration: '7',
           itemNameEncrypted: Buffer.from('cc'.repeat(8), 'hex'),
         })
@@ -326,7 +326,7 @@ describe('SharesService', () => {
       expect(result).toEqual({ revokedShares: 2, revokedInvites: 3 });
       // De-duped names threaded into both the share query and the invite update
       expect(manager.find).toHaveBeenCalledWith(Share, {
-        where: { sharerId: SHARER_ID, rootIpnsName: In(['k51a', 'k51b']) },
+        where: { sharerId: SHARER_ID, shareRootIpnsName: In(['k51a', 'k51b']) },
       });
       expect(manager.remove).toHaveBeenCalledWith(shares);
       expect(queryBuilder.update).toHaveBeenCalledWith(ShareInvite);
@@ -415,7 +415,7 @@ describe('SharesService', () => {
   });
 
   describe('updateGrant', () => {
-    it('persists the rotated descriptor and advances rootGeneration for the sharer', async () => {
+    it('persists the rotated key and advances rootGeneration for the sharer', async () => {
       const share = createMockShare({ rootGeneration: '2' });
       manager.findOne.mockResolvedValue(share);
 
@@ -425,7 +425,7 @@ describe('SharesService', () => {
         where: { id: 'share-uuid-1' },
         lock: { mode: 'pessimistic_write' },
       });
-      expect(share.readDescriptorRef).toEqual(Buffer.from('bb'.repeat(32), 'hex'));
+      expect(share.encryptedReadKey).toEqual(Buffer.from('bb'.repeat(32), 'hex'));
       expect(share.rootGeneration).toBe('3');
       expect(manager.save).toHaveBeenCalledWith(share);
     });
@@ -466,41 +466,41 @@ describe('SharesService', () => {
       expect(manager.save).not.toHaveBeenCalled();
     });
 
-    it('leaves writeDescriptorRef unchanged when neither writeDescriptorRef nor clearWriteDescriptor is supplied (read-only rotation, T-68.1-19-02)', async () => {
+    it('leaves encryptedWriteKey unchanged when neither encryptedWriteKey nor clearEncryptedWriteKey is supplied (read-only rotation, T-68.1-19-02)', async () => {
       const existingWrite = Buffer.from('cc'.repeat(32), 'hex');
-      const share = createMockShare({ rootGeneration: '2', writeDescriptorRef: existingWrite });
+      const share = createMockShare({ rootGeneration: '2', encryptedWriteKey: existingWrite });
       manager.findOne.mockResolvedValue(share);
 
       await service.updateGrant('share-uuid-1', SHARER_ID, 'bb'.repeat(32), '3');
 
-      expect(share.writeDescriptorRef).toBe(existingWrite);
+      expect(share.encryptedWriteKey).toBe(existingWrite);
       expect(manager.save).toHaveBeenCalledWith(share);
     });
 
-    it('sets writeDescriptorRef when supplied (read->write upgrade)', async () => {
-      const share = createMockShare({ rootGeneration: '2', writeDescriptorRef: null });
+    it('sets encryptedWriteKey when supplied (read->write upgrade)', async () => {
+      const share = createMockShare({ rootGeneration: '2', encryptedWriteKey: null });
       manager.findOne.mockResolvedValue(share);
 
       await service.updateGrant('share-uuid-1', SHARER_ID, 'bb'.repeat(32), '3', 'dd'.repeat(32));
 
-      expect(share.writeDescriptorRef).toEqual(Buffer.from('dd'.repeat(32), 'hex'));
+      expect(share.encryptedWriteKey).toEqual(Buffer.from('dd'.repeat(32), 'hex'));
       expect(manager.save).toHaveBeenCalledWith(share);
     });
 
-    it('clears writeDescriptorRef to null when clearWriteDescriptor is true (write->read downgrade)', async () => {
+    it('clears encryptedWriteKey to null when clearEncryptedWriteKey is true (write->read downgrade)', async () => {
       const share = createMockShare({
         rootGeneration: '2',
-        writeDescriptorRef: Buffer.from('cc'.repeat(32), 'hex'),
+        encryptedWriteKey: Buffer.from('cc'.repeat(32), 'hex'),
       });
       manager.findOne.mockResolvedValue(share);
 
       await service.updateGrant('share-uuid-1', SHARER_ID, 'bb'.repeat(32), '3', undefined, true);
 
-      expect(share.writeDescriptorRef).toBeNull();
+      expect(share.encryptedWriteKey).toBeNull();
       expect(manager.save).toHaveBeenCalledWith(share);
     });
 
-    it('throws BadRequestException when both writeDescriptorRef and clearWriteDescriptor are supplied', async () => {
+    it('throws BadRequestException when both encryptedWriteKey and clearEncryptedWriteKey are supplied', async () => {
       await expect(
         service.updateGrant('share-uuid-1', SHARER_ID, 'bb'.repeat(32), '3', 'dd'.repeat(32), true)
       ).rejects.toThrow(BadRequestException);
