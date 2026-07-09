@@ -1,0 +1,57 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "e429205935af",
+  "session_id": "4d78f8a5-6112-418c-85c3-c6241359b1fb",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-09T22:46:16.059188Z",
+  "branch": "feat/share-invite-security-and-ipns-data-integrity-api",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/PROJECT.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "4fcd32935669",
+  "checkpoint_transcript_start": 650,
+  "transcript_lines_at_start": 650,
+  "token_usage": {
+    "input_tokens": 52,
+    "cache_creation_tokens": 3304,
+    "cache_read_tokens": 648229,
+    "output_tokens": 3617,
+    "api_call_count": 2
+  },
+  "session_metrics": {
+    "turn_count": 10
+  },
+  "summary": {
+    "intent": "Complete a GSD workflow phase (71) and run the automated post-completion routing checks before proceeding to the next phase.",
+    "outcome": "Phase completion committed (0a46a6b0e), tdd review-checkpoint gate ran as advisory-only (no block, no type:tdd plans), PROJECT.md was evolved and committed (252e2e60b), learnings copy skipped (feature disabled), and final routing checks (auto-mode state, phase 72 CONTEXT.md, clean tree) were run.",
+    "learnings": {
+      "repo": [
+        "This project has global_learnings feature disabled, so the learnings-copy step is a no-op during phase completion.",
+        "MVP_MODE=false means advisory gates (like tdd.review-checkpoint) never escalate to blocking regardless of their result."
+      ],
+      "code": [],
+      "workflow": [
+        "GSD phase completion routing runs a fixed sequence: check for code-review capability hooks, run advisory/blocking gates (e.g. tdd gate), update PROJECT.md, check learnings feature, then final routing checks (auto-mode, next phase's CONTEXT.md presence, clean working tree)."
+      ]
+    },
+    "friction": [],
+    "open_items": [
+      "Confirm phase 72 has a CONTEXT.md before starting it, per the final routing check initiated at the end of this session."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-09T22:46:05.558797Z",
+    "agent_lines": 1,
+    "agent_removed": 1,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 1,
+    "total_lines_changed": 2,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
