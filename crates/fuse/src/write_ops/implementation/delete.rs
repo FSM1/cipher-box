@@ -540,10 +540,10 @@ mod tests {
         let share = SentShareResponse {
             share_id: "s1".to_string(),
             recipient_public_key: "0x04".to_string(),
-            read_descriptor_ref: "ref".to_string(),
-            write_descriptor_ref: None,
+            encrypted_read_key: "ref".to_string(),
+            encrypted_write_key: None,
             root_node_id: "n1".to_string(),
-            root_ipns_name: root_ipns_name.to_string(),
+            share_root_ipns_name: root_ipns_name.to_string(),
             root_generation: "1".to_string(),
             item_name_encrypted: None,
             created_at: "2024-01-01T00:00:00Z".to_string(),

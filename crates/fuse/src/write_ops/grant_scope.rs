@@ -157,7 +157,10 @@ impl SentSharesCache {
     /// deletes with zero rotation (D-15a / Pitfall 8).
     pub fn from_sent_shares(shares: &[SentShareResponse]) -> Self {
         Self {
-            root_ipns_names: shares.iter().map(|s| s.root_ipns_name.clone()).collect(),
+            root_ipns_names: shares
+                .iter()
+                .map(|s| s.share_root_ipns_name.clone())
+                .collect(),
             is_authoritative: true,
         }
     }
@@ -733,7 +736,10 @@ pub fn run_scope_exit_gate_coalesced(
         match fs.build_scope_exit_child_override(parent_ino, child_ino) {
             Ok(children) => Some(children),
             Err(e) => {
-                log::error!("scope-exit coalesced child override failed (fail-closed): {}", e);
+                log::error!(
+                    "scope-exit coalesced child override failed (fail-closed): {}",
+                    e
+                );
                 return Err(());
             }
         }
@@ -963,10 +969,10 @@ mod tests {
         let cache = SentSharesCache::from_sent_shares(&[SentShareResponse {
             share_id: "share-1".to_string(),
             recipient_public_key: "0x04aa".to_string(),
-            read_descriptor_ref: "deadbeef".to_string(),
-            write_descriptor_ref: None,
+            encrypted_read_key: "deadbeef".to_string(),
+            encrypted_write_key: None,
             root_node_id: "node-1".to_string(),
-            root_ipns_name: "k51folderA".to_string(),
+            share_root_ipns_name: "k51folderA".to_string(),
             root_generation: "1".to_string(),
             item_name_encrypted: None,
             created_at: "2024-01-01T00:00:00Z".to_string(),
