@@ -352,6 +352,12 @@ started: "Introduced by plan 70.1-13 (commit f97441e5c), first live CI run faile
 
 ## Resolution (2026-07-09 — HEADLINE: the Part A +2 / Bob-bypass assertion failures)
 
+> Scope note: `status: fixed` covers the SHALLOW D-16 / grant-root-only path
+> (the +2-publish and Bob-bypass defects below). Deep scope-exits still reseal
+> intermediate parents under stale in-memory keys — a documented, out-of-scope
+> follow-up (see "Known limitation" later in this Resolution), NOT closed here.
+
+
 root_cause: |
   TWO DISTINCT, DETERMINISTIC defects in the covered scope-exit delete path.
   They are NOT the same root cause (the orchestrator's "one shared cause"
