@@ -1,0 +1,286 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "b50674a909a2",
+  "session_id": "a4ed1cb9-4e4c-4d71-bc03-3c2c6b4e70a3",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-09T01:46:26.093001Z",
+  "branch": "feat/rotation-read-plane-durability-and-deep-crash-resume-soundne",
+  "checkpoints_count": 2,
+  "save_step_count": 1,
+  "files_touched": [
+    "tests/desktop-e2e/scripts/shared-scope-exit-rotation.mts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "1a40f59e6a04",
+  "token_usage": {
+    "input_tokens": 127368,
+    "cache_creation_tokens": 2198907,
+    "cache_read_tokens": 93008506,
+    "output_tokens": 614495,
+    "api_call_count": 388
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-plan-phase-2026-07-08T13:42:46.030418Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "0eb6f9cbb31b",
+      "timestamp": "2026-07-08T13:42:46.030418Z",
+      "native": {
+        "command": "/gsd-plan-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-gsd-execute-phase-2026-07-08T15:12:58.253651Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "1b22299d3cb2",
+      "timestamp": "2026-07-08T15:12:58.253651Z",
+      "native": {
+        "command": "/gsd-execute-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-execute-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-insights-2026-07-08T22:06:54.276214Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "insights"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "d42e8425334c",
+      "timestamp": "2026-07-08T22:06:54.276214Z",
+      "native": {
+        "command": "/insights"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/insights",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01HWrVLBHmrKhyMLN1WEc3yj",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-capture"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "1a40f59e6a04",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 2181,
+        "end": 2182,
+        "entry_ids": [
+          "c8f3b029-0547-476c-8088-a47b7c514a13"
+        ],
+        "tool_use_id": "toolu_01HWrVLBHmrKhyMLN1WEc3yj"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01HWrVLBHmrKhyMLN1WEc3yj"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-capture",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_019MUyCMBTy3mb1Mo2c4mvW1",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "1a40f59e6a04",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 2379,
+        "end": 2380,
+        "entry_ids": [
+          "f7d9e55e-8607-4c67-a4e3-a2b5926e3eff"
+        ],
+        "tool_use_id": "toolu_019MUyCMBTy3mb1Mo2c4mvW1"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_019MUyCMBTy3mb1Mo2c4mvW1"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-ship-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_016oZNJJLXTPFRv9VgchZdPw",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "1a40f59e6a04",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 2393,
+        "end": 2394,
+        "entry_ids": [
+          "6da98d5c-591f-44c8-bb6b-a9e9d85cd6d5"
+        ],
+        "tool_use_id": "toolu_016oZNJJLXTPFRv9VgchZdPw"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_016oZNJJLXTPFRv9VgchZdPw"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ship-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 50
+  },
+  "summary": {
+    "intent": "Continue and complete GSD Phase 70.1 (rotation read-plane durability and crash-resume soundness) through wave-based parallel execution, get the D-16 desktop-e2e acceptance checkpoint green on macOS/Linux/Windows, verify the phase goal, and run the full ship-phase flow (verify/secure/validate/simplify/SDK-E2E/CodeRabbit/ship).",
+    "outcome": "All 13 plans merged, three real product bugs found and fixed (depth-3 decrypt-before-dirtiness-check in both engines, JsonSidecarFloorStore multi-writer race, and a scope-exit revocation bypass + double-publish), D-16 went green on all three platforms, phase verification passed (7/8 SC fully verified, SC#6 closed via live sdk-e2e), and the ship-phase flow got through Verify/Secure/Validate/Simplify/SDK-E2E gates plus CodeRabbit triage (2 confirmed findings fixed with TS+Rust parity, 1 refuted) — PR opening and final review-resolution steps were still in progress when the transcript ends.",
+    "learnings": {
+      "repo": [
+        "rust-analyzer diagnostics (dead_code, E0063 'field missing', unresolved import) are frequently stale mid-edit snapshots in this repo during concurrent agent edits — always confirm with authoritative `cargo check`/`cargo test` before trusting them.",
+        "gsd commit helper can report `commit_failed` as a false negative while the commit actually lands — verify via `git log`, never blindly retry.",
+        "`cargo fmt --all` in an executor strands out-of-scope formatting drift across unrelated files; always scope to `cargo fmt -p <crate>`.",
+        "Cross-package dist staleness causes false test failures after a wave merge — rebuild sdk-core+sdk dist before re-running consumer vitest suites.",
+        "sdk-e2e vitest has no dotenv loader; TEST_LOGIN_SECRET/env must be sourced into the shell (`set -a; . ./.env; set +a`) before running, or login 401s.",
+        "macOS FUSE-T defers file `release` by ~40s and the publish queue is edge-triggered (drains only on a subsequent FUSE op) with no wall-clock backstop — an idle mount can silently never republish a parent folder.",
+        "Cross-Client Sync Test 5/7 macOS soft-skips are a separate READ-side bug: FUSE-T ignores the `inval_inode` reverse-notification so the SMB client cache serves stale content even after correct server-side re-resolution — distinct from the write-side publish-queue-drain issue.",
+        "Windows exit code -1073741502 (0xC0000142/STATUS_DLL_INIT_FAILED) on a desktop-e2e API-start step is a transient Windows CI runner flake, not a code issue — re-running the job alone resolves it.",
+        "Two rust-analyzer processes eating ~11GB total can be caused by a stale/orphaned editor+RA process bound to a deleted worktree directory (e.g. leftover from a prior phase) parented by an old `claude --dangerously-skip-permissions` session — kill the orphan process tree to reclaim RAM.",
+        "CodeRabbit CLI (`coderabbit review --agent --base main --type committed`) can misattribute root cause (e.g. blaming an unreachable 'missing parent' path) while still correctly flagging the real defect (per-child fail-open) — always adversarially re-verify CLI findings against actual code before fixing."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/rotation/engine.ts",
+          "line": 887,
+          "end_line": 903,
+          "finding": "collectDirtyFrontier now checks childPub.generation > childRef.generation BEFORE calling unsealChildReadKey — dirty edges are pushed with nodeReadKey: undefined and never decrypted, fixing a bug where decrypting a stale sealed ref with the parent's rotated key threw CryptoError."
+        },
+        {
+          "path": "crates/sdk/src/rotation/engine.rs",
+          "line": 1037,
+          "end_line": 1050,
+          "finding": "Rust twin of the TS decrypt-before-dirtiness-check fix: collect_dirty_frontier checks generation before attempting unseal."
+        },
+        {
+          "path": "crates/sdk/src/floor_store.rs",
+          "line": 265,
+          "end_line": 271,
+          "finding": "JsonSidecarFloorStore::new() previously built its own private Arc<Mutex<()>> per instance even when multiple instances (generation/seq/checkpoint stores) pointed at the same rotation-high-water.json sidecar, causing a concurrent-rename race (ENOENT). Fixed with a process-global path-keyed lock registry (shared_lock_for) so co-located instances share one lock."
+        },
+        {
+          "path": "crates/fuse/src/write_ops/grant_scope.rs",
+          "line": 425,
+          "end_line": 579,
+          "finding": "rotate_read_on_scope_exit originally discarded the RotateReadResult (matched Ok(_)) and never refreshed the grant-root inode's in-memory read_key, so a subsequent relink resealed the folder under the STALE pre-rotation key — a revocation bypass letting a cut-off recipient still decrypt. Fixed by capturing RotateReadResult and calling refresh_grant_root_read_key to update the inode in place."
+        },
+        {
+          "path": "crates/fuse/src/fs.rs",
+          "line": 352,
+          "end_line": 413,
+          "finding": "build_scope_exit_child_override failed OPEN per-child (child-not-found -> continue; build_child_refs error -> warn+skip) unlike its fail-closed sibling build_folder_metadata, and the override REPLACES the grant-root's published child list — a transient lookup failure could silently drop a sibling from the folder, causing silent data loss with no EIO. Fixed by propagating those two error cases while preserving the two legitimate skip cases (non-File/Folder children, never-published children)."
+        },
+        {
+          "path": "crates/sdk/src/rotation/engine.rs",
+          "line": 1501,
+          "end_line": 1608,
+          "finding": "The resume Skipped-branch discarded VerifySubtreeOutcome.is_dirty (kept only .frontier), so a missing/unresolvable root (is_dirty:true, frontier:[]) could be mis-marked Complete instead of routing to the fail-closed resolve. Currently dormant in production (FUSE persist_job is a no-op so completed_node_ids never repopulates) but a real latent soundness gap in the resume path; fixed to check !is_dirty before short-circuiting, mirrored in the TS engine.ts reference."
+        },
+        {
+          "path": "crates/fuse/src/platform/windows/write_ops.rs",
+          "line": 1265,
+          "end_line": 1300,
+          "finding": "WinFsp coalescing was ported via a new shared run_scope_exit_gate_coalesced function (also used by fuser delete.rs) so the fuser and WinFsp delete paths can't drift; suppress-signal is stored on a new CipherBoxFS.coalesced_scope_exit_relink_suppressed HashSet since WinFsp splits delete across set_delete->cleanup."
+        }
+      ],
+      "workflow": [
+        "When a canary-first (single-plan-then-fan-out) approach is used for wave parallelism, explicitly tell the user upfront — silently doing so reads as 'not actually parallel' and draws direct pushback.",
+        "Hold/batch multiple independent fixes (e.g. WinFsp port + macOS drain fix) and push them together in one CI dispatch rather than burning a ~30min real-mount CI cycle per fix.",
+        "When resuming a debugger/investigator agent that already holds full root-cause context (file line numbers, reproduced evidence, a written FakeTransport test), resuming via SendMessage is far cheaper than spawning a fresh agent that must re-derive the same context.",
+        "Always verify a subagent's summary claims against the live checkout before trusting them — multiple 'diagnostics show X is broken/unused' claims from agents turned out to be stale editor snapshots, confirmed clean by authoritative `cargo check`.",
+        "For a phase with TS+Rust engine parity as an explicit goal, any fix discovered in one engine must be checked and mirrored in the other before considering the fix complete — CodeRabbit findings prompted checking TS parity for a Rust-only bug and found the identical latent defect there."
+      ]
+    },
+    "friction": [
+      "Multiple stale rust-analyzer / mid-edit-snapshot diagnostics (E0063 missing struct field, dead_code, unresolved macro reference) required repeated authoritative cargo check/test verification cycles to rule out false alarms, costing time each time.",
+      "GSD commit helper repeatedly reports commit_failed as a false negative (lint-staged hooks are slow on large files like ROADMAP.md, sometimes exceeding the 2-min Bash timeout), requiring manual git log verification each time rather than trusting the tool output.",
+      "desktop-e2e CI round-trips are slow (~15-40 min per run across 3 platforms) and multiple issues had to be discovered serially across several dispatched runs (macOS setup timeout -> revocation bypass/double-publish -> Windows coalescing gap -> Windows API-start flake) before D-16 went fully green.",
+      "local live idle-mount validation of the macOS publish-queue-drain fix was impossible on the interactive dev machine because background Spotlight/Finder processes generate spontaneous FUSE ops that mask the exact bug being fixed, forcing reliance on CI as the only valid test bed.",
+      "TEE-worker-dependent tests (tee-republish.test.ts) failed during the SDK-E2E ship gate due to an unseeded local tee_key_state — an environment-setup gap unrelated to the phase, requiring investigation to rule out as a regression.",
+      "Two orphaned rust-analyzer processes bound to a deleted worktree (leaked from a stale Phase-69 Claude session) were silently consuming ~5.4GB of RAM until the user noticed and asked about it."
+    ],
+    "open_items": [
+      "WinFsp handle_rename ungated-dest D-15d parity gap — tracked in .planning/todos/pending/2026-07-08-winfsp-d15d-gate-ordering-parity.md (delete path now closed; rename path still has the pre-existing ordering issue).",
+      "Desktop query_grants_rooted_at is a no-op — ROT-04 inner grant re-mint on desktop is deferred, tracked in .planning/todos/pending/2026-07-08-desktop-query-grants-rooted-at-remint-noop.md.",
+      "macOS FUSE-T read-side cache invalidation gap causing Cross-Client Sync Test 5 (content sync) and Test 7 (folder rename sync) to soft-skip on macOS — tracked in .planning/todos/pending/2026-07-09-macos-fuse-t-cross-client-sync-invalidation.md; requires either a working FUSE-T notification path or a shorter SMB cache TTL.",
+      "queue.rs duplication (identical floor-sidecar-skip guard block copy-pasted in load_all_for_vault and gc_failed_entries) flagged by the simplify reviewer as low-value; deliberately not refactored to keep ship-phase scope tight.",
+      "Finding 3 (CodeRabbit) — borrowed (non-copied) IPNS/owner/write key buffers passed by reference from client.ts into the rotation engine are not currently zeroed by the engine (refuted as a live defect) but remain a latent hardening opportunity (defensive copy at the seam) not applied.",
+      "Stale/dangling Phase-69 checkout and its orphaned Claude session/rust-analyzer process were cleaned up manually mid-session but the root cause (worktree cleanup not killing associated processes) was not addressed as a systemic fix.",
+      "Ship-phase flow was mid-execution at transcript end: PR not yet opened, PR review resolution and final CI-green confirmation and learnings-extraction steps (Steps 8-11 of ship-phase) still pending."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-09T01:45:36.410219Z",
+    "agent_lines": 9,
+    "agent_removed": 3,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 9,
+    "total_lines_changed": 12,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
