@@ -34,18 +34,18 @@ class IsNonNegativeBigIntConstraint implements ValidatorConstraintInterface {
 export class UpdateGrantDto {
   @ApiProperty({
     description:
-      'Hex-encoded ECIES descriptor ref for read access, re-wrapped for the recipient ' +
+      'Hex-encoded ECIES encrypted key for read access, re-wrapped for the recipient ' +
       'after an owner rotation. The server stores the client-supplied ciphertext as-is.',
   })
   @IsString()
   @Matches(/^(?:[0-9a-fA-F]{2})+$/, {
-    message: 'readDescriptorRef must be an even-length hex string',
+    message: 'encryptedReadKey must be an even-length hex string',
   })
   @MaxLength(2500)
-  readDescriptorRef!: string;
+  encryptedReadKey!: string;
 
   @ApiProperty({
-    description: 'Generation of the root node the rotated descriptor is rooted at (numeric string)',
+    description: 'Generation of the root node the rotated key is rooted at (numeric string)',
   })
   @IsNumberString()
   @Validate(IsNonNegativeBigIntConstraint)
@@ -54,27 +54,27 @@ export class UpdateGrantDto {
 
   @ApiProperty({
     description:
-      'Hex-encoded ECIES descriptor ref for write access, set to upgrade a read-only share ' +
-      'to write (read->write, D-09). Omit to leave any existing writeDescriptorRef unchanged ' +
-      '(e.g. a read-descriptor-rotation-only call). Mutually exclusive with clearWriteDescriptor.',
+      'Hex-encoded ECIES encrypted key for write access, set to upgrade a read-only share ' +
+      'to write (read->write, D-09). Omit to leave any existing encryptedWriteKey unchanged ' +
+      '(e.g. a read-key-rotation-only call). Mutually exclusive with clearEncryptedWriteKey.',
     required: false,
   })
   @IsString()
   @Matches(/^(?:[0-9a-fA-F]{2})+$/, {
-    message: 'writeDescriptorRef must be an even-length hex string',
+    message: 'encryptedWriteKey must be an even-length hex string',
   })
   @MaxLength(4096)
   @IsOptional()
-  writeDescriptorRef?: string;
+  encryptedWriteKey?: string;
 
   @ApiProperty({
     description:
-      'When true, clears any existing writeDescriptorRef (write->read downgrade). Omit/false ' +
-      'to leave writeDescriptorRef unchanged. Mutually exclusive with writeDescriptorRef.',
+      'When true, clears any existing encryptedWriteKey (write->read downgrade). Omit/false ' +
+      'to leave encryptedWriteKey unchanged. Mutually exclusive with encryptedWriteKey.',
     required: false,
     default: false,
   })
   @IsBoolean()
   @IsOptional()
-  clearWriteDescriptor?: boolean;
+  clearEncryptedWriteKey?: boolean;
 }

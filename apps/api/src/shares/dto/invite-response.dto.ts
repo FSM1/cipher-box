@@ -11,7 +11,7 @@ export class InviteResponseDto {
   token!: string;
 
   @ApiProperty({ description: 'IPNS name of the root shared node' })
-  rootIpnsName!: string;
+  shareRootIpnsName!: string;
 
   @ApiProperty({ description: 'UUID of the root shared node' })
   rootNodeId!: string;
@@ -64,22 +64,22 @@ export class InviteDataResponseDto {
   @ApiProperty({
     description: 'Hex-encoded root readKey wrapped with ephemeral public key',
   })
-  encryptedKey!: string;
+  encryptedReadKey!: string;
 
   @ApiProperty({
     description:
-      'Hex-encoded ECIES descriptor ref for write access wrapped with ephemeral public key. ' +
+      'Hex-encoded ECIES encrypted key for write access wrapped with ephemeral public key. ' +
       'Null for read-only invites.',
     type: String,
     nullable: true,
   })
-  writeDescriptorRef!: string | null;
+  encryptedWriteKey!: string | null;
 
   @ApiProperty({ description: 'UUID of the root shared node' })
   rootNodeId!: string;
 
   @ApiProperty({ description: 'IPNS name of the root shared node' })
-  rootIpnsName!: string;
+  shareRootIpnsName!: string;
 
   @ApiProperty({ description: 'Generation of the root node at invite creation (numeric string)' })
   rootGeneration!: string;

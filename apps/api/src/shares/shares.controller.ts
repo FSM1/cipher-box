@@ -42,7 +42,7 @@ export class SharesController {
     summary: 'Create a share',
     description:
       'Share an encrypted folder or file with another user. ' +
-      'The readDescriptorRef is the root readKey + metadata wrapped for the recipient via ECIES.',
+      'The encryptedReadKey is the root readKey + metadata wrapped for the recipient via ECIES.',
   })
   @ApiResponse({ status: 201, description: 'Share created', type: CreateShareResponseDto })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
@@ -58,12 +58,10 @@ export class SharesController {
       recipientPublicKey: dto.recipientPublicKey.startsWith('0x')
         ? dto.recipientPublicKey
         : `0x${dto.recipientPublicKey}`,
-      readDescriptorRef: share.readDescriptorRef.toString('hex'),
-      writeDescriptorRef: share.writeDescriptorRef
-        ? share.writeDescriptorRef.toString('hex')
-        : null,
+      encryptedReadKey: share.encryptedReadKey.toString('hex'),
+      encryptedWriteKey: share.encryptedWriteKey ? share.encryptedWriteKey.toString('hex') : null,
       rootNodeId: share.rootNodeId,
-      rootIpnsName: share.rootIpnsName,
+      shareRootIpnsName: share.shareRootIpnsName,
       rootGeneration: share.rootGeneration,
       itemNameEncrypted: share.itemNameEncrypted ? share.itemNameEncrypted.toString('hex') : null,
       createdAt: share.createdAt,
@@ -119,10 +117,10 @@ export class SharesController {
       shares: shares.map((s) => ({
         shareId: s.id,
         sharerPublicKey: s.sharer.publicKey,
-        readDescriptorRef: s.readDescriptorRef.toString('hex'),
-        writeDescriptorRef: s.writeDescriptorRef ? s.writeDescriptorRef.toString('hex') : null,
+        encryptedReadKey: s.encryptedReadKey.toString('hex'),
+        encryptedWriteKey: s.encryptedWriteKey ? s.encryptedWriteKey.toString('hex') : null,
         rootNodeId: s.rootNodeId,
-        rootIpnsName: s.rootIpnsName,
+        shareRootIpnsName: s.shareRootIpnsName,
         rootGeneration: s.rootGeneration,
         itemNameEncrypted: s.itemNameEncrypted ? s.itemNameEncrypted.toString('hex') : null,
         createdAt: s.createdAt,
@@ -155,10 +153,10 @@ export class SharesController {
       shares: shares.map((s) => ({
         shareId: s.id,
         recipientPublicKey: s.recipient.publicKey,
-        readDescriptorRef: s.readDescriptorRef.toString('hex'),
-        writeDescriptorRef: s.writeDescriptorRef ? s.writeDescriptorRef.toString('hex') : null,
+        encryptedReadKey: s.encryptedReadKey.toString('hex'),
+        encryptedWriteKey: s.encryptedWriteKey ? s.encryptedWriteKey.toString('hex') : null,
         rootNodeId: s.rootNodeId,
-        rootIpnsName: s.rootIpnsName,
+        shareRootIpnsName: s.shareRootIpnsName,
         rootGeneration: s.rootGeneration,
         itemNameEncrypted: s.itemNameEncrypted ? s.itemNameEncrypted.toString('hex') : null,
         createdAt: s.createdAt,
@@ -229,9 +227,9 @@ export class SharesController {
   @Patch(':shareId/grant')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({
-    summary: 'Update a share grant descriptor',
+    summary: 'Update a share grant key',
     description:
-      'Persist a rotated readDescriptorRef and rootGeneration on an existing share. ' +
+      'Persist a rotated encryptedReadKey and rootGeneration on an existing share. ' +
       'Only the sharer can update it; the server never re-encrypts and stores ' +
       'the client-supplied ciphertext as-is.',
   })
@@ -247,10 +245,10 @@ export class SharesController {
     await this.sharesService.updateGrant(
       shareId,
       req.user.id,
-      dto.readDescriptorRef,
+      dto.encryptedReadKey,
       dto.rootGeneration,
-      dto.writeDescriptorRef,
-      dto.clearWriteDescriptor
+      dto.encryptedWriteKey,
+      dto.clearEncryptedWriteKey
     );
   }
 }

@@ -25,10 +25,10 @@ describe('SharesController', () => {
     id: 'share-uuid-1',
     sharerId: 'sharer-uuid-1',
     recipientId: 'recipient-uuid-1',
-    readDescriptorRef: Buffer.from('aabb', 'hex'),
-    writeDescriptorRef: Buffer.from('ccdd', 'hex'),
+    encryptedReadKey: Buffer.from('aabb', 'hex'),
+    encryptedWriteKey: Buffer.from('ccdd', 'hex'),
     rootNodeId: 'node-uuid-1',
-    rootIpnsName: 'k51qzi5uqu5full',
+    shareRootIpnsName: 'k51qzi5uqu5full',
     rootGeneration: '3',
     itemNameEncrypted: Buffer.from('eeff', 'hex'),
     hiddenByRecipient: false,
@@ -42,10 +42,10 @@ describe('SharesController', () => {
     id: 'share-uuid-2',
     sharerId: 'sharer-uuid-1',
     recipientId: 'recipient-uuid-2',
-    readDescriptorRef: Buffer.from('1122', 'hex'),
-    writeDescriptorRef: null,
+    encryptedReadKey: Buffer.from('1122', 'hex'),
+    encryptedWriteKey: null,
     rootNodeId: 'node-uuid-2',
-    rootIpnsName: 'k51qzi5uqu5min',
+    shareRootIpnsName: 'k51qzi5uqu5min',
     rootGeneration: '0',
     itemNameEncrypted: null,
     hiddenByRecipient: false,
@@ -87,10 +87,10 @@ describe('SharesController', () => {
   describe('createShare', () => {
     const dto: CreateShareDto = {
       recipientPublicKey: '0x04recipientkey',
-      readDescriptorRef: 'aabb',
-      writeDescriptorRef: 'ccdd',
+      encryptedReadKey: 'aabb',
+      encryptedWriteKey: 'ccdd',
       rootNodeId: 'node-uuid-1',
-      rootIpnsName: 'k51qzi5uqu5full',
+      shareRootIpnsName: 'k51qzi5uqu5full',
       rootGeneration: '3',
       itemNameEncrypted: 'eeff',
     };
@@ -111,24 +111,24 @@ describe('SharesController', () => {
       expect(result).toEqual({
         shareId: 'share-uuid-1',
         recipientPublicKey: '0x04recipientkey',
-        readDescriptorRef: 'aabb',
-        writeDescriptorRef: 'ccdd',
+        encryptedReadKey: 'aabb',
+        encryptedWriteKey: 'ccdd',
         rootNodeId: 'node-uuid-1',
-        rootIpnsName: 'k51qzi5uqu5full',
+        shareRootIpnsName: 'k51qzi5uqu5full',
         rootGeneration: '3',
         itemNameEncrypted: 'eeff',
         createdAt,
       });
     });
 
-    it('returns null for absent writeDescriptorRef and itemNameEncrypted', async () => {
+    it('returns null for absent encryptedWriteKey and itemNameEncrypted', async () => {
       sharesService.createShare.mockResolvedValue(minimalShare);
 
       const result = await controller.createShare(mockRequest, dto);
 
-      expect(result.writeDescriptorRef).toBeNull();
+      expect(result.encryptedWriteKey).toBeNull();
       expect(result.itemNameEncrypted).toBeNull();
-      expect(result.readDescriptorRef).toBe('1122');
+      expect(result.encryptedReadKey).toBe('1122');
     });
 
     it('propagates NotFoundException when the recipient is unknown', async () => {
@@ -175,15 +175,15 @@ describe('SharesController', () => {
       expect(result.shares[0]).toEqual({
         shareId: 'share-uuid-1',
         sharerPublicKey: '04sharerkey',
-        readDescriptorRef: 'aabb',
-        writeDescriptorRef: 'ccdd',
+        encryptedReadKey: 'aabb',
+        encryptedWriteKey: 'ccdd',
         rootNodeId: 'node-uuid-1',
-        rootIpnsName: 'k51qzi5uqu5full',
+        shareRootIpnsName: 'k51qzi5uqu5full',
         rootGeneration: '3',
         itemNameEncrypted: 'eeff',
         createdAt,
       });
-      expect(result.shares[1].writeDescriptorRef).toBeNull();
+      expect(result.shares[1].encryptedWriteKey).toBeNull();
       expect(result.shares[1].itemNameEncrypted).toBeNull();
       expect(result.shares[1].sharerPublicKey).toBe('04sharerkey2');
     });
@@ -212,15 +212,15 @@ describe('SharesController', () => {
       expect(result.shares[0]).toEqual({
         shareId: 'share-uuid-1',
         recipientPublicKey: '04recipientkey',
-        readDescriptorRef: 'aabb',
-        writeDescriptorRef: 'ccdd',
+        encryptedReadKey: 'aabb',
+        encryptedWriteKey: 'ccdd',
         rootNodeId: 'node-uuid-1',
-        rootIpnsName: 'k51qzi5uqu5full',
+        shareRootIpnsName: 'k51qzi5uqu5full',
         rootGeneration: '3',
         itemNameEncrypted: 'eeff',
         createdAt,
       });
-      expect(result.shares[1].writeDescriptorRef).toBeNull();
+      expect(result.shares[1].encryptedWriteKey).toBeNull();
       expect(result.shares[1].itemNameEncrypted).toBeNull();
       expect(result.shares[1].recipientPublicKey).toBe('04recipientkey2');
     });
@@ -294,9 +294,9 @@ describe('SharesController', () => {
   });
 
   describe('updateGrant', () => {
-    const dto: UpdateGrantDto = { readDescriptorRef: 'aabbcc', rootGeneration: '4' };
+    const dto: UpdateGrantDto = { encryptedReadKey: 'aabbcc', rootGeneration: '4' };
 
-    it('delegates shareId, req.user.id, readDescriptorRef and rootGeneration to the service and returns 204', async () => {
+    it('delegates shareId, req.user.id, encryptedReadKey and rootGeneration to the service and returns 204', async () => {
       sharesService.updateGrant.mockResolvedValue(undefined);
 
       const result = await controller.updateGrant(mockRequest, 'share-uuid-1', dto);

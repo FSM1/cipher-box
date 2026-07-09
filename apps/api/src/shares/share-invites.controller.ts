@@ -57,7 +57,7 @@ export class ShareInvitesController {
     return {
       id: invite.id,
       token: invite.token,
-      rootIpnsName: invite.rootIpnsName,
+      shareRootIpnsName: invite.shareRootIpnsName,
       rootNodeId: invite.rootNodeId,
       rootGeneration: invite.rootGeneration,
       itemNameEncrypted: invite.itemNameEncrypted ? invite.itemNameEncrypted.toString('hex') : null,
@@ -69,7 +69,7 @@ export class ShareInvitesController {
 
   /**
    * List active (unclaimed, unexpired) invites for a specific item.
-   * Requires rootIpnsName query parameter.
+   * Requires shareRootIpnsName query parameter.
    */
   @Get()
   @ApiOperation({
@@ -79,7 +79,7 @@ export class ShareInvitesController {
       'for the specified item. Expired invites are auto-cleaned.',
   })
   @ApiQuery({
-    name: 'rootIpnsName',
+    name: 'shareRootIpnsName',
     description: 'IPNS name of the root shared node',
     required: true,
   })
@@ -95,12 +95,12 @@ export class ShareInvitesController {
   ): Promise<InviteResponseDto[]> {
     const invites = await this.shareInviteService.getInvitesForItem(
       req.user.id,
-      query.rootIpnsName
+      query.shareRootIpnsName
     );
     return invites.map((inv) => ({
       id: inv.id,
       token: inv.token,
-      rootIpnsName: inv.rootIpnsName,
+      shareRootIpnsName: inv.shareRootIpnsName,
       rootNodeId: inv.rootNodeId,
       rootGeneration: inv.rootGeneration,
       itemNameEncrypted: inv.itemNameEncrypted ? inv.itemNameEncrypted.toString('hex') : null,

@@ -23,7 +23,7 @@ export class SharesService {
   ) {}
 
   /**
-   * Create a new share record with descriptor refs (DATA-02).
+   * Create a new share record with encrypted keys (DATA-02).
    * Validates recipient exists and is not the sharer.
    * Prevents duplicate grants for the same root node / recipient pair.
    */
@@ -61,12 +61,10 @@ export class SharesService {
     const share = this.shareRepo.create({
       sharerId,
       recipientId: recipient.id,
-      readDescriptorRef: Buffer.from(dto.readDescriptorRef, 'hex'),
-      writeDescriptorRef: dto.writeDescriptorRef
-        ? Buffer.from(dto.writeDescriptorRef, 'hex')
-        : null,
+      encryptedReadKey: Buffer.from(dto.encryptedReadKey, 'hex'),
+      encryptedWriteKey: dto.encryptedWriteKey ? Buffer.from(dto.encryptedWriteKey, 'hex') : null,
       rootNodeId: dto.rootNodeId,
-      rootIpnsName: dto.rootIpnsName,
+      shareRootIpnsName: dto.shareRootIpnsName,
       rootGeneration: dto.rootGeneration ?? '0',
       itemNameEncrypted: dto.itemNameEncrypted ? Buffer.from(dto.itemNameEncrypted, 'hex') : null,
       hiddenByRecipient: false,
@@ -151,7 +149,7 @@ export class SharesService {
    * names, in a single transaction. Used when an owner deletes an item (file or
    * folder subtree) to the recycle bin.
    *
-   * - Shares: HARD-deleted by rootIpnsName (D-11).
+   * - Shares: HARD-deleted by shareRootIpnsName (D-11).
    * - Invites: active ShareInvite rows are marked 'revoked'.
    *
    * Scoped to `sharerId = caller` so a user can only revoke their own shares.
@@ -169,7 +167,7 @@ export class SharesService {
 
     return this.dataSource.transaction(async (manager) => {
       const shares = await manager.find(Share, {
-        where: { sharerId, rootIpnsName: In(uniqueNames) },
+        where: { sharerId, shareRootIpnsName: In(uniqueNames) },
       });
       if (shares.length > 0) {
         await manager.remove(shares);
@@ -181,7 +179,7 @@ export class SharesService {
         .update(ShareInvite)
         .set({ status: 'revoked' })
         .where('sharer_id = :sharerId', { sharerId })
-        .andWhere('root_ipns_name IN (:...names)', { names: uniqueNames })
+        .andWhere('share_root_ipns_name IN (:...names)', { names: uniqueNames })
         .andWhere('status = :status', { status: 'active' })
         .execute();
 
@@ -228,31 +226,31 @@ export class SharesService {
   }
 
   /**
-   * Persist a rotated readDescriptorRef and rootGeneration on an existing share.
+   * Persist a rotated encryptedReadKey and rootGeneration on an existing share.
    * Only the sharer (owner) can update it — the owner drives grant re-mint on
    * key rotation (D-10/D-11, 68-07 owner reconcile). The server never
    * re-encrypts — it persists the client-supplied ciphertext as-is.
    *
-   * `writeDescriptorRef`/`clearWriteDescriptor` additionally support the
+   * `encryptedWriteKey`/`clearEncryptedWriteKey` additionally support the
    * read->write upgrade / write->read downgrade paths (68.1-19): when
-   * `writeDescriptorRef` is supplied, it sets the share's write descriptor
-   * (upgrade). When `clearWriteDescriptor` is true, it clears the share's
-   * write descriptor to null (downgrade). When neither is supplied — the
-   * existing read-descriptor-rotation-only call shape (owner-reconcile,
-   * D-10/D-11) — `writeDescriptorRef` is left completely unchanged (T-68.1-19-02).
+   * `encryptedWriteKey` is supplied, it sets the share's write key
+   * (upgrade). When `clearEncryptedWriteKey` is true, it clears the share's
+   * write key to null (downgrade). When neither is supplied — the
+   * existing read-key-rotation-only call shape (owner-reconcile,
+   * D-10/D-11) — `encryptedWriteKey` is left completely unchanged (T-68.1-19-02).
    * The two are mutually exclusive.
    */
   async updateGrant(
     shareId: string,
     sharerId: string,
-    readDescriptorRef: string,
+    encryptedReadKey: string,
     rootGeneration: string,
-    writeDescriptorRef?: string,
-    clearWriteDescriptor?: boolean
+    encryptedWriteKey?: string,
+    clearEncryptedWriteKey?: boolean
   ): Promise<void> {
-    if (writeDescriptorRef && clearWriteDescriptor) {
+    if (encryptedWriteKey && clearEncryptedWriteKey) {
       throw new BadRequestException(
-        'writeDescriptorRef and clearWriteDescriptor are mutually exclusive'
+        'encryptedWriteKey and clearEncryptedWriteKey are mutually exclusive'
       );
     }
 
@@ -281,14 +279,14 @@ export class SharesService {
         );
       }
 
-      share.readDescriptorRef = Buffer.from(readDescriptorRef, 'hex');
+      share.encryptedReadKey = Buffer.from(encryptedReadKey, 'hex');
       share.rootGeneration = rootGeneration;
-      if (clearWriteDescriptor) {
-        share.writeDescriptorRef = null;
-      } else if (writeDescriptorRef) {
-        share.writeDescriptorRef = Buffer.from(writeDescriptorRef, 'hex');
+      if (clearEncryptedWriteKey) {
+        share.encryptedWriteKey = null;
+      } else if (encryptedWriteKey) {
+        share.encryptedWriteKey = Buffer.from(encryptedWriteKey, 'hex');
       }
-      // else: leave share.writeDescriptorRef untouched (read-only rotation).
+      // else: leave share.encryptedWriteKey untouched (read-only rotation).
       await manager.save(share);
     });
   }

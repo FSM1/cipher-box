@@ -20,10 +20,10 @@ describe('InvitesController', () => {
   const buildInvite = (overrides: Partial<ShareInvite> = {}): ShareInvite =>
     ({
       status: 'active',
-      encryptedKey: Buffer.from('deadbeef', 'hex'),
-      writeDescriptorRef: Buffer.from('cafe', 'hex'),
+      encryptedReadKey: Buffer.from('deadbeef', 'hex'),
+      encryptedWriteKey: Buffer.from('cafe', 'hex'),
       rootNodeId: 'root-node-uuid',
-      rootIpnsName: 'k51qzi5uqu5test',
+      shareRootIpnsName: 'k51qzi5uqu5test',
       rootGeneration: '7',
       itemNameEncrypted: Buffer.from('0011', 'hex'),
       ...overrides,
@@ -99,31 +99,31 @@ describe('InvitesController', () => {
 
       expect(result).toEqual({
         status: 'active',
-        encryptedKey: 'deadbeef',
-        writeDescriptorRef: 'cafe',
+        encryptedReadKey: 'deadbeef',
+        encryptedWriteKey: 'cafe',
         rootNodeId: 'root-node-uuid',
-        rootIpnsName: 'k51qzi5uqu5test',
+        shareRootIpnsName: 'k51qzi5uqu5test',
         rootGeneration: '7',
         itemNameEncrypted: '0011',
       });
     });
 
-    it('returns null for writeDescriptorRef and itemNameEncrypted when absent (read-only invite)', async () => {
+    it('returns null for encryptedWriteKey and itemNameEncrypted when absent (read-only invite)', async () => {
       shareInviteService.getInviteForClaim.mockResolvedValue(
-        buildInvite({ writeDescriptorRef: null, itemNameEncrypted: null })
+        buildInvite({ encryptedWriteKey: null, itemNameEncrypted: null })
       );
 
       const result = await controller.getInviteData('tok-readonly');
 
-      expect(result.writeDescriptorRef).toBeNull();
+      expect(result.encryptedWriteKey).toBeNull();
       expect(result.itemNameEncrypted).toBeNull();
-      expect(result.encryptedKey).toBe('deadbeef');
+      expect(result.encryptedReadKey).toBe('deadbeef');
     });
   });
 
   describe('claimInvite', () => {
     const dto: ClaimInviteDto = {
-      readDescriptorRef: 'aa'.repeat(40),
+      encryptedReadKey: 'aa'.repeat(40),
     };
 
     it('delegates to the service with token, the authenticated user id, and dto', async () => {
