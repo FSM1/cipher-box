@@ -10,6 +10,7 @@ import { Repository, DataSource, In } from 'typeorm';
 import { Share } from './entities/share.entity';
 import { ShareInvite } from './entities/share-invite.entity';
 import { User } from '../auth/entities/user.entity';
+import { IpnsRecord } from '../ipns/entities/ipns-record.entity';
 import { CreateShareDto } from './dto/create-share.dto';
 
 @Injectable()
@@ -19,6 +20,8 @@ export class SharesService {
     private readonly shareRepo: Repository<Share>,
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
+    @InjectRepository(IpnsRecord)
+    private readonly ipnsRecordRepo: Repository<IpnsRecord>,
     private readonly dataSource: DataSource
   ) {}
 

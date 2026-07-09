@@ -11,6 +11,7 @@ import { SharesService } from './shares.service';
 import { Share } from './entities/share.entity';
 import { ShareInvite } from './entities/share-invite.entity';
 import { User } from '../auth/entities/user.entity';
+import { IpnsRecord } from '../ipns/entities/ipns-record.entity';
 import { CreateShareDto } from './dto/create-share.dto';
 
 type RepoMock = jest.Mocked<Record<string, jest.Mock>>;
@@ -52,6 +53,7 @@ describe('SharesService', () => {
   let service: SharesService;
   let shareRepo: RepoMock;
   let userRepo: RepoMock;
+  let ipnsRecordRepo: RepoMock;
   let dataSource: { transaction: jest.Mock };
   let manager: {
     find: jest.Mock;
@@ -73,6 +75,12 @@ describe('SharesService', () => {
 
     userRepo = {
       findOne: jest.fn(),
+    };
+
+    // Default: caller IS the registered owner of the shared node (D-01/SC#1).
+    // Individual root-ownership tests override this per-case.
+    ipnsRecordRepo = {
+      findOne: jest.fn().mockResolvedValue({ id: 'ipns-record-1' }),
     };
 
     queryBuilder = {
@@ -102,6 +110,7 @@ describe('SharesService', () => {
         SharesService,
         { provide: getRepositoryToken(Share), useValue: shareRepo },
         { provide: getRepositoryToken(User), useValue: userRepo },
+        { provide: getRepositoryToken(IpnsRecord), useValue: ipnsRecordRepo },
         { provide: DataSource, useValue: dataSource },
       ],
     }).compile();

@@ -10,6 +10,7 @@ import { Repository, DataSource } from 'typeorm';
 import { randomBytes } from 'crypto';
 import { Share } from './entities/share.entity';
 import { ShareInvite } from './entities/share-invite.entity';
+import { IpnsRecord } from '../ipns/entities/ipns-record.entity';
 import { CreateInviteDto } from './dto/create-invite.dto';
 import { ClaimInviteDto } from './dto/claim-invite.dto';
 
@@ -23,6 +24,8 @@ export class ShareInviteService {
   constructor(
     @InjectRepository(ShareInvite)
     private readonly inviteRepo: Repository<ShareInvite>,
+    @InjectRepository(IpnsRecord)
+    private readonly ipnsRecordRepo: Repository<IpnsRecord>,
     private readonly dataSource: DataSource
   ) {}
 
