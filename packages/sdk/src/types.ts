@@ -43,13 +43,13 @@ export type ShareCallbacks = {
 };
 
 /**
- * Client-authoritative record that a grant rooted at `rootIpnsName` is held
+ * Client-authoritative record that a grant rooted at `shareRootIpnsName` is held
  * locally. Used as the anti-malicious-relay cross-check in `hasCoveringGrant`
  * (T-63-17) -- independent of whatever `activeGrantRootIpnsNames` the relay
  * reports for a given scope-exit mutation.
  */
 export type LocalGrantRecord = {
-  rootIpnsName: string;
+  shareRootIpnsName: string;
 };
 
 /**

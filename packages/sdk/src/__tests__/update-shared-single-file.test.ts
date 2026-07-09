@@ -3,8 +3,8 @@
  * seam, closes writable-shares 10.3).
  *
  * A DIRECT single-file share (root `kind: 'file'`) has no parent folder write
- * chain to walk — the two grant descriptors (`readDescriptorRef`/
- * `writeDescriptorRef`) directly ECIES-wrap the file's own readKey/writeKey.
+ * chain to walk — the two grant encrypted keys (`encryptedReadKey`/
+ * `encryptedWriteKey`) directly ECIES-wrap the file's own readKey/writeKey.
  * `updateSharedSingleFile` recovers both, validates-before-trust by unsealing
  * the file's own write-body, and publishes to the file's OWN IPNS at seq+1.
  *
@@ -97,7 +97,7 @@ type Fixture = {
  *
  * @param opts.generation - the file node's generation (default 0).
  * @param opts.omitWriteBody - when true, the file node carries NO write-body
- *   (simulates a read-only descriptor pair / missing ipnsPrivateKey).
+ *   (simulates a read-only encrypted-key pair / missing ipnsPrivateKey).
  */
 async function buildFixture(
   opts: { generation?: number; omitWriteBody?: boolean } = {}
@@ -143,12 +143,12 @@ function mockResolution(filePublished: PublishedNode): void {
 }
 
 async function buildArgs(overrides?: {
-  writeDescriptorRef?: string;
+  encryptedWriteKey?: string;
   rootExpectedGeneration?: number;
 }): Promise<{
   shareId: string;
-  readDescriptorRef: string;
-  writeDescriptorRef: string;
+  encryptedReadKey: string;
+  encryptedWriteKey: string;
   fileIpnsName: string;
   ownerPublicKey: Uint8Array;
   recipientPrivateKey: Uint8Array;
@@ -156,16 +156,16 @@ async function buildArgs(overrides?: {
   rootExpectedGeneration: number;
   newContent: Uint8Array;
 }> {
-  const readDescriptorRef = cryptoMod.bytesToHex(
+  const encryptedReadKey = cryptoMod.bytesToHex(
     await cryptoMod.wrapKey(fileReadKey, RECIPIENT_PUBLIC_KEY)
   );
-  const writeDescriptorRef = cryptoMod.bytesToHex(
+  const encryptedWriteKey = cryptoMod.bytesToHex(
     await cryptoMod.wrapKey(fileWriteKey, RECIPIENT_PUBLIC_KEY)
   );
   return {
     shareId: SHARE_ID,
-    readDescriptorRef,
-    writeDescriptorRef: overrides?.writeDescriptorRef ?? writeDescriptorRef,
+    encryptedReadKey,
+    encryptedWriteKey: overrides?.encryptedWriteKey ?? encryptedWriteKey,
     fileIpnsName: FILE_IPNS,
     ownerPublicKey: OWNER_PUBLIC_KEY,
     recipientPrivateKey: RECIPIENT_PRIVATE_KEY,
@@ -183,7 +183,7 @@ describe('CipherBoxClient.updateSharedSingleFile', () => {
     client = new CipherBoxClient(createTestConfig());
   });
 
-  it('resolves the file keys from the grant descriptors and delegates to shareOps.updateSharedFile exactly once', async () => {
+  it("resolves the file keys from the grant's encrypted keys and delegates to shareOps.updateSharedFile exactly once", async () => {
     const { filePublished, fileNode } = await buildFixture();
     mockResolution(filePublished);
     // Snapshot params INSIDE the mock implementation, before the method's own
@@ -229,19 +229,19 @@ describe('CipherBoxClient.updateSharedSingleFile', () => {
     expect(shareOps.updateSharedFile).not.toHaveBeenCalled();
   });
 
-  it('throws fail-closed on a tampered writeDescriptorRef (AEAD auth), without delegating', async () => {
+  it('throws fail-closed on a tampered encryptedWriteKey (AEAD auth), without delegating', async () => {
     const { filePublished } = await buildFixture();
     mockResolution(filePublished);
     const args = await buildArgs();
 
-    // Corrupt the write descriptor hex (flip a char past the wrap-tag prefix)
+    // Corrupt the write encrypted-key hex (flip a char past the wrap-tag prefix)
     // so the fake unwrapKey recovers a DIFFERENT (wrong) 32-byte writeKey —
     // unsealNode's real AEAD auth then fails validating it against the file's
     // own write-body (never caught, never swallowed).
-    const chars = args.writeDescriptorRef.split('');
+    const chars = args.encryptedWriteKey.split('');
     const idx = Math.floor(chars.length / 2);
     chars[idx] = chars[idx] === '0' ? '1' : '0';
-    const tampered = { ...args, writeDescriptorRef: chars.join('') };
+    const tampered = { ...args, encryptedWriteKey: chars.join('') };
 
     await expect(client.updateSharedSingleFile(tampered)).rejects.toThrow();
     expect(shareOps.updateSharedFile).not.toHaveBeenCalled();

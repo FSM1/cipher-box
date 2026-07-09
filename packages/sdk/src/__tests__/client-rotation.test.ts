@@ -329,7 +329,7 @@ describe('CipherBoxClient — scope-exit rotation wiring (SC#2 / SC#4, Task 2)',
         rotationCallbacks: {
           getActiveGrantRootIpnsNames: async () => new Set(), // relay omits it
           getLocalGrantRecord: (ipnsName) =>
-            ipnsName === FOLDER_IPNS ? { rootIpnsName: FOLDER_IPNS } : null,
+            ipnsName === FOLDER_IPNS ? { shareRootIpnsName: FOLDER_IPNS } : null,
           persistJob: vi.fn(),
         },
       })

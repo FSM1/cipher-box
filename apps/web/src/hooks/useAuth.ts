@@ -337,7 +337,7 @@ export function useAuth() {
             // shareCallbacks (getCoveringShares/addShareKeys) removed: the SDK's
             // per-recipient key fan-out is dead code (D-03 already skips it at
             // upload time) and the web `addShareKeys` fan-out it called into is
-            // deleted (SC#2 / D-12) — descriptor refs replace it.
+            // deleted (SC#2 / D-12) — encrypted-key refs replace it.
             // Concrete web driver for the scope-exit rotation injection seam
             // (68-05): durable job checkpoint + D-02/D-03 progress badge +
             // D-09 multi-tab leader election (68-08).

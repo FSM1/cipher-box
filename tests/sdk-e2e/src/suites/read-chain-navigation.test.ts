@@ -188,17 +188,17 @@ describe('Read-chain navigation + root-step rotation happy-path round-trip (D-04
     // -----------------------------------------------------------------------
     // Step 3: Alice issues a read grant for the folder root to Bob (READ-01).
     //
-    // issueReadGrant: ONE ECIES wrap of the share-root readKey → readDescriptorRef.
+    // issueReadGrant: ONE ECIES wrap of the share-root readKey → encryptedReadKey.
     // Zero node resolves, zero seal/unseal, zero IPNS publishes (READ-01 / §3.2).
     //
     // Transport-decoupled seam (D-05): Phase 66 wires real shares persistence;
     // here an in-memory stub returns a synthetic shareId (schema-agnostic — D-05).
     // -----------------------------------------------------------------------
-    const { readDescriptorRef } = await issueReadGrant({
+    const { encryptedReadKey } = await issueReadGrant({
       shareRootReadKey: folderResult.rootReadKey,
       recipientPublicKey: bob.publicKey,
       rootNodeId: folderNodeId,
-      rootIpnsName: folderIpnsName,
+      shareRootIpnsName: folderIpnsName,
       rootGeneration: folderGeneration,
       insertShareFn: async (_payload) => ({ shareId: crypto.randomUUID() }),
     });
@@ -207,7 +207,7 @@ describe('Read-chain navigation + root-step rotation happy-path round-trip (D-04
     // Step 4: Bob navigates the read chain to the file (pre-rotation).
     //
     // navigateReadChain:
-    //   1. ONE ECIES unwrap of readDescriptorRef → shareRootReadKey
+    //   1. ONE ECIES unwrap of encryptedReadKey → shareRootReadKey
     //   2. Resolve root IPNS → fetch PublishedNode (generation == 0)
     //   3. Behind-retry check: 0 > 0 == false → continue
     //   4. Unseal root node
@@ -219,9 +219,9 @@ describe('Read-chain navigation + root-step rotation happy-path round-trip (D-04
     //   6. Leaf is 'file' kind with content → { status: 'ok', content, nodeId }
     // -----------------------------------------------------------------------
     const preResult = await navigateReadChain({
-      readDescriptorRef,
+      encryptedReadKey,
       recipientPrivKey: bob.privateKey,
-      rootIpnsName: folderIpnsName,
+      shareRootIpnsName: folderIpnsName,
       rootExpectedGeneration: folderGeneration,
       path: [fileIpnsName],
       ctx: bobCtx,
@@ -290,14 +290,14 @@ describe('Read-chain navigation + root-step rotation happy-path round-trip (D-04
     //   - navigateReadChain Step 3: generation (1) > rootExpectedGeneration (0)
     //     → { status: 'behind-retry' } (NOT 'ok')
     //
-    // The same readDescriptorRef (pre-rotation ECIES wrap) is used — it wraps the
+    // The same encryptedReadKey (pre-rotation ECIES wrap) is used — it wraps the
     // OLD shareRootReadKey under Bob's public key, which no longer matches the
     // rotated root readKey'.
     // -----------------------------------------------------------------------
     const postResult = await navigateReadChain({
-      readDescriptorRef, // same pre-rotation grant descriptor
+      encryptedReadKey, // same pre-rotation grant encrypted key
       recipientPrivKey: bob.privateKey,
-      rootIpnsName: folderIpnsName,
+      shareRootIpnsName: folderIpnsName,
       rootExpectedGeneration: folderGeneration, // still 0 — anchored at grant issuance
       path: [fileIpnsName],
       ctx: bobCtx,

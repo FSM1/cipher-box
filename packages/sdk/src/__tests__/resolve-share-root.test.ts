@@ -2,7 +2,7 @@
  * CipherBoxClient.resolveShareRoot tests (68.2-08 Rule-2 facade addition).
  *
  * Hoists the raw-crypto portion of `useSharedNavigationActions.ts`'s
- * `navigateToShare` (ONE ECIES unwrap of `readDescriptorRef` -> resolve+
+ * `navigateToShare` (ONE ECIES unwrap of `encryptedReadKey` -> resolve+
  * unseal the root Node) into the SDK -- mirrors `resolveChildIdentity`'s
  * mocking boundary (only `resolveIpnsRecord`/`fetchFromIpfs` mocked). Uses
  * the SAME deterministic, invertible `wrapKey`/`unwrapKey` fake as
@@ -106,14 +106,14 @@ describe('CipherBoxClient.resolveShareRoot', () => {
   it('recovers the root readKey via ECIES unwrap and unseals a FOLDER root', async () => {
     const { published } = await buildRootFixture('folder');
     mockResolution(published, 5n);
-    const readDescriptorRef = cryptoMod.bytesToHex(
+    const encryptedReadKey = cryptoMod.bytesToHex(
       await cryptoMod.wrapKey(ROOT_READ_KEY, RECIPIENT_PUBLIC_KEY)
     );
 
     const result = await client.resolveShareRoot({
-      readDescriptorRef,
+      encryptedReadKey,
       recipientPrivateKey: RECIPIENT_PRIVATE_KEY,
-      rootIpnsName: ROOT_IPNS,
+      shareRootIpnsName: ROOT_IPNS,
       rootExpectedGeneration: 0,
     });
 
@@ -128,14 +128,14 @@ describe('CipherBoxClient.resolveShareRoot', () => {
   it('resolves a single-file share root with kind "file"', async () => {
     const { published } = await buildRootFixture('file');
     mockResolution(published);
-    const readDescriptorRef = cryptoMod.bytesToHex(
+    const encryptedReadKey = cryptoMod.bytesToHex(
       await cryptoMod.wrapKey(ROOT_READ_KEY, RECIPIENT_PUBLIC_KEY)
     );
 
     const result = await client.resolveShareRoot({
-      readDescriptorRef,
+      encryptedReadKey,
       recipientPrivateKey: RECIPIENT_PRIVATE_KEY,
-      rootIpnsName: ROOT_IPNS,
+      shareRootIpnsName: ROOT_IPNS,
       rootExpectedGeneration: 0,
     });
 
@@ -147,14 +147,14 @@ describe('CipherBoxClient.resolveShareRoot', () => {
   it('returns behind-retry when the resolved generation exceeds rootExpectedGeneration', async () => {
     const { published } = await buildRootFixture('folder', 5);
     mockResolution(published);
-    const readDescriptorRef = cryptoMod.bytesToHex(
+    const encryptedReadKey = cryptoMod.bytesToHex(
       await cryptoMod.wrapKey(ROOT_READ_KEY, RECIPIENT_PUBLIC_KEY)
     );
 
     const result = await client.resolveShareRoot({
-      readDescriptorRef,
+      encryptedReadKey,
       recipientPrivateKey: RECIPIENT_PRIVATE_KEY,
-      rootIpnsName: ROOT_IPNS,
+      shareRootIpnsName: ROOT_IPNS,
       rootExpectedGeneration: 0,
     });
 
@@ -163,14 +163,14 @@ describe('CipherBoxClient.resolveShareRoot', () => {
 
   it('returns revoked when the root IPNS record cannot be resolved', async () => {
     vi.mocked(sdkCore.resolveIpnsRecord).mockResolvedValue(null);
-    const readDescriptorRef = cryptoMod.bytesToHex(
+    const encryptedReadKey = cryptoMod.bytesToHex(
       await cryptoMod.wrapKey(ROOT_READ_KEY, RECIPIENT_PUBLIC_KEY)
     );
 
     const result = await client.resolveShareRoot({
-      readDescriptorRef,
+      encryptedReadKey,
       recipientPrivateKey: RECIPIENT_PRIVATE_KEY,
-      rootIpnsName: ROOT_IPNS,
+      shareRootIpnsName: ROOT_IPNS,
       rootExpectedGeneration: 0,
     });
 
@@ -180,15 +180,15 @@ describe('CipherBoxClient.resolveShareRoot', () => {
   it('never zeroes the caller-owned recipientPrivateKey (D-09)', async () => {
     const { published } = await buildRootFixture('file');
     mockResolution(published);
-    const readDescriptorRef = cryptoMod.bytesToHex(
+    const encryptedReadKey = cryptoMod.bytesToHex(
       await cryptoMod.wrapKey(ROOT_READ_KEY, RECIPIENT_PUBLIC_KEY)
     );
     const before = RECIPIENT_PRIVATE_KEY.slice();
 
     await client.resolveShareRoot({
-      readDescriptorRef,
+      encryptedReadKey,
       recipientPrivateKey: RECIPIENT_PRIVATE_KEY,
-      rootIpnsName: ROOT_IPNS,
+      shareRootIpnsName: ROOT_IPNS,
       rootExpectedGeneration: 0,
     });
 

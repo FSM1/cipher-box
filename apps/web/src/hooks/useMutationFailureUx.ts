@@ -23,7 +23,7 @@
  *     when the replayed seq exactly matches its last-recorded floor -- Gap 4
  *     / 68.1-21), (D-05) immediately as a per-mutation error notice, no
  *     retry.
- *   - surfaces a stale/rotated-out write-descriptor failure (D-01/WRITE-03)
+ *   - surfaces a stale/rotated-out write-encrypted-key failure (D-01/WRITE-03)
  *     with a one-tap re-resolve action, escalating to a terminal notice with
  *     no action if the re-resolve still fails.
  *   - surfaces the one-time degraded-cache notice (D-08) at most once per
@@ -69,9 +69,9 @@ export const RECONCILE_RETRY_DELAYS_MS = [2000, 4000, 8000, 16000] as const;
 
 export type RunWithFailureUxOptions = {
   /**
-   * Re-resolves the write descriptor for a stale/rotated-out co-writer
+   * Re-resolves the write encrypted key for a stale/rotated-out co-writer
    * write (D-01/WRITE-03) before a single automatic retry. Omit for
-   * mutations that never touch a shared write descriptor -- those
+   * mutations that never touch a shared write encrypted key -- those
    * immediately surface the terminal revoked notice instead.
    */
   refreshWriteAccess?: () => Promise<void>;
@@ -186,7 +186,7 @@ function dispatchRegressionRejected(): void {
  * a `Refresh access` action) or, once a refresh has already been attempted
  * and still failed, the terminal revoked notice with no action.
  */
-function dispatchWriteDescriptorStale<T>(
+function dispatchEncryptedWriteKeyStale<T>(
   mutationFn: () => Promise<T>,
   opts: RunWithFailureUxOptions
 ): void {
@@ -253,7 +253,7 @@ export async function runWithFailureUx<T>(
       throw err;
     }
     if (err instanceof CannotWriteUntilRefetchError) {
-      dispatchWriteDescriptorStale(mutationFn, opts);
+      dispatchEncryptedWriteKeyStale(mutationFn, opts);
       throw err;
     }
     throw err;

@@ -14,7 +14,7 @@
  * with a SINGLE ECIES wrap of the subtree root's readKey -- the recipient
  * recovers every descendant key on demand via the read-chain at read time
  * (`navigateReadChain`), not via a pre-computed per-child key array. Likewise
- * a write grant wraps only the ROOT writeKey (`writeDescriptorRef`), never a
+ * a write grant wraps only the ROOT writeKey (`encryptedWriteKey`), never a
  * per-child write-key fan-out.
  */
 

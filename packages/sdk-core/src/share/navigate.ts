@@ -4,7 +4,7 @@
  * Implements READ-02 / design §2.6, §3.3, §4.6.
  *
  * Algorithm:
- *   1. ONE ECIES unwrap of the grant readDescriptorRef → shareRootReadKey.
+ *   1. ONE ECIES unwrap of the grant encryptedReadKey → shareRootReadKey.
  *   2. Resolve + fetch the root PublishedNode.
  *   3. Behind-retry check: envelope generation > rootExpectedGeneration → soft-fail.
  *   4. Unseal root node.
@@ -88,9 +88,9 @@ async function fetchPublishedNode(
 /**
  * Walk a read-chain grant from the share root to a file leaf.
  *
- * @param params.readDescriptorRef        - Base64 ECIES-wrapped share-root readKey
+ * @param params.encryptedReadKey        - Base64 ECIES-wrapped share-root readKey
  * @param params.recipientPrivKey         - Secp256k1 private key for ECIES unwrap (one op)
- * @param params.rootIpnsName             - IPNS k51 name of the grant root node
+ * @param params.shareRootIpnsName        - IPNS k51 name of the grant root node
  * @param params.rootExpectedGeneration   - Generation at which the grant was issued (staleness witness)
  * @param params.path                     - Ordered child ipnsNames root→leaf; empty = root IS the file leaf
  * @param params.ctx                      - SDK context for IPNS + IPFS access
@@ -104,9 +104,9 @@ async function fetchPublishedNode(
  *   The recovered content key returned inside `content` is caller-owned and NOT zeroed.
  */
 export async function navigateReadChain(params: {
-  readDescriptorRef: string;
+  encryptedReadKey: string;
   recipientPrivKey: Uint8Array;
-  rootIpnsName: string;
+  shareRootIpnsName: string;
   rootExpectedGeneration: number;
   path: string[];
   ctx: SdkContext;
@@ -120,13 +120,13 @@ export async function navigateReadChain(params: {
       // Step 1: ONE ECIES unwrap → share-root readKey
       // D-09: do NOT zero recipientPrivKey — caller is the terminal owner.
       const shareRootReadKey = await unwrapKey(
-        base64ToBytes(params.readDescriptorRef),
+        base64ToBytes(params.encryptedReadKey),
         params.recipientPrivKey
       );
       mintedKeys.push(shareRootReadKey);
 
       // Step 2: Resolve + fetch the root PublishedNode
-      const rootPublished = await fetchPublishedNode(params.rootIpnsName, params.ctx);
+      const rootPublished = await fetchPublishedNode(params.shareRootIpnsName, params.ctx);
       if (!rootPublished) return { status: 'revoked' };
 
       // Step 3: Behind-retry check (§4.6 / D-06)

@@ -334,11 +334,11 @@ describe('Rotation crash-safety suite (TEST-01 phase gate)', () => {
     const nodeKeySource = (name: string) => keyMap.get(name);
 
     // Issue pre-rotation grant to Bob
-    const { readDescriptorRef: preGrant } = await issueReadGrant({
+    const { encryptedReadKey: preGrant } = await issueReadGrant({
       shareRootReadKey: rootResult.rootReadKey,
       recipientPublicKey: bob.publicKey,
       rootNodeId: rootResult.node.id,
-      rootIpnsName: rootIpnsName,
+      shareRootIpnsName: rootIpnsName,
       rootGeneration: 0,
       insertShareFn: async (_p) => ({ shareId: crypto.randomUUID() }),
     });
@@ -378,9 +378,9 @@ describe('Rotation crash-safety suite (TEST-01 phase gate)', () => {
 
     // Pre-rotation grant is now revoked (behind-retry)
     const revokedResult = await navigateReadChain({
-      readDescriptorRef: preGrant,
+      encryptedReadKey: preGrant,
       recipientPrivKey: bob.privateKey,
-      rootIpnsName: rootIpnsName,
+      shareRootIpnsName: rootIpnsName,
       rootExpectedGeneration: 0,
       path: [subIpnsName, fileIpnsName],
       ctx: bobCtx,
@@ -388,18 +388,18 @@ describe('Rotation crash-safety suite (TEST-01 phase gate)', () => {
     expect(revokedResult.status).toBe('behind-retry');
 
     // Post-rotation grant navigates root → subfolder → file (D-02: multi-level re-seal proven)
-    const { readDescriptorRef: freshGrant } = await issueReadGrant({
+    const { encryptedReadKey: freshGrant } = await issueReadGrant({
       shareRootReadKey: readKeyPrimeRoot,
       recipientPublicKey: bob.publicKey,
       rootNodeId: rootResult.node.id,
-      rootIpnsName: rootIpnsName,
+      shareRootIpnsName: rootIpnsName,
       rootGeneration: 1,
       insertShareFn: async (_p) => ({ shareId: crypto.randomUUID() }),
     });
     const navResult = await navigateReadChain({
-      readDescriptorRef: freshGrant,
+      encryptedReadKey: freshGrant,
       recipientPrivKey: bob.privateKey,
-      rootIpnsName: rootIpnsName,
+      shareRootIpnsName: rootIpnsName,
       rootExpectedGeneration: 1,
       path: [subIpnsName, fileIpnsName],
       ctx: bobCtx,
@@ -487,11 +487,11 @@ describe('Rotation crash-safety suite (TEST-01 phase gate)', () => {
     });
 
     // Pre-rotation grant to Bob (will become stale after rotation)
-    const { readDescriptorRef: preGrant2 } = await issueReadGrant({
+    const { encryptedReadKey: preGrant2 } = await issueReadGrant({
       shareRootReadKey: root2Result.rootReadKey,
       recipientPublicKey: bob.publicKey,
       rootNodeId: root2Result.node.id,
-      rootIpnsName: root2IpnsName,
+      shareRootIpnsName: root2IpnsName,
       rootGeneration: 0,
       insertShareFn: async (_p) => ({ shareId: crypto.randomUUID() }),
     });
@@ -570,9 +570,9 @@ describe('Rotation crash-safety suite (TEST-01 phase gate)', () => {
 
     // Pre-rotation grant is revoked (root committed → published gen=1 > expected gen=0)
     const revokedNav = await navigateReadChain({
-      readDescriptorRef: preGrant2,
+      encryptedReadKey: preGrant2,
       recipientPrivKey: bob.privateKey,
-      rootIpnsName: root2IpnsName,
+      shareRootIpnsName: root2IpnsName,
       rootExpectedGeneration: 0,
       path: [sub2IpnsName, file2IpnsName],
       ctx: bobCtx,
@@ -627,18 +627,18 @@ describe('Rotation crash-safety suite (TEST-01 phase gate)', () => {
     expect(capturedReadKeys.length).toBe(0);
 
     // Post-resume navigation works with the new root readKey
-    const { readDescriptorRef: freshGrant2 } = await issueReadGrant({
+    const { encryptedReadKey: freshGrant2 } = await issueReadGrant({
       shareRootReadKey: readKeyPrimeRoot2,
       recipientPublicKey: bob.publicKey,
       rootNodeId: root2Result.node.id,
-      rootIpnsName: root2IpnsName,
+      shareRootIpnsName: root2IpnsName,
       rootGeneration: 1,
       insertShareFn: async (_p) => ({ shareId: crypto.randomUUID() }),
     });
     const postResumeNav = await navigateReadChain({
-      readDescriptorRef: freshGrant2,
+      encryptedReadKey: freshGrant2,
       recipientPrivKey: bob.privateKey,
-      rootIpnsName: root2IpnsName,
+      shareRootIpnsName: root2IpnsName,
       rootExpectedGeneration: 1,
       path: [sub2IpnsName, file2IpnsName],
       ctx: bobCtx,
@@ -882,11 +882,11 @@ describe('Rotation crash-safety suite (TEST-01 phase gate)', () => {
     );
 
     // Pre-rotation grant to Bob (will become stale after the crash-run's root commit).
-    const { readDescriptorRef: preGrant4 } = await issueReadGrant({
+    const { encryptedReadKey: preGrant4 } = await issueReadGrant({
       shareRootReadKey: root4ReadKey,
       recipientPublicKey: bob.publicKey,
       rootNodeId: root4Node.id,
-      rootIpnsName: root4IpnsName,
+      shareRootIpnsName: root4IpnsName,
       rootGeneration: 0,
       insertShareFn: async (_p) => ({ shareId: crypto.randomUUID() }),
     });
@@ -948,9 +948,9 @@ describe('Rotation crash-safety suite (TEST-01 phase gate)', () => {
 
     // Pre-rotation grant is already cut (root committed → published gen=1 > expected gen=0).
     const revokedNav4 = await navigateReadChain({
-      readDescriptorRef: preGrant4,
+      encryptedReadKey: preGrant4,
       recipientPrivKey: bob.privateKey,
-      rootIpnsName: root4IpnsName,
+      shareRootIpnsName: root4IpnsName,
       rootExpectedGeneration: 0,
       path: [],
       ctx: bobCtx,
@@ -1019,9 +1019,9 @@ describe('Rotation crash-safety suite (TEST-01 phase gate)', () => {
 
       // Pre-rotation grant remains cut after the resume's root step.
       const revokedNavAfterResume = await navigateReadChain({
-        readDescriptorRef: preGrant4,
+        encryptedReadKey: preGrant4,
         recipientPrivKey: bob.privateKey,
-        rootIpnsName: root4IpnsName,
+        shareRootIpnsName: root4IpnsName,
         rootExpectedGeneration: 0,
         path: [],
         ctx: bobCtx,
@@ -1029,18 +1029,18 @@ describe('Rotation crash-safety suite (TEST-01 phase gate)', () => {
       expect(revokedNavAfterResume.status).toBe('behind-retry');
 
       // A freshly issued grant using the resume's new key navigates successfully.
-      const { readDescriptorRef: freshGrant4 } = await issueReadGrant({
+      const { encryptedReadKey: freshGrant4 } = await issueReadGrant({
         shareRootReadKey: resumeResult4!.readKey,
         recipientPublicKey: bob.publicKey,
         rootNodeId: root4Node.id,
-        rootIpnsName: root4IpnsName,
+        shareRootIpnsName: root4IpnsName,
         rootGeneration: 2,
         insertShareFn: async (_p) => ({ shareId: crypto.randomUUID() }),
       });
       const postResumeNav4 = await navigateReadChain({
-        readDescriptorRef: freshGrant4,
+        encryptedReadKey: freshGrant4,
         recipientPrivKey: bob.privateKey,
-        rootIpnsName: root4IpnsName,
+        shareRootIpnsName: root4IpnsName,
         rootExpectedGeneration: 2,
         path: [],
         ctx: bobCtx,
@@ -1164,11 +1164,11 @@ describe('Rotation crash-safety suite (TEST-01 phase gate)', () => {
     const nodeKeySource5 = (name: string) => keyMap5.get(name);
 
     // Pre-rotation grant to Bob, rooted at root5, reaching the DEEP fileA5 leaf.
-    const { readDescriptorRef: preGrant5 } = await issueReadGrant({
+    const { encryptedReadKey: preGrant5 } = await issueReadGrant({
       shareRootReadKey: root5Result.rootReadKey,
       recipientPublicKey: bob.publicKey,
       rootNodeId: root5Result.node.id,
-      rootIpnsName: root5IpnsName,
+      shareRootIpnsName: root5IpnsName,
       rootGeneration: 0,
       insertShareFn: async (_p) => ({ shareId: crypto.randomUUID() }),
     });
@@ -1316,18 +1316,18 @@ describe('Rotation crash-safety suite (TEST-01 phase gate)', () => {
 
     // --- D-10 assertion 1: owner navigates root5 -> subA5 -> fileA5 and
     // unseals with the NEW root key.
-    const { readDescriptorRef: freshGrant5 } = await issueReadGrant({
+    const { encryptedReadKey: freshGrant5 } = await issueReadGrant({
       shareRootReadKey: readKeyPrimeRoot5,
       recipientPublicKey: bob.publicKey,
       rootNodeId: root5Result.node.id,
-      rootIpnsName: root5IpnsName,
+      shareRootIpnsName: root5IpnsName,
       rootGeneration: 1,
       insertShareFn: async (_p) => ({ shareId: crypto.randomUUID() }),
     });
     const navResult5 = await navigateReadChain({
-      readDescriptorRef: freshGrant5,
+      encryptedReadKey: freshGrant5,
       recipientPrivKey: bob.privateKey,
-      rootIpnsName: root5IpnsName,
+      shareRootIpnsName: root5IpnsName,
       rootExpectedGeneration: 1,
       path: [subA5IpnsName, fileA5IpnsName],
       ctx: bobCtx,
@@ -1340,9 +1340,9 @@ describe('Rotation crash-safety suite (TEST-01 phase gate)', () => {
 
     // --- D-10 assertion 2: the revoked reader's OLD key FAILS (revocation held).
     const revokedNav5 = await navigateReadChain({
-      readDescriptorRef: preGrant5,
+      encryptedReadKey: preGrant5,
       recipientPrivKey: bob.privateKey,
-      rootIpnsName: root5IpnsName,
+      shareRootIpnsName: root5IpnsName,
       rootExpectedGeneration: 0,
       path: [subA5IpnsName, fileA5IpnsName],
       ctx: bobCtx,
@@ -1427,11 +1427,11 @@ describe('Rotation crash-safety suite (TEST-01 phase gate)', () => {
     ]);
     const nodeKeySource6 = (name: string) => keyMap6.get(name);
 
-    const { readDescriptorRef: preGrant6 } = await issueReadGrant({
+    const { encryptedReadKey: preGrant6 } = await issueReadGrant({
       shareRootReadKey: root6Result.rootReadKey,
       recipientPublicKey: bob.publicKey,
       rootNodeId: root6Result.node.id,
-      rootIpnsName: root6IpnsName,
+      shareRootIpnsName: root6IpnsName,
       rootGeneration: 0,
       insertShareFn: async (_p) => ({ shareId: crypto.randomUUID() }),
     });
@@ -1564,18 +1564,18 @@ describe('Rotation crash-safety suite (TEST-01 phase gate)', () => {
 
     // --- D-10 assertion 1: owner navigates root6 -> c1_6 AND root6 -> c2_6
     // and unseals both with the NEW root key.
-    const { readDescriptorRef: freshGrant6 } = await issueReadGrant({
+    const { encryptedReadKey: freshGrant6 } = await issueReadGrant({
       shareRootReadKey: readKeyPrimeRoot6,
       recipientPublicKey: bob.publicKey,
       rootNodeId: root6Result.node.id,
-      rootIpnsName: root6IpnsName,
+      shareRootIpnsName: root6IpnsName,
       rootGeneration: 1,
       insertShareFn: async (_p) => ({ shareId: crypto.randomUUID() }),
     });
     const navC1_6 = await navigateReadChain({
-      readDescriptorRef: freshGrant6,
+      encryptedReadKey: freshGrant6,
       recipientPrivKey: bob.privateKey,
-      rootIpnsName: root6IpnsName,
+      shareRootIpnsName: root6IpnsName,
       rootExpectedGeneration: 1,
       path: [c1_6IpnsName],
       ctx: bobCtx,
@@ -1585,9 +1585,9 @@ describe('Rotation crash-safety suite (TEST-01 phase gate)', () => {
       expect(navC1_6.content?.cid).toBeTruthy();
     }
     const navC2_6 = await navigateReadChain({
-      readDescriptorRef: freshGrant6,
+      encryptedReadKey: freshGrant6,
       recipientPrivKey: bob.privateKey,
-      rootIpnsName: root6IpnsName,
+      shareRootIpnsName: root6IpnsName,
       rootExpectedGeneration: 1,
       path: [c2_6IpnsName],
       ctx: bobCtx,
@@ -1599,9 +1599,9 @@ describe('Rotation crash-safety suite (TEST-01 phase gate)', () => {
 
     // --- D-10 assertion 2: the revoked reader's OLD key FAILS (revocation held).
     const revokedNav6 = await navigateReadChain({
-      readDescriptorRef: preGrant6,
+      encryptedReadKey: preGrant6,
       recipientPrivKey: bob.privateKey,
-      rootIpnsName: root6IpnsName,
+      shareRootIpnsName: root6IpnsName,
       rootExpectedGeneration: 0,
       path: [c1_6IpnsName],
       ctx: bobCtx,
