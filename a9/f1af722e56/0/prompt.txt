@@ -1269,3 +1269,74 @@ Report: `/Users/myankelev/Code/random/cipher-box/.planning/phases/70.1-rotation-
 <status>completed</status>
 <summary>Background command "CodeRabbit CLI review vs main (committed)" completed (exit code 0)</summary>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>a26bf5aaea3bc623f</task-id>
+<tool-use-id>toolu_01EYqvM21PVqrqCgUwCfC2jm</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a26bf5aaea3bc623f.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify 3 CodeRabbit critical/major findings" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All three findings verified against the actual code. Here are the verdicts, ranked by real severity.
+
+---
+
+## FINDING 6 — CONFIRMED (MAJOR, highest practical severity)
+
+`build_scope_exit_child_override` fails OPEN on a per-child basis, diverging from its fail-closed sibling `build_folder_metadata`, and the resulting override REPLACES (not merges) the grant-root's published child list.
+
+Decisive evidence:
+- `crates/fuse/src/fs.rs:373-375` — child inode not found → `continue` (silently drops the child). Sibling `build_folder_metadata` treats the identical case as fatal: `crates/fuse/src/fs.rs:238` `.ok_or_else(...)?`.
+- `crates/fuse/src/fs.rs:408-413` — `build_child_refs` error → `log::warn` + skip (drops the child). Sibling propagates it: `crates/fuse/src/fs.rs:279` `.map_err(...)?`.
+- The override is a REPLACE, not additive: `crates/sdk/src/rotation/engine.rs:733` `children_override.map_or_else(|| node_children(node), ...to_vec)` — when `Some`, the root is resealed/published with THIS list, discarding its currently-published children.
+- Caller feeds it straight through with no error channel: `grant_scope.rs:730` `Some(fs.build_scope_exit_child_override(...))` → `rotate_read_from_node_with_root_children` (`engine.rs:1472`) → `root_children_override` → `rotate_one_inner`. Return type is `Vec`, so a short list is indistinguishable from a correct one.
+
+CodeRabbit's framing is partly wrong: the "missing/non-folder PARENT → empty Vec" paths (`fs.rs:352`, `fs.rs:365`) are UNREACHABLE, because the caller only enters this branch when `parent_ipns` is non-empty and equals `grant_root_ipns_name` (`grant_scope.rs:719-729`), which already proves the parent is present and Root/Folder. The REAL defect is the per-child fail-open (child-not-found + build_child_refs error).
+
+Concrete failure scenario:
+- Grant-root R (shared folder) has children [A(folder), B(file), secret.txt(file)]. Owner deletes secret.txt (covered shallow scope-exit; R is the direct parent → coalesced path).
+- `build_scope_exit_child_override(R, secret.txt)` iterates [A, B]; `build_child_refs` errors on B (or B's inode is momentarily absent from the table) → B is warn-logged and skipped. Override = [A].
+- Rotation republishes R under the new read key with children [A] only. B is dropped from R's read-plane child list — B's IPNS record still exists but is unreferenced/orphaned, invisible to every reader including the owner. Rotation returns `Ok`, `run_scope_exit_gate_coalesced` returns `Ok(true)` — silent data loss, no EIO.
+
+Minimal fix: change `build_scope_exit_child_override` to return `Result&lt;Vec&lt;SealedChildRef&gt;, String&gt;`, propagate the child-not-found and `build_child_refs` errors (mirror `fs.rs:238`/`:279`), and error on missing/non-folder parent instead of empty-vec. `run_scope_exit_gate_coalesced` then maps the Err to EIO (fail closed), matching the phase invariant.
+
+---
+
+## FINDING 7 — CONFIRMED as a logic defect, but currently DORMANT (CodeRabbit's CRITICAL overstates live reachability)
+
+The `is_dirty` signal IS dropped, and the Skipped-branch convergence check genuinely mis-handles a missing root — but it is unreachable through the current production wiring.
+
+Decisive evidence:
+- `crates/sdk/src/rotation/engine.rs:1501-1503` — `verify_subtree_clean(...).await?.frontier` keeps ONLY `frontier`, discarding `is_dirty`.
+- `engine.rs:1133-1141` — a missing root returns `{ is_dirty: true, frontier: [] }`. So a missing root yields an empty frontier.
+- `engine.rs:1587-1602` — the Skipped branch reuses `pre_rotation_frontier` and, on `frontier.is_empty()`, marks the job `Complete` and returns `Ok(None)` — WITHOUT consulting `is_dirty`. A missing root here would be mis-marked converged. (Note the dirty-resume path at `engine.rs:1608` DOES fail closed via `.ok_or_else`, but the empty-frontier short-circuit at 1595 returns before reaching it.)
+- The prior verifier's "missing-root-as-dirty covered" test at `engine.rs:3410` exercises `verify_subtree_clean` DIRECTLY (`3417`), NOT the Skipped consumer. No test drives a resume-Skip with a missing root — the consumer gap is genuinely uncovered.
+
+Reachability (why it is dormant right now): the Skipped branch is reached only when `rotate_one_inner` returns `Skipped`, which for a missing root requires the fast idempotency path `engine.rs:419-423` (`root_node_id ∈ job_record.completed_node_ids`) — i.e., a RESUMED job. But the FUSE deps do not persist/reload jobs: `crates/fuse/src/write_ops/rotation_deps.rs:223-230` `persist_job` is an explicit no-op logger, and every scope-exit builds a fresh `RotationJobRecord::new(root_node_id)` (`grant_scope.rs:494`) with empty `completed_node_ids`. On a fresh job the root can never return `Skipped`; a missing root instead fails closed with an error at `engine.rs:425` (propagated via `?` at `engine.rs:1517`). So the mis-completion is unreachable in current production wiring.
+
+Verdict: real soundness defect in the public engine's resume path (the exact "missing/unresolvable root must be DIRTY, fail closed" invariant is violated once resume is wired), but NOT a live CRITICAL — it is latent until a durable `persist_job`/resume path repopulates `completed_node_ids`. Phase 70.1 is explicitly hardening this resume path, so it is worth fixing now.
+
+Minimal fix: capture the full `VerifySubtreeOutcome` at `engine.rs:1501` (keep both fields); in the Skipped branch change `if frontier.is_empty()` to `if frontier.is_empty() &amp;&amp; !outcome.is_dirty` — so an `is_dirty &amp;&amp; empty` (missing-root) outcome routes into the dirty-resume re-resolve (which already fails closed at `engine.rs:1608`) instead of marking `Complete`.
+
+---
+
+## FINDING 3 — REFUTED
+
+The premise (borrowed, non-copied buffers at the seam) is TRUE, but the consequence (engine zeroes live state) does NOT occur — so there is no real defect.
+
+Decisive evidence:
+- Client passes BORROWED references, not copies: `packages/sdk/src/client.ts:2052-2054` returns `folder.ipnsKeypair.publicKey`/`.privateKey`/`folder.writeKey` directly (no `new Uint8Array(...)`); `client.ts:2072-2073` passes `this.config.vaultKeypair.publicKey`/`.privateKey` directly.
+- But the engine's zeroization is terminal-owner-only and targets ONLY engine-derived/minted buffers. The COMPLETE `.fill(0)` set in `packages/sdk-core/src/rotation/engine.ts` (lines 532, 786, 943, 1200, 1205, 1532, 1549, 1592, 1671, 1948, 2265, 2446-2447, 2489, 2496, 2552, 2573-2574, 2632, 2673) zeroes: unsealed `node.content.fileKey`, derived `childReadKey`/`childWriteKey` (from `unsealChildReadKey`/`unsealChildWriteKey`, `engine.ts:2416-2432`), minted `readKeyPrime`, `parentOldReadKey` (a `new Uint8Array(readKey)` copy, `engine.ts:1639`), and freshly-minted `newKeypair.privateKey`/`newWriteKey` (rotateWrite). NONE zero the borrowed `ipnsKeypair.publicKey/privateKey`, `folder.writeKey`, or `vaultKeypair.*`.
+- The borrowed IPNS keypair flows into publish/sign fields (`ipnsPrivateKey`/`ipnsPublicKey`, `engine.ts:1686-1687`, `2020-2021`) and `writeKey` into `sealNode` (`engine.ts:1101-1102`) — none of which appear in the `.fill(0)` set. `ownerPrivateKey` is explicitly documented never-zeroed (`engine.ts:1713`) and only feeds `unwrapKey` (`engine.ts:1742`); `ownerPublicKey` only feeds `wrapKey` (`engine.ts:1082`).
+
+Verdict: no field passed by borrowed reference is zeroed by the engine, so the finding does not manifest. It is a latent fragility only — a defensive `new Uint8Array(...)` copy at the seam would harden against a future engine change that zeroed an IPNS/owner/write input — but as the code stands it is not a defect. REFUTE.
+
+---
+
+Severity ranking: Finding 6 (real, reachable now, silent read-plane data loss) &gt; Finding 7 (real logic defect, dormant until resume is wired; CodeRabbit's CRITICAL overstates current reachability) &gt; Finding 3 (refuted; latent hardening opportunity, not a defect).
+
+Relevant files: `/Users/myankelev/Code/random/cipher-box/crates/fuse/src/fs.rs`, `/Users/myankelev/Code/random/cipher-box/crates/fuse/src/write_ops/grant_scope.rs`, `/Users/myankelev/Code/random/cipher-box/crates/fuse/src/write_ops/rotation_deps.rs`, `/Users/myankelev/Code/random/cipher-box/crates/sdk/src/rotation/engine.rs`, `/Users/myankelev/Code/random/cipher-box/packages/sdk/src/client.ts`, `/Users/myankelev/Code/random/cipher-box/packages/sdk-core/src/rotation/engine.ts`.</result>
+<usage><subagent_tokens>74805</subagent_tokens><tool_uses>24</tool_uses><duration_ms>420957</duration_ms></usage>
+</task-notification>
