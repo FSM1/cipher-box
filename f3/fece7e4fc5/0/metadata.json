@@ -1,0 +1,302 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "f3fece7e4fc5",
+  "session_id": "a4ed1cb9-4e4c-4d71-bc03-3c2c6b4e70a3",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-09T03:00:23.404609Z",
+  "branch": "feat/rotation-read-plane-durability-and-deep-crash-resume-soundne",
+  "checkpoints_count": 2,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "fd9898399cda",
+  "token_usage": {
+    "input_tokens": 145341,
+    "cache_creation_tokens": 2394810,
+    "cache_read_tokens": 120796400,
+    "output_tokens": 724397,
+    "api_call_count": 471
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-plan-phase-2026-07-08T13:42:46.030418Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "0eb6f9cbb31b",
+      "timestamp": "2026-07-08T13:42:46.030418Z",
+      "native": {
+        "command": "/gsd-plan-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-gsd-execute-phase-2026-07-08T15:12:58.253651Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "1b22299d3cb2",
+      "timestamp": "2026-07-08T15:12:58.253651Z",
+      "native": {
+        "command": "/gsd-execute-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-execute-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-insights-2026-07-08T22:06:54.276214Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "insights"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "d42e8425334c",
+      "timestamp": "2026-07-08T22:06:54.276214Z",
+      "native": {
+        "command": "/insights"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/insights",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01HWrVLBHmrKhyMLN1WEc3yj",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-capture"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "fd9898399cda",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 2181,
+        "end": 2182,
+        "entry_ids": [
+          "c8f3b029-0547-476c-8088-a47b7c514a13"
+        ],
+        "tool_use_id": "toolu_01HWrVLBHmrKhyMLN1WEc3yj"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01HWrVLBHmrKhyMLN1WEc3yj"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-capture",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_019MUyCMBTy3mb1Mo2c4mvW1",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "fd9898399cda",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 2379,
+        "end": 2380,
+        "entry_ids": [
+          "f7d9e55e-8607-4c67-a4e3-a2b5926e3eff"
+        ],
+        "tool_use_id": "toolu_019MUyCMBTy3mb1Mo2c4mvW1"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_019MUyCMBTy3mb1Mo2c4mvW1"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-ship-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_016oZNJJLXTPFRv9VgchZdPw",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "fd9898399cda",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 2393,
+        "end": 2394,
+        "entry_ids": [
+          "6da98d5c-591f-44c8-bb6b-a9e9d85cd6d5"
+        ],
+        "tool_use_id": "toolu_016oZNJJLXTPFRv9VgchZdPw"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_016oZNJJLXTPFRv9VgchZdPw"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ship-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 56
+  },
+  "summary": {
+    "intent": "Continue and complete GSD Phase 70.1 (rotation read-plane durability and crash-resume soundness) through wave-based parallel execution, resolve the Wave-7 desktop-e2e (D-16) acceptance checkpoint, then run the full /ship-phase flow (verify/secure/validate/simplify/SDK-E2E/CodeRabbit/ship/resolve reviews) to open and merge a PR.",
+    "outcome": "All 13 plans executed and merged across 7 waves; D-16 desktop-e2e acceptance passed on macOS/Linux/Windows after fixing a real revocation-bypass bug, a double-publish bug, and a macOS idle-mount publish-queue starvation bug; PR #598 opened, CodeRabbit/Greptile findings triaged (fixed a real TS/Rust parity checkpoint-GC bug plus CI-only gate breaks), all 7 review threads resolved, and CI was being driven to fully green with a final floor_store Windows-cfg fix in flight when the transcript ends.",
+    "learnings": {
+      "repo": [
+        "gsd commit helper can report `commit_failed` as a false negative while the commit actually lands — always verify with `git log`, never blindly retry",
+        "cargo fmt -p <crate> reformats the WHOLE crate (not just touched files) and strands out-of-scope drift; must revert unrelated files after formatting",
+        "This repo's CI does NOT run `cargo fmt --check` at all, so local `cargo fmt` before commit is unnecessary churn and risks rustfmt-version skew vs already-passing code",
+        "Windows CI job builds with `--features winfsp` not `fuse`; test modules using `crate::test_support` must be gated `#[cfg(all(test, feature = \"fuse\"))]`, not bare `#[cfg(test)]`, or they break on Windows only",
+        "Permission-based test fault injection (chmod) only works on Unix; such tests must be `#[cfg(unix)]`-gated or they silently no-op and fail assertions on Windows",
+        "The SC#6 grep gate requires a `// sc6-allow:` marker within roughly a ±1-line window directly above a raw IPNS resolve call",
+        "A 96-commit branch with no PR hides branch-wide CI gates (SC#6 grep gate, Windows cargo job) until the first real PR-triggered CI run — open PRs earlier to surface these sooner",
+        "gh pr edit fails on this repo (Projects-classic GraphQL); patch PR body via `gh api -X PATCH .../pulls/<N> -F body=@file` instead",
+        "PR titles/commit subjects must be conventional and paren-free (commitlint + lint-pr-title reject parens in the subject, though `type(scope):` scopes like `(fuse)` are fine)",
+        "CodeRabbit CLI bundles findings differently from the PR-level review; CLI run pre-PR + PR-level bot review can both surface real, non-overlapping bugs",
+        "rust-analyzer diagnostics (E0063, dead_code, unused-import) are frequently stale mid-edit snapshots during concurrent agent edits — always confirm with an authoritative `cargo check`/`cargo test` before trusting them",
+        "Rust rotate_read engine (TS + Rust twin) previously discarded RotateReadResult at the FUSE gate, leaving the in-memory grant-root read key stale — closed via Fix A (refresh_grant_root_read_key)",
+        "Covalesced scope-exit delete (root_children_override) reduces grant-root publish count from +2/+3 to exactly +1 by having the engine reseal with a caller-supplied post-delete child list instead of resolving live children",
+        "macOS FUSE-T defers file release ~40s and the publish queue is edge-triggered (only drains on a subsequent FUSE op) with no wall-clock backstop — an idle mount can silently starve a queued parent republish indefinitely",
+        "TS/Rust rotation engines must be fixed in lockstep — CodeRabbit caught the TS engine GC'ing an ECIES checkpoint before the parent's batched republish committed, while the Rust twin already deferred correctly via pending_checkpoint_node_ids"
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/write_ops/grant_scope.rs",
+          "line": 425,
+          "end_line": 580,
+          "finding": "rotate_read_on_scope_exit now takes &mut CipherBoxFS, captures RotateReadResult, and refreshes the grant-root inode's in-memory read_key via refresh_grant_root_read_key (line ~556) to close a revocation-bypass where a subsequent relink resealed the folder under the stale old key"
+        },
+        {
+          "path": "crates/fuse/src/fs.rs",
+          "line": 373,
+          "end_line": 413,
+          "finding": "build_scope_exit_child_override originally failed OPEN per-child (continue/warn+skip on missing child or build_child_refs error) and REPLACED the grant-root's published child list, silently dropping/orphaning transiently-unresolvable siblings; fixed to propagate errors and fail closed to EIO, mirroring the fail-closed sibling build_folder_metadata"
+        },
+        {
+          "path": "crates/sdk/src/rotation/engine.rs",
+          "line": 1495,
+          "end_line": 1610,
+          "finding": "verify_subtree_clean's is_dirty signal was discarded (only .frontier kept); the Skipped-branch convergence check used frontier.is_empty() alone, which would mis-mark a missing root as converged on resume; fixed by keeping both fields and gating the short-circuit on !is_dirty"
+        },
+        {
+          "path": "packages/sdk-core/src/rotation/engine.ts",
+          "line": 1364,
+          "end_line": 1796,
+          "finding": "repairDirtyNode called deleteWrappedKey immediately after decrementing a multi-child parent's pending count (even when the decrement didn't trigger the parent's republish), risking permanent checkpoint loss on a crash between GC and the batched republish; ported the Rust twin's deferred design via a new pendingCheckpointNodeIds field, flushed only after updateFolderMetadataAndPublish commits"
+        },
+        {
+          "path": "crates/fuse/src/write_ops/rotation_deps.rs",
+          "line": 246,
+          "end_line": 311,
+          "finding": "persist_wrapped_key held decoded plaintext key bytes in a plain Vec<u8> (not zeroized) while sibling get_wrapped_key already used Zeroizing; fixed for hygiene. Also owner_private_key field was plain Vec<u8> instead of Zeroizing, fixed to match phase's zeroization discipline"
+        },
+        {
+          "path": "crates/sdk/src/floor_store.rs",
+          "line": 265,
+          "end_line": 271,
+          "finding": "Three independent JsonSidecarFloorStore instances (generation, seq, checkpoint) pointed at the same rotation-high-water.json but each built its own Arc<Mutex<()>>, racing on a shared deterministic .tmp rename path; fixed with a process-global path-keyed shared lock registry (SIDECAR_LOCKS/shared_lock_for)"
+        },
+        {
+          "path": "crates/sdk/src/queue.rs",
+          "line": 411,
+          "end_line": 547,
+          "finding": "load_all_for_vault and gc_failed_entries both warned 'missing field id' and skipped the co-located rotation-high-water.json floor sidecar on every scan; harmless (GC never deletes .json, only .bin) but noisy — fixed by skipping known floor-sidecar filenames before parse attempts via is_reserved_floor_sidecar"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/fuse/mod.rs",
+          "line": 417,
+          "end_line": 464,
+          "finding": "Added a bounded (5s) mount-init authoritative sent_shares refresh plus a 2s-interval background 'fuse-publish-pump' thread (using unique never-seen lookup names to defeat SMB negative-lookup caching) to drive the FUSE op that drains the otherwise edge-triggered publish queue on an idle macOS mount"
+        }
+      ],
+      "workflow": [
+        "When batching multiple independent code fixes destined for the same CI run, hold all pushes until every fix is ready, then push once — minimizes real-mount/CI round-trip cost (each desktop-e2e run costs ~15-40 min across 3 platforms)",
+        "Delegate deep root-cause debugging to a dedicated debugger subagent with explicit instructions to prove/disprove hypotheses and NOT apply a fix without confirming real vs fixture bug first — prevents papering over genuine product bugs with test hacks",
+        "Resume (not respawn) a subagent that already holds full context of a live repro/investigation rather than spawning a fresh one — much cheaper for complex multi-step diagnoses",
+        "Use an adversarial reviewer subagent to independently verify each CodeRabbit/Greptile finding against real code before fixing — correctly refutes false positives (e.g. borrowed-not-copied key buffers that are never actually zeroed) while confirming real bugs",
+        "When a live E2E test run is required to close an SC/acceptance gate and can't run in the current sandbox, treat CI as the authoritative arbiter and defer local validation to targeted offline proof tests (e.g. FakeTransport publish-count assertions) instead",
+        "Always rebuild cross-package dists (sdk-core → sdk → api etc.) before running consumer test suites after changing a shared lower-level package, to avoid false failures from stale dist artifacts",
+        "Verify subagent-reported 'diagnostics'/'never used' warnings against an authoritative build tool before acting — mid-edit tool snapshots frequently misreport during concurrent editing"
+      ]
+    },
+    "friction": [
+      "Canary-first (single-plan) execution of Wave 1 was flagged by the user as not matching their explicit request for all 4 plans to run concurrently — required correcting to full concurrent dispatch",
+      "Simultaneous git worktree creation across concurrent plan dispatches risks a `.git/config.lock` race, requiring dispatches to be issued in separate messages rather than truly simultaneously",
+      "Plan 03's unscoped `cargo fmt --all` stranded out-of-scope drift across ~13 unrelated files, blocking cleanup-wave merge with worktree_dirty until manually discarded",
+      "Wave 3 post-merge gate showed 3 false test failures due to stale sdk-core dist not rebuilt after a Wave 2 sdk-core change — required rebuilding dists to get true green",
+      "Desktop-e2e Step 8 required multiple debugging cycles across 3 platforms: revocation-bypass bug, double-publish bug (fuser fixed, then discovered missing on WinFsp), and macOS-specific idle-mount publish-queue starvation — each surfaced only after a real CI round-trip (~15-40 min each)",
+      "Windows CI failed once with a transient STATUS_DLL_INIT_FAILED (0xC0000142) API-startup flake unrelated to code, requiring a job re-run",
+      "Two rust-analyzer processes consumed ~11GB RAM combined; one was an orphaned leftover from a deleted Phase-69 worktree checkout with a dangling parent Claude Code session, requiring manual discovery and cleanup",
+      "CodeRabbit CLI + PR-level review together surfaced 7+ findings requiring careful triage (fix vs refute vs defer), including one genuine ship-blocking security/data-loss bug (build_scope_exit_child_override fail-open) not initially caught by the phase's own verification/security audit",
+      "Committing large files (engine.ts) through slow eslint/lint-staged pre-commit hooks repeatedly hit the 120-300s Bash timeout mid-commit, requiring status checks to confirm partial success before continuing",
+      "Local `cargo fmt -p cipherbox-fuse` produced different formatting output than what was already committed and CI-passing (rustfmt version skew), requiring reverting unnecessary fmt churn since CI doesn't fmt-check at all",
+      "First-ever PR CI run on a 96-commit no-PR branch surfaced two previously-hidden gate failures (SC#6 grep marker adjacency, Windows winfsp cfg gate) that had never been exercised until the PR opened"
+    ],
+    "open_items": [
+      "Todo: WinFsp handle_rename ungated-dest D-15d parity gap (rename path, distinct from the now-fixed delete path)",
+      "Todo: ROT-04 desktop query_grants_rooted_at re-mint no-op — scope-exit rotation currently de-authorizes all recipients rather than selectively re-minting for survivors",
+      "Todo: macOS FUSE-T cross-client sync read-side invalidation gap — desktop-e2e Test 5 (content sync) and Test 7 (folder rename sync) remain soft-skipped on macOS because FUSE-T ignores inval_inode and serves stale SMB-cached content/attributes; needs a working invalidation path or shorter cache TTL, then flip both from soft-skip to hard assertions",
+      "Two tee-republish.test.ts failures during the sdk-e2e gate run were classified as pre-existing local-stack precondition issues (TEE worker not initialized/seeded on :3002), unrelated to this phase — not fixed, just noted for the PR",
+      "Dangling Phase-69 Claude Code session and its stale cipher-box-phase69 checkout directory — RA process was killed but the checkout directory itself was not verified as cleaned up",
+      "Final CI run (with the floor_store #[cfg(unix)] fix) was still in flight at transcript end — full three-platform green confirmation, PR merge, and final 'confirm green & report' step were not yet completed"
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 144,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-LEARNINGS.md": 143
+      }
+    }
+  ]
+}
