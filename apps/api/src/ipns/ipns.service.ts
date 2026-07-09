@@ -310,21 +310,47 @@ export class IpnsService {
     } else {
       const dbSeq = BigInt(existing.sequenceNumber);
       if (embeddedSeq === dbSeq) {
-        // Idempotent republish — TEE 6-hour re-sign path (D-09 / Pitfall 4).
-        // latestCid is preserved ONLY for a genuine same-CID idempotent retry;
-        // a republish at the same sequence carrying a DIFFERENT CID is
-        // equivocation (D-05) and is rejected below, never silently applied.
-        // The TEE lease-renewer (republish.service.ts renewIpnsRecordEol) never
-        // reaches this branch — it performs a standalone UPDATE that re-signs
-        // the existing CID/seq in place and never calls upsertIpnsRecord, so
-        // this guard can only be hit by a fresh, externally-signed publish.
-        if (metadataCid !== existing.latestCid) {
-          throw new BadRequestException(
-            `Same-sequence republish with a different CID rejected (equivocation): stored=${existing.latestCid}, incoming=${metadataCid}, sequence=${dbSeq}`
-          );
+        // embeddedSeq === dbSeq has two very different causes that must NOT be conflated:
+        //
+        //   (a) a GENUINE same-sequence republish — an idempotent TEE 6-hour re-sign
+        //       (same CID) or an equivocation attempt (different CID). The writer
+        //       intends to write AT the current sequence, so it carries either no
+        //       expectedSequenceNumber or expectedSequenceNumber === embeddedSeq.
+        //
+        //   (b) a FORWARD-publish CAS attempt that LOST a concurrent race. The writer
+        //       computed embeddedSeq = itsView + 1 and carries
+        //       expectedSequenceNumber === embeddedSeq - 1 (== itsView). A concurrent
+        //       writer advanced the canonical row to embeddedSeq first, so the two now
+        //       coincide. This is a CAS conflict (409), NOT equivocation (400): fall
+        //       through to the atomic CAS UPDATE below, whose stale `expected`
+        //       (embeddedSeq - 1 !== dbSeq) yields affected=0 → 409, which the client's
+        //       publishWithCas merges (ROT-05 / HIGH-4 concurrent-add-during-rotation).
+        //
+        // Only (a) is subject to the D-05 equivocation guard. Misclassifying (b) as
+        // equivocation breaks legitimate concurrent rotation republishes; it is still
+        // rejected as a write (409, affected=0 — no same-seq CID overwrite ever lands),
+        // so the D-05 equivocation protection is fully preserved.
+        const isForwardCasRace =
+          expectedSequenceNumber !== undefined &&
+          BigInt(expectedSequenceNumber) === embeddedSeq - 1n;
+        if (!isForwardCasRace) {
+          // (a) genuine same-sequence republish.
+          // The TEE lease-renewer (republish.service.ts renewIpnsRecordEol) never
+          // reaches this branch — it performs a standalone UPDATE that re-signs the
+          // existing CID/seq in place and never calls upsertIpnsRecord, so this can
+          // only be a fresh, externally-signed publish.
+          if (metadataCid !== existing.latestCid) {
+            // D-05: same sequence, different CID → equivocation, hard reject.
+            throw new BadRequestException(
+              `Same-sequence republish with a different CID rejected (equivocation): stored=${existing.latestCid}, incoming=${metadataCid}, sequence=${dbSeq}`
+            );
+          }
+          // Idempotent re-sign: do NOT increment the DB sequence, but still update
+          // latestCid/signedRecord below.
+          isIdempotentRepublish = true;
         }
-        // Do NOT increment the DB sequence, but still update latestCid/signedRecord below.
-        isIdempotentRepublish = true;
+        // else: (b) forward-CAS race — leave isIdempotentRepublish=false and fall
+        // through; the CAS UPDATE's stale `expected` produces the correct 409.
       } else if (embeddedSeq === dbSeq + 1n) {
         // Normal forward publish — increment allowed.
       } else if (embeddedSeq < dbSeq) {

@@ -2141,6 +2141,40 @@ describe('IpnsService', () => {
       expect(mockQbExecute).not.toHaveBeenCalled();
     });
 
+    // D-05 refinement (ROT-05 regression caught by sdk-e2e concurrent-add-during-rotation):
+    // a same-seq / DIFFERENT-CID publish that carries expectedSequenceNumber === embeddedSeq - 1
+    // is a FORWARD-publish CAS attempt that LOST a concurrent race (a concurrent writer advanced
+    // the row to embeddedSeq first), NOT equivocation. It must fall THROUGH to the atomic CAS
+    // UPDATE and surface a 409 (which the client's publishWithCas merges), never a 400. The
+    // equivocation protection is preserved: the CAS WHERE (expected != actual) still rejects the
+    // write (affected=0), so no same-seq CID overwrite ever lands.
+    it('treats same-seq/different-CID with a forward CAS expectation as a 409 race, not a 400 equivocation', async () => {
+      // Existing row at seq 5. A concurrent writer already advanced it to 5 with its own CID;
+      // this publish embeds seq 5 with a DIFFERENT CID but expected '4' (its pre-race view).
+      const existingRow = { ...mockFolderEntity, sequenceNumber: '5', signedRecord: null };
+      mockFolderIpnsRepo.findOne.mockResolvedValue(existingRow);
+      const divergentCid = 'bafkreidivergentcid00000000000000000000000000000000000000000000';
+      mockParseIpnsRecord.mockResolvedValue({
+        value: `/ipfs/${divergentCid}`,
+        sequence: 5n, // embedded === DB seq === 5n
+      });
+      // CAS fails: WHERE sequence_number = expected('4') != actual(5) → affected=0 → 409.
+      mockQbExecute.mockResolvedValue({ affected: 0 });
+
+      await expect(
+        service.publishRecord(testUserId, {
+          ipnsName: testIpnsName,
+          record: testRecord,
+          metadataCid: divergentCid,
+          expectedSequenceNumber: '4', // === embeddedSeq - 1 → forward-CAS intent
+        })
+      ).rejects.toBeInstanceOf(ConflictException);
+
+      // Proves it fell THROUGH the D-05 equivocation guard to the atomic CAS UPDATE —
+      // a 400 equivocation would have thrown BEFORE the UPDATE was ever attempted.
+      expect(mockQbExecute).toHaveBeenCalled();
+    });
+
     it('allows idempotent republish (embedded = DB seq, SAME CID) without incrementing DB sequenceNumber', async () => {
       // Existing row at seq 5 — TEE re-sign path sends embedded=5n with the SAME CID.
       const existingRow = { ...mockFolderEntity, sequenceNumber: '5', signedRecord: null };
