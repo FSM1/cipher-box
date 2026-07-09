@@ -1292,9 +1292,17 @@ export async function rotateReadFromNode(
   // BEFORE root itself rotates this run. rotateOne(root) does not mutate the
   // children mirror (only re-seals root's OWN body), so this frontier — derived via
   // 70-05's key-bearing recursive walk — remains valid for BOTH branches below.
-  const preRotationDirtyFrontier: DirtyFrontierItem[] = rootProbePub
-    ? (await verifySubtreeClean(rootNodeIpnsName, rootReadKey, ctx)).frontier
-    : [];
+  // Keep BOTH the dirty signal and the frontier (parity with the Rust twin,
+  // 70.1 CodeRabbit finding 7): verifySubtreeClean returns { isDirty: true,
+  // frontier: [] } for a missing/unresolvable root, so the empty-frontier
+  // convergence short-circuit on the resume/skipped branch below must consult
+  // isDirty — re-deriving it from frontier.length alone would mis-treat a
+  // missing root as "already converged" instead of failing closed.
+  const preRotationProbe = rootProbePub
+    ? await verifySubtreeClean(rootNodeIpnsName, rootReadKey, ctx)
+    : { isDirty: false, frontier: [] as DirtyFrontierItem[] };
+  const preRotationDirtyFrontier: DirtyFrontierItem[] = preRotationProbe.frontier;
+  const preRotationIsDirty = preRotationProbe.isDirty;
 
   // §4.2: Rotate the scope-root FIRST.
   // This is the actual cut: once the root's readKey is rotated and published,
@@ -1861,7 +1869,10 @@ export async function rotateReadFromNode(
     // skipped) using the exact same rootReadKey — reuse it rather than re-running
     // verifySubtreeClean a second time (SC#3 / Plan 70-06).
     const frontier = preRotationDirtyFrontier;
-    const isDirty = frontier.length > 0;
+    // `|| preRotationIsDirty` routes the missing/unresolvable-root outcome
+    // (empty frontier WITH isDirty) into the dirty-resume re-resolve below,
+    // which fails closed on the `!rootResolved` throw — never mark it complete.
+    const isDirty = frontier.length > 0 || preRotationIsDirty;
     if (!isDirty) {
       // Subtree fully converged — no dirty edges to process.
       jobRecord.status = 'complete';

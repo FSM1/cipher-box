@@ -1498,9 +1498,15 @@ async fn rotate_read_from_node_inner<D: RotationDeps>(
 ) -> Result<Option<RotateReadResult>, RotationError> {
     job_record.status = RotationStatus::InProgress;
 
-    let pre_rotation_frontier = verify_subtree_clean(deps, root_ipns_name, root_read_key)
-        .await?
-        .frontier;
+    // Keep BOTH the dirty signal and the frontier (70.1 CodeRabbit finding 7):
+    // a missing/unresolvable root returns `{ is_dirty: true, frontier: [] }`, so
+    // the empty-frontier convergence short-circuit on the resume/Skipped branch
+    // below must consult `is_dirty` — otherwise a missing root would be mistaken
+    // for "already converged" instead of failing closed.
+    let pre_rotation_outcome =
+        verify_subtree_clean(deps, root_ipns_name, root_read_key).await?;
+    let pre_rotation_dirty = pre_rotation_outcome.is_dirty;
+    let pre_rotation_frontier = pre_rotation_outcome.frontier;
 
     // §4.2: rotate the scope-root FIRST — the actual revocation cut.
     // 70.1-13a: on a covered scope-exit delete the root is republished with the
@@ -1592,10 +1598,15 @@ async fn rotate_read_from_node_inner<D: RotationDeps>(
             // unchanged on this branch (root did not rotate this run), so
             // the frontier computed above with it remains valid.
             let frontier = pre_rotation_frontier;
-            if frontier.is_empty() {
+            if frontier.is_empty() && !pre_rotation_dirty {
                 // Fully converged already (or the root has no published
                 // children at all) — nothing dirty to reconcile, and nothing
                 // further gets minted or published. No double-bump risk.
+                //
+                // `!pre_rotation_dirty` guards the missing/unresolvable-root case
+                // (finding 7): that returns an empty frontier WITH `is_dirty`, and
+                // must NOT be mis-marked Complete — it falls through to the dirty
+                // resume below, which fails closed on the `resolve(...)?` miss.
                 job_record.status = RotationStatus::Complete;
                 deps.persist_job(job_record).await;
                 return Ok(None);
