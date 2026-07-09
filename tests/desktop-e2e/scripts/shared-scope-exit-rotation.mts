@@ -434,9 +434,15 @@ async function main(): Promise<void> {
 
     // Cleanup: revoke Bob's (now-stale) grant. The rotation above already cut
     // Bob off; this hard-deletes the share row so a later re-run starts clean.
-    const revokeRes = await axiosInstance.delete(`/shares/${shareId}`);
-    if (revokeRes.status !== 204) {
-      console.warn(`Cleanup: revoking share ${shareId} returned ${revokeRes.status} (non-fatal)`);
+    // axiosInstance rejects on non-2xx, so guard the whole call: a failed
+    // cleanup revoke must not abort Part B (the rotation already cut Bob off).
+    try {
+      const revokeRes = await axiosInstance.delete(`/shares/${shareId}`);
+      if (revokeRes.status !== 204) {
+        console.warn(`Cleanup: revoking share ${shareId} returned ${revokeRes.status} (non-fatal)`);
+      }
+    } catch (err) {
+      console.warn(`Cleanup: revoking share ${shareId} failed (non-fatal): ${String(err)}`);
     }
 
     clearBytes(sharedFolderReadKey);
