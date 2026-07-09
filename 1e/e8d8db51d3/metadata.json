@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "1ee8d8db51d3",
+  "strategy": "manual-commit",
+  "branch": "feat/share-invite-security-and-ipns-data-integrity-api",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/1e/e8d8db51d3/0/metadata.json",
+      "transcript": "/1e/e8d8db51d3/0/full.jsonl",
+      "content_hash": "/1e/e8d8db51d3/0/content_hash.txt",
+      "prompt": "/1e/e8d8db51d3/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 29716,
+    "cache_creation_tokens": 952425,
+    "cache_read_tokens": 55026345,
+    "output_tokens": 273787,
+    "api_call_count": 182
+  }
+}

@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bzx2em83d</task-id>
+<tool-use-id>toolu_016LPyW9BC3nC6ji9gkQ7k9A</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/4d78f8a5-6112-418c-85c3-c6241359b1fb/tasks/bzx2em83d.output</output-file>
+<status>completed</status>
+<summary>Background command "Run CodeRabbit CLI review vs main" completed (exit code 0)</summary>
+</task-notification>
