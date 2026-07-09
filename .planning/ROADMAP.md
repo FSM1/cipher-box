@@ -778,7 +778,7 @@ Plans:
 5. `bulkRevoke` issues a single DELETE (not `find` + `remove`)
 6. `ShareInviteService` has unit coverage for `createInvite`, `getInvitesForItem`, and `revokeInvite` with realistic fixtures (not placeholder strings)
 
-**Plans**: 2/9 plans executed
+**Plans**: 5/9 plans executed
 
 **Wave 1**
 
@@ -787,9 +787,9 @@ Plans:
 
 **Wave 2** *(after 71-01)*
 
-- [ ] 71-02-PLAN.md — D-10 FOUNDATION: TS consumers rename (sdk-core/sdk/web/sdk-e2e) + surgical shareRootIpnsName + method/type renames (compiler-guided)
-- [ ] 71-03-PLAN.md — D-10 FOUNDATION: Rust crates rename (*Descriptor*→*EncryptedKey*), serde aligned to JSON contract, excluding WinFsp security_descriptor
-- [ ] 71-06-PLAN.md — D-01/D-02 root-ownership gate on createInvite + createShare (ipns_records creator check) + IpnsRecord DI wiring (SC#1)
+- [x] 71-02-PLAN.md — D-10 FOUNDATION: TS consumers rename (sdk-core/sdk/web/sdk-e2e) + surgical shareRootIpnsName + method/type renames (compiler-guided)
+- [x] 71-03-PLAN.md — D-10 FOUNDATION: Rust crates rename (*Descriptor*→*EncryptedKey*), serde aligned to JSON contract, excluding WinFsp security_descriptor
+- [x] 71-06-PLAN.md — D-01/D-02 root-ownership gate on createInvite + createShare (ipns_records creator check) + IpnsRecord DI wiring (SC#1)
 
 **Wave 3** *(after 71-04/71-02/71-06)*
 
