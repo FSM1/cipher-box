@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "7fcb2e53230d",
+  "strategy": "manual-commit",
+  "branch": "feat/share-invite-security-and-ipns-data-integrity-api",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/ROADMAP.md",
+    ".planning/phases/71-share-invite-security-and-ipns-data-integrity-api/71-01-PLAN.md",
+    ".planning/phases/71-share-invite-security-and-ipns-data-integrity-api/71-02-PLAN.md",
+    ".planning/phases/71-share-invite-security-and-ipns-data-integrity-api/71-03-PLAN.md",
+    ".planning/phases/71-share-invite-security-and-ipns-data-integrity-api/71-04-PLAN.md",
+    ".planning/phases/71-share-invite-security-and-ipns-data-integrity-api/71-07-PLAN.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7f/cb2e53230d/0/metadata.json",
+      "transcript": "/7f/cb2e53230d/0/full.jsonl",
+      "content_hash": "/7f/cb2e53230d/0/content_hash.txt",
+      "prompt": "/7f/cb2e53230d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 17774,
+    "cache_creation_tokens": 687559,
+    "cache_read_tokens": 16841279,
+    "output_tokens": 135687,
+    "api_call_count": 90
+  }
+}
