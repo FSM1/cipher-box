@@ -114,3 +114,12 @@ SC#5 closed. `revokeForItems` bulk-revoke now issues a single scoped DELETE for 
 ---
 *Phase: 71-share-invite-security-and-ipns-data-integrity-api*
 *Completed: 2026-07-09*
+
+## Self-Check: PASSED
+
+- FOUND: apps/api/src/shares/shares.service.ts
+- FOUND: apps/api/src/shares/shares.service.spec.ts
+- FOUND: .planning/phases/71-share-invite-security-and-ipns-data-integrity-api/71-08-SUMMARY.md
+- FOUND commit: bc07bc5fe (test)
+- FOUND commit: 44cf469f9 (feat)
+- FOUND commit: d117a911c (docs)
