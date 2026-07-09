@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "da8cc1282572",
+  "strategy": "manual-commit",
+  "branch": "feat/rotation-read-plane-durability-and-deep-crash-resume-soundne",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/todos/pending/2026-07-07-fuse-shared-scope-exit-rotation-live-wiring.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/da/8cc1282572/0/metadata.json",
+      "transcript": "/da/8cc1282572/0/full.jsonl",
+      "content_hash": "/da/8cc1282572/0/content_hash.txt",
+      "prompt": "/da/8cc1282572/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 5234,
+    "cache_creation_tokens": 443334,
+    "cache_read_tokens": 5268040,
+    "output_tokens": 11873,
+    "api_call_count": 13
+  }
+}

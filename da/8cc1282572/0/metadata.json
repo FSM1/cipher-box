@@ -1,0 +1,242 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "da8cc1282572",
+  "session_id": "a4ed1cb9-4e4c-4d71-bc03-3c2c6b4e70a3",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-09T09:56:22.086167Z",
+  "branch": "feat/rotation-read-plane-durability-and-deep-crash-resume-soundne",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/todos/pending/2026-07-07-fuse-shared-scope-exit-rotation-live-wiring.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "664d80e56ac5",
+  "checkpoint_transcript_start": 3513,
+  "transcript_lines_at_start": 3513,
+  "token_usage": {
+    "input_tokens": 5234,
+    "cache_creation_tokens": 443334,
+    "cache_read_tokens": 5268040,
+    "output_tokens": 11873,
+    "api_call_count": 13
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-plan-phase-2026-07-08T13:42:46.030418Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "0eb6f9cbb31b",
+      "timestamp": "2026-07-08T13:42:46.030418Z",
+      "native": {
+        "command": "/gsd-plan-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-gsd-execute-phase-2026-07-08T15:12:58.253651Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "1b22299d3cb2",
+      "timestamp": "2026-07-08T15:12:58.253651Z",
+      "native": {
+        "command": "/gsd-execute-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-execute-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-insights-2026-07-08T22:06:54.276214Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "insights"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "d42e8425334c",
+      "timestamp": "2026-07-08T22:06:54.276214Z",
+      "native": {
+        "command": "/insights"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/insights",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01HWrVLBHmrKhyMLN1WEc3yj",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-capture"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "664d80e56ac5",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 2181,
+        "end": 2182,
+        "entry_ids": [
+          "c8f3b029-0547-476c-8088-a47b7c514a13"
+        ],
+        "tool_use_id": "toolu_01HWrVLBHmrKhyMLN1WEc3yj"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01HWrVLBHmrKhyMLN1WEc3yj"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-capture",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_019MUyCMBTy3mb1Mo2c4mvW1",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "664d80e56ac5",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 2379,
+        "end": 2380,
+        "entry_ids": [
+          "f7d9e55e-8607-4c67-a4e3-a2b5926e3eff"
+        ],
+        "tool_use_id": "toolu_019MUyCMBTy3mb1Mo2c4mvW1"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_019MUyCMBTy3mb1Mo2c4mvW1"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-ship-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_016oZNJJLXTPFRv9VgchZdPw",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "664d80e56ac5",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 2393,
+        "end": 2394,
+        "entry_ids": [
+          "6da98d5c-591f-44c8-bb6b-a9e9d85cd6d5"
+        ],
+        "tool_use_id": "toolu_016oZNJJLXTPFRv9VgchZdPw"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_016oZNJJLXTPFRv9VgchZdPw"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ship-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 58
+  },
+  "summary": {
+    "intent": "Ship phase 70.1 of CipherBox (rotation-crash-resume-depth2 soundness work) as PR #598 through the /ship-phase flow, then verify all related todos were correctly retired to completed/.",
+    "outcome": "PR #598 achieved fully green CI (all cargo/Windows/macOS/Linux, Test, SDK-E2E, CodeRabbit, Greptile, Release Preview, Cross-Language Vector Parity, codecov) with 0 unresolved review threads; user then caught that the ship flow doesn't retire todos, so the assistant manually verified and moved the two resolves_phase:70.1 todos (rotation-crash-resume-depth2-soundness-gap, fuse-shared-scope-exit-rotation-live-wiring) to completed/ and pushed the commit.",
+    "learnings": {
+      "repo": [
+        "First-ever PR CI run on a long no-PR branch (96 commits) surfaced three pre-existing platform-gate failures that never ran before: SC#6 grep marker, Windows winfsp test_support cfg gate, and a Windows-incompatible permission-based floor_store test — these gates only trigger on PR CI, not local/branch work.",
+        "CodeRabbit caught a real TS/Rust twin-parity bug: the TS rotation engine GC'd a checkpoint before the parent republish committed, risking permanent subtree read-loss on crash; fix was porting the Rust engine's deferral logic to TS.",
+        "Todos use resolves_phase frontmatter to link to the phase that should close them; grep pending/ for resolves_phase to find retirement candidates."
+      ],
+      "code": [],
+      "workflow": [
+        "The /ship-phase flow does not run todo retirement — that's execute-phase's job, and it can be skipped/incomplete, leaving resolves_phase-tagged todos stranded in pending/ even after the phase's work is fully merged and CI-green.",
+        "Before moving a todo to completed/, verify its full acceptance criteria (including embedded sub-findings like D-15a/b/c/d) are met, not just the headline fix — a todo can have caveats or separately-tracked limitations that stay open even when the main fix lands.",
+        "cargo fmt version-skew can be a trap in CI verification — this repo's CI doesn't fmt-check, so local fmt mismatches aren't blocking."
+      ]
+    },
+    "friction": [
+      "Commit likely hung on 1Password signing at a timeout during the ship flow, requiring a manual check to confirm it actually landed.",
+      "Ship flow completion gave a false sense of full closure — the assistant had to be explicitly asked by the user whether todos were moved, revealing a gap in the automated flow (todo retirement wasn't run)."
+    ],
+    "open_items": [
+      "ROT-04 desktop re-mint no-op — deferred, not blocking.",
+      "WinFsp handle_rename D-15d parity — deferred, not blocking.",
+      "macOS FUSE-T cross-client Test 5/7 invalidation — deferred, tracked as a newly filed todo.",
+      "SHARE-WRITE-KEY write-share key threading gap (referenced in prior memory, still open per project-cipherbox-collect-child-keys).",
+      "Assistant proposed saving a durable learning to memory: 'open the PR earlier on long branches since first PR CI surfaces branch-wide gate failures' — user had not yet confirmed this before transcript ends.",
+      "Consider whether /ship-phase should be updated to also run todo retirement automatically, to avoid repeating this manual catch."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-09T09:56:05.008101Z",
+    "agent_lines": 0,
+    "agent_removed": 78,
+    "human_added": 116,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 116,
+    "total_lines_changed": 232,
+    "agent_percentage": 33.62068965517241,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
