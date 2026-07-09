@@ -6,7 +6,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { DataSource, In } from 'typeorm';
+import { DataSource } from 'typeorm';
 import { SharesService } from './shares.service';
 import { Share } from './entities/share.entity';
 import { ShareInvite } from './entities/share-invite.entity';
@@ -84,6 +84,8 @@ describe('SharesService', () => {
     };
 
     queryBuilder = {
+      delete: jest.fn().mockReturnThis(),
+      from: jest.fn().mockReturnThis(),
       update: jest.fn().mockReturnThis(),
       set: jest.fn().mockReturnThis(),
       where: jest.fn().mockReturnThis(),
@@ -337,37 +339,46 @@ describe('SharesService', () => {
       expect(dataSource.transaction).not.toHaveBeenCalled();
     });
 
-    it('hard-deletes matching shares and revokes active invites in a transaction', async () => {
-      const shares = [createMockShare(), createMockShare({ id: 'share-uuid-2' })];
-      manager.find.mockResolvedValue(shares);
-      queryBuilder.execute.mockResolvedValue({ affected: 3 });
+    it('deletes matching shares via a single query-builder DELETE and revokes active invites in a transaction', async () => {
+      // Sequenced execute results: share DELETE first, then invite UPDATE.
+      queryBuilder.execute
+        .mockResolvedValueOnce({ affected: 3 })
+        .mockResolvedValueOnce({ affected: 2 });
 
       const result = await service.revokeForItems(SHARER_ID, ['k51a', 'k51b', 'k51a']);
 
-      expect(result).toEqual({ revokedShares: 2, revokedInvites: 3 });
-      // De-duped names threaded into both the share query and the invite update
-      expect(manager.find).toHaveBeenCalledWith(Share, {
-        where: { sharerId: SHARER_ID, shareRootIpnsName: In(['k51a', 'k51b']) },
+      expect(result).toEqual({ revokedShares: 3, revokedInvites: 2 });
+      // find+remove round-trip is gone entirely
+      expect(manager.find).not.toHaveBeenCalled();
+      expect(manager.remove).not.toHaveBeenCalled();
+      // De-duped names threaded into the share DELETE, mirroring the invite UPDATE binding style
+      expect(queryBuilder.delete).toHaveBeenCalledWith();
+      expect(queryBuilder.from).toHaveBeenCalledWith(Share);
+      expect(queryBuilder.where).toHaveBeenCalledWith('sharer_id = :sharerId', {
+        sharerId: SHARER_ID,
       });
-      expect(manager.remove).toHaveBeenCalledWith(shares);
+      expect(queryBuilder.andWhere).toHaveBeenCalledWith('share_root_ipns_name IN (:...names)', {
+        names: ['k51a', 'k51b'],
+      });
       expect(queryBuilder.update).toHaveBeenCalledWith(ShareInvite);
       expect(queryBuilder.set).toHaveBeenCalledWith({ status: 'revoked' });
       expect(queryBuilder.andWhere).toHaveBeenCalledWith('status = :status', { status: 'active' });
     });
 
-    it('skips manager.remove when no shares match but still revokes invites', async () => {
-      manager.find.mockResolvedValue([]);
-      queryBuilder.execute.mockResolvedValue({ affected: 1 });
+    it('returns zero revoked shares when no shares match but still revokes invites', async () => {
+      queryBuilder.execute
+        .mockResolvedValueOnce({ affected: 0 })
+        .mockResolvedValueOnce({ affected: 1 });
 
       const result = await service.revokeForItems(SHARER_ID, ['k51a']);
 
       expect(result).toEqual({ revokedShares: 0, revokedInvites: 1 });
+      expect(manager.find).not.toHaveBeenCalled();
       expect(manager.remove).not.toHaveBeenCalled();
     });
 
-    it('treats an undefined affected count as zero revoked invites', async () => {
-      manager.find.mockResolvedValue([]);
-      queryBuilder.execute.mockResolvedValue({});
+    it('treats an undefined affected count as zero for both shares and invites', async () => {
+      queryBuilder.execute.mockResolvedValueOnce({}).mockResolvedValueOnce({});
 
       const result = await service.revokeForItems(SHARER_ID, ['k51a']);
 
