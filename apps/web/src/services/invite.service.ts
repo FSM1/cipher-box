@@ -37,7 +37,7 @@ import { logger } from '../lib/logger';
  * `parentFolderId` (as threaded through `ShareDialog`/`InviteLinkTab`) is
  * `useFolderNavigation`'s `currentFolderId`, which uses the literal string
  * `'root'` for the vault root instead of a real IPNS name --
- * `resolveShareWriteDescriptor`'s `parentIpnsName` argument must be a real
+ * `resolveShareEncryptedWriteKey`'s `parentIpnsName` argument must be a real
  * IPNS name the SDK client can `requireFolder()` against (68.1-11's
  * documented write-key gap; SHARE-WRITE-KEY foundation).
  */
@@ -115,7 +115,7 @@ export function buildInviteUrl(token: string, ephemeralPrivKeyHex: string): stri
  * sent to the server).
  *
  * When `params.permission === 'write'`, additionally resolves the item's own
- * writeKey from the owned write-chain (`resolveShareWriteDescriptor`, 68.1-18)
+ * writeKey from the owned write-chain (`resolveShareEncryptedWriteKey`, 68.1-18)
  * and ECIES-wraps it for the SAME ephemeral public key used for the readKey --
  * the recipient claims both from one ephemeral bridge. No caller currently
  * requests `permission: 'write'` (the invite UI has no read/write toggle yet,
@@ -123,7 +123,7 @@ export function buildInviteUrl(token: string, ephemeralPrivKeyHex: string): stri
  * recipient-side write-claim + UI toggle are out of this plan's scope (68.1-19).
  *
  * @security The ephemeral private key and the item's readKey are zeroed in
- *   `finally` on every exit path (T-68.1-11-01/03). `resolveShareWriteDescriptor`
+ *   `finally` on every exit path (T-68.1-11-01/03). `resolveShareEncryptedWriteKey`
  *   zeroes the derived item writeKey internally before returning (D-09) --
  *   raw writeKey material never reaches this function.
  */
@@ -144,12 +144,12 @@ export async function createInviteLink(params: {
     const identity = await resolveChildNodeIdentity(params.item, params.folderKey);
     itemReadKey = identity.readKey;
 
-    const encryptedKey = bytesToHex(await wrapKey(itemReadKey, ephemeral.publicKey));
+    const encryptedReadKey = bytesToHex(await wrapKey(itemReadKey, ephemeral.publicKey));
 
-    let writeDescriptorRef: string | undefined;
+    let encryptedWriteKey: string | undefined;
     if (params.permission === 'write') {
       const parentIpnsName = resolveParentIpnsName(params.parentFolderId);
-      writeDescriptorRef = await getSdkClient().resolveShareWriteDescriptor(
+      encryptedWriteKey = await getSdkClient().resolveShareEncryptedWriteKey(
         parentIpnsName,
         params.item.ipnsName,
         ephemeral.publicKey
@@ -169,11 +169,11 @@ export async function createInviteLink(params: {
     }
 
     const invite = await shareInvitesControllerCreateInvite({
-      rootIpnsName: params.item.ipnsName,
+      shareRootIpnsName: params.item.ipnsName,
       rootNodeId: identity.nodeId,
       rootGeneration: String(identity.generation),
-      encryptedKey,
-      writeDescriptorRef,
+      encryptedReadKey,
+      encryptedWriteKey,
       itemNameEncrypted,
     });
 
@@ -218,8 +218,8 @@ export async function claimInvite(
 
     const inviteData = await invitesControllerGetInviteData(token);
 
-    rootReadKey = await unwrapKey(hexToBytes(inviteData.encryptedKey), ephemeralPrivateKey);
-    const readDescriptorRef = bytesToHex(await wrapKey(rootReadKey, vaultKeypair.publicKey));
+    rootReadKey = await unwrapKey(hexToBytes(inviteData.encryptedReadKey), ephemeralPrivateKey);
+    const encryptedReadKey = bytesToHex(await wrapKey(rootReadKey, vaultKeypair.publicKey));
 
     let itemNameEncrypted: string | undefined;
     if (inviteData.itemNameEncrypted) {
@@ -238,7 +238,7 @@ export async function claimInvite(
     }
 
     const result = await invitesControllerClaimInvite(token, {
-      readDescriptorRef,
+      encryptedReadKey,
       itemNameEncrypted,
     });
 
@@ -276,14 +276,14 @@ export async function checkInviteStatus(token: string): Promise<'active' | 'expi
  * Uses the authenticated ShareInvitesController endpoint.
  */
 export async function fetchInvitesForItem(ipnsName: string): Promise<InviteInfo[]> {
-  const invites = await shareInvitesControllerListInvites({ rootIpnsName: ipnsName });
+  const invites = await shareInvitesControllerListInvites({ shareRootIpnsName: ipnsName });
   return invites.map((invite) => ({
     id: invite.id,
     token: invite.token,
     status: invite.status,
     // TODO(phase 63): SealedChildRef has no .type; itemType has no source at the invite layer.
     itemType: 'folder',
-    ipnsName: invite.rootIpnsName,
+    ipnsName: invite.shareRootIpnsName,
     // itemNameEncrypted (if present) is wrapped for the EPHEMERAL public key, which the
     // sharer never retains after creation (T-68.1-11-01) -- there is no plaintext name
     // the sharer can recover for their own invite list.

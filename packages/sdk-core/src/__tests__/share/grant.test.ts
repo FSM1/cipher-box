@@ -1,7 +1,7 @@
 /**
  * Tests for issueReadGrant, claimInviteReadKey, and claimInvite.
  *
- * issueReadGrant: ONE ECIES wrap → readDescriptorRef; zero node touches; zero IPNS publishes.
+ * issueReadGrant: ONE ECIES wrap → encryptedReadKey; zero node touches; zero IPNS publishes.
  * claimInviteReadKey: unwrap with ephemeral private key, re-wrap to claimer public key.
  * claimInvite: full service flow — fetch invite data → claimInviteReadKey → insertShareFn.
  *
@@ -54,8 +54,8 @@ const RECIPIENT_PUBLIC_KEY = new Uint8Array(65).fill(0x04);
 /** Fake ECIES-wrapped key bytes returned by the mocked wrapKey. */
 const WRAPPED_BYTES = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
 
-/** base64 of WRAPPED_BYTES — the expected readDescriptorRef encoding. */
-const EXPECTED_DESCRIPTOR_REF = btoa(String.fromCharCode(0xde, 0xad, 0xbe, 0xef));
+/** base64 of WRAPPED_BYTES — the expected encryptedReadKey encoding. */
+const EXPECTED_ENCRYPTED_READ_KEY = btoa(String.fromCharCode(0xde, 0xad, 0xbe, 0xef));
 
 // ---------------------------------------------------------------------------
 // issueReadGrant tests (Task 1 — READ-01 / §3.2)
@@ -78,7 +78,7 @@ describe('issueReadGrant', () => {
       shareRootReadKey: SHARE_ROOT_READ_KEY,
       recipientPublicKey: RECIPIENT_PUBLIC_KEY,
       rootNodeId: 'node-1',
-      rootIpnsName: 'k51qzi',
+      shareRootIpnsName: 'k51qzi',
       rootGeneration: 0,
       insertShareFn,
     });
@@ -92,7 +92,7 @@ describe('issueReadGrant', () => {
       shareRootReadKey: SHARE_ROOT_READ_KEY,
       recipientPublicKey: RECIPIENT_PUBLIC_KEY,
       rootNodeId: 'node-root-1',
-      rootIpnsName: 'k51testname',
+      shareRootIpnsName: 'k51testname',
       rootGeneration: 3,
       insertShareFn,
     });
@@ -100,24 +100,24 @@ describe('issueReadGrant', () => {
     expect(insertShareFn).toHaveBeenCalledOnce();
     const [payload] = insertShareFn.mock.calls[0];
     expect(payload.rootNodeId).toBe('node-root-1');
-    expect(payload.rootIpnsName).toBe('k51testname');
+    expect(payload.shareRootIpnsName).toBe('k51testname');
     expect(payload.rootGeneration).toBe(3);
-    expect(payload.readDescriptorRef).toBe(EXPECTED_DESCRIPTOR_REF);
+    expect(payload.encryptedReadKey).toBe(EXPECTED_ENCRYPTED_READ_KEY);
     expect(payload.recipientPublicKey).toBe(RECIPIENT_PUBLIC_KEY);
   });
 
-  it('returns { shareId, readDescriptorRef } matching insertShareFn result', async () => {
+  it('returns { shareId, encryptedReadKey } matching insertShareFn result', async () => {
     const result = await issueReadGrant({
       shareRootReadKey: SHARE_ROOT_READ_KEY,
       recipientPublicKey: RECIPIENT_PUBLIC_KEY,
       rootNodeId: 'node-1',
-      rootIpnsName: 'k51abc',
+      shareRootIpnsName: 'k51abc',
       rootGeneration: 0,
       insertShareFn,
     });
 
     expect(result.shareId).toBe('share-abc-123');
-    expect(result.readDescriptorRef).toBe(EXPECTED_DESCRIPTOR_REF);
+    expect(result.encryptedReadKey).toBe(EXPECTED_ENCRYPTED_READ_KEY);
   });
 
   it('produces structurally identical grant payload for a folder root and a single-file root (READ-01)', async () => {
@@ -127,7 +127,7 @@ describe('issueReadGrant', () => {
       shareRootReadKey: SHARE_ROOT_READ_KEY,
       recipientPublicKey: RECIPIENT_PUBLIC_KEY,
       rootNodeId: 'folder-root',
-      rootIpnsName: 'k51folder',
+      shareRootIpnsName: 'k51folder',
       rootGeneration: 0,
       insertShareFn: folderInsertFn,
     });
@@ -142,17 +142,17 @@ describe('issueReadGrant', () => {
       shareRootReadKey: SHARE_ROOT_READ_KEY,
       recipientPublicKey: RECIPIENT_PUBLIC_KEY,
       rootNodeId: 'file-root',
-      rootIpnsName: 'k51file',
+      shareRootIpnsName: 'k51file',
       rootGeneration: 0,
       insertShareFn: fileInsertFn,
     });
 
-    // Both grant results have the same shape — string shareId + string readDescriptorRef.
+    // Both grant results have the same shape — string shareId + string encryptedReadKey.
     // This proves granting a single file is structurally identical to granting a deep folder.
     expect(typeof folderResult.shareId).toBe('string');
-    expect(typeof folderResult.readDescriptorRef).toBe('string');
+    expect(typeof folderResult.encryptedReadKey).toBe('string');
     expect(typeof fileResult.shareId).toBe('string');
-    expect(typeof fileResult.readDescriptorRef).toBe('string');
+    expect(typeof fileResult.encryptedReadKey).toBe('string');
 
     // wrapKey called once per grant (only one ECIES op each, regardless of tree depth)
     expect(mockFns.wrapKey).toHaveBeenCalledOnce();
@@ -163,7 +163,7 @@ describe('issueReadGrant', () => {
       shareRootReadKey: SHARE_ROOT_READ_KEY,
       recipientPublicKey: RECIPIENT_PUBLIC_KEY,
       rootNodeId: 'node-1',
-      rootIpnsName: 'k51abc',
+      shareRootIpnsName: 'k51abc',
       rootGeneration: 0,
       insertShareFn,
     });
@@ -189,13 +189,13 @@ describe('claimInviteReadKey', () => {
   /** Fake invite-wrapped bytes (ECIES ciphertext encrypted to ephemeral pubkey). */
   const INVITE_WRAPPED_BYTES = new Uint8Array([0x01, 0x02, 0x03, 0x04]);
 
-  /** base64 of INVITE_WRAPPED_BYTES — the invite readDescriptorRef. */
-  const INVITE_DESCRIPTOR_REF = btoa(String.fromCharCode(0x01, 0x02, 0x03, 0x04));
+  /** base64 of INVITE_WRAPPED_BYTES — the invite encryptedReadKey. */
+  const INVITE_ENCRYPTED_READ_KEY = btoa(String.fromCharCode(0x01, 0x02, 0x03, 0x04));
 
   /** Fake re-wrapped bytes returned by the mocked reWrapKey. */
   const CLAIMER_WRAPPED_BYTES = new Uint8Array([0xca, 0xfe, 0xba, 0xbe]);
 
-  /** base64 of CLAIMER_WRAPPED_BYTES — the expected claimer readDescriptorRef. */
+  /** base64 of CLAIMER_WRAPPED_BYTES — the expected claimer encryptedReadKey. */
   const EXPECTED_CLAIMER_REF = btoa(String.fromCharCode(0xca, 0xfe, 0xba, 0xbe));
 
   beforeEach(() => {
@@ -205,7 +205,7 @@ describe('claimInviteReadKey', () => {
 
   it('calls reWrapKey with the decoded invite bytes, ephemeralPrivateKey, and claimerPublicKey', async () => {
     await claimInviteReadKey({
-      readDescriptorRef: INVITE_DESCRIPTOR_REF,
+      encryptedReadKey: INVITE_ENCRYPTED_READ_KEY,
       ephemeralPrivateKey: EPHEMERAL_PRIV_KEY,
       claimerPublicKey: CLAIMER_PUBLIC_KEY,
     });
@@ -218,9 +218,9 @@ describe('claimInviteReadKey', () => {
     );
   });
 
-  it('returns the base64-encoded result of reWrapKey (standard grant readDescriptorRef)', async () => {
+  it('returns the base64-encoded result of reWrapKey (standard grant encryptedReadKey)', async () => {
     const result = await claimInviteReadKey({
-      readDescriptorRef: INVITE_DESCRIPTOR_REF,
+      encryptedReadKey: INVITE_ENCRYPTED_READ_KEY,
       ephemeralPrivateKey: EPHEMERAL_PRIV_KEY,
       claimerPublicKey: CLAIMER_PUBLIC_KEY,
     });
@@ -230,7 +230,7 @@ describe('claimInviteReadKey', () => {
 
   it('returns a plain string — no encryptedChildKeys fan-out (D-07)', async () => {
     const result = await claimInviteReadKey({
-      readDescriptorRef: INVITE_DESCRIPTOR_REF,
+      encryptedReadKey: INVITE_ENCRYPTED_READ_KEY,
       ephemeralPrivateKey: EPHEMERAL_PRIV_KEY,
       claimerPublicKey: CLAIMER_PUBLIC_KEY,
     });
@@ -243,7 +243,7 @@ describe('claimInviteReadKey', () => {
 
   it('uses reWrapKey (not separate unwrapKey + wrapKey) — intermediate zeroization delegated to reWrapKey (T-63-05)', async () => {
     await claimInviteReadKey({
-      readDescriptorRef: INVITE_DESCRIPTOR_REF,
+      encryptedReadKey: INVITE_ENCRYPTED_READ_KEY,
       ephemeralPrivateKey: EPHEMERAL_PRIV_KEY,
       claimerPublicKey: CLAIMER_PUBLIC_KEY,
     });
@@ -257,7 +257,7 @@ describe('claimInviteReadKey', () => {
 
   it('does NOT touch sealNode, resolveIpnsRecord, or createAndPublishIpnsRecord (READ-05 — no node/IPNS side effects)', async () => {
     await claimInviteReadKey({
-      readDescriptorRef: INVITE_DESCRIPTOR_REF,
+      encryptedReadKey: INVITE_ENCRYPTED_READ_KEY,
       ephemeralPrivateKey: EPHEMERAL_PRIV_KEY,
       claimerPublicKey: CLAIMER_PUBLIC_KEY,
     });
@@ -283,16 +283,16 @@ describe('claimInvite', () => {
   /** Fake invite-wrapped bytes (ECIES ciphertext encrypted to ephemeral pubkey). */
   const INVITE_WRAPPED_BYTES = new Uint8Array([0x01, 0x02, 0x03, 0x04]);
 
-  /** base64 of INVITE_WRAPPED_BYTES — the invite readDescriptorRef in the invite row. */
-  const INVITE_DESCRIPTOR_REF = btoa(String.fromCharCode(0x01, 0x02, 0x03, 0x04));
+  /** base64 of INVITE_WRAPPED_BYTES — the invite encryptedReadKey in the invite row. */
+  const INVITE_ENCRYPTED_READ_KEY = btoa(String.fromCharCode(0x01, 0x02, 0x03, 0x04));
 
   /** Fake re-wrapped bytes returned by the mocked reWrapKey. */
   const CLAIMER_WRAPPED_BYTES = new Uint8Array([0xca, 0xfe, 0xba, 0xbe]);
 
-  /** base64 of CLAIMER_WRAPPED_BYTES — the expected claimer readDescriptorRef. */
+  /** base64 of CLAIMER_WRAPPED_BYTES — the expected claimer encryptedReadKey. */
   const EXPECTED_CLAIMER_REF = btoa(String.fromCharCode(0xca, 0xfe, 0xba, 0xbe));
 
-  const getInviteDataFn = vi.fn<[], Promise<{ readDescriptorRef: string }>>();
+  const getInviteDataFn = vi.fn<[], Promise<{ encryptedReadKey: string }>>();
   const insertShareFn = vi.fn<
     [Parameters<Parameters<typeof claimInvite>[0]['insertShareFn']>[0]],
     Promise<{ shareId: string }>
@@ -301,7 +301,7 @@ describe('claimInvite', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockFns.reWrapKey.mockResolvedValue(CLAIMER_WRAPPED_BYTES);
-    getInviteDataFn.mockResolvedValue({ readDescriptorRef: INVITE_DESCRIPTOR_REF });
+    getInviteDataFn.mockResolvedValue({ encryptedReadKey: INVITE_ENCRYPTED_READ_KEY });
     insertShareFn.mockResolvedValue({ shareId: 'share-claim-001' });
   });
 
@@ -311,7 +311,7 @@ describe('claimInvite', () => {
       ephemeralPrivateKey: EPHEMERAL_PRIV_KEY,
       claimerPublicKey: CLAIMER_PUBLIC_KEY,
       rootNodeId: 'node-root-1',
-      rootIpnsName: 'k51inviteroot',
+      shareRootIpnsName: 'k51inviteroot',
       rootGeneration: 0,
       getInviteDataFn,
       insertShareFn,
@@ -338,7 +338,7 @@ describe('claimInvite', () => {
       ephemeralPrivateKey: EPHEMERAL_PRIV_KEY,
       claimerPublicKey: CLAIMER_PUBLIC_KEY,
       rootNodeId: 'node-root-1',
-      rootIpnsName: 'k51inviteroot',
+      shareRootIpnsName: 'k51inviteroot',
       rootGeneration: 0,
       getInviteDataFn,
       insertShareFn,
@@ -350,13 +350,13 @@ describe('claimInvite', () => {
     expect(capturedArgs![2]).toEqual(CLAIMER_PUBLIC_KEY);
   });
 
-  it('persists trimmed rootNodeId and rootIpnsName — not raw whitespace-padded input', async () => {
+  it('persists trimmed rootNodeId and shareRootIpnsName — not raw whitespace-padded input', async () => {
     await claimInvite({
       inviteToken: 'tok-abc',
       ephemeralPrivateKey: EPHEMERAL_PRIV_KEY,
       claimerPublicKey: CLAIMER_PUBLIC_KEY,
       rootNodeId: '  node-root-1  ',
-      rootIpnsName: '  k51inviteroot  ',
+      shareRootIpnsName: '  k51inviteroot  ',
       rootGeneration: 0,
       getInviteDataFn,
       insertShareFn,
@@ -364,7 +364,7 @@ describe('claimInvite', () => {
 
     const [payload] = insertShareFn.mock.calls[0];
     expect(payload.rootNodeId).toBe('node-root-1');
-    expect(payload.rootIpnsName).toBe('k51inviteroot');
+    expect(payload.shareRootIpnsName).toBe('k51inviteroot');
   });
 
   it('snapshots key buffers before getInviteDataFn so a mid-await caller zeroing cannot corrupt the re-wrap', async () => {
@@ -385,7 +385,7 @@ describe('claimInvite', () => {
     const zeroingGetFn = vi.fn().mockImplementation(async () => {
       mutableEphemeralKey.fill(0);
       mutableClaimerKey.fill(0);
-      return { readDescriptorRef: INVITE_DESCRIPTOR_REF };
+      return { encryptedReadKey: INVITE_ENCRYPTED_READ_KEY };
     });
 
     await claimInvite({
@@ -393,7 +393,7 @@ describe('claimInvite', () => {
       ephemeralPrivateKey: mutableEphemeralKey,
       claimerPublicKey: mutableClaimerKey,
       rootNodeId: 'node-root-1',
-      rootIpnsName: 'k51inviteroot',
+      shareRootIpnsName: 'k51inviteroot',
       rootGeneration: 0,
       getInviteDataFn: zeroingGetFn,
       insertShareFn,
@@ -410,7 +410,7 @@ describe('claimInvite', () => {
       ephemeralPrivateKey: EPHEMERAL_PRIV_KEY,
       claimerPublicKey: CLAIMER_PUBLIC_KEY,
       rootNodeId: 'node-root-1',
-      rootIpnsName: 'k51inviteroot',
+      shareRootIpnsName: 'k51inviteroot',
       rootGeneration: 2,
       getInviteDataFn,
       insertShareFn,
@@ -421,27 +421,27 @@ describe('claimInvite', () => {
     // claimInvite passes a snapshotted copy of claimerPublicKey — use toStrictEqual, not toBe.
     expect(payload.recipientPublicKey).toStrictEqual(CLAIMER_PUBLIC_KEY);
     expect(payload.rootNodeId).toBe('node-root-1');
-    expect(payload.rootIpnsName).toBe('k51inviteroot');
+    expect(payload.shareRootIpnsName).toBe('k51inviteroot');
     expect(payload.rootGeneration).toBe(2);
-    expect(payload.readDescriptorRef).toBe(EXPECTED_CLAIMER_REF);
+    expect(payload.encryptedReadKey).toBe(EXPECTED_CLAIMER_REF);
     // No encryptedChildKeys fan-out — Success Criterion 4 / D-06
     expect(payload).not.toHaveProperty('encryptedChildKeys');
   });
 
-  it('returns { shareId, readDescriptorRef } matching insertShareFn and the re-wrapped key', async () => {
+  it('returns { shareId, encryptedReadKey } matching insertShareFn and the re-wrapped key', async () => {
     const result = await claimInvite({
       inviteToken: 'tok-xyz',
       ephemeralPrivateKey: EPHEMERAL_PRIV_KEY,
       claimerPublicKey: CLAIMER_PUBLIC_KEY,
       rootNodeId: 'node-root-1',
-      rootIpnsName: 'k51inviteroot',
+      shareRootIpnsName: 'k51inviteroot',
       rootGeneration: 0,
       getInviteDataFn,
       insertShareFn,
     });
 
     expect(result.shareId).toBe('share-claim-001');
-    expect(result.readDescriptorRef).toBe(EXPECTED_CLAIMER_REF);
+    expect(result.encryptedReadKey).toBe(EXPECTED_CLAIMER_REF);
   });
 
   it('two claims of the same invite produce two independent standard grants of the same readKey (D-06 multi-claim)', async () => {
@@ -461,7 +461,7 @@ describe('claimInvite', () => {
       ephemeralPrivateKey: EPHEMERAL_PRIV_KEY,
       claimerPublicKey: claimerPubKey1,
       rootNodeId: 'node-root-shared',
-      rootIpnsName: 'k51shared',
+      shareRootIpnsName: 'k51shared',
       rootGeneration: 1,
       getInviteDataFn,
       insertShareFn: insertShareFn1,
@@ -474,7 +474,7 @@ describe('claimInvite', () => {
       ephemeralPrivateKey: EPHEMERAL_PRIV_KEY,
       claimerPublicKey: claimerPubKey2,
       rootNodeId: 'node-root-shared',
-      rootIpnsName: 'k51shared',
+      shareRootIpnsName: 'k51shared',
       rootGeneration: 1,
       getInviteDataFn,
       insertShareFn: insertShareFn2,
@@ -499,7 +499,7 @@ describe('claimInvite', () => {
       ephemeralPrivateKey: EPHEMERAL_PRIV_KEY,
       claimerPublicKey: CLAIMER_PUBLIC_KEY,
       rootNodeId: 'node-root-1',
-      rootIpnsName: 'k51inviteroot',
+      shareRootIpnsName: 'k51inviteroot',
       rootGeneration: 0,
       getInviteDataFn,
       insertShareFn,

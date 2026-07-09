@@ -96,13 +96,13 @@ function toReceivedShare(dto: ReceivedShareResponseDto): ReceivedShare {
   return {
     shareId: dto.shareId,
     sharerPublicKey: dto.sharerPublicKey,
-    ipnsName: dto.rootIpnsName,
+    ipnsName: dto.shareRootIpnsName,
     itemName: '',
     itemNameEncrypted: dto.itemNameEncrypted,
-    permission: dto.writeDescriptorRef !== null ? 'write' : 'read',
+    permission: dto.encryptedWriteKey !== null ? 'write' : 'read',
     createdAt: dto.createdAt,
-    readDescriptorRef: dto.readDescriptorRef,
-    writeDescriptorRef: dto.writeDescriptorRef,
+    encryptedReadKey: dto.encryptedReadKey,
+    encryptedWriteKey: dto.encryptedWriteKey,
     rootGeneration: parseRootGeneration(dto.rootGeneration),
     rootNodeId: dto.rootNodeId,
   };
@@ -113,12 +113,12 @@ function toSentShare(dto: SentShareResponseDto): SentShare {
   return {
     shareId: dto.shareId,
     recipientPublicKey: dto.recipientPublicKey,
-    ipnsName: dto.rootIpnsName,
+    ipnsName: dto.shareRootIpnsName,
     itemName: '',
     itemNameEncrypted: dto.itemNameEncrypted,
-    permission: dto.writeDescriptorRef !== null ? 'write' : 'read',
+    permission: dto.encryptedWriteKey !== null ? 'write' : 'read',
     createdAt: dto.createdAt,
-    readDescriptorRef: dto.readDescriptorRef,
+    encryptedReadKey: dto.encryptedReadKey,
     rootGeneration: parseRootGeneration(dto.rootGeneration),
     rootNodeId: dto.rootNodeId,
   };
@@ -127,7 +127,7 @@ function toSentShare(dto: SentShareResponseDto): SentShare {
 /**
  * Fetch active, non-hidden shares received by the current user (paginated).
  *
- * Real grant rows (readDescriptorRef/rootGeneration/rootNodeId) — the data
+ * Real grant rows (encryptedReadKey/rootGeneration/rootNodeId) — the data
  * path D-07 seeds the durable rotation-floor from (ROT-07).
  */
 export async function fetchReceivedShares(
@@ -141,7 +141,7 @@ export async function fetchReceivedShares(
 /**
  * Fetch active shares sent by the current user (paginated).
  *
- * Real grant rows (readDescriptorRef/rootGeneration/rootNodeId) — the data
+ * Real grant rows (encryptedReadKey/rootGeneration/rootNodeId) — the data
  * path D-07 seeds the durable rotation-floor from (ROT-07).
  */
 export async function fetchSentShares(
@@ -179,11 +179,11 @@ export async function hideShare(shareId: string): Promise<void> {
 
 /**
  * Fail-closed (68.1-20): there is NO per-child `share_keys` fan-out endpoint
- * under the descriptor-ref grant model — `sharesControllerGetShareKeys` does
+ * under the encrypted-key grant model — `sharesControllerGetShareKeys` does
  * not exist server-side. A grant carries exactly one wrapped
- * `readDescriptorRef` (and optionally `writeDescriptorRef`) for the shared
+ * `encryptedReadKey` (and optionally `encryptedWriteKey`) for the shared
  * item's OWN root; every descendant key is recovered on demand via the
- * read/write-chain walk (`navigateReadChain`, `resolveShareWriteDescriptor`),
+ * read/write-chain walk (`navigateReadChain`, `resolveShareEncryptedWriteKey`),
  * never via a pre-fetched per-child key list.
  *
  * Always returns an empty array so every caller's existing empty-array/null

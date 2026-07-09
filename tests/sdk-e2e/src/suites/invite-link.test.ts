@@ -49,11 +49,11 @@ describe('Invite Link', () => {
         Authorization: `Bearer ${alice.accessToken}`,
         'Content-Type': 'application/json',
       },
-      // v3 CreateInviteDto: rootIpnsName + rootNodeId + encryptedKey
+      // v3 CreateInviteDto: shareRootIpnsName + rootNodeId + encryptedReadKey
       body: JSON.stringify({
-        rootIpnsName: folder.ipnsName,
+        shareRootIpnsName: folder.ipnsName,
         rootNodeId: folder.id,
-        encryptedKey,
+        encryptedReadKey: encryptedKey,
       }),
     });
 
@@ -82,11 +82,11 @@ describe('Invite Link', () => {
     expect(res.ok).toBe(true);
 
     const data = await res.json();
-    // v3 InviteDataResponseDto: status + encryptedKey + root identity (no itemType/itemName).
+    // v3 InviteDataResponseDto: status + encryptedReadKey + root identity (no itemType/itemName).
     expect(data.status).toBe('active');
-    expect(data.rootIpnsName).toBe(folderIpnsName);
+    expect(data.shareRootIpnsName).toBe(folderIpnsName);
     expect(data.rootNodeId).toBe(folderNodeId);
-    expect(data.encryptedKey).toBeTruthy();
+    expect(data.encryptedReadKey).toBeTruthy();
   });
 
   it('should allow Bob to claim the invite', async () => {
@@ -101,7 +101,7 @@ describe('Invite Link', () => {
         Authorization: `Bearer ${bob.accessToken}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ readDescriptorRef: encryptedKey }),
+      body: JSON.stringify({ encryptedReadKey: encryptedKey }),
     });
 
     expect(res.status).toBe(201);
@@ -120,7 +120,7 @@ describe('Invite Link', () => {
         Authorization: `Bearer ${charlie.accessToken}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ readDescriptorRef: encryptedKey }),
+      body: JSON.stringify({ encryptedReadKey: encryptedKey }),
     });
 
     // Should be 409 (already claimed) or 404 (no longer active)
@@ -138,7 +138,7 @@ describe('Invite Link', () => {
         Authorization: `Bearer ${bob.accessToken}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ readDescriptorRef: encryptedKey }),
+      body: JSON.stringify({ encryptedReadKey: encryptedKey }),
     });
 
     expect([404, 409]).toContain(res.status);
@@ -156,9 +156,9 @@ describe('Invite Link', () => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        rootIpnsName: folderIpnsName,
+        shareRootIpnsName: folderIpnsName,
         rootNodeId: folderNodeId,
-        encryptedKey,
+        encryptedReadKey: encryptedKey,
       }),
     });
     expect(createRes.status).toBe(201);

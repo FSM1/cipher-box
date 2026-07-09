@@ -39,7 +39,7 @@ describe('hasCoveringGrant', () => {
     const params: CoverageParams = {
       nodeAncestorIpnsNames: ['k51/node-x', 'k51/parent-y', 'k51/root-z'],
       activeGrantRootIpnsNames: new Set(['k51/other-root']),
-      localGrantRecord: { rootIpnsName: 'k51/unrelated-root' },
+      localGrantRecord: { shareRootIpnsName: 'k51/unrelated-root' },
     };
     expect(hasCoveringGrant(params)).toBe(false);
   });
@@ -86,25 +86,25 @@ describe('hasCoveringGrant', () => {
     const params: CoverageParams = {
       nodeAncestorIpnsNames: ['k51/leaf', 'k51/shared-folder', 'k51/root'],
       activeGrantRootIpnsNames: new Set(), // relay omits it (malicious or stale)
-      localGrantRecord: { rootIpnsName: 'k51/shared-folder' },
+      localGrantRecord: { shareRootIpnsName: 'k51/shared-folder' },
     };
     expect(hasCoveringGrant(params)).toBe(true);
   });
 
-  it('returns true when localGrantRecord.rootIpnsName is the leaf node itself', () => {
+  it('returns true when localGrantRecord.shareRootIpnsName is the leaf node itself', () => {
     const params: CoverageParams = {
       nodeAncestorIpnsNames: ['k51/file-node'],
       activeGrantRootIpnsNames: new Set(),
-      localGrantRecord: { rootIpnsName: 'k51/file-node' },
+      localGrantRecord: { shareRootIpnsName: 'k51/file-node' },
     };
     expect(hasCoveringGrant(params)).toBe(true);
   });
 
-  it('does NOT count localGrantRecord when its rootIpnsName is not in the ancestry', () => {
+  it('does NOT count localGrantRecord when its shareRootIpnsName is not in the ancestry', () => {
     const params: CoverageParams = {
       nodeAncestorIpnsNames: ['k51/node-a', 'k51/parent-b'],
       activeGrantRootIpnsNames: new Set(),
-      localGrantRecord: { rootIpnsName: 'k51/unrelated-root' },
+      localGrantRecord: { shareRootIpnsName: 'k51/unrelated-root' },
     };
     expect(hasCoveringGrant(params)).toBe(false);
   });
@@ -149,7 +149,7 @@ describe('maybeRotateOnScopeExit', () => {
     const params: CoverageParams = {
       nodeAncestorIpnsNames: ['k51/moved-node', 'k51/src-folder'],
       activeGrantRootIpnsNames: new Set(['k51/other-shared-folder']), // share for a different subtree
-      localGrantRecord: { rootIpnsName: 'k51/other-shared-folder' }, // grant on a different subtree
+      localGrantRecord: { shareRootIpnsName: 'k51/other-shared-folder' }, // grant on a different subtree
     };
 
     const result = await maybeRotateOnScopeExit(params, deps);
@@ -197,7 +197,7 @@ describe('maybeRotateOnScopeExit', () => {
     const params: CoverageParams = {
       nodeAncestorIpnsNames: ['k51/deleted-file', 'k51/shared-folder', 'k51/root'],
       activeGrantRootIpnsNames: new Set(), // relay maliciously omits 'k51/shared-folder'
-      localGrantRecord: { rootIpnsName: 'k51/shared-folder' }, // client knows it owns this grant
+      localGrantRecord: { shareRootIpnsName: 'k51/shared-folder' }, // client knows it owns this grant
     };
 
     const result = await maybeRotateOnScopeExit(params, deps);
@@ -212,7 +212,7 @@ describe('maybeRotateOnScopeExit', () => {
       // Multiple ancestors are grant roots (e.g., nested shared folders)
       nodeAncestorIpnsNames: ['k51/leaf', 'k51/shared-sub', 'k51/shared-root'],
       activeGrantRootIpnsNames: new Set(['k51/shared-sub', 'k51/shared-root']),
-      localGrantRecord: { rootIpnsName: 'k51/shared-root' },
+      localGrantRecord: { shareRootIpnsName: 'k51/shared-root' },
     };
 
     const result = await maybeRotateOnScopeExit(params, deps);

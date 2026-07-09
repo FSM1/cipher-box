@@ -114,7 +114,7 @@ function sharedFileBase64ToBytes(b64: string): Uint8Array {
 
 /**
  * Encode raw bytes to base64 (68.2-08 hoist). Bridges the web's hex-encoded
- * `readDescriptorRef` (API DTO contract) into `navigateReadChain`'s base64
+ * `encryptedReadKey` (API DTO contract) into `navigateReadChain`'s base64
  * contract (sdk-core's own `issueReadGrant` produces base64 -- the two
  * encodings diverge at the API boundary).
  */
@@ -1027,7 +1027,7 @@ export class CipherBoxClient {
    * (single-file share) or when the file is a direct child of the currently
    * viewed folder depth.
    *
-   * @param args.readDescriptorRef - HEX-encoded ECIES-wrapped share-root
+   * @param args.encryptedReadKey - HEX-encoded ECIES-wrapped share-root
    *   readKey (the `ReceivedShare`/API DTO wire contract) -- bridged to
    *   `navigateReadChain`'s base64 contract internally.
    * @param args.recipientPrivateKey - Caller-owned, NEVER zeroed here (D-09).
@@ -1036,9 +1036,9 @@ export class CipherBoxClient {
    *   and this method -- only decrypted plaintext leaves this method.
    */
   async downloadSharedFile(args: {
-    readDescriptorRef: string;
+    encryptedReadKey: string;
     recipientPrivateKey: Uint8Array;
-    rootIpnsName: string;
+    shareRootIpnsName: string;
     rootExpectedGeneration: number;
     path: string[];
   }): Promise<
@@ -1048,9 +1048,9 @@ export class CipherBoxClient {
   > {
     return this.withOperation('downloadSharedFile', async () => {
       const result = await sdkCore.navigateReadChain({
-        readDescriptorRef: sharedFileBytesToBase64(hexToBytes(args.readDescriptorRef)),
+        encryptedReadKey: sharedFileBytesToBase64(hexToBytes(args.encryptedReadKey)),
         recipientPrivKey: args.recipientPrivateKey,
-        rootIpnsName: args.rootIpnsName,
+        shareRootIpnsName: args.shareRootIpnsName,
         rootExpectedGeneration: args.rootExpectedGeneration,
         path: args.path,
         ctx: this.ctx,
@@ -1081,10 +1081,10 @@ export class CipherBoxClient {
   }
 
   /**
-   * Resolve a share's ROOT node from its grant descriptor (D-07 full-boundary
+   * Resolve a share's ROOT node from its grant encrypted key (D-07 full-boundary
    * facade, 68.2-08 Rule-2 addition -- the share-ENTRY counterpart to
    * {@link resolveChildIdentity}'s per-child descent). ONE ECIES unwrap of
-   * `readDescriptorRef` -> shareRootReadKey, resolve+unseal the root Node.
+   * `encryptedReadKey` -> shareRootReadKey, resolve+unseal the root Node.
    * Hoisted verbatim from `useSharedNavigationActions.ts`'s `navigateToShare`
    * (the raw-crypto portion only -- UI state wiring/seeding stays in the web
    * hook).
@@ -1094,9 +1094,9 @@ export class CipherBoxClient {
    *   returned `readKey` (must zero it once superseded/discarded/consumed).
    */
   async resolveShareRoot(args: {
-    readDescriptorRef: string;
+    encryptedReadKey: string;
     recipientPrivateKey: Uint8Array;
-    rootIpnsName: string;
+    shareRootIpnsName: string;
     rootExpectedGeneration?: number;
   }): Promise<
     | { status: 'revoked' }
@@ -1112,12 +1112,12 @@ export class CipherBoxClient {
   > {
     return this.withOperation('resolveShareRoot', async () => {
       const shareRootReadKey = await unwrapKey(
-        hexToBytes(args.readDescriptorRef),
+        hexToBytes(args.encryptedReadKey),
         args.recipientPrivateKey
       );
       let committed = false;
       try {
-        const resolved = await this.resolvePublishedNode(args.rootIpnsName);
+        const resolved = await this.resolvePublishedNode(args.shareRootIpnsName);
         if (!resolved) return { status: 'revoked' as const };
         if (
           args.rootExpectedGeneration !== undefined &&
@@ -1268,7 +1268,7 @@ export class CipherBoxClient {
    * chain — silently dropping WriteChildRefs inserted by earlier mutations in
    * the same session. That drop is what made cold-reload DFS descent unable to
    * recover just-created subfolders (GAP-2 symptom) and made
-   * resolveShareWriteDescriptor fail closed on freshly-created items.
+   * resolveShareEncryptedWriteKey fail closed on freshly-created items.
    */
   private adoptPublishedFolderState(
     folder: FolderState,
@@ -3686,7 +3686,7 @@ export class CipherBoxClient {
   }
 
   /**
-   * Mint an ECIES-wrapped `writeDescriptorRef` for a WRITE-permission share or
+   * Mint an ECIES-wrapped `encryptedWriteKey` for a WRITE-permission share or
    * invite of an OWNED item (68.1-18, SHARE-WRITE-KEY / WEB-03 / GAP-3).
    *
    * Under the node/v3 write-chain, an item's own writeKey is sealed inside its
@@ -3704,7 +3704,7 @@ export class CipherBoxClient {
    * item's raw writeKey never crosses the SDK boundary into the web layer
    * (T-68.1-18-02).
    *
-   * Fails closed (throws, never returns an empty/zero descriptor) when the
+   * Fails closed (throws, never returns an empty/zero encrypted key) when the
    * parent has no write-capable `writeKey` or the item has no `WriteChildRef`
    * in the parent's write-body (T-68.1-18-01).
    *
@@ -3715,23 +3715,23 @@ export class CipherBoxClient {
    *   wrap the item's writeKey for (the real recipient for a direct share, or
    *   an ephemeral keypair's public key for an invite link)
    * @returns Hex-encoded ECIES ciphertext (the live REST DTOs are hex-only,
-   *   mirroring 68.1-11's `readDescriptorRef` convention — not base64)
+   *   mirroring 68.1-11's `encryptedReadKey` convention — not base64)
    * @security The derived item writeKey is zeroed in `finally` immediately
    *   after wrapping (terminal owner, D-09) — it never survives past this
    *   call's own stack frame.
    */
-  async resolveShareWriteDescriptor(
+  async resolveShareEncryptedWriteKey(
     parentIpnsName: string,
     itemIpnsName: string,
     recipientPublicKey: Uint8Array
   ): Promise<string> {
-    return this.withOperation('resolveShareWriteDescriptor', async () => {
+    return this.withOperation('resolveShareEncryptedWriteKey', async () => {
       const parent = await this.requireFolder(parentIpnsName, 'Parent folder');
 
       const writeBodyParams = await this.getWriteBodyParams(parent);
       if (!writeBodyParams.writeKey) {
         throw new Error(
-          `resolveShareWriteDescriptor: parent folder ${parentIpnsName} has no writeKey — cannot mint a write grant without a write-capable parent`
+          `resolveShareEncryptedWriteKey: parent folder ${parentIpnsName} has no writeKey — cannot mint a write grant without a write-capable parent`
         );
       }
       const parentWriteKey = writeBodyParams.writeKey;
@@ -3739,13 +3739,13 @@ export class CipherBoxClient {
       const childRef = parent.children.find((c) => c.ipnsName === itemIpnsName);
       if (!childRef) {
         throw new Error(
-          `resolveShareWriteDescriptor: item ${itemIpnsName} not found in parent folder ${parentIpnsName}`
+          `resolveShareEncryptedWriteKey: item ${itemIpnsName} not found in parent folder ${parentIpnsName}`
         );
       }
 
       const itemPub = await this.resolvePublishedNode(itemIpnsName);
       if (!itemPub) {
-        throw new Error(`resolveShareWriteDescriptor: cannot resolve item IPNS ${itemIpnsName}`);
+        throw new Error(`resolveShareEncryptedWriteKey: cannot resolve item IPNS ${itemIpnsName}`);
       }
       const itemNodeId = itemPub.published.id;
       const itemKind = itemPub.published.kind;
@@ -3753,7 +3753,7 @@ export class CipherBoxClient {
       const writeChildRef = writeBodyParams.writeChildren?.find((wc) => wc.childId === itemNodeId);
       if (!writeChildRef) {
         throw new Error(
-          `resolveShareWriteDescriptor: item ${itemIpnsName} has no WriteChildRef in the parent write-body — cannot mint a write grant for an item with no write-chain entry`
+          `resolveShareEncryptedWriteKey: item ${itemIpnsName} has no WriteChildRef in the parent write-body — cannot mint a write grant for an item with no write-chain entry`
         );
       }
 
@@ -5283,10 +5283,10 @@ export class CipherBoxClient {
    * A single-file share's root IS the file — there is no parent folder write
    * chain to walk (unlike {@link updateSharedFile}'s folder path, which
    * requires a loaded `SharedFolderState`). The file's readKey/writeKey are
-   * recovered directly from the grant's ECIES-wrapped descriptors
-   * (`share.readDescriptorRef`/`share.writeDescriptorRef`), and the file's
+   * recovered directly from the grant's ECIES-wrapped encrypted keys
+   * (`share.encryptedReadKey`/`share.encryptedWriteKey`), and the file's
    * ipnsPrivateKey is recovered by unsealing the file's own write-body
-   * (validate-before-trust — a wrong/tampered descriptor fails AEAD auth
+   * (validate-before-trust — a wrong/tampered encrypted key fails AEAD auth
    * closed here, never caught-and-continued).
    *
    * Publishes to the file's OWN IPNS at the resolved sequence + 1 via the
@@ -5296,8 +5296,8 @@ export class CipherBoxClient {
    */
   async updateSharedSingleFile(args: {
     shareId: string;
-    readDescriptorRef: string;
-    writeDescriptorRef: string;
+    encryptedReadKey: string;
+    encryptedWriteKey: string;
     fileIpnsName: string;
     ownerPublicKey: Uint8Array;
     /** Caller-owned — NEVER zeroed by this method (D-09). */
@@ -5310,11 +5310,11 @@ export class CipherBoxClient {
       // Recovered file keys — MINTED by this call, terminal owner (D-09).
       // args.recipientPrivateKey is caller-owned and is NEVER zeroed here.
       let fileReadKey: Uint8Array | null = await unwrapKey(
-        hexToBytes(args.readDescriptorRef),
+        hexToBytes(args.encryptedReadKey),
         args.recipientPrivateKey
       );
       let fileWriteKey: Uint8Array | null = await unwrapKey(
-        hexToBytes(args.writeDescriptorRef),
+        hexToBytes(args.encryptedWriteKey),
         args.recipientPrivateKey
       );
       let currentFileNode: CoreNode | null = null;
@@ -5331,7 +5331,7 @@ export class CipherBoxClient {
           throw new Error('updateSharedSingleFile: share was updated — please reopen');
         }
 
-        // Validate-before-trust for BOTH keys: a wrong/tampered descriptor
+        // Validate-before-trust for BOTH keys: a wrong/tampered encrypted key
         // fails AEAD auth closed here (T-68.1-32-01) — never caught.
         currentFileNode = await unsealNode(filePub.published, fileReadKey, fileWriteKey);
 

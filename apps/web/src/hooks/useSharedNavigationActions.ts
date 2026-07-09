@@ -113,27 +113,27 @@ async function resolveFolderIpnsPrivateKey(
 }
 
 /**
- * Unwrap a grant's `writeDescriptorRef` into the shared-root writeKey
+ * Unwrap a grant's `encryptedWriteKey` into the shared-root writeKey
  * (68.1-20, SHARE-WRITE-KEY recipient side).
  *
  * Only meaningful for the share ROOT: a node's writeKey under the node/v3
  * write-chain is sealed inside its PARENT's write-body (`WriteChildRef.
- * writeKeySealed`), so the descriptor-ref grant only ever carries the
+ * writeKeySealed`), so the encrypted-key grant only ever carries the
  * shared item's OWN root writeKey -- there is no equivalent per-subfolder
- * descriptor to unwrap deeper in the tree (that requires a write-chain walk
+ * encrypted key to unwrap deeper in the tree (that requires a write-chain walk
  * from this root writeKey, out of this helper's scope -- see client.ts
  * `moveInSharedFolder`, 68.1-20 Task 3).
  *
- * Returns `null` for read-only grants (no `writeDescriptorRef`) so callers
+ * Returns `null` for read-only grants (no `encryptedWriteKey`) so callers
  * preserve the existing zero-buffer `writeKey` seed default untouched
  * (T-68.1-20-01: a read-only grant can never recover a usable writeKey).
  */
 async function resolveSharedRootWriteKey(
-  writeDescriptorRef: string | null | undefined,
+  encryptedWriteKey: string | null | undefined,
   vaultPrivateKey: Uint8Array
 ): Promise<Uint8Array | null> {
-  if (!writeDescriptorRef) return null;
-  return unwrapKey(hexToBytes(writeDescriptorRef), vaultPrivateKey);
+  if (!encryptedWriteKey) return null;
+  return unwrapKey(hexToBytes(encryptedWriteKey), vaultPrivateKey);
 }
 
 export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
@@ -141,7 +141,7 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
    * Navigate into a shared folder/file from the top-level list.
    *
    * `client.resolveShareRoot` performs the ONE ECIES unwrap of
-   * `readDescriptorRef` -> share-root readKey and resolves + unseals the
+   * `encryptedReadKey` -> share-root readKey and resolves + unseals the
    * root Node entirely inside the SDK (D-07). A `kind: 'file'` root
    * (single-file share) switches to `currentView: 'file'` instead --
    * `SharedFileBrowser`'s effect then calls `downloadSharedFile` with a
@@ -174,9 +174,9 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
 
       try {
         const result = await getSdkClient().resolveShareRoot({
-          readDescriptorRef: share.readDescriptorRef,
+          encryptedReadKey: share.encryptedReadKey,
           recipientPrivateKey: vaultKeypair.privateKey,
-          rootIpnsName: share.ipnsName,
+          shareRootIpnsName: share.ipnsName,
           rootExpectedGeneration: share.rootGeneration,
         });
 
@@ -230,7 +230,7 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
         committed = true;
 
         // T-68.1-20-01: recover the shared-root writeKey from the grant's
-        // writeDescriptorRef (write grants only) -- read-only grants keep the
+        // encryptedWriteKey (write grants only) -- read-only grants keep the
         // SDK's zero-buffer writeKey default (cannot unseal the write-body).
         // Navigation is already committed above, so a write-key failure must NOT
         // surface as a navigation error -- guard the lookup and fall back to
@@ -239,7 +239,7 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
         let shareRootWriteKey: Uint8Array | null = null;
         try {
           shareRootWriteKey = await resolveSharedRootWriteKey(
-            share.writeDescriptorRef,
+            share.encryptedWriteKey,
             vaultKeypair.privateKey
           );
         } catch (writeKeyErr) {
@@ -487,13 +487,13 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
       p.ipnsPrivateKeyRef.current = ipnsPrivateKey;
 
       // T-68.1-20-01: re-derive the shared-root writeKey when this navigate-up
-      // restores the share ROOT depth (the only depth a writeDescriptorRef
+      // restores the share ROOT depth (the only depth a encryptedWriteKey
       // grant covers) -- a deeper subfolder restore keeps the zero-buffer
       // writeKey default untouched (see resolveSharedRootWriteKey doc).
       const isRootDepth = parent.ipnsName === shareEntry.share.ipnsName;
       const rootWriteKey = isRootDepth
         ? await resolveSharedRootWriteKey(
-            shareEntry.share.writeDescriptorRef,
+            shareEntry.share.encryptedWriteKey,
             vaultKeypair.privateKey
           )
         : null;
@@ -575,7 +575,7 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
         const isRootDepth = target.ipnsName === shareEntry.share.ipnsName;
         const rootWriteKey = isRootDepth
           ? await resolveSharedRootWriteKey(
-              shareEntry.share.writeDescriptorRef,
+              shareEntry.share.encryptedWriteKey,
               vaultKeypair.privateKey
             )
           : null;
@@ -642,7 +642,7 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
       try {
         // Full folder chain from the share root (navStack[0]) down to the
         // current folder (p.ipnsName). The SDK receives the root separately
-        // via rootIpnsName, so drop it with slice(1); the remaining hops plus
+        // via shareRootIpnsName, so drop it with slice(1); the remaining hops plus
         // the leaf form the path. At the share root itself, navStack is empty
         // and p.ipnsName IS the root -- slice(1) then correctly drops it, so
         // the root is never double-counted.
@@ -653,9 +653,9 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
         const path = p.currentView === 'file' ? [] : [...folderChain.slice(1), item.ipnsName];
 
         const result = await getSdkClient().downloadSharedFile({
-          readDescriptorRef: share.readDescriptorRef,
+          encryptedReadKey: share.encryptedReadKey,
           recipientPrivateKey: vaultKeypair.privateKey,
-          rootIpnsName: share.ipnsName,
+          shareRootIpnsName: share.ipnsName,
           rootExpectedGeneration: share.rootGeneration ?? 0,
           path,
         });
@@ -707,9 +707,9 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
       const vaultKeypair = auth.vaultKeypair;
 
       const result = await getSdkClient().downloadSharedFile({
-        readDescriptorRef: share.readDescriptorRef,
+        encryptedReadKey: share.encryptedReadKey,
         recipientPrivateKey: vaultKeypair.privateKey,
-        rootIpnsName: share.ipnsName,
+        shareRootIpnsName: share.ipnsName,
         rootExpectedGeneration: share.rootGeneration ?? 0,
         path: [],
       });
@@ -730,7 +730,7 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
    * Save a DIRECT single-file share's edited content (68.1-32, WEB-03
    * writable-shares 10.3/10.4). Delegates to
    * `CipherBoxClient.updateSharedSingleFile`, which recovers the file's
-   * read/write/ipnsPrivateKey directly from the grant descriptors (no parent
+   * read/write/ipnsPrivateKey directly from the grant's encrypted keys (no parent
    * folder write chain — the share root IS the file) and republishes to the
    * file's OWN IPNS at seq+1.
    */
@@ -745,7 +745,7 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
         throw new Error('Shared item not found');
       }
       const share = shareEntry.share;
-      if (!share.writeDescriptorRef) {
+      if (!share.encryptedWriteKey) {
         throw new Error('No write access');
       }
       const auth = useAuthStore.getState();
@@ -758,8 +758,8 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
       // here (matches moveItemHandler's identical treatment).
       await getSdkClient().updateSharedSingleFile({
         shareId: share.shareId,
-        readDescriptorRef: share.readDescriptorRef,
-        writeDescriptorRef: share.writeDescriptorRef,
+        encryptedReadKey: share.encryptedReadKey,
+        encryptedWriteKey: share.encryptedWriteKey,
         fileIpnsName: share.ipnsName,
         ownerPublicKey: parsePublicKey(share.sharerPublicKey),
         recipientPrivateKey: vaultKeypair.privateKey,

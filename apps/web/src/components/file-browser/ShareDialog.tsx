@@ -122,19 +122,19 @@ export function ShareDialog({
       while (hasMore) {
         const result = await sharesControllerGetSentShares({ limit: pageSize, offset });
         for (const s of result.shares) {
-          if (s.rootIpnsName !== ipnsName) continue;
+          if (s.shareRootIpnsName !== ipnsName) continue;
           matches.push({
             shareId: s.shareId,
             recipientPublicKey: s.recipientPublicKey,
-            ipnsName: s.rootIpnsName,
+            ipnsName: s.shareRootIpnsName,
             itemName: item.name,
             itemNameEncrypted: s.itemNameEncrypted,
-            // Fail-closed: only a present, non-empty writeDescriptorRef grants
+            // Fail-closed: only a present, non-empty encryptedWriteKey grants
             // write. `!== null` alone would mis-map an absent (undefined) ref to
             // 'write'; a truthy check treats null/undefined/empty as read.
-            permission: s.writeDescriptorRef ? 'write' : 'read',
+            permission: s.encryptedWriteKey ? 'write' : 'read',
             createdAt: s.createdAt,
-            readDescriptorRef: s.readDescriptorRef,
+            encryptedReadKey: s.encryptedReadKey,
             rootGeneration: parseRootGeneration(s.rootGeneration),
             rootNodeId: s.rootNodeId,
           });
@@ -182,18 +182,18 @@ export function ShareDialog({
       const identity = await resolveChildNodeIdentity(item, folderKey);
       itemReadKey = identity.readKey;
 
-      const readDescriptorRef = bytesToHex(await wrapKey(itemReadKey, recipientPublicKey));
+      const encryptedReadKey = bytesToHex(await wrapKey(itemReadKey, recipientPublicKey));
 
       // Write grants: resolve the item's OWN writeKey from the owned
       // write-chain (parent writeKey -> WriteChildRef.writeKeySealed) and
       // ECIES-wrap it for the recipient (68.1-18, SHARE-WRITE-KEY). Raw
-      // writeKey material never leaves the SDK -- resolveShareWriteDescriptor
-      // returns only the wrapped hex descriptor and zeroes its own derived
+      // writeKey material never leaves the SDK -- resolveShareEncryptedWriteKey
+      // returns only the wrapped hex encrypted key and zeroes its own derived
       // key internally (D-09).
-      let writeDescriptorRef: string | undefined;
+      let encryptedWriteKey: string | undefined;
       if (permission === 'write') {
         const parentIpnsName = resolveParentIpnsName(parentFolderId);
-        writeDescriptorRef = await getSdkClient().resolveShareWriteDescriptor(
+        encryptedWriteKey = await getSdkClient().resolveShareEncryptedWriteKey(
           parentIpnsName,
           item.ipnsName,
           recipientPublicKey
@@ -210,10 +210,10 @@ export function ShareDialog({
 
       const result = await sharesControllerCreateShare({
         recipientPublicKey: trimmed.startsWith('0x') ? trimmed : `0x${trimmed}`,
-        readDescriptorRef,
-        writeDescriptorRef,
+        encryptedReadKey,
+        encryptedWriteKey,
         rootNodeId: identity.nodeId,
-        rootIpnsName: item.ipnsName,
+        shareRootIpnsName: item.ipnsName,
         rootGeneration: String(identity.generation),
         itemNameEncrypted,
       });
@@ -224,10 +224,10 @@ export function ShareDialog({
         ipnsName: item.ipnsName,
         itemName: item.name,
         itemNameEncrypted: result.itemNameEncrypted,
-        // Fail-closed: treat absent/null/empty writeDescriptorRef as read.
-        permission: result.writeDescriptorRef ? 'write' : 'read',
+        // Fail-closed: treat absent/null/empty encryptedWriteKey as read.
+        permission: result.encryptedWriteKey ? 'write' : 'read',
         createdAt: result.createdAt,
-        readDescriptorRef: result.readDescriptorRef,
+        encryptedReadKey: result.encryptedReadKey,
         rootGeneration: parseRootGeneration(result.rootGeneration),
         rootNodeId: result.rootNodeId,
       };
@@ -291,9 +291,9 @@ export function ShareDialog({
       try {
         // Upgrading read -> write mints the shared item's own writeKey from
         // the owned write-chain (parent writeKey -> WriteChildRef.writeKeySealed,
-        // 68.1-18's resolveShareWriteDescriptor) and PATCHes the SAME share row
+        // 68.1-18's resolveShareEncryptedWriteKey) and PATCHes the SAME share row
         // (no revoke/recreate, same shareId) via updateGrant -- the
-        // readDescriptorRef/rootGeneration are re-sent unchanged so this call
+        // encryptedReadKey/rootGeneration are re-sent unchanged so this call
         // only ever advances the write side.
         const bareHex = share.recipientPublicKey.startsWith('0x')
           ? share.recipientPublicKey.slice(2)
@@ -301,16 +301,16 @@ export function ShareDialog({
         recipientPublicKey = hexToBytes(bareHex);
 
         const parentIpnsName = resolveParentIpnsName(parentFolderId);
-        const writeDescriptorRef = await getSdkClient().resolveShareWriteDescriptor(
+        const encryptedWriteKey = await getSdkClient().resolveShareEncryptedWriteKey(
           parentIpnsName,
           item.ipnsName,
           recipientPublicKey
         );
 
         await sharesControllerUpdateGrant(share.shareId, {
-          readDescriptorRef: share.readDescriptorRef,
+          encryptedReadKey: share.encryptedReadKey,
           rootGeneration: String(share.rootGeneration),
-          writeDescriptorRef,
+          encryptedWriteKey,
         });
 
         setRecipients((prev) =>
@@ -343,13 +343,13 @@ export function ShareDialog({
     setConfirmDowngradeId(null);
 
     try {
-      // Downgrading write -> read clears the share's writeDescriptorRef via
-      // the explicit clearWriteDescriptor signal (68.1-19) -- the read side
-      // (readDescriptorRef/rootGeneration) is re-sent unchanged, same shareId.
+      // Downgrading write -> read clears the share's encryptedWriteKey via
+      // the explicit clearEncryptedWriteKey signal (68.1-19) -- the read side
+      // (encryptedReadKey/rootGeneration) is re-sent unchanged, same shareId.
       await sharesControllerUpdateGrant(share.shareId, {
-        readDescriptorRef: share.readDescriptorRef,
+        encryptedReadKey: share.encryptedReadKey,
         rootGeneration: String(share.rootGeneration),
-        clearWriteDescriptor: true,
+        clearEncryptedWriteKey: true,
       });
 
       // Update local state
