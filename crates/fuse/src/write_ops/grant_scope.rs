@@ -755,7 +755,10 @@ pub fn run_scope_exit_gate_coalesced(
     })
 }
 
-#[cfg(test)]
+// Gated on `feature = "fuse"` like every other module using the fuse-only
+// `crate::test_support` harness — otherwise the Windows `--features winfsp`
+// cargo build compiles this module but cannot find test_support (E0433).
+#[cfg(all(test, feature = "fuse"))]
 mod tests {
     use super::*;
     use crate::inode::{FileAttrs, InodeData};
