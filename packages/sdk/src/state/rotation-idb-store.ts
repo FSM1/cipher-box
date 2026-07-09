@@ -106,7 +106,7 @@ function maxFloor(existing: unknown, candidate: unknown): number | undefined {
  * an in-memory Map keyed by nodeId, then written into the combined store and
  * the legacy stores deleted, all before the transaction completes.
  */
-export function foldLegacyStoresIntoCombined(db: IDBDatabase, tx: IDBTransaction): void {
+function foldLegacyStoresIntoCombined(db: IDBDatabase, tx: IDBTransaction): void {
   if (
     !db.objectStoreNames.contains(GENERATION_STORE_NAME) ||
     !db.objectStoreNames.contains(SEQ_STORE_NAME)
