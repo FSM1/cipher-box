@@ -2108,28 +2108,60 @@ describe('IpnsService', () => {
       await expect(publishNoCas()).resolves.toBeDefined();
     });
 
-    it('allows idempotent republish (embedded = DB seq) without incrementing DB sequenceNumber', async () => {
-      // Existing row at seq 5 — TEE re-sign path sends embedded=5n.
+    // D-05: same-seq republish with a DIFFERENT CID is equivocation and must be
+    // rejected 400; same-seq republish with the SAME CID is the genuine TEE
+    // idempotent re-sign path and must still succeed with no sequence bump.
+    //
+    // Structural guard (non-inferable, documented): the TEE lease-renewer
+    // (republish.service.ts renewIpnsRecordEol) NEVER reaches this same-seq
+    // branch — it performs a standalone UPDATE that re-signs the existing
+    // CID/seq in place and never calls upsertIpnsRecord/publishRecord. Only a
+    // fresh, externally-signed publishRecord call embedding the current DB
+    // sequence can hit this branch, which is exactly the equivocation case
+    // D-05 guards against.
+    it('rejects same-seq republish with a DIFFERENT CID (D-05: equivocation)', async () => {
+      // Existing row at seq 5 with latestCid = testMetadataCid.
       const existingRow = { ...mockFolderEntity, sequenceNumber: '5', signedRecord: null };
       mockFolderIpnsRepo.findOne.mockResolvedValue(existingRow);
-      const newCid = 'bafkreinewcidforteeresign000000000000000000000000000000000000000';
+      const divergentCid = 'bafkreidivergentcid00000000000000000000000000000000000000000000';
       mockParseIpnsRecord.mockResolvedValue({
-        value: `/ipfs/${newCid}`,
+        value: `/ipfs/${divergentCid}`,
+        sequence: 5n, // embedded = DB seq = 5n, but CID diverges from existing.latestCid
+      });
+
+      await expect(
+        service.publishRecord(testUserId, {
+          ipnsName: testIpnsName,
+          record: testRecord,
+          metadataCid: divergentCid,
+        })
+      ).rejects.toThrow(BadRequestException);
+
+      // Must not have applied the atomic UPDATE — rejected before the CAS write.
+      expect(mockQbExecute).not.toHaveBeenCalled();
+    });
+
+    it('allows idempotent republish (embedded = DB seq, SAME CID) without incrementing DB sequenceNumber', async () => {
+      // Existing row at seq 5 — TEE re-sign path sends embedded=5n with the SAME CID.
+      const existingRow = { ...mockFolderEntity, sequenceNumber: '5', signedRecord: null };
+      mockFolderIpnsRepo.findOne.mockResolvedValue(existingRow);
+      mockParseIpnsRecord.mockResolvedValue({
+        value: `/ipfs/${testMetadataCid}`, // SAME CID as existing.latestCid
         sequence: 5n, // embedded = DB seq = 5n → idempotent
       });
 
       const result = await service.publishRecord(testUserId, {
         ipnsName: testIpnsName,
         record: testRecord,
-        metadataCid: newCid, // new CID (TEE may re-sign after content update)
+        metadataCid: testMetadataCid, // SAME CID — genuine idempotent retry
       });
 
       // The atomic UPDATE setClause uses the SQL no-op expression for idempotent republish.
       const setArgs = mockQbSet.mock.calls[0][0];
       expect(typeof setArgs.sequenceNumber).toBe('function');
       expect(setArgs.sequenceNumber()).toBe('sequence_number');
-      // latestCid must be updated even on idempotent re-sign (Pitfall 4).
-      expect(setArgs.latestCid).toBe(newCid);
+      // latestCid stays the same-CID value (idempotent retry, not equivocation).
+      expect(setArgs.latestCid).toBe(testMetadataCid);
       // Return value reflects unchanged sequence.
       expect(result.sequenceNumber).toBe('5');
       expect(result.success).toBe(true);
@@ -2219,6 +2251,51 @@ describe('IpnsService', () => {
           expectedSequenceNumber: '3', // stale → CAS WHERE fails → 409
         })
       ).rejects.toThrow(ConflictException);
+    });
+  });
+
+  // =========================================================================
+  // D-06: first-publish INSERT-race (Postgres 23505 unique-violation) → 409
+  // =========================================================================
+
+  describe('first-publish INSERT-race translation (D-06/SC#4)', () => {
+    it('translates a Postgres 23505 unique-violation on first-publish save into ConflictException (409)', async () => {
+      mockFolderIpnsRepo.findOne.mockResolvedValue(null);
+      mockFolderIpnsRepo.create.mockReturnValue({ ...mockFolderEntity, sequenceNumber: '1' });
+      mockParseIpnsRecord.mockResolvedValue({
+        value: `/ipfs/${testMetadataCid}`,
+        sequence: 1n,
+      });
+      // Concurrent first-publish race: another request's INSERT won, this one's
+      // save() hits the unique constraint on ipns_name.
+      mockFolderIpnsRepo.save.mockRejectedValue({ code: '23505' });
+
+      await expect(
+        service.publishRecord(testUserId, {
+          ipnsName: testIpnsName,
+          record: testRecord,
+          metadataCid: testMetadataCid,
+        })
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('re-throws a non-23505 first-publish save error unchanged', async () => {
+      mockFolderIpnsRepo.findOne.mockResolvedValue(null);
+      mockFolderIpnsRepo.create.mockReturnValue({ ...mockFolderEntity, sequenceNumber: '1' });
+      mockParseIpnsRecord.mockResolvedValue({
+        value: `/ipfs/${testMetadataCid}`,
+        sequence: 1n,
+      });
+      const nonUniqueViolation = { code: '23503' }; // foreign-key violation, not unique
+      mockFolderIpnsRepo.save.mockRejectedValue(nonUniqueViolation);
+
+      await expect(
+        service.publishRecord(testUserId, {
+          ipnsName: testIpnsName,
+          record: testRecord,
+          metadataCid: testMetadataCid,
+        })
+      ).rejects.toBe(nonUniqueViolation);
     });
   });
 

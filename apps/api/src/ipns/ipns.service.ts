@@ -311,6 +311,18 @@ export class IpnsService {
       const dbSeq = BigInt(existing.sequenceNumber);
       if (embeddedSeq === dbSeq) {
         // Idempotent republish — TEE 6-hour re-sign path (D-09 / Pitfall 4).
+        // latestCid is preserved ONLY for a genuine same-CID idempotent retry;
+        // a republish at the same sequence carrying a DIFFERENT CID is
+        // equivocation (D-05) and is rejected below, never silently applied.
+        // The TEE lease-renewer (republish.service.ts renewIpnsRecordEol) never
+        // reaches this branch — it performs a standalone UPDATE that re-signs
+        // the existing CID/seq in place and never calls upsertIpnsRecord, so
+        // this guard can only be hit by a fresh, externally-signed publish.
+        if (metadataCid !== existing.latestCid) {
+          throw new BadRequestException(
+            `Same-sequence republish with a different CID rejected (equivocation): stored=${existing.latestCid}, incoming=${metadataCid}, sequence=${dbSeq}`
+          );
+        }
         // Do NOT increment the DB sequence, but still update latestCid/signedRecord below.
         isIdempotentRepublish = true;
       } else if (embeddedSeq === dbSeq + 1n) {
@@ -450,7 +462,25 @@ export class IpnsService {
       isRoot: false, // Root folder is tracked in Vault entity
     });
 
-    const saved = await this.ipnsRecordRepository.save(folder);
+    // D-06: two brand-new publishRecord calls for the same ipnsName can race
+    // past the findOne(null) check above and both attempt this INSERT; the
+    // loser hits the DB's unique constraint on ipns_name. Translate that
+    // Postgres unique-violation (23505) into a clean, idempotent-retriable
+    // 409 instead of letting an ambiguous 500 surface. Mirrors the
+    // err.code / err.driverError.code idiom used in shares.service.ts —
+    // never QueryFailedError instanceof, which does not survive the
+    // TypeORM driver boundary reliably.
+    let saved: IpnsRecord;
+    try {
+      saved = await this.ipnsRecordRepository.save(folder);
+    } catch (err: unknown) {
+      const code = (err as { code?: string; driverError?: { code?: string } }).code;
+      const driverCode = (err as { driverError?: { code?: string } }).driverError?.code;
+      if (code === '23505' || driverCode === '23505') {
+        throw new ConflictException({ statusCode: 409, message: 'IPNS record already exists' });
+      }
+      throw err;
+    }
 
     // Auto-enroll for TEE republishing when encrypted key is provided.
     // enrollFolder is scheduling-only (2 args): signing columns live in ipns_records.
