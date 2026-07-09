@@ -233,3 +233,11 @@ None - no external service configuration required.
 ---
 *Phase: 71-share-invite-security-and-ipns-data-integrity-api*
 *Completed: 2026-07-09*
+
+## Self-Check: PASSED
+
+- FOUND: packages/sdk-core/src/share/grant.ts
+- FOUND: packages/sdk/src/client.ts
+- FOUND: .planning/phases/71-share-invite-security-and-ipns-data-integrity-api/71-02-SUMMARY.md
+- FOUND commit: f06e56fea (Task 1)
+- FOUND commit: 3b9095b43 (docs: summary)
