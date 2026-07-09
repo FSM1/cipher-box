@@ -1,0 +1,125 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "2f4c7ebeaac0",
+  "session_id": "4d78f8a5-6112-418c-85c3-c6241359b1fb",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-09T23:42:58.117196Z",
+  "branch": "feat/share-invite-security-and-ipns-data-integrity-api",
+  "checkpoints_count": 2,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "d84b95e8ef8f",
+  "token_usage": {
+    "input_tokens": 30956,
+    "cache_creation_tokens": 980916,
+    "cache_read_tokens": 66504955,
+    "output_tokens": 294658,
+    "api_call_count": 204
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-ship-phase-2026-07-09T22:59:42.56172Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "34559f5bc681",
+      "timestamp": "2026-07-09T22:59:42.56172Z",
+      "native": {
+        "command": "/ship-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/ship-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 14
+  },
+  "summary": {
+    "intent": "Execute all 9 plans of CipherBox phase 71 (Share-Invite Security & IPNS Data-Integrity API) via wave-based parallel subagent execution, then run a fully autonomous post-execution ship pipeline (verify → secure → validate → simplify → SDK E2E gate → CodeRabbit → PR → resolve reviews) to get the phase merge-ready without babysitting.",
+    "outcome": "All 9 plans executed across 4 waves, merged, and verified (16/16 truths, 0 gaps); phase 71 marked complete. The ship pipeline then passed security/validation, found and fixed a real regression in the D-05 IPNS equivocation guard and a Greptile-flagged stale-write-key bug in the widen-only claim merge, triaged CodeRabbit findings, opened PR #599 with a conventional title, and was mid-way through resolving PR review threads (fixing the Greptile P1) when the transcript ends.",
+    "learnings": {
+      "repo": [
+        "cipher-box is a pnpm monorepo; root `pnpm typecheck` excludes `apps/api tsc --noEmit`, so pre-existing tsc errors there are non-CI-gated noise, not regressions",
+        "Local dev stack ports: postgres 5432, redis 6380, kubo (IPFS) 5001, mock-ipns-routing 3001, tee-worker 3002, API 3000",
+        "sdk-e2e reads `SDK_E2E_SECRET` (default `e2e-test-secret-do-not-use-in-production`) but vitest does not auto-load `.env`; API's `TEST_LOGIN_SECRET` must be passed explicitly or auth 401s cascade-skip whole suites",
+        "Repo is squash-merge only (`merge:false, rebase:false, squash:true`) — individual commit subjects never reach main, only the PR title needs to be conventional/paren-free; commitlint's subject-no-parens rule is enforced solely via `pr-title.yml`, not per-commit",
+        "`gh pr edit` fails on this repo due to Projects-classic GraphQL incompatibility; use `gh api -X PATCH repos/FSM1/cipher-box/pulls/<N> -F body=@file` instead",
+        "Worktree base-check reason `baseref-head` means worktrees fork from live HEAD, allowing parallel wave execution without inter-wave degrade",
+        "codebase-drift advisory gate flags ~143 pre-existing structural elements as noise because the repo was never `/gsd-map-codebase`'d (`last_mapped_commit: null`)",
+        "CodeRabbit CLI review caps at 150 changed files (this phase's 106 was under the cap)",
+        "The API does not log handled 4xx bodies; to see the real reason for a 400/409, temporarily add an axios response interceptor in `packages/api-client/src/instance.ts`, rebuild the client chain, run once, then revert"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 321,
+          "finding": "D-05 same-sequence CID-equivocation guard fired 400 on legitimate concurrent CAS races (embeddedSeq === dbSeq but caller intended a forward-CAS that lost the race); fixed by falling through to the CAS UPDATE (→409) when `expectedSequenceNumber === embeddedSeq - 1`, confirmed via `rotation-crash-safety` sdk-e2e suite going from 5/6 to 6/6"
+        },
+        {
+          "path": "apps/api/src/shares/share-invite.service.ts",
+          "line": 193,
+          "end_line": 207,
+          "finding": "Widen-only merge in claimInvite: a generation-bump re-claim via a write-capable invite onto an already-write-capable share advanced the read key/generation but left `encryptedWriteKey` wrapped for the stale generation, silently losing write access post-rotation (Greptile P1); fixed and unit-tested"
+        },
+        {
+          "path": "apps/web/src/services/share.service.ts",
+          "line": 102,
+          "finding": "Permission derivation used `!== null` on a `string | null | undefined` write-key field, misclassifying `undefined` as a write grant; loosened to `!= null` in both occurrences"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 5312,
+          "end_line": 5319,
+          "finding": "Pre-existing crypto-hygiene gap: if the second `unwrapKey` call throws, the first unwrapped key is outside the try block so `finally` never zeroizes it — flagged by CodeRabbit, deferred as todo since it predates phase 71"
+        }
+      ],
+      "workflow": [
+        "Running independent audit agents (security, Nyquist validation) as parallel background tasks while doing a read-only simplify pass in the foreground overlaps well and shortens the ship pipeline's critical path",
+        "When an SDK E2E suite fails, classify each failure against `git diff origin/main` before deciding fix vs defer — distinguishes real phase regressions from pre-existing/environmental breakage",
+        "Reproduce a suspected regression at least twice before diagnosing it as deterministic, to rule out flakiness in concurrency-sensitive tests",
+        "Prefer capturing todos for out-of-scope, risky, or behavior-changing review findings rather than fixing everything a linter/reviewer surfaces at ship time"
+      ]
+    },
+    "friction": [
+      "The tracking-commit helper repeatedly reported `commit_failed` while the commit actually landed (known false-negative, required manual `git log` verification each time)",
+      "First PR-review poll script had an awk parsing bug against tab-delimited `gh pr checks` output, causing a false 'still pending' read that had to be corrected and re-run",
+      "A user-approved local Postgres DB reset (to get a clean live-stack run for the 71-05 checkpoint) had a collateral side effect of wiping `tee_key_state`, causing 2 unrelated sdk-e2e `tee-republish` test failures later in the ship gate",
+      "A stale `node dist/main.js` API process was already listening on :3000 from an earlier session and had to be killed/rebuilt from current code before the 71-05 live-stack checkpoint could be trusted",
+      "CodeRabbit misread the phase's `SECURITY.md` (claimed it referenced vaults when it correctly referenced `ipns_records`), producing an invalid finding that had to be manually verified and dismissed",
+      "A secret-pattern guard blocked direct `grep` of `.env` files, requiring an alternate source-only investigation path to confirm throttle-bypass behavior"
+    ],
+    "open_items": [
+      "Todo: extract a shared `assertRootOwnership` helper to dedupe the 7-line ownership gate duplicated across `createInvite` and `createShare`",
+      "Todo: restore `tee_key_state` for the tee-worker so the 2 environmental `tee-republish` sdk-e2e failures (caused by the DB reset) can pass again",
+      "Todo: zeroize file keys on the unwrap error path in `packages/sdk/src/client.ts` (pre-existing, deferred)",
+      "Todo: consider rejecting a write-invite claimed without a write key in `claimInvite` (deferred as a behavior change, not fixed now)",
+      "Todo: reconcile phase-71 planning docs' stale D-01/greenfield language against the amended design (docs lag code, code is correct)",
+      "PR #599 review-thread resolution was in progress (fixing/committing the Greptile P1) when the transcript ends — remaining CodeRabbit/Greptile threads still need replies + resolution, plus final CI-green confirmation and `/gsd-extract-learnings 71`",
+      "Phase 72 (SDK Write-Plane Durability and Correctness) is queued for discussion/planning but was intentionally not auto-advanced into"
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
