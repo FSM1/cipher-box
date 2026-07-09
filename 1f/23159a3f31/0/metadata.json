@@ -1,0 +1,192 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "1f23159a3f31",
+  "session_id": "a4ed1cb9-4e4c-4d71-bc03-3c2c6b4e70a3",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-09T00:13:31.493033Z",
+  "branch": "feat/rotation-read-plane-durability-and-deep-crash-resume-soundne",
+  "checkpoints_count": 2,
+  "save_step_count": 1,
+  "files_touched": [
+    "tests/desktop-e2e/scripts/shared-scope-exit-rotation.mts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "191a0de51988",
+  "token_usage": {
+    "input_tokens": 83852,
+    "cache_creation_tokens": 1646973,
+    "cache_read_tokens": 76164009,
+    "output_tokens": 497114,
+    "api_call_count": 287
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-plan-phase-2026-07-08T13:42:46.030418Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "0eb6f9cbb31b",
+      "timestamp": "2026-07-08T13:42:46.030418Z",
+      "native": {
+        "command": "/gsd-plan-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-gsd-execute-phase-2026-07-08T15:12:58.253651Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "1b22299d3cb2",
+      "timestamp": "2026-07-08T15:12:58.253651Z",
+      "native": {
+        "command": "/gsd-execute-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-execute-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-insights-2026-07-08T22:06:54.276214Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "insights"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "d42e8425334c",
+      "timestamp": "2026-07-08T22:06:54.276214Z",
+      "native": {
+        "command": "/insights"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/insights",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 38
+  },
+  "summary": {
+    "intent": "Execute all 13 plans of CipherBox roadmap Phase 70.1 (rotation read-plane durability + deep crash-resume soundness, spanning TS engine, Rust engine twin, and desktop FUSE live-wiring) via wave-based parallel worktree execution, then validate the phase via real desktop-e2e CI across macOS/Linux/Windows, debugging and fixing whatever the acceptance gate surfaces.",
+    "outcome": "All 13 plans merged and all unit/integration/e2e gates green (sdk-core 363, sdk 362, cargo sdk 152, cargo fuse 108+1, depth-3 e2e 6/6); execution uncovered and fixed three genuine product bugs (dirty-frontier decrypt-before-check ordering in both engines, JsonSidecarFloorStore multi-writer rename race, and a scope-exit rotation revocation bypass + double-publish), plus a desktop mount-lifecycle gap (refresh_sent_shares never wired) and WinFsp coalescing parity; the D-16 real-mount desktop-e2e acceptance passed fully on Linux, passed security invariants on Windows (count-only failure = WinFsp parity gap, now fixed pending CI), and remains blocked on macOS by a newly root-caused FUSE-T publish-queue edge-trigger latency bug (fix in flight, not yet pushed/re-verified).",
+    "learnings": {
+      "repo": [
+        "Worktree-mode subagents must run `pnpm i` themselves since node_modules is gitignored and absent in fresh worktrees.",
+        "Rust executors must scope `cargo fmt -p <crate>` instead of `cargo fmt --all`, or workspace-wide formatting drift strands uncommitted changes across unrelated files and blocks `cleanup-wave` with `worktree_dirty`.",
+        "Cross-package dist staleness is a real trap: after merging a wave that changes packages/sdk-core, packages/sdk's vitest suite must be re-run only after rebuilding sdk-core's dist, or it silently tests stale code.",
+        "The gsd commit helper can report `commit_failed` as a false negative when lint-staged is just slow (or times out at 2 min on large files like ROADMAP.md) — always verify via `git log` rather than retrying.",
+        "rust-analyzer/IDE diagnostics (unused import, E0308, E0063, 'never used') repeatedly appeared as stale mid-edit snapshots during concurrent agent edits; only `cargo check`/`cargo test` output is authoritative.",
+        "The GSD decision-coverage gate's D-NN bullet parser only accepts 3 forms (`- **D-NN:**`, `- **D-NN — title**`, `- **D-NN: Title.**`); a period-before-closing-`**` form causes it to fail-bail on ALL bullets with '0/N covered', not just the malformed one.",
+        "`state.planned-phase` and roadmap-annotate tools can silently no-op (`updated: []` / `updated:false`) when STATE.md/ROADMAP.md don't match their expected anchor format — always verify with git status/diff and hand-edit as fallback.",
+        "sdk-e2e vitest has no dotenv loader; `.env` must be `set -a; . ./.env; set +a` sourced into the shell before running, or the harness falls back to a default test-login secret and gets 401.",
+        "The WriteQueue journal scanner (`queue.rs`) treats every `*.json` in `cb-journal/` as a JournalEntry and warns+skips anything that fails to parse (including the co-located rotation-high-water floor sidecar) — benign noise, not data loss, since GC only ever deletes `.bin` files by parsed entry id.",
+        "CipherBox delete is a soft-delete (move to private recycle bin, keys re-sealed under the bin plane) — structurally equivalent to a move-out-of-scope, which is why deletes (not just moves) trigger scope-exit rotation; same-folder rename does not rotate (gate only fires when parent != newparent).",
+        "Desktop-e2e has two separate harnesses: macOS/Linux run `run-all.sh`, Windows runs `run-all.ps1` — a new step added to one does not automatically apply to the other.",
+        "`.mts` test helpers in this repo must be invoked via `node node_modules/tsx/dist/cli.mjs`, not the `.bin/tsx` shim.",
+        "FUSE-T on macOS CI defers `handle_release` by ~40s past when the test stops touching the mount; combined with the fact that the publish queue only drains when a subsequent FUSE op arrives (no wall-clock backstop), a folder's child-add republish can simply never fire on an idle mount — this is latency-only (journal replay is authoritative) but makes CI assertions relying on propagation flaky/failing.",
+        "`mkdir` republishes its parent directly in a spawned thread rather than going through the debounced publish queue, making it immune to the edge-trigger stall that affects file writes."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/rotation/engine.ts",
+          "line": 815,
+          "finding": "collectDirtyFrontier previously called unsealChildReadKey (AEAD decrypt) before checking childPub.generation > childRef.generation for dirtiness; for a genuinely dirty edge whose parent also rotated, decrypting with the parent's current key always throws before the check runs. Fixed by reordering: plaintext generation check first, decrypt only on confirmed-clean edges, dirty edges pushed with nodeReadKey: undefined and repaired via the ECIES checkpoint plane."
+        },
+        {
+          "path": "crates/sdk/src/floor_store.rs",
+          "line": 265,
+          "finding": "JsonSidecarFloorStore::new() built its own fresh Arc<Mutex<()>> per instance even when multiple instances (generation/seq/checkpoint stores in fs.rs) pointed at the identical rotation-high-water.json sidecar and shared a deterministic .tmp rename path — causing ENOENT races. Fixed with a process-global path-keyed lock registry (shared_lock_for) so co-located instances share one lock."
+        },
+        {
+          "path": "crates/fuse/src/write_ops/grant_scope.rs",
+          "line": 461,
+          "finding": "rotate_read_on_scope_exit matched Ok(_) and discarded the RotateReadResult (new read key) while borrowing fs immutably, so the grant-root inode's in-memory read_key was never refreshed after rotation; the subsequent delete-triggered relink republish then resealed the folder under the stale old key and published last, making the newest IPNS record decryptable by the revoked recipient. Fixed by taking &mut CipherBoxFS and writing the new key/generation into the inode."
+        },
+        {
+          "path": "crates/fuse/src/write_ops/implementation/delete.rs",
+          "line": 97,
+          "finding": "A covered scope-exit delete triggers both engine.rs's rotate_one+republish_parent (2 new-key publishes when the scope-root has a surviving child) AND a separate old-key relink republish from update_folder_metadata, yielding +2/+3 publishes instead of the expected +1 for the grant-root. Fixed via a new rotate_read_from_node_with_root_children engine API that takes a caller-supplied post-delete children override so the rotation itself is the single authoritative publish, and the redundant relink is suppressed for the shallow covered case."
+        }
+      ],
+      "workflow": [
+        "When a user challenges an orchestration choice (e.g. 'why is only 1 plan running concurrently'), state the actual reasoning transparently (canary-first caution) rather than assuming intent, then correct immediately by firing the rest of the wave.",
+        "Resuming an already-context-loaded subagent (via SendMessage) for a deepened/corrected task is far cheaper than spawning a fresh one that has to re-derive the same root-cause trace — used repeatedly for research extensions and debugger handoffs.",
+        "When a debugger/fixer agent's returned diagnostics conflict with its own claimed fix (e.g. 'never used' warnings on code the agent says it wired in), always re-verify authoritatively via a fresh cargo check/test before trusting the summary — repeatedly caught to be stale IDE snapshots, but worth the check given the stakes (security fixes).",
+        "For CI-only real-mount acceptance tests, hold multiple independent fixes (e.g. WinFsp parity + macOS timing fix) unpushed until all are ready, to avoid burning a ~30-min real-mount CI cycle per partial fix.",
+        "Distinguish 'harness/fixture bug' from 'genuine product bug' explicitly when delegating debugging — a debugger that fixes the wrong side (patching the test to pass) defeats the purpose of an anti-vacuous gate; instruct debuggers not to modify test logic without flagging it as a distinct decision."
+      ]
+    },
+    "friction": [
+      "Multiple mid-session stale IDE/rust-analyzer diagnostics falsely suggested broken code (unused imports, E0308, E0063, 'never used') during concurrent agent edits, requiring repeated authoritative cargo check/test re-verification to rule out false alarms.",
+      "GSD's decision-coverage gate failed opaquely ('0/15 covered') due to a single malformed bullet elsewhere in CONTEXT.md, requiring manual regex archaeology to find the parser's accepted bullet forms.",
+      "state.planned-phase and roadmap-annotate tools silently no-op'd instead of erroring, requiring manual verification and hand-editing of STATE.md/ROADMAP.md.",
+      "Plan 03's unscoped `cargo fmt --all` left uncommitted formatting drift across 13 unrelated files, blocking cleanup-wave's merge with worktree_dirty.",
+      "Wave 3 post-merge gate showed 3 false test failures due to sdk-core dist staleness after a cross-package change, requiring diagnosis before ruling it non-regression.",
+      "sdk-e2e authentication failed with a misleading 401 because the harness's vitest config has no dotenv loader and needed the .env manually sourced into the shell.",
+      "The depth-3 anti-vacuous e2e fixture (plan 10) was only typechecked, not run live, so its first live run surfaced a genuine product bug that unit tests had been masking via overly permissive mocks.",
+      "Desktop-e2e CI round-trips are slow (~15-40 min) and had to be run multiple times (at least 3 full dispatches) as fixes were incrementally discovered and applied.",
+      "The D-16 real-mount acceptance surfaced a critical desktop mount-lifecycle gap (refresh_sent_shares never wired) that made every desktop delete/rename EIO, discovered only at the final acceptance leg rather than earlier in unit testing.",
+      "Windows and macOS/Linux desktop-e2e run different harness scripts (.ps1 vs .sh), so a new test step added to one silently didn't apply to the other, requiring a second CI round-trip to discover."
+    ],
+    "open_items": [
+      "macOS FUSE-T publish-queue idle-mount stall: harness nudge fix + product wall-clock drain backstop fix in flight (debugger a46221ae), not yet committed/pushed/verified.",
+      "WinFsp coalescing port for the scope-exit delete path committed (b9b6e5f6b) but not yet pushed or verified by Windows CI.",
+      "WinFsp `handle_rename` still has an ungated `dest_ino` removal and replacement-validity-before-gating order gap — narrowed from the original D-15d parity todo, tracked as remaining work.",
+      "ROT-04 desktop grant re-mint no-op (`query_grants_rooted_at`/`update_grant`/`delete_grant` as trait default no-ops) — desktop scope-exit rotation currently de-authorizes ALL recipients rather than selectively re-minting for survivors; tracked as a todo, and the D-16 'Bob cut off' assertion currently can't distinguish selective revocation from blanket revocation.",
+      "Journal warning skip fix (is_reserved_floor_sidecar) is committed and verified but relies on hardcoded filename matching rather than directory separation — a cleaner (deferred) alternative would relocate the floor sidecar out of cb-journal/ entirely.",
+      "Plan 13's Task 2 (human sign-off on the D-16 real-mount acceptance) is still open pending a fully green three-platform CI run.",
+      "Phase verification (gsd-verifier, goal-backward) and final phase completion/routing have not yet run — deferred until D-16 is fully green."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-09T00:12:38.624323Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 22,
+    "human_modified": 3,
+    "human_removed": 0,
+    "total_committed": 22,
+    "total_lines_changed": 25,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 268,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/debug/macos-first-publish-timeout.md": 267
+      }
+    }
+  ]
+}
