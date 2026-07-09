@@ -1227,3 +1227,35 @@ Nothing else rose to the bar. I did **not** flag the TS/Rust engine mirroring, t
 ---
 
 any idea why I have 11GB of ram used by 2 rust-analyzer processes  [Image #1][Image #2]
+
+---
+
+<task-notification>
+<task-id>ab9b889d6b3bb1237</task-id>
+<tool-use-id>toolu_01XxEPPNoE4bcTSa9QtiJTd9</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/ab9b889d6b3bb1237.output</output-file>
+<status>completed</status>
+<summary>Agent "Phase 70.1 security audit" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Report written. Root `SECURITY.md` untouched; phase file left untracked.
+
+## Result: SECURED
+
+**Core invariants confirmed: 4/4** · **Threats resolved: 33/33** (30 mitigate CLOSED + 3 accept) · **threats_open: 0** · ASVS L2, block_on high · static analysis only.
+
+### The four crux invariants (all upheld in code)
+1. **Scope-exit cuts off a revoked reader** — `crates/fuse/src/write_ops/grant_scope.rs:556-579` `refresh_grant_root_read_key` does `read_key.copy_from_slice(result.read_key.as_slice())` in place on the grant-root inode, only after a successful `Some(result)` rotation (`:526-528`). Old key is dead; a later local relink reseals under the new key. Log sites emit only public `ipns`/`child_id`, never key bytes.
+2. **Zeroization terminal-owner-only** — Rust `RotateReadResult.read_key` is `Zeroizing` (`crates/sdk/src/rotation/engine.rs:809-810`); `grant_scope.rs:553-554` explicitly does not zero the result (owner self-zeroes on drop). TS engine has 30+ terminal-owner `fill(0)`/"do NOT zero" guards; recovered `readKeyPrime` zeroed only at ParentTrackingState teardown (`engine.ts:1713-1718`).
+3. **No key logged/persisted-plain/sent to server** — ECIES(secp256k1) wrap/unwrap (`crates/crypto/src/ecies.rs`), host-local wrap at `rotation_deps.rs:251`, ciphertext-only sidecar/IDB, "MUST NOT be routed through any API endpoint." Grep for key material in log statements across all changed rotation/floor/gate files: zero hits.
+4. **Floor plane fails closed on corrupt/unreadable sidecar** — `floor_store.rs:63,180-215,473-477`: parse-error and any non-`NotFound` read-error → `Corrupt` → `get` returns `i64::MAX` floor, which forces `high_water.rs:280-289` regression check to reject; `put` refuses to overwrite corrupt state with an `Err`.
+
+The D-15 fail-closed gates (a-authoritative cache, b-complete ancestor walk, c-poison-lock→EIO, d-validate-before-gate) all surface `Err`/EIO rather than a silent no-rotation. WinFsp shares the identical gate. 409 CAS conflict materializes a real remote; IPNS resolve is signature-verified with `VerifyError::Invalid` fail-closed.
+
+### One non-blocking note (no security impact)
+T-70.1-SC's `accept` rationale says "zero new dependencies," but the diff adds two **test-only devDependencies**: `@noble/secp256k1@^2.2.3` (already a workspace dep, promoted for unit tests) in `packages/sdk-core/package.json` and `fake-indexeddb@^6.2.5` (new, standard IDB test polyfill) in `packages/sdk/package.json`. Zero new production/runtime deps and zero new Rust crates. The wording is imprecise; the security-relevant claim (no new shipped-runtime supply-chain surface) holds. Documentation-accuracy only — does not block.
+
+No genuine in-scope vulnerability found.
+
+Report: `/Users/myankelev/Code/random/cipher-box/.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-SECURITY.md` (untracked, ready for the orchestrator to commit).</result>
+<usage><subagent_tokens>126831</subagent_tokens><tool_uses>49</tool_uses><duration_ms>526649</duration_ms></usage>
+</task-notification>
