@@ -144,8 +144,9 @@ pub struct FuseRotationDeps<T: RotationTransport> {
     /// minted `read_key_prime` before it is persisted at rest (D-01).
     owner_public_key: Vec<u8>,
     /// Owner's ECIES private key (secp256k1) — unwraps a checkpointed key on
-    /// resume (D-05 repair path).
-    owner_private_key: Vec<u8>,
+    /// resume (D-05 repair path). Held in `Zeroizing` so the key bytes are
+    /// wiped on drop, consistent with the rest of this file's key handling.
+    owner_private_key: Zeroizing<Vec<u8>>,
     /// Combined per-nodeId sidecar (Plan 70.1-03) backing
     /// `persist_wrapped_key`/`get_wrapped_key`/`delete_wrapped_key`.
     floor_store: JsonSidecarFloorStore,
@@ -161,7 +162,7 @@ impl<T: RotationTransport> FuseRotationDeps<T> {
         Self {
             transport,
             owner_public_key,
-            owner_private_key,
+            owner_private_key: Zeroizing::new(owner_private_key),
             floor_store,
         }
     }
@@ -308,6 +309,7 @@ pub struct ApiClientTransport<'a> {
 
 impl RotationTransport for ApiClientTransport<'_> {
     async fn resolve(&self, ipns_name: &str) -> Result<Option<ResolvedRecord>, RotationError> {
+        // sc6-allow: rotation transport's verified fail-closed chokepoint (D-08), not a read-plane bypass.
         match resolve_ipns_verified(self.api, ipns_name).await {
             Ok(v) => Ok(Some(ResolvedRecord {
                 cid: v.cid,
