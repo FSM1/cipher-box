@@ -212,3 +212,15 @@ None - no external service configuration required.
 ---
 *Phase: 71-share-invite-security-and-ipns-data-integrity-api*
 *Completed: 2026-07-09*
+
+## Self-Check: PASSED
+
+- FOUND: apps/api/src/migrations/1750000000000-ApiSchemaCutover.ts
+- FOUND: apps/api/src/shares/entities/share.entity.ts
+- FOUND: apps/api/src/shares/entities/share-invite.entity.ts
+- FOUND: packages/api-client/openapi.json
+- FOUND: .planning/phases/71-share-invite-security-and-ipns-data-integrity-api/71-01-SUMMARY.md
+- FOUND commit: 347b068 (Task 1)
+- FOUND commit: 881eaff (Task 2)
+- FOUND commit: 0e4a9d3 (Task 3)
+- FOUND commit: f9e8ab2 (docs: summary)
