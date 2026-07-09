@@ -406,4 +406,65 @@ describe('ShareInviteService — claimInvite security invariants', () => {
       expect(existingShare.encryptedWriteKey).not.toBeNull();
     });
   });
+
+  // ------------------------------------------------------------------ getInvitesForItem (D-09)
+  describe('getInvitesForItem', () => {
+    it('returns only active, non-expired invites for the sharer + item', async () => {
+      const activeInvite = makeInvite({ id: 'invite-active-1', expiresAt: futureDate });
+      mockInviteRepo.find.mockResolvedValue([activeInvite]);
+
+      const result = await service.getInvitesForItem(sharerId, shareRootIpnsName);
+
+      expect(mockInviteRepo.find).toHaveBeenCalledWith({
+        where: { sharerId, shareRootIpnsName, status: 'active' },
+        order: { createdAt: 'DESC' },
+      });
+      expect(result).toEqual([activeInvite]);
+      expect(mockInviteRepo.remove).not.toHaveBeenCalled();
+    });
+
+    it('auto-cleans expired invites and excludes them from the result', async () => {
+      const activeInvite = makeInvite({ id: 'invite-active-1', expiresAt: futureDate });
+      const expiredInvite = makeInvite({ id: 'invite-expired-1', expiresAt: pastDate });
+      mockInviteRepo.find.mockResolvedValue([activeInvite, expiredInvite]);
+
+      const result = await service.getInvitesForItem(sharerId, shareRootIpnsName);
+
+      expect(result).toEqual([activeInvite]);
+      expect(mockInviteRepo.remove).toHaveBeenCalledTimes(1);
+      expect(mockInviteRepo.remove).toHaveBeenCalledWith([expiredInvite]);
+    });
+  });
+
+  // ------------------------------------------------------------------ revokeInvite (D-09)
+  describe('revokeInvite', () => {
+    it('throws NotFoundException when the invite does not exist', async () => {
+      mockInviteRepo.findOne.mockResolvedValue(null);
+
+      await expect(service.revokeInvite('invite-id-1', sharerId)).rejects.toThrow(
+        NotFoundException
+      );
+      expect(mockInviteRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('throws ForbiddenException when the caller is not the sharer', async () => {
+      mockInviteRepo.findOne.mockResolvedValue(makeInvite({ sharerId }));
+
+      await expect(service.revokeInvite('invite-id-1', claimerId)).rejects.toThrow(
+        ForbiddenException
+      );
+      expect(mockInviteRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('sets status to revoked and saves when the caller is the sharer', async () => {
+      const invite = makeInvite({ sharerId, status: 'active' });
+      mockInviteRepo.findOne.mockResolvedValue(invite);
+
+      await service.revokeInvite('invite-id-1', sharerId);
+
+      expect(mockInviteRepo.save).toHaveBeenCalledTimes(1);
+      const savedInvite = mockInviteRepo.save.mock.calls[0][0] as ShareInvite;
+      expect(savedInvite.status).toBe('revoked');
+    });
+  });
 });
