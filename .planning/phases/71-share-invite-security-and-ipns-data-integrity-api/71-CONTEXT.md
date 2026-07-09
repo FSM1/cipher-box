@@ -62,8 +62,10 @@ Reject with `ForbiddenException` (403) if no row. Apply to **BOTH** `createInvit
 - The proposed ipns index would guard `ipns_records.user_id`, the column the entity model says is *not* authoritative — redundant and semantically wrong-layer.
 - **SC#3 is flagged for revision:** its `claim_count` CHECK-constraint half still applies (D-04); its root-uniqueness-index half is dropped as already-covered. Planner should record this SC amendment.
 
-### D-04 — claim_count CHECK constraint (SC#3, mechanical)
-Add a forward migration + entity `@Check`: `CHECK (claim_count >= 0 AND claim_count <= max_claims)` on `share_invites`. Target: `share-invite.entity.ts`.
+### D-04 — claim_count CHECK constraint (SC#3) — AMENDED 2026-07-09 (greenfield → fold into cutover)
+Add the entity `@Check` on `share-invite.entity.ts`: `CHECK (claim_count >= 0 AND claim_count <= max_claims)`.
+
+**Migration:** apply the `CONSTRAINT ... CHECK (...)` **directly inside the `share_invites` CREATE TABLE in the shipped cutover** `1750000000000-ApiSchemaCutover.ts` (edit in place). **NO separate forward migration, NO `[BLOCKING]` `migration:run` gate.** Rationale: the v2.0 schema is **greenfield/unreleased** (user-confirmed 2026-07-09) — a forward migration to constrain a column defined in the same unreleased cutover is pointless indirection. This supersedes the original "forward migration + never edit cutover" instruction below and retires the planned `1752100000000-ClaimCountCheckConstraint` migration and its blocking run task. The DB-level `23514 check_violation` backstop verification (real-Postgres or documented manual) still applies.
 
 ### D-05 — Same-seq CID equivocation → HARD-GUARD 400 (SC#4 / D-09)
 When a republish arrives with `embeddedSeq === dbSeq` **and the incoming metadata CID differs from the stored `latestCid`**, reject with `BadRequestException` (400).
@@ -90,8 +92,37 @@ Swap `find` + `remove` for a single `DELETE ... execute()`. **Note the naming co
 ### D-09 — Restore ShareInviteService unit coverage (SC#6, mechanical)
 Extend `share-invite.service.spec.ts` for `createInvite`, `getInvitesForItem`, `revokeInvite` with realistic UUID/key fixtures (not placeholder strings). Also fix placeholder fixtures in `shares.controller.spec.ts` (contract-valid UUIDs/keys).
 
-### Migration ordering (cross-cutting)
-New forward migrations (D-04 CHECK constraint, plus any needed for D-07) land in `apps/api/src/migrations/` with timestamps **after** the latest existing `1751000000000-ScheduleCollapse.ts`. NEVER edit the shipped `1750000000000-ApiSchemaCutover.ts` in place.
+### D-10 — Full share-plane rename, purge "descriptor" (NEW 2026-07-09)
+
+The `shares`/`share_invites` naming is renamed **end-to-end** (columns + TS fields/DTOs + methods/types + api-client + Rust crates), purging the "descriptor" term from the share context. **Greenfield edit-in-place** — no rename migration; edit the CREATE TABLE column names directly in the cutover `1750000000000-ApiSchemaCutover.ts` (user-confirmed v2.0 schema is unreleased).
+
+**Canonical rename map (apply everywhere the identifier is share/invite-grant-scoped):**
+
+| Old | New | Scope note |
+|-----|-----|-----------|
+| col `read_descriptor_ref` (shares) | `encrypted_read_key` | cutover CREATE TABLE, in place |
+| col `write_descriptor_ref` (shares, share_invites) | `encrypted_write_key` | both tables, cutover in place |
+| col `root_ipns_name` (shares, share_invites) | `share_root_ipns_name` | both tables, cutover in place |
+| col `encrypted_key` (share_invites read key) | `encrypted_read_key` | cross-table parallelism with shares |
+| field `readDescriptorRef` | `encryptedReadKey` | entities, DTOs, sdk-core/sdk, web, api-client |
+| field `writeDescriptorRef` | `encryptedWriteKey` | " (presence still = write grant, T-66-E1 / D-07) |
+| field/DTO `rootIpnsName` **(share-grant domain ONLY)** | `shareRootIpnsName` | **SURGICAL** — the ~21 share/invite/grant-domain files, NOT the vault/ipns/folder-tree `rootIpnsName` (95 total; the vault-root/folder-tree ones stay `rootIpnsName`) |
+| field `encryptedKey` (invite read key) | `encryptedReadKey` | parallelism |
+| method `resolveShareWriteDescriptor` | `resolveShareEncryptedWriteKey` (planner may pick a cleaner name) | sdk client + call sites + tests |
+| `clearWriteDescriptor`, `dispatchWriteDescriptor`, `claimerReadDescriptorRef` | `clearEncryptedWriteKey`, `dispatchEncryptedWriteKey`, `claimerEncryptedReadKey` | sdk/web |
+| `*DescriptorRef` TS types | `*EncryptedKeyRef` (or inline) | purge the type name |
+| Rust `*Descriptor*` symbols (`crates/fuse`, `crates/sdk`) | matching `*EncryptedKey*` | full e2e |
+
+**Blast radius (measured):** field-level ~40–95 files/220–538 hits per identifier; crosses TS + Rust + api-client. `readDescriptorRef` field ONLY unwraps to a single ECIES-wrapped key (no packed metadata — verified: builder `wrapKey(itemWriteKey, pub)` at `client.ts:3771`, consumer `unwrapKey(...) → key → unsealNode` at `client.ts:5314`), so `encrypted_read_key`/`encryptedReadKey` is the accurate name. The grant's logical metadata (`rootNodeId`, `share_root_ipns_name`, `root_generation`) stays in separate columns.
+
+**Regenerate:** run `pnpm api:generate` after the DTO field renames and commit the regenerated `@cipherbox/api-client` (pre-commit hook enforces it). Greenfield → no client back-compat concern.
+
+**Sequencing:** the rename is a **foundation** step — it must land BEFORE (or be threaded through) the D-01/D-07/D-08/D-09 logic changes, since they touch the same files/fields. All subsequent plans use the NEW names.
+
+**Explicitly NOT renamed:** `root_generation`/`rootGeneration` (load-bearing anti-rollback staleness witness — seeds the recipient's durable generation floor, `shares.service.ts:275`; not derivable from live metadata; out of scope), `root_node_id`/`rootNodeId`, `item_name_encrypted`/`itemNameEncrypted`, and the vault/ipns/folder-tree `rootIpnsName`.
+
+### Migration ordering (cross-cutting) — AMENDED 2026-07-09 (greenfield)
+The v2.0 schema is **greenfield/unreleased**, so for this phase the `shares`/`share_invites` schema changes (D-10 renames + D-04 CHECK) are applied **directly in the cutover `1750000000000-ApiSchemaCutover.ts` in place** — NO new forward migration. (The general forward-only / immutable-shipped-migration rule resumes once v2.0 ships; it does not apply to this unreleased cutover.) D-05/D-06 are runtime-logic changes with no schema component.
 
 ### Folded Todos
 All 8 ROADMAP source todos are folded into this phase's scope (they define it):
