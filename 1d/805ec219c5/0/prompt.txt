@@ -1,0 +1,1444 @@
+/gsd-execute-phase 70.1 with independent worktrees for the concurrent plans. worktrees should `pnpm i`
+
+---
+
+<task-notification>
+<task-id>a2dccbc7f08719ebd</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a2dccbc7f08719ebd.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 04 of phase 70.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 70.1-04
+**Tasks:** 2/2 complete
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a2dccbc7f08719ebd/.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-04-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"70.1-04","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a2dccbc7f08719ebd","branch":"worktree-agent-a2dccbc7f08719ebd","expected_base":"727c65a09e46e346a918d5e94d972e2b53a5967a"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `c3a73c8a2` — test(70.1-04): failing recursive verify plus missing-root-dirty tests (RED)
+- `eadf590d5` — feat(sdk): widen DirtyFrontierEntry and recurse verify_subtree_clean (GREEN)
+- `c2cd109b1` — docs(70.1-04): complete Rust rotation-engine D-12 structural catch-up plan (SUMMARY)
+
+**Key file:** `crates/sdk/src/rotation/engine.rs`
+
+**What shipped:**
+- `DirtyFrontierEntry` widened: `{ ipns_name, node_id, parent_ipns_name, node_read_key: Zeroizing&lt;[u8;32]&gt;, child_pub_kind: NodeKind, enqueued_generation: u32 }` (Rust twin of TS `DirtyFrontierItem`).
+- `verify_subtree_clean` now recurses the full subtree via a new explicit-work-stack helper `collect_dirty_frontier` (descend below clean folder edges, stop below dirty edges), and returns a new `VerifySubtreeOutcome { is_dirty, frontier }` shape.
+- Missing root now surfaces as `is_dirty: true` with an empty frontier — distinct from a fully-converged (also empty) frontier. This fixes a real latent bug in `rotate_read_from_node`'s resume branch, which previously checked `frontier.is_empty()` and would mark the job `Complete` when the root record was simply gone.
+- Extracted `derive_child_read_key`, shared between `enqueue_child` and the new verify walk.
+- Deliberately left the depth&gt;=2 consumption bug in `rotate_read_from_node`'s resume branch untouched — that's Plan 06 scope.
+
+**Verification:** `cargo test -p cipherbox-sdk` — 137 passed, 0 failed. `cargo clippy -p cipherbox-sdk --all-targets` — no new warnings from this plan's changes (pre-existing warnings elsewhere untouched). `cargo fmt -p cipherbox-sdk -- --check` — only pre-existing out-of-scope drift remains (not touched, per repo convention).
+
+**Duration:** ~30 min (not precisely timed — start timestamp was not captured before work began).</result>
+<usage><subagent_tokens>179566</subagent_tokens><tool_uses>61</tool_uses><duration_ms>504231</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a2dccbc7f08719ebd</worktreePath><worktreeBranch>worktree-agent-a2dccbc7f08719ebd</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a3caeb6e9c02a7bf9</task-id>
+<tool-use-id>toolu_01Jxtindc6euw5WoN5wc1qpx</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a3caeb6e9c02a7bf9.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 03 of phase 70.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 70.1-03
+**Tasks:** 3/3
+**SUMMARY:** `.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-03-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+worktree_path: /Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a3caeb6e9c02a7bf9
+branch: worktree-agent-a3caeb6e9c02a7bf9
+base: 727c65a09e46e346a918d5e94d972e2b53a5967a
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `7b8e9dae` test(70.1-03): failing fail-closed put + combined-record + migration tests
+- `2c20036e` feat(sdk): combined per-node floor record with fail-closed durable put
+- `cb7bc18f` fix(sdk): sweep HighWaterStore::put consumers for the new Result signature
+- `ba8f195f` docs(70.1-03): add plan summary for combined fail-closed floor store
+
+**Duration:** ~50 min
+
+Summary of what was built:
+- `crates/sdk/src/floor_store.rs` — `CombinedFloorRecord { generation, seq, wrapped_key_checkpoint }` collapsed the two independent sidecar files (`rotation-high-water-generation.json` / `rotation-high-water-seq.json`) into ONE `rotation-high-water.json`, with legacy fold-forward migration and `persist_wrapped_key`/`get_wrapped_key`/`delete_wrapped_key` accessors.
+- `crates/sdk/src/rotation/high_water.rs` — `HighWaterStore::put` now returns `Result&lt;(), RotationError&gt;` (new `PersistFailed` variant); `bump_floor`/`bump_generation`/`bump_seq`/`seed_from_grant`/`enforce_resolved` all propagate fail-closed.
+- Consumer sweep across `crates/sdk/src/{adapter,lib,listing,emit}.rs` and `crates/fuse/src/fs.rs`; `content_ops.rs`/`inode.rs`/`events.rs`/`replay.rs` needed no changes (verified via clean `cargo check`).
+- `cargo test -p cipherbox-sdk` (139 passed), `cargo test -p cipherbox-fuse --features fuse` (96+1 passed), `cargo clippy` clean on all touched files.
+
+No modifications were made to STATE.md/ROADMAP.md per instructions — those remain for the orchestrator.</result>
+<usage><subagent_tokens>274704</subagent_tokens><tool_uses>106</tool_uses><duration_ms>992036</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a3caeb6e9c02a7bf9</worktreePath><worktreeBranch>worktree-agent-a3caeb6e9c02a7bf9</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a8fb46a1ed345f273</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a8fb46a1ed345f273.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 01 of phase 70.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 70.1-01
+**Tasks:** 2/2
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a8fb46a1ed345f273/.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-01-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"70.1-01","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a8fb46a1ed345f273","branch":"worktree-agent-a8fb46a1ed345f273","expected_base":"727c65a09e46e346a918d5e94d972e2b53a5967a"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `628c61d5b`: test(70.1-01): failing depth&gt;=2 dirty-resume consumption tests
+- `bdd7108f7`: feat(70.1-01): depth-aware dirty-resume consumption + normal-branch ordering fix
+- `c975ba048`: docs(70.1-01): complete depth-aware dirty-resume consumption plan
+- `6ea616ca1`: docs(70.1-01): append self-check results to SUMMARY.md
+
+**Duration:** ~38 min
+
+Key files:
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a8fb46a1ed345f273/packages/sdk-core/src/rotation/engine.ts` — Bug A (dirty-resume mis-attribution) and Bug B (normal-branch ordering) fixes; new `findParentNodeByIpnsName` + `resolveParentTrackingState` helpers
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a8fb46a1ed345f273/packages/sdk-core/src/__tests__/rotation/engine.test.ts` — new SC#1/SC#2 depth-2/depth-3 test cases
+
+Full `sdk-core` suite: 357/357 passing (355 pre-existing + 2 new), no regressions. No deviations from plan. STATE.md/ROADMAP.md/REQUIREMENTS.md intentionally left untouched per worktree-mode contract — orchestrator owns those after the wave completes.</result>
+<usage><subagent_tokens>459240</subagent_tokens><tool_uses>80</tool_uses><duration_ms>2140015</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a8fb46a1ed345f273</worktreePath><worktreeBranch>worktree-agent-a8fb46a1ed345f273</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a68f7fb5c3bab94ad</task-id>
+<tool-use-id>toolu_01KLEtT3bvHvfK8YfGsKKAGf</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a68f7fb5c3bab94ad.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 02 of phase 70.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Clean working tree, all commits in place. Per instructions, I do not update STATE.md/ROADMAP.md — the orchestrator owns that after the wave completes.
+
+## PLAN COMPLETE
+
+**Plan:** 70.1-02
+**Tasks:** 3/3
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a68f7fb5c3bab94ad/.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-02-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"70.1-02","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a68f7fb5c3bab94ad","branch":"worktree-agent-a68f7fb5c3bab94ad","expected_base":"727c65a09e46e346a918d5e94d972e2b53a5967a"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- 96c079613: test(70.1-02): failing combined floor-record atomicity tests
+- 6e89d4473: feat(70.1-02): collapse web rotation floors into one combined IndexedDB store
+- 2758f6ee0: feat(70.1-02): enforceResolved writes both floors in one combined record
+- dfae54daf: docs(70.1-02): complete combined rotation floor record plan
+
+**Duration:** ~12 min
+
+Key files:
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a68f7fb5c3bab94ad/packages/sdk/src/state/rotation-high-water.ts`
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a68f7fb5c3bab94ad/packages/sdk/src/index.ts`
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a68f7fb5c3bab94ad/packages/sdk/src/__tests__/rotation-high-water.test.ts`
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a68f7fb5c3bab94ad/apps/web/src/services/rotation-state.service.ts`
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a68f7fb5c3bab94ad/apps/web/src/services/rotation-state.service.test.ts` (new)
+
+Notable deviation: Test B (wrapped-key round trip) and Test C (migration-preservation) live in a new colocated `apps/web/src/services/rotation-state.service.test.ts` rather than `packages/sdk`'s test file, since that logic is inherently browser-only IndexedDB code — the plan's own RESEARCH pre-authorized this placement. Full detail and rationale documented in the SUMMARY's Deviations section.</result>
+<usage><subagent_tokens>341484</subagent_tokens><tool_uses>103</tool_uses><duration_ms>1205297</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a68f7fb5c3bab94ad</worktreePath><worktreeBranch>worktree-agent-a68f7fb5c3bab94ad</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a68f7fb5c3bab94ad</task-id>
+<tool-use-id>toolu_01MReM9NpPXYBhuoEVNsXRTp</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a68f7fb5c3bab94ad.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 02 of phase 70.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Clean working tree, all correction commits in place. The reviewer's hoist is complete.
+
+## CORRECTION COMPLETE
+
+**Plan:** 70.1-02 (post-review correction)
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a68f7fb5c3bab94ad/.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-02-SUMMARY.md`
+
+What the correction did:
+- Hoisted the entire IndexedDB adapter (open + `onupgradeneeded` legacy fold + transactional get/put + wrapped-key accessors + D-08 degradation) from `apps/web` into new `packages/sdk/src/state/rotation-idb-store.ts`, exposed via a `createIndexedDbHighWaterStore()` factory.
+- Lazy global `indexedDB` (function-body only); exported as its own tsup entry + `@cipherbox/sdk/state/rotation-idb-store` subpath, **not** in the main barrel — tree-shakeable, no IndexedDB pulled into desktop/node consumers.
+- New `packages/sdk/src/__tests__/rotation-idb-store.test.ts` (13 tests, `fake-indexeddb`) — migration fold + legacy-store deletion, max-preserving `put`, wrapped-key round trip, D-08 degradation — running under `pnpm --filter @cipherbox/sdk test` (CI-covered).
+- Moved `fake-indexeddb` devDependency from `apps/web` to `packages/sdk`; thinned the web service to wiring; deleted the never-CI-run web test.
+
+Verification: SDK suite 359 passed / 49 skipped / 0 failed (rotation-idb-store 13/13, rotation-high-water 29/29); SDK build emits the subpath dist; `apps/web` `tsc -b` clean; all touched files lint-clean.
+
+**New commits (on top of prior 4):**
+- `2f8e27802` feat(70.1-02): hoist rotation IndexedDB adapter into the SDK for CI coverage
+- `f7d17b8f7` refactor(70.1-02): thin web rotation service to SDK adapter wiring
+- `276e07071` docs(70.1-02): record IndexedDB adapter hoist into CI-covered SDK suite
+
+&lt;worktree_metadata&gt;
+worktree_path: /Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a68f7fb5c3bab94ad
+branch: worktree-agent-a68f7fb5c3bab94ad
+base: 727c65a09e46e346a918d5e94d972e2b53a5967a
+&lt;/worktree_metadata&gt;</result>
+<usage><subagent_tokens>332888</subagent_tokens><tool_uses>142</tool_uses><duration_ms>481196</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a68f7fb5c3bab94ad</worktreePath><worktreeBranch>worktree-agent-a68f7fb5c3bab94ad</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a3aa93ef31bf3bf5f</task-id>
+<tool-use-id>toolu_01LDKKBos3QV9cJiipuSVXGx</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a3aa93ef31bf3bf5f.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 05 of phase 70.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All committed cleanly, working tree clean. Per the orchestrator's instructions, I do NOT update STATE.md/ROADMAP.md — that's the orchestrator's job after all wave agents complete.
+
+## PLAN COMPLETE
+
+**Plan:** 70.1-05
+**Tasks:** 2/2 complete
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a3aa93ef31bf3bf5f/.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-05-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"70.1-05","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a3aa93ef31bf3bf5f","branch":"worktree-agent-a3aa93ef31bf3bf5f","expected_base":"8c541dac3e597c507a557fdc4804b7487982d1db"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `c9a1e9aad`: test(70.1-05): failing keyCheckpoint call-order + dirty-item repair tests
+- `f8bdbb100`: feat(70.1-05): keyCheckpoint seam + persist-before-publish + dirty-item repair path
+- `e67c97ef6`: docs(70.1-05): complete keyCheckpoint seam plan
+
+**Duration:** ~55 min
+
+Key files:
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a3aa93ef31bf3bf5f/packages/sdk-core/src/rotation/engine.ts` — `KeyCheckpointCallbacks`, `DirtyNodeUnrecoverableError`, persist-before-publish in `rotateOne`, `isDirtyItem` BFS routing, `repairDirtyNode`
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a3aa93ef31bf3bf5f/packages/sdk/src/types.ts` — `RotationClientCallbacks.keyCheckpoint` seam
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a3aa93ef31bf3bf5f/packages/sdk-core/src/__tests__/rotation/engine.test.ts` — SC#3 test block (Tests A–D)
+
+Notable deviation: the dirty-item repair path is gated on `keyCheckpointCallbacks` being supplied (D-01 conditional invocation), so existing tests exercising dirty items without the checkpoint plane wired (Plan 70-06's safe-double-rotation test, Plan 70.1-01's SC#1/SC#2) continue to pass unmodified — documented in full in the SUMMARY's Deviations section, along with the RED/GREEN git-workflow correction and the `@noble/secp256k1` devDependency addition needed for real ECIES test keypairs.</result>
+<usage><subagent_tokens>346550</subagent_tokens><tool_uses>103</tool_uses><duration_ms>1431016</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a3aa93ef31bf3bf5f</worktreePath><worktreeBranch>worktree-agent-a3aa93ef31bf3bf5f</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aa9ed8baec9ede06e</task-id>
+<tool-use-id>toolu_014fTK6Luwezhf3UhFFdxhgr</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/aa9ed8baec9ede06e.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 06 of phase 70.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Clean working tree, all committed. Plan execution complete.
+
+## PLAN COMPLETE
+
+**Plan:** 70.1-06
+**Tasks:** 2/2
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-aa9ed8baec9ede06e/.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-06-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+worktree_path: /Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-aa9ed8baec9ede06e
+branch: worktree-agent-aa9ed8baec9ede06e
+base: 8c541dac3e597c507a557fdc4804b7487982d1db
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `64d09c37d`: test(70.1-06): failing depth&gt;=2 Rust dirty-resume consumption tests
+- `a4a1f9daa`: fix(sdk): depth-aware Rust dirty-resume consumption for read rotation
+- `c24f785d3`: docs(70.1-06): complete depth-aware Rust dirty-resume consumption plan
+
+**Duration:** ~26 min
+
+Key file: `crates/sdk/src/rotation/engine.rs` — added `find_node_by_ipns_name` (walk-from-root primitive) and `seed_or_find_parent_tracking_state` (generalized parent-tracking seed, Rust twin of `engine.ts`'s `findParentNodeByIpnsName`/`resolveParentTrackingState`), `enqueue_dirty_frontier_entry`, a BFS requeue-guard, and restructured `rotate_read_from_node` to compute the pre-rotation dirty frontier unconditionally and consume depth&gt;=2 dirty entries against their real (not root-hardcoded) parent. All 143 `cipherbox-sdk` unit tests pass, including the two new `sc1_`/`sc2_` depth-aware consumption cases. No STATE.md/ROADMAP.md changes made (orchestrator-owned).</result>
+<usage><subagent_tokens>330720</subagent_tokens><tool_uses>64</tool_uses><duration_ms>1507395</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-aa9ed8baec9ede06e</worktreePath><worktreeBranch>worktree-agent-aa9ed8baec9ede06e</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>abe16a565b4d6462f</task-id>
+<tool-use-id>toolu_0195F79CdQDxx8cg18rQjkTt</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/abe16a565b4d6462f.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 07 of phase 70.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 70.1-07
+**Tasks:** 3/3 complete
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-abe16a565b4d6462f/.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-07-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"70.1-07","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-abe16a565b4d6462f","branch":"worktree-agent-abe16a565b4d6462f","expected_base":"c50e6e2f9bdc5fb2542844239b282308b6541fb5"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `e6f58e795`: test(70.1-07): failing freshly-resolved-generation reconcile test
+- `2be1db70a`: feat(70.1-07): thread folder read key into reconcileFolderSequence gate
+- `73f759840`: feat(70.1-07): thread keyCheckpointCallbacks + existing seams through performScopeExitRotation
+- `85fbd361c`: docs(70.1-07): add plan 07 execution summary
+
+**Duration:** ~25 min (18:53 → 19:06)
+
+Key files touched (absolute paths):
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-abe16a565b4d6462f/packages/sdk/src/client.ts` — `reconcileFolderSequence` fetch+unseal gate (SC#5/D-09), read-key threading at 6 call sites, `performScopeExitRotation` keyCheckpoint/nodeKeySource/grantCallbacks/innerGrants wiring, `DirtyNodeUnrecoverableError` catch
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-abe16a565b4d6462f/packages/sdk/src/__tests__/reconcile-generation-gate.test.ts` — new SC#5 test suite (3 tests)
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-abe16a565b4d6462f/packages/sdk/src/__tests__/client-rotation.test.ts` — Rule-3 mock fix (crypto `importOriginal` + real sealed-node fixture)
+
+Full `@cipherbox/sdk` vitest suite: 362 passed, 0 failed. Typecheck and lint clean on all modified/created files (pre-existing unrelated quarantined-test type errors untouched). Working tree clean.
+
+One design deviation worth flagging to the reviewer: `keyCheckpointCallbacks`/owner ECIES keys/`nodeKeySource` are derived once inside `performScopeExitRotation`'s body (from `this.config`/`this.folderTree`) rather than threaded as new parameters at each of its 5 call sites — documented with rationale in the SUMMARY's Decisions section.</result>
+<usage><subagent_tokens>347962</subagent_tokens><tool_uses>128</tool_uses><duration_ms>1098182</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-abe16a565b4d6462f</worktreePath><worktreeBranch>worktree-agent-abe16a565b4d6462f</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a864b9932bcd17dd5</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a864b9932bcd17dd5.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 08 of phase 70.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Clean working tree, all committed.
+
+## PLAN COMPLETE
+
+**Plan:** 70.1-08
+**Tasks:** 2/2
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a864b9932bcd17dd5/.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-08-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"70.1-08","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a864b9932bcd17dd5","branch":"worktree-agent-a864b9932bcd17dd5","expected_base":"c50e6e2f9bdc5fb2542844239b282308b6541fb5"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `1b9941420` test(70.1-08): failing depth-3 Rust crash-resume + ECIES checkpoint lifecycle tests
+- `3d0867d6e` feat(70.1-08): RotationDeps checkpoint methods + persist-before-publish + dirty-item repair
+- `5aa68f7a4` docs(70.1-08): complete ECIES key-checkpoint seam and dirty-node repair plan
+
+**Duration:** ~6 min (RED to GREEN commit)
+
+Key files modified:
+- `crates/sdk/src/rotation/engine.rs` — checkpoint seam, persist-before-publish, dirty-item repair path, D-13 tests
+- `crates/sdk/src/rotation/high_water.rs` — `RotationError::DirtyNodeUnrecoverable`
+
+One notable deviation (Rule 1 bug fix, documented in SUMMARY): the repair path is gated on `get_wrapped_key` actually returning a checkpoint rather than unconditionally routing every dirty item through repair — an unconditional design broke Plan 70.1-06's pre-existing SC#1/SC#2 "safe double-rotation" tests. The gated design (mirroring the already-shipped TS twin, Plan 70.1-05) keeps `cargo test -p cipherbox-sdk` fully green (145/145).
+
+`cargo fmt -p cipherbox-sdk` / `cargo clippy -p cipherbox-sdk` were scoped correctly; incidental out-of-scope formatting drift in `client.rs`/`registry.rs`/`state.rs`/`sync.rs` was reverted before each commit, leaving only `engine.rs` + `high_water.rs` committed.</result>
+<usage><subagent_tokens>340195</subagent_tokens><tool_uses>116</tool_uses><duration_ms>1502623</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a864b9932bcd17dd5</worktreePath><worktreeBranch>worktree-agent-a864b9932bcd17dd5</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a271b3324139460cc</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a271b3324139460cc.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 10 of phase 70.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 70.1-10
+**Tasks:** 1/1 complete
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a271b3324139460cc/.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-10-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"70.1-10","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a271b3324139460cc","branch":"worktree-agent-a271b3324139460cc","expected_base":"9be080e8674085a7a49bb8829e9b6f3e375fbe25"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `c63332e06`: test(sdk-e2e): add depth-3 anti-vacuous crash-resume fixture
+- `0a7a2f421`: docs(70.1-10): complete depth-3 anti-vacuous crash-resume plan
+
+**Duration:** ~40 min
+
+**Key file:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a271b3324139460cc/tests/sdk-e2e/src/suites/rotation-crash-safety.test.ts`
+
+**Summary of work:**
+- Added Test 5: depth-3, fan-out≥2 tree (`root5 -&gt; [subA5, subB5]`, `subA5 -&gt; [fileA5]`), crashing at the exact D-01 post-publish/pre-parent-republish window on the deep grandchild (fileA5), then resuming and asserting all 4 D-10 properties.
+- Added Test 6: multi-dirty-edge variant (`root6 -&gt; [c1_6, c2_6]`) where 2 siblings publish while root6's own batch is still open, repaired via a single batched republish on resume.
+- Wired the Plan 70.1-05 `keyCheckpointCallbacks` ECIES seam via a new test-local `createKeyCheckpointStub()` Map-backed stub, and recovered post-rotation keys by unwrapping each node's own checkpoint with the owner's private key (avoiding interference with the suite's shared `crypto.getRandomValues` spy, since ECIES `wrapKey` consumes additional random bytes).
+- "No spurious root decrement" was asserted concretely via IPNS `sequenceNumber` deltas across the crash/resume boundary rather than internal engine state.
+
+**Verification performed (scoped per instructions — no docker/API stack in this worktree):**
+- `pnpm i`, then built `@cipherbox/crypto` → `@cipherbox/core` → `@cipherbox/api-client` → `@cipherbox/sdk-core` → `@cipherbox/sdk` dists in dependency order.
+- `tsc --noEmit -p tests/sdk-e2e/tsconfig.json` — zero new errors (3 pre-existing, unrelated baseline errors in `bin-operations.test.ts`).
+- `eslint` on the file — clean.
+- `prettier --check` — clean.
+- **Live e2e run deferred to the orchestrator** (needs docker stack + API :3000) — noted explicitly in the SUMMARY.
+
+No modifications were made to STATE.md or ROADMAP.md, per instructions.</result>
+<usage><subagent_tokens>256667</subagent_tokens><tool_uses>71</tool_uses><duration_ms>972369</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a271b3324139460cc</worktreePath><worktreeBranch>worktree-agent-a271b3324139460cc</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a16f833b99c769abf</task-id>
+<tool-use-id>toolu_01Q3foHKhhUGamuKkcxZsJzh</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a16f833b99c769abf.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 09 of phase 70.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 70.1-09
+**Tasks:** 3/3
+**SUMMARY:** `.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-09-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"70.1-09","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a16f833b99c769abf","branch":"worktree-agent-a16f833b99c769abf","expected_base":"beab04a4bfe09dd562b4ca047a7ff097b9e79283"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `4c545aa1f`: test(70.1-09): failing production RotationDeps adapter tests
+- `e48acf307`: feat(70.1-09): implement the production RotationDeps adapter
+- `7bb155c39`: feat(70.1-09): wire rotate_read_on_scope_exit to the production adapter
+- `beab04a4b`: docs(70.1-09): complete production RotationDeps adapter plan
+
+**Duration:** ~55 min
+
+Key files:
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a16f833b99c769abf/crates/fuse/src/write_ops/rotation_deps.rs` (new — `FuseRotationDeps`, `ApiClientTransport`, `RotationTransport`)
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a16f833b99c769abf/crates/fuse/src/write_ops/grant_scope.rs` (live-wired `rotate_read_on_scope_exit`)
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a16f833b99c769abf/crates/fuse/src/fs.rs` (new `rotation_checkpoint_store` field)
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a16f833b99c769abf/crates/fuse/src/test_support.rs`, `apps/desktop/src-tauri/src/fuse/mod.rs`, `apps/desktop/src-tauri/src/fuse/windows/mod.rs` (construction-site wiring)
+
+All 99 `cipherbox-fuse` tests pass (`cargo test -p cipherbox-fuse --features fuse`), `cipherbox-desktop` compiles clean. Two documented scope decisions (not stubs blocking this plan's own goal): the ROT-04 desktop-grant-remint deferral (explicitly sanctioned by the plan) and IPNS signing-key sourcing from the local `InodeTable` with fail-closed behavior for non-materialized nodes (a real gap RESEARCH didn't specify a source for — full detail and rationale in the SUMMARY's "Decisions Made"/"Known Limitations" sections).</result>
+<usage><subagent_tokens>417278</subagent_tokens><tool_uses>141</tool_uses><duration_ms>1642331</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a16f833b99c769abf</worktreePath><worktreeBranch>worktree-agent-a16f833b99c769abf</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ad867c90dd073c8f6</task-id>
+<tool-use-id>toolu_01Bzh3gzNCgRcF2iiQZQ38zy</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/ad867c90dd073c8f6.output</output-file>
+<status>completed</status>
+<summary>Agent "Diagnose depth-3 crash-resume decryption failure" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Verdict: PRODUCT BUG (not a fixture bug)
+
+The two new depth-3 fixtures are correctly written and correctly exposed a genuine, previously-undetected engine bug. No product or test code was changed — the working tree is clean (confirmed via `git diff --stat` and `git status --porcelain` on `packages/sdk-core`, `packages/sdk`, `tests/sdk-e2e`).
+
+### Root cause
+
+`collectDirtyFrontier` in `packages/sdk-core/src/rotation/engine.ts` (~line 815, calling `resolveChildKeyAndEnvelope` at ~line 664) determines whether a child edge is "dirty" by comparing `childPub.generation` (plaintext, from the child's own published IPNS envelope) against `childRef.generation` (the parent's mirrored generation) — but it does this check **after** unconditionally attempting to `unsealChildReadKey` (AEAD-decrypt) the child's `SealedChildRef.readKeySealed` with the parent's **current** readKey, with no try/catch. `resolveChildKeyAndEnvelope` bundles "fetch child's public envelope" and "decrypt the child's key" into one call, so the dirtiness check never gets a chance to run before the decrypt is attempted.
+
+A genuinely dirty edge is, by definition, one whose ref hasn't been re-sealed to reflect the child's rotation. When the parent has **also** rotated in the same walk (the normal case — every node in a full-subtree `rotateReadFromNode` walk rotates, including every intermediate parent), the parent's current key differs from the old key the stale ref is still sealed under, so decrypting it with the current key **must** cryptographically fail. This is an ordering bug, not a crypto bug: the plaintext generation check should run first (no decryption required — `childPub.generation` is already available from `resolveAndFetchNode` alone), and the decrypt should only be attempted on a confirmed-clean edge.
+
+This class of bug was structurally invisible to the sdk-core unit-test suite (`packages/sdk-core/src/__tests__/rotation/engine.test.ts`, `verifySubtreeClean — full-subtree recursion` describe block) because its mocks make `unsealChildReadKey` unconditionally succeed regardless of the key argument passed in — masking exactly the AEAD key-mismatch this bug produces with real crypto. The Plan 70.1-10 depth-3/multi-dirty-edge sdk-e2e fixtures are the first real-crypto test to exercise a genuinely-dirty, parent-also-rotated edge, which is exactly why Phase 70's crash-safety gate "passed vacuously" before.
+
+### Evidence (live instrumentation, reverted after confirmation)
+
+I temporarily added fingerprint-only (SHA-256, no key material) diagnostics around the `unsealChildReadKey` call in `resolveChildKeyAndEnvelope`, rebuilt `sdk-core`/`sdk` dist, and re-ran both failing tests individually:
+
+- Test 5: `FAIL ipnsName=...b0zb childId=4701aa2d... childPubGen=1 childRefGen=0 ... err=Decryption failed` — this is fileA5, resolved via subA5's mirror. `childPubGen=1` (fileA5 really rotated/published) vs `childRefGen=0` (subA5's own mirror of fileA5 is stale) is precisely the dirty condition, but the decrypt attempt (using subA5's current/new key) throws before the comparison runs.
+- Test 6: `FAIL ipnsName=...x85f childId=2c6e114d... childPubGen=1 childRefGen=0 ... err=Decryption failed` — same signature, one level shallower (root6's own children c1_6/c2_6), since root6 already rotated and its own D-09 batch never fired for either child before the crash.
+
+Instrumentation was fully reverted (`git diff --stat packages/sdk-core/src/rotation/engine.ts` is empty) and dist rebuilt from clean source afterward.
+
+### Recommended fix direction (not applied)
+
+Restructure `collectDirtyFrontier`/`resolveChildKeyAndEnvelope` so the dirty check runs on plaintext data first:
+1. Fetch `childPub` via `resolveAndFetchNode` alone (no decrypt).
+2. If `childPub.generation &gt; childRef.generation` → dirty: push a `DirtyFrontierItem` **without** calling `unsealChildReadKey` at all — it's neither guaranteed to succeed nor needed, since `repairDirtyNode` (the consumer when `keyCheckpointCallbacks` is wired) already recovers the correct key via the ECIES checkpoint plane keyed by `childPub.id`, never via `item.nodeReadKey`. `DirtyFrontierItem.nodeReadKey` would need to become optional/placeholder for this path.
+3. Only if clean, call `unsealChildReadKey` (expected to succeed) and recurse as today.
+
+This is currently blocking the whole point of Phase 70.1's checkpoint plane: `verifySubtreeClean` throws before `rotateReadFromNode` ever gets a chance to route the item to `repairDirtyNode`. Secondary item to re-audit once fixed: `findParentNodeByIpnsName` (~line 702) uses the same `resolveChildKeyAndEnvelope` helper while walking from root — should be safe today (only descends via provably-clean edges) but worth re-checking against a tree with multiple independent dirty edges at different depths.
+
+### Final test result
+
+`npx vitest run --no-coverage rotation-crash-safety`: **4 passed / 2 failed** (unchanged from the reported starting state) — tests 1–4 pass, test 5 and test 6 fail with `CryptoError: Decryption failed`, exactly as before investigation.
+
+### Commits
+
+None. No product or test code changes were made — this is a genuine product bug requiring an orchestrator/design decision, not a mechanical fix.
+
+### Files
+
+- `/Users/myankelev/Code/random/cipher-box/packages/sdk-core/src/rotation/engine.ts` — offending code path (`collectDirtyFrontier` ~line 815, `resolveChildKeyAndEnvelope` ~line 664); untouched (reverted).
+- `/Users/myankelev/Code/random/cipher-box/tests/sdk-e2e/src/suites/rotation-crash-safety.test.ts` — the two correct fixtures (test 5 at line 1063, test 6 at line 1358) exposing the bug; untouched.
+- `/Users/myankelev/Code/random/cipher-box/packages/sdk-core/src/__tests__/rotation/engine.test.ts` — unit-test mocks (`verifySubtreeClean — full-subtree recursion` describe, ~line 1738) that mask this class of bug; not modified, flagged for awareness.
+- `/Users/myankelev/Code/random/cipher-box/.planning/debug/rotation-crash-safety-depth3.md` — debug session file with full evidence trail (created this session; not archived, since unresolved by design).</result>
+<usage><subagent_tokens>204650</subagent_tokens><tool_uses>33</tool_uses><duration_ms>517273</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a73fb96e14c693339</task-id>
+<tool-use-id>toolu_01QZBjrc5jT1B9homL71Bm6o</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a73fb96e14c693339.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix dirty-frontier ordering bug both engines" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All green across the board. Final summary:
+
+## What changed
+
+**`packages/sdk-core/src/rotation/engine.ts`** (commit `afaaf80ad`)
+- `collectDirtyFrontier`: now fetches the child's plaintext envelope via `resolveAndFetchNode` and compares `childPub.generation &gt; childRef.generation` **before** any decrypt. Only a confirmed-clean edge is decrypted (new `unsealChildReadKeyFromPub` helper factored out of `resolveChildKeyAndEnvelope`). A dirty edge is pushed to the frontier with `nodeReadKey: undefined` — no decrypt attempted at all.
+- `findParentNodeByIpnsName`: same reorder — skips a dirty sibling branch without attempting the unseal (it shared the flaw, per the audit requirement).
+- `DirtyFrontierItem.nodeReadKey` and the BFS `queue` item's `nodeReadKey` are now `Uint8Array | undefined`. The BFS routes a dirty item to `repairDirtyNode` (ECIES checkpoint) when `keyCheckpointCallbacks` is wired, and now **fails closed with `DirtyNodeUnrecoverableError`** instead of the old (actually-unsafe) decrypt-then-double-rotate fallback when it isn't.
+- `repairDirtyNode` now marks the repaired node in `jobRecord.completedNodeIds` (mirroring `rotateOne`'s own idempotency marking) so a node discovered both via the dirty-frontier merge and via its parent's normal children-enqueue loop isn't double-processed.
+- Zeroization guards (`instanceof Uint8Array` checks) added everywhere `nodeReadKey` is read/zeroed, since it can now be absent.
+
+**`packages/sdk-core/src/__tests__/rotation/engine.test.ts`** (commit `dccd69647`)
+- Added `keyAwareUnsealChildReadKey` — throws on a key mismatch instead of the old unconditional-success mock that masked the bug.
+- Updated the existing depth-2 dirty test and added a new one reproducing the exact regression (dirty edge whose parent also rotated in the same walk) at the unit tier.
+- Updated the SC#1/SC#2/Test-5 dirty-resume fixtures to wire `keyCheckpointCallbacks` (since the unsafe fallback they implicitly relied on no longer exists), and added a `Test 3b` proving the fail-closed `DirtyNodeUnrecoverableError` path.
+
+**`crates/sdk/src/rotation/engine.rs`** (commit `96022c7d8`)
+- Same reorder in `collect_dirty_frontier` and `find_node_by_ipns_name` (confirmed via re-audit these shared the identical flaw).
+- `DirtyFrontierEntry.node_read_key` / `QueueItem.node_read_key` changed to `Option&lt;Zeroizing&lt;[u8;32]&gt;&gt;`; the BFS loop fails closed with `RotationError::DirtyNodeUnrecoverable` when no checkpoint is found (removed the old fallback-to-`rotate_one` design).
+- Fixed the two now-broken `sc1_*`/`sc2_*` tests by seeding a real checkpoint (via a simulated prior `rotate_one` commit) instead of a directly-seeded dirty fixture, and added `plan_70_1_10_dirty_edge_whose_parent_also_rotated_never_attempts_decrypt`.
+
+## Verification results
+- e2e gate: `rotation-crash-safety.test.ts` — **6 passed / 0 failed** (all 6, including Test 5 depth-3 and Test 6 multi-dirty-edge).
+- `pnpm --filter @cipherbox/sdk-core test`: 363 passed, 12 skipped, 0 failed.
+- `pnpm --filter @cipherbox/sdk test`: 362 passed, 49 skipped, 0 failed.
+- `cargo test -p cipherbox-sdk`: 146 passed, 0 failed.
+- Scoped `cargo fmt -p cipherbox-sdk` / `cargo clippy -p cipherbox-sdk --all-targets`: clean (no new warnings in `rotation/engine.rs`); an accidental fmt touch to unrelated files (`client.rs`, `registry.rs`, `state.rs`, `sync.rs`) was reverted before committing to keep the diff scoped.
+
+## Commits
+- `afaaf80ad` — `fix(sdk-core): check edge dirtiness before decrypt in collectDirtyFrontier`
+- `dccd69647` — `test(sdk-core): harden verifySubtreeClean mocks to model AEAD key-mismatch`
+- `96022c7d8` — `fix(sdk): reorder Rust dirty-frontier check before decrypt`
+
+All on branch `feat/rotation-read-plane-durability-and-deep-crash-resume-soundne` in the main checkout (no worktree used). `.planning/debug/rotation-crash-safety-depth3.md` is a pre-existing untracked file unrelated to this task — left untouched.</result>
+<usage><subagent_tokens>434477</subagent_tokens><tool_uses>155</tool_uses><duration_ms>2354313</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aaac4dbcb96f798e5</task-id>
+<tool-use-id>toolu_01YWkA6PY3uwnR3cUmcDNnNQ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/aaac4dbcb96f798e5.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 11 of phase 70.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Clean tree (only the pre-existing untracked debug file remains, left untouched as instructed). STATE.md and ROADMAP.md were not touched, per instructions — the orchestrator owns those.
+
+## PLAN COMPLETE
+
+**Plan:** 70.1-11
+**Tasks:** 2/2 complete
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-11-SUMMARY.md`
+
+**Commits:**
+- `3bc44c6a3`: test(70.1-11): failing gate-correctness fail-closed tests (RED — compile-error signal)
+- `119c6b363`: fix(fuse): fail closed on non-authoritative cache incomplete ancestry and poisoned lock (GREEN)
+- `16dc96b4c`: docs(70.1-11): complete grant-scope gate fail-closed correctness plan (SUMMARY)
+- `5b64c5553`: docs(70.1-11): append self-check result to SUMMARY
+
+**Files modified:**
+- `/Users/myankelev/Code/random/cipher-box/crates/fuse/src/write_ops/grant_scope.rs`
+- `/Users/myankelev/Code/random/cipher-box/crates/fuse/src/fs.rs`
+
+**Verification:** `cargo test -p cipherbox-fuse --features fuse grant_scope` → 16/16 pass (all D-15a/b/c cases green, plus 10 updated pre-existing tests). `cargo check -p cipherbox-fuse --features fuse` compiles clean. Scoped `rustfmt --check` clean on both modified files; scoped clippy shows no new warnings (the pre-existing `result_unit_err` lint on `run_scope_exit_gate`'s signature predates this plan).
+
+**Known deferred regression (explicitly scoped to Plan 12, documented in SUMMARY):** `crates/fuse/src/write_ops/implementation/delete.rs`'s two private-delete tests (`unlink_private_delete_succeeds_with_zero_rotation`, `rmdir_private_delete_succeeds_with_zero_rotation`) now fail — they seed a non-authoritative cache and the fail-closed gate correctly returns EIO. This file is outside this plan's `files_modified` and the plan's own `key_links` explicitly defers this reseeding to Plan 12.
+
+**Duration:** ~25 min</result>
+<usage><subagent_tokens>189353</subagent_tokens><tool_uses>64</tool_uses><duration_ms>874020</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>acc83f18c5450eea3</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/acc83f18c5450eea3.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 12 of phase 70.1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Everything is clean: three commits landed on the current branch, working tree clean except the untouched pre-existing debug file, and the full `cipherbox-fuse` test suite is green (106/106).
+
+## PLAN COMPLETE
+
+**Plan:** 70.1-12
+**Tasks:** 2/2
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-12-SUMMARY.md`
+
+**Commits:**
+- `56c77b415`: test(70.1-12): reseed private-delete cache, invert shared-exit test, add rename gate-ordering tests
+- `267a3c750`: fix(fuse): reorder scope-exit gate before D-07 bin-ref capture and rename mutation
+- `0d16ef00f`: docs(70.1-12): complete D-15d gate ordering and D-14 rotation-success inversion plan
+
+**Files modified:**
+- `/Users/myankelev/Code/random/cipher-box/crates/fuse/src/write_ops/implementation/delete.rs`
+- `/Users/myankelev/Code/random/cipher-box/crates/fuse/src/write_ops/implementation/rename.rs`
+
+**Key outcome worth flagging:** The plan's `unlink_shared_scope_exit_fails_closed_until_rotation_wired` inversion (assert success + exactly one rotation) could not be honestly achieved as a spy/fake-transport test — the production `run_scope_exit_gate` hardcodes the real `ApiClientTransport`, and that file (`grant_scope.rs`) was outside this plan's `files_modified`. Rather than fabricate a false pass or expand scope into an out-of-plan file, I built a minimal in-process HTTP/1.1 mock server (plain `std::net::TcpListener`, no new Cargo dependency) directly inside `delete.rs`'s test module, using a genuinely-generated Ed25519 keypair and a real signed IPNS record so the test drives the actual production `ApiClientTransport`/`FuseRotationDeps` code path end-to-end. This is documented in detail under "Decisions Made" in the SUMMARY.
+
+Also worth noting: `crates/fuse/src/platform/windows/write_ops.rs` contains an independent duplicate of this same gate-ordering pattern but is out of this plan's scope and cannot even be `cargo check`ed on macOS (winfsp-sys requires Windows COM APIs) — flagged in the SUMMARY as a WinFsp-parity follow-up, consistent with the plan's own "budget a CI round-trip" note.
+
+**Duration:** ~65 min</result>
+<usage><subagent_tokens>349249</subagent_tokens><tool_uses>107</tool_uses><duration_ms>1662219</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a3f8ac4d12b4f0571</task-id>
+<tool-use-id>toolu_01VV2NXAYv2oAitXmWBfxHRA</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a3f8ac4d12b4f0571.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 13 desktop-e2e acceptance" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All confirmed. STATE.md/ROADMAP.md untouched (no diff output). Now returning the structured checkpoint per plan requirements.
+
+## CHECKPOINT REACHED
+
+**Type:** human-verify (real FUSE mount required — cannot be self-certified)
+**Plan:** 70.1-13
+**Progress:** 1/2 tasks complete
+
+### Completed Tasks
+
+| Task | Name | Commit | Files |
+|------|------|--------|-------|
+| 1 | Author the dispatch-gated desktop-e2e shared-scope-exit acceptance leg | `f97441e5c` | `tests/desktop-e2e/scripts/shared-scope-exit-rotation.mts` (new), `tests/desktop-e2e/scripts/run-all.sh` (Step 8 added) |
+| — | SUMMARY.md (Task 1 documentation) | `3ec257b03` | `.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-13-SUMMARY.md` |
+
+### Static verification performed (all clean)
+
+- `tsc --noEmit --strict` on the new `.mts` helper — clean
+- `eslint` (auto-fixed prettier formatting once, then clean) — clean
+- `cargo check -p cipherbox-fuse --features fuse` — clean (no Rust files touched; confirms no regression)
+- `bash -n` on the modified `run-all.sh` — clean
+
+### Current Task
+
+**Task 2:** Human-verify the dispatch-gated desktop-e2e run
+**Status:** blocked — requires a real FUSE mount, which this executor cannot provision or self-certify
+**Blocked by:** two things, one expected (dispatch gate + real mount need a human/CI runner) and one newly discovered:
+
+**CRITICAL FINDING — `CipherBoxFS::refresh_sent_shares` is never invoked from the desktop mount lifecycle.** Confirmed via exhaustive repo-wide grep: zero call sites anywhere. `apps/desktop/src-tauri/src/fuse/mod.rs` seeds `sent_shares` to `SentSharesCache::empty()` (non-authoritative) at mount construction and never refreshes it. Per the Plan 11 D-15a fix, the scope-exit gate fails CLOSED (EIO) whenever the cache is non-authoritative — **regardless of private vs. shared**. Net effect: on today's `HEAD`, every delete/rename on a real desktop mount returns EIO, unconditionally, not just the shared-rotation case this plan targets. This is out of this plan's declared file scope (`tests/desktop-e2e/` only) and is a genuine architectural/design decision (refresh cadence, blocking-vs-best-effort mount init) — documented in full in the SUMMARY rather than patched unilaterally. Full detail: `.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-13-SUMMARY.md` under "CRITICAL FINDING."
+
+### Checkpoint Details
+
+**Human/CI steps to run the real-mount acceptance:**
+1. **Prerequisite fix recommended first:** wire `CipherBoxFS::refresh_sent_shares()` into `apps/desktop/src-tauri/src/fuse/mod.rs`'s mount lifecycle (mount init + periodic background refresh, mirroring the existing `spawn_bin_entry_publish` pattern already in that file). Without this, the run below is expected to fail with EIO on essentially every delete/rename, not just this leg's assertions.
+2. Dispatch the real-mount CI leg: `env -u GITHUB_TOKEN gh workflow run "Desktop E2E Tests" --ref feat/rotation-read-plane-durability-and-deep-crash-resume-soundne` (macOS/Linux legs exercise FUSE; Windows/WinFsp is out of this leg's scope), **or** run locally via the headless-desktop `--dev-key` + local-stack UAT recipe, then `bash tests/desktop-e2e/scripts/run-all.sh` (the new leg runs last, as Step 8).
+3. What to observe for sign-off (console output from the new leg): PASS lines for (a) "shared-scope-exit delete completed with no EIO", (b) grant-root "sequence bumped by exactly 1", (c) "revoked recipient (Bob) can no longer decrypt", (d) private folder "read key UNCHANGED after delete."
+4. If it EIOs on the covered-scope-exit delete and step 1's fix hasn't landed yet — that's the known, expected blocker above, not a new regression. If it fails after the fix lands, treat as a genuine regression against this plan's threat model (T-70.1-32).
+5. Re-run once if the failure signature matches the documented macFUSE-vs-FUSE-T linking caveat or the ~15% FUSE-T/SMB cache flake (T-70.1-33, accepted infra limit) before concluding a real defect.
+
+### Awaiting
+
+Human decision: either (a) land the `refresh_sent_shares` wiring fix first, then dispatch/run the real-mount leg and report the 4 D-16 points, or (b) explicitly accept running it now knowing it will likely EIO on the known gap. Resume signal per the plan: type "approved" once the desktop-e2e leg confirms the 4 D-16 points, or describe the failure.
+
+Key files (absolute paths):
+- `/Users/myankelev/Code/random/cipher-box/tests/desktop-e2e/scripts/shared-scope-exit-rotation.mts`
+- `/Users/myankelev/Code/random/cipher-box/tests/desktop-e2e/scripts/run-all.sh`
+- `/Users/myankelev/Code/random/cipher-box/.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-13-SUMMARY.md`
+- `/Users/myankelev/Code/random/cipher-box/apps/desktop/src-tauri/src/fuse/mod.rs` (where the missing `refresh_sent_shares` wiring would need to land — not modified by this plan)</result>
+<usage><subagent_tokens>223687</subagent_tokens><tool_uses>80</tool_uses><duration_ms>857140</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a3f8ac4d12b4f0571</task-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a3f8ac4d12b4f0571.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 13 desktop-e2e acceptance" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Correct on my read of the code — there are two distinct sharing mechanisms, and `sent shares` is **not** the invite-link one.
+
+**`sent shares`** (what the FUSE `SentSharesCache` / `GET /shares/sent` references) are **direct user-to-user shares**: the owner ECIES-wraps a folder's read key under a specific recipient's public key and creates a `Share` row (`apps/api/src/shares/shares.controller.ts`, `entities/share.entity.ts`). The recipient already exists and is known by their public key. "Sent shares" = the list of active grants this user has handed out (`GET /shares/sent`), keyed by `root_ipns_name`. That set is exactly the grant roots the scope-exit gate needs to know about to decide whether a delete/move exits a shared subtree and must rotate.
+
+**Share invites** are the separate link-based flow (`share-invites.controller.ts`, `invites.controller.ts`, `entities/share-invite.entity.ts`, `AddShareInvites` migration): you mint a claimable invite (a link) for someone who isn't necessarily a known recipient yet; they later *claim* it, at which point it typically materializes into a `Share`. That's the "share via link" feature.
+
+Why the rotation gate keys off **sent shares** and not invites: the security question the gate answers is "does an *active, already-granted* recipient currently have read access to this subtree, such that deleting/moving out of it needs a read-key rotation to cut them off?" That's precisely the set of live grants — i.e., sent shares. An unclaimed invite link hasn't granted anyone key access yet; once claimed it becomes a `Share` and shows up in `/shares/sent`. So the cache tracks sent shares, and my finding stands: nothing in `apps/desktop/src-tauri/src/fuse/mod.rs` ever refreshes that cache, so it stays non-authoritative and the gate fails closed (EIO) on every mount delete/rename today.
+
+One caveat: I confirmed the two-mechanism split and that `/shares/sent` powers the cache, but I did not deep-trace whether claiming an invite writes into the exact same `Share` table row the `sent` endpoint reads. If that linkage matters for your next step, I can verify `share-invite.service.ts`'s claim path.</result>
+<usage><subagent_tokens>184546</subagent_tokens><tool_uses>81</tool_uses><duration_ms>1324394</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a3f8ac4d12b4f0571</task-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a3f8ac4d12b4f0571.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 13 desktop-e2e acceptance" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Good challenge — and on the rename point you're **right**, the code already agrees with you. Here's the precise, code-grounded picture. Two of your three intuitions match the implementation exactly; the delete case is the one with a real rationale.
+
+### Rename: you're correct — a same-folder rename does NOT rotate
+
+`rename.rs:134-135`:
+```rust
+if parent != newparent
+    &amp;&amp; crate::write_ops::grant_scope::run_scope_exit_gate(fs, source_ino).is_err()
+```
+The gate only runs when `parent != newparent`. The comment is explicit: *"A same-folder rename is NOT a scope exit — the node stays in place, so no rotation."* FUSE implements both "rename" and "move to another folder" as the same `rename` syscall, so the code has to distinguish them — and it does. Renaming `SharedFolder/FileA.txt` → `SharedFolder/FileB.txt` rotates nothing. Only a **cross-folder move** trips the gate.
+
+(There's one extra case: if a move *overwrites* an existing shared destination, that destination's own removal is a scope-exit too — D-15d, `rename.rs:153-164`. But that's the overwritten victim leaving scope, not the rename itself.)
+
+### Delete: it rotates because delete is a soft-delete = move OUT of the shared scope
+
+This is the key thing your scenario is missing: **CipherBox delete is not a hard delete.** Deleting `SharedFolder/FileA.txt` moves FileA to User A's private recycle bin, and (`delete.rs:122-127`) *"the child's node/v3 read/write keys are re-sealed under the [bin plane]."* So structurally it's identical to a cross-folder move: the file object leaves the shared subtree and lands in A's private space.
+
+Why that needs rotation: keys in CipherBox are derived **top-down through the folder key** (read chain: `parent_key` unseals each child's `readKeySealed`). B holds `SharedFolder`'s read key, so B can derive FileA's key. The shared-folder read key is the **only** revocation lever — there is no per-file revocation. The scope-exit rotation preserves the invariant *"the key a recipient holds only ever covers items currently in the shared scope."* When FileA leaves that scope, rotating `SharedFolder`'s read key is how the system enforces that B's grant no longer reaches it.
+
+The D-07 commit-ordering in `delete.rs:94-97` confirms this is the intent: the rotation runs **before** the bin ref is sealed, precisely so the departing item is re-keyed with post-rotation material and can't be raced by a stale-key bin ref.
+
+### The honest caveat (where I'd refute an over-strong reading)
+
+Rotation is **forward-looking**, not a retroactive shred. It re-mints the folder key and re-seals the *remaining* children; it does **not** unpublish or re-encrypt FileA's already-published content CID (which stays pinned for bin recovery). So a recipient who *cached FileA's key before the delete* could still fetch that one old ciphertext out-of-band. What rotation guarantees is that B's held key stops matching the live tree going forward — which is the enforcement seam that makes an eventual full revocation of B sound. If your mental model was "rotation instantly destroys B's access to the deleted bytes," that part is not what it does.
+
+### Net
+
+- Same-folder rename → **no rotation** (you're right; code agrees).
+- Private delete / private move (folder never shared) → **no rotation** (pure relink, `NoRotation`).
+- Delete or cross-folder move of an item under a covering grant → **one rotation of the grant root**, because the item is leaving the shared scope and the folder key is the only revocation lever.
+
+And to tie back to my finding: none of this actually fires on a real desktop mount today, because `sent_shares` is never refreshed, so the gate fails closed (EIO) before it even reaches the private-vs-shared decision.</result>
+<usage><subagent_tokens>202633</subagent_tokens><tool_uses>87</tool_uses><duration_ms>1826495</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a3f8ac4d12b4f0571</task-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a3f8ac4d12b4f0571.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 13 desktop-e2e acceptance" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. The `sent_shares` refresh is now wired and everything is committed. Working tree is clean (the untouched debug file remains, as instructed).
+
+## Summary
+
+### On your soft-delete point
+You're partially right: the "binned file stays readable by B" *leak* only exists under soft-delete (the content CID stays pinned). But the rotation *trigger* is gated on `has_covering_grant`, not on delete mode — it fires either way, enforcing the forward revocation invariant. So I did **not** branch the gate on delete mode; soft-delete just makes the rotation load-bearing against a concrete leak rather than defense-in-depth.
+
+### What I implemented (commit `0ab0cb602`)
+The gap: nothing ever called `CipherBoxFS::refresh_sent_shares`, so the cache stayed non-authoritative and the scope-exit gate failed closed (EIO) on **every** real-mount delete/rename. Fixed by:
+
+- **`grant_scope.rs`** — added `install_sent_shares_cache` (shared D-15c poison-recovery) and `spawn_periodic_sent_shares_refresh` (30s cadence). `CipherBoxFS::refresh_sent_shares` now delegates to the shared install path.
+- **`fs.rs`** — `sent_shares` is now `Arc&lt;RwLock&lt;..&gt;&gt;` so the background task and the mounted `fs` (moved onto the mount thread) share one lock. All existing access is deref-transparent.
+- **`fuse/mod.rs` + `fuse/windows/mod.rs`** — mount-init does a bounded (5s, best-effort) authoritative seed, then spawns the 30s periodic refresh, on both FUSE and WinFsp paths. If the init refresh fails the gate keeps failing closed (safe — never a silent bypass); the periodic loop recovers and also covers folders shared *after* mount.
+
+**Security invariant preserved:** the gate only transitions from fail-closed to functioning when a `/shares/sent` refresh has genuinely succeeded. No fail-open path was introduced.
+
+### Also fixed (commit `a68b1c2ac`)
+A correctness bug in my own test: the first draft revoked Bob *before* the delete, which would have dropped the covering grant and suppressed the rotation (revoke is a hard DELETE). Corrected to keep the grant active through the delete — Bob is cut off by the rotation itself (desktop `query_grants_rooted_at` is a no-op, so it never re-wraps his grant); revoke is now cleanup.
+
+### Verification
+- `cargo check` clean: `cipherbox-fuse --features fuse` and `cipherbox-desktop --features fuse`.
+- 27 `cipherbox-fuse` tests green after the `Arc&lt;RwLock&gt;` refactor (16 `grant_scope` incl. poison-recovery, 11 `write_ops::implementation`).
+- `tsc --strict` + eslint clean on the `.mts` leg. Windows/WinFsp is CI-only on macOS — static-reviewed, identical pattern.
+
+### Still pending (Task 2, unchanged)
+The real-mount desktop-e2e run + human sign-off (`autonomous: false`) — but it's now expected to genuinely exercise rotation rather than EIO. One follow-up remains outside this plan: desktop `query_grants_rooted_at` is still a no-op, so a scope-exit rotation currently de-authorizes *all* recipients (no re-mint) — implementing that is the natural next step and will require revisiting the leg's "Bob cut off" assertion.</result>
+<usage><subagent_tokens>313298</subagent_tokens><tool_uses>142</tool_uses><duration_ms>3029932</duration_ms></usage>
+</task-notification>
+
+---
+
+push the code up to github and launch the desktop-e2e job against that branch
+
+---
+
+<task-notification>
+<task-id>bn0imdv7s</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/bn0imdv7s.output</output-file>
+<status>completed</status>
+<summary>Background command "Background-watch desktop-e2e run until complete" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+Firstly, ensure that the step 8 runs on windows, then spawn a debugger to repro this locally via headless desktop UAT.
+
+---
+
+while that is happening, could you maybe also dig in to the journal warnings that keep being logged?
+
+---
+
+<task-notification>
+<task-id>af68963bf9dbce261</task-id>
+<tool-use-id>toolu_01Gr2jHuHBXAWjRPWmuc7pcd</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/af68963bf9dbce261.output</output-file>
+<status>completed</status>
+<summary>Agent "Repro desktop-e2e Part A failure locally via UAT" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Summary
+
+**Verdict: Could not confirm the assigned bug; found a different, code-confirmed PRODUCT bug instead. STOPPING for orchestrator decision — no fix applied, no commits made.**
+
+### What I did
+
+Worked on the main checkout (no worktree), branch `feat/phase-70.1-rotation-read-plane-durability`. Built `sdk-core`/`sdk`/`core`/`crypto`/`api-client` dists, then achieved a **real FUSE-T/SMB headless mount** at `~/CipherBox` via `pnpm --filter desktop dev -- -- --dev-key &lt;hex&gt;` against the local docker stack + API (:3000). Had to clear stale `~/Library/Application Support/cipherbox/cb-journal/` state left from an earlier, unrelated debug session (an anti-rollback floor collision unrelated to Phase 70.1) to get a clean repro environment matching CI's always-fresh runner. Ran `tests/desktop-e2e/scripts/shared-scope-exit-rotation.mts` against the live mount **twice**.
+
+### Finding 1 — the assigned bug (Part A setup, `pollFindChild` "secret.txt never appeared") — NOT REPRODUCED
+
+Both local runs passed this exact phase cleanly. Desktop-log timestamps show the two-hop publish chain (secret.txt's own first IPNS publish, then the folder's children-list republish) took **~40–47s** wall-clock even on a fast, warm, dedicated machine — a substantial fraction of the 90s/18-attempt budget under ideal conditions. My best (unconfirmed) hypothesis is CI-runner speed (cold Kubo, shared vCPUs, concurrent Xvfb/WebKit/cargo load) pushing this chain past 90s — but I never observed the failure itself, so I cannot name a proven root cause for this specific symptom.
+
+### Finding 2 — a real, code-confirmed race condition later in the same Part A (the rotation itself)
+
+In run #2, the rotation failed closed with an exact log match:
+```
+JsonSidecarFloorStore: failed to persist for node 00000000-0000-4007-8007-000000000007: No such file or directory (os error 2)
+shared-scope-exit read-key rotation FAILED ... — failing closed
+scope-exit gate failed (fail-closed)
+```
+Root cause, confirmed by reading the code (not inferred):
+- `crates/fuse/src/fs.rs:82-92` — `CipherBoxFS` holds **three** independently-constructed `JsonSidecarFloorStore` instances (`high_water.generation_store`, `high_water.seq_store`, `rotation_checkpoint_store`) that the field's own doc comment confirms all point at the **same** `rotation-high-water.json` sidecar.
+- `crates/sdk/src/floor_store.rs:265-271` — every `JsonSidecarFloorStore::new()` call builds its **own** fresh `Arc&lt;Mutex&lt;()&gt;&gt;`, so these three instances never share a lock.
+- `crates/sdk/src/floor_store.rs:206-233` — `write_map_atomic_blocking` always writes to the **same deterministic** `path.with_extension("tmp")`, then `rename()`s it into place.
+
+When `rotation_checkpoint_store.persist_wrapped_key(...)` (used during scope-exit rotation) races `high_water`'s `bump_generation`/`bump_seq`/`enforce_resolved` (most plausibly triggered by the 30s background sync daemon's own resolve, which logged an unrelated IPNS change 76s earlier), the loser's `rename()` hits ENOENT because the winner already consumed the shared tmp path — an exact structural match for the observed error. This is a regression introduced by Phase 70.1's `rotation_checkpoint_store` wiring (Plans 70.1-03/70.1-09) — precisely the area your task brief flagged as suspect. Run #1 (which didn't hit this race) instead showed a secondary, unconfirmed anomaly (grant-root sequence bumped +2 instead of +1, and a revocation-bypass-shaped result) that I flagged but did not fully root-cause.
+
+### Outcome
+
+- No code changed, nothing committed. The leg script was **not** modified.
+- Environment cleaned up: desktop process killed, mount unmounted, no stray processes.
+- Debug session file: `/Users/myankelev/Code/random/cipher-box/.planning/debug/scope-exit-part-a-fail.md` (left open, not archived — contains full evidence trail, eliminated hypotheses, and the reasoning checkpoint).
+
+**Recommendation:** the `JsonSidecarFloorStore` race (Finding 2) needs an engineering fix — share one `Arc&lt;Mutex&lt;()&gt;&gt;` across every store instance pointed at the same sidecar path (or give each writer a per-call-unique temp filename) — before this leg (or real shared-scope-exit deletes in production) can be trusted. Finding 1 (the actual CI symptom) needs either a CI run with added timing instrumentation or a widened poll budget to gather direct evidence, since I could not reproduce it locally.</result>
+<usage><subagent_tokens>294351</subagent_tokens><tool_uses>75</tool_uses><duration_ms>1617764</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ac18ac4ddb23ab572</task-id>
+<tool-use-id>toolu_018v8jPfXBbisovLsnx5LGQa</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/ac18ac4ddb23ab572.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix JsonSidecarFloorStore multi-writer race" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Summary
+
+**Bug 1 — concurrent rename race (fixed, commit `1ac08bf6f`)**
+
+`crates/sdk/src/floor_store.rs`: `CipherBoxFS` holds three independently-constructed `JsonSidecarFloorStore` instances all pointing at `&lt;journal_dir&gt;/rotation-high-water.json`. Each `new()` built its own `Arc&lt;Mutex&lt;()&gt;&gt;`, so concurrent writers raced on the same deterministic `write_map_atomic_blocking` `.tmp` path (ENOENT on the loser's `rename()`, or a silent lost update).
+
+Fix: added a process-global registry (`static SIDECAR_LOCKS: OnceLock&lt;StdMutex&lt;HashMap&lt;PathBuf, Arc&lt;Mutex&lt;()&gt;&gt;&gt;&gt;&gt;`) keyed by the sidecar's normalized path (parent-dir-canonicalized + file name, since the file itself may not exist yet). `JsonSidecarFloorStore::new()` now looks up/inserts the shared lock via `shared_lock_for()`, so every instance constructed over the same path serializes through one lock — not just `Clone`s of one instance.
+
+New test: `floor_store::tests::multiple_instances_over_the_same_path_share_one_lock_and_never_lose_an_update` — constructs three separate instances (mirroring `fs.rs` exactly) and hammers concurrent `put`/`persist_wrapped_key`. Verified it **fails reliably (5/5 runs)** before the fix, reproducing the exact live-repro'd `"No such file or directory (os error 2)"` and `"refusing to write over corrupt sidecar"` errors, and **passes (5/5 runs)** after the fix.
+
+**Bug 2 — spurious journal warning (fixed, commit `55f0fd5d0`)**
+
+`crates/sdk/src/floor_store.rs`: added `pub(crate) fn is_reserved_floor_sidecar(file_name: &amp;str) -&gt; bool` recognizing `COMBINED_FILE_NAME`/`LEGACY_GENERATION_FILE_NAME`/`LEGACY_SEQ_FILE_NAME`.
+
+`crates/sdk/src/queue.rs`: both `load_all_for_vault` and `gc_failed_entries` scan loops now skip reserved floor-sidecar filenames before attempting to parse them as `JournalEntry`.
+
+New tests use a thread-local log-capture harness (`capture_log_messages`, scoped per-thread so it's safe under parallel test execution) to prove the warning is actually silenced, not just that entry counts are unaffected (they were always correct even pre-fix, via the pre-existing serde-Err-skip path — this is a pure noise fix):
+- `floor_store::tests::is_reserved_floor_sidecar_recognizes_combined_and_legacy_names`
+- `queue::tests::load_all_for_vault_skips_the_floor_sidecar_without_a_malformed_warning`
+- `queue::tests::gc_failed_entries_skips_the_floor_sidecar_without_a_malformed_warning`
+
+Verified fail-before (captured `"malformed entry"` warnings without the skip) / pass-after; each test also asserts a genuinely malformed file still warns, proving the harness itself works.
+
+**Verification**
+- `cargo test -p cipherbox-sdk`: 150 passed, 0 failed
+- `cargo test -p cipherbox-fuse --features fuse`: 107 passed (106 lib + 1 integration), 0 failed
+- `cargo fmt -p cipherbox-sdk` / `cargo clippy -p cipherbox-sdk --all-targets`: clean on both changed files (fmt drift on unrelated files `client.rs`/`registry.rs`/`state.rs`/`sync.rs` was reverted, not committed)
+
+**Double-bump watch item:** Did not observe or reproduce independently — my repro focused on the ENOENT/lost-update race per the bug report's root cause. The shared-lock fix serializes exactly the writers that could plausibly cause a spurious extra bump (two racing `put`/`persist_wrapped_key` calls), so it's a plausible side-effect fix, but I did not specifically instrument for a +2 sequence bump. Flagging per instructions rather than expanding scope.
+
+**Out of scope, left untouched:** `tests/desktop-e2e/scripts/shared-scope-exit-rotation.mts` (modified) and `.planning/debug/scope-exit-part-a-fail.md` (untracked) predate this session and are unrelated to the two bugs — not committed.
+
+Files changed:
+- `/Users/myankelev/Code/random/cipher-box/crates/sdk/src/floor_store.rs`
+- `/Users/myankelev/Code/random/cipher-box/crates/sdk/src/queue.rs`</result>
+<usage><subagent_tokens>172986</subagent_tokens><tool_uses>95</tool_uses><duration_ms>802377</duration_ms></usage>
+</task-notification>
+
+---
+
+/insights
+
+---
+
+ok 2/3 desktop e2e results are in and reporting failure in step 8 - think its time to begin debugging
+
+---
+
+<task-notification>
+<task-id>a6bb7de2969d8c939</task-id>
+<tool-use-id>toolu_01TApj4fCeoTgyguXqUufzNC</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a6bb7de2969d8c939.output</output-file>
+<status>completed</status>
+<summary>Agent "Root-cause D-16 double-publish + revocation bypass" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Root-caused. Summary for orchestrator routing:
+
+## Confirmed / Refuted
+
+Your "one shared root cause" hypothesis is **partially refuted**. There are **two distinct, deterministic defects**, and the sequence attribution in your hypothesis was **inverted** (the old-key publish is *last*, not first).
+
+## Defect 1 — the `+2` bump (proven by executable test)
+
+The rotation walk publishes the **grant-root twice** whenever the scope-root still has a child at rotation time — and it does, because the scope-exit gate (`delete.rs:97`) runs *before* the inode is removed (`delete.rs:223`), so `secret.txt` is still a child when `rotate_read_from_node` runs:
+
+- **Publish #1** — `engine.rs:1418` `rotate_one(root)` → `seal_and_publish` (`engine.rs:698-732`), grant-root under the **new** key.
+- **Publish #2** — non-empty children seeds a `ParentTrackingState` (`engine.rs:1454-1471`); after the child rotates, `complete_pending_child` (`engine.rs:2031`) fires `republish_parent` (`engine.rs:2115`) → a **second** CAS-publish of the *same* grant-root ipns, again under the **new** key.
+
+Both are new-key, so this pair is not the bypass. The e2e's "+1 / exactly one rotation publish" (`shared-scope-exit-rotation.mts:355-366`) is simply wrong for a scope-root with a child.
+
+**Proof (live, deterministic, offline):** added `covered_scope_exit_with_a_child_publishes_the_grant_root_twice` to `crates/fuse/src/write_ops/rotation_deps.rs` using the injectable `FakeTransport`. `cargo test -p cipherbox-fuse`: childless grant-root → `publish_count==1`; one-child grant-root → `publish_count==2` (child → 1). Both green.
+
+## Defect 2 — the Bob revocation bypass (the security bug; proven by code trace)
+
+**Exact origin: `crates/fuse/src/write_ops/grant_scope.rs:452-461`** — `rotate_read_on_scope_exit` matches `Ok(_)` and **discards the `RotateReadResult`** carrying the grant-root's new read key (`engine.rs:1832`), and borrows `fs` immutably, so the in-memory grant-root inode `read_key` is never refreshed. Then `delete.rs:230` `update_folder_metadata(parent)` (not suppressed for a covered exit) → `build_folder_metadata` reseals the grant-root under the **stale old** in-memory key (`fs.rs:196/211` read, `fs.rs:301` seal) → `spawn_metadata_publish` (`metadata.rs:277`) CAS-publishes **last-writer-wins** (`metadata.rs:323/341`). The grant-root's newest record ends up sealed under the pre-rotation key → Bob (byte-identical key) decrypts it again.
+
+**Same root cause or separate?** Separate from the `+2`, but the Bob-bypass *is* the "plain relink not suppressed" mechanism you described — it's just a **third** publish (old-key, lands last), not the `+2`.
+
+**Harness per-user-cache theory: RULED OUT.** `apps/api/src/ipns/ipns.controller.ts:227` / `ipns.service.ts:557` resolve is name-only (no `userId`) over a shared DB row — owner and Bob resolve identically. Owner PASS is the one timing-sensitive part (owner reads the new-key record in the synchronous-rotation window before the async old-key relink lands; Bob reads after). The end state (newest record = old-key) is deterministic.
+
+## Fix proposal (NOT applied)
+
+- **Fix A (required, security):** capture the `RotateReadResult` at `grant_scope.rs:461`, thread `&amp;mut CipherBoxFS`, and write the new `read_key`/`generation` into the grant-root inode — exactly what `engine.rs:762-769`'s own doc says the caller must do but is currently unwired. Then the still-needed relink reseals the `secret.txt`-removed child list under the new key (terminal-owner zeroization only; never log the key).
+- **Fix B (test/expectation, your call):** a scope-root with a child inherently costs 2 rotation publishes; relax the `==+1` assertion to the security invariants (pre-rotation key no longer decrypts newest + Bob cut off), and decide whether the covered-path relink is **suppressed** (safe once `republish_parent` reflects the post-delete child list — avoids a `+3` after Fix A) or coalesced.
+
+**Files touched:** `crates/fuse/src/write_ops/rotation_deps.rs` (one proof test added, no production code changed) and `.planning/debug/scope-exit-part-a-fail.md` (status → `root-caused`). Out-of-scope `cargo fmt` drift was reverted; scoped `cargo fmt -p cipherbox-fuse` / `cargo test -p cipherbox-fuse` only.</result>
+<usage><subagent_tokens>237953</subagent_tokens><tool_uses>31</tool_uses><duration_ms>870839</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a6bb7de2969d8c939</task-id>
+<tool-use-id>toolu_017ztoZ4m4ZNSmQTU5zrnbHy</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a6bb7de2969d8c939.output</output-file>
+<status>completed</status>
+<summary>Agent "Root-cause D-16 double-publish + revocation bypass" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Both commits are on the branch, working tree clean, not pushed. The `(` in the subject is only the allowed `(fuse)`/`(sdk)` scope — no parens in the description, so PR-title CI is satisfied.
+
+## Summary
+
+Implemented both fixes on `feat/rotation-read-plane-durability-and-deep-crash-resume-soundne`, verified, committed atomically, **not pushed**.
+
+### What changed
+
+**Commit 1 — `79ba5d835` `feat(sdk): add root-children override to rotation engine`**
+- `crates/sdk/src/rotation/engine.rs`: new `rotate_read_from_node_with_root_children` + private `rotate_one_inner`/`rotate_read_from_node_inner` delegating wrappers, `seal_and_publish` gains `children_override`. The scope-root is re-sealed/published with a caller-supplied post-delete child list instead of its resolved children. **Zero churn** to the ~27 existing engine test call sites (they hit the unchanged wrappers). Exported via `rotation/mod.rs` + `lib.rs`. Two new SDK tests (empty override → root published once, deleted child never rotated; survivor override → root twice + survivor once + deleted child never).
+
+**Commit 2 — `086d23a64` `fix(fuse): close scope-exit read-key revocation bypass and coalesce delete publish`**
+- **Fix A** (`grant_scope.rs`): `rotate_read_on_scope_exit` now takes `&amp;mut CipherBoxFS`, captures the `RotateReadResult`, and refreshes the grant-root inode's in-memory `read_key` in place (`refresh_grant_root_read_key` — D-09 terminal-owner, key bytes never logged). Gate split into a synchronous immutable `detect_scope_exit`/`detect_scope_exit_grant_root` half + the `&amp;mut` rotation half — preserves all D-15a/b/c fail-closed checks and resolves the borrow conflict (`fs.rt` cloned so `block_on` doesn't borrow `fs`). `run_scope_exit_gate` → `&amp;mut`.
+- **Coalescing** (`delete.rs` handle_unlink/handle_rmdir + `fs.rs` `build_scope_exit_child_override`): shallow covered delete builds the post-delete child list **without mutating state** (fail-closed: nothing removed until the rotation succeeds) and drives the engine override, then **suppresses** the plain `update_folder_metadata` relink.
+- `platform/windows/write_ops.rs`: two gate call sites → `&amp;mut fs` (Fix A reaches WinFsp; coalescing parity tracked by the existing todo).
+- `rotation_deps.rs`: coalesced-count proof test through the production adapter.
+- `shared-scope-exit-rotation.mts`: Part A count message reframed to the coalesced `+1`, security invariants made primary.
+
+### Coalescing approach chosen &amp; why
+Engine `root_children_override` (not the reorder). The reorder needed a synchronous pre-rotation relink that publishes under the **old key** (a transient revocation window) and messy fail-closed rollback. The override is race-free, all-new-key, fail-closed (compute override → rotate → only then remove the inode), and correctly re-keys surviving siblings (the stale-key relink could never do that). I scoped it to the shallow case (grant-root == deleted node's direct parent — the D-16 scenario); deep scope-exits and rename/WinFsp pass `None` and keep their relink, now resealed under the Fix-A-refreshed key.
+
+### Resulting publish count
+**Exactly 1** grant-root publish for a single-child grant-root (proven `== 1` through the production `FuseRotationDeps` adapter). Was `+2` rotation + `+1` stale-key relink. A grant-root with surviving siblings is `+2` (rotate_one + one batched republish that re-keys the sibling).
+
+### Tests
+`cargo test -p cipherbox-sdk` → 152 passed; `cargo test -p cipherbox-fuse` → 108 + 1 passed. Scoped `cargo fmt -p cipherbox-fuse -p cipherbox-sdk`; out-of-scope fmt drift reverted (only intentionally-changed files committed).
+
+### Live mount
+Not re-run this session (heavy/flaky per the prior session). Security + coalesced-count invariants proven deterministically offline via the FakeTransport/adapter tests. The live `shared-scope-exit-rotation.mts` Part A leg and WinFsp are **pending CI** — for you to dispatch.</result>
+<usage><subagent_tokens>413232</subagent_tokens><tool_uses>87</tool_uses><duration_ms>1929184</duration_ms></usage>
+</task-notification>
+
+---
+
+linux passed but failures on both windows and macos
+
+---
+
+<task-notification>
+<task-id>a6bb7de2969d8c939</task-id>
+<tool-use-id>toolu_019uh6D6YcEQd9VHqdPyPzo4</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a6bb7de2969d8c939.output</output-file>
+<status>completed</status>
+<summary>Agent "Root-cause D-16 double-publish + revocation bypass" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. Committed atomically (`b9b6e5f6b`), not pushed, tree clean (the untracked `macos-first-publish-timeout.md` is a different investigator's session, not mine).
+
+## WinFsp coalescing port — summary
+
+### WinFsp changes — `crates/fuse/src/platform/windows/write_ops.rs`
+- **`handle_set_delete`** (~L1265-1300): replaced `run_scope_exit_gate(&amp;mut fs, context.ino)` with the shared `run_scope_exit_gate_coalesced(&amp;mut fs, context.ino, parent_ino)`. `Ok(true)` → `fs.coalesced_scope_exit_relink_suppressed.insert(context.ino)`; `Ok(false)` → `.remove(...)` (clear stale); `Err(())` → `STATUS_ACCESS_DENIED` (unchanged fail-closed).
+- **`handle_cleanup`** (~L612): `let relink_suppressed = fs.coalesced_scope_exit_relink_suppressed.remove(&amp;ino);` and (~L767) wrapped `update_folder_metadata(parent_ino)` in `if !relink_suppressed { … }`.
+
+### Shared logic — factored (so they can't drift)
+- New `grant_scope::run_scope_exit_gate_coalesced(fs, child_ino, parent_ino) -&gt; Result&lt;bool, ()&gt;` (`crates/fuse/src/write_ops/grant_scope.rs`) — the *single* implementation of the coalesced gate. The fuser `handle_unlink`/`handle_rmdir` were **refactored** to call it (their inline blocks removed), and WinFsp `set_delete` calls the same function. Same detect → shallow-check → post-delete override → rotate → suppress-signal logic on both platforms.
+- The one platform difference is the suppress-signal *storage*, forced by WinFsp's split delete: fuser carries `relink_suppressed` in a local var (gate + relink in one call); WinFsp carries it on a new `CipherBoxFS.coalesced_scope_exit_relink_suppressed: HashSet&lt;u64&gt;` (`set_delete` records → `cleanup` consumes). Field added + initialized at all 3 construction sites (`test_support.rs`, `apps/desktop/src-tauri/src/fuse/mod.rs`, `apps/desktop/src-tauri/src/fuse/windows/mod.rs`).
+
+### Structural parity (static analysis; winfsp-sys can't build on macOS)
+- Gate/rotation/coalescing: **identical** (shared function).
+- Relink suppression: identical (`if !relink_suppressed`).
+- **Fix A** preserved (unchanged — rotation refreshes the grant-root inode key in `set_delete`).
+- **D-15d bin-ref ordering** preserved *by construction*: the rotation runs in `set_delete`, D-07 bin refs are built later in `cleanup`, so they're sealed under the post-rotation (Fix-A-refreshed) parent key.
+- Write/read-plane separation and fail-closed unchanged.
+- Net effect: a shallow covered scope-exit delete publishes the grant-root **exactly once** on Windows → matches the `.mts` `=== +1` (no test change needed, as you noted).
+
+### Fuser regression test
+`cargo test -p cipherbox-fuse` → **108 passed** (+1 integration), no regressions, no new warnings (only the pre-existing `current_sequence_number is never read` mock-field warning). `cargo fmt -p cipherbox-fuse` applied; out-of-scope drift reverted.
+
+### Todo disposition — narrowed, not closed
+`.planning/todos/pending/2026-07-08-winfsp-d15d-gate-ordering-parity.md` retitled and narrowed: the **delete path is CLOSED** (coalescing parity done via the shared function; D-15d bin ordering satisfied by the split). The **remaining gap** is WinFsp `handle_rename`: the overwritten `dest_ino` is removed *ungated* (~L1147, no scope-exit gate — fuser gates it), plus replacement-validity-before-gating order. I left rename untouched (out of scope for this delete-leg fix; rename isn't the D-16 leg).
+
+**Windows CI is the authoritative verification** — please dispatch. Not pushed.</result>
+<usage><subagent_tokens>487826</subagent_tokens><tool_uses>126</tool_uses><duration_ms>765905</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a46221ae4aaf454a4</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a46221ae4aaf454a4.output</output-file>
+<status>completed</status>
+<summary>Agent "Investigate macOS first-publish IPNS timeout" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Investigation complete. Diagnosis written to `/Users/myankelev/Code/random/cipher-box/.planning/debug/macos-first-publish-timeout.md`. No code changed.
+
+## Verdict: genuine trigger BUG, not slowness
+
+The folder's *first* IPNS publish (empty, seq 1) lands fine at mkdir. The failure is that the folder's *second* publish — the child-add republish that adds `secret.txt` to the folder's children — **is never triggered** on the macOS runner. It is not slow; it never fires. (This also refutes the task's proposed "first-publish resolve-error" theory: `resolve_sequence` falls back to the cache and mkdir seeds seq 1 via `record_publish(name,1)`, so a second publish would bump to seq 2 regardless of propagation — the publish just never happens.)
+
+## Mechanism (two necessary conditions, both hold on macOS CI)
+
+1. **FUSE-T defers close/release.** `handle_release` for `secret.txt` fired at 23:27:04Z — ~40-47s after the write (~23:26:20Z) and ~39s after the test's *last* mount I/O (nudge at ~23:26:25Z). On Linux fuser, release is prompt at `close()`, so the enqueue precedes the nudge that drains it.
+2. **The parent-folder republish is edge-triggered with no wall-clock backstop.** `handle_release` enqueues it via `fs.queue_publish(parent_ino, true)` (`crates/fuse/src/read_ops.rs:810`). `flush_publish_queue` (`crates/fuse/src/fs.rs:501`, debounce 1.5s / safety-valve 10s) is the only code that builds+spawns the folder publish, and it is reachable **only** from `drain_upload_completions` (`fs.rs:483`), whose only non-test callers are inside FUSE op handlers (`read_ops.rs:129/272/694`, `dir_ops.rs:21`, windows/*). The mount is `fuser::mount2` (`apps/desktop/src-tauri/src/fuse/mod.rs:409`) — a foreground, op-driven session with no periodic pump.
+
+Net: on macOS the release lands *after* the test stops touching the mount (it then only polls IPNS directly). No FUSE op arrives → the queue never drains → the folder stays at its empty seq-1 record → `secret.txt` never appears → 200s timeout.
+
+Contrast: `mkdir` republishes its parent **directly** in a spawned thread (`crates/fuse/src/write_ops/implementation/mkdir.rs:250`, "Parent metadata published after mkdir"), so it is immune — which is exactly why `SharedGrant` appeared under root but `secret.txt` never appeared under the folder.
+
+## Evidence (log-deterministic)
+
+- macOS: the folder's own ipnsName appears in the entire log **exactly twice** — the mkdir publish and the test's error line. **No** "Background node/v3 publish succeeded" or "Background metadata publish failed" for it. **163s of zero FS activity** after the delayed release (23:27:04Z → death 23:29:47Z).
+- Linux (PASS): both `pollFindChild` calls hit at attempt 1 (0.0s), 23:19:12; whole leg 57s; Rust log not even interleaved.
+- The "IPNS name not found" / "no cached sequence" flood the brief mentioned references **other** folders' names from earlier steps, not our folder — a red herring for this failure.
+
+## Severity: latency, not data loss
+
+`handle_release` keeps the file's journal entry until the parent publish is confirmed; next-mount replay is the authoritative cleanup (`read_ops.rs:921-928`). Real users constantly poke the mount, so the drain fires within seconds in practice — which is why the prior session's local headless run passed in ~40-47s and the isolated CI runner (no Finder/Spotlight, test goes silent) does not. A local macOS repro is therefore unlikely to reproduce and would not refute the diagnosis.
+
+## Recommendation
+
+- **(iii) Raising the macOS poll budget — do NOT.** Ruled out: the republish is never attempted across 163s; no budget works.
+- **(ii) Pragmatic / unblock CI now:** make the Part A poll drive mount activity — have `pollFindChild(grantRoot, "secret.txt")` also `nudge(folder)` each iteration. That generates the FUSE op that drains the queue and flushes the folder publish; it mirrors real mount usage rather than masking the gap (better than the suite's existing "optional on macOS — timed out" best-effort skip).
+- **(i) Primary / product fix:** add a wall-clock backstop for the publish-queue drain so a queued parent republish fires without a subsequent FUSE op — e.g. a small background thread at mount that periodically `stat()`s the mount root (drives the existing drain on the FS thread, no refactor; `fuser::mount2` moves `fs` so a shared-timer needs care), or chain the parent republish off upload-completion (mirror mkdir's direct-publish model).
+
+Recommended: ship (ii) to make the leg deterministic now **and** file (i) as the real product fix — they are complementary. This finally root-causes the prior session's open "Part A setup timeout — probably CI slowness" question, and is a **distinct** bug from that session's `+2`/Bob-bypass and `JsonSidecarFloorStore` findings.</result>
+<usage><subagent_tokens>158164</subagent_tokens><tool_uses>31</tool_uses><duration_ms>810851</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a46221ae4aaf454a4</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a46221ae4aaf454a4.output</output-file>
+<status>completed</status>
+<summary>Agent "Investigate macOS first-publish IPNS timeout" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Both fixes are implemented, tested, and committed on `feat/rotation-read-plane-durability-and-deep-crash-resume-soundne` (on top of HEAD `b9b6e5f6b`). Not pushed.
+
+## What I changed
+
+**Fix 1 — harness nudge (commit `8e2080221`), `tests/desktop-e2e/scripts/shared-scope-exit-rotation.mts`**
+- `pollFindChild` gains an optional `nudgePaths: string[] = []` (mts:144) and calls `nudge(...nudgePaths)` at the start of every poll iteration (mts:154-155).
+- The two "file-under-folder" call sites — Part A `secret.txt` (mts:~282) and Part B `private.txt` (mts:~455) — now pass `[join(args.mount, &lt;folder&gt;)]`. Each poll iteration issues statSync+readdirSync on the folder → a FUSE op that drains the publish queue, mirroring a real client still using the mount. Folder-under-root polls keep the default `[]` (mkdir republishes root directly). No assertion weakened.
+
+**Fix 2 — product backstop (commit `313ebf178`), `apps/desktop/src-tauri/src/fuse/mod.rs`**
+- `PUBLISH_PUMP_INTERVAL_SECS = 2` (mod.rs:72).
+- A `fuse-publish-pump` background thread (mod.rs:434) spawned alongside the mount thread, waking every 2s to `std::fs::symlink_metadata(mount_root/.cb-pub-pump-&lt;n&gt;)` with a fresh name each tick (mod.rs:446).
+- Bounded to mount lifetime: mount thread flips a shared `Arc&lt;AtomicBool&gt;` false the instant `fuser::mount2` returns (mod.rs:461,464), both clean-unmount and error arms.
+- `crates/fuse/src/fs.rs:969` — new `publish_queue_backstop_tests` (3 tests).
+
+## Fix-2 design chosen and why
+
+**Option 2 (background pump), not option 1.** `fs` is *moved into* `fuser::mount2` and owned solely by the FS thread; upload completions are drained *inline* on that thread (no background consumer task exists). So option 1 ("chain the republish off upload-completion") would require building folder metadata off-thread → a risky `fs`-sharing refactor with a real data-race surface. The pump instead drives the *existing* drain by generating a FUSE op — zero new `fs` sharing, no race. I verified `handle_lookup`/`handle_getattr` both call `drain_upload_completions` → `flush_publish_queue`. I use a **unique, never-seen name** each tick because it's uncacheable by the SMB negative-lookup cache, so it reliably reaches our handler through FUSE-T (a fixed root-`getattr` risks being served from the SMB attribute cache).
+
+## How I validated (live vs test)
+
+**Deferred the live idle-mount run to CI, with justification** (the sanctioned fallback). The local stack is up (kubo/redis/someguy/postgres/tee-worker healthy, API :3000 v0.44.1, FUSE-T installed), but a live idle-mount test on *this interactive machine* is **non-diagnostic**: background macOS processes (mds/Spotlight/Finder) issue spontaneous FUSE ops on `~/CipherBox` that drain the queue regardless of the pump — which is precisely why the prior session's local Part A **passed without any pump** and only the isolated CI runner failed. I can't guarantee true idleness locally, nor force FUSE-T to defer release like the loaded CI runner, so a local pass would prove nothing.
+
+Instead I validated the two things that *are* determinable offline:
+1. **Drain contract** — 3 new deterministic tests: one drain flushes a queued republish past the 1.5s debounce (`single_drain_flushes_past_debounce`) and past the 10s safety valve even with a stuck upload (`single_drain_flushes_stuck_upload_past_safety_valve`); a within-debounce entry is NOT flushed (`fresh_entry_is_not_flushed_within_debounce`).
+2. **Poke reaches our FS through FUSE-T** — the probe is the *same class of op* as Fix 1's `nudge()` and every existing desktop-e2e re-resolution nudge, all proven to reach our handlers across the passing suite; it differs only by running on a background thread (transparent to FUSE-T) and using a more cache-proof unique name.
+
+Residual risk owned by CI: whether smbfs could serve a fresh-unique-name negative lookup from a dir-enumeration cache (believed no). If it ever did, **Fix 1 alone still greens D-16 deterministically** and Fix 2 is harmless defense-in-depth. The isolated CI-macOS leg is the end-to-end arbiter.
+
+## Latency bound
+
+On a fully idle mount, a queued republish publishes within **~2–3.5s** of the upload completing: ≤2s poke interval + the ≥1.5s debounce, with the 10s safety valve as the hard ceiling.
+
+## Test results
+
+- `cargo test -p cipherbox-fuse` → **111 passed / 0 failed** (was 108; +3 backstop tests); coalescing/revocation suite green.
+- `cargo check -p cipherbox-desktop` → **0 errors** (default `fuse` feature).
+- `cargo fmt -p cipherbox-fuse -p cipherbox-desktop` applied; the resulting out-of-scope fmt drift in ~15 pre-existing files was reverted with `git checkout --` (only the 3 intended files staged), per the known "cargo fmt strands drift" hazard.
+- `.mts` tsx transpile+load reaches the expected `TEST_SECRET` runtime guard (imports resolve, no syntax error); no separate tsc gate for these scripts.
+
+Working tree clean; two atomic commits; debug file `/Users/myankelev/Code/random/cipher-box/.planning/debug/macos-first-publish-timeout.md` updated to `status: fixed`. Awaiting your push + CI dispatch.</result>
+<usage><subagent_tokens>256730</subagent_tokens><tool_uses>80</tool_uses><duration_ms>1009883</duration_ms></usage>
+</task-notification>
+
+---
+
+are the macos changes made meant to also resolve the failing `Cross-Client Sync Tests - test 5` that has been failing for a while?
+
+---
+
+yes I think a todo for this is in order - both test 5 & 7 are skipped and this should be solved.
+
+---
+
+<task-notification>
+<task-id>bkl6xvhxv</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/bkl6xvhxv.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch run 28984795137, dump D-16 breakdown all platforms" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+ok all 3 platforms passing by the looks of it
+
+---
+
+once the verifier is finished, please kick off the /ship-phase 70.1 flow
+
+---
+
+<task-notification>
+<task-id>ac14f573c88174bcd</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/ac14f573c88174bcd.output</output-file>
+<status>completed</status>
+<summary>Agent "Phase 70.1 goal verification" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Verification complete.
+
+## Verification Complete — Phase 70.1
+
+**Overall verdict: Goal achieved — YES** (with one pending verification step, not a code gap)
+**Status:** human_needed
+**Score:** 7/8 success criteria fully verified, 1 present-but-behavior-unverified
+**Report:** `/Users/myankelev/Code/random/cipher-box/.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-VERIFICATION.md`
+
+### What I verified against the actual code (not SUMMARY claims)
+- **All 13 plans merged** on this branch (git log 70.1-01 → 70.1-13).
+- **SC#1/2/3 (TS + Rust engine parity):** depth-aware dirty-frontier consumption confirmed in both; the depth-3 **decrypt-before-dirtiness-check** fix is real in both — `engine.ts:887-903` ("WITHOUT decrypting anything first") and `engine.rs:1037-1050` ("No decrypt attempted for a dirty edge"). `DirtyNodeUnrecoverableError`/`RotationError::DirtyNodeUnrecoverable` present.
+- **SC#4 (floor plane):** `floor_store.rs` fails closed on both corrupt sidecar and non-NotFound read error; single atomic combined record; the per-path shared-lock race fix is covered by a passing test (`multiple_instances_over_the_same_path_share_one_lock`).
+- **SC#5:** `client.ts:1842-1858` reconcile fetches the CID and unseals to recover the *actual* generation, feeds `enforceResolved` — explicitly not the cached `nodeGeneration`.
+- **SC#7 (Rust twin):** full parity + recursive `verify_subtree_clean` + missing-root-as-dirty + FakeDeps depth-3 crash-resume/ECIES-repair — all green.
+- **SC#8:** production `RotationDeps` adapter, D-15a/b/c fail-closed, **Fix-A `refresh_grant_root_read_key`** (revocation-bypass closed), coalesced gate, D-15d ordering in delete/rename, WinFsp delete parity. The **D-16 leg is GREEN on macOS+Linux+Windows in CI run 28984795137** (verified via `gh run view`), and the `.mts` asserts all four conditions.
+
+**Scoped tests I ran (all green):** cargo `cipherbox-sdk` 152/0, cargo `cipherbox-fuse` 112/0, sdk-core vitest 71, sdk vitest 71.
+
+### The one true open item (not a gap)
+- **SC#6:** The depth-3 fan-out≥2 (Test 5) + multi-dirty-edge (Test 6) sdk-e2e fixtures exist, assert all 4 D-10 properties, and pass static checks — but the phase's own **anti-vacuous gate is the live-stack run**, which I'm constrained from executing (no docker stack), and `ci.yml`'s `sdk-e2e` job triggers only on PR-to-main (no PR open yet, so it hasn't run). The Rust twin's identical invariant passes at unit tier, so confidence is high — this is a pending test execution, not missing code. **Action to close:** run `pnpm --filter sdk-e2e test -- rotation-crash-safety` against a live stack, or open the PR so CI runs it as a required gate.
+
+### Accepted deferrals (tracked as todos — not phase-blocking)
+1. ROT-04 desktop `query_grants_rooted_at` re-mint no-op — `2026-07-08-desktop-query-grants-rooted-at-remint-noop.md`
+2. WinFsp `handle_rename` ungated-dest D-15d parity — `2026-07-08-winfsp-d15d-gate-ordering-parity.md`
+3. macOS FUSE-T cross-client cache invalidation — `2026-07-09-macos-fuse-t-cross-client-sync-invalidation.md`
+
+Routing recommendation: proceed to phase completion once the SC#6 sdk-e2e live gate runs green (it will run automatically on PR open).</result>
+<usage><subagent_tokens>112571</subagent_tokens><tool_uses>45</tool_uses><duration_ms>440558</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bcmyrhqe1</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/bcmyrhqe1.output</output-file>
+<status>completed</status>
+<summary>Background command "Run full sdk-e2e suite (SC#6 gate)" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aa9e14058eb21dd4f</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/aa9e14058eb21dd4f.output</output-file>
+<status>completed</status>
+<summary>Agent "Phase 70.1 simplify review" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I did a static sweep of the phase's source (non-test, non-planning) files, verifying every new public symbol against all callers across the workspace (crates, packages, apps/desktop, apps/web, .mts scripts, tests). Here is what I found.
+
+## Summary
+
+The diff is **essentially clean**. Everything I checked that looked like a candidate for dead code turned out to be wired up:
+
+- `rotation_deps.rs` — `RotationTransport` seam has two real implementors (`ApiClientTransport` prod + `FakeTransport` test), `FuseRotationDeps`/`find_grant_root_state` used by `grant_scope.rs`. Not one-caller over-engineering.
+- `grant_scope.rs` — `AncestorChain`, `install_sent_shares_cache`, `spawn_periodic_sent_shares_refresh`, `SENT_SHARES_REFRESH_INTERVAL` all consumed by `fs.rs` + `apps/desktop` (mod.rs and windows/mod.rs).
+- `floor_store.rs` — every new helper (`fold_legacy_two_file_shape`, `write_map_atomic_blocking`, `normalize_lock_key`, `shared_lock_for`, `load_map_or_refuse_corrupt`, `map_persist_result`, `FloorField`) has internal callers.
+- New TS exports (`DirtyNodeUnrecoverableError`, `KeyCheckpointCallbacks`, `CombinedFloorRecord`, `keyCheckpoint`) all consumed by `client.ts` / `types.ts` / apps.
+- `rotate_read_from_node` / `rotate_read_from_node_with_root_children` are two thin wrappers over a shared `_inner`; both wrappers have real production callers (the second in `grant_scope.rs`). Legit, not redundant.
+
+## Safe to apply now (tiny, behavior-preserving)
+
+**1. `foldLegacyStoresIntoCombined` is exported but only used internally — drop the `export`.**
+`packages/sdk/src/state/rotation-idb-store.ts:109`
+It's referenced exactly once, at line 179 (inside `openRotationDB`'s `onupgradeneeded`), with no external or test consumer (the idb-store test only imports `createIndexedDbHighWaterStore` and `openRotationDB`). Making it module-private is behavior-preserving. Its sibling `openRotationDB` *is* exported and tested, so the `export` here may have been added for parity — but nothing currently uses it. **Confidence: medium.**
+
+## Larger refactor — defer to todo (optional, low value)
+
+**2. Duplicated floor-sidecar skip block in `queue.rs`.**
+`crates/sdk/src/queue.rs:425–433` (in `load_all_for_vault`) and `539–547` (in `gc_failed_entries`)
+The same 8-line guard —
+```rust
+if path.file_name().and_then(|f| f.to_str())
+    .is_some_and(crate::floor_store::is_reserved_floor_sidecar) { continue; }
+```
+— is copy-pasted verbatim in both scan loops. A one-line private helper like `is_floor_sidecar_path(&amp;path) -&gt; bool` would collapse it. It's genuinely duplicated, but trivial and defensive, so the payoff is marginal. **Confidence: high that it's duplication; low that it's worth changing.**
+
+Nothing else rose to the bar. I did **not** flag the TS/Rust engine mirroring, the fail-closed `is_authoritative`/`reached_root` branches, the advisory no-op `persist_job`, or the documented ROT-04/Phase-72 deferral no-ops — those are intentional per your exclusion list.</result>
+<usage><subagent_tokens>66049</subagent_tokens><tool_uses>28</tool_uses><duration_ms>230071</duration_ms></usage>
+</task-notification>
+
+---
+
+any idea why I have 11GB of ram used by 2 rust-analyzer processes  [Image #1][Image #2]
+
+---
+
+<task-notification>
+<task-id>ab9b889d6b3bb1237</task-id>
+<tool-use-id>toolu_01XxEPPNoE4bcTSa9QtiJTd9</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/ab9b889d6b3bb1237.output</output-file>
+<status>completed</status>
+<summary>Agent "Phase 70.1 security audit" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Report written. Root `SECURITY.md` untouched; phase file left untracked.
+
+## Result: SECURED
+
+**Core invariants confirmed: 4/4** · **Threats resolved: 33/33** (30 mitigate CLOSED + 3 accept) · **threats_open: 0** · ASVS L2, block_on high · static analysis only.
+
+### The four crux invariants (all upheld in code)
+1. **Scope-exit cuts off a revoked reader** — `crates/fuse/src/write_ops/grant_scope.rs:556-579` `refresh_grant_root_read_key` does `read_key.copy_from_slice(result.read_key.as_slice())` in place on the grant-root inode, only after a successful `Some(result)` rotation (`:526-528`). Old key is dead; a later local relink reseals under the new key. Log sites emit only public `ipns`/`child_id`, never key bytes.
+2. **Zeroization terminal-owner-only** — Rust `RotateReadResult.read_key` is `Zeroizing` (`crates/sdk/src/rotation/engine.rs:809-810`); `grant_scope.rs:553-554` explicitly does not zero the result (owner self-zeroes on drop). TS engine has 30+ terminal-owner `fill(0)`/"do NOT zero" guards; recovered `readKeyPrime` zeroed only at ParentTrackingState teardown (`engine.ts:1713-1718`).
+3. **No key logged/persisted-plain/sent to server** — ECIES(secp256k1) wrap/unwrap (`crates/crypto/src/ecies.rs`), host-local wrap at `rotation_deps.rs:251`, ciphertext-only sidecar/IDB, "MUST NOT be routed through any API endpoint." Grep for key material in log statements across all changed rotation/floor/gate files: zero hits.
+4. **Floor plane fails closed on corrupt/unreadable sidecar** — `floor_store.rs:63,180-215,473-477`: parse-error and any non-`NotFound` read-error → `Corrupt` → `get` returns `i64::MAX` floor, which forces `high_water.rs:280-289` regression check to reject; `put` refuses to overwrite corrupt state with an `Err`.
+
+The D-15 fail-closed gates (a-authoritative cache, b-complete ancestor walk, c-poison-lock→EIO, d-validate-before-gate) all surface `Err`/EIO rather than a silent no-rotation. WinFsp shares the identical gate. 409 CAS conflict materializes a real remote; IPNS resolve is signature-verified with `VerifyError::Invalid` fail-closed.
+
+### One non-blocking note (no security impact)
+T-70.1-SC's `accept` rationale says "zero new dependencies," but the diff adds two **test-only devDependencies**: `@noble/secp256k1@^2.2.3` (already a workspace dep, promoted for unit tests) in `packages/sdk-core/package.json` and `fake-indexeddb@^6.2.5` (new, standard IDB test polyfill) in `packages/sdk/package.json`. Zero new production/runtime deps and zero new Rust crates. The wording is imprecise; the security-relevant claim (no new shipped-runtime supply-chain surface) holds. Documentation-accuracy only — does not block.
+
+No genuine in-scope vulnerability found.
+
+Report: `/Users/myankelev/Code/random/cipher-box/.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-SECURITY.md` (untracked, ready for the orchestrator to commit).</result>
+<usage><subagent_tokens>126831</subagent_tokens><tool_uses>49</tool_uses><duration_ms>526649</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bqgfdl771</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/bqgfdl771.output</output-file>
+<status>completed</status>
+<summary>Background command "CodeRabbit CLI review vs main (committed)" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a26bf5aaea3bc623f</task-id>
+<tool-use-id>toolu_01EYqvM21PVqrqCgUwCfC2jm</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/a26bf5aaea3bc623f.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify 3 CodeRabbit critical/major findings" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All three findings verified against the actual code. Here are the verdicts, ranked by real severity.
+
+---
+
+## FINDING 6 — CONFIRMED (MAJOR, highest practical severity)
+
+`build_scope_exit_child_override` fails OPEN on a per-child basis, diverging from its fail-closed sibling `build_folder_metadata`, and the resulting override REPLACES (not merges) the grant-root's published child list.
+
+Decisive evidence:
+- `crates/fuse/src/fs.rs:373-375` — child inode not found → `continue` (silently drops the child). Sibling `build_folder_metadata` treats the identical case as fatal: `crates/fuse/src/fs.rs:238` `.ok_or_else(...)?`.
+- `crates/fuse/src/fs.rs:408-413` — `build_child_refs` error → `log::warn` + skip (drops the child). Sibling propagates it: `crates/fuse/src/fs.rs:279` `.map_err(...)?`.
+- The override is a REPLACE, not additive: `crates/sdk/src/rotation/engine.rs:733` `children_override.map_or_else(|| node_children(node), ...to_vec)` — when `Some`, the root is resealed/published with THIS list, discarding its currently-published children.
+- Caller feeds it straight through with no error channel: `grant_scope.rs:730` `Some(fs.build_scope_exit_child_override(...))` → `rotate_read_from_node_with_root_children` (`engine.rs:1472`) → `root_children_override` → `rotate_one_inner`. Return type is `Vec`, so a short list is indistinguishable from a correct one.
+
+CodeRabbit's framing is partly wrong: the "missing/non-folder PARENT → empty Vec" paths (`fs.rs:352`, `fs.rs:365`) are UNREACHABLE, because the caller only enters this branch when `parent_ipns` is non-empty and equals `grant_root_ipns_name` (`grant_scope.rs:719-729`), which already proves the parent is present and Root/Folder. The REAL defect is the per-child fail-open (child-not-found + build_child_refs error).
+
+Concrete failure scenario:
+- Grant-root R (shared folder) has children [A(folder), B(file), secret.txt(file)]. Owner deletes secret.txt (covered shallow scope-exit; R is the direct parent → coalesced path).
+- `build_scope_exit_child_override(R, secret.txt)` iterates [A, B]; `build_child_refs` errors on B (or B's inode is momentarily absent from the table) → B is warn-logged and skipped. Override = [A].
+- Rotation republishes R under the new read key with children [A] only. B is dropped from R's read-plane child list — B's IPNS record still exists but is unreferenced/orphaned, invisible to every reader including the owner. Rotation returns `Ok`, `run_scope_exit_gate_coalesced` returns `Ok(true)` — silent data loss, no EIO.
+
+Minimal fix: change `build_scope_exit_child_override` to return `Result&lt;Vec&lt;SealedChildRef&gt;, String&gt;`, propagate the child-not-found and `build_child_refs` errors (mirror `fs.rs:238`/`:279`), and error on missing/non-folder parent instead of empty-vec. `run_scope_exit_gate_coalesced` then maps the Err to EIO (fail closed), matching the phase invariant.
+
+---
+
+## FINDING 7 — CONFIRMED as a logic defect, but currently DORMANT (CodeRabbit's CRITICAL overstates live reachability)
+
+The `is_dirty` signal IS dropped, and the Skipped-branch convergence check genuinely mis-handles a missing root — but it is unreachable through the current production wiring.
+
+Decisive evidence:
+- `crates/sdk/src/rotation/engine.rs:1501-1503` — `verify_subtree_clean(...).await?.frontier` keeps ONLY `frontier`, discarding `is_dirty`.
+- `engine.rs:1133-1141` — a missing root returns `{ is_dirty: true, frontier: [] }`. So a missing root yields an empty frontier.
+- `engine.rs:1587-1602` — the Skipped branch reuses `pre_rotation_frontier` and, on `frontier.is_empty()`, marks the job `Complete` and returns `Ok(None)` — WITHOUT consulting `is_dirty`. A missing root here would be mis-marked converged. (Note the dirty-resume path at `engine.rs:1608` DOES fail closed via `.ok_or_else`, but the empty-frontier short-circuit at 1595 returns before reaching it.)
+- The prior verifier's "missing-root-as-dirty covered" test at `engine.rs:3410` exercises `verify_subtree_clean` DIRECTLY (`3417`), NOT the Skipped consumer. No test drives a resume-Skip with a missing root — the consumer gap is genuinely uncovered.
+
+Reachability (why it is dormant right now): the Skipped branch is reached only when `rotate_one_inner` returns `Skipped`, which for a missing root requires the fast idempotency path `engine.rs:419-423` (`root_node_id ∈ job_record.completed_node_ids`) — i.e., a RESUMED job. But the FUSE deps do not persist/reload jobs: `crates/fuse/src/write_ops/rotation_deps.rs:223-230` `persist_job` is an explicit no-op logger, and every scope-exit builds a fresh `RotationJobRecord::new(root_node_id)` (`grant_scope.rs:494`) with empty `completed_node_ids`. On a fresh job the root can never return `Skipped`; a missing root instead fails closed with an error at `engine.rs:425` (propagated via `?` at `engine.rs:1517`). So the mis-completion is unreachable in current production wiring.
+
+Verdict: real soundness defect in the public engine's resume path (the exact "missing/unresolvable root must be DIRTY, fail closed" invariant is violated once resume is wired), but NOT a live CRITICAL — it is latent until a durable `persist_job`/resume path repopulates `completed_node_ids`. Phase 70.1 is explicitly hardening this resume path, so it is worth fixing now.
+
+Minimal fix: capture the full `VerifySubtreeOutcome` at `engine.rs:1501` (keep both fields); in the Skipped branch change `if frontier.is_empty()` to `if frontier.is_empty() &amp;&amp; !outcome.is_dirty` — so an `is_dirty &amp;&amp; empty` (missing-root) outcome routes into the dirty-resume re-resolve (which already fails closed at `engine.rs:1608`) instead of marking `Complete`.
+
+---
+
+## FINDING 3 — REFUTED
+
+The premise (borrowed, non-copied buffers at the seam) is TRUE, but the consequence (engine zeroes live state) does NOT occur — so there is no real defect.
+
+Decisive evidence:
+- Client passes BORROWED references, not copies: `packages/sdk/src/client.ts:2052-2054` returns `folder.ipnsKeypair.publicKey`/`.privateKey`/`folder.writeKey` directly (no `new Uint8Array(...)`); `client.ts:2072-2073` passes `this.config.vaultKeypair.publicKey`/`.privateKey` directly.
+- But the engine's zeroization is terminal-owner-only and targets ONLY engine-derived/minted buffers. The COMPLETE `.fill(0)` set in `packages/sdk-core/src/rotation/engine.ts` (lines 532, 786, 943, 1200, 1205, 1532, 1549, 1592, 1671, 1948, 2265, 2446-2447, 2489, 2496, 2552, 2573-2574, 2632, 2673) zeroes: unsealed `node.content.fileKey`, derived `childReadKey`/`childWriteKey` (from `unsealChildReadKey`/`unsealChildWriteKey`, `engine.ts:2416-2432`), minted `readKeyPrime`, `parentOldReadKey` (a `new Uint8Array(readKey)` copy, `engine.ts:1639`), and freshly-minted `newKeypair.privateKey`/`newWriteKey` (rotateWrite). NONE zero the borrowed `ipnsKeypair.publicKey/privateKey`, `folder.writeKey`, or `vaultKeypair.*`.
+- The borrowed IPNS keypair flows into publish/sign fields (`ipnsPrivateKey`/`ipnsPublicKey`, `engine.ts:1686-1687`, `2020-2021`) and `writeKey` into `sealNode` (`engine.ts:1101-1102`) — none of which appear in the `.fill(0)` set. `ownerPrivateKey` is explicitly documented never-zeroed (`engine.ts:1713`) and only feeds `unwrapKey` (`engine.ts:1742`); `ownerPublicKey` only feeds `wrapKey` (`engine.ts:1082`).
+
+Verdict: no field passed by borrowed reference is zeroed by the engine, so the finding does not manifest. It is a latent fragility only — a defensive `new Uint8Array(...)` copy at the seam would harden against a future engine change that zeroed an IPNS/owner/write input — but as the code stands it is not a defect. REFUTE.
+
+---
+
+Severity ranking: Finding 6 (real, reachable now, silent read-plane data loss) &gt; Finding 7 (real logic defect, dormant until resume is wired; CodeRabbit's CRITICAL overstates current reachability) &gt; Finding 3 (refuted; latent hardening opportunity, not a defect).
+
+Relevant files: `/Users/myankelev/Code/random/cipher-box/crates/fuse/src/fs.rs`, `/Users/myankelev/Code/random/cipher-box/crates/fuse/src/write_ops/grant_scope.rs`, `/Users/myankelev/Code/random/cipher-box/crates/fuse/src/write_ops/rotation_deps.rs`, `/Users/myankelev/Code/random/cipher-box/crates/sdk/src/rotation/engine.rs`, `/Users/myankelev/Code/random/cipher-box/packages/sdk/src/client.ts`, `/Users/myankelev/Code/random/cipher-box/packages/sdk-core/src/rotation/engine.ts`.</result>
+<usage><subagent_tokens>74805</subagent_tokens><tool_uses>24</tool_uses><duration_ms>420957</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b3emgr79f</task-id>
+<tool-use-id>toolu_01E8JmxYPD4Ecr8VN578YftW</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/b3emgr79f.output</output-file>
+<status>failed</status>
+<summary>Background command "Background poll: wait for CodeRabbit + Greptile reviews to settle" failed with exit code 1</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bwc3mq0w6</task-id>
+<tool-use-id>toolu_01Yc28Do26zqcdLh2YoxgRuh</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/bwc3mq0w6.output</output-file>
+<status>completed</status>
+<summary>Background command "cargo check fuse after owner_private_key Zeroizing change" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ab51e297cbf3eeece</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/ab51e297cbf3eeece.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify checkpoint-GC-ordering finding" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Verification complete. I have decisive evidence from both twins.
+
+## VERDICT
+
+**TypeScript: CONFIRMED** — real crash-window data-loss bug. **Rust twin: CORRECT (defers properly)**. This is a **TS/Rust parity divergence** where the TS engine is missing the deferral machinery the Rust twin already implements. CodeRabbit read it correctly.
+
+---
+
+### TS evidence (`packages/sdk-core/src/rotation/engine.ts`)
+
+The GC is **immediate**, not deferred:
+
+- **`repairDirtyNode`, line 1791** → `decrementPendingAndMaybeRepublish(parentState, ...)` — for `pendingChildCount &gt; 1` this only decrements (e.g. 2→1) and does **not** republish. `updateFolderMetadataAndPublish` fires **only** when the counter hits 0 (`decrementPendingAndMaybeRepublish`, line 1578).
+- **Line 1796** → `await keyCheckpointCallbacks!.deleteWrappedKey(item.childPubId)` runs unconditionally right after, GC-ing the checkpoint even though the parent mirror was only updated **in memory** (line 1783), never durably published.
+- The comment at 1794-1795 ("GC only AFTER the parent mirror... committed, plus any triggered republish") is **misleading**: for a non-final child there IS no triggered republish, so "committed" means in-memory only.
+- **`ParentTrackingState`, lines 1364-1381** — struct ends at `pendingChildCount: number;` with **no `pendingCheckpointNodeIds` field**. Line 1796 is the **only** `deleteWrappedKey` call site in the entire TS engine — there is no deferred-flush path.
+- Parents with &gt;1 dirty child are real and seeded: the frontier grouping loop `countByParent` (lines 1941-1952) sets `state.pendingChildCount = count` per distinct parent.
+
+### Crash-window scenario (concrete)
+
+Parent P with 2 dirty children A, B on resume (`pendingChildCount = 2`):
+1. `repairDirtyNode(A)`: recovers key, updates P's in-memory mirror, `decrement` 2→1 (**no republish**), then line 1796 deletes A's checkpoint.
+2. **Crash** before B processed / before P's count reaches 0.
+3. Resume: P's on-disk mirror still carries A's **stale** `readKeySealed` (never durably republished) → `collectDirtyFrontier` rediscovers A's edge dirty → `repairDirtyNode(A)` → `getWrappedKey(A)` returns `undefined` (GC'd) → **`DirtyNodeUnrecoverableError`** (lines 1738-1745).
+
+**Checkpoint is the only recovery source (confirmed):** `readKeyPrime` is recovered solely via `unwrapKey(checkpoint, ownerPrivateKey)` (line 1750). The node's published body was sealed by the lost prior run under `readKeyPrime`; P's stale on-disk `readKeySealed` decrypts to the OLD key, which cannot unseal the already-rotated node. No re-derivation path exists → permanent loss of read access to that subtree.
+
+### Rust twin evidence (`crates/sdk/src/rotation/engine.rs`) — CORRECT
+
+The Rust engine implements exactly the fix CodeRabbit prescribes:
+- **`ParentTrackingState.pending_checkpoint_node_ids: Vec&lt;String&gt;`** (line 852) — the deferral field TS lacks.
+- **`repair_dirty_node`, line 2059** → `state.pending_checkpoint_node_ids.push(published.id.clone())` — **queues** instead of deleting.
+- **`complete_pending_child`, lines 2141-2148** → only when count hits 0: `republish_parent(...)` **first** (line 2143, durable commit), **then** `for node_id in &amp;state.pending_checkpoint_node_ids { delete_wrapped_key(...) }` (2146-2148). Correct D-01 ordering.
+- The immediate `delete_wrapped_key` at Rust line 1550 is the **root** case (root has no parent mirror) — legitimately different, as noted, and not the multi-child intermediate-parent bug.
+
+### Severity: real ship-blocker (not benign)
+
+Narrow trigger (resume with a parent having ≥2 dirty children + crash in the GC→final-republish window) but the outcome is **permanent, unrecoverable** loss of read access to a subtree — and this is precisely the D-01/D-04 invariant Phase 70.1 exists to harden. The correct implementation already exists in the Rust twin, so this is an unambiguous port gap, not a design open-question.
+
+### Minimal fix direction (port the Rust design)
+
+1. Add `pendingCheckpointNodeIds: string[]` to `ParentTrackingState` (after line 1381).
+2. In `repairDirtyNode`, replace line 1796's immediate `deleteWrappedKey` with `parentState.pendingCheckpointNodeIds.push(item.childPubId)` inside the `if (parentState)` block (before/with the decrement at 1791).
+3. In `decrementPendingAndMaybeRepublish`, after `updateFolderMetadataAndPublish` returns (post line 1597, inside the `=== 0` branch) and before `parentTracking.delete`, flush: `for (const id of parentState.pendingCheckpointNodeIds) await keyCheckpointCallbacks!.deleteWrappedKey(id)`.
+
+Note the parent-not-found fallback in `repairDirtyNode` (line 1756-1760, resolved record missing) also currently reaches line 1796's delete — the port must ensure GC only happens on the durable-republish path in that branch too.
+
+Relevant files:
+- `/Users/myankelev/Code/random/cipher-box/packages/sdk-core/src/rotation/engine.ts` (buggy: 1729-1796, 1573-1603, 1364-1381)
+- `/Users/myankelev/Code/random/cipher-box/crates/sdk/src/rotation/engine.rs` (correct reference: 845-852, 2059, 2129-2153)</result>
+<usage><subagent_tokens>39244</subagent_tokens><tool_uses>10</tool_uses><duration_ms>201399</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bi7goii6s</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/bi7goii6s.output</output-file>
+<status>completed</status>
+<summary>Background command "Build + test sdk-core after checkpoint-GC deferral port" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bpm330hiv</task-id>
+<tool-use-id>toolu_01Ksh4sLcrV7s1RZGU57xszf</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/1df3ecfc-c665-42cd-8775-cdb6ef61523a/tasks/bpm330hiv.output</output-file>
+<status>completed</status>
+<summary>Background command "Final verify: status, SC#6 gate, cargo check fuse" completed (exit code 0)</summary>
+</task-notification>
