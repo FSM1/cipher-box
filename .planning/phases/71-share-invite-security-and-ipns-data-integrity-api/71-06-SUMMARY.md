@@ -157,6 +157,10 @@ None - no external service configuration required.
 - No DTO/endpoint shape changes in this plan — `pnpm api:generate` was not required and was not run.
 - `apps/api` typecheck confirmed clean for all files touched by this plan (pre-existing unrelated errors in `ipns/` and `metrics/` modules from other wave-1 work are out of scope for 71-06).
 
+## Self-Check: PASSED
+
+All 5 modified source files and the SUMMARY.md itself confirmed present on disk. All 6 commit hashes (`6c0849ecb`, `15192381b`, `456a4ebdd`, `782c09af1`, `497838202`, `fae766692`) confirmed present in `git log --oneline --all`.
+
 ---
 *Phase: 71-share-invite-security-and-ipns-data-integrity-api*
 *Completed: 2026-07-09*
