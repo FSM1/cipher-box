@@ -1,0 +1,5 @@
+I need some more scenarios to understand the problem here. The root ipns name of a share is any ipns name inside an owners vault. This pointer is stored inside the database shares table (root_ipns_name) which is the share root, not the owners vault root.
+
+---
+
+scenario B is not allowed - only child items can be shared. Additionally, what are the read descriptor ref and write descriptor ref in the database? My understanding is that the read/write permissions would be available to Bob after 1 - resolving the IPNS name -> decrypting the ipfs entry using Bob's private key
