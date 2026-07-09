@@ -1,0 +1,99 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "512fffa7c614",
+  "session_id": "4d78f8a5-6112-418c-85c3-c6241359b1fb",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-09T22:38:58.125484Z",
+  "branch": "feat/share-invite-security-and-ipns-data-integrity-api",
+  "checkpoints_count": 2,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "797cb0b7fb99",
+  "token_usage": {
+    "input_tokens": 19630,
+    "cache_creation_tokens": 437817,
+    "cache_read_tokens": 19891795,
+    "output_tokens": 143516,
+    "api_call_count": 95
+  },
+  "session_metrics": {
+    "turn_count": 9
+  },
+  "summary": {
+    "intent": "Execute all 9 plans of phase 71 (Share-Invite Security & IPNS Data-Integrity API) in cipher-box using the GSD wave-based parallel execution workflow, orchestrating subagents across 4 dependency-ordered waves with worktree isolation.",
+    "outcome": "All 9 plans across 4 waves executed, merged, and gated successfully (final: pnpm typecheck green, 894/894 api tests passing); the blocking human-verify checkpoint in plan 71-05 was resolved by driving a live-stack run that confirmed the D-06 concurrent first-publish race yields exactly one 200 and one 409, never a 500; phase verification was starting as the transcript ends.",
+    "learnings": {
+      "repo": [
+        "cipher-box's root `pnpm typecheck` excludes `apps/api tsc --noEmit`, so errors surfaced only by a raw `apps/api tsc --noEmit` run are non-CI-gating and can be legitimately deferred.",
+        "Wave 1 of a rename-style phase can intentionally leave TS consumers (sdk/web) broken until Wave 2 fixes them — a full `pnpm typecheck` should not be used as the Wave 1 post-merge gate in that case.",
+        "gsd worktree `base-check` reporting reason `baseref-head` means worktrees fork from live HEAD, which lets every wave keep parallel worktree isolation without degrading to sequential across waves.",
+        "The gsd tracking-commit helper can report `commit_failed` as a false negative even though the commit actually landed — always verify via `git log`, not the helper's own status.",
+        "`codebase-drift` gate flags large advisory 'drift' as baseline noise when `last_mapped_commit: null` (repo never ran `/gsd-map-codebase`) — safe to treat as non-blocking if no phase-modified files are among the flagged items.",
+        "sdk-e2e (vitest) does not auto-load `.env`; if `SDK_E2E_SECRET` isn't explicitly exported it falls back to a hardcoded default that can mismatch the API's `TEST_LOGIN_SECRET`, causing an early-suite 401 that cascade-skips all later suites including the target test.",
+        "Worktrees don't inherit gitignored `.env` files — must be manually copied in before running e2e suites from a worktree.",
+        "`pnpm --filter X test --` wrapping silently drops a `--testPathPattern`-style argument due to double `--`; use `npx jest`/direct test runner invocation instead.",
+        "Fresh worktrees lack `node_modules` and built `dist/` for internal packages like `@cipherbox/crypto`; executors must run `pnpm i` plus targeted package builds before tests/typecheck are meaningful.",
+        "`requirements.mark-complete` uses the global REQUIREMENTS.md REQ-ID scheme; phase 71 requirements use CONTEXT.md decision-ID naming (D-xx/SC#x), so mark-complete calls against those IDs are silent no-ops (`not_found`), not failures.",
+        "A stale compiled API process (`node dist/main.js`, not watch mode) can linger on :3000 from a prior session; using it for live verification would give false results since it lacks the current branch's fixes — must kill and restart from source before trusting a live-stack test."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "finding": "D-05 same-seq CID equivocation guard and D-06 first-publish 23505→409 (ConflictException) translation were added here by plan 71-04."
+        },
+        {
+          "path": "apps/api/src/shares/share-invite.service.ts",
+          "finding": "claimInvite's existing-share branch replaced with a widen-only merge (isWriteUpgrade/isGenerationBump gates) so grants never downgrade write→read (plan 71-07, SC#2)."
+        },
+        {
+          "path": "apps/api/src/shares/shares.service.ts",
+          "finding": "revokeForItems rewritten from find()+remove() to a single createQueryBuilder().delete() scoped to sharer_id+share_root_ipns_name, mirroring the sibling invite-revoke update block (plan 71-08, SC#5)."
+        },
+        {
+          "path": "crates/fuse/src/write_ops/implementation/delete.rs",
+          "line": 543,
+          "end_line": 546,
+          "finding": "E0560 diagnostics referencing old field names after 71-03's rename were stale LSP noise from an intermediate worktree state, not real errors — confirmed clean via `cargo check --all-targets` on the merged tree."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns-verify-cache.spec.ts",
+          "line": 370,
+          "finding": "Pre-existing TS2352 error, unchanged vs origin/main and untouched by phase 71 — confirmed non-gating since CI's typecheck script excludes apps/api tsc."
+        }
+      ],
+      "workflow": [
+        "For multi-wave orchestration, verify a spawned agent's worktree exists (and its config.lock released) before dispatching the next parallel agent in the same wave, to avoid a git config race.",
+        "Don't blindly trust a subagent's self-reported test/check results when they conflict with raw diagnostics (e.g. cargo E0560) — settle discrepancies by re-running the check against the merged tree at the post-merge gate.",
+        "When a plan includes a blocking human-verify checkpoint requiring a live environment, have the executor author/commit the autonomous portion, pause and return exact reproduction commands, then let the orchestrator (with user approval) drive the live run rather than the subagent.",
+        "For trivial checkpoint-continuation work (writing a SUMMARY + one commit), it can be more efficient for the orchestrator to do it directly via `git -C` on the existing worktree rather than spawning another full agent."
+      ]
+    },
+    "friction": [
+      "Stale/misleading cargo E0560 diagnostics from plan 71-03's subagent required an extra verification pass at Wave 2 post-merge before being ruled out as noise.",
+      "gsd tracking-commit helper falsely reported `commit_failed` twice (Wave 1 and Wave 3a) even though the commits had landed, requiring manual git-log verification each time.",
+      "A stale compiled API process was already occupying :3000 from a prior session and had to be identified and killed before a trustworthy live-stack test run.",
+      "sdk-e2e/API login-secret mismatch (SDK_E2E_SECRET default vs TEST_LOGIN_SECRET) caused a 401 that cascade-skipped the target test on the first live-stack attempt, requiring root-cause investigation before a second, correctly-scoped run.",
+      "Worktrees lacked gitignored `.env` files, blocking the live e2e run until manually copied in.",
+      "71-08's executor hit a `pnpm --filter test --` wrapper bug that silently drops the test-pattern argument, requiring a workaround (direct npx jest invocation)."
+    ],
+    "open_items": [
+      "Pre-existing, unrelated tsc errors (ipns-verify-cache.spec.ts TS2352, http-metrics.interceptor.spec.ts TS2724, 3x TS18048 in bin-operations.test.ts) logged to deferred-items.md and intentionally left unfixed as out-of-scope for phase 71.",
+      "sdk-e2e share/invite suites updated in plan 71-02 were typecheck-clean but not executed end-to-end against a live API stack in that worktree — a live sdk-e2e run was recommended before final merge/release.",
+      "Phase 71 verification step had not yet run at the point the transcript ends (final post-merge gate just passed, tracking/drift checks for 71-09 were in progress)."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}

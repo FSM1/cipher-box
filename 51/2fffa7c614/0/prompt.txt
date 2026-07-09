@@ -1,0 +1,132 @@
+<task-notification>
+<task-id>abf27328d5074fabc</task-id>
+<tool-use-id>toolu_01QFJ7Yvqe9f17io1RszHeWQ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/4d78f8a5-6112-418c-85c3-c6241359b1fb/tasks/abf27328d5074fabc.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 71-05 (checkpoint) of phase 71" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Task 1 is complete and committed. I've now reached Task 2, which is a `checkpoint:human-verify gate="blocking"` task. Per instructions I must pause here and return the checkpoint state to the orchestrator rather than attempting the live-stack run myself.
+
+## CHECKPOINT REACHED
+
+**Type:** human-verify (blocking)
+**Plan:** 71-05
+**Progress:** 1/2 tasks complete
+
+### Completed Tasks
+
+| Task | Name | Commit | Files |
+| ---- | ---- | ------ | ----- |
+| 1 | Add first-publish concurrent-race case (Test 21, D-06) | `a42634802` | `tests/sdk-e2e/src/suites/ipns-publish-gate.test.ts`, `.planning/phases/71-share-invite-security-and-ipns-data-integrity-api/deferred-items.md` |
+
+Task 1 verification: `pnpm --filter sdk-e2e exec tsc --noEmit -p tsconfig.json` passes clean for `ipns-publish-gate.test.ts` (0 errors in that file). Note: required a one-time `pnpm install` + rebuild of `@cipherbox/{crypto,core,api-client,sdk-core,sdk}` dists to resolve workspace types in this fresh worktree — logged as environment setup, not a code change. 3 pre-existing unrelated `TS18048` errors remain in `bin-operations.test.ts` (untouched by this plan, last modified in commit `1fb8996a2` well before Phase 71) — logged to `deferred-items.md`, not fixed (out of scope).
+
+### Current Task
+
+**Task 2:** [BLOCKING] Run Test 21 against the live stack (D-06 real-race backstop)
+**Status:** blocked — requires live docker stack + API server, and the apps/api unit suite mocks the DataSource so only this real run can prove the DB-level race
+**Blocked by:** human/orchestrator must bootstrap and run the live stack (I was explicitly instructed not to attempt this myself)
+
+### Checkpoint Details
+
+**What was built:** Test 21 — a new `it()` case in `tests/sdk-e2e/src/suites/ipns-publish-gate.test.ts` that fires two concurrent first-publish requests (`createAndPublishIpnsRecord` with `sequenceNumber: 1n`, no `expectedSequenceNumber`) for one brand-new Ed25519 keypair/ipnsName via `Promise.allSettled`, then asserts exactly one fulfilled (200) and one rejected with `statusOf(reason) === 409` (never 500), followed by a resolve confirming `sequenceNumber === 1n`.
+
+**Exact commands to run (live stack):**
+```bash
+docker compose -f docker/docker-compose.yml up -d   # postgres, redis 6380, kubo — note in the prompt says these 3 containers (cipherbox-postgres, cipherbox-redis, cipherbox-ipfs) are already up/healthy
+pnpm --filter @cipherbox/api migration:run
+pnpm --filter @cipherbox/api dev                    # API on :3000
+pnpm --filter sdk-e2e test -- ipns-publish-gate
+```
+
+**Expected result:** Test 21 passes — one request 200, the concurrent one 409 (never 500). A 500 on the loser is a real failure indicating 71-04's `23505`→409 translation does not cover the first-publish INSERT path.
+
+**Both outcomes are acceptable per the plan:** if the live stack cannot be bootstrapped, the plan explicitly permits recording "manual-pending" with the exact commands above rather than blocking indefinitely.
+
+### Awaiting
+
+The observed result of running `pnpm --filter sdk-e2e test -- ipns-publish-gate` (specifically Test 21) against the live stack — either:
+1. The concrete 200/409 split (pass), or
+2. A report that the live stack could not be bootstrapped (manual-pending)
+
+Once the orchestrator has this result, a continuation agent should be spawned to: finish Task 2's acceptance criteria, write `71-05-SUMMARY.md` (with the observed split or manual-pending note), and make the final metadata commit. I did not write SUMMARY.md — per instructions, the continuation agent owns that once Task 2's result is known.
+
+&lt;worktree_metadata&gt;
+{"agent_id":"71-05","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-abf27328d5074fabc","branch":"worktree-agent-abf27328d5074fabc","expected_base":"a4263480254bb61f3a47e920f1348a22356bd532"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `a42634802`: test(71-05): add first-publish concurrent-race case (Test 21, D-06)
+
+**Duration (Task 1 only):** ~15 min (includes one-time worktree dependency install + dist rebuild)</result>
+<usage><subagent_tokens>114050</subagent_tokens><tool_uses>31</tool_uses><duration_ms>177221</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-abf27328d5074fabc</worktreePath><worktreeBranch>worktree-agent-abf27328d5074fabc</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bq8m8jp8y</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/4d78f8a5-6112-418c-85c3-c6241359b1fb/tasks/bq8m8jp8y.output</output-file>
+<status>completed</status>
+<summary>Background command "Run Test 21 ipns-publish-gate against live stack" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bipn2hyfq</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/4d78f8a5-6112-418c-85c3-c6241359b1fb/tasks/bipn2hyfq.output</output-file>
+<status>completed</status>
+<summary>Background command "Run Test 21 scoped with aligned secret" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0d0a983bc9ce45f8</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/4d78f8a5-6112-418c-85c3-c6241359b1fb/tasks/a0d0a983bc9ce45f8.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 71-09 of phase 71" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Clean working tree, all commits landed. Plan 71-09 is complete.
+
+## PLAN COMPLETE
+
+**Plan:** 71-09
+**Tasks:** 2/2
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a0d0a983bc9ce45f8/.planning/phases/71-share-invite-security-and-ipns-data-integrity-api/71-09-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"71-09","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a0d0a983bc9ce45f8","branch":"worktree-agent-a0d0a983bc9ce45f8","expected_base":"3abd1546b017fb2040fbe6c688d7972959aacba9"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `bc6e0f0db`: test(71-09): cover getInvitesForItem and revokeInvite
+- `feb0b5bb9`: test(71-09): harden shares.controller.spec fixtures and record D-03
+- `2d6cb07f9`: docs(71-09): complete share-invite-security-and-ipns-data-integrity-api plan
+
+**Duration:** ~15 min
+
+**Notes:**
+- Added `describe('getInvitesForItem')` and `describe('revokeInvite')` blocks to `apps/api/src/shares/share-invite.service.spec.ts` (active-only + expired auto-clean; NotFound/Forbidden/owner-success guards).
+- Hardened `apps/api/src/shares/shares.controller.spec.ts` fixtures — UUID-shaped ids, two full-length k51 CIDv1 IPNS names, full-length uncompressed secp256k1 public keys, full-length hex encrypted-key values — replacing all placeholder strings, and recorded the D-03 dropped-index decision as an inline comment.
+- Full `pnpm --filter @cipherbox/api test -- --testPathPattern="shares"` suite: 91/91 passing (ran via `npx jest` directly inside the worktree since `pnpm i` was required first — fresh worktree had no `node_modules`).
+- No deviations from plan; `createInvite`/`claimInvite` blocks (owned by 71-06/71-07) were left untouched as instructed.
+- STATE.md and ROADMAP.md were intentionally NOT modified — orchestrator owns those writes after the wave completes.</result>
+<usage><subagent_tokens>161322</subagent_tokens><tool_uses>40</tool_uses><duration_ms>303583</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a0d0a983bc9ce45f8</worktreePath><worktreeBranch>worktree-agent-a0d0a983bc9ce45f8</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bgky0mt3c</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/4d78f8a5-6112-418c-85c3-c6241359b1fb/tasks/bgky0mt3c.output</output-file>
+<status>completed</status>
+<summary>Background command "Final post-merge gate: typecheck + api tests" completed (exit code 0)</summary>
+</task-notification>
