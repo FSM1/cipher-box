@@ -1,0 +1,93 @@
+I need some more scenarios to understand the problem here. The root ipns name of a share is any ipns name inside an owners vault. This pointer is stored inside the database shares table (root_ipns_name) which is the share root, not the owners vault root.
+
+---
+
+scenario B is not allowed - only child items can be shared. Additionally, what are the read descriptor ref and write descriptor ref in the database? My understanding is that the read/write permissions would be available to Bob after 1 - resolving the IPNS name -> decrypting the ipfs entry using Bob's private key
+
+---
+
+I also think that some of the `shares` column names need to be updated - 
+read_descriptor_ref - encrypted_read_key
+write_descriptor_ref - encrypted_write_key
+root_ipns_name - share_root_ipns_name
+
+---
+
+also not too sure about the `root_generation` and whether that is actually necessary to be stored in the database if it is primarily part of the item metadata (IPFS record). 
+
+Please elaborate on the read_descriptor_ref not just being a read-key - what metadata is included in that ?
+
+---
+
+<task-notification>
+<task-id>aba56875d8ec50704</task-id>
+<tool-use-id>toolu_01MygJymZkbNyNqTUriqMTQ3</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/982eaacf-e163-496a-b611-eb3a6d0b51c4/tasks/aba56875d8ec50704.output</output-file>
+<status>completed</status>
+<summary>Agent "Plan Phase 71" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLANNING COMPLETE
+
+**Phase 71 — Share-Invite Security and IPNS Data-Integrity (API): 7 plans, 3 waves.** All 9 decisions (D-01…D-09, D-03 = documented drop) and all 6 SCs traced to plan `requirements`. TDD mode honored (task-level RED→GREEN on every code task), fine granularity, MVP off. D-01 written per the coordinator's amended decision (ipns_records creator check on BOTH createInvite + createShare; IpnsRecord DI wiring replaces the retired Vault-forFeature task).
+
+**Plans (all under `.planning/phases/71-share-invite-security-and-ipns-data-integrity-api/`):**
+
+- **71-01** (W1, auto) — D-01/D-02/SC#1: `ipns_records` creator-ownership gate (403) on `createInvite` + `createShare`, IpnsRecord DI into both services + `shares.module` forFeature + both spec provider mocks; reject/accept + createInvite coverage.
+- **71-02** (W1, **autonomous:false**) — D-04/SC#3: `@Check` on ShareInvite entity + forward migration `1752100000000-ClaimCountCheckConstraint` (idempotent `DO $$…duplicate_object` guard, throwing `down()`) + **[BLOCKING] `migration:run`** &amp; manual `23514` DB-CHECK backstop.
+- **71-03** (W1, auto) — D-05/D-06/SC#4: same-seq CID-equivocation guard (400, CID-conditional) + Pitfall-4 test rewrite + first-publish `23505`→409 (err.code idiom, local object-payload ConflictException) + unit tests.
+- **71-04** (W2 ← 71-01, auto) — D-07/SC#2: widen-only grant merge in `claimInvite` existing-share branch + positive-widen cases + explicit never-downgrade negative backstop.
+- **71-05** (W2 ← 71-01, auto) — D-08/SC#5: `revokeForItems` find+remove → single `createQueryBuilder().delete()` mirroring the sibling invite `.update()`; spec rewritten to sequenced `execute` mocks.
+- **71-06** (W2 ← 71-03, **autonomous:false**) — D-06/SC#4: sdk-e2e Test 21 concurrent first-publish race + **[BLOCKING] live-stack run** proving one 200 + one 409 (the real-race backstop unit mocks can't cover).
+- **71-07** (W3 ← 71-01, 71-04, auto) — D-09/D-03/SC#6: `getInvitesForItem` + `revokeInvite` coverage, contract-valid `shares.controller.spec` fixtures, D-03 documented drop.
+
+**Quality gate:** every task has `&lt;read_first&gt;` + `&lt;acceptance_criteria&gt;` + concrete `&lt;action&gt;` (no fenced code); backstop edges (D-04 DB CHECK/23514, D-05 same-CID-preserved + TEE-renewal structural, D-06 real race, D-07 never-downgrade) land in `must_haves.truths` as non-inferable checks; each plan has an "Artifacts this phase produces" section; STRIDE `&lt;threat_model&gt;` per plan (no npm installs → no supply-chain checkpoint). Waves respect file ownership (`share-invite.service.spec.ts` serialized across W1→W2→W3; no same-wave file overlaps). All 7 pass `frontmatter.validate` + `verify.plan-structure` (0 errors, 0 warnings).
+
+**OQ1 note (carried into plans):** confirmed `dto.rootIpnsName` = the shared child node's IPNS name (`invite.service.ts:172`, `ShareDialog.tsx:216`), which is why the `ipns_records`-keyed check (not `vaults`) is correct — captured in 71-01's D-01 rationale + D-02 residual-gap comment.
+
+**Not committed.** Files are written + ROADMAP updated via scoped edits (verified intact: 863 lines, 16 phases, +10/-2). I did **not** `git commit` — current branch is the Phase 70.1 feature branch (`feat/rotation-read-plane-durability-…`); committing Phase 71 plans here would be wrong-branch. Orchestrator should branch (e.g. `feat/71-share-invite-security-and-ipns-data-integrity-api`) then stage the 7 new `71-*-PLAN.md` + `.planning/ROADMAP.md`.</result>
+<usage><subagent_tokens>237430</subagent_tokens><tool_uses>31</tool_uses><duration_ms>814941</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aba56875d8ec50704</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/982eaacf-e163-496a-b611-eb3a6d0b51c4/tasks/aba56875d8ec50704.output</output-file>
+<status>completed</status>
+<summary>Agent "Plan Phase 71" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>ROADMAP intact (876 lines, 16 phases, Phase 72 present after 71). All 9 plans on disk. Revision complete.
+
+## PLANNING COMPLETE
+
+**Phase 71 revised — 9 plans, 4 waves.** Absorbed D-10 (full share-plane rename) as a foundation and folded D-04 into the cutover per the amended CONTEXT. All decisions D-01…D-10 + SC#1…SC#6 traced; every plan passes `frontmatter.validate` + `verify.plan-structure` (0 errors/warnings); no same-wave file conflicts. TDD mode, fine granularity, backstops preserved.
+
+**Wave map:**
+
+- **Wave 1** — `71-01` (D-10/D-04 apps/api rename + cutover-in-place CHECK + api-client regen) ‖ `71-04` (D-05/D-06 IPNS guards — no share overlap, runs parallel)
+- **Wave 2** (← 71-01) — `71-02` (D-10 TS consumers: sdk-core/sdk/web/sdk-e2e, compiler-guided) ‖ `71-03` (D-10 Rust crates) ‖ `71-06` (D-01/D-02 ownership gate)
+- **Wave 3** — `71-05` (D-06 sdk-e2e live race ← 71-04,71-02) ‖ `71-07` (D-07 widen ← 71-06) ‖ `71-08` (D-08 revoke DELETE ← 71-06)
+- **Wave 4** — `71-09` (D-09 coverage + fixtures + D-03 drop ← 71-06,71-07)
+
+**One-line-per-plan:**
+
+- **71-01** (W1, auto) — D-10/D-04 FOUNDATION: rename shares/share_invites columns (`encrypted_read_key`/`encrypted_write_key`/`share_root_ipns_name`) + entities/DTOs/services/apps-api-specs, purge "descriptor", fold `claim_count` CHECK into the cutover CREATE TABLE (in place, greenfield) + `@Check`, `pnpm api:generate` + commit client. **Retires the old `1752100000000` migration + its blocking `migration:run`.**
+- **71-02** (W2←01, auto) — D-10 FOUNDATION: sdk-core/sdk/web/sdk-e2e rename to the new names + methods (`resolveShareEncryptedWriteKey`, `clearEncryptedWriteKey`, `dispatchEncryptedWriteKey`, `claimerEncryptedReadKey`) + `*EncryptedKeyRef` types; **surgical** `rootIpnsName→shareRootIpnsName` (share-domain only; vault/folder-tree stays), compiler-guided via `pnpm typecheck`.
+- **71-03** (W2←01, auto) — D-10 FOUNDATION: Rust `*Descriptor*→*EncryptedKey*` across `crates/{api-client,core,fuse,sdk}`, serde aligned to the JSON contract, **excluding WinFsp `security_descriptor`** under `platform/windows` (unrelated OS symbol — verified intact).
+- **71-04** (W1, auto) — D-05 same-seq CID-equivocation guard (400) + Pitfall-4 rewrite; D-06 first-publish `23505`→409 (err.code idiom, local object-payload) + unit tests.
+- **71-05** (W3←04,02, **autonomous:false**) — D-06 sdk-e2e Test 21 concurrent first-publish + **[BLOCKING] live-stack run** proving one 200 + one 409.
+- **71-06** (W2←01, auto) — D-01/D-02: `ipns_records` creator-ownership gate (403) on `createInvite`+`createShare` (new `dto.shareRootIpnsName`), IpnsRecord DI + both spec provider mocks, reject/accept tests.
+- **71-07** (W3←06, auto) — D-07 widen-only merge on `encryptedWriteKey` presence + never-downgrade negative backstop.
+- **71-08** (W3←06, auto) — D-08 `revokeForItems` find+remove → single `createQueryBuilder().delete()` on `share_root_ipns_name`; spec → sequenced `execute` mocks.
+- **71-09** (W4←06,07, auto) — D-09 `getInvitesForItem`/`revokeInvite` coverage + contract-valid controller fixtures + D-03 documented drop.
+
+**Backstops in `must_haves.truths` (non-inferable, no silent drops):** D-04 DB CHECK/`23514` (71-01, non-blocking real-Postgres/manual verify — per the amendment), D-05 same-CID-preserved + TEE-renewal structural (71-04), D-06 real race (71-05 live), D-07 never-downgrade (71-07). D-10 surgical boundaries encoded as ACs: vault/folder-tree `rootIpnsName` intact (71-02), WinFsp `security_descriptor` intact (71-03).
+
+**Scope kept in-phase** (not split): the rename is mechanical/compiler-guided, so despite the blast radius (76 TS + 16 Rust files) each plan stays within budget by relying on typecheck/regen as the driver rather than per-file logic authoring — matching the user's wish to land the rename here.
+
+**Note on the D-10 rename risk:** the two genuinely hand-scoped renames are `shareRootIpnsName` (share-domain only, 21 of 95 `rootIpnsName` files) and the Rust descriptor exclusion (WinFsp `security_descriptor`). Both are called out explicitly with intactness ACs. Windows crates compile CI-only on macOS (project memory), so 71-03 flags a CI round-trip to confirm the Windows exclusion held.
+
+**Not committed.** 9 plans written + ROADMAP updated via scoped edits (verified intact: 876 lines, 16 phases). Current branch is the Phase 70.1 feature branch — orchestrator should branch (e.g. `feat/71-share-invite-security-and-ipns-data-integrity-api`) then stage the 9 `71-*-PLAN.md` + `.planning/ROADMAP.md`. (The stale ROADMAP top-line at L73 still lists "8 todos / partial unique index" — cosmetic; the detailed SC#3 and Plans block are corrected. Flagging in case you want the orchestrator to touch it up.)</result>
+<usage><subagent_tokens>345309</subagent_tokens><tool_uses>22</tool_uses><duration_ms>1102961</duration_ms></usage>
+</task-notification>
