@@ -727,7 +727,16 @@ pub fn run_scope_exit_gate_coalesced(
         })
         .unwrap_or_default();
     let root_children_override = if !parent_ipns.is_empty() && parent_ipns == grant_root_ipns_name {
-        Some(fs.build_scope_exit_child_override(parent_ino, child_ino))
+        // Fail closed: an incomplete override would drop children from the
+        // grant-root's republished read plane (silent orphaning), so a build
+        // failure aborts the whole scope-exit rather than publishing a short list.
+        match fs.build_scope_exit_child_override(parent_ino, child_ino) {
+            Ok(children) => Some(children),
+            Err(e) => {
+                log::error!("scope-exit coalesced child override failed (fail-closed): {}", e);
+                return Err(());
+            }
+        }
     } else {
         None
     };

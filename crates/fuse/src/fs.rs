@@ -342,15 +342,25 @@ impl CipherBoxFS {
     /// half of [`Self::build_folder_metadata`]'s child loop; the refs are sealed
     /// under the parent's pre-rotation read key so the rotation BFS can still
     /// derive each surviving child's key via `unseal_child_read_key`.
+    ///
+    /// Fail-closed (70.1 CodeRabbit finding 6): because the override REPLACES the
+    /// grant-root's published child list, any child that a normal relink-republish
+    /// would have linked but this loop drops would be silently orphaned from the
+    /// read plane. So this mirrors [`Self::build_folder_metadata`]'s child-loop
+    /// discipline EXACTLY — a missing child inode or a `build_child_refs` failure
+    /// is fatal (propagated as `Err`, mapped to EIO by the caller), while the same
+    /// legitimately-unlinkable children that path skips (non-File/Folder inodes and
+    /// never-published children with an empty `ipns_name`) are skipped here too, so
+    /// the coalesced override matches what a normal republish would produce.
     pub fn build_scope_exit_child_override(
         &self,
         parent_ino: u64,
         exclude_ino: u64,
-    ) -> Vec<cipherbox_core::node::SealedChildRef> {
+    ) -> Result<Vec<cipherbox_core::node::SealedChildRef>, String> {
         use cipherbox_core::node::NodeKind;
-        let Some(parent) = self.inodes.get(parent_ino) else {
-            return Vec::new();
-        };
+        let parent = self.inodes.get(parent_ino).ok_or_else(|| {
+            format!("build_scope_exit_child_override: parent inode {parent_ino} not found")
+        })?;
         let (parent_read_key, parent_write_key) = match &parent.kind {
             crate::inode::InodeKind::Root {
                 read_key,
@@ -362,7 +372,11 @@ impl CipherBoxFS {
                 write_key,
                 ..
             } => (**read_key, **write_key),
-            _ => return Vec::new(),
+            _ => {
+                return Err(format!(
+                    "build_scope_exit_child_override: parent inode {parent_ino} is not a Root/Folder"
+                ))
+            }
         };
         let child_inos = parent.children.clone().unwrap_or_default();
         let mut sealed_children = Vec::new();
@@ -370,9 +384,9 @@ impl CipherBoxFS {
             if child_ino == exclude_ino {
                 continue;
             }
-            let Some(child) = self.inodes.get(child_ino) else {
-                continue;
-            };
+            let child = self.inodes.get(child_ino).ok_or_else(|| {
+                format!("build_scope_exit_child_override: child inode {child_ino} not found")
+            })?;
             let (kind, child_ipns, child_read_key, child_write_key) = match &child.kind {
                 crate::inode::InodeKind::Folder {
                     ipns_name,
@@ -386,13 +400,17 @@ impl CipherBoxFS {
                     write_key,
                     ..
                 } => (NodeKind::File, ipns_name.clone(), **read_key, **write_key),
+                // Non-File/Folder inodes are not read-plane children — the normal
+                // republish path skips them too (`build_folder_metadata`).
                 _ => continue,
             };
+            // Never-published child (no IPNS identity yet): nothing to link into
+            // the read chain — the normal republish path skips it too.
             if child_ipns.is_empty() {
                 continue;
             }
             let child_id = child.node_id.clone();
-            match cipherbox_sdk::build_child_refs(
+            let (sealed_ref, _write_ref) = cipherbox_sdk::build_child_refs(
                 &child_read_key,
                 &child_write_key,
                 &parent_read_key,
@@ -403,16 +421,15 @@ impl CipherBoxFS {
                 kind,
                 0,
                 0,
-            ) {
-                Ok((sealed_ref, _write_ref)) => sealed_children.push(sealed_ref),
-                Err(e) => log::warn!(
-                    "build_scope_exit_child_override: build_child_refs failed for child {}: {}",
-                    child_ino,
-                    e
-                ),
-            }
+            )
+            .map_err(|e| {
+                format!(
+                    "build_scope_exit_child_override: build_child_refs failed for child {child_ino}: {e}"
+                )
+            })?;
+            sealed_children.push(sealed_ref);
         }
-        sealed_children
+        Ok(sealed_children)
     }
 
     pub fn update_folder_metadata(&mut self, folder_ino: u64) -> Result<(), String> {
