@@ -687,6 +687,11 @@ mod tests {
     // suite is RED until Task 2 lands.
     // -----------------------------------------------------------------
 
+    // Unix-only: the write failure is induced by chmod-ing the dir read-only
+    // (0o500), which Windows' permission model does not honor the same way (the
+    // create still succeeds). The fail-closed D-08 behavior itself is
+    // platform-agnostic and is covered on the Linux/macOS CI runners.
+    #[cfg(unix)]
     #[tokio::test]
     async fn put_fails_closed_on_write_failure_and_enforce_resolved_surfaces_it() {
         // D-08: a write failure must surface as Err, never be swallowed by
@@ -694,7 +699,6 @@ mod tests {
         let dir = make_temp_dir();
         let store = JsonSidecarFloorStore::for_generation(&dir);
 
-        #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let mut perms = std::fs::metadata(&dir).expect("stat dir").permissions();
