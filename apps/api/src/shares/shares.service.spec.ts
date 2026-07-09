@@ -126,6 +126,18 @@ describe('SharesService', () => {
   // createShare()
   // ===========================================================================
   describe('createShare', () => {
+    it('throws ForbiddenException when the caller did not register shareRootIpnsName in ipns_records (D-01/SC#1)', async () => {
+      ipnsRecordRepo.findOne.mockResolvedValue(null);
+
+      await expect(service.createShare(SHARER_ID, createDto())).rejects.toThrow(ForbiddenException);
+      expect(ipnsRecordRepo.findOne).toHaveBeenCalledWith({
+        where: { ipnsName: createDto().shareRootIpnsName, userId: SHARER_ID },
+      });
+      expect(shareRepo.save).not.toHaveBeenCalled();
+      // Fail-fast: the root-ownership gate runs before the recipient lookup
+      expect(userRepo.findOne).not.toHaveBeenCalled();
+    });
+
     it('creates a read-only share for a valid recipient (happy path)', async () => {
       userRepo.findOne.mockResolvedValue({ id: RECIPIENT_ID, publicKey: BARE_PUBKEY });
       shareRepo.findOne.mockResolvedValue(null);
