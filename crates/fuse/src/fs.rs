@@ -954,6 +954,77 @@ mod drain_refresh_completions_tests {
     }
 }
 
+/// Idle-mount publish-queue backstop (macos-first-publish-timeout).
+///
+/// A file written through the mount enqueues its parent-folder republish in the
+/// EDGE-TRIGGERED `publish_queue`; `flush_publish_queue` runs only when a FUSE op
+/// reaches `drain_upload_completions`. On FUSE-T the file `release` that enqueues
+/// it can be deferred past the point a client stops touching the mount, so the
+/// desktop `fuse-publish-pump` thread periodically issues a lookup to generate one
+/// such op. These tests pin the contract that thread relies on: a SINGLE drain
+/// (one pump poke) flushes a queued republish once it is past the debounce /
+/// safety-valve, and NOT before. Pure in-memory: the flushed folder ino is
+/// synthetic so `build_folder_metadata` errors out before any network publish.
+#[cfg(all(test, feature = "fuse"))]
+mod publish_queue_backstop_tests {
+    use crate::publish::PublishQueueEntry;
+    use crate::test_support::make_test_fs;
+    use std::time::{Duration, Instant};
+
+    // A folder ino with no inode entry: flush removes the queue entry (fs.rs:515)
+    // BEFORE build_folder_metadata (which Errs "not found"), so no publish spawns.
+    const SYNTH_FOLDER_INO: u64 = 987_654;
+
+    fn queue_with_age(fs: &mut crate::CipherBoxFS, pending_uploads: usize, age: Duration) {
+        fs.publish_queue.insert(
+            SYNTH_FOLDER_INO,
+            PublishQueueEntry {
+                first_dirty: Instant::now() - age,
+                pending_uploads,
+            },
+        );
+    }
+
+    /// One drain (== one pump poke / one getattr) flushes a republish whose upload
+    /// has completed once it is past the 1.5s debounce — no second FUSE op needed.
+    #[tokio::test]
+    async fn single_drain_flushes_past_debounce() {
+        let mut fs = make_test_fs();
+        queue_with_age(&mut fs, 0, Duration::from_secs(2));
+        fs.drain_upload_completions();
+        assert!(
+            !fs.publish_queue.contains_key(&SYNTH_FOLDER_INO),
+            "a debounce-elapsed republish must flush on a single drain (the pump poke)"
+        );
+    }
+
+    /// The 10s safety valve flushes even if an upload never completes
+    /// (pending_uploads stuck > 0) — the backstop cannot wedge on a lost upload.
+    #[tokio::test]
+    async fn single_drain_flushes_stuck_upload_past_safety_valve() {
+        let mut fs = make_test_fs();
+        queue_with_age(&mut fs, 1, Duration::from_secs(11));
+        fs.drain_upload_completions();
+        assert!(
+            !fs.publish_queue.contains_key(&SYNTH_FOLDER_INO),
+            "the safety valve must flush a stuck-upload republish on a single drain"
+        );
+    }
+
+    /// A fresh republish (within the debounce window, upload not yet done) is NOT
+    /// flushed — the backstop poke must not defeat the coalescing debounce.
+    #[tokio::test]
+    async fn fresh_entry_is_not_flushed_within_debounce() {
+        let mut fs = make_test_fs();
+        queue_with_age(&mut fs, 1, Duration::from_millis(100));
+        fs.drain_upload_completions();
+        assert!(
+            fs.publish_queue.contains_key(&SYNTH_FOLDER_INO),
+            "a within-debounce republish must survive a drain (no premature publish)"
+        );
+    }
+}
+
 /// D-07 write-plane pairing regression (desktop-e2e "Cross-client sync" / "Move
 /// content" failure): a parent re-published by the FUSE write path
 /// (`build_folder_metadata`) must key its child's `WriteChildRef.child_id` by the
