@@ -311,6 +311,18 @@ export class IpnsService {
       const dbSeq = BigInt(existing.sequenceNumber);
       if (embeddedSeq === dbSeq) {
         // Idempotent republish — TEE 6-hour re-sign path (D-09 / Pitfall 4).
+        // latestCid is preserved ONLY for a genuine same-CID idempotent retry;
+        // a republish at the same sequence carrying a DIFFERENT CID is
+        // equivocation (D-05) and is rejected below, never silently applied.
+        // The TEE lease-renewer (republish.service.ts renewIpnsRecordEol) never
+        // reaches this branch — it performs a standalone UPDATE that re-signs
+        // the existing CID/seq in place and never calls upsertIpnsRecord, so
+        // this guard can only be hit by a fresh, externally-signed publish.
+        if (metadataCid !== existing.latestCid) {
+          throw new BadRequestException(
+            `Same-sequence republish with a different CID rejected (equivocation): stored=${existing.latestCid}, incoming=${metadataCid}, sequence=${dbSeq}`
+          );
+        }
         // Do NOT increment the DB sequence, but still update latestCid/signedRecord below.
         isIdempotentRepublish = true;
       } else if (embeddedSeq === dbSeq + 1n) {
