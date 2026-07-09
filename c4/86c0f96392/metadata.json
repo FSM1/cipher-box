@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "c486c0f96392",
+  "strategy": "manual-commit",
+  "branch": "feat/rotation-read-plane-durability-and-deep-crash-resume-soundne",
+  "checkpoints_count": 8,
+  "files_touched": [
+    "packages/sdk/src/state/rotation-idb-store.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/c4/86c0f96392/0/metadata.json",
+      "transcript": "/c4/86c0f96392/0/full.jsonl",
+      "content_hash": "/c4/86c0f96392/0/content_hash.txt",
+      "prompt": "/c4/86c0f96392/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 121288,
+    "cache_creation_tokens": 2104746,
+    "cache_read_tokens": 85896595,
+    "output_tokens": 561202,
+    "api_call_count": 348
+  }
+}
