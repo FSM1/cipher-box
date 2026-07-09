@@ -11,47 +11,82 @@ import { UpdateGrantDto } from './dto/update-grant.dto';
 import { PaginationQueryDto } from './dto/pagination.dto';
 import { RequestWithUser } from '../common/types';
 
+// D-03 (SC#3 amended, documented drop): the `ipns_records(user_id) WHERE is_root`
+// partial unique index is intentionally NOT added. One-root-per-user is already
+// enforced at the vault layer via `vaults.owner_id` uniqueness, so an additional
+// index on `ipns_records` would guard a column the entity model already treats as
+// a non-authoritative creator marker. Recorded here (not just in CONTEXT.md) so
+// the absence of that index isn't misread as an omission by a future reader of
+// this share-plane test file.
+
+// Contract-valid fixture constants (D-09 fixture-hardening pass) — UUID-shaped
+// ids, full CIDv1 libp2p-key IPNS names (k51qzi5uqu5 + 40-60 char suffix, per
+// create-share.dto.ts's @Matches validator), and full-length uncompressed
+// secp256k1 public keys (04 + 128 hex chars), mirroring share-invite.service.spec.ts.
+const SHARER_ID = 'a1a1a1a1-1111-4111-8111-111111111111';
+const RECIPIENT_ID_1 = 'a2a2a2a2-2222-4222-8222-222222222222';
+const RECIPIENT_ID_2 = 'a3a3a3a3-3333-4333-8333-333333333333';
+const SHARE_ID_1 = 'b1b1b1b1-1111-4111-8111-111111111111';
+const SHARE_ID_2 = 'b2b2b2b2-2222-4222-8222-222222222222';
+const NODE_ID_1 = 'c1c1c1c1-1111-4111-8111-111111111111';
+const NODE_ID_2 = 'c2c2c2c2-2222-4222-8222-222222222222';
+
+const IPNS_NAME_FULL = 'k51qzi5uqu5dkkciu33khkzbcmxtyhn2hgdqyp6rv7s5egjlsdj6a2xpz9lxvz';
+const IPNS_NAME_MIN = 'k51qzi5uqu5abcdefghij0123456789klmnopqrstuvwxyz9876543210zz';
+
+const PUBLIC_KEY_SHARER = '04' + 'ab'.repeat(64);
+const PUBLIC_KEY_SHARER_2 = '04' + 'cd'.repeat(64);
+const PUBLIC_KEY_RECIPIENT = '04' + 'ef'.repeat(64);
+const PUBLIC_KEY_RECIPIENT_2 = '04' + '12'.repeat(64);
+const DTO_RECIPIENT_PUBLIC_KEY = '0x04' + 'aa'.repeat(64);
+
+const READ_KEY_HEX = 'aa'.repeat(64);
+const WRITE_KEY_HEX = 'bb'.repeat(64);
+const ITEM_NAME_HEX = 'cc'.repeat(32);
+const READ_KEY_HEX_MIN = 'dd'.repeat(64);
+const UPDATE_READ_KEY_HEX = 'ee'.repeat(64);
+
 describe('SharesController', () => {
   let controller: SharesController;
   let sharesService: jest.Mocked<SharesService>;
 
-  const mockUser = { id: 'sharer-uuid-1' };
+  const mockUser = { id: SHARER_ID };
   const mockRequest = { user: mockUser } as unknown as RequestWithUser;
 
   const createdAt = new Date('2026-06-01T00:00:00Z');
 
   // A fully-populated share (write grant + encrypted name present).
   const fullShare = {
-    id: 'share-uuid-1',
-    sharerId: 'sharer-uuid-1',
-    recipientId: 'recipient-uuid-1',
-    encryptedReadKey: Buffer.from('aabb', 'hex'),
-    encryptedWriteKey: Buffer.from('ccdd', 'hex'),
-    rootNodeId: 'node-uuid-1',
-    shareRootIpnsName: 'k51qzi5uqu5full',
+    id: SHARE_ID_1,
+    sharerId: SHARER_ID,
+    recipientId: RECIPIENT_ID_1,
+    encryptedReadKey: Buffer.from(READ_KEY_HEX, 'hex'),
+    encryptedWriteKey: Buffer.from(WRITE_KEY_HEX, 'hex'),
+    rootNodeId: NODE_ID_1,
+    shareRootIpnsName: IPNS_NAME_FULL,
     rootGeneration: '3',
-    itemNameEncrypted: Buffer.from('eeff', 'hex'),
+    itemNameEncrypted: Buffer.from(ITEM_NAME_HEX, 'hex'),
     hiddenByRecipient: false,
     createdAt,
-    sharer: { publicKey: '04sharerkey' },
-    recipient: { publicKey: '04recipientkey' },
+    sharer: { publicKey: PUBLIC_KEY_SHARER },
+    recipient: { publicKey: PUBLIC_KEY_RECIPIENT },
   } as unknown as Share;
 
   // A read-only share (write + encrypted name absent) — exercises the null ternary branches.
   const minimalShare = {
-    id: 'share-uuid-2',
-    sharerId: 'sharer-uuid-1',
-    recipientId: 'recipient-uuid-2',
-    encryptedReadKey: Buffer.from('1122', 'hex'),
+    id: SHARE_ID_2,
+    sharerId: SHARER_ID,
+    recipientId: RECIPIENT_ID_2,
+    encryptedReadKey: Buffer.from(READ_KEY_HEX_MIN, 'hex'),
     encryptedWriteKey: null,
-    rootNodeId: 'node-uuid-2',
-    shareRootIpnsName: 'k51qzi5uqu5min',
+    rootNodeId: NODE_ID_2,
+    shareRootIpnsName: IPNS_NAME_MIN,
     rootGeneration: '0',
     itemNameEncrypted: null,
     hiddenByRecipient: false,
     createdAt,
-    sharer: { publicKey: '04sharerkey2' },
-    recipient: { publicKey: '04recipientkey2' },
+    sharer: { publicKey: PUBLIC_KEY_SHARER_2 },
+    recipient: { publicKey: PUBLIC_KEY_RECIPIENT_2 },
   } as unknown as Share;
 
   beforeEach(async () => {
@@ -86,13 +121,13 @@ describe('SharesController', () => {
 
   describe('createShare', () => {
     const dto: CreateShareDto = {
-      recipientPublicKey: '0x04recipientkey',
-      encryptedReadKey: 'aabb',
-      encryptedWriteKey: 'ccdd',
-      rootNodeId: 'node-uuid-1',
-      shareRootIpnsName: 'k51qzi5uqu5full',
+      recipientPublicKey: DTO_RECIPIENT_PUBLIC_KEY,
+      encryptedReadKey: READ_KEY_HEX,
+      encryptedWriteKey: WRITE_KEY_HEX,
+      rootNodeId: NODE_ID_1,
+      shareRootIpnsName: IPNS_NAME_FULL,
       rootGeneration: '3',
-      itemNameEncrypted: 'eeff',
+      itemNameEncrypted: ITEM_NAME_HEX,
     };
 
     it('passes req.user.id and dto to the service', async () => {
@@ -100,7 +135,7 @@ describe('SharesController', () => {
 
       await controller.createShare(mockRequest, dto);
 
-      expect(sharesService.createShare).toHaveBeenCalledWith('sharer-uuid-1', dto);
+      expect(sharesService.createShare).toHaveBeenCalledWith(SHARER_ID, dto);
     });
 
     it('maps a write-grant share with encrypted name to hex strings', async () => {
@@ -109,14 +144,14 @@ describe('SharesController', () => {
       const result = await controller.createShare(mockRequest, dto);
 
       expect(result).toEqual({
-        shareId: 'share-uuid-1',
-        recipientPublicKey: '0x04recipientkey',
-        encryptedReadKey: 'aabb',
-        encryptedWriteKey: 'ccdd',
-        rootNodeId: 'node-uuid-1',
-        shareRootIpnsName: 'k51qzi5uqu5full',
+        shareId: SHARE_ID_1,
+        recipientPublicKey: DTO_RECIPIENT_PUBLIC_KEY,
+        encryptedReadKey: READ_KEY_HEX,
+        encryptedWriteKey: WRITE_KEY_HEX,
+        rootNodeId: NODE_ID_1,
+        shareRootIpnsName: IPNS_NAME_FULL,
         rootGeneration: '3',
-        itemNameEncrypted: 'eeff',
+        itemNameEncrypted: ITEM_NAME_HEX,
         createdAt,
       });
     });
@@ -128,7 +163,7 @@ describe('SharesController', () => {
 
       expect(result.encryptedWriteKey).toBeNull();
       expect(result.itemNameEncrypted).toBeNull();
-      expect(result.encryptedReadKey).toBe('1122');
+      expect(result.encryptedReadKey).toBe(READ_KEY_HEX_MIN);
     });
 
     it('propagates NotFoundException when the recipient is unknown', async () => {
@@ -139,7 +174,7 @@ describe('SharesController', () => {
   });
 
   describe('revokeForItems', () => {
-    const dto: RevokeForItemsDto = { ipnsNames: ['k51qzi5uqu5full', 'k51qzi5uqu5min'] };
+    const dto: RevokeForItemsDto = { ipnsNames: [IPNS_NAME_FULL, IPNS_NAME_MIN] };
 
     it('forwards req.user.id and ipnsNames and returns the service summary', async () => {
       const summary = { revokedShares: 2, revokedInvites: 1 };
@@ -147,7 +182,7 @@ describe('SharesController', () => {
 
       const result = await controller.revokeForItems(mockRequest, dto);
 
-      expect(sharesService.revokeForItems).toHaveBeenCalledWith('sharer-uuid-1', dto.ipnsNames);
+      expect(sharesService.revokeForItems).toHaveBeenCalledWith(SHARER_ID, dto.ipnsNames);
       expect(result).toBe(summary);
     });
   });
@@ -160,7 +195,7 @@ describe('SharesController', () => {
 
       await controller.getReceivedShares(mockRequest, pagination);
 
-      expect(sharesService.getReceivedShares).toHaveBeenCalledWith('sharer-uuid-1', 25, 10);
+      expect(sharesService.getReceivedShares).toHaveBeenCalledWith(SHARER_ID, 25, 10);
     });
 
     it('maps received shares with sharer publicKey across both null branches', async () => {
@@ -173,19 +208,19 @@ describe('SharesController', () => {
 
       expect(result.total).toBe(2);
       expect(result.shares[0]).toEqual({
-        shareId: 'share-uuid-1',
-        sharerPublicKey: '04sharerkey',
-        encryptedReadKey: 'aabb',
-        encryptedWriteKey: 'ccdd',
-        rootNodeId: 'node-uuid-1',
-        shareRootIpnsName: 'k51qzi5uqu5full',
+        shareId: SHARE_ID_1,
+        sharerPublicKey: PUBLIC_KEY_SHARER,
+        encryptedReadKey: READ_KEY_HEX,
+        encryptedWriteKey: WRITE_KEY_HEX,
+        rootNodeId: NODE_ID_1,
+        shareRootIpnsName: IPNS_NAME_FULL,
         rootGeneration: '3',
-        itemNameEncrypted: 'eeff',
+        itemNameEncrypted: ITEM_NAME_HEX,
         createdAt,
       });
       expect(result.shares[1].encryptedWriteKey).toBeNull();
       expect(result.shares[1].itemNameEncrypted).toBeNull();
-      expect(result.shares[1].sharerPublicKey).toBe('04sharerkey2');
+      expect(result.shares[1].sharerPublicKey).toBe(PUBLIC_KEY_SHARER_2);
     });
   });
 
@@ -197,7 +232,7 @@ describe('SharesController', () => {
 
       await controller.getSentShares(mockRequest, pagination);
 
-      expect(sharesService.getSentShares).toHaveBeenCalledWith('sharer-uuid-1', 50, 0);
+      expect(sharesService.getSentShares).toHaveBeenCalledWith(SHARER_ID, 50, 0);
     });
 
     it('maps sent shares with recipient publicKey across both null branches', async () => {
@@ -210,19 +245,19 @@ describe('SharesController', () => {
 
       expect(result.total).toBe(2);
       expect(result.shares[0]).toEqual({
-        shareId: 'share-uuid-1',
-        recipientPublicKey: '04recipientkey',
-        encryptedReadKey: 'aabb',
-        encryptedWriteKey: 'ccdd',
-        rootNodeId: 'node-uuid-1',
-        shareRootIpnsName: 'k51qzi5uqu5full',
+        shareId: SHARE_ID_1,
+        recipientPublicKey: PUBLIC_KEY_RECIPIENT,
+        encryptedReadKey: READ_KEY_HEX,
+        encryptedWriteKey: WRITE_KEY_HEX,
+        rootNodeId: NODE_ID_1,
+        shareRootIpnsName: IPNS_NAME_FULL,
         rootGeneration: '3',
-        itemNameEncrypted: 'eeff',
+        itemNameEncrypted: ITEM_NAME_HEX,
         createdAt,
       });
       expect(result.shares[1].encryptedWriteKey).toBeNull();
       expect(result.shares[1].itemNameEncrypted).toBeNull();
-      expect(result.shares[1].recipientPublicKey).toBe('04recipientkey2');
+      expect(result.shares[1].recipientPublicKey).toBe(PUBLIC_KEY_RECIPIENT_2);
     });
   });
 
@@ -261,9 +296,9 @@ describe('SharesController', () => {
     it('delegates to the service with shareId and req.user.id', async () => {
       sharesService.revokeShare.mockResolvedValue(undefined);
 
-      await controller.revokeShare(mockRequest, 'share-uuid-1');
+      await controller.revokeShare(mockRequest, SHARE_ID_1);
 
-      expect(sharesService.revokeShare).toHaveBeenCalledWith('share-uuid-1', 'sharer-uuid-1');
+      expect(sharesService.revokeShare).toHaveBeenCalledWith(SHARE_ID_1, SHARER_ID);
     });
 
     it('propagates ForbiddenException when the caller is not the sharer', async () => {
@@ -271,7 +306,7 @@ describe('SharesController', () => {
         new ForbiddenException('Only the sharer can revoke a share')
       );
 
-      await expect(controller.revokeShare(mockRequest, 'share-uuid-1')).rejects.toThrow(
+      await expect(controller.revokeShare(mockRequest, SHARE_ID_1)).rejects.toThrow(
         ForbiddenException
       );
     });
@@ -281,9 +316,9 @@ describe('SharesController', () => {
     it('delegates to the service with shareId and req.user.id', async () => {
       sharesService.hideShare.mockResolvedValue(undefined);
 
-      await controller.hideShare(mockRequest, 'share-uuid-1');
+      await controller.hideShare(mockRequest, SHARE_ID_1);
 
-      expect(sharesService.hideShare).toHaveBeenCalledWith('share-uuid-1', 'sharer-uuid-1');
+      expect(sharesService.hideShare).toHaveBeenCalledWith(SHARE_ID_1, SHARER_ID);
     });
 
     it('propagates NotFoundException when the share is missing', async () => {
@@ -294,17 +329,17 @@ describe('SharesController', () => {
   });
 
   describe('updateGrant', () => {
-    const dto: UpdateGrantDto = { encryptedReadKey: 'aabbcc', rootGeneration: '4' };
+    const dto: UpdateGrantDto = { encryptedReadKey: UPDATE_READ_KEY_HEX, rootGeneration: '4' };
 
     it('delegates shareId, req.user.id, encryptedReadKey and rootGeneration to the service and returns 204', async () => {
       sharesService.updateGrant.mockResolvedValue(undefined);
 
-      const result = await controller.updateGrant(mockRequest, 'share-uuid-1', dto);
+      const result = await controller.updateGrant(mockRequest, SHARE_ID_1, dto);
 
       expect(sharesService.updateGrant).toHaveBeenCalledWith(
-        'share-uuid-1',
-        'sharer-uuid-1',
-        'aabbcc',
+        SHARE_ID_1,
+        SHARER_ID,
+        UPDATE_READ_KEY_HEX,
         '4',
         undefined,
         undefined
@@ -317,7 +352,7 @@ describe('SharesController', () => {
         new ForbiddenException('Only the sharer can update the grant')
       );
 
-      await expect(controller.updateGrant(mockRequest, 'share-uuid-1', dto)).rejects.toThrow(
+      await expect(controller.updateGrant(mockRequest, SHARE_ID_1, dto)).rejects.toThrow(
         ForbiddenException
       );
     });
