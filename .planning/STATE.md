@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
-current_phase: 70.1
-current_phase_name: rotation-read-plane-durability-and-deep-crash-resume-soundne
+current_phase: 71
+current_phase_name: share-invite-security-and-ipns-data-integrity-api
 status: executing
 stopped_at: Phase 70.1 planned (13 plans, 7 waves)
-last_updated: "2026-07-09T14:01:29.470Z"
-last_activity: 2026-07-08
-last_activity_desc: Phase 70.1 execution started
+last_updated: "2026-07-09T21:18:17.991Z"
+last_activity: 2026-07-09
+last_activity_desc: Phase 71 execution started
 progress:
   total_phases: 16
-  completed_phases: 11
-  total_plans: 161
-  completed_plans: 147
-  percent: 69
+  completed_phases: 12
+  total_plans: 170
+  completed_plans: 160
+  percent: 75
 ---
 
 # Project State
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-27)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 70.1 — rotation-read-plane-durability-and-deep-crash-resume-soundne
+**Current focus:** Phase 71 — share-invite-security-and-ipns-data-integrity-api
 
 ## Current Position
 
-Phase: 70.1 (rotation-read-plane-durability-and-deep-crash-resume-soundne) — EXECUTING
-Plan: 1 of 13
-Status: Ready to execute
-Last activity: 2026-07-08 — Phase 70.1 execution started
+Phase: 71 (share-invite-security-and-ipns-data-integrity-api) — EXECUTING
+Plan: 1 of 9
+Status: Executing Phase 71
+Last activity: 2026-07-09 — Phase 71 execution started
 
 Progress: `██████████` 79 / 79 plans (100%)
 

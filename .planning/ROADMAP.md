@@ -778,12 +778,12 @@ Plans:
 5. `bulkRevoke` issues a single DELETE (not `find` + `remove`)
 6. `ShareInviteService` has unit coverage for `createInvite`, `getInvitesForItem`, and `revokeInvite` with realistic fixtures (not placeholder strings)
 
-**Plans**: 9 plans (includes D-10 full share-plane rename foundation)
+**Plans**: 2/9 plans executed
 
 **Wave 1**
 
-- [ ] 71-01-PLAN.md — D-10/D-04 FOUNDATION: apps/api share-plane rename (columns/entities/DTOs/services/specs, purge "descriptor") + cutover-in-place claim_count CHECK + api-client regen (SC#3)
-- [ ] 71-04-PLAN.md — D-05 same-seq CID-equivocation guard + D-06 first-publish 23505→409 in ipns.service (SC#4)
+- [x] 71-01-PLAN.md — D-10/D-04 FOUNDATION: apps/api share-plane rename (columns/entities/DTOs/services/specs, purge "descriptor") + cutover-in-place claim_count CHECK + api-client regen (SC#3)
+- [x] 71-04-PLAN.md — D-05 same-seq CID-equivocation guard + D-06 first-publish 23505→409 in ipns.service (SC#4)
 
 **Wave 2** *(after 71-01)*
 
