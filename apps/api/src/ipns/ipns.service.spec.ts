@@ -2255,6 +2255,51 @@ describe('IpnsService', () => {
   });
 
   // =========================================================================
+  // D-06: first-publish INSERT-race (Postgres 23505 unique-violation) → 409
+  // =========================================================================
+
+  describe('first-publish INSERT-race translation (D-06/SC#4)', () => {
+    it('translates a Postgres 23505 unique-violation on first-publish save into ConflictException (409)', async () => {
+      mockFolderIpnsRepo.findOne.mockResolvedValue(null);
+      mockFolderIpnsRepo.create.mockReturnValue({ ...mockFolderEntity, sequenceNumber: '1' });
+      mockParseIpnsRecord.mockResolvedValue({
+        value: `/ipfs/${testMetadataCid}`,
+        sequence: 1n,
+      });
+      // Concurrent first-publish race: another request's INSERT won, this one's
+      // save() hits the unique constraint on ipns_name.
+      mockFolderIpnsRepo.save.mockRejectedValue({ code: '23505' });
+
+      await expect(
+        service.publishRecord(testUserId, {
+          ipnsName: testIpnsName,
+          record: testRecord,
+          metadataCid: testMetadataCid,
+        })
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('re-throws a non-23505 first-publish save error unchanged', async () => {
+      mockFolderIpnsRepo.findOne.mockResolvedValue(null);
+      mockFolderIpnsRepo.create.mockReturnValue({ ...mockFolderEntity, sequenceNumber: '1' });
+      mockParseIpnsRecord.mockResolvedValue({
+        value: `/ipfs/${testMetadataCid}`,
+        sequence: 1n,
+      });
+      const nonUniqueViolation = { code: '23503' }; // foreign-key violation, not unique
+      mockFolderIpnsRepo.save.mockRejectedValue(nonUniqueViolation);
+
+      await expect(
+        service.publishRecord(testUserId, {
+          ipnsName: testIpnsName,
+          record: testRecord,
+          metadataCid: testMetadataCid,
+        })
+      ).rejects.toBe(nonUniqueViolation);
+    });
+  });
+
+  // =========================================================================
   // D-03: Strict first-publish gate — only embedded 1 accepted (Plan 60-05)
   // =========================================================================
 

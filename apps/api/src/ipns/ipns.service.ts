@@ -462,7 +462,25 @@ export class IpnsService {
       isRoot: false, // Root folder is tracked in Vault entity
     });
 
-    const saved = await this.ipnsRecordRepository.save(folder);
+    // D-06: two brand-new publishRecord calls for the same ipnsName can race
+    // past the findOne(null) check above and both attempt this INSERT; the
+    // loser hits the DB's unique constraint on ipns_name. Translate that
+    // Postgres unique-violation (23505) into a clean, idempotent-retriable
+    // 409 instead of letting an ambiguous 500 surface. Mirrors the
+    // err.code / err.driverError.code idiom used in shares.service.ts —
+    // never QueryFailedError instanceof, which does not survive the
+    // TypeORM driver boundary reliably.
+    let saved: IpnsRecord;
+    try {
+      saved = await this.ipnsRecordRepository.save(folder);
+    } catch (err: unknown) {
+      const code = (err as { code?: string; driverError?: { code?: string } }).code;
+      const driverCode = (err as { driverError?: { code?: string } }).driverError?.code;
+      if (code === '23505' || driverCode === '23505') {
+        throw new ConflictException({ statusCode: 409, message: 'IPNS record already exists' });
+      }
+      throw err;
+    }
 
     // Auto-enroll for TEE republishing when encrypted key is provided.
     // enrollFolder is scheduling-only (2 args): signing columns live in ipns_records.
