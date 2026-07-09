@@ -405,6 +405,37 @@ describe('ShareInviteService — claimInvite security invariants', () => {
       expect(existingShare.encryptedWriteKey).toEqual(existingWriteKey);
       expect(existingShare.encryptedWriteKey).not.toBeNull();
     });
+
+    it('generation-bump on a write-capable share via a write-capable invite refreshes encryptedWriteKey (Greptile P1: no stale write key)', async () => {
+      // isGenerationBump=true but isWriteUpgrade=false (existing share ALREADY has write).
+      // The write key must still advance to the new generation, else the recipient keeps
+      // an old-generation write key and silently loses write capability post-rotation.
+      mockInviteRepo.findOne.mockResolvedValue(
+        makeInvite({ encryptedWriteKey: Buffer.from('ff'.repeat(64), 'hex'), rootGeneration: '3' })
+      );
+
+      const staleWriteKey = Buffer.from('ee'.repeat(64), 'hex');
+      const existingShare = {
+        id: 'existing-share-id',
+        encryptedWriteKey: staleWriteKey,
+        rootGeneration: '1',
+        encryptedReadKey: Buffer.from('cc'.repeat(64), 'hex'),
+      } as unknown as Share;
+      mockManager.findOne.mockResolvedValue(existingShare);
+
+      const dto: ClaimInviteDto = { encryptedReadKey: READ_HEX, encryptedWriteKey: WRITE_HEX };
+
+      const result = await service.claimInvite(token, claimerId, dto);
+
+      expect(result).toEqual({ shareId: 'existing-share-id' });
+      expect(mockManager.save).toHaveBeenCalledTimes(1);
+      const savedShare = mockManager.save.mock.calls[0][0] as Share;
+      // Generation advanced AND the write key was refreshed to the new-generation value —
+      // not left at the stale old-generation key.
+      expect(savedShare.rootGeneration).toBe('3');
+      expect(savedShare.encryptedWriteKey).toEqual(Buffer.from(WRITE_HEX, 'hex'));
+      expect(savedShare.encryptedWriteKey).not.toEqual(staleWriteKey);
+    });
   });
 
   // ------------------------------------------------------------------ getInvitesForItem (D-09)

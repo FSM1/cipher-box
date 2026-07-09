@@ -198,7 +198,18 @@ export class ShareInviteService {
 
         if (isWriteUpgrade || isGenerationBump) {
           existingShare.encryptedReadKey = Buffer.from(dto.encryptedReadKey, 'hex');
-          if (isWriteUpgrade && dto.encryptedWriteKey) {
+          // Refresh the write key when the claimer supplies one AND write authority is
+          // (re)established at the new generation: either a read→write upgrade, OR a
+          // generation bump on an already-write-capable share via a write-capable invite.
+          // Without the generation-bump arm, a bump would advance encryptedReadKey +
+          // rootGeneration while leaving encryptedWriteKey wrapped for the OLD generation's
+          // key material — the recipient would silently lose write capability post-rotation.
+          // Still presence-gated on dto.encryptedWriteKey so a non-widening / read-only
+          // re-claim can never null out an existing write grant (T-66-E1).
+          if (
+            (isWriteUpgrade || (isGenerationBump && inviteGrantsWrite)) &&
+            dto.encryptedWriteKey
+          ) {
             existingShare.encryptedWriteKey = Buffer.from(dto.encryptedWriteKey, 'hex');
           }
           if (isGenerationBump) {
