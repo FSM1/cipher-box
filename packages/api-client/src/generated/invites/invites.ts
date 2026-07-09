@@ -44,7 +44,7 @@ export const invitesControllerGetInviteData = (
   );
 };
 /**
- * Claim an invite by providing the descriptor ref re-wrapped for the recipient. Creates a single Share row. Single-claim enforced atomically.
+ * Claim an invite by providing the encrypted key re-wrapped for the recipient. Creates a single Share row. Single-claim enforced atomically.
  * @summary Claim an invite link
  */
 export const invitesControllerClaimInvite = (
