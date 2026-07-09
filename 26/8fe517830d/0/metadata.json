@@ -1,0 +1,97 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "268fe517830d",
+  "session_id": "4d78f8a5-6112-418c-85c3-c6241359b1fb",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-09T22:13:54.684846Z",
+  "branch": "feat/share-invite-security-and-ipns-data-integrity-api",
+  "checkpoints_count": 3,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "8c8a4643d0fd",
+  "token_usage": {
+    "input_tokens": 17891,
+    "cache_creation_tokens": 367384,
+    "cache_read_tokens": 9420005,
+    "output_tokens": 91548,
+    "api_call_count": 58
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Execute all 9 plans of phase 71 (Share-Invite Security & IPNS Data-Integrity API) in dependency-ordered waves using parallel subagent executors, per the execute-phase orchestrator workflow, with no CLI flags active.",
+    "outcome": "Waves 1, 2, and 3a (7 of 9 plans: 71-01, 71-02, 71-03, 71-04, 71-06, 71-07, 71-08) executed, merged, and post-merge gates passed green (typecheck, cargo check --all-targets, 889/889 api tests); the checkpoint plan 71-05 (live-stack race test) and Wave 4 (71-09) remained pending when the transcript ends, with the Wave 3a tracking commit failing to land and being retried.",
+    "learnings": {
+      "repo": [
+        "Phase 71 worktrees fork from live HEAD (baseRef reason `baseref-head`), so all 4 waves retain parallel worktree isolation with no inter-wave degrade",
+        "Root `pnpm typecheck` is the real cross-plan integration check for this monorepo, but it intentionally fails mid-phase (Wave 1 renames the API while sdk/web consumers are only fixed in Wave 2) — post-merge gates must be scoped per-wave to what actually reached a consistent state rather than always running the full command",
+        "`apps/api tsc --noEmit` is NOT covered by the root `pnpm typecheck` CI script and is not CI-gated — pre-existing errors there (crypto/dist staleness cascade, ipns-verify-cache.spec.ts TS2352, http-metrics.interceptor.spec.ts TS2724 HttpArgumentsHost) are non-blocking noise, not regressions",
+        "`packages/crypto` dist can be stale in fresh worktrees, causing spurious null-narrowing/type errors downstream (apps/api) until `pnpm --filter @cipherbox/crypto build` is run",
+        "This phase's requirement IDs use CONTEXT.md decision-ID naming (e.g. D-10, D-04), not the global REQUIREMENTS.md REQ-ID scheme, so `requirements.mark-complete` is a no-op for phase-71 plans",
+        "`npx jest --testPathPattern=...` should be used directly instead of `pnpm --filter test --`, which silently drops the pattern arg due to double `--` wrapping",
+        "codebase-drift gate flags ~143 pre-existing structural elements as advisory noise whenever `last_mapped_commit` is null (repo never `/gsd-map-codebase`'d) — not a real regression signal until the repo is mapped once"
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/write_ops/implementation/delete.rs",
+          "line": 543,
+          "end_line": 546,
+          "finding": "Agent-reported E0560 diagnostic referencing old descriptor field names was stale LSP/intermediate-worktree noise, not a real error — cargo check --all-targets on the merged tree compiled cleanly"
+        },
+        {
+          "path": "crates/fuse/src/write_ops/implementation/rename.rs",
+          "line": 294,
+          "end_line": 297,
+          "finding": "Same stale-diagnostic pattern as delete.rs:543-546; resolved as non-issue after merge"
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "finding": "Modified by 71-04 (D-05 same-seq CID equivocation guard, D-06 23505→409 ConflictException translation); null-narrowing errors initially attributed here by 71-08 were actually a crypto/dist staleness cascade, not a real regression from this file"
+        },
+        {
+          "path": "apps/api/src/shares/share-invite.service.ts",
+          "finding": "71-07 replaced claimInvite's existing-share log-and-return with a widen-only merge (isWriteUpgrade/isGenerationBump gates) inside the existing claim transaction, preserving never-downgrade write→read invariant (T-66-E1)"
+        },
+        {
+          "path": "apps/api/src/shares/shares.service.ts",
+          "finding": "71-08 replaced revokeForItems's manager.find(Share)+manager.remove(shares) with a single createQueryBuilder().delete().from(Share) scoped to sharer_id + share_root_ipns_name, mirroring the sibling invite-revoke .update() block"
+        }
+      ],
+      "workflow": [
+        "Orchestrator dispatches wave agents one at a time (not all at once) and verifies each new agent's worktree was created before dispatching the next, to avoid a config.lock race on worktree creation",
+        "Post-merge gates should re-verify diagnostics an executor subagent flags rather than trusting them at face value — run the authoritative check (e.g. cargo check --all-targets) against the actually-merged tree before deciding a fix is needed",
+        "Known false-negative: the tracking-commit helper can report `commit_failed` even when the commit actually lands — verify via `git log`/git state before trusting the reported status",
+        "STATE.md/ROADMAP.md writes are intentionally reserved for the orchestrator; executor subagents must not modify them, only leave SUMMARY.md files"
+      ]
+    },
+    "friction": [
+      "71-03's task-notification result included a misleading E0560 Rust compile diagnostic that turned out to be stale/inaccurate, requiring an extra verification pass at the Wave 2 post-merge gate",
+      "71-08 surfaced pre-existing tsc --noEmit errors that needed manual classification (pre-existing vs. phase-introduced) via git diff against origin/main and CI config inspection",
+      "Wave 3a's tracking commit did not land on the first attempt (ROADMAP.md remained staged, HEAD unchanged), requiring a retry with more visible output",
+      "71-02 (TS consumers rename) took ~95 minutes and could not run sdk-e2e suites end-to-end against a live API stack in its worktree (no docker stack available), leaving that verification deferred to before merge"
+    ],
+    "open_items": [
+      "71-05 checkpoint (live concurrent first-publish race test against Postgres, autonomous:false) still needs to be handled: author Test 21 (autonomous, typecheck-only) then pause for human-verified live docker+Postgres run",
+      "Wave 4 (71-09: restore invite-service unit coverage) not yet started, depends on 71-06 and 71-07 which are now merged",
+      "D-04's claim_count CHECK constraint backstop requires manual psql verification against live Postgres (documented in 71-01's SUMMARY, non-blocking since mocked in Jest)",
+      "sdk-e2e raw-HTTP suites fixed by 71-02 were only typechecked, not executed end-to-end against a live API stack — recommended before final merge",
+      "Two pre-existing, non-CI-gated apps/api tsc --noEmit errors (ipns-verify-cache.spec.ts TS2352, http-metrics.interceptor.spec.ts TS2724) logged to deferred-items.md but left unfixed as out of phase-71 scope",
+      "Two stale worktree-agent-* branches from prior sessions (no active worktrees) noted as harmless but not cleaned up"
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
