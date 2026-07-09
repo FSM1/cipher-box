@@ -778,7 +778,7 @@ Plans:
 5. `bulkRevoke` issues a single DELETE (not `find` + `remove`)
 6. `ShareInviteService` has unit coverage for `createInvite`, `getInvitesForItem`, and `revokeInvite` with realistic fixtures (not placeholder strings)
 
-**Plans**: 5/9 plans executed
+**Plans**: 7/9 plans executed
 
 **Wave 1**
 
@@ -794,8 +794,8 @@ Plans:
 **Wave 3** *(after 71-04/71-02/71-06)*
 
 - [ ] 71-05-PLAN.md — D-06 sdk-e2e first-publish concurrent-race backstop (live stack, SC#4)
-- [ ] 71-07-PLAN.md — D-07 re-claim widen-only merge + never-downgrade backstop (SC#2)
-- [ ] 71-08-PLAN.md — D-08 bulk-revoke direct DELETE in revokeForItems on share_root_ipns_name (SC#5)
+- [x] 71-07-PLAN.md — D-07 re-claim widen-only merge + never-downgrade backstop (SC#2)
+- [x] 71-08-PLAN.md — D-08 bulk-revoke direct DELETE in revokeForItems on share_root_ipns_name (SC#5)
 
 **Wave 4** *(after 71-06/71-07)*
 
