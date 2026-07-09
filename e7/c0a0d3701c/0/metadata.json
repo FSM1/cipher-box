@@ -1,0 +1,297 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "e7c0a0d3701c",
+  "session_id": "a4ed1cb9-4e4c-4d71-bc03-3c2c6b4e70a3",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-09T10:01:26.669963Z",
+  "branch": "feat/rotation-read-plane-durability-and-deep-crash-resume-soundne",
+  "checkpoints_count": 2,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "de8f6ed3e271",
+  "token_usage": {
+    "input_tokens": 150735,
+    "cache_creation_tokens": 2892730,
+    "cache_read_tokens": 129751385,
+    "output_tokens": 744340,
+    "api_call_count": 492
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-gsd-plan-phase-2026-07-08T13:42:46.030418Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "0eb6f9cbb31b",
+      "timestamp": "2026-07-08T13:42:46.030418Z",
+      "native": {
+        "command": "/gsd-plan-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-gsd-execute-phase-2026-07-08T15:12:58.253651Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "1b22299d3cb2",
+      "timestamp": "2026-07-08T15:12:58.253651Z",
+      "native": {
+        "command": "/gsd-execute-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/gsd-execute-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-insights-2026-07-08T22:06:54.276214Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "insights"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "d42e8425334c",
+      "timestamp": "2026-07-08T22:06:54.276214Z",
+      "native": {
+        "command": "/insights"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/insights",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01HWrVLBHmrKhyMLN1WEc3yj",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-capture"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "de8f6ed3e271",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 2181,
+        "end": 2182,
+        "entry_ids": [
+          "c8f3b029-0547-476c-8088-a47b7c514a13"
+        ],
+        "tool_use_id": "toolu_01HWrVLBHmrKhyMLN1WEc3yj"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01HWrVLBHmrKhyMLN1WEc3yj"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-capture",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_019MUyCMBTy3mb1Mo2c4mvW1",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "de8f6ed3e271",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 2379,
+        "end": 2380,
+        "entry_ids": [
+          "f7d9e55e-8607-4c67-a4e3-a2b5926e3eff"
+        ],
+        "tool_use_id": "toolu_019MUyCMBTy3mb1Mo2c4mvW1"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_019MUyCMBTy3mb1Mo2c4mvW1"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-ship-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_016oZNJJLXTPFRv9VgchZdPw",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "de8f6ed3e271",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 2393,
+        "end": 2394,
+        "entry_ids": [
+          "6da98d5c-591f-44c8-bb6b-a9e9d85cd6d5"
+        ],
+        "tool_use_id": "toolu_016oZNJJLXTPFRv9VgchZdPw"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_016oZNJJLXTPFRv9VgchZdPw"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ship-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_011FgzCvjcnZ4MeSjv8PrkyB",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-capture"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "de8f6ed3e271",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 3628,
+        "end": 3629,
+        "entry_ids": [
+          "0e18b8ed-3407-404d-9046-38d94e2819c2"
+        ],
+        "tool_use_id": "toolu_011FgzCvjcnZ4MeSjv8PrkyB"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_011FgzCvjcnZ4MeSjv8PrkyB"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-capture",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 60
+  },
+  "summary": {
+    "intent": "Finish executing and shipping GSD Phase 70.1 (rotation read-plane durability and crash-resume soundness) — get the desktop-e2e D-16 acceptance gate green across macOS/Linux/Windows, then run the full ship-phase pipeline (verify/secure/validate/simplify/e2e/CodeRabbit/PR/resolve-reviews) to merge-ready state.",
+    "outcome": "Phase 70.1 shipped as PR #598 with all CI checks green on all three platforms and 0 unresolved review threads; along the way, two genuine security/soundness bugs were found and fixed (a revocation-bypass from a stale in-memory key refresh, and a TS-vs-Rust checkpoint-GC ordering divergence that could permanently lose read access on crash), three pre-existing platform CI gates were fixed, and follow-up todos (deep-path key-refresh gap, macOS FUSE-T Test 5/7 invalidation) were captured and the phase's own todos retired.",
+    "learnings": {
+      "repo": [
+        "This repo's CI does not run `cargo fmt --check` at all — running `cargo fmt -p <crate>` locally before committing is pure churn/version-skew risk and should be skipped unless a lint actually requires it.",
+        "`cargo fmt -p <crate>` still reformats every file in that crate (not just touched ones); always diff and revert out-of-scope files before committing.",
+        "The SC#6 grep gate requires a `// sc6-allow:` marker within a strict ±1-line window of a sanctioned raw IPNS resolve call — placing it 3 lines away fails the gate.",
+        "Windows winfsp builds require fuse-only test modules to be gated `#[cfg(all(test, feature = \"fuse\"))]`, not bare `#[cfg(test)]`, or they E0433 under `--features winfsp`.",
+        "Permission-based test induction (chmod-based write-failure simulation) doesn't work on Windows; such tests must be `#[cfg(unix)]`-gated.",
+        "The gsd commit helper can report `commit_failed` as a false negative even when the commit landed — always verify via `git log`, never blind-retry.",
+        "rust-analyzer diagnostics (E0063, dead_code, unresolved imports) are frequently stale mid-edit snapshots during active subagent edits — verify authoritatively with `cargo check`/`cargo test` before trusting them.",
+        "`gh pr edit` fails on this repo due to Projects-classic GraphQL incompatibility; patch PR bodies via `gh api -X PATCH repos/.../pulls/<N> -F body=@file`.",
+        "macOS FUSE-T defers file `release()` by ~40s and the local publish queue is edge-triggered with no wall-clock backstop — an idle mount can silently stall a queued republish indefinitely.",
+        "First-ever PR CI on a long-lived no-PR branch surfaces branch-wide gate failures (grep gates, platform-specific cargo jobs) that never ran during local development — open PRs earlier."
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/write_ops/grant_scope.rs",
+          "line": 461,
+          "finding": "rotate_read_on_scope_exit discarded RotateReadResult and never refreshed the grant-root inode's in-memory read key, so a subsequent local relink resealed under the stale old key — a revocation bypass. Fixed by threading &mut fs and calling refresh_grant_root_read_key."
+        },
+        {
+          "path": "crates/fuse/src/fs.rs",
+          "line": 373,
+          "finding": "build_scope_exit_child_override failed OPEN per-child (missing child or build_child_refs error → silently skipped), and the override REPLACES the grant-root's published child list — a transient sibling lookup failure would silently orphan that child. Fixed to propagate errors and fail closed, mirroring build_folder_metadata's discipline."
+        },
+        {
+          "path": "packages/sdk-core/src/rotation/engine.ts",
+          "line": 1796,
+          "finding": "repairDirtyNode GC'd a child's ECIES key checkpoint immediately, even when the parent's batched republish hadn't happened yet (pendingChildCount>1) — a crash in that window permanently loses recoverability of that subtree. The Rust twin (engine.rs) already deferred GC via pending_checkpoint_node_ids; ported the same deferral pattern to TS."
+        },
+        {
+          "path": "crates/sdk/src/rotation/engine.rs",
+          "line": 1501,
+          "finding": "Resume Skipped-branch only kept `.frontier` from verify_subtree_clean, discarding is_dirty, so a missing root (is_dirty:true, empty frontier) could be mis-marked Complete instead of routed to the fail-closed resolve. Same defect existed in the TS twin; fixed both to check `frontier.is_empty() && !is_dirty`."
+        },
+        {
+          "path": "crates/sdk/src/floor_store.rs",
+          "line": 697,
+          "finding": "A phase-added test induced write failure via Unix chmod 0o500 but ran its fail-closed assertion unconditionally, breaking on Windows where the chmod has no effect. Fixed by gating the whole test fn with #[cfg(unix)]."
+        }
+      ],
+      "workflow": [
+        "Twin-engine parity is not automatic — every substantive rotation-engine fix (missing-root dirty signal, checkpoint-GC ordering) had to be independently re-verified and ported to the other language's engine.",
+        "Adversarially verifying CodeRabbit/Greptile findings against actual code before fixing avoided two false fixes (client key-borrow zeroization claim, get_wrapped_key double-Zeroizing) while correctly escalating two real bugs.",
+        "Batching multiple independent fixes into one push before re-dispatching expensive CI (desktop-e2e, cross-platform cargo) avoids burning CI cycles.",
+        "The ship-phase flow does not run todo retirement automatically — pending todos with `resolves_phase` matching the shipped phase must be manually checked and moved to completed/."
+      ]
+    },
+    "friction": [
+      "Windows CI hit a transient STATUS_DLL_INIT_FAILED (0xC0000142) API-startup flake unrelated to the code, requiring a re-run.",
+      "11GB of RAM was consumed by two rust-analyzer processes — one was an orphan bound to a deleted worktree directory (cipher-box-phase69), parented by a dangling leftover Claude Code session that also had to be killed.",
+      "Repeated stale rust-analyzer diagnostics (E0063, dead_code, unused import) required authoritative `cargo check`/`cargo test` re-verification multiple times, adding overhead.",
+      "Slow lint-staged/eslint pre-commit hooks on large files (engine.ts, ROADMAP.md) repeatedly hit the 120s Bash timeout mid-commit, requiring timeout increases and post-hoc git-log verification.",
+      "An unscoped `cargo fmt -p cipherbox-fuse` reformatted 8 out-of-scope files with a version-skew risk vs. what already passed CI, discovered only after diffing — had to be reverted.",
+      "CodeRabbit CLI review's first hypothesis (single shared root cause for +2 bump and revocation bypass) was partially wrong/inverted and had to be corrected by deeper agent investigation.",
+      "The initial macOS D-16 timeout was misdiagnosed at first as pure CI slowness before being root-caused as a genuine edge-triggered publish-queue starvation bug."
+    ],
+    "open_items": [
+      "PR #598 is fully green and all review threads resolved but awaiting the user's explicit merge decision.",
+      "Deep scope-exit rotation only refreshes the grant-root inode's in-memory key, not intermediate parent inodes on a multi-level-deep delete — captured as a new todo (2026-07-09-deep-scope-exit-rotation-refreshes-only-grant-root-inode-key.md).",
+      "macOS FUSE-T ignores inval_inode, causing desktop-e2e cross-client-sync Test 5 (content sync) and Test 7 (folder rename sync) to remain soft-skipped on macOS — captured as a todo (2026-07-09-macos-fuse-t-cross-client-sync-invalidation.md).",
+      "ROT-04: desktop query_grants_rooted_at re-mint no-op remains a sanctioned deferral (pre-existing todo).",
+      "WinFsp handle_rename ungated-dest D-15d gate-ordering parity remains deferred (pre-existing todo, narrowed to rename-only after this phase closed the delete-path parity gap).",
+      "Consider memorializing the pattern of orphaned rust-analyzer/dangling Claude sessions surviving deleted worktrees as a cleanup-discipline note."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
