@@ -827,6 +827,16 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
       folderKey: currentFolderKey,
       ipnsPrivateKey: p.ipnsPrivateKeyRef.current ?? new Uint8Array(32),
       writeKey: refreshedWriteKey ?? undefined,
+      // SC4 fix: shared write ops read SharedFolderState.publishedNode
+      // directly (client.ts buildSharedWriteContextFromState, no network
+      // re-resolve). Reseeding without the live publishedNode falls back to
+      // PLACEHOLDER_PUBLISHED_NODE (empty readSealed), so the write retried
+      // after "Refresh access" would throw an unclassified GCM/unseal error
+      // instead of reaching the classifier. Carry the active depth's live
+      // publishedNode, mirroring navigateToSubfolder's capture pattern above.
+      publishedNode:
+        getSdkClient().getSharedFolderState(currentShareId)?.publishedNode ??
+        PLACEHOLDER_PUBLISHED_NODE,
       sequenceNumber: p.currentSequenceNumber ?? 0n,
       children: p.folderChildren,
       ownerPublicKey: parsePublicKey(shareEntry.share.sharerPublicKey),
