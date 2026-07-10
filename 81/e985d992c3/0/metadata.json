@@ -1,0 +1,58 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "81e985d992c3",
+  "session_id": "2e538f07-7404-47a7-b648-78422a25400d",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-10T20:34:57.149706Z",
+  "branch": "feat/shared-write-navigation-correctness-web",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "8bd916143f52",
+  "checkpoint_transcript_start": 506,
+  "transcript_lines_at_start": 506,
+  "token_usage": {
+    "input_tokens": 398,
+    "cache_creation_tokens": 8162,
+    "cache_read_tokens": 1755629,
+    "output_tokens": 5544,
+    "api_call_count": 6
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Re-verify that fix commit d3c39c06e closed the SC4 gap for phase 73 (shared-write-navigation-correctness-web), then mark the phase complete to close out milestone v2.0.",
+    "outcome": "Re-verification passed 7/7 success criteria, VERIFICATION.md was updated to 'passed', phase 73 was marked complete with no warnings, and it was confirmed as the final phase of milestone v2.0 (Metadata and Sharing Refactor); completion tracking and VERIFICATION.md were committed.",
+    "learnings": {
+      "repo": [
+        "cipher-box WRITE-03 refresh-access retry bug: seedActiveSharedFolder was called without publishedNode at one call site while three other call sites passed it; fix passes `getSdkClient().getSharedFolderState(currentShareId)?.publishedNode ?? PLACEHOLDER_PUBLISHED_NODE` so the retry reseeds with a real envelope instead of throwing an unclassified GCM/unseal error (fix commit d3c39c06e, lines ~837-839).",
+        "cipher-box GSD phases: the TDD gate is advisory/non-blocking when MVP mode is off, satisfied as long as plans carried RED `test(NN-xx)` commits."
+      ],
+      "code": [],
+      "workflow": [
+        "For phase.complete, capture raw command output to a file and parse it separately rather than inline-parsing in the same bash invocation — an inline node parser produced a syntax error that looked like a gate failure but was just a scripting mistake."
+      ]
+    },
+    "friction": [
+      "Inline node script used to check the TDD gate had a syntax error, initially appearing as if the gate had failed rather than the check itself being broken; required rerunning phase.complete cleanly with output redirected to a file."
+    ],
+    "open_items": [
+      "A live run of `rotation-ux.spec.ts` WRITE-03 e2e test is still recommended as a non-blocking CI/manual confirmation step for the SC4 fix, not yet executed."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 71,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/phases/73-shared-write-navigation-correctness-web/73-VERIFICATION.md": 70
+      }
+    }
+  ]
+}
