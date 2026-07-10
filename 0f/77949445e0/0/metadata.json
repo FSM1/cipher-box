@@ -1,0 +1,120 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "0f77949445e0",
+  "session_id": "4d78f8a5-6112-418c-85c3-c6241359b1fb",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-10T00:04:53.124302Z",
+  "branch": "feat/share-invite-security-and-ipns-data-integrity-api",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "553f46f1f46c",
+  "token_usage": {
+    "input_tokens": 41269,
+    "cache_creation_tokens": 1091238,
+    "cache_read_tokens": 105259911,
+    "output_tokens": 372821,
+    "api_call_count": 269
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-ship-phase-2026-07-09T22:59:42.56172Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "34559f5bc681",
+      "timestamp": "2026-07-09T22:59:42.56172Z",
+      "native": {
+        "command": "/ship-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/ship-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 15
+  },
+  "summary": {
+    "intent": "Execute all 9 plans of Phase 71 (Share-Invite Security & IPNS Data-Integrity API) in the cipher-box monorepo using wave-based parallel subagent execution, then autonomously run the full post-execution 'ship phase' loop (verify, secure, validate, simplify, SDK E2E gate, CodeRabbit review, PR creation, review resolution, learnings extraction) without user babysitting.",
+    "outcome": "All 9 plans executed across 4 waves with all gates green (typecheck, 894/894 API tests, cargo check, sdk-core/sdk tests); phase verified (16/16 truths) and shipped as PR #599, including a real live-stack proof of the D-06 concurrency fix, a genuine D-05 regression caught and fixed by the SDK E2E gate, a Greptile P1 stale-write-key bug fixed, and all 8 CodeRabbit findings fixed (not deferred) with 0 unresolved review threads; final CI confirmation was still in progress at transcript end.",
+    "learnings": {
+      "repo": [
+        "Repo is squash-merge-only (merge:false, rebase:false, squash:true, title=PR_TITLE) — individual commit subjects never reach main, so GSD's non-conventional 'feat NN-MM:' commit style doesn't need rewording before ship; only the PR title must be conventional and paren-free",
+        "commitlint's subject-no-parens rule is enforced only on the PR title via pr-title.yml CI job, not on individual commits — local commit-msg hook is disabled",
+        "CI's Migration Drift Check only fails on structural drift (CREATE/DROP TABLE, ADD/DROP COLUMN, ALTER TYPE, RENAME COLUMN) — it tolerates index/constraint name churn from `migration:generate`, so a huge generated diff can still be a pass",
+        "Throttling is relaxed under NODE_ENV=test (apps/api/src/app.module.ts:56) — the API's own dev server runs with NODE_ENV=test so THROTTLE_BYPASS_SECRET isn't required for full sdk-e2e runs",
+        "sdk-e2e auth requires SDK_E2E_SECRET (default 'e2e-test-secret-do-not-use-in-production' when vitest doesn't autoload .env) to match the API's TEST_LOGIN_SECRET ('e2e-test-secret-ci-only') or all suites cascade-skip after a 401 in beforeAll",
+        "API doesn't log handled 4xx responses — must temporarily add an axios response interceptor in packages/api-client/src/instance.ts to see err.response.data, then revert after diagnosis",
+        "tee-worker (:3002) /public-key returns 401 after a DB reset wipes tee_key_state, causing tee-republish test failures unrelated to code changes — a known environmental gotcha when resetting the local Postgres DB for live-stack testing",
+        "CI has a working TEE worker so tee-republish tests pass there even when they fail locally after a DB reset — confirms local-only environmental cause",
+        "GSD `update-plan-progress` calls flip the phase's ROADMAP.md box to [x] once all plans have summaries, independent of whether verification has actually run yet",
+        "gsd tracking-commit helper can report 'commit_failed' as a false negative while the commit actually lands — must verify via `git log --oneline -1`, not blind retry (previously known, reconfirmed twice in this session)"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 321,
+          "finding": "D-05 same-seq CID-equivocation guard threw 400 whenever embeddedSeq===dbSeq with a different CID, but couldn't distinguish genuine equivocation from a forward-CAS attempt that lost a race; fixed to fall through to the CAS UPDATE (yielding correct 409) when expectedSequenceNumber === embeddedSeq - 1, confirmed via rotation-crash-safety e2e test and a new unit test"
+        },
+        {
+          "path": "apps/api/src/shares/share-invite.service.ts",
+          "line": 207,
+          "finding": "Greptile P1: widen-only merge logic advanced generation/read-key on a generation-bump re-claim via a write-capable invite onto an already-write-capable share, but left encryptedWriteKey wrapped for the old generation (isGenerationBump && inviteGrantsWrite but isWriteUpgrade=false case) — recipient silently lost write access post-rotation; fixed and covered with a new unit test"
+        },
+        {
+          "path": "apps/api/src/shares/share-invite.service.ts",
+          "line": 193,
+          "finding": "claimInvite allowed a write-capable invite to be claimed without an encryptedWriteKey, silently downgrading to read-only share; CodeRabbit flagged this MAJOR (reinforcing an earlier deferred finding) — fixed by adding pre-transaction validation rejecting the claim with 400 if a write invite lacks a write key"
+        },
+        {
+          "path": "apps/web/src/services/share.service.ts",
+          "line": 102,
+          "finding": "Permission-derivation used `writeDescriptorRef/encryptedWriteKey !== null` after a rename, but the DTO field type is string|null|undefined, so an undefined write key would be misclassified as 'write' capable — loosened both occurrences to `!= null`"
+        },
+        {
+          "path": "apps/api/src/migrations/1750000000000-ApiSchemaCutover.ts",
+          "line": 1,
+          "finding": "Added composite (sharer_id, share_root_ipns_name) indexes on shares and share_invites per CodeRabbit N1; required matching class-level @Index decorators on share.entity.ts and share-invite.entity.ts to avoid Migration Drift Check failures (drift check compares entities vs migrated schema)"
+        }
+      ],
+      "workflow": [
+        "Wave-based parallel subagent execution: verify each spawned executor's worktree exists (via git config.lock release check) before dispatching the next agent in the same wave, to avoid config-lock races",
+        "Merge all worktrees in a wave together only after all agents in that wave return, then run a post-merge integration gate scoped to what the wave's plans actually touch (avoid running the full/wrong test command by inspecting root package.json scripts for a pnpm monorepo instead of defaulting to `npm test`)",
+        "When an agent flags a diagnostic (e.g. cargo E0560) that conflicts with its own reported passing checks, don't trust either blindly — settle it by re-running the check against the actually-merged tree, since intermediate worktree/LSP state can produce stale false positives",
+        "For blocking human-verify checkpoint plans, split the wave into an autonomous sub-wave (other plans) plus a separate handling path for the checkpoint plan; when the user delegates the live-stack run back to the agent, inspect the current live-stack state first (e.g. check if a port is already bound and by what/how stale) before resetting shared infra",
+        "Treat repeated CodeRabbit/Greptile findings on the same area as an escalation signal — the session reversed an earlier 'defer' decision to 'fix' once a second independent reviewer flagged the same MAJOR issue",
+        "Use `gh api -X PATCH repos/<owner>/<repo>/pulls/<N> -F body=@file` instead of `gh pr edit` when the repo has Projects-classic GraphQL issues blocking the edit endpoint",
+        "Poll GitHub PR checks/threads in the background with correct tab-delimited parsing for `gh pr checks` output (a naive awk split on spaces breaks on multi-word check names like 'CodeRabbit / Review')",
+        "Always `git fetch` and check for a bot-pushed `chore(release)` commit before pushing again, to avoid a rejected push or accidental overwrite"
+      ]
+    },
+    "friction": [
+      "CodeRabbit CLI review appeared to complete quickly but the PR-level CodeRabbit review was actually still processing ('skipping' status was a red herring) — the user had to correct the assistant's assumption that it was skipped",
+      "First CI-check poll script had a parsing bug (awk field split on spaces broke on the multi-word 'CodeRabbit / Review' check name), requiring a second corrected poll",
+      "Tracking-commit helper's known false-negative ('commit_failed') recurred twice during the session, requiring manual git log verification each time",
+      "DB reset (done at user's request to get a clean live-stack run) had the side effect of wiping tee_key_state, causing 2 unrelated tee-republish test failures that needed separate diagnosis to rule out as a regression",
+      "Stale compiled API process on :3000 (PID from an earlier, unknown-vintage build) had to be discovered and killed before a meaningful live-stack test run could occur",
+      "Root cause diagnosis of the D-05 regression required temporarily instrumenting packages/api-client/src/instance.ts with a debug interceptor since the API doesn't log handled 4xx bodies"
+    ],
+    "open_items": [
+      "Todo: extract-assert-root-ownership-helper — dedup 7-line ownership-gate logic duplicated in createInvite and createShare (deferred pre-ship as low-risk-but-unnecessary refactor of verified security code)",
+      "Todo: restore-tee-key-state-for-sdk-e2e-tee-republish — tee-worker auth/secret/epoch-sync issue causing tee_key_state to stay empty after a DB reset, blocking 2 sdk-e2e tests locally (confirmed non-issue in CI)",
+      "Todo: reconcile-phase71-planning-docs-d01-greenfield — CONTEXT/PATTERNS/SECURITY/VERIFICATION/STATE docs contain stale D-01/greenfield language that lags the amended design (code itself is correct/verified)",
+      "Deleted todo (superseded by fix): zeroize-file-keys-on-unwrap-error-path and reject-write-invite-claimed-without-write-key were both originally deferred as todos, then later actually fixed after CodeRabbit re-flagged the write-key issue as MAJOR — confirm the zeroize-file-keys todo file's current status, as it may still be open since only the write-key issue was reversed to a fix",
+      "Final CI check settlement on commit 79f2046ac (after the full CodeRabbit fix round) was still polling/unconfirmed at end of transcript — need to confirm all checks green and give the final ship report (SHA, CI status, N/N threads resolved, deferred todos list)",
+      "PR #599 merge decision explicitly left to the user, not yet acted upon"
+    ]
+  }
+}
