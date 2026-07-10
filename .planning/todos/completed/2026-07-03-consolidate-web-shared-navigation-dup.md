@@ -7,7 +7,43 @@ files:
   - apps/web/src/hooks/useSharedNavigationActions.ts:765
   - apps/web/src/components/file-browser/ShareDialog.tsx:44
 source: ship-phase 68.1 simplify review
+status: completed
+resolved: 2026-07-10
+resolution: partial — genuine duplication removed; the 9-site resolveKinds unification evaluated and deliberately declined (see Resolution)
 ---
+
+## Resolution (2026-07-10)
+
+Closed. The genuine duplication this todo targeted has been removed; the one
+remaining item (the "resolveKinds-then-project util across ~9 sites") was
+investigated end-to-end and **deliberately declined** — it is a family of
+intentionally-distinct variants, not a mechanical duplicate.
+
+Done (Phase 73 + 2026-07-10 follow-up):
+
+- SC6 restore consolidation — `navigateUp`/`navigateToBreadcrumb` folded into one
+  `restoreToBreadcrumbIndex(crumbIndex)` helper (Phase 73, 73-06).
+- Dead `resolveFolderIpnsPrivateKey` + orphaned JSDoc removed (Phase 73, 73-06).
+- `readSharedContent` extracted — `downloadSharedFile` / `loadSharedFileContent`
+  now share one read-core helper preserving exact error strings and control flow
+  (commit `ef3c5e77b`).
+- `parseRootGeneration` exported from `share.service.ts` and imported by
+  `ShareDialog.tsx` (commit `334d4c492`).
+- `resolveFileIpnsKey` mirror — MOOT (its `resolveFolderIpnsPrivateKey` analog was
+  deleted in Phase 73).
+
+Declined (with rationale, see back-out analysis below): the resolveKinds-then-project
+consolidation. It has **zero user impact** (behavior-neutral by definition), the sites
+are load-bearing-distinct rather than duplicated (so a helper gives no "fix-once"
+benefit and could mask intentional guard differences), and unifying would require
+changing observable guard/timing semantics in security-critical navigation with no
+CI-gated e2e. Net value low, risk moderate-to-high. **Do not reopen as a mechanical
+refactor** — if ever revisited, scope it as a from-scratch redesign with explicit
+sign-off on which guard semantics may change.
+
+Verification of the landed changes: `pnpm typecheck` exit 0; eslint clean;
+web-e2e `writable-shares.spec.ts` + `shared-folder-desync.spec.ts` 35/35 against the
+live stack (owned-folder nav byte-for-byte unchanged).
 
 ## Partially resolved (Phase 73, 2026-07-10)
 
@@ -45,7 +81,7 @@ Three of the four remaining sub-items are now closed:
   its exact `setError`-then-return control flow, so its generic catch-all
   (`logger.error` + "Failed to download file") still only fires for genuinely unexpected errors.
 
-**Still open, NOT safely unifiable (back-out, 2026-07-10):** the single resolveKinds-then-project
+**Declined — NOT safely unifiable (back-out analysis, 2026-07-10):** the single resolveKinds-then-project
 util across the ~9 sites. A full investigation (reading every cited site plus adjacent ones
 found via grep) found the "pattern" is a family, not a duplicate -- every site differs in a way
 that's load-bearing, not incidental:
