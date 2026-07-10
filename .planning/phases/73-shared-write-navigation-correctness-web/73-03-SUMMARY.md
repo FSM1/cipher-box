@@ -101,3 +101,10 @@ SC5 is fully satisfied. No blockers for other phase-73 plans; this plan had `dep
 
 *Phase: 73-shared-write-navigation-correctness-web*
 *Completed: 2026-07-10*
+
+## Self-Check: PASSED
+
+- FOUND: apps/web/src/components/file-browser/SharedFolderRow.tsx
+- FOUND: .planning/phases/73-shared-write-navigation-correctness-web/73-03-SUMMARY.md
+- FOUND: 8a1218735
+- FOUND: d1c38de44
