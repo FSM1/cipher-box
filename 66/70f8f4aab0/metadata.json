@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "6670f8f4aab0",
+  "strategy": "manual-commit",
+  "branch": "feat/sdk-write-plane-durability-and-correctness",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/sdk/src/__tests__/collect-subtree-ipns-names.test.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/66/70f8f4aab0/0/metadata.json",
+      "transcript": "/66/70f8f4aab0/0/full.jsonl",
+      "content_hash": "/66/70f8f4aab0/0/content_hash.txt",
+      "prompt": "/66/70f8f4aab0/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 78068,
+    "cache_creation_tokens": 2273487,
+    "cache_read_tokens": 62762701,
+    "output_tokens": 371375,
+    "api_call_count": 302
+  }
+}
