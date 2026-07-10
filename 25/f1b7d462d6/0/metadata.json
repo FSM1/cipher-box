@@ -1,0 +1,116 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "25f1b7d462d6",
+  "session_id": "2b291057-9ece-4152-bb3e-94cc8f022c70",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-10T22:10:09.33562Z",
+  "branch": "feat/shared-write-navigation-correctness-web",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    ".planning/phases/73-shared-write-navigation-correctness-web/73-VALIDATION.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "8fc9eaedc65b",
+  "token_usage": {
+    "input_tokens": 27438,
+    "cache_creation_tokens": 279286,
+    "cache_read_tokens": 6464466,
+    "output_tokens": 60413,
+    "api_call_count": 56
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-ship-phase-2026-07-10T21:51:44.372452Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "7154f28d72f3",
+      "timestamp": "2026-07-10T21:51:44.372452Z",
+      "native": {
+        "command": "/ship-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/ship-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Autonomously run the full post-execute-phase ship loop for GSD phase 73 (verify, secure, crypto/privacy review, security review, validate, simplify, SDK E2E gate, CodeRabbit CLI review, ship, resolve PR reviews) without babysitting, per the Ship Phase playbook.",
+    "outcome": "Verification/security/validation all passed (7/7 verified, 17/17 threats closed, 0 gaps), diagnosed and fixed a local TEE-worker stack misconfiguration blocking 3 SDK E2E tests, fixed a genuine stale test assertion (Test 20) and a real CodeRabbit MAJOR finding in useSharedNavigationActions.ts, got SDK E2E to 106/106 green, and committed the fixes as three scoped commits — ship/PR steps had not yet run by end of transcript.",
+    "learnings": {
+      "repo": [
+        "Local dev stack: cipherbox-mock-ipns-routing claims host port 3001, pushing cipherbox-tee-worker's container port 3001 to remap onto host 3002 — but TeeService defaults TEE_WORKER_URL to http://localhost:3001, so it silently talks to the wrong container.",
+        "The API (via TeeKeyStateService), not the TEE worker itself, populates the tee_key_state DB table by fetching the worker's pubkey at boot; if that fetch fails (wrong port or bad auth), the table stays empty and all tombstone/republish e2e tests fail with 'tee_key_state is empty'.",
+        "apps/tee-worker/src/middleware/auth.ts gates /public-key (and other endpoints) behind Authorization: Bearer $TEE_WORKER_SECRET — a host-run API must be given the worker container's matching secret or it gets a 401.",
+        "Phase 73 commits were already conventional (fix(73-08):, test(73-01):) — the filter-branch reword step in the playbook is not always needed; check commit subjects before blindly rewriting history.",
+        "createAndPublishIpnsRecord's SC4 change makes it catch the 410 and return {success:false, tombstoned:true} instead of throwing; resolveIpnsRecord still throws on 410 (only 404 maps to null) so only the publish half of tombstone tests needed updating.",
+        "The established pattern for re-resolving stale shared-folder state before a key operation is: seed from cache, then call getSdkClient().refreshSharedFolder(shareId) in a try/catch-ignored block (see restoreToBreadcrumbIndex at useSharedNavigationActions.ts:608) — refreshCurrentDepthWriteKey was missing this step."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useSharedNavigationActions.ts",
+          "line": 608,
+          "finding": "restoreToBreadcrumbIndex correctly re-resolves via getSdkClient().refreshSharedFolder(currentShareId) before reseeding publishedNode; refreshCurrentDepthWriteKey lacked this and was reseeding from the same stale in-memory getSharedFolderState(), so 'Refresh access' after a tombstone-caused write failure could never recover — fixed to mirror the established pattern."
+        },
+        {
+          "path": "tests/sdk-e2e/src/suites/ipns-publish-gate.test.ts",
+          "line": 20,
+          "finding": "Test 20 (WRITE-04, tombstone → publish returns 410) asserted the pre-SC4 throw-on-410 contract via expect(publishError).toBeDefined(); updated to assert the new return-value {success:false, tombstoned:true} contract since createAndPublishIpnsRecord now swallows the 410 by design."
+        },
+        {
+          "path": "packages/sdk-core/src/client.ts",
+          "line": 5674,
+          "finding": "New publishedParent resolve path uses raw resolvePublishedNode, bypassing the ROT-07 gate applied to sibling reads elsewhere in the same PR — flagged as non-blocking LOW by both the crypto/privacy and secure-phase audits, in-domain but not fixed in this session (still open)."
+        },
+        {
+          "path": "packages/sdk-core/src/client.ts",
+          "line": 5177,
+          "finding": "publishNodeFn is the only production caller reaching a 410-tombstone (co-writer shared-write path) and correctly handles the new tombstoned return value, confirming the SC4 swallow-and-return contract change is safe by design."
+        }
+      ],
+      "workflow": [
+        "When a background command's exit code appears masked by a pipe (e.g. reported completed/exit 0 but actual exit was 1), re-check the raw exit status directly rather than trusting the task-notification summary.",
+        "Before treating an E2E failure as pre-existing infra noise, verify per-test which code path it touches — one of three 'TEE infra' failures (Test 20) was actually caused by the phase's own contract change, not the TEE-stack gap; blanket-classifying all 3 as infra would have hidden a real stale-test bug.",
+        "Before fixing a test that no longer matches new behavior, search production callers to confirm no code still relies on the old contract — only then is 'update the test' safe rather than 'the code has a bug'.",
+        "Independent read-only analysis passes (audits, Nyquist validation, security sweep) can be launched as parallel background agents while the orchestrator does other prep work (docker/build checks) concurrently."
+      ]
+    },
+    "friction": [
+      "SDK E2E gate initially showed 3 failures that looked uniformly like TEE-infra noise, requiring multi-step root-causing (container status, DB state, port mapping, auth secret) to separate genuine infra gaps (2 tests) from a real stale-assertion bug (Test 20).",
+      "The API does not log handled 4xx reasons, and diagnosing the TEE worker 404-then-401 chain required manually probing ports 3001 vs 3002 and correlating with API startup logs rather than getting a clear error from the test failure itself.",
+      "Playbook's default assumption (reword commits to conventional before shipping) didn't match reality — commits were already conventional, requiring a manual check to avoid unnecessary/risky filter-branch history rewriting.",
+      "CodeRabbit CLI surfaced 2 nits referencing hallucinated/nonexistent phase numbers (45–55/79–88), adding noise that had to be identified and discarded rather than acted on."
+    ],
+    "open_items": [
+      "client.ts:5674 publishedParent resolve bypassing the ROT-07 gate (LOW severity, flagged by two independent audits) — not fixed or logged as a todo within this transcript; still needs a disposition (fix/todo/discard) before ship completes.",
+      "Ship steps 8–11 (gsd-ship, PR creation/body patch, CodeRabbit PR-review thread resolution, learnings extraction) had not yet run by the end of the transcript.",
+      "TEE-stack local dev port collision (3001 mock-ipns-routing vs 3002 tee-worker) and secret-matching requirement — persisted to memory (project-local-tee-worker-port-collision.md) but the underlying docker-compose port mapping itself was not corrected, so the issue will recur for future sessions unless the stack config is fixed."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-10T22:09:38.368581Z",
+    "agent_lines": 15,
+    "agent_removed": 15,
+    "human_added": 105,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 120,
+    "total_lines_changed": 135,
+    "agent_percentage": 22.22222222222222,
+    "metric_version": 2
+  }
+}
