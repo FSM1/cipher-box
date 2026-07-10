@@ -1,0 +1,101 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "1884ca182681",
+  "session_id": "67f868ae-597f-436d-9d1d-2b17847681c3",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-10T19:07:08.561245Z",
+  "branch": "feat/shared-write-navigation-correctness-web",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "98ad5a5a244a",
+  "token_usage": {
+    "input_tokens": 15038,
+    "cache_creation_tokens": 369697,
+    "cache_read_tokens": 8122132,
+    "output_tokens": 61383,
+    "api_call_count": 71
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01UYCCzQhFZAHGHdsaWBLw9U",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "98ad5a5a244a",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 116,
+        "end": 117,
+        "entry_ids": [
+          "018bd085-2058-4077-b6f9-80db0d5e8d2b"
+        ],
+        "tool_use_id": "toolu_01UYCCzQhFZAHGHdsaWBLw9U"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01UYCCzQhFZAHGHdsaWBLw9U"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-plan-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Determine whether phase 73 of the CipherBox project had unresolved discussion points, then run /gsd-plan-phase to plan it — ensuring the correct feature branch (not the default docs/plan-phase-N branch) was used and that any tangentially-related pending todos got folded into scope.",
+    "outcome": "Phase 73 was planned end-to-end: 2 pending todos were folded into ROADMAP, the correct branch `feat/shared-write-navigation-correctness-web` was created and held throughout, research uncovered that SC4 (write-access refresh) was deeper than its source todo implied, 9 PLAN.md files were produced across 3 waves, plan-checker found 2 blockers + 1 warning (all fixed and re-verified to PASS), and STATE.md was advanced to reflect phase 73 as planned.",
+    "learnings": {
+      "repo": [
+        "GSD's `phase_branch_template` is `feat/{slug}`; correct branch names come from the phase directory slug minus the number (e.g. phase 72 → `feat/sdk-write-plane-durability-and-correctness`), not from letting the planner auto-generate one.",
+        "gsd-core plan-phase workflow Step 0 explicitly forbids creating/renaming/switching git branches during plan-phase — branch setup must happen before invoking the skill.",
+        "In useSharedWriteOps.ts, `runWithFailureUx` is never called at all — a real API 410 currently surfaces as an uncaught AxiosError instead of the expected tombstone UX (found during phase 73 research for SC4).",
+        "fetchShareKeys must be preserved when removing dead write-share key paths — only the dead folder-IPNS branch should be deleted, not the whole function (SC7 landmine).",
+        "Phase 73 SC sequencing was locked by research as SC7→SC6→SC1+SC2→SC4 due to dependency ordering between the seams touched.",
+        "Intel's API-SURFACE.md regeneration for phase 73 came back empty (0 symbols, HINT-only) — real grounding for planning had to come from RESEARCH.md/PATTERNS.md instead."
+      ],
+      "code": [
+        {
+          "path": ".planning/phases/73-shared-write-navigation-correctness-web/73-02-PLAN.md",
+          "finding": "TDD RED-task verify command piped through `grep ... || true`, masking the real exit code so the 'confirm RED' gate could never fail; fixed to invert on the test's actual exit code."
+        },
+        {
+          "path": ".planning/phases/73-shared-write-navigation-correctness-web/73-04-PLAN.md",
+          "finding": "Same grep-masking anti-pattern as 73-02-PLAN.md in a parallel RED-task verify command; fixed identically."
+        },
+        {
+          "path": ".planning/phases/73-shared-write-navigation-correctness-web/73-09-PLAN.md",
+          "finding": "Frontmatter `depends_on: [73-07, 73-01]` was missing an implied dependency on 73-05 for item-4 ordering; added without changing the plan's wave (stayed wave 3)."
+        }
+      ],
+      "workflow": [
+        "When classifying many pending todos (51) against a phase's scope, delegate the read-and-classify pass to a subagent rather than reading each todo directly, to conserve context.",
+        "When a plan-checker gate returns small, mechanical, fully-specified fixes (not judgment calls), apply them directly and re-run the checker rather than burning a full planner iteration.",
+        "Before committing agent-modified ROADMAP.md, diff it explicitly to guard against the known gsd-planner ROADMAP-truncation failure mode rather than trusting the agent's edit.",
+        "Sanity-check STATE.md's cursor position before treating it as ground truth — it can go stale (still showed phase 72 'verifying' after phase 72 had already merged to main)."
+      ]
+    },
+    "friction": [
+      "STATE.md had drifted from actual repo state (still marked Phase 72 as 'verifying' despite PR #602 already merged to main), requiring a manual cursor correction that was out of scope for the original task.",
+      "No `73-*` phase directory or discussion artifacts existed yet for phase 73, requiring several exploratory reads (ROADMAP, STATE, source todos) just to confirm there was nothing blocking before planning could start."
+    ],
+    "open_items": [
+      "Phase 72 formal completion/closure in STATE.md's progress counters was left untouched (only the cursor was advanced) — still needs to be marked complete separately.",
+      "3 adjacent-but-separate pending todos (SDK merge parity, dead SDK scaffolding retirement, ESLint boundary rule) were deliberately left out of phase 73 scope; revisit if they become relevant.",
+      "Q1 from Phase 68 (co-writer offline during write-key rotation — explicit re-fetch vs. grace/notification) remains open and is related to phase 73's SC4 decision to wire the write-access refresh end-to-end."
+    ]
+  }
+}
