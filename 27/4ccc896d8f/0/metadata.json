@@ -1,0 +1,103 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "274ccc896d8f",
+  "session_id": "67f868ae-597f-436d-9d1d-2b17847681c3",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-10T18:35:03.19393Z",
+  "branch": "feat/shared-write-navigation-correctness-web",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    ".planning/phases/73-shared-write-navigation-correctness-web/73-PATTERNS.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "98ad5a5a244a",
+  "token_usage": {
+    "input_tokens": 14145,
+    "cache_creation_tokens": 335010,
+    "cache_read_tokens": 4214193,
+    "output_tokens": 39414,
+    "api_call_count": 47
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01UYCCzQhFZAHGHdsaWBLw9U",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "98ad5a5a244a",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 116,
+        "end": 117,
+        "entry_ids": [
+          "018bd085-2058-4077-b6f9-80db0d5e8d2b"
+        ],
+        "tool_use_id": "toolu_01UYCCzQhFZAHGHdsaWBLw9U"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01UYCCzQhFZAHGHdsaWBLw9U"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-plan-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Determine whether phase 73 (shared-write navigation correctness, web) had unresolved discussion points before planning, then kick off `/gsd-plan-phase 73` ensuring it lands on the correct feature branch and folds in any tangential pending todos into scope.",
+    "outcome": "Confirmed phase 73 was planning-ready with one genuine gray area (SC4 fork), resolved it via AskUserQuestion (wire end-to-end + research-first), pre-created and committed the correct branch (`feat/shared-write-navigation-correctness-web`) before invoking the planner so it couldn't spin up a stray branch, folded two tangential todos into ROADMAP.md, and ran research + pattern-mapping stages of the pipeline — RESEARCH.md, VALIDATION.md, and PATTERNS.md are written and committed; planner/checker stages remain to run.",
+    "learnings": {
+      "repo": [
+        "GSD's phase_branch_template is `feat/{slug}` where slug is the phase directory name minus the leading number (e.g. phase 72's dir → `feat/sdk-write-plane-durability-and-correctness`).",
+        "The plan-phase workflow (.claude/gsd-core/workflows/plan-phase.md) Step 0 explicitly forbids creating, renaming, or switching git branches during plan-phase — pre-creating and committing the correct branch beforehand avoids the stray `docs/plan-phase-{N}` branch the planner has spun up in the past.",
+        "plan-phase init's `phase_slug` output can be checked against the branch name before planning starts to confirm they'll match.",
+        "PATTERNS.md is not auto-committed by the plan-phase pipeline — the orchestrator must commit it explicitly after gsd-pattern-mapper runs.",
+        "gsd's plan:pre hooks include intel, research, pattern-mapper, schema-gate→planner, tdd→planner, and drift-gate; schema-gate only fires for TypeORM entity/migration changes."
+      ],
+      "code": [
+        {
+          "path": "useSharedWriteOps.ts",
+          "finding": "Never calls `runWithFailureUx` at all — a real API 410 (tombstone) currently surfaces as an uncaught AxiosError instead of triggering the refresh-write-access flow. SC4 (refreshWriteAccess/CannotWriteUntilRefetchError) is deeper than the WRITE-03 todo originally stated."
+        }
+      ],
+      "workflow": [
+        "Delegated classification of 51 pending todos against phase scope to a subagent instead of reading each one directly, to conserve orchestrator context.",
+        "Used AskUserQuestion to lock in two plan-shaping decisions (SC4 approach, research-first ordering) before spawning any pipeline agents, then persisted them into 73-CONTEXT.md so downstream agents inherit the decision without re-litigating it.",
+        "Used TaskCreate to pre-declare the full multi-stage pipeline (researcher → VALIDATION.md → pattern-mapper → planner → checker) before executing, giving a visible plan and checkpoints for each stage."
+      ]
+    },
+    "friction": [],
+    "open_items": [
+      "3 topically-adjacent pending todos (SDK merge parity, dead SDK scaffolding retirement, ESLint boundary rule) were deliberately left out of phase 73 scope — revisit if the user wants them folded in later.",
+      "STATE.md Q1 (Phase 68) remains open: co-writer offline during write-key rotation — explicit re-fetch requirement vs. grace/notification; touches SC4 scope.",
+      "gsd-planner and gsd-plan-checker pipeline stages had not yet run at transcript end — PLAN.md files and the pass/fail verification loop are still pending.",
+      "SC7 landmine flagged by research: refactor must preserve `fetchShareKeys`, removing only the dead folder-IPNS path — needs enforcement during planning/execution."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-10T18:34:36.165398Z",
+    "agent_lines": 238,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 238,
+    "total_lines_changed": 238,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
