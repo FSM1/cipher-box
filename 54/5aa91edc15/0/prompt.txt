@@ -1,0 +1,97 @@
+is phase 72 worth discussing or cam we jump straight in to planning?
+
+---
+
+are there any @.planning/todos/pending/ that have either already been addressed in phase 70/70.1/71 or recently added in those same phases that should be folded in to phase 72/73
+
+---
+
+<task-notification>
+<task-id>a1b40627b35bedd4b</task-id>
+<tool-use-id>toolu_0121UUSEQ4uSrvFei1P2cnmg</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/4d78f8a5-6112-418c-85c3-c6241359b1fb/tasks/a1b40627b35bedd4b.output</output-file>
+<status>completed</status>
+<summary>Agent "Classify recently-added todos for 72/73 fit" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have read all 12 todo bodies. Here is the classification.
+
+## Classification table
+
+| Todo | Scope bucket | Fold into 72/73? | Reason (grounded in body) |
+|---|---|---|---|
+| deep-scope-exit-rotation-refreshes-only-grant-root-inode-key | rotation read-plane + fuse | Neither | `area: desktop-fuse-rotation`; fixes rotation engine subtree re-key + FUSE InodeTable in-memory read keys — rotation read-plane, not SDK write plane, not web. |
+| 68.2-coderabbit-hardening-backlog | mixed SDK-read + web | Neither (mostly) | Item 4 (`refreshSharedFolder` stale write envelope, `client.ts:5229`) touches the shared write-body but the todo is a bundled 10-item read/freshness/a11y backlog; the write-envelope concern already lives inside Phase 73's `write03-refresh-access` / `child-ref-...-mirror-stale` framing and this multi-area bundle can't be folded whole. Not a clean 72/73 fit. |
+| d07-boundary-eslint-rule | web/CI tooling | Neither | Promotes a web/SDK import boundary grep to an ESLint/CI rule (`apps/web/.eslintrc.cjs`, `ci.yml`) — tooling/CI hardening, not nav/write correctness in 73's scope. |
+| node-codec-kat-pin-file-iv-encoding | crypto KAT parity | Neither | `area: crypto-kat-parity`; pins Rust↔TS cross-language node-codec KAT vector encoding — crypto/test-vector, not SDK write plane or web. |
+| fuse-publish-and-concurrency-hardening-deferred | fuse/desktop | Neither | `area: desktop-fuse`; FUSE publish retry helper, FP-resolve cap, Windows write-plane keying, Rust zeroization — all crates/fuse, CI-gated. |
+| desktop-query-grants-rooted-at-remint-noop | rotation read-plane + fuse | Neither | `area: desktop-fuse-rotation`; implements `query_grants_rooted_at` re-mint in the FUSE RotationDeps adapter — rotation read-plane, desktop. |
+| winfsp-d15d-gate-ordering-parity | fuse/rotation (Windows) | Neither | `area: desktop-fuse-rotation`; WinFsp rename dest-gating + coalescing parity in `platform/windows` — fuse rotation, CI-gated. |
+| macos-fuse-t-cross-client-sync-invalidation | fuse/desktop | Neither | `area: desktop-fuse`; FUSE-T SMB read-cache invalidation, flip soft-skipped desktop-e2e Tests 5/7 — read-side fuse limitation. |
+| restore-tee-key-state-for-sdk-e2e-tee-republish | testing infra / TEE | Neither | `area: testing`; environmental `tee_key_state` repopulation for sdk-e2e — infra chore, explicitly "does not gate Phase 71 correctness," not a code change. |
+| zeroize-file-keys-on-unwrap-error-path | crypto / SDK client | **Borderline → Neither** | `area: crypto`, in `packages/sdk/src/client.ts` `updateSharedSingleFile` — it's the SHARED single-file write path (a write-plane hygiene fix), but it's zeroization hygiene on the share write path, not the write-chain/WriteChildRef work Phase 72 scopes. See verdict. |
+| extract-assert-root-ownership-helper | API | Neither | `area: api`; dedup `assertRootOwnership` across two `apps/api/src/shares` services — API layer, explicitly "not tied to a specific phase." |
+| reconcile-phase71-planning-docs-d01-greenfield | docs | Neither | `area: docs`; docs-only reconciliation of Phase 71 planning artifacts — no code change. |
+
+## Verdict
+
+Missing-but-belongs list: effectively **empty**. No todo cleanly belongs in Phase 72 or Phase 73 that isn't already in their source-todo lists.
+
+Two items warrant an explicit note rather than a fold:
+
+- **zeroize-file-keys-on-unwrap-error-path** is the closest call. It lives in `packages/sdk/src/client.ts` and touches a shared-file *write* path (`updateSharedSingleFile`), which is nominally Phase 72's package territory. But its `area` is `crypto` and it is a key-zeroization hygiene fix, not part of Phase 72's write-chain correctness surface (WriteChildRef / getWriteBodyParams / deleteItem / re-homing / mirror refresh / helper dedup). Strict scope reading: leave standalone. If you want to opportunistically batch a same-file hygiene fix into Phase 72, this is the only defensible candidate — but it is not a scope requirement and the todo itself frames it as pre-existing, low-severity, deliberately deferred.
+
+- **68.2-coderabbit-hardening-backlog item 4** (`refreshSharedFolder` stale write envelope) and **item 9** (shared-nav seed race) overlap thematically with Phase 73's `write03-refresh-access` and `shared-nav-stack-stale-children-snapshot`, but this todo is a bundled 10-item multi-area backlog (SDK cache, web a11y, parallelization). It should not be folded wholesale; if anything, individual items could be cherry-picked, but that's a re-scoping decision, not a missing-source-todo.
+
+All remaining 10 todos are correctly outside 72/73: rotation read-plane (deep-scope-exit, query-grants-remint), fuse/desktop (fuse-publish-hardening, winfsp-d15d, macos-fuse-t), crypto (node-codec-kat), API (assert-root-ownership), testing infra (restore-tee-key-state), CI tooling (d07-boundary-eslint), and docs (reconcile-phase71).</result>
+<usage><subagent_tokens>52263</subagent_tokens><tool_uses>12</tool_uses><duration_ms>46523</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aea8c2c9dab23eaed</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/4d78f8a5-6112-418c-85c3-c6241359b1fb/tasks/aea8c2c9dab23eaed.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify phase 71 source todos addressed" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All 8 items verified against shipped code. NIT3 fixtures were also hardened (contract-valid keys, no placeholders).
+
+## Audit results
+
+| Todo file | Addressed | Evidence |
+|---|---|---|
+| `share-invite-validate-root-ownership.md` | yes | `createInvite` now does `ipnsRecordRepo.findOne({ipnsName, userId})` and throws `ForbiddenException` on miss (share-invite.service.ts:37-48). rootNodeId pair-consistency deliberately dropped per D-02 (crypto boundary is authoritative) — documented decision, not open residue. |
+| `share-invite-reclaim-apply-later-grant.md` | yes | Upgrade-merge (option 1) shipped as D-07/SC#2: read→write and generation-bump re-claims widen the existing share, presence-gated on invite write authority; non-widening re-claim is a true no-op (share-invite.service.ts:195-238). Unit-covered. |
+| `share-invites-claim-count-check-constraint.md` | yes | `CONSTRAINT CHK_share_invites_claim_count CHECK (claim_count &gt;= 0 AND claim_count &lt;= max_claims)` folded into the greenfield cutover CREATE TABLE (ApiSchemaCutover.ts:115) + `@Check` on entity (share-invite.entity.ts:14). |
+| `ipns-records-root-uniqueness-index.md` | dropped | Intentionally dropped (D-03) — redundant with vault-level root uniqueness. No `UQ_ipns_records_user_root` index exists; confirmed absent from migrations + entity. |
+| `ipns-first-publish-insert-race.md` | yes | First-publish `save` wrapped; Postgres 23505 (via `err.code`/`err.driverError.code`) translated to `ConflictException` 409 (ipns.service.ts:503-506). |
+| `ipns-idempotent-same-seq-cid-equivocation.md` | yes | D-05 hard-guard: same-sequence republish with a different CID → `BadRequestException` (ipns.service.ts:342-346); same-CID idempotent TEE re-sign still succeeds. Stale "Pitfall 4" test rewritten. |
+| `shares-bulk-revoke-direct-delete.md` | yes | `revokeForItems` now uses `createQueryBuilder().delete()` and `shareResult.affected` — no more find+remove of bytea blobs (shares.service.ts:184-204). |
+| `restore-shares-module-unit-coverage.md` | yes | `share-invite.service.spec.ts` now covers createInvite ownership gate + mechanics, expiry transitions, `getInvitesForItem` auto-clean (37 tests). NIT3 fixtures also hardened to contract-valid keys (`'0x04'+'aa'.repeat(64)`). |
+
+## Verdict
+
+**Safe to retire (delete from pending) — all 8:**
+1. `2026-06-30-share-invite-validate-root-ownership.md`
+2. `2026-06-30-share-invite-reclaim-apply-later-grant.md`
+3. `2026-06-30-share-invites-claim-count-check-constraint.md`
+4. `2026-06-30-ipns-records-root-uniqueness-index.md` (dropped, not implemented — but decision is final, so retire it)
+5. `2026-06-30-ipns-first-publish-insert-race.md`
+6. `2026-06-30-ipns-idempotent-same-seq-cid-equivocation.md`
+7. `2026-06-30-shares-bulk-revoke-direct-delete.md`
+8. `2026-06-30-restore-shares-module-unit-coverage.md`
+
+**Open residue that should NOT be closed:** none.
+
+One thing worth surfacing (not a reason to keep any todo open): todo #1's original ask included `rootNodeId` pair-consistency, which Phase 71 deliberately did **not** implement (D-02 kept rootNodeId client-asserted, relying on the cryptographic wrapping boundary as the true gate). This is an accepted design decision documented in the shipped code comment, so the todo is correctly retired — but if you ever want defense-in-depth on the node/name pair, that would be net-new scope, not a Phase 71 regression.</result>
+<usage><subagent_tokens>53790</subagent_tokens><tool_uses>18</tool_uses><duration_ms>68280</duration_ms></usage>
+</task-notification>
+
+---
+
+ok you can move the 8 over to @.planning/todos/completed/ and add the zeroize to 72, with the 68.2 coderabbit-hardening being included in 73. do not commit yet, this will all be committed with the phase 72 planning.
+
+---
+
+also wanted to ask whether phases 72 and 73 have any mutual dependencies - if not, these can be worked on in parallel
