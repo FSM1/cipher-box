@@ -1,0 +1,84 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "cea00e295e42",
+  "session_id": "2e538f07-7404-47a7-b648-78422a25400d",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-10T20:32:31.806185Z",
+  "branch": "feat/shared-write-navigation-correctness-web",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "93ba3dea1f3e",
+  "token_usage": {
+    "input_tokens": 20365,
+    "cache_creation_tokens": 572823,
+    "cache_read_tokens": 16623404,
+    "output_tokens": 118741,
+    "api_call_count": 84
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Execute all 9 plans of cipher-box phase 73 (shared-write-navigation-correctness-web) using wave-based parallel worktree execution: discover plans, group into dependency waves, spawn per-plan subagents, merge results, and drive the phase through verification/completion.",
+    "outcome": "All 3 waves (9 plans total) executed in parallel worktrees, merged cleanly, and passed post-merge typecheck/test gates. Phase verification (gsd-verifier) found 6/7 success criteria solid but one real bug in SC4 (refreshCurrentDepthWriteKey omitting publishedNode, causing a decrypt failure on write-retry after 'Refresh access'); the orchestrator independently confirmed the bug against the merged code, applied a one-line fix, verified it with tsc/eslint, and was committing it when the transcript ends.",
+    "learnings": {
+      "repo": [
+        "cipher-box monorepo resolves cross-package TS types via built dist/ (gitignored) — fresh worktrees need pnpm install + build the crypto→core→api-client→sdk-core→sdk chain before typecheck works",
+        "Full `pnpm test` includes live-API sdk integration tests that false-fail without a running API server; post-merge gates must scope to typecheck + infra-free unit suites (sdk-core, sdk) instead",
+        "gsd-executor agents self-detect worktree mode by checking whether .git is a file, and emit a <worktree_metadata> JSON block; the harness (not the executor) creates the worktree-agent-* branch",
+        "The commit-tracking helper can report `commit_failed` as a false negative even when the commit actually landed — verify via `git log`/clean tree rather than trusting the helper's return code",
+        "Two `execute:wave:post` capability drift gates exist gated on `workflow.schema_drift_gate`: a blocking schema-drift gate and an advisory (warn, non-blocking) codebase-drift gate that flags a stale `.planning/codebase/` map"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useSharedNavigationActions.ts",
+          "line": 823,
+          "end_line": 834,
+          "finding": "refreshCurrentDepthWriteKey's seedActiveSharedFolder call omitted publishedNode (unlike the other 3 call sites at lines 268, 410, 540), causing seedSharedFolder to fall back to PLACEHOLDER_PUBLISHED_NODE and unsealNode to throw a GCM decrypt error on the SC4 write-retry-after-refresh path — fixed by capturing the live publishedNode via getSdkClient().getSharedFolderState(...) before reseeding, mirroring the pattern at line 351"
+        },
+        {
+          "path": "packages/sdk-core/src/ipns/index.ts",
+          "finding": "createAndPublishIpnsRecord now maps a 410 API response to {success:false, sequenceNumber:0n, tombstoned:true} by mirroring the existing 404-detection try/catch idiom"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "resolveNodeIdentity's signature changed from (ipnsName: string) to (childRef: SealedChildRef) to route through gatedResolveChild's ROT-07 anti-rollback floor; publishNodeFn now surfaces tombstoned:true before its generic failure throw"
+        }
+      ],
+      "workflow": [
+        "Wave-execution pattern: capture git base state → dispatch per-plan subagents in parallel worktrees → record each completion in a manifest as notifications arrive → merge all worktree branches via a guarded cleanup-wave step → run a scoped post-merge build/test gate → commit tracking updates → proceed to next wave",
+        "Pre-spawn intra-wave file-overlap checks only catch declared files_modified — an executor's out-of-scope but justified deviation (e.g. a stray doc-comment fix) can create an undeclared overlap; git's 3-way merge often resolves it cleanly anyway",
+        "Don't trust a subagent verifier's findings at face value — independently re-confirm specific, checkable claims (e.g. via grep/Read) against the actual merged code before deciding how to route a reported gap",
+        "Optional CLI flags should only be treated as active when their literal token is present in the raw phase argument, never inferred from documentation of what a flag *could* do"
+      ]
+    },
+    "friction": [
+      "Undeclared file overlap between plans 73-06 and 73-04 (both touching useSharedWriteOps.ts) wasn't caught by the pre-spawn overlap check since it wasn't in either plan's declared files_modified — required manual post-hoc verification that the merge was safe",
+      "Pipe usage broke exit-code capture when running the typecheck gate, forcing a re-run to confirm success cleanly",
+      "Tracking-commit helper reported commit_failed despite the commit actually landing, requiring a git log check to disambiguate",
+      "Executor <worktree_metadata> occasionally reports expected_base as its own post-commit tip rather than the true fork base, requiring the orchestrator to reconcile against its own captured base",
+      "Plan 73-08 could not run its live e2e test (WRITE-03) because sibling plan 73-09 was concurrently using the same dev-server ports (3000/5173); this deferred verification is exactly what let the SC4 bug slip past pre-merge testing"
+    ],
+    "open_items": [
+      "Live run of the rotation-ux.spec.ts WRITE-03 e2e case against a running stack still needs to happen to confirm the SC4 publishedNode fix actually resolves the retry path",
+      "Port contention when multiple worktree-based e2e subagents run in parallel (both defaulting to API :3000 / web :5173) is an unresolved gap in the wave-execution setup that could hide similar bugs in future phases",
+      "Advisory codebase-drift gate flagged the .planning/codebase/ map as generally stale versus the repo tree — noted but not remapped this session"
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 140,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/phases/73-shared-write-navigation-correctness-web/73-VERIFICATION.md": 139
+      }
+    }
+  ]
+}

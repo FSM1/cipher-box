@@ -1,0 +1,113 @@
+<task-notification>
+<task-id>aa9bef0ca7cb13450</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/4d78f8a5-6112-418c-85c3-c6241359b1fb/tasks/aa9bef0ca7cb13450.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 73-09 of phase 73" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 73-09
+**Tasks:** 2/2 complete
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-aa9bef0ca7cb13450/.planning/phases/73-shared-write-navigation-correctness-web/73-09-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"73-09","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-aa9bef0ca7cb13450","branch":"worktree-agent-aa9bef0ca7cb13450","expected_base":"af6b14d86d14851e6d363a548778a9f93946d21b"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `af412ad4c` — feat(73-09): refresh shared-nav restore target via refreshSharedFolder
+- `f532081d8` — test(73-09): finalize SC2 deeper-mutate-then-navigate-up web-e2e case
+- `af6b14d86` — docs(73-09): add plan summary for nav-stack restore freshness (SC2)
+
+**Duration:** ~12 min
+
+### What was done
+
+- `restoreToBreadcrumbIndex` in `apps/web/src/hooks/useSharedNavigationActions.ts` now calls `await getSdkClient().refreshSharedFolder(currentShareId)` immediately after `seedActiveSharedFolder` re-seeds the restored depth, inside the helper's existing try/catch. Purely additive — relies on `refreshSharedFolder`'s existing `state.sequenceNumber &gt;= result.sequenceNumber` monotonicity guard (`client.ts:5624`); no new invalidation structure.
+- Re-verified (read-only, no edits) that `useSharedNavigation.ts:355-375`'s `listSharedFolder([])` seed-race effect is not widened — its dependency array still re-fires correctly via the resulting `sharedFolder:updated` emission.
+- Removed the `test.fixme` guard on the deeper-mutate-then-navigate-up SC2 case in `tests/web-e2e/tests/shared-folder-desync.spec.ts`.
+- Verification: `pnpm --filter @cipherbox/web exec tsc -b` clean; `pnpm --filter @cipherbox/web-e2e exec tsc --noEmit` clean; `playwright test --list` shows the case active; full local run against the docker stack passed 5/5 (58.0s), including the new SC2 case.
+
+No deviations from plan. Stayed within declared files only (did not touch `useSharedWriteOps.ts` or `useSharedNavigation.ts`, per the parallel-wave note about plan 73-08).</result>
+<usage><subagent_tokens>151852</subagent_tokens><tool_uses>48</tool_uses><duration_ms>365258</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-aa9bef0ca7cb13450</worktreePath><worktreeBranch>worktree-agent-aa9bef0ca7cb13450</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0d1a02d55cc51c1e</task-id>
+<tool-use-id>toolu_01CzhNvepVaKLKtaYQv4VL4R</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/4d78f8a5-6112-418c-85c3-c6241359b1fb/tasks/a0d1a02d55cc51c1e.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 73-08 of phase 73" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 73-08
+**Tasks:** 2/2 tasks complete
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a0d1a02d55cc51c1e/.planning/phases/73-shared-write-navigation-correctness-web/73-08-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"73-08","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a0d1a02d55cc51c1e","branch":"worktree-agent-a0d1a02d55cc51c1e","expected_base":"4be95743804f71f875a478cfd987cbb1ec7af658"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `cc940a8d5`: feat(73-08): wrap shared writes in runWithFailureUx with live refresh supplier
+- `4e68f73d9`: test(73-08): finalize WRITE-03 e2e to drive the real classifier path
+- `908595850`: docs(73-08): complete wire shared-write failure classifier plan
+
+**Duration:** ~65 min
+
+### Key files
+- `apps/web/src/hooks/useSharedWriteOps.ts` — every write op now nests `runWithFailureUx` inside `withRevocationGuard`, with a new required `refreshWriteAccess` param.
+- `apps/web/src/hooks/useSharedNavigation.ts` — threads `navActions.refreshCurrentDepthWriteKey` as `refreshWriteAccess`.
+- `apps/web/src/hooks/__tests__/useSharedWriteOps.test.ts` — Rule 3 fix for the new required param at 4 existing call sites.
+- `tests/web-e2e/tests/rotation-ux.spec.ts` — WRITE-03 case un-fixme'd into a real two-account classifier-driven flow (owner tombstones the shared folder's own IPNS name via a real `POST /ipns/tombstone`, then the co-writer's write drives the toast → refresh → terminal-revoked sequence through the genuine classifier path).
+
+### Verification performed
+- `pnpm typecheck` (full build-ordered chain: crypto→core→api-client→sdk-core→sdk→web) passes clean.
+- `pnpm --filter @cipherbox/web-e2e exec tsc --noEmit` passes clean.
+- `pnpm --filter @cipherbox/web-e2e exec playwright test --list ... -g "WRITE-03"` confirms the case is active (not `fixme`).
+
+### Not executed
+Live browser run of the WRITE-03 e2e case against a running local stack was **not** performed — this worktree is a parallel executor alongside sibling plan 73-09, both defaulting to the same local ports (API `:3000`, web `:5173`); starting a second dev-server set or touching the already-running `:3000` process risked disrupting the concurrent agent. This is documented in the SUMMARY's `coverage[1].rationale` as the remaining manual/CI verification step.</result>
+<usage><subagent_tokens>254659</subagent_tokens><tool_uses>119</tool_uses><duration_ms>1056036</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a0d1a02d55cc51c1e</worktreePath><worktreeBranch>worktree-agent-a0d1a02d55cc51c1e</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a03c937b74101b2fc</task-id>
+<tool-use-id>toolu_01MQ3NQYXccttLbUQodAGnYp</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/4d78f8a5-6112-418c-85c3-c6241359b1fb/tasks/a03c937b74101b2fc.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify phase 73 goal achievement" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Verification Complete
+
+**Status:** gaps_found
+**Score:** 6/7 must-haves verified
+**Report:** `/Users/myankelev/Code/random/cipher-box/.planning/phases/73-shared-write-navigation-correctness-web/73-VERIFICATION.md`
+
+### Gaps Found
+
+6 of 7 roadmap Success Criteria (SC1, SC2, SC3, SC5, SC6, SC7) are solidly implemented — verified directly against the merged code, not SUMMARY narrative. SC4, however, has a real code-level bug:
+
+**SC4 — WRITE-03 refreshWriteAccess supplier corrupts write state on retry**
+
+The `refreshWriteAccess` supplier (`refreshCurrentDepthWriteKey` in `apps/web/src/hooks/useSharedNavigationActions.ts:783-844`) reseeds the SDK's `sharedFolderTree` state via `seedActiveSharedFolder` **without passing `publishedNode`** (line 824-834) — unlike the other three call sites in the same file (`navigateToShare` line 268, `navigateToSubfolder` line 410, `restoreToBreadcrumbIndex` line 540), all of which correctly pass a real `publishedNode` after plan 73-07's own fix for this exact bug class.
+
+Every shared-write op reads this state with **no network re-resolve** (`buildSharedWriteContextFromState` → `unsealNode` first thing). Since `seedSharedFolder` falls back to `PLACEHOLDER_PUBLISHED_NODE` (empty `readSealed`) when `publishedNode` is omitted, `unsealNode` throws a GCM/decrypt error immediately — before the retried write can ever reach `publishNodeFn`'s tombstone/success classification.
+
+Concretely: after "Refresh access" is clicked (D-01/WRITE-03), `useMutationFailureUx.ts`'s `retryAfterRefresh` calls the supplier, then retries the same write — which now throws an unclassified crypto error instead of either succeeding or reaching the intended "Write access revoked." terminal toast.
+
+This was never caught because the one e2e case that exercises this retry live (`tests/web-e2e/tests/rotation-ux.spec.ts:444`, WRITE-03) was, per 73-08-SUMMARY.md's own admission, never actually run against a live stack (documented as a remaining step due to parallel-worktree port contention). Static tracing of the real call graph shows the retry path would not reach the classified outcome the test asserts.
+
+**Suggested fix:** capture the active depth's live `publishedNode` before reseeding (e.g. `getSdkClient().getSharedFolderState(currentShareId)?.publishedNode`, mirroring `navigateToSubfolder`'s existing pattern) and pass it through in `refreshCurrentDepthWriteKey`'s `seedActiveSharedFolder` call. Then run the WRITE-03 e2e live to confirm.
+
+Structured gap details are in VERIFICATION.md frontmatter for `/gsd-plan-phase --gaps`.</result>
+<usage><subagent_tokens>226340</subagent_tokens><tool_uses>67</tool_uses><duration_ms>444976</duration_ms></usage>
+</task-notification>
