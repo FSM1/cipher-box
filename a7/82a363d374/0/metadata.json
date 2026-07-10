@@ -1,0 +1,124 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "a782a363d374",
+  "session_id": "4d78f8a5-6112-418c-85c3-c6241359b1fb",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-10T00:11:57.849205Z",
+  "branch": "feat/share-invite-security-and-ipns-data-integrity-api",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "d3769fda9fd6",
+  "token_usage": {
+    "input_tokens": 42759,
+    "cache_creation_tokens": 1107966,
+    "cache_read_tokens": 115760849,
+    "output_tokens": 385588,
+    "api_call_count": 285
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-ship-phase-2026-07-09T22:59:42.56172Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "34559f5bc681",
+      "timestamp": "2026-07-09T22:59:42.56172Z",
+      "native": {
+        "command": "/ship-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/ship-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 16
+  },
+  "summary": {
+    "intent": "Execute all 9 plans of phase 71 (share-invite security & IPNS data-integrity API) using GSD's wave-based parallel executor workflow, then run the full autonomous post-execution ship loop (verify, secure, validate, simplify, SDK E2E gate, CodeRabbit review, PR creation, review resolution, learnings extraction) for cipher-box.",
+    "outcome": "All 9 plans executed across 4 waves and merged with green gates (typecheck, cargo, 899 api tests); phase verified (16/16) and shipped as PR #599. The SDK E2E gate caught and the session fixed a real D-05 regression (concurrent IPNS republish getting 400 instead of 409), a Greptile P1 bug (stale write key after generation-bump re-claim), and all 8 CodeRabbit findings including new Swagger annotations and composite DB indexes; pre-existing deferred type errors were also fixed at the user's request as the session ended.",
+    "learnings": {
+      "repo": [
+        "cipher-box is a pnpm monorepo; execute-phase's default post-merge gate assumes `npm test`/`npm run build` which is wrong here — must scope gates to `pnpm typecheck`, `pnpm --filter <pkg> test`, and `cargo check --all-targets` instead.",
+        "Worktree base-check reason `baseref-head` means worktrees fork from live HEAD, so all waves keep parallel isolation without inter-wave degrade.",
+        "The repo is squash-merge-only (merge:false, rebase:false, squash:true, title=PR_TITLE) — individual commit subjects never reach main, so only the PR title needs to be conventional/paren-free; per-commit reword (Step 7 of ship-phase) is unnecessary here.",
+        "CI's Migration Drift Check (ci.yml) only fails on structural drift (CREATE/DROP TABLE, ADD/DROP COLUMN, ALTER TYPE, RENAME COLUMN) and tolerates index/constraint name churn — but adding indexes only to a migration (not matching entity `@Index` decorators) still risks drift and should be added to both.",
+        "sdk-e2e (vitest) does not auto-load `.env`; `SDK_E2E_SECRET` must be explicitly aligned with the API's `TEST_LOGIN_SECRET` or auth 401s cascade-skip the whole suite.",
+        "Throttle limits are relaxed under `NODE_ENV=test` (apps/api app.module.ts:56), so `THROTTLE_BYPASS_SECRET` isn't required for local sdk-e2e runs against a test-mode API.",
+        "CodeRabbit CLI has a ~150-changed-file diff cap; phase 71's 106 files were under it.",
+        "`gh pr edit` fails on this repo due to Projects-classic GraphQL — PR body edits must go through `gh api -X PATCH repos/FSM1/cipher-box/pulls/<N>`.",
+        "After `gh pr create` and a passing Release Preview, `github-actions[bot]` may push a `chore(release)` commit — always `git fetch` before pushing again to avoid rejection.",
+        "The API doesn't log handled 4xx responses; to get exact error bodies, temporarily add an axios response interceptor in `packages/api-client/src/instance.ts`, rebuild the client chain, run once, then revert."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 321,
+          "finding": "D-05 same-seq CID-equivocation guard threw 400 even when the request was actually a forward-CAS attempt that lost a race (expectedSequenceNumber === embeddedSeq-1); fixed to fall through to the CAS UPDATE (→409) in that specific case while still rejecting true equivocation."
+        },
+        {
+          "path": "apps/api/src/shares/share-invite.service.ts",
+          "line": 207,
+          "finding": "Widen-only merge in claimInvite didn't re-wrap the write key on a generation-bump re-claim via a write-capable invite when the share was already write-capable (isGenerationBump && inviteGrantsWrite but isWriteUpgrade=false) — recipient silently lost write access post-rotation. Fixed by Greptile P1 finding."
+        },
+        {
+          "path": "apps/api/src/shares/share-invite.service.ts",
+          "line": 193,
+          "finding": "claimInvite originally allowed a write-capable invite to be claimed without supplying an encryptedWriteKey (silent downgrade to read-only); CodeRabbit MAJOR finding — added pre-transaction validation to reject with 400."
+        },
+        {
+          "path": "apps/web/src/services/share.service.ts",
+          "line": 102,
+          "finding": "Permission-derivation check used `!== null` on a `string | null | undefined` write-key field, misclassifying `undefined` as write-capable; loosened to `!= null` in both occurrences."
+        }
+      ],
+      "workflow": [
+        "When a subagent reports a compile-time diagnostic (e.g. cargo E0560) but its own narrower check passed, don't trust either side blindly — settle it against the fully merged tree at the post-merge gate before deciding whether to route to a fix.",
+        "For wave-based orchestration, verify worktree creation before dispatching the next agent in the same wave to avoid a `.git/config.lock` race.",
+        "When a subagent flags 'pre-existing' errors as deferred, still classify them (unchanged vs origin/main, whether CI actually gates on them) rather than accepting the claim at face value — one of 71-08's three flagged errors turned out to be dist-staleness cascade that disappeared once crypto was rebuilt.",
+        "`gh pr checks` output is tab-delimited, not space-delimited — `awk '{print $2}'` mis-parses multi-word check names like 'CodeRabbit / Review' and can cause a poll to exit early thinking a check settled when it didn't.",
+        "A checkpoint plan (autonomous:false) should be split into an autonomous sub-wave (other disjoint plans) run in parallel, with the blocking human-verify plan handled separately once its dependencies are otherwise clear."
+      ]
+    },
+    "friction": [
+      "71-03's cargo diagnostic (E0560 in delete.rs/rename.rs) turned out to be stale LSP noise from an intermediate worktree state, not a real error — required a full post-merge `cargo check --all-targets` to disprove.",
+      "The tracking/commit helper repeatedly reported `commit_failed` as a false negative while the commit actually landed, requiring manual `git log` verification each time.",
+      "Restarting the API after a DB reset used a stale `node dist/main.js` process on :3000 instead of picking up current branch code, which would have produced false test results if not caught.",
+      "sdk-e2e auth 401 cascade-skipped multiple suites (including the target ipns-publish-gate) due to a login-secret mismatch between the harness default and the API's configured secret.",
+      "CodeRabbit's PR check showed as 'skipping' and was initially assumed complete/skipped, but the user had to correct that it was just slow — the actual review with 4 threads arrived later.",
+      "Resetting the local Postgres DB (per user instruction) wiped `tee_key_state`, and the TEE worker's `/public-key` endpoint then returned 401, causing 2 unrelated sdk-e2e test failures (tee-republish) that had to be diagnosed and classified as environmental collateral rather than a phase regression.",
+      "Adding composite indexes to the migration alone (without matching entity `@Index` decorators) triggered the local Migration Drift Check tool, requiring extra investigation to confirm CI's drift check is lenient on index/constraint churn and to add matching entity annotations."
+    ],
+    "open_items": [
+      "Todo: extract a shared `assertRootOwnership` helper to dedupe the 7-line ownership-gate logic duplicated across createInvite and createShare (deferred as low-risk-but-unnecessary pre-ship refactor).",
+      "Todo: restore/repopulate `tee_key_state` and fix TEE-worker auth so sdk-e2e's tee-republish suite passes locally again (broken as collateral of the session's own DB reset).",
+      "Todo: zeroize file keys on the unwrap-error path in packages/sdk/src/client.ts (pre-existing crypto-hygiene gap, not introduced by phase 71) — still deferred, not fixed, at end of session.",
+      "Todo: reconcile phase 71 planning docs' stale D-01/greenfield language (CONTEXT/PATTERNS/SECURITY/VERIFICATION/STATE) with the amended design — deferred as doc-only cleanup.",
+      "Session ended mid-flight: after fixing the 5 pre-existing type errors (HttpArgumentsHost import, 3 undefined-assertions in bin-operations.test.ts) per the user's ask, the commit/push was issued but final CI settlement and PR review re-sweep on that last commit had not yet been confirmed."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
