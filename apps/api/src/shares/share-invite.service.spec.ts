@@ -6,7 +6,12 @@
  */
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { ShareInviteService } from './share-invite.service';
 import { ShareInvite } from './entities/share-invite.entity';
@@ -179,6 +184,22 @@ describe('ShareInviteService — claimInvite security invariants', () => {
       expect(result.maxClaims).toBe(1);
       expect(result.claimCount).toBe(0);
     });
+
+    it('persists encrypted DTO fields with Buffer conversion (encryptedReadKey, encryptedWriteKey, itemNameEncrypted)', async () => {
+      mockIpnsRecordRepo.findOne.mockResolvedValue({ id: 'ipns-record-1' });
+      const itemNameHex = 'dd'.repeat(32);
+      const dto = makeCreateInviteDto({
+        encryptedReadKey: READ_HEX,
+        encryptedWriteKey: WRITE_HEX,
+        itemNameEncrypted: itemNameHex,
+      });
+
+      const result = await service.createInvite(sharerId, dto);
+
+      expect(result.encryptedReadKey).toEqual(Buffer.from(READ_HEX, 'hex'));
+      expect(result.encryptedWriteKey).toEqual(Buffer.from(WRITE_HEX, 'hex'));
+      expect(result.itemNameEncrypted).toEqual(Buffer.from(itemNameHex, 'hex'));
+    });
   });
 
   // ------------------------------------------------------------------ T-66-E1 (priority)
@@ -223,6 +244,23 @@ describe('ShareInviteService — claimInvite security invariants', () => {
       const createCall = mockManager.create.mock.calls[0];
       const shareData = createCall[1] as Partial<Share>;
       expect(shareData.encryptedWriteKey).toEqual(Buffer.from(WRITE_HEX, 'hex'));
+    });
+  });
+
+  // ------------------------------------------------------------------ write invite requires a write key
+  describe('write-capable invite must be claimed with a re-wrapped write key', () => {
+    it('rejects a write invite claimed without dto.encryptedWriteKey and does NOT consume the invite', async () => {
+      mockInviteRepo.findOne.mockResolvedValue(
+        makeInvite({ encryptedWriteKey: Buffer.from('ff'.repeat(64), 'hex') })
+      );
+      const dto: ClaimInviteDto = { encryptedReadKey: READ_HEX }; // write key omitted
+
+      await expect(service.claimInvite(token, claimerId, dto)).rejects.toBeInstanceOf(
+        BadRequestException
+      );
+      // Rejected BEFORE the transaction — no atomic claim, no share minted, invite intact.
+      expect(mockManager.create).not.toHaveBeenCalled();
+      expect(mockManager.save).not.toHaveBeenCalled();
     });
   });
 
@@ -435,6 +473,31 @@ describe('ShareInviteService — claimInvite security invariants', () => {
       expect(savedShare.rootGeneration).toBe('3');
       expect(savedShare.encryptedWriteKey).toEqual(Buffer.from(WRITE_HEX, 'hex'));
       expect(savedShare.encryptedWriteKey).not.toEqual(staleWriteKey);
+    });
+
+    it('stale-generation re-claim (invite generation lower than existing share) is a no-op', async () => {
+      // Invite carries a LOWER rootGeneration than the existing share — not a widen.
+      mockInviteRepo.findOne.mockResolvedValue(
+        makeInvite({ encryptedWriteKey: null, rootGeneration: '1' })
+      );
+      const existingReadKey = Buffer.from('cc'.repeat(64), 'hex');
+      const existingShare = {
+        id: 'existing-share-id',
+        encryptedWriteKey: null,
+        rootGeneration: '3',
+        encryptedReadKey: existingReadKey,
+      } as unknown as Share;
+      mockManager.findOne.mockResolvedValue(existingShare);
+
+      const dto: ClaimInviteDto = { encryptedReadKey: READ_HEX };
+
+      const result = await service.claimInvite(token, claimerId, dto);
+
+      // Invite is consumed (burned) but the existing grant is untouched — true no-op.
+      expect(result).toEqual({ shareId: 'existing-share-id' });
+      expect(mockManager.save).not.toHaveBeenCalled();
+      expect(existingShare.rootGeneration).toBe('3');
+      expect(existingShare.encryptedReadKey).toEqual(existingReadKey);
     });
   });
 

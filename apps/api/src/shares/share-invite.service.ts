@@ -3,6 +3,7 @@ import {
   NotFoundException,
   ForbiddenException,
   ConflictException,
+  BadRequestException,
   Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -146,6 +147,18 @@ export class ShareInviteService {
     // Self-claim prevention
     if (invite.sharerId === claimerId) {
       throw new ConflictException('Cannot claim your own invite');
+    }
+
+    // A write-capable invite MUST be claimed with a re-wrapped write key. Without this
+    // guard the invite is still atomically consumed below while the minted (or widened)
+    // share silently drops to read-only (encryptedWriteKey = null) — the recipient burns a
+    // write invite and permanently loses the write grant they were entitled to. Reject
+    // BEFORE the transaction so the invite is NOT consumed. Read-only invites are exempt;
+    // write authority stays invite-derived (T-66-E1).
+    if (invite.encryptedWriteKey !== null && !dto.encryptedWriteKey) {
+      throw new BadRequestException(
+        'This invite grants write access — a re-wrapped encryptedWriteKey is required to claim it'
+      );
     }
 
     // Run atomic claim + Share creation inside a transaction
