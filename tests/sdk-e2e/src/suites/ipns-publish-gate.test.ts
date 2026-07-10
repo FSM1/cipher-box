@@ -361,10 +361,13 @@ describe('IPNS publish-gate suite (TEE-04/07, WRITE-04 phase gate)', () => {
   }, 120_000);
 
   // -------------------------------------------------------------------------
-  // Test 21 — D-06: concurrent FIRST publish of the same new ipnsName →
-  // exactly one 200 + one 409 (real DB unique-constraint race, live Postgres)
+  // Test 21 — D-06: concurrent FIRST publish of the same new ipnsName with the
+  // SAME CID at sequence=1. Idempotent by design (D-05/D-06), so it settles as
+  // EITHER one 200 + one 409 (insert-race on the live Postgres unique constraint)
+  // OR two 200s (the loser serialized after the winner committed and re-read the
+  // identical CID). Any loser must be a clean 409, never a 5xx.
   // -------------------------------------------------------------------------
-  it('Test 21 (D-06): concurrent first-publish of the same new ipnsName → exactly one 200 + one 409', async () => {
+  it('Test 21 (D-06): concurrent first-publish of the same new ipnsName → one 200 + one 409 or idempotent two 200s', async () => {
     const alice = fixture.accounts.get('alice')!;
     const aliceCtx = alice.client.getContext();
 
@@ -379,9 +382,12 @@ describe('IPNS publish-gate suite (TEE-04/07, WRITE-04 phase gate)', () => {
 
     // Fire two concurrent first-publish requests for the same brand-new ipnsName.
     // Both sign a first-publish record embedding sequence=1 (no expectedSequenceNumber
-    // — this is the first-publish path, not a CAS forward publish). Exactly one
-    // INSERT wins; the loser's 23505 unique-violation must be translated to a clean
-    // 409 ConflictException, never surfaced as a 500.
+    // — this is the first-publish path, not a CAS forward publish). Because both
+    // carry the SAME CID, the outcome is timing-dependent: if the loser's INSERT
+    // races the winner's it hits the ipns_records(ipnsName) unique constraint and
+    // its 23505 unique-violation must translate to a clean 409 ConflictException
+    // (never a 500); if it serializes after the winner commits it re-reads the
+    // identical CID at sequence=1 and returns an idempotent 200.
     const [resultA, resultB] = await Promise.allSettled([
       createAndPublishIpnsRecord({
         ipnsPrivateKey: kp.privateKey,
@@ -404,13 +410,15 @@ describe('IPNS publish-gate suite (TEE-04/07, WRITE-04 phase gate)', () => {
     const fulfilled = [resultA, resultB].filter((r) => r.status === 'fulfilled');
     const rejected = [resultA, resultB].filter((r) => r.status === 'rejected');
 
-    // Exactly one winner, exactly one loser
-    expect(fulfilled).toHaveLength(1);
-    expect(rejected).toHaveLength(1);
-
-    // The losing call must report 409 ConflictException, never a 500
-    const rejectedResult = rejected[0] as PromiseRejectedResult;
-    expect(statusOf(rejectedResult.reason)).toBe(409);
+    // At least one winner always commits; the loser is EITHER a 409 (insert-race)
+    // or an idempotent 200 (same CID + sequence=1). Both shapes are correct, so
+    // accept 1 or 2 successes. The only hard invariants: never zero winners, and
+    // any loser is a clean 409 ConflictException — never a 500 / unhandled error.
+    expect(fulfilled.length).toBeGreaterThanOrEqual(1);
+    expect(rejected.length).toBeLessThanOrEqual(1);
+    for (const r of rejected) {
+      expect(statusOf((r as PromiseRejectedResult).reason)).toBe(409);
+    }
 
     // Follow-up resolve: exactly one row exists, at sequence=1
     const resolved = await resolveIpnsRecord(ipnsName, aliceCtx);
