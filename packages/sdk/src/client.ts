@@ -459,12 +459,19 @@ export class CipherBoxClient {
    */
   private async collectDescendantIpnsNames(
     nodeReadKey: Uint8Array,
-    nodeChildren: SealedChildRef[]
+    nodeChildren: SealedChildRef[],
+    visited: Set<string> = new Set()
   ): Promise<string[]> {
     const limit = pLimit(UNENROLL_COLLECT_CONCURRENCY);
     const results = await Promise.all(
       nodeChildren.map((childRef) =>
         limit(async (): Promise<string[]> => {
+          // Cycle guard (mirrors dfsFindFolder): a cyclic/malicious folder graph
+          // must not recurse unbounded. Mark the hop before any await so two
+          // concurrent siblings pointing at the same node cannot both descend;
+          // an already-seen ipnsName is contributed once but never re-walked.
+          if (visited.has(childRef.ipnsName)) return [childRef.ipnsName];
+          visited.add(childRef.ipnsName);
           try {
             const childResolved = await this.resolvePublishedNode(childRef.ipnsName);
             if (!childResolved) return [childRef.ipnsName];
@@ -487,7 +494,8 @@ export class CipherBoxClient {
               const childNode = await unsealNode(childResolved.published, childReadKey);
               const nested = await this.collectDescendantIpnsNames(
                 childReadKey,
-                childNode.children ?? []
+                childNode.children ?? [],
+                visited
               );
               return [childRef.ipnsName, ...nested];
             } finally {
@@ -541,7 +549,8 @@ export class CipherBoxClient {
         const itemNode = await unsealNode(resolved.published, itemReadKey);
         const descendants = await this.collectDescendantIpnsNames(
           itemReadKey,
-          itemNode.children ?? []
+          itemNode.children ?? [],
+          new Set([item.ipnsName])
         );
         return [item.ipnsName, ...descendants];
       } finally {
@@ -573,7 +582,8 @@ export class CipherBoxClient {
     try {
       const descendants = await this.collectDescendantIpnsNames(
         entry.nodeReadKey,
-        entry.nodeRef.children ?? []
+        entry.nodeRef.children ?? [],
+        new Set([entry.nodeIpnsName])
       );
       return [entry.nodeIpnsName, ...descendants];
     } catch (err) {
