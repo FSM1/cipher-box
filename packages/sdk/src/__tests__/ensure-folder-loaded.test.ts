@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CipherBoxClient } from '../client';
 import { createTestConfig } from './helpers';
-import type { FolderEntry, FolderMetadata } from '@cipherbox/core';
+import type { Node, SealedChildRef } from '@cipherbox/core';
 
 // Mock sdk-core: keep everything real except loadFolderMetadata, which we drive
 // per-folder so the DFS walk has metadata to descend through.
@@ -26,29 +26,38 @@ import * as sdkCore from '@cipherbox/sdk-core';
 
 const ROOT = 'k51test'; // matches createTestConfig().rootIpnsName
 
-function folderEntry(ipnsName: string, name: string): FolderEntry {
+function folderEntry(ipnsName: string, name: string): SealedChildRef {
   return {
-    type: 'folder',
-    id: `id-${ipnsName}`,
     name,
     ipnsName,
-    ipnsPrivateKeyEncrypted: 'aa',
-    folderKeyEncrypted: 'bb',
-    createdAt: 1,
-    modifiedAt: 1,
+    generation: 0,
+    versionFloor: 0n,
+    readKeySealed: `sealed-${ipnsName}`,
   };
 }
 
-function metadata(children: FolderMetadata['children']): FolderMetadata {
-  return { version: 'v2', children };
+function metadata(children: SealedChildRef[], nodeId: string): Node {
+  return {
+    schema: 'node/v3',
+    kind: 'folder',
+    id: nodeId,
+    generation: 0,
+    createdAt: 0,
+    modifiedAt: 0,
+    children,
+  };
 }
 
 /** Drive loadFolderMetadata to return canned metadata keyed by IPNS name. */
-function mockTree(tree: Record<string, FolderMetadata['children']>) {
+function mockTree(tree: Record<string, SealedChildRef[]>) {
   vi.mocked(sdkCore.loadFolderMetadata).mockImplementation(async ({ ipnsName }) => {
     const children = tree[ipnsName];
     if (!children) return null;
-    return { metadata: metadata(children), sequenceNumber: 1n, cid: `cid-${ipnsName}` };
+    return {
+      metadata: metadata(children, `node-${ipnsName}`),
+      sequenceNumber: 1n,
+      cid: `cid-${ipnsName}`,
+    };
   });
 }
 
@@ -67,6 +76,9 @@ describe.skip('CipherBoxClient.ensureFolderLoaded — TODO(phase 63)', () => {
     client.getFolderTree().set('k51a', {
       ipnsName: 'k51a',
       folderKey: new Uint8Array(32).fill(1),
+      // All-zero: legacy zero-fallback writeKey (see FolderState doc comment
+      // in types.ts) — this test only exercises the cached-state short-circuit.
+      writeKey: new Uint8Array(32),
       ipnsKeypair: { publicKey: new Uint8Array(0), privateKey: new Uint8Array(32).fill(2) },
       sequenceNumber: 5n,
       children: [],

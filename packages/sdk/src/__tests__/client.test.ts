@@ -3,6 +3,7 @@ import { CipherBoxClient } from '../client';
 import type { CipherBoxClientConfig } from '../types';
 import type { SdkEvent } from '../events';
 import { createTestConfig } from './helpers';
+import type { Node, SealedChildRef } from '@cipherbox/core';
 
 // Mock sdk-core to avoid real IPFS/IPNS calls
 vi.mock('@cipherbox/sdk-core', async (importOriginal) => {
@@ -62,6 +63,10 @@ describe('CipherBoxClient', () => {
       client.getFolderTree().set('test-ipns', {
         ipnsName: 'test-ipns',
         folderKey,
+        // All-zero: legacy zero-fallback writeKey (see FolderState doc comment
+        // in types.ts) — this test only exercises key-clearing, not the
+        // write-body path.
+        writeKey: new Uint8Array(32),
         ipnsKeypair: {
           publicKey: new Uint8Array(32).fill(0xcc),
           privateKey: ipnsPrivateKey,
@@ -128,7 +133,15 @@ describe('CipherBoxClient', () => {
 
       // Mock loadFolderMetadata to return data
       vi.mocked(sdkCore.loadFolderMetadata).mockResolvedValue({
-        metadata: { version: 'v2', children: [] },
+        metadata: {
+          schema: 'node/v3',
+          kind: 'folder',
+          id: 'test-node-id',
+          generation: 0,
+          createdAt: 0,
+          modifiedAt: 0,
+          children: [],
+        },
         sequenceNumber: 1n,
         cid: 'bafytest',
       });
@@ -179,7 +192,15 @@ describe('CipherBoxClient', () => {
       );
 
       vi.mocked(sdkCore.loadFolderMetadata).mockResolvedValue({
-        metadata: { version: 'v2', children: [] },
+        metadata: {
+          schema: 'node/v3',
+          kind: 'folder',
+          id: 'test-node-id',
+          generation: 0,
+          createdAt: 0,
+          modifiedAt: 0,
+          children: [],
+        },
         sequenceNumber: 1n,
         cid: 'bafytest',
       });
@@ -216,21 +237,30 @@ describe('CipherBoxClient', () => {
       const events: SdkEvent[] = [];
       client.on((e) => events.push(e));
 
-      const mockChildren = [
+      const mockChildren: SealedChildRef[] = [
         {
-          type: 'folder' as const,
-          id: 'child1',
           name: 'SubFolder',
           ipnsName: 'k51child',
-          ipnsPrivateKeyEncrypted: 'abc',
-          folderKeyEncrypted: 'def',
-          createdAt: Date.now(),
-          modifiedAt: Date.now(),
+          generation: 0,
+          versionFloor: 0n,
+          // Deliberately not a real sealed value: the listing resolve below
+          // must fail to unseal it and soft-skip the child (see comment below).
+          readKeySealed: 'not-a-valid-seal',
         },
       ];
 
+      const metadata: Node = {
+        schema: 'node/v3',
+        kind: 'folder',
+        id: 'test-node-id',
+        generation: 0,
+        createdAt: 0,
+        modifiedAt: 0,
+        children: mockChildren,
+      };
+
       vi.mocked(sdkCore.loadFolderMetadata).mockResolvedValue({
-        metadata: { version: 'v2', children: mockChildren },
+        metadata,
         sequenceNumber: 5n,
         cid: 'bafytest',
       });
@@ -251,10 +281,10 @@ describe('CipherBoxClient', () => {
 
       // Verify folder:loaded event. 68.2-02: the event payload carries
       // ResolvedChild[] (resolved through the gated listing path), not the
-      // raw legacy SealedChildRef-shaped `mockChildren` fixture above --
-      // `mockChildren` has no `readKeySealed` (pre-node/v3 shape), so the
-      // listing resolve cannot open it and the child is soft-skipped
-      // (folder-listing.ts's per-child skip semantics), yielding [].
+      // raw SealedChildRef[] `mockChildren` fixture above -- `mockChildren`
+      // carries a bogus `readKeySealed`, so the listing resolve cannot open
+      // it and the child is soft-skipped (folder-listing.ts's per-child
+      // skip semantics), yielding [].
       const loadedEvent = events.find((e) => e.type === 'folder:loaded');
       expect(loadedEvent).toBeDefined();
       expect((loadedEvent as { folderId: string }).folderId).toBe('test-ipns');
@@ -278,20 +308,24 @@ describe('CipherBoxClient', () => {
       const events: SdkEvent[] = [];
       client.on((e) => events.push(e));
 
-      // Set up folder state
-      const child = {
-        type: 'file' as const,
-        id: 'file1',
+      // Set up folder state. deleteFromFolder matches `childId` against
+      // SealedChildRef.ipnsName, so this child's ipnsName is 'file1' to line
+      // up with the `client.deleteItem('folder-ipns', 'file1')` call below.
+      const child: SealedChildRef = {
         name: 'test.txt',
-        fileMetaIpnsName: 'k51file',
-        ipnsPrivateKeyEncrypted: 'abc',
-        createdAt: Date.now(),
-        modifiedAt: Date.now(),
+        ipnsName: 'file1',
+        generation: 0,
+        versionFloor: 0n,
+        readKeySealed: 'sealed-file1',
       };
 
       client.getFolderTree().set('folder-ipns', {
         ipnsName: 'folder-ipns',
         folderKey: new Uint8Array(32).fill(1),
+        // All-zero: legacy zero-fallback writeKey (see FolderState doc comment
+        // in types.ts) so getWriteBodyParams short-circuits to `{}` instead of
+        // requiring a real IPNS-resolve/fetch mock for this delete-only test.
+        writeKey: new Uint8Array(32),
         ipnsKeypair: {
           publicKey: new Uint8Array(32).fill(2),
           privateKey: new Uint8Array(64).fill(3),

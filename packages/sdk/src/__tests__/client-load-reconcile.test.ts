@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CipherBoxClient } from '../client';
 import { createTestConfig } from './helpers';
+import type { Node, SealedChildRef } from '@cipherbox/core';
 
 // Mock sdk-core: keep everything real except loadFolderMetadata, which we drive
 // to return canned IPNS-resolved state (simulating a stale IPNS snapshot).
@@ -24,6 +25,10 @@ import * as sdkCore from '@cipherbox/sdk-core';
 const IPNS = 'k51reconcile';
 
 const folderKey = new Uint8Array(32).fill(1);
+// All-zero: matches FolderState's documented "legacy zero-fallback" writeKey
+// (types.ts) so getWriteBodyParams's hasRealWriteKey check short-circuits to
+// `{}` — loadFolder never exercises the write-body path, so this is inert.
+const writeKey = new Uint8Array(32);
 const ipnsKeypair = {
   publicKey: new Uint8Array(32).fill(2),
   privateKey: new Uint8Array(64).fill(3),
@@ -31,8 +36,17 @@ const ipnsKeypair = {
 
 /** Build a canned loadFolderMetadata result with the given sequenceNumber. */
 function mockResolve(sequenceNumber: bigint) {
+  const metadata: Node = {
+    schema: 'node/v3',
+    kind: 'folder',
+    id: 'reconcile-node-id',
+    generation: 0,
+    createdAt: 0,
+    modifiedAt: 0,
+    children: [],
+  };
   vi.mocked(sdkCore.loadFolderMetadata).mockResolvedValue({
-    metadata: { version: 'v2', children: [] },
+    metadata,
     sequenceNumber,
     cid: `cid-${sequenceNumber}`,
   });
@@ -56,20 +70,19 @@ describe('CipherBoxClient.loadFolder — sequenceNumber reconcile guard (REQ-1)'
     const client = new CipherBoxClient(createTestConfig());
 
     // Seed in-memory entry at sequence 5 with known children
-    const existingChildren = [
+    const existingChildren: SealedChildRef[] = [
       {
-        type: 'file' as const,
-        id: 'kept-file',
         name: 'important.txt',
-        fileMetaIpnsName: 'k51file',
-        ipnsPrivateKeyEncrypted: 'abc',
-        createdAt: 1,
-        modifiedAt: 1,
+        ipnsName: 'kept-file',
+        generation: 0,
+        versionFloor: 1n,
+        readKeySealed: 'sealed-kept-file',
       },
     ];
     client.getFolderTree().set(IPNS, {
       ipnsName: IPNS,
       folderKey,
+      writeKey,
       ipnsKeypair,
       sequenceNumber: 5n,
       children: existingChildren,
@@ -134,6 +147,7 @@ describe('CipherBoxClient.loadFolder — sequenceNumber reconcile guard (REQ-1)'
     client.getFolderTree().set(IPNS, {
       ipnsName: IPNS,
       folderKey,
+      writeKey,
       ipnsKeypair,
       sequenceNumber: 2n,
       children: [],

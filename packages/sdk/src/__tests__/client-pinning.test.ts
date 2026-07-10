@@ -77,16 +77,14 @@ describe('CipherBoxClient pinning', () => {
       const client = new CipherBoxClient(config);
       setupFolder(client, 'folder-ipns');
 
-      vi.mocked(sdkCore.addFilePointerToFolder).mockReturnValue({
+      vi.mocked(sdkCore.addFilePointerToFolder).mockResolvedValue({
         updatedChildren: [],
-        filePointer: {
-          type: 'file',
-          id: 'f1',
+        newRef: {
           name: 'test.txt',
-          fileMetaIpnsName: 'k51',
-          ipnsPrivateKeyEncrypted: 'enc',
-          createdAt: Date.now(),
-          modifiedAt: Date.now(),
+          ipnsName: 'k51',
+          generation: 0,
+          versionFloor: 0n,
+          readKeySealed: 'enc',
         },
       });
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
@@ -128,16 +126,14 @@ describe('CipherBoxClient pinning', () => {
       const client = new CipherBoxClient(config);
       setupFolder(client, 'folder-ipns');
 
-      vi.mocked(sdkCore.addFilePointerToFolder).mockReturnValue({
+      vi.mocked(sdkCore.addFilePointerToFolder).mockResolvedValue({
         updatedChildren: [],
-        filePointer: {
-          type: 'file',
-          id: 'f1',
+        newRef: {
           name: 'new.txt',
-          fileMetaIpnsName: 'k51',
-          ipnsPrivateKeyEncrypted: 'enc',
-          createdAt: Date.now(),
-          modifiedAt: Date.now(),
+          ipnsName: 'k51',
+          generation: 0,
+          versionFloor: 0n,
+          readKeySealed: 'enc',
         },
       });
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
@@ -179,16 +175,14 @@ describe('CipherBoxClient pinning', () => {
       const client = new CipherBoxClient(config);
       setupFolder(client, 'folder-ipns');
 
-      vi.mocked(sdkCore.addFilePointerToFolder).mockReturnValue({
+      vi.mocked(sdkCore.addFilePointerToFolder).mockResolvedValue({
         updatedChildren: [],
-        filePointer: {
-          type: 'file',
-          id: 'f1',
+        newRef: {
           name: 'new.txt',
-          fileMetaIpnsName: 'k51',
-          ipnsPrivateKeyEncrypted: 'enc',
-          createdAt: Date.now(),
-          modifiedAt: Date.now(),
+          ipnsName: 'k51',
+          generation: 0,
+          versionFloor: 0n,
+          readKeySealed: 'enc',
         },
       });
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
@@ -237,16 +231,14 @@ describe('CipherBoxClient pinning', () => {
       const client = new CipherBoxClient(config);
       setupFolder(client, 'folder-ipns');
 
-      vi.mocked(sdkCore.addFilePointerToFolder).mockReturnValue({
+      vi.mocked(sdkCore.addFilePointerToFolder).mockResolvedValue({
         updatedChildren: [],
-        filePointer: {
-          type: 'file',
-          id: 'f1',
+        newRef: {
           name: 'new.txt',
-          fileMetaIpnsName: 'k51',
-          ipnsPrivateKeyEncrypted: 'enc',
-          createdAt: Date.now(),
-          modifiedAt: Date.now(),
+          ipnsName: 'k51',
+          generation: 0,
+          versionFloor: 0n,
+          readKeySealed: 'enc',
         },
       });
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
@@ -298,16 +290,14 @@ describe('CipherBoxClient pinning', () => {
       const client = new CipherBoxClient(config);
       setupFolder(client, 'folder-ipns');
 
-      vi.mocked(sdkCore.addFilePointerToFolder).mockReturnValue({
+      vi.mocked(sdkCore.addFilePointerToFolder).mockResolvedValue({
         updatedChildren: [],
-        filePointer: {
-          type: 'file',
-          id: 'f1',
+        newRef: {
           name: 'new.txt',
-          fileMetaIpnsName: 'k51',
-          ipnsPrivateKeyEncrypted: 'enc',
-          createdAt: Date.now(),
-          modifiedAt: Date.now(),
+          ipnsName: 'k51',
+          generation: 0,
+          versionFloor: 0n,
+          readKeySealed: 'enc',
         },
       });
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
@@ -348,16 +338,14 @@ describe('CipherBoxClient pinning', () => {
       const client = new CipherBoxClient(config);
       setupFolder(client, 'folder-ipns');
 
-      vi.mocked(sdkCore.addFilePointerToFolder).mockReturnValue({
+      vi.mocked(sdkCore.addFilePointerToFolder).mockResolvedValue({
         updatedChildren: [],
-        filePointer: {
-          type: 'file',
-          id: 'f1',
+        newRef: {
           name: 'new.txt',
-          fileMetaIpnsName: 'k51',
-          ipnsPrivateKeyEncrypted: 'enc',
-          createdAt: Date.now(),
-          modifiedAt: Date.now(),
+          ipnsName: 'k51',
+          generation: 0,
+          versionFloor: 0n,
+          readKeySealed: 'enc',
         },
       });
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
@@ -395,16 +383,14 @@ describe('CipherBoxClient pinning', () => {
 
       const commonSetup = (client: CipherBoxClient) => {
         setupFolder(client, 'folder-ipns');
-        vi.mocked(sdkCore.addFilePointerToFolder).mockReturnValue({
+        vi.mocked(sdkCore.addFilePointerToFolder).mockResolvedValue({
           updatedChildren: [],
-          filePointer: {
-            type: 'file',
-            id: 'f1',
+          newRef: {
             name: 'new.txt',
-            fileMetaIpnsName: 'k51',
-            ipnsPrivateKeyEncrypted: 'enc',
-            createdAt: Date.now(),
-            modifiedAt: Date.now(),
+            ipnsName: 'k51',
+            generation: 0,
+            versionFloor: 0n,
+            readKeySealed: 'enc',
           },
         });
         vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({

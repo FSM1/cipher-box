@@ -73,35 +73,29 @@ function setupUploadMocks() {
     fileWriteKey: new Uint8Array(32).fill(0x44),
   });
 
-  vi.mocked(sdkCore.addFilePointerToFolder).mockReturnValue({
+  vi.mocked(sdkCore.addFilePointerToFolder).mockResolvedValue({
     updatedChildren: [
       {
-        type: 'file' as const,
-        id: 'file1',
         name: 'existing.txt',
-        fileMetaIpnsName: 'k51file',
-        ipnsPrivateKeyEncrypted: 'abc',
-        createdAt: 0,
-        modifiedAt: 0,
+        ipnsName: 'k51file',
+        generation: 0,
+        versionFloor: 0n,
+        readKeySealed: 'abc',
       },
       {
-        type: 'file' as const,
-        id: 'new-file',
         name: 'new.txt',
-        fileMetaIpnsName: 'k51filemeta',
-        ipnsPrivateKeyEncrypted: 'enc-key',
-        createdAt: 0,
-        modifiedAt: 0,
+        ipnsName: 'k51filemeta',
+        generation: 0,
+        versionFloor: 0n,
+        readKeySealed: 'enc-key',
       },
     ],
-    filePointer: {
-      type: 'file' as const,
-      id: 'new-file',
+    newRef: {
       name: 'new.txt',
-      fileMetaIpnsName: 'k51filemeta',
-      ipnsPrivateKeyEncrypted: 'enc-key',
-      createdAt: 0,
-      modifiedAt: 0,
+      ipnsName: 'k51filemeta',
+      generation: 0,
+      versionFloor: 0n,
+      readKeySealed: 'enc-key',
     },
   });
 }

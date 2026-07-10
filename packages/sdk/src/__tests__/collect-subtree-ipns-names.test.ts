@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CipherBoxClient } from '../client';
 import { createTestConfig } from './helpers';
-import type { FolderEntry, FolderMetadata } from '@cipherbox/core';
+import type { Node, SealedChildRef } from '@cipherbox/core';
 
 // Mock sdk-core: keep everything real except the functions we need to control.
 // - loadFolderMetadata: driven per-test to simulate on-demand fetch
@@ -55,40 +55,48 @@ const SIBLING_A = 'k51sibA';
 const SIBLING_A_FILE = 'k51sibAfile';
 const SIBLING_B = 'k51sibB';
 
-function folderEntry(ipnsName: string, name: string): FolderEntry {
+function folderEntry(ipnsName: string, name: string): SealedChildRef {
   return {
-    type: 'folder',
-    id: `id-${ipnsName}`,
     name,
     ipnsName,
-    ipnsPrivateKeyEncrypted: 'aa',
-    folderKeyEncrypted: 'bb',
-    createdAt: 1,
-    modifiedAt: 1,
+    generation: 0,
+    versionFloor: 0n,
+    readKeySealed: `sealed-${ipnsName}`,
   };
 }
 
-function filePointer(fileMetaIpnsName: string, name: string) {
+function filePointer(fileMetaIpnsName: string, name: string): SealedChildRef {
   return {
-    type: 'file' as const,
-    id: `id-file-${fileMetaIpnsName}`,
     name,
-    fileMetaIpnsName,
-    createdAt: 1,
-    modifiedAt: 1,
+    ipnsName: fileMetaIpnsName,
+    generation: 0,
+    versionFloor: 0n,
+    readKeySealed: `sealed-${fileMetaIpnsName}`,
   };
 }
 
-function metadata(children: FolderMetadata['children']): FolderMetadata {
-  return { version: 'v2', children };
+function metadata(children: SealedChildRef[], nodeId: string): Node {
+  return {
+    schema: 'node/v3',
+    kind: 'folder',
+    id: nodeId,
+    generation: 0,
+    createdAt: 0,
+    modifiedAt: 0,
+    children,
+  };
 }
 
 /** Drive loadFolderMetadata to return canned metadata keyed by IPNS name. */
-function mockTree(tree: Record<string, FolderMetadata['children']>) {
+function mockTree(tree: Record<string, SealedChildRef[]>) {
   vi.mocked(sdkCore.loadFolderMetadata).mockImplementation(async ({ ipnsName }) => {
     const children = tree[ipnsName];
     if (!children) return null;
-    return { metadata: metadata(children), sequenceNumber: 1n, cid: `cid-${ipnsName}` };
+    return {
+      metadata: metadata(children, `node-${ipnsName}`),
+      sequenceNumber: 1n,
+      cid: `cid-${ipnsName}`,
+    };
   });
 }
 
@@ -134,6 +142,11 @@ describe.skip('collectSubtreeIpnsNamesAsync — D-03 on-demand traversal — TOD
     client.getFolderTree().set(PARENT, {
       ipnsName: PARENT,
       folderKey: new Uint8Array(32).fill(1),
+      // All-zero: legacy zero-fallback writeKey (see FolderState doc comment
+      // in types.ts) so getWriteBodyParams short-circuits to `{}` for these
+      // deleteItem-driven traversal tests instead of requiring a real
+      // IPNS-resolve/fetch mock.
+      writeKey: new Uint8Array(32),
       ipnsKeypair: { publicKey: new Uint8Array(0), privateKey: new Uint8Array(64).fill(2) },
       sequenceNumber: 1n,
       children: [folderEntry(SUBFOLDER, 'SubFolder')],
@@ -191,6 +204,11 @@ describe.skip('collectSubtreeIpnsNamesAsync — D-03 on-demand traversal — TOD
     client.getFolderTree().set(GRANDPARENT, {
       ipnsName: GRANDPARENT,
       folderKey: new Uint8Array(32).fill(1),
+      // All-zero: legacy zero-fallback writeKey (see FolderState doc comment
+      // in types.ts) so getWriteBodyParams short-circuits to `{}` for these
+      // deleteItem-driven traversal tests instead of requiring a real
+      // IPNS-resolve/fetch mock.
+      writeKey: new Uint8Array(32),
       ipnsKeypair: { publicKey: new Uint8Array(0), privateKey: new Uint8Array(64).fill(2) },
       sequenceNumber: 1n,
       children: [folderEntry(PARENT, 'Parent')],
@@ -205,14 +223,17 @@ describe.skip('collectSubtreeIpnsNamesAsync — D-03 on-demand traversal — TOD
     vi.mocked(sdkCore.loadFolderMetadata).mockImplementation(async ({ ipnsName }) => {
       if (ipnsName === PARENT) {
         return {
-          metadata: metadata([folderEntry(SIBLING_A, 'SibA'), folderEntry(SIBLING_B, 'SibB')]),
+          metadata: metadata(
+            [folderEntry(SIBLING_A, 'SibA'), folderEntry(SIBLING_B, 'SibB')],
+            `node-${ipnsName}`
+          ),
           sequenceNumber: 1n,
           cid: `cid-${ipnsName}`,
         };
       }
       if (ipnsName === SIBLING_A) {
         return {
-          metadata: metadata([filePointer(SIBLING_A_FILE, 'afile.txt')]),
+          metadata: metadata([filePointer(SIBLING_A_FILE, 'afile.txt')], `node-${ipnsName}`),
           sequenceNumber: 1n,
           cid: `cid-${ipnsName}`,
         };
@@ -268,6 +289,11 @@ describe.skip('collectSubtreeIpnsNamesAsync — D-03 on-demand traversal — TOD
     client.getFolderTree().set(PARENT, {
       ipnsName: PARENT,
       folderKey: new Uint8Array(32).fill(1),
+      // All-zero: legacy zero-fallback writeKey (see FolderState doc comment
+      // in types.ts) so getWriteBodyParams short-circuits to `{}` for these
+      // deleteItem-driven traversal tests instead of requiring a real
+      // IPNS-resolve/fetch mock.
+      writeKey: new Uint8Array(32),
       ipnsKeypair: { publicKey: new Uint8Array(0), privateKey: new Uint8Array(64).fill(2) },
       sequenceNumber: 1n,
       children: [folderEntry(SUBFOLDER, 'SubFolder')],
@@ -319,6 +345,11 @@ describe.skip('collectSubtreeIpnsNamesAsync — D-03 on-demand traversal — TOD
     client.getFolderTree().set(PARENT, {
       ipnsName: PARENT,
       folderKey: new Uint8Array(32).fill(1),
+      // All-zero: legacy zero-fallback writeKey (see FolderState doc comment
+      // in types.ts) so getWriteBodyParams short-circuits to `{}` for these
+      // deleteItem-driven traversal tests instead of requiring a real
+      // IPNS-resolve/fetch mock.
+      writeKey: new Uint8Array(32),
       ipnsKeypair: { publicKey: new Uint8Array(0), privateKey: new Uint8Array(64).fill(2) },
       sequenceNumber: 1n,
       children: [folderEntry(FOLDER_A, 'FolderA')],

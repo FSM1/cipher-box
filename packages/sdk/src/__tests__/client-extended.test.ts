@@ -105,23 +105,19 @@ describe('CipherBoxClient - extended', () => {
       vi.mocked(sdkCore.renameInFolder).mockReturnValue({
         updatedChildren: [
           {
-            type: 'file',
-            id: 'file1',
             name: 'renamed.txt',
-            fileMetaIpnsName: 'k51file',
-            ipnsPrivateKeyEncrypted: 'abc',
-            createdAt: 0,
-            modifiedAt: 0,
+            ipnsName: 'k51file',
+            generation: 0,
+            versionFloor: 0n,
+            readKeySealed: 'sealed-key-hex',
           },
         ],
         renamedChild: {
-          type: 'file',
-          id: 'file1',
           name: 'renamed.txt',
-          fileMetaIpnsName: 'k51file',
-          ipnsPrivateKeyEncrypted: 'abc',
-          createdAt: 0,
-          modifiedAt: 0,
+          ipnsName: 'k51file',
+          generation: 0,
+          versionFloor: 0n,
+          readKeySealed: 'sealed-key-hex',
         },
       });
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
@@ -228,35 +224,29 @@ describe('CipherBoxClient - extended', () => {
         fileReadKey: new Uint8Array(32).fill(0x43),
         fileWriteKey: new Uint8Array(32).fill(0x44),
       });
-      vi.mocked(sdkCore.addFilePointerToFolder).mockReturnValue({
+      vi.mocked(sdkCore.addFilePointerToFolder).mockResolvedValue({
         updatedChildren: [
           {
-            type: 'file',
-            id: 'file1',
             name: 'test.txt',
-            fileMetaIpnsName: 'k51file',
-            ipnsPrivateKeyEncrypted: 'abc',
-            createdAt: 0,
-            modifiedAt: 0,
+            ipnsName: 'k51file',
+            generation: 0,
+            versionFloor: 0n,
+            readKeySealed: 'sealed-key-hex',
           },
           {
-            type: 'file',
-            id: 'file2',
             name: 'new.txt',
-            fileMetaIpnsName: 'k51filemeta',
-            ipnsPrivateKeyEncrypted: 'enc',
-            createdAt: 0,
-            modifiedAt: 0,
+            ipnsName: 'k51filemeta',
+            generation: 0,
+            versionFloor: 0n,
+            readKeySealed: 'enc',
           },
         ],
-        filePointer: {
-          type: 'file',
-          id: 'file2',
+        newRef: {
           name: 'new.txt',
-          fileMetaIpnsName: 'k51filemeta',
-          ipnsPrivateKeyEncrypted: 'enc',
-          createdAt: 0,
-          modifiedAt: 0,
+          ipnsName: 'k51filemeta',
+          generation: 0,
+          versionFloor: 0n,
+          readKeySealed: 'enc',
         },
       });
       vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
@@ -334,15 +324,13 @@ describe('CipherBoxClient - extended', () => {
 
       vi.mocked(sdkCore.resolveFileMetadata).mockResolvedValue({
         metadata: {
-          version: 'v1',
           cid: 'bafycontent',
-          fileKeyEncrypted: 'abc',
           fileIv: 'def',
           size: 1024,
           mimeType: 'application/octet-stream',
           encryptionMode: 'GCM',
-          createdAt: 1700000000000,
-          modifiedAt: 1700000000000,
+          fileKey: new Uint8Array(32),
+          versions: [],
         },
         metadataCid: 'bafymetacid',
       });
@@ -350,7 +338,16 @@ describe('CipherBoxClient - extended', () => {
         new Uint8Array([72, 101, 108, 108, 111])
       );
 
-      const result = await client.downloadFromIpns('k51filemeta', new Uint8Array(32));
+      const result = await client.downloadFromIpns(
+        {
+          name: 'x.txt',
+          ipnsName: 'k51filemeta',
+          generation: 0,
+          versionFloor: 0n,
+          readKeySealed: 'sealed-key-hex',
+        },
+        new Uint8Array(32)
+      );
 
       expect(result).toEqual(new Uint8Array([72, 101, 108, 108, 111]));
       expect(events.some((e) => e.type === 'file:downloaded')).toBe(true);
@@ -515,13 +512,11 @@ describe('CipherBoxClient - extended', () => {
 
       vi.mocked(binOps.restoreFromBin).mockResolvedValue({
         restoredItem: {
-          type: 'file',
-          id: 'file1',
           name: 'x.txt',
-          fileMetaIpnsName: 'k51',
-          ipnsPrivateKeyEncrypted: '',
-          createdAt: 0,
-          modifiedAt: 0,
+          ipnsName: 'k51',
+          generation: 0,
+          versionFloor: 0n,
+          readKeySealed: '',
         },
         updatedBinState: { entries: [], sequenceNumber: 2, ipnsName: 'k51bin' },
       });
