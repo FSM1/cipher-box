@@ -208,11 +208,10 @@ test.describe.serial('Shared Folder Desync (SC#5)', () => {
   // dual-account harness from 1.1/1.2 -- do NOT construct a new fixture or
   // describe block.
   //
-  // Impl plan 73-09 removes this fixme guard once navigateUp's/
-  // navigateToBreadcrumb's consolidated restore helper (SC6) calls
-  // `refreshSharedFolder()` after re-seeding a restored depth (see
-  // 73-RESEARCH.md SC2).
-  test.fixme('Grantee sees fresh children after navigating up following a remote mutation while deeper (SC2)', async () => {
+  // Plan 73-09 closes SC2: navigateUp's/navigateToBreadcrumb's consolidated
+  // restore helper (SC6) now calls `refreshSharedFolder()` after re-seeding a
+  // restored depth (see 73-RESEARCH.md SC2), so this case is active.
+  test('Grantee sees fresh children after navigating up following a remote mutation while deeper (SC2)', async () => {
     test.setTimeout(90000);
 
     const desyncSubfolderName = `desync-subfolder-${runId}`;
