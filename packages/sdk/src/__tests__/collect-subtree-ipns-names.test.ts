@@ -388,25 +388,137 @@ describe('CipherBoxClient.deleteItem — fire-and-forget IPNS unenroll subtree w
     expect(client.getFolderTree().has(PARENT)).toBe(true);
   });
 
-  // Test D (documented gap, NOT a stale phase TODO): a cyclic folder graph
-  // A -> B -> A. Unlike `dfsFindFolder` (ensureFolderLoaded's navigation DFS,
-  // client.ts ~1466), which threads an explicit `visited: Set<string>` guard
-  // specifically to survive "a cyclic/malicious tree", the fire-and-forget
-  // unenroll walk (`collectDescendantIpnsNames`, added in Phase 68.1-02) has
-  // NO equivalent cycle guard -- confirmed by reading client.ts: it recurses
-  // unconditionally into every folder/root child with no visited-set
-  // parameter at all. A folder graph that (through corruption or a malicious
-  // shared link, since a folder's children are attacker-influenced content
-  // once shared) lists an ancestor as its own descendant would recurse
-  // without bound (RangeError: Maximum call stack size exceeded, or a hang
-  // bounded only by pLimit concurrency) instead of terminating. This is a
-  // real, currently-unaddressed asymmetry between the two DFS
-  // implementations -- reported as a FINDING rather than fixed here (fixing
-  // it means editing client.ts production code, which is out of scope for a
-  // test-migration pass). Left skipped deliberately: enabling it against the
-  // current implementation would hang/stack-overflow the test run, not fail
-  // it cleanly.
-  it.skip('Test D: a cyclic folder graph currently has NO visited-set guard (collectDescendantIpnsNames) -- FINDING, not stale TODO', () => {
-    expect(true).toBe(true);
+  // Test D (cycle guard): a cyclic folder graph A -> B -> A. Mirrors the
+  // `visited: Set<string>` guard `dfsFindFolder` uses to survive "a
+  // cyclic/malicious tree" -- `collectDescendantIpnsNames` now threads its own
+  // `visited` set (seeded by both entry collectors) and checks-and-adds each
+  // `childRef.ipnsName` before any await: an already-seen node contributes its
+  // own name once but is NEVER re-walked. Folder A's node lists folder B as a
+  // child, and B's node lists A back -- a folder's children are
+  // attacker-influenced content once shared, so a malicious/corrupt back-edge
+  // to an ancestor is a real input. Without the guard this recurses without
+  // bound (RangeError: Maximum call stack size exceeded, or a hang bounded only
+  // by pLimit concurrency); with it, the walk terminates and each node's
+  // SUBTREE is expanded exactly once. Note B (whose only inbound path is A's
+  // forward edge) is therefore collected exactly once, which is the precise
+  // cycle-break witness -- A appears twice in the raw name list only because
+  // deleteItem prepends the removed item's OWN name AND B's back-edge
+  // contributes A once as a non-expanded leaf, NOT because A's subtree was
+  // walked twice.
+  it('Test D: a cyclic folder graph A->B->A terminates via the visited guard (B walked exactly once)', async () => {
+    const client = new CipherBoxClient(createTestConfig());
+    const PARENT = 'k51parent';
+    const FOLDER_A = 'k51cycleA';
+    const FOLDER_B = 'k51cycleB';
+    const FOLDER_A_NODE_ID = '77777777-7777-4777-8777-777777777777';
+    const FOLDER_B_NODE_ID = '88888888-8888-4888-8888-888888888888';
+
+    const parentReadKey = new Uint8Array(32).fill(1);
+    const folderAReadKey = new Uint8Array(32).fill(5);
+    const folderBReadKey = new Uint8Array(32).fill(6);
+
+    // PARENT holds FOLDER_A (the deleted item).
+    const folderARef: SealedChildRef = {
+      name: 'FolderA',
+      ipnsName: FOLDER_A,
+      generation: 0,
+      versionFloor: 0n,
+      readKeySealed: await sealChildReadKey(
+        folderAReadKey,
+        parentReadKey,
+        FOLDER_A_NODE_ID,
+        'folder',
+        0
+      ),
+    };
+    client
+      .getFolderTree()
+      .set(
+        PARENT,
+        folderState({ ipnsName: PARENT, folderKey: parentReadKey, children: [folderARef] })
+      );
+
+    // A lists B (sealed under A's readKey).
+    const folderBRefUnderA: SealedChildRef = {
+      name: 'FolderB',
+      ipnsName: FOLDER_B,
+      generation: 0,
+      versionFloor: 0n,
+      readKeySealed: await sealChildReadKey(
+        folderBReadKey,
+        folderAReadKey,
+        FOLDER_B_NODE_ID,
+        'folder',
+        0
+      ),
+    };
+    const folderANode: Node = {
+      schema: 'node/v3',
+      kind: 'folder',
+      id: FOLDER_A_NODE_ID,
+      generation: 0,
+      createdAt: 0,
+      modifiedAt: 0,
+      children: [folderBRefUnderA],
+    };
+
+    // B lists A back (sealed under B's readKey) -- the cycle.
+    const folderARefUnderB: SealedChildRef = {
+      name: 'FolderA',
+      ipnsName: FOLDER_A,
+      generation: 0,
+      versionFloor: 0n,
+      readKeySealed: await sealChildReadKey(
+        folderAReadKey,
+        folderBReadKey,
+        FOLDER_A_NODE_ID,
+        'folder',
+        0
+      ),
+    };
+    const folderBNode: Node = {
+      schema: 'node/v3',
+      kind: 'folder',
+      id: FOLDER_B_NODE_ID,
+      generation: 0,
+      createdAt: 0,
+      modifiedAt: 0,
+      children: [folderARefUnderB],
+    };
+
+    mockNetwork({
+      [FOLDER_A]: {
+        cid: 'cid-cycleA',
+        published: await sealNode(folderANode, folderAReadKey, DUMMY_WRITE_KEY),
+      },
+      [FOLDER_B]: {
+        cid: 'cid-cycleB',
+        published: await sealNode(folderBNode, folderBReadKey, DUMMY_WRITE_KEY),
+      },
+    });
+
+    // Must terminate (no stack overflow / no hang) -- the guard breaks the cycle.
+    await expect(client.deleteItem(PARENT, FOLDER_A)).resolves.not.toThrow();
+
+    await vi.waitFor(() => expect(ipnsControllerUnenrollBatch).toHaveBeenCalled());
+
+    const allNames = vi
+      .mocked(ipnsControllerUnenrollBatch)
+      .mock.calls.flatMap((call) => call[0].ipnsNames);
+
+    // Both cycle nodes collected.
+    expect(allNames).toContain(FOLDER_A);
+    expect(allNames).toContain(FOLDER_B);
+    // Cycle-break witness: B's subtree is walked exactly once. Without the
+    // visited guard, A<->B would re-expand unbounded and B would appear many
+    // times (before the stack overflowed).
+    expect(allNames.filter((n) => n === FOLDER_B)).toHaveLength(1);
+    // The full name list is finite and small: the guard caps A's back-edge to a
+    // single non-expanded leaf contribution, so the deterministic output is
+    // exactly [FOLDER_A (removed item), FOLDER_B, FOLDER_A (B's back-edge leaf)].
+    expect(allNames).toHaveLength(3);
+    expect(allNames.filter((n) => n === FOLDER_A)).toHaveLength(2);
+    // Only the two distinct nodes are ever named.
+    expect(new Set(allNames)).toEqual(new Set([FOLDER_A, FOLDER_B]));
   });
 });
