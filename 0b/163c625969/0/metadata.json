@@ -1,0 +1,99 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "0b163c625969",
+  "session_id": "67f868ae-597f-436d-9d1d-2b17847681c3",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-10T18:30:05.955478Z",
+  "branch": "feat/shared-write-navigation-correctness-web",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/73-shared-write-navigation-correctness-web/73-RESEARCH.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "98ad5a5a244a",
+  "checkpoint_transcript_start": 163,
+  "transcript_lines_at_start": 163,
+  "token_usage": {
+    "input_tokens": 414,
+    "cache_creation_tokens": 133846,
+    "cache_read_tokens": 1207354,
+    "output_tokens": 7770,
+    "api_call_count": 11
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01UYCCzQhFZAHGHdsaWBLw9U",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "98ad5a5a244a",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 116,
+        "end": 117,
+        "entry_ids": [
+          "018bd085-2058-4077-b6f9-80db0d5e8d2b"
+        ],
+        "tool_use_id": "toolu_01UYCCzQhFZAHGHdsaWBLw9U"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01UYCCzQhFZAHGHdsaWBLw9U"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-plan-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Orchestrate the GSD plan:pre pipeline for phase 73 (shared-write-navigation-correctness-web) — spawn researcher, pattern-mapper, planner, and plan-checker agents faithfully per the configured hook contracts, then produce phase planning docs.",
+    "outcome": "Set up pipeline task tracking for the full sequence and synchronously spawned gsd-phase-researcher, which produced 73-RESEARCH.md covering the 7 SC target seams; downstream steps (VALIDATION.md, PATTERNS.md, planner, plan-checker) were queued but not yet executed.",
+    "learnings": {
+      "repo": [
+        "GSD plan:pre pipeline for this project has 6 active hooks: intel, research, pattern-mapper, schema-gate→planner, tdd→planner, drift-gate.",
+        "schema-gate hook only fires for TypeORM entity/migration file changes; phase 73 (SDK/web hooks only) doesn't trigger it even though SC4 surfaces an already-emitted tombstone at the SDK layer.",
+        "TDD mode being active means the planner automatically receives a tdd contribution alongside CONTEXT/ROADMAP/RESEARCH/PATTERNS.",
+        "Agent-skill contracts for researcher/planner/checker were empty in this repo — those agents fall back to their baked-in contracts.",
+        "Phase branch for this work is feat/shared-write-navigation-correctness-web; plan-checker step includes reconciling any stray branch back to it."
+      ],
+      "code": [],
+      "workflow": [
+        "GSD orchestrator rule: spawn the researcher agent synchronously (sonnet) and wait for it rather than firing and forgetting.",
+        "plan-checker (sonnet) is expected to iterate up to 3x until it returns PASS.",
+        "PATTERNS.md must be committed explicitly by the orchestrator after gsd-pattern-mapper runs, since plan-phase does not commit it automatically (matches existing memory: [[feedback-gsd-...]] pattern of GSD steps needing manual follow-through)."
+      ]
+    },
+    "friction": [],
+    "open_items": [
+      "If 73-RESEARCH.md has a Validation Architecture section, write 73-VALIDATION.md from template and commit it.",
+      "Spawn gsd-pattern-mapper to produce PATTERNS.md and commit it explicitly.",
+      "Regenerate intel API-SURFACE.md, then spawn gsd-planner (opus) with CONTEXT/ROADMAP/RESEARCH/PATTERNS + tdd contribution; SC4 is locked to wire-end-to-end.",
+      "Spawn gsd-plan-checker (sonnet), iterating up to 3x until PASS; confirm resulting plans land on feat/shared-write-navigation-correctness-web."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-10T18:29:42.098167Z",
+    "agent_lines": 302,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 302,
+    "total_lines_changed": 302,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
