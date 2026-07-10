@@ -100,7 +100,9 @@ async function readDurableFloors(
  * matching `rotation-state.service.ts` -- so `put(value, key)` passes the value
  * first and the nodeId key second. This stages only the `seq` field via a
  * read-modify-write so any existing `generation`/`wrappedKeyCheckpoint` floors
- * for the node are preserved (matching production's max-preserving write).
+ * for the node are preserved. Unlike production's `idbPutFloors` (which
+ * max-preserves `seq` and never lowers a floor), this helper overwrites `seq`
+ * with the given value so a test can stage an exact sequence floor.
  */
 async function writeDurableSeqFloor(page: Page, nodeId: string, value: number): Promise<void> {
   await page.evaluate(
