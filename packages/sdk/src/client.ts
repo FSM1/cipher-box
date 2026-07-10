@@ -3847,6 +3847,7 @@ export class CipherBoxClient {
   private async maybeRepublishFolderForFileMigration(
     folderIpnsName: string,
     folder: FolderState,
+    fileContentChanged: boolean,
     migratedIpnsPrivateKeyEncrypted?: string
   ): Promise<void> {
     if (migratedIpnsPrivateKeyEncrypted) {
@@ -3873,6 +3874,22 @@ export class CipherBoxClient {
         newSequenceNumber,
         publishedWriteChildren ?? writeBodyParams.writeChildren
       );
+    }
+
+    // 72-06 SC#4: a file-only publish never bumps the parent's OWN sequence
+    // number (by design), so `listingCache` — keyed by (ipnsName,
+    // sequenceNumber) — survives the edit and would otherwise serve the
+    // PRE-edit size/modifiedAt for the just-updated file on the next emit
+    // below (72-RESEARCH.md Critical Finding 1). Gated on `fileContentChanged`
+    // (computed by the caller, which already has both the prior NodeContent
+    // and the new UpdateFileContentParams) so a genuine no-op edit (e.g.
+    // deleteFileVersion, whose live content descriptor is unchanged) does not
+    // needlessly bust an otherwise-valid cache. Mirrors the shipped
+    // `updateSharedFile` (68.2-02 Rule 1 fix) one-liner for the shared-path
+    // sibling. Does NOT add size/modifiedAt fields to SealedChildRef
+    // (NODE-03 frozen field set).
+    if (fileContentChanged) {
+      this.listingCache.delete(folderIpnsName);
     }
 
     const live = this.folderTree.get(folderIpnsName) ?? folder;
@@ -3952,9 +3969,19 @@ export class CipherBoxClient {
           ctx: this.ctx,
         });
 
+        // 72-06 SC#4: did the file's live content actually change? Gates the
+        // listingCache invalidation inside maybeRepublishFolderForFileMigration
+        // — computed here (not re-derived in that seam) since this caller
+        // already holds both the prior NodeContent and the new
+        // UpdateFileContentParams.
+        const fileContentChanged =
+          fileData.updates.size !== fileData.currentMetadata.size ||
+          fileData.updates.cid !== fileData.currentMetadata.cid;
+
         await this.maybeRepublishFolderForFileMigration(
           parentIpnsName,
           folder,
+          fileContentChanged,
           fileData.migratedIpnsPrivateKeyEncrypted
         );
 
@@ -4035,9 +4062,17 @@ export class CipherBoxClient {
           ctx: this.ctx,
         });
 
+        // 72-06 SC#4: see replaceFile's identical comment — computed here
+        // (not re-derived in the seam) from the caller's own prior/new
+        // content descriptors.
+        const fileContentChanged =
+          params.updates.size !== params.currentMetadata.size ||
+          params.updates.cid !== params.currentMetadata.cid;
+
         await this.maybeRepublishFolderForFileMigration(
           parentIpnsName,
           folder,
+          fileContentChanged,
           params.migratedIpnsPrivateKeyEncrypted
         );
 
@@ -4117,9 +4152,19 @@ export class CipherBoxClient {
           ctx: this.ctx,
         });
 
+        // 72-06 SC#4: deleteFileVersion's `updates` carries the SAME live
+        // content descriptor as `currentMetadata` (only a past version entry
+        // is pruned) — this normally evaluates to `false`, matching the
+        // locked "gated on a real change" wording (no needless cache bust on
+        // a version-history-only delete).
+        const fileContentChanged =
+          params.updates.size !== params.currentMetadata.size ||
+          params.updates.cid !== params.currentMetadata.cid;
+
         await this.maybeRepublishFolderForFileMigration(
           parentIpnsName,
           folder,
+          fileContentChanged,
           params.migratedIpnsPrivateKeyEncrypted
         );
 
