@@ -2,7 +2,7 @@
 
 ## From Plan 71-08
 
-- `pnpm --filter @cipherbox/api exec tsc --noEmit` reports pre-existing errors unrelated to this plan's change (`apps/api/src/shares/shares.service.ts` / `.spec.ts`): `@cipherbox/crypto` module resolution failures (stale/missing `packages/crypto/dist`, known cross-package dist-staleness issue), a couple of pre-existing `ipns.service.ts` null-narrowing errors, and an `HttpArgumentsHost` import mismatch in `http-metrics.interceptor.spec.ts`. None reference `shares.service.ts`/`shares.service.spec.ts`. Out of scope for this plan — not fixed.
+- `pnpm --filter @cipherbox/api exec tsc --noEmit` reports pre-existing errors, none of which are in this plan's changed files (`apps/api/src/shares/shares.service.ts` / `.spec.ts`). The reported errors are located in OTHER files: `@cipherbox/crypto` module-resolution failures (stale/missing `packages/crypto/dist`, a known cross-package dist-staleness issue — clears after building crypto), null-narrowing errors in `apps/api/src/ipns/ipns-verify-cache.spec.ts`, and an `HttpArgumentsHost` import mismatch in `apps/api/src/metrics/http-metrics.interceptor.spec.ts`. All are unchanged vs `origin/main` and not CI-gated (the `pnpm typecheck` gate excludes `apps/api tsc`). Out of scope for this plan — not fixed.
 
 ## From Plan 71-05
 

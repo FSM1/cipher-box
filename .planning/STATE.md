@@ -24,13 +24,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-27)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 71 — share-invite-security-and-ipns-data-integrity-api
+**Current focus:** Phase 72 — SDK Write-Plane Durability and Correctness
 
 ## Current Position
 
 Phase: 72 — SDK Write-Plane Durability and Correctness
 Plan: Not started
-Status: Executing Phase 71
+Status: Phase 71 complete — Phase 72 not started
 Last activity: 2026-07-09 — Phase 71 complete, transitioned to Phase 72
 
 Progress: `██████████` 79 / 79 plans (100%)
