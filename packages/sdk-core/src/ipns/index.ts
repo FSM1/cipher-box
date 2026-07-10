@@ -48,7 +48,7 @@ export async function createAndPublishIpnsRecord(params: {
   expectedSequenceNumber?: string;
   generation?: string;
   ctx?: SdkContext;
-}): Promise<{ success: boolean; sequenceNumber: bigint }> {
+}): Promise<{ success: boolean; sequenceNumber: bigint; tombstoned?: boolean }> {
   return withPerf('ipns:publish', async () => {
     // T-47-01 / D-05: caller-owns-key convention. This is a CALLEE that receives a
     // caller-owned `ipnsPrivateKey` buffer — it MUST NOT zero it. Callers reuse the
@@ -92,19 +92,34 @@ export async function createAndPublishIpnsRecord(params: {
     const apiOptions = params.ctx?.axiosInstance
       ? { _axiosInstance: params.ctx.axiosInstance }
       : undefined;
-    const response = await ipnsControllerPublishRecord(
-      {
-        ipnsName: params.ipnsName,
-        record: recordBase64,
-        publicKey,
-        metadataCid: params.metadataCid,
-        encryptedIpnsPrivateKey: params.encryptedIpnsPrivateKey,
-        keyEpoch: params.keyEpoch,
-        expectedSequenceNumber: params.expectedSequenceNumber,
-        generation: params.generation,
-      },
-      apiOptions
-    );
+    let response;
+    try {
+      response = await ipnsControllerPublishRecord(
+        {
+          ipnsName: params.ipnsName,
+          record: recordBase64,
+          publicKey,
+          metadataCid: params.metadataCid,
+          encryptedIpnsPrivateKey: params.encryptedIpnsPrivateKey,
+          keyEpoch: params.keyEpoch,
+          expectedSequenceNumber: params.expectedSequenceNumber,
+          generation: params.generation,
+        },
+        apiOptions
+      );
+    } catch (error) {
+      // SC4(a): a 410 (IPNS_TOMBSTONED, apps/api ipns.service.ts) means the co-writer's
+      // IPNS name was rotated out from under it — surface a real, catchable signal
+      // instead of letting a raw AxiosError propagate. Mirrors the 404-detection idiom
+      // in resolveIpnsRecord (see the catch block below). All other errors rethrow
+      // unchanged — this must not become a silent-swallow of publish failures.
+      const anyError = error as Error & { status?: number; response?: { status?: number } };
+      const status = anyError.status ?? anyError.response?.status;
+      if (status === 410) {
+        return { success: false, sequenceNumber: 0n, tombstoned: true };
+      }
+      throw error;
+    }
 
     return {
       success: response.success,

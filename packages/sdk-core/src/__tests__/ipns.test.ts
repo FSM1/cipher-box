@@ -109,9 +109,7 @@ describe('IPNS operations', () => {
       });
 
       expect(result.success).toBe(false);
-      // Return type does not yet declare `tombstoned` (added in Task 2/GREEN) — cast locally
-      // so this RED test compiles and fails at runtime.
-      expect((result as { tombstoned?: boolean }).tombstoned).toBe(true);
+      expect(result.tombstoned).toBe(true);
     });
 
     // Regression guard: a non-410 rejection must still propagate unchanged (no swallowing).
