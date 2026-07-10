@@ -5615,12 +5615,6 @@ export class CipherBoxClient {
    * read-body children. `destIpnsPrivateKey` comes from unsealing the
    * destination's own node under its now-recovered read+write keys.
    *
-   * `getShareKeysFn` is retained for backward compatibility: a non-empty
-   * result (a caller supplying a real per-child share_keys fan-out) is still
-   * honored via the legacy path below. Every current web caller's
-   * `fetchShareKeys` now always returns `[]` (68.1-20 Task 1 — no live
-   * share_keys endpoint exists), which routes here to the write-chain path.
-   *
    * KNOWN BLOCKER (documented per 68.1-20 Task 3, not silently worked around):
    * this resolves the destination ONLY when it is a direct child of the
    * CURRENTLY ACTIVE shared folder's own write-body — i.e., `srcState` IS the
@@ -5652,9 +5646,6 @@ export class CipherBoxClient {
       destFolderId: string;
       destIpnsName: string;
       vaultPrivateKey: Uint8Array;
-      getShareKeysFn: (
-        shareId: string
-      ) => Promise<Array<{ keyType: string; itemId: string; encryptedKey: string }>>;
     }
   ): Promise<void> {
     return this.withOperation('moveInSharedFolder', async () => {
@@ -5667,8 +5658,6 @@ export class CipherBoxClient {
         throw new Error('Cannot move a folder into itself');
       }
 
-      const shareKeys = await args.getShareKeysFn(shareId);
-
       let destFolderKey: Uint8Array | null = null;
       let destWriteKey: Uint8Array | null = null;
       let destIpnsPrivateKey: Uint8Array | null = null;
@@ -5677,125 +5666,79 @@ export class CipherBoxClient {
       let destChildren: SealedChildRef[];
 
       try {
-        if (shareKeys.length > 0) {
-          // Legacy path (kept for compatibility, T-49-01/T-68.1-08-01
-          // write-capability guard): a caller supplying a real per-child
-          // share_keys fan-out is still honored — fail closed before any
-          // publish or key unwrap if either entry is missing.
-          const destFolderKeyRecord = shareKeys.find(
-            (k) => k.keyType === 'folder' && k.itemId === args.destFolderId
+        // 68.1-20: write-chain resolution — no live share_keys fan-out
+        // exists (fetchShareKeys always returns [], Task 1). Unseal the
+        // SOURCE folder's own write-body under its seeded writeKey and walk
+        // one hop to the destination's WriteChildRef.
+        const srcParentNode = await unsealNode(
+          srcState.publishedNode,
+          srcState.folderKey,
+          srcState.writeKey
+        );
+        if (!srcParentNode.writeBody) {
+          throw new Error(
+            'moveInSharedFolder: source folder has no write-body -- not write-capable ' +
+              '(writeKey unseeded or zero; only the share ROOT depth is seeded with a real ' +
+              'writeKey today, see useSharedNavigationActions.ts navigateToShare)'
           );
-          if (!destFolderKeyRecord) throw new Error('No read key for destination folder');
-
-          const destFolderIpnsRecord = shareKeys.find(
-            (k) => k.keyType === 'folder-ipns' && k.itemId === args.destFolderId
-          );
-          if (!destFolderIpnsRecord) throw new Error('No write key for destination folder');
-
-          destFolderKey = await unwrapKey(
-            hexToBytes(destFolderKeyRecord.encryptedKey),
-            args.vaultPrivateKey
-          );
-          destIpnsPrivateKey = await unwrapKey(
-            hexToBytes(destFolderIpnsRecord.encryptedKey),
-            args.vaultPrivateKey
-          );
-
-          // Load dest children fresh — never a cached/stale ref (A1).
-          const destMeta = await sdkCore.loadFolderMetadata({
-            ipnsName: args.destIpnsName,
-            folderKey: destFolderKey,
-            ctx: this.ctx,
-          });
-          if (!destMeta) {
-            throw new Error(
-              `moveInSharedFolder: cannot resolve destination folder ${args.destIpnsName}`
-            );
-          }
-          // Reuse the CID loadFolderMetadata already resolved instead of a
-          // second IPNS resolve round trip — content-addressed, same bytes.
-          const destRaw = await sdkCore.fetchFromIpfs(this.ctx, destMeta.cid);
-          destPublished = JSON.parse(new TextDecoder().decode(destRaw)) as PublishedNode;
-          destSequenceNumber = destMeta.sequenceNumber;
-          destChildren = destMeta.metadata.children ?? [];
-          // No write-body write-chain key in the legacy path — the
-          // folder-ipns share_keys entry plugs directly into writeKey below.
-          destWriteKey = destIpnsPrivateKey;
-        } else {
-          // 68.1-20: write-chain resolution — no live share_keys fan-out
-          // exists (fetchShareKeys always returns [], Task 1). Unseal the
-          // SOURCE folder's own write-body under its seeded writeKey and walk
-          // one hop to the destination's WriteChildRef.
-          const srcParentNode = await unsealNode(
-            srcState.publishedNode,
-            srcState.folderKey,
-            srcState.writeKey
-          );
-          if (!srcParentNode.writeBody) {
-            throw new Error(
-              'moveInSharedFolder: source folder has no write-body -- not write-capable ' +
-                '(writeKey unseeded or zero; only the share ROOT depth is seeded with a real ' +
-                'writeKey today, see useSharedNavigationActions.ts navigateToShare)'
-            );
-          }
-
-          const destPub = await this.resolvePublishedNode(args.destIpnsName);
-          if (!destPub) {
-            throw new Error(
-              `moveInSharedFolder: cannot resolve destination IPNS ${args.destIpnsName}`
-            );
-          }
-          const destNodeId = destPub.published.id;
-          const destKind = destPub.published.kind;
-
-          const destWriteChildRef = srcParentNode.writeBody.writeChildren.find(
-            (wc) => wc.childId === destNodeId
-          );
-          // destReadRef supplies the parent-mirror generation (write-chain
-          // AADs use the SAME generation source as the read-chain, §2.6) and
-          // the destination's readKeySealed.
-          const destReadRef = srcState.children.find((c) => c.ipnsName === args.destIpnsName);
-
-          if (!destWriteChildRef || !destReadRef) {
-            // KNOWN BLOCKER (see method doc): destination is not a direct
-            // child of the currently active shared folder's write-body. Fail
-            // closed with a precise, actionable error rather than a
-            // zero/guessed key.
-            throw new Error(
-              `moveInSharedFolder: destination ${args.destIpnsName} is not a direct child of ` +
-                "the currently active shared folder's write-chain -- cross-subtree write-chain " +
-                'resolution beyond one hop is not implemented (68.1-20 known blocker). ' +
-                'Navigate so the destination is a direct child of the folder you are moving from.'
-            );
-          }
-
-          destFolderKey = await unsealChildReadKey(
-            destReadRef.readKeySealed,
-            srcState.folderKey,
-            destNodeId,
-            destKind,
-            destReadRef.generation
-          );
-          destWriteKey = await unsealChildWriteKey(
-            destWriteChildRef.writeKeySealed,
-            srcState.writeKey,
-            destNodeId,
-            destKind,
-            destReadRef.generation
-          );
-
-          const destNode = await unsealNode(destPub.published, destFolderKey, destWriteKey);
-          destIpnsPrivateKey = destNode.writeBody?.ipnsPrivateKey ?? null;
-          if (!destIpnsPrivateKey) {
-            throw new Error(
-              `moveInSharedFolder: destination ${args.destIpnsName} write-body has no ipnsPrivateKey`
-            );
-          }
-
-          destPublished = destPub.published;
-          destSequenceNumber = destPub.sequenceNumber;
-          destChildren = destNode.children ?? [];
         }
+
+        const destPub = await this.resolvePublishedNode(args.destIpnsName);
+        if (!destPub) {
+          throw new Error(
+            `moveInSharedFolder: cannot resolve destination IPNS ${args.destIpnsName}`
+          );
+        }
+        const destNodeId = destPub.published.id;
+        const destKind = destPub.published.kind;
+
+        const destWriteChildRef = srcParentNode.writeBody.writeChildren.find(
+          (wc) => wc.childId === destNodeId
+        );
+        // destReadRef supplies the parent-mirror generation (write-chain
+        // AADs use the SAME generation source as the read-chain, §2.6) and
+        // the destination's readKeySealed.
+        const destReadRef = srcState.children.find((c) => c.ipnsName === args.destIpnsName);
+
+        if (!destWriteChildRef || !destReadRef) {
+          // KNOWN BLOCKER (see method doc): destination is not a direct
+          // child of the currently active shared folder's write-body. Fail
+          // closed with a precise, actionable error rather than a
+          // zero/guessed key.
+          throw new Error(
+            `moveInSharedFolder: destination ${args.destIpnsName} is not a direct child of ` +
+              "the currently active shared folder's write-chain -- cross-subtree write-chain " +
+              'resolution beyond one hop is not implemented (68.1-20 known blocker). ' +
+              'Navigate so the destination is a direct child of the folder you are moving from.'
+          );
+        }
+
+        destFolderKey = await unsealChildReadKey(
+          destReadRef.readKeySealed,
+          srcState.folderKey,
+          destNodeId,
+          destKind,
+          destReadRef.generation
+        );
+        destWriteKey = await unsealChildWriteKey(
+          destWriteChildRef.writeKeySealed,
+          srcState.writeKey,
+          destNodeId,
+          destKind,
+          destReadRef.generation
+        );
+
+        const destNode = await unsealNode(destPub.published, destFolderKey, destWriteKey);
+        destIpnsPrivateKey = destNode.writeBody?.ipnsPrivateKey ?? null;
+        if (!destIpnsPrivateKey) {
+          throw new Error(
+            `moveInSharedFolder: destination ${args.destIpnsName} write-body has no ipnsPrivateKey`
+          );
+        }
+
+        destPublished = destPub.published;
+        destSequenceNumber = destPub.sequenceNumber;
+        destChildren = destNode.children ?? [];
 
         // Resolve the moved child's UUID/kind (plaintext on its own PublishedNode
         // envelope, NODE-03) + readKey (unsealed through the SOURCE folderKey).

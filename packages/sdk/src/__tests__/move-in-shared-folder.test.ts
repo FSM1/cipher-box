@@ -1,19 +1,18 @@
 /**
  * CipherBoxClient.moveInSharedFolder -- reachable-branch regression test
- * (72-01, SC#5).
+ * (72-01/72-07, SC#5).
  *
- * `moveInSharedFolder` has two branches keyed off `getShareKeysFn`'s result:
- *   - `shareKeys.length > 0` -- the LEGACY per-child share_keys fan-out path.
- *     Every current web caller's `fetchShareKeys` always returns `[]`
- *     (68.1-20 Task 1 -- no live share_keys endpoint exists), so this branch
- *     is DEAD in production and is removed by a later plan in this phase
- *     (Plan 07). It is intentionally NOT covered here.
- *   - `shareKeys.length === 0` (the `else` branch) -- the REACHABLE
- *     write-chain path: unseals the SOURCE folder's own write-body, walks
- *     one hop to the destination's `WriteChildRef` (keyed by the
- *     destination's node UUID, NEVER its ipnsName), and derives
- *     `destFolderKey`/`destWriteKey`/`destIpnsPrivateKey` from real AES-GCM
- *     AAD-bound seals -- exactly as production does.
+ * `moveInSharedFolder` previously had a second branch keyed off a
+ * `getShareKeysFn` callback's result: a LEGACY per-child share_keys fan-out
+ * path (`shareKeys.length > 0`), dead in production because every web
+ * caller's `fetchShareKeys` always returned `[]` (68.1-20 Task 1 -- no live
+ * share_keys endpoint exists). Plan 07 deleted that dead branch and the
+ * `getShareKeysFn` parameter entirely. This test covers the single
+ * remaining REACHABLE write-chain path: unseals the SOURCE folder's own
+ * write-body, walks one hop to the destination's `WriteChildRef` (keyed by
+ * the destination's node UUID, NEVER its ipnsName), and derives
+ * `destFolderKey`/`destWriteKey`/`destIpnsPrivateKey` from real AES-GCM
+ * AAD-bound seals -- exactly as production does.
  *
  * Per 72-RESEARCH.md Critical Finding 3, this file was previously 100%
  * skipped at the describe level (13 tests, all exercising the now-dead
@@ -272,9 +271,6 @@ describe('CipherBoxClient.moveInSharedFolder -- reachable write-chain branch (68
       destFolderId: 'unused-by-the-write-chain-branch',
       destIpnsName: DEST_IPNS,
       vaultPrivateKey: new Uint8Array(32).fill(0x99),
-      // Empty -> routes to the reachable write-chain (`else`) branch, exactly
-      // like every current web caller's fetchShareKeys (68.1-20 Task 1).
-      getShareKeysFn: async () => [],
     });
 
     // Publishes DEST before SOURCE (dup-not-orphan, T-68.1-08-04).
