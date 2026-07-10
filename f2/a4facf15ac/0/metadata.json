@@ -1,0 +1,67 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "f2a4facf15ac",
+  "session_id": "2e538f07-7404-47a7-b648-78422a25400d",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-10T20:36:21.280793Z",
+  "branch": "feat/shared-write-navigation-correctness-web",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "8bd916143f52",
+  "token_usage": {
+    "input_tokens": 20893,
+    "cache_creation_tokens": 587205,
+    "cache_read_tokens": 19877980,
+    "output_tokens": 128280,
+    "api_call_count": 95
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Execute all 9 plans of Phase 73 ('shared-write-navigation-correctness-web') using wave-based parallel worktree execution, discovering plans, grouping into dependency-respecting waves, spawning subagents per plan, merging results, and driving the phase through verification and completion.",
+    "outcome": "All 9 plans across 3 waves executed successfully in isolated worktrees and merged with clean typecheck/test gates; goal-backward verification found one real SC4 bug (missing publishedNode in a refresh-write-access reseed call), which was fixed, re-verified (7/7 SC passed), and the phase was marked complete as the final phase of milestone v2.0.",
+    "learnings": {
+      "repo": [
+        "Monorepo cross-package types resolve via built dist/ (gitignored), so fresh worktrees need pnpm install + build of the crypto→core→api-client→sdk-core→sdk chain before typecheck works.",
+        "Full pnpm test includes live-API sdk integration tests that false-fail without a running API; post-merge/regression gates should scope to typecheck + affected packages' infra-free unit suites instead.",
+        "apps/web shared-write hooks (useSharedWriteOps.ts, useSharedNavigation.ts, useSharedNavigationActions.ts) are a hotspot for undeclared cross-plan file overlaps even when plans declare non-overlapping files_modified.",
+        "seedActiveSharedFolder falls back to PLACEHOLDER_PUBLISHED_NODE (empty readSealed) when publishedNode is omitted, causing unsealNode to throw a GCM decrypt error — any new call site seeding shared-folder state must pass a real publishedNode, mirroring existing call sites."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useSharedNavigationActions.ts",
+          "line": 783,
+          "end_line": 844,
+          "finding": "refreshCurrentDepthWriteKey's seedActiveSharedFolder call omitted publishedNode (unlike the other 4 call sites at lines 268, 351, 410, 540), causing the WRITE-03 refresh-access retry to throw an unclassified decrypt error instead of reaching publishNodeFn's tombstone/success classification. Fixed in commit d3c39c06e by passing getSdkClient().getSharedFolderState(currentShareId)?.publishedNode ?? PLACEHOLDER_PUBLISHED_NODE."
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedWriteOps.ts",
+          "finding": "73-06 made an undeclared comment-only edit near resolveChildNodeId (renaming a stray doc-comment reference to the deleted resolveFolderIpnsPrivateKey helper) that overlapped with 73-04's body edits to the same function; git's 3-way merge resolved it cleanly with no conflict."
+        }
+      ],
+      "workflow": [
+        "Executor-reported <worktree_metadata> expected_base can be the agent's own post-commit tip rather than the true fork base (observed with 73-05); the orchestrator should trust its own captured EXPECTED_BASE and verify via merge-base rather than the executor's self-report.",
+        "When two Wave 3 agents work in the same hook family but declare non-overlapping files, explicitly scoping each agent to its declared files in the dispatch prompt prevented a merge conflict.",
+        "A subagent (73-08) deferred a live e2e run because starting a second dev-server stack in parallel with a sibling worktree agent risked port contention (:3000/:5173) — this exact gap became the source of the real SC4 bug the verifier caught, showing live e2e coverage matters even under worktree parallelism constraints.",
+        "Re-scoping the verifier to just the closed gap (rather than re-running full goal-backward verification) is an efficient pattern for gap-closure confirmation.",
+        "A 'commit_failed' report from the tracking-commit helper can be a false negative — worth confirming via git log/git status before treating it as a real failure."
+      ]
+    },
+    "friction": [
+      "Post-merge gate step's default build/test commands were empty, forcing manual reasoning about which scoped commands (typecheck + specific package unit tests) were safe substitutes for the full monorepo suite.",
+      "Exit-code capture broke due to a shell pipe during the first typecheck gate run, requiring a re-run to confirm the gate actually passed.",
+      "73-06's comment-only edit to useSharedWriteOps.ts was an undeclared file overlap with 73-04 that the pre-spawn intra-wave overlap check couldn't catch since it wasn't in 73-06's declared files_modified.",
+      "73-08 could not safely run its WRITE-03 e2e test live due to port contention with the concurrently running 73-09 worktree, deferring critical verification that later surfaced as a real bug.",
+      "Inline node-based status parsing scripts had syntax errors twice (once for the tdd gate check, once for phase.complete), requiring cleaner re-runs with output captured to a file."
+    ],
+    "open_items": [
+      "Live rotation-ux.spec.ts WRITE-03 e2e run is still only noted as a recommended non-blocking CI/manual confirmation step, not yet executed after the SC4 fix.",
+      "Formal v2.0 milestone archive/close-out (via /gsd-complete-milestone) was left undone — PROJECT.md was only updated to note Phase 73 completion and milestone readiness, not formally archived.",
+      "SHARE-WRITE-KEY gap (write-share key threading) referenced in prior memory as open may now be substantially addressed by 73-07/73-08/73-09 — worth re-checking whether that memory entry is stale."
+    ]
+  }
+}
