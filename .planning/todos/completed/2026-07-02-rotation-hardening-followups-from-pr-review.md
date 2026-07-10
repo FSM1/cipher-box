@@ -34,3 +34,19 @@ Two more from CodeRabbit's second-pass PR review (2026-07-02, PR `#587` re-revie
 ## Solution
 
 One small hardening plan touching the sites above; items 1–2 and 5–6 need sdk-e2e re-runs, items 3–4 are web-only. Related: the existing rotation-fresh-record-resume todo also touches the driver.
+
+## Resolution
+
+RESOLVED. All six follow-ups are closed:
+
+- Items 2/3/4/6 — closed by Phase 70.
+- Item 1 (cross-store bump atomicity) — Phase 70.1 (#598) collapsed the two-store
+  seam into a single `CombinedFloorRecord` written via one `store.put`
+  (`packages/sdk/src/state/rotation-high-water.ts`, docstring marks "SC#4/D-06
+  CLOSED, 70.1-02").
+- Item 5 (reconcile cached generation) — Phase 70.1 `reconcileFolderSequence`
+  now re-resolves + `unsealNode(folderReadKey)` and feeds the freshly-resolved
+  `generation` into `enforceResolved` rather than the cached `folderTree` value
+  (`packages/sdk/src/client.ts`, SC#5/D-09).
+
+Retired 2026-07-11 via pending-todo triage.

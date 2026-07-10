@@ -30,3 +30,18 @@ Extend the base-aware pattern to every write-body-mutating `updateFolderMetadata
 regression coverage for the shared-write delete/move paths (the writable-shares web-e2e spec has no
 concurrent-move test today). Relates to [[remove-legacy-moveinsharedfolder-sharekeys-branch]] and
 the Phase 72 SC#1 base-aware merge (`registration.ts`).
+
+## Resolution
+
+NOT APPLICABLE — retired 2026-07-11 via pending-todo triage.
+
+The premise does not hold against the current node/v3 shared-write code:
+`packages/sdk/src/share/shared-write.ts` has **zero** `updateFolderMetadataAndPublish`
+call sites and **no CAS-409 naive-union merge path**. Every write-body mutation
+goes through `resealAndPublishParent` → `publishOrThrow`, which performs a strict
+CAS publish (`sequenceNumber + 1n`) and throws `CannotWriteUntilRefetchError` on
+conflict/tombstone (`shared-write.ts:224-286`). There is no merge-on-409 step that
+could resurrect a dropped `WriteChildRef`, so the base-aware `baseWriteChildren`
+threading that Phase 72 added to the owned-folder merge path has no analog to apply
+here — the resurrection exposure class this todo describes cannot occur on the
+shared-write path. Verified against HEAD (post-#603).
