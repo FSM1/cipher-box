@@ -18,7 +18,21 @@ interface ClientInternals {
 const API = 'http://localhost:3000';
 const SECRET = 'e2e-test-secret-do-not-use-in-production';
 
-// TODO(phase 65): re-enable when write-chain stubs are implemented
+// Live-stack integration suite (NOT legacy, NOT phase-gated -- this is a
+// deliberate, permanent infra gate). These specs exercise CipherBoxClient
+// against a REAL running API + docker stack (Postgres/Redis/Kubo relay) --
+// no sdk-core/crypto/core mocks at all, unlike every other file in this
+// directory. They are always `.skip`'d for the regular unit-test run (`pnpm
+// --filter @cipherbox/sdk test`), which never has that stack available, and
+// are meant to be run manually/locally or from a dedicated e2e job:
+//
+//   docker compose up -d          # postgres, redis, kubo relay, someguy
+//   pnpm --filter @cipherbox/api dev   # API on :3000 with TEST_LOGIN_SECRET set
+//   pnpm --filter @cipherbox/sdk exec vitest run \
+//     src/__tests__/integration.test.ts --no-coverage
+//
+// `SECRET` below must equal the API's `TEST_LOGIN_SECRET` env var (see
+// project memory: "sdk-e2e live checkpoint run" for the full local recipe).
 const describeIf = describe.skip;
 
 describeIf('SDK Integration (live API)', () => {
