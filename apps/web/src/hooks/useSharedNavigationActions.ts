@@ -543,6 +543,22 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
           ownerPublicKey: parsePublicKey(shareEntry.share.sharerPublicKey),
           recipientPublicKey: vaultKeypair.publicKey,
         });
+
+        // 73-09 SC2: the restored depth's `target.children` is the snapshot
+        // captured at descent time -- it may have gone stale while the user
+        // was navigated away (the projection subscription only ever updates
+        // the CURRENTLY-ACTIVE depth, so a `sharedFolder:updated` for this
+        // depth while it was suspended was dropped). Re-resolve it now: this
+        // is purely ADDITIVE to the seed above (Pitfall 5 / Landmine 3) --
+        // `refreshSharedFolder` re-checks IPNS for `currentShareId` and, if
+        // the record is fresher than the just-seeded snapshot, emits
+        // `sharedFolder:updated` (already-wired projection subscription
+        // applies it); its own `state.sequenceNumber >= result.sequenceNumber`
+        // monotonicity guard (client.ts:5624) makes this a safe no-op
+        // otherwise. A refresh failure must not undo the already-committed
+        // restore above -- caught by this same try/catch, logged, and
+        // ignored.
+        await getSdkClient().refreshSharedFolder(currentShareId);
       } catch (err) {
         logger.error('[SharedNav] Failed to re-seed after breadcrumb restore:', err);
       }
