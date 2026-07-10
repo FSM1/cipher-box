@@ -694,22 +694,22 @@ test.describe.serial('Writable Shares', () => {
     await bobSharedBrowser.navigateIntoFolder(folderName);
   });
 
-  // SC1 (73-RESEARCH.md): navigateUp/navigateToBreadcrumb only re-derive a
-  // writeKey when restoring the SHARE ROOT (the `isRootDepth` branch in
-  // useSharedNavigationActions.ts) -- any non-root restore depth seeds a
-  // zero-buffer writeKey (`new Uint8Array(32)` fallback in
-  // shared-folder-projection.ts's `seedSharedFolder`), so a write performed
-  // right after an UP-ONE-LEVEL restore (not a full round-trip back to
-  // root) silently fails its GCM auth tag check. Test 8.4 above only covers
-  // DESCEND-then-write (full return to root, then back down) -- it never
-  // navigates UP from depth 2 to depth 1 and writes from THAT restored
-  // level. This is the exact gap flagged against 8.4.
+  // SC1 (73-RESEARCH.md): navigateUp/navigateToBreadcrumb previously only
+  // re-derived a writeKey when restoring the SHARE ROOT (the old
+  // `isRootDepth` branch in useSharedNavigationActions.ts) -- any non-root
+  // restore depth seeded a zero-buffer writeKey (`new Uint8Array(32)`
+  // fallback in shared-folder-projection.ts's `seedSharedFolder`), so a
+  // write performed right after an UP-ONE-LEVEL restore (not a full
+  // round-trip back to root) silently failed its GCM auth tag check. Test
+  // 8.4 above only covers DESCEND-then-write (full return to root, then
+  // back down) -- it never navigates UP from depth 2 to depth 1 and writes
+  // from THAT restored level. This was the exact gap flagged against 8.4.
   //
-  // Impl plan 73-07 removes this fixme guard once
-  // useSharedNavigationActions.ts's consolidated restore helper (SC6) caches
-  // each depth's writeKey in NavStackEntry and uses it on restore instead of
-  // the isRootDepth branch (see 73-RESEARCH.md SC1).
-  test.fixme('8.4b Bob navigates up one level then writes from the restored subfolder (SC1)', async () => {
+  // Plan 73-07 closed the gap: useSharedNavigationActions.ts's consolidated
+  // restore helper (SC6) now caches each depth's writeKey in NavStackEntry
+  // and transfers it on restore instead of the old isRootDepth branch (see
+  // 73-RESEARCH.md SC1).
+  test('8.4b Bob navigates up one level then writes from the restored subfolder (SC1)', async () => {
     test.setTimeout(90000);
 
     // Reuse 8.3's depth-2 descent: folderName -> deepSubfolder -> nestedSubfolder.
