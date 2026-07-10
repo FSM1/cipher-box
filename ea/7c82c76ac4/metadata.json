@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "ea7c82c76ac4",
+  "strategy": "manual-commit",
+  "branch": "feat/shared-write-navigation-correctness-web",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/ea/7c82c76ac4/0/metadata.json",
+      "transcript": "/ea/7c82c76ac4/0/full.jsonl",
+      "content_hash": "/ea/7c82c76ac4/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 182,
+    "cache_creation_tokens": 16762,
+    "cache_read_tokens": 917301,
+    "output_tokens": 6045,
+    "api_call_count": 7
+  }
+}
