@@ -110,6 +110,11 @@ type UseSharedNavigationReturn = {
     destIpnsName: string,
     clearSelection: () => void
   ) => Promise<void>;
+  /**
+   * Re-derive and re-seed the CURRENT depth's writeKey (73-07 Task 1, supplier
+   * for plan 73-08's SC4 `refreshWriteAccess`).
+   */
+  refreshCurrentDepthWriteKey: () => Promise<void>;
 };
 
 /**
@@ -145,6 +150,11 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
   // IPNS private key stored in ref to avoid re-renders; zeroed on cleanup
   const ipnsPrivateKeyRef = useRef<Uint8Array | null>(null);
 
+  // Active-depth writeKey (73-07, SC1) -- mirrors ipnsPrivateKeyRef; owned by
+  // either this ref (active depth) or a NavStackEntry.writeKey (suspended
+  // depth), never both at once. Zeroed on cleanup.
+  const currentWriteKeyRef = useRef<Uint8Array | null>(null);
+
   // Navigation stack for folder browsing within a share
   const navStackRef = useRef<
     Array<{
@@ -152,6 +162,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       folderName: string;
       children: SealedChildRef[];
       folderKey: Uint8Array;
+      writeKey: Uint8Array | null;
       ipnsName: string;
       sequenceNumber: bigint | null;
     }>
@@ -173,6 +184,13 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     if (ipnsPrivateKeyRef.current) {
       ipnsPrivateKeyRef.current.fill(0);
       ipnsPrivateKeyRef.current = null;
+    }
+  }, []);
+
+  const zeroWriteKey = useCallback(() => {
+    if (currentWriteKeyRef.current) {
+      currentWriteKeyRef.current.fill(0);
+      currentWriteKeyRef.current = null;
     }
   }, []);
 
@@ -289,12 +307,14 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       });
       for (const entry of navStackRef.current) {
         entry.folderKey.fill(0);
+        entry.writeKey?.fill(0);
       }
       navStackRef.current = [];
       zeroIpnsKey();
+      zeroWriteKey();
       clearPolling();
     };
-  }, [zeroIpnsKey, clearPolling]);
+  }, [zeroIpnsKey, zeroWriteKey, clearPolling]);
 
   // ---------------------------------------------------------------------------
   // sharedFolder:updated projection (REQ-3)
@@ -378,6 +398,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     folderChildrenRef,
     sequenceNumberRef,
     ipnsPrivateKeyRef,
+    currentWriteKeyRef,
     navStackRef,
     setCurrentView,
     setCurrentShareId,
@@ -392,6 +413,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     setSharedItems,
     clearPolling,
     zeroIpnsKey,
+    zeroWriteKey,
     seedActiveSharedFolder,
   });
 
