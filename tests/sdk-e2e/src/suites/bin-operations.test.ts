@@ -80,7 +80,7 @@ describe('Bin Operations', () => {
     const binState = (ctx.client as unknown as HasBinState).binState;
     const folderEntry = binState.entries.find((e: BinEntry) => e.name === 'BinFolder');
     expect(folderEntry).toBeTruthy();
-    expect(folderEntry.itemType).toBe('folder');
+    expect(folderEntry!.itemType).toBe('folder');
   });
 
   it('should restore a file from bin', async () => {
@@ -88,7 +88,7 @@ describe('Bin Operations', () => {
     const fileEntry = binState.entries.find((e: BinEntry) => e.name === 'bin-file.txt');
     expect(fileEntry).toBeTruthy();
 
-    await ctx.client.restoreFromBin(fileEntry.id, ctx.rootIpnsName);
+    await ctx.client.restoreFromBin(fileEntry!.id, ctx.rootIpnsName);
 
     // Verify restored to folder
     expectChildNamed(ctx.client, ctx.rootIpnsName, 'bin-file.txt');
@@ -104,7 +104,7 @@ describe('Bin Operations', () => {
     const folderEntry = binState.entries.find((e: BinEntry) => e.name === 'BinFolder');
     expect(folderEntry).toBeTruthy();
 
-    await ctx.client.permanentDelete(folderEntry.id);
+    await ctx.client.permanentDelete(folderEntry!.id);
 
     const updatedBin = (ctx.client as unknown as HasBinState).binState;
     const stillInBin = updatedBin.entries.find((e: BinEntry) => e.name === 'BinFolder');

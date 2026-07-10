@@ -1,13 +1,12 @@
 import { HttpMetricsInterceptor } from './http-metrics.interceptor';
 import { MetricsService } from './metrics.service';
-import {
-  ExecutionContext,
-  CallHandler,
-  HttpArgumentsHost,
-  BadRequestException,
-} from '@nestjs/common';
+import { ExecutionContext, CallHandler, BadRequestException } from '@nestjs/common';
 import { Observable, of, throwError } from 'rxjs';
 import { Request, Response } from 'express';
+
+// Derive HttpArgumentsHost from ExecutionContext rather than importing it directly —
+// @nestjs/common does not re-export the interface type from its package root.
+type HttpArgumentsHost = ReturnType<ExecutionContext['switchToHttp']>;
 
 // Typed test doubles — narrow mocks instead of broad `any` casts, so the
 // suite keeps compile-time guarantees and stays lint-clean.
