@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "4c647947037c",
+  "strategy": "manual-commit",
+  "branch": "fix/fuse-per-file-publish-seq-equivocation",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/fuse/src/content_ops.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/4c/647947037c/0/metadata.json",
+      "transcript": "/4c/647947037c/0/full.jsonl",
+      "content_hash": "/4c/647947037c/0/content_hash.txt",
+      "prompt": "/4c/647947037c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 44663,
+    "cache_creation_tokens": 451727,
+    "cache_read_tokens": 18275508,
+    "output_tokens": 120081,
+    "api_call_count": 99
+  }
+}
