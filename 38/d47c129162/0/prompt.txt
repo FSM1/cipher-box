@@ -320,3 +320,7 @@ if the local web-e2e run passes, push everything up to remote, rerun web-e2e aga
 <status>completed</status>
 <summary>Background command "Poll dispatched ci-e2e run until complete" completed (exit code 0)</summary>
 </task-notification>
+
+---
+
+is there anything that needs to be clarified and discussed in the phase scope?
