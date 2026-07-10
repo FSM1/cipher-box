@@ -6,6 +6,7 @@ files:
   - packages/sdk-core/src/upload/index.ts:36
   - apps/web/src/workers/encrypt.worker.ts
 source: ship-phase 68.1 simplify review
+resolves_phase: 77
 ---
 
 ## Problem

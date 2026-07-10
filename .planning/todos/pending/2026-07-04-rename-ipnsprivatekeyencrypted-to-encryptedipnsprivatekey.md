@@ -5,6 +5,7 @@ area: sdk
 files:
   - packages/sdk-core/src/upload/index.ts:22
 source: ship-phase 68.1 CodeRabbit finding 22 (deep write-plane verification)
+resolves_phase: 77
 ---
 
 ## Problem

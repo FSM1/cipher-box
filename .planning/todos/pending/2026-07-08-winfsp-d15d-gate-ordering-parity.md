@@ -7,6 +7,7 @@ source: Phase 70.1 plan 12 SUMMARY + plan 13 static review; NARROWED 2026-07-09 
 files:
   - crates/fuse/src/platform/windows/write_ops.rs
   - crates/fuse/src/write_ops/implementation/rename.rs
+resolves_phase: 74
 ---
 
 ## Status (2026-07-09) — delete path CLOSED, rename path REMAINS

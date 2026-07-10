@@ -6,6 +6,7 @@ files:
   - apps/web/src/components/file-browser/useFileBrowserActions.ts:67
   - apps/web/src/hooks/useFileDownload.ts
 source: ship-phase 68.1 simplify review
+resolves_phase: 78
 ---
 
 ## Problem

@@ -7,6 +7,7 @@ files:
   - apps/tee-worker/src/services/ipns-signer.ts
   - apps/tee-worker/src/__tests__/ipns-signer.test.ts
   - apps/tee-worker/src/__tests__/key-manager.test.ts
+resolves_phase: 76
 ---
 
 > Deferred from the Phase 67 ship (CodeRabbit, 1 MAJOR + 3 MINOR). The "later EOL only"

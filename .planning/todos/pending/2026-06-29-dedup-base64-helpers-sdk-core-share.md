@@ -2,7 +2,7 @@
 created: 2026-06-29
 title: Dedup base64 helpers in sdk-core/share (navigate.ts + grant.ts → shared share/codec.ts)
 area: sdk-core
-resolves_phase: 64
+resolves_phase: 77
 files:
   - packages/sdk-core/src/share/navigate.ts
   - packages/sdk-core/src/share/grant.ts

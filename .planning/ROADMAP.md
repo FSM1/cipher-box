@@ -3,7 +3,7 @@
 ## Milestones
 
 - ✅ **v1.1 IPFS Infrastructure** — Phases 18–60 (shipped 2026-06-27) — full detail: `milestones/v1.1-ROADMAP.md`
-- 📋 **v2.0 Metadata and Sharing Refactor** — Phases 61–73 (active)
+- 📋 **v2.0 Metadata and Sharing Refactor** — Phases 61–78 (active; 61–73 shipped, 74–78 closeout)
 
 ## Phases
 
@@ -58,7 +58,7 @@
 
 </details>
 
-### v2.0 Metadata and Sharing Refactor (Phases 61–73)
+### v2.0 Metadata and Sharing Refactor (Phases 61–78)
 
 - [x] **Phase 61: AAD-Bound Seal Primitive and Cross-Language KAT** — Additive AES-GCM+AAD seal in `packages/crypto` and `crates/crypto` with a committed TS↔Rust known-answer test (completed 2026-06-28)
 - [x] **Phase 62: Unified Node Codec (Core Keystone)** — `Node`/`SealedChildRef`/`PublishedNode` types replacing all legacy metadata types; nothing downstream typechecks until this lands (completed 2026-06-28)
@@ -73,6 +73,11 @@
 - [x] **Phase 71: Share-Invite Security and IPNS Data-Integrity (API)** — Validate sharer root ownership via `ipns_records` creator marker, apply-or-reject later invite grants, `claim_count` CHECK folded into the greenfield cutover, first-publish INSERT-race 409, same-seq CID equivocation hard-guard, direct bulk-revoke DELETE, `ShareInviteService` lifecycle unit coverage, plus a full share-plane rename purging "descriptor" (D-10). Root-uniqueness index dropped (D-03; already covered by vault uniqueness). (completed 2026-07-09)
 - [x] **Phase 72: SDK Write-Plane Durability and Correctness** — Delete drops the removed child's `WriteChildRef`, fail-closed `getWriteBodyParams` on transient resolve miss, restore-to-different-parent re-homing, `SealedChildRef` size/modifiedAt mirror refresh, legacy `moveInSharedFolder` branch removal, write-plane helper dedup, and two write-chain test-fidelity fixes (8 todos) (completed 2026-07-10)
 - [x] **Phase 73: Shared Write/Navigation Correctness (Web)** — Preserve nested write capability across navigate-up/breadcrumb restore, invalidate stale nav-stack child snapshots, gate the non-listing read facades with the ROT-07 floor, give WRITE-03 refresh-access a live production trigger, and route drag-payload kind through the resolved listing, plus fold in the tangential nav-hook dedup and dead getShareKeys/folder-IPNS path cleanup in the same subsystem (7 todos) (completed 2026-07-10)
+- [ ] **Phase 74: Rust and FUSE Rotation-Revocation Soundness** — Deep scope-exit key refresh across all intermediate inodes, desktop grant re-mint seam, WinFsp dest-gating parity (3 todos; closes remaining Rust-side revocation bypasses)
+- [ ] **Phase 75: Cross-Language IPNS and Node-Codec Verification Parity** — Strict RFC3339 + ValidityType==0 enforcement, KAT IV-encoding pin, UUID AAD acceptance parity, all Rust↔TS vector-locked (4 todos)
+- [ ] **Phase 76: FUSE Durability and TEE Write-Path Hardening** — Vault-init publish preflight, deferred Phase 69 publish/concurrency items, TEE republish/renew error handling + later-EOL invariant (4 todos)
+- [ ] **Phase 77: Crypto Hygiene and Terminology Canonicalization** — Error-path zeroization, base64 helper dedup, `encryptedIpnsPrivateKey` field renames, dead share-scaffolding retirement, root-ownership helper extract (12 todos; mechanical, no behavior change)
+- [ ] **Phase 78: Recovery Tool v3, Vault-Load Guards, Web UX and CI Guards** — Port recovery.html to node/v3 (un-fixme recovery.spec), download-progress UX resolution, D-07 CI rule, web vitest CI, remaining 68.2/73 hardening incl. two data-integrity races (5 todos)
 
 ## Phase Details
 
@@ -887,6 +892,139 @@ Plans:
 - [x] 73-07-PLAN.md — SC1: navStack writeKey retention + D-09 zeroization audit
 - [x] 73-08-PLAN.md — SC4(c/d): useSharedWriteOps runWithFailureUx wiring + refreshWriteAccess supplier + rotation-ux e2e
 - [x] 73-09-PLAN.md — SC2: refresh-after-restore stale-snapshot invalidation
+
+### Phase 74: Rust and FUSE Rotation-Revocation Soundness
+
+**Goal:** Close the remaining scope-exit read-revocation bypasses on the Rust/desktop side so the M4 revocation guarantee holds end-to-end. The rotation engine surfaces every rotated node's new read key (not just the grant-root), all intermediate FUSE inodes are refreshed on rotation, the desktop grant-re-mint seam is wired so retained recipients keep access while revoked ones are cut, and WinFsp overwrite-rename is dest-gated with fuser ordering parity.
+
+**Depends on:** Phase 69, Phase 70.1
+
+**Source todos (M4 closeout):**
+
+- `2026-07-09-deep-scope-exit-rotation-refreshes-only-grant-root-inode-key` — engine per-node key surfacing + intermediate inode refresh (Rust+TS parity)
+- `2026-07-08-desktop-query-grants-rooted-at-remint-noop` — implement `RotationDeps.query_grants_rooted_at` so scope-exit rotation re-mints for still-authorized recipients
+- `2026-07-08-winfsp-d15d-gate-ordering-parity` — WinFsp RENAME dest scope-exit gate + validation-before-gating order
+
+**Success Criteria:**
+
+1. Scope-exit rotation on a depth≥2 shared subtree refreshes the read key of every retained inode; a revoked recipient cannot decrypt any node under the rotated grant root
+2. Desktop `query_grants_rooted_at` returns live grants and retained recipients keep access post-rotation (desktop-e2e distinguishes retained vs revoked)
+3. WinFsp overwrite-rename cannot bypass the scope-exit gate; behavior matches the fuser path (Windows CI green)
+
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 74 to break down)
+
+### Phase 75: Cross-Language IPNS and Node-Codec Verification Parity
+
+**Goal:** Eliminate the Rust↔TS verification blind spots so the two implementations accept/reject byte-for-byte identically and the KATs actually pin encoding. Strict RFC3339 Validity parsing in TS matches the Rust verifier, `ValidityType==0` (EOL) is bound before Validity is treated as expiry on both sides, the node-codec KAT pins IV string encoding unambiguously, and the AAD UUID acceptance domain is identical in both languages — each locked by a cross-language vector.
+
+**Depends on:** Phase 62, Phase 67
+
+**Source todos (M4 closeout):**
+
+- `2026-06-24-ts-resolve-strict-rfc3339-validity-parity` — strict RFC3339 Validity parse + malformed-timestamp vector
+- `2026-06-24-harden-validity-type-and-vector-expiry-lockstep` — enforce `ValidityType==0` (Rust+TS) + expired/wrong-type vectors
+- `2026-07-07-node-codec-kat-pin-file-iv-encoding` — make KAT `file_iv`/`iv` values encoding-unambiguous base64
+- `2026-06-28-harden-uuid-acceptance-parity-aad-builder` — single canonical UUID acceptance domain in TS `uuidToBytes` and Rust `build_node_aad`
+
+**Success Criteria:**
+
+1. A malformed/out-of-range RFC3339 Validity and a `ValidityType!=0` record are rejected identically by Rust and TS, covered by shared vectors
+2. A hex-encoded `file_iv` fails the node-codec KAT (base64-only sample values)
+3. TS and Rust accept exactly the same UUID acceptance domain in the AAD builder, locked by a cross-language KAT
+
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 75 to break down)
+
+### Phase 76: FUSE Durability and TEE Write-Path Hardening
+
+**Goal:** Harden the desktop publish path and the TEE lease-renewer write path against transient/partial-failure states. Vault init preflight-resolves both IPNS names and fails closed, the deferred Phase 69 FUSE publish/concurrency items land (retry-helper consolidation with no 5→2 regression, true global FP-resolve cap, Windows D-07 node_id keying), and the TEE republish/renew routes distinguish real DB/config errors from harmless CAS-miss/epoch-mismatch with a later-EOL renewal invariant.
+
+**Depends on:** Phase 67, Phase 69
+
+**Source todos (M4 closeout):**
+
+- `2026-06-26-vault-init-publish-ordering-preflight` — resolve both IPNS names before either publish, fail-closed on transient resolve
+- `2026-07-07-fuse-publish-and-concurrency-hardening-deferred` — publish retry-helper consolidation, global FP-resolve cap, Windows D-07 node_id, residual zeroization
+- `2026-07-01-tee-republish-writepath-error-handling-hardening` — distinguish real DB/config errors from CAS-miss + per-entry null guard
+- `2026-07-01-renew-ipns-record-eol-invariant-and-tests` — strictly-later-EOL guard on `renewIpnsRecord` + fix renewal/corrupted-key tests
+
+**Success Criteria:**
+
+1. Vault init aborts atomically (no half-initialized state) when either IPNS name is unresolvable or a publish conflicts
+2. FUSE publish retries route through one shared helper with the correct attempt budget; FP-resolve concurrency is globally bounded; Windows D-07 write refs key by stored node_id (CI green)
+3. TEE republish surfaces real DB/config failures (not silent success) and `renewIpnsRecord` rejects an equal/earlier EOL, both covered by tests that assert the intended branch
+
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 76 to break down)
+
+### Phase 77: Crypto Hygiene and Terminology Canonicalization
+
+**Goal:** Low-risk, mechanical cleanup that removes latent key-leak surface, deduplicates copy-pasted crypto helpers, and canonicalizes field names to the CLAUDE.md terminology standard — no behavior change. Error-path zeroization is added where owned key buffers can leak on throw, `base64` helpers are consolidated, the misnamed `ipnsPrivateKeyEncrypted`/`encryptedIpnsKey` fields are renamed to `encryptedIpnsPrivateKey`, dead share scaffolding is retired, and the duplicated Phase 71 root-ownership gate is extracted.
+
+**Depends on:** Phase 72
+
+**Source todos (M4 closeout):**
+
+- `2026-07-10-wrapipnskeyfortee-bytes-in-bytes-out` — bytes-in/out `wrapIpnsKeyForTee`, hex at transport boundary, rename to `teePublicKey`
+- `2026-07-10-zeroize-createsubfolder-keys-on-error-path` — try/catch zeroize `createSubfolder` keys on seal/publish throw
+- `2026-06-28-zeroize-local-key-plaintext-copies-in-aes-helpers` — `.fill(0)` owned copies in AES-GCM helpers
+- `2026-06-20-e2e-helper-scripts-zeroize-userprivatekey` — zeroize `verify-filepointer.mts` keys
+- `2026-07-03-hoist-base64tobytes-into-crypto-package` — hoist `base64ToBytes` into `@cipherbox/crypto`
+- `2026-06-29-dedup-base64-helpers-sdk-core-share` — extract shared `share/codec.ts` base64 helpers
+- `2026-06-29-node-codec-base64-helper-dedup` — consolidate `node/` codec base64 helpers
+- `2026-07-04-rename-ipnsprivatekeyencrypted-to-encryptedipnsprivatekey` — in-memory field rename
+- `2026-07-01-rename-encrypted-ipns-key-canonical-field` — TEE wire-contract field rename (worker + API relay)
+- `2026-07-02-retire-dead-sdk-share-scaffolding` — retire `ShareCallbacks`/`addShareKeysFn` + dead share code
+- `2026-07-03-drop-discarded-per-upload-ecies-wrapkey` — stop computing the discarded per-upload wrapKey
+- `2026-07-10-extract-assert-root-ownership-helper` — extract shared `assertRootOwnership` API helper
+
+**Success Criteria:**
+
+1. No owned key/plaintext buffer copy survives a throw on the audited crypto/upload paths (error-path zeroization present + tested)
+2. `base64` encode/decode helpers exist once per package boundary; the ~10 copy-pasted copies are removed with golden-vector parity preserved
+3. All IPNS-key fields use the canonical `encryptedIpnsPrivateKey` name across in-memory, wire, and tests; dead share scaffolding and the discarded wrapKey are gone; full typecheck + unit suites green
+
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 77 to break down)
+
+### Phase 78: Recovery Tool v3, Vault-Load Guards, Web UX and CI Guards
+
+**Goal:** Close the v3 vault-format loose ends and the web/CI hardening backlog. The offline `recovery.html` tool is ported to the node/v3 read chain (un-fixme `recovery.spec.ts` so web-e2e has zero expected failures), the download-progress UX dead code is resolved, the D-07 web/SDK boundary is CI-enforced, web vitest is decided/wired, and the remaining Phase 68.2/73 CodeRabbit backlog items land (including the item-3 poll-monotonicity and item-11 descent-vs-restore data-integrity races pulled forward from triage).
+
+**Depends on:** Phase 68.1, Phase 68.2, Phase 73
+
+**Source todos (M4 closeout):**
+
+- `2026-07-03-port-recovery-tool-to-v3-vault-format` — port `recovery.html` to node/v3, un-fixme `recovery.spec.ts` (absorbs the merged v2→v3 migration todo)
+- `2026-07-03-download-progress-ux-decision-usefiledownload` — wire or delete `useFileDownload`/`download.store`
+- `2026-07-06-d07-boundary-eslint-rule` — promote the D-07 boundary from grep gate to ESLint/CI rule
+- `2026-07-02-web-vitest-not-in-ci-and-ipns-service-test-broken` — decide/wire apps/web vitest into CI (broken test already deleted)
+- `2026-07-06-68.2-coderabbit-hardening-backlog` — remaining 8-open/1-partial 68.2/73 hardening items (items 3 + 11 are the data-integrity races)
+
+**Success Criteria:**
+
+1. `recovery.html` recovers a real v3 vault offline and `recovery.spec.ts` is un-fixme'd — the full web-e2e suite has zero expected failures/skips
+2. The download-progress dead code is resolved (wired to restore spinners or deleted)
+3. The D-07 boundary is CI-enforced, the web vitest CI decision is implemented, and the two 68.2 data-integrity races (poll-monotonicity, descent-vs-restore) are fixed with e2e coverage
+
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 78 to break down)
 
 ---
 

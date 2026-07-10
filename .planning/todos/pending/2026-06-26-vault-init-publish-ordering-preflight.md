@@ -6,6 +6,7 @@ severity: medium
 source: PR #566 CodeRabbit review (Major, "Heavy lift") — 2026-06-26
 files:
   - apps/desktop/src-tauri/src/commands/vault.rs
+resolves_phase: 76
 ---
 
 ## Problem

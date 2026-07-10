@@ -6,6 +6,7 @@ files:
   - apps/web/src/services/download.service.ts:8
   - packages/sdk-core/src/share/grant.ts
 source: ship-phase 68.1 simplify review
+resolves_phase: 77
 ---
 
 ## Problem

@@ -7,6 +7,7 @@ source: Phase 70.1 plan 09 (sanctioned ROT-04 deferral) + plan 13 SUMMARY; flagg
 files:
   - crates/fuse/src/write_ops/rotation_deps.rs
   - crates/sdk/src/rotation/engine.rs
+resolves_phase: 74
 ---
 
 ## Problem

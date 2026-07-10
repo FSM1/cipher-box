@@ -9,6 +9,7 @@ files:
   - packages/core/src/node/seal.ts
 source: 68.1-VERIFICATION.md (human-approved deferral, override 1 of 2)
 supersedes: 2026-06-29-recovery-html-vault-v3-migration.md
+resolves_phase: 78
 ---
 
 > **Merged 2026-07-11:** absorbs the earlier `2026-06-29-recovery-html-vault-v3-migration`

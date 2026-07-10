@@ -4,6 +4,7 @@ title: Tighten TS resolve Validity timestamp parsing for Rust parity
 area: sdk-core
 files:
   - packages/sdk-core/src/ipns/index.ts
+resolves_phase: 75
 ---
 
 ## Problem

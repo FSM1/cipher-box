@@ -6,6 +6,7 @@ phase: 55-or-later
 files:
   - packages/sdk-core/scripts/verify-filepointer.ts
   - packages/sdk-core/scripts/edit-filepointer.ts
+resolves_phase: 77
 ---
 
 ## Problem
