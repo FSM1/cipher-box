@@ -10,7 +10,7 @@
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { type SealedChildRef } from '@cipherbox/core';
+import { type SealedChildRef, type PublishedNode } from '@cipherbox/core';
 import { type ResolvedChild } from '@cipherbox/sdk';
 import { useShareStore, type ReceivedShare } from '../stores/share.store';
 import { fetchReceivedShares, decryptItemName } from '../services/share.service';
@@ -163,6 +163,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       children: SealedChildRef[];
       folderKey: Uint8Array;
       writeKey: Uint8Array | null;
+      publishedNode: PublishedNode;
       ipnsName: string;
       sequenceNumber: bigint | null;
     }>

@@ -40,7 +40,7 @@
  */
 
 import { useCallback, type MutableRefObject } from 'react';
-import type { SealedChildRef } from '@cipherbox/core';
+import type { SealedChildRef, PublishedNode } from '@cipherbox/core';
 import { unwrapKey, hexToBytes } from '@cipherbox/crypto';
 import { useShareStore } from '../stores/share.store';
 import { useAuthStore } from '../stores/auth.store';
@@ -48,7 +48,11 @@ import { hideShare } from '../services/share.service';
 import { triggerBrowserDownload } from '../services/download.service';
 import { getSdkClient } from '../lib/sdk-provider';
 import { logger } from '../lib/logger';
-import { parsePublicKey, type SeedSharedFolderArgs } from './shared-folder-projection';
+import {
+  parsePublicKey,
+  PLACEHOLDER_PUBLISHED_NODE,
+  type SeedSharedFolderArgs,
+} from './shared-folder-projection';
 import type { SharedListItem, SharedBreadcrumb } from './useSharedNavigation';
 
 type NavStackEntry = {
@@ -58,6 +62,17 @@ type NavStackEntry = {
   folderKey: Uint8Array;
   /** This depth's writeKey (73-07, SC1) -- null for read-only shares/depths. */
   writeKey: Uint8Array | null;
+  /**
+   * This depth's on-wire published envelope (73-07, SC1 correctness fix).
+   * Write ops (`uploadToSharedFolder` et al.) trust `SharedFolderState.
+   * publishedNode` directly (client.ts `buildSharedWriteContextFromState`) --
+   * they do NOT re-resolve it from the network. Without restoring this
+   * alongside the writeKey, `seedActiveSharedFolder` falls back to
+   * `PLACEHOLDER_PUBLISHED_NODE` (shared-folder-projection.ts) after a
+   * restore, and the very first write at the restored depth fails to unseal
+   * ("Decryption failed") even with the correct writeKey.
+   */
+  publishedNode: PublishedNode;
   ipnsName: string;
   sequenceNumber: bigint | null;
 };
@@ -324,6 +339,17 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
           }
           const ipnsPrivateKey = new Uint8Array(32);
 
+          // 73-07 SC1 correctness fix: capture the CURRENT (pre-descent)
+          // depth's live publishedNode from the SDK's sharedFolderTree BEFORE
+          // it gets overwritten below by the child's seedActiveSharedFolder
+          // call -- write ops (uploadToSharedFolder et al.) trust
+          // SharedFolderState.publishedNode directly (no network re-resolve),
+          // so restoring this depth later without its real publishedNode
+          // would seed the placeholder and fail every write (see
+          // NavStackEntry.publishedNode doc).
+          const currentPublishedNode =
+            getSdkClient().getSharedFolderState(currentShareId)?.publishedNode;
+
           // Push the CURRENT (pre-descent) level so navigateUp / navigateToBreadcrumb
           // can restore it without a network round-trip. 73-07 SC1: TRANSFER
           // the active-depth writeKey into the pushed entry -- the stack
@@ -336,6 +362,9 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
               children: p.folderChildren,
               folderKey: currentFolderKey,
               writeKey: p.currentWriteKeyRef.current,
+              // Fallback should be unreachable (the current depth is always
+              // seeded before a descent), but never regress to a hard crash.
+              publishedNode: currentPublishedNode ?? PLACEHOLDER_PUBLISHED_NODE,
               ipnsName: currentIpnsName,
               sequenceNumber: p.currentSequenceNumber,
             },
@@ -504,6 +533,11 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
           folderKey: target.folderKey,
           ipnsPrivateKey,
           writeKey: p.currentWriteKeyRef.current ?? undefined,
+          // 73-07 SC1 correctness fix: restore this depth's OWN published
+          // envelope (captured at push time in navigateToSubfolder), not the
+          // seedActiveSharedFolder default placeholder -- write ops trust
+          // this directly (see NavStackEntry.publishedNode doc).
+          publishedNode: target.publishedNode,
           sequenceNumber: target.sequenceNumber ?? 0n,
           children: target.children,
           ownerPublicKey: parsePublicKey(shareEntry.share.sharerPublicKey),
