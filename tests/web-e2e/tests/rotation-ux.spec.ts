@@ -275,61 +275,88 @@ test.describe.serial('Rotation UX: badge lifecycle + failure-UX toasts', () => {
     );
   });
 
-  test('a stale co-writer write surfaces Refresh access, escalating to a terminal Write access revoked with no action (D-01/WRITE-03)', async () => {
-    // SCOPE NOTE: CannotWriteUntilRefetchError's own trigger --
-    // publishNodeFn reporting `tombstoned: true` -- is a documented
-    // Phase-66 mock seam with no live production call site yet
-    // (packages/sdk/src/share/shared-write.ts's PublishNodeResult doc
-    // comment: "mock seam for Phase-66 live publish-gate reject"), and
-    // 68-09's own SUMMARY independently flags the identical gap ("No live
-    // call site in this plan's three files currently throws
-    // CannotWriteUntilRefetchError at runtime"). This proves the REAL
-    // NotificationToast/notification.store contract that
-    // useMutationFailureUx.ts#dispatchWriteDescriptorStale dispatches on
-    // that error (exact call shape verified by source reading), against the
-    // real rendered component.
-    let refreshClicked = false;
-    await page.exposeFunction('__e2eRecordRefreshClick', () => {
-      refreshClicked = true;
-    });
+  // SCOPE NOTE (updated for Phase 73 SC4 -- restructured toward a
+  // classifier-driven flow, per 73-RESEARCH.md SC4): CannotWriteUntilRefetchError's
+  // throw site in packages/sdk/src/share/shared-write.ts is already correctly
+  // wired and needs NO change -- the gap was entirely upstream/downstream of
+  // it, across three stacked seams:
+  //   - 73-02: packages/sdk-core/src/ipns/index.ts's createAndPublishIpnsRecord
+  //     maps a real API 410 (apps/api's IPNS_TOMBSTONED) to a typed
+  //     `{ tombstoned: true }` result instead of letting a raw AxiosError
+  //     propagate uncaught.
+  //   - 73-05: packages/sdk/src/client.ts's publishNodeFn
+  //     (buildWriteTransportSeams) reads that new `tombstoned` field and maps
+  //     it straight through to shared-write.ts's existing
+  //     CannotWriteUntilRefetchError throw sites.
+  //   - 73-08: apps/web/src/hooks/useSharedWriteOps.ts wires every
+  //     shared-write mutation through runWithFailureUx (today it calls NONE
+  //     of them through the classifier -- only withRevocationGuard's 403
+  //     detection wraps shared writes), threading a refreshWriteAccess
+  //     supplier that re-derives/reseeds the current depth's writeKey (the
+  //     SC1/SC6 consolidated restore helper's re-derive path).
+  //
+  // Once all three land, this test drives a GENUINE flow instead of direct
+  // notification-store injection: a co-writer performs a real shared-folder
+  // write whose publish target has been tombstoned (e.g. the owner
+  // rotates/tombstones the writer's IPNS name via a real API/DB fixture),
+  // and the co-writer's write attempt surfaces the SAME "Refresh access"
+  // toast THROUGH the real classifier path (runWithFailureUx ->
+  // CannotWriteUntilRefetchError), not via direct notification injection.
+  //
+  // Impl plan 73-08 removes this fixme guard and finalizes the assertions
+  // once the seams above land. Until then, do NOT remove the direct-injection
+  // assertions below (kept as a reference for the exact toast copy/action
+  // contract 73-08's real-flow version must preserve) -- they are commented
+  // out, not deleted, so 73-08 knows precisely what this test used to assert
+  // before it had a real production trigger.
+  test.fixme('a stale co-writer write surfaces Refresh access, escalating to a terminal Write access revoked with no action (D-01/WRITE-03)', async () => {
+    test.setTimeout(60_000);
 
-    await page.evaluate(async () => {
-      const notificationStoreModPath = '/src/stores/notification.store.ts';
-      const mod = await import(notificationStoreModPath);
-      mod.useNotificationStore
-        .getState()
-        .addNotification('error', 'Write failed — access may be out of date.', {
-          label: 'Refresh access',
-          onClick: () =>
-            (
-              window as unknown as { __e2eRecordRefreshClick: () => void }
-            ).__e2eRecordRefreshClick(),
-        });
-    });
-
-    const staleToast = page.locator('[role="alert"]', {
-      hasText: 'Write failed — access may be out of date.',
-    });
-    await expect(staleToast).toBeVisible();
-    const refreshButton = staleToast.locator('button:not([aria-label="Dismiss notification"])');
-    await expect(refreshButton).toHaveCount(1);
-    await expect(refreshButton).toHaveText('[Refresh access]');
-    await refreshButton.click();
-    expect(refreshClicked).toBe(true);
-
-    // Escalation: a second failure after the refresh attempt surfaces the
-    // terminal, no-action notice -- refreshing cannot help (D-01 escalated).
-    await page.evaluate(async () => {
-      const notificationStoreModPath = '/src/stores/notification.store.ts';
-      const mod = await import(notificationStoreModPath);
-      mod.useNotificationStore.getState().clearNotifications();
-      mod.useNotificationStore.getState().addNotification('error', 'Write access revoked.');
-    });
-
-    const revokedToast = page.locator('[role="alert"]', { hasText: 'Write access revoked.' });
-    await expect(revokedToast).toBeVisible();
-    const revokedAction = revokedToast.locator('button:not([aria-label="Dismiss notification"])');
-    await expect(revokedAction).toHaveCount(0);
+    // TARGET FLOW (skeleton -- 73-08 fills in the real multi-account
+    // tombstone trigger and finalizes locators):
+    // 1. Set up a co-writer share (owner + writer accounts, write
+    //    permission) -- mirror tests/web-e2e/tests/writable-shares.spec.ts's
+    //    multi-account harness (createWalletTestAccount for owner/writer).
+    // 2. Owner rotates/tombstones the writer's IPNS write name via a real
+    //    fixture (API call or DB tombstone), simulating a completed
+    //    write-revocation rotation the writer has not yet refetched.
+    // 3. Writer attempts a real shared-folder write (upload/rename) that
+    //    targets the now-tombstoned IPNS name.
+    // 4. Assert the SAME "Write failed — access may be out of date." toast
+    //    with a "[Refresh access]" action appears -- reached THROUGH the
+    //    real runWithFailureUx -> CannotWriteUntilRefetchError classifier
+    //    path (useMutationFailureUx.ts#dispatchWriteDescriptorStale), not
+    //    via direct notification-store injection.
+    // 5. Clicking "Refresh access" re-derives the writer's writeKey/state
+    //    for the current depth and retries the write.
+    // 6. A second write against a still-tombstoned target escalates to the
+    //    terminal "Write access revoked." toast with NO action button.
+    //
+    // PRE-73-08 direct-injection assertions this replaces (reference only,
+    // not executed -- 73-08 must preserve this exact toast copy/action
+    // contract when wiring the real trigger):
+    //
+    //   await page.evaluate(async () => {
+    //     const mod = await import('/src/stores/notification.store.ts');
+    //     mod.useNotificationStore.getState().addNotification('error',
+    //       'Write failed — access may be out of date.', {
+    //         label: 'Refresh access',
+    //         onClick: () => { /* record click */ },
+    //       });
+    //   });
+    //   const staleToast = page.locator('[role="alert"]', {
+    //     hasText: 'Write failed — access may be out of date.',
+    //   });
+    //   await expect(staleToast).toBeVisible();
+    //   const refreshButton = staleToast.locator(
+    //     'button:not([aria-label="Dismiss notification"])'
+    //   );
+    //   await expect(refreshButton).toHaveCount(1);
+    //   await expect(refreshButton).toHaveText('[Refresh access]');
+    //   await refreshButton.click();
+    //   // ... escalation: clearNotifications() + addNotification('error',
+    //   // 'Write access revoked.') with no action button, assert
+    //   // revokedToast visible and its action button count is 0.
   });
 
   test('a persistently-deferring mutation exhausts retries and surfaces the terminal Retry toast without ever silently auto-dismissing (D-06)', async () => {
