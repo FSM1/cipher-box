@@ -269,7 +269,35 @@ pub async fn publish_file_node(
     )?;
     let value = format!("/ipfs/{}", node_cid);
 
-    if is_first_publish {
+    // `is_first_publish` is the caller's release-time HINT (the file inode had an
+    // empty CID; see read_ops.rs). A dropped UploadComplete (write_generation
+    // mismatch, fs.rs) or a duplicated/deferred FUSE-T release can leave that hint
+    // set AFTER the per-file record already exists at seq 1. Re-running the seq-1
+    // tail re-seals a FRESH node envelope (created_at/modified_at = now_ms changes
+    // each call → a new envelope CID), and the API anti-equivocation gate
+    // (Phase 71 D-05) rejects a same-sequence republish with a different CID (400).
+    // Confirm the record is genuinely absent before taking the first-publish
+    // (seq 1 + TEE enroll) tail; if it already resolves, the content still needs
+    // to be published, so fall through to the sequence-bumping CAS branch instead
+    // (cf. replay.rs::publish_child_node's resolve-first guard, which skips because
+    // replay has nothing new to publish — here we do).
+    let do_first_publish = if is_first_publish {
+        match crate::publish::resolve_ipns_for_replay(coordinator, api, file_ipns_name).await {
+            crate::error::IpnsResolveOutcome::NotFound => true,
+            crate::error::IpnsResolveOutcome::Found(_) => false,
+            crate::error::IpnsResolveOutcome::Error(e) => {
+                return Err(format!(
+                    "resolve before per-file first-publish for {}: {} \
+                     — refusing to risk a seq-1 equivocation",
+                    file_ipns_name, e
+                ));
+            }
+        }
+    } else {
+        false
+    };
+
+    if do_first_publish {
         // First publish: no prior record → seq 1, expected None, TEE enroll.
         let (enc_tee, epoch) = match (encrypted_ipns_for_tee, tee_key_epoch) {
             (Some(h), Some(e)) => (Some(h.to_string()), Some(e)),
