@@ -17,8 +17,8 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { updateFolderMetadataAndPublish } from '../../folder/registration';
-import type { PublishedNode } from '@cipherbox/core';
-import { unsealNode } from '@cipherbox/core';
+import type { PublishedNode, WriteChildRef } from '@cipherbox/core';
+import { unsealNode, sealNode } from '@cipherbox/core';
 import { createMockContext } from '../helpers';
 
 // ---------------------------------------------------------------------------
@@ -56,6 +56,7 @@ vi.mock('../../folder/merge', () => ({
 
 const NODE_ID = '550e8400-e29b-41d4-a716-446655440000';
 const READ_KEY = new Uint8Array(32).fill(0xab);
+const WRITE_KEY = new Uint8Array(32).fill(0xcd);
 const IPNS_PRIVATE_KEY = new Uint8Array(64).fill(0x01);
 
 // ---------------------------------------------------------------------------
@@ -240,5 +241,168 @@ describe('updateFolderMetadataAndPublish — nodeId/nodeGeneration required (D-0
     expect(capturedIds[1]).toBe(NODE_ID);
     // Suppress unused variable warning
     void firstCid;
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SC#1 Critical Finding 2 — base-aware write-body CAS-merge (72-03 Task 1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a real sealed remote PublishedNode carrying the given writeChildren,
+ * used to simulate a racing writer's published state fetched via decodeRemote
+ * during a CAS-409 retry.
+ */
+async function buildSealedRemote(writeChildren: WriteChildRef[]): Promise<Uint8Array> {
+  const node = {
+    schema: 'node/v3' as const,
+    kind: 'folder' as const,
+    id: NODE_ID,
+    generation: 0,
+    createdAt: Date.now(),
+    modifiedAt: Date.now(),
+    children: [],
+    writeBody: {
+      ipnsPrivateKey: IPNS_PRIVATE_KEY,
+      writeChildren,
+    },
+  };
+  const sealed = await sealNode(node, READ_KEY, WRITE_KEY);
+  return new TextEncoder().encode(JSON.stringify(sealed));
+}
+
+describe('updateFolderMetadataAndPublish — base-aware write-body CAS-merge (SC#1 Critical Finding 2)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFns.addToIpfs.mockImplementation(async (_ctx: unknown, data: Uint8Array) => ({
+      cid: 'QmTestCid',
+      size: data.length,
+      recorded: true,
+    }));
+  });
+
+  it('Test A — no concurrent change: a clean publish with a dropped childId omits it from the sealed write-body', async () => {
+    const ctx = createMockContext();
+    mockFns.createAndPublishIpnsRecord.mockResolvedValue({ success: true, sequenceNumber: 2n });
+
+    const baseWriteChildren: WriteChildRef[] = [
+      { childId: 'X', writeKeySealed: 'seal-x' },
+      { childId: 'Z', writeKeySealed: 'seal-z' },
+    ];
+    // Local already dropped X (e.g. deleteItem's write-chain trim).
+    const localWriteChildren: WriteChildRef[] = [{ childId: 'Z', writeKeySealed: 'seal-z' }];
+
+    const { publishedWriteChildren } = await updateFolderMetadataAndPublish({
+      children: [],
+      readKey: READ_KEY,
+      writeKey: WRITE_KEY,
+      writeChildren: localWriteChildren,
+      baseWriteChildren,
+      ipnsPrivateKey: IPNS_PRIVATE_KEY,
+      ipnsName: 'k51-write-merge-a',
+      sequenceNumber: 1n,
+      ctx,
+      nodeId: NODE_ID,
+      nodeGeneration: 0,
+    });
+
+    expect(publishedWriteChildren).toEqual([{ childId: 'Z', writeKeySealed: 'seal-z' }]);
+  });
+
+  it('Test B — concurrent add: a local delete is honored AND a remote-only concurrent add is kept', async () => {
+    const ctx = createMockContext();
+    const capturedIds: string[] = [];
+    let callCount = 0;
+    mockFns.addToIpfs.mockImplementation(async (_ctx: unknown, data: Uint8Array) => {
+      const node = JSON.parse(new TextDecoder().decode(data)) as PublishedNode;
+      capturedIds.push(node.id);
+      callCount++;
+      return { cid: `QmAttempt${callCount}`, size: data.length, recorded: true };
+    });
+
+    const axios409 = Object.assign(new Error('Conflict'), { response: { status: 409 } });
+    mockFns.createAndPublishIpnsRecord
+      .mockRejectedValueOnce(axios409)
+      .mockResolvedValueOnce({ success: true, sequenceNumber: 3n });
+    mockFns.resolveIpnsRecord.mockResolvedValue({
+      sequenceNumber: 2n,
+      cid: 'QmRemoteFromConcurrentWrite',
+    });
+
+    const baseWriteChildren: WriteChildRef[] = [{ childId: 'X', writeKeySealed: 'seal-x' }];
+    // Local already dropped X, has nothing else.
+    const localWriteChildren: WriteChildRef[] = [];
+    // Remote (racing writer, unaware of the delete) still has X, plus a
+    // brand-new concurrently-added Y absent from base.
+    const remoteWriteChildren: WriteChildRef[] = [
+      { childId: 'X', writeKeySealed: 'seal-x' },
+      { childId: 'Y', writeKeySealed: 'seal-y' },
+    ];
+    mockFns.fetchFromIpfs.mockResolvedValue(await buildSealedRemote(remoteWriteChildren));
+
+    const { publishedWriteChildren } = await updateFolderMetadataAndPublish({
+      children: [],
+      readKey: READ_KEY,
+      writeKey: WRITE_KEY,
+      writeChildren: localWriteChildren,
+      baseWriteChildren,
+      ipnsPrivateKey: IPNS_PRIVATE_KEY,
+      ipnsName: 'k51-write-merge-b',
+      sequenceNumber: 1n,
+      ctx,
+      nodeId: NODE_ID,
+      nodeGeneration: 0,
+    });
+
+    expect(publishedWriteChildren).toEqual([{ childId: 'Y', writeKeySealed: 'seal-y' }]);
+    expect(capturedIds).toHaveLength(2);
+  });
+
+  it("Test C — resurrection guard: a concurrent 409 with the racing writer's pre-delete snapshot must NOT resurrect the dropped childId", async () => {
+    const ctx = createMockContext();
+    let callCount = 0;
+    mockFns.addToIpfs.mockImplementation(async (_ctx: unknown, data: Uint8Array) => {
+      callCount++;
+      return { cid: `QmAttempt${callCount}`, size: data.length, recorded: true };
+    });
+
+    const axios409 = Object.assign(new Error('Conflict'), { response: { status: 409 } });
+    mockFns.createAndPublishIpnsRecord
+      .mockRejectedValueOnce(axios409)
+      .mockResolvedValueOnce({ success: true, sequenceNumber: 3n });
+    mockFns.resolveIpnsRecord.mockResolvedValue({
+      sequenceNumber: 2n,
+      cid: 'QmRemoteFromConcurrentWrite',
+    });
+
+    // Base has {X, Z}; local dropped X (has {Z}); the racing writer's remote
+    // snapshot predates the delete and still carries {X, Z} unchanged.
+    const baseWriteChildren: WriteChildRef[] = [
+      { childId: 'X', writeKeySealed: 'seal-x' },
+      { childId: 'Z', writeKeySealed: 'seal-z' },
+    ];
+    const localWriteChildren: WriteChildRef[] = [{ childId: 'Z', writeKeySealed: 'seal-z' }];
+    const remoteWriteChildren: WriteChildRef[] = [
+      { childId: 'X', writeKeySealed: 'seal-x' },
+      { childId: 'Z', writeKeySealed: 'seal-z' },
+    ];
+    mockFns.fetchFromIpfs.mockResolvedValue(await buildSealedRemote(remoteWriteChildren));
+
+    const { publishedWriteChildren } = await updateFolderMetadataAndPublish({
+      children: [],
+      readKey: READ_KEY,
+      writeKey: WRITE_KEY,
+      writeChildren: localWriteChildren,
+      baseWriteChildren,
+      ipnsPrivateKey: IPNS_PRIVATE_KEY,
+      ipnsName: 'k51-write-merge-c',
+      sequenceNumber: 1n,
+      ctx,
+      nodeId: NODE_ID,
+      nodeGeneration: 0,
+    });
+
+    // X must NOT be resurrected — merged write-body is exactly {Z}.
+    expect(publishedWriteChildren).toEqual([{ childId: 'Z', writeKeySealed: 'seal-z' }]);
   });
 });
