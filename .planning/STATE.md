@@ -6,14 +6,14 @@ current_phase: 72
 current_phase_name: sdk-write-plane-durability-and-correctness
 status: executing
 stopped_at: Completed 72-06-PLAN.md
-last_updated: "2026-07-10T14:59:03.354Z"
+last_updated: "2026-07-10T15:15:00.564Z"
 last_activity: 2026-07-10
 last_activity_desc: Phase 72 execution started
 progress:
   total_phases: 16
   completed_phases: 13
   total_plans: 180
-  completed_plans: 176
+  completed_plans: 177
   percent: 81
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 ## Current Position
 
 Phase: 72 (sdk-write-plane-durability-and-correctness) — EXECUTING
-Plan: 8 of 10
+Plan: 9 of 10
 Status: Ready to execute
 Last activity: 2026-07-10 — Phase 72 execution started
 
@@ -263,6 +263,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 72 P05 | 25min | 3 tasks | 5 files |
 | Phase 72 P06 | 20min | 2 tasks | 3 files |
 | Phase 72 P07 | 8min | 2 tasks | 3 files |
+| Phase 72 P08 | 15min | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -571,6 +572,8 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase 72]: [Phase 72-06]: SC#4 reframed per Critical Finding 1 -- fix is listingCache.delete(folderIpnsName) gated on a caller-computed fileContentChanged boolean (size/cid comparison), not a SealedChildRef schema change
 - [Phase 72]: [Phase 72-06]: updateSharedSingleFile's two unwrapKey calls moved inside the existing try/finally so a throw on the second unwrap still zeroes the already-unwrapped first key
 - [Phase 72]: Removed the unreachable moveInSharedFolder legacy share-keys branch and getShareKeysFn param; updated the Plan 01 regression test call site to match (Rule 3 blocking fix, not in plan file list)
+- [Phase ?]: [Phase 72-08]: walkChildWriteKey mode controls ONLY the missing-WriteChildRef lookup; an AEAD unseal failure is NEVER swallowed by any mode (deviates from RESEARCH.md's literal 'nullable' table wording, confirmed by resolveSharedSubfolderWriteKey's own throw-on-tamper regression tests) — Preserving RESEARCH's literal table wording would have converted a security-critical AEAD tamper-detection throw into a silent null return, breaking 2 existing tests and introducing a fail-open regression
+- [Phase ?]: [Phase 72-08]: updateSharedFile's inline write-chain walk (site 5) left as a documented, not-folded exception -- getFileIpnsKeyFn fallback confirmed LIVE via apps/web/src/hooks/useSharedWriteOps.ts resolveFileIpnsKey
 
 ## Operator Next Steps
 
@@ -578,7 +581,7 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-10T14:58:24.757Z
+**Last session:** 2026-07-10T15:14:28.750Z
 **Stopped at:** Completed 72-06-PLAN.md
 **Resume file:** 
 
