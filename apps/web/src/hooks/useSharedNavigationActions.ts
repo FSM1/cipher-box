@@ -18,7 +18,6 @@
 
 import { useCallback, type MutableRefObject } from 'react';
 import type { SealedChildRef } from '@cipherbox/core';
-import { ShareKeyCache } from '@cipherbox/sdk';
 import { unwrapKey, hexToBytes } from '@cipherbox/crypto';
 import { useShareStore } from '../stores/share.store';
 import { useAuthStore } from '../stores/auth.store';
@@ -53,7 +52,6 @@ export type SharedNavigationActionsParams = {
   sequenceNumberRef: MutableRefObject<bigint | null>;
   ipnsPrivateKeyRef: MutableRefObject<Uint8Array | null>;
   navStackRef: MutableRefObject<NavStackEntry[]>;
-  shareKeysCacheRef: MutableRefObject<ShareKeyCache>;
   // State setters
   setCurrentView: (view: 'list' | 'folder' | 'file') => void;
   setCurrentShareId: (id: string | null) => void;
@@ -71,46 +69,11 @@ export type SharedNavigationActionsParams = {
   // Helpers from orchestrator
   clearPolling: () => void;
   zeroIpnsKey: () => void;
-  getShareKeys: (
-    shareId: string
-  ) => Promise<Array<{ keyType: string; itemId: string; encryptedKey: string }>>;
   /**
    * Seed (or re-seed) the SDK's sharedFolderTree for the active depth.
    */
   seedActiveSharedFolder: (args: Omit<SeedSharedFolderArgs, 'addShareKeysFn'>) => void;
 };
-
-/**
- * Resolve a folder's IPNS signing key for write shares.
- *
- * Write-share IPNS keys are still delivered via the legacy per-share key
- * fan-out (`getShareKeys`, keyType `folder-ipns`, itemId = folder ipnsName) --
- * unchanged by the Node-v3 read-chain migration (mirrors the identical
- * `writableSet` check in `CipherBoxClient.enumerateSharedSubtree`). Full
- * write-body (NodeWriteBody) key delivery through the grant chain is Phase-68
- * follow-on wiring; until then this is best-effort (T-68.1-05-02 zero-key
- * placeholder fallback, matching `shared-folder-projection.ts`'s existing
- * `writeKey ?? new Uint8Array(32)` convention -- write mutations remain
- * gated at the UI layer by `permission === 'write'`).
- */
-async function resolveFolderIpnsPrivateKey(
-  shareId: string,
-  folderIpnsName: string,
-  permission: 'read' | 'write',
-  vaultPrivateKey: Uint8Array,
-  getShareKeys: SharedNavigationActionsParams['getShareKeys']
-): Promise<Uint8Array> {
-  if (permission !== 'write') return new Uint8Array(32);
-  try {
-    const keys = await getShareKeys(shareId);
-    const entry = keys.find((k) => k.keyType === 'folder-ipns' && k.itemId === folderIpnsName);
-    if (!entry) return new Uint8Array(32);
-    return await unwrapKey(hexToBytes(entry.encryptedKey), vaultPrivateKey);
-  } catch (err) {
-    logger.error('[SharedNav] Failed to resolve folder IPNS key:', err);
-    return new Uint8Array(32);
-  }
-}
 
 /**
  * Unwrap a grant's `encryptedWriteKey` into the shared-root writeKey
@@ -211,13 +174,7 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
           return;
         }
 
-        const ipnsPrivateKey = await resolveFolderIpnsPrivateKey(
-          shareId,
-          share.ipnsName,
-          share.permission,
-          vaultKeypair.privateKey,
-          p.getShareKeys
-        );
+        const ipnsPrivateKey = new Uint8Array(32);
 
         p.zeroIpnsKey();
         p.ipnsPrivateKeyRef.current = ipnsPrivateKey;
@@ -275,13 +232,12 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
         // (revoked/behind-retry); once 'ok', the web is the terminal owner.
         // `committed` is set true immediately once the key is either stored
         // into state (folder case) or explicitly discarded (file case) --
-        // this only fires if something throws in between (e.g.
-        // resolveFolderIpnsPrivateKey), preventing a leak.
+        // this only fires if something throws in between, preventing a leak.
         if (!committed && shareRootReadKey) shareRootReadKey.fill(0);
         p.setIsLoading(false);
       }
     },
-    [p.sharedItems, p.getShareKeys, p.seedActiveSharedFolder, p.zeroIpnsKey]
+    [p.sharedItems, p.seedActiveSharedFolder, p.zeroIpnsKey]
   );
 
   /**
@@ -331,13 +287,7 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
             p.setError('Shared item not found');
             return;
           }
-          const ipnsPrivateKey = await resolveFolderIpnsPrivateKey(
-            currentShareId,
-            childRef.ipnsName,
-            p.permission ?? 'read',
-            vaultKeypair.privateKey,
-            p.getShareKeys
-          );
+          const ipnsPrivateKey = new Uint8Array(32);
 
           // Push the CURRENT (pre-descent) level so navigateUp / navigateToBreadcrumb
           // can restore it without a network round-trip.
@@ -413,7 +363,6 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
       p.currentSequenceNumber,
       p.permission,
       p.sharedItems,
-      p.getShareKeys,
       p.seedActiveSharedFolder,
       p.zeroIpnsKey,
     ]
@@ -476,13 +425,7 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
     try {
       const shareEntry = p.sharedItems.find((s) => s.share.shareId === currentShareId);
       if (!shareEntry) return;
-      const ipnsPrivateKey = await resolveFolderIpnsPrivateKey(
-        currentShareId,
-        parent.ipnsName,
-        p.permission ?? 'read',
-        vaultKeypair.privateKey,
-        p.getShareKeys
-      );
+      const ipnsPrivateKey = new Uint8Array(32);
       p.zeroIpnsKey();
       p.ipnsPrivateKeyRef.current = ipnsPrivateKey;
 
@@ -521,7 +464,6 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
     p.currentShareId,
     p.permission,
     p.sharedItems,
-    p.getShareKeys,
     p.seedActiveSharedFolder,
     p.zeroIpnsKey,
     navigateToRoot,
@@ -560,13 +502,7 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
       try {
         const shareEntry = p.sharedItems.find((s) => s.share.shareId === currentShareId);
         if (!shareEntry) return;
-        const ipnsPrivateKey = await resolveFolderIpnsPrivateKey(
-          currentShareId,
-          target.ipnsName,
-          p.permission ?? 'read',
-          vaultKeypair.privateKey,
-          p.getShareKeys
-        );
+        const ipnsPrivateKey = new Uint8Array(32);
         p.zeroIpnsKey();
         p.ipnsPrivateKeyRef.current = ipnsPrivateKey;
 
@@ -603,7 +539,6 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
       p.currentShareId,
       p.permission,
       p.sharedItems,
-      p.getShareKeys,
       p.seedActiveSharedFolder,
       p.zeroIpnsKey,
     ]

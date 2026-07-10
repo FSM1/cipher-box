@@ -39,8 +39,10 @@ async function resolveChildNodeId(ipnsName: string): Promise<string> {
  * Resolve a shared file's re-wrapped IPNS private key from `share_keys`
  * (keyType `file-ipns`, itemId = file's ipnsName) -- fallback path used by
  * `updateSharedFile` only when the write-chain walk finds no `WriteChildRef`
- * for the file. Mirrors `useSharedNavigationActions.ts`'s
- * `resolveFolderIpnsPrivateKey` (folder-ipns analog).
+ * for the file. This is the last live consumer of the `share_keys` fan-out
+ * (the folder-ipns analog in `useSharedNavigationActions.ts` was dead code
+ * removed in Phase 73 SC7, since its `fetchShareKeys` stub always returns
+ * `[]` for folder-ipns lookups).
  */
 async function resolveFileIpnsKey(itemId: string, shareId: string): Promise<Uint8Array | null> {
   const vaultPrivateKey = useAuthStore.getState().vaultKeypair?.privateKey;
