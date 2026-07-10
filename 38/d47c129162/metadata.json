@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "38d47c129162",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-72-sdk-write-plane-durability",
+  "checkpoints_count": 2,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/38/d47c129162/0/metadata.json",
+      "transcript": "/38/d47c129162/0/full.jsonl",
+      "content_hash": "/38/d47c129162/0/content_hash.txt",
+      "prompt": "/38/d47c129162/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1899,
+    "cache_creation_tokens": 404584,
+    "cache_read_tokens": 4331274,
+    "output_tokens": 30486,
+    "api_call_count": 39
+  }
+}
