@@ -1,0 +1,123 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "0a4021a168f2",
+  "session_id": "4d78f8a5-6112-418c-85c3-c6241359b1fb",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-10T00:02:33.069174Z",
+  "branch": "feat/share-invite-security-and-ipns-data-integrity-api",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "553f46f1f46c",
+  "token_usage": {
+    "input_tokens": 40781,
+    "cache_creation_tokens": 1084368,
+    "cache_read_tokens": 102046119,
+    "output_tokens": 367438,
+    "api_call_count": 264
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-ship-phase-2026-07-09T22:59:42.56172Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "34559f5bc681",
+      "timestamp": "2026-07-09T22:59:42.56172Z",
+      "native": {
+        "command": "/ship-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/ship-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 15
+  },
+  "summary": {
+    "intent": "Execute all 9 plans of CipherBox phase 71 (Share-Invite Security & IPNS Data-Integrity API) via wave-based parallel subagent orchestration, then run a fully autonomous post-execution ship pipeline (verify, secure, validate, simplify, SDK E2E gate, CodeRabbit review, PR creation, review-thread resolution, learnings extraction).",
+    "outcome": "All 9 plans executed across 4 waves and merged with green gates (typecheck, 894/894 api tests, cargo check, sdk tests); phase verification passed 16/16. Ship pipeline completed: security/validation/simplify passed, SDK E2E gate caught and fixed a real D-05 regression (concurrent republish returning 400 instead of 409), CodeRabbit CLI findings triaged (fixes + deferred todos), PR #599 opened and pushed, a Greptile P1 (stale write key on generation-bump) and several CodeRabbit PR-review findings (write-key claim rejection, Swagger annotations, composite indexes) were fixed with matching entity/migration changes, tests re-verified (899/899), and commits were being grouped for final push when the transcript ends.",
+    "learnings": {
+      "repo": [
+        "cipher-box is a pnpm monorepo; root scripts define pnpm typecheck as the real cross-plan/CI-gated integration check — apps/api's own `tsc --noEmit` is NOT part of it and isn't CI-gated",
+        "GSD worktree isolation forks from live HEAD when base-check reason is 'baseref-head', allowing all waves to stay parallel without inter-wave degrade",
+        "GSD commit-tracking helper can report `commit_failed` as a false negative even when the commit lands — always verify with `git log --oneline -1`",
+        "apps/api throttling is relaxed under NODE_ENV=test, so THROTTLE_BYPASS_SECRET is unnecessary when the API runs in that mode",
+        "sdk-e2e (vitest) does not auto-load .env files; it falls back to SDK_E2E_SECRET default `e2e-test-secret-do-not-use-in-production` unless explicitly exported, which must match the API's TEST_LOGIN_SECRET (e2e-test-secret-ci-only) or auth 401s cascade-skip the whole suite run",
+        "packages/api-client/src/instance.ts is the place to add a temporary axios response interceptor to log err.response.data, since the API doesn't log handled 4xx responses",
+        "cipher-box repo is squash-merge only (merge:false, rebase:false, squash:true, title=PR_TITLE) — individual commit subject conventions never reach main, only the PR title needs to be conventional/paren-free",
+        "GitHub CI's Migration Drift Check only fails on structural drift (CREATE/DROP TABLE, ADD/DROP COLUMN, ALTER TYPE, RENAME COLUMN) via regex; it tolerates index/constraint name churn from `migration:generate`, so raw TypeORM migration-generate output is noisy but not indicative of a real CI failure",
+        "gh pr edit fails on this repo due to Projects-classic GraphQL incompatibility; PR body must be patched via `gh api -X PATCH repos/FSM1/cipher-box/pulls/<N> -F body=@file`",
+        "CodeRabbit CLI review skips diffs over 150 changed files; phase 71's 106 files was under the cap",
+        "`gh pr checks` output is tab-delimited, not space-delimited — awk '{print $2}' on multi-word check names like 'CodeRabbit / Review' silently grabs the wrong field"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 321,
+          "finding": "D-05 same-seq CID-equivocation guard threw a blanket 400 whenever embeddedSeq===dbSeq with a different CID, but this also fires for a legitimate forward-CAS attempt that lost a race (writer intended embeddedSeq=view+1, expectedSequenceNumber=view, but a concurrent writer already advanced dbSeq to embeddedSeq). Fixed by falling through to the CAS UPDATE (yielding 409) when expectedSequenceNumber === embeddedSeq-1, while preserving the 400 for true equivocation (no expectedSequenceNumber supplied)."
+        },
+        {
+          "path": "apps/api/src/shares/share-invite.service.ts",
+          "line": 193,
+          "finding": "claimInvite's widen-only merge logic (isWriteUpgrade/isGenerationBump) had a gap: when a generation bump landed on an already-write-capable share via a write-capable invite (isGenerationBump && inviteGrantsWrite but isWriteUpgrade=false), the read key/generation advanced but encryptedWriteKey stayed wrapped for the old generation, silently losing write access for the recipient post-rotation. Flagged as Greptile P1 and fixed."
+        },
+        {
+          "path": "apps/web/src/services/share.service.ts",
+          "line": 102,
+          "finding": "Permission-derivation logic used `encryptedWriteKey !== null` which misclassifies an `undefined` write key (DTO type is string|null|undefined) as write-capable; loosened to `!= null` at both occurrences per CodeRabbit finding."
+        },
+        {
+          "path": "apps/api/src/migrations/1750000000000-ApiSchemaCutover.ts",
+          "finding": "Greenfield cutover migration's down() intentionally throws (no rollback path), so composite index additions (CodeRabbit N1) only needed to be added to up() plus matching @Index decorators on share.entity.ts and share-invite.entity.ts to avoid Migration Drift Check noise."
+        }
+      ],
+      "workflow": [
+        "When a subagent flags a diagnostic (e.g. rustc E0560) but reports its own check green, don't trust either blindly — settle it definitively against the merged/committed tree with the stricter check (cargo check --all-targets) before deciding it's real or stale LSP noise",
+        "For live-stack human-verify checkpoints, always verify what's actually running on the target port (stale compiled dist vs current branch code) before trusting a test run against it — a stale build can produce false negatives for the exact fix under test",
+        "When two independent reviewers (Greptile P1 + CodeRabbit MAJOR) flag the same class of issue, treat that convergence as a signal to reverse an earlier 'defer' decision rather than deferring again",
+        "Deterministic vs flaky regression triage: re-run a failing timing-sensitive test at least twice before concluding it's a real regression rather than noise",
+        "Before adding DB indexes only to a migration, check whether CI's drift check compares entities to migrated schema — matching @Index decorators are needed on the TypeORM entities or the drift check may flag noise (though ultimately this repo's drift check tolerates it)"
+      ]
+    },
+    "friction": [
+      "A background poll script for gh pr checks used space-based awk parsing on tab-delimited output, silently grabbing the wrong field and requiring a second corrected poll run",
+      "User had to explicitly correct the agent's assumption that CodeRabbit's review was 'skipping' — it was just slow, not skipped, causing a round of premature conclusions about review completeness",
+      "Root-cause diagnosis of the D-05 400-vs-409 regression required temporarily instrumenting packages/api-client/src/instance.ts with a debug interceptor and rebuilding the full client chain since the API doesn't log handled 4xx responses",
+      "Local DB reset (done to get a clean live-stack run for the 71-05 checkpoint) had a side effect of wiping tee_key_state, causing 2 unrelated tee-republish test failures that needed separate diagnosis to rule out as phase-71 regressions",
+      "A shell PATH glitch caused one diagnostic bash command to fail transiently and require a retry"
+    ],
+    "open_items": [
+      "Todo: extract-assert-root-ownership-helper — dedupe the 7-line ownership-gate check duplicated across createInvite and createShare (deferred pre-ship as verified security-critical code)",
+      "Todo: restore-tee-key-state-for-sdk-e2e-tee-republish — local dev environment's TEE worker key state needs repopulating after DB resets so tee-republish e2e tests pass locally (CI unaffected)",
+      "Todo: reconcile-phase71-planning-docs-d01-greenfield — CONTEXT/PATTERNS/SECURITY/VERIFICATION/STATE docs still reference stale pre-amendment D-01 vaults language even though code is correct",
+      "D-04 claim_count CHECK constraint backstop still only has a manual psql verification recipe recorded in the plan summary, not automated coverage (accepted as non-blocking per plan)",
+      "Final commit grouping/push for the CodeRabbit PR-review round (T3 write-key rejection fix, N2/N3 tests, Swagger @ApiResponse annotations, composite indexes + entity @Index, deferred-items.md and STATE.md doc sync) was in progress when transcript ends — not yet pushed or confirmed green on CI",
+      "Step 9 (resolve PR reviews) and Step 10 (confirm green & report) were not yet completed at transcript end — CI poll on final commit was stale/needs re-run after this new round of fixes"
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
