@@ -1,0 +1,65 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "2a24dea80c52",
+  "session_id": "2e538f07-7404-47a7-b648-78422a25400d",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-10T20:39:43.725445Z",
+  "branch": "feat/shared-write-navigation-correctness-web",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "8bd916143f52",
+  "token_usage": {
+    "input_tokens": 21668,
+    "cache_creation_tokens": 606529,
+    "cache_read_tokens": 22972669,
+    "output_tokens": 139126,
+    "api_call_count": 105
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Execute all 9 plans of Phase 73 (shared-write-navigation-correctness-web) using the GSD execute-phase workflow's wave-based parallel worktree execution, with no optional flags active, through to phase completion.",
+    "outcome": "All 9 plans executed across 3 waves in parallel worktrees, merged cleanly with all post-merge gates green; goal-backward verification found one real bug (SC4 refreshWriteAccess supplier omitting publishedNode), which was fixed, re-verified to 7/7 passed, phase marked complete, PROJECT.md updated to reflect v2.0 milestone completion, and 6 of 7 related todos closed.",
+    "learnings": {
+      "repo": [
+        "cipher-box monorepo resolves cross-package TypeScript types from built dist/ output (gitignored), so fresh worktrees need pnpm install + the full build chain crypto→core→api-client→sdk-core→sdk before typecheck works",
+        "Full `pnpm test` includes live-API integration tests in sdk that false-fail without a running API; post-merge/regression gates must scope to specific packages' infra-free unit suites instead",
+        "gsd-executor's returned <worktree_metadata> `expected_base` field can report the post-commit tip rather than the true fork base — orchestrator must independently capture/verify fork base rather than trusting it",
+        "The tracking-commit helper can report `commit_failed` as a false negative even when the commit lands cleanly — verify via `git log`/`git status` before retrying",
+        "The `codebase-drift` capability gate is advisory/non-blocking and its `.planning/codebase/` map is generally stale against the whole repo, not wave-specific",
+        "`seedActiveSharedFolder` falls back to `PLACEHOLDER_PUBLISHED_NODE` (empty readSealed) when `publishedNode` is omitted, which causes `unsealNode` to throw a GCM decrypt error on subsequent reads — any new call site must pass a real publishedNode, matching the pattern at other call sites in useSharedNavigationActions.ts",
+        "Todos in .planning/todos/pending are not reliably tagged with `resolves_phase`, so the phase-completion auto-close step can silently miss todos that were actually resolved by the phase — requires manual reconciliation against SC/plan mapping"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useSharedNavigationActions.ts",
+          "line": 783,
+          "end_line": 844,
+          "finding": "refreshCurrentDepthWriteKey's seedActiveSharedFolder call (originally lines 824-834) omitted publishedNode, unlike the other three call sites (navigateToShare L268, navigateToSubfolder L410, restoreToBreadcrumbIndex L540) — caused WRITE-03 refresh-access retry to hit an unclassified GCM decrypt error instead of reaching publishNodeFn's tombstone/success classification; fixed by passing getSdkClient().getSharedFolderState(currentShareId)?.publishedNode ?? PLACEHOLDER_PUBLISHED_NODE"
+        }
+      ],
+      "workflow": [
+        "For monorepo post-merge/regression gates, prefer `pnpm typecheck` (build-ordered dependency chain + tsc -b) plus scoped unit test runs over the full `pnpm build && pnpm test`, to avoid false failures from live-API integration tests",
+        "When parallel worktree agents share default dev-server ports (e.g. :3000/:5173), live e2e verification can't safely run in more than one worktree at a time — plan for this or defer live e2e to a serialized post-merge step",
+        "After a verifier reports a gap, independently re-confirm the specific code claim (grep/read the exact lines) before trusting and routing it — cheap and catches false positives",
+        "Undeclared file overlaps between parallel plans can occur even when pre-spawn dependency analysis finds no declared overlap (e.g. a documentation/comment-only edit); git's 3-way merge often resolves these cleanly but should be spot-checked"
+      ]
+    },
+    "friction": [
+      "Undeclared intra-wave file overlap: 73-06 made a comment-only Rule-1 deviation touching useSharedWriteOps.ts, which 73-04 also modified — not visible in the pre-spawn files_modified overlap check, required manual merge-conflict watching",
+      "Executor's worktree_metadata expected_base field was unreliable (reported post-commit tip instead of fork base), requiring the orchestrator to independently verify merge-base",
+      "Tracking-commit helper falsely reported commit_failed despite the commit landing, requiring manual git log verification",
+      "73-08 could not run its live WRITE-03 e2e test because it would contend for the same dev-server ports as the concurrently running 73-09 worktree — deferred to CI/manual verification, and this gap is exactly what let the SC4 bug slip through initially",
+      "Phase's auto-close step for resolves_phase-tagged todos found zero matches even though 6 pending todos were fully resolved by the phase, because those todos weren't tagged with resolves_phase — required manual cross-referencing of todo titles against delivered success criteria"
+    ],
+    "open_items": [
+      "SC6 todo (2026-07-03-consolidate-web-shared-navigation-dup) only partially resolved by Phase 73 — readSharedContent dedup, resolveKinds-then-project util consolidation across 9 sites, ShareDialog parseRootGeneration/pagination dedup, and resolveFileIpnsKey mirror remain open; annotated in the todo file but not closed",
+      "Live rotation-ux.spec.ts WRITE-03 e2e run against a running local stack is still recommended as a non-blocking CI/manual confirmation step even after the SC4 fix was applied and statically re-verified",
+      "Phase 73 was the final phase of milestone v2.0 (Metadata and Sharing Refactor) — formal milestone close-out via /gsd-complete-milestone has not yet been run"
+    ]
+  }
+}
