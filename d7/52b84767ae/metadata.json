@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "d752b84767ae",
+  "strategy": "manual-commit",
+  "branch": "fix/web-e2e-rotation-durability-floor-store",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/d7/52b84767ae/0/metadata.json",
+      "transcript": "/d7/52b84767ae/0/full.jsonl",
+      "content_hash": "/d7/52b84767ae/0/content_hash.txt",
+      "prompt": "/d7/52b84767ae/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 37568,
+    "cache_creation_tokens": 386330,
+    "cache_read_tokens": 10047618,
+    "output_tokens": 83086,
+    "api_call_count": 69
+  }
+}
