@@ -424,6 +424,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     setIsLoading,
     setError,
     handleRevocation,
+    refreshWriteAccess: navActions.refreshCurrentDepthWriteKey,
   });
 
   // ---------------------------------------------------------------------------

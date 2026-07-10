@@ -19,6 +19,7 @@ import { getSdkClient } from '../lib/sdk-provider';
 import { useAuthStore } from '../stores/auth.store';
 import { fetchShareKeys } from '../services/share.service';
 import { logger } from '../lib/logger';
+import { runWithFailureUx } from './useMutationFailureUx';
 import type { SharedListItem } from './useSharedNavigation';
 
 /**
@@ -70,6 +71,14 @@ export type SharedWriteOpsParams = {
   setIsLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
   handleRevocation: (silent: boolean) => void;
+  /**
+   * Re-derives and reseeds the current depth's shared writeKey (D-01/WRITE-03).
+   * Threaded into `runWithFailureUx` as the `refreshWriteAccess` supplier so a
+   * `CannotWriteUntilRefetchError` (a real publish target tombstone) offers a
+   * one-tap "Refresh access" retry instead of immediately surfacing the
+   * terminal "Write access revoked." notice.
+   */
+  refreshWriteAccess: () => Promise<void>;
 };
 
 export function useSharedWriteOps(p: SharedWriteOpsParams) {
@@ -100,7 +109,9 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
       p.setIsLoading(true);
       p.setError(null);
       try {
-        await withRevocationGuard(() => op(shareId));
+        await withRevocationGuard(() =>
+          runWithFailureUx(() => op(shareId), { refreshWriteAccess: p.refreshWriteAccess })
+        );
         return true;
       } catch (err) {
         const message = (err as Error).message || failMessage;
@@ -113,7 +124,7 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
         p.setIsLoading(false);
       }
     },
-    [p.currentShareId, p.setError, p.setIsLoading, withRevocationGuard]
+    [p.currentShareId, p.setError, p.setIsLoading, p.refreshWriteAccess, withRevocationGuard]
   );
 
   /**
@@ -175,14 +186,18 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
         throw new Error('Write access not available');
       }
       await withRevocationGuard(() =>
-        getSdkClient().updateSharedFile(shareId, {
-          filePointer: item,
-          newContent,
-          getFileIpnsKeyFn: (itemId) => resolveFileIpnsKey(itemId, shareId),
-        })
+        runWithFailureUx(
+          () =>
+            getSdkClient().updateSharedFile(shareId, {
+              filePointer: item,
+              newContent,
+              getFileIpnsKeyFn: (itemId) => resolveFileIpnsKey(itemId, shareId),
+            }),
+          { refreshWriteAccess: p.refreshWriteAccess }
+        )
       );
     },
-    [p.currentShareId, withRevocationGuard]
+    [p.currentShareId, p.refreshWriteAccess, withRevocationGuard]
   );
 
   /**
@@ -259,12 +274,16 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
       try {
         for (const item of items) {
           await withRevocationGuard(() =>
-            getSdkClient().moveInSharedFolder(shareId, {
-              itemId: item.ipnsName,
-              destFolderId,
-              destIpnsName,
-              vaultPrivateKey,
-            })
+            runWithFailureUx(
+              () =>
+                getSdkClient().moveInSharedFolder(shareId, {
+                  itemId: item.ipnsName,
+                  destFolderId,
+                  destIpnsName,
+                  vaultPrivateKey,
+                }),
+              { refreshWriteAccess: p.refreshWriteAccess }
+            )
           );
         }
         clearSelection();
@@ -278,7 +297,7 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
         p.setIsLoading(false);
       }
     },
-    [p.currentShareId, p.setError, p.setIsLoading, withRevocationGuard]
+    [p.currentShareId, p.setError, p.setIsLoading, p.refreshWriteAccess, withRevocationGuard]
   );
 
   return {
