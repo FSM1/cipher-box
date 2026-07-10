@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "7f19b37e018b",
+  "strategy": "manual-commit",
+  "branch": "feat/shared-write-navigation-correctness-web",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/sdk-e2e/src/suites/ipns-publish-gate.test.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7f/19b37e018b/0/metadata.json",
+      "transcript": "/7f/19b37e018b/0/full.jsonl",
+      "content_hash": "/7f/19b37e018b/0/content_hash.txt",
+      "prompt": "/7f/19b37e018b/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 27412,
+    "cache_creation_tokens": 278408,
+    "cache_read_tokens": 6288462,
+    "output_tokens": 60132,
+    "api_call_count": 55
+  }
+}

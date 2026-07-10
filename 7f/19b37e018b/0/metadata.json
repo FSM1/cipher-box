@@ -1,0 +1,102 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "7f19b37e018b",
+  "session_id": "2b291057-9ece-4152-bb3e-94cc8f022c70",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-10T22:09:29.430293Z",
+  "branch": "feat/shared-write-navigation-correctness-web",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "tests/sdk-e2e/src/suites/ipns-publish-gate.test.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "8fc9eaedc65b",
+  "token_usage": {
+    "input_tokens": 27412,
+    "cache_creation_tokens": 278408,
+    "cache_read_tokens": 6288462,
+    "output_tokens": 60132,
+    "api_call_count": 55
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-ship-phase-2026-07-10T21:51:44.372452Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "7154f28d72f3",
+      "timestamp": "2026-07-10T21:51:44.372452Z",
+      "native": {
+        "command": "/ship-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/ship-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Autonomously run the full GSD post-execute-phase ship loop for cipher-box phase 73 (verify, secure, crypto/privacy review, security review, Nyquist validation, simplify, SDK E2E gate, CodeRabbit CLI, ship, resolve PR reviews) without stopping for user input except on real blockers.",
+    "outcome": "Verify/secure/validate passed (7/7, SECURED 17/17, 0 gaps); root-caused and fixed a local TEE-worker stack misconfiguration to get SDK E2E to 106/106; found and fixed two real phase-73 bugs (a stale test assertion in ipns-publish-gate.test.ts and a stale-state bug in useSharedNavigationActions.ts); CodeRabbit CLI noise triaged as discard. Commits for the fixes were landing when the transcript ends — ship, PR review resolution, and learnings extraction had not yet run.",
+    "learnings": {
+      "repo": [
+        "tee_key_state is populated by the API's TeeKeyStateService fetching the tee-worker's pubkey at boot (not by the worker itself); if that fetch fails at startup the table stays empty and all tombstone/republish e2e tests fail with 'tee_key_state is empty'.",
+        "Local docker stack: cipherbox-mock-ipns-routing claims host port :3001, so cipherbox-tee-worker's container port 3001 gets remapped to host :3002. The API's TEE_WORKER_URL still defaults to :3001, so it silently fetches from the wrong service (mock-ipns-routing, 404) instead of the real worker — must explicitly set TEE_WORKER_URL=http://localhost:3002.",
+        "tee-worker endpoints (e.g. /public-key) are gated by `Authorization: Bearer $TEE_WORKER_SECRET` (apps/tee-worker/src/middleware/auth.ts); the host-run API also needs TEE_WORKER_SECRET set to the worker container's matching secret or the pubkey fetch 401s and tee_key_state never seeds.",
+        "Phase 73's executor commits already used conventional subjects (`fix(73-08):`, `test(73-01):`) rather than GSD's typical non-conventional `feat 73-08:` style, so the mandatory filter-branch reword step (Step 7) was unnecessary here — check commit subjects before assuming the reword is needed.",
+        "resolveIpnsRecord maps HTTP 404 to null but lets 410 fall through to throw (apps/... line ~132) — relevant when reasoning about tombstone propagation on the resolve side of the IPNS gate."
+      ],
+      "code": [
+        {
+          "path": "tests/sdk-e2e/src/suites/ipns-publish-gate.test.ts",
+          "line": 20,
+          "finding": "Test 20 (WRITE-04) still asserted the pre-phase-73 contract that createAndPublishIpnsRecord throws on a 410 tombstone. Phase 73 changed the function to catch the 410 and return {success:false, tombstoned:true} instead, so publishError stayed undefined and the test failed — this was a stale assertion, not a regression (confirmed no production caller relied on the old throw)."
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigationActions.ts",
+          "finding": "refreshCurrentDepthWriteKey reseeded publishedNode from the cached getSharedFolderState() instead of re-resolving via IPNS first, so on a tombstone/stale-state 'Refresh access' retry it re-derived the key against the same stale node and could never recover. Fixed to mirror the existing restoreToBreadcrumbIndex pattern: call getSdkClient().refreshSharedFolder(currentShareId) (try/catch-ignored) before reseeding."
+        }
+      ],
+      "workflow": [
+        "Running long background gates (SDK E2E, CodeRabbit CLI, multiple audit agents) in parallel let the orchestrator keep making progress (docker checks, build chain, diff review) instead of idling.",
+        "A backgrounded command's summary line ('completed, exit code 0') can be misleading when output is piped — always tail/inspect the actual result file rather than trusting the notification's exit code.",
+        "When an e2e failure looks like a regression, systematically ruling out infra (container health, DB state, env var wiring, auth) before touching phase code avoided misdiagnosing a wiring gap as a code bug."
+      ]
+    },
+    "friction": [
+      "Background task notification reported SDK E2E exit code 0, but the real exit code was 1 (masked by a pipe) — required manually tailing output to catch 3 failing tests.",
+      "Diagnosing the TEE E2E failures required a multi-step root-cause chain (container health → DB tee_key_state → port collision → auth secret mismatch) before it was clear phase 73 wasn't at fault.",
+      "CodeRabbit CLI raised 2 nits with hallucinated cross-references to nonexistent phases (45–55/79–88) in planning docs — pure noise requiring manual verification to dismiss."
+    ],
+    "open_items": [
+      "The crypto/privacy and general-security agents both flagged a non-blocking LOW: publishedParent resolve at client.ts:5674 uses raw resolvePublishedNode, bypassing the ROT-07 gate applied to sibling reads — final disposition (fix/todo/discard) was not resolved before the transcript ends.",
+      "Remaining ship-phase steps not yet executed at transcript end: commit the docs/todo changes, conventional PR title + body via gh api PATCH, push, CodeRabbit PR-level review + thread resolution, final green-check report, and /gsd-extract-learnings for 73-LEARNINGS.md.",
+      "Two real bugs were fixed inline (stale Test 20 contract, stale-state refreshCurrentDepthWriteKey) but had not yet been referenced in the PR body triage tally described in the ship-phase instructions."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-10T22:08:49.101719Z",
+    "agent_lines": 18,
+    "agent_removed": 19,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 18,
+    "total_lines_changed": 37,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
