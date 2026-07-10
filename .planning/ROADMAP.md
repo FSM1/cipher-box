@@ -72,7 +72,7 @@
 - [x] **Phase 70: Rotation Soundness — Deep Merge, Fresh-Record Resume, and Durable Floor Concurrency** — Local-wins merge for rotated child keys, deep `verifySubtreeClean`, true fresh-record crash-resume, grant-callback threading through the real walk, and an atomic/async-safe anti-rollback floor store (5 deferred CodeRabbit/PR-review todos) (completed 2026-07-07)
 - [x] **Phase 71: Share-Invite Security and IPNS Data-Integrity (API)** — Validate sharer root ownership via `ipns_records` creator marker, apply-or-reject later invite grants, `claim_count` CHECK folded into the greenfield cutover, first-publish INSERT-race 409, same-seq CID equivocation hard-guard, direct bulk-revoke DELETE, `ShareInviteService` lifecycle unit coverage, plus a full share-plane rename purging "descriptor" (D-10). Root-uniqueness index dropped (D-03; already covered by vault uniqueness). (completed 2026-07-09)
 - [x] **Phase 72: SDK Write-Plane Durability and Correctness** — Delete drops the removed child's `WriteChildRef`, fail-closed `getWriteBodyParams` on transient resolve miss, restore-to-different-parent re-homing, `SealedChildRef` size/modifiedAt mirror refresh, legacy `moveInSharedFolder` branch removal, write-plane helper dedup, and two write-chain test-fidelity fixes (8 todos) (completed 2026-07-10)
-- [ ] **Phase 73: Shared Write/Navigation Correctness (Web)** — Preserve nested write capability across navigate-up/breadcrumb restore, invalidate stale nav-stack child snapshots, gate the non-listing read facades with the ROT-07 floor, give WRITE-03 refresh-access a live production trigger, and route drag-payload kind through the resolved listing, plus fold in the tangential nav-hook dedup and dead getShareKeys/folder-IPNS path cleanup in the same subsystem (7 todos)
+- [x] **Phase 73: Shared Write/Navigation Correctness (Web)** — Preserve nested write capability across navigate-up/breadcrumb restore, invalidate stale nav-stack child snapshots, gate the non-listing read facades with the ROT-07 floor, give WRITE-03 refresh-access a live production trigger, and route drag-payload kind through the resolved listing, plus fold in the tangential nav-hook dedup and dead getShareKeys/folder-IPNS path cleanup in the same subsystem (7 todos) (completed 2026-07-10)
 
 ## Phase Details
 
@@ -874,7 +874,7 @@ Plans:
 6. Duplicated shared-navigation logic in `useSharedNavigationActions` (navigateUp / navigateToBreadcrumb restore + resolve-kinds-before-project) is consolidated to a single source of truth — the writeKey/snapshot fixes (SC1/SC2) live in one place, not copy-pasted across nav entrypoints
 7. The dead `resolveFolderIpnsPrivateKey` / `getShareKeys` folder-IPNS write-share key path is removed from `useSharedNavigationActions.ts` (no remaining references), leaving the derived-writeKey path (SC1) as the sole write-key source
 
-**Plans**: 7/9 plans executed
+**Plans**: 9/9 plans complete
 
 Plans:
 
@@ -885,8 +885,8 @@ Plans:
 - [x] 73-05-PLAN.md — SC4(b) publishNodeFn tombstone mapping + SC2 item-4 refreshSharedFolder write-envelope
 - [x] 73-06-PLAN.md — SC7 dead getShareKeys/folder-IPNS path removal + SC6 restore-helper consolidation
 - [x] 73-07-PLAN.md — SC1: navStack writeKey retention + D-09 zeroization audit
-- [ ] 73-08-PLAN.md — SC4(c/d): useSharedWriteOps runWithFailureUx wiring + refreshWriteAccess supplier + rotation-ux e2e
-- [ ] 73-09-PLAN.md — SC2: refresh-after-restore stale-snapshot invalidation
+- [x] 73-08-PLAN.md — SC4(c/d): useSharedWriteOps runWithFailureUx wiring + refreshWriteAccess supplier + rotation-ux e2e
+- [x] 73-09-PLAN.md — SC2: refresh-after-restore stale-snapshot invalidation
 
 ---
 
