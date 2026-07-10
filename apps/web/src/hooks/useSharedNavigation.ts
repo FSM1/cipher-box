@@ -11,9 +11,9 @@
 
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { type SealedChildRef } from '@cipherbox/core';
-import { ShareKeyCache, type ResolvedChild } from '@cipherbox/sdk';
+import { type ResolvedChild } from '@cipherbox/sdk';
 import { useShareStore, type ReceivedShare } from '../stores/share.store';
-import { fetchReceivedShares, fetchShareKeys, decryptItemName } from '../services/share.service';
+import { fetchReceivedShares, decryptItemName } from '../services/share.service';
 import { useAuthStore } from '../stores/auth.store';
 import { getSdkClient, hasSdkClient } from '../lib/sdk-provider';
 import { logger } from '../lib/logger';
@@ -157,9 +157,6 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     }>
   >([]);
 
-  // Cache share keys per shareId with TTL to avoid refetching
-  const shareKeysCacheRef = useRef(new ShareKeyCache(60_000));
-
   // Polling interval ref for 30s sync
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -196,15 +193,6 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     },
     [zeroIpnsKey]
   );
-
-  const getShareKeys = useCallback(async (shareId: string) => {
-    const cached = shareKeysCacheRef.current.get(shareId);
-    if (cached) return cached;
-
-    const keys = await fetchShareKeys(shareId);
-    shareKeysCacheRef.current.set(shareId, keys);
-    return keys;
-  }, []);
 
   /**
    * Seed (or re-seed) the SDK's sharedFolderTree for the active shared-folder
@@ -305,7 +293,6 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       navStackRef.current = [];
       zeroIpnsKey();
       clearPolling();
-      shareKeysCacheRef.current.clear();
     };
   }, [zeroIpnsKey, clearPolling]);
 
@@ -392,7 +379,6 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     sequenceNumberRef,
     ipnsPrivateKeyRef,
     navStackRef,
-    shareKeysCacheRef,
     setCurrentView,
     setCurrentShareId,
     setFolderChildren,
@@ -406,7 +392,6 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     setSharedItems,
     clearPolling,
     zeroIpnsKey,
-    getShareKeys,
     seedActiveSharedFolder,
   });
 

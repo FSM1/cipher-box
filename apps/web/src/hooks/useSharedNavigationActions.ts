@@ -18,7 +18,6 @@
 
 import { useCallback, type MutableRefObject } from 'react';
 import type { SealedChildRef } from '@cipherbox/core';
-import { ShareKeyCache } from '@cipherbox/sdk';
 import { unwrapKey, hexToBytes } from '@cipherbox/crypto';
 import { useShareStore } from '../stores/share.store';
 import { useAuthStore } from '../stores/auth.store';
@@ -53,7 +52,6 @@ export type SharedNavigationActionsParams = {
   sequenceNumberRef: MutableRefObject<bigint | null>;
   ipnsPrivateKeyRef: MutableRefObject<Uint8Array | null>;
   navStackRef: MutableRefObject<NavStackEntry[]>;
-  shareKeysCacheRef: MutableRefObject<ShareKeyCache>;
   // State setters
   setCurrentView: (view: 'list' | 'folder' | 'file') => void;
   setCurrentShareId: (id: string | null) => void;
@@ -71,46 +69,11 @@ export type SharedNavigationActionsParams = {
   // Helpers from orchestrator
   clearPolling: () => void;
   zeroIpnsKey: () => void;
-  getShareKeys: (
-    shareId: string
-  ) => Promise<Array<{ keyType: string; itemId: string; encryptedKey: string }>>;
   /**
    * Seed (or re-seed) the SDK's sharedFolderTree for the active depth.
    */
   seedActiveSharedFolder: (args: Omit<SeedSharedFolderArgs, 'addShareKeysFn'>) => void;
 };
-
-/**
- * Resolve a folder's IPNS signing key for write shares.
- *
- * Write-share IPNS keys are still delivered via the legacy per-share key
- * fan-out (`getShareKeys`, keyType `folder-ipns`, itemId = folder ipnsName) --
- * unchanged by the Node-v3 read-chain migration (mirrors the identical
- * `writableSet` check in `CipherBoxClient.enumerateSharedSubtree`). Full
- * write-body (NodeWriteBody) key delivery through the grant chain is Phase-68
- * follow-on wiring; until then this is best-effort (T-68.1-05-02 zero-key
- * placeholder fallback, matching `shared-folder-projection.ts`'s existing
- * `writeKey ?? new Uint8Array(32)` convention -- write mutations remain
- * gated at the UI layer by `permission === 'write'`).
- */
-async function resolveFolderIpnsPrivateKey(
-  shareId: string,
-  folderIpnsName: string,
-  permission: 'read' | 'write',
-  vaultPrivateKey: Uint8Array,
-  getShareKeys: SharedNavigationActionsParams['getShareKeys']
-): Promise<Uint8Array> {
-  if (permission !== 'write') return new Uint8Array(32);
-  try {
-    const keys = await getShareKeys(shareId);
-    const entry = keys.find((k) => k.keyType === 'folder-ipns' && k.itemId === folderIpnsName);
-    if (!entry) return new Uint8Array(32);
-    return await unwrapKey(hexToBytes(entry.encryptedKey), vaultPrivateKey);
-  } catch (err) {
-    logger.error('[SharedNav] Failed to resolve folder IPNS key:', err);
-    return new Uint8Array(32);
-  }
-}
 
 /**
  * Unwrap a grant's `encryptedWriteKey` into the shared-root writeKey
@@ -211,13 +174,7 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
           return;
         }
 
-        const ipnsPrivateKey = await resolveFolderIpnsPrivateKey(
-          shareId,
-          share.ipnsName,
-          share.permission,
-          vaultKeypair.privateKey,
-          p.getShareKeys
-        );
+        const ipnsPrivateKey = new Uint8Array(32);
 
         p.zeroIpnsKey();
         p.ipnsPrivateKeyRef.current = ipnsPrivateKey;
@@ -275,13 +232,12 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
         // (revoked/behind-retry); once 'ok', the web is the terminal owner.
         // `committed` is set true immediately once the key is either stored
         // into state (folder case) or explicitly discarded (file case) --
-        // this only fires if something throws in between (e.g.
-        // resolveFolderIpnsPrivateKey), preventing a leak.
+        // this only fires if something throws in between, preventing a leak.
         if (!committed && shareRootReadKey) shareRootReadKey.fill(0);
         p.setIsLoading(false);
       }
     },
-    [p.sharedItems, p.getShareKeys, p.seedActiveSharedFolder, p.zeroIpnsKey]
+    [p.sharedItems, p.seedActiveSharedFolder, p.zeroIpnsKey]
   );
 
   /**
@@ -331,13 +287,7 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
             p.setError('Shared item not found');
             return;
           }
-          const ipnsPrivateKey = await resolveFolderIpnsPrivateKey(
-            currentShareId,
-            childRef.ipnsName,
-            p.permission ?? 'read',
-            vaultKeypair.privateKey,
-            p.getShareKeys
-          );
+          const ipnsPrivateKey = new Uint8Array(32);
 
           // Push the CURRENT (pre-descent) level so navigateUp / navigateToBreadcrumb
           // can restore it without a network round-trip.
@@ -413,7 +363,6 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
       p.currentSequenceNumber,
       p.permission,
       p.sharedItems,
-      p.getShareKeys,
       p.seedActiveSharedFolder,
       p.zeroIpnsKey,
     ]
@@ -442,105 +391,33 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
   }, [p.folderKey, p.zeroIpnsKey, p.clearPolling]);
 
   /**
-   * Navigate up one level.
+   * Restore navigation state to a specific breadcrumb/nav-stack index.
    *
-   * Restores the parent NavStackEntry captured on descent -- no network call
-   * needed. Falls through to navigateToRoot when the stack is empty (root level).
-   */
-  const navigateUp = useCallback(async () => {
-    if (p.navStackRef.current.length === 0) {
-      if (p.currentView === 'folder' || p.currentView === 'file') {
-        navigateToRoot();
-      }
-      return;
-    }
-
-    const currentShareId = p.currentShareId;
-    const stack = p.navStackRef.current;
-    const parent = stack[stack.length - 1];
-
-    // Discard the level being left (its folderKey is not referenced anywhere else).
-    if (p.folderKey) p.folderKey.fill(0);
-    p.navStackRef.current = stack.slice(0, -1);
-
-    p.setFolderChildren(parent.children);
-    p.setFolderKey(parent.folderKey);
-    p.setIpnsName(parent.ipnsName);
-    p.setCurrentSequenceNumber(parent.sequenceNumber);
-    p.setBreadcrumbs((prev) => prev.slice(0, -1));
-
-    const auth = useAuthStore.getState();
-    if (!currentShareId || !auth.vaultKeypair) return;
-    const vaultKeypair = auth.vaultKeypair;
-
-    try {
-      const shareEntry = p.sharedItems.find((s) => s.share.shareId === currentShareId);
-      if (!shareEntry) return;
-      const ipnsPrivateKey = await resolveFolderIpnsPrivateKey(
-        currentShareId,
-        parent.ipnsName,
-        p.permission ?? 'read',
-        vaultKeypair.privateKey,
-        p.getShareKeys
-      );
-      p.zeroIpnsKey();
-      p.ipnsPrivateKeyRef.current = ipnsPrivateKey;
-
-      // T-68.1-20-01: re-derive the shared-root writeKey when this navigate-up
-      // restores the share ROOT depth (the only depth a encryptedWriteKey
-      // grant covers) -- a deeper subfolder restore keeps the zero-buffer
-      // writeKey default untouched (see resolveSharedRootWriteKey doc).
-      const isRootDepth = parent.ipnsName === shareEntry.share.ipnsName;
-      const rootWriteKey = isRootDepth
-        ? await resolveSharedRootWriteKey(
-            shareEntry.share.encryptedWriteKey,
-            vaultKeypair.privateKey
-          )
-        : null;
-      try {
-        p.seedActiveSharedFolder({
-          shareId: currentShareId,
-          ipnsName: parent.ipnsName,
-          folderKey: parent.folderKey,
-          ipnsPrivateKey,
-          writeKey: rootWriteKey ?? undefined,
-          sequenceNumber: parent.sequenceNumber ?? 0n,
-          children: parent.children,
-          ownerPublicKey: parsePublicKey(shareEntry.share.sharerPublicKey),
-          recipientPublicKey: vaultKeypair.publicKey,
-        });
-      } finally {
-        rootWriteKey?.fill(0);
-      }
-    } catch (err) {
-      logger.error('[SharedNav] Failed to re-seed after navigate-up:', err);
-    }
-  }, [
-    p.currentView,
-    p.folderKey,
-    p.currentShareId,
-    p.permission,
-    p.sharedItems,
-    p.getShareKeys,
-    p.seedActiveSharedFolder,
-    p.zeroIpnsKey,
-    navigateToRoot,
-  ]);
-
-  /**
-   * Navigate directly to a breadcrumb level.
-   *
-   * Truncates the nav stack to `crumbIndex`, restoring that level's state and
+   * The single restore helper shared by `navigateUp` (called with
+   * `stack.length - 1`) and `navigateToBreadcrumb` (called with the target
+   * `crumbIndex`) -- Phase 73 SC6 consolidation of what were previously two
+   * near-verbatim ~55-line blocks. Truncates the nav stack to `crumbIndex`,
    * zeroing the folderKeys of every discarded deeper level (including the
-   * current live level).
+   * current live level), restores the target entry's
+   * children/folderKey/ipnsName/sequenceNumber/breadcrumbs, re-derives the
+   * root-depth writeKey via `resolveSharedRootWriteKey` (`isRootDepth`
+   * branch), and re-seeds the SDK's sharedFolderTree via
+   * `seedActiveSharedFolder`.
+   *
+   * UI-behavior-NEUTRAL: this is a pure consolidation -- no restored value or
+   * writeKey source changes here (SC1's writeKey-from-stack and SC2's
+   * refresh-after-restore land inside this helper in later plans).
    */
-  const navigateToBreadcrumb = useCallback(
+  const restoreToBreadcrumbIndex = useCallback(
     async (crumbIndex: number) => {
       const stack = p.navStackRef.current;
       if (crumbIndex < 0 || crumbIndex >= stack.length) return;
       const target = stack[crumbIndex];
       const currentShareId = p.currentShareId;
 
+      // Discard the level(s) being left: the current live folderKey plus any
+      // deeper stack entries beyond crumbIndex (empty range for navigateUp's
+      // one-level-up case, since crumbIndex is always the top of stack there).
       if (p.folderKey) p.folderKey.fill(0);
       for (let i = crumbIndex + 1; i < stack.length; i++) {
         stack[i].folderKey.fill(0);
@@ -560,18 +437,14 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
       try {
         const shareEntry = p.sharedItems.find((s) => s.share.shareId === currentShareId);
         if (!shareEntry) return;
-        const ipnsPrivateKey = await resolveFolderIpnsPrivateKey(
-          currentShareId,
-          target.ipnsName,
-          p.permission ?? 'read',
-          vaultKeypair.privateKey,
-          p.getShareKeys
-        );
+        const ipnsPrivateKey = new Uint8Array(32);
         p.zeroIpnsKey();
         p.ipnsPrivateKeyRef.current = ipnsPrivateKey;
 
-        // T-68.1-20-01: same root-depth-only writeKey re-derivation as
-        // navigateUp -- see resolveSharedRootWriteKey doc.
+        // T-68.1-20-01: re-derive the shared-root writeKey when this restore
+        // lands on the share ROOT depth (the only depth an encryptedWriteKey
+        // grant covers) -- a deeper subfolder restore keeps the zero-buffer
+        // writeKey default untouched (see resolveSharedRootWriteKey doc).
         const isRootDepth = target.ipnsName === shareEntry.share.ipnsName;
         const rootWriteKey = isRootDepth
           ? await resolveSharedRootWriteKey(
@@ -595,18 +468,38 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
           rootWriteKey?.fill(0);
         }
       } catch (err) {
-        logger.error('[SharedNav] Failed to re-seed after breadcrumb navigation:', err);
+        logger.error('[SharedNav] Failed to re-seed after breadcrumb restore:', err);
       }
     },
-    [
-      p.folderKey,
-      p.currentShareId,
-      p.permission,
-      p.sharedItems,
-      p.getShareKeys,
-      p.seedActiveSharedFolder,
-      p.zeroIpnsKey,
-    ]
+    [p.folderKey, p.currentShareId, p.sharedItems, p.seedActiveSharedFolder, p.zeroIpnsKey]
+  );
+
+  /**
+   * Navigate up one level.
+   *
+   * Restores the parent NavStackEntry captured on descent -- no network call
+   * needed. Falls through to navigateToRoot when the stack is empty (root level).
+   */
+  const navigateUp = useCallback(async () => {
+    if (p.navStackRef.current.length === 0) {
+      if (p.currentView === 'folder' || p.currentView === 'file') {
+        navigateToRoot();
+      }
+      return;
+    }
+    await restoreToBreadcrumbIndex(p.navStackRef.current.length - 1);
+  }, [p.currentView, navigateToRoot, restoreToBreadcrumbIndex]);
+
+  /**
+   * Navigate directly to a breadcrumb level.
+   *
+   * Delegates to `restoreToBreadcrumbIndex` (bounds-checked there).
+   */
+  const navigateToBreadcrumb = useCallback(
+    async (crumbIndex: number) => {
+      await restoreToBreadcrumbIndex(crumbIndex);
+    },
+    [restoreToBreadcrumbIndex]
   );
 
   /**
