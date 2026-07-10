@@ -1,0 +1,137 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "ab67c91ff365",
+  "session_id": "1fe64f2c-aba7-4c33-bdde-c289c7f9ed8a",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-10T23:37:04.752085Z",
+  "branch": "docs/triage-m4-todos",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/ROADMAP.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "f70b70e3d084",
+  "checkpoint_transcript_start": 308,
+  "transcript_lines_at_start": 308,
+  "token_usage": {
+    "input_tokens": 848,
+    "cache_creation_tokens": 233302,
+    "cache_read_tokens": 3821604,
+    "output_tokens": 25353,
+    "api_call_count": 17
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01KciubWgqytLmZY1N6dVCum",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "f70b70e3d084",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 202,
+        "end": 203,
+        "entry_ids": [
+          "fbf0fdb2-5c0c-41de-933e-28cf8b6e89bc"
+        ],
+        "tool_use_id": "toolu_01KciubWgqytLmZY1N6dVCum"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01KciubWgqytLmZY1N6dVCum"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "summary": {
+    "intent": "User wanted to clean up 84 repo-wide `TODO(phase 63/65)` comment markers left over from earlier CipherBox phases, using ultracode to classify each as already-resolved (stale) vs still describing a real unfinished limitation.",
+    "outcome": "Ran a 21-agent workflow classifying all 83 markers across 21 files into 43 RESOLVED (stale comments, safe to delete) and 40 STILL_VALID (real gap: web listing UI never wired to ResolvedChild.kind from phase 68.2); test-file markers (describe.skip suites) were carved out separately since they require reviving tests, not deleting comments. Added a new Phase 79 to ROADMAP.md to track the still-valid work and committed the planning update.",
+    "learnings": {
+      "repo": [
+        "Web file-browser UI (FileBrowser.tsx, FileList.tsx, FileDetails.tsx, FolderDetails.tsx, MoveDialog, ShareDialog, SharedMoveDialog, FileListItem, useFileBrowserActions, useFolderNavigation) still consumes bare SealedChildRef and hardcodes kind:'folder' instead of using ResolvedChild.kind, which was added in phase 68.2",
+        "ResolvedChild type (packages/sdk/src/folder-listing.ts) has no createdAt field; NodeContent (core/node/types.ts) also lacks createdAt even though Node envelope (core/node/types.ts:166) has it — Created date displays 'unavailable (phase 63)' in FileDetails.tsx and FolderDetails.tsx",
+        "Folders-first sort is not restored in web UI (alphabetical only) — FileList.tsx, SharedFileBrowser, useFileBrowserActions",
+        "Drag-and-drop is disabled at FileList.tsx lines 144/145/264/268",
+        "4 tests are describe.skip'd: 3 in useSharedWriteOps.test.ts and 1 in sdk-core load.test.ts, whose underlying function is now implemented so the skip itself is stale",
+        "useFolderNavigation.ts:321 — folder id still keyed by ipnsName rather than Node.id (low-impact identity nit)"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/components/file-browser/details/FileDetails.tsx",
+          "line": 82,
+          "end_line": 82,
+          "finding": "JSX still renders stale placeholder '[sealed inside read-body — phase 63]' even though fileKey is now resolvable as Uint8Array on NodeContent; redaction is correct but the phase-63 workaround copy is obsolete"
+        },
+        {
+          "path": "apps/web/src/components/file-browser/details/FileDetails.tsx",
+          "line": 94,
+          "end_line": 94,
+          "finding": "Created date genuinely unwired — neither ResolvedChild nor NodeContent carries createdAt from the Node envelope"
+        },
+        {
+          "path": "apps/web/src/components/file-browser/FileBrowser.tsx",
+          "line": 115,
+          "end_line": 115,
+          "finding": "deleteMessage still uses folder-only copy, never consults resolved kind from currentFolder.children"
+        },
+        {
+          "path": "apps/web/src/components/file-browser/FileList.tsx",
+          "line": 42,
+          "end_line": 42,
+          "finding": "UploadVirtualEntry is a hand-rolled type manually mirroring SealedChildRef fields instead of aligning with real upload-produced Node shape"
+        }
+      ],
+      "workflow": [
+        "For repo-wide TODO/marker triage, enumerate markers first, sample comment text for context, then fan out one verifier agent per file via Workflow to classify each marker against current code — avoids one agent trying to hold all 84 markers across 21 files in context",
+        "When a classified 'resolved' marker is actually a describe.skip test stub, treat it separately from simple comment-deletions — reviving a test is a different, riskier action than deleting a stale comment, so segregate test files from the zero-risk cleanup pass",
+        "Use AskUserQuestion to let the user choose forks (e.g., delete-now vs schedule-later) after presenting a synthesized breakdown, rather than deciding unilaterally"
+      ]
+    },
+    "friction": [],
+    "open_items": [
+      "~45 stale TODO(phase 63/65) comments in non-test files still need to be deleted (approved but not yet executed in this session)",
+      "Phase 79 added to ROADMAP.md to track ~38 still-valid remaining web-feature gaps (kind propagation, folders-first sort, drag-and-drop, Created date, dialog mislabeling)",
+      "4 skipped test suites (3 in useSharedWriteOps.test.ts, 1 in sdk-core load.test.ts) plus a bin.test.ts fixture note deferred to a separate test-revival phase (79) rather than bundled into the comment-cleanup pass",
+      "Overlaps existing project note web-kind-and-post-upload-refresh-traps and 68.2 backlog item 2 — worth cross-referencing when scoping Phase 79 work"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-10T23:36:46.005987Z",
+    "agent_lines": 30,
+    "agent_removed": 2,
+    "human_added": 59,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 89,
+    "total_lines_changed": 94,
+    "agent_percentage": 34.04255319148936,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
