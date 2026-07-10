@@ -339,19 +339,34 @@ export async function updateFolderMetadataAndPublish(params: {
       // write-body is sealed at all.
       if (params.writeKey) {
         if (params.baseWriteChildren) {
-          // Base-aware prune (SC#1 Critical Finding 2): start from local
-          // (already reflects this transaction's own intentional deletes by
-          // omission), then fold in ONLY genuinely concurrent remote entries —
-          // a childId absent from base (a real concurrent add) or a childId
-          // already present in local (remote wins on a conflicting value for
-          // an existing entry). A childId present in base but absent from
-          // local is never resurrected, regardless of whether the racing
-          // writer's stale remote snapshot still carries it.
+          // Base-aware 3-way prune (SC#1 Critical Finding 2, extended by the
+          // F5 remote-delete fix): a childId present in base is kept ONLY if
+          // it is STILL present on BOTH sides (local and remote) — if EITHER
+          // side dropped it since base, that deletion is honored and the
+          // entry is never resurrected, regardless of which side raced
+          // ahead. This is symmetric: a childId present in base but absent
+          // from local is never resurrected by a racing writer's stale
+          // remote snapshot that still carries it (Test C); a childId
+          // present in base and untouched in local but concurrently DELETED
+          // by the remote writer is likewise dropped, not carried forward
+          // just because local's stale copy still has it (F5 — the prior
+          // version only protected local's own deletes, not remote's).
+          // A childId absent from base (a genuinely concurrent add, from
+          // either side) is always kept — neither side can have "deleted"
+          // something it never knew existed (Test B).
           const baseIds = new Set(params.baseWriteChildren.map((wc) => wc.childId));
+          const localIds = new Set(currentWriteChildren.map((wc) => wc.childId));
           const mergedMap = new Map<string, WriteChildRef>();
-          for (const wc of currentWriteChildren) mergedMap.set(wc.childId, wc);
+          for (const wc of currentWriteChildren) {
+            if (!baseIds.has(wc.childId)) mergedMap.set(wc.childId, wc);
+          }
           for (const wc of remoteWriteChildren) {
-            if (!baseIds.has(wc.childId) || mergedMap.has(wc.childId)) {
+            if (!baseIds.has(wc.childId) || localIds.has(wc.childId)) {
+              // Either a genuinely concurrent remote add, or present in base
+              // and still present on both sides — remote wins on a
+              // conflicting value for an existing entry (matches prior
+              // behavior). Otherwise (present in base, absent from local):
+              // fall through and drop it — one side deleted it.
               mergedMap.set(wc.childId, wc);
             }
           }

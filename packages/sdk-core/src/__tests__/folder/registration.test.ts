@@ -405,4 +405,57 @@ describe('updateFolderMetadataAndPublish — base-aware write-body CAS-merge (SC
     // X must NOT be resurrected — merged write-body is exactly {Z}.
     expect(publishedWriteChildren).toEqual([{ childId: 'Z', writeKeySealed: 'seal-z' }]);
   });
+
+  it('Test D — concurrent REMOTE deletion: local never touched X, but a concurrent remote writer deleted it — merge must NOT resurrect X (F5)', async () => {
+    const ctx = createMockContext();
+    let callCount = 0;
+    mockFns.addToIpfs.mockImplementation(async (_ctx: unknown, data: Uint8Array) => {
+      callCount++;
+      return { cid: `QmAttempt${callCount}`, size: data.length, recorded: true };
+    });
+
+    const axios409 = Object.assign(new Error('Conflict'), { response: { status: 409 } });
+    mockFns.createAndPublishIpnsRecord
+      .mockRejectedValueOnce(axios409)
+      .mockResolvedValueOnce({ success: true, sequenceNumber: 3n });
+    mockFns.resolveIpnsRecord.mockResolvedValue({
+      sequenceNumber: 2n,
+      cid: 'QmRemoteFromConcurrentWrite',
+    });
+
+    // Base has {X, Z}; local's own transaction never touched X (it is still
+    // present, unchanged from base, in local's write-body); the racing
+    // writer concurrently DELETED X for real (its remote snapshot only has
+    // {Z}) — this is a genuine concurrent delete, not a stale pre-delete
+    // snapshot (contrast with Test C).
+    const baseWriteChildren: WriteChildRef[] = [
+      { childId: 'X', writeKeySealed: 'seal-x' },
+      { childId: 'Z', writeKeySealed: 'seal-z' },
+    ];
+    const localWriteChildren: WriteChildRef[] = [
+      { childId: 'X', writeKeySealed: 'seal-x' },
+      { childId: 'Z', writeKeySealed: 'seal-z' },
+    ];
+    const remoteWriteChildren: WriteChildRef[] = [{ childId: 'Z', writeKeySealed: 'seal-z' }];
+    mockFns.fetchFromIpfs.mockResolvedValue(await buildSealedRemote(remoteWriteChildren));
+
+    const { publishedWriteChildren } = await updateFolderMetadataAndPublish({
+      children: [],
+      readKey: READ_KEY,
+      writeKey: WRITE_KEY,
+      writeChildren: localWriteChildren,
+      baseWriteChildren,
+      ipnsPrivateKey: IPNS_PRIVATE_KEY,
+      ipnsName: 'k51-write-merge-d',
+      sequenceNumber: 1n,
+      ctx,
+      nodeId: NODE_ID,
+      nodeGeneration: 0,
+    });
+
+    // The concurrent remote deletion of X must be honored — merged
+    // write-body is exactly {Z}, X is NOT resurrected by local's untouched
+    // (now-stale) copy.
+    expect(publishedWriteChildren).toEqual([{ childId: 'Z', writeKeySealed: 'seal-z' }]);
+  });
 });
