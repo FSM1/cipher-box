@@ -7,10 +7,10 @@
  */
 
 export interface ClaimInviteDto {
-  /** Hex-encoded ECIES descriptor ref for read access re-wrapped for the recipient (claimer re-wraps the root readKey from the ephemeral key to their own pubkey). Server never sees plaintext (zero-knowledge). */
-  readDescriptorRef: string;
-  /** Hex-encoded ECIES descriptor ref for write access re-wrapped for the recipient. Omit for read-only claim. */
-  writeDescriptorRef?: string;
+  /** Hex-encoded ECIES encrypted key for read access re-wrapped for the recipient (claimer re-wraps the root readKey from the ephemeral key to their own pubkey). Server never sees plaintext (zero-knowledge). */
+  encryptedReadKey: string;
+  /** Hex-encoded ECIES encrypted key for write access re-wrapped for the recipient. Omit for read-only claim. */
+  encryptedWriteKey?: string;
   /** Hex-encoded ECIES ciphertext of the display name re-wrapped for the recipient. Optional: omit if recipient can derive the name from their filesystem. */
   itemNameEncrypted?: string;
 }

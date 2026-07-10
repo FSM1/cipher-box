@@ -1,7 +1,7 @@
 /**
- * IPNS publish-gate suite (TEE-04/07, WRITE-04 phase gate) — Phase 66.
+ * IPNS publish-gate suite (TEE-04/07, WRITE-04 phase gate) — Phase 66; Test 21 added Phase 71.
  *
- * Four behavior cases exercised against the live API + migrated node/v3 schema:
+ * Five behavior cases exercised against the live API + migrated node/v3 schema:
  *   Test 16 (TEE-04): Two concurrent forward publishes from the same expected
  *     sequenceNumber='1' → exactly one 200 + one 409; follow-up resolve shows
  *     sequenceNumber=2n (one increment, zero lost updates).
@@ -11,8 +11,11 @@
  *     correct expected sequence → 409; served CID never regresses to the lower-gen value.
  *   Test 20 (WRITE-04 tombstone): POST /ipns/tombstone; subsequent publish returns
  *     HTTP 410 {error:'IPNS_TOMBSTONED'}; resolve of the tombstoned name → 410.
+ *   Test 21 (D-06): Two concurrent FIRST publishes of the same brand-new ipnsName
+ *     (no baseline row) → exactly one 200 + one 409 via the Postgres unique
+ *     constraint on ipns_records(ipnsName) (23505→409 translation), never a 500.
  *
- * These four cases need the live stack because they exercise real concurrency and the
+ * These five cases need the live stack because they exercise real concurrency and the
  * publish CAS / tombstone round-trip. The TEE-05 seqFloor gate (null-signedRecord
  * shared-folder rows: at/above floor serves, below-floor and unparseable cached records
  * fail closed) is pure resolve-decision logic and is covered by unit tests in
@@ -355,5 +358,63 @@ describe('IPNS publish-gate suite (TEE-04/07, WRITE-04 phase gate)', () => {
     expect(resolveError).toBeDefined();
     expect(statusOf(resolveError)).toBe(410);
     expect((dataOf(resolveError) as Record<string, unknown>)?.error).toBe('IPNS_TOMBSTONED');
+  }, 120_000);
+
+  // -------------------------------------------------------------------------
+  // Test 21 — D-06: concurrent FIRST publish of the same new ipnsName →
+  // exactly one 200 + one 409 (real DB unique-constraint race, live Postgres)
+  // -------------------------------------------------------------------------
+  it('Test 21 (D-06): concurrent first-publish of the same new ipnsName → exactly one 200 + one 409', async () => {
+    const alice = fixture.accounts.get('alice')!;
+    const aliceCtx = alice.client.getContext();
+
+    // Brand-new Ed25519 keypair / ipnsName — NO baseline publish. Both concurrent
+    // calls race the very first INSERT for this ipnsName, exercising the
+    // Postgres unique constraint on ipns_records(ipnsName) directly (not the
+    // UPDATE...WHERE CAS path Tests 16/17/TEE-07 exercise).
+    const kp = generateEd25519Keypair();
+    const pubKey = deriveEd25519PublicKey(kp.privateKey);
+    const ipnsName = await deriveIpnsName(pubKey);
+    const cid = 'bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi';
+
+    // Fire two concurrent first-publish requests for the same brand-new ipnsName.
+    // Both sign a first-publish record embedding sequence=1 (no expectedSequenceNumber
+    // — this is the first-publish path, not a CAS forward publish). Exactly one
+    // INSERT wins; the loser's 23505 unique-violation must be translated to a clean
+    // 409 ConflictException, never surfaced as a 500.
+    const [resultA, resultB] = await Promise.allSettled([
+      createAndPublishIpnsRecord({
+        ipnsPrivateKey: kp.privateKey,
+        ipnsPublicKey: pubKey,
+        ipnsName,
+        metadataCid: cid,
+        sequenceNumber: 1n,
+        ctx: aliceCtx,
+      }),
+      createAndPublishIpnsRecord({
+        ipnsPrivateKey: kp.privateKey,
+        ipnsPublicKey: pubKey,
+        ipnsName,
+        metadataCid: cid,
+        sequenceNumber: 1n,
+        ctx: aliceCtx,
+      }),
+    ]);
+
+    const fulfilled = [resultA, resultB].filter((r) => r.status === 'fulfilled');
+    const rejected = [resultA, resultB].filter((r) => r.status === 'rejected');
+
+    // Exactly one winner, exactly one loser
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+
+    // The losing call must report 409 ConflictException, never a 500
+    const rejectedResult = rejected[0] as PromiseRejectedResult;
+    expect(statusOf(rejectedResult.reason)).toBe(409);
+
+    // Follow-up resolve: exactly one row exists, at sequence=1
+    const resolved = await resolveIpnsRecord(ipnsName, aliceCtx);
+    expect(resolved).not.toBeNull();
+    expect(resolved!.sequenceNumber).toBe(1n);
   }, 120_000);
 });

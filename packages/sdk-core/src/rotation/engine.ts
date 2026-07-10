@@ -59,8 +59,8 @@ import { mergeRotatedChildren } from './merge';
  *
  * Callback contract:
  *   - `queryGrantsFn(nodeId)` — returns all grants whose root is `nodeId`.
- *   - `updateGrantFn(shareId, readDescriptorRef, newGeneration)` — persists the
- *     re-minted ECIES-wrapped descriptor for a non-revoked recipient.
+ *   - `updateGrantFn(shareId, encryptedReadKey, newGeneration)` — persists the
+ *     re-minted ECIES-wrapped encrypted key for a non-revoked recipient.
  *   - `deleteGrantFn(shareId)` — removes a revoked recipient's grant row.
  */
 export type GrantRemintCallbacks = {
@@ -71,7 +71,7 @@ export type GrantRemintCallbacks = {
   >;
   updateGrantFn: (
     shareId: string,
-    readDescriptorRef: string,
+    encryptedReadKey: string,
     newGeneration: number
   ) => Promise<void>;
   deleteGrantFn: (shareId: string) => Promise<void>;
@@ -85,8 +85,8 @@ export type GrantRemintCallbacks = {
  *
  * Callback contract:
  *   - `queryWriteGrantsFn(nodeId)` — returns all write grants whose root is `nodeId`.
- *   - `writeDescriptorRefPersistFn(shareId, writeDescriptorRef)` — persists the
- *     re-wrapped ECIES descriptor for a surviving (non-revoked) co-writer.
+ *   - `encryptedWriteKeyPersistFn(shareId, encryptedWriteKey)` — persists the
+ *     re-wrapped ECIES encrypted key for a surviving (non-revoked) co-writer.
  *   - `teeUnenrollFn(oldIpnsName)` — removes the old k51 name from the TEE republish
  *     batch (tombstone-intent — §5.5 / WRITE-04).
  *   - `deleteWriteGrantFn(shareId)` — drops the revoked recipient's grant row (WRITE-03).
@@ -101,7 +101,7 @@ export type WriteRevocationCallbacks = {
   ) => Promise<
     ReadonlyArray<{ shareId: string; recipientPublicKey: Uint8Array; isRevoked: boolean }>
   >;
-  writeDescriptorRefPersistFn: (shareId: string, writeDescriptorRef: string) => Promise<void>;
+  encryptedWriteKeyPersistFn: (shareId: string, encryptedWriteKey: string) => Promise<void>;
   teeUnenrollFn: (oldIpnsName: string) => Promise<void>;
   deleteWriteGrantFn: (shareId: string) => Promise<void>;
 };
@@ -540,7 +540,7 @@ export async function mintFileKeyOnRotate(node: Node, _job: RotationJobRecord): 
  *
  * Phase 64 implementation (ROT-04/HIGH-3): for every non-revoked grant whose
  * `rootNodeId` is in the rotated set, ECIES-re-wrap the share-root readKey
- * under the new `readKey'` and re-issue a `readDescriptorRef` via
+ * under the new `readKey'` and re-issue a `encryptedReadKey` via
  * `callbacks.updateGrantFn`. Revoked recipients' rows are deleted via
  * `callbacks.deleteGrantFn`.
  *
@@ -568,7 +568,7 @@ export async function reMintGrantsRootedAt(
 
   for (const grant of grants) {
     if (grant.isRevoked) {
-      // Revoked recipient: delete the grant row. Do NOT re-mint a descriptor.
+      // Revoked recipient: delete the grant row. Do NOT re-mint an encrypted key.
       // T-64-04b: re-minting for a revoked recipient defeats revocation.
       await callbacks.deleteGrantFn(grant.shareId);
     } else {
@@ -576,8 +576,8 @@ export async function reMintGrantsRootedAt(
       // T-64-04c: always use wrapKey — never hand-roll key wrapping.
       // Do NOT zero newReadKey here — caller is terminal owner (D-09).
       const wrappedBytes = await wrapKey(newReadKey, grant.recipientPublicKey);
-      const readDescriptorRef = bytesToBase64(wrappedBytes);
-      await callbacks.updateGrantFn(grant.shareId, readDescriptorRef, newGeneration);
+      const encryptedReadKey = bytesToBase64(wrappedBytes);
+      await callbacks.updateGrantFn(grant.shareId, encryptedReadKey, newGeneration);
     }
   }
 }
@@ -2704,8 +2704,8 @@ export async function rotateWriteFromNode(params: {
         } catch (err) {
           throw new Error('rotateWriteFromNode: wrapKey for co-writer failed', { cause: err });
         }
-        const writeDescriptorRef = bytesToBase64(wrapped);
-        await callbacks.writeDescriptorRefPersistFn(grant.shareId, writeDescriptorRef);
+        const encryptedWriteKey = bytesToBase64(wrapped);
+        await callbacks.encryptedWriteKeyPersistFn(grant.shareId, encryptedWriteKey);
       }
     }
   } finally {

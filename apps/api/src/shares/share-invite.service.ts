@@ -3,6 +3,7 @@ import {
   NotFoundException,
   ForbiddenException,
   ConflictException,
+  BadRequestException,
   Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -10,6 +11,7 @@ import { Repository, DataSource } from 'typeorm';
 import { randomBytes } from 'crypto';
 import { Share } from './entities/share.entity';
 import { ShareInvite } from './entities/share-invite.entity';
+import { IpnsRecord } from '../ipns/entities/ipns-record.entity';
 import { CreateInviteDto } from './dto/create-invite.dto';
 import { ClaimInviteDto } from './dto/claim-invite.dto';
 
@@ -23,30 +25,42 @@ export class ShareInviteService {
   constructor(
     @InjectRepository(ShareInvite)
     private readonly inviteRepo: Repository<ShareInvite>,
+    @InjectRepository(IpnsRecord)
+    private readonly ipnsRecordRepo: Repository<IpnsRecord>,
     private readonly dataSource: DataSource
   ) {}
 
   /**
    * Create an invite record with a random token and 7-day expiry.
-   * The encryptedKey is the root readKey wrapped with an ephemeral public key.
+   * The encryptedReadKey is the root readKey wrapped with an ephemeral public key.
    */
   async createInvite(sharerId: string, dto: CreateInviteDto): Promise<ShareInvite> {
+    // D-01/SC#1 root-ownership gate (defense-in-depth, non-authoritative): reads the
+    // ipns_records creator marker to reject callers who never registered this node.
+    // The true access boundary is cryptographic (the sharer can only wrap keys they
+    // hold) — this is a cheap anti-spoof check atop that boundary. Per D-02, only
+    // shareRootIpnsName ownership is verified here; rootNodeId stays client-asserted.
+    const owned = await this.ipnsRecordRepo.findOne({
+      where: { ipnsName: dto.shareRootIpnsName, userId: sharerId },
+    });
+    if (!owned) {
+      throw new ForbiddenException('You are not the registered owner of this node');
+    }
+
     const token = randomBytes(16).toString('base64url');
     const expiresAt = new Date(Date.now() + INVITE_EXPIRY_MS);
 
     const invite = this.inviteRepo.create({
       token,
       sharerId,
-      rootIpnsName: dto.rootIpnsName,
+      shareRootIpnsName: dto.shareRootIpnsName,
       rootNodeId: dto.rootNodeId,
       rootGeneration: dto.rootGeneration ?? '0',
       // Client-supplied ECIES ciphertext (wrapped with the ephemeral pubkey).
       // Server never encrypts plaintext (zero-knowledge).
       itemNameEncrypted: dto.itemNameEncrypted ? Buffer.from(dto.itemNameEncrypted, 'hex') : null,
-      encryptedKey: Buffer.from(dto.encryptedKey, 'hex'),
-      writeDescriptorRef: dto.writeDescriptorRef
-        ? Buffer.from(dto.writeDescriptorRef, 'hex')
-        : null,
+      encryptedReadKey: Buffer.from(dto.encryptedReadKey, 'hex'),
+      encryptedWriteKey: dto.encryptedWriteKey ? Buffer.from(dto.encryptedWriteKey, 'hex') : null,
       status: 'active',
       maxClaims: 1,
       claimCount: 0,
@@ -77,7 +91,7 @@ export class ShareInviteService {
 
   /**
    * Get full invite data for the claim flow (authenticated).
-   * Returns encryptedKey, writeDescriptorRef, rootNodeId, rootIpnsName, rootGeneration.
+   * Returns encryptedReadKey, encryptedWriteKey, rootNodeId, shareRootIpnsName, rootGeneration.
    * Auto-expires and returns null if past TTL.
    */
   async getInviteForClaim(token: string): Promise<ShareInvite | null> {
@@ -98,12 +112,12 @@ export class ShareInviteService {
   }
 
   /**
-   * Claim an invite: atomic single-claim that mints one descriptor-ref Share (D-05).
+   * Claim an invite: atomic single-claim that mints one encrypted-key Share (D-05).
    *
    * Uses UPDATE ... WHERE to prevent race conditions on concurrent claims.
    * Self-claim prevention: sharer cannot claim their own invite.
    * Root identity is copied from the invite row, not from claimer input.
-   * Single descriptor-ref grant — no fan-out (DATA-01/DATA-02).
+   * Single encrypted-key grant — no fan-out (DATA-01/DATA-02).
    */
   async claimInvite(
     token: string,
@@ -133,6 +147,18 @@ export class ShareInviteService {
     // Self-claim prevention
     if (invite.sharerId === claimerId) {
       throw new ConflictException('Cannot claim your own invite');
+    }
+
+    // A write-capable invite MUST be claimed with a re-wrapped write key. Without this
+    // guard the invite is still atomically consumed below while the minted (or widened)
+    // share silently drops to read-only (encryptedWriteKey = null) — the recipient burns a
+    // write invite and permanently loses the write grant they were entitled to. Reject
+    // BEFORE the transaction so the invite is NOT consumed. Read-only invites are exempt;
+    // write authority stays invite-derived (T-66-E1).
+    if (invite.encryptedWriteKey !== null && !dto.encryptedWriteKey) {
+      throw new BadRequestException(
+        'This invite grants write access — a re-wrapped encryptedWriteKey is required to claim it'
+      );
     }
 
     // Run atomic claim + Share creation inside a transaction
@@ -167,31 +193,70 @@ export class ShareInviteService {
       });
 
       if (existingShare) {
-        this.logger.warn(
-          `Invite claim for ${invite.rootIpnsName}: share already exists between ${invite.sharerId} and ${claimerId}`
-        );
+        // D-07/SC#2: a re-claim over an already-existing share applies the later
+        // invite's grant ONLY if it WIDENS authority (read→write, or a higher
+        // rootGeneration). A same-level or lower re-claim is a true no-op — no
+        // manager.save, no field mutation. Write authority is presence-derived
+        // (T-66-E1): every field write below is individually gated so a
+        // non-widening re-claim can never null out an existing encryptedWriteKey.
+        // This runs AFTER the atomic claim UPDATE above (already committed inside
+        // this same transaction manager) — the invite is validly consumed for a
+        // legitimate widen, and a redundant re-claim still burns the invite without
+        // silently dropping (or downgrading) the existing grant.
+        const inviteGrantsWrite = invite.encryptedWriteKey !== null;
+        const existingHasWrite = existingShare.encryptedWriteKey !== null;
+        const isWriteUpgrade = inviteGrantsWrite && !existingHasWrite;
+        const isGenerationBump =
+          BigInt(invite.rootGeneration) > BigInt(existingShare.rootGeneration);
+
+        if (isWriteUpgrade || isGenerationBump) {
+          existingShare.encryptedReadKey = Buffer.from(dto.encryptedReadKey, 'hex');
+          // Refresh the write key when the claimer supplies one AND write authority is
+          // (re)established at the new generation: either a read→write upgrade, OR a
+          // generation bump on an already-write-capable share via a write-capable invite.
+          // Without the generation-bump arm, a bump would advance encryptedReadKey +
+          // rootGeneration while leaving encryptedWriteKey wrapped for the OLD generation's
+          // key material — the recipient would silently lose write capability post-rotation.
+          // Still presence-gated on dto.encryptedWriteKey so a non-widening / read-only
+          // re-claim can never null out an existing write grant (T-66-E1).
+          if (
+            (isWriteUpgrade || (isGenerationBump && inviteGrantsWrite)) &&
+            dto.encryptedWriteKey
+          ) {
+            existingShare.encryptedWriteKey = Buffer.from(dto.encryptedWriteKey, 'hex');
+          }
+          if (isGenerationBump) {
+            existingShare.rootGeneration = invite.rootGeneration;
+          }
+          await manager.save(existingShare);
+        } else {
+          this.logger.warn(
+            `Invite claim for ${invite.shareRootIpnsName}: share already exists between ${invite.sharerId} and ${claimerId} and does not widen authority — no-op`
+          );
+        }
+
         return { shareId: existingShare.id };
       }
 
-      // Mint exactly one descriptor-ref Share (D-05).
+      // Mint exactly one encrypted-key Share (D-05).
       // Root identity is sourced from the invite row to prevent spoofing (T-66-S1).
       // Write grant is presence-derived from the INVITE, not claimer input (T-66-E1):
-      // a read-only invite (invite.writeDescriptorRef === null) can never yield a
-      // write grant even if the claimer supplies a writeDescriptorRef in the claim
-      // body. The stored value is still the claimer's re-wrapped ref (wrapped for the
+      // a read-only invite (invite.encryptedWriteKey === null) can never yield a
+      // write grant even if the claimer supplies an encryptedWriteKey in the claim
+      // body. The stored value is still the claimer's re-wrapped key (wrapped for the
       // recipient's pubkey); the invite only gates whether write authority exists.
       // itemNameEncrypted is re-wrapped client-side for the recipient's real pubkey.
-      const inviteGrantsWrite = invite.writeDescriptorRef !== null;
+      const inviteGrantsWrite = invite.encryptedWriteKey !== null;
       const share = manager.create(Share, {
         sharerId: invite.sharerId,
         recipientId: claimerId,
-        readDescriptorRef: Buffer.from(dto.readDescriptorRef, 'hex'),
-        writeDescriptorRef:
-          inviteGrantsWrite && dto.writeDescriptorRef
-            ? Buffer.from(dto.writeDescriptorRef, 'hex')
+        encryptedReadKey: Buffer.from(dto.encryptedReadKey, 'hex'),
+        encryptedWriteKey:
+          inviteGrantsWrite && dto.encryptedWriteKey
+            ? Buffer.from(dto.encryptedWriteKey, 'hex')
             : null,
         rootNodeId: invite.rootNodeId,
-        rootIpnsName: invite.rootIpnsName,
+        shareRootIpnsName: invite.shareRootIpnsName,
         rootGeneration: invite.rootGeneration,
         itemNameEncrypted: dto.itemNameEncrypted ? Buffer.from(dto.itemNameEncrypted, 'hex') : null,
         hiddenByRecipient: false,
@@ -207,11 +272,11 @@ export class ShareInviteService {
    * Get active invites for a specific item created by a sharer.
    * Auto-cleans expired invites during the query.
    */
-  async getInvitesForItem(sharerId: string, rootIpnsName: string): Promise<ShareInvite[]> {
+  async getInvitesForItem(sharerId: string, shareRootIpnsName: string): Promise<ShareInvite[]> {
     const invites = await this.inviteRepo.find({
       where: {
         sharerId,
-        rootIpnsName,
+        shareRootIpnsName,
         status: 'active',
       },
       order: { createdAt: 'DESC' },

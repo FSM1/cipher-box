@@ -85,8 +85,8 @@ pub async fn revoke_shares_for_items(
 
 /// A single row from `GET /shares/sent` — mirrors the server's
 /// `SentShareResponseDto` (`apps/api/src/shares/dto/share-response.dto.ts`)
-/// field-for-field. `root_ipns_name` is the value consumed downstream to
-/// build `activeGrantRootIpnsNames`.
+/// field-for-field. `share_root_ipns_name` is the value consumed downstream
+/// to build `activeGrantRootIpnsNames`.
 ///
 /// Note: unlike some domain rows, revoked shares are hard-deleted server-side
 /// (see `revoke_shares_for_items`), so there is no `revoked`/status field on
@@ -99,15 +99,15 @@ pub struct SentShareResponse {
     pub share_id: String,
     /// Recipient secp256k1 public key (0x04...).
     pub recipient_public_key: String,
-    /// Hex-encoded ECIES descriptor ref for read access.
-    pub read_descriptor_ref: String,
-    /// Hex-encoded ECIES descriptor ref for write access, or `None` for
+    /// Hex-encoded ECIES encrypted key for read access.
+    pub encrypted_read_key: String,
+    /// Hex-encoded ECIES encrypted key for write access, or `None` for
     /// read-only shares.
-    pub write_descriptor_ref: Option<String>,
+    pub encrypted_write_key: Option<String>,
     /// UUID of the root shared node.
     pub root_node_id: String,
     /// IPNS name (k51...) of the root shared node — the grant root.
-    pub root_ipns_name: String,
+    pub share_root_ipns_name: String,
     /// Generation of the root node at share creation (numeric string).
     pub root_generation: String,
     /// Hex-encoded ECIES ciphertext of the display name, or `None` if not
@@ -253,18 +253,18 @@ mod tests {
         let json = r#"{
             "shareId": "share-1",
             "recipientPublicKey": "0x04abc",
-            "readDescriptorRef": "deadbeef",
-            "writeDescriptorRef": null,
+            "encryptedReadKey": "deadbeef",
+            "encryptedWriteKey": null,
             "rootNodeId": "node-1",
-            "rootIpnsName": "k51one",
+            "shareRootIpnsName": "k51one",
             "rootGeneration": "3",
             "itemNameEncrypted": null,
             "createdAt": "2026-01-01T00:00:00.000Z"
         }"#;
         let share: SentShareResponse = serde_json::from_str(json).unwrap();
         assert_eq!(share.share_id, "share-1");
-        assert_eq!(share.root_ipns_name, "k51one");
-        assert_eq!(share.write_descriptor_ref, None);
+        assert_eq!(share.share_root_ipns_name, "k51one");
+        assert_eq!(share.encrypted_write_key, None);
         assert_eq!(share.item_name_encrypted, None);
     }
 

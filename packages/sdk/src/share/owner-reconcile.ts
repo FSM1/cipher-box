@@ -49,8 +49,8 @@ export type GrantRow = {
 export type OwnerReconcileTransport = {
   /** Returns every grant the current user (owner) has sent. */
   listSentGrants: () => Promise<GrantRow[]>;
-  /** Persists the re-minted ECIES-wrapped descriptor for a surviving recipient. */
-  updateGrant: (shareId: string, readDescriptorRef: string, generation: number) => Promise<void>;
+  /** Persists the re-minted ECIES-wrapped encrypted key for a surviving recipient. */
+  updateGrant: (shareId: string, encryptedReadKey: string, generation: number) => Promise<void>;
   /** Removes a revoked recipient's grant row. */
   deleteGrant: (shareId: string) => Promise<void>;
 };
@@ -77,8 +77,8 @@ export function buildGrantRemintCallbacks(
           isRevoked: grant.isRevoked,
         }));
     },
-    updateGrantFn: (shareId, readDescriptorRef, newGeneration) =>
-      transport.updateGrant(shareId, readDescriptorRef, newGeneration),
+    updateGrantFn: (shareId, encryptedReadKey, newGeneration) =>
+      transport.updateGrant(shareId, encryptedReadKey, newGeneration),
     deleteGrantFn: (shareId) => transport.deleteGrant(shareId),
   };
 }

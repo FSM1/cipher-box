@@ -63,8 +63,8 @@ const FILE_CONTENT = {
   versions: [],
 };
 
-/** Common grant parameters (ECIES-wrapped readDescriptorRef). */
-const GRANT_DESCRIPTOR_REF = btoa('wrapped-root-read-key'); // base64 placeholder
+/** Common grant parameters (ECIES-wrapped encryptedReadKey). */
+const GRANT_ENCRYPTED_READ_KEY = btoa('wrapped-root-read-key'); // base64 placeholder
 const RECIPIENT_PRIV_KEY = new Uint8Array(32).fill(0x11);
 const SHARE_ROOT_READ_KEY = new Uint8Array(32).fill(0x22);
 
@@ -135,9 +135,9 @@ describe('navigateReadChain', () => {
     mockFns.unsealNode.mockResolvedValueOnce(fileNode);
 
     const result = await navigateReadChain({
-      readDescriptorRef: GRANT_DESCRIPTOR_REF,
+      encryptedReadKey: GRANT_ENCRYPTED_READ_KEY,
       recipientPrivKey: RECIPIENT_PRIV_KEY,
-      rootIpnsName: ROOT_IPNS,
+      shareRootIpnsName: ROOT_IPNS,
       rootExpectedGeneration: 0,
       path: [FILE_LEAF_IPNS],
       ctx,
@@ -222,9 +222,9 @@ describe('navigateReadChain', () => {
     mockFns.unsealChildReadKey.mockResolvedValueOnce(subReadKey).mockResolvedValueOnce(fileReadKey);
 
     const result = await navigateReadChain({
-      readDescriptorRef: GRANT_DESCRIPTOR_REF,
+      encryptedReadKey: GRANT_ENCRYPTED_READ_KEY,
       recipientPrivKey: RECIPIENT_PRIV_KEY,
-      rootIpnsName: ROOT_IPNS,
+      shareRootIpnsName: ROOT_IPNS,
       rootExpectedGeneration: 0,
       path: [CHILD_FOLDER_IPNS, FILE_LEAF_IPNS],
       ctx,
@@ -249,9 +249,9 @@ describe('navigateReadChain', () => {
     mockFns.fetchFromIpfs.mockResolvedValueOnce(makePublishedBytes('root-id', 'folder', 2));
 
     const result = await navigateReadChain({
-      readDescriptorRef: GRANT_DESCRIPTOR_REF,
+      encryptedReadKey: GRANT_ENCRYPTED_READ_KEY,
       recipientPrivKey: RECIPIENT_PRIV_KEY,
-      rootIpnsName: ROOT_IPNS,
+      shareRootIpnsName: ROOT_IPNS,
       rootExpectedGeneration: 1,
       path: [FILE_LEAF_IPNS],
       ctx,
@@ -272,9 +272,9 @@ describe('navigateReadChain', () => {
     mockFns.resolveIpnsRecord.mockResolvedValueOnce(null);
 
     const result = await navigateReadChain({
-      readDescriptorRef: GRANT_DESCRIPTOR_REF,
+      encryptedReadKey: GRANT_ENCRYPTED_READ_KEY,
       recipientPrivKey: RECIPIENT_PRIV_KEY,
-      rootIpnsName: ROOT_IPNS,
+      shareRootIpnsName: ROOT_IPNS,
       rootExpectedGeneration: 0,
       path: [FILE_LEAF_IPNS],
       ctx,
@@ -307,9 +307,9 @@ describe('navigateReadChain', () => {
     mockFns.unsealNode.mockResolvedValueOnce(rootNodeEmpty);
 
     const result = await navigateReadChain({
-      readDescriptorRef: GRANT_DESCRIPTOR_REF,
+      encryptedReadKey: GRANT_ENCRYPTED_READ_KEY,
       recipientPrivKey: RECIPIENT_PRIV_KEY,
-      rootIpnsName: ROOT_IPNS,
+      shareRootIpnsName: ROOT_IPNS,
       rootExpectedGeneration: 0,
       path: [FILE_LEAF_IPNS],
       ctx,
@@ -359,9 +359,9 @@ describe('navigateReadChain', () => {
 
     await expect(
       navigateReadChain({
-        readDescriptorRef: GRANT_DESCRIPTOR_REF,
+        encryptedReadKey: GRANT_ENCRYPTED_READ_KEY,
         recipientPrivKey: RECIPIENT_PRIV_KEY,
-        rootIpnsName: ROOT_IPNS,
+        shareRootIpnsName: ROOT_IPNS,
         rootExpectedGeneration: 0,
         path: [FILE_LEAF_IPNS],
         ctx,
@@ -423,9 +423,9 @@ describe('navigateReadChain', () => {
     mockFns.unsealNode.mockResolvedValueOnce(fileNode);
 
     await navigateReadChain({
-      readDescriptorRef: GRANT_DESCRIPTOR_REF,
+      encryptedReadKey: GRANT_ENCRYPTED_READ_KEY,
       recipientPrivKey: RECIPIENT_PRIV_KEY,
-      rootIpnsName: ROOT_IPNS,
+      shareRootIpnsName: ROOT_IPNS,
       rootExpectedGeneration: 0,
       path: [FILE_LEAF_IPNS],
       ctx,

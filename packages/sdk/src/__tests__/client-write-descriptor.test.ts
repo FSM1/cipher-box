@@ -1,14 +1,14 @@
 /**
- * TDD tests for 68.1-18: resolveShareWriteDescriptor (SHARE-WRITE-KEY foundation).
+ * TDD tests for 68.1-18: resolveShareEncryptedWriteKey (SHARE-WRITE-KEY foundation).
  *
  * Closes the first half of the SHARE-WRITE-KEY web-wiring gap documented in
  * 68.1-11-SUMMARY.md's "Known Gaps": under the node/v3 write-chain, a shared
  * item's own writeKey is sealed inside its PARENT's write-body
  * (`WriteChildRef.writeKeySealed`, under the parent's writeKey) -- there is no
- * way to derive it from the parent's readKey alone. `resolveShareWriteDescriptor`
+ * way to derive it from the parent's readKey alone. `resolveShareEncryptedWriteKey`
  * walks the owned write-chain (mirrors `resolveFileWriteChainKeys`'s write-key
  * walk) and ECIES-wraps the item's writeKey for a recipient, returning only the
- * wrapped hex descriptor -- raw writeKey material never leaves the SDK.
+ * wrapped hex encrypted key -- raw writeKey material never leaves the SDK.
  *
  * `wrapKey`/`unwrapKey` are mocked with a deterministic, INVERTIBLE fake
  * (prefix-tag + copy) instead of the real secp256k1/eciesjs stack -- @noble/secp256k1
@@ -151,27 +151,27 @@ async function setupWriteCapableParentWithItem(
   return { itemWriteKey };
 }
 
-describe('CipherBoxClient.resolveShareWriteDescriptor (68.1-18)', () => {
+describe('CipherBoxClient.resolveShareEncryptedWriteKey (68.1-18)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('returns a wrapped hex descriptor that unwraps to the child writeKey (round-trip)', async () => {
+  it('returns a wrapped hex encrypted key that unwraps to the child writeKey (round-trip)', async () => {
     const client = new CipherBoxClient(createTestConfig());
     const { itemWriteKey } = await setupWriteCapableParentWithItem(client);
 
-    const descriptorHex = await client.resolveShareWriteDescriptor(
+    const encryptedWriteKeyHex = await client.resolveShareEncryptedWriteKey(
       PARENT_IPNS,
       ITEM_IPNS,
       RECIPIENT_PUBLIC_KEY
     );
 
-    expect(typeof descriptorHex).toBe('string');
-    expect(descriptorHex.length).toBeGreaterThan(0);
-    expect(descriptorHex).toMatch(/^[0-9a-f]+$/);
+    expect(typeof encryptedWriteKeyHex).toBe('string');
+    expect(encryptedWriteKeyHex.length).toBeGreaterThan(0);
+    expect(encryptedWriteKeyHex).toMatch(/^[0-9a-f]+$/);
 
     const wrappedBytes = new Uint8Array(
-      descriptorHex.match(/.{1,2}/g)!.map((byte) => parseInt(byte, 16))
+      encryptedWriteKeyHex.match(/.{1,2}/g)!.map((byte) => parseInt(byte, 16))
     );
     const unwrapped = await cryptoMod.unwrapKey(wrappedBytes, RECIPIENT_PRIVATE_KEY);
     expect(unwrapped).toEqual(itemWriteKey);
@@ -182,7 +182,7 @@ describe('CipherBoxClient.resolveShareWriteDescriptor (68.1-18)', () => {
     await setupWriteCapableParentWithItem(client, { parentWriteKey: new Uint8Array(32) });
 
     await expect(
-      client.resolveShareWriteDescriptor(PARENT_IPNS, ITEM_IPNS, RECIPIENT_PUBLIC_KEY)
+      client.resolveShareEncryptedWriteKey(PARENT_IPNS, ITEM_IPNS, RECIPIENT_PUBLIC_KEY)
     ).rejects.toThrow(/no writeKey|write-capable parent/);
   });
 
@@ -191,7 +191,7 @@ describe('CipherBoxClient.resolveShareWriteDescriptor (68.1-18)', () => {
     await setupWriteCapableParentWithItem(client, { includeWriteChildRef: false });
 
     await expect(
-      client.resolveShareWriteDescriptor(PARENT_IPNS, ITEM_IPNS, RECIPIENT_PUBLIC_KEY)
+      client.resolveShareEncryptedWriteKey(PARENT_IPNS, ITEM_IPNS, RECIPIENT_PUBLIC_KEY)
     ).rejects.toThrow(/WriteChildRef/);
   });
 
@@ -208,7 +208,7 @@ describe('CipherBoxClient.resolveShareWriteDescriptor (68.1-18)', () => {
       return out;
     });
 
-    await client.resolveShareWriteDescriptor(PARENT_IPNS, ITEM_IPNS, RECIPIENT_PUBLIC_KEY);
+    await client.resolveShareEncryptedWriteKey(PARENT_IPNS, ITEM_IPNS, RECIPIENT_PUBLIC_KEY);
 
     expect(capturedKey).not.toBeNull();
     expect(capturedKey!.every((b) => b === 0)).toBe(true);

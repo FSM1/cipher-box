@@ -41,14 +41,14 @@
  *    alongside localGrantRecord, not instead of it.
  *
  * `localGrantRecord` — the client's own record of a grant it holds on this
- *    node's ancestry. When non-null, localGrantRecord.rootIpnsName is the
+ *    node's ancestry. When non-null, localGrantRecord.shareRootIpnsName is the
  *    anti-malicious-relay cross-check (§3.9): if that IPNS name appears in
  *    the ancestry, the node is covered regardless of what the relay reports.
  */
 export type CoverageParams = {
   nodeAncestorIpnsNames: string[];
   activeGrantRootIpnsNames: Set<string>;
-  localGrantRecord: { rootIpnsName: string } | null;
+  localGrantRecord: { shareRootIpnsName: string } | null;
 };
 
 /**
@@ -82,7 +82,7 @@ export type ScopeExitDeps = {
  * D-08: pure sdk-core function — no I/O, no durable state, no async.
  * §3.9: two independent sources are cross-checked:
  *   1. activeGrantRootIpnsNames (relay-supplied, completeness aid)
- *   2. localGrantRecord.rootIpnsName (client-authoritative, anti-malicious-relay)
+ *   2. localGrantRecord.shareRootIpnsName (client-authoritative, anti-malicious-relay)
  *
  * Either source covering any ancestor in nodeAncestorIpnsNames returns true.
  * Short-circuits at the first match to minimise work on hot delete/move/rename paths.
@@ -104,7 +104,7 @@ export function hasCoveringGrant(params: CoverageParams): boolean {
       return true;
     }
     // Check client's own local grant record (anti-malicious-relay cross-check — §3.9 / T-63-17)
-    if (localGrantRecord !== null && localGrantRecord.rootIpnsName === ancestor) {
+    if (localGrantRecord !== null && localGrantRecord.shareRootIpnsName === ancestor) {
       return true;
     }
   }

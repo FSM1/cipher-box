@@ -1375,7 +1375,7 @@
     },
     "/shares": {
       "post": {
-        "description": "Share an encrypted folder or file with another user. The readDescriptorRef is the root readKey + metadata wrapped for the recipient via ECIES.",
+        "description": "Share an encrypted folder or file with another user. The encryptedReadKey is the root readKey + metadata wrapped for the recipient via ECIES.",
         "operationId": "SharesController_createShare",
         "parameters": [],
         "requestBody": {
@@ -1401,6 +1401,9 @@
           },
           "401": {
             "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Caller is not the registered owner of the shared node"
           },
           "404": {
             "description": "Recipient not found"
@@ -1684,7 +1687,7 @@
     },
     "/shares/{shareId}/grant": {
       "patch": {
-        "description": "Persist a rotated readDescriptorRef and rootGeneration on an existing share. Only the sharer can update it; the server never re-encrypts and stores the client-supplied ciphertext as-is.",
+        "description": "Persist a rotated encryptedReadKey and rootGeneration on an existing share. Only the sharer can update it; the server never re-encrypts and stores the client-supplied ciphertext as-is.",
         "operationId": "SharesController_updateGrant",
         "parameters": [
           {
@@ -1710,6 +1713,9 @@
           "204": {
             "description": "Grant updated"
           },
+          "400": {
+            "description": "Invalid request body"
+          },
           "401": {
             "description": "Unauthorized"
           },
@@ -1725,7 +1731,7 @@
             "bearer": []
           }
         ],
-        "summary": "Update a share grant descriptor",
+        "summary": "Update a share grant key",
         "tags": ["shares"]
       }
     },
@@ -1807,7 +1813,7 @@
     },
     "/invites/{token}/claim": {
       "post": {
-        "description": "Claim an invite by providing the descriptor ref re-wrapped for the recipient. Creates a single Share row. Single-claim enforced atomically.",
+        "description": "Claim an invite by providing the encrypted key re-wrapped for the recipient. Creates a single Share row. Single-claim enforced atomically.",
         "operationId": "InvitesController_claimInvite",
         "parameters": [
           {
@@ -1840,6 +1846,9 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "A write-capable invite was claimed without a re-wrapped encryptedWriteKey"
           },
           "401": {
             "description": "Unauthorized"
@@ -1888,6 +1897,9 @@
           },
           "401": {
             "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Caller is not the registered owner of the shared node"
           }
         },
         "security": [
@@ -1903,7 +1915,7 @@
         "operationId": "ShareInvitesController_listInvites",
         "parameters": [
           {
-            "name": "rootIpnsName",
+            "name": "shareRootIpnsName",
             "required": true,
             "in": "query",
             "description": "IPNS name of the root shared node",
@@ -2992,19 +3004,19 @@
             "description": "Recipient secp256k1 public key (uncompressed, 0x04... format)",
             "example": "04abc123..."
           },
-          "readDescriptorRef": {
+          "encryptedReadKey": {
             "type": "string",
-            "description": "Hex-encoded ECIES descriptor ref for read access (wrapped root readKey + metadata). Server never sees plaintext (zero-knowledge)."
+            "description": "Hex-encoded ECIES encrypted key for read access (wrapped root readKey + metadata). Server never sees plaintext (zero-knowledge)."
           },
-          "writeDescriptorRef": {
+          "encryptedWriteKey": {
             "type": "string",
-            "description": "Hex-encoded ECIES descriptor ref for write access. Presence signals a write grant (D-09). Omit for read-only shares."
+            "description": "Hex-encoded ECIES encrypted key for write access. Presence signals a write grant (D-09). Omit for read-only shares."
           },
           "rootNodeId": {
             "type": "string",
             "description": "UUID of the root shared node (folder or file)"
           },
-          "rootIpnsName": {
+          "shareRootIpnsName": {
             "type": "string",
             "description": "IPNS name (k51...) of the root shared node"
           },
@@ -3018,7 +3030,7 @@
             "description": "Hex-encoded ECIES ciphertext of the display name wrapped for recipient. Optional: omit if recipient can derive the name from their filesystem."
           }
         },
-        "required": ["recipientPublicKey", "readDescriptorRef", "rootNodeId", "rootIpnsName"]
+        "required": ["recipientPublicKey", "encryptedReadKey", "rootNodeId", "shareRootIpnsName"]
       },
       "CreateShareResponseDto": {
         "type": "object",
@@ -3031,20 +3043,20 @@
             "type": "string",
             "description": "Recipient secp256k1 public key (0x04...)"
           },
-          "readDescriptorRef": {
+          "encryptedReadKey": {
             "type": "string",
-            "description": "Hex-encoded ECIES descriptor ref for read access"
+            "description": "Hex-encoded ECIES encrypted key for read access"
           },
-          "writeDescriptorRef": {
+          "encryptedWriteKey": {
             "type": "string",
-            "description": "Hex-encoded ECIES descriptor ref for write access, or null for read-only shares",
+            "description": "Hex-encoded ECIES encrypted key for write access, or null for read-only shares",
             "nullable": true
           },
           "rootNodeId": {
             "type": "string",
             "description": "UUID of the root shared node"
           },
-          "rootIpnsName": {
+          "shareRootIpnsName": {
             "type": "string",
             "description": "IPNS name (k51...) of the root shared node"
           },
@@ -3066,10 +3078,10 @@
         "required": [
           "shareId",
           "recipientPublicKey",
-          "readDescriptorRef",
-          "writeDescriptorRef",
+          "encryptedReadKey",
+          "encryptedWriteKey",
           "rootNodeId",
-          "rootIpnsName",
+          "shareRootIpnsName",
           "rootGeneration",
           "itemNameEncrypted",
           "createdAt"
@@ -3113,20 +3125,20 @@
             "type": "string",
             "description": "Sharer secp256k1 public key (0x04...)"
           },
-          "readDescriptorRef": {
+          "encryptedReadKey": {
             "type": "string",
-            "description": "Hex-encoded ECIES descriptor ref for read access"
+            "description": "Hex-encoded ECIES encrypted key for read access"
           },
-          "writeDescriptorRef": {
+          "encryptedWriteKey": {
             "type": "string",
-            "description": "Hex-encoded ECIES descriptor ref for write access, or null for read-only shares",
+            "description": "Hex-encoded ECIES encrypted key for write access, or null for read-only shares",
             "nullable": true
           },
           "rootNodeId": {
             "type": "string",
             "description": "UUID of the root shared node"
           },
-          "rootIpnsName": {
+          "shareRootIpnsName": {
             "type": "string",
             "description": "IPNS name (k51...) of the root shared node"
           },
@@ -3147,10 +3159,10 @@
         "required": [
           "shareId",
           "sharerPublicKey",
-          "readDescriptorRef",
-          "writeDescriptorRef",
+          "encryptedReadKey",
+          "encryptedWriteKey",
           "rootNodeId",
-          "rootIpnsName",
+          "shareRootIpnsName",
           "rootGeneration",
           "itemNameEncrypted",
           "createdAt"
@@ -3183,20 +3195,20 @@
             "type": "string",
             "description": "Recipient secp256k1 public key (0x04...)"
           },
-          "readDescriptorRef": {
+          "encryptedReadKey": {
             "type": "string",
-            "description": "Hex-encoded ECIES descriptor ref for read access"
+            "description": "Hex-encoded ECIES encrypted key for read access"
           },
-          "writeDescriptorRef": {
+          "encryptedWriteKey": {
             "type": "string",
-            "description": "Hex-encoded ECIES descriptor ref for write access, or null for read-only shares",
+            "description": "Hex-encoded ECIES encrypted key for write access, or null for read-only shares",
             "nullable": true
           },
           "rootNodeId": {
             "type": "string",
             "description": "UUID of the root shared node"
           },
-          "rootIpnsName": {
+          "shareRootIpnsName": {
             "type": "string",
             "description": "IPNS name (k51...) of the root shared node"
           },
@@ -3217,10 +3229,10 @@
         "required": [
           "shareId",
           "recipientPublicKey",
-          "readDescriptorRef",
-          "writeDescriptorRef",
+          "encryptedReadKey",
+          "encryptedWriteKey",
           "rootNodeId",
-          "rootIpnsName",
+          "shareRootIpnsName",
           "rootGeneration",
           "itemNameEncrypted",
           "createdAt"
@@ -3256,25 +3268,25 @@
       "UpdateGrantDto": {
         "type": "object",
         "properties": {
-          "readDescriptorRef": {
+          "encryptedReadKey": {
             "type": "string",
-            "description": "Hex-encoded ECIES descriptor ref for read access, re-wrapped for the recipient after an owner rotation. The server stores the client-supplied ciphertext as-is."
+            "description": "Hex-encoded ECIES encrypted key for read access, re-wrapped for the recipient after an owner rotation. The server stores the client-supplied ciphertext as-is."
           },
           "rootGeneration": {
             "type": "string",
-            "description": "Generation of the root node the rotated descriptor is rooted at (numeric string)"
+            "description": "Generation of the root node the rotated key is rooted at (numeric string)"
           },
-          "writeDescriptorRef": {
+          "encryptedWriteKey": {
             "type": "string",
-            "description": "Hex-encoded ECIES descriptor ref for write access, set to upgrade a read-only share to write (read->write, D-09). Omit to leave any existing writeDescriptorRef unchanged (e.g. a read-descriptor-rotation-only call). Mutually exclusive with clearWriteDescriptor."
+            "description": "Hex-encoded ECIES encrypted key for write access, set to upgrade a read-only share to write (read->write, D-09). Omit to leave any existing encryptedWriteKey unchanged (e.g. a read-key-rotation-only call). Mutually exclusive with clearEncryptedWriteKey."
           },
-          "clearWriteDescriptor": {
+          "clearEncryptedWriteKey": {
             "type": "boolean",
-            "description": "When true, clears any existing writeDescriptorRef (write->read downgrade). Omit/false to leave writeDescriptorRef unchanged. Mutually exclusive with writeDescriptorRef.",
+            "description": "When true, clears any existing encryptedWriteKey (write->read downgrade). Omit/false to leave encryptedWriteKey unchanged. Mutually exclusive with encryptedWriteKey.",
             "default": false
           }
         },
-        "required": ["readDescriptorRef", "rootGeneration"]
+        "required": ["encryptedReadKey", "rootGeneration"]
       },
       "InviteStatusResponseDto": {
         "type": "object",
@@ -3295,20 +3307,20 @@
             "enum": ["active", "expired", "claimed", "revoked"],
             "description": "Current status of the invite"
           },
-          "encryptedKey": {
+          "encryptedReadKey": {
             "type": "string",
             "description": "Hex-encoded root readKey wrapped with ephemeral public key"
           },
-          "writeDescriptorRef": {
+          "encryptedWriteKey": {
             "type": "string",
-            "description": "Hex-encoded ECIES descriptor ref for write access wrapped with ephemeral public key. Null for read-only invites.",
+            "description": "Hex-encoded ECIES encrypted key for write access wrapped with ephemeral public key. Null for read-only invites.",
             "nullable": true
           },
           "rootNodeId": {
             "type": "string",
             "description": "UUID of the root shared node"
           },
-          "rootIpnsName": {
+          "shareRootIpnsName": {
             "type": "string",
             "description": "IPNS name of the root shared node"
           },
@@ -3324,10 +3336,10 @@
         },
         "required": [
           "status",
-          "encryptedKey",
-          "writeDescriptorRef",
+          "encryptedReadKey",
+          "encryptedWriteKey",
           "rootNodeId",
-          "rootIpnsName",
+          "shareRootIpnsName",
           "rootGeneration",
           "itemNameEncrypted"
         ]
@@ -3335,20 +3347,20 @@
       "ClaimInviteDto": {
         "type": "object",
         "properties": {
-          "readDescriptorRef": {
+          "encryptedReadKey": {
             "type": "string",
-            "description": "Hex-encoded ECIES descriptor ref for read access re-wrapped for the recipient (claimer re-wraps the root readKey from the ephemeral key to their own pubkey). Server never sees plaintext (zero-knowledge)."
+            "description": "Hex-encoded ECIES encrypted key for read access re-wrapped for the recipient (claimer re-wraps the root readKey from the ephemeral key to their own pubkey). Server never sees plaintext (zero-knowledge)."
           },
-          "writeDescriptorRef": {
+          "encryptedWriteKey": {
             "type": "string",
-            "description": "Hex-encoded ECIES descriptor ref for write access re-wrapped for the recipient. Omit for read-only claim."
+            "description": "Hex-encoded ECIES encrypted key for write access re-wrapped for the recipient. Omit for read-only claim."
           },
           "itemNameEncrypted": {
             "type": "string",
             "description": "Hex-encoded ECIES ciphertext of the display name re-wrapped for the recipient. Optional: omit if recipient can derive the name from their filesystem."
           }
         },
-        "required": ["readDescriptorRef"]
+        "required": ["encryptedReadKey"]
       },
       "ClaimInviteResponseDto": {
         "type": "object",
@@ -3363,7 +3375,7 @@
       "CreateInviteDto": {
         "type": "object",
         "properties": {
-          "rootIpnsName": {
+          "shareRootIpnsName": {
             "type": "string",
             "description": "IPNS name (k51...) of the root shared node"
           },
@@ -3380,16 +3392,16 @@
             "type": "string",
             "description": "Hex-encoded ECIES ciphertext of the display name wrapped with the ephemeral public key. Server never sees plaintext (zero-knowledge)."
           },
-          "encryptedKey": {
+          "encryptedReadKey": {
             "type": "string",
             "description": "Hex-encoded root readKey wrapped with the EPHEMERAL public key via ECIES. Server never sees the ephemeral private key — it lives only in the URL fragment."
           },
-          "writeDescriptorRef": {
+          "encryptedWriteKey": {
             "type": "string",
-            "description": "Hex-encoded ECIES descriptor ref for write access wrapped with the EPHEMERAL public key. Omit for read-only invites."
+            "description": "Hex-encoded ECIES encrypted key for write access wrapped with the EPHEMERAL public key. Omit for read-only invites."
           }
         },
-        "required": ["rootIpnsName", "rootNodeId", "encryptedKey"]
+        "required": ["shareRootIpnsName", "rootNodeId", "encryptedReadKey"]
       },
       "InviteResponseDto": {
         "type": "object",
@@ -3402,7 +3414,7 @@
             "type": "string",
             "description": "Invite token (URL-safe base64)"
           },
-          "rootIpnsName": {
+          "shareRootIpnsName": {
             "type": "string",
             "description": "IPNS name of the root shared node"
           },
@@ -3437,7 +3449,7 @@
         "required": [
           "id",
           "token",
-          "rootIpnsName",
+          "shareRootIpnsName",
           "rootNodeId",
           "rootGeneration",
           "itemNameEncrypted",

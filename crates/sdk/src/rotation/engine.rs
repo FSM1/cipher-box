@@ -124,7 +124,7 @@ pub struct GrantRow {
     pub recipient_public_key: Vec<u8>,
     /// `true` when this grant has been revoked; a revoked recipient's row
     /// is deleted, NEVER re-minted (T-64-04b parity — re-minting a revoked
-    /// recipient's descriptor would defeat revocation).
+    /// recipient's encrypted key would defeat revocation).
     pub is_revoked: bool,
 }
 
@@ -181,13 +181,13 @@ pub trait RotationDeps {
         Ok(Vec::new())
     }
 
-    /// HIGH-3: persists a re-minted `readDescriptorRef` (ECIES-wrapped new
+    /// HIGH-3: persists a re-minted `encryptedReadKey` (ECIES-wrapped new
     /// readKey) + the new generation for a non-revoked recipient's grant
     /// row. Default no-op.
     async fn update_grant(
         &self,
         _share_id: &str,
-        _read_descriptor_ref: &str,
+        _encrypted_read_key: &str,
         _new_generation: u32,
     ) -> Result<(), RotationError> {
         Ok(())
@@ -580,7 +580,7 @@ fn mint_file_key_on_rotate() -> Zeroizing<[u8; 32]> {
     key
 }
 
-/// HIGH-3 (T-69-12-02): re-mints the `readDescriptorRef` for every
+/// HIGH-3 (T-69-12-02): re-mints the `encryptedReadKey` for every
 /// non-revoked grant rooted at `node_id` — including an inner grant rooted
 /// at a subtree node — and hard-deletes a revoked recipient's row.
 ///
@@ -603,8 +603,8 @@ async fn re_mint_grants_rooted_at<D: RotationDeps>(
     let grants = deps.query_grants_rooted_at(node_id).await?;
     for grant in grants {
         if grant.is_revoked {
-            // T-64-04b parity: re-minting a revoked recipient's descriptor
-            // would defeat revocation — delete the row instead.
+            // T-64-04b parity: re-minting a revoked recipient's encrypted
+            // key would defeat revocation — delete the row instead.
             deps.delete_grant(&grant.share_id).await?;
         } else {
             let wrapped = cipherbox_crypto::wrap_key(new_read_key, &grant.recipient_public_key)
@@ -614,8 +614,8 @@ async fn re_mint_grants_rooted_at<D: RotationDeps>(
                         grant.share_id
                     ))
                 })?;
-            let read_descriptor_ref = base64_encode(&wrapped);
-            deps.update_grant(&grant.share_id, &read_descriptor_ref, new_generation)
+            let encrypted_read_key = base64_encode(&wrapped);
+            deps.update_grant(&grant.share_id, &encrypted_read_key, new_generation)
                 .await?;
         }
     }
@@ -1503,8 +1503,7 @@ async fn rotate_read_from_node_inner<D: RotationDeps>(
     // the empty-frontier convergence short-circuit on the resume/Skipped branch
     // below must consult `is_dirty` — otherwise a missing root would be mistaken
     // for "already converged" instead of failing closed.
-    let pre_rotation_outcome =
-        verify_subtree_clean(deps, root_ipns_name, root_read_key).await?;
+    let pre_rotation_outcome = verify_subtree_clean(deps, root_ipns_name, root_read_key).await?;
     let pre_rotation_dirty = pre_rotation_outcome.is_dirty;
     let pre_rotation_frontier = pre_rotation_outcome.frontier;
 
@@ -2448,7 +2447,7 @@ mod test_support {
         /// node".
         pub grants_by_node: Mutex<HashMap<String, Vec<GrantRow>>>,
         /// Ordered log of every `update_grant` call:
-        /// `(share_id, read_descriptor_ref, new_generation)`.
+        /// `(share_id, encrypted_read_key, new_generation)`.
         pub updated_grants: Mutex<Vec<(String, String, u32)>>,
         /// Ordered log of every `delete_grant` call's `share_id`.
         pub deleted_grants: Mutex<Vec<String>>,
@@ -2648,12 +2647,12 @@ mod test_support {
         async fn update_grant(
             &self,
             share_id: &str,
-            read_descriptor_ref: &str,
+            encrypted_read_key: &str,
             new_generation: u32,
         ) -> Result<(), RotationError> {
             self.updated_grants.lock().unwrap().push((
                 share_id.to_string(),
-                read_descriptor_ref.to_string(),
+                encrypted_read_key.to_string(),
                 new_generation,
             ));
             Ok(())
@@ -3942,7 +3941,7 @@ mod rotate_read_from_node {
             1,
             "exactly the non-revoked share is re-minted, got: {updated:?}"
         );
-        let (share_id, read_descriptor_ref, new_generation) = &updated[0];
+        let (share_id, encrypted_read_key, new_generation) = &updated[0];
         assert_eq!(share_id, "share-active");
         assert_eq!(*new_generation, 1);
 
@@ -3976,13 +3975,13 @@ mod rotate_read_from_node {
         )
         .unwrap();
 
-        let wrapped_bytes = decode_b64(read_descriptor_ref).unwrap();
+        let wrapped_bytes = decode_b64(encrypted_read_key).unwrap();
         let unwrapped =
             cipherbox_crypto::unwrap_key(&wrapped_bytes, &active_sk.serialize()).unwrap();
         assert_eq!(
             unwrapped.as_slice(),
             child_new_read_key.as_slice(),
-            "the re-minted descriptor must wrap child-0's ACTUAL new readKey"
+            "the re-minted encrypted key must wrap child-0's ACTUAL new readKey"
         );
     }
 

@@ -367,6 +367,6 @@ describe('IpnsService with IpnsVerifyCache', () => {
     // Structural guard: verify the service does not expose a skipSigVerify bypass
     // (grep cannot be run in Jest, but we can confirm the service constructor and
     //  method signatures do not accept such a parameter by inspecting the instance).
-    expect((service as Record<string, unknown>).skipSigVerify).toBeUndefined();
+    expect((service as unknown as Record<string, unknown>).skipSigVerify).toBeUndefined();
   });
 });

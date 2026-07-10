@@ -20,7 +20,7 @@ const mockFns = vi.hoisted(() => ({
   wrapKey: vi.fn(),
 }));
 
-// Mock @cipherbox/crypto to intercept wrapKey (ECIES descriptor minting).
+// Mock @cipherbox/crypto to intercept wrapKey (ECIES encrypted-key minting).
 // engine.ts imports wrapKey from this package in the GREEN phase.
 vi.mock('@cipherbox/crypto', () => ({
   wrapKey: mockFns.wrapKey,
@@ -41,7 +41,7 @@ const NEW_GENERATION = 3;
 const MOCK_WRAPPED_BYTES = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
 
 /** Expected base64 encoding of MOCK_WRAPPED_BYTES (what updateGrantFn receives). */
-const EXPECTED_DESCRIPTOR = btoa(String.fromCharCode(0xde, 0xad, 0xbe, 0xef));
+const EXPECTED_ENCRYPTED_KEY = btoa(String.fromCharCode(0xde, 0xad, 0xbe, 0xef));
 
 const SHARE_ID_A = 'share-aaaa-1111';
 const SHARE_ID_B = 'share-bbbb-2222';
@@ -71,7 +71,7 @@ describe('reMintGrantsRootedAt', () => {
     mockFns.wrapKey.mockResolvedValue(MOCK_WRAPPED_BYTES);
   });
 
-  it('Test 1: re-mints readDescriptorRef for a non-revoked grant via ECIES', async () => {
+  it('Test 1: re-mints encryptedReadKey for a non-revoked grant via ECIES', async () => {
     const mockQueryGrants = vi
       .fn()
       .mockResolvedValue([
@@ -94,15 +94,19 @@ describe('reMintGrantsRootedAt', () => {
     // wrapKey must be called with (newReadKey, recipientPublicKey) — ECIES wrap
     expect(mockFns.wrapKey).toHaveBeenCalledWith(NEW_READ_KEY, RECIPIENT_PUB_KEY_A);
 
-    // updateGrantFn must be called with (shareId, base64Descriptor, newGeneration)
-    expect(mockUpdateGrant).toHaveBeenCalledWith(SHARE_ID_A, EXPECTED_DESCRIPTOR, NEW_GENERATION);
+    // updateGrantFn must be called with (shareId, base64EncryptedKey, newGeneration)
+    expect(mockUpdateGrant).toHaveBeenCalledWith(
+      SHARE_ID_A,
+      EXPECTED_ENCRYPTED_KEY,
+      NEW_GENERATION
+    );
     expect(mockUpdateGrant).toHaveBeenCalledTimes(1);
 
     // deleteGrantFn must NOT be called (grant is not revoked)
     expect(mockDeleteGrant).not.toHaveBeenCalled();
   });
 
-  it('Test 2: deletes revoked recipient grant row without re-minting descriptor', async () => {
+  it('Test 2: deletes revoked recipient grant row without re-minting encrypted key', async () => {
     const mockQueryGrants = vi
       .fn()
       .mockResolvedValue([
@@ -146,7 +150,11 @@ describe('reMintGrantsRootedAt', () => {
 
     // Exactly one update (non-revoked) and one delete (revoked)
     expect(mockUpdateGrant).toHaveBeenCalledTimes(1);
-    expect(mockUpdateGrant).toHaveBeenCalledWith(SHARE_ID_A, EXPECTED_DESCRIPTOR, NEW_GENERATION);
+    expect(mockUpdateGrant).toHaveBeenCalledWith(
+      SHARE_ID_A,
+      EXPECTED_ENCRYPTED_KEY,
+      NEW_GENERATION
+    );
     expect(mockUpdateGrant).not.toHaveBeenCalledWith(
       SHARE_ID_B,
       expect.anything(),

@@ -14,11 +14,11 @@
  *        cascade (root's SealedChildRef.ipnsName → new child name).
  *      - WRITE-04: teeUnenrollFn fired for each old name (tombstone-intent).
  *      - WRITE-03: surviving co-writer (bob) gets wrapKey re-wrap via
- *        writeDescriptorRefPersistFn; revoked recipient is dropped via
+ *        encryptedWriteKeyPersistFn; revoked recipient is dropped via
  *        deleteWriteGrantFn.
  *      - Read-plane invariance: generation unchanged, readKey not rotated.
  *
- * D-02 scope: live publish-gate reject / resolve-410 / writeDescriptorRef
+ * D-02 scope: live publish-gate reject / resolve-410 / encryptedWriteKey
  * persistence are behind injected callbacks (Phase 66 enforces live).
  * The round-trip itself (IPFS pin + IPNS publish/resolve) is real.
  *
@@ -321,13 +321,13 @@ describe('Write-chain rotation suite (D-04 phase gate)', () => {
       { shareId: SURVIVOR_SHARE_ID, recipientPublicKey: bob.publicKey, isRevoked: false },
       { shareId: REVOKED_SHARE_ID, recipientPublicKey: revokedPubKey, isRevoked: true },
     ]);
-    const writeDescriptorRefPersistFn = vi.fn().mockResolvedValue(undefined);
+    const encryptedWriteKeyPersistFn = vi.fn().mockResolvedValue(undefined);
     const teeUnenrollFn = vi.fn().mockResolvedValue(undefined);
     const deleteWriteGrantFn = vi.fn().mockResolvedValue(undefined);
 
     const callbacks: WriteRevocationCallbacks = {
       queryWriteGrantsFn,
-      writeDescriptorRefPersistFn,
+      encryptedWriteKeyPersistFn,
       teeUnenrollFn,
       deleteWriteGrantFn,
     };
@@ -394,17 +394,17 @@ describe('Write-chain rotation suite (D-04 phase gate)', () => {
     // queryWriteGrantsFn is called once with the root node ID.
     expect(queryWriteGrantsFn).toHaveBeenCalledWith(rootNodeId);
 
-    // Survivor (bob): writeDescriptorRefPersistFn receives a base64-wrapped new write key.
-    expect(writeDescriptorRefPersistFn).toHaveBeenCalledTimes(1);
-    const [persistedShareId, writeDescriptorRef] = writeDescriptorRefPersistFn.mock.calls[0] as [
+    // Survivor (bob): encryptedWriteKeyPersistFn receives a base64-wrapped new write key.
+    expect(encryptedWriteKeyPersistFn).toHaveBeenCalledTimes(1);
+    const [persistedShareId, encryptedWriteKey] = encryptedWriteKeyPersistFn.mock.calls[0] as [
       string,
       string,
     ];
     expect(persistedShareId).toBe(SURVIVOR_SHARE_ID);
 
-    // Verify the descriptor: unwrapping it with bob's private key must yield the new root
+    // Verify the encrypted key: unwrapping it with bob's private key must yield the new root
     // write key — confirmed by using it to unseal the new root's write-body.
-    const wrappedBytes = Uint8Array.from(atob(writeDescriptorRef), (c) => c.charCodeAt(0));
+    const wrappedBytes = Uint8Array.from(atob(encryptedWriteKey), (c) => c.charCodeAt(0));
     const unwrappedKey = await unwrapKey(wrappedBytes, bob.privateKey);
     expect(unwrappedKey).toBeInstanceOf(Uint8Array);
     expect(unwrappedKey.length).toBe(32);
@@ -416,9 +416,9 @@ describe('Write-chain rotation suite (D-04 phase gate)', () => {
     expect(survivorView.writeBody!.ipnsPrivateKey.length).toBe(32);
     unwrappedKey.fill(0); // zero after verification
 
-    // Revoked recipient: deleteWriteGrantFn called; writeDescriptorRefPersistFn NOT called for them.
+    // Revoked recipient: deleteWriteGrantFn called; encryptedWriteKeyPersistFn NOT called for them.
     expect(deleteWriteGrantFn).toHaveBeenCalledWith(REVOKED_SHARE_ID);
-    expect(writeDescriptorRefPersistFn).not.toHaveBeenCalledWith(
+    expect(encryptedWriteKeyPersistFn).not.toHaveBeenCalledWith(
       REVOKED_SHARE_ID,
       expect.anything()
     );

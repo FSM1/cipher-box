@@ -7,12 +7,12 @@
  */
 
 export interface UpdateGrantDto {
-  /** Hex-encoded ECIES descriptor ref for read access, re-wrapped for the recipient after an owner rotation. The server stores the client-supplied ciphertext as-is. */
-  readDescriptorRef: string;
-  /** Generation of the root node the rotated descriptor is rooted at (numeric string) */
+  /** Hex-encoded ECIES encrypted key for read access, re-wrapped for the recipient after an owner rotation. The server stores the client-supplied ciphertext as-is. */
+  encryptedReadKey: string;
+  /** Generation of the root node the rotated key is rooted at (numeric string) */
   rootGeneration: string;
-  /** Hex-encoded ECIES descriptor ref for write access, set to upgrade a read-only share to write (read->write, D-09). Omit to leave any existing writeDescriptorRef unchanged (e.g. a read-descriptor-rotation-only call). Mutually exclusive with clearWriteDescriptor. */
-  writeDescriptorRef?: string;
-  /** When true, clears any existing writeDescriptorRef (write->read downgrade). Omit/false to leave writeDescriptorRef unchanged. Mutually exclusive with writeDescriptorRef. */
-  clearWriteDescriptor?: boolean;
+  /** Hex-encoded ECIES encrypted key for write access, set to upgrade a read-only share to write (read->write, D-09). Omit to leave any existing encryptedWriteKey unchanged (e.g. a read-key-rotation-only call). Mutually exclusive with clearEncryptedWriteKey. */
+  encryptedWriteKey?: string;
+  /** When true, clears any existing encryptedWriteKey (write->read downgrade). Omit/false to leave encryptedWriteKey unchanged. Mutually exclusive with encryptedWriteKey. */
+  clearEncryptedWriteKey?: boolean;
 }

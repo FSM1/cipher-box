@@ -11,16 +11,16 @@ export interface InviteDataResponseDto {
   /** Current status of the invite */
   status: InviteDataResponseDtoStatus;
   /** Hex-encoded root readKey wrapped with ephemeral public key */
-  encryptedKey: string;
+  encryptedReadKey: string;
   /**
-   * Hex-encoded ECIES descriptor ref for write access wrapped with ephemeral public key. Null for read-only invites.
+   * Hex-encoded ECIES encrypted key for write access wrapped with ephemeral public key. Null for read-only invites.
    * @nullable
    */
-  writeDescriptorRef: string | null;
+  encryptedWriteKey: string | null;
   /** UUID of the root shared node */
   rootNodeId: string;
   /** IPNS name of the root shared node */
-  rootIpnsName: string;
+  shareRootIpnsName: string;
   /** Generation of the root node at invite creation (numeric string) */
   rootGeneration: string;
   /**

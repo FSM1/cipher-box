@@ -274,7 +274,7 @@ function getActiveGrantRootIpnsNames(): Promise<Set<string>> {
 function getLocalGrantRecord(ipnsName: string): LocalGrantRecord | null {
   const { sentShares } = useShareStore.getState();
   const isKnownGrantRoot = sentShares.some((share) => share.ipnsName === ipnsName);
-  return isKnownGrantRoot ? { rootIpnsName: ipnsName } : null;
+  return isKnownGrantRoot ? { shareRootIpnsName: ipnsName } : null;
 }
 
 /**

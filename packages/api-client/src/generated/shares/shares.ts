@@ -25,7 +25,7 @@ import type { BodyType } from '../../instance';
 type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
 
 /**
- * Share an encrypted folder or file with another user. The readDescriptorRef is the root readKey + metadata wrapped for the recipient via ECIES.
+ * Share an encrypted folder or file with another user. The encryptedReadKey is the root readKey + metadata wrapped for the recipient via ECIES.
  * @summary Create a share
  */
 export const sharesControllerCreateShare = (
@@ -120,8 +120,8 @@ export const sharesControllerHideShare = (
   return customInstance<void>({ url: `/shares/${shareId}/hide`, method: 'PATCH' }, options);
 };
 /**
- * Persist a rotated readDescriptorRef and rootGeneration on an existing share. Only the sharer can update it; the server never re-encrypts and stores the client-supplied ciphertext as-is.
- * @summary Update a share grant descriptor
+ * Persist a rotated encryptedReadKey and rootGeneration on an existing share. Only the sharer can update it; the server never re-encrypts and stores the client-supplied ciphertext as-is.
+ * @summary Update a share grant key
  */
 export const sharesControllerUpdateGrant = (
   shareId: string,

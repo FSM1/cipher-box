@@ -47,7 +47,7 @@ const NEW_READ_KEY = new Uint8Array(32).fill(0xab);
 const NEW_GENERATION = 3;
 
 const MOCK_WRAPPED_BYTES = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
-const EXPECTED_DESCRIPTOR = btoa(String.fromCharCode(0xde, 0xad, 0xbe, 0xef));
+const EXPECTED_ENCRYPTED_KEY = btoa(String.fromCharCode(0xde, 0xad, 0xbe, 0xef));
 
 const SHARE_ID_SURVIVING = 'share-survive-1111';
 const SHARE_ID_REVOKED = 'share-revoked-2222';
@@ -144,7 +144,7 @@ describe('runOwnerReconcile', () => {
     expect(transport.updateGrant).not.toHaveBeenCalled();
   });
 
-  it('Test 3: surviving grant -> transport.updateGrant called with new descriptor + generation, transport.deleteGrant NOT called', async () => {
+  it('Test 3: surviving grant -> transport.updateGrant called with new encrypted key + generation, transport.deleteGrant NOT called', async () => {
     const transport = makeTransport([
       {
         shareId: SHARE_ID_SURVIVING,
@@ -160,7 +160,7 @@ describe('runOwnerReconcile', () => {
 
     expect(transport.updateGrant).toHaveBeenCalledWith(
       SHARE_ID_SURVIVING,
-      EXPECTED_DESCRIPTOR,
+      EXPECTED_ENCRYPTED_KEY,
       NEW_GENERATION
     );
     expect(transport.updateGrant).toHaveBeenCalledTimes(1);

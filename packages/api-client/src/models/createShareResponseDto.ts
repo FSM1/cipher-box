@@ -11,17 +11,17 @@ export interface CreateShareResponseDto {
   shareId: string;
   /** Recipient secp256k1 public key (0x04...) */
   recipientPublicKey: string;
-  /** Hex-encoded ECIES descriptor ref for read access */
-  readDescriptorRef: string;
+  /** Hex-encoded ECIES encrypted key for read access */
+  encryptedReadKey: string;
   /**
-   * Hex-encoded ECIES descriptor ref for write access, or null for read-only shares
+   * Hex-encoded ECIES encrypted key for write access, or null for read-only shares
    * @nullable
    */
-  writeDescriptorRef: string | null;
+  encryptedWriteKey: string | null;
   /** UUID of the root shared node */
   rootNodeId: string;
   /** IPNS name (k51...) of the root shared node */
-  rootIpnsName: string;
+  shareRootIpnsName: string;
   /** Generation of the root node at share creation (numeric string) */
   rootGeneration: string;
   /**

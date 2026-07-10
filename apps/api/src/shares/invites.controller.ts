@@ -93,20 +93,18 @@ export class InvitesController {
 
     return {
       status: invite.status,
-      encryptedKey: invite.encryptedKey.toString('hex'),
-      writeDescriptorRef: invite.writeDescriptorRef
-        ? invite.writeDescriptorRef.toString('hex')
-        : null,
+      encryptedReadKey: invite.encryptedReadKey.toString('hex'),
+      encryptedWriteKey: invite.encryptedWriteKey ? invite.encryptedWriteKey.toString('hex') : null,
       rootNodeId: invite.rootNodeId,
-      rootIpnsName: invite.rootIpnsName,
+      shareRootIpnsName: invite.shareRootIpnsName,
       rootGeneration: invite.rootGeneration,
       itemNameEncrypted: invite.itemNameEncrypted ? invite.itemNameEncrypted.toString('hex') : null,
     };
   }
 
   /**
-   * AUTHENTICATED: Claim an invite by providing re-wrapped descriptor refs.
-   * Creates a single descriptor-ref Share via the sharing infrastructure (D-05).
+   * AUTHENTICATED: Claim an invite by providing re-wrapped encrypted keys.
+   * Creates a single encrypted-key Share via the sharing infrastructure (D-05).
    */
   @Post(':token/claim')
   @UseGuards(JwtAuthGuard, ThrottlerGuard)
@@ -114,7 +112,7 @@ export class InvitesController {
   @ApiOperation({
     summary: 'Claim an invite link',
     description:
-      'Claim an invite by providing the descriptor ref re-wrapped for the recipient. ' +
+      'Claim an invite by providing the encrypted key re-wrapped for the recipient. ' +
       'Creates a single Share row. Single-claim enforced atomically.',
   })
   @ApiParam({ name: 'token', description: 'Invite token (URL-safe base64)' })
@@ -122,6 +120,10 @@ export class InvitesController {
     status: 201,
     description: 'Invite claimed successfully',
     type: ClaimInviteResponseDto,
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'A write-capable invite was claimed without a re-wrapped encryptedWriteKey',
   })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 404, description: 'Invite not found or expired' })

@@ -14,6 +14,7 @@ import { User } from '../../auth/entities/user.entity';
 // Plain unique constraint — hard-delete on revoke means no revoked rows coexist (D-11)
 @Entity('shares')
 @Unique(['sharerId', 'recipientId', 'rootNodeId'])
+@Index('IDX_shares_sharer_root', ['sharerId', 'shareRootIpnsName'])
 export class Share {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
@@ -35,18 +36,18 @@ export class Share {
   recipient!: User;
 
   /**
-   * ECIES descriptor ref for read access (wrapped root readKey + metadata).
+   * ECIES-wrapped root readKey for read access.
    * Server never sees plaintext (zero-knowledge, CLAUDE.md rule 6).
    */
-  @Column({ type: 'bytea', name: 'read_descriptor_ref' })
-  readDescriptorRef!: Buffer;
+  @Column({ type: 'bytea', name: 'encrypted_read_key' })
+  encryptedReadKey!: Buffer;
 
   /**
-   * ECIES descriptor ref for write access (wrapped root writeKey + metadata).
+   * ECIES-wrapped root writeKey for write access.
    * NULL for read-only shares. Presence signals write grant (D-09).
    */
-  @Column({ type: 'bytea', name: 'write_descriptor_ref', nullable: true })
-  writeDescriptorRef!: Buffer | null;
+  @Column({ type: 'bytea', name: 'encrypted_write_key', nullable: true })
+  encryptedWriteKey!: Buffer | null;
 
   /**
    * UUID of the root shared node (folder or file).
@@ -57,8 +58,8 @@ export class Share {
   /**
    * IPNS name (k51...) of the root shared node.
    */
-  @Column({ type: 'varchar', length: 255, name: 'root_ipns_name' })
-  rootIpnsName!: string;
+  @Column({ type: 'varchar', length: 255, name: 'share_root_ipns_name' })
+  shareRootIpnsName!: string;
 
   /**
    * Generation of the root node at share creation.

@@ -190,4 +190,4 @@ This document evolves at phase transitions and milestone boundaries.
 
 ---
 
-Last updated: 2026-06-29 — Phase 62 (Unified Node Codec keystone) complete; Milestone 4 in execution (Phase 63 next). Milestone 4 (v2.0 Metadata and Sharing Refactor) started 2026-06-27. Scope locked to Tier 1 (read key-chaining + resumable read-rotation) + Tier 2 (write-revocation via ADR 0001 full Ed25519 rotation + resolve/republish/TEE contract rewrite). Tier 3 capability layer and SEED-001 TEE cost-cycling deferred. Greenfield `node/v3` sole codec. Requirements in `.planning/REQUIREMENTS.md`; design source of truth in `.planning/design/2026-06-26-sharing-read-keychaining-design.md` + ADR 0001/0002 + `CONTEXT.md`. v1.1 carried items (Phase 39 D-02/D-06, HARD-11 staging smoke-test) remain open.
+Last updated: 2026-07-10 (Phase 71 complete — share-invite security + IPNS data-integrity API)

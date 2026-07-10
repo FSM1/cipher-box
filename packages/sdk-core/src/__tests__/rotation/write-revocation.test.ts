@@ -7,7 +7,7 @@
  *   - First-publish at sequenceNumber 1n for each new name
  *   - Child-first cascade (child published before root re-points)
  *   - teeUnenrollFn called for each old name (tombstone-intent)
- *   - Co-writer re-wrap via wrapKey and writeDescriptorRefPersistFn (survivor)
+ *   - Co-writer re-wrap via wrapKey and encryptedWriteKeyPersistFn (survivor)
  *   - Revoked grant dropped via deleteWriteGrantFn (not re-wrapped)
  *   - Read-plane invariance (no readKey rotation, no generation bump)
  *   - Parent SealedChildRef.ipnsName re-pointed to new child name
@@ -143,7 +143,7 @@ REVOKED_PUB_KEY[0] = 0x04;
 /** Simulated wrapped bytes returned by wrapKey. */
 const MOCK_WRAPPED_BYTES = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
 /** Expected base64 encoding of MOCK_WRAPPED_BYTES. */
-const EXPECTED_DESCRIPTOR = btoa(String.fromCharCode(0xde, 0xad, 0xbe, 0xef));
+const EXPECTED_ENCRYPTED_KEY = btoa(String.fromCharCode(0xde, 0xad, 0xbe, 0xef));
 
 // ---------------------------------------------------------------------------
 // Node fixtures (returned by mocked unsealNode)
@@ -216,7 +216,7 @@ function makeCallbacks(overrides?: Partial<WriteRevocationCallbacks>): WriteRevo
       { shareId: SHARE_ID_SURVIVOR, recipientPublicKey: SURVIVOR_PUB_KEY, isRevoked: false },
       { shareId: SHARE_ID_REVOKED, recipientPublicKey: REVOKED_PUB_KEY, isRevoked: true },
     ]),
-    writeDescriptorRefPersistFn: vi.fn().mockResolvedValue(undefined),
+    encryptedWriteKeyPersistFn: vi.fn().mockResolvedValue(undefined),
     teeUnenrollFn: vi.fn().mockResolvedValue(undefined),
     deleteWriteGrantFn: vi.fn().mockResolvedValue(undefined),
     ...overrides,
@@ -295,7 +295,7 @@ beforeEach(() => {
   // createAndPublishIpnsRecord: success
   mockFns.createAndPublishIpnsRecord.mockResolvedValue({ success: true, sequenceNumber: 1n });
 
-  // wrapKey: returns mock wrapped bytes for co-writer descriptor
+  // wrapKey: returns mock wrapped bytes for co-writer encrypted key
   mockFns.wrapKey.mockResolvedValue(MOCK_WRAPPED_BYTES);
 });
 
@@ -427,7 +427,7 @@ describe('rotateWriteFromNode', () => {
     expect(callbacks.queryWriteGrantsFn).toHaveBeenCalledTimes(1);
   });
 
-  it('Test 6: survivor gets new writeDescriptorRef via wrapKey; revoked recipient is dropped', async () => {
+  it('Test 6: survivor gets new encryptedWriteKey via wrapKey; revoked recipient is dropped', async () => {
     const ctx = createMockContext();
     const callbacks = makeCallbacks();
 
@@ -444,19 +444,19 @@ describe('rotateWriteFromNode', () => {
     expect(mockFns.wrapKey).toHaveBeenCalledTimes(1);
     expect(mockFns.wrapKey).toHaveBeenCalledWith(expect.any(Uint8Array), SURVIVOR_PUB_KEY);
 
-    // Survivor gets writeDescriptorRefPersistFn with base64(wrappedBytes)
-    expect(callbacks.writeDescriptorRefPersistFn).toHaveBeenCalledWith(
+    // Survivor gets encryptedWriteKeyPersistFn with base64(wrappedBytes)
+    expect(callbacks.encryptedWriteKeyPersistFn).toHaveBeenCalledWith(
       SHARE_ID_SURVIVOR,
-      EXPECTED_DESCRIPTOR
+      EXPECTED_ENCRYPTED_KEY
     );
-    expect(callbacks.writeDescriptorRefPersistFn).toHaveBeenCalledTimes(1);
+    expect(callbacks.encryptedWriteKeyPersistFn).toHaveBeenCalledTimes(1);
 
     // Revoked recipient is dropped — never re-wrapped
     expect(callbacks.deleteWriteGrantFn).toHaveBeenCalledWith(SHARE_ID_REVOKED);
     expect(callbacks.deleteWriteGrantFn).toHaveBeenCalledTimes(1);
 
-    // Revoked recipient must NOT get a descriptor
-    expect(callbacks.writeDescriptorRefPersistFn).not.toHaveBeenCalledWith(
+    // Revoked recipient must NOT get an encrypted key
+    expect(callbacks.encryptedWriteKeyPersistFn).not.toHaveBeenCalledWith(
       SHARE_ID_REVOKED,
       expect.anything()
     );

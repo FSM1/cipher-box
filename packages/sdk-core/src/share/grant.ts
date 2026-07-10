@@ -4,19 +4,19 @@
  * Implements READ-01 (issueReadGrant), READ-05 / D-07 (claimInviteReadKey),
  * and D-06 (claimInvite — the full invite-claim service flow).
  *
- * issueReadGrant: ONE ECIES wrap of the share-root readKey → readDescriptorRef.
+ * issueReadGrant: ONE ECIES wrap of the share-root readKey → encryptedReadKey.
  *   - ZERO node resolves, ZERO seal/unseal, ZERO IPNS publishes (READ-01 / §3.2).
  *   - Granting a single-file root is structurally identical to granting a deep folder.
  *   - Transport-decoupled behind an injected insertShareFn callback (D-05).
  *
  * claimInviteReadKey: unwrap readKey with URL-fragment ephemeral private key,
- *   re-wrap to claimer's public key → standard grant readDescriptorRef (READ-05 / §3.11).
+ *   re-wrap to claimer's public key → standard grant encryptedReadKey (READ-05 / §3.11).
  *   - Crypto primitive only.
  *   - Emits ONE re-wrapped root readKey — no per-child key fan-out (D-07).
  *
  * claimInvite: full service-flow wrapper around claimInviteReadKey (D-06 / §3.11).
  *   - Fetches invite data via injected getInviteDataFn callback.
- *   - Calls claimInviteReadKey to produce the claimer-wrapped readDescriptorRef.
+ *   - Calls claimInviteReadKey to produce the claimer-wrapped encryptedReadKey.
  *   - Persists ONE standard grant row via injected insertShareFn (D-02 transport seam).
  *   - ONE re-wrapped root readKey per claimer — no per-child key fan-out (D-06).
  */
@@ -31,7 +31,7 @@ import { wrapKey, reWrapKey } from '@cipherbox/crypto';
  * Grant payload passed to the insertShareFn callback (the D-05 transport seam).
  *
  * The API consumes this to persist a share row; actual shares persistence waits
- * for Phase 66 (the readDescriptorRef column cutover). The callback is injected
+ * for Phase 66 (the encryptedReadKey column cutover). The callback is injected
  * so unit tests pass a vi.fn() without importing the API client.
  */
 export type ReadGrantPayload = {
@@ -40,11 +40,11 @@ export type ReadGrantPayload = {
   /** UUID of the grant root node (folder or file — structurally identical). */
   rootNodeId: string;
   /** IPNS k51 name of the grant root node. */
-  rootIpnsName: string;
+  shareRootIpnsName: string;
   /** Node generation at which this grant is anchored (staleness witness). */
   rootGeneration: number;
-  /** Base64-encoded ECIES-wrapped share-root readKey (the grant descriptor). */
-  readDescriptorRef: string;
+  /** Base64-encoded ECIES-wrapped share-root readKey (the grant encrypted key). */
+  encryptedReadKey: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -82,7 +82,7 @@ function base64ToBytes(b64: string): Uint8Array {
  * Issue a read grant by ECIES-wrapping the share-root readKey under the
  * recipient's secp256k1 public key.
  *
- * ONE ECIES wrap → readDescriptorRef. Zero node resolves, zero seal/unseal,
+ * ONE ECIES wrap → encryptedReadKey. Zero node resolves, zero seal/unseal,
  * zero IPNS publishes. Granting a single-file root is structurally identical
  * to granting a deep folder (READ-01 / §3.2): the grant always covers
  * whatever subtree is rooted at rootNodeId, regardless of tree depth.
@@ -93,13 +93,13 @@ function base64ToBytes(b64: string): Uint8Array {
  * @param params.shareRootReadKey - 32-byte AES-256 read key for the grant root node
  * @param params.recipientPublicKey - 65-byte uncompressed secp256k1 public key
  * @param params.rootNodeId - UUID of the grant root node
- * @param params.rootIpnsName - IPNS k51 name of the grant root node
+ * @param params.shareRootIpnsName - IPNS k51 name of the grant root node
  * @param params.rootGeneration - Node generation at grant issuance (staleness witness)
  * @param params.insertShareFn - Injected callback that persists the grant row and
  *   returns the assigned shareId. Never called on crypto failure.
  *
- * @returns `{ shareId, readDescriptorRef }` — the assigned share identifier and
- *   the base64 ECIES-wrapped grant descriptor.
+ * @returns `{ shareId, encryptedReadKey }` — the assigned share identifier and
+ *   the base64 ECIES-wrapped grant encrypted key.
  *
  * @security Does NOT zero `shareRootReadKey` — the caller is the terminal owner
  *   of that buffer and must zero it on their own lifecycle boundary (D-09).
@@ -108,10 +108,10 @@ export async function issueReadGrant(params: {
   shareRootReadKey: Uint8Array;
   recipientPublicKey: Uint8Array;
   rootNodeId: string;
-  rootIpnsName: string;
+  shareRootIpnsName: string;
   rootGeneration: number;
   insertShareFn: (payload: ReadGrantPayload) => Promise<{ shareId: string }>;
-}): Promise<{ shareId: string; readDescriptorRef: string }> {
+}): Promise<{ shareId: string; encryptedReadKey: string }> {
   // Input validation — reject malformed keys before any crypto work or persistence.
   if (params.shareRootReadKey.length !== 32) {
     throw new Error(
@@ -138,18 +138,18 @@ export async function issueReadGrant(params: {
   } catch (err) {
     throw new Error('issueReadGrant: key wrapping failed', { cause: err });
   }
-  const readDescriptorRef = bytesToBase64(wrapped);
+  const encryptedReadKey = bytesToBase64(wrapped);
 
   // Persist the grant row via the injected callback (D-05 transport seam).
   const result = await params.insertShareFn({
     recipientPublicKey: params.recipientPublicKey,
     rootNodeId: params.rootNodeId,
-    rootIpnsName: params.rootIpnsName,
+    shareRootIpnsName: params.shareRootIpnsName,
     rootGeneration: params.rootGeneration,
-    readDescriptorRef,
+    encryptedReadKey,
   });
 
-  return { shareId: result.shareId, readDescriptorRef };
+  return { shareId: result.shareId, encryptedReadKey };
 }
 
 // ---------------------------------------------------------------------------
@@ -161,7 +161,7 @@ export async function issueReadGrant(params: {
  *
  * Unwraps the share-root readKey from the URL-fragment ephemeral private key
  * and re-wraps it under the claimer's secp256k1 public key, producing a
- * standard grant readDescriptorRef (identical in shape to issueReadGrant's output).
+ * standard grant encryptedReadKey (identical in shape to issueReadGrant's output).
  *
  * This is a crypto primitive only. Full invite create/claim service wiring
  * (link generation, invite row storage, server-side re-wrap coordination) is
@@ -172,14 +172,14 @@ export async function issueReadGrant(params: {
  * link re-wraps the same root readKey per claimer; revocation is achieved via
  * rotation (Plan 03/05), not link invalidation (T-63-06 / §3.11).
  *
- * @param params.readDescriptorRef - Base64 ECIES-wrapped share-root readKey
+ * @param params.encryptedReadKey - Base64 ECIES-wrapped share-root readKey
  *   from the invite link (encrypted to the URL-fragment ephemeral public key)
  * @param params.ephemeralPrivateKey - 32-byte secp256k1 private key from the
  *   URL fragment; caller-owned, NOT zeroed here (D-09)
  * @param params.claimerPublicKey - 65-byte uncompressed secp256k1 public key
  *   of the claimer; caller-owned, NOT zeroed here (D-09)
  *
- * @returns Base64 readDescriptorRef encrypted to the claimer's public key —
+ * @returns Base64 encryptedReadKey encrypted to the claimer's public key —
  *   the input to a standard grant row (same shape as issueReadGrant's output).
  *
  * @security This function MINTS the intermediate share-root readKey buffer.
@@ -189,7 +189,7 @@ export async function issueReadGrant(params: {
  *   `ephemeralPrivateKey` and `claimerPublicKey` are NEVER zeroed here (D-09).
  */
 export async function claimInviteReadKey(params: {
-  readDescriptorRef: string;
+  encryptedReadKey: string;
   ephemeralPrivateKey: Uint8Array;
   claimerPublicKey: Uint8Array;
 }): Promise<string> {
@@ -207,9 +207,9 @@ export async function claimInviteReadKey(params: {
 
   let inviteWrapped: Uint8Array;
   try {
-    inviteWrapped = base64ToBytes(params.readDescriptorRef);
+    inviteWrapped = base64ToBytes(params.encryptedReadKey);
   } catch (err) {
-    throw new Error('claimInviteReadKey: failed to decode readDescriptorRef', { cause: err });
+    throw new Error('claimInviteReadKey: failed to decode encryptedReadKey', { cause: err });
   }
 
   // reWrapKey: unwrap with ephemeralPrivateKey → share-root readKey (intermediate,
@@ -247,7 +247,7 @@ export async function claimInviteReadKey(params: {
  *
  * All transport is injected as callbacks (D-02 mock seam):
  * - `getInviteDataFn` is called once with `inviteToken` to obtain the invite's
- *   readDescriptorRef (ECIES-wrapped to the URL-fragment ephemeral public key).
+ *   encryptedReadKey (ECIES-wrapped to the URL-fragment ephemeral public key).
  * - `insertShareFn` is called exactly once to persist the claimer's grant row.
  *   It is NEVER called on crypto failure.
  *
@@ -260,24 +260,24 @@ export async function claimInviteReadKey(params: {
  * @param params.claimerPublicKey - 65-byte uncompressed secp256k1 public key of the claimer;
  *   caller-owned, NOT zeroed here (D-09)
  * @param params.rootNodeId - UUID of the grant root node
- * @param params.rootIpnsName - IPNS k51 name of the grant root node
+ * @param params.shareRootIpnsName - IPNS k51 name of the grant root node
  * @param params.rootGeneration - Node generation at which this grant is anchored
- * @param params.getInviteDataFn - Injected callback: receives inviteToken, returns { readDescriptorRef }
+ * @param params.getInviteDataFn - Injected callback: receives inviteToken, returns { encryptedReadKey }
  * @param params.insertShareFn - Injected callback: persists the standard grant row, returns { shareId }
  *
- * @returns `{ shareId, readDescriptorRef }` — the assigned share identifier and the
- *   base64 ECIES-wrapped grant descriptor re-encrypted to the claimer's public key.
+ * @returns `{ shareId, encryptedReadKey }` — the assigned share identifier and the
+ *   base64 ECIES-wrapped grant encrypted key re-encrypted to the claimer's public key.
  */
 export async function claimInvite(params: {
   inviteToken: string;
   ephemeralPrivateKey: Uint8Array;
   claimerPublicKey: Uint8Array;
   rootNodeId: string;
-  rootIpnsName: string;
+  shareRootIpnsName: string;
   rootGeneration: number;
-  getInviteDataFn: (token: string) => Promise<{ readDescriptorRef: string }>;
+  getInviteDataFn: (token: string) => Promise<{ encryptedReadKey: string }>;
   insertShareFn: (payload: ReadGrantPayload) => Promise<{ shareId: string }>;
-}): Promise<{ shareId: string; readDescriptorRef: string }> {
+}): Promise<{ shareId: string; encryptedReadKey: string }> {
   // Input validation — reject malformed keys before any I/O or crypto work.
   if (params.ephemeralPrivateKey.length !== 32) {
     throw new Error(
@@ -300,13 +300,13 @@ export async function claimInvite(params: {
   if (params.rootNodeId.trim().length === 0) {
     throw new Error('claimInvite: rootNodeId must be non-empty');
   }
-  if (params.rootIpnsName.trim().length === 0) {
-    throw new Error('claimInvite: rootIpnsName must be non-empty');
+  if (params.shareRootIpnsName.trim().length === 0) {
+    throw new Error('claimInvite: shareRootIpnsName must be non-empty');
   }
 
   // Snapshot trimmed root identifiers (FIX #12: persist trimmed, not raw whitespace-padded input).
   const rootNodeId = params.rootNodeId.trim();
-  const rootIpnsName = params.rootIpnsName.trim();
+  const shareRootIpnsName = params.shareRootIpnsName.trim();
 
   // Snapshot key buffers BEFORE the first await so a caller that reuses or zeroes
   // these Uint8Arrays mid-await cannot corrupt the subsequent re-wrap (FIX #11).
@@ -321,8 +321,8 @@ export async function claimInvite(params: {
     // Step 2: Re-wrap using snapshotted buffers (not caller-owned params).
     // Delegates to the existing claimInviteReadKey primitive — NOT reimplemented here (D-07).
     // The intermediate readKey buffer is zeroed inside reWrapKey (T-63-05).
-    const claimerReadDescriptorRef = await claimInviteReadKey({
-      readDescriptorRef: inviteData.readDescriptorRef,
+    const claimerEncryptedReadKey = await claimInviteReadKey({
+      encryptedReadKey: inviteData.encryptedReadKey,
       ephemeralPrivateKey: ephemeralPrivateKeyCopy,
       claimerPublicKey: claimerPublicKeyCopy,
     });
@@ -332,12 +332,12 @@ export async function claimInvite(params: {
     const result = await params.insertShareFn({
       recipientPublicKey: claimerPublicKeyCopy,
       rootNodeId,
-      rootIpnsName,
+      shareRootIpnsName,
       rootGeneration: params.rootGeneration,
-      readDescriptorRef: claimerReadDescriptorRef,
+      encryptedReadKey: claimerEncryptedReadKey,
     });
 
-    return { shareId: result.shareId, readDescriptorRef: claimerReadDescriptorRef };
+    return { shareId: result.shareId, encryptedReadKey: claimerEncryptedReadKey };
   } finally {
     // Zero our owned copy of the ephemeral private key (caller-owned params.ephemeralPrivateKey
     // is NOT zeroed here per D-09 — we only zero the copy minted above).

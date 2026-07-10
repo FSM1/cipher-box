@@ -310,9 +310,47 @@ export class IpnsService {
     } else {
       const dbSeq = BigInt(existing.sequenceNumber);
       if (embeddedSeq === dbSeq) {
-        // Idempotent republish — TEE 6-hour re-sign path (D-09 / Pitfall 4).
-        // Do NOT increment the DB sequence, but still update latestCid/signedRecord below.
-        isIdempotentRepublish = true;
+        // embeddedSeq === dbSeq has two very different causes that must NOT be conflated:
+        //
+        //   (a) a GENUINE same-sequence republish — an idempotent TEE 6-hour re-sign
+        //       (same CID) or an equivocation attempt (different CID). The writer
+        //       intends to write AT the current sequence, so it carries either no
+        //       expectedSequenceNumber or expectedSequenceNumber === embeddedSeq.
+        //
+        //   (b) a FORWARD-publish CAS attempt that LOST a concurrent race. The writer
+        //       computed embeddedSeq = itsView + 1 and carries
+        //       expectedSequenceNumber === embeddedSeq - 1 (== itsView). A concurrent
+        //       writer advanced the canonical row to embeddedSeq first, so the two now
+        //       coincide. This is a CAS conflict (409), NOT equivocation (400): fall
+        //       through to the atomic CAS UPDATE below, whose stale `expected`
+        //       (embeddedSeq - 1 !== dbSeq) yields affected=0 → 409, which the client's
+        //       publishWithCas merges (ROT-05 / HIGH-4 concurrent-add-during-rotation).
+        //
+        // Only (a) is subject to the D-05 equivocation guard. Misclassifying (b) as
+        // equivocation breaks legitimate concurrent rotation republishes; it is still
+        // rejected as a write (409, affected=0 — no same-seq CID overwrite ever lands),
+        // so the D-05 equivocation protection is fully preserved.
+        const isForwardCasRace =
+          expectedSequenceNumber !== undefined &&
+          BigInt(expectedSequenceNumber) === embeddedSeq - 1n;
+        if (!isForwardCasRace) {
+          // (a) genuine same-sequence republish.
+          // The TEE lease-renewer (republish.service.ts renewIpnsRecordEol) never
+          // reaches this branch — it performs a standalone UPDATE that re-signs the
+          // existing CID/seq in place and never calls upsertIpnsRecord, so this can
+          // only be a fresh, externally-signed publish.
+          if (metadataCid !== existing.latestCid) {
+            // D-05: same sequence, different CID → equivocation, hard reject.
+            throw new BadRequestException(
+              `Same-sequence republish with a different CID rejected (equivocation): stored=${existing.latestCid}, incoming=${metadataCid}, sequence=${dbSeq}`
+            );
+          }
+          // Idempotent re-sign: do NOT increment the DB sequence, but still update
+          // latestCid/signedRecord below.
+          isIdempotentRepublish = true;
+        }
+        // else: (b) forward-CAS race — leave isIdempotentRepublish=false and fall
+        // through; the CAS UPDATE's stale `expected` produces the correct 409.
       } else if (embeddedSeq === dbSeq + 1n) {
         // Normal forward publish — increment allowed.
       } else if (embeddedSeq < dbSeq) {
@@ -450,7 +488,25 @@ export class IpnsService {
       isRoot: false, // Root folder is tracked in Vault entity
     });
 
-    const saved = await this.ipnsRecordRepository.save(folder);
+    // D-06: two brand-new publishRecord calls for the same ipnsName can race
+    // past the findOne(null) check above and both attempt this INSERT; the
+    // loser hits the DB's unique constraint on ipns_name. Translate that
+    // Postgres unique-violation (23505) into a clean, idempotent-retriable
+    // 409 instead of letting an ambiguous 500 surface. Mirrors the
+    // err.code / err.driverError.code idiom used in shares.service.ts —
+    // never QueryFailedError instanceof, which does not survive the
+    // TypeORM driver boundary reliably.
+    let saved: IpnsRecord;
+    try {
+      saved = await this.ipnsRecordRepository.save(folder);
+    } catch (err: unknown) {
+      const code = (err as { code?: string; driverError?: { code?: string } }).code;
+      const driverCode = (err as { driverError?: { code?: string } }).driverError?.code;
+      if (code === '23505' || driverCode === '23505') {
+        throw new ConflictException({ statusCode: 409, message: 'IPNS record already exists' });
+      }
+      throw err;
+    }
 
     // Auto-enroll for TEE republishing when encrypted key is provided.
     // enrollFolder is scheduling-only (2 args): signing columns live in ipns_records.

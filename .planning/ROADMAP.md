@@ -70,7 +70,7 @@
 - [x] **Phase 68: Web Integration — Rotation UX and Durable Client State** — Replace `executeLazyRotation` with `rotateReadFromNode`, durable IndexedDB generation + seq high-water (M1 defense, survives restart), `folderTree` reconcile-before-rotate (all 12 plans executed 2026-07-01; verification passed 14/14 after 68-11/68-12 gap closure, see 68-VERIFICATION.md) (completed 2026-07-01)
 - [x] **Phase 69: FUSE and WinFsp — Rust Integration and Grant-Root Awareness** — Symmetric child-key unwrap, `spawn_file_meta_reencrypt` deletion from both callers, grant-root scope computation, durable client floors, `Node` Rust enum, Rust SDK-owned read chain (Phase 68.2 parity), Windows CI gate (completed 2026-07-06)
 - [x] **Phase 70: Rotation Soundness — Deep Merge, Fresh-Record Resume, and Durable Floor Concurrency** — Local-wins merge for rotated child keys, deep `verifySubtreeClean`, true fresh-record crash-resume, grant-callback threading through the real walk, and an atomic/async-safe anti-rollback floor store (5 deferred CodeRabbit/PR-review todos) (completed 2026-07-07)
-- [ ] **Phase 71: Share-Invite Security and IPNS Data-Integrity (API)** — Validate sharer root ownership, apply-or-reject later invite grants, `claim_count` CHECK constraint, partial unique index on `ipns_records(user_id) WHERE is_root`, first-publish INSERT-race 409, same-seq CID equivocation decision, direct bulk-revoke DELETE, and `ShareInviteService` lifecycle unit coverage (8 todos)
+- [x] **Phase 71: Share-Invite Security and IPNS Data-Integrity (API)** — Validate sharer root ownership via `ipns_records` creator marker, apply-or-reject later invite grants, `claim_count` CHECK folded into the greenfield cutover, first-publish INSERT-race 409, same-seq CID equivocation hard-guard, direct bulk-revoke DELETE, `ShareInviteService` lifecycle unit coverage, plus a full share-plane rename purging "descriptor" (D-10). Root-uniqueness index dropped (D-03; already covered by vault uniqueness). (completed 2026-07-09)
 - [ ] **Phase 72: SDK Write-Plane Durability and Correctness** — Delete drops the removed child's `WriteChildRef`, fail-closed `getWriteBodyParams` on transient resolve miss, restore-to-different-parent re-homing, `SealedChildRef` size/modifiedAt mirror refresh, legacy `moveInSharedFolder` branch removal, write-plane helper dedup, and two write-chain test-fidelity fixes (8 todos)
 - [ ] **Phase 73: Shared Write/Navigation Correctness (Web)** — Preserve nested write capability across navigate-up/breadcrumb restore, invalidate stale nav-stack child snapshots, gate the non-listing read facades with the ROT-07 floor, give WRITE-03 refresh-access a live production trigger, and route drag-payload kind through the resolved listing (5 todos)
 
@@ -773,12 +773,33 @@ Plans:
 
 1. `createInvite` rejects when the caller does not own `rootIpnsName`/`rootNodeId` (ownership lookup, not verbatim copy from the DTO)
 2. `claimInvite` against an already-existing share applies the later invite's grant or explicitly rejects it (no silent `return { shareId }` that drops the grant)
-3. A DB CHECK constraint keeps `share_invites.claim_count` within `[0, max_claims]`, and a partial unique index on `ipns_records(user_id) WHERE is_root` exists (both via migration)
+3. A DB CHECK constraint keeps `share_invites.claim_count` within `[0, max_claims]` (via migration). AMENDED (D-03): the `ipns_records(user_id) WHERE is_root` partial unique index is DROPPED — one-root-per-user is already enforced by `vaults.owner_id` uniqueness
 4. The IPNS first-publish INSERT race translates the unique-violation into a 409 (not a 500), and the same-seq idempotent-republish path either guards CID equality or documents the accepted equivocation (D-09 decision recorded)
 5. `bulkRevoke` issues a single DELETE (not `find` + `remove`)
 6. `ShareInviteService` has unit coverage for `createInvite`, `getInvitesForItem`, and `revokeInvite` with realistic fixtures (not placeholder strings)
 
-**Plans**: TBD (run `/gsd-plan-phase 71`)
+**Plans**: 9/9 plans complete
+
+**Wave 1**
+
+- [x] 71-01-PLAN.md — D-10/D-04 FOUNDATION: apps/api share-plane rename (columns/entities/DTOs/services/specs, purge "descriptor") + cutover-in-place claim_count CHECK + api-client regen (SC#3)
+- [x] 71-04-PLAN.md — D-05 same-seq CID-equivocation guard + D-06 first-publish 23505→409 in ipns.service (SC#4)
+
+**Wave 2** *(after 71-01)*
+
+- [x] 71-02-PLAN.md — D-10 FOUNDATION: TS consumers rename (sdk-core/sdk/web/sdk-e2e) + surgical shareRootIpnsName + method/type renames (compiler-guided)
+- [x] 71-03-PLAN.md — D-10 FOUNDATION: Rust crates rename (*Descriptor*→*EncryptedKey*), serde aligned to JSON contract, excluding WinFsp security_descriptor
+- [x] 71-06-PLAN.md — D-01/D-02 root-ownership gate on createInvite + createShare (ipns_records creator check) + IpnsRecord DI wiring (SC#1)
+
+**Wave 3** *(after 71-04/71-02/71-06)*
+
+- [x] 71-05-PLAN.md — D-06 sdk-e2e first-publish concurrent-race backstop (live stack, SC#4)
+- [x] 71-07-PLAN.md — D-07 re-claim widen-only merge + never-downgrade backstop (SC#2)
+- [x] 71-08-PLAN.md — D-08 bulk-revoke direct DELETE in revokeForItems on share_root_ipns_name (SC#5)
+
+**Wave 4** *(after 71-06/71-07)*
+
+- [x] 71-09-PLAN.md — D-09 getInvitesForItem/revokeInvite coverage + controller fixtures + D-03 documented drop (SC#6)
 
 ---
 

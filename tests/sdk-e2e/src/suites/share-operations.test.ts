@@ -15,10 +15,10 @@ import { generateTextContent } from '../helpers/data-generators';
 /** Shape of a received/sent share object in the v3 API response (share-response.dto.ts) */
 interface ShareResponse {
   shareId: string;
-  readDescriptorRef: string;
-  writeDescriptorRef: string | null;
+  encryptedReadKey: string;
+  encryptedWriteKey: string | null;
   rootNodeId: string;
-  rootIpnsName: string;
+  shareRootIpnsName: string;
 }
 
 describe('Share Operations', () => {
@@ -56,10 +56,10 @@ describe('Share Operations', () => {
       'text/plain'
     );
 
-    // Wrap the folder readKey for Bob using ECIES (the v3 readDescriptorRef).
+    // Wrap the folder readKey for Bob using ECIES (the v3 encryptedReadKey).
     const encryptedKey = await wrapKey(folder.folderKey, bob.publicKey);
 
-    // Create share via API (v3 CreateShareDto: readDescriptorRef + rootNodeId + rootIpnsName)
+    // Create share via API (v3 CreateShareDto: encryptedReadKey + rootNodeId + shareRootIpnsName)
     const res = await testFetch(`${API_URL}/shares`, {
       method: 'POST',
       headers: {
@@ -68,9 +68,9 @@ describe('Share Operations', () => {
       },
       body: JSON.stringify({
         recipientPublicKey: '0x' + bytesToHex(bob.publicKey),
-        readDescriptorRef: bytesToHex(encryptedKey),
+        encryptedReadKey: bytesToHex(encryptedKey),
         rootNodeId: folder.id,
-        rootIpnsName: folder.ipnsName,
+        shareRootIpnsName: folder.ipnsName,
       }),
     });
 
@@ -92,8 +92,8 @@ describe('Share Operations', () => {
     expect(data.shares.length).toBeGreaterThanOrEqual(1);
     const share = data.shares.find((s: ShareResponse) => s.shareId === shareId);
     expect(share).toBeTruthy();
-    // v3 shares carry root identity (rootIpnsName/rootNodeId), not itemName/itemType.
-    expect(share.rootIpnsName).toBe(sharedFolderIpnsName);
+    // v3 shares carry root identity (shareRootIpnsName/rootNodeId), not itemName/itemType.
+    expect(share.shareRootIpnsName).toBe(sharedFolderIpnsName);
     expect(share.rootNodeId).toBe(sharedNodeId);
   });
 
@@ -119,8 +119,8 @@ describe('Share Operations', () => {
     const data = await res.json();
     const share = data.shares.find((s: ShareResponse) => s.shareId === shareId);
 
-    // Bob unwraps the readDescriptorRef with his private key (hex-encoded ECIES).
-    const folderKey = await unwrapKey(hexToBytes(share.readDescriptorRef), bob.privateKey);
+    // Bob unwraps the encryptedReadKey with his private key (hex-encoded ECIES).
+    const folderKey = await unwrapKey(hexToBytes(share.encryptedReadKey), bob.privateKey);
     expect(folderKey.length).toBe(32); // AES-256 key
   });
 
@@ -138,9 +138,9 @@ describe('Share Operations', () => {
       },
       body: JSON.stringify({
         recipientPublicKey: '0x' + bytesToHex(alice.publicKey),
-        readDescriptorRef: bytesToHex(selfKey),
+        encryptedReadKey: bytesToHex(selfKey),
         rootNodeId: alice.rootNodeId,
-        rootIpnsName: alice.rootIpnsName,
+        shareRootIpnsName: alice.rootIpnsName,
       }),
     });
 

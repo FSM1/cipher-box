@@ -26,8 +26,8 @@ import { useAuthStore } from '../stores/auth.store';
 import { getSdkClient, hasSdkClient } from '../lib/sdk-provider';
 import { logger } from '../lib/logger';
 
-/** A decoded sent-share row, enriched with `rootIpnsName` for the FolderTree lookup below. */
-type DecodedSentGrant = GrantRow & { rootIpnsName: string };
+/** A decoded sent-share row, enriched with `shareRootIpnsName` for the FolderTree lookup below. */
+type DecodedSentGrant = GrantRow & { shareRootIpnsName: string };
 
 /**
  * Fetch + decode every share the owner has sent.
@@ -62,7 +62,7 @@ async function decodeSentGrants(): Promise<DecodedSentGrant[]> {
           recipientPublicKey: hexToBytes(bareHex),
           isRevoked: false,
           rootNodeId: share.rootNodeId,
-          rootIpnsName: share.rootIpnsName,
+          shareRootIpnsName: share.shareRootIpnsName,
         });
       } catch (error) {
         logger.error(
@@ -89,11 +89,11 @@ async function listSentGrants(): Promise<GrantRow[]> {
 
 async function updateGrant(
   shareId: string,
-  readDescriptorRef: string,
+  encryptedReadKey: string,
   generation: number
 ): Promise<void> {
   await sharesControllerUpdateGrant(shareId, {
-    readDescriptorRef,
+    encryptedReadKey,
     rootGeneration: String(generation),
   });
 }
@@ -168,18 +168,18 @@ export async function triggerOwnerReconcileOnLogin(): Promise<void> {
   // The client can be torn down (logout) while the fetch above was in flight.
   if (!hasSdkClient()) return;
 
-  const distinctRoots = new Map<string, string>(); // rootNodeId -> rootIpnsName
+  const distinctRoots = new Map<string, string>(); // rootNodeId -> shareRootIpnsName
   for (const grant of decoded) {
     if (!distinctRoots.has(grant.rootNodeId)) {
-      distinctRoots.set(grant.rootNodeId, grant.rootIpnsName);
+      distinctRoots.set(grant.rootNodeId, grant.shareRootIpnsName);
     }
   }
 
   const client = getSdkClient();
   const folderTree = client.getFolderTree();
 
-  for (const [rootNodeId, rootIpnsName] of distinctRoots) {
-    const folderState = folderTree.get(rootIpnsName);
+  for (const [rootNodeId, shareRootIpnsName] of distinctRoots) {
+    const folderState = folderTree.get(shareRootIpnsName);
     if (!folderState) {
       // Not loaded in-memory yet -- best-effort skip (see doc comment above).
       continue;
@@ -212,11 +212,11 @@ export async function triggerOwnerReconcileOnLogin(): Promise<void> {
  *
  * Sourced the same way as the eager login sweep: the CURRENT
  * `folderKey`/`nodeGeneration` from the SDK's in-memory `FolderTree`.
- * Best-effort: skipped when `rootIpnsName` is not a known sent-grant root,
+ * Best-effort: skipped when `shareRootIpnsName` is not a known sent-grant root,
  * or when the folder isn't currently loaded in-memory. Fire-and-forget;
  * errors are captured and logged, never thrown to the caller.
  */
-export async function runOwnerReconcileForFolder(rootIpnsName: string): Promise<void> {
+export async function runOwnerReconcileForFolder(shareRootIpnsName: string): Promise<void> {
   if (!hasSdkClient()) return;
 
   let decoded: DecodedSentGrant[];
@@ -224,7 +224,7 @@ export async function runOwnerReconcileForFolder(rootIpnsName: string): Promise<
     decoded = await decodeSentGrants();
   } catch (error) {
     logger.error(
-      `[owner-reconcile] Failed to fetch sent grants for opportunistic reconcile of ${rootIpnsName}:`,
+      `[owner-reconcile] Failed to fetch sent grants for opportunistic reconcile of ${shareRootIpnsName}:`,
       safeError(error)
     );
     return;
@@ -233,11 +233,11 @@ export async function runOwnerReconcileForFolder(rootIpnsName: string): Promise<
   // The client can be torn down (logout) while the fetch above was in flight.
   if (!hasSdkClient()) return;
 
-  const grant = decoded.find((candidate) => candidate.rootIpnsName === rootIpnsName);
+  const grant = decoded.find((candidate) => candidate.shareRootIpnsName === shareRootIpnsName);
   if (!grant) return; // not a grant root -- nothing to reconcile
 
   const client = getSdkClient();
-  const folderState = client.getFolderTree().get(rootIpnsName);
+  const folderState = client.getFolderTree().get(shareRootIpnsName);
   if (!folderState) return; // best-effort skip, same as the eager login sweep
 
   try {

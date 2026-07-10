@@ -6,10 +6,11 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource, In } from 'typeorm';
+import { Repository, DataSource } from 'typeorm';
 import { Share } from './entities/share.entity';
 import { ShareInvite } from './entities/share-invite.entity';
 import { User } from '../auth/entities/user.entity';
+import { IpnsRecord } from '../ipns/entities/ipns-record.entity';
 import { CreateShareDto } from './dto/create-share.dto';
 
 @Injectable()
@@ -19,15 +20,30 @@ export class SharesService {
     private readonly shareRepo: Repository<Share>,
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
+    @InjectRepository(IpnsRecord)
+    private readonly ipnsRecordRepo: Repository<IpnsRecord>,
     private readonly dataSource: DataSource
   ) {}
 
   /**
-   * Create a new share record with descriptor refs (DATA-02).
+   * Create a new share record with encrypted keys (DATA-02).
    * Validates recipient exists and is not the sharer.
    * Prevents duplicate grants for the same root node / recipient pair.
    */
   async createShare(sharerId: string, dto: CreateShareDto): Promise<Share> {
+    // D-01/SC#1 root-ownership gate (defense-in-depth, non-authoritative): reads the
+    // ipns_records creator marker to reject callers who never registered this node.
+    // The true access boundary is cryptographic (the sharer can only wrap keys they
+    // hold) — this is a cheap anti-spoof check atop that boundary. Per D-02, only
+    // shareRootIpnsName ownership is verified here; rootNodeId stays client-asserted.
+    // Runs fail-fast, before the recipient lookup.
+    const owned = await this.ipnsRecordRepo.findOne({
+      where: { ipnsName: dto.shareRootIpnsName, userId: sharerId },
+    });
+    if (!owned) {
+      throw new ForbiddenException('You are not the registered owner of this node');
+    }
+
     // Look up recipient by publicKey
     // Strip 0x prefix if present — DB stores bare hex
     const normalizedPubKey = dto.recipientPublicKey.startsWith('0x')
@@ -61,12 +77,10 @@ export class SharesService {
     const share = this.shareRepo.create({
       sharerId,
       recipientId: recipient.id,
-      readDescriptorRef: Buffer.from(dto.readDescriptorRef, 'hex'),
-      writeDescriptorRef: dto.writeDescriptorRef
-        ? Buffer.from(dto.writeDescriptorRef, 'hex')
-        : null,
+      encryptedReadKey: Buffer.from(dto.encryptedReadKey, 'hex'),
+      encryptedWriteKey: dto.encryptedWriteKey ? Buffer.from(dto.encryptedWriteKey, 'hex') : null,
       rootNodeId: dto.rootNodeId,
-      rootIpnsName: dto.rootIpnsName,
+      shareRootIpnsName: dto.shareRootIpnsName,
       rootGeneration: dto.rootGeneration ?? '0',
       itemNameEncrypted: dto.itemNameEncrypted ? Buffer.from(dto.itemNameEncrypted, 'hex') : null,
       hiddenByRecipient: false,
@@ -151,7 +165,7 @@ export class SharesService {
    * names, in a single transaction. Used when an owner deletes an item (file or
    * folder subtree) to the recycle bin.
    *
-   * - Shares: HARD-deleted by rootIpnsName (D-11).
+   * - Shares: HARD-deleted by shareRootIpnsName (D-11).
    * - Invites: active ShareInvite rows are marked 'revoked'.
    *
    * Scoped to `sharerId = caller` so a user can only revoke their own shares.
@@ -168,12 +182,13 @@ export class SharesService {
     }
 
     return this.dataSource.transaction(async (manager) => {
-      const shares = await manager.find(Share, {
-        where: { sharerId, rootIpnsName: In(uniqueNames) },
-      });
-      if (shares.length > 0) {
-        await manager.remove(shares);
-      }
+      const shareResult = await manager
+        .createQueryBuilder()
+        .delete()
+        .from(Share)
+        .where('sharer_id = :sharerId', { sharerId })
+        .andWhere('share_root_ipns_name IN (:...names)', { names: uniqueNames })
+        .execute();
 
       // Mark active invites for these items as revoked
       const inviteResult = await manager
@@ -181,12 +196,12 @@ export class SharesService {
         .update(ShareInvite)
         .set({ status: 'revoked' })
         .where('sharer_id = :sharerId', { sharerId })
-        .andWhere('root_ipns_name IN (:...names)', { names: uniqueNames })
+        .andWhere('share_root_ipns_name IN (:...names)', { names: uniqueNames })
         .andWhere('status = :status', { status: 'active' })
         .execute();
 
       return {
-        revokedShares: shares.length,
+        revokedShares: shareResult.affected ?? 0,
         revokedInvites: inviteResult.affected ?? 0,
       };
     });
@@ -228,31 +243,31 @@ export class SharesService {
   }
 
   /**
-   * Persist a rotated readDescriptorRef and rootGeneration on an existing share.
+   * Persist a rotated encryptedReadKey and rootGeneration on an existing share.
    * Only the sharer (owner) can update it — the owner drives grant re-mint on
    * key rotation (D-10/D-11, 68-07 owner reconcile). The server never
    * re-encrypts — it persists the client-supplied ciphertext as-is.
    *
-   * `writeDescriptorRef`/`clearWriteDescriptor` additionally support the
+   * `encryptedWriteKey`/`clearEncryptedWriteKey` additionally support the
    * read->write upgrade / write->read downgrade paths (68.1-19): when
-   * `writeDescriptorRef` is supplied, it sets the share's write descriptor
-   * (upgrade). When `clearWriteDescriptor` is true, it clears the share's
-   * write descriptor to null (downgrade). When neither is supplied — the
-   * existing read-descriptor-rotation-only call shape (owner-reconcile,
-   * D-10/D-11) — `writeDescriptorRef` is left completely unchanged (T-68.1-19-02).
+   * `encryptedWriteKey` is supplied, it sets the share's write key
+   * (upgrade). When `clearEncryptedWriteKey` is true, it clears the share's
+   * write key to null (downgrade). When neither is supplied — the
+   * existing read-key-rotation-only call shape (owner-reconcile,
+   * D-10/D-11) — `encryptedWriteKey` is left completely unchanged (T-68.1-19-02).
    * The two are mutually exclusive.
    */
   async updateGrant(
     shareId: string,
     sharerId: string,
-    readDescriptorRef: string,
+    encryptedReadKey: string,
     rootGeneration: string,
-    writeDescriptorRef?: string,
-    clearWriteDescriptor?: boolean
+    encryptedWriteKey?: string,
+    clearEncryptedWriteKey?: boolean
   ): Promise<void> {
-    if (writeDescriptorRef && clearWriteDescriptor) {
+    if (encryptedWriteKey && clearEncryptedWriteKey) {
       throw new BadRequestException(
-        'writeDescriptorRef and clearWriteDescriptor are mutually exclusive'
+        'encryptedWriteKey and clearEncryptedWriteKey are mutually exclusive'
       );
     }
 
@@ -281,14 +296,14 @@ export class SharesService {
         );
       }
 
-      share.readDescriptorRef = Buffer.from(readDescriptorRef, 'hex');
+      share.encryptedReadKey = Buffer.from(encryptedReadKey, 'hex');
       share.rootGeneration = rootGeneration;
-      if (clearWriteDescriptor) {
-        share.writeDescriptorRef = null;
-      } else if (writeDescriptorRef) {
-        share.writeDescriptorRef = Buffer.from(writeDescriptorRef, 'hex');
+      if (clearEncryptedWriteKey) {
+        share.encryptedWriteKey = null;
+      } else if (encryptedWriteKey) {
+        share.encryptedWriteKey = Buffer.from(encryptedWriteKey, 'hex');
       }
-      // else: leave share.writeDescriptorRef untouched (read-only rotation).
+      // else: leave share.encryptedWriteKey untouched (read-only rotation).
       await manager.save(share);
     });
   }

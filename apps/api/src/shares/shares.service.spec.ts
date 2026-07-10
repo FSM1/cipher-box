@@ -6,11 +6,12 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { DataSource, In } from 'typeorm';
+import { DataSource } from 'typeorm';
 import { SharesService } from './shares.service';
 import { Share } from './entities/share.entity';
 import { ShareInvite } from './entities/share-invite.entity';
 import { User } from '../auth/entities/user.entity';
+import { IpnsRecord } from '../ipns/entities/ipns-record.entity';
 import { CreateShareDto } from './dto/create-share.dto';
 
 type RepoMock = jest.Mocked<Record<string, jest.Mock>>;
@@ -25,10 +26,10 @@ function createMockShare(overrides: Partial<Share> = {}): Share {
     id: 'share-uuid-1',
     sharerId: SHARER_ID,
     recipientId: RECIPIENT_ID,
-    readDescriptorRef: Buffer.from('aa'.repeat(32), 'hex'),
-    writeDescriptorRef: null,
+    encryptedReadKey: Buffer.from('aa'.repeat(32), 'hex'),
+    encryptedWriteKey: null,
     rootNodeId: 'root-node-uuid-1',
-    rootIpnsName: 'k51qzi5uqu5test',
+    shareRootIpnsName: 'k51qzi5uqu5test',
     rootGeneration: '0',
     itemNameEncrypted: null,
     hiddenByRecipient: false,
@@ -41,9 +42,9 @@ function createMockShare(overrides: Partial<Share> = {}): Share {
 function createDto(overrides: Partial<CreateShareDto> = {}): CreateShareDto {
   return {
     recipientPublicKey: BARE_PUBKEY,
-    readDescriptorRef: 'aa'.repeat(32),
+    encryptedReadKey: 'aa'.repeat(32),
     rootNodeId: 'root-node-uuid-1',
-    rootIpnsName: 'k51qzi5uqu5test',
+    shareRootIpnsName: 'k51qzi5uqu5test',
     ...overrides,
   } as CreateShareDto;
 }
@@ -52,6 +53,7 @@ describe('SharesService', () => {
   let service: SharesService;
   let shareRepo: RepoMock;
   let userRepo: RepoMock;
+  let ipnsRecordRepo: RepoMock;
   let dataSource: { transaction: jest.Mock };
   let manager: {
     find: jest.Mock;
@@ -75,7 +77,15 @@ describe('SharesService', () => {
       findOne: jest.fn(),
     };
 
+    // Default: caller IS the registered owner of the shared node (D-01/SC#1).
+    // Individual root-ownership tests override this per-case.
+    ipnsRecordRepo = {
+      findOne: jest.fn().mockResolvedValue({ id: 'ipns-record-1' }),
+    };
+
     queryBuilder = {
+      delete: jest.fn().mockReturnThis(),
+      from: jest.fn().mockReturnThis(),
       update: jest.fn().mockReturnThis(),
       set: jest.fn().mockReturnThis(),
       where: jest.fn().mockReturnThis(),
@@ -102,6 +112,7 @@ describe('SharesService', () => {
         SharesService,
         { provide: getRepositoryToken(Share), useValue: shareRepo },
         { provide: getRepositoryToken(User), useValue: userRepo },
+        { provide: getRepositoryToken(IpnsRecord), useValue: ipnsRecordRepo },
         { provide: DataSource, useValue: dataSource },
       ],
     }).compile();
@@ -117,6 +128,18 @@ describe('SharesService', () => {
   // createShare()
   // ===========================================================================
   describe('createShare', () => {
+    it('throws ForbiddenException when the caller did not register shareRootIpnsName in ipns_records (D-01/SC#1)', async () => {
+      ipnsRecordRepo.findOne.mockResolvedValue(null);
+
+      await expect(service.createShare(SHARER_ID, createDto())).rejects.toThrow(ForbiddenException);
+      expect(ipnsRecordRepo.findOne).toHaveBeenCalledWith({
+        where: { ipnsName: createDto().shareRootIpnsName, userId: SHARER_ID },
+      });
+      expect(shareRepo.save).not.toHaveBeenCalled();
+      // Fail-fast: the root-ownership gate runs before the recipient lookup
+      expect(userRepo.findOne).not.toHaveBeenCalled();
+    });
+
     it('creates a read-only share for a valid recipient (happy path)', async () => {
       userRepo.findOne.mockResolvedValue({ id: RECIPIENT_ID, publicKey: BARE_PUBKEY });
       shareRepo.findOne.mockResolvedValue(null);
@@ -129,13 +152,13 @@ describe('SharesService', () => {
       expect(result).toBe(built);
       // Recipient looked up by bare hex pubkey
       expect(userRepo.findOne).toHaveBeenCalledWith({ where: { publicKey: BARE_PUBKEY } });
-      // Read-only: writeDescriptorRef null, itemNameEncrypted null, rootGeneration defaulted
+      // Read-only: encryptedWriteKey null, itemNameEncrypted null, rootGeneration defaulted
       expect(shareRepo.create).toHaveBeenCalledWith(
         expect.objectContaining({
           sharerId: SHARER_ID,
           recipientId: RECIPIENT_ID,
-          readDescriptorRef: Buffer.from('aa'.repeat(32), 'hex'),
-          writeDescriptorRef: null,
+          encryptedReadKey: Buffer.from('aa'.repeat(32), 'hex'),
+          encryptedWriteKey: null,
           rootGeneration: '0',
           itemNameEncrypted: null,
           hiddenByRecipient: false,
@@ -166,7 +189,7 @@ describe('SharesService', () => {
       await service.createShare(
         SHARER_ID,
         createDto({
-          writeDescriptorRef: 'bb'.repeat(32),
+          encryptedWriteKey: 'bb'.repeat(32),
           rootGeneration: '7',
           itemNameEncrypted: 'cc'.repeat(8),
         })
@@ -174,7 +197,7 @@ describe('SharesService', () => {
 
       expect(shareRepo.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          writeDescriptorRef: Buffer.from('bb'.repeat(32), 'hex'),
+          encryptedWriteKey: Buffer.from('bb'.repeat(32), 'hex'),
           rootGeneration: '7',
           itemNameEncrypted: Buffer.from('cc'.repeat(8), 'hex'),
         })
@@ -316,37 +339,46 @@ describe('SharesService', () => {
       expect(dataSource.transaction).not.toHaveBeenCalled();
     });
 
-    it('hard-deletes matching shares and revokes active invites in a transaction', async () => {
-      const shares = [createMockShare(), createMockShare({ id: 'share-uuid-2' })];
-      manager.find.mockResolvedValue(shares);
-      queryBuilder.execute.mockResolvedValue({ affected: 3 });
+    it('deletes matching shares via a single query-builder DELETE and revokes active invites in a transaction', async () => {
+      // Sequenced execute results: share DELETE first, then invite UPDATE.
+      queryBuilder.execute
+        .mockResolvedValueOnce({ affected: 3 })
+        .mockResolvedValueOnce({ affected: 2 });
 
       const result = await service.revokeForItems(SHARER_ID, ['k51a', 'k51b', 'k51a']);
 
-      expect(result).toEqual({ revokedShares: 2, revokedInvites: 3 });
-      // De-duped names threaded into both the share query and the invite update
-      expect(manager.find).toHaveBeenCalledWith(Share, {
-        where: { sharerId: SHARER_ID, rootIpnsName: In(['k51a', 'k51b']) },
+      expect(result).toEqual({ revokedShares: 3, revokedInvites: 2 });
+      // find+remove round-trip is gone entirely
+      expect(manager.find).not.toHaveBeenCalled();
+      expect(manager.remove).not.toHaveBeenCalled();
+      // De-duped names threaded into the share DELETE, mirroring the invite UPDATE binding style
+      expect(queryBuilder.delete).toHaveBeenCalledWith();
+      expect(queryBuilder.from).toHaveBeenCalledWith(Share);
+      expect(queryBuilder.where).toHaveBeenCalledWith('sharer_id = :sharerId', {
+        sharerId: SHARER_ID,
       });
-      expect(manager.remove).toHaveBeenCalledWith(shares);
+      expect(queryBuilder.andWhere).toHaveBeenCalledWith('share_root_ipns_name IN (:...names)', {
+        names: ['k51a', 'k51b'],
+      });
       expect(queryBuilder.update).toHaveBeenCalledWith(ShareInvite);
       expect(queryBuilder.set).toHaveBeenCalledWith({ status: 'revoked' });
       expect(queryBuilder.andWhere).toHaveBeenCalledWith('status = :status', { status: 'active' });
     });
 
-    it('skips manager.remove when no shares match but still revokes invites', async () => {
-      manager.find.mockResolvedValue([]);
-      queryBuilder.execute.mockResolvedValue({ affected: 1 });
+    it('returns zero revoked shares when no shares match but still revokes invites', async () => {
+      queryBuilder.execute
+        .mockResolvedValueOnce({ affected: 0 })
+        .mockResolvedValueOnce({ affected: 1 });
 
       const result = await service.revokeForItems(SHARER_ID, ['k51a']);
 
       expect(result).toEqual({ revokedShares: 0, revokedInvites: 1 });
+      expect(manager.find).not.toHaveBeenCalled();
       expect(manager.remove).not.toHaveBeenCalled();
     });
 
-    it('treats an undefined affected count as zero revoked invites', async () => {
-      manager.find.mockResolvedValue([]);
-      queryBuilder.execute.mockResolvedValue({});
+    it('treats an undefined affected count as zero for both shares and invites', async () => {
+      queryBuilder.execute.mockResolvedValueOnce({}).mockResolvedValueOnce({});
 
       const result = await service.revokeForItems(SHARER_ID, ['k51a']);
 
@@ -415,7 +447,7 @@ describe('SharesService', () => {
   });
 
   describe('updateGrant', () => {
-    it('persists the rotated descriptor and advances rootGeneration for the sharer', async () => {
+    it('persists the rotated key and advances rootGeneration for the sharer', async () => {
       const share = createMockShare({ rootGeneration: '2' });
       manager.findOne.mockResolvedValue(share);
 
@@ -425,7 +457,7 @@ describe('SharesService', () => {
         where: { id: 'share-uuid-1' },
         lock: { mode: 'pessimistic_write' },
       });
-      expect(share.readDescriptorRef).toEqual(Buffer.from('bb'.repeat(32), 'hex'));
+      expect(share.encryptedReadKey).toEqual(Buffer.from('bb'.repeat(32), 'hex'));
       expect(share.rootGeneration).toBe('3');
       expect(manager.save).toHaveBeenCalledWith(share);
     });
@@ -466,41 +498,41 @@ describe('SharesService', () => {
       expect(manager.save).not.toHaveBeenCalled();
     });
 
-    it('leaves writeDescriptorRef unchanged when neither writeDescriptorRef nor clearWriteDescriptor is supplied (read-only rotation, T-68.1-19-02)', async () => {
+    it('leaves encryptedWriteKey unchanged when neither encryptedWriteKey nor clearEncryptedWriteKey is supplied (read-only rotation, T-68.1-19-02)', async () => {
       const existingWrite = Buffer.from('cc'.repeat(32), 'hex');
-      const share = createMockShare({ rootGeneration: '2', writeDescriptorRef: existingWrite });
+      const share = createMockShare({ rootGeneration: '2', encryptedWriteKey: existingWrite });
       manager.findOne.mockResolvedValue(share);
 
       await service.updateGrant('share-uuid-1', SHARER_ID, 'bb'.repeat(32), '3');
 
-      expect(share.writeDescriptorRef).toBe(existingWrite);
+      expect(share.encryptedWriteKey).toBe(existingWrite);
       expect(manager.save).toHaveBeenCalledWith(share);
     });
 
-    it('sets writeDescriptorRef when supplied (read->write upgrade)', async () => {
-      const share = createMockShare({ rootGeneration: '2', writeDescriptorRef: null });
+    it('sets encryptedWriteKey when supplied (read->write upgrade)', async () => {
+      const share = createMockShare({ rootGeneration: '2', encryptedWriteKey: null });
       manager.findOne.mockResolvedValue(share);
 
       await service.updateGrant('share-uuid-1', SHARER_ID, 'bb'.repeat(32), '3', 'dd'.repeat(32));
 
-      expect(share.writeDescriptorRef).toEqual(Buffer.from('dd'.repeat(32), 'hex'));
+      expect(share.encryptedWriteKey).toEqual(Buffer.from('dd'.repeat(32), 'hex'));
       expect(manager.save).toHaveBeenCalledWith(share);
     });
 
-    it('clears writeDescriptorRef to null when clearWriteDescriptor is true (write->read downgrade)', async () => {
+    it('clears encryptedWriteKey to null when clearEncryptedWriteKey is true (write->read downgrade)', async () => {
       const share = createMockShare({
         rootGeneration: '2',
-        writeDescriptorRef: Buffer.from('cc'.repeat(32), 'hex'),
+        encryptedWriteKey: Buffer.from('cc'.repeat(32), 'hex'),
       });
       manager.findOne.mockResolvedValue(share);
 
       await service.updateGrant('share-uuid-1', SHARER_ID, 'bb'.repeat(32), '3', undefined, true);
 
-      expect(share.writeDescriptorRef).toBeNull();
+      expect(share.encryptedWriteKey).toBeNull();
       expect(manager.save).toHaveBeenCalledWith(share);
     });
 
-    it('throws BadRequestException when both writeDescriptorRef and clearWriteDescriptor are supplied', async () => {
+    it('throws BadRequestException when both encryptedWriteKey and clearEncryptedWriteKey are supplied', async () => {
       await expect(
         service.updateGrant('share-uuid-1', SHARER_ID, 'bb'.repeat(32), '3', 'dd'.repeat(32), true)
       ).rejects.toThrow(BadRequestException);

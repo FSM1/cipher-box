@@ -44,7 +44,7 @@ describe('CipherBoxClient.downloadSharedFile', () => {
     client = new CipherBoxClient(createTestConfig());
   });
 
-  it('bridges the hex readDescriptorRef to base64, fetches + decrypts the leaf content (GCM), and zeroes the recovered fileKey', async () => {
+  it('bridges the hex encryptedReadKey to base64, fetches + decrypts the leaf content (GCM), and zeroes the recovered fileKey', async () => {
     const fileKey = new Uint8Array(32).fill(0x55);
     const plaintext = new TextEncoder().encode('hello shared file');
     const iv = new Uint8Array(12).fill(0x01);
@@ -67,14 +67,14 @@ describe('CipherBoxClient.downloadSharedFile', () => {
     vi.mocked(sdkCore.navigateReadChain).mockResolvedValue(navigateResult);
     vi.mocked(sdkCore.fetchFromIpfs).mockResolvedValue(ciphertext);
 
-    const rawDescriptor = new Uint8Array([1, 2, 3, 4, 5]);
-    const readDescriptorRefHex = bytesToHex(rawDescriptor);
+    const rawEncryptedKey = new Uint8Array([1, 2, 3, 4, 5]);
+    const encryptedReadKeyHex = bytesToHex(rawEncryptedKey);
     const recipientPrivateKey = new Uint8Array(32).fill(0x99);
 
     const result = await client.downloadSharedFile({
-      readDescriptorRef: readDescriptorRefHex,
+      encryptedReadKey: encryptedReadKeyHex,
       recipientPrivateKey,
-      rootIpnsName: 'k51root',
+      shareRootIpnsName: 'k51root',
       rootExpectedGeneration: 0,
       path: ['k51leaf'],
     });
@@ -87,9 +87,9 @@ describe('CipherBoxClient.downloadSharedFile', () => {
 
     // Bridged to base64 correctly before calling navigateReadChain.
     const callArgs = vi.mocked(sdkCore.navigateReadChain).mock.calls[0][0];
-    expect(callArgs.readDescriptorRef).toBe(bytesToBase64(rawDescriptor));
+    expect(callArgs.encryptedReadKey).toBe(bytesToBase64(rawEncryptedKey));
     expect(callArgs.recipientPrivKey).toBe(recipientPrivateKey);
-    expect(callArgs.rootIpnsName).toBe('k51root');
+    expect(callArgs.shareRootIpnsName).toBe('k51root');
     expect(callArgs.rootExpectedGeneration).toBe(0);
     expect(callArgs.path).toEqual(['k51leaf']);
 
@@ -123,9 +123,9 @@ describe('CipherBoxClient.downloadSharedFile', () => {
     vi.mocked(sdkCore.fetchFromIpfs).mockResolvedValue(ciphertext);
 
     const result = await client.downloadSharedFile({
-      readDescriptorRef: bytesToHex(new Uint8Array([9, 9])),
+      encryptedReadKey: bytesToHex(new Uint8Array([9, 9])),
       recipientPrivateKey: new Uint8Array(32).fill(0x11),
-      rootIpnsName: 'k51root',
+      shareRootIpnsName: 'k51root',
       rootExpectedGeneration: 0,
       path: [],
     });
@@ -140,9 +140,9 @@ describe('CipherBoxClient.downloadSharedFile', () => {
     vi.mocked(sdkCore.navigateReadChain).mockResolvedValue({ status: 'revoked' });
 
     const result = await client.downloadSharedFile({
-      readDescriptorRef: bytesToHex(new Uint8Array([1])),
+      encryptedReadKey: bytesToHex(new Uint8Array([1])),
       recipientPrivateKey: new Uint8Array(32).fill(1),
-      rootIpnsName: 'k51root',
+      shareRootIpnsName: 'k51root',
       rootExpectedGeneration: 0,
       path: [],
     });
@@ -155,9 +155,9 @@ describe('CipherBoxClient.downloadSharedFile', () => {
     vi.mocked(sdkCore.navigateReadChain).mockResolvedValue({ status: 'behind-retry' });
 
     const result = await client.downloadSharedFile({
-      readDescriptorRef: bytesToHex(new Uint8Array([1])),
+      encryptedReadKey: bytesToHex(new Uint8Array([1])),
       recipientPrivateKey: new Uint8Array(32).fill(1),
-      rootIpnsName: 'k51root',
+      shareRootIpnsName: 'k51root',
       rootExpectedGeneration: 0,
       path: [],
     });
