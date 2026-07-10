@@ -2821,6 +2821,11 @@ export class CipherBoxClient {
       // key — T-68.1-01-03).
       let rehomedDestWriteChildren = destWriteBodyParams.writeChildren;
       let rehomedSourceWriteChildren = sourceWriteBodyParams.writeChildren;
+      // Base snapshot for the SOURCE publish's CAS-409 merge (threaded below).
+      // Populated only when a WriteChildRef is actually re-homed (see the
+      // `if (movedWriteKey)` branch) -- when nothing changes, the source
+      // write-body republishes verbatim and no base-aware merge is needed.
+      let sourceBaseWriteChildren: WriteChildRef[] | undefined;
 
       if (!destWriteBodyParams.writeKey || !sourceWriteBodyParams.writeKey) {
         console.warn(
@@ -2856,6 +2861,12 @@ export class CipherBoxClient {
               ...(destWriteBodyParams.writeChildren ?? []),
               { childId: childPub.id, writeKeySealed },
             ];
+            // Capture the pre-drop snapshot as baseWriteChildren (mirrors
+            // deleteItem's pattern): a CAS-409 retry's base-aware merge
+            // (registration.ts) then prunes this childId's drop instead of
+            // letting a racing writer's stale remote snapshot resurrect it
+            // in the SOURCE folder (write-chain-resurrection fix).
+            sourceBaseWriteChildren = sourceWriteBodyParams.writeChildren;
             rehomedSourceWriteChildren = (sourceWriteBodyParams.writeChildren ?? []).filter(
               (wc) => wc.childId !== childPub.id
             );
@@ -2923,6 +2934,7 @@ export class CipherBoxClient {
         readKey: sourceFolder.folderKey,
         writeKey: sourceWriteBodyParams.writeKey,
         writeChildren: rehomedSourceWriteChildren,
+        baseWriteChildren: sourceBaseWriteChildren,
         ipnsPrivateKey: sourceFolder.ipnsKeypair.privateKey,
         ipnsName: sourceIpnsName,
         sequenceNumber: sourceFolder.sequenceNumber,
