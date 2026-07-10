@@ -86,6 +86,19 @@ import type { BinState } from './bin';
 import * as shareOps from './share';
 import { resolveChildren, type ResolvedChild } from './folder-listing';
 
+/**
+ * True only for a non-null, exactly-32-byte, not-all-zero writeKey (72-08
+ * SC#6: single definition replacing the ~6 inline `wk.length === 32 &&
+ * !wk.every((b) => b === 0)` spellings and the 2 duplicated local
+ * `hasRealWriteKey` closures previously scattered across this file).
+ *
+ * Pure read — a borrow per the D-09 buffer-ownership contract (RESEARCH.md
+ * "Buffer Ownership Table"): never mutates or zeroes `wk`.
+ */
+function hasRealWriteKey(wk: Uint8Array | null | undefined): boolean {
+  return !!wk && wk.length === 32 && !wk.every((b) => b === 0);
+}
+
 /** Maximum concurrent encrypt+pin operations for batch uploads. */
 const UPLOAD_CONCURRENCY = 3;
 
@@ -1242,7 +1255,7 @@ export class CipherBoxClient {
     folder: FolderState
   ): Promise<{ writeKey?: Uint8Array; writeChildren?: WriteChildRef[] }> {
     const wk = folder.writeKey;
-    if (!wk || wk.length !== 32 || wk.every((b) => b === 0)) {
+    if (!hasRealWriteKey(wk)) {
       return {};
     }
     if (folder.metadata?.writeBody) {
@@ -1434,9 +1447,7 @@ export class CipherBoxClient {
     for (const childRef of parentNode.children ?? []) {
       const cachedChild = this.folderTree.get(childRef.ipnsName);
       const cachedWriteKey = cachedChild?.writeKey;
-      const cachedHasRealWriteKey =
-        !!cachedWriteKey && cachedWriteKey.length === 32 && !cachedWriteKey.every((b) => b === 0);
-      if (cachedChild && cachedHasRealWriteKey) {
+      if (cachedChild && hasRealWriteKey(cachedWriteKey)) {
         if (childRef.ipnsName === targetIpnsName) return cachedChild;
         // Only DESCEND THROUGH a cached child that is actually traversable — i.e.
         // has an unsealed write-body mirror. A registerFolder-seeded entry
@@ -1698,9 +1709,7 @@ export class CipherBoxClient {
       return existing;
     }
 
-    const wk = existing.writeKey;
-    const hasRealWriteKey = !!wk && wk.length === 32 && !wk.every((b) => b === 0);
-    const node = hasRealWriteKey
+    const node = hasRealWriteKey(existing.writeKey)
       ? await unsealNode(resolved.published, existing.folderKey, existing.writeKey)
       : await unsealNode(resolved.published, existing.folderKey);
 
@@ -1736,9 +1745,7 @@ export class CipherBoxClient {
    * replace a caller/folderTree-owned read-plane view with a network re-walk).
    */
   private async recoverWriteKeyIfNeeded(existing: FolderState): Promise<void> {
-    const wk = existing.writeKey;
-    const hasRealWriteKey = !!wk && wk.length === 32 && !wk.every((b) => b === 0);
-    if (hasRealWriteKey) return;
+    if (hasRealWriteKey(existing.writeKey)) return;
     if (!this.internalRootIpnsKeypair || !this.internalRootWriteKey) return;
     if (existing.ipnsName === this.config.rootIpnsName) return;
 
@@ -1917,7 +1924,7 @@ export class CipherBoxClient {
       const raw = await sdkCore.fetchFromIpfs(this.ctx, resolved.cid);
       const published = JSON.parse(new TextDecoder().decode(raw)) as PublishedNode;
       const wk = folder.writeKey;
-      const realWriteKey = wk && wk.length === 32 && !wk.every((b) => b === 0) ? wk : undefined;
+      const realWriteKey = hasRealWriteKey(wk) ? wk : undefined;
       const node = await unsealNode(published, folder.folderKey, realWriteKey);
       if (realWriteKey === undefined) {
         // Write-body preservation (68.1-23): unsealing WITHOUT a real writeKey
@@ -5845,9 +5852,6 @@ export class CipherBoxClient {
       const state = this.sharedFolderTree.get(shareId);
       if (!state) throw new Error('Shared folder not loaded');
 
-      const hasRealWriteKey = (wk: Uint8Array | null | undefined): boolean =>
-        !!wk && wk.length === 32 && !wk.every((b) => b === 0);
-
       // Unseal the share root's OWN write-body once (if it is write-capable)
       // so the first DFS level has a writeChildren list to check children
       // against — mirrors dfsFindFolder's parentNode.writeBody lookup.
@@ -6011,9 +6015,7 @@ export class CipherBoxClient {
       const parent = this.sharedFolderTree.get(shareId);
       if (!parent) return null;
 
-      const hasRealWriteKey =
-        parent.writeKey.length === 32 && !parent.writeKey.every((b) => b === 0);
-      if (!hasRealWriteKey) return null;
+      if (!hasRealWriteKey(parent.writeKey)) return null;
 
       const parentNode = await unsealNode(parent.publishedNode, parent.folderKey, parent.writeKey);
       if (!parentNode.writeBody) return null;
