@@ -364,3 +364,7 @@ Pre-existing, out-of-scope vitest-v3/TypeScript typecheck drift in unrelated tes
 ---
 
 typecheck should be performed before the build
+
+---
+
+I hadn't taken in to account the build dependency - if it is easier to build first and then typecheck, then happy to go with that
