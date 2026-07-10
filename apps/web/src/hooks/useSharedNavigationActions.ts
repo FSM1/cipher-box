@@ -42,7 +42,7 @@
 import { useCallback, type MutableRefObject } from 'react';
 import type { SealedChildRef, PublishedNode } from '@cipherbox/core';
 import { unwrapKey, hexToBytes } from '@cipherbox/crypto';
-import { useShareStore } from '../stores/share.store';
+import { useShareStore, type ReceivedShare } from '../stores/share.store';
 import { useAuthStore } from '../stores/auth.store';
 import { hideShare } from '../services/share.service';
 import { triggerBrowserDownload } from '../services/download.service';
@@ -141,6 +141,53 @@ async function resolveSharedRootWriteKey(
 ): Promise<Uint8Array | null> {
   if (!encryptedWriteKey) return null;
   return unwrapKey(hexToBytes(encryptedWriteKey), vaultPrivateKey);
+}
+
+/**
+ * Marker errors thrown by `readSharedContent` for the SDK's `revoked` /
+ * `behind-retry` statuses -- distinct classes (rather than string matching)
+ * so callers can `instanceof`-branch without any risk of colliding with a
+ * genuinely unexpected error that happens to share message text.
+ */
+class SharedFileRevokedError extends Error {}
+class SharedFileBehindRetryError extends Error {}
+
+/**
+ * Shared read-core for `downloadSharedFile` / `loadSharedFileContent`: builds
+ * the `client.downloadSharedFile` request from an already-resolved share +
+ * vault keypair, and maps the result's `revoked`/`behind-retry` status to a
+ * thrown marker error carrying the EXACT existing user-visible message
+ * strings -- both callers already used these same two strings, one via
+ * `p.setError` (downloadSharedFile) and one via `throw` (loadSharedFileContent),
+ * so centralizing the throw here changes neither caller's observable
+ * behavior. `downloadSharedFile` calls this inside its own try/catch and
+ * translates the marker errors back into its `setError`-then-return control
+ * flow (see below) so its non-status catch-all path (`logger.error` + generic
+ * "Failed to download file") is untouched.
+ */
+async function readSharedContent(
+  share: ReceivedShare,
+  path: string[],
+  vaultKeypair: { privateKey: Uint8Array }
+): Promise<{ plaintext: Uint8Array; mimeType: string }> {
+  const result = await getSdkClient().downloadSharedFile({
+    encryptedReadKey: share.encryptedReadKey,
+    recipientPrivateKey: vaultKeypair.privateKey,
+    shareRootIpnsName: share.ipnsName,
+    rootExpectedGeneration: share.rootGeneration ?? 0,
+    path,
+  });
+
+  if (result.status === 'revoked') {
+    throw new SharedFileRevokedError('File is no longer available (revoked)');
+  }
+  if (result.status === 'behind-retry') {
+    throw new SharedFileBehindRetryError(
+      'This share was updated -- please reopen it and try again'
+    );
+  }
+
+  return result;
 }
 
 export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
@@ -644,25 +691,13 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
         ];
         const path = p.currentView === 'file' ? [] : [...folderChain.slice(1), item.ipnsName];
 
-        const result = await getSdkClient().downloadSharedFile({
-          encryptedReadKey: share.encryptedReadKey,
-          recipientPrivateKey: vaultKeypair.privateKey,
-          shareRootIpnsName: share.ipnsName,
-          rootExpectedGeneration: share.rootGeneration ?? 0,
-          path,
-        });
-
-        if (result.status === 'revoked') {
-          p.setError('File is no longer available (revoked)');
-          return;
-        }
-        if (result.status === 'behind-retry') {
-          p.setError('This share was updated -- please reopen it and try again');
-          return;
-        }
-
-        triggerBrowserDownload(result.plaintext, item.name, result.mimeType);
+        const { plaintext, mimeType } = await readSharedContent(share, path, vaultKeypair);
+        triggerBrowserDownload(plaintext, item.name, mimeType);
       } catch (err) {
+        if (err instanceof SharedFileRevokedError || err instanceof SharedFileBehindRetryError) {
+          p.setError(err.message);
+          return;
+        }
         logger.error('[SharedNav] Failed to download shared file:', err);
         p.setError('Failed to download file');
       } finally {
@@ -674,12 +709,10 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
 
   /**
    * Load a DIRECT single-file share's content (68.1-32, WEB-03 writable-shares
-   * 10.3). Mirrors `downloadSharedFile`'s `client.downloadSharedFile` read
-   * core but with `path: []` (the share root IS the file — no intermediate
-   * hops) and returns the decrypted plaintext instead of triggering a browser
-   * download, so `TextEditorDialog` can load it into the textarea. Does NOT
-   * touch `downloadSharedFile` itself — the shared-FOLDER download path stays
-   * byte-for-byte unchanged.
+   * 10.3). Shares `readSharedContent` with `downloadSharedFile` but calls it
+   * with `path: []` (the share root IS the file — no intermediate hops) and
+   * returns the decrypted plaintext instead of triggering a browser download,
+   * so `TextEditorDialog` can load it into the textarea.
    */
   const loadSharedFileContent = useCallback(
     async (_item: SealedChildRef): Promise<Uint8Array> => {
@@ -698,22 +731,8 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
       }
       const vaultKeypair = auth.vaultKeypair;
 
-      const result = await getSdkClient().downloadSharedFile({
-        encryptedReadKey: share.encryptedReadKey,
-        recipientPrivateKey: vaultKeypair.privateKey,
-        shareRootIpnsName: share.ipnsName,
-        rootExpectedGeneration: share.rootGeneration ?? 0,
-        path: [],
-      });
-
-      if (result.status === 'revoked') {
-        throw new Error('File is no longer available (revoked)');
-      }
-      if (result.status === 'behind-retry') {
-        throw new Error('This share was updated -- please reopen it and try again');
-      }
-
-      return result.plaintext;
+      const { plaintext } = await readSharedContent(share, [], vaultKeypair);
+      return plaintext;
     },
     [p.currentShareId, p.sharedItems]
   );
