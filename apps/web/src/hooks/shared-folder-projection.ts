@@ -46,7 +46,7 @@ export type SharedFolderClient = Pick<
  * exercised through real navigation paths; Phase 68 will replace this with the
  * actual resolved node.
  */
-const PLACEHOLDER_PUBLISHED_NODE: PublishedNode = {
+export const PLACEHOLDER_PUBLISHED_NODE: PublishedNode = {
   schema: 'node/v3',
   kind: 'folder',
   id: '00000000-0000-0000-0000-000000000000',

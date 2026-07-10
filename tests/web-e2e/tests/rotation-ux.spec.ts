@@ -2,7 +2,17 @@ import { test, expect, type Browser, type BrowserContext, type Page } from '@pla
 import type { PrivateKeyAccount } from 'viem/accounts';
 import { createTestAccount, setupMockWallet, loginViaWallet } from '../utils/wallet-login-helpers';
 import { deleteAccountViaPage } from '../utils/cleanup-helpers';
+import {
+  createWalletTestAccount,
+  closeWalletTestAccounts,
+  navigateToShared,
+  type WalletTestAccount,
+} from '../utils/multi-account-wallet';
 import { FileListPage } from '../page-objects/file-browser/file-list.page';
+import { CreateFolderDialogPage } from '../page-objects/dialogs/create-folder-dialog.page';
+import { ContextMenuPage } from '../page-objects/file-browser/context-menu.page';
+import { ShareDialogPage } from '../page-objects/dialogs/share-dialog.page';
+import { SharedFileBrowserPage } from '../page-objects/file-browser/shared-file-browser.page';
 
 /**
  * Rotation UX: header badge lifecycle + failure-UX toasts (ROT-07 —
@@ -275,62 +285,32 @@ test.describe.serial('Rotation UX: badge lifecycle + failure-UX toasts', () => {
     );
   });
 
-  test('a stale co-writer write surfaces Refresh access, escalating to a terminal Write access revoked with no action (D-01/WRITE-03)', async () => {
-    // SCOPE NOTE: CannotWriteUntilRefetchError's own trigger --
-    // publishNodeFn reporting `tombstoned: true` -- is a documented
-    // Phase-66 mock seam with no live production call site yet
-    // (packages/sdk/src/share/shared-write.ts's PublishNodeResult doc
-    // comment: "mock seam for Phase-66 live publish-gate reject"), and
-    // 68-09's own SUMMARY independently flags the identical gap ("No live
-    // call site in this plan's three files currently throws
-    // CannotWriteUntilRefetchError at runtime"). This proves the REAL
-    // NotificationToast/notification.store contract that
-    // useMutationFailureUx.ts#dispatchWriteDescriptorStale dispatches on
-    // that error (exact call shape verified by source reading), against the
-    // real rendered component.
-    let refreshClicked = false;
-    await page.exposeFunction('__e2eRecordRefreshClick', () => {
-      refreshClicked = true;
-    });
-
-    await page.evaluate(async () => {
-      const notificationStoreModPath = '/src/stores/notification.store.ts';
-      const mod = await import(notificationStoreModPath);
-      mod.useNotificationStore
-        .getState()
-        .addNotification('error', 'Write failed — access may be out of date.', {
-          label: 'Refresh access',
-          onClick: () =>
-            (
-              window as unknown as { __e2eRecordRefreshClick: () => void }
-            ).__e2eRecordRefreshClick(),
-        });
-    });
-
-    const staleToast = page.locator('[role="alert"]', {
-      hasText: 'Write failed — access may be out of date.',
-    });
-    await expect(staleToast).toBeVisible();
-    const refreshButton = staleToast.locator('button:not([aria-label="Dismiss notification"])');
-    await expect(refreshButton).toHaveCount(1);
-    await expect(refreshButton).toHaveText('[Refresh access]');
-    await refreshButton.click();
-    expect(refreshClicked).toBe(true);
-
-    // Escalation: a second failure after the refresh attempt surfaces the
-    // terminal, no-action notice -- refreshing cannot help (D-01 escalated).
-    await page.evaluate(async () => {
-      const notificationStoreModPath = '/src/stores/notification.store.ts';
-      const mod = await import(notificationStoreModPath);
-      mod.useNotificationStore.getState().clearNotifications();
-      mod.useNotificationStore.getState().addNotification('error', 'Write access revoked.');
-    });
-
-    const revokedToast = page.locator('[role="alert"]', { hasText: 'Write access revoked.' });
-    await expect(revokedToast).toBeVisible();
-    const revokedAction = revokedToast.locator('button:not([aria-label="Dismiss notification"])');
-    await expect(revokedAction).toHaveCount(0);
-  });
+  // SCOPE NOTE (Phase 73 SC4 -- CLOSED): the D-01/WRITE-03 co-writer
+  // refresh-access flow previously had no live production trigger for this
+  // test to drive (see git history for the prior fixme skeleton). All three
+  // enabling seams have now landed:
+  //   - 73-02: packages/sdk-core/src/ipns/index.ts's createAndPublishIpnsRecord
+  //     maps a real API 410 (apps/api's IPNS_TOMBSTONED) to a typed
+  //     `{ tombstoned: true }` result instead of letting a raw AxiosError
+  //     propagate uncaught.
+  //   - 73-05: packages/sdk/src/client.ts's publishNodeFn
+  //     (buildWriteTransportSeams) reads that `tombstoned` field and maps it
+  //     straight through to shared-write.ts's existing
+  //     CannotWriteUntilRefetchError throw sites.
+  //   - 73-08: apps/web/src/hooks/useSharedWriteOps.ts now wires every
+  //     shared-write mutation through runWithFailureUx, threading
+  //     navActions.refreshCurrentDepthWriteKey as the refreshWriteAccess
+  //     supplier.
+  //
+  // The classifier-driven test below (own describe.serial, own two-account
+  // harness at the bottom of this file) drives this end to end: Alice
+  // (owner) tombstones the shared folder's own IPNS name via the real
+  // `POST /ipns/tombstone` endpoint (a direct API fixture standing in for a
+  // completed write-revocation rotation Bob has not yet refetched), then Bob
+  // attempts a real shared-folder write against that now-tombstoned target
+  // and the SAME "Refresh access" toast appears THROUGH the real classifier
+  // path (runWithFailureUx -> CannotWriteUntilRefetchError) -- not via direct
+  // notification-store injection.
 
   test('a persistently-deferring mutation exhausts retries and surfaces the terminal Retry toast without ever silently auto-dismissing (D-06)', async () => {
     test.setTimeout(30_000);
@@ -379,5 +359,164 @@ test.describe.serial('Rotation UX: badge lifecycle + failure-UX toasts', () => {
 
     await retryButton.click();
     expect(retryClicked).toBe(true);
+  });
+});
+
+/**
+ * D-01/WRITE-03 classifier-driven refresh-access flow (Phase 73 SC4).
+ *
+ * Own two-account harness (owner + write-share recipient) -- distinct from
+ * the single-account describe.serial above, mirroring the multi-account
+ * pattern in tests/web-e2e/tests/writable-shares.spec.ts.
+ *
+ * Real production trigger: Alice (the shared folder's owner, and therefore
+ * the owning `user_id` on its `ipns_records` row) tombstones the folder's
+ * OWN IPNS name via the real `POST /ipns/tombstone` endpoint -- the same
+ * terminal state a completed write-revocation rotation leaves behind for a
+ * co-writer who has not yet refetched. Bob (the write-share recipient, still
+ * holding the pre-tombstone writeKey/state seeded when he navigated into the
+ * folder) then attempts a real shared-folder write, driving the classifier
+ * through its real path: publish 410 -> createAndPublishIpnsRecord tombstoned
+ * -> publishNodeFn (client.ts) -> CannotWriteUntilRefetchError
+ * (shared-write.ts) -> runWithFailureUx (useSharedWriteOps.ts).
+ */
+test.describe.serial('Rotation UX: D-01/WRITE-03 classifier-driven refresh-access flow', () => {
+  let browser: Browser;
+  let alice: WalletTestAccount;
+  let bob: WalletTestAccount;
+  let aliceFileList: FileListPage;
+  let aliceCreateFolderDialog: CreateFolderDialogPage;
+  let aliceContextMenu: ContextMenuPage;
+  let aliceShareDialog: ShareDialogPage;
+  let bobSharedBrowser: SharedFileBrowserPage;
+
+  const runId = Date.now().toString();
+  const folderName = `write03-${runId}`;
+
+  test.beforeAll(async ({ browser: testBrowser }) => {
+    test.setTimeout(300_000); // Two Core Kit logins + share setup can be slow
+    browser = testBrowser;
+
+    alice = await createWalletTestAccount(browser, 'alice-write03');
+    bob = await createWalletTestAccount(browser, 'bob-write03');
+
+    aliceFileList = new FileListPage(alice.page);
+    aliceCreateFolderDialog = new CreateFolderDialogPage(alice.page);
+    aliceContextMenu = new ContextMenuPage(alice.page);
+    aliceShareDialog = new ShareDialogPage(alice.page);
+    bobSharedBrowser = new SharedFileBrowserPage(bob.page);
+
+    // Alice creates a folder and shares it with Bob using write permission
+    // (mirrors writable-shares.spec.ts phase 1-2).
+    const newFolderButton = alice.page.locator('.file-browser-new-folder-button');
+    await newFolderButton.click();
+    await aliceCreateFolderDialog.waitForOpen();
+    await aliceCreateFolderDialog.createFolder(folderName);
+    await aliceFileList.waitForItemToAppear(folderName, { timeout: 30000 });
+
+    await aliceFileList.rightClickItem(folderName);
+    await aliceContextMenu.waitForOpen();
+    await aliceContextMenu.clickShare();
+    await aliceShareDialog.waitForOpen();
+    await aliceShareDialog.waitForRecipientsLoaded();
+
+    const writeBtn = alice.page.locator('.share-perm-btn', { hasText: '[ READ-WRITE ]' });
+    await writeBtn.click();
+    await aliceShareDialog.shareWithKey(bob.publicKey);
+    await aliceShareDialog.waitForSuccess({ timeout: 60000 });
+    await aliceShareDialog.close();
+
+    // Bob navigates into the write-shared folder -- this seeds his SDK
+    // client's writeKey/ipnsName state for the current depth (the same
+    // state refreshCurrentDepthWriteKey/runWithFailureUx operate on).
+    await navigateToShared(bob);
+    await bobSharedBrowser.waitForLoaded({ timeout: 30000 });
+    await bobSharedBrowser.waitForSharedItem(folderName, { timeout: 15000 });
+    await bobSharedBrowser.navigateIntoFolder(folderName);
+  });
+
+  test.afterAll(async () => {
+    if (alice || bob) {
+      await closeWalletTestAccounts([alice, bob].filter(Boolean));
+    }
+  });
+
+  test('a stale co-writer write surfaces Refresh access, escalating to a terminal Write access revoked with no action (D-01/WRITE-03)', async () => {
+    test.setTimeout(60_000);
+
+    // Resolve the shared folder's own IPNS name from Alice's real, running
+    // folder.store singleton (the same store the app itself reads) -- no
+    // mocking, this is the exact name Bob's next write will target.
+    const ipnsName = await alice.page.evaluate(async (name) => {
+      const folderStoreModPath = '/src/stores/folder.store.ts';
+      const mod = await import(folderStoreModPath);
+      const folders = mod.useFolderStore.getState().folders as Record<
+        string,
+        { name: string; ipnsName: string }
+      >;
+      const match = Object.values(folders).find((f) => f.name === name);
+      return match?.ipnsName ?? null;
+    }, folderName);
+    if (!ipnsName) {
+      throw new Error(
+        `Could not resolve ipnsName for folder "${folderName}" from Alice's folder store`
+      );
+    }
+
+    // Read Alice's real accessToken from her auth.store singleton so the
+    // tombstone call below is authenticated exactly like a real API request
+    // this client would make.
+    const accessToken = await alice.page.evaluate(async () => {
+      const authStoreModPath = '/src/stores/auth.store.ts';
+      const mod = await import(authStoreModPath);
+      return mod.useAuthStore.getState().accessToken;
+    });
+    if (!accessToken) {
+      throw new Error("Could not read Alice's accessToken from auth.store");
+    }
+
+    // Real production trigger (SC4 concrete-change #4): tombstone the shared
+    // folder's own IPNS name via the real POST /ipns/tombstone endpoint.
+    // Alice is the record's owner (she published it when she created the
+    // folder), so this is a genuine, authorized tombstone -- not a mock.
+    const apiBaseUrl = process.env.API_BASE_URL || 'http://localhost:3000';
+    const tombstoneResponse = await alice.page.request.post(`${apiBaseUrl}/ipns/tombstone`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      data: { ipnsName },
+    });
+    expect(tombstoneResponse.ok()).toBe(true);
+
+    // Bob attempts a real shared-folder write (create subfolder) against the
+    // now-tombstoned target. Routes through the REAL classifier path: publish
+    // 410 -> createAndPublishIpnsRecord tombstoned -> publishNodeFn ->
+    // CannotWriteUntilRefetchError -> runWithFailureUx.
+    const mkdirBtn = bob.page.locator('.toolbar-btn', { hasText: '--mkdir' });
+    await mkdirBtn.click();
+    const folderInput = bob.page.locator('.shared-inline-input-field');
+    await folderInput.waitFor({ state: 'visible', timeout: 5000 });
+    await folderInput.fill(`bob-write03-subfolder-${runId}`);
+    await folderInput.press('Enter');
+
+    const staleToast = bob.page.locator('[role="alert"]', {
+      hasText: 'Write failed — access may be out of date.',
+    });
+    await expect(staleToast).toBeVisible({ timeout: 30000 });
+    const refreshButton = staleToast.locator('button:not([aria-label="Dismiss notification"])');
+    await expect(refreshButton).toHaveCount(1);
+    await expect(refreshButton).toHaveText('[Refresh access]');
+
+    // Clicking "Refresh access" re-derives/reseeds Bob's writeKey for the
+    // current depth (a real, local, successful re-derivation from the share
+    // grant) and retries the SAME write. It still targets the now-tombstoned
+    // name, so it fails again and escalates to the terminal notice with no
+    // action -- the exact D-01/WRITE-03 two-stage contract.
+    await refreshButton.click();
+
+    const revokedToast = bob.page.locator('[role="alert"]', {
+      hasText: 'Write access revoked.',
+    });
+    await expect(revokedToast).toBeVisible({ timeout: 30000 });
+    const revokedButton = revokedToast.locator('button:not([aria-label="Dismiss notification"])');
+    await expect(revokedButton).toHaveCount(0);
   });
 });

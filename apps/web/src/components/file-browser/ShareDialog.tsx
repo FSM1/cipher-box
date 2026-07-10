@@ -12,6 +12,7 @@ import { useShareStore } from '../../stores/share.store';
 import type { SentShare } from '../../stores/share.store';
 import { resolveChildNodeIdentity } from '../../lib/crypto/key-wrapping';
 import { resolveParentIpnsName } from '../../services/invite.service';
+import { parseRootGeneration } from '../../services/share.service';
 import { getSdkClient } from '../../lib/sdk-provider';
 import { InviteLinkTab } from './InviteLinkTab';
 import '../../styles/share-dialog.css';
@@ -34,17 +35,6 @@ function truncateKey(key: string): string {
   if (key.length < 12) return key;
   const hex = key.startsWith('0x') ? key.slice(2) : key;
   return `0x${hex.slice(0, 4)}...${hex.slice(-4)}`;
-}
-
-/**
- * Parse a grant's `rootGeneration` (numeric string from the DTO) into a number.
- * Fail-closed (V5, T-68-21): a non-numeric/absent value is `undefined`, never
- * coerced to NaN/0 -- mirrors share.service.ts's parseRootGeneration.
- */
-function parseRootGeneration(value: string | undefined | null): number | undefined {
-  if (value === undefined || value === null || !/^\d+$/.test(value)) return undefined;
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) ? parsed : undefined;
 }
 
 /**
@@ -113,8 +103,14 @@ export function ShareDialog({
 
     (async () => {
       // The API has no server-side ipnsName filter on /shares/sent -- page
-      // through the full sent-share list and filter client-side to this item
-      // (mirrors share.service.ts's fetchAllSentShares pagination pattern).
+      // through the full sent-share list and filter client-side to this item.
+      // This intentionally does NOT call share.service.ts's fetchAllSentShares
+      // + toSentShare: those fetch/map the FULL unfiltered list with
+      // itemName '' and a `!= null` permission check, whereas this dialog
+      // needs the filtered-to-this-item subset with itemName seeded from the
+      // local `item.name` and the stricter truthy permission check below
+      // (2026-07-03 todo -- divergence confirmed, not swapped to preserve
+      // exact behavior).
       const pageSize = 100;
       let offset = 0;
       const matches: SentShare[] = [];

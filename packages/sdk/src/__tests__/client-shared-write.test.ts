@@ -23,13 +23,19 @@ vi.mock('@cipherbox/crypto', () => ({
   hexToBytes: vi.fn(),
 }));
 
-// Mock sdk-core: keep everything real except loadFolderMetadata, which we drive
-// to return canned IPNS-resolved state for refreshSharedFolder.
+// Mock sdk-core: keep everything real except loadFolderMetadata (canned
+// IPNS-resolved state for refreshSharedFolder) and resolveIpnsRecord/
+// fetchFromIpfs (73-05: refreshSharedFolder's fresh branch now also calls
+// resolvePublishedNode(state.ipnsName) to populate adoptSharedFolderResult's
+// publishedParent, so these two seams need mocking too or the fresh-branch
+// test hits a real network call).
 vi.mock('@cipherbox/sdk-core', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@cipherbox/sdk-core')>();
   return {
     ...actual,
     loadFolderMetadata: vi.fn(),
+    resolveIpnsRecord: vi.fn(),
+    fetchFromIpfs: vi.fn(),
   };
 });
 
@@ -188,6 +194,18 @@ describe('CipherBoxClient - shared write', () => {
         cid: 'bafyremote',
       });
 
+      // 73-05: the fresh branch also resolves the raw envelope via
+      // resolvePublishedNode(state.ipnsName) to populate `publishedParent`
+      // (SC2 item-4) — mock the resolve + fetch round trip it drives.
+      vi.mocked(sdkCore.resolveIpnsRecord).mockResolvedValue({
+        cid: 'bafyparent',
+        sequenceNumber: 5n,
+        signatureVerified: true,
+      });
+      vi.mocked(sdkCore.fetchFromIpfs).mockResolvedValue(
+        new TextEncoder().encode(JSON.stringify(PUBLISHED_PARENT_NODE))
+      );
+
       await client.refreshSharedFolder('share-1');
 
       // Re-resolved via loadFolderMetadata with the stored ipnsName + folderKey.
@@ -195,10 +213,16 @@ describe('CipherBoxClient - shared write', () => {
       const [args] = vi.mocked(sdkCore.loadFolderMetadata).mock.calls[0];
       expect(args).toMatchObject({ ipnsName: 'k51shared' });
 
-      // Adopted the newer snapshot.
+      // Additionally re-resolved the raw envelope for publishedParent.
+      expect(sdkCore.resolveIpnsRecord).toHaveBeenCalledWith('k51shared', expect.anything());
+      expect(sdkCore.fetchFromIpfs).toHaveBeenCalledWith(expect.anything(), 'bafyparent');
+
+      // Adopted the newer snapshot, including the freshly-resolved envelope
+      // (so a later shared write signs against it, not a stale one).
       const state = client.getSharedFolderState('share-1');
       expect(state?.sequenceNumber).toBe(5n);
       expect(state?.children).toEqual(REFRESHED_CHILDREN);
+      expect(state?.publishedNode).toEqual(PUBLISHED_PARENT_NODE);
 
       // Emitted the newer snapshot exactly once. 68.2-02: the event's
       // children is ResolvedChild[] -- REFRESHED_CHILDREN is a legacy

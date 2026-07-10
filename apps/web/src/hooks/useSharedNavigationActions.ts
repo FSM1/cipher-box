@@ -14,19 +14,45 @@
  * Security (D-09): recipient vault private key is caller-owned, never zeroed
  * here. Minted intermediates (share-root/subfolder readKeys) are zeroed on
  * every exit path once they are no longer the live state.
+ *
+ * Zeroization audit (73-07, SC1): the nav stack now retains a `writeKey` per
+ * depth (`NavStackEntry.writeKey`) and an active-depth `currentWriteKeyRef`
+ * (mirroring `ipnsPrivateKeyRef`), extending a key buffer's in-memory
+ * lifetime. Every exit path is covered:
+ *  - New-share entry (`navigateToShare`): `zeroWriteKey()` releases any
+ *    prior active-depth buffer before the new clone is stored.
+ *  - Descent (`navigateToSubfolder`): the pushed stack entry TRANSFERS the
+ *    prior active-depth buffer (no clone, no zero -- the stack entry is now
+ *    the sole owner); the new child depth gets a fresh clone.
+ *  - Restore (`restoreToBreadcrumbIndex`, shared by `navigateUp` /
+ *    `navigateToBreadcrumb`): the abandoned active-depth buffer is zeroed
+ *    via `zeroWriteKey()`; every discarded deeper stack entry's `writeKey` is
+ *    `.fill(0)`'d alongside its `folderKey`; the restored target's buffer is
+ *    TRANSFERRED (not cloned) into `currentWriteKeyRef`.
+ *  - Root (`navigateToRoot`): every stack entry's `writeKey` is `.fill(0)`'d
+ *    alongside its `folderKey`, and `zeroWriteKey()` releases the active
+ *    depth's buffer.
+ *  - Unmount: `zeroWriteKey()` is called from `useSharedNavigation.ts`'s
+ *    cleanup, mirroring `zeroIpnsKey()`.
+ * `seedActiveSharedFolder` clones `writeKey` internally (shared-folder-
+ * projection.ts), so a retained buffer passed to it is never zeroed by the
+ * seed call itself -- no use-after-free.
  */
 
 import { useCallback, type MutableRefObject } from 'react';
-import type { SealedChildRef } from '@cipherbox/core';
-import { ShareKeyCache } from '@cipherbox/sdk';
+import type { SealedChildRef, PublishedNode } from '@cipherbox/core';
 import { unwrapKey, hexToBytes } from '@cipherbox/crypto';
-import { useShareStore } from '../stores/share.store';
+import { useShareStore, type ReceivedShare } from '../stores/share.store';
 import { useAuthStore } from '../stores/auth.store';
 import { hideShare } from '../services/share.service';
 import { triggerBrowserDownload } from '../services/download.service';
 import { getSdkClient } from '../lib/sdk-provider';
 import { logger } from '../lib/logger';
-import { parsePublicKey, type SeedSharedFolderArgs } from './shared-folder-projection';
+import {
+  parsePublicKey,
+  PLACEHOLDER_PUBLISHED_NODE,
+  type SeedSharedFolderArgs,
+} from './shared-folder-projection';
 import type { SharedListItem, SharedBreadcrumb } from './useSharedNavigation';
 
 type NavStackEntry = {
@@ -34,6 +60,19 @@ type NavStackEntry = {
   folderName: string;
   children: SealedChildRef[];
   folderKey: Uint8Array;
+  /** This depth's writeKey (73-07, SC1) -- null for read-only shares/depths. */
+  writeKey: Uint8Array | null;
+  /**
+   * This depth's on-wire published envelope (73-07, SC1 correctness fix).
+   * Write ops (`uploadToSharedFolder` et al.) trust `SharedFolderState.
+   * publishedNode` directly (client.ts `buildSharedWriteContextFromState`) --
+   * they do NOT re-resolve it from the network. Without restoring this
+   * alongside the writeKey, `seedActiveSharedFolder` falls back to
+   * `PLACEHOLDER_PUBLISHED_NODE` (shared-folder-projection.ts) after a
+   * restore, and the very first write at the restored depth fails to unseal
+   * ("Decryption failed") even with the correct writeKey.
+   */
+  publishedNode: PublishedNode;
   ipnsName: string;
   sequenceNumber: bigint | null;
 };
@@ -52,8 +91,9 @@ export type SharedNavigationActionsParams = {
   folderChildrenRef: MutableRefObject<SealedChildRef[]>;
   sequenceNumberRef: MutableRefObject<bigint | null>;
   ipnsPrivateKeyRef: MutableRefObject<Uint8Array | null>;
+  /** Active-depth writeKey (73-07, SC1) -- mirrors ipnsPrivateKeyRef. */
+  currentWriteKeyRef: MutableRefObject<Uint8Array | null>;
   navStackRef: MutableRefObject<NavStackEntry[]>;
-  shareKeysCacheRef: MutableRefObject<ShareKeyCache>;
   // State setters
   setCurrentView: (view: 'list' | 'folder' | 'file') => void;
   setCurrentShareId: (id: string | null) => void;
@@ -71,46 +111,13 @@ export type SharedNavigationActionsParams = {
   // Helpers from orchestrator
   clearPolling: () => void;
   zeroIpnsKey: () => void;
-  getShareKeys: (
-    shareId: string
-  ) => Promise<Array<{ keyType: string; itemId: string; encryptedKey: string }>>;
+  /** Zero + null out currentWriteKeyRef (73-07, SC1) -- mirrors zeroIpnsKey. */
+  zeroWriteKey: () => void;
   /**
    * Seed (or re-seed) the SDK's sharedFolderTree for the active depth.
    */
   seedActiveSharedFolder: (args: Omit<SeedSharedFolderArgs, 'addShareKeysFn'>) => void;
 };
-
-/**
- * Resolve a folder's IPNS signing key for write shares.
- *
- * Write-share IPNS keys are still delivered via the legacy per-share key
- * fan-out (`getShareKeys`, keyType `folder-ipns`, itemId = folder ipnsName) --
- * unchanged by the Node-v3 read-chain migration (mirrors the identical
- * `writableSet` check in `CipherBoxClient.enumerateSharedSubtree`). Full
- * write-body (NodeWriteBody) key delivery through the grant chain is Phase-68
- * follow-on wiring; until then this is best-effort (T-68.1-05-02 zero-key
- * placeholder fallback, matching `shared-folder-projection.ts`'s existing
- * `writeKey ?? new Uint8Array(32)` convention -- write mutations remain
- * gated at the UI layer by `permission === 'write'`).
- */
-async function resolveFolderIpnsPrivateKey(
-  shareId: string,
-  folderIpnsName: string,
-  permission: 'read' | 'write',
-  vaultPrivateKey: Uint8Array,
-  getShareKeys: SharedNavigationActionsParams['getShareKeys']
-): Promise<Uint8Array> {
-  if (permission !== 'write') return new Uint8Array(32);
-  try {
-    const keys = await getShareKeys(shareId);
-    const entry = keys.find((k) => k.keyType === 'folder-ipns' && k.itemId === folderIpnsName);
-    if (!entry) return new Uint8Array(32);
-    return await unwrapKey(hexToBytes(entry.encryptedKey), vaultPrivateKey);
-  } catch (err) {
-    logger.error('[SharedNav] Failed to resolve folder IPNS key:', err);
-    return new Uint8Array(32);
-  }
-}
 
 /**
  * Unwrap a grant's `encryptedWriteKey` into the shared-root writeKey
@@ -134,6 +141,53 @@ async function resolveSharedRootWriteKey(
 ): Promise<Uint8Array | null> {
   if (!encryptedWriteKey) return null;
   return unwrapKey(hexToBytes(encryptedWriteKey), vaultPrivateKey);
+}
+
+/**
+ * Marker errors thrown by `readSharedContent` for the SDK's `revoked` /
+ * `behind-retry` statuses -- distinct classes (rather than string matching)
+ * so callers can `instanceof`-branch without any risk of colliding with a
+ * genuinely unexpected error that happens to share message text.
+ */
+class SharedFileRevokedError extends Error {}
+class SharedFileBehindRetryError extends Error {}
+
+/**
+ * Shared read-core for `downloadSharedFile` / `loadSharedFileContent`: builds
+ * the `client.downloadSharedFile` request from an already-resolved share +
+ * vault keypair, and maps the result's `revoked`/`behind-retry` status to a
+ * thrown marker error carrying the EXACT existing user-visible message
+ * strings -- both callers already used these same two strings, one via
+ * `p.setError` (downloadSharedFile) and one via `throw` (loadSharedFileContent),
+ * so centralizing the throw here changes neither caller's observable
+ * behavior. `downloadSharedFile` calls this inside its own try/catch and
+ * translates the marker errors back into its `setError`-then-return control
+ * flow (see below) so its non-status catch-all path (`logger.error` + generic
+ * "Failed to download file") is untouched.
+ */
+async function readSharedContent(
+  share: ReceivedShare,
+  path: string[],
+  vaultKeypair: { privateKey: Uint8Array }
+): Promise<{ plaintext: Uint8Array; mimeType: string }> {
+  const result = await getSdkClient().downloadSharedFile({
+    encryptedReadKey: share.encryptedReadKey,
+    recipientPrivateKey: vaultKeypair.privateKey,
+    shareRootIpnsName: share.ipnsName,
+    rootExpectedGeneration: share.rootGeneration ?? 0,
+    path,
+  });
+
+  if (result.status === 'revoked') {
+    throw new SharedFileRevokedError('File is no longer available (revoked)');
+  }
+  if (result.status === 'behind-retry') {
+    throw new SharedFileBehindRetryError(
+      'This share was updated -- please reopen it and try again'
+    );
+  }
+
+  return result;
 }
 
 export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
@@ -211,13 +265,7 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
           return;
         }
 
-        const ipnsPrivateKey = await resolveFolderIpnsPrivateKey(
-          shareId,
-          share.ipnsName,
-          share.permission,
-          vaultKeypair.privateKey,
-          p.getShareKeys
-        );
+        const ipnsPrivateKey = new Uint8Array(32);
 
         p.zeroIpnsKey();
         p.ipnsPrivateKeyRef.current = ipnsPrivateKey;
@@ -248,6 +296,11 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
             writeKeyErr
           );
         }
+        // 73-07 SC1: this is a NEW share entry, so any prior active-depth
+        // writeKey is abandoned -- release it before storing the clone for
+        // this (root) depth.
+        p.zeroWriteKey();
+        p.currentWriteKeyRef.current = shareRootWriteKey ? new Uint8Array(shareRootWriteKey) : null;
         try {
           p.seedActiveSharedFolder({
             shareId,
@@ -264,7 +317,8 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
         } finally {
           // D-09: seedSharedFolder clones the writeKey buffer internally
           // (shared-folder-projection.ts) -- this call's own derived buffer
-          // is the terminal owner and must be zeroed here.
+          // is the terminal owner and must be zeroed here (currentWriteKeyRef
+          // holds an independent clone, so it survives this zero).
           shareRootWriteKey?.fill(0);
         }
       } catch (err) {
@@ -275,13 +329,12 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
         // (revoked/behind-retry); once 'ok', the web is the terminal owner.
         // `committed` is set true immediately once the key is either stored
         // into state (folder case) or explicitly discarded (file case) --
-        // this only fires if something throws in between (e.g.
-        // resolveFolderIpnsPrivateKey), preventing a leak.
+        // this only fires if something throws in between, preventing a leak.
         if (!committed && shareRootReadKey) shareRootReadKey.fill(0);
         p.setIsLoading(false);
       }
     },
-    [p.sharedItems, p.getShareKeys, p.seedActiveSharedFolder, p.zeroIpnsKey]
+    [p.sharedItems, p.seedActiveSharedFolder, p.zeroIpnsKey, p.zeroWriteKey]
   );
 
   /**
@@ -331,16 +384,23 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
             p.setError('Shared item not found');
             return;
           }
-          const ipnsPrivateKey = await resolveFolderIpnsPrivateKey(
-            currentShareId,
-            childRef.ipnsName,
-            p.permission ?? 'read',
-            vaultKeypair.privateKey,
-            p.getShareKeys
-          );
+          const ipnsPrivateKey = new Uint8Array(32);
+
+          // 73-07 SC1 correctness fix: capture the CURRENT (pre-descent)
+          // depth's live publishedNode from the SDK's sharedFolderTree BEFORE
+          // it gets overwritten below by the child's seedActiveSharedFolder
+          // call -- write ops (uploadToSharedFolder et al.) trust
+          // SharedFolderState.publishedNode directly (no network re-resolve),
+          // so restoring this depth later without its real publishedNode
+          // would seed the placeholder and fail every write (see
+          // NavStackEntry.publishedNode doc).
+          const currentPublishedNode =
+            getSdkClient().getSharedFolderState(currentShareId)?.publishedNode;
 
           // Push the CURRENT (pre-descent) level so navigateUp / navigateToBreadcrumb
-          // can restore it without a network round-trip.
+          // can restore it without a network round-trip. 73-07 SC1: TRANSFER
+          // the active-depth writeKey into the pushed entry -- the stack
+          // entry becomes its sole owner, so it is NOT zeroed here.
           p.navStackRef.current = [
             ...p.navStackRef.current,
             {
@@ -348,10 +408,15 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
               folderName: p.breadcrumbs[p.breadcrumbs.length - 1]?.name ?? '',
               children: p.folderChildren,
               folderKey: currentFolderKey,
+              writeKey: p.currentWriteKeyRef.current,
+              // Fallback should be unreachable (the current depth is always
+              // seeded before a descent), but never regress to a hard crash.
+              publishedNode: currentPublishedNode ?? PLACEHOLDER_PUBLISHED_NODE,
               ipnsName: currentIpnsName,
               sequenceNumber: p.currentSequenceNumber,
             },
           ];
+          p.currentWriteKeyRef.current = null;
 
           p.zeroIpnsKey();
           p.ipnsPrivateKeyRef.current = ipnsPrivateKey;
@@ -374,6 +439,10 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
             currentShareId,
             { published, readKey: childReadKey, generation: childRef.generation }
           );
+          // 73-07 SC1: the new active depth (the child) gets a fresh clone --
+          // currentWriteKeyRef.current was already nulled above (transferred
+          // to the pushed stack entry), so this is a plain assignment.
+          p.currentWriteKeyRef.current = childWriteKey ? new Uint8Array(childWriteKey) : null;
           try {
             p.seedActiveSharedFolder({
               shareId: currentShareId,
@@ -391,7 +460,8 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
             // D-09: seedSharedFolder clones the writeKey buffer internally
             // (shared-folder-projection.ts) -- this call's own derived buffer
             // is the terminal owner and must be zeroed here (mirrors
-            // navigateToShare's shareRootWriteKey finally).
+            // navigateToShare's shareRootWriteKey finally; currentWriteKeyRef
+            // holds an independent clone, so it survives this zero).
             childWriteKey?.fill(0);
           }
         } finally {
@@ -413,7 +483,6 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
       p.currentSequenceNumber,
       p.permission,
       p.sharedItems,
-      p.getShareKeys,
       p.seedActiveSharedFolder,
       p.zeroIpnsKey,
     ]
@@ -426,8 +495,10 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
     if (p.folderKey) p.folderKey.fill(0);
     for (const entry of p.navStackRef.current) {
       entry.folderKey.fill(0);
+      entry.writeKey?.fill(0);
     }
     p.zeroIpnsKey();
+    p.zeroWriteKey();
     p.clearPolling();
     p.setCurrentView('list');
     p.setCurrentShareId(null);
@@ -439,7 +510,115 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
     p.setCurrentSequenceNumber(null);
     p.navStackRef.current = [];
     p.setError(null);
-  }, [p.folderKey, p.zeroIpnsKey, p.clearPolling]);
+  }, [p.folderKey, p.zeroIpnsKey, p.zeroWriteKey, p.clearPolling]);
+
+  /**
+   * Restore navigation state to a specific breadcrumb/nav-stack index.
+   *
+   * The single restore helper shared by `navigateUp` (called with
+   * `stack.length - 1`) and `navigateToBreadcrumb` (called with the target
+   * `crumbIndex`) -- Phase 73 SC6 consolidation of what were previously two
+   * near-verbatim ~55-line blocks. Truncates the nav stack to `crumbIndex`,
+   * zeroing the folderKeys (and writeKeys, 73-07 SC1) of every discarded
+   * deeper level (including the current live level), restores the target
+   * entry's children/folderKey/writeKey/ipnsName/sequenceNumber/breadcrumbs,
+   * and re-seeds the SDK's sharedFolderTree via `seedActiveSharedFolder`.
+   *
+   * SC1 (73-07): the target entry's stored `writeKey` is TRANSFERRED into
+   * `currentWriteKeyRef` (not re-derived) -- root is just the first stack
+   * entry, no special case. This replaces the prior `isRootDepth` /
+   * `resolveSharedRootWriteKey` re-derivation, which only ever restored write
+   * capability for a root-depth landing and silently seeded a zero-buffer
+   * writeKey for any deeper restore (the exact WEB-03/SC1 gap).
+   */
+  const restoreToBreadcrumbIndex = useCallback(
+    async (crumbIndex: number) => {
+      const stack = p.navStackRef.current;
+      if (crumbIndex < 0 || crumbIndex >= stack.length) return;
+      const target = stack[crumbIndex];
+      const currentShareId = p.currentShareId;
+
+      // Discard the level(s) being left: the current live folderKey/writeKey
+      // plus any deeper stack entries beyond crumbIndex (empty range for
+      // navigateUp's one-level-up case, since crumbIndex is always the top
+      // of stack there). The active depth's writeKey is abandoned on the way
+      // up -- zero it via zeroWriteKey() before it is overwritten below.
+      if (p.folderKey) p.folderKey.fill(0);
+      p.zeroWriteKey();
+      for (let i = crumbIndex + 1; i < stack.length; i++) {
+        stack[i].folderKey.fill(0);
+        stack[i].writeKey?.fill(0);
+      }
+      p.navStackRef.current = stack.slice(0, crumbIndex);
+
+      p.setFolderChildren(target.children);
+      p.setFolderKey(target.folderKey);
+      p.setIpnsName(target.ipnsName);
+      p.setCurrentSequenceNumber(target.sequenceNumber);
+      p.setBreadcrumbs((prev) => prev.slice(0, crumbIndex + 1));
+
+      // SC1: transfer (not clone) the restored target's writeKey into the
+      // active-depth ref -- currentWriteKeyRef becomes its sole owner. Never
+      // zeroed in a finally below: it is retained state, not a throwaway
+      // derivation.
+      p.currentWriteKeyRef.current = target.writeKey;
+
+      const auth = useAuthStore.getState();
+      if (!currentShareId || !auth.vaultKeypair) return;
+      const vaultKeypair = auth.vaultKeypair;
+
+      try {
+        const shareEntry = p.sharedItems.find((s) => s.share.shareId === currentShareId);
+        if (!shareEntry) return;
+        const ipnsPrivateKey = new Uint8Array(32);
+        p.zeroIpnsKey();
+        p.ipnsPrivateKeyRef.current = ipnsPrivateKey;
+
+        p.seedActiveSharedFolder({
+          shareId: currentShareId,
+          ipnsName: target.ipnsName,
+          folderKey: target.folderKey,
+          ipnsPrivateKey,
+          writeKey: p.currentWriteKeyRef.current ?? undefined,
+          // 73-07 SC1 correctness fix: restore this depth's OWN published
+          // envelope (captured at push time in navigateToSubfolder), not the
+          // seedActiveSharedFolder default placeholder -- write ops trust
+          // this directly (see NavStackEntry.publishedNode doc).
+          publishedNode: target.publishedNode,
+          sequenceNumber: target.sequenceNumber ?? 0n,
+          children: target.children,
+          ownerPublicKey: parsePublicKey(shareEntry.share.sharerPublicKey),
+          recipientPublicKey: vaultKeypair.publicKey,
+        });
+
+        // 73-09 SC2: the restored depth's `target.children` is the snapshot
+        // captured at descent time -- it may have gone stale while the user
+        // was navigated away (the projection subscription only ever updates
+        // the CURRENTLY-ACTIVE depth, so a `sharedFolder:updated` for this
+        // depth while it was suspended was dropped). Re-resolve it now: this
+        // is purely ADDITIVE to the seed above (Pitfall 5 / Landmine 3) --
+        // `refreshSharedFolder` re-checks IPNS for `currentShareId` and, if
+        // the record is fresher than the just-seeded snapshot, emits
+        // `sharedFolder:updated` (already-wired projection subscription
+        // applies it); its own `state.sequenceNumber >= result.sequenceNumber`
+        // monotonicity guard (client.ts:5624) makes this a safe no-op
+        // otherwise. A refresh failure must not undo the already-committed
+        // restore above -- caught by this same try/catch, logged, and
+        // ignored.
+        await getSdkClient().refreshSharedFolder(currentShareId);
+      } catch (err) {
+        logger.error('[SharedNav] Failed to re-seed after breadcrumb restore:', err);
+      }
+    },
+    [
+      p.folderKey,
+      p.currentShareId,
+      p.sharedItems,
+      p.seedActiveSharedFolder,
+      p.zeroIpnsKey,
+      p.zeroWriteKey,
+    ]
+  );
 
   /**
    * Navigate up one level.
@@ -454,159 +633,19 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
       }
       return;
     }
-
-    const currentShareId = p.currentShareId;
-    const stack = p.navStackRef.current;
-    const parent = stack[stack.length - 1];
-
-    // Discard the level being left (its folderKey is not referenced anywhere else).
-    if (p.folderKey) p.folderKey.fill(0);
-    p.navStackRef.current = stack.slice(0, -1);
-
-    p.setFolderChildren(parent.children);
-    p.setFolderKey(parent.folderKey);
-    p.setIpnsName(parent.ipnsName);
-    p.setCurrentSequenceNumber(parent.sequenceNumber);
-    p.setBreadcrumbs((prev) => prev.slice(0, -1));
-
-    const auth = useAuthStore.getState();
-    if (!currentShareId || !auth.vaultKeypair) return;
-    const vaultKeypair = auth.vaultKeypair;
-
-    try {
-      const shareEntry = p.sharedItems.find((s) => s.share.shareId === currentShareId);
-      if (!shareEntry) return;
-      const ipnsPrivateKey = await resolveFolderIpnsPrivateKey(
-        currentShareId,
-        parent.ipnsName,
-        p.permission ?? 'read',
-        vaultKeypair.privateKey,
-        p.getShareKeys
-      );
-      p.zeroIpnsKey();
-      p.ipnsPrivateKeyRef.current = ipnsPrivateKey;
-
-      // T-68.1-20-01: re-derive the shared-root writeKey when this navigate-up
-      // restores the share ROOT depth (the only depth a encryptedWriteKey
-      // grant covers) -- a deeper subfolder restore keeps the zero-buffer
-      // writeKey default untouched (see resolveSharedRootWriteKey doc).
-      const isRootDepth = parent.ipnsName === shareEntry.share.ipnsName;
-      const rootWriteKey = isRootDepth
-        ? await resolveSharedRootWriteKey(
-            shareEntry.share.encryptedWriteKey,
-            vaultKeypair.privateKey
-          )
-        : null;
-      try {
-        p.seedActiveSharedFolder({
-          shareId: currentShareId,
-          ipnsName: parent.ipnsName,
-          folderKey: parent.folderKey,
-          ipnsPrivateKey,
-          writeKey: rootWriteKey ?? undefined,
-          sequenceNumber: parent.sequenceNumber ?? 0n,
-          children: parent.children,
-          ownerPublicKey: parsePublicKey(shareEntry.share.sharerPublicKey),
-          recipientPublicKey: vaultKeypair.publicKey,
-        });
-      } finally {
-        rootWriteKey?.fill(0);
-      }
-    } catch (err) {
-      logger.error('[SharedNav] Failed to re-seed after navigate-up:', err);
-    }
-  }, [
-    p.currentView,
-    p.folderKey,
-    p.currentShareId,
-    p.permission,
-    p.sharedItems,
-    p.getShareKeys,
-    p.seedActiveSharedFolder,
-    p.zeroIpnsKey,
-    navigateToRoot,
-  ]);
+    await restoreToBreadcrumbIndex(p.navStackRef.current.length - 1);
+  }, [p.currentView, navigateToRoot, restoreToBreadcrumbIndex]);
 
   /**
    * Navigate directly to a breadcrumb level.
    *
-   * Truncates the nav stack to `crumbIndex`, restoring that level's state and
-   * zeroing the folderKeys of every discarded deeper level (including the
-   * current live level).
+   * Delegates to `restoreToBreadcrumbIndex` (bounds-checked there).
    */
   const navigateToBreadcrumb = useCallback(
     async (crumbIndex: number) => {
-      const stack = p.navStackRef.current;
-      if (crumbIndex < 0 || crumbIndex >= stack.length) return;
-      const target = stack[crumbIndex];
-      const currentShareId = p.currentShareId;
-
-      if (p.folderKey) p.folderKey.fill(0);
-      for (let i = crumbIndex + 1; i < stack.length; i++) {
-        stack[i].folderKey.fill(0);
-      }
-      p.navStackRef.current = stack.slice(0, crumbIndex);
-
-      p.setFolderChildren(target.children);
-      p.setFolderKey(target.folderKey);
-      p.setIpnsName(target.ipnsName);
-      p.setCurrentSequenceNumber(target.sequenceNumber);
-      p.setBreadcrumbs((prev) => prev.slice(0, crumbIndex + 1));
-
-      const auth = useAuthStore.getState();
-      if (!currentShareId || !auth.vaultKeypair) return;
-      const vaultKeypair = auth.vaultKeypair;
-
-      try {
-        const shareEntry = p.sharedItems.find((s) => s.share.shareId === currentShareId);
-        if (!shareEntry) return;
-        const ipnsPrivateKey = await resolveFolderIpnsPrivateKey(
-          currentShareId,
-          target.ipnsName,
-          p.permission ?? 'read',
-          vaultKeypair.privateKey,
-          p.getShareKeys
-        );
-        p.zeroIpnsKey();
-        p.ipnsPrivateKeyRef.current = ipnsPrivateKey;
-
-        // T-68.1-20-01: same root-depth-only writeKey re-derivation as
-        // navigateUp -- see resolveSharedRootWriteKey doc.
-        const isRootDepth = target.ipnsName === shareEntry.share.ipnsName;
-        const rootWriteKey = isRootDepth
-          ? await resolveSharedRootWriteKey(
-              shareEntry.share.encryptedWriteKey,
-              vaultKeypair.privateKey
-            )
-          : null;
-        try {
-          p.seedActiveSharedFolder({
-            shareId: currentShareId,
-            ipnsName: target.ipnsName,
-            folderKey: target.folderKey,
-            ipnsPrivateKey,
-            writeKey: rootWriteKey ?? undefined,
-            sequenceNumber: target.sequenceNumber ?? 0n,
-            children: target.children,
-            ownerPublicKey: parsePublicKey(shareEntry.share.sharerPublicKey),
-            recipientPublicKey: vaultKeypair.publicKey,
-          });
-        } finally {
-          rootWriteKey?.fill(0);
-        }
-      } catch (err) {
-        logger.error('[SharedNav] Failed to re-seed after breadcrumb navigation:', err);
-      }
+      await restoreToBreadcrumbIndex(crumbIndex);
     },
-    [
-      p.folderKey,
-      p.currentShareId,
-      p.permission,
-      p.sharedItems,
-      p.getShareKeys,
-      p.seedActiveSharedFolder,
-      p.zeroIpnsKey,
-    ]
+    [restoreToBreadcrumbIndex]
   );
 
   /**
@@ -652,25 +691,13 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
         ];
         const path = p.currentView === 'file' ? [] : [...folderChain.slice(1), item.ipnsName];
 
-        const result = await getSdkClient().downloadSharedFile({
-          encryptedReadKey: share.encryptedReadKey,
-          recipientPrivateKey: vaultKeypair.privateKey,
-          shareRootIpnsName: share.ipnsName,
-          rootExpectedGeneration: share.rootGeneration ?? 0,
-          path,
-        });
-
-        if (result.status === 'revoked') {
-          p.setError('File is no longer available (revoked)');
-          return;
-        }
-        if (result.status === 'behind-retry') {
-          p.setError('This share was updated -- please reopen it and try again');
-          return;
-        }
-
-        triggerBrowserDownload(result.plaintext, item.name, result.mimeType);
+        const { plaintext, mimeType } = await readSharedContent(share, path, vaultKeypair);
+        triggerBrowserDownload(plaintext, item.name, mimeType);
       } catch (err) {
+        if (err instanceof SharedFileRevokedError || err instanceof SharedFileBehindRetryError) {
+          p.setError(err.message);
+          return;
+        }
         logger.error('[SharedNav] Failed to download shared file:', err);
         p.setError('Failed to download file');
       } finally {
@@ -682,12 +709,10 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
 
   /**
    * Load a DIRECT single-file share's content (68.1-32, WEB-03 writable-shares
-   * 10.3). Mirrors `downloadSharedFile`'s `client.downloadSharedFile` read
-   * core but with `path: []` (the share root IS the file — no intermediate
-   * hops) and returns the decrypted plaintext instead of triggering a browser
-   * download, so `TextEditorDialog` can load it into the textarea. Does NOT
-   * touch `downloadSharedFile` itself — the shared-FOLDER download path stays
-   * byte-for-byte unchanged.
+   * 10.3). Shares `readSharedContent` with `downloadSharedFile` but calls it
+   * with `path: []` (the share root IS the file — no intermediate hops) and
+   * returns the decrypted plaintext instead of triggering a browser download,
+   * so `TextEditorDialog` can load it into the textarea.
    */
   const loadSharedFileContent = useCallback(
     async (_item: SealedChildRef): Promise<Uint8Array> => {
@@ -706,22 +731,8 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
       }
       const vaultKeypair = auth.vaultKeypair;
 
-      const result = await getSdkClient().downloadSharedFile({
-        encryptedReadKey: share.encryptedReadKey,
-        recipientPrivateKey: vaultKeypair.privateKey,
-        shareRootIpnsName: share.ipnsName,
-        rootExpectedGeneration: share.rootGeneration ?? 0,
-        path: [],
-      });
-
-      if (result.status === 'revoked') {
-        throw new Error('File is no longer available (revoked)');
-      }
-      if (result.status === 'behind-retry') {
-        throw new Error('This share was updated -- please reopen it and try again');
-      }
-
-      return result.plaintext;
+      const { plaintext } = await readSharedContent(share, [], vaultKeypair);
+      return plaintext;
     },
     [p.currentShareId, p.sharedItems]
   );
@@ -772,6 +783,112 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
   );
 
   /**
+   * Re-derive and re-seed the CURRENT depth's writeKey (73-07 Task 1, supplier
+   * for plan 73-08's SC4 `refreshWriteAccess`).
+   *
+   * At the share ROOT, the writeKey source is `resolveSharedRootWriteKey`
+   * over the grant's `encryptedWriteKey` -- this never depends on transient
+   * per-depth SDK state, so it is always cleanly re-derivable here.
+   *
+   * At a DEEPER depth, `resolveSharedSubfolderWriteKey` requires the PARENT
+   * depth to be the one currently seeded into the SDK's `sharedFolderTree`
+   * (it reads `sharedFolderTree.get(shareId)`) -- but the depth seeded at
+   * this call site is the CURRENT (child) depth, not its parent, so a clean
+   * re-derivation is not reproducible from here. Falls back to re-seeding
+   * from the retained `currentWriteKeyRef` (this depth's last-known-good
+   * writeKey) instead of re-walking the write-chain from an unavailable
+   * parent context.
+   */
+  const refreshCurrentDepthWriteKey = useCallback(async () => {
+    const currentShareId = p.currentShareId;
+    const currentIpnsName = p.ipnsName;
+    const currentFolderKey = p.folderKey;
+    if (!currentShareId || !currentIpnsName || !currentFolderKey) return;
+    const shareEntry = p.sharedItems.find((s) => s.share.shareId === currentShareId);
+    if (!shareEntry) return;
+    const auth = useAuthStore.getState();
+    if (!auth.vaultKeypair) return;
+    const vaultKeypair = auth.vaultKeypair;
+
+    const isRootDepth = currentIpnsName === shareEntry.share.ipnsName;
+    let refreshedWriteKey: Uint8Array | null = null;
+
+    if (isRootDepth) {
+      let freshWriteKey: Uint8Array | null = null;
+      try {
+        freshWriteKey = await resolveSharedRootWriteKey(
+          shareEntry.share.encryptedWriteKey,
+          vaultKeypair.privateKey
+        );
+        refreshedWriteKey = freshWriteKey ? new Uint8Array(freshWriteKey) : null;
+      } catch (err) {
+        logger.error('[SharedNav] Failed to refresh root write key:', err);
+      } finally {
+        // D-09: this call's own derived buffer is the terminal owner once
+        // cloned into refreshedWriteKey above.
+        freshWriteKey?.fill(0);
+      }
+    } else {
+      // See doc comment above: a deeper re-derivation needs the PARENT depth
+      // seeded, not reproducible here -- fall back to the retained buffer.
+      // Cloned (not read live) so the subsequent zeroWriteKey() below cannot
+      // zero this snapshot out from under itself (same underlying buffer).
+      refreshedWriteKey = p.currentWriteKeyRef.current
+        ? new Uint8Array(p.currentWriteKeyRef.current)
+        : null;
+    }
+
+    p.zeroWriteKey();
+    p.currentWriteKeyRef.current = refreshedWriteKey;
+    p.seedActiveSharedFolder({
+      shareId: currentShareId,
+      ipnsName: currentIpnsName,
+      folderKey: currentFolderKey,
+      ipnsPrivateKey: p.ipnsPrivateKeyRef.current ?? new Uint8Array(32),
+      writeKey: refreshedWriteKey ?? undefined,
+      // SC4 fix: shared write ops read SharedFolderState.publishedNode
+      // directly (client.ts buildSharedWriteContextFromState, no network
+      // re-resolve). Reseeding without the live publishedNode falls back to
+      // PLACEHOLDER_PUBLISHED_NODE (empty readSealed), so the write retried
+      // after "Refresh access" would throw an unclassified GCM/unseal error
+      // instead of reaching the classifier. Carry the active depth's live
+      // publishedNode, mirroring navigateToSubfolder's capture pattern above.
+      publishedNode:
+        getSdkClient().getSharedFolderState(currentShareId)?.publishedNode ??
+        PLACEHOLDER_PUBLISHED_NODE,
+      sequenceNumber: p.currentSequenceNumber ?? 0n,
+      children: p.folderChildren,
+      ownerPublicKey: parsePublicKey(shareEntry.share.sharerPublicKey),
+      recipientPublicKey: vaultKeypair.publicKey,
+    });
+
+    // WRITE-03/SC4: mirror restoreToBreadcrumbIndex -- after reseeding, re-check
+    // IPNS so a co-writer whose write failed on a STALE (not revoked)
+    // publishedNode actually recovers on retry, instead of reusing the same
+    // stale envelope the seed above carried from cached SDK state. Purely
+    // additive: refreshSharedFolder's monotonicity guard makes it a no-op when
+    // IPNS is not fresher, and when it is, it emits `sharedFolder:updated` (the
+    // already-wired projection applies it) carrying the freshly-resolved
+    // publishedParent. A refresh failure (e.g. a genuinely tombstoned/revoked
+    // name that resolves 410) must NOT block the retry from proceeding to the
+    // terminal "write access revoked" escalation -- caught, logged, ignored.
+    try {
+      await getSdkClient().refreshSharedFolder(currentShareId);
+    } catch (err) {
+      logger.error('[SharedNav] Failed to refresh shared folder during write-access refresh:', err);
+    }
+  }, [
+    p.currentShareId,
+    p.ipnsName,
+    p.folderKey,
+    p.sharedItems,
+    p.currentSequenceNumber,
+    p.folderChildren,
+    p.seedActiveSharedFolder,
+    p.zeroWriteKey,
+  ]);
+
+  /**
    * Hide a shared item from the user's view.
    */
   const hideSharedItem = useCallback(
@@ -798,5 +915,6 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
     loadSharedFileContent,
     saveSharedSingleFile,
     hideSharedItem,
+    refreshCurrentDepthWriteKey,
   };
 }

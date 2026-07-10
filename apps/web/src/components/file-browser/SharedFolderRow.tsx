@@ -12,7 +12,7 @@ import type { MouseEvent, DragEvent, KeyboardEvent } from 'react';
 import type { SealedChildRef } from '@cipherbox/core';
 import type { ResolvedChild } from '@cipherbox/sdk';
 import { isExternalFileDrag } from '../../hooks/useDropUpload';
-import { isFileRef } from '../../utils/fileTypes';
+import { isFileRef, isFileRefResolved } from '../../utils/fileTypes';
 import { formatBytes, formatDate } from '../../utils/format';
 import type { DragItem } from './FileListItem';
 
@@ -55,6 +55,13 @@ export type SharedFolderRowProps = {
   onMoveItemTo?: (destFolderId: string, destIpnsName: string, draggedItems: DragItem[]) => void;
   /** Currently selected items (for multi-select-aware drag payload) */
   selectedItems?: SealedChildRef[];
+  /**
+   * SDK-resolved listing keyed by ipnsName (68.2-15) -- used to classify the
+   * drag-payload `type` for bare `SealedChildRef`s, which carry no `.kind`
+   * since the 68.2-11 kind-cache removal (`isFileRef` alone always reports
+   * `false`/folder for them).
+   */
+  resolvedByIpnsName: Map<string, ResolvedChild>;
 };
 
 export function SharedFolderRow({
@@ -73,6 +80,7 @@ export function SharedFolderRow({
   onSelect,
   onMoveItemTo,
   selectedItems = [],
+  resolvedByIpnsName,
 }: SharedFolderRowProps) {
   // 68.2-08 (D-02): prefer the resolved listing's kind when available --
   // isFileRef reads `.kind` directly off a ResolvedChild, no kind-cache
@@ -108,12 +116,16 @@ export function SharedFolderRow({
         isSelected && selectedItems.length > 1
           ? selectedItems.map((i) => ({
               id: i.ipnsName,
-              type: isFileRef(i) ? ('file' as const) : ('folder' as const),
+              type: isFileRefResolved(i, resolvedByIpnsName)
+                ? ('file' as const)
+                : ('folder' as const),
             }))
           : [
               {
                 id: item.ipnsName,
-                type: isFileRef(item) ? ('file' as const) : ('folder' as const),
+                type: isFileRefResolved(item, resolvedByIpnsName)
+                  ? ('file' as const)
+                  : ('folder' as const),
               },
             ];
 
@@ -121,7 +133,7 @@ export function SharedFolderRow({
       e.dataTransfer.setData('application/json', JSON.stringify(payload));
       e.dataTransfer.effectAllowed = 'move';
     },
-    [item, isSelected, selectedItems]
+    [item, isSelected, selectedItems, resolvedByIpnsName]
   );
 
   // ---------------------------------------------------------------------------

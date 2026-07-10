@@ -694,6 +694,66 @@ test.describe.serial('Writable Shares', () => {
     await bobSharedBrowser.navigateIntoFolder(folderName);
   });
 
+  // SC1 (73-RESEARCH.md): navigateUp/navigateToBreadcrumb previously only
+  // re-derived a writeKey when restoring the SHARE ROOT (the old
+  // `isRootDepth` branch in useSharedNavigationActions.ts) -- any non-root
+  // restore depth seeded a zero-buffer writeKey (`new Uint8Array(32)`
+  // fallback in shared-folder-projection.ts's `seedSharedFolder`), so a
+  // write performed right after an UP-ONE-LEVEL restore (not a full
+  // round-trip back to root) silently failed its GCM auth tag check. Test
+  // 8.4 above only covers DESCEND-then-write (full return to root, then
+  // back down) -- it never navigates UP from depth 2 to depth 1 and writes
+  // from THAT restored level. This was the exact gap flagged against 8.4.
+  //
+  // Plan 73-07 closed the gap: useSharedNavigationActions.ts's consolidated
+  // restore helper (SC6) now caches each depth's writeKey in NavStackEntry
+  // and transfers it on restore instead of the old isRootDepth branch (see
+  // 73-RESEARCH.md SC1).
+  test('8.4b Bob navigates up one level then writes from the restored subfolder (SC1)', async () => {
+    test.setTimeout(90000);
+
+    // Reuse 8.3's depth-2 descent: folderName -> deepSubfolder -> nestedSubfolder.
+    await bobSharedBrowser.navigateToRoot();
+    await bobSharedBrowser.waitForLoaded({ timeout: 15000 });
+    await bobSharedBrowser.navigateIntoFolder(folderName);
+    await bobSharedBrowser.navigateIntoSubfolder(deepSubfolder);
+    await bobSharedBrowser.navigateIntoSubfolder(nestedSubfolder);
+
+    // Navigate UP exactly ONE level -- back to deepSubfolder (depth 1),
+    // NOT all the way to root. This is the restore path that currently
+    // seeds a zero-buffer writeKey for any non-root depth.
+    await bobSharedBrowser.navigateUp();
+    await expect(bobSharedBrowser.breadcrumbs().locator('.breadcrumb-item--current')).toHaveText(
+      deepSubfolder,
+      { ignoreCase: true, timeout: 30000 }
+    );
+
+    // Write from the restored depth-1 folder MUST SUCCEED -- no GCM-auth /
+    // write-key error toast. Upload a new file (mirrors 8.3's pattern).
+    const restoredWriteFileName = `restored-depth1-write-${runId}.txt`;
+    const uploadBtn = bob.page.locator('.toolbar-btn', { hasText: '--upload' });
+    await expect(uploadBtn).toBeVisible({ timeout: 10000 });
+    const testFile = createTestTextFile(
+      restoredWriteFileName,
+      'Written after up-one-level restore (SC1)'
+    );
+    const fileInput = bob.page.locator('input[type="file"]');
+    await fileInput.setInputFiles(testFile.path);
+
+    // Assert SUCCESS: the file appears, and no write-key/GCM-auth error
+    // toast is surfaced.
+    await bobSharedBrowser.getFolderItem(restoredWriteFileName).waitFor({
+      state: 'visible',
+      timeout: 30000,
+    });
+    await expect(bob.page.locator('[role="alert"]')).toHaveCount(0);
+
+    // Restore navigation state for subsequent tests.
+    await bobSharedBrowser.navigateToRoot();
+    await bobSharedBrowser.waitForLoaded({ timeout: 15000 });
+    await bobSharedBrowser.navigateIntoFolder(folderName);
+  });
+
   test('8.5 Alice can read files at all depths created by Bob', async () => {
     test.setTimeout(90000);
 

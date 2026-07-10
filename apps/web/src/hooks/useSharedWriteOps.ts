@@ -19,18 +19,25 @@ import { getSdkClient } from '../lib/sdk-provider';
 import { useAuthStore } from '../stores/auth.store';
 import { fetchShareKeys } from '../services/share.service';
 import { logger } from '../lib/logger';
+import { runWithFailureUx } from './useMutationFailureUx';
 import type { SharedListItem } from './useSharedNavigation';
 
 /**
- * Resolve a child item's write-body UUID (childNodeId) from its IPNS name via
- * `client.resolveNodeIdentity` (D-07, 68.2-08) -- `id`/`kind` are plaintext
- * on the PublishedNode envelope (NODE-03), so no readKey/decryption is
- * needed; the SDK facade resolves+parses the envelope internally.
+ * Resolve a child item's write-body UUID (childNodeId) from its
+ * `SealedChildRef` via `client.resolveNodeIdentity` (D-07, 68.2-08) --
+ * `id`/`kind` are plaintext on the PublishedNode envelope (NODE-03), so no
+ * readKey/decryption is needed; the SDK facade resolves+parses the envelope
+ * internally.
+ *
+ * 73-04 SC3: `resolveNodeIdentity` now routes through `gatedResolveChild`
+ * (ROT-07 anti-rollback floor), so the full `SealedChildRef` -- not just its
+ * bare `ipnsName` -- must be threaded through so the gate can source
+ * `generation`/`versionFloor` from the PARENT mirror.
  */
-async function resolveChildNodeId(ipnsName: string): Promise<string> {
-  const identity = await getSdkClient().resolveNodeIdentity(ipnsName);
+async function resolveChildNodeId(item: SealedChildRef): Promise<string> {
+  const identity = await getSdkClient().resolveNodeIdentity(item);
   if (!identity) {
-    throw new Error(`Cannot resolve item ${ipnsName} (revoked or not found)`);
+    throw new Error(`Cannot resolve item ${item.ipnsName} (revoked or not found)`);
   }
   return identity.nodeId;
 }
@@ -39,8 +46,10 @@ async function resolveChildNodeId(ipnsName: string): Promise<string> {
  * Resolve a shared file's re-wrapped IPNS private key from `share_keys`
  * (keyType `file-ipns`, itemId = file's ipnsName) -- fallback path used by
  * `updateSharedFile` only when the write-chain walk finds no `WriteChildRef`
- * for the file. Mirrors `useSharedNavigationActions.ts`'s
- * `resolveFolderIpnsPrivateKey` (folder-ipns analog).
+ * for the file. This is the last live consumer of the `share_keys` fan-out
+ * (the folder-ipns analog in `useSharedNavigationActions.ts` was dead code
+ * removed in Phase 73 SC7, since its `fetchShareKeys` stub always returns
+ * `[]` for folder-ipns lookups).
  */
 async function resolveFileIpnsKey(itemId: string, shareId: string): Promise<Uint8Array | null> {
   const vaultPrivateKey = useAuthStore.getState().vaultKeypair?.privateKey;
@@ -62,6 +71,14 @@ export type SharedWriteOpsParams = {
   setIsLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
   handleRevocation: (silent: boolean) => void;
+  /**
+   * Re-derives and reseeds the current depth's shared writeKey (D-01/WRITE-03).
+   * Threaded into `runWithFailureUx` as the `refreshWriteAccess` supplier so a
+   * `CannotWriteUntilRefetchError` (a real publish target tombstone) offers a
+   * one-tap "Refresh access" retry instead of immediately surfacing the
+   * terminal "Write access revoked." notice.
+   */
+  refreshWriteAccess: () => Promise<void>;
 };
 
 export function useSharedWriteOps(p: SharedWriteOpsParams) {
@@ -92,7 +109,9 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
       p.setIsLoading(true);
       p.setError(null);
       try {
-        await withRevocationGuard(() => op(shareId));
+        await withRevocationGuard(() =>
+          runWithFailureUx(() => op(shareId), { refreshWriteAccess: p.refreshWriteAccess })
+        );
         return true;
       } catch (err) {
         const message = (err as Error).message || failMessage;
@@ -105,7 +124,7 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
         p.setIsLoading(false);
       }
     },
-    [p.currentShareId, p.setError, p.setIsLoading, withRevocationGuard]
+    [p.currentShareId, p.setError, p.setIsLoading, p.refreshWriteAccess, withRevocationGuard]
   );
 
   /**
@@ -167,14 +186,18 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
         throw new Error('Write access not available');
       }
       await withRevocationGuard(() =>
-        getSdkClient().updateSharedFile(shareId, {
-          filePointer: item,
-          newContent,
-          getFileIpnsKeyFn: (itemId) => resolveFileIpnsKey(itemId, shareId),
-        })
+        runWithFailureUx(
+          () =>
+            getSdkClient().updateSharedFile(shareId, {
+              filePointer: item,
+              newContent,
+              getFileIpnsKeyFn: (itemId) => resolveFileIpnsKey(itemId, shareId),
+            }),
+          { refreshWriteAccess: p.refreshWriteAccess }
+        )
       );
     },
-    [p.currentShareId, withRevocationGuard]
+    [p.currentShareId, p.refreshWriteAccess, withRevocationGuard]
   );
 
   /**
@@ -187,7 +210,7 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
   const deleteItemHandler = useCallback(
     async (item: SealedChildRef) => {
       await runWrite(async (shareId) => {
-        const childNodeId = await resolveChildNodeId(item.ipnsName);
+        const childNodeId = await resolveChildNodeId(item);
         await getSdkClient().deleteFromSharedFolder(shareId, {
           itemId: item.ipnsName,
           childNodeId,
@@ -251,12 +274,16 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
       try {
         for (const item of items) {
           await withRevocationGuard(() =>
-            getSdkClient().moveInSharedFolder(shareId, {
-              itemId: item.ipnsName,
-              destFolderId,
-              destIpnsName,
-              vaultPrivateKey,
-            })
+            runWithFailureUx(
+              () =>
+                getSdkClient().moveInSharedFolder(shareId, {
+                  itemId: item.ipnsName,
+                  destFolderId,
+                  destIpnsName,
+                  vaultPrivateKey,
+                }),
+              { refreshWriteAccess: p.refreshWriteAccess }
+            )
           );
         }
         clearSelection();
@@ -270,7 +297,7 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
         p.setIsLoading(false);
       }
     },
-    [p.currentShareId, p.setError, p.setIsLoading, withRevocationGuard]
+    [p.currentShareId, p.setError, p.setIsLoading, p.refreshWriteAccess, withRevocationGuard]
   );
 
   return {

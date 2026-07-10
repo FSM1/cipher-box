@@ -190,4 +190,77 @@ test.describe.serial('Shared Folder Desync (SC#5)', () => {
     expect(dateText).not.toBe('—');
     expect(dateText).not.toContain('1970');
   });
+
+  // ============================================
+  // Phase 4: Stale Nav-Stack Restore After a Deeper Descent (SC2)
+  // ============================================
+
+  // SC2 (73-RESEARCH.md): `navigateToSubfolder` pushes the level being left
+  // onto navStackRef's `children` BY REFERENCE at descent time, and neither
+  // `navigateUp` nor `navigateToBreadcrumb` re-resolve that depth on
+  // restore -- restoring replays the FROZEN descent-time snapshot, even if
+  // a `sharedFolder:updated` event fired for that exact depth while the
+  // grantee was navigated deeper in the tree. This is a DIFFERENT gap from
+  // the SC#5/D-03 regression test above (that one covers a first-ever
+  // navigate-in after a remote write; this one covers navigate-DEEPER, then
+  // navigate back UP, after a remote write to the depth left behind). Not
+  // covered by 2.1/3.1's single-descent flow. Reuses the SAME owner+grantee
+  // dual-account harness from 1.1/1.2 -- do NOT construct a new fixture or
+  // describe block.
+  //
+  // Plan 73-09 closes SC2: navigateUp's/navigateToBreadcrumb's consolidated
+  // restore helper (SC6) now calls `refreshSharedFolder()` after re-seeding a
+  // restored depth (see 73-RESEARCH.md SC2), so this case is active.
+  test('Grantee sees fresh children after navigating up following a remote mutation while deeper (SC2)', async () => {
+    test.setTimeout(90000);
+
+    const desyncSubfolderName = `desync-subfolder-${runId}`;
+    const ownerMutationFileName = `owner-mutation-${runId}.txt`;
+
+    // Grantee is at depth 0 (sharedFolderName, per 2.1's navigateIntoFolder
+    // above). Create and descend into a subfolder -- this takes the
+    // grantee to depth 1, pushing depth 0's children snapshot onto
+    // navStackRef by reference.
+    const mkdirBtn = grantee.page.locator('.toolbar-btn', { hasText: '--mkdir' });
+    await mkdirBtn.click();
+    const folderInput = grantee.page.locator('.shared-inline-input-field');
+    await folderInput.waitFor({ state: 'visible', timeout: 5000 });
+    await folderInput.fill(desyncSubfolderName);
+    await folderInput.press('Enter');
+    await granteeSharedBrowser.getFolderItem(desyncSubfolderName).waitFor({
+      state: 'visible',
+      timeout: 30000,
+    });
+    await granteeSharedBrowser.navigateIntoSubfolder(desyncSubfolderName);
+
+    // Owner mutates the depth the grantee navigated AWAY from (depth 0,
+    // sharedFolderName) while the grantee is deeper -- add a new file
+    // there from the owner's OWN (non-shared) file browser.
+    await navigateToFiles(owner);
+    await ownerFileList.waitForItemToAppear(sharedFolderName, { timeout: 15000 });
+    await ownerFileList.doubleClickFolder(sharedFolderName);
+    await owner.page
+      .locator('.breadcrumb-item', { hasText: sharedFolderName.toLowerCase() })
+      .waitFor({ state: 'visible', timeout: 30000 });
+
+    const ownerFile = createTestTextFile(
+      ownerMutationFileName,
+      'Owner mutation while grantee is deeper (SC2)'
+    );
+    const ownerFileInput = owner.page.locator('input[type="file"]');
+    await ownerFileInput.setInputFiles(ownerFile.path);
+    await ownerFileList.waitForItemToAppear(ownerMutationFileName, { timeout: 30000 });
+
+    // Grantee navigates UP to the mutated depth (back to sharedFolderName).
+    // The child listing MUST reflect the FRESH mutation, not the frozen
+    // descent-time snapshot captured when the grantee left depth 0.
+    await granteeSharedBrowser.navigateUp();
+
+    // Fresh listing assertion: the owner's newly-added file must appear
+    // even though it was created entirely while the grantee was deeper.
+    await granteeSharedBrowser.getFolderItem(ownerMutationFileName).waitFor({
+      state: 'visible',
+      timeout: 30000,
+    });
+  });
 });

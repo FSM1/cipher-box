@@ -10,10 +10,10 @@
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { type SealedChildRef } from '@cipherbox/core';
-import { ShareKeyCache, type ResolvedChild } from '@cipherbox/sdk';
+import { type SealedChildRef, type PublishedNode } from '@cipherbox/core';
+import { type ResolvedChild } from '@cipherbox/sdk';
 import { useShareStore, type ReceivedShare } from '../stores/share.store';
-import { fetchReceivedShares, fetchShareKeys, decryptItemName } from '../services/share.service';
+import { fetchReceivedShares, decryptItemName } from '../services/share.service';
 import { useAuthStore } from '../stores/auth.store';
 import { getSdkClient, hasSdkClient } from '../lib/sdk-provider';
 import { logger } from '../lib/logger';
@@ -110,6 +110,11 @@ type UseSharedNavigationReturn = {
     destIpnsName: string,
     clearSelection: () => void
   ) => Promise<void>;
+  /**
+   * Re-derive and re-seed the CURRENT depth's writeKey (73-07 Task 1, supplier
+   * for plan 73-08's SC4 `refreshWriteAccess`).
+   */
+  refreshCurrentDepthWriteKey: () => Promise<void>;
 };
 
 /**
@@ -145,6 +150,11 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
   // IPNS private key stored in ref to avoid re-renders; zeroed on cleanup
   const ipnsPrivateKeyRef = useRef<Uint8Array | null>(null);
 
+  // Active-depth writeKey (73-07, SC1) -- mirrors ipnsPrivateKeyRef; owned by
+  // either this ref (active depth) or a NavStackEntry.writeKey (suspended
+  // depth), never both at once. Zeroed on cleanup.
+  const currentWriteKeyRef = useRef<Uint8Array | null>(null);
+
   // Navigation stack for folder browsing within a share
   const navStackRef = useRef<
     Array<{
@@ -152,13 +162,12 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       folderName: string;
       children: SealedChildRef[];
       folderKey: Uint8Array;
+      writeKey: Uint8Array | null;
+      publishedNode: PublishedNode;
       ipnsName: string;
       sequenceNumber: bigint | null;
     }>
   >([]);
-
-  // Cache share keys per shareId with TTL to avoid refetching
-  const shareKeysCacheRef = useRef(new ShareKeyCache(60_000));
 
   // Polling interval ref for 30s sync
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -179,6 +188,13 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     }
   }, []);
 
+  const zeroWriteKey = useCallback(() => {
+    if (currentWriteKeyRef.current) {
+      currentWriteKeyRef.current.fill(0);
+      currentWriteKeyRef.current = null;
+    }
+  }, []);
+
   const clearPolling = useCallback(() => {
     if (pollIntervalRef.current) {
       clearInterval(pollIntervalRef.current);
@@ -196,15 +212,6 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     },
     [zeroIpnsKey]
   );
-
-  const getShareKeys = useCallback(async (shareId: string) => {
-    const cached = shareKeysCacheRef.current.get(shareId);
-    if (cached) return cached;
-
-    const keys = await fetchShareKeys(shareId);
-    shareKeysCacheRef.current.set(shareId, keys);
-    return keys;
-  }, []);
 
   /**
    * Seed (or re-seed) the SDK's sharedFolderTree for the active shared-folder
@@ -301,13 +308,14 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       });
       for (const entry of navStackRef.current) {
         entry.folderKey.fill(0);
+        entry.writeKey?.fill(0);
       }
       navStackRef.current = [];
       zeroIpnsKey();
+      zeroWriteKey();
       clearPolling();
-      shareKeysCacheRef.current.clear();
     };
-  }, [zeroIpnsKey, clearPolling]);
+  }, [zeroIpnsKey, zeroWriteKey, clearPolling]);
 
   // ---------------------------------------------------------------------------
   // sharedFolder:updated projection (REQ-3)
@@ -391,8 +399,8 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     folderChildrenRef,
     sequenceNumberRef,
     ipnsPrivateKeyRef,
+    currentWriteKeyRef,
     navStackRef,
-    shareKeysCacheRef,
     setCurrentView,
     setCurrentShareId,
     setFolderChildren,
@@ -406,7 +414,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     setSharedItems,
     clearPolling,
     zeroIpnsKey,
-    getShareKeys,
+    zeroWriteKey,
     seedActiveSharedFolder,
   });
 
@@ -416,6 +424,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     setIsLoading,
     setError,
     handleRevocation,
+    refreshWriteAccess: navActions.refreshCurrentDepthWriteKey,
   });
 
   // ---------------------------------------------------------------------------
