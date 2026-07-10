@@ -299,7 +299,7 @@ describe('IPNS publish-gate suite (TEE-04/07, WRITE-04 phase gate)', () => {
   // -------------------------------------------------------------------------
   // Test 20 — WRITE-04: tombstoned name rejected at publish AND resolve
   // -------------------------------------------------------------------------
-  it('Test 20 (WRITE-04): tombstone → publish returns 410 IPNS_TOMBSTONED; resolve returns 410', async () => {
+  it('Test 20 (WRITE-04): tombstone → publish surfaces {tombstoned:true}; resolve returns 410', async () => {
     const alice = fixture.accounts.get('alice')!;
     const aliceCtx = alice.client.getContext();
 
@@ -329,24 +329,23 @@ describe('IPNS publish-gate suite (TEE-04/07, WRITE-04 phase gate)', () => {
     });
     expect(tombstoneResp.ok).toBe(true);
 
-    // Subsequent publish must be rejected with HTTP 410 IPNS_TOMBSTONED
-    let publishError: unknown;
-    try {
-      await createAndPublishIpnsRecord({
-        ipnsPrivateKey: kp.privateKey,
-        ipnsPublicKey: pubKey,
-        ipnsName,
-        metadataCid: cid,
-        sequenceNumber: 2n,
-        expectedSequenceNumber: '1',
-        ctx: aliceCtx,
-      });
-    } catch (err) {
-      publishError = err;
-    }
-    expect(publishError).toBeDefined();
-    expect(statusOf(publishError)).toBe(410);
-    expect((dataOf(publishError) as Record<string, unknown>)?.error).toBe('IPNS_TOMBSTONED');
+    // Subsequent publish against the tombstoned name: the API rejects with HTTP
+    // 410 IPNS_TOMBSTONED, and `createAndPublishIpnsRecord` maps that to a
+    // catchable `{ success: false, tombstoned: true }` signal (SC4/73-02)
+    // instead of letting a raw AxiosError propagate -- so it must NOT throw.
+    // This is the write-side of the co-writer stale-write UX (publishNodeFn ->
+    // CannotWriteUntilRefetch); a raw throw here would bypass that classifier.
+    const publishResult = await createAndPublishIpnsRecord({
+      ipnsPrivateKey: kp.privateKey,
+      ipnsPublicKey: pubKey,
+      ipnsName,
+      metadataCid: cid,
+      sequenceNumber: 2n,
+      expectedSequenceNumber: '1',
+      ctx: aliceCtx,
+    });
+    expect(publishResult.tombstoned).toBe(true);
+    expect(publishResult.success).toBe(false);
 
     // Resolve of the tombstoned name must also return HTTP 410
     let resolveError: unknown;
