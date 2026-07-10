@@ -73,6 +73,11 @@ export class ApiSchemaCutover1750000000000 implements MigrationInterface {
 
     await queryRunner.query(`CREATE INDEX "IDX_shares_sharer_id" ON "shares" ("sharer_id")`);
     await queryRunner.query(`CREATE INDEX "IDX_shares_recipient_id" ON "shares" ("recipient_id")`);
+    // Composite index for the (sharer_id, share_root_ipns_name) access path used by
+    // revokeForItems' bulk DELETE (SC#5) and the D-01 ownership-scoped share lookups.
+    await queryRunner.query(
+      `CREATE INDEX "IDX_shares_sharer_root" ON "shares" ("sharer_id", "share_root_ipns_name")`
+    );
 
     // ──────────────────────────────────────────────────────────────────────────
     // Step 3: Drop and recreate share_invites (slimmed; D-05)
@@ -122,6 +127,11 @@ export class ApiSchemaCutover1750000000000 implements MigrationInterface {
     );
     await queryRunner.query(
       `CREATE INDEX "IDX_share_invites_expires_at" ON "share_invites" ("expires_at")`
+    );
+    // Composite index for the (sharer_id, share_root_ipns_name) access path used by
+    // getInvitesForItem (D-09) and ownership-scoped invite lookups.
+    await queryRunner.query(
+      `CREATE INDEX "IDX_share_invites_sharer_root" ON "share_invites" ("sharer_id", "share_root_ipns_name")`
     );
 
     // ──────────────────────────────────────────────────────────────────────────

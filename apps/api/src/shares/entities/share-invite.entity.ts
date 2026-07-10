@@ -12,6 +12,7 @@ import { User } from '../../auth/entities/user.entity';
 
 @Entity('share_invites')
 @Check('CHK_share_invites_claim_count', '"claim_count" >= 0 AND "claim_count" <= "max_claims"')
+@Index('IDX_share_invites_sharer_root', ['sharerId', 'shareRootIpnsName'])
 export class ShareInvite {
   @PrimaryGeneratedColumn('uuid')
   id!: string;

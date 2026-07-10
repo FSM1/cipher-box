@@ -14,6 +14,7 @@ import { User } from '../../auth/entities/user.entity';
 // Plain unique constraint — hard-delete on revoke means no revoked rows coexist (D-11)
 @Entity('shares')
 @Unique(['sharerId', 'recipientId', 'rootNodeId'])
+@Index('IDX_shares_sharer_root', ['sharerId', 'shareRootIpnsName'])
 export class Share {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
