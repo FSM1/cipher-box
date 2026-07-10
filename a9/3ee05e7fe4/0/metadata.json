@@ -19,6 +19,40 @@
     "output_tokens": 11509,
     "api_call_count": 18
   },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01UYCCzQhFZAHGHdsaWBLw9U",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "98ad5a5a244a",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 116,
+        "end": 117,
+        "entry_ids": [
+          "018bd085-2058-4077-b6f9-80db0d5e8d2b"
+        ],
+        "tool_use_id": "toolu_01UYCCzQhFZAHGHdsaWBLw9U"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01UYCCzQhFZAHGHdsaWBLw9U"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-plan-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
   "session_metrics": {
     "turn_count": 1
   },
