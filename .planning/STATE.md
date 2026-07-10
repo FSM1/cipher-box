@@ -6,14 +6,14 @@ current_phase: 72
 current_phase_name: sdk-write-plane-durability-and-correctness
 status: executing
 stopped_at: Completed 72-02-PLAN.md
-last_updated: "2026-07-10T14:08:27.217Z"
+last_updated: "2026-07-10T14:31:45.134Z"
 last_activity: 2026-07-10
 last_activity_desc: Phase 72 execution started
 progress:
   total_phases: 16
   completed_phases: 13
   total_plans: 180
-  completed_plans: 173
+  completed_plans: 174
   percent: 81
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 ## Current Position
 
 Phase: 72 (sdk-write-plane-durability-and-correctness) — EXECUTING
-Plan: 5 of 10
+Plan: 6 of 10
 Status: Ready to execute
 Last activity: 2026-07-10 — Phase 72 execution started
 
@@ -260,6 +260,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 72 P02 | 25min | 2 tasks | 2 files |
 | Phase 72 P03 | 25min | 2 tasks | 3 files |
 | Phase 72 P04 | 15min | 2 tasks | 3 files |
+| Phase 72 P05 | 25min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -563,6 +564,8 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: 72-03: baseWriteChildren is optional on updateFolderMetadataAndPublish; omitting it falls back to the legacy naive union (back-compat for moveItem/restoreFromBin, not yet threaded)
 - [Phase ?]: 72-03: deleteItem's UUID-resolve-and-drop step fails OPEN (never aborts the already-succeeded read-plane delete)
 - [Phase ?]: [72-04] getWriteBodyParams split: transient-miss with real writeKey throws (fail-closed); structurally-absent writeSealed stays fail-open (unchanged)
+- [Phase 72-05]: restoreFromBin re-homing only runs when sourceFolder.ipnsName !== targetFolderIpnsName (same-parent restore is a write-body no-op)
+- [Phase 72-05]: permanentDeleteFromBin drops the lingering original-parent WriteChildRef by BinEntry.nodeRef.id (captured UUID witness), never a fresh resolve
 
 ## Operator Next Steps
 
@@ -570,7 +573,7 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-10T14:07:45.374Z
+**Last session:** 2026-07-10T14:30:17.636Z
 **Stopped at:** Completed 72-02-PLAN.md
 **Resume file:** 
 
