@@ -83,7 +83,16 @@ export async function getWriteBodyParams(
   const published = JSON.parse(new TextDecoder().decode(raw)) as PublishedNode;
   if (!published.writeSealed) return { writeKey: wk, writeChildren: [] };
   const node = await unsealNode(published, folder.folderKey, wk);
-  return { writeKey: wk, writeChildren: node.writeBody?.writeChildren ?? [] };
+  try {
+    return { writeKey: wk, writeChildren: node.writeBody?.writeChildren ?? [] };
+  } finally {
+    // D-09: unsealNode just materialized a transient IPNS private key
+    // (node.writeBody.ipnsPrivateKey) purely to let us read writeChildren.
+    // This function is the terminal owner of that transient buffer -- it is
+    // never returned or passed on -- so it must be zeroed here rather than
+    // left to linger in memory.
+    node.writeBody?.ipnsPrivateKey.fill(0);
+  }
 }
 
 /**
