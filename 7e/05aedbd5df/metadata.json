@@ -3,8 +3,9 @@
   "checkpoint_id": "7e05aedbd5df",
   "strategy": "manual-commit",
   "branch": "feat/shared-write-navigation-correctness-web",
-  "checkpoints_count": 5,
+  "checkpoints_count": 6,
   "files_touched": [
+    ".planning/ROADMAP.md",
     ".planning/STATE.md"
   ],
   "sessions": [
@@ -13,13 +14,19 @@
       "transcript": "/7e/05aedbd5df/0/full.jsonl",
       "content_hash": "/7e/05aedbd5df/0/content_hash.txt",
       "prompt": "/7e/05aedbd5df/0/prompt.txt"
+    },
+    {
+      "metadata": "/7e/05aedbd5df/1/metadata.json",
+      "transcript": "/7e/05aedbd5df/1/full.jsonl",
+      "content_hash": "/7e/05aedbd5df/1/content_hash.txt",
+      "prompt": ""
     }
   ],
   "token_usage": {
-    "input_tokens": 16632,
-    "cache_creation_tokens": 497886,
-    "cache_read_tokens": 6140307,
-    "output_tokens": 65181,
-    "api_call_count": 42
+    "input_tokens": 31696,
+    "cache_creation_tokens": 868282,
+    "cache_read_tokens": 14442783,
+    "output_tokens": 128607,
+    "api_call_count": 114
   }
 }

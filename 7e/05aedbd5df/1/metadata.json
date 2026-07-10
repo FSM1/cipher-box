@@ -1,0 +1,116 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "7e05aedbd5df",
+  "session_id": "67f868ae-597f-436d-9d1d-2b17847681c3",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-10T19:34:01.091996Z",
+  "branch": "feat/shared-write-navigation-correctness-web",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    ".planning/ROADMAP.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "98ad5a5a244a",
+  "token_usage": {
+    "input_tokens": 15064,
+    "cache_creation_tokens": 370396,
+    "cache_read_tokens": 8302476,
+    "output_tokens": 63426,
+    "api_call_count": 72
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01UYCCzQhFZAHGHdsaWBLw9U",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "98ad5a5a244a",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 116,
+        "end": 117,
+        "entry_ids": [
+          "018bd085-2058-4077-b6f9-80db0d5e8d2b"
+        ],
+        "tool_use_id": "toolu_01UYCCzQhFZAHGHdsaWBLw9U"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01UYCCzQhFZAHGHdsaWBLw9U"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-plan-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Determine whether phase 73 (cipher-box) had open discussion points before planning, then kick off `/gsd-plan-phase 73` ensuring the correct branch name was used and that tangential pending todos were folded into scope.",
+    "outcome": "Phase 73 planning pipeline completed end-to-end on the correct branch (`feat/shared-write-navigation-correctness-web`): two tangential todos were folded in as new success criteria (SC6, SC7), research/pattern-mapping/planning/verification all ran, plan-checker found and the assistant fixed 2 blockers + 1 warning, and the checker passed on re-verification, yielding 9 plans across 3 waves ready for `/gsd-execute-phase 73`.",
+    "learnings": {
+      "repo": [
+        "GSD `phase_branch_template` is `feat/{slug}`; the correct branch name is the phase directory slug with the number stripped (e.g. phase 72 used `feat/sdk-write-plane-durability-and-correctness`), not the planner's occasional stray `docs/plan-phase-{N}` branch.",
+        "plan-phase.md workflow Step 0 has a 'Git Branch Invariant': it must not create/rename/switch branches during planning — pre-creating the correctly-named feat branch before invoking the skill anchors all subsequent commits to it.",
+        "PATTERNS.md produced by gsd-pattern-mapper is not auto-committed by the plan-phase workflow and must be committed explicitly.",
+        "`useSharedWriteOps.ts` never calls `runWithFailureUx`; a real API 410 currently surfaces as an uncaught AxiosError instead of a handled tombstone state — SC4 is actually 4 stacked gaps, not the single wiring task the source todo implied.",
+        "In the shared-write nav rework, `fetchShareKeys` must be preserved when removing the dead folder-IPNS path — only that specific dead path should be deleted, not the whole function (SC7 landmine).",
+        "web-e2e in this repo is gated to run only on main-push, not on phase branches in CI, so SC1/SC2/SC4 end-to-end validation must be run locally against VALIDATION.md's sampling plan before shipping."
+      ],
+      "code": [
+        {
+          "path": ".planning/phases/73-shared-write-navigation-correctness-web/73-02-PLAN.md",
+          "finding": "TDD RED-task verify command piped through `grep ... || true`, masking the real test exit code so the 'confirm RED' gate could never fail; fixed to check the actual exit code."
+        },
+        {
+          "path": ".planning/phases/73-shared-write-navigation-correctness-web/73-04-PLAN.md",
+          "finding": "Same RED-gate exit-code-masking anti-pattern as 73-02-PLAN.md; fixed identically."
+        },
+        {
+          "path": ".planning/phases/73-shared-write-navigation-correctness-web/73-09-PLAN.md",
+          "finding": "`depends_on` frontmatter listed only [73-07, 73-01] but was missing an implicit ordering dependency on 73-05 (item 4); added 73-05 without changing the plan's wave (3)."
+        }
+      ],
+      "workflow": [
+        "Before running `/gsd-plan-phase`, check for a `73-*` planning directory, DISCUSSION.md, and open-question markers in source todos to decide if a discuss-phase pass is warranted — a tight ROADMAP entry with concrete success criteria and no markers means it's safe to skip straight to planning.",
+        "When asked to fold 'tangential' pending todos into a phase, delegate classification of the full pending-todos backlog to a subagent rather than reading each one manually, to conserve context.",
+        "Mechanical, fully-specified plan-checker findings (like exit-code masking or a missing depends_on) can be fixed directly by the orchestrator instead of re-spawning the full planner, then re-verified with a fresh plan-checker pass rather than trusting the fix silently."
+      ]
+    },
+    "friction": [
+      "STATE.md was stale — still showed Phase 72 as 'verifying' even though PR #602 had already merged to main; had to be manually advanced without touching progress counters (phase-72 formal completion was out of scope for this task).",
+      "The WRITE-03 source todo understated SC4's actual scope, presenting it as a single wiring decision when research revealed 4 stacked gaps (missing `runWithFailureUx` call, unhandled AxiosError, no live supplier, no e2e classifier flow).",
+      "First plan-checker pass surfaced 2 blockers (duplicated exit-code-masking bug in two separate plan files) + 1 warning, requiring a second verification iteration to confirm the gate."
+    ],
+    "open_items": [
+      "3 genuinely-separate pending todos (SDK merge parity, SDK ShareCallbacks scaffolding retirement, D-07 ESLint boundary rule) were deliberately left out of phase 73 and remain in the backlog.",
+      "Phase 72's formal completion in STATE.md progress counters was left untouched and still needs to be closed out separately.",
+      "Local stack run of SC1/SC2/SC4 end-to-end flows recommended before shipping, since web-e2e CI doesn't cover the phase branch.",
+      "Next step handed off to the user: run `/gsd-execute-phase 73` (Wave 1 has 5 fully parallel plans: 73-01, 73-02, 73-03, 73-04, 73-06)."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-10T19:33:28.272226Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 6,
+    "human_removed": 0,
+    "total_committed": 0,
+    "total_lines_changed": 6,
+    "agent_percentage": 0,
+    "metric_version": 2
+  }
+}
