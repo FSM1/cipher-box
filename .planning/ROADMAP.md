@@ -819,6 +819,7 @@ Plans:
 - `.planning/todos/pending/2026-07-03-dedupe-sdk-write-plane-helpers.md`
 - `.planning/todos/pending/2026-06-30-write-chain-e2e-seed-index-stability.md`
 - `.planning/todos/pending/2026-06-29-upload-batch-test-mock-type-drift.md`
+- `.planning/todos/pending/2026-07-10-zeroize-file-keys-on-unwrap-error-path.md`
 
 **Success Criteria** (what must be TRUE):
 
@@ -829,7 +830,20 @@ Plans:
 5. The unreachable `moveInSharedFolder` `shareKeys.length > 0` branch (and its `getShareKeysFn` param) is removed, eliminating the latent wrong-key bug
 6. The near-identical write-plane helpers (`client.ts` ↔ `bin/index.ts` `getWriteBodyParams`, `replaceFile`/`restoreFileVersion`) share one primitive; `write-chain-rotation.test.ts` identifies rotated seeds by provenance (not fixed `capturedKeys` offsets); `upload-batch.test.ts` mocks use the current `SealedChildRef` shape
 
-**Plans**: TBD (run `/gsd-plan-phase 72`)
+**Plans**: 10 plans
+
+Plans:
+
+- [ ] 72-01-PLAN.md — SC#5 reachable-path regression gate (rewrite move-in-shared-folder.test.ts) [Wave 0]
+- [ ] 72-02-PLAN.md — SC#6 test hardening: upload-batch mock shape + write-chain-rotation seed-by-provenance [Wave 0]
+- [ ] 72-03-PLAN.md — SC#1 deleteItem drops WriteChildRef + base-aware write-body merge (no resurrection) [Wave 1]
+- [ ] 72-04-PLAN.md — SC#2 getWriteBodyParams fails closed on transient resolve miss (both copies) [Wave 2]
+- [ ] 72-05-PLAN.md — SC#3 restoreFromBin re-homes WriteChildRef + permanent-delete drop [Wave 3]
+- [ ] 72-06-PLAN.md — SC#4 listingCache invalidation after in-place edit + updateSharedSingleFile zeroize [Wave 4]
+- [ ] 72-07-PLAN.md — SC#5 remove dead moveInSharedFolder branch + getShareKeysFn param + web callers [Wave 5]
+- [ ] 72-08-PLAN.md — SC#6 walkChildWriteKey 3-mode primitive + hasRealWriteKey predicate [Wave 6]
+- [ ] 72-09-PLAN.md — SC#6 wrapIpnsKeyForTee extraction (sdk-core, 3 TEE sites) [Wave 6]
+- [ ] 72-10-PLAN.md — SC#6 version-op core extraction + bin getWriteBodyParams/adopt re-point [Wave 7]
 
 ---
 
@@ -846,6 +860,7 @@ Plans:
 - `.planning/todos/pending/2026-07-06-gate-non-listing-read-facades.md`
 - `.planning/todos/pending/2026-07-02-write03-refresh-access-path-has-no-live-trigger.md`
 - `.planning/todos/pending/2026-07-06-sharedfolderrow-drag-kind-classification.md`
+- `.planning/todos/pending/2026-07-06-68.2-coderabbit-hardening-backlog.md` (web-scoped items only — e.g. item 4 `refreshSharedFolder` stale write envelope, item 9 shared-nav seed race; non-web items stay in the backlog)
 
 **Success Criteria** (what must be TRUE):
 
