@@ -1,0 +1,101 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "22aff8d89af6",
+  "session_id": "1fe64f2c-aba7-4c33-bdde-c289c7f9ed8a",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-10T23:13:44.098469Z",
+  "branch": "docs/triage-m4-todos",
+  "checkpoints_count": 3,
+  "files_touched": [
+    ".planning/todos/pending/2026-07-03-port-recovery-tool-to-v3-vault-format.md",
+    ".planning/todos/pending/2026-07-06-68.2-coderabbit-hardening-backlog.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "2f7801b896b2",
+  "token_usage": {
+    "input_tokens": 22440,
+    "cache_creation_tokens": 124553,
+    "cache_read_tokens": 2716378,
+    "output_tokens": 31537,
+    "api_call_count": 25
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Use ultracode/Workflow to triage all pending M4 (v2.0 Metadata & Sharing Refactor) todos in cipher-box, classify them as resolved/not-applicable/actionable/out-of-scope, group actionable items into closeout phases, then act on the findings (retire resolved/duplicate todos, verify a specific security-relevant todo, annotate a partially-resolved backlog todo) on a docs branch.",
+    "outcome": "42 pending todos were classified via a 42-agent Workflow fan-out into resolved/NA/duplicate/out-of-scope/actionable buckets, with actionable items grouped into 5 proposed closeout phases (74-78). The user then had 3 resolved todos and 1 not-applicable todo moved to completed, 2 duplicate recovery-tool todos merged into one, and the 68.2 CodeRabbit hardening backlog todo annotated with resolved/partial item statuses — all committed on a docs branch.",
+    "learnings": {
+      "repo": [
+        "cipher-box shared-write path (packages/sdk/src/share/shared-write.ts) publishes via resealAndPublishParent → publishOrThrow with strict CAS, throwing CannotWriteUntilRefetchError on conflict — there is no naive-union merge-on-409 path, so merge-parity/resurrection vectors described in older todos don't apply to this node/v3 path",
+        "cipher-box has a documented convention for moving resolved todos from .planning/todos/pending/ to a completed location with resolution notes appended before the move",
+        "M4 (v2.0 Metadata & Sharing Refactor) spans roadmap phases 61-73 and was ~94% done at triage time, needing closeout phases 74+",
+        "Phase 73 PR (#603) and its 73-05 follow-up fixed several items in the 68.2 CodeRabbit hardening backlog (items 1 and 4), and Greptile P1 review during that PR ship added a new item (11: in-flight descent overwrite race in useSharedNavigationActions.ts) that is still unaddressed"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/share/shared-write.ts",
+          "finding": "Publishes via resealAndPublishParent → publishOrThrow (strict CAS, throws on 409) — no updateFolderMetadataAndPublish call sites and no naive-union merge path, confirming the shared-write-base-aware-merge-parity todo is not applicable"
+        },
+        {
+          "path": "crates/fuse/src/write_ops/grant_scope.rs",
+          "line": 559,
+          "finding": "refresh_grant_root_read_key only matches inode where ipns_name == grant_root_ipns_name and returns early — intermediate parent inodes on deep scope-exit rotation keep pre-rotation keys, a real revocation bypass"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/vault.rs",
+          "line": 123,
+          "end_line": 278,
+          "finding": "initialize_vault publishes vault-key then root-folder sequentially with no up-front resolve of both IPNS names before either publish, risking a half-initialized vault state"
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 394,
+          "finding": "Still hard-coded to BLOB_V2_VERSION=0x02 and halts with 'not v2 format' — offline recovery tool was never ported to v3/node format post-#578, breaking recovery for all v3 vaults; recovery.spec.ts:75 is test.fixme'd pending this"
+        }
+      ],
+      "workflow": [
+        "Workflow tool's `args` parameter must be passed as an actual JSON array/object, not a JSON-encoded string — passing a stringified list breaks array methods like .filter/.map inside the script; had to hardcode the todo list directly in the script instead",
+        "For large-scale (42-item) codebase-verification triage, a per-item classifier agent fan-out (Workflow) with schema-constrained output plus a synthesis pass by the main agent produces reliable resolved/actionable classifications, but results should be spot-checked (e.g. the 68.2 backlog needed re-verification after a later PR landed)"
+      ]
+    },
+    "friction": [
+      "Workflow's `args` array arrived to the script as a string instead of an array, forcing a script edit to hardcode the todo list and a re-run",
+      "Initial Workflow synthesis of the 68.2 CodeRabbit backlog understated item 4's status ('masked' vs actually fixed) and didn't account for item 11 being added later in Phase 73 ship review, requiring a follow-up re-verification pass"
+    ],
+    "open_items": [
+      "Phases 74-78 closeout plan (28 actionable items) proposed but not yet written into ROADMAP.md via /gsd-phase — user has not yet confirmed whether to proceed with (a), (b), or (c) from the earlier offer",
+      "Deep scope-exit rotation refreshes only grant-root inode key (crates/fuse/src/write_ops/grant_scope.rs:559) — unresolved revocation bypass, proposed for Phase 74",
+      "query_grants_rooted_at no-op de-authorization bug on scope-exit rotation — proposed for Phase 74",
+      "Vault-init publish-ordering preflight (apps/desktop/src-tauri/src/commands/vault.rs) — proposed for Phase 76",
+      "recovery.html v2→v3 port, currently broken for all v3 vaults, recovery.spec.ts still fixme'd — proposed for Phase 78, flagged as higher priority than its bucket",
+      "68.2 CodeRabbit hardening backlog: 8 open + 1 partial items remain (items 2,3,5,6,8,9,10,11 open; item 7 partial); item 11 (in-flight descent overwrite race) and item 3 (poll-monotonicity) recommended to move into the higher-priority Phase 74/75 correctness bucket rather than Phase 78 web-UX cleanup",
+      "macos-fuse-t-cross-client-sync-invalidation todo parked as standalone/low-priority (agent confidence low, infra-limited FUSE-T cache stopgap)"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-10T23:13:20.606832Z",
+    "agent_lines": 36,
+    "agent_removed": 16,
+    "human_added": 321,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 357,
+    "total_lines_changed": 667,
+    "agent_percentage": 7.796101949025487,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}

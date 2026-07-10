@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "22aff8d89af6",
+  "strategy": "manual-commit",
+  "branch": "docs/triage-m4-todos",
+  "checkpoints_count": 3,
+  "files_touched": [
+    ".planning/todos/pending/2026-07-03-port-recovery-tool-to-v3-vault-format.md",
+    ".planning/todos/pending/2026-07-06-68.2-coderabbit-hardening-backlog.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/22/aff8d89af6/0/metadata.json",
+      "transcript": "/22/aff8d89af6/0/full.jsonl",
+      "content_hash": "/22/aff8d89af6/0/content_hash.txt",
+      "prompt": "/22/aff8d89af6/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 22440,
+    "cache_creation_tokens": 124553,
+    "cache_read_tokens": 2716378,
+    "output_tokens": 31537,
+    "api_call_count": 25
+  }
+}
