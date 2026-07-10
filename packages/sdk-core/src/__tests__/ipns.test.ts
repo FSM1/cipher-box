@@ -91,6 +91,47 @@ describe('IPNS operations', () => {
         undefined
       );
     });
+
+    // SC4(a): 410 (IPNS_TOMBSTONED) from ipnsControllerPublishRecord must be caught and
+    // mapped to a tombstoned result instead of letting a raw AxiosError propagate.
+    // Mirrors the existing 404-detection idiom used by resolveIpnsRecord (lines 317-325).
+    it('SC4(a): maps a 410 rejection to { success:false, tombstoned:true }', async () => {
+      const { ipnsControllerPublishRecord } = await import('@cipherbox/api-client');
+      const error = new Error('Gone') as Error & { response?: { status?: number } };
+      error.response = { status: 410 };
+      vi.mocked(ipnsControllerPublishRecord).mockRejectedValue(error);
+
+      const result = await createAndPublishIpnsRecord({
+        ipnsPrivateKey: new Uint8Array(64),
+        ipnsName: 'k51tombstoned',
+        metadataCid: 'QmTombstonedCid',
+        sequenceNumber: 1n,
+      });
+
+      expect(result.success).toBe(false);
+      // Return type does not yet declare `tombstoned` (added in Task 2/GREEN) — cast locally
+      // so this RED test compiles and fails at runtime.
+      expect((result as { tombstoned?: boolean }).tombstoned).toBe(true);
+    });
+
+    // Regression guard: a non-410 rejection must still propagate unchanged (no swallowing).
+    it('SC4(a) regression: a non-410 rejection (500) still rethrows unchanged', async () => {
+      const { ipnsControllerPublishRecord } = await import('@cipherbox/api-client');
+      const error = new Error('Internal Server Error') as Error & {
+        response?: { status?: number };
+      };
+      error.response = { status: 500 };
+      vi.mocked(ipnsControllerPublishRecord).mockRejectedValue(error);
+
+      await expect(
+        createAndPublishIpnsRecord({
+          ipnsPrivateKey: new Uint8Array(64),
+          ipnsName: 'k51notfound500',
+          metadataCid: 'QmCid500',
+          sequenceNumber: 1n,
+        })
+      ).rejects.toThrow('Internal Server Error');
+    });
   });
 
   describe('resolveIpnsRecord', () => {
