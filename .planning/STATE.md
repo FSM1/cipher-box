@@ -4,17 +4,17 @@ milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
 current_phase: 72
 current_phase_name: sdk-write-plane-durability-and-correctness
-status: executing
-stopped_at: Completed 72-09-PLAN.md
-last_updated: "2026-07-10T15:21:00.293Z"
+status: verifying
+stopped_at: Completed 72-10-PLAN.md
+last_updated: "2026-07-10T15:32:28.123Z"
 last_activity: 2026-07-10
 last_activity_desc: Phase 72 execution started
 progress:
   total_phases: 16
-  completed_phases: 13
+  completed_phases: 14
   total_plans: 180
-  completed_plans: 178
-  percent: 81
+  completed_plans: 179
+  percent: 88
 ---
 
 # Project State
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 
 Phase: 72 (sdk-write-plane-durability-and-correctness) — EXECUTING
 Plan: 10 of 10
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-07-10 — Phase 72 execution started
 
 Progress: `██████████` 79 / 79 plans (100%)
@@ -265,6 +265,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 72 P07 | 8min | 2 tasks | 3 files |
 | Phase 72 P08 | 15min | 2 tasks | 1 files |
 | Phase 72 P09 | 8min | 1 tasks | 5 files |
+| Phase 72 P10 | 10min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -577,6 +578,8 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: [Phase 72-08]: updateSharedFile's inline write-chain walk (site 5) left as a documented, not-folded exception -- getFileIpnsKeyFn fallback confirmed LIVE via apps/web/src/hooks/useSharedWriteOps.ts resolveFileIpnsKey
 - [Phase ?]: 72-09: only the shared TEE-wrap sequence (hexToBytes -> wrapKey -> bytesToHex) extracted into wrapIpnsKeyForTee; each site's own fail-closed validation throws (per-site error messages) left in place at call sites
 - [Phase ?]: 72-09: vault/index.ts's two root-key wraps (wrapKey(rootReadKey/rootWriteKey, userPublicKey)) left untouched — only the TEE ipns-key wrap was extracted
+- [Phase ?]: runFileVersionOp is not wrapped in withOperation itself -- each public method keeps its own withOperation(name) call for correct per-op telemetry attribution
+- [Phase ?]: write-body-params.ts standardizes the IPNS-resolve path on inline resolveIpnsRecord+fetchFromIpfs+JSON.parse (bin's pre-existing style) rather than client.ts's resolvePublishedNode wrapper, since the extra signatureVerified field was never consumed by getWriteBodyParams
 
 ## Operator Next Steps
 
@@ -584,8 +587,8 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-10T15:21:00.287Z
-**Stopped at:** Completed 72-09-PLAN.md
+**Last session:** 2026-07-10T15:32:28.115Z
+**Stopped at:** Completed 72-10-PLAN.md
 **Resume file:** 
 
 None
