@@ -1,0 +1,150 @@
+/gsd-execute-phase 73
+
+---
+
+<task-notification>
+<task-id>a5f0c873759bc9c10</task-id>
+<tool-use-id>toolu_01HXoVLX9X1FSHV6oRhe1W98</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/4d78f8a5-6112-418c-85c3-c6241359b1fb/tasks/a5f0c873759bc9c10.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 73-02 of phase 73" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 73-02
+**Tasks:** 2/2 complete
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a5f0c873759bc9c10/.planning/phases/73-shared-write-navigation-correctness-web/73-02-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"73-02","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a5f0c873759bc9c10","branch":"worktree-agent-a5f0c873759bc9c10","expected_base":"936102b487ad1246136fdd4fe9d64f8256425a25"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `ef2492aeb`: test(73-02): add failing 410-tombstoned and non-410-rethrow cases
+- `73fd3b491`: feat(73-02): map 410 to tombstoned in createAndPublishIpnsRecord
+- `ce078b69e`: docs(73-02): complete 410-tombstoned mapping plan
+
+**Duration:** ~12 min
+
+Summary: `createAndPublishIpnsRecord` (`packages/sdk-core/src/ipns/index.ts`) now wraps the `ipnsControllerPublishRecord` call in try/catch, mirroring `resolveIpnsRecord`'s existing 404-detection idiom. A 410 status returns `{ success: false, sequenceNumber: 0n, tombstoned: true }`; any other error rethrows unchanged. Return type extended additively with `tombstoned?: boolean`. No changes to the D-05/T-47-01 caller-owns-key contract (no zeroing added). Verified: `pnpm --filter @cipherbox/sdk-core test` (369/369 pass, 32 files) and `pnpm --filter @cipherbox/sdk-core run typecheck` both green. No deviations from plan.</result>
+<usage><subagent_tokens>140352</subagent_tokens><tool_uses>34</tool_uses><duration_ms>214008</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a5f0c873759bc9c10</worktreePath><worktreeBranch>worktree-agent-a5f0c873759bc9c10</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>afe1ca1238bdd4078</task-id>
+<tool-use-id>toolu_01Gaew4f6KZKZUahGMTebyCe</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/4d78f8a5-6112-418c-85c3-c6241359b1fb/tasks/afe1ca1238bdd4078.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 73-03 of phase 73" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 73-03
+**Tasks:** 1/1 complete
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-afe1ca1238bdd4078/.planning/phases/73-shared-write-navigation-correctness-web/73-03-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"73-03","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-afe1ca1238bdd4078","branch":"worktree-agent-afe1ca1238bdd4078","expected_base":"936102b487ad1246136fdd4fe9d64f8256425a25"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `8a1218735`: fix(73-03): classify shared drag payload kind from resolved listing
+- `d1c38de44`: docs(73-03): complete shared drag payload kind fix plan
+- `06768988a`: docs(73-03): append self-check results to plan summary
+
+**Duration:** ~15 min
+
+**Summary:** Fixed `SharedFolderRow.tsx#handleDragStart`'s drag-payload kind classification. Both call sites (multi-select and single-item) now use `isFileRefResolved(ref, resolvedByIpnsName)` against the SDK-resolved listing instead of `isFileRef(bareRef)`, which was unconditionally `false` post-68.2-11 kind-cache removal. `SharedFileBrowser.tsx` threads its already-computed `resolvedByIpnsName` map into the `&lt;SharedFolderRow&gt;` call site. No out-of-scope call sites touched (line-81 `isFolder` display logic left byte-unchanged). Verified via `pnpm --filter @cipherbox/web exec tsc -b` (clean) and prettier/eslint (clean). No deviations from plan.
+
+Files modified:
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-afe1ca1238bdd4078/apps/web/src/components/file-browser/SharedFolderRow.tsx`
+- `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-afe1ca1238bdd4078/apps/web/src/components/file-browser/SharedFileBrowser.tsx`
+
+STATE.md, ROADMAP.md, and REQUIREMENTS.md were not modified — left for the orchestrator per worktree-mode instructions.</result>
+<usage><subagent_tokens>92143</subagent_tokens><tool_uses>33</tool_uses><duration_ms>203343</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-afe1ca1238bdd4078</worktreePath><worktreeBranch>worktree-agent-afe1ca1238bdd4078</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ab7cbea32a99cbd5d</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/4d78f8a5-6112-418c-85c3-c6241359b1fb/tasks/ab7cbea32a99cbd5d.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 73-01 of phase 73" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 73-01
+**Tasks:** 2/2 complete
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-ab7cbea32a99cbd5d/.planning/phases/73-shared-write-navigation-correctness-web/73-01-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"73-01","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-ab7cbea32a99cbd5d","branch":"worktree-agent-ab7cbea32a99cbd5d","expected_base":"936102b487ad1246136fdd4fe9d64f8256425a25"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `33e43cb42`: test(73-01): scaffold SC1/SC2 fixme web-e2e regression cases
+- `ee1e2f4cf`: test(73-01): restructure rotation-ux WRITE-03 case toward classifier flow
+- `6d6c4affb`: docs(73-01): complete wave-0 web-e2e scaffold plan
+- `95ed11b4d`: docs(73-01): append self-check result to plan summary
+
+**Duration:** ~14 min
+
+**Files modified:**
+- `tests/web-e2e/tests/writable-shares.spec.ts` — added `test.fixme` case "8.4b" (descend-2 / up-1 / write, SC1)
+- `tests/web-e2e/tests/shared-folder-desync.spec.ts` — added `test.fixme` case (deeper-mutate-then-navigate-up freshness, SC2)
+- `tests/web-e2e/tests/rotation-ux.spec.ts` — restructured D-01/WRITE-03 case in place into a `test.fixme` classifier-flow skeleton (SC4)
+
+Verified via `pnpm --filter @cipherbox/web-e2e exec playwright test --list` (40 tests across the 3 files; all new/restructured cases discovered at the `:8` fixme marker; no existing case altered) and `pnpm exec eslint` (clean after `--fix` formatting). No STATE.md/ROADMAP.md modifications made per orchestrator ownership.</result>
+<usage><subagent_tokens>193902</subagent_tokens><tool_uses>47</tool_uses><duration_ms>373910</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-ab7cbea32a99cbd5d</worktreePath><worktreeBranch>worktree-agent-ab7cbea32a99cbd5d</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a5d5d8b6bb63049f1</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/4d78f8a5-6112-418c-85c3-c6241359b1fb/tasks/a5d5d8b6bb63049f1.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 73-06 of phase 73" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Everything is clean and committed. Plan 73-06 execution is complete.
+
+## PLAN COMPLETE
+
+**Plan:** 73-06
+**Tasks:** 2/2 complete
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a5d5d8b6bb63049f1/.planning/phases/73-shared-write-navigation-correctness-web/73-06-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"73-06","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a5d5d8b6bb63049f1","branch":"worktree-agent-a5d5d8b6bb63049f1","expected_base":"936102b487ad1246136fdd4fe9d64f8256425a25"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `e50044fe1`: refactor(73-06): remove dead folder-IPNS write-share-key path
+- `6cb963e03`: refactor(73-06): extract single restore helper for navigateUp/navigateToBreadcrumb
+- `f9a64d240`: docs(73-06): complete shared-nav dead-code removal and restore consolidation plan
+- `58616a821`: docs(73-06): append self-check results to plan summary
+
+**Duration:** ~6 min
+
+**Files modified:**
+- `apps/web/src/hooks/useSharedNavigationActions.ts`
+- `apps/web/src/hooks/useSharedNavigation.ts`
+- `apps/web/src/hooks/useSharedWriteOps.ts` (comment-only dangling-reference fix, Rule 1)
+
+**Notes:**
+- Task 1 (SC7): deleted `resolveFolderIpnsPrivateKey` and its `getShareKeys`/`shareKeysCacheRef` plumbing across both hooks; `fetchShareKeys`, `resolveSharedRootWriteKey`, `resolveSharedSubfolderWriteKey` remain live and untouched, as the landmine required.
+- Task 2 (SC6): extracted `restoreToBreadcrumbIndex(crumbIndex)` as the single restore/re-seed helper; `navigateUp` delegates with `stack.length - 1`, `navigateToBreadcrumb` delegates with its own index. UI-behavior-neutral — verified algebraically against the pre-refactor bodies.
+- One deviation: a stray doc-comment in `useSharedWriteOps.ts` named the deleted helper — reworded to satisfy the plan's "grep returns 0, code AND comments" acceptance bar without touching any live logic.
+- All acceptance criteria verified: `grep -rn "resolveFolderIpnsPrivateKey" apps/web/src` → 0; `pnpm --filter @cipherbox/web exec tsc -b` → clean; eslint clean.
+- Did not touch STATE.md/ROADMAP.md/REQUIREMENTS.md per worktree-mode instructions — SC6/SC7 are phase-local success criteria, not REQUIREMENTS.md REQ-IDs, so no requirements-mark-complete step was needed.</result>
+<usage><subagent_tokens>190176</subagent_tokens><tool_uses>73</tool_uses><duration_ms>475119</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a5d5d8b6bb63049f1</worktreePath><worktreeBranch>worktree-agent-a5d5d8b6bb63049f1</worktreeBranch></worktree>
+</task-notification>
