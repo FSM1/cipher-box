@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 import axios from 'axios';
 import MockAdapter from 'axios-mock-adapter';
 import { setApiClientConfig, customInstance } from '../instance';
@@ -9,7 +9,7 @@ describe('instance – 401 refresh interceptor', () => {
   let refreshAccessToken: ReturnType<typeof vi.fn>;
   let onRefreshFailure: ReturnType<typeof vi.fn>;
   const origCreate = axios.create.bind(axios);
-  let createSpy: ReturnType<typeof vi.spyOn>;
+  let createSpy: MockInstance<typeof axios.create>;
 
   beforeEach(async () => {
     getAccessToken = vi.fn().mockResolvedValue('initial-token');
