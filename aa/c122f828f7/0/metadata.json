@@ -1,0 +1,112 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "aac122f828f7",
+  "session_id": "4d78f8a5-6112-418c-85c3-c6241359b1fb",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-10T00:03:16.492797Z",
+  "branch": "feat/share-invite-security-and-ipns-data-integrity-api",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "553f46f1f46c",
+  "token_usage": {
+    "input_tokens": 41191,
+    "cache_creation_tokens": 1086407,
+    "cache_read_tokens": 103327984,
+    "output_tokens": 368892,
+    "api_call_count": 266
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-ship-phase-2026-07-09T22:59:42.56172Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "34559f5bc681",
+      "timestamp": "2026-07-09T22:59:42.56172Z",
+      "native": {
+        "command": "/ship-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/ship-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 15
+  },
+  "summary": {
+    "intent": "Execute all 9 plans of CipherBox Phase 71 (Share-Invite Security & IPNS Data-Integrity API) via wave-based parallel orchestration, then autonomously run the full post-execution ship pipeline (verify, secure, validate, simplify, SDK E2E gate, CodeRabbit review, PR creation, and PR-review resolution) without user babysitting.",
+    "outcome": "All 9 plans executed across 4 waves and merged with all gates green; phase verification passed 16/16 truths. The autonomous ship loop found and fixed two real regressions (a D-05 IPNS equivocation-guard bug via the SDK E2E gate, and a Greptile-flagged stale-write-key bug in the widen-only claim merge), triaged CodeRabbit/Greptile findings (several fixed in-diff, several deferred as todos), opened PR #599, and was mid-way through resolving a fresh batch of CodeRabbit PR-review threads when the transcript ends.",
+    "learnings": {
+      "repo": [
+        "This repo is squash-merge only (merge:false, rebase:false, squash:true, title=PR_TITLE) — individual commit subjects never reach main, so GSD executor's non-conventional 'feat 71-03:' style commits don't need rewording; only the PR title must be conventional and paren-free.",
+        "commitlint's subject-no-parens rule is enforced only via the pr-title.yml CI job on the PR title, not on individual commits.",
+        "CI's Migration Drift Check (ci.yml) only fails on structural drift (CREATE/DROP TABLE, ADD/DROP COLUMN, ALTER TYPE, RENAME COLUMN) via regex — it tolerates index/constraint name churn from TypeORM's migration:generate, so large generated diffs are often cosmetic noise.",
+        "Root cause of a real regression: apps/api/src/ipns/ipns.service.ts's D-05 same-seq CID-equivocation guard couldn't distinguish genuine equivocation from a forward-CAS attempt that lost a race; fix checks expectedSequenceNumber === embeddedSeq - 1 to fall through to the CAS UPDATE (409) instead of rejecting as equivocation (400).",
+        "apps/api/src/shares/share-invite.service.ts's widen-only claimInvite merge had a bug: a generation-bump via a write-capable invite onto an already-write-capable share advanced the read key/generation without re-wrapping encryptedWriteKey for the new generation, silently losing write access post-rotation.",
+        "gh pr edit fails on this repo due to Projects-classic GraphQL; PR body must be patched via `gh api -X PATCH repos/FSM1/cipher-box/pulls/<N> -F body=@file`.",
+        "vitest (sdk-e2e) does not auto-load .env — SDK_E2E_SECRET must be passed explicitly or it silently falls back to a default that mismatches the API's TEST_LOGIN_SECRET, causing cascading 401s.",
+        "Throttling in apps/api is relaxed under NODE_ENV=test (app.module.ts:56), so a missing THROTTLE_BYPASS_SECRET doesn't cause 429s in that mode.",
+        "The API does not log handled 4xx responses; diagnosing a real 400 reason requires temporarily adding an axios response interceptor in packages/api-client/src/instance.ts, rebuilding the client chain, running the failing test, then reverting.",
+        "CodeRabbit CLI (`coderabbit review --agent --base main --type committed`) skips diffs over 150 changed files.",
+        "gsd-tools' commit helper can report commit_failed while the commit actually lands — must verify via `git log --oneline -1`, never blindly retry."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 321,
+          "finding": "D-05 same-seq CID equivocation guard threw 400 even when embeddedSeq===dbSeq resulted from a legitimate forward-CAS race (expectedSequenceNumber===embeddedSeq-1); fixed to fall through to the CAS UPDATE producing 409 in that case."
+        },
+        {
+          "path": "apps/api/src/shares/share-invite.service.ts",
+          "line": 193,
+          "end_line": 207,
+          "finding": "claimInvite's widen-only merge left encryptedWriteKey wrapped for the old generation when a generation-bump landed via a write-capable invite on an already-write-capable share; fixed to re-wrap/advance the write key together with the generation bump. Also added a pre-transaction validation rejecting a write-capable invite claimed without an encryptedWriteKey (CodeRabbit MAJOR + Greptile P1 signal)."
+        },
+        {
+          "path": "apps/web/src/services/share.service.ts",
+          "line": 102,
+          "finding": "Permission-derivation used `!== null` on a string|null|undefined DTO field, misclassifying undefined write keys; loosened to `!= null` in both occurrences per CodeRabbit finding #10."
+        },
+        {
+          "path": "apps/api/src/migrations/1750000000000-ApiSchemaCutover.ts",
+          "finding": "Added composite indexes on shares/share_invites keyed by share_root_ipns_name per CodeRabbit N1; required matching @Index decorators on Share and ShareInvite entities to avoid Migration Drift Check false-positive."
+        }
+      ],
+      "workflow": [
+        "When multiple parallel subagents share a worktree-per-plan execution model, verify each worktree exists (and its config.lock is released) before dispatching the next agent in the same wave, to avoid a git config race.",
+        "Don't trust an executor subagent's own test/check output blindly when diagnostics (e.g. LSP/tsc errors) surface — re-verify against the actual merged tree at the post-merge gate rather than the in-worktree report.",
+        "When a live-stack human-verify checkpoint plan pauses, inspect existing running processes (e.g. a stale `node dist/main.js` on the target port) before reusing them — stale builds can produce false negatives.",
+        "Use a background poll with correct tab-delimited parsing for `gh pr checks` (a naive awk split on spaces breaks because check names like 'CodeRabbit / Review' contain spaces).",
+        "Second-reviewer signal (Greptile P1 + CodeRabbit MAJOR both flagging the same class of issue) is a valid reason to reverse an earlier 'defer' triage decision and fix immediately.",
+        "Before committing to a 'defer as todo' triage decision, check whether the fix is actually cheap (e.g. entity @Index annotations, controller @ApiResponse codes) — several items initially deferred were reclassified as low-risk fixes once inspected."
+      ]
+    },
+    "friction": [
+      "CodeRabbit's PR-level review took long enough to appear pending/skipped that the agent initially misdiagnosed it as skipped, prompting a user correction ('coderabbit review is in - not skipped was just taking a while').",
+      "A local DB reset (done to get a clean IPNS unique-constraint state for Test 21) had the side effect of wiping tee_key_state, causing 2 unrelated tee-republish test failures that had to be diagnosed and confirmed environmental rather than a regression.",
+      "First poll script for `gh pr checks` had a parsing bug (awk splitting on spaces broke on multi-word check names), requiring a second corrected poll.",
+      "The generic regression/test gate in the workflow defaults to `npm test`, which is wrong for this pnpm monorepo and risks RAM-starving infra-dependent suites — had to be manually overridden each time with scoped, correct commands.",
+      "CodeRabbit's finding #5 (SECURITY.md wording) and #6 (owner-reconcile hex format) were false positives requiring verification effort before being dismissed."
+    ],
+    "open_items": [
+      "Todo: extract a shared assertRootOwnership helper to dedupe the 7-line ownership gate duplicated in createInvite and createShare (deferred pre-ship as too risky to refactor verified security code).",
+      "Todo: restore tee_key_state / TEE worker auth alignment so the tee-republish sdk-e2e suite passes locally (currently only verified green in CI, not locally).",
+      "Todo: reconcile phase-71 planning docs (CONTEXT/PATTERNS/SECURITY/VERIFICATION/STATE) that still reference stale D-01/greenfield language not matching the amended design (code is correct; docs lag).",
+      "In-flight at transcript end: fetching and resolving a fresh batch of CodeRabbit PR-review threads on PR #599 (commit 79f2046ac) after pushing 4 additional fix commits — thread reply/resolve loop and final CI-green confirmation not yet completed.",
+      "Some CodeRabbit deferral todos initially written (zeroize file keys on unwrap error path; reject write-invite claimed without write key) were partially superseded mid-session — the write-key-reject todo was deleted after being fixed later in the same run; need to confirm the zeroize-keys todo file still accurately reflects final state."
+    ]
+  }
+}
