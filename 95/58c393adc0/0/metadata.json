@@ -1,0 +1,95 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "9558c393adc0",
+  "session_id": "2e538f07-7404-47a7-b648-78422a25400d",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-10T20:54:35.132617Z",
+  "branch": "feat/shared-write-navigation-correctness-web",
+  "checkpoints_count": 2,
+  "save_step_count": 1,
+  "files_touched": [
+    "apps/web/src/hooks/useSharedNavigationActions.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "c0c07b37700e",
+  "token_usage": {
+    "input_tokens": 22186,
+    "cache_creation_tokens": 640388,
+    "cache_read_tokens": 28002522,
+    "output_tokens": 166900,
+    "api_call_count": 120
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Execute all 9 plans of phase 73 (shared-write-navigation-correctness-web) using wave-based parallel worktree execution, then follow up by folding a related pending refactor todo (consolidate-web-shared-navigation-dup) fully into the completed phase.",
+    "outcome": "All 9 plans executed across 3 waves with clean merges and green gates; a real SC4 bug (missing publishedNode in refreshCurrentDepthWriteKey) was caught by the verifier, fixed, and re-verified to 7/7; phase 73 marked complete, closing out milestone v2.0. 6 of 7 related todos were reconciled to completed and the partial SC6 todo annotated; a follow-up agent was then dispatched (still running at transcript end) to fully close the remaining nav-dedup consolidation work.",
+    "learnings": {
+      "repo": [
+        "Monorepo cross-package types resolve from built dist/ (gitignored) — fresh worktrees need pnpm install + full dep-chain build (crypto→core→api-client→sdk-core→sdk) before typecheck works; `pnpm typecheck` self-builds this chain.",
+        "gsd-executor is self-contained: detects worktree mode via `.git` being a file, derives its own worktree identity, and returns a `<worktree_metadata>` JSON block; harness creates the `worktree-agent-*` branch.",
+        "Full monorepo `pnpm test` false-fails on sdk's live-API integration tests without a running API — post-merge/regression gates should scope to typecheck + the specific changed packages' infra-free unit suites instead.",
+        "`close_phase_todos` only moves todos tagged `resolves_phase: N` in frontmatter; untagged todos addressed by a phase are silently stranded in pending, not auto-closed.",
+        "`seedActiveSharedFolder`/`seedSharedFolder` falls back to `PLACEHOLDER_PUBLISHED_NODE` (empty readSealed) when publishedNode is omitted, causing `unsealNode` to throw a GCM/decrypt error — any new seed call site must pass a real publishedNode like the existing 3-4 sites do.",
+        "apps/web has no CI-run tests on feature branches (web-e2e is main-push-only and flaky locally), so behavior-neutral refactors of core nav code need local docker-stack e2e verification before merging."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useSharedNavigationActions.ts",
+          "line": 783,
+          "end_line": 844,
+          "finding": "refreshCurrentDepthWriteKey's seedActiveSharedFolder call (originally lines 824-834) omitted publishedNode unlike the other 3-4 call sites (navigateToShare ~268, navigateToSubfolder ~410, restoreToBreadcrumbIndex ~540), causing the WRITE-03 refresh-access retry to crash with an unclassified GCM/unseal error instead of reaching publishNodeFn's tombstone/success classification; fixed by passing getSdkClient().getSharedFolderState(currentShareId)?.publishedNode ?? PLACEHOLDER_PUBLISHED_NODE (commit d3c39c06e)."
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedWriteOps.ts",
+          "finding": "73-06 made a comment-only fix here (dangling reference to deleted resolveFolderIpnsPrivateKey) that overlapped with 73-04's concurrent edits to the same file in Wave 1; git's 3-way merge resolved it cleanly since 73-06's change was comment-only."
+        }
+      ],
+      "workflow": [
+        "When a subagent's declared files_modified misses a small drift (e.g. a stray doc-comment fix), the intra-wave overlap pre-check can't catch it — worth watching diffs post-completion rather than trusting only the static overlap check.",
+        "Executor's reported `expected_base` in worktree_metadata can reflect the post-commit tip rather than the actual fork base — verify against the orchestrator's own captured EXPECTED_BASE/merge-base rather than trusting the field verbatim.",
+        "When a verifier reports gaps_found with a specific checkable claim, independently confirm against the merged code before routing/fixing — don't take verifier output at face value even when it looks well-evidenced.",
+        "For a delicate behavior-neutral refactor with no CI e2e gating, delegate to a fresh-context agent with an explicit back-out clause (drop the risky sub-item if it threatens behavior-neutrality) rather than attempting it inline or forcing full completion."
+      ]
+    },
+    "friction": [
+      "Empty build/test command config forced ad-hoc scoping decisions each gate (full pnpm test vs typecheck+targeted unit suites) to avoid false failures from live-API integration tests.",
+      "Commit helper reported `commit_failed` for the Wave 1 tracking commit despite the commit actually landing cleanly — a known false-negative requiring manual git log verification.",
+      "73-08's WRITE-03 e2e case couldn't be run live in its worktree due to port contention with the concurrently running 73-09 worktree (both defaulting to API :3000 / web :5173), deferring verification and letting the SC4 bug slip past into the verifier stage.",
+      "Todo auto-close (`close_phase_todos`) silently stranded all 7 phase-relevant todos in pending because none were tagged `resolves_phase: 73`, requiring manual reconciliation.",
+      "Memory index initially pointed a new entry at the wrong file, requiring correction of both MEMORY.md and the underlying memory file."
+    ],
+    "open_items": [
+      "Live browser run of the WRITE-03 rotation-ux e2e case against a running local stack was never executed (deferred by 73-08 due to port contention); flagged as a non-blocking CI/manual confirmation step.",
+      "Todo consolidate-web-shared-navigation-dup (SC6) had 3 non-moot remaining sub-items (readSharedContent dedup, resolveKinds-then-project unification across ~9 owned+shared nav sites, ShareDialog share.service.ts export dedup); a follow-up agent was dispatched to close them with a back-out clause on the risky sub-item, but had not returned by end of transcript.",
+      "Milestone v2.0 (Metadata and Sharing Refactor) is complete as of phase 73 but not yet formally archived via /gsd-complete-milestone.",
+      "47 local commits on feature branch feat/shared-write-navigation-correctness-web are not yet pushed or opened as a PR."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-10T20:54:08.015162Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 19,
+    "human_modified": 40,
+    "human_removed": 0,
+    "total_committed": 19,
+    "total_lines_changed": 59,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
