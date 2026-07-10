@@ -4016,28 +4016,97 @@ export class CipherBoxClient {
   }
 
   /**
+   * Shared version-op core for {@link replaceFile}, {@link restoreFileVersion},
+   * and {@link deleteFileVersion} (72-10 SC#6 extraction — the three were
+   * near-byte-identical: requireFolder -> resolveFileWriteChainKeys -> a
+   * 14-field updateFileMetadata call -> the conditional folder-migration
+   * piggyback -> an identical 3-key zeroing finally). Only `createVersion`
+   * and (for delete) `deletedCid` vary across callers, and `deletedCid` is
+   * purely passthrough — it never enters the publish call, so it stays out
+   * of this shared core and is folded back in by {@link deleteFileVersion}.
+   *
+   * Per locked decision 2 the caller pre-resolves `fileIpnsPrivateKey`,
+   * `currentMetadata`, and `updates` (web tier owns key/service logic). This
+   * method does NOT zero `params.fileIpnsPrivateKey` — sdk-core
+   * `updateFileMetadata` zeroes it in its own finally on every exit path
+   * (T-47-01); the caller owns any additional lifecycle. The write-chain
+   * `fileReadKey`/`fileWriteKey` this method derives ARE zeroed here (D-09 —
+   * this method is their terminal owner).
+   *
+   * @param parentIpnsName - IPNS name of the folder containing the file
+   * @param fileId - IPNS name of the file (`SealedChildRef.ipnsName`) being mutated
+   * @param params - Pre-resolved key + metadata + content updates
+   * @returns Pruned version CIDs the caller should unpin
+   */
+  private async runFileVersionOp(
+    parentIpnsName: string,
+    fileId: string,
+    params: {
+      fileIpnsPrivateKey: Uint8Array;
+      currentMetadata: NodeContent;
+      updates: sdkCore.UpdateFileContentParams;
+      createVersion: boolean;
+      maxVersionsPerFile?: number;
+      migratedIpnsPrivateKeyEncrypted?: string;
+    }
+  ): Promise<{ prunedCids: string[] }> {
+    const folder = await this.requireFolder(parentIpnsName);
+    const fileKeys = await this.resolveFileWriteChainKeys(folder, fileId);
+
+    try {
+      const publishResult = await sdkCore.updateFileMetadata({
+        fileIpnsPrivateKey: params.fileIpnsPrivateKey,
+        fileReadKey: fileKeys.fileReadKey,
+        fileWriteKey: fileKeys.fileWriteKey,
+        fileMetaIpnsName: fileKeys.fileMetaIpnsName,
+        fileSequenceNumber: fileKeys.fileSequenceNumber,
+        nodeId: fileKeys.nodeId,
+        nodeGeneration: fileKeys.nodeGeneration,
+        originalCreatedAt: fileKeys.originalCreatedAt,
+        currentMetadata: params.currentMetadata,
+        updates: params.updates,
+        createVersion: params.createVersion,
+        maxVersionsPerFile: params.maxVersionsPerFile,
+        ctx: this.ctx,
+      });
+
+      // 72-06 SC#4: did the file's live content actually change? Gates the
+      // listingCache invalidation inside maybeRepublishFolderForFileMigration
+      // — computed here (not re-derived in that seam) since this caller
+      // already holds both the prior NodeContent and the new
+      // UpdateFileContentParams. Shared by all three version ops.
+      const fileContentChanged =
+        params.updates.size !== params.currentMetadata.size ||
+        params.updates.cid !== params.currentMetadata.cid;
+
+      await this.maybeRepublishFolderForFileMigration(
+        parentIpnsName,
+        folder,
+        fileContentChanged,
+        params.migratedIpnsPrivateKeyEncrypted
+      );
+
+      return { prunedCids: publishResult.prunedCids };
+    } finally {
+      fileKeys.fileReadKey.fill(0);
+      fileKeys.fileWriteKey.fill(0);
+      // T-68.1-12-04: this walk's own fileIpnsPrivateKey is unused here —
+      // the caller supplies params.fileIpnsPrivateKey instead. Zero it.
+      fileKeys.fileIpnsPrivateKey.fill(0);
+    }
+  }
+
+  /**
    * Replace a file's content, owning the full publish + folderTree bookkeeping.
    *
    * Routes the web "file replace" path (formerly the `useFileOperations`
    * fire-and-forget "6b" block) through the client so the SDK `folderTree`
-   * stays authoritative. Steps:
-   *   1. Read the parent folder from `folderTree.get()` (self-healing via
-   *      `requireFolder`) and resolve the file's write-chain keys.
-   *   2. Publish the file's per-IPNS metadata via sdk-core `updateFileMetadata`
-   *      (direct single-shot publish, 68.1-07). Capture `prunedCids` for the
-   *      caller to unpin.
-   *   3. Conditional folder re-publish — ONLY on `migratedIpnsPrivateKeyEncrypted`
-   *      (lazy TEE-key migration piggybacked on this mutation); otherwise the
-   *      folder's children/sequence are left untouched.
-   *   4. Emit `folder:updated` from the current folderTree snapshot.
-   *
-   * Per locked decision 2 the caller pre-resolves `fileIpnsPrivateKey`,
-   * `currentMetadata`, and `updates` (web tier owns key/service logic). This
-   * method does NOT zero `fileIpnsPrivateKey` — sdk-core `updateFileMetadata`
-   * zeroes it in its own finally on every exit path (T-47-01); the caller
-   * owns any additional lifecycle. The write-chain `fileReadKey`/
-   * `fileWriteKey` this method derives ARE zeroed here (D-09 — this method is
-   * their terminal owner).
+   * stays authoritative. Delegates to the shared {@link runFileVersionOp}
+   * core (72-10 SC#6): requireFolder -> resolve write-chain keys ->
+   * `updateFileMetadata` publish -> conditional folder re-publish (ONLY on
+   * `migratedIpnsPrivateKeyEncrypted`, lazy TEE-key migration piggybacked on
+   * this mutation) -> `folder:updated` emission from the current folderTree
+   * snapshot.
    *
    * @param parentIpnsName - IPNS name of the folder containing the file
    * @param fileId - IPNS name of the file (`SealedChildRef.ipnsName`) to replace
@@ -4056,81 +4125,27 @@ export class CipherBoxClient {
       migratedIpnsPrivateKeyEncrypted?: string;
     }
   ): Promise<{ prunedCids: string[] }> {
-    return this.withOperation('replaceFile', async () => {
-      const folder = await this.requireFolder(parentIpnsName);
-      const fileKeys = await this.resolveFileWriteChainKeys(folder, fileId);
-
-      try {
-        const publishResult = await sdkCore.updateFileMetadata({
-          fileIpnsPrivateKey: fileData.fileIpnsPrivateKey,
-          fileReadKey: fileKeys.fileReadKey,
-          fileWriteKey: fileKeys.fileWriteKey,
-          fileMetaIpnsName: fileKeys.fileMetaIpnsName,
-          fileSequenceNumber: fileKeys.fileSequenceNumber,
-          nodeId: fileKeys.nodeId,
-          nodeGeneration: fileKeys.nodeGeneration,
-          originalCreatedAt: fileKeys.originalCreatedAt,
-          currentMetadata: fileData.currentMetadata,
-          updates: fileData.updates,
-          createVersion: fileData.createVersion,
-          maxVersionsPerFile: fileData.maxVersionsPerFile,
-          ctx: this.ctx,
-        });
-
-        // 72-06 SC#4: did the file's live content actually change? Gates the
-        // listingCache invalidation inside maybeRepublishFolderForFileMigration
-        // — computed here (not re-derived in that seam) since this caller
-        // already holds both the prior NodeContent and the new
-        // UpdateFileContentParams.
-        const fileContentChanged =
-          fileData.updates.size !== fileData.currentMetadata.size ||
-          fileData.updates.cid !== fileData.currentMetadata.cid;
-
-        await this.maybeRepublishFolderForFileMigration(
-          parentIpnsName,
-          folder,
-          fileContentChanged,
-          fileData.migratedIpnsPrivateKeyEncrypted
-        );
-
-        return { prunedCids: publishResult.prunedCids };
-      } finally {
-        fileKeys.fileReadKey.fill(0);
-        fileKeys.fileWriteKey.fill(0);
-        // T-68.1-12-04: this walk's own fileIpnsPrivateKey is unused here —
-        // the caller supplies fileData.fileIpnsPrivateKey instead. Zero it.
-        fileKeys.fileIpnsPrivateKey.fill(0);
-      }
-    });
+    return this.withOperation('replaceFile', () =>
+      this.runFileVersionOp(parentIpnsName, fileId, fileData)
+    );
   }
 
   /**
    * Restore a previous version of a file, owning publish + folderTree bookkeeping.
    *
-   * Mirrors the web `useFileVersions.handleRestoreVersion` control flow, routed
-   * through the client so `folderTree` stays authoritative:
-   *   1. Read the parent folder from `folderTree.get()` (self-healing via
-   *      `requireFolder`) and resolve the file's write-chain keys.
-   *   2. Publish the file's per-IPNS metadata via `updateFileMetadata` using the
-   *      pre-resolved restored metadata (`updates`). Capture `prunedCids`.
-   *   3. CONDITIONAL folder publish — only when `migratedIpnsPrivateKeyEncrypted`
-   *      is provided (lazy TEE-key migration piggybacked on this mutation, see
-   *      `maybeRepublishFolderForFileMigration`). Otherwise leave folder
-   *      children + sequence unchanged (the file-only publish does not
-   *      advance the folder sequence).
-   *   4. Emit `folder:updated` reading back from the folderTree snapshot so
-   *      both branches emit a consistent event.
+   * Mirrors the web `useFileVersions.handleRestoreVersion` control flow,
+   * routed through the client so `folderTree` stays authoritative. Delegates
+   * to the shared {@link runFileVersionOp} core (72-10 SC#6) — see
+   * {@link replaceFile} for the shared step-by-step.
    *
    * Per locked decision 2 the caller pre-resolves `fileIpnsPrivateKey`,
    * `currentMetadata`, and the restored `updates` (web tier owns the restore
    * service logic — deciding WHICH version becomes live and how `versions`
-   * folds). This method does NOT zero `fileIpnsPrivateKey` —
-   * `updateFileMetadata` owns zeroing (T-47-01). The write-chain
-   * `fileReadKey`/`fileWriteKey` this method derives ARE zeroed here (D-09).
+   * folds).
    *
    * @param parentIpnsName - IPNS name of the folder containing the file
    * @param fileId - IPNS name of the file (`SealedChildRef.ipnsName`) to restore
-   * @param versionIndex - Index of the version being restored (caller-resolved;
+   * @param _versionIndex - Index of the version being restored (caller-resolved;
    *   informational only here — the caller already folded it into `updates`)
    * @param params - Pre-resolved key + metadata + restored content updates
    * @returns Pruned version CIDs the caller should unpin
@@ -4138,7 +4153,7 @@ export class CipherBoxClient {
   async restoreFileVersion(
     parentIpnsName: string,
     fileId: string,
-    versionIndex: number,
+    _versionIndex: number,
     params: {
       fileIpnsPrivateKey: Uint8Array;
       currentMetadata: NodeContent;
@@ -4148,51 +4163,12 @@ export class CipherBoxClient {
       migratedIpnsPrivateKeyEncrypted?: string;
     }
   ): Promise<{ prunedCids: string[] }> {
-    void versionIndex;
-    return this.withOperation('restoreFileVersion', async () => {
-      const folder = await this.requireFolder(parentIpnsName);
-      const fileKeys = await this.resolveFileWriteChainKeys(folder, fileId);
-
-      try {
-        const publishResult = await sdkCore.updateFileMetadata({
-          fileIpnsPrivateKey: params.fileIpnsPrivateKey,
-          fileReadKey: fileKeys.fileReadKey,
-          fileWriteKey: fileKeys.fileWriteKey,
-          fileMetaIpnsName: fileKeys.fileMetaIpnsName,
-          fileSequenceNumber: fileKeys.fileSequenceNumber,
-          nodeId: fileKeys.nodeId,
-          nodeGeneration: fileKeys.nodeGeneration,
-          originalCreatedAt: fileKeys.originalCreatedAt,
-          currentMetadata: params.currentMetadata,
-          updates: params.updates,
-          createVersion: params.createVersion ?? false,
-          maxVersionsPerFile: params.maxVersionsPerFile,
-          ctx: this.ctx,
-        });
-
-        // 72-06 SC#4: see replaceFile's identical comment — computed here
-        // (not re-derived in the seam) from the caller's own prior/new
-        // content descriptors.
-        const fileContentChanged =
-          params.updates.size !== params.currentMetadata.size ||
-          params.updates.cid !== params.currentMetadata.cid;
-
-        await this.maybeRepublishFolderForFileMigration(
-          parentIpnsName,
-          folder,
-          fileContentChanged,
-          params.migratedIpnsPrivateKeyEncrypted
-        );
-
-        return { prunedCids: publishResult.prunedCids };
-      } finally {
-        fileKeys.fileReadKey.fill(0);
-        fileKeys.fileWriteKey.fill(0);
-        // T-68.1-12-04: this walk's own fileIpnsPrivateKey is unused here —
-        // the caller supplies params.fileIpnsPrivateKey instead. Zero it.
-        fileKeys.fileIpnsPrivateKey.fill(0);
-      }
-    });
+    return this.withOperation('restoreFileVersion', () =>
+      this.runFileVersionOp(parentIpnsName, fileId, {
+        ...params,
+        createVersion: params.createVersion ?? false,
+      })
+    );
   }
 
   /**
@@ -4200,25 +4176,22 @@ export class CipherBoxClient {
    * folderTree bookkeeping.
    *
    * Mirrors the web `useFileVersions.handleDeleteVersion` control flow. Same
-   * shape as {@link restoreFileVersion}: resolve write-chain keys, publish
-   * file metadata via `updateFileMetadata`, conditional folder publish only
-   * on lazy TEE-key migration, then emit `folder:updated` from the
-   * folderTree snapshot. `updates` carries the SAME live content descriptor
-   * as `currentMetadata` (the deleted version is a past entry, not the live
-   * content) with the target version already pruned from its `versions`
-   * array by the caller — `createVersion` is always `false` here since a
-   * version-history edit never folds a new version.
+   * shape as {@link restoreFileVersion} — delegates to the shared
+   * {@link runFileVersionOp} core (72-10 SC#6). `updates` carries the SAME
+   * live content descriptor as `currentMetadata` (the deleted version is a
+   * past entry, not the live content) with the target version already
+   * pruned from its `versions` array by the caller — `createVersion` is
+   * always `false` here since a version-history edit never folds a new
+   * version. `deletedCid` is pure passthrough (never enters the publish
+   * call), so it is folded back into the result after the shared core runs.
    *
    * Per locked decision 2 the caller pre-resolves `fileIpnsPrivateKey`,
-   * `currentMetadata`, the version-pruned `updates`, and the `deletedCid` (web
-   * tier owns the delete service logic). This method does NOT zero
-   * `fileIpnsPrivateKey` — `updateFileMetadata` owns zeroing (T-47-01). The
-   * write-chain `fileReadKey`/`fileWriteKey` this method derives ARE zeroed
-   * here (D-09).
+   * `currentMetadata`, the version-pruned `updates`, and the `deletedCid`
+   * (web tier owns the delete service logic).
    *
    * @param parentIpnsName - IPNS name of the folder containing the file
    * @param fileId - IPNS name of the file (`SealedChildRef.ipnsName`) whose version is deleted
-   * @param versionIndex - Index of the version being deleted (caller-resolved;
+   * @param _versionIndex - Index of the version being deleted (caller-resolved;
    *   informational only here — the caller already pruned it from `updates`)
    * @param params - Pre-resolved key + metadata + version-pruned updates + deletedCid
    * @returns The deleted version's `deletedCid` plus any `prunedCids` `updateFileMetadata`
@@ -4228,7 +4201,7 @@ export class CipherBoxClient {
   async deleteFileVersion(
     parentIpnsName: string,
     fileId: string,
-    versionIndex: number,
+    _versionIndex: number,
     params: {
       fileIpnsPrivateKey: Uint8Array;
       currentMetadata: NodeContent;
@@ -4238,52 +4211,12 @@ export class CipherBoxClient {
       migratedIpnsPrivateKeyEncrypted?: string;
     }
   ): Promise<{ deletedCid?: string; prunedCids: string[] }> {
-    void versionIndex;
     return this.withOperation('deleteFileVersion', async () => {
-      const folder = await this.requireFolder(parentIpnsName);
-      const fileKeys = await this.resolveFileWriteChainKeys(folder, fileId);
-
-      try {
-        const publishResult = await sdkCore.updateFileMetadata({
-          fileIpnsPrivateKey: params.fileIpnsPrivateKey,
-          fileReadKey: fileKeys.fileReadKey,
-          fileWriteKey: fileKeys.fileWriteKey,
-          fileMetaIpnsName: fileKeys.fileMetaIpnsName,
-          fileSequenceNumber: fileKeys.fileSequenceNumber,
-          nodeId: fileKeys.nodeId,
-          nodeGeneration: fileKeys.nodeGeneration,
-          originalCreatedAt: fileKeys.originalCreatedAt,
-          currentMetadata: params.currentMetadata,
-          updates: params.updates,
-          createVersion: false,
-          maxVersionsPerFile: params.maxVersionsPerFile,
-          ctx: this.ctx,
-        });
-
-        // 72-06 SC#4: deleteFileVersion's `updates` carries the SAME live
-        // content descriptor as `currentMetadata` (only a past version entry
-        // is pruned) — this normally evaluates to `false`, matching the
-        // locked "gated on a real change" wording (no needless cache bust on
-        // a version-history-only delete).
-        const fileContentChanged =
-          params.updates.size !== params.currentMetadata.size ||
-          params.updates.cid !== params.currentMetadata.cid;
-
-        await this.maybeRepublishFolderForFileMigration(
-          parentIpnsName,
-          folder,
-          fileContentChanged,
-          params.migratedIpnsPrivateKeyEncrypted
-        );
-
-        return { deletedCid: params.deletedCid, prunedCids: publishResult.prunedCids };
-      } finally {
-        fileKeys.fileReadKey.fill(0);
-        fileKeys.fileWriteKey.fill(0);
-        // T-68.1-12-04: this walk's own fileIpnsPrivateKey is unused here —
-        // the caller supplies params.fileIpnsPrivateKey instead. Zero it.
-        fileKeys.fileIpnsPrivateKey.fill(0);
-      }
+      const { prunedCids } = await this.runFileVersionOp(parentIpnsName, fileId, {
+        ...params,
+        createVersion: false,
+      });
+      return { deletedCid: params.deletedCid, prunedCids };
     });
   }
 
