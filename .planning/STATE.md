@@ -3,17 +3,17 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
 current_phase: 72
-current_phase_name: SDK Write-Plane Durability and Correctness
+current_phase_name: sdk-write-plane-durability-and-correctness
 status: executing
-stopped_at: Phase 70.1 context gathered
-last_updated: "2026-07-09T22:44:07.197Z"
-last_activity: 2026-07-09
-last_activity_desc: Phase 71 complete, transitioned to Phase 72
+stopped_at: Completed 72-01-PLAN.md
+last_updated: "2026-07-10T12:54:44.571Z"
+last_activity: 2026-07-10
+last_activity_desc: Phase 72 execution started
 progress:
   total_phases: 16
   completed_phases: 13
-  total_plans: 170
-  completed_plans: 169
+  total_plans: 180
+  completed_plans: 170
   percent: 81
 ---
 
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-27)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 72 — SDK Write-Plane Durability and Correctness
+**Current focus:** Phase 72 — sdk-write-plane-durability-and-correctness
 
 ## Current Position
 
-Phase: 72 — SDK Write-Plane Durability and Correctness
-Plan: Not started
-Status: Phase 71 complete — Phase 72 not started
-Last activity: 2026-07-09 — Phase 71 complete, transitioned to Phase 72
+Phase: 72 (sdk-write-plane-durability-and-correctness) — EXECUTING
+Plan: 2 of 10
+Status: Ready to execute
+Last activity: 2026-07-10 — Phase 72 execution started
 
 Progress: `██████████` 79 / 79 plans (100%)
 
@@ -256,6 +256,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 70 P06 | 55min | 3 tasks | 4 files |
 | Phase 70 P07 | 13min | 3 tasks | 2 files |
 | Phase 70 P08 | 55min | 2 tasks | 1 files |
+| Phase 72 P01 | 20min | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -553,6 +554,7 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: Test 4 uses a deliberately childless (single file node) rotation root — a traced D-02/D-09 timing analysis shows any multi-level tree crash before the walk's final persist hits an unrecoverable AEAD mismatch via this suite's persistCallback-only fault-injection model
 - [Phase ?]: Test 4 crashes on the FIRST persistCallback call and resumes with EMPTY completedNodeIds plus the CURRENT valid rootReadKey (captured via the existing spy), converging via safe double-rotation
 - [Phase 70 post-gate fix]: 70-04's enqueueConcurrentlyAddedChildren over-reached ROT-05 by pushing a concurrently-added child onto the BFS queue for its own rotateOne pass (requires an IPNS write key the rotating party may not hold) and ran after parentTracking teardown so the re-seal never reached the parent's published SealedChildRef; replaced with createConcurrentAddResealingMerge, an async mergeChildrenFn wrapper invoked inside the D-09 CAS-409 merge that re-seals only the concurrent child's readKeySealed wrapper (trying both the parent's old and already-current key) without rotating the child's own node -- commit 7faa0e82835d56368ea87f969d57b083d43ea9a3; sdk-e2e rotation-crash-safety 4/4 green, sdk-core unit 355/355 green
+- [Phase 72-01]: Rewrote 13-test skipped legacy suite into 1 live test of the reachable write-chain branch instead of modernizing legacy-branch tests slated for deletion in Plan 07 — 72-RESEARCH.md Critical Finding 3: SC#5 had zero regression coverage; modernizing dead-branch tests is wasted effort
 
 ## Operator Next Steps
 
@@ -560,11 +562,11 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-08T13:40:40.831Z
-**Stopped at:** Phase 70.1 context gathered
+**Last session:** 2026-07-10T12:54:44.564Z
+**Stopped at:** Completed 72-01-PLAN.md
 **Resume file:** 
 
-.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-CONTEXT.md
+None
 
 - GAP-1 (68.1-13): resolveFileMetadata AEAD Decryption-failed for CTR/streaming video preview and post-upload batch-download -- needs dedicated crypto debugging
 - GAP-2 (68.1-13): full-workflow.spec.ts 3.8 cold-reload multi-level IPNS DFS resolve times out -- needs retry-budget tuning or propagation investigation
