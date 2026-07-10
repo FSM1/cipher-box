@@ -62,6 +62,7 @@ vi.mock('../share', () => ({
 import * as sdkCore from '@cipherbox/sdk-core';
 import { clearBytes } from '@cipherbox/crypto';
 import { sealNode } from '@cipherbox/core';
+import type { SealedChildRef } from '@cipherbox/core';
 
 function makeUploadResult(index: number): sdkCore.UploadResult {
   return {
@@ -95,19 +96,17 @@ function setupBatchMocks(fileCount: number, failIndices: number[] = []) {
     return makeUploadResult(idx);
   });
 
-  vi.mocked(sdkCore.addFilePointerToFolder).mockImplementation(({ children, fileName }) => {
-    const newChild = {
-      type: 'file' as const,
-      id: `file-${fileName}`,
-      name: fileName,
-      fileMetaIpnsName: `k51-${fileName}`,
-      ipnsPrivateKeyEncrypted: 'enc-key',
-      createdAt: Date.now(),
-      modifiedAt: Date.now(),
+  vi.mocked(sdkCore.addFilePointerToFolder).mockImplementation(async ({ children, name }) => {
+    const newRef: SealedChildRef = {
+      name,
+      ipnsName: `k51-${name}`,
+      generation: 0,
+      versionFloor: 0n,
+      readKeySealed: 'c2VhbGVk',
     };
     return {
-      updatedChildren: [...children, newChild],
-      filePointer: newChild,
+      updatedChildren: [...children, newRef],
+      newRef,
     };
   });
 
@@ -353,33 +352,21 @@ describe('CipherBoxClient.uploadFiles - batch upload orchestration', () => {
 
     // Second call throws a name collision
     let callCount = 0;
-    vi.mocked(sdkCore.addFilePointerToFolder).mockImplementation(({ children, fileName }) => {
+    vi.mocked(sdkCore.addFilePointerToFolder).mockImplementation(async ({ children, name }) => {
       callCount++;
       if (callCount === 2) {
         throw new Error('An item with this name already exists');
       }
+      const newRef: SealedChildRef = {
+        name,
+        ipnsName: `k51-${name}`,
+        generation: 0,
+        versionFloor: 0n,
+        readKeySealed: 'c2VhbGVk',
+      };
       return {
-        updatedChildren: [
-          ...children,
-          {
-            type: 'file' as const,
-            id: `file-${fileName}`,
-            name: fileName,
-            fileMetaIpnsName: `k51-${fileName}`,
-            ipnsPrivateKeyEncrypted: 'enc-key',
-            createdAt: Date.now(),
-            modifiedAt: Date.now(),
-          },
-        ],
-        filePointer: {
-          type: 'file' as const,
-          id: `file-${fileName}`,
-          name: fileName,
-          fileMetaIpnsName: `k51-${fileName}`,
-          ipnsPrivateKeyEncrypted: 'enc-key',
-          createdAt: Date.now(),
-          modifiedAt: Date.now(),
-        },
+        updatedChildren: [...children, newRef],
+        newRef,
       };
     });
 
