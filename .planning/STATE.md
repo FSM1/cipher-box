@@ -5,15 +5,15 @@ milestone_name: Metadata and Sharing Refactor
 current_phase: 72
 current_phase_name: sdk-write-plane-durability-and-correctness
 status: executing
-stopped_at: Completed 72-01-PLAN.md
-last_updated: "2026-07-10T12:54:44.571Z"
+stopped_at: Completed 72-02-PLAN.md
+last_updated: "2026-07-10T13:19:27.150Z"
 last_activity: 2026-07-10
 last_activity_desc: Phase 72 execution started
 progress:
   total_phases: 16
   completed_phases: 13
   total_plans: 180
-  completed_plans: 170
+  completed_plans: 171
   percent: 81
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 ## Current Position
 
 Phase: 72 (sdk-write-plane-durability-and-correctness) — EXECUTING
-Plan: 2 of 10
+Plan: 3 of 10
 Status: Ready to execute
 Last activity: 2026-07-10 — Phase 72 execution started
 
@@ -257,6 +257,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 70 P07 | 13min | 3 tasks | 2 files |
 | Phase 70 P08 | 55min | 2 tasks | 1 files |
 | Phase 72 P01 | 20min | 1 tasks | 1 files |
+| Phase 72 P02 | 25min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -555,6 +556,7 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: Test 4 crashes on the FIRST persistCallback call and resumes with EMPTY completedNodeIds plus the CURRENT valid rootReadKey (captured via the existing spy), converging via safe double-rotation
 - [Phase 70 post-gate fix]: 70-04's enqueueConcurrentlyAddedChildren over-reached ROT-05 by pushing a concurrently-added child onto the BFS queue for its own rotateOne pass (requires an IPNS write key the rotating party may not hold) and ran after parentTracking teardown so the re-seal never reached the parent's published SealedChildRef; replaced with createConcurrentAddResealingMerge, an async mergeChildrenFn wrapper invoked inside the D-09 CAS-409 merge that re-seals only the concurrent child's readKeySealed wrapper (trying both the parent's old and already-current key) without rotating the child's own node -- commit 7faa0e82835d56368ea87f969d57b083d43ea9a3; sdk-e2e rotation-crash-safety 4/4 green, sdk-core unit 355/355 green
 - [Phase 72-01]: Rewrote 13-test skipped legacy suite into 1 live test of the reachable write-chain branch instead of modernizing legacy-branch tests slated for deletion in Plan 07 — 72-RESEARCH.md Critical Finding 3: SC#5 had zero regression coverage; modernizing dead-branch tests is wasted effort
+- [Phase 72-02]: write-chain-rotation.test.ts: identify rotated seeds via a scoped vi.spyOn(cryptoModule, 'generateEd25519Keypair') read-back in guaranteed child-first call order, not fixed capturedKeys[0]/[2] offsets — capturedKeys mixed Ed25519 seeds with writeKey/ephemeral randoms at unstable positions; the spy observes the exact minting call and works across the sdk-core dist bundle boundary since @cipherbox/crypto is externalized, unlike createAndPublishIpnsRecord which is bundled internally and not spy-able from outside
 
 ## Operator Next Steps
 
@@ -562,8 +564,8 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-10T12:54:44.564Z
-**Stopped at:** Completed 72-01-PLAN.md
+**Last session:** 2026-07-10T13:19:27.142Z
+**Stopped at:** Completed 72-02-PLAN.md
 **Resume file:** 
 
 None
