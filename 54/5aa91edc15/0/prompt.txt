@@ -95,3 +95,12 @@ ok you can move the 8 over to @.planning/todos/completed/ and add the zeroize to
 ---
 
 also wanted to ask whether phases 72 and 73 have any mutual dependencies - if not, these can be worked on in parallel
+
+---
+
+ok lets get phase 72 planned + executed + shipped, then repeat the flow for 73 once 72 is all merged.
+
+---
+
+sorry to interrupt - just noticed that all the desktop and web e2e tests are failing - https://github.com/FSM1/cipher-box/actions/runs/28941806263/job/85865671229 only the web e2e failed
+https://github.com/FSM1/cipher-box/actions/runs/29059796208 - all desktop e2e also failing.
