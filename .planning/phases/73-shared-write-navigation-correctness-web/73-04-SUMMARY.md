@@ -134,6 +134,12 @@ None - no external service configuration required.
 - Full `pnpm --filter @cipherbox/sdk test` (420 passed, 3 skipped) and `pnpm --filter @cipherbox/sdk run typecheck` are green; `apps/web`'s `tsc -b` is also green against the new `resolveNodeIdentity` signature.
 - Plan 73-08 (which wires `runWithFailureUx` into `useSharedWriteOps.ts`) touches the same file -- no conflict expected since this plan only changed `resolveChildNodeId`'s signature and `deleteItemHandler`'s one call site, not the `runWithFailureUx`/error-handling wiring itself.
 
+## Self-Check: PASSED
+
+All created/modified files verified present on disk; all 4 commit hashes
+(`489e184c4`, `ef32cab7a`, `0c3fa020a`, `8726a3d1a`) verified present in
+`git log --oneline --all`.
+
 ---
 *Phase: 73-shared-write-navigation-correctness-web*
 *Completed: 2026-07-10*
