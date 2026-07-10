@@ -113,3 +113,10 @@ None - no external service configuration required.
 
 *Phase: 73-shared-write-navigation-correctness-web*
 *Completed: 2026-07-10*
+
+## Self-Check: PASSED
+
+- FOUND: .planning/phases/73-shared-write-navigation-correctness-web/73-05-SUMMARY.md
+- FOUND commit: 0b5d0f957
+- FOUND commit: 3a78c1c48
+- FOUND commit: 2e192ad94
