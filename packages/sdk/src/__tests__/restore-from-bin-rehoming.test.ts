@@ -468,4 +468,65 @@ describe('binOps.restoreFromBin write-link re-homing (72-05, SC#3)', () => {
     expect(captured.count()).toBe(1);
     expect(warnSpy).toHaveBeenCalled();
   });
+
+  it('fail-closed: an AEAD failure unsealing the source WriteChildRef THROWS (does not silently downgrade to read-plane-only)', async () => {
+    const { folderTree, sourceFolder, targetFolder, binState } = await seedRestore();
+
+    // Re-seal the source WriteChildRef under a DIFFERENT (wrong) key so
+    // unsealChildWriteKey fails GCM auth under the folder's real writeKey --
+    // this simulates a tampered / wrong-key write-body. Per Finding 1, this
+    // must FAIL CLOSED and propagate, never be silently downgraded to a
+    // read-plane-only restore (mirrors walkChildWriteKey's 72-08 precedent).
+    const wrongKey = new Uint8Array(32).fill(0x66);
+    const tamperedSealed = await sealChildWriteKey(wrongKey, wrongKey, NODE_UUID, 'file', GEN);
+    sourceFolder.metadata!.writeBody!.writeChildren = [
+      { childId: NODE_UUID, writeKeySealed: tamperedSealed },
+    ];
+
+    await expect(
+      restoreFromBin({
+        entryId: 'e1',
+        targetFolderIpnsName: targetFolder.ipnsName,
+        folderTree,
+        binState,
+        binCtx,
+        sourceFolder,
+      })
+    ).rejects.toThrow();
+  });
+
+  it('best-effort: a SOURCE-side cleanup publish failure never blocks the restore (bin entry still removed)', async () => {
+    const { folderTree, sourceFolder, targetFolder, binState } = await seedRestore();
+
+    // Target publish (call 0) succeeds normally; SOURCE publish (call 1,
+    // dropping the stale WriteChildRef from the original parent) throws --
+    // a network blip / CAS exhaustion. Per Finding 2 this must be
+    // best-effort: the restore already succeeded via the target publish, so
+    // this failure must be swallowed (logged) and the bin-entry removal
+    // below must still run.
+    let call = 0;
+    vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockImplementation(async (params) => {
+      call += 1;
+      if (call === 2) throw new Error('network blip');
+      return {
+        cid: 'bafynew',
+        newSequenceNumber: 2n,
+        publishedChildren: params.children,
+        publishedWriteChildren: params.writeKey ? params.writeChildren : undefined,
+      };
+    });
+
+    const result = await restoreFromBin({
+      entryId: 'e1',
+      targetFolderIpnsName: targetFolder.ipnsName,
+      folderTree,
+      binState,
+      binCtx,
+      sourceFolder,
+    });
+
+    expect(result.restoredItem).toBeDefined();
+    expect(result.updatedBinState.entries).toHaveLength(0);
+    expect(warnSpy).toHaveBeenCalled();
+  });
 });

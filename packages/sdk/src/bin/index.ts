@@ -539,11 +539,29 @@ export async function restoreFromBin(params: {
   let didRehome = false;
 
   if (sourceFolder && sourceFolder.ipnsName !== targetFolderIpnsName) {
+    // The RESOLVE step (getWriteBodyParams) is fail-OPEN (T-72-05-03): a
+    // genuine resolve MISS (record present but momentarily unresolvable,
+    // SC#2) must never block the restore — it degrades to read-plane-only
+    // re-linking, exactly as if sourceFolder had not been supplied at all.
+    // This catch is scoped to ONLY the resolve step — it must NOT also
+    // swallow AEAD unseal/reseal failures below, which fail CLOSED.
+    let sourceResolveFailed = false;
     try {
       sourceWriteBodyParams = await getWriteBodyParams(sourceFolder, binCtx.ctx);
       baseSourceWriteChildren = sourceWriteBodyParams.writeChildren;
       rehomedSourceWriteChildren = sourceWriteBodyParams.writeChildren;
+    } catch (err) {
+      console.warn(
+        `[CipherBox] restoreFromBin: source folder ${sourceFolder.ipnsName} write-body resolve ` +
+          'failed — restoring read-plane only (no re-homing):',
+        err
+      );
+      rehomedSourceWriteChildren = undefined;
+      baseSourceWriteChildren = undefined;
+      sourceResolveFailed = true;
+    }
 
+    if (!sourceResolveFailed) {
       if (!targetWriteBodyParams.writeKey || !sourceWriteBodyParams.writeKey) {
         console.warn(
           `[CipherBox] restoreFromBin: source or destination folder ${sourceFolder.ipnsName} -> ` +
@@ -557,6 +575,12 @@ export async function restoreFromBin(params: {
           (wc) => wc.childId === nodeId
         );
         if (movedWriteRef) {
+          // NOTE: deliberately uncaught here — a wrong-key / tampered write
+          // body AEAD failure (unsealChildWriteKey / sealChildWriteKey) must
+          // FAIL CLOSED and propagate out of restoreFromBin, mirroring
+          // walkChildWriteKey (72-08): only a MISSING ref is nullable /
+          // fail-open, an unseal FAILURE never silently downgrades to a
+          // read-plane-only restore.
           let movedWriteKey: Uint8Array | null = null;
           try {
             movedWriteKey = await unsealChildWriteKey(
@@ -592,19 +616,6 @@ export async function restoreFromBin(params: {
         // else: no source WriteChildRef for this node (pre-write-plane or
         // already read-only) — nothing to re-home, lists stay verbatim.
       }
-    } catch (err) {
-      // Fail OPEN (T-72-05-03): a failure resolving the SOURCE side's
-      // write-body must never block the restore — it degrades to
-      // read-plane-only re-linking, exactly as if sourceFolder had not been
-      // supplied at all.
-      console.warn(
-        `[CipherBox] restoreFromBin: source folder ${sourceFolder.ipnsName} write-body resolve ` +
-          'failed — restoring read-plane only (no re-homing):',
-        err
-      );
-      rehomedSourceWriteChildren = undefined;
-      baseSourceWriteChildren = undefined;
-      didRehome = false;
     }
   }
 
@@ -638,32 +649,47 @@ export async function restoreFromBin(params: {
   );
 
   if (didRehome && sourceFolder) {
-    const {
-      newSequenceNumber: sourceSeq,
-      publishedChildren: sourcePublishedChildren,
-      publishedWriteChildren: sourcePublishedWriteChildren,
-    } = await sdkCore.updateFolderMetadataAndPublish({
-      children: sourceFolder.children,
-      folderKey: sourceFolder.folderKey,
-      writeKey: sourceWriteBodyParams.writeKey,
-      writeChildren: rehomedSourceWriteChildren,
-      baseWriteChildren: baseSourceWriteChildren,
-      ipnsPrivateKey: sourceFolder.ipnsKeypair.privateKey,
-      ipnsPublicKey: sourceFolder.ipnsKeypair.publicKey,
-      ipnsName: sourceFolder.ipnsName,
-      sequenceNumber: sourceFolder.sequenceNumber,
-      ctx: binCtx.ctx,
-      nodeId: sourceFolder.nodeId,
-      nodeGeneration: sourceFolder.nodeGeneration,
-    });
+    // Best-effort (mirrors permanentDeleteFromBin's fail-open lingering-ref
+    // drop / dropLingeringWriteChildRef): the TARGET publish above already
+    // durably restored the item. A failure here (network blip, CAS
+    // exhaustion) must never propagate out of restoreFromBin — that would
+    // skip the bin-entry removal below even though the restore already
+    // succeeded. The stale source WriteChildRef left behind is harmless dead
+    // weight, reconciled later by dropLingeringWriteChildRef.
+    try {
+      const {
+        newSequenceNumber: sourceSeq,
+        publishedChildren: sourcePublishedChildren,
+        publishedWriteChildren: sourcePublishedWriteChildren,
+      } = await sdkCore.updateFolderMetadataAndPublish({
+        children: sourceFolder.children,
+        folderKey: sourceFolder.folderKey,
+        writeKey: sourceWriteBodyParams.writeKey,
+        writeChildren: rehomedSourceWriteChildren,
+        baseWriteChildren: baseSourceWriteChildren,
+        ipnsPrivateKey: sourceFolder.ipnsKeypair.privateKey,
+        ipnsPublicKey: sourceFolder.ipnsKeypair.publicKey,
+        ipnsName: sourceFolder.ipnsName,
+        sequenceNumber: sourceFolder.sequenceNumber,
+        ctx: binCtx.ctx,
+        nodeId: sourceFolder.nodeId,
+        nodeGeneration: sourceFolder.nodeGeneration,
+      });
 
-    adoptPublishedFolderState(
-      folderTree,
-      sourceFolder,
-      sourcePublishedChildren,
-      sourceSeq,
-      sourcePublishedWriteChildren ?? rehomedSourceWriteChildren
-    );
+      adoptPublishedFolderState(
+        folderTree,
+        sourceFolder,
+        sourcePublishedChildren,
+        sourceSeq,
+        sourcePublishedWriteChildren ?? rehomedSourceWriteChildren
+      );
+    } catch (err) {
+      console.warn(
+        `[CipherBox] restoreFromBin: source-side cleanup publish for ${sourceFolder.ipnsName} ` +
+          'failed — stale WriteChildRef will linger there until reconciled:',
+        err
+      );
+    }
   }
 
   // 7. Remove entry from bin and publish updated bin metadata
