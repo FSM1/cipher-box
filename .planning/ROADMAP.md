@@ -72,7 +72,7 @@
 - [x] **Phase 70: Rotation Soundness — Deep Merge, Fresh-Record Resume, and Durable Floor Concurrency** — Local-wins merge for rotated child keys, deep `verifySubtreeClean`, true fresh-record crash-resume, grant-callback threading through the real walk, and an atomic/async-safe anti-rollback floor store (5 deferred CodeRabbit/PR-review todos) (completed 2026-07-07)
 - [x] **Phase 71: Share-Invite Security and IPNS Data-Integrity (API)** — Validate sharer root ownership via `ipns_records` creator marker, apply-or-reject later invite grants, `claim_count` CHECK folded into the greenfield cutover, first-publish INSERT-race 409, same-seq CID equivocation hard-guard, direct bulk-revoke DELETE, `ShareInviteService` lifecycle unit coverage, plus a full share-plane rename purging "descriptor" (D-10). Root-uniqueness index dropped (D-03; already covered by vault uniqueness). (completed 2026-07-09)
 - [x] **Phase 72: SDK Write-Plane Durability and Correctness** — Delete drops the removed child's `WriteChildRef`, fail-closed `getWriteBodyParams` on transient resolve miss, restore-to-different-parent re-homing, `SealedChildRef` size/modifiedAt mirror refresh, legacy `moveInSharedFolder` branch removal, write-plane helper dedup, and two write-chain test-fidelity fixes (8 todos) (completed 2026-07-10)
-- [ ] **Phase 73: Shared Write/Navigation Correctness (Web)** — Preserve nested write capability across navigate-up/breadcrumb restore, invalidate stale nav-stack child snapshots, gate the non-listing read facades with the ROT-07 floor, give WRITE-03 refresh-access a live production trigger, and route drag-payload kind through the resolved listing (5 todos)
+- [ ] **Phase 73: Shared Write/Navigation Correctness (Web)** — Preserve nested write capability across navigate-up/breadcrumb restore, invalidate stale nav-stack child snapshots, gate the non-listing read facades with the ROT-07 floor, give WRITE-03 refresh-access a live production trigger, and route drag-payload kind through the resolved listing, plus fold in the tangential nav-hook dedup and dead getShareKeys/folder-IPNS path cleanup in the same subsystem (7 todos)
 
 ## Phase Details
 
@@ -861,6 +861,8 @@ Plans:
 - `.planning/todos/pending/2026-07-02-write03-refresh-access-path-has-no-live-trigger.md`
 - `.planning/todos/pending/2026-07-06-sharedfolderrow-drag-kind-classification.md`
 - `.planning/todos/pending/2026-07-06-68.2-coderabbit-hardening-backlog.md` (web-scoped items only — e.g. item 4 `refreshSharedFolder` stale write envelope, item 9 shared-nav seed race; non-web items stay in the backlog)
+- `.planning/todos/pending/2026-07-03-consolidate-web-shared-navigation-dup.md` (folded-in tangential: dedup `useSharedNavigationActions` navigateUp/navigateToBreadcrumb restore + resolve-kinds-before-project — overlaps SC1/SC5, same file)
+- `.planning/todos/pending/2026-07-04-remove-dead-getsharekeys-folder-ipns-path.md` (folded-in tangential: remove dead `resolveFolderIpnsPrivateKey`/`getShareKeys` write-share key path in `useSharedNavigationActions.ts` — same write-key nav subsystem as SC1)
 
 **Success Criteria** (what must be TRUE):
 
@@ -869,6 +871,8 @@ Plans:
 3. `resolveFileMetadata`, `downloadFromIpns`, and `resolveNodeIdentity` route through the ROT-07 anti-rollback floor gate (not raw `resolvePublishedNode`)
 4. WRITE-03 `refreshWriteAccess` / `CannotWriteUntilRefetchError` has at least one live production supplier (`publishNodeFn` can surface a tombstone), not test-only
 5. `SharedFolderRow` drag-payload kind is derived from the resolved listing (`isFileRefResolved`/`resolvedByIpnsName`), not `isFileRef` on a bare `SealedChildRef`
+6. Duplicated shared-navigation logic in `useSharedNavigationActions` (navigateUp / navigateToBreadcrumb restore + resolve-kinds-before-project) is consolidated to a single source of truth — the writeKey/snapshot fixes (SC1/SC2) live in one place, not copy-pasted across nav entrypoints
+7. The dead `resolveFolderIpnsPrivateKey` / `getShareKeys` folder-IPNS write-share key path is removed from `useSharedNavigationActions.ts` (no remaining references), leaving the derived-writeKey path (SC1) as the sole write-key source
 
 **Plans**: TBD (run `/gsd-plan-phase 73`)
 
