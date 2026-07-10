@@ -13,7 +13,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CipherBoxClient } from '../client';
 import { createTestConfig } from './helpers';
-import type { FileMetadata } from '@cipherbox/core';
+import type { NodeContent, SealedChildRef } from '@cipherbox/core';
 
 // ── crypto mock ────────────────────────────────────────────────────────────────
 vi.mock('@cipherbox/crypto', () => ({
@@ -70,7 +70,6 @@ const SRC_IPNS = 'k51src';
 const DEST_IPNS = 'k51dest';
 const FILE_ID = 'file-uuid-1';
 const FILE_META_IPNS = 'k51filemeta';
-const IPNS_PRIV_KEY_ENC = 'deadbeef01';
 
 const SRC_FOLDER_KEY = new Uint8Array(32).fill(0x11);
 const DEST_FOLDER_KEY = new Uint8Array(32).fill(0x22);
@@ -78,19 +77,23 @@ const DEST_FOLDER_KEY = new Uint8Array(32).fill(0x22);
 /** Populate the client's folderTree with src and dest folders. */
 function setupFolders(client: CipherBoxClient) {
   const now = Date.now();
-  const filePointer = {
-    type: 'file' as const,
-    id: FILE_ID,
+  // 68.2: SealedChildRef's field set is FROZEN to exactly {name, ipnsName,
+  // generation, versionFloor, readKeySealed} — no `id`/`fileMetaIpnsName`/
+  // `ipnsPrivateKeyEncrypted` (those were legacy FilePointer fields). `ipnsName`
+  // now IS the identity used to locate the child (mirrors moveItem's real
+  // childId === ref.ipnsName match in sdk-core/folder/metadata-ops.ts).
+  const filePointer: SealedChildRef = {
     name: 'hello.txt',
-    fileMetaIpnsName: FILE_META_IPNS,
-    ipnsPrivateKeyEncrypted: IPNS_PRIV_KEY_ENC,
-    createdAt: now,
-    modifiedAt: now,
+    ipnsName: FILE_ID,
+    generation: 0,
+    versionFloor: 0n,
+    readKeySealed: 'sealed-file-readkey',
   };
 
   client.getFolderTree().set(SRC_IPNS, {
     ipnsName: SRC_IPNS,
     folderKey: new Uint8Array(SRC_FOLDER_KEY),
+    writeKey: new Uint8Array(32).fill(0x33),
     ipnsKeypair: {
       publicKey: new Uint8Array(32).fill(0xaa),
       privateKey: new Uint8Array(64).fill(0xbb),
@@ -106,6 +109,7 @@ function setupFolders(client: CipherBoxClient) {
   client.getFolderTree().set(DEST_IPNS, {
     ipnsName: DEST_IPNS,
     folderKey: new Uint8Array(DEST_FOLDER_KEY),
+    writeKey: new Uint8Array(32).fill(0x44),
     ipnsKeypair: {
       publicKey: new Uint8Array(32).fill(0xcc),
       privateKey: new Uint8Array(64).fill(0xdd),
@@ -119,17 +123,15 @@ function setupFolders(client: CipherBoxClient) {
   });
 }
 
-/** Minimal valid FileMetadata */
-const mockFileMeta: FileMetadata = {
-  version: 'v1',
+/** Minimal valid NodeContent (replaces the retired FileMetadata shape). */
+const mockFileMeta: NodeContent = {
   cid: 'bafyfile',
-  fileKeyEncrypted: 'aabbcc',
   fileIv: '112233',
   size: 42,
   mimeType: 'text/plain',
   encryptionMode: 'GCM',
-  createdAt: 1000,
-  modifiedAt: 1000,
+  fileKey: new Uint8Array(32).fill(0x77),
+  versions: [],
 };
 
 // ── tests ──────────────────────────────────────────────────────────────────────
@@ -142,29 +144,20 @@ describe.skip('CipherBoxClient.moveItem — file metadata re-encryption — TODO
     client = new CipherBoxClient(createTestConfig());
     setupFolders(client);
 
-    // sdkCore.moveItem returns the shuffled children arrays
+    // sdkCore.moveItem returns the shuffled children arrays. Real return shape
+    // is { updatedSource, updatedDest, movedRef } (sdk-core/folder/metadata-ops.ts)
+    // — NOT updatedSourceChildren/updatedDestChildren/movedItem.
+    const movedFileRef: SealedChildRef = {
+      name: 'hello.txt',
+      ipnsName: FILE_ID,
+      generation: 0,
+      versionFloor: 0n,
+      readKeySealed: 'sealed-file-readkey',
+    };
     vi.mocked(sdkCore.moveItem).mockReturnValue({
-      updatedSourceChildren: [],
-      updatedDestChildren: [
-        {
-          type: 'file',
-          id: FILE_ID,
-          name: 'hello.txt',
-          fileMetaIpnsName: FILE_META_IPNS,
-          ipnsPrivateKeyEncrypted: IPNS_PRIV_KEY_ENC,
-          createdAt: 0,
-          modifiedAt: 0,
-        },
-      ],
-      movedItem: {
-        type: 'file',
-        id: FILE_ID,
-        name: 'hello.txt',
-        fileMetaIpnsName: FILE_META_IPNS,
-        ipnsPrivateKeyEncrypted: IPNS_PRIV_KEY_ENC,
-        createdAt: 0,
-        modifiedAt: 0,
-      },
+      updatedSource: [],
+      updatedDest: [movedFileRef],
+      movedRef: movedFileRef,
     });
 
     // resolveFileMetadata returns metadata encrypted with source key
@@ -206,8 +199,17 @@ describe.skip('CipherBoxClient.moveItem — file metadata re-encryption — TODO
     expect(sdkCore.updateFileMetadata).toHaveBeenCalled();
     const call = vi.mocked(sdkCore.updateFileMetadata).mock.calls[0];
     const params = call[0] as Parameters<typeof sdkCore.updateFileMetadata>[0];
-    // folderKey must be the DESTINATION folder's key
-    expect(params.folderKey).toEqual(DEST_FOLDER_KEY);
+    // 68.2: updateFileMetadata's params no longer carry a folder-scoped key at
+    // all — the per-file Node (Phase 68.1-07) is sealed under its OWN
+    // fileReadKey/fileWriteKey, independent of any parent folder key (there is
+    // no `folderKey` field on this type any more). The re-encrypt-under-the-
+    // destination-folder-key premise this suite was written against is
+    // superseded: the current `moveItem` (sdk-core/folder/metadata-ops.ts) is a
+    // pure SealedChildRef link rewrite with ZERO re-encryption (READ-04), so
+    // this whole describe block is retired pending a phase-65 rewrite (see the
+    // describe.skip title). Mapped onto the closest surviving field so this
+    // dead code still typechecks against the current signature.
+    expect(params.fileWriteKey).toEqual(DEST_FOLDER_KEY);
     // Must not create a new version (re-encryption is not a content change)
     expect(params.createVersion).toBe(false);
     // Must carry the same content unchanged
@@ -217,16 +219,12 @@ describe.skip('CipherBoxClient.moveItem — file metadata re-encryption — TODO
   });
 
   it('does NOT re-encrypt file metadata when moving a folder (no FilePointer involved)', async () => {
-    const now = Date.now();
-    const folderChild = {
-      type: 'folder' as const,
-      id: 'subfolder-uuid',
+    const folderChild: SealedChildRef = {
       name: 'SubDir',
       ipnsName: 'k51subfolder',
-      folderKeyEncrypted: 'encfkey',
-      ipnsPrivateKeyEncrypted: 'encipns',
-      createdAt: now,
-      modifiedAt: now,
+      generation: 0,
+      versionFloor: 0n,
+      readKeySealed: 'sealed-folder-readkey',
     };
 
     // Replace file with folder child in source
@@ -235,9 +233,9 @@ describe.skip('CipherBoxClient.moveItem — file metadata re-encryption — TODO
     client.getFolderTree().set(SRC_IPNS, srcState);
 
     vi.mocked(sdkCore.moveItem).mockReturnValue({
-      updatedSourceChildren: [],
-      updatedDestChildren: [folderChild],
-      movedItem: folderChild,
+      updatedSource: [],
+      updatedDest: [folderChild],
+      movedRef: folderChild,
     });
 
     await client.moveItem(SRC_IPNS, DEST_IPNS, 'subfolder-uuid');

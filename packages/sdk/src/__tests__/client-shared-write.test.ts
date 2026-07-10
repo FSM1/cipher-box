@@ -14,7 +14,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CipherBoxClient } from '../client';
 import type { SdkEvent } from '../events';
 import type { SharedFolderState } from '../types';
-import type { FolderChild, PublishedNode } from '@cipherbox/core';
+import type { SealedChildRef, PublishedNode } from '@cipherbox/core';
 import { createTestConfig } from './helpers';
 
 vi.mock('@cipherbox/crypto', () => ({
@@ -46,15 +46,17 @@ vi.mock('../share', async (importOriginal) => {
 import * as shareOps from '../share';
 import * as sdkCore from '@cipherbox/sdk-core';
 
-const PUBLISHED_CHILDREN: FolderChild[] = [
+// 68.2-02: readKeySealed is intentionally a placeholder (not a real AES-GCM
+// seal) so the listing-resolve path in the assertions below fails to unseal
+// it and soft-skips the child, yielding [] -- this is the documented
+// behavior the event-payload assertions rely on (see comments below).
+const PUBLISHED_CHILDREN: SealedChildRef[] = [
   {
-    type: 'file',
-    id: 'newfile',
     name: 'doc.txt',
-    fileMetaIpnsName: 'k51newfile',
-    ipnsPrivateKeyEncrypted: 'enc',
-    createdAt: 1,
-    modifiedAt: 1,
+    ipnsName: 'k51newfile',
+    generation: 0,
+    versionFloor: 0n,
+    readKeySealed: 'not-a-real-seal',
   },
 ];
 
@@ -88,6 +90,16 @@ function seedSharedFolder(
   return state;
 }
 
+/** Plausible republished-parent envelope for uploadToSharedFolder's `publishedParent`. */
+const PUBLISHED_PARENT_NODE: PublishedNode = {
+  schema: 'node/v3',
+  kind: 'folder',
+  id: 'stub-node-id',
+  generation: 1,
+  aeadVersion: 1,
+  readSealed: 'dGVzdA==',
+};
+
 describe('CipherBoxClient - shared write', () => {
   let client: CipherBoxClient;
 
@@ -105,7 +117,8 @@ describe('CipherBoxClient - shared write', () => {
       vi.mocked(shareOps.uploadToSharedFolder).mockResolvedValue({
         publishedChildren: PUBLISHED_CHILDREN,
         newSequenceNumber: 4n,
-        filePointer: PUBLISHED_CHILDREN[0] as never,
+        filePointer: PUBLISHED_CHILDREN[0],
+        publishedParent: PUBLISHED_PARENT_NODE,
       });
 
       await client.uploadToSharedFolder('share-1', {
@@ -154,15 +167,13 @@ describe('CipherBoxClient - shared write', () => {
   });
 
   describe('refreshSharedFolder', () => {
-    const REFRESHED_CHILDREN: FolderChild[] = [
+    const REFRESHED_CHILDREN: SealedChildRef[] = [
       {
-        type: 'file',
-        id: 'remotefile',
         name: 'remote.txt',
-        fileMetaIpnsName: 'k51remote',
-        ipnsPrivateKeyEncrypted: 'enc-remote',
-        createdAt: 2,
-        modifiedAt: 2,
+        ipnsName: 'k51remote',
+        generation: 0,
+        versionFloor: 0n,
+        readKeySealed: 'not-a-real-seal',
       },
     ];
 

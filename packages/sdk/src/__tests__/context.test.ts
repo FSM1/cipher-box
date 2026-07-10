@@ -1,22 +1,19 @@
 import { describe, it, expect, vi } from 'vitest';
 import { buildSharedWriteContext, type SharedWriteContextParams } from '../share/context';
 import type { SdkContext } from '@cipherbox/sdk-core';
-import type { FolderChild, FolderEntry, PublishedNode } from '@cipherbox/core';
+import type { SealedChildRef, PublishedNode } from '@cipherbox/core';
 
 const makeSdkContext = (): SdkContext => ({
   apiUrl: 'http://localhost:3000',
   getAccessToken: async () => 'test-token',
 });
 
-const makeFolderEntry = (id: string, name: string): FolderEntry => ({
-  type: 'folder',
-  id,
+const makeFolderEntry = (id: string, name: string): SealedChildRef => ({
   name,
   ipnsName: `k51-${id}`,
-  ipnsPrivateKeyEncrypted: 'encrypted-key',
-  folderKeyEncrypted: 'encrypted-folder-key',
-  createdAt: 1000,
-  modifiedAt: 1000,
+  generation: 0,
+  versionFloor: 0n,
+  readKeySealed: 'encrypted-folder-key',
 });
 
 const stubPublishedNode: PublishedNode = {
@@ -35,7 +32,7 @@ const makeParams = (overrides?: Partial<SharedWriteContextParams>): SharedWriteC
   publishedNode: stubPublishedNode,
   ipnsName: 'k51-test-folder',
   sequenceNumber: 42n,
-  children: [makeFolderEntry('child-1', 'Documents')] as FolderChild[],
+  children: [makeFolderEntry('child-1', 'Documents')],
   ownerPublicKey: new Uint8Array(33).fill(3),
   recipientPublicKey: new Uint8Array(33).fill(4),
   shareId: 'share-abc-123',
