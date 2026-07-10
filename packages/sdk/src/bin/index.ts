@@ -714,6 +714,91 @@ export async function restoreFromBin(params: {
 }
 
 /**
+ * Drop a bin entry's lingering `WriteChildRef` from its original parent's
+ * write-body (SC#1/SC#3 symmetry, 72-05 Open Question 1). `addToBin` RETAINS
+ * the removed child's `WriteChildRef` in the original parent's write-body (so
+ * a later `restoreFromBin` can re-home it) -- every bin-clearing path
+ * (permanent-delete, empty, purge) is a symmetric release point that must
+ * drop it, or the ref lingers forever (unbounded write-body growth) and a
+ * same-UUID node created later could resurrect a write link to it.
+ *
+ * Shared by `permanentDeleteFromBin`, `emptyBin`, and `purgeExpiredEntries`
+ * so the three bin-clearing paths cannot silently drift apart on this
+ * hygiene behavior (CodeRabbit F3: `emptyBin`/`purgeExpiredEntries` had no
+ * equivalent of this cleanup before this extraction).
+ *
+ * Fail-open (matches `deleteItem`'s hygiene posture, Pitfall 2): any
+ * resolve/publish failure here is logged and swallowed -- it must never
+ * block the caller's CID cleanup + bin-entry removal.
+ */
+async function dropLingeringWriteChildRef(params: {
+  originalParent: FolderState;
+  nodeId: string;
+  binCtx: BinOperationContext;
+  folderTree?: FolderTree;
+}): Promise<void> {
+  const { originalParent, nodeId, binCtx, folderTree } = params;
+  try {
+    const writeBodyParams = await getWriteBodyParams(originalParent, binCtx.ctx);
+    const hasLingeringRef = writeBodyParams.writeChildren?.some((wc) => wc.childId === nodeId);
+    if (!writeBodyParams.writeKey || !hasLingeringRef) return;
+
+    const baseWriteChildren = writeBodyParams.writeChildren;
+    const trimmedWriteChildren = (writeBodyParams.writeChildren ?? []).filter(
+      (wc) => wc.childId !== nodeId
+    );
+    const { newSequenceNumber, publishedChildren, publishedWriteChildren } =
+      await sdkCore.updateFolderMetadataAndPublish({
+        children: originalParent.children,
+        folderKey: originalParent.folderKey,
+        writeKey: writeBodyParams.writeKey,
+        writeChildren: trimmedWriteChildren,
+        baseWriteChildren,
+        ipnsPrivateKey: originalParent.ipnsKeypair.privateKey,
+        ipnsPublicKey: originalParent.ipnsKeypair.publicKey,
+        ipnsName: originalParent.ipnsName,
+        sequenceNumber: originalParent.sequenceNumber,
+        ctx: binCtx.ctx,
+        nodeId: originalParent.nodeId,
+        nodeGeneration: originalParent.nodeGeneration,
+      });
+
+    const finalWriteChildren = publishedWriteChildren ?? trimmedWriteChildren;
+    if (folderTree) {
+      adoptPublishedFolderState(
+        folderTree,
+        originalParent,
+        publishedChildren,
+        newSequenceNumber,
+        finalWriteChildren
+      );
+    } else {
+      originalParent.children = publishedChildren;
+      originalParent.sequenceNumber = newSequenceNumber;
+      // 72-follow-up F4: without a folderTree to route through
+      // adoptPublishedFolderState, the in-memory metadata mirror (consulted
+      // FIRST by getWriteBodyParams and walked directly by dfsFindFolder)
+      // was left stale here -- the NEXT getWriteBodyParams call would see
+      // the pre-trim writeChildren and re-seal the dropped ref right back
+      // in, silently undoing this cleanup (the GAP-2 class this phase
+      // fixed elsewhere). Sync it explicitly.
+      if (originalParent.metadata) {
+        originalParent.metadata.children = publishedChildren;
+        if (originalParent.metadata.writeBody) {
+          originalParent.metadata.writeBody.writeChildren = finalWriteChildren;
+        }
+      }
+    }
+  } catch (err) {
+    console.warn(
+      `[CipherBox] dropLingeringWriteChildRef: failed to drop lingering WriteChildRef from ` +
+        `original parent ${originalParent.ipnsName}:`,
+      err
+    );
+  }
+}
+
+/**
  * Permanently delete a bin entry (unpin CIDs, remove from bin metadata).
  *
  * For files: unpins the content CID if available.
@@ -748,51 +833,12 @@ export async function permanentDeleteFromBin(params: {
   // or publish failure here must never block the CID cleanup + entry
   // removal below (matches deleteItem's hygiene posture, Pitfall 2).
   if (params.originalParent && entry.nodeRef?.id) {
-    const originalParent = params.originalParent;
-    const nodeId = entry.nodeRef.id;
-    try {
-      const writeBodyParams = await getWriteBodyParams(originalParent, params.binCtx.ctx);
-      const hasLingeringRef = writeBodyParams.writeChildren?.some((wc) => wc.childId === nodeId);
-      if (writeBodyParams.writeKey && hasLingeringRef) {
-        const baseWriteChildren = writeBodyParams.writeChildren;
-        const trimmedWriteChildren = (writeBodyParams.writeChildren ?? []).filter(
-          (wc) => wc.childId !== nodeId
-        );
-        const { newSequenceNumber, publishedChildren, publishedWriteChildren } =
-          await sdkCore.updateFolderMetadataAndPublish({
-            children: originalParent.children,
-            folderKey: originalParent.folderKey,
-            writeKey: writeBodyParams.writeKey,
-            writeChildren: trimmedWriteChildren,
-            baseWriteChildren,
-            ipnsPrivateKey: originalParent.ipnsKeypair.privateKey,
-            ipnsPublicKey: originalParent.ipnsKeypair.publicKey,
-            ipnsName: originalParent.ipnsName,
-            sequenceNumber: originalParent.sequenceNumber,
-            ctx: params.binCtx.ctx,
-            nodeId: originalParent.nodeId,
-            nodeGeneration: originalParent.nodeGeneration,
-          });
-        if (params.folderTree) {
-          adoptPublishedFolderState(
-            params.folderTree,
-            originalParent,
-            publishedChildren,
-            newSequenceNumber,
-            publishedWriteChildren ?? trimmedWriteChildren
-          );
-        } else {
-          originalParent.children = publishedChildren;
-          originalParent.sequenceNumber = newSequenceNumber;
-        }
-      }
-    } catch (err) {
-      console.warn(
-        `[CipherBox] permanentDeleteFromBin: failed to drop lingering WriteChildRef from ` +
-          `original parent ${originalParent.ipnsName}:`,
-        err
-      );
-    }
+    await dropLingeringWriteChildRef({
+      originalParent: params.originalParent,
+      nodeId: entry.nodeRef.id,
+      binCtx: params.binCtx,
+      folderTree: params.folderTree,
+    });
   }
 
   // Remove from bin metadata and publish
@@ -824,7 +870,35 @@ export async function permanentDeleteFromBin(params: {
 export async function emptyBin(params: {
   binState: BinState;
   binCtx: BinOperationContext;
+  /**
+   * Each entry's original parent FolderState, keyed by
+   * `BinEntry.originalParentIpnsName`, for entries whose original parent was
+   * resolvable upstream (F3 fix: `emptyBin` is a bin-clearing path and must
+   * drop lingering `WriteChildRef`s the same as `permanentDeleteFromBin` —
+   * see {@link dropLingeringWriteChildRef}). Entries with no map entry (parent
+   * unresolvable, or entry predates originalParentIpnsName) are skipped —
+   * fail-open, never blocks CID cleanup + bin clearing.
+   */
+  originalParents?: Map<string, FolderState>;
+  folderTree?: FolderTree;
 }): Promise<{ updatedBinState: BinState }> {
+  // SC#1/SC#3 symmetry (F3): drop each entry's lingering WriteChildRef from
+  // its original parent's write-body before clearing the bin, matching
+  // permanentDeleteFromBin. Best-effort per entry (fail-open).
+  if (params.originalParents) {
+    for (const entry of params.binState.entries) {
+      const originalParent = params.originalParents.get(entry.originalParentIpnsName);
+      if (originalParent && entry.nodeRef?.id) {
+        await dropLingeringWriteChildRef({
+          originalParent,
+          nodeId: entry.nodeRef.id,
+          binCtx: params.binCtx,
+          folderTree: params.folderTree,
+        });
+      }
+    }
+  }
+
   // Best-effort CID cleanup for each entry — content + versions + descendant
   // subtree (shared helper; previously only entry.contentCid was unpinned).
   for (const entry of params.binState.entries) {
@@ -862,6 +936,16 @@ export async function purgeExpiredEntries(params: {
   binState: BinState;
   retentionDays: number;
   binCtx: BinOperationContext;
+  /**
+   * Original parent FolderStates for the EXPIRING entries, keyed by
+   * `BinEntry.originalParentIpnsName` (F3 fix: `purgeExpiredEntries` is a
+   * bin-clearing path and must drop lingering `WriteChildRef`s the same as
+   * `permanentDeleteFromBin` — see {@link dropLingeringWriteChildRef}).
+   * Entries with no map entry are skipped -- fail-open, never blocks CID
+   * cleanup + purge.
+   */
+  originalParents?: Map<string, FolderState>;
+  folderTree?: FolderTree;
 }): Promise<{ purgedCount: number; updatedState: BinState }> {
   const retentionMs = params.retentionDays * 24 * 60 * 60 * 1000;
   const now = Date.now();
@@ -884,6 +968,23 @@ export async function purgeExpiredEntries(params: {
   };
 
   await saveBinMetadata({ metadata, binCtx: params.binCtx });
+
+  // SC#1/SC#3 symmetry (F3): drop each expiring entry's lingering
+  // WriteChildRef from its original parent's write-body, matching
+  // permanentDeleteFromBin. Best-effort per entry (fail-open).
+  if (params.originalParents) {
+    for (const entry of expired) {
+      const originalParent = params.originalParents.get(entry.originalParentIpnsName);
+      if (originalParent && entry.nodeRef?.id) {
+        await dropLingeringWriteChildRef({
+          originalParent,
+          nodeId: entry.nodeRef.id,
+          binCtx: params.binCtx,
+          folderTree: params.folderTree,
+        });
+      }
+    }
+  }
 
   // Best-effort CID cleanup for expired entries (after metadata is saved):
   // content + versions + descendant subtree via the shared helper.
