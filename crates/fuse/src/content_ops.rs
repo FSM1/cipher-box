@@ -281,10 +281,12 @@ pub async fn publish_file_node(
     // to be published, so fall through to the sequence-bumping CAS branch instead
     // (cf. replay.rs::publish_child_node's resolve-first guard, which skips because
     // replay has nothing new to publish — here we do).
-    let do_first_publish = if is_first_publish {
+    // On the `Found` path we keep the resolved sequence so the CAS branch below can
+    // reuse it instead of resolving the same name a second time.
+    let (do_first_publish, resolved_seq) = if is_first_publish {
         match crate::publish::resolve_ipns_for_replay(coordinator, api, file_ipns_name).await {
-            crate::error::IpnsResolveOutcome::NotFound => true,
-            crate::error::IpnsResolveOutcome::Found(_) => false,
+            crate::error::IpnsResolveOutcome::NotFound => (true, None),
+            crate::error::IpnsResolveOutcome::Found(seq) => (false, Some(seq)),
             crate::error::IpnsResolveOutcome::Error(e) => {
                 return Err(format!(
                     "resolve before per-file first-publish for {}: {} \
@@ -294,7 +296,7 @@ pub async fn publish_file_node(
             }
         }
     } else {
-        false
+        (false, None)
     };
 
     if do_first_publish {
@@ -344,6 +346,7 @@ pub async fn publish_file_node(
             api,
             coordinator,
             file_ipns_name,
+            resolved_seq,
             |new_seq_for_record: u64| {
                 let value = format!("/ipfs/{}", node_cid_for_closure);
                 let record = cipherbox_core::ipns::create_ipns_record(
