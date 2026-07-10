@@ -1,0 +1,121 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "1cc578595bc9",
+  "session_id": "2b291057-9ece-4152-bb3e-94cc8f022c70",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-10T22:08:37.186531Z",
+  "branch": "feat/shared-write-navigation-correctness-web",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/hooks/useSharedNavigationActions.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "8fc9eaedc65b",
+  "token_usage": {
+    "input_tokens": 27386,
+    "cache_creation_tokens": 276403,
+    "cache_read_tokens": 6114463,
+    "output_tokens": 59720,
+    "api_call_count": 54
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-ship-phase-2026-07-10T21:51:44.372452Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "7154f28d72f3",
+      "timestamp": "2026-07-10T21:51:44.372452Z",
+      "native": {
+        "command": "/ship-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/ship-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Run the full autonomous post-execute-phase ship loop for CipherBox GSD phase 73 (verify, secure, crypto/privacy review, security review, validate, simplify, SDK E2E gate, CodeRabbit CLI review, ship, resolve PR reviews) without babysitting.",
+    "outcome": "Verification/security/validation gates passed (7/7 verified, 17/17 threats closed, Nyquist compliant); diagnosed and fixed a local TEE-worker port/auth misconfiguration blocking 3 SDK E2E tests, updated a stale test assertion for phase 73's new tombstone-return contract, and fixed a real CodeRabbit-flagged bug in useSharedNavigationActions.ts where refresh-access reseeded stale cached state instead of re-resolving IPNS; SDK E2E reached 106/106 green and the web app typechecked, with commit/ship/PR-review steps still in progress when the transcript ends.",
+    "learnings": {
+      "repo": [
+        "Local dev stack: tee-worker's container port 3001 gets remapped to host :3002 because mock-ipns-routing already claims host :3001, but TeeService defaults TEE_WORKER_URL to http://localhost:3001 — causing silent 404s and an unseeded tee_key_state table at API boot.",
+        "The tee-worker's /public-key endpoint is gated by `Authorization: Bearer $TEE_WORKER_SECRET` (apps/tee-worker/src/middleware/auth.ts); the host-run API must be started with a matching TEE_WORKER_SECRET or the pubkey fetch 401s and tee_key_state stays empty.",
+        "tee_key_state is populated by the API (TeeKeyStateService) fetching the worker's pubkey at startup, not by the worker itself — so an empty table means the API's boot-time fetch failed, not that the worker container is down.",
+        "Phase 73 commit subjects were already conventional (fix(73-08):, test(73-01):) — the filter-branch reword step in the ship-phase runbook was unnecessary; only unrelated chore:/docs: merge-summary descriptions had parens, and those don't drive release-please versioning.",
+        "CodeRabbit CLI review flagged two hallucinated cross-references to nonexistent phases (45-55/79-88) in .planning/ doc metadata — treated as noise/discard."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 5674,
+          "finding": "publishedParent resolve uses raw resolvePublishedNode, bypassing the ROT-07 signature-verification gate applied to sibling reads elsewhere in the same PR — flagged as non-blocking LOW by both the crypto/privacy and security audits."
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigationActions.ts",
+          "finding": "refreshCurrentDepthWriteKey reseeded publishedNode from the cached getSharedFolderState() (the same stale node that just failed) instead of re-resolving via IPNS, so a co-writer whose write failed on stale state could never recover via 'Refresh access'. Fixed by mirroring the existing restoreToBreadcrumbIndex pattern: seed then call getSdkClient().refreshSharedFolder(currentShareId) to re-resolve, wrapped in try/catch-ignored."
+        },
+        {
+          "path": "tests/sdk-e2e/src/suites/ipns-publish-gate.test.ts",
+          "finding": "Test 20 (WRITE-04, tombstone → publish returns 410) asserted the pre-phase-73 throw-on-410 contract via expect(publishError).toBeDefined(); phase 73's createAndPublishIpnsRecord now catches the 410 and returns {success:false, tombstoned:true} instead of throwing. Confirmed no production caller relied on the old throw (the only 410-tombstone consumer, publishNodeFn at client.ts:5177, already handles the tombstoned return correctly), so the test assertion was updated rather than the code."
+        }
+      ],
+      "workflow": [
+        "When a background command's summary reports exit code 0 but a piped/tee'd command masks the real status, re-check the actual exit code directly rather than trusting the notification summary — one SDK E2E run here was actually exit 1 despite the notification saying completed/0.",
+        "Before treating an E2E failure as infra noise, trace it to a specific test and confirm it isn't touching the phase's own changed code path — one of three 'TEE infra' failures turned out to be a real stale-test-contract issue on the phase's SC4 path.",
+        "Diagnosing an infra failure methodically (probe both candidate ports directly, compare responses) found a root cause (port collision + auth secret mismatch) that a superficial 'container is running, must be infra noise' judgment would have missed."
+      ]
+    },
+    "friction": [
+      "SDK E2E gate initially showed 3 failures that looked like generic TEE infra noise, requiring deep diagnosis (container status, DB state, port mapping, auth headers) to separate a genuine local-stack misconfiguration from a real phase regression.",
+      "Background task notification reported the SDK E2E run as completed/exit 0 when the actual exit code was 1, requiring a manual re-check of the tail output.",
+      "The ship-phase runbook's step 7 (conventional-commit reword via git filter-branch) turned out to be unnecessary for this phase since commits were already conventional, but required verification effort to confirm before skipping."
+    ],
+    "open_items": [
+      "publishedParent resolve at client.ts:5674 bypassing the ROT-07 signature-verification gate — flagged LOW by two independent audits, not yet triaged to fix/todo/discard in this transcript excerpt.",
+      "CodeRabbit's MAJOR finding on refreshCurrentDepthWriteKey was fixed in code but the fix commit, remaining ship steps (commit, force-push if needed, PR creation, PR review resolution, learnings extraction) were still pending at transcript end.",
+      "The TEE worker port-collision/auth-secret gotcha was persisted to persistent memory as project-local-tee-worker-port-collision.md for future sessions."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-10T22:08:07.7691Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 16,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 16,
+    "total_lines_changed": 16,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 9,
+      "user_lines_removed": 8,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/phases/73-shared-write-navigation-correctness-web/73-VALIDATION.md": 8
+      },
+      "user_removed_per_file": {
+        ".planning/phases/73-shared-write-navigation-correctness-web/73-VALIDATION.md": 8
+      }
+    }
+  ]
+}
