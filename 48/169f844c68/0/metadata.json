@@ -1,0 +1,120 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "48169f844c68",
+  "session_id": "fb69e209-b983-4a6f-90d8-643f3ca5eb80",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-10T13:32:20.200836Z",
+  "branch": "feat/sdk-write-plane-durability-and-correctness",
+  "checkpoints_count": 2,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "a0cb1be22c1f",
+  "token_usage": {
+    "input_tokens": 74388,
+    "cache_creation_tokens": 1536862,
+    "cache_read_tokens": 42105720,
+    "output_tokens": 276953,
+    "api_call_count": 240
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01CdAjLEmvEpDkX1sPCHvbgh",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "a0cb1be22c1f",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 137,
+        "end": 138,
+        "entry_ids": [
+          "ab7aef83-21cc-4e62-bdc1-f79ede6e723b"
+        ],
+        "tool_use_id": "toolu_01CdAjLEmvEpDkX1sPCHvbgh"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01CdAjLEmvEpDkX1sPCHvbgh"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01XStRJGtrvvvGDGJJxj5HKw",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "a0cb1be22c1f",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 1321,
+        "end": 1322,
+        "entry_ids": [
+          "c86f7686-4263-434f-a560-7fa54a696451"
+        ],
+        "tool_use_id": "toolu_01XStRJGtrvvvGDGJJxj5HKw"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01XStRJGtrvvvGDGJJxj5HKw"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01PqbQBvrRKvsRSzYVvfQTTs",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "a0cb1be22c1f",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 1583,
+        "end": 1584,
+        "entry_ids": [
+          "179572da-02b6-47bf-a79f-46beb5f32b42"
+        ],
+        "tool_use_id": "toolu_01PqbQBvrRKvsRSzYVvfQTTs"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01PqbQBvrRKvsRSzYVvfQTTs"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 22
+  }
+}
