@@ -1,9 +1,9 @@
 ---
 phase: 73
 slug: shared-write-navigation-correctness-web
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: audited
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-07-10
 ---
 
@@ -58,11 +58,11 @@ created: 2026-07-10
 
 ## Wave 0 Requirements
 
-- [ ] New/extended SDK Vitest covering `resolveFileMetadata` / `downloadFromIpns` fail-closed (`signatureVerified:false`) — no existing dedicated file for these two facades (SC3).
-- [ ] New SDK-core Vitest for `createAndPublishIpnsRecord` 410 → `{tombstoned:true}` mapping in `packages/sdk-core/src/ipns/index.ts` (SC4) — mirror the existing `resolveIpnsRecord` 404-detection idiom (`packages/sdk-core/src/__tests__/ipns.test.ts`); mock `{ response: { status: 410 } }`.
-- [ ] New `writable-shares.spec.ts` case: descend 2 levels, navigate up 1, write from restored depth (SC1).
-- [ ] New/extended `shared-folder-desync.spec.ts` case: mutate from a second client while navigated deeper, then navigate up, assert fresh children (SC2).
-- [ ] Rewritten `rotation-ux.spec.ts` D-01/WRITE-03 case: real classifier-driven flow instead of direct toast injection (SC4).
+- [x] New/extended SDK Vitest covering `resolveFileMetadata` / `downloadFromIpns` fail-closed (`signatureVerified:false`) — `packages/sdk/src/__tests__/file-metadata-facade.test.ts` (2 fail-closed cases asserting `rejects.toThrow(/unverified record/)` with `signatureVerified:false`, plus `resolveNodeIdentity` covered in `resolve-node-identity.test.ts`). Green (SC3).
+- [x] New SDK-core Vitest for `createAndPublishIpnsRecord` 410 → `{tombstoned:true}` mapping — `packages/sdk-core/src/__tests__/ipns.test.ts` (`SC4(a)` maps 410→`{success:false, tombstoned:true}`, plus regression guard that a 500 rethrows unchanged). Green (SC4).
+- [x] New `writable-shares.spec.ts` case: descend 2 levels, navigate up 1, write from restored depth — test `8.4b` (uploads from restored depth-1, asserts file visible + zero `[role="alert"]` toasts) (SC1).
+- [x] Extended `shared-folder-desync.spec.ts` case: mutate from owner while grantee navigated deeper, then navigate up, assert fresh children — test "Grantee sees fresh children…" (owner adds file at left depth, grantee navigates up, asserts owner file visible) (SC2).
+- [x] Rewritten `rotation-ux.spec.ts` D-01/WRITE-03 case: real classifier-driven flow via real `POST /ipns/tombstone` → publish 410 → classifier → two-stage toast contract, no direct toast injection (SC4).
 
 ---
 
@@ -78,11 +78,11 @@ created: 2026-07-10
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or a Wave 0 dependency
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references (SC3 facade test, SC4 sdk-core 410 test, 3 e2e cases)
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 30s (SDK loop)
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or a Wave 0 dependency (all 9 plans carry automated verify refs)
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references (SC3 facade test, SC4 sdk-core 410 test, 3 e2e cases) — all present and behavior-verified
+- [x] No watch-mode flags
+- [x] Feedback latency < 30s (SDK loop) — sdk 6.2s, sdk-core 1.5s
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** COMPLIANT — audited 2026-07-10. All 5 Wave 0 items exist and genuinely exercise the target behavior (test bodies read, not just filenames). SDK Vitest (`file-metadata-facade`, `resolve-node-identity`) and sdk-core Vitest (`ipns` 410→tombstoned) run green locally. The 3 web-e2e cases (SC1 `8.4b`, SC2 desync deeper-mutate, SC4 rotation classifier-driven) are behaviorally correct and assert real outcomes; they are main-push gated in CI and run locally per the Manual-Only table. 0 gaps.
