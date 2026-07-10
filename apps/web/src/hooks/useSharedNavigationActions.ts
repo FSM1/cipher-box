@@ -861,6 +861,22 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
       ownerPublicKey: parsePublicKey(shareEntry.share.sharerPublicKey),
       recipientPublicKey: vaultKeypair.publicKey,
     });
+
+    // WRITE-03/SC4: mirror restoreToBreadcrumbIndex -- after reseeding, re-check
+    // IPNS so a co-writer whose write failed on a STALE (not revoked)
+    // publishedNode actually recovers on retry, instead of reusing the same
+    // stale envelope the seed above carried from cached SDK state. Purely
+    // additive: refreshSharedFolder's monotonicity guard makes it a no-op when
+    // IPNS is not fresher, and when it is, it emits `sharedFolder:updated` (the
+    // already-wired projection applies it) carrying the freshly-resolved
+    // publishedParent. A refresh failure (e.g. a genuinely tombstoned/revoked
+    // name that resolves 410) must NOT block the retry from proceeding to the
+    // terminal "write access revoked" escalation -- caught, logged, ignored.
+    try {
+      await getSdkClient().refreshSharedFolder(currentShareId);
+    } catch (err) {
+      logger.error('[SharedNav] Failed to refresh shared folder during write-access refresh:', err);
+    }
   }, [
     p.currentShareId,
     p.ipnsName,
