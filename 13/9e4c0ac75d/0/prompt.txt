@@ -1,0 +1,20 @@
+<task-notification>
+<task-id>a0ab128ad2e7590aa</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/4d78f8a5-6112-418c-85c3-c6241359b1fb/tasks/a0ab128ad2e7590aa.output</output-file>
+<status>completed</status>
+<summary>Agent "Extract phase 73 learnings" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Wrote `/Users/myankelev/Code/random/cipher-box/.planning/phases/73-shared-write-navigation-correctness-web/73-LEARNINGS.md`, mirroring 72-LEARNINGS.md's frontmatter and structure (6/6/6/6 counts, `missing_artifacts: UAT.md`, prettier-clean markdown). Sections used: `## Decisions`, `## Lessons`, `## Patterns`, `## Surprises`. All five flagged items are captured and cross-checked against artifacts/commits (throw→return WRITE-04 Test 20 sweep in `7ecec1422`; refreshCurrentDepthWriteKey IPNS re-resolve in `7e0026862`; single-owner writeKey buffer discipline from 73-07; `resolveNodeIdentity(SealedChildRef)` gate from 73-04; TEE `tee_key_state` port-collision framed honestly as an env gotcha tied to the sdk-e2e run). Not committed.</result>
+<usage><subagent_tokens>132058</subagent_tokens><tool_uses>21</tool_uses><duration_ms>184170</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b6gigebkr</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/4d78f8a5-6112-418c-85c3-c6241359b1fb/tasks/b6gigebkr.output</output-file>
+<status>completed</status>
+<summary>Background command "Background poll for CI settle + CodeRabbit review" completed (exit code 0)</summary>
+</task-notification>
