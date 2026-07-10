@@ -4769,10 +4769,35 @@ export class CipherBoxClient {
       // Capture entry before deletion for IPNS unenrollment
       const entry = this.binState.entries.find((e) => e.id === entryId);
 
+      // SC#1 symmetry (72-05, Open Question 1): addToBin RETAINS the removed
+      // child's WriteChildRef in the original parent's write-body so a later
+      // restoreFromBin can re-home it; permanent removal is the symmetric
+      // release point that drops it. Self-bootstrap the original parent
+      // (reusing restoreFromBin's requireFolder plumbing) and fail OPEN on a
+      // resolve miss — a permanent-delete must never be blocked by an
+      // unresolvable original parent.
+      let originalParent: FolderState | undefined;
+      if (entry?.originalParentIpnsName) {
+        try {
+          originalParent = await this.requireFolder(
+            entry.originalParentIpnsName,
+            'Original parent folder'
+          );
+        } catch (err) {
+          console.warn(
+            `[CipherBox] permanentDelete: original parent ${entry.originalParentIpnsName} could ` +
+              'not be resolved — the lingering WriteChildRef will not be dropped:',
+            err
+          );
+        }
+      }
+
       const { updatedBinState } = await binOps.permanentDeleteFromBin({
         entryId,
         binState: this.binState,
         binCtx: this.getBinContext(),
+        originalParent,
+        folderTree: this.folderTree,
       });
 
       this.binState = updatedBinState;
