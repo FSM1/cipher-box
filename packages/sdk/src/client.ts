@@ -4856,6 +4856,36 @@ export class CipherBoxClient {
   }
 
   /**
+   * Resolve the distinct `originalParentIpnsName`s referenced by `entries` to
+   * their `FolderState`, for the SC#1 lingering-WriteChildRef cleanup shared
+   * by every bin-clearing path (`permanentDelete`/`emptyBin`/`purgeExpired`,
+   * F3 fix). Fail-open per entry (mirrors `permanentDelete`'s posture,
+   * Pitfall 2): a resolve miss is logged and simply omitted from the
+   * returned map, so `dropLingeringWriteChildRef` skips it rather than
+   * blocking the caller's CID cleanup + bin clearing.
+   */
+  private async resolveOriginalParents(entries: BinEntry[]): Promise<Map<string, FolderState>> {
+    const ipnsNames = new Set(
+      entries.map((e) => e.originalParentIpnsName).filter((name): name is string => !!name)
+    );
+    const resolved = new Map<string, FolderState>();
+    await Promise.all(
+      Array.from(ipnsNames).map(async (ipnsName) => {
+        try {
+          resolved.set(ipnsName, await this.requireFolder(ipnsName, 'Original parent folder'));
+        } catch (err) {
+          console.warn(
+            `[CipherBox] resolveOriginalParents: original parent ${ipnsName} could not be ` +
+              'resolved — the lingering WriteChildRef will not be dropped:',
+            err
+          );
+        }
+      })
+    );
+    return resolved;
+  }
+
+  /**
    * Permanently delete all bin entries.
    */
   async emptyBin(): Promise<void> {
@@ -4864,10 +4894,13 @@ export class CipherBoxClient {
 
       // Capture entries before emptying so async collection can proceed after the bin is cleared
       const entriesToUnenroll = [...this.binState.entries];
+      const originalParents = await this.resolveOriginalParents(this.binState.entries);
 
       const { updatedBinState } = await binOps.emptyBin({
         binState: this.binState,
         binCtx: this.getBinContext(),
+        originalParents,
+        folderTree: this.folderTree,
       });
 
       this.binState = updatedBinState;
@@ -4895,10 +4928,13 @@ export class CipherBoxClient {
       if (!this.binState) throw new BinNotLoadedError();
 
       const previousEntries = this.binState.entries;
+      const originalParents = await this.resolveOriginalParents(previousEntries);
       const { purgedCount, updatedState } = await binOps.purgeExpiredEntries({
         binState: this.binState,
         retentionDays: normalizedDays,
         binCtx: this.getBinContext(),
+        originalParents,
+        folderTree: this.folderTree,
       });
 
       if (purgedCount > 0) {
@@ -5647,9 +5683,9 @@ export class CipherBoxClient {
    * Pitfall 1).
    *
    * Key zeroing (T-49-04/T-68.1-08-02): all locally-derived `destFolderKey` /
-   * `destWriteKey` / `destIpnsPrivateKey` and the derived `childReadKey` are
-   * zeroed in `finally`. `vaultPrivateKey` is caller-owned and never zeroed
-   * here (D-09).
+   * `destWriteKey` / `destIpnsPrivateKey` / `srcParentIpnsPrivateKey` and the
+   * derived `childReadKey` are zeroed in `finally`. `vaultPrivateKey` is
+   * caller-owned and never zeroed here (D-09).
    */
   async moveInSharedFolder(
     shareId: string,
@@ -5673,6 +5709,7 @@ export class CipherBoxClient {
       let destFolderKey: Uint8Array | null = null;
       let destWriteKey: Uint8Array | null = null;
       let destIpnsPrivateKey: Uint8Array | null = null;
+      let srcParentIpnsPrivateKey: Uint8Array | null = null;
       let destPublished: PublishedNode;
       let destSequenceNumber: bigint;
       let destChildren: SealedChildRef[];
@@ -5694,6 +5731,14 @@ export class CipherBoxClient {
               'writeKey today, see useSharedNavigationActions.ts navigateToShare)'
           );
         }
+        // D-09: this unseal just materialized the SOURCE folder's own
+        // transient IPNS private key purely as a byproduct of decoding
+        // writeChildren -- only writeChildren is read below (the actual
+        // republish signing key is independently re-unsealed by
+        // shareOps.moveInSharedFolder from srcCtx). This function is the
+        // terminal owner of THIS copy, so track it for zeroing in the
+        // outer finally alongside destIpnsPrivateKey/destWriteKey/destFolderKey.
+        srcParentIpnsPrivateKey = srcParentNode.writeBody.ipnsPrivateKey;
 
         const destPub = await this.resolvePublishedNode(args.destIpnsName);
         if (!destPub) {
@@ -5821,6 +5866,10 @@ export class CipherBoxClient {
         destWriteKey = null;
         destFolderKey?.fill(0);
         destFolderKey = null;
+        // Zero the SOURCE folder's transiently-unsealed IPNS private key
+        // (see comment at extraction site above; terminal owner here).
+        srcParentIpnsPrivateKey?.fill(0);
+        srcParentIpnsPrivateKey = null;
       }
     });
   }
