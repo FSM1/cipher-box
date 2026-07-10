@@ -99,6 +99,99 @@ function hasRealWriteKey(wk: Uint8Array | null | undefined): boolean {
   return !!wk && wk.length === 32 && !wk.every((b) => b === 0);
 }
 
+/**
+ * Fail-open/fail-closed mode for {@link walkChildWriteKey}'s missing
+ * `WriteChildRef` lookup (72-08 SC#6, RESEARCH.md "Write-Chain Hop Walk"
+ * table — string-literal union per project convention, never a TS enum):
+ *
+ * - `'require'` — missing ref throws (write-capability is mandatory for the
+ *   caller's operation: {@link resolveFileWriteChainKeys},
+ *   {@link resolveShareEncryptedWriteKey}, `moveInSharedFolder`'s reachable
+ *   destination branch).
+ * - `'skip'` — missing ref returns `null` (caller treats the child as
+ *   "not write-capable, continue/skip" — the dominant case:
+ *   `dfsFindFolder`, `moveItem`'s re-homing branch,
+ *   `enumerateSharedSubtree`'s writable-flag probe).
+ * - `'nullable'` — missing ref returns `null` (`resolveSharedSubfolderWriteKey`
+ *   only — a cold-navigation "is this depth even writable" probe, not a
+ *   mutation).
+ */
+type WriteChainWalkMode = 'require' | 'skip' | 'nullable';
+
+/**
+ * Walks one hop of the write chain: looks up `childId`'s `WriteChildRef`
+ * within `writeChildren` (matched by node UUID, never ipnsName — NODE-03)
+ * and unseals its writeKey under `parentWriteKey`.
+ *
+ * `mode` controls ONLY the missing-`WriteChildRef` behavior — see
+ * {@link WriteChainWalkMode}. A cryptographic (AEAD) unseal failure — a
+ * tampered `writeKeySealed` or a wrong `parentWriteKey` — is NEVER swallowed
+ * by ANY mode: it always propagates uncaught. This matches every one of the
+ * 8 original inline call sites verbatim (none of them ever caught
+ * `unsealChildWriteKey`'s own throw); it is also independently confirmed by
+ * `resolve-shared-subfolder-write-key.test.ts`'s "throws on a tampered
+ * writeKeySealed (fail-closed AEAD, not swallowed)" case for the one site
+ * (`resolveSharedSubfolderWriteKey`) RESEARCH.md's hop-walk table loosely
+ * summarizes as "validation returns null" — that description refers to a
+ * SEPARATE, deliberately out-of-scope downstream `unsealNode`/`!writeBody`
+ * structural check the call site keeps for itself (this task's "preserve
+ * the validate-before-trust step where the original site had it"
+ * instruction), not to this primitive's own unseal step.
+ *
+ * D-09: the unsealed key is nulled locally before a successful return
+ * (ownership transfers to the caller, who becomes its terminal owner) and
+ * zeroed in `finally` only on the failure/throw path — mirrors every
+ * existing site's `try { ...; return result; } finally { local?.fill(0); }`
+ * idiom (PATTERNS.md "D-09 zeroize idiom"). `parentWriteKey` is borrowed
+ * (tree/caller-owned) and is never zeroed here.
+ *
+ * @param missingRefError - optional custom `Error` factory for `'require'`
+ *   mode, so callers keep their existing exact error message text.
+ */
+async function walkChildWriteKey(params: {
+  writeChildren: WriteChildRef[] | undefined;
+  childId: string;
+  parentWriteKey: Uint8Array;
+  childKind: NodeKind;
+  childGeneration: number;
+  mode: WriteChainWalkMode;
+  missingRefError?: () => Error;
+}): Promise<Uint8Array | null> {
+  const {
+    writeChildren,
+    childId,
+    parentWriteKey,
+    childKind,
+    childGeneration,
+    mode,
+    missingRefError,
+  } = params;
+
+  const writeChildRef = writeChildren?.find((wc) => wc.childId === childId);
+  if (!writeChildRef) {
+    if (mode === 'require') {
+      throw missingRefError ? missingRefError() : new Error(`No WriteChildRef for ${childId}`);
+    }
+    return null;
+  }
+
+  let local: Uint8Array | null = null;
+  try {
+    local = await unsealChildWriteKey(
+      writeChildRef.writeKeySealed,
+      parentWriteKey,
+      childId,
+      childKind,
+      childGeneration
+    );
+    const result = local;
+    local = null; // ownership transfer -- do not zero in finally
+    return result;
+  } finally {
+    local?.fill(0);
+  }
+}
+
 /** Maximum concurrent encrypt+pin operations for batch uploads. */
 const UPLOAD_CONCURRENCY = 3;
 
@@ -1517,21 +1610,19 @@ export class CipherBoxClient {
           continue;
         }
 
-        const writeChildRef = parentNode.writeBody?.writeChildren.find(
-          (wc) => wc.childId === childResolved.published.id
-        );
-        if (!writeChildRef) {
+        childWriteKey = await walkChildWriteKey({
+          writeChildren: parentNode.writeBody?.writeChildren,
+          childId: childResolved.published.id,
+          parentWriteKey: parentState.writeKey,
+          childKind: childResolved.published.kind,
+          childGeneration: childRef.generation,
+          mode: 'skip',
+        });
+        if (!childWriteKey) {
           // No write link recorded for this child (e.g. pre-D-03 folder never
           // republished with a write-body) — not self-writable, skip.
           continue;
         }
-        childWriteKey = await unsealChildWriteKey(
-          writeChildRef.writeKeySealed,
-          parentState.writeKey,
-          childResolved.published.id,
-          childResolved.published.kind,
-          childRef.generation
-        );
 
         // T-68.1-01-03: unsealNode validates the recovered writeKey (throws on
         // wrong key) BEFORE the recovered ipnsPrivateKey is ever trusted —
@@ -2793,22 +2884,20 @@ export class CipherBoxClient {
         // above for the read-plane re-seal) — NEVER the ipnsName-based
         // `childId` param moveItem receives. The write-capability gate at
         // resolveFileWriteChainKeys matches on this exact UUID.
-        const movedWriteRef = sourceWriteBodyParams.writeChildren?.find(
-          (wc) => wc.childId === childPub.id
-        );
-        if (movedWriteRef) {
-          let movedWriteKey: Uint8Array | null = null;
+        //
+        // Generation is destEntry.generation — the SealedChildRef
+        // parent-mirror generation, unchanged by the move (same value
+        // the read-plane re-seal above uses).
+        const movedWriteKey = await walkChildWriteKey({
+          writeChildren: sourceWriteBodyParams.writeChildren,
+          childId: childPub.id,
+          parentWriteKey: sourceWriteBodyParams.writeKey,
+          childKind: childPub.kind,
+          childGeneration: destEntry.generation,
+          mode: 'skip',
+        });
+        if (movedWriteKey) {
           try {
-            // Generation is destEntry.generation — the SealedChildRef
-            // parent-mirror generation, unchanged by the move (same value
-            // the read-plane re-seal above uses).
-            movedWriteKey = await unsealChildWriteKey(
-              movedWriteRef.writeKeySealed,
-              sourceWriteBodyParams.writeKey,
-              childPub.id,
-              childPub.kind,
-              destEntry.generation
-            );
             const writeKeySealed = await sealChildWriteKey(
               movedWriteKey,
               destWriteBodyParams.writeKey,
@@ -3652,13 +3741,20 @@ export class CipherBoxClient {
         throw new Error(`File ${fileId} is not write-capable (no WriteChildRef)`);
       }
 
-      fileWriteKey = await unsealChildWriteKey(
-        writeChildRef.writeKeySealed,
-        writeBodyParams.writeKey,
-        fileNodeId,
-        fileKind,
-        childRef.generation
-      );
+      fileWriteKey = await walkChildWriteKey({
+        writeChildren: writeBodyParams.writeChildren,
+        childId: fileNodeId,
+        parentWriteKey: writeBodyParams.writeKey,
+        childKind: fileKind,
+        childGeneration: childRef.generation,
+        mode: 'require',
+        missingRefError: () => new Error(`File ${fileId} is not write-capable (no WriteChildRef)`),
+      });
+      if (!fileWriteKey) {
+        // mode 'require' never actually returns null (throws instead) --
+        // this guard exists only to narrow the type for TS.
+        throw new Error(`File ${fileId} is not write-capable (no WriteChildRef)`);
+      }
 
       const currentFileNode = await unsealNode(filePub.published, fileReadKey, fileWriteKey);
       if (
@@ -3803,22 +3899,27 @@ export class CipherBoxClient {
       const itemNodeId = itemPub.published.id;
       const itemKind = itemPub.published.kind;
 
-      const writeChildRef = writeBodyParams.writeChildren?.find((wc) => wc.childId === itemNodeId);
-      if (!writeChildRef) {
+      // Derived item writeKey — this call is its terminal owner (D-09), zeroed
+      // in `finally` regardless of the wrapKey outcome.
+      let itemWriteKey: Uint8Array | null = await walkChildWriteKey({
+        writeChildren: writeBodyParams.writeChildren,
+        childId: itemNodeId,
+        parentWriteKey,
+        childKind: itemKind,
+        childGeneration: childRef.generation,
+        mode: 'require',
+        missingRefError: () =>
+          new Error(
+            `resolveShareEncryptedWriteKey: item ${itemIpnsName} has no WriteChildRef in the parent write-body — cannot mint a write grant for an item with no write-chain entry`
+          ),
+      });
+      if (!itemWriteKey) {
+        // mode 'require' never actually returns null (throws instead) --
+        // this guard exists only to narrow the type for TS.
         throw new Error(
           `resolveShareEncryptedWriteKey: item ${itemIpnsName} has no WriteChildRef in the parent write-body — cannot mint a write grant for an item with no write-chain entry`
         );
       }
-
-      // Derived item writeKey — this call is its terminal owner (D-09), zeroed
-      // in `finally` regardless of the wrapKey outcome.
-      let itemWriteKey: Uint8Array | null = await unsealChildWriteKey(
-        writeChildRef.writeKeySealed,
-        parentWriteKey,
-        itemNodeId,
-        itemKind,
-        childRef.generation
-      );
 
       try {
         const wrapped = await wrapKey(itemWriteKey, recipientPublicKey);
@@ -5340,6 +5441,18 @@ export class CipherBoxClient {
         // file's own write-body, its ipnsPrivateKey (shared-write.ts walkChildWriteKey
         // + unsealParentWriteBody pattern, inlined here since both helpers are
         // module-private to shared-write.ts).
+        //
+        // 72-08 SC#6 documented exception: this site is intentionally NOT
+        // re-pointed at the module-level walkChildWriteKey primitive above.
+        // Its fallback-to-legacy-key-lookup shape (missing-ref falls through
+        // to `args.getFileIpnsKeyFn` below, only throwing if THAT also
+        // misses) fits none of the primitive's 3 modes cleanly (RESEARCH.md
+        // "Write-Chain Hop Walk" table, site 5). Confirmed LIVE, not dead:
+        // `apps/web/src/hooks/useSharedWriteOps.ts` wires a real
+        // `getFileIpnsKeyFn` (`resolveFileIpnsKey`) that fetches+unwraps a
+        // `file-ipns` `share_keys` entry via `fetchShareKeys` — so folding
+        // this into a mode would silently drop the fallback lookup live
+        // callers still depend on.
         const writeChildRef = parentNode.writeBody.writeChildren.find(
           (wc) => wc.childId === fileNodeId
         );
@@ -5727,13 +5840,22 @@ export class CipherBoxClient {
           destKind,
           destReadRef.generation
         );
-        destWriteKey = await unsealChildWriteKey(
-          destWriteChildRef.writeKeySealed,
-          srcState.writeKey,
-          destNodeId,
-          destKind,
-          destReadRef.generation
-        );
+        destWriteKey = await walkChildWriteKey({
+          writeChildren: srcParentNode.writeBody.writeChildren,
+          childId: destNodeId,
+          parentWriteKey: srcState.writeKey,
+          childKind: destKind,
+          childGeneration: destReadRef.generation,
+          mode: 'require',
+        });
+        if (!destWriteKey) {
+          // mode 'require' never actually returns null (throws instead) --
+          // this guard exists only to narrow the type for TS. destWriteChildRef
+          // is already known present (checked above), so this never fires.
+          throw new Error(
+            `moveInSharedFolder: destination ${args.destIpnsName} write-chain resolve returned no key`
+          );
+        }
 
         const destNode = await unsealNode(destPub.published, destFolderKey, destWriteKey);
         destIpnsPrivateKey = destNode.writeBody?.ipnsPrivateKey ?? null;
@@ -5909,20 +6031,17 @@ export class CipherBoxClient {
               continue;
             }
 
-            const writeChildRef = parentWriteChildren.find(
-              (wc) => wc.childId === childResolved.published.id
-            );
-
             let writable = false;
-            if (writeChildRef && parentWriteKey) {
-              childWriteKey = await unsealChildWriteKey(
-                writeChildRef.writeKeySealed,
+            if (parentWriteKey) {
+              childWriteKey = await walkChildWriteKey({
+                writeChildren: parentWriteChildren,
+                childId: childResolved.published.id,
                 parentWriteKey,
-                childResolved.published.id,
-                childResolved.published.kind,
-                child.generation
-              );
-              writable = true;
+                childKind: childResolved.published.kind,
+                childGeneration: child.generation,
+                mode: 'skip',
+              });
+              writable = childWriteKey !== null;
             }
 
             result.push({
@@ -6020,21 +6139,17 @@ export class CipherBoxClient {
       const parentNode = await unsealNode(parent.publishedNode, parent.folderKey, parent.writeKey);
       if (!parentNode.writeBody) return null;
 
-      const writeChildRef = parentNode.writeBody.writeChildren.find(
-        (wc) => wc.childId === child.published.id
-      );
-      if (!writeChildRef) return null;
+      const childWriteKey = await walkChildWriteKey({
+        writeChildren: parentNode.writeBody.writeChildren,
+        childId: child.published.id,
+        parentWriteKey: parent.writeKey,
+        childKind: child.published.kind,
+        childGeneration: child.generation,
+        mode: 'nullable',
+      });
+      if (!childWriteKey) return null;
 
-      let childWriteKey: Uint8Array | null = null;
       try {
-        childWriteKey = await unsealChildWriteKey(
-          writeChildRef.writeKeySealed,
-          parent.writeKey,
-          child.published.id,
-          child.published.kind,
-          child.generation
-        );
-
         // T-68.1-30-02: validate before trust (fail-closed, NOT caught) —
         // mirrors dfsFindFolder's T-68.1-01-03 guarantee.
         const childNode = await unsealNode(child.published, child.readKey, childWriteKey);
@@ -6042,7 +6157,7 @@ export class CipherBoxClient {
 
         return new Uint8Array(childWriteKey);
       } finally {
-        childWriteKey?.fill(0);
+        childWriteKey.fill(0);
       }
     });
   }
