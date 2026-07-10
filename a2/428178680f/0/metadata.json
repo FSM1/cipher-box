@@ -1,0 +1,261 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "a2428178680f",
+  "session_id": "fb69e209-b983-4a6f-90d8-643f3ca5eb80",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-10T17:46:32.774674Z",
+  "branch": "feat/sdk-write-plane-durability-and-correctness",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    ".planning/phases/72-sdk-write-plane-durability-and-correctness/72-LEARNINGS.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "d3b91e16ee0d",
+  "token_usage": {
+    "input_tokens": 101299,
+    "cache_creation_tokens": 2482144,
+    "cache_read_tokens": 95000788,
+    "output_tokens": 480764,
+    "api_call_count": 382
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01CdAjLEmvEpDkX1sPCHvbgh",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d3b91e16ee0d",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 137,
+        "end": 138,
+        "entry_ids": [
+          "ab7aef83-21cc-4e62-bdc1-f79ede6e723b"
+        ],
+        "tool_use_id": "toolu_01CdAjLEmvEpDkX1sPCHvbgh"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01CdAjLEmvEpDkX1sPCHvbgh"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01XStRJGtrvvvGDGJJxj5HKw",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d3b91e16ee0d",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 1321,
+        "end": 1322,
+        "entry_ids": [
+          "c86f7686-4263-434f-a560-7fa54a696451"
+        ],
+        "tool_use_id": "toolu_01XStRJGtrvvvGDGJJxj5HKw"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01XStRJGtrvvvGDGJJxj5HKw"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-plan-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01PqbQBvrRKvsRSzYVvfQTTs",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-execute-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d3b91e16ee0d",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 1583,
+        "end": 1584,
+        "entry_ids": [
+          "179572da-02b6-47bf-a79f-46beb5f32b42"
+        ],
+        "tool_use_id": "toolu_01PqbQBvrRKvsRSzYVvfQTTs"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01PqbQBvrRKvsRSzYVvfQTTs"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-execute-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_019nGZrHvduXXCpepDTpmSs4",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d3b91e16ee0d",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 2243,
+        "end": 2244,
+        "entry_ids": [
+          "1dcbc06a-f3f7-4430-bc2d-e533ae2116af"
+        ],
+        "tool_use_id": "toolu_019nGZrHvduXXCpepDTpmSs4"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_019nGZrHvduXXCpepDTpmSs4"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ship-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01LeKyh7TRFmZiEWP195tDgu",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-extract-learnings"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d3b91e16ee0d",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 2653,
+        "end": 2654,
+        "entry_ids": [
+          "fccac50a-1db2-4e50-b41f-3e36f57263f7"
+        ],
+        "tool_use_id": "toolu_01LeKyh7TRFmZiEWP195tDgu"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01LeKyh7TRFmZiEWP195tDgu"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-extract-learnings",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 34
+  },
+  "summary": {
+    "intent": "Complete the full lifecycle of Phase 72 (SDK Write-Plane Durability and Correctness) for the CipherBox monorepo — audit stale todos, plan, execute, and ship the phase — while also firefighting concurrent CI regressions and web-e2e flakiness that surfaced mid-session.",
+    "outcome": "Phase 72 shipped as PR #602 with all 10 plans, 6 success criteria, a HIGH-severity moveItem write-chain resurrection fix, a CAS-merge remote-deletion bug fix, a DoS cycle-guard fix, a new CI test-typecheck gate, and 3 flaky web-e2e tests fixed; two prior CI regressions (PR #600, #601) were also diagnosed and merged; all CodeRabbit/security findings resolved and PR review threads closed, with merge left to the user.",
+    "learnings": {
+      "repo": [
+        "`gh workflow run <file> -f ref=<branch>` returns 422 on this repo — use `gh workflow run <file> --ref <branch>` instead (main's workflow definition predates the ref input).",
+        "`ci-e2e.yml` (web-e2e + desktop-e2e) only triggers on push-to-main or workflow_dispatch, never on pull_request — PR authors must manually dispatch it against their branch to get pre-merge e2e signal.",
+        "vitest ignores `.env` files — sdk-e2e tests read `process.env.SDK_E2E_SECRET` directly with a fallback default, so it must be explicitly exported before running the suite locally, matching the API's `TEST_LOGIN_SECRET`.",
+        "`tests/web-e2e` `ciFloor()` helper only raises wait timeouts to a 60s floor under `process.env.CI` — local runs use the raw (often much shorter) caller timeout, causing local-only flakes on IPNS-gated waits that pass reliably in CI.",
+        "Root `pnpm typecheck` only ran each package's `tsconfig.build.json` (which excludes test files) plus `tsconfig.scripts.json` — test files were never typechecked in CI, allowing ~113 TS errors (vitest v2→v3 Mock migration + Phase-62 retired-type drift) to accumulate silently.",
+        "`packages/sdk` resolves `@cipherbox/*` cross-package imports via workspace symlinks to built `dist/`, not path aliases or TS project references — so a test-inclusive typecheck gate must run build-first, per-package in dependency order (crypto→core→api-client→sdk-core→sdk).",
+        "GSD executor commits use non-conventional `feat 51-03:`/`refactor sdk:` style that fails the `pr-release-preview` CI gate; must reword via `git filter-branch --msg-filter` before opening a PR (interactive rebase unavailable in this environment).",
+        "`github-actions[bot]` pushes a `chore(release)` commit after `gh pr create` and after a passing Release Preview — always fetch+rebase before the next push or it's rejected.",
+        "`gh pr edit` fails on this repo due to Projects-classic GraphQL — patch PR bodies via `gh api -X PATCH repos/FSM1/cipher-box/pulls/<N> -F body=@file` instead.",
+        "`walkChildWriteKey`'s 'nullable' mode does not swallow AEAD unseal failures — they always propagate; only the missing-WriteChildRef case returns null, a subtlety that diverged from the literal RESEARCH.md wording."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/folder/registration.ts",
+          "line": 332,
+          "end_line": 367,
+          "finding": "Base-aware CAS-merge for writeChildren originally only guarded against resurrecting entries deleted locally (protected against stale remote overwrite) but failed to honor concurrent remote deletions — an entry present in base+local but removed by a racing remote writer got silently resurrected. Rewritten as a symmetric 3-way prune: base-absent entries always kept (concurrent adds), base-present entries kept only if present on both local and remote."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 2916,
+          "end_line": 2937,
+          "finding": "moveItem dropped the moved child's WriteChildRef from the source folder but never threaded baseWriteChildren into updateFolderMetadataAndPublish (unlike deleteItem and restoreFromBin which were fixed in this phase) — allowing a concurrent stale republish of the source folder to resurrect write capability for an item that had been moved out, an authorization-boundary leak. Fixed by capturing sourceBaseWriteChildren before the drop filter and threading it through."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 459,
+          "end_line": 494,
+          "finding": "collectDescendantIpnsNames had no cycle guard (unlike its sibling dfsFindFolder which threads a visited Set) — a cyclic or malicious folder graph would cause unbounded recursion (DoS-class stack overflow/hang). Fixed by threading a visited: Set<string> marked synchronously before any await, shared by reference across recursive calls."
+        },
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "line": 609,
+          "end_line": 667,
+          "finding": "restoreFromBin's re-homing wrapped AEAD unseal/reseal failures inside the same fail-open catch meant only for IPNS resolve misses, silently downgrading a tampered/wrong-key write-body into a read-only restore instead of failing closed; also the source-side cleanup publish was unguarded, so a transient failure there could abort an already-durably-committed restore. Both fixed: AEAD block now has no enclosing catch (propagates), source cleanup publish wrapped in try/catch as best-effort."
+        }
+      ],
+      "workflow": [
+        "When a security-reviewer and CodeRabbit CLI disagree or one 'confirms sound' logic the other flags, adversarially re-verify by hand-tracing all input combinations rather than trusting either verdict outright — this caught a real remote-deletion resurrection bug the security review had marked as sound.",
+        "For long-running background verification loops (e2e reproduction), don't repeatedly local-run under cold/loaded conditions expecting consistency — when local timeouts keep chasing a moving target (different test flaking each run), switch to running under the actual CI timeout regime (e.g. CI=1 env var) to get a representative pass/fail rather than whack-a-mole fixing individual timeouts.",
+        "Deferring non-blocking findings (style suggestions, pre-existing gaps not corroborated by multiple reviewers) as todos with file refs rather than fixing everything in scope keeps a ship cycle from stalling on low-value work — but must be captured durably (todo files), not just mentioned in chat.",
+        "Capturing a discovered-but-deferred task (e.g. the vitest v3 Mock drift + CI typecheck gap) as a pending todo file immediately, before continuing other work, prevents it from being lost across context compaction.",
+        "Running post-fix live e2e suites (not just unit tests) after high-blast-radius refactors (CAS-merge rewrite, bin-clearing helper extraction) is necessary because unit mocks can pass while real IPNS round-trip behavior regresses."
+      ]
+    },
+    "friction": null,
+    "open_items": null
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-10T17:45:49.925654Z",
+    "agent_lines": 215,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 215,
+    "total_lines_changed": 215,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
