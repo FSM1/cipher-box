@@ -336,12 +336,18 @@ describe('Write-chain rotation suite (D-04 phase gate)', () => {
     const newRootKeypair = rootResult.value;
     keypairSpy.mockRestore();
 
-    const newChildIpnsName = await deriveIpnsName(newChildKeypair.publicKey);
-    const newRootIpnsName = await deriveIpnsName(newRootKeypair.publicKey);
-    // Zero the captured seeds immediately after derivation — they are Ed25519 private key
-    // material and must not linger past this point (D-09 terminal ownership).
-    newChildKeypair.privateKey.fill(0);
-    newRootKeypair.privateKey.fill(0);
+    let newChildIpnsName: string;
+    let newRootIpnsName: string;
+    try {
+      newChildIpnsName = await deriveIpnsName(newChildKeypair.publicKey);
+      newRootIpnsName = await deriveIpnsName(newRootKeypair.publicKey);
+    } finally {
+      // Zero the captured seeds immediately after derivation — they are Ed25519 private key
+      // material and must not linger past this point (D-09 terminal ownership). Wrapped in
+      // finally so a throw from deriveIpnsName does not skip the zeroing.
+      newChildKeypair.privateKey.fill(0);
+      newRootKeypair.privateKey.fill(0);
+    }
 
     // -----------------------------------------------------------------------
     // WRITE-02: Each node gets a new k51 name; parent re-points to new child name.
