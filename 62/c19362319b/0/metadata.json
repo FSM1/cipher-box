@@ -3,7 +3,7 @@
   "checkpoint_id": "62c19362319b",
   "session_id": "2e538f07-7404-47a7-b648-78422a25400d",
   "strategy": "manual-commit",
-  "created_at": "2026-07-10T21:35:21.58484Z",
+  "created_at": "2026-07-10T21:36:42.640765Z",
   "branch": "feat/shared-write-navigation-correctness-web",
   "checkpoints_count": 5,
   "save_step_count": 1,
@@ -12,90 +12,61 @@
   "model": "",
   "turn_id": "8270cb279407",
   "token_usage": {
-    "input_tokens": 29559,
-    "cache_creation_tokens": 669107,
-    "cache_read_tokens": 34006507,
-    "output_tokens": 183633,
-    "api_call_count": 137
+    "input_tokens": 29611,
+    "cache_creation_tokens": 672106,
+    "cache_read_tokens": 34782534,
+    "output_tokens": 186881,
+    "api_call_count": 139
   },
   "session_metrics": {
     "turn_count": 9
   },
   "summary": {
-    "intent": "Execute all 9 plans of Phase 73 (shared-write/navigation correctness for web) via wave-based parallel subagent orchestration, then follow up by fully consolidating a leftover dedup todo (`consolidate-web-shared-navigation-dup`) into the phase and closing it out.",
-    "outcome": "All 9 plans executed across 3 waves with clean merges and green gates; verifier found and the orchestrator fixed a real SC4 bug (missing publishedNode in refreshCurrentDepthWriteKey), re-verified 7/7; phase marked complete (final phase of v2.0 milestone). A follow-up agent then closed 3 of 4 remaining todo sub-items (readSharedContent dedup, ShareDialog export dedup, moot mirror) behind typecheck+eslint+35/35 live e2e verification, deliberately backed out of the risky 'resolveKinds-then-project' unification, and the todo was moved to completed with the back-out decision recorded as the resolution (final git mv/commit was in progress when the transcript ends).",
+    "intent": "Execute all 9 plans of Phase 73 (shared-write-navigation-correctness-web) via wave-based parallel worktree execution to completion, then investigate and fold in remaining scope from a related todo (consolidate-web-shared-navigation-dup) and properly close it out.",
+    "outcome": "All 9 plans across 3 waves executed, merged, and verified (7/7 SC after one gap fix); phase marked complete as the final phase of milestone v2.0. A follow-up consolidation agent closed 3 of 4 remaining todo sub-items (deduped readSharedContent and ShareDialog helpers, confirmed one item moot) while responsibly backing out of a risky 9-site refactor; the todo was moved to completed with the decision recorded, after recovering from a git mv that initially committed an unmodified blob.",
     "learnings": {
       "repo": [
-        "Cross-package types resolve via built dist/ (gitignored), so fresh worktrees need pnpm install + build of crypto→core→api-client→sdk-core→sdk chain before typecheck works",
-        "Root `pnpm typecheck` self-builds the full dependency chain and typechecks apps/web via tsc -b — this is what CI runs and is safe to use as the post-merge gate instead of full pnpm test (which includes flaky live-API integration tests)",
-        "gsd-executor agents are self-contained: they detect worktree mode via `.git` being a file, derive their own worktree identity, and emit a `<worktree_metadata>` JSON block; the harness (not the executor) creates the `worktree-agent-*` branch",
-        "Executor-reported `expected_base` in `<worktree_metadata>` can be the agent's own post-commit tip rather than the true fork base — orchestrator must trust its own captured EXPECTED_BASE and verify via merge-base, not the agent's self-report",
-        "`close_phase_todos` only moves todos tagged `resolves_phase: N` in frontmatter; todos without that tag are stranded in pending even after the phase completes and requires manual reconciliation",
-        "web-e2e specs (writable-shares, shared-folder-desync, rotation-ux) require a live docker stack (API :3000, ipfs/redis/someguy/postgres/tee) and Playwright starts its own web server against it",
-        "In useSharedNavigationActions.ts, `seedActiveSharedFolder` calls must pass a real `publishedNode` (like navigateToShare, navigateToSubfolder, restoreToBreadcrumbIndex do) or it falls back to PLACEHOLDER_PUBLISHED_NODE and unsealNode throws a GCM decrypt error on retried writes",
-        "The 'resolveKinds-then-project' pattern across owned/shared nav (~9-10 sites) is not true duplication — each site has load-bearing differences (parallel vs sequential SDK calls, pre- vs post-await guards, > vs >= sequence checks, runWithFailureUx wrapping, writeKey-lifecycle side effects tied to specific SC/D-requirements) making unification high-risk with no real DRY payoff"
+        "Executor's <worktree_metadata> JSON sometimes reports expected_base as the agent's own post-commit tip rather than the actual fork base — orchestrator must verify against its own captured base via merge-base, not trust the field blindly.",
+        "Root pnpm typecheck builds the monorepo dependency chain crypto→core→api-client→sdk-core→sdk (and apps/web via tsc -b) since cross-package types resolve from gitignored dist/, which fresh worktrees lack — executors need explicit pnpm install + build-chain setup notes.",
+        "Full monorepo `pnpm test` includes live-API sdk integration tests that false-fail without a running API; post-merge gates should scope to typecheck + the specific changed packages' infra-free unit suites instead.",
+        "close_phase_todos only moves todos tagged resolves_phase:N in frontmatter; if the phase's todos were never tagged, auto-close silently moves zero and they get stranded in pending — must be reconciled by hand.",
+        "Phase 73 deleted resolveFolderIpnsPrivateKey (73-06), which made the SC6 todo's sub-item #4 (resolveFileIpnsKey mirror dedup) moot with no code change needed.",
+        "Deliberate 'byte-for-byte unchanged' comments in code (e.g. downloadSharedFile) signal a prior explicit decision not to touch that path — deduping across it should be treated as crossing a documented decision, not a free win.",
+        "git mv followed immediately by commit can stage only the rename of the HEAD blob if prior Edit-tool changes to that file were never `git add`-ed — resulting in a 0-insertion/0-deletion 100%-rename commit that silently drops the edits (must verify diff post-commit, not just exit code)."
       ],
       "code": [
         {
           "path": "apps/web/src/hooks/useSharedNavigationActions.ts",
           "line": 783,
           "end_line": 844,
-          "finding": "refreshCurrentDepthWriteKey's seedActiveSharedFolder call (originally lines 823-834) omitted publishedNode, unlike sibling call sites at lines 268, 410, 540 — fixed by passing getSdkClient().getSharedFolderState(currentShareId)?.publishedNode ?? PLACEHOLDER_PUBLISHED_NODE (commit d3c39c06e)"
+          "finding": "refreshCurrentDepthWriteKey's seedActiveSharedFolder call omitted publishedNode (unlike the other 3 call sites at lines 268/410/540), causing seedSharedFolder to fall back to PLACEHOLDER_PUBLISHED_NODE and unsealNode to throw a GCM decrypt error on WRITE-03 refresh-access retries; fixed by passing getSdkClient().getSharedFolderState(currentShareId)?.publishedNode ?? PLACEHOLDER_PUBLISHED_NODE (commit d3c39c06e)."
         },
         {
-          "path": "packages/sdk-core/src/ipns/index.ts",
-          "finding": "createAndPublishIpnsRecord now maps a 410 API status to {success:false, sequenceNumber:0n, tombstoned:true}, mirroring resolveIpnsRecord's existing 404-detection idiom"
-        },
-        {
-          "path": "packages/sdk/src/client.ts",
-          "finding": "publishNodeFn (in buildWriteTransportSeams) checks pubResult.tombstoned===true and surfaces it before the generic failure throw; refreshSharedFolder's fresh branch now resolves and forwards publishedParent via resolvePublishedNode"
-        },
-        {
-          "path": "apps/web/src/components/file-browser/SharedFolderRow.tsx",
-          "finding": "handleDragStart's isFileRef(bareSealedChildRef) checks were unconditionally false since 68.2-11 kind-cache removal; replaced with isFileRefResolved(ref, resolvedByIpnsName) against the resolved listing map"
+          "path": "apps/web/src/hooks/useSharedNavigationActions.ts",
+          "line": 351,
+          "finding": "Existing correct pattern for capturing live publishedNode at descent time (getSdkClient().getSharedFolderState(currentShareId)?.publishedNode) that the SC4 fix mirrored."
         }
       ],
       "workflow": [
-        "Wave-based parallel worktree execution: capture base commit + build a wave manifest before dispatch, run intra-wave file-overlap checks pre-spawn (though undeclared incidental overlaps like comment-only touches can still slip through and must be caught at merge time)",
-        "After each wave: merge worktrees via cleanup-wave, run post-merge typecheck+test gate, update tracking (ROADMAP/STATE), then check advisory/blocking drift gates before starting next wave",
-        "After verifier reports gaps_found, independently re-confirm the specific claim against actual code before acting on it, rather than trusting the subagent verdict blindly",
-        "When delegating a risky behavior-neutral refactor to a subagent, give it a precise spec plus an explicit back-out clause (favor behavior-neutrality over completeness) and a mandatory local e2e gate",
-        "Independently re-verify a subagent's own verification claims (typecheck, e2e) rather than trusting its self-report, especially when the subagent's final message suggests it returned before confirming a backgrounded run's results",
-        "Convert a todo to a completed record with a resolution summary before moving it, rather than leaving self-contradictory 'still open' language in a file now filed as done"
+        "When a wave-execution subagent makes an undeclared file-modification overlap with a sibling plan in the same wave (not listed in either plan's declared files_modified), git's 3-way merge can still succeed cleanly if the changes are non-overlapping lines (e.g. one is comment-only) — but this should be flagged and watched, not assumed safe.",
+        "Independently re-verify a sub-verifier agent's specific, checkable claims (e.g. grep/read the exact lines) before acting on gap reports rather than trusting the narrative alone.",
+        "When delegating a risky, behavior-neutral refactor to a subagent, give it an explicit back-out clause (abandon if genuine behavior-neutrality can't be preserved) plus a mandatory local e2e gate against a live stack, then independently re-run the same gate rather than trusting the subagent's self-report of test results.",
+        "A subagent's final returned message can be a stale 'still waiting on background process' status if it was captured mid-run before the background task finished — always check for a fuller/later completion report or verify state directly rather than treating the first return as final.",
+        "For low-ROI, high-risk internal refactors (no user-facing impact, causes only illusory duplication, real regression risk in security-critical code with no CI e2e gate), the correct disposition is to close the todo with the analysis recorded as the resolution, not leave it open inviting a future risky attempt."
       ]
     },
     "friction": [
-      "Wave 1's 73-06 made an undeclared comment-only edit to useSharedWriteOps.ts, which 73-04 also modified — an intra-wave file overlap the pre-spawn declared-files check couldn't detect (needed git 3-way merge to resolve, which succeeded cleanly)",
-      "Post-merge gate commit-tracking helper reported 'commit_failed' as a false negative even though the commit actually landed, requiring manual git log verification each time",
-      "Full monorepo pnpm test/build defaults are unusable as a gate because they include live-API integration tests that fail without a running API — orchestrator had to manually scope gates to typecheck + specific affected package unit tests",
-      "73-08's WRITE-03 e2e case was never run live because it ran in a worktree parallel to 73-09, both defaulting to the same local ports (:3000, :5173), so starting a second dev-server risked disrupting the sibling agent — deferred to a documented non-blocking follow-up, and this exact gap is what the verifier later caught as a real bug",
-      "phase.complete's inline node-based JSON parsing attempt was malformed/syntax-broken twice, requiring fallback to writing raw output to a file and parsing cleanly",
-      "close_phase_todos moved 0 of 7 phase-73-related todos to completed because none were tagged with resolves_phase:73 in frontmatter, requiring manual investigation and reconciliation",
-      "A background/async agent task returned a premature 'still waiting' message before its final full report arrived in a later notification, requiring the orchestrator to independently verify e2e results in the interim rather than trust the incomplete status",
-      "API connection closed mid-response during the final todo-move/commit step, leaving the file edited but not yet git mv'd or committed, requiring the user to ask 'did that go through?' to catch the incomplete action"
+      "Post-merge gate config (build/test commands) was empty, forcing ad hoc scoping decisions each wave to avoid false failures from live-API integration tests and full monorepo test runs.",
+      "commit_failed false-negative from the tracking commit helper despite the commit actually landing, requiring manual git log verification.",
+      "Inline node-based JSON/status parsing scripts had syntax errors on two separate occasions, requiring re-runs with cleaner output capture.",
+      "API connection closed mid-response during the final todo-closing step, leaving work in an ambiguous state that required manual verification of what had actually been committed.",
+      "git mv committed a 0-diff rename because prior Edit-tool changes weren't staged, silently dropping the resolution content until caught by inspecting the commit diff."
     ],
     "open_items": [
-      "Live browser run of the rotation-ux WRITE-03 e2e case against a running local stack was never performed (deferred by 73-08 due to port contention with parallel 73-09) — remains a recommended CI/manual confirmation step even after the SC4 code fix and re-verification",
-      "Sub-item #2 of the consolidate-web-shared-navigation-dup todo (resolveKinds-then-project unification across ~9-10 owned+shared nav sites) was deliberately backed out as high-risk/low-value and left undone, with the analysis recorded in the now-completed todo as the resolution rather than pursued further",
-      "Milestone v2.0 (Metadata and Sharing Refactor) is fully complete (Phase 73 was its final phase) but not yet archived — /gsd-complete-milestone has not been run",
-      "Branch feat/shared-write-navigation-correctness-web has 47+ commits all local and unpushed; no PR opened yet (/gsd-ship 73 offered but not executed)",
-      "Final git mv of the todo file to completed/ and its commit were interrupted by a dropped API connection and had not been confirmed completed as of the end of the transcript"
+      "Live browser run of the WRITE-03 rotation-ux e2e case (tests/web-e2e/tests/rotation-ux.spec.ts) was never executed against a running stack (deferred by 73-08 due to parallel-worktree port contention); remains a recommended CI/manual confirmation step even though the code path is now verified.",
+      "Sub-item #2 of the consolidate-web-shared-navigation-dup todo (unifying ~9-10 resolveKinds-then-project sites across owned and shared navigation planes) was intentionally not implemented — flagged as a family of load-bearing distinct guard behaviors, not true duplication; any future attempt needs explicit sign-off on changing guard semantics.",
+      "Milestone v2.0 (Metadata and Sharing Refactor) is fully complete as of Phase 73 but not yet formally archived via /gsd-complete-milestone.",
+      "PR for branch feat/shared-write-navigation-correctness-web has not been opened; all commits remain local/unpushed."
     ]
-  },
-  "prompt_attributions": [
-    {
-      "checkpoint_number": 2,
-      "user_lines_added": 38,
-      "user_lines_removed": 1,
-      "agent_lines_added": 0,
-      "agent_lines_removed": 0,
-      "user_added_per_file": {
-        ".claude/scheduled_tasks.lock": 1,
-        ".planning/todos/pending/2026-07-03-consolidate-web-shared-navigation-dup.md": 37
-      },
-      "user_removed_per_file": {
-        ".planning/todos/pending/2026-07-03-consolidate-web-shared-navigation-dup.md": 1
-      }
-    }
-  ]
+  }
 }
