@@ -1249,8 +1249,19 @@ export class CipherBoxClient {
       return { writeKey: wk, writeChildren: folder.metadata.writeBody.writeChildren };
     }
     const resolved = await this.resolvePublishedNode(folder.ipnsName);
-    if (!resolved || !resolved.published.writeSealed) {
-      // Nothing published yet, or no write-body ever sealed — start with [].
+    if (!resolved) {
+      // 72-04 SC#2: a real writeKey is present but the resolve genuinely
+      // came back null (transient IPNS resolve miss) — fail CLOSED rather
+      // than returning writeChildren: [], which would let the next publish
+      // seal an EMPTY write-body and silently discard the entire write
+      // chain. Distinct from the `!writeSealed` case below (a structurally
+      // never-write-capable folder), which stays fail-open (Pitfall 3 / A1).
+      throw new Error(
+        `getWriteBodyParams: transient IPNS resolve miss for folder ${folder.ipnsName}; refusing to seal an empty write-body and discard the write chain`
+      );
+    }
+    if (!resolved.published.writeSealed) {
+      // Resolved fine, but no write-body was ever sealed — start with [].
       return { writeKey: wk, writeChildren: [] };
     }
     const node = await unsealNode(resolved.published, folder.folderKey, wk);
