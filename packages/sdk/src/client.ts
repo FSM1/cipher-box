@@ -5449,17 +5449,21 @@ export class CipherBoxClient {
     return this.withOperation('updateSharedSingleFile', async () => {
       // Recovered file keys — MINTED by this call, terminal owner (D-09).
       // args.recipientPrivateKey is caller-owned and is NEVER zeroed here.
-      let fileReadKey: Uint8Array | null = await unwrapKey(
-        hexToBytes(args.encryptedReadKey),
-        args.recipientPrivateKey
-      );
-      let fileWriteKey: Uint8Array | null = await unwrapKey(
-        hexToBytes(args.encryptedWriteKey),
-        args.recipientPrivateKey
-      );
+      // 72-06 (zeroize fix): both unwrapKey calls live INSIDE the try below
+      // (null-initialized here) so a throw on the SECOND call still reaches
+      // the existing `finally` cleanup and zeroes the already-unwrapped
+      // first key instead of leaving it un-zeroed until GC.
+      let fileReadKey: Uint8Array | null = null;
+      let fileWriteKey: Uint8Array | null = null;
       let currentFileNode: CoreNode | null = null;
 
       try {
+        fileReadKey = await unwrapKey(hexToBytes(args.encryptedReadKey), args.recipientPrivateKey);
+        fileWriteKey = await unwrapKey(
+          hexToBytes(args.encryptedWriteKey),
+          args.recipientPrivateKey
+        );
+
         const filePub = await this.resolvePublishedNode(args.fileIpnsName);
         if (!filePub) {
           throw new Error(`updateSharedSingleFile: file ${args.fileIpnsName} not found (revoked)`);
