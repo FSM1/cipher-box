@@ -11,7 +11,7 @@
     "lint:fix": "eslint . --fix",
     "lint:md": "markdownlint '**/*.md' --ignore node_modules --ignore '**/node_modules/**'",
     "lint:md:fix": "markdownlint '**/*.md' --ignore node_modules --ignore '**/node_modules/**' --fix",
-    "typecheck": "pnpm --filter @cipherbox/crypto build && pnpm --filter @cipherbox/core build && pnpm --filter @cipherbox/api-client build && pnpm --filter @cipherbox/sdk-core build && pnpm --filter @cipherbox/sdk build && pnpm --filter @cipherbox/web exec tsc -b && tsc -p tsconfig.scripts.json --noEmit",
+    "typecheck": "pnpm --filter @cipherbox/crypto build && pnpm --filter @cipherbox/core build && pnpm --filter @cipherbox/api-client build && pnpm --filter @cipherbox/sdk-core build && pnpm --filter @cipherbox/sdk build && pnpm --filter @cipherbox/web exec tsc -b && tsc -p tsconfig.scripts.json --noEmit && pnpm --filter @cipherbox/crypto run typecheck && pnpm --filter @cipherbox/core run typecheck && pnpm --filter @cipherbox/api-client run typecheck && pnpm --filter @cipherbox/sdk-core run typecheck && pnpm --filter @cipherbox/sdk run typecheck",
     "test": "pnpm --parallel -r run test",
     "test:web-e2e": "DELEGATED_ROUTING_URL=http://localhost:3001 pnpm --filter @cipherbox/web-e2e test",
     "test:web-e2e:headed": "DELEGATED_ROUTING_URL=http://localhost:3001 pnpm --filter @cipherbox/web-e2e test:headed",
