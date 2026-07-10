@@ -83,7 +83,7 @@ export async function decryptItemName(
  * absent (`undefined`), never coerced to `NaN`/`0` — the durable rotation
  * floor downstream must never seed from a forged/garbled low generation.
  */
-function parseRootGeneration(value: string | undefined | null): number | undefined {
+export function parseRootGeneration(value: string | undefined | null): number | undefined {
   // Strict digits-only: Number('') / Number(' ') coerce to 0, and negative or
   // fractional strings pass isFinite — all of which would seed a forged floor.
   if (value === undefined || value === null || !/^\d+$/.test(value)) return undefined;
@@ -109,7 +109,7 @@ function toReceivedShare(dto: ReceivedShareResponseDto): ReceivedShare {
 }
 
 /** Reshape a sent-share grant DTO row into the web store's SentShare shape. */
-function toSentShare(dto: SentShareResponseDto): SentShare {
+export function toSentShare(dto: SentShareResponseDto): SentShare {
   return {
     shareId: dto.shareId,
     recipientPublicKey: dto.recipientPublicKey,
@@ -223,7 +223,7 @@ async function ensureFreshSentShares(): Promise<SentShare[]> {
  * Fetch ALL sent shares by paginating through the API.
  * The API enforces a max limit of 100 per page.
  */
-async function fetchAllSentShares(): Promise<SentShare[]> {
+export async function fetchAllSentShares(): Promise<SentShare[]> {
   const pageSize = 100;
   let offset = 0;
   const allShares: SentShare[] = [];
