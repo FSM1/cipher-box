@@ -294,9 +294,9 @@ async function main(): Promise<void> {
     const wrappedForBob = await wrapKey(sharedFolderReadKey, bobPublicKey);
     const shareRes = await axiosInstance.post('/shares', {
       recipientPublicKey: '0x' + bytesToHex(bobPublicKey),
-      readDescriptorRef: bytesToHex(wrappedForBob),
+      encryptedReadKey: bytesToHex(wrappedForBob),
       rootNodeId: grantRootNodeId,
-      rootIpnsName: grantRootIpnsName,
+      shareRootIpnsName: grantRootIpnsName,
     });
     const shareId: string = shareRes.data.shareId;
     console.log(`Created share ${shareId} for ${bobEmail} rooted at ${grantRootIpnsName}`);
@@ -306,13 +306,13 @@ async function main(): Promise<void> {
     // isn't just "never worked").
     const receivedRes = await bobCtx.axiosInstance!.get('/shares/received');
     const receivedShare = (
-      receivedRes.data.shares as Array<{ shareId: string; readDescriptorRef: string }>
+      receivedRes.data.shares as Array<{ shareId: string; encryptedReadKey: string }>
     ).find((s) => s.shareId === shareId);
     if (!receivedShare) {
       throw new Error('Bob does not see the newly created share in /shares/received');
     }
     const bobFolderReadKey = await unwrapKey(
-      hexToBytes(receivedShare.readDescriptorRef),
+      hexToBytes(receivedShare.encryptedReadKey),
       bobPrivateKey
     );
     const bobCouldReadWhileActive = await canRead(grantRootIpnsName, bobFolderReadKey, bobCtx);

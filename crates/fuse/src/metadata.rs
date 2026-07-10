@@ -33,11 +33,19 @@ use crate::publish::PublishCoordinator;
 /// The `old_cids_to_unpin` parameter carries CIDs to unpin only on success; on the
 /// retry path additional intermediate CIDs are also cleaned up. Pass `vec![]` when
 /// there is nothing to unpin.
+///
+/// `preresolved_seq`: when `Some(seq)`, the caller has already resolved the current
+/// sequence (e.g. `publish_file_node`'s pre-publish equivocation guard resolves the
+/// name via `resolve_ipns_for_replay`), so the first CAS attempt reuses it instead of
+/// issuing a second identical resolve round-trip. Pass `None` to resolve here as
+/// usual. The `Conflict` retry path always re-resolves regardless — a conflict means
+/// any pre-resolved sequence is already stale.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub(crate) async fn publish_with_cas_retry<F>(
     api: &ApiClient,
     coordinator: &PublishCoordinator,
     ipns_name: &str,
+    preresolved_seq: Option<u64>,
     make_record: F,
     old_cids_to_unpin: &[String],
     journal_entry: Option<()>, // placeholder for future (queue, entry) — always None this phase
@@ -45,7 +53,10 @@ pub(crate) async fn publish_with_cas_retry<F>(
 where
     F: Fn(u64) -> Result<(String, String), String>, // make_record(new_seq) -> (record_b64, cid)
 {
-    let seq = coordinator.resolve_sequence(api, ipns_name).await?;
+    let seq = match preresolved_seq {
+        Some(s) => s,
+        None => coordinator.resolve_sequence(api, ipns_name).await?,
+    };
     let new_seq = seq
         .checked_add(1)
         .ok_or_else(|| "IPNS sequence number overflow".to_string())?;
@@ -538,6 +549,7 @@ pub fn spawn_bin_entry_publish(
                     &api,
                     &coordinator,
                     &bin_ipns_name,
+                    None, // no pre-resolved sequence on the bin-publish path
                     make_bin_record,
                     &old_cids,
                     None, // D-01a: no JournalOp::BinPublish variant; exhaustion → Err → EIO
