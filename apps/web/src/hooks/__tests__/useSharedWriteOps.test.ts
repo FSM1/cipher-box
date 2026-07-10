@@ -444,6 +444,7 @@ describe.skip('moveItemHandler (REQ-2) — routes through runWrite -> client.mov
       setIsLoading,
       setError,
       handleRevocation,
+      refreshWriteAccess: vi.fn(() => Promise.resolve()),
     });
 
     const item = makeChild('doc.txt');
@@ -480,6 +481,7 @@ describe.skip('moveItemHandler (REQ-2) — routes through runWrite -> client.mov
       setIsLoading,
       setError,
       handleRevocation,
+      refreshWriteAccess: vi.fn(() => Promise.resolve()),
     });
 
     const item = makeChild('doc.txt');
@@ -507,6 +509,7 @@ describe.skip('moveItemHandler (REQ-2) — routes through runWrite -> client.mov
       setIsLoading: vi.fn(),
       setError,
       handleRevocation: vi.fn(),
+      refreshWriteAccess: vi.fn(() => Promise.resolve()),
     });
 
     await ops.moveItem(makeChild('x.txt'), 'dest', 'ipns');
@@ -536,6 +539,7 @@ describe.skip('batchMoveItemsHandler (REQ-6) — loops moveInSharedFolder', () =
       setIsLoading: vi.fn(),
       setError,
       handleRevocation: vi.fn(),
+      refreshWriteAccess: vi.fn(() => Promise.resolve()),
     });
     return { ops, setError, clearSelection };
   }
