@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "8065e473a632",
+  "strategy": "manual-commit",
+  "branch": "feat/sdk-write-plane-durability-and-correctness",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/sdk/src/client.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/80/65e473a632/0/metadata.json",
+      "transcript": "/80/65e473a632/0/full.jsonl",
+      "content_hash": "/80/65e473a632/0/content_hash.txt",
+      "prompt": "/80/65e473a632/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 82934,
+    "cache_creation_tokens": 2389842,
+    "cache_read_tokens": 85939894,
+    "output_tokens": 449961,
+    "api_call_count": 353
+  }
+}
