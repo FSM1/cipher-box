@@ -5,15 +5,15 @@ milestone_name: Metadata and Sharing Refactor
 current_phase: 72
 current_phase_name: sdk-write-plane-durability-and-correctness
 status: executing
-stopped_at: Completed 72-02-PLAN.md
-last_updated: "2026-07-10T14:31:45.134Z"
+stopped_at: Completed 72-06-PLAN.md
+last_updated: "2026-07-10T14:46:09.066Z"
 last_activity: 2026-07-10
 last_activity_desc: Phase 72 execution started
 progress:
   total_phases: 16
   completed_phases: 13
   total_plans: 180
-  completed_plans: 174
+  completed_plans: 175
   percent: 81
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 ## Current Position
 
 Phase: 72 (sdk-write-plane-durability-and-correctness) — EXECUTING
-Plan: 6 of 10
+Plan: 7 of 10
 Status: Ready to execute
 Last activity: 2026-07-10 — Phase 72 execution started
 
@@ -261,6 +261,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 72 P03 | 25min | 2 tasks | 3 files |
 | Phase 72 P04 | 15min | 2 tasks | 3 files |
 | Phase 72 P05 | 25min | 3 tasks | 5 files |
+| Phase 72 P06 | 20min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -566,6 +567,8 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: [72-04] getWriteBodyParams split: transient-miss with real writeKey throws (fail-closed); structurally-absent writeSealed stays fail-open (unchanged)
 - [Phase 72-05]: restoreFromBin re-homing only runs when sourceFolder.ipnsName !== targetFolderIpnsName (same-parent restore is a write-body no-op)
 - [Phase 72-05]: permanentDeleteFromBin drops the lingering original-parent WriteChildRef by BinEntry.nodeRef.id (captured UUID witness), never a fresh resolve
+- [Phase 72]: [Phase 72-06]: SC#4 reframed per Critical Finding 1 -- fix is listingCache.delete(folderIpnsName) gated on a caller-computed fileContentChanged boolean (size/cid comparison), not a SealedChildRef schema change
+- [Phase 72]: [Phase 72-06]: updateSharedSingleFile's two unwrapKey calls moved inside the existing try/finally so a throw on the second unwrap still zeroes the already-unwrapped first key
 
 ## Operator Next Steps
 
@@ -573,11 +576,9 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-10T14:30:17.636Z
-**Stopped at:** Completed 72-02-PLAN.md
+**Last session:** 2026-07-10T14:46:09.059Z
+**Stopped at:** Completed 72-06-PLAN.md
 **Resume file:** 
-
-None
 
 - GAP-1 (68.1-13): resolveFileMetadata AEAD Decryption-failed for CTR/streaming video preview and post-upload batch-download -- needs dedicated crypto debugging
 - GAP-2 (68.1-13): full-workflow.spec.ts 3.8 cold-reload multi-level IPNS DFS resolve times out -- needs retry-budget tuning or propagation investigation
