@@ -9,6 +9,22 @@ files:
 source: ship-phase 68.1 simplify review
 ---
 
+## Partially resolved (Phase 73, 2026-07-10)
+
+Phase 73 (SC6/SC7, plan 73-06) resolved two of the sub-items below:
+
+- The `navigateUp` vs `navigateToBreadcrumb` ~55-line near-verbatim restore+re-seed
+  block was consolidated into a single `restoreToBreadcrumbIndex(crumbIndex)` helper
+  (`navigateUp` now delegates with `stack.length - 1`).
+- The dead `resolveFolderIpnsPrivateKey` path and its orphaned JSDoc block were
+  deleted (tracked separately by the now-completed
+  `2026-07-04-remove-dead-getsharekeys-folder-ipns-path` todo).
+
+**Still open:** `readSharedContent` dedup (`loadSharedFileContent` ≡ `downloadSharedFile`);
+the single resolveKinds-then-project util across the 9 sites; ShareDialog
+`parseRootGeneration`/sent-shares pagination+DTO dedup (`export parseRootGeneration`/`toSentShare`
+from `share.service`); and the `resolveFileIpnsKey` (useSharedWriteOps.ts) mirror.
+
 ## Problem
 
 - `loadSharedFileContent` (useSharedNavigationActions.ts:765) duplicates
