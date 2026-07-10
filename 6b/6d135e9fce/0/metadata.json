@@ -1,0 +1,107 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "6b6d135e9fce",
+  "session_id": "2b291057-9ece-4152-bb3e-94cc8f022c70",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-10T22:35:39.854016Z",
+  "branch": "feat/shared-write-navigation-correctness-web",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "90e94e886a77",
+  "token_usage": {
+    "input_tokens": 30407,
+    "cache_creation_tokens": 336455,
+    "cache_read_tokens": 13232092,
+    "output_tokens": 98270,
+    "api_call_count": 89
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-ship-phase-2026-07-10T21:51:44.372452Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "7154f28d72f3",
+      "timestamp": "2026-07-10T21:51:44.372452Z",
+      "native": {
+        "command": "/ship-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/ship-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Run the full autonomous ship-phase pipeline for GSD phase 73 (verify → secure → validate → simplify → SDK E2E gate → CodeRabbit CLI → ship → resolve PR reviews) without babysitting, applying the three-way fix/todo/discard triage rule to every finding.",
+    "outcome": "Phase 73 shipped as PR #603 with all pre-ship gates passing (verify 7/7, secure 17/17, validate 0 gaps, SDK E2E 106/106, CodeRabbit CLI 0 findings after fixes) and CI green; PR-level review triage was in progress at transcript end, with one more real fix (seq-consistency guard in client.ts) staged for commit and two todos logged to the existing 68.2 hardening backlog.",
+    "learnings": {
+      "repo": [
+        "Local dev stack: TEE_WORKER_URL defaults to http://localhost:3001, but when mock-ipns-routing already owns host :3001, docker remaps tee-worker to host :3002 — causes silent 404 at API boot and empty tee_key_state table",
+        "tee_key_state is populated by the API's TeeService fetching the worker's pubkey at startup (not by the worker itself); worker endpoints are gated by Authorization: Bearer $TEE_WORKER_SECRET (apps/tee-worker/src/middleware/auth.ts)",
+        "Phase 73 commit subjects were already conventional (fix(73-08): style, not the problematic feat 73-08: style) — the filter-branch reword step (Step 7) was unnecessary this time; only chore:/docs: merge summaries had parens, which don't drive release-please versioning",
+        "CodeRabbit CLI sometimes hallucinates cross-refs to nonexistent phase numbers in .planning/ doc-metadata nits — treat as review noise",
+        "resolveIpnsRecord maps 404→null but lets 410 fall through to throw; createAndPublishIpnsRecord was changed in phase 73 (SC4) to catch 410 and return {success:false, tombstoned:true} instead of throwing",
+        ".planning/todos/pending/2026-07-06-68.2-coderabbit-hardening-backlog.md is the standing shared-nav hardening backlog — check it for dedupe before filing new shared-nav/write-key todos"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useSharedNavigationActions.ts",
+          "line": 268,
+          "finding": "refreshCurrentDepthWriteKey reseeded publishedNode from cached getSharedFolderState() (stale on tombstone scenario); fixed to call getSdkClient().refreshSharedFolder(currentShareId) first, mirroring the restoreToBreadcrumbIndex pattern (line ~608)"
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigationActions.ts",
+          "line": 419,
+          "finding": "Greptile-flagged in-flight descent race (fast navigate-up during descent seed) is a genuine async TOCTOU but pre-existing nav-architecture issue; deferred as todo rather than fixed at ship time"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 5674,
+          "end_line": 5680,
+          "finding": "publishedParent resolve bypassed the seq-consistency check applied to sibling reads; adopting children/seq from one resolve but publishedNode from another with no consistency guard could seed a stale envelope — fixed with a guard mirroring doReresolveFolderInPlace"
+        },
+        {
+          "path": "tests/sdk-e2e/src/suites/ipns-publish-gate.test.ts",
+          "line": 20,
+          "finding": "Test 20 (WRITE-04) asserted the old throw-on-410 contract; updated to assert the new {tombstoned:true} return contract after confirming no production caller relied on the old throw behavior"
+        }
+      ],
+      "workflow": [
+        "Run independent gate agents/checks (secure, crypto/privacy, general security sweep, Nyquist validation, SDK E2E, CodeRabbit CLI) concurrently in the background, then adversarially re-verify their findings by reading the actual source before triaging",
+        "Piped bash exit codes can mask real failures (SDK E2E run looked like exit 0 via a task-notification summary but was actually exit 1 due to the pipe) — always tail/inspect actual output, don't trust the notification alone",
+        "When an E2E infra failure looks like a missing service, verify container health first, then trace config wiring (port mapping, env defaults, auth secrets) methodically rather than assuming rebuild/restart will fix it",
+        "Before filing a new todo, search existing pending todos for a related item and append/refine in place rather than creating a duplicate file"
+      ]
+    },
+    "friction": [
+      "SDK E2E suite's exit code was masked by a pipe, initially appearing to pass (exit 0) when it actually failed (exit 1) with 3 failures",
+      "3 SDK E2E failures traced to a two-layer local-stack wiring gap: TEE_WORKER_URL port collision (:3001 vs :3002) plus a TEE_WORKER_SECRET auth mismatch — required deep multi-step diagnosis (container status, DB state, API boot logs, direct port probing) before confirming it wasn't a phase regression",
+      "Test 20 (WRITE-04) had a stale assertion left over from before phase 73's throw→return contract change, requiring careful verification that no production caller depended on the old throw behavior before updating the test",
+      "Transient network timeout when checking for an existing PR via gh",
+      "PR-level review triage required manually mapping GraphQL reviewThreads across two reviewers (CodeRabbit inline findings + Greptile) since neither is filtered by author"
+    ],
+    "open_items": [
+      "Greptile #419 in-flight descent race in useSharedNavigationActions.ts — logged as a new item in the 68.2 hardening backlog, deferred as too risky/non-trivial to fix at ship time",
+      "Ungated publishedParent write-base resolve (client.ts) — partially addressed with a seq-consistency guard this session; residual note in 68.2 backlog item 4 needs finalizing",
+      "Guard fix + todo-doc updates were committed but not yet pushed/rebased at transcript end",
+      "PR #603 review-thread resolution (reply + resolveReviewThread for all 8 threads) not yet completed at transcript end",
+      "Step 10 (confirm all CI checks green post-fix, final triage tally report) not yet performed",
+      "Step 11 learnings file (73-LEARNINGS.md) was written and committed but final PR state confirmation still pending"
+    ]
+  }
+}
