@@ -42,7 +42,8 @@ import { RenameDialogPage } from '../page-objects/dialogs/rename-dialog.page';
 
 /**
  * Reads the durable generation/seq high-water floors for `nodeId` directly
- * from the real IndexedDB store `rotation-state.service.ts` writes to.
+ * from the real IndexedDB `rotation-floor` store `rotation-state.service.ts`
+ * writes to (the single combined store introduced by Phase 70.1 / D-06).
  * Read-only observation -- does not invoke any app resolve/enforce logic.
  */
 async function readDurableFloors(
@@ -62,22 +63,19 @@ async function readDurableFloors(
             // The DB (or its stores) may not exist yet — e.g. a fresh profile
             // where rotation-state.service.ts has never written. Treat that as
             // "no floors recorded" instead of throwing synchronously.
-            if (
-              !db.objectStoreNames.contains('generation-high-water') ||
-              !db.objectStoreNames.contains('seq-high-water')
-            ) {
+            // Phase 70.1 (D-06) collapsed the two `generation-high-water` /
+            // `seq-high-water` stores into a single `rotation-floor` store
+            // keyed by nodeId, holding a `{ generation?, seq?, ... }` record.
+            if (!db.objectStoreNames.contains('rotation-floor')) {
               resolve({ generation: undefined, seq: undefined });
               return;
             }
             try {
-              const tx = db.transaction(['generation-high-water', 'seq-high-water'], 'readonly');
-              const genReq = tx.objectStore('generation-high-water').get(nodeId);
-              const seqReq = tx.objectStore('seq-high-water').get(nodeId);
+              const tx = db.transaction('rotation-floor', 'readonly');
+              const getReq = tx.objectStore('rotation-floor').get(nodeId);
               tx.oncomplete = () => {
-                resolve({
-                  generation: genReq.result as number | undefined,
-                  seq: seqReq.result as number | undefined,
-                });
+                const rec = getReq.result as { generation?: number; seq?: number } | undefined;
+                resolve({ generation: rec?.generation, seq: rec?.seq });
               };
               tx.onerror = () => reject(tx.error);
             } catch (err) {
@@ -98,9 +96,11 @@ async function readDurableFloors(
  * sequence than the server now serves) -- see the SC#4 test comment for why
  * the relay-replay path cannot reproduce this against the live API resolve.
  *
- * The stores are created WITHOUT a keyPath (out-of-line keys), matching
- * `rotation-state.service.ts` -- so `put(value, key)` passes the value first
- * and the nodeId key second.
+ * The `rotation-floor` store is created WITHOUT a keyPath (out-of-line keys),
+ * matching `rotation-state.service.ts` -- so `put(value, key)` passes the value
+ * first and the nodeId key second. This stages only the `seq` field via a
+ * read-modify-write so any existing `generation`/`wrappedKeyCheckpoint` floors
+ * for the node are preserved (matching production's max-preserving write).
  */
 async function writeDurableSeqFloor(page: Page, nodeId: string, value: number): Promise<void> {
   await page.evaluate(
@@ -112,13 +112,22 @@ async function writeDurableSeqFloor(page: Page, nodeId: string, value: number): 
         req.onerror = () => reject(req.error);
         req.onsuccess = () => {
           const db = req.result;
-          if (!db.objectStoreNames.contains('seq-high-water')) {
-            reject(new Error('seq-high-water store missing -- durable floor not yet seeded'));
+          if (!db.objectStoreNames.contains('rotation-floor')) {
+            reject(new Error('rotation-floor store missing -- durable floor not yet seeded'));
             return;
           }
           try {
-            const tx = db.transaction('seq-high-water', 'readwrite');
-            tx.objectStore('seq-high-water').put(value, nodeId);
+            const tx = db.transaction('rotation-floor', 'readwrite');
+            const store = tx.objectStore('rotation-floor');
+            const readBack = store.get(nodeId);
+            readBack.onsuccess = () => {
+              const existing =
+                (readBack.result as
+                  | { generation?: number; seq?: number; wrappedKeyCheckpoint?: string }
+                  | undefined) ?? {};
+              store.put({ ...existing, seq: value }, nodeId);
+            };
+            readBack.onerror = () => reject(readBack.error);
             tx.oncomplete = () => resolve();
             tx.onerror = () => reject(tx.error);
           } catch (err) {
