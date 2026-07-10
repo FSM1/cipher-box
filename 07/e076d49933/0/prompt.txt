@@ -1,0 +1,77 @@
+<task-notification>
+<task-id>a7b47c92de89e94f8</task-id>
+<tool-use-id>toolu_017TsKMLdC994XvqG95uWsKB</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/4d78f8a5-6112-418c-85c3-c6241359b1fb/tasks/a7b47c92de89e94f8.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 73-05 of phase 73" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 73-05
+**Tasks:** 2/2
+**SUMMARY:** /Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a7b47c92de89e94f8/.planning/phases/73-shared-write-navigation-correctness-web/73-05-SUMMARY.md
+
+&lt;worktree_metadata&gt;
+{"agent_id":"73-05","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a7b47c92de89e94f8","branch":"worktree-agent-a7b47c92de89e94f8","expected_base":"037179b9054f49144f29874087fcaf9ad54b0628"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `0b5d0f957`: feat(73-05): map createAndPublishIpnsRecord tombstoned through publishNodeFn
+- `3a78c1c48`: feat(73-05): populate publishedParent in refreshSharedFolder fresh branch
+- `2e192ad94`: docs(73-05): add plan summary
+- `037179b90`: docs(73-05): append self-check results to summary
+
+**Duration:** ~29 min
+
+Key changes:
+- `packages/sdk/src/client.ts` — `publishNodeFn` (in `buildWriteTransportSeams`) now checks `pubResult.tombstoned === true` and returns `{ tombstoned: true }` before the generic failure throw, giving `shared-write.ts`'s existing `CannotWriteUntilRefetchError` throw sites a real source. `refreshSharedFolder`'s fresh branch (after the unchanged sequenceNumber monotonicity guard) now calls `this.resolvePublishedNode(state.ipnsName)` and forwards the result as `publishedParent` to `adoptSharedFolderResult`.
+- `packages/sdk/src/__tests__/client-shared-write.test.ts` — added `resolveIpnsRecord`/`fetchFromIpfs` to the sdk-core mock and updated the fresh-branch `refreshSharedFolder` test to mock the extra round trip and assert `publishedNode` propagation.
+
+Verification: full `pnpm --filter @cipherbox/sdk test` green (420 passed, 3 skipped live-API integration tests, expected), `tsc --noEmit` clean, `shared-write.ts` confirmed untouched, no `axios` import added to `packages/sdk`.</result>
+<usage><subagent_tokens>152454</subagent_tokens><tool_uses>48</tool_uses><duration_ms>280828</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a7b47c92de89e94f8</worktreePath><worktreeBranch>worktree-agent-a7b47c92de89e94f8</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a05065a8a10027203</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/4d78f8a5-6112-418c-85c3-c6241359b1fb/tasks/a05065a8a10027203.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 73-07 of phase 73" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## PLAN COMPLETE
+
+**Plan:** 73-07
+**Tasks:** 2/2 complete
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a05065a8a10027203/.planning/phases/73-shared-write-navigation-correctness-web/73-07-SUMMARY.md`
+
+&lt;worktree_metadata&gt;
+{"agent_id":"73-07","worktree_path":"/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a05065a8a10027203","branch":"worktree-agent-a05065a8a10027203","expected_base":"3ad0baba18a4ce18f9992d65542ea11adf63bac0"}
+&lt;/worktree_metadata&gt;
+
+**Commits:**
+- `fe3b01d37`: feat(73-07): carry writeKey in shared nav stack for restore
+- `696699cdc`: feat(73-07): restore publishedNode with writeKey and activate SC1 e2e case
+- `3ad0baba1`: docs(73-07): complete nav-stack writeKey and publishedNode restore plan
+
+**Duration:** ~25 min
+
+### Key files
+- `apps/web/src/hooks/useSharedNavigationActions.ts` — `NavStackEntry.writeKey`/`.publishedNode`, `currentWriteKeyRef` threading, updated `navigateToShare`/`navigateToSubfolder`/`navigateToRoot`/`restoreToBreadcrumbIndex`, new `refreshCurrentDepthWriteKey`
+- `apps/web/src/hooks/useSharedNavigation.ts` — `currentWriteKeyRef` + `zeroWriteKey()`, extended `navStackRef` entry shape, unmount cleanup
+- `apps/web/src/hooks/shared-folder-projection.ts` — exported `PLACEHOLDER_PUBLISHED_NODE`
+- `tests/web-e2e/tests/writable-shares.spec.ts` — un-fixme'd 8.4b (SC1 case)
+
+### Deviation (Rule 1 — bug, documented in SUMMARY)
+Task 1 alone (writeKey-only restore) passed typecheck but failed the new e2e case: `uploadToSharedFolder`/`createSharedSubfolder` trust `SharedFolderState.publishedNode` directly (no network re-resolve), and `restoreToBreadcrumbIndex` never restored it, so every restored depth got re-seeded with the SDK's placeholder envelope — the first write after any restore failed with "Decryption failed" even with the correct writeKey. Fixed by also carrying `publishedNode` per `NavStackEntry`, captured at descent time via `getSharedFolderState`.
+
+### Verification
+- `pnpm --filter @cipherbox/web exec tsc -b` — clean
+- `pnpm --filter @cipherbox/web-e2e exec tsc --noEmit` — clean
+- eslint clean on all touched files
+- Full local run of `tests/web-e2e/tests/writable-shares.spec.ts` against the docker stack: **30/30 passed**, including the new 8.4b (SC1) case</result>
+<usage><subagent_tokens>276106</subagent_tokens><tool_uses>140</tool_uses><duration_ms>1294523</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a05065a8a10027203</worktreePath><worktreeBranch>worktree-agent-a05065a8a10027203</worktreeBranch></worktree>
+</task-notification>
