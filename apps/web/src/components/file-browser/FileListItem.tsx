@@ -76,7 +76,7 @@ export function FileListItem({
   parentId,
   selectedIds,
   allItems,
-  folderKey: _folderKey, // TODO(phase 63): used for per-file size resolution
+  folderKey: _folderKey,
   onSelect,
   onNavigate,
   onContextMenu,
@@ -264,7 +264,6 @@ export function FileListItem({
 
   /**
    * Handle drop - move item to this folder, or upload external files.
-   * TODO(phase 63): uses ipnsName as folder destination identifier.
    */
   const handleDrop = useCallback(
     (e: DragEvent) => {
@@ -279,7 +278,7 @@ export function FileListItem({
       if (!jsonData) {
         if (e.dataTransfer.files.length > 0 && onExternalFileDrop) {
           const files = Array.from(e.dataTransfer.files);
-          onExternalFileDrop(files, item.ipnsName); // TODO(phase 63): ipnsName as id
+          onExternalFileDrop(files, item.ipnsName);
         }
         return;
       }

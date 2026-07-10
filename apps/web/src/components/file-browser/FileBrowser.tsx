@@ -1,5 +1,4 @@
 import { useCallback } from 'react';
-// TODO(phase 63): FolderEntry, FilePointer, isFilePointer removed — use SealedChildRef
 import { useFolderNavigation } from '../../hooks/useFolderNavigation';
 import { useFolder } from '../../hooks/useFolder';
 import { useFileDownload } from '../../hooks/useFileDownload';
@@ -311,12 +310,11 @@ export function FileBrowser() {
           onClose={actions.closeShareDialog}
           item={actions.shareItem}
           folderKey={currentFolder.folderKey}
-          ipnsName={actions.shareItem.ipnsName /* TODO(phase 63): SealedChildRef.ipnsName */}
+          ipnsName={actions.shareItem.ipnsName}
           parentFolderId={currentFolderId}
         />
       )}
 
-      {/* TODO(phase 63): isFilePointer removed; pass item directly (SealedChildRef) */}
       <TextEditorDialog
         open={actions.editorDialog.open}
         onClose={actions.closeEditorDialog}

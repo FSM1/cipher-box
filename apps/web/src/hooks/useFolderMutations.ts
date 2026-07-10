@@ -277,8 +277,6 @@ export function useFolderMutations() {
 
         // Validate batch move preconditions
         const folders = useFolderStore.getState().folders;
-        // TODO(phase 63): use itemIds for SealedChildRef lookup (no id field yet)
-        // const itemIds = new Set(items.map((i) => i.id));
 
         for (const item of items) {
           if (item.type === 'folder') {
@@ -299,7 +297,6 @@ export function useFolderMutations() {
         }
 
         // Name collision check against destination
-        // TODO(phase 63): use Node id for collision detection (SealedChildRef has no id field)
         const movedNames = items
           .map((i) => {
             const ref = sourceFolder.children.find((c) => c.ipnsName === i.id);

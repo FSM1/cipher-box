@@ -6,7 +6,6 @@ import { VersionHistory } from './VersionHistory';
 
 /**
  * File details content (node/v3: ResolvedChild display; content resolved via read-chain).
- * TODO(phase 63): wire read-chain navigation to load NodeContent for display.
  */
 export function FileDetails({
   item,
@@ -41,7 +40,6 @@ export function FileDetails({
       {/* IPNS section */}
       <div className="details-section-header">{'// ipns'}</div>
 
-      {/* TODO(phase 63): item.ipnsName is the child's IPNS k51 name (SealedChildRef) */}
       <DetailRow label="File Metadata IPNS">
         <CopyableValue value={item.ipnsName} />
       </DetailRow>
@@ -78,10 +76,7 @@ export function FileDetails({
         {fileMetaLoading ? (
           <span className="details-loading">resolving...</span>
         ) : fileMeta ? (
-          <span className="details-value details-value--redacted">
-            {/* TODO(phase 63): fileKey is now a raw Uint8Array inside the sealed body */}
-            [sealed inside read-body — phase 63]
-          </span>
+          <span className="details-value details-value--redacted">[redacted]</span>
         ) : (
           <span className="details-value details-value--dim">unavailable</span>
         )}

@@ -128,7 +128,6 @@ export function VersionHistory({
               <div className="details-version-info">
                 <span className="details-version-number">v{versionNumber}</span>
                 <span className="details-version-date">
-                  {/* TODO(phase 63): version.createdAt (ms) replaces retired version.timestamp */}
                   {formatDateWithTime(version.createdAt)}
                 </span>
                 <span className="details-version-size">{formatBytes(version.size)}</span>
@@ -139,7 +138,6 @@ export function VersionHistory({
               {confirmingRestore === index ? (
                 <div className="details-version-confirm" role="alert">
                   <span className="details-version-confirm-text">
-                    {/* TODO(phase 63): version.createdAt (ms) replaces retired version.timestamp */}
                     Restore version from {formatDate(version.createdAt)}? Current version will be
                     saved as a past version.
                   </span>
