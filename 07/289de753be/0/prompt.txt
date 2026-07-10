@@ -1,0 +1,1 @@
+ok now that the bookkeeping is done, please outline the above proposed phases using /gsd-phase flow, and make sure to update the respective todos with the phases they exect to be resolved in. by  the end of this, only the `non m4` todos should remain unmodified.

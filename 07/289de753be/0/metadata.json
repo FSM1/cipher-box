@@ -1,0 +1,110 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "07289de753be",
+  "session_id": "1fe64f2c-aba7-4c33-bdde-c289c7f9ed8a",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-10T23:23:25.14116Z",
+  "branch": "docs/triage-m4-todos",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/ROADMAP.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "4779eb641c63",
+  "checkpoint_transcript_start": 181,
+  "transcript_lines_at_start": 181,
+  "token_usage": {
+    "input_tokens": 5334,
+    "cache_creation_tokens": 66936,
+    "cache_read_tokens": 3774393,
+    "output_tokens": 27963,
+    "api_call_count": 20
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01KciubWgqytLmZY1N6dVCum",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "4779eb641c63",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 202,
+        "end": 203,
+        "entry_ids": [
+          "fbf0fdb2-5c0c-41de-933e-28cf8b6e89bc"
+        ],
+        "tool_use_id": "toolu_01KciubWgqytLmZY1N6dVCum"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01KciubWgqytLmZY1N6dVCum"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Turn the previously agreed M4 v2.0 closeout plan into concrete roadmap phases (74-78) using the /gsd-phase add-phase workflow, then link each M4 todo to the phase that resolves it, leaving non-M4 todos untouched.",
+    "outcome": "Added and enriched Phases 74-78 in ROADMAP.md, retired one todo that no longer needed a phase assignment, stamped `resolves_phase` on 28 M4 todos (10 non-M4 left untouched), updated milestone metadata/checklist and STATE.md's Roadmap Evolution via the GSD handler, and committed the change.",
+    "learnings": {
+      "repo": [
+        "cipher-box's /gsd-phase skill routes on the leading flag: no flag → add-phase (one integer phase at a time, can't batch-add a range like 74-78 in one call), --insert → decimal phase insertion, --remove → renumber, --edit → in-place field edit.",
+        "add-phase workflow only appends one phase per `gsd_run query phase.add` call — adding phases 74-78 required 5 sequential invocations.",
+        "STATE.md is protected by a protect-files.sh PreToolUse hook; updates must go through the GSD handler (`gsd_run query state.add-roadmap-evolution` / `state.patch`) rather than raw Edit/Write.",
+        "Each new phase directory created by phase.add contains only a `.gitkeep` until planned."
+      ],
+      "code": [],
+      "workflow": [
+        "When mapping a todo backlog to new roadmap phases, do a final pass for todos missed in the original classification batch before invoking the phase-creation workflow — two were caught late here (`confirm-no-legacy-v1-v2-vault-blobs-on-auth-reenable`, `extract-assert-root-ownership-helper`).",
+        "After bulk-stamping a frontmatter field (e.g. `resolves_phase`) across many todo files via script, verify counts match the expected split (28 stamped vs 10 untouched) before proceeding, rather than trusting the script ran cleanly."
+      ]
+    },
+    "friction": [
+      "The /gsd-phase add-phase workflow doesn't support adding a contiguous range of phases in one call, forcing 5 separate `phase.add` invocations plus manual enrichment (goal/success criteria/dependencies/resolved todos) as a follow-up edit pass rather than being generated correctly the first time.",
+      "User had to intervene mid-task to redirect one todo (the legacy vault-blob check) from being assigned to Phase 78 to being retired instead."
+    ],
+    "open_items": [
+      "`confirm-no-legacy-v1-v2-vault-blobs-on-auth-reenable` was retired rather than assigned to a phase — confirm this is intentional and not silently dropped work.",
+      "10 non-M4 todos remain unmodified/unscoped as designed — will need their own phase mapping in a future milestone."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-10T23:23:12.186739Z",
+    "agent_lines": 140,
+    "agent_removed": 2,
+    "human_added": 88,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 228,
+    "total_lines_changed": 276,
+    "agent_percentage": 51.449275362318836,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
