@@ -5,15 +5,15 @@ milestone_name: Metadata and Sharing Refactor
 current_phase: 73
 status: executing
 stopped_at: Completed 72-10-PLAN.md
-last_updated: "2026-07-10T23:22:34.181Z"
+last_updated: "2026-07-10T23:36:09.597Z"
 last_activity: 2026-07-10
 last_activity_desc: Phase 73 complete
 progress:
-  total_phases: 21
+  total_phases: 22
   completed_phases: 15
   total_plans: 189
   completed_plans: 188
-  percent: 71
+  percent: 68
 current_phase_name: shared-write-navigation-correctness-web
 ---
 
@@ -391,6 +391,7 @@ Recent for v1.1:
 - Phase 76 added: M4 v2.0 closeout phase (from pending-todo triage)
 - Phase 77 added: M4 v2.0 closeout phase (from pending-todo triage)
 - Phase 78 added: M4 v2.0 closeout phase (from pending-todo triage)
+- Phase 79 added: Web kind-discrimination completion + deferred test revival (from TODO(phase 63/65) marker triage)
 
 ### Open Concerns
 

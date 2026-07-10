@@ -3,7 +3,7 @@
 ## Milestones
 
 - ✅ **v1.1 IPFS Infrastructure** — Phases 18–60 (shipped 2026-06-27) — full detail: `milestones/v1.1-ROADMAP.md`
-- 📋 **v2.0 Metadata and Sharing Refactor** — Phases 61–78 (active; 61–73 shipped, 74–78 closeout)
+- 📋 **v2.0 Metadata and Sharing Refactor** — Phases 61–79 (active; 61–73 shipped, 74–79 closeout)
 
 ## Phases
 
@@ -58,7 +58,7 @@
 
 </details>
 
-### v2.0 Metadata and Sharing Refactor (Phases 61–78)
+### v2.0 Metadata and Sharing Refactor (Phases 61–79)
 
 - [x] **Phase 61: AAD-Bound Seal Primitive and Cross-Language KAT** — Additive AES-GCM+AAD seal in `packages/crypto` and `crates/crypto` with a committed TS↔Rust known-answer test (completed 2026-06-28)
 - [x] **Phase 62: Unified Node Codec (Core Keystone)** — `Node`/`SealedChildRef`/`PublishedNode` types replacing all legacy metadata types; nothing downstream typechecks until this lands (completed 2026-06-28)
@@ -78,6 +78,7 @@
 - [ ] **Phase 76: FUSE Durability and TEE Write-Path Hardening** — Vault-init publish preflight, deferred Phase 69 publish/concurrency items, TEE republish/renew error handling + later-EOL invariant (4 todos)
 - [ ] **Phase 77: Crypto Hygiene and Terminology Canonicalization** — Error-path zeroization, base64 helper dedup, `encryptedIpnsPrivateKey` field renames, dead share-scaffolding retirement, root-ownership helper extract (12 todos; mechanical, no behavior change)
 - [ ] **Phase 78: Recovery Tool v3, Vault-Load Guards, Web UX and CI Guards** — Port recovery.html to node/v3 (un-fixme recovery.spec), download-progress UX resolution, D-07 CI rule, web vitest CI, remaining 68.2/73 hardening incl. two data-integrity races (5 todos)
+- [ ] **Phase 79: Web Kind-Discrimination Completion and Deferred Test Revival** — Route the listing UI through `ResolvedChild.kind` (folders-first sort, drag-and-drop, kind-aware dialogs), wire Created date, revive 4 `describe.skip` suites, drive `TODO(phase 63/65)` markers to zero (from marker triage; ~40 still-valid markers)
 
 ## Phase Details
 
@@ -1025,6 +1026,33 @@ Plans:
 Plans:
 
 - [ ] TBD (run /gsd-plan-phase 78 to break down)
+
+### Phase 79: Web Kind-Discrimination Completion and Deferred Test Revival
+
+**Goal:** Finish wiring the web listing UI through `ResolvedChild.kind` (added in Phase 68.2) so file-vs-folder is discriminated everywhere, and revive the test suites deferred during the Phase 62 node/v3 cutover. Surfaced by triaging the 83 `TODO(phase 63/65)` markers left in the code: 43 were already stale (removed separately as a comment cleanup), but ~40 describe real remaining stub behavior — the listing UI still consumes bare `SealedChildRef` and hardcodes `kind: 'folder'`, so folders-first sort, drag-and-drop, and kind-aware dialog labels never came back after the cutover, `createdAt` is still stubbed in the details panes, and four test suites remain `describe.skip`'d.
+
+**Depends on:** Phase 68.2, Phase 73
+
+**Scope (source: `TODO(phase 63/65)` marker triage, 2026-07-11):**
+
+- **Folders-first sort** — restore kind-based sort (currently alphabetical only): `FileList.tsx:96/100`, `SharedFileBrowser.tsx:50/54`, `useFileBrowserActions.ts:333`
+- **Drag-and-drop re-enable** — drop targets + external drop are disabled pending kind discrimination: `FileList.tsx:144/145/264/268`
+- **Kind-aware dialogs/labels** — rename/delete/move/share dialogs hardcode "Folder" and stub the id off `ipnsName`; route through resolved kind: `FileBrowser.tsx:115/268/276`, `FileListItem.tsx:159/167/169`, `MoveDialog.tsx:47/270`, `SharedMoveDialog.tsx:101/162`, `ShareDialog.tsx:374/548`, `useFileBrowserActions.ts:502/519/547/561/574`, `SharedFileBrowser.tsx:566`, `invite.service.ts:284`, `FileList.tsx:42` (UploadVirtualEntry shape)
+- **Created-date wiring** — `createdAt` from the Node envelope isn't carried on `ResolvedChild`/`NodeContent`; details panes show "unavailable (phase 63)": `FileDetails.tsx:94`, `FolderDetails.tsx:8/121`
+- **Folder identity** — folder id still keyed by `ipnsName` rather than `Node.id`: `useFolderNavigation.ts:321`, `useFolderMutations.ts:368/399` (kind-based subtree recursion)
+- **Revive deferred tests** — un-skip and update: `sdk-core/src/__tests__/file.test.ts:186` (updateFileMetadata), `sdk-core/src/folder/__tests__/load.test.ts:44` (fetchAndDecryptMetadata D-13), `apps/web/src/hooks/__tests__/useSharedWriteOps.test.ts:428/528` (shared move/batch-move handlers); plus populate `nodeRef` in the `bin.test.ts:43` fixture now that `BinEntry.nodeRef` exists
+
+**Success Criteria:**
+
+1. File-vs-folder is discriminated from `ResolvedChild.kind` at every listing/dialog/drag site — folders-first sort and drag-and-drop are restored, and rename/delete/move/share dialogs label the actual kind (no hardcoded "folder")
+2. The details panes show a real Created date (or the field is intentionally dropped), sourced from the Node envelope rather than the "unavailable (phase 63)" stub
+3. The four `describe.skip` suites are revived and passing (or explicitly retired with rationale); zero `TODO(phase 63)`/`TODO(phase 65)` markers remain in the codebase
+
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 79 to break down)
 
 ---
 
