@@ -2939,10 +2939,43 @@ export class CipherBoxClient {
       // mismatch, never publish (metadata OR rotation) against possibly-superseded state.
       await this.reconcileFolderSequence(folderIpnsName, folder.sequenceNumber, folder.folderKey);
 
-      // 1c. Preserve the folder's existing write-body on republish (D-03). The
-      // removed child's WriteChildRef is preserved verbatim — write-link removal
-      // is owned by 68.1-02 (this plan only preserves, never edits, the chain).
+      // 1c. Preserve the folder's existing write-body on republish (D-03), then
+      // DROP the removed child's WriteChildRef so the write-chain shrinks in
+      // step with the read-plane delete (SC#1). `childId` here is an ipnsName
+      // (matched against SealedChildRef.ipnsName by sdkCore.deleteFromFolder
+      // above); WriteChildRef.childId is the child's node UUID -- a DIFFERENT
+      // value (72-RESEARCH.md Pitfall 1) -- so the removed item's UUID must be
+      // resolved before it can be filtered out of writeChildren. The pre-trim
+      // snapshot is threaded through as baseWriteChildren so a CAS-409 retry's
+      // base-aware merge (registration.ts) prunes the drop instead of letting a
+      // racing writer's stale remote snapshot resurrect it.
       const writeBodyParams = await this.getWriteBodyParams(folder);
+      const baseWriteChildren = writeBodyParams.writeChildren;
+      let trimmedWriteChildren = writeBodyParams.writeChildren;
+      if (writeBodyParams.writeKey && writeBodyParams.writeChildren) {
+        try {
+          const removedResolved = await this.resolvePublishedNode(removedItem.ipnsName);
+          const removedUuid = removedResolved?.published.id;
+          if (removedUuid) {
+            trimmedWriteChildren = writeBodyParams.writeChildren.filter(
+              (wc) => wc.childId !== removedUuid
+            );
+          } else {
+            console.warn(
+              `[CipherBox] deleteItem: could not resolve removed item's UUID (${removedItem.ipnsName}) — skipping write-chain trim`
+            );
+          }
+        } catch (err) {
+          // Fail OPEN (Pitfall 2): this is a hygiene fix — a resolve miss on
+          // the removed item's own IPNS record must never abort the
+          // already-succeeded read-plane delete. Skip the write-chain trim
+          // and proceed with the write-body unchanged.
+          console.warn(
+            `[CipherBox] deleteItem: UUID resolve failed for write-chain trim (${removedItem.ipnsName}):`,
+            err
+          );
+        }
+      }
 
       // 2. Publish updated metadata
       const { newSequenceNumber, publishedChildren, publishedWriteChildren } =
@@ -2950,7 +2983,9 @@ export class CipherBoxClient {
           children: updatedChildren,
           baseChildren,
           folderKey: folder.folderKey,
-          ...writeBodyParams,
+          writeKey: writeBodyParams.writeKey,
+          writeChildren: trimmedWriteChildren,
+          baseWriteChildren,
           ipnsPrivateKey: folder.ipnsKeypair.privateKey,
           ipnsName: folderIpnsName,
           sequenceNumber: folder.sequenceNumber,
@@ -2964,7 +2999,7 @@ export class CipherBoxClient {
         folder,
         publishedChildren,
         newSequenceNumber,
-        publishedWriteChildren ?? writeBodyParams.writeChildren
+        publishedWriteChildren ?? trimmedWriteChildren
       );
 
       // 4. Emit update event
