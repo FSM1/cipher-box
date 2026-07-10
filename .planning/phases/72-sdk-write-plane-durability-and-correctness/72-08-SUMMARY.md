@@ -140,3 +140,10 @@ None - no external service configuration required.
 ---
 *Phase: 72-sdk-write-plane-durability-and-correctness*
 *Completed: 2026-07-10*
+
+## Self-Check: PASSED
+
+- FOUND: `.planning/phases/72-sdk-write-plane-durability-and-correctness/72-08-SUMMARY.md`
+- FOUND: `b00849615` (Task 1 commit)
+- FOUND: `5b053a98a` (Task 2 commit)
+- FOUND: `ea3ebe4fa` (SUMMARY commit)
