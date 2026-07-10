@@ -541,9 +541,12 @@ test.describe.serial('Writable Shares', () => {
     await folderInput.waitFor({ state: 'visible', timeout: 5000 });
     await folderInput.fill(securitySubfolder);
     await folderInput.press('Enter');
+    // A recipient mkdir is a full shared-write -> IPNS publish -> re-resolve
+    // round-trip (the highest-latency path); under parallel-worker CI load it can
+    // exceed 30s. Use the same 60s budget the owner-side shared waits use below.
     await bobSharedBrowser.getFolderItem(securitySubfolder).waitFor({
       state: 'visible',
-      timeout: 30000,
+      timeout: 60000,
     });
 
     // Alice navigates to her folder and enters the subfolder Bob created
@@ -591,9 +594,10 @@ test.describe.serial('Writable Shares', () => {
     await folderInput.waitFor({ state: 'visible', timeout: 5000 });
     await folderInput.fill(deepSubfolder);
     await folderInput.press('Enter');
+    // Shared-write mkdir round-trip: use the 60s CI budget (see 8.1).
     await bobSharedBrowser.getFolderItem(deepSubfolder).waitFor({
       state: 'visible',
-      timeout: 30000,
+      timeout: 60000,
     });
 
     // Navigate into the subfolder (wait for breadcrumbs to confirm navigation completed)

@@ -887,8 +887,10 @@ test.describe.serial('Full Workflow', () => {
     await confirmDialog.clickConfirm();
     await confirmDialog.waitForClose({ timeout: 30000 });
 
-    // Both files should be gone
-    await fileList.waitForItemToDisappear(delFile1.name, { timeout: 15000 });
+    // Both files should be gone. Batch delete publishes two IPNS updates, so
+    // give the disappearance the same headroom as the confirm-dialog close
+    // above (CI floors this to 60s via ciFloor; 15s was too tight locally).
+    await fileList.waitForItemToDisappear(delFile1.name, { timeout: 30000 });
     await expectItemGone(delFile2.name);
   });
 
@@ -915,10 +917,12 @@ test.describe.serial('Full Workflow', () => {
     // Select the subfolder as destination
     await moveDialog.selectFolder(batchDelFolder);
     await moveDialog.clickMove();
-    await moveDialog.waitForClose({ timeout: 15000 });
+    // Batch move publishes IPNS updates for both source and destination; give
+    // the same headroom as 4.10 (CI floors to 60s; 15s was too tight locally).
+    await moveDialog.waitForClose({ timeout: 30000 });
 
     // Files should be gone from current view
-    await fileList.waitForItemToDisappear(msFiles[0].name, { timeout: 15000 });
+    await fileList.waitForItemToDisappear(msFiles[0].name, { timeout: 30000 });
     await expectItemGone(moveFile.name);
 
     // Navigate into subfolder and verify
@@ -1312,8 +1316,9 @@ test.describe.serial('Full Workflow', () => {
   });
 
   test('6.6.2 Restore a past version', async () => {
-    // Restore involves IPNS publish which can be slow
-    test.setTimeout(60000);
+    // Restore involves an IPNS publish which can be slow, and we poll the editor
+    // (re-resolving from IPNS each open) until the restored content lands.
+    test.setTimeout(90000);
 
     // Open Details for the editable file
     await fileList.rightClickItem(editableFileName);
@@ -1333,30 +1338,31 @@ test.describe.serial('Full Workflow', () => {
     // Confirm the restore
     await detailsDialog.confirmVersionAction();
 
-    // After restore: the old current (textEditorEditedContent) becomes v1,
-    // and the restored content is now current. Version count stays at 1.
-    // Wait for the version section to refresh by re-checking version count.
-    await expect(async () => {
-      expect(await detailsDialog.getVersionCount()).toBe(1);
-    }).toPass({ timeout: 30000 });
-
-    // Close the details dialog
+    // After restore, the previously-current content becomes v1 and the restored
+    // content becomes current. The version count is 1 both BEFORE and AFTER the
+    // swap, so it is NOT a usable readiness signal — gating on it gives zero wait
+    // for the restore's IPNS publish to land. The text editor re-resolves the
+    // file fresh from IPNS on every open, so a single read can race the in-flight
+    // restore publish and return the pre-restore content. Poll by re-opening the
+    // editor until it serves the restored content.
     await detailsDialog.close();
 
-    // Verify the restore worked by opening the text editor
-    await fileList.rightClickItem(editableFileName);
-    await contextMenu.waitForOpen();
-    await contextMenu.clickEdit();
-    await textEditorDialog.waitForOpen({ timeout: 10000 });
-    await textEditorDialog.waitForContentLoaded({ timeout: 30000 });
-
-    // Content should now be the pre-6.5.3 content that was versioned
-    const content = await textEditorDialog.getContent();
-    expect(content).toBe(editableFileUpdatedContent);
-
-    // Close text editor without saving
-    await textEditorDialog.clickCancel();
-    await textEditorDialog.waitForClose();
+    await expect
+      .poll(
+        async () => {
+          await fileList.rightClickItem(editableFileName);
+          await contextMenu.waitForOpen();
+          await contextMenu.clickEdit();
+          await textEditorDialog.waitForOpen({ timeout: 10000 });
+          await textEditorDialog.waitForContentLoaded({ timeout: 30000 });
+          const c = await textEditorDialog.getContent();
+          await textEditorDialog.clickCancel();
+          await textEditorDialog.waitForClose();
+          return c;
+        },
+        { timeout: 45000, intervals: [1000, 2000, 3000, 5000] }
+      )
+      .toBe(editableFileUpdatedContent);
   });
 
   test('6.6.3 Delete a past version', async () => {
@@ -1454,6 +1460,11 @@ test.describe.serial('Full Workflow', () => {
   });
 
   test('8.2 Delete remaining root files', async () => {
+    // Three files are deleted serially, each a separate IPNS publish -> refresh
+    // round-trip; under parallel-worker CI load the cumulative wall-clock exceeds
+    // the default 90s budget even though each delete individually succeeds.
+    test.setTimeout(150000);
+
     // Delete remaining files at root
     // Note: rootFiles[0] was moved to workspace in test 5.1, workspace was deleted in 8.1
     // Some files may have been moved around, clean up what remains
