@@ -1303,18 +1303,26 @@ export class CipherBoxClient {
   }
 
   /**
-   * Resolve a node's plaintext identity (id + kind) from its IPNS name,
+   * Resolve a node's plaintext identity (id + kind) from its `SealedChildRef`,
    * without requiring any readKey -- `id`/`kind` are PLAINTEXT on the
    * `PublishedNode` envelope (NODE-03), so no decryption is needed (D-07
    * full-boundary facade, 68.2-08 Rule-2 addition -- replaces
    * `useSharedWriteOps.ts`'s direct `resolveIpnsRecord`+`fetchFromIpfs`
    * usage for `deleteFromSharedFolder`'s `childNodeId` resolution).
    *
+   * 73-04 SC3: now routes through `gatedResolveChild` (ROT-07 anti-rollback
+   * floor) instead of a raw `resolvePublishedNode` -- takes the full
+   * `SealedChildRef` (not just its bare `ipnsName`) so the gate's
+   * `enforceResolved` call can source `generation`/`versionFloor` from the
+   * PARENT mirror, per Pitfall 3.
+   *
    * @returns `null` when the IPNS record cannot be resolved (revoked/not found).
    */
-  async resolveNodeIdentity(ipnsName: string): Promise<{ nodeId: string; kind: NodeKind } | null> {
+  async resolveNodeIdentity(
+    childRef: SealedChildRef
+  ): Promise<{ nodeId: string; kind: NodeKind } | null> {
     return this.withOperation('resolveNodeIdentity', async () => {
-      const resolved = await this.resolvePublishedNode(ipnsName);
+      const resolved = await this.gatedResolveChild(childRef);
       if (!resolved) return null;
       return { nodeId: resolved.published.id, kind: resolved.published.kind };
     });
@@ -4193,6 +4201,11 @@ export class CipherBoxClient {
    * (68.2-11, Rule 2) as the SDK facade replacement for the deleted web-native
    * `resolveFileMetadata` (file-metadata.service.ts).
    *
+   * 73-04 SC3: the initial resolve (to recover the file's plaintext `id` for
+   * the AAD input) now routes through `gatedResolveChild` (ROT-07
+   * anti-rollback floor) instead of a raw `resolvePublishedNode`, so an
+   * unverified/rolled-back record fails closed here too.
+   *
    * @param fileRef - The file's SealedChildRef from the parent folder's
    *   read-body (carries `readKeySealed` + `generation`)
    * @param folderKey - The PARENT folder's readKey (used to unseal the file's
@@ -4209,7 +4222,7 @@ export class CipherBoxClient {
     folderKey: Uint8Array
   ): Promise<{ metadata: NodeContent; metadataCid: string }> {
     return this.withOperation('resolveFileMetadata', async () => {
-      const resolvedNode = await this.resolvePublishedNode(fileRef.ipnsName);
+      const resolvedNode = await this.gatedResolveChild(fileRef);
       if (!resolvedNode) {
         throw new Error(`resolveFileMetadata: IPNS record not found for ${fileRef.ipnsName}`);
       }
@@ -4250,6 +4263,11 @@ export class CipherBoxClient {
    * folderKey and recovers the file readKey the same way the web-native
    * `resolveFileMetadata` (file-metadata.service.ts, 68.1-04) does.
    *
+   * 73-04 SC3: the initial resolve (to recover the file's plaintext `id` for
+   * the AAD input) now routes through `gatedResolveChild` (ROT-07
+   * anti-rollback floor) instead of a raw `resolvePublishedNode`, so an
+   * unverified/rolled-back record fails closed here too.
+   *
    * @param fileRef - The file's SealedChildRef from the parent folder's
    *   read-body (carries `readKeySealed` + `generation`)
    * @param folderKey - The PARENT folder's readKey (used to unseal the file's
@@ -4265,7 +4283,9 @@ export class CipherBoxClient {
     return this.withOperation('downloadFromIpns', async () => {
       // Resolve the file Node once to recover its plaintext `id` (the AAD input
       // for unsealChildReadKey — matches the web-native resolveFileMetadata).
-      const resolvedNode = await this.resolvePublishedNode(fileRef.ipnsName);
+      // Routed through the gated resolve (ROT-07 anti-rollback floor, SC3)
+      // instead of a raw resolvePublishedNode.
+      const resolvedNode = await this.gatedResolveChild(fileRef);
       if (!resolvedNode) {
         throw new Error(`downloadFromIpns: IPNS record not found for ${fileRef.ipnsName}`);
       }

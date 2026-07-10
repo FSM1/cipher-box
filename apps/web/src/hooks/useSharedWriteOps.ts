@@ -22,15 +22,21 @@ import { logger } from '../lib/logger';
 import type { SharedListItem } from './useSharedNavigation';
 
 /**
- * Resolve a child item's write-body UUID (childNodeId) from its IPNS name via
- * `client.resolveNodeIdentity` (D-07, 68.2-08) -- `id`/`kind` are plaintext
- * on the PublishedNode envelope (NODE-03), so no readKey/decryption is
- * needed; the SDK facade resolves+parses the envelope internally.
+ * Resolve a child item's write-body UUID (childNodeId) from its
+ * `SealedChildRef` via `client.resolveNodeIdentity` (D-07, 68.2-08) --
+ * `id`/`kind` are plaintext on the PublishedNode envelope (NODE-03), so no
+ * readKey/decryption is needed; the SDK facade resolves+parses the envelope
+ * internally.
+ *
+ * 73-04 SC3: `resolveNodeIdentity` now routes through `gatedResolveChild`
+ * (ROT-07 anti-rollback floor), so the full `SealedChildRef` -- not just its
+ * bare `ipnsName` -- must be threaded through so the gate can source
+ * `generation`/`versionFloor` from the PARENT mirror.
  */
-async function resolveChildNodeId(ipnsName: string): Promise<string> {
-  const identity = await getSdkClient().resolveNodeIdentity(ipnsName);
+async function resolveChildNodeId(item: SealedChildRef): Promise<string> {
+  const identity = await getSdkClient().resolveNodeIdentity(item);
   if (!identity) {
-    throw new Error(`Cannot resolve item ${ipnsName} (revoked or not found)`);
+    throw new Error(`Cannot resolve item ${item.ipnsName} (revoked or not found)`);
   }
   return identity.nodeId;
 }
@@ -189,7 +195,7 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
   const deleteItemHandler = useCallback(
     async (item: SealedChildRef) => {
       await runWrite(async (shareId) => {
-        const childNodeId = await resolveChildNodeId(item.ipnsName);
+        const childNodeId = await resolveChildNodeId(item);
         await getSdkClient().deleteFromSharedFolder(shareId, {
           itemId: item.ipnsName,
           childNodeId,
