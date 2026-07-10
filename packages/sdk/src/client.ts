@@ -5181,6 +5181,9 @@ export class CipherBoxClient {
           sequenceNumber,
           ctx: this.ctx,
         });
+        if (pubResult.tombstoned === true) {
+          return { tombstoned: true };
+        }
         if (!pubResult.success) {
           throw new Error(
             `publishNodeFn: IPNS publish rejected for ${ipnsName} (seq=${pubResult.sequenceNumber})`
@@ -5662,9 +5665,18 @@ export class CipherBoxClient {
         return;
       }
 
+      // `loadFolderMetadata` above returns only the decrypted Node, not the raw
+      // PublishedNode envelope, so the write-body's cached `publishedNode`
+      // would go stale here unless we separately resolve it (coderabbit
+      // backlog item 4 -- see 73-RESEARCH.md). Resolve the envelope for this
+      // depth and pass it through as `publishedParent` so a later shared write
+      // signs against the freshly-refreshed envelope, not a stale one.
+      const parentResolved = await this.resolvePublishedNode(state.ipnsName);
+
       await this.adoptSharedFolderResult(shareId, {
         publishedChildren: result.metadata.children ?? [],
         newSequenceNumber: result.sequenceNumber,
+        ...(parentResolved ? { publishedParent: parentResolved.published } : {}),
       });
     });
   }
