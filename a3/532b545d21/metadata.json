@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "a3532b545d21",
+  "strategy": "manual-commit",
+  "branch": "feat/shared-write-navigation-correctness-web",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/todos/pending/2026-07-06-68.2-coderabbit-hardening-backlog.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/a3/532b545d21/0/metadata.json",
+      "transcript": "/a3/532b545d21/0/full.jsonl",
+      "content_hash": "/a3/532b545d21/0/content_hash.txt",
+      "prompt": "/a3/532b545d21/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 963,
+    "cache_creation_tokens": 17177,
+    "cache_read_tokens": 1858467,
+    "output_tokens": 11708,
+    "api_call_count": 10
+  }
+}

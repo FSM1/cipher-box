@@ -1,0 +1,112 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "a3532b545d21",
+  "session_id": "2b291057-9ece-4152-bb3e-94cc8f022c70",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-10T22:16:23.488973Z",
+  "branch": "feat/shared-write-navigation-correctness-web",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    ".planning/todos/pending/2026-07-06-68.2-coderabbit-hardening-backlog.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "5de935de2fb2",
+  "checkpoint_transcript_start": 428,
+  "transcript_lines_at_start": 428,
+  "token_usage": {
+    "input_tokens": 963,
+    "cache_creation_tokens": 17177,
+    "cache_read_tokens": 1858467,
+    "output_tokens": 11708,
+    "api_call_count": 10
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-ship-phase-2026-07-10T21:51:44.372452Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "7154f28d72f3",
+      "timestamp": "2026-07-10T21:51:44.372452Z",
+      "native": {
+        "command": "/ship-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/ship-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Finalize CipherBox phase 73 PR by resolving the last CodeRabbit review item, generating phase learnings, and preparing the docs commit before push.",
+    "outcome": "CodeRabbit CLI re-run confirmed 0 findings (MAJOR cleared); the crypto/security reviewers' ungated `publishedParent` resolve LOW was merged into the existing 68.2 hardening backlog item 4 instead of a new file; 73-LEARNINGS.md was generated, verified, and committed alongside the backlog-todo edit.",
+    "learnings": {
+      "repo": [
+        "The 68.2-coderabbit-hardening-backlog.md item 4 ('refreshSharedFolder stale write envelope → pass freshly-resolved PublishedNode as publishedParent') was implemented in phase 73 (73-05), but the resolve that seeds publishedParent is itself ungated — a second-order refinement now appended to the same backlog item rather than filed as a new todo.",
+        "The ungated publishedParent resolve is considered mitigated, not fix-now: in-memory seq-monotonicity guard + server CAS provide protection, but the share root has no parent-mirror to source a floor from, and signatureVerified would not catch a validly-signed rollback."
+      ],
+      "code": [
+        {
+          "path": "client.ts",
+          "line": 5674,
+          "finding": "publishedParent resolve is ungated (no floor/CAS check at this specific call site) — flagged as LOW by both crypto reviewer and security auditor, tracked as a follow-up in the 68.2 hardening backlog item 4 rather than fixed immediately."
+        }
+      ],
+      "workflow": [
+        "Before filing a new todo for a review finding, grep existing pending todos for related items and append/update in place to avoid duplication — this backlog file already covered the adjacent write-envelope issue.",
+        "Re-run the CodeRabbit CLI after making code changes post-initial-review to confirm findings actually cleared before drafting the PR body.",
+        "Run the learnings-extraction agent in parallel/background with other wrap-up work (CodeRabbit re-run, backlog edits, PR body drafting) so all docs land in the same push."
+      ]
+    },
+    "friction": [],
+    "open_items": [
+      "Ungated publishedParent resolve at client.ts:5674 remains an open, mitigated-but-unfixed follow-up tracked under 68.2 hardening backlog item 4.",
+      "PR for phase 73 not yet pushed/opened at end of transcript — commit of learnings + backlog todo was the last completed step."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-10T22:15:56.411881Z",
+    "agent_lines": 12,
+    "agent_removed": 0,
+    "human_added": 215,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 227,
+    "total_lines_changed": 227,
+    "agent_percentage": 5.286343612334802,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 216,
+      "user_lines_removed": 0,
+      "agent_lines_added": 12,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/phases/73-shared-write-navigation-correctness-web/73-LEARNINGS.md": 215
+      }
+    }
+  ]
+}
