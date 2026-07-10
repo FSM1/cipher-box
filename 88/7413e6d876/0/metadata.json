@@ -1,0 +1,105 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "887413e6d876",
+  "session_id": "67f868ae-597f-436d-9d1d-2b17847681c3",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-10T19:04:52.902845Z",
+  "branch": "feat/shared-write-navigation-correctness-web",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "98ad5a5a244a",
+  "token_usage": {
+    "input_tokens": 14856,
+    "cache_creation_tokens": 360875,
+    "cache_read_tokens": 6895349,
+    "output_tokens": 55179,
+    "api_call_count": 64
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01UYCCzQhFZAHGHdsaWBLw9U",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-plan-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "98ad5a5a244a",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 116,
+        "end": 117,
+        "entry_ids": [
+          "018bd085-2058-4077-b6f9-80db0d5e8d2b"
+        ],
+        "tool_use_id": "toolu_01UYCCzQhFZAHGHdsaWBLw9U"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01UYCCzQhFZAHGHdsaWBLw9U"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-plan-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Check whether phase 73 (cipher-box GSD roadmap) had open discussion points before planning, then kick off /gsd-plan-phase for it — ensuring the feature branch is named correctly (not a stray planner-generated branch) and that any tangential pending todos get folded into scope.",
+    "outcome": "Confirmed phase 73 was plan-ready, created and committed to the correct branch (feat/shared-write-navigation-correctness-web), folded two tangential todos into the ROADMAP, and ran the full plan-phase pipeline (research → VALIDATION.md → pattern-mapping → 9 PLAN.md files across 3 waves). Plan-checker found 2 blockers + 1 warning; fixes were applied directly and a re-verification commit was in progress when the transcript ended.",
+    "learnings": {
+      "repo": [
+        "cipher-box's GSD branch_template is 'feat/{slug}'; the correct slug is the phase directory name minus the leading number (e.g. phase 72's dir → feat/sdk-write-plane-durability-and-correctness), not the stray docs/plan-phase-{N} branch the planner can spin up.",
+        "plan-phase.md workflow has an explicit Step 0 guardrail: 'Do not create, rename, or switch git branches during plan-phase' — so pre-creating and committing to the correct feature branch before invoking the skill reliably prevents branch drift.",
+        "plan:pre hooks active in this repo: intel, research, pattern-mapper, schema-gate→planner, tdd→planner, drift-gate. schema-gate only fires for TypeORM entity/migration file changes, not SDK/web hook changes.",
+        "fetchShareKeys must be preserved even when removing the dead folder-IPNS write-share-key path — only that specific path is dead code, not the whole function (SC7 landmine identified during research).",
+        "intel's API-SURFACE.md regeneration can legitimately produce 0 symbols (HINT-only) for phases whose real grounding lives in RESEARCH.md/PATTERNS.md rather than a stable public API surface."
+      ],
+      "code": [
+        {
+          "path": "src/hooks/useSharedWriteOps.ts",
+          "finding": "Never calls runWithFailureUx at all — a real API 410 (tombstone) currently surfaces as an uncaught AxiosError instead of a classified failure. Root cause was deeper than the originating WRITE-03 todo stated; research locked plan sequencing to SC7→SC6→SC1+SC2→SC4 to fix this properly."
+        },
+        {
+          "path": ".planning/phases/73-shared-write-navigation-correctness-web/73-02-PLAN.md",
+          "finding": "TDD RED-task verify command piped test output through `grep ... || true`, which swallows the real exit code and makes the 'confirm RED' gate unable to ever fail — a recurring anti-pattern the plan-checker flagged as a blocker."
+        },
+        {
+          "path": ".planning/phases/73-shared-write-navigation-correctness-web/73-04-PLAN.md",
+          "finding": "Same grep-masks-exit-code RED-gate anti-pattern as 73-02-PLAN.md; fixed by inverting on the test's actual exit code."
+        },
+        {
+          "path": ".planning/phases/73-shared-write-navigation-correctness-web/73-09-PLAN.md",
+          "finding": "depends_on frontmatter was missing an implied ordering dependency on 73-05 (had only [73-07, 73-01]); added without changing its wave assignment."
+        }
+      ],
+      "workflow": [
+        "When scanning a large pending-todo backlog (51 items) for tangential relevance to a phase's scope, delegate the classification to a subagent rather than reading each todo directly — preserves main-context budget.",
+        "Plan-checker (gsd-plan-checker) blockers that are mechanical/fully-specified (like an exit-code-masking test pattern) are cheaper to fix directly than to re-run a full gsd-planner cycle; only structural/judgment-level findings warrant a replan.",
+        "TaskCreate/TaskUpdate was used to track the multi-stage plan-phase pipeline (research → validation → pattern-map → plan → verify) as discrete checkable steps across long-running subagent spawns."
+      ]
+    },
+    "friction": [
+      "Phase 73 had no directory, DISCUSSION.md, or discuss-phase artifacts yet, requiring manual cross-checking of ROADMAP.md, STATE.md, and source todo files just to confirm it was plan-ready.",
+      "Had to proactively guard against a known risk (gsd-planner sometimes creates a stray docs/plan-phase-{N} branch instead of the intended feat/ branch) by reading the workflow file to confirm the Step 0 no-branch-switching gate would hold.",
+      "Plan-checker's first pass surfaced 2 blockers and 1 warning (same RED-gate anti-pattern duplicated across two plan files, plus a missing depends_on), requiring a manual fix-and-reverify loop rather than a clean first-pass approval."
+    ],
+    "open_items": [
+      "Re-run gsd-plan-checker to confirm the PASS gate after applying the 3 fixes (73-02, 73-04, 73-09 PLAN.md edits) — not yet confirmed complete at end of transcript.",
+      "STATE.md's open Q1 (Phase 68) — whether a co-writer offline during write-key rotation needs an explicit re-fetch requirement vs. grace/notification — remains unresolved and is tangential to the SC4 wire-end-to-end decision just locked for phase 73.",
+      "Three 'adjacent-but-separate' pending todos (SDK merge parity, dead SDK scaffolding retirement, ESLint boundary rule) were explicitly left out of phase 73's folded-in scope; deferred rather than resolved.",
+      "SHARE-WRITE-KEY write-share key threading gap (noted in existing project memory) remains open and is adjacent to the shared-write navigation work phase 73 is doing."
+    ]
+  }
+}
