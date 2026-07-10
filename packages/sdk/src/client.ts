@@ -83,21 +83,13 @@ import { SharedFolderTree } from './state/shared-folder-tree';
 import { KeyCache } from './state/key-cache';
 import * as binOps from './bin';
 import type { BinState } from './bin';
+import {
+  hasRealWriteKey,
+  getWriteBodyParams as getWriteBodyParamsShared,
+  adoptPublishedFolderState as adoptPublishedFolderStateShared,
+} from './write-body-params';
 import * as shareOps from './share';
 import { resolveChildren, type ResolvedChild } from './folder-listing';
-
-/**
- * True only for a non-null, exactly-32-byte, not-all-zero writeKey (72-08
- * SC#6: single definition replacing the ~6 inline `wk.length === 32 &&
- * !wk.every((b) => b === 0)` spellings and the 2 duplicated local
- * `hasRealWriteKey` closures previously scattered across this file).
- *
- * Pure read — a borrow per the D-09 buffer-ownership contract (RESEARCH.md
- * "Buffer Ownership Table"): never mutates or zeroes `wk`.
- */
-function hasRealWriteKey(wk: Uint8Array | null | undefined): boolean {
-  return !!wk && wk.length === 32 && !wk.every((b) => b === 0);
-}
 
 /**
  * Fail-open/fail-closed mode for {@link walkChildWriteKey}'s missing
@@ -1327,51 +1319,16 @@ export class CipherBoxClient {
    * adds/removes WriteChildRef entries (insertion is owned by createFolder
    * 68.1-02 and the owned-file-write plans 68.1-07/09).
    *
-   * Sourcing order:
-   *   1. Legacy zero-fallback writeKey (registerFolder/loadFolder without a real
-   *      key) → return `{}` so the publish stays write-body-less, identical to
-   *      pre-D-03 behavior. Sealing under a zero key is exactly the
-   *      T-68.1-01-03 threat this avoids.
-   *   2. In-memory `folder.metadata.writeBody` (populated by ensureFolderLoaded,
-   *      which unseals with the real writeKey) → use its writeChildren directly.
-   *   3. Otherwise unseal the CURRENT on-wire node once per operation
-   *      (shared-write pattern: unsealNode with readKey+writeKey →
-   *      writeBody.writeChildren). An absent on-wire write-body (pre-D-03
-   *      publish) yields `[]` — the republish then seals a fresh empty
-   *      write-body going forward. A write-body that IS present but fails GCM
-   *      auth under folder.writeKey propagates as a throw (fail-closed,
-   *      T-68.1-01-03) rather than silently dropping entries.
-   *
-   * Never zeroes folder.folderKey / folder.writeKey (caller-owned, D-09).
+   * 72-10 SC#6: delegates to the shared `write-body-params.ts` implementation
+   * (identical to `bin/index.ts`'s copy after Plan 04's SC#2 unification) —
+   * see that module's doc comment for the full sourcing order and fail-closed
+   * rationale. Never zeroes folder.folderKey / folder.writeKey
+   * (caller-owned, D-09).
    */
   private async getWriteBodyParams(
     folder: FolderState
   ): Promise<{ writeKey?: Uint8Array; writeChildren?: WriteChildRef[] }> {
-    const wk = folder.writeKey;
-    if (!hasRealWriteKey(wk)) {
-      return {};
-    }
-    if (folder.metadata?.writeBody) {
-      return { writeKey: wk, writeChildren: folder.metadata.writeBody.writeChildren };
-    }
-    const resolved = await this.resolvePublishedNode(folder.ipnsName);
-    if (!resolved) {
-      // 72-04 SC#2: a real writeKey is present but the resolve genuinely
-      // came back null (transient IPNS resolve miss) — fail CLOSED rather
-      // than returning writeChildren: [], which would let the next publish
-      // seal an EMPTY write-body and silently discard the entire write
-      // chain. Distinct from the `!writeSealed` case below (a structurally
-      // never-write-capable folder), which stays fail-open (Pitfall 3 / A1).
-      throw new Error(
-        `getWriteBodyParams: transient IPNS resolve miss for folder ${folder.ipnsName}; refusing to seal an empty write-body and discard the write chain`
-      );
-    }
-    if (!resolved.published.writeSealed) {
-      // Resolved fine, but no write-body was ever sealed — start with [].
-      return { writeKey: wk, writeChildren: [] };
-    }
-    const node = await unsealNode(resolved.published, folder.folderKey, wk);
-    return { writeKey: wk, writeChildren: node.writeBody?.writeChildren ?? [] };
+    return getWriteBodyParamsShared(folder, this.ctx);
   }
 
   /**
@@ -1379,13 +1336,10 @@ export class CipherBoxClient {
    * in-memory FolderState, INCLUDING the unsealed `metadata` Node mirror when
    * present (68.1-22).
    *
-   * `getWriteBodyParams` prefers `metadata.writeBody.writeChildren` and
-   * `dfsFindFolder` walks `metadata.writeBody` directly, so leaving the mirror
-   * stale after a publish makes the NEXT mutation re-seal an OUTDATED write
-   * chain — silently dropping WriteChildRefs inserted by earlier mutations in
-   * the same session. That drop is what made cold-reload DFS descent unable to
-   * recover just-created subfolders (GAP-2 symptom) and made
-   * resolveShareEncryptedWriteKey fail closed on freshly-created items.
+   * 72-10 SC#6: delegates to the shared `write-body-params.ts` implementation
+   * (identical to `bin/index.ts`'s copy) — see that module's doc comment for
+   * why leaving the `metadata.writeBody` mirror stale after a publish would
+   * silently drop WriteChildRefs on the next mutation (GAP-2).
    */
   private adoptPublishedFolderState(
     folder: FolderState,
@@ -1393,30 +1347,13 @@ export class CipherBoxClient {
     newSequenceNumber: bigint,
     publishedWriteChildren?: WriteChildRef[]
   ): void {
-    folder.children = publishedChildren;
-    folder.sequenceNumber = newSequenceNumber;
-    folder.lastLoadedAt = Date.now();
-    if (folder.metadata) {
-      folder.metadata.children = publishedChildren;
-      if (publishedWriteChildren) {
-        if (folder.metadata.writeBody) {
-          folder.metadata.writeBody.writeChildren = publishedWriteChildren;
-        } else {
-          // 68.1-29: the folder carried a read-only metadata mirror (no
-          // write-body — e.g. loaded via loadFolder, or getWriteBodyParams
-          // sourced the chain from the on-wire node rather than the mirror) but
-          // this publish sealed a real write chain. CREATE the mirror so the
-          // next getWriteBodyParams (prefers metadata.writeBody) and DFS descent
-          // (walks metadata.writeBody.writeChildren) see the new WriteChildRefs
-          // instead of the absent-mirror fallback that dropped them.
-          folder.metadata.writeBody = {
-            ipnsPrivateKey: new Uint8Array(folder.ipnsKeypair.privateKey),
-            writeChildren: publishedWriteChildren,
-          };
-        }
-      }
-    }
-    this.folderTree.set(folder.ipnsName, folder);
+    adoptPublishedFolderStateShared(
+      this.folderTree,
+      folder,
+      publishedChildren,
+      newSequenceNumber,
+      publishedWriteChildren
+    );
   }
 
   /**

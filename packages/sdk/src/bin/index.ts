@@ -24,14 +24,14 @@ import {
   sealChildWriteKey,
   unsealChildReadKey,
   unsealChildWriteKey,
-  unsealNode,
   type BinEntry,
   type RecycleBinMetadata,
 } from '@cipherbox/core';
-import type { SealedChildRef, Node, PublishedNode, WriteChildRef } from '@cipherbox/core';
+import type { SealedChildRef, Node, WriteChildRef } from '@cipherbox/core';
 import { bytesToHex, hexToBytes, wrapKey } from '@cipherbox/crypto';
 import type { FolderTree } from '../state/folder-tree';
 import type { FolderState } from '../types';
+import { getWriteBodyParams, adoptPublishedFolderState } from '../write-body-params';
 
 /** Current bin metadata version. */
 const BIN_METADATA_VERSION = 'v1' as const;
@@ -55,93 +55,6 @@ export type BinState = {
   sequenceNumber: number;
   ipnsName: string;
 };
-
-// ---------------------------------------------------------------------------
-// Internal helpers: write-body preservation (D-03)
-// ---------------------------------------------------------------------------
-
-/**
- * Resolve the write-body params (`writeKey` + current `writeChildren`) the bin
- * publish sites must thread into `updateFolderMetadataAndPublish` so the
- * republished owned folder PRESERVES its existing write chain (D-03).
- *
- * Mirrors CipherBoxClient.getWriteBodyParams (client.ts): a legacy zero-fallback
- * writeKey returns `{}` (write-body-less publish, pre-D-03 behavior); an
- * in-memory `folder.metadata.writeBody` is preferred; otherwise the CURRENT
- * on-wire node is unsealed once. A present-but-unopenable write-body throws
- * fail-closed (T-68.1-01-03). Never zeroes folder keys (caller-owned, D-09).
- */
-async function getWriteBodyParams(
-  folder: FolderState,
-  ctx: SdkContext
-): Promise<{ writeKey?: Uint8Array; writeChildren?: WriteChildRef[] }> {
-  const wk = folder.writeKey;
-  if (!wk || wk.length !== 32 || wk.every((b) => b === 0)) {
-    return {};
-  }
-  if (folder.metadata?.writeBody) {
-    return { writeKey: wk, writeChildren: folder.metadata.writeBody.writeChildren };
-  }
-  const resolved = await sdkCore.resolveIpnsRecord(folder.ipnsName, ctx);
-  if (!resolved) {
-    // 72-04 SC#2: a real writeKey is present but the resolve genuinely
-    // came back null (transient IPNS resolve miss) — fail CLOSED rather
-    // than returning writeChildren: [], which would let the next publish
-    // seal an EMPTY write-body and silently discard the entire write
-    // chain. Distinct from the `!writeSealed` case below (a structurally
-    // never-write-capable folder), which stays fail-open (Pitfall 3 / A1).
-    // Mirrors CipherBoxClient.getWriteBodyParams (client.ts) — keep both
-    // copies identical (Plan 08 dedupe precondition).
-    throw new Error(
-      `getWriteBodyParams: transient IPNS resolve miss for folder ${folder.ipnsName}; refusing to seal an empty write-body and discard the write chain`
-    );
-  }
-  const raw = await sdkCore.fetchFromIpfs(ctx, resolved.cid);
-  const published = JSON.parse(new TextDecoder().decode(raw)) as PublishedNode;
-  if (!published.writeSealed) return { writeKey: wk, writeChildren: [] };
-  const node = await unsealNode(published, folder.folderKey, wk);
-  return { writeKey: wk, writeChildren: node.writeBody?.writeChildren ?? [] };
-}
-
-/**
- * Adopt a successful `updateFolderMetadataAndPublish` result into the
- * in-memory FolderState, INCLUDING the unsealed `metadata` Node mirror
- * (68.1-22 — mirrors CipherBoxClient.adoptPublishedFolderState).
- *
- * The bin publish sites previously discarded the publish result entirely,
- * leaving `folderState.sequenceNumber` one step behind the wire — so the very
- * next publish against the same folder (e.g. restoreFromBin right after
- * deleteToBin) hit the server's anti-rollback gate with a 409 Conflict.
- */
-function adoptPublishedFolderState(
-  folderTree: FolderTree,
-  folder: FolderState,
-  publishedChildren: SealedChildRef[],
-  newSequenceNumber: bigint,
-  publishedWriteChildren?: WriteChildRef[]
-): void {
-  folder.children = publishedChildren;
-  folder.sequenceNumber = newSequenceNumber;
-  folder.lastLoadedAt = Date.now();
-  if (folder.metadata) {
-    folder.metadata.children = publishedChildren;
-    if (publishedWriteChildren) {
-      if (folder.metadata.writeBody) {
-        folder.metadata.writeBody.writeChildren = publishedWriteChildren;
-      } else {
-        // 68.1-29: create the write-body mirror when the folder was loaded with a
-        // read-only metadata mirror but this publish sealed a real write chain, so
-        // the next getWriteBodyParams/DFS read sees the new WriteChildRefs (mirrors
-        // CipherBoxClient.adoptPublishedFolderState).
-        folder.metadata.writeBody = {
-          ipnsPrivateKey: new Uint8Array(folder.ipnsKeypair.privateKey),
-          writeChildren: publishedWriteChildren,
-        };
-      }
-    }
-  }
-  folderTree.set(folder.ipnsName, folder);
-}
 
 // ---------------------------------------------------------------------------
 // Internal helpers: load / save bin metadata
