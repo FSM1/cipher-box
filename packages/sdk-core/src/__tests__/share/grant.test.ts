@@ -9,7 +9,12 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { issueReadGrant, claimInviteReadKey, claimInvite } from '../../share/grant';
+import {
+  issueReadGrant,
+  claimInviteReadKey,
+  claimInvite,
+  type ReadGrantPayload,
+} from '../../share/grant';
 
 // ---------------------------------------------------------------------------
 // Module mocks — hoisted before all imports.
@@ -62,10 +67,7 @@ const EXPECTED_ENCRYPTED_READ_KEY = btoa(String.fromCharCode(0xde, 0xad, 0xbe, 0
 // ---------------------------------------------------------------------------
 
 describe('issueReadGrant', () => {
-  const insertShareFn = vi.fn<
-    [Parameters<Parameters<typeof issueReadGrant>[0]['insertShareFn']>[0]],
-    Promise<{ shareId: string }>
-  >();
+  const insertShareFn = vi.fn<(payload: ReadGrantPayload) => Promise<{ shareId: string }>>();
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -292,11 +294,8 @@ describe('claimInvite', () => {
   /** base64 of CLAIMER_WRAPPED_BYTES — the expected claimer encryptedReadKey. */
   const EXPECTED_CLAIMER_REF = btoa(String.fromCharCode(0xca, 0xfe, 0xba, 0xbe));
 
-  const getInviteDataFn = vi.fn<[], Promise<{ encryptedReadKey: string }>>();
-  const insertShareFn = vi.fn<
-    [Parameters<Parameters<typeof claimInvite>[0]['insertShareFn']>[0]],
-    Promise<{ shareId: string }>
-  >();
+  const getInviteDataFn = vi.fn<(token: string) => Promise<{ encryptedReadKey: string }>>();
+  const insertShareFn = vi.fn<(payload: ReadGrantPayload) => Promise<{ shareId: string }>>();
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -374,7 +373,7 @@ describe('claimInvite', () => {
     let capturedEphemeral: Uint8Array | undefined;
     let capturedClaimer: Uint8Array | undefined;
     mockFns.reWrapKey.mockImplementation(
-      async (wrapped: Uint8Array, ephKey: Uint8Array, clKey: Uint8Array) => {
+      async (_wrapped: Uint8Array, ephKey: Uint8Array, clKey: Uint8Array) => {
         capturedEphemeral = new Uint8Array(ephKey);
         capturedClaimer = new Uint8Array(clKey);
         return CLAIMER_WRAPPED_BYTES;

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 import { publishWithCas } from '../cas';
 import { ConflictError } from '../errors';
 import { createMockContext } from './helpers';
@@ -26,7 +26,20 @@ vi.mock('../ipns', () => ({
 
 type TestData = { value: string; versions?: string[] };
 
-function makeParams(overrides?: Partial<Parameters<typeof publishWithCas<TestData>>[0]>) {
+type PublishWithCasParams = Parameters<typeof publishWithCas<TestData>>[0];
+type EncodeAndUploadFn = PublishWithCasParams['encodeAndUpload'];
+type DecodeRemoteFn = PublishWithCasParams['decodeRemote'];
+type MergeFn = PublishWithCasParams['merge'];
+
+type MakeParamsOverrides = Partial<
+  Omit<PublishWithCasParams, 'encodeAndUpload' | 'decodeRemote' | 'merge'>
+> & {
+  encodeAndUpload?: Mock<EncodeAndUploadFn>;
+  decodeRemote?: Mock<DecodeRemoteFn>;
+  merge?: Mock<MergeFn>;
+};
+
+function makeParams(overrides?: MakeParamsOverrides) {
   const localData: TestData = { value: 'local' };
   const baseData: TestData = { value: 'base' };
 
@@ -37,9 +50,9 @@ function makeParams(overrides?: Partial<Parameters<typeof publishWithCas<TestDat
     ctx: createMockContext(),
     maxAttempts: 4,
     backoff: false, // default off so tests don't need timer mocks unless testing backoff
-    encodeAndUpload: vi.fn().mockResolvedValue('bafy-cid-1'),
-    decodeRemote: vi.fn(),
-    merge: vi.fn().mockReturnValue({ merged: { value: 'merged' } }),
+    encodeAndUpload: vi.fn<EncodeAndUploadFn>().mockResolvedValue('bafy-cid-1'),
+    decodeRemote: vi.fn<DecodeRemoteFn>(),
+    merge: vi.fn<MergeFn>().mockReturnValue({ merged: { value: 'merged' } }),
     localData,
     baseData,
     ...overrides,
@@ -83,7 +96,7 @@ describe('publishWithCas', () => {
     const remoteData: TestData = { value: 'remote' };
     const mergedData: TestData = { value: 'merged' };
     const params = makeParams({
-      merge: vi.fn().mockReturnValue({ merged: mergedData }),
+      merge: vi.fn<MergeFn>().mockReturnValue({ merged: mergedData }),
     });
 
     const conflictError = { response: { status: 409 } };
@@ -124,7 +137,9 @@ describe('publishWithCas', () => {
 
   it('Test 4: prunedCids from merge callback propagate through return', async () => {
     const params = makeParams({
-      merge: vi.fn().mockReturnValue({ merged: { value: 'merged' }, prunedCids: ['cidA', 'cidB'] }),
+      merge: vi
+        .fn<MergeFn>()
+        .mockReturnValue({ merged: { value: 'merged' }, prunedCids: ['cidA', 'cidB'] }),
     });
     const conflictError = { response: { status: 409 } };
     mockFns.createAndPublishIpnsRecord
@@ -143,7 +158,7 @@ describe('publishWithCas', () => {
   it('Test 4b: prunedCids accumulate and dedupe across multiple merge rounds', async () => {
     const params = makeParams({
       merge: vi
-        .fn()
+        .fn<MergeFn>()
         .mockReturnValueOnce({ merged: { value: 'merged-1' }, prunedCids: ['cidA', 'cidB'] })
         .mockReturnValueOnce({ merged: { value: 'merged-2' }, prunedCids: ['cidB', 'cidC'] }),
     });
