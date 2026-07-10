@@ -49,6 +49,10 @@ export class ShareInvitesController {
     type: InviteResponseDto,
   })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({
+    status: 403,
+    description: 'Caller is not the registered owner of the shared node',
+  })
   async createInvite(
     @Request() req: RequestWithUser,
     @Body() dto: CreateInviteDto

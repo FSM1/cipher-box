@@ -1402,6 +1402,9 @@
           "401": {
             "description": "Unauthorized"
           },
+          "403": {
+            "description": "Caller is not the registered owner of the shared node"
+          },
           "404": {
             "description": "Recipient not found"
           },
@@ -1710,6 +1713,9 @@
           "204": {
             "description": "Grant updated"
           },
+          "400": {
+            "description": "Invalid request body"
+          },
           "401": {
             "description": "Unauthorized"
           },
@@ -1841,6 +1847,9 @@
               }
             }
           },
+          "400": {
+            "description": "A write-capable invite was claimed without a re-wrapped encryptedWriteKey"
+          },
           "401": {
             "description": "Unauthorized"
           },
@@ -1888,6 +1897,9 @@
           },
           "401": {
             "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Caller is not the registered owner of the shared node"
           }
         },
         "security": [

@@ -121,6 +121,10 @@ export class InvitesController {
     description: 'Invite claimed successfully',
     type: ClaimInviteResponseDto,
   })
+  @ApiResponse({
+    status: 400,
+    description: 'A write-capable invite was claimed without a re-wrapped encryptedWriteKey',
+  })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 404, description: 'Invite not found or expired' })
   @ApiResponse({ status: 409, description: 'Invite already claimed or self-claim' })

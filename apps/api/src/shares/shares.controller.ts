@@ -46,6 +46,10 @@ export class SharesController {
   })
   @ApiResponse({ status: 201, description: 'Share created', type: CreateShareResponseDto })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({
+    status: 403,
+    description: 'Caller is not the registered owner of the shared node',
+  })
   @ApiResponse({ status: 404, description: 'Recipient not found' })
   @ApiResponse({ status: 409, description: 'Share already exists or self-share' })
   async createShare(
@@ -234,6 +238,7 @@ export class SharesController {
       'the client-supplied ciphertext as-is.',
   })
   @ApiResponse({ status: 204, description: 'Grant updated' })
+  @ApiResponse({ status: 400, description: 'Invalid request body' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Only the sharer can update' })
   @ApiResponse({ status: 404, description: 'Share not found' })
