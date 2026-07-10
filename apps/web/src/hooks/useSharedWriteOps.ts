@@ -216,7 +216,6 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
           destFolderId,
           destIpnsName,
           vaultPrivateKey,
-          getShareKeysFn: fetchShareKeys,
         });
       }, 'Shared folder move failed');
     },
@@ -257,7 +256,6 @@ export function useSharedWriteOps(p: SharedWriteOpsParams) {
               destFolderId,
               destIpnsName,
               vaultPrivateKey,
-              getShareKeysFn: fetchShareKeys,
             })
           );
         }
