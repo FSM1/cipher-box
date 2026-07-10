@@ -14,19 +14,13 @@
 
 import { sealNode, unsealNode } from '@cipherbox/core';
 import type { Node, PublishedNode, SealedChildRef, WriteChildRef } from '@cipherbox/core';
-import {
-  generateEd25519Keypair,
-  generateRandomBytes,
-  deriveIpnsName,
-  wrapKey,
-  bytesToHex,
-  hexToBytes,
-} from '@cipherbox/crypto';
+import { generateEd25519Keypair, generateRandomBytes, deriveIpnsName } from '@cipherbox/crypto';
 import type { SdkContext, TeeKeys } from '../types';
 import { addToIpfs, fetchFromIpfs } from '../ipfs';
 import { createAndPublishIpnsRecord } from '../ipns';
 import { publishWithCas } from '../cas';
 import { mergeChildren } from './merge';
+import { wrapIpnsKeyForTee } from '../tee/wrap';
 
 /**
  * Create a new subfolder with generated keys.
@@ -95,11 +89,9 @@ export async function createSubfolder(params: {
       );
     }
     // ECIES-wrap the generated IPNS private key under the TEE public key.
-    // Do NOT zero ipnsPrivateKey here — wrapKey reads but does not consume the buffer;
-    // the caller is the terminal owner (D-09).
-    const teePublicKeyBytes = hexToBytes(currentPublicKey);
-    const wrappedBytes = await wrapKey(ipnsPrivateKey, teePublicKeyBytes);
-    encryptedIpnsPrivateKey = bytesToHex(wrappedBytes);
+    // Do NOT zero ipnsPrivateKey here — wrapIpnsKeyForTee borrows the buffer, it
+    // does not consume it; the caller is the terminal owner (D-09).
+    encryptedIpnsPrivateKey = await wrapIpnsKeyForTee(ipnsPrivateKey, currentPublicKey);
     keyEpoch = currentEpoch;
   }
 
@@ -162,6 +154,18 @@ export async function createSubfolder(params: {
 export async function updateFolderMetadataAndPublish(params: {
   children: SealedChildRef[];
   baseChildren?: SealedChildRef[];
+  /**
+   * Base write-body snapshot (pre-mutation `writeChildren`), keyed by
+   * `childId` (UUID) — the write-plane analog of `baseChildren`. When
+   * supplied, the CAS-409 write-body merge becomes base-aware: a childId
+   * present in `baseWriteChildren` but ABSENT from `writeChildren` (this
+   * call's own local state) is treated as an intentional delete this
+   * transaction already committed to, and is pruned even if a racing
+   * writer's stale remote snapshot still carries it (SC#1 Critical Finding
+   * 2 / T-72-03-01). When omitted, the merge falls back to the legacy naive
+   * union (back-compat for callers that have not threaded this through yet).
+   */
+  baseWriteChildren?: WriteChildRef[];
   /**
    * Optional injectable conflict-resolution policy for the CAS-409 merge
    * closure below. Defaults to `mergeChildren` (remote-wins) — every
@@ -235,10 +239,14 @@ export async function updateFolderMetadataAndPublish(params: {
   // childId) must be merged separately on a 409 or the retry reseals a STALE
   // write chain and DROPS any WriteChildRef a concurrent writer added — the
   // exact write-plane clobber phase 68.1 exists to prevent. `currentWriteChildren`
-  // is what encodeAndUpload seals; decodeRemote captures the remote write-body and
-  // merge() unions it in (write plane is add-only here — deletes are preserved
-  // verbatim per D-03/68.1-02 — so a union never resurrects an intentionally
-  // dropped entry). Only meaningful when a real writeKey is supplied.
+  // is what encodeAndUpload seals; decodeRemote captures the remote write-body.
+  // merge() applies a BASE-AWARE prune (SC#1 Critical Finding 2 / T-72-03-01):
+  // a childId present in `baseWriteChildren` but absent from the caller's local
+  // `writeChildren` is an intentional delete this transaction already committed
+  // to, and is pruned even when a racing writer's stale remote snapshot still
+  // carries it — a plain union would silently resurrect it. A childId absent
+  // from base but present in remote is a genuine concurrent add and is always
+  // kept. Only meaningful when a real writeKey is supplied.
   let currentWriteChildren: WriteChildRef[] = params.writeChildren ?? [];
   let remoteWriteChildren: WriteChildRef[] = [];
 
@@ -326,15 +334,51 @@ export async function updateFolderMetadataAndPublish(params: {
       local: SealedChildRef[],
       remote: SealedChildRef[]
     ) => {
-      // Union the remote writer's write-body entries into the local chain
-      // (keyed by childId, remote wins on conflict) so the resealed write-body
-      // preserves BOTH writers' WriteChildRefs. Only when a real writeKey is in
-      // play — otherwise no write-body is sealed at all.
+      // Merge the remote writer's write-body entries into the local chain,
+      // keyed by childId. Only when a real writeKey is in play — otherwise no
+      // write-body is sealed at all.
       if (params.writeKey) {
-        const byChildId = new Map<string, WriteChildRef>();
-        for (const wc of currentWriteChildren) byChildId.set(wc.childId, wc);
-        for (const wc of remoteWriteChildren) byChildId.set(wc.childId, wc);
-        currentWriteChildren = Array.from(byChildId.values());
+        if (params.baseWriteChildren) {
+          // Base-aware 3-way prune (SC#1 Critical Finding 2, extended by the
+          // F5 remote-delete fix): a childId present in base is kept ONLY if
+          // it is STILL present on BOTH sides (local and remote) — if EITHER
+          // side dropped it since base, that deletion is honored and the
+          // entry is never resurrected, regardless of which side raced
+          // ahead. This is symmetric: a childId present in base but absent
+          // from local is never resurrected by a racing writer's stale
+          // remote snapshot that still carries it (Test C); a childId
+          // present in base and untouched in local but concurrently DELETED
+          // by the remote writer is likewise dropped, not carried forward
+          // just because local's stale copy still has it (F5 — the prior
+          // version only protected local's own deletes, not remote's).
+          // A childId absent from base (a genuinely concurrent add, from
+          // either side) is always kept — neither side can have "deleted"
+          // something it never knew existed (Test B).
+          const baseIds = new Set(params.baseWriteChildren.map((wc) => wc.childId));
+          const localIds = new Set(currentWriteChildren.map((wc) => wc.childId));
+          const mergedMap = new Map<string, WriteChildRef>();
+          for (const wc of currentWriteChildren) {
+            if (!baseIds.has(wc.childId)) mergedMap.set(wc.childId, wc);
+          }
+          for (const wc of remoteWriteChildren) {
+            if (!baseIds.has(wc.childId) || localIds.has(wc.childId)) {
+              // Either a genuinely concurrent remote add, or present in base
+              // and still present on both sides — remote wins on a
+              // conflicting value for an existing entry (matches prior
+              // behavior). Otherwise (present in base, absent from local):
+              // fall through and drop it — one side deleted it.
+              mergedMap.set(wc.childId, wc);
+            }
+          }
+          currentWriteChildren = Array.from(mergedMap.values());
+        } else {
+          // No base snapshot supplied — legacy naive union (back-compat for
+          // callers that have not threaded baseWriteChildren through yet).
+          const byChildId = new Map<string, WriteChildRef>();
+          for (const wc of currentWriteChildren) byChildId.set(wc.childId, wc);
+          for (const wc of remoteWriteChildren) byChildId.set(wc.childId, wc);
+          currentWriteChildren = Array.from(byChildId.values());
+        }
       }
       // SC#1 site B / T-70-01: defaults to the generic remote-wins mergeChildren
       // for every non-rotation caller; the rotation engine opts in explicitly

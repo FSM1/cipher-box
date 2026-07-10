@@ -4,12 +4,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { CipherBoxClient } from '../client';
-import {
-  initializeVault,
-  encryptVaultKeys,
-  type FolderChild,
-  type FilePointer,
-} from '@cipherbox/core';
+import { initializeVault, encryptVaultKeys } from '@cipherbox/core';
 import { deriveIpnsName, hexToBytes, bytesToHex } from '@cipherbox/crypto';
 import type { FolderTree } from '../state/folder-tree';
 import type { BinState } from '../bin';
@@ -23,7 +18,21 @@ interface ClientInternals {
 const API = 'http://localhost:3000';
 const SECRET = 'e2e-test-secret-do-not-use-in-production';
 
-// TODO(phase 65): re-enable when write-chain stubs are implemented
+// Live-stack integration suite (NOT legacy, NOT phase-gated -- this is a
+// deliberate, permanent infra gate). These specs exercise CipherBoxClient
+// against a REAL running API + docker stack (Postgres/Redis/Kubo relay) --
+// no sdk-core/crypto/core mocks at all, unlike every other file in this
+// directory. They are always `.skip`'d for the regular unit-test run (`pnpm
+// --filter @cipherbox/sdk test`), which never has that stack available, and
+// are meant to be run manually/locally or from a dedicated e2e job:
+//
+//   docker compose up -d          # postgres, redis, kubo relay, someguy
+//   pnpm --filter @cipherbox/api dev   # API on :3000 with TEST_LOGIN_SECRET set
+//   pnpm --filter @cipherbox/sdk exec vitest run \
+//     src/__tests__/integration.test.ts --no-coverage
+//
+// `SECRET` below must equal the API's `TEST_LOGIN_SECRET` env var (see
+// project memory: "sdk-e2e live checkpoint run" for the full local recipe).
 const describeIf = describe.skip;
 
 describeIf('SDK Integration (live API)', () => {
@@ -53,7 +62,8 @@ describeIf('SDK Integration (live API)', () => {
         headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ownerPublicKey: bytesToHex(publicKey),
-          encryptedRootFolderKey: bytesToHex(encrypted.encryptedRootFolderKey),
+          encryptedRootReadKey: bytesToHex(encrypted.encryptedRootReadKey),
+          encryptedRootWriteKey: bytesToHex(encrypted.encryptedRootWriteKey),
           encryptedRootIpnsPrivateKey: bytesToHex(encrypted.encryptedIpnsPrivateKey),
           rootIpnsName,
         }),
@@ -65,9 +75,19 @@ describeIf('SDK Integration (live API)', () => {
         getAccessToken: async () => accessToken,
         vaultKeypair: { publicKey, privateKey },
         rootIpnsName,
-        rootFolderKey: vault.rootFolderKey,
+        rootFolderKey: vault.rootReadKey,
+        rootWriteKey: vault.rootWriteKey,
       });
-      client.registerFolder(rootIpnsName, vault.rootFolderKey, vault.rootIpnsKeypair, [], 0n);
+      client.registerFolder(
+        rootIpnsName,
+        vault.rootReadKey,
+        vault.rootIpnsKeypair,
+        [],
+        0n,
+        undefined,
+        undefined,
+        vault.rootWriteKey
+      );
 
       try {
         // 1. Create folder
@@ -87,47 +107,40 @@ describeIf('SDK Integration (live API)', () => {
 
         // 3. Download via downloadFromIpns (same path the web app uses)
         const root = (client as unknown as ClientInternals).folderTree.get(rootIpnsName);
-        const fileChild = root?.children.find(
-          (c): c is FilePointer => c.type === 'file' && c.name === 'test.txt'
-        );
+        const fileChild = root?.children.find((c) => c.name === 'test.txt');
         expect(fileChild).toBeTruthy();
+        const fileIdentity = await client.resolveChildIdentity(fileChild!, vault.rootReadKey);
+        expect(fileIdentity.kind).toBe('file');
 
-        const downloaded = await client.downloadFromIpns(
-          fileChild!.fileMetaIpnsName,
-          vault.rootFolderKey
-        );
+        const downloaded = await client.downloadFromIpns(fileChild!, vault.rootReadKey);
         const downloadedText = new TextDecoder().decode(downloaded);
         expect(downloadedText).toBe(originalContent);
         console.log('  ✓ Download via downloadFromIpns (content verified)');
 
         // 4. Rename file
-        await client.renameItem(rootIpnsName, fileChild!.id, 'renamed.txt');
+        await client.renameItem(rootIpnsName, fileChild!.ipnsName, 'renamed.txt');
         const afterRename = (client as unknown as ClientInternals).folderTree.get(rootIpnsName);
         expect(afterRename).toBeTruthy();
-        expect(
-          afterRename!.children.find((c: FolderChild) => c.name === 'renamed.txt')
-        ).toBeTruthy();
+        expect(afterRename!.children.find((c) => c.name === 'renamed.txt')).toBeTruthy();
         console.log('  ✓ Rename file');
 
         // 5. Rename folder
-        await client.renameItem(rootIpnsName, folder.id, 'RenamedFolder');
+        await client.renameItem(rootIpnsName, folder.ipnsName, 'RenamedFolder');
         const afterFolderRename = (client as unknown as ClientInternals).folderTree.get(
           rootIpnsName
         );
         expect(afterFolderRename).toBeTruthy();
-        expect(
-          afterFolderRename!.children.find((c: FolderChild) => c.name === 'RenamedFolder')
-        ).toBeTruthy();
+        expect(afterFolderRename!.children.find((c) => c.name === 'RenamedFolder')).toBeTruthy();
         console.log('  ✓ Rename folder');
 
         // 6. Delete file
-        const deleteResult = await client.deleteItem(rootIpnsName, fileChild!.id);
-        expect(deleteResult.removedItem.id).toBe(fileChild!.id);
+        const deleteResult = await client.deleteItem(rootIpnsName, fileChild!.ipnsName);
+        expect(deleteResult.removedItem.ipnsName).toBe(fileChild!.ipnsName);
         console.log('  ✓ Delete file');
 
         // 7. Delete folder
-        const folderDelete = await client.deleteItem(rootIpnsName, folder.id);
-        expect(folderDelete.removedItem.id).toBe(folder.id);
+        const folderDelete = await client.deleteItem(rootIpnsName, folder.ipnsName);
+        expect(folderDelete.removedItem.ipnsName).toBe(folder.ipnsName);
         console.log('  ✓ Delete folder');
 
         // Verify root is empty
@@ -167,7 +180,8 @@ describeIf('SDK Integration (live API)', () => {
         headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ownerPublicKey: bytesToHex(publicKey),
-          encryptedRootFolderKey: bytesToHex(encrypted.encryptedRootFolderKey),
+          encryptedRootReadKey: bytesToHex(encrypted.encryptedRootReadKey),
+          encryptedRootWriteKey: bytesToHex(encrypted.encryptedRootWriteKey),
           encryptedRootIpnsPrivateKey: bytesToHex(encrypted.encryptedIpnsPrivateKey),
           rootIpnsName,
         }),
@@ -179,9 +193,19 @@ describeIf('SDK Integration (live API)', () => {
         getAccessToken: async () => accessToken,
         vaultKeypair: { publicKey, privateKey },
         rootIpnsName,
-        rootFolderKey: vault.rootFolderKey,
+        rootFolderKey: vault.rootReadKey,
+        rootWriteKey: vault.rootWriteKey,
       });
-      client.registerFolder(rootIpnsName, vault.rootFolderKey, vault.rootIpnsKeypair, [], 0n);
+      client.registerFolder(
+        rootIpnsName,
+        vault.rootReadKey,
+        vault.rootIpnsKeypair,
+        [],
+        0n,
+        undefined,
+        undefined,
+        vault.rootWriteKey
+      );
 
       try {
         // 1. loadBin on fresh account — should return empty state (not null)
@@ -200,7 +224,7 @@ describeIf('SDK Integration (live API)', () => {
         console.log('  ✓ Uploaded file for bin test');
 
         // 3. deleteToBin — should NOT throw "Bin not loaded"
-        await client.deleteToBin(rootIpnsName, fileChild!.id, 'My Vault');
+        await client.deleteToBin(rootIpnsName, fileChild!.ipnsName, 'My Vault');
         console.log('  ✓ deleteToBin succeeded (no "Bin not loaded" error)');
 
         // 4. Verify bin state has the entry
@@ -252,7 +276,8 @@ describeIf('SDK Integration (live API)', () => {
         headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ownerPublicKey: bytesToHex(publicKey),
-          encryptedRootFolderKey: bytesToHex(encrypted.encryptedRootFolderKey),
+          encryptedRootReadKey: bytesToHex(encrypted.encryptedRootReadKey),
+          encryptedRootWriteKey: bytesToHex(encrypted.encryptedRootWriteKey),
           encryptedRootIpnsPrivateKey: bytesToHex(encrypted.encryptedIpnsPrivateKey),
           rootIpnsName,
         }),
@@ -264,9 +289,19 @@ describeIf('SDK Integration (live API)', () => {
         getAccessToken: async () => accessToken,
         vaultKeypair: { publicKey, privateKey },
         rootIpnsName,
-        rootFolderKey: vault.rootFolderKey,
+        rootFolderKey: vault.rootReadKey,
+        rootWriteKey: vault.rootWriteKey,
       });
-      client.registerFolder(rootIpnsName, vault.rootFolderKey, vault.rootIpnsKeypair, [], 0n);
+      client.registerFolder(
+        rootIpnsName,
+        vault.rootReadKey,
+        vault.rootIpnsKeypair,
+        [],
+        0n,
+        undefined,
+        undefined,
+        vault.rootWriteKey
+      );
 
       try {
         // Upload 3 files in one batch
@@ -301,21 +336,18 @@ describeIf('SDK Integration (live API)', () => {
 
         // Verify all 3 appear in folder
         const root = (client as unknown as ClientInternals).folderTree.get(rootIpnsName);
-        const names = root!.children.map((c: FolderChild) => c.name).sort();
+        const names = root!.children.map((c) => c.name).sort();
         expect(names).toContain('batch-a.txt');
         expect(names).toContain('batch-b.txt');
         expect(names).toContain('batch-c.txt');
         console.log('  ✓ All 3 files visible in folder');
 
         // Download one and verify content
-        const fileChild = root!.children.find(
-          (c): c is FilePointer => c.type === 'file' && c.name === 'batch-a.txt'
-        );
+        const fileChild = root!.children.find((c) => c.name === 'batch-a.txt');
         expect(fileChild).toBeTruthy();
-        const downloaded = await client.downloadFromIpns(
-          fileChild!.fileMetaIpnsName,
-          vault.rootFolderKey
-        );
+        const fileIdentity = await client.resolveChildIdentity(fileChild!, vault.rootReadKey);
+        expect(fileIdentity.kind).toBe('file');
+        const downloaded = await client.downloadFromIpns(fileChild!, vault.rootReadKey);
         const text = new TextDecoder().decode(downloaded);
         expect(text).toContain('file-a');
         console.log('  ✓ Downloaded batch-a.txt, content verified');

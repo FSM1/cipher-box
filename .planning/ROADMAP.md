@@ -71,7 +71,7 @@
 - [x] **Phase 69: FUSE and WinFsp — Rust Integration and Grant-Root Awareness** — Symmetric child-key unwrap, `spawn_file_meta_reencrypt` deletion from both callers, grant-root scope computation, durable client floors, `Node` Rust enum, Rust SDK-owned read chain (Phase 68.2 parity), Windows CI gate (completed 2026-07-06)
 - [x] **Phase 70: Rotation Soundness — Deep Merge, Fresh-Record Resume, and Durable Floor Concurrency** — Local-wins merge for rotated child keys, deep `verifySubtreeClean`, true fresh-record crash-resume, grant-callback threading through the real walk, and an atomic/async-safe anti-rollback floor store (5 deferred CodeRabbit/PR-review todos) (completed 2026-07-07)
 - [x] **Phase 71: Share-Invite Security and IPNS Data-Integrity (API)** — Validate sharer root ownership via `ipns_records` creator marker, apply-or-reject later invite grants, `claim_count` CHECK folded into the greenfield cutover, first-publish INSERT-race 409, same-seq CID equivocation hard-guard, direct bulk-revoke DELETE, `ShareInviteService` lifecycle unit coverage, plus a full share-plane rename purging "descriptor" (D-10). Root-uniqueness index dropped (D-03; already covered by vault uniqueness). (completed 2026-07-09)
-- [ ] **Phase 72: SDK Write-Plane Durability and Correctness** — Delete drops the removed child's `WriteChildRef`, fail-closed `getWriteBodyParams` on transient resolve miss, restore-to-different-parent re-homing, `SealedChildRef` size/modifiedAt mirror refresh, legacy `moveInSharedFolder` branch removal, write-plane helper dedup, and two write-chain test-fidelity fixes (8 todos)
+- [x] **Phase 72: SDK Write-Plane Durability and Correctness** — Delete drops the removed child's `WriteChildRef`, fail-closed `getWriteBodyParams` on transient resolve miss, restore-to-different-parent re-homing, `SealedChildRef` size/modifiedAt mirror refresh, legacy `moveInSharedFolder` branch removal, write-plane helper dedup, and two write-chain test-fidelity fixes (8 todos) (completed 2026-07-10)
 - [ ] **Phase 73: Shared Write/Navigation Correctness (Web)** — Preserve nested write capability across navigate-up/breadcrumb restore, invalidate stale nav-stack child snapshots, gate the non-listing read facades with the ROT-07 floor, give WRITE-03 refresh-access a live production trigger, and route drag-payload kind through the resolved listing (5 todos)
 
 ## Phase Details
@@ -819,6 +819,7 @@ Plans:
 - `.planning/todos/pending/2026-07-03-dedupe-sdk-write-plane-helpers.md`
 - `.planning/todos/pending/2026-06-30-write-chain-e2e-seed-index-stability.md`
 - `.planning/todos/pending/2026-06-29-upload-batch-test-mock-type-drift.md`
+- `.planning/todos/pending/2026-07-10-zeroize-file-keys-on-unwrap-error-path.md`
 
 **Success Criteria** (what must be TRUE):
 
@@ -829,7 +830,20 @@ Plans:
 5. The unreachable `moveInSharedFolder` `shareKeys.length > 0` branch (and its `getShareKeysFn` param) is removed, eliminating the latent wrong-key bug
 6. The near-identical write-plane helpers (`client.ts` ↔ `bin/index.ts` `getWriteBodyParams`, `replaceFile`/`restoreFileVersion`) share one primitive; `write-chain-rotation.test.ts` identifies rotated seeds by provenance (not fixed `capturedKeys` offsets); `upload-batch.test.ts` mocks use the current `SealedChildRef` shape
 
-**Plans**: TBD (run `/gsd-plan-phase 72`)
+**Plans**: 10/10 plans complete
+
+Plans:
+
+- [x] 72-01-PLAN.md — SC#5 reachable-path regression gate (rewrite move-in-shared-folder.test.ts) [Wave 0]
+- [x] 72-02-PLAN.md — SC#6 test hardening: upload-batch mock shape + write-chain-rotation seed-by-provenance [Wave 0]
+- [x] 72-03-PLAN.md — SC#1 deleteItem drops WriteChildRef + base-aware write-body merge (no resurrection) [Wave 1]
+- [x] 72-04-PLAN.md — SC#2 getWriteBodyParams fails closed on transient resolve miss (both copies) [Wave 2]
+- [x] 72-05-PLAN.md — SC#3 restoreFromBin re-homes WriteChildRef + permanent-delete drop [Wave 3]
+- [x] 72-06-PLAN.md — SC#4 listingCache invalidation after in-place edit + updateSharedSingleFile zeroize [Wave 4]
+- [x] 72-07-PLAN.md — SC#5 remove dead moveInSharedFolder branch + getShareKeysFn param + web callers [Wave 5]
+- [x] 72-08-PLAN.md — SC#6 walkChildWriteKey 3-mode primitive + hasRealWriteKey predicate [Wave 6]
+- [x] 72-09-PLAN.md — SC#6 wrapIpnsKeyForTee extraction (sdk-core, 3 TEE sites) [Wave 6]
+- [x] 72-10-PLAN.md — SC#6 version-op core extraction + bin getWriteBodyParams/adopt re-point [Wave 7]
 
 ---
 
@@ -846,6 +860,7 @@ Plans:
 - `.planning/todos/pending/2026-07-06-gate-non-listing-read-facades.md`
 - `.planning/todos/pending/2026-07-02-write03-refresh-access-path-has-no-live-trigger.md`
 - `.planning/todos/pending/2026-07-06-sharedfolderrow-drag-kind-classification.md`
+- `.planning/todos/pending/2026-07-06-68.2-coderabbit-hardening-backlog.md` (web-scoped items only — e.g. item 4 `refreshSharedFolder` stale write envelope, item 9 shared-nav seed race; non-web items stay in the backlog)
 
 **Success Criteria** (what must be TRUE):
 

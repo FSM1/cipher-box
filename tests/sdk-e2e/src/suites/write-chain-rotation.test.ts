@@ -46,62 +46,29 @@ import {
 } from '@cipherbox/core';
 import type { Node, PublishedNode } from '@cipherbox/core';
 import {
-  deriveEd25519PublicKey,
   deriveIpnsName,
   generateEd25519Keypair,
   generateRandomBytes,
   unwrapKey,
 } from '@cipherbox/crypto';
+// Namespace import used to vi.spyOn generateEd25519Keypair for provenance-based
+// rotated-seed identification (see Test 2) — spying via the named import binding
+// above would not observe calls made internally inside @cipherbox/sdk-core's
+// bundled rotation engine.
+import * as cryptoModule from '@cipherbox/crypto';
 import { type MultiAccountFixture, createMultiAccountFixture } from '../fixtures/multi-account';
 
 // ---------------------------------------------------------------------------
-// Shared fixture and spy
+// Shared fixture
 // ---------------------------------------------------------------------------
 
 let fixture: MultiAccountFixture;
 
-/**
- * 32-byte values captured from crypto.getRandomValues during write-rotation.
- *
- * rotateWriteSubtree calls generateEd25519Keypair() then generateRandomBytes(32)
- * per node (child-first order). For a 2-node tree (child, then root):
- *   [0] = new child Ed25519 seed
- *   [1] = new child write key
- *   [2] = new root Ed25519 seed
- *   [3] = new root write key
- *
- * AES-GCM IVs (12 bytes) are filtered out by the 32-byte guard below.
- * Reset via clearCapturedKeys() immediately before each rotateWriteFromNode call.
- */
-const capturedKeys: Uint8Array[] = [];
-
-function clearCapturedKeys(): void {
-  for (const key of capturedKeys) {
-    key.fill(0);
-  }
-  capturedKeys.length = 0;
-}
-
 beforeAll(async () => {
   fixture = await createMultiAccountFixture(['alice', 'bob']);
-
-  // Install spy once for the whole suite. The original is called first so
-  // all callers receive real random bytes; we only intercept 32-byte calls.
-  const origGetRV = globalThis.crypto.getRandomValues.bind(globalThis.crypto);
-  vi.spyOn(globalThis.crypto, 'getRandomValues').mockImplementation(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (array: any) => {
-      origGetRV(array as ArrayBufferView);
-      if (array instanceof Uint8Array && array.length === 32) {
-        capturedKeys.push(new Uint8Array(array));
-      }
-      return array;
-    }
-  );
 });
 
 afterAll(async () => {
-  clearCapturedKeys();
   vi.restoreAllMocks();
   if (fixture) await fixture.cleanupAll();
 });
@@ -332,9 +299,20 @@ describe('Write-chain rotation suite (D-04 phase gate)', () => {
       deleteWriteGrantFn,
     };
 
-    // Clear the spy before rotation so indices are stable (child-first: [0]=child-ed25519
-    // seed, [1]=child-writeKey, [2]=root-ed25519 seed, [3]=root-writeKey).
-    clearCapturedKeys();
+    // Identify the rotated Ed25519 seeds by PROVENANCE, not by a fixed offset into a
+    // mixed-purpose random-bytes capture list: rotateWriteSubtree also mints a fresh
+    // 32-byte writeKey per node (and may mint further 32-byte randoms for co-writer
+    // re-wrap), so a fixed positional-index lookup into such a list is brittle to
+    // those extra draws.
+    // Instead, spy directly on generateEd25519Keypair — the ONE call that actually
+    // mints a node's new k51 identity — and read back its real return values.
+    // rotateWriteSubtree processes children strictly before their parent (child-first
+    // / bottom-up, per its own docstring), so for this 2-node tree the spy's call
+    // order is deterministic: call 0 = child's new keypair, call 1 = root's new
+    // keypair. vi.spyOn defaults to pass-through (delegates to the real
+    // implementation and only records calls/results), so rotation behavior is
+    // unaffected — only observed.
+    const keypairSpy = vi.spyOn(cryptoModule, 'generateEd25519Keypair');
 
     // --- Run write-chain rotation (live IPFS + IPNS round-trip) ---
     await rotateWriteFromNode({
@@ -346,17 +324,30 @@ describe('Write-chain rotation suite (D-04 phase gate)', () => {
       callbacks,
     });
 
-    // Derive new IPNS names from the captured Ed25519 seeds.
-    // Child is processed first (child-first / bottom-up): index 0 = child seed.
-    // Root is processed after: index 2 = root seed.
-    expect(capturedKeys.length).toBeGreaterThanOrEqual(4);
-    const newChildIpnsPublicKey = deriveEd25519PublicKey(capturedKeys[0]);
-    const newChildIpnsName = await deriveIpnsName(newChildIpnsPublicKey);
-    const newRootIpnsPublicKey = deriveEd25519PublicKey(capturedKeys[2]);
-    const newRootIpnsName = await deriveIpnsName(newRootIpnsPublicKey);
-    // Zero the captured seeds immediately after derivation — they are Ed25519 private key
-    // material and must not linger in capturedKeys until afterAll (D-09 terminal ownership).
-    clearCapturedKeys();
+    // Exactly one generateEd25519Keypair call per rotated node (child, then root).
+    expect(keypairSpy).toHaveBeenCalledTimes(2);
+    const [childResult, rootResult] = keypairSpy.mock.results;
+    if (childResult.type !== 'return' || rootResult.type !== 'return') {
+      throw new Error(
+        'write-chain-rotation: generateEd25519Keypair spy captured a throw, not a return'
+      );
+    }
+    const newChildKeypair = childResult.value;
+    const newRootKeypair = rootResult.value;
+    keypairSpy.mockRestore();
+
+    let newChildIpnsName: string;
+    let newRootIpnsName: string;
+    try {
+      newChildIpnsName = await deriveIpnsName(newChildKeypair.publicKey);
+      newRootIpnsName = await deriveIpnsName(newRootKeypair.publicKey);
+    } finally {
+      // Zero the captured seeds immediately after derivation — they are Ed25519 private key
+      // material and must not linger past this point (D-09 terminal ownership). Wrapped in
+      // finally so a throw from deriveIpnsName does not skip the zeroing.
+      newChildKeypair.privateKey.fill(0);
+      newRootKeypair.privateKey.fill(0);
+    }
 
     // -----------------------------------------------------------------------
     // WRITE-02: Each node gets a new k51 name; parent re-points to new child name.

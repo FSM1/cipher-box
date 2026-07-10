@@ -3,18 +3,18 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
 current_phase: 72
-current_phase_name: SDK Write-Plane Durability and Correctness
-status: executing
-stopped_at: Phase 70.1 context gathered
-last_updated: "2026-07-09T22:44:07.197Z"
-last_activity: 2026-07-09
-last_activity_desc: Phase 71 complete, transitioned to Phase 72
+current_phase_name: sdk-write-plane-durability-and-correctness
+status: verifying
+stopped_at: Completed 72-10-PLAN.md
+last_updated: "2026-07-10T15:32:28.123Z"
+last_activity: 2026-07-10
+last_activity_desc: Phase 72 execution started
 progress:
   total_phases: 16
-  completed_phases: 13
-  total_plans: 170
-  completed_plans: 169
-  percent: 81
+  completed_phases: 14
+  total_plans: 180
+  completed_plans: 179
+  percent: 88
 ---
 
 # Project State
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-27)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 72 — SDK Write-Plane Durability and Correctness
+**Current focus:** Phase 72 — sdk-write-plane-durability-and-correctness
 
 ## Current Position
 
-Phase: 72 — SDK Write-Plane Durability and Correctness
-Plan: Not started
-Status: Phase 71 complete — Phase 72 not started
-Last activity: 2026-07-09 — Phase 71 complete, transitioned to Phase 72
+Phase: 72 (sdk-write-plane-durability-and-correctness) — EXECUTING
+Plan: 10 of 10
+Status: Phase complete — ready for verification
+Last activity: 2026-07-10 — Phase 72 execution started
 
 Progress: `██████████` 79 / 79 plans (100%)
 
@@ -256,6 +256,16 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 70 P06 | 55min | 3 tasks | 4 files |
 | Phase 70 P07 | 13min | 3 tasks | 2 files |
 | Phase 70 P08 | 55min | 2 tasks | 1 files |
+| Phase 72 P01 | 20min | 1 tasks | 1 files |
+| Phase 72 P02 | 25min | 2 tasks | 2 files |
+| Phase 72 P03 | 25min | 2 tasks | 3 files |
+| Phase 72 P04 | 15min | 2 tasks | 3 files |
+| Phase 72 P05 | 25min | 3 tasks | 5 files |
+| Phase 72 P06 | 20min | 2 tasks | 3 files |
+| Phase 72 P07 | 8min | 2 tasks | 3 files |
+| Phase 72 P08 | 15min | 2 tasks | 1 files |
+| Phase 72 P09 | 8min | 1 tasks | 5 files |
+| Phase 72 P10 | 10min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -553,6 +563,23 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: Test 4 uses a deliberately childless (single file node) rotation root — a traced D-02/D-09 timing analysis shows any multi-level tree crash before the walk's final persist hits an unrecoverable AEAD mismatch via this suite's persistCallback-only fault-injection model
 - [Phase ?]: Test 4 crashes on the FIRST persistCallback call and resumes with EMPTY completedNodeIds plus the CURRENT valid rootReadKey (captured via the existing spy), converging via safe double-rotation
 - [Phase 70 post-gate fix]: 70-04's enqueueConcurrentlyAddedChildren over-reached ROT-05 by pushing a concurrently-added child onto the BFS queue for its own rotateOne pass (requires an IPNS write key the rotating party may not hold) and ran after parentTracking teardown so the re-seal never reached the parent's published SealedChildRef; replaced with createConcurrentAddResealingMerge, an async mergeChildrenFn wrapper invoked inside the D-09 CAS-409 merge that re-seals only the concurrent child's readKeySealed wrapper (trying both the parent's old and already-current key) without rotating the child's own node -- commit 7faa0e82835d56368ea87f969d57b083d43ea9a3; sdk-e2e rotation-crash-safety 4/4 green, sdk-core unit 355/355 green
+- [Phase 72-01]: Rewrote 13-test skipped legacy suite into 1 live test of the reachable write-chain branch instead of modernizing legacy-branch tests slated for deletion in Plan 07 — 72-RESEARCH.md Critical Finding 3: SC#5 had zero regression coverage; modernizing dead-branch tests is wasted effort
+- [Phase 72-02]: write-chain-rotation.test.ts: identify rotated seeds via a scoped vi.spyOn(cryptoModule, 'generateEd25519Keypair') read-back in guaranteed child-first call order, not fixed capturedKeys[0]/[2] offsets — capturedKeys mixed Ed25519 seeds with writeKey/ephemeral randoms at unstable positions; the spy observes the exact minting call and works across the sdk-core dist bundle boundary since @cipherbox/crypto is externalized, unlike createAndPublishIpnsRecord which is bundled internally and not spy-able from outside
+- [Phase ?]: 72-03: Write-plane base-aware merge treats a childId absent from LOCAL (relative to base) as an intentional delete regardless of remote — stricter than the read-plane mergeChildren, required for SC#1's resurrection guard
+- [Phase ?]: 72-03: baseWriteChildren is optional on updateFolderMetadataAndPublish; omitting it falls back to the legacy naive union (back-compat for moveItem/restoreFromBin, not yet threaded)
+- [Phase ?]: 72-03: deleteItem's UUID-resolve-and-drop step fails OPEN (never aborts the already-succeeded read-plane delete)
+- [Phase ?]: [72-04] getWriteBodyParams split: transient-miss with real writeKey throws (fail-closed); structurally-absent writeSealed stays fail-open (unchanged)
+- [Phase 72-05]: restoreFromBin re-homing only runs when sourceFolder.ipnsName !== targetFolderIpnsName (same-parent restore is a write-body no-op)
+- [Phase 72-05]: permanentDeleteFromBin drops the lingering original-parent WriteChildRef by BinEntry.nodeRef.id (captured UUID witness), never a fresh resolve
+- [Phase 72]: [Phase 72-06]: SC#4 reframed per Critical Finding 1 -- fix is listingCache.delete(folderIpnsName) gated on a caller-computed fileContentChanged boolean (size/cid comparison), not a SealedChildRef schema change
+- [Phase 72]: [Phase 72-06]: updateSharedSingleFile's two unwrapKey calls moved inside the existing try/finally so a throw on the second unwrap still zeroes the already-unwrapped first key
+- [Phase 72]: Removed the unreachable moveInSharedFolder legacy share-keys branch and getShareKeysFn param; updated the Plan 01 regression test call site to match (Rule 3 blocking fix, not in plan file list)
+- [Phase ?]: [Phase 72-08]: walkChildWriteKey mode controls ONLY the missing-WriteChildRef lookup; an AEAD unseal failure is NEVER swallowed by any mode (deviates from RESEARCH.md's literal 'nullable' table wording, confirmed by resolveSharedSubfolderWriteKey's own throw-on-tamper regression tests) — Preserving RESEARCH's literal table wording would have converted a security-critical AEAD tamper-detection throw into a silent null return, breaking 2 existing tests and introducing a fail-open regression
+- [Phase ?]: [Phase 72-08]: updateSharedFile's inline write-chain walk (site 5) left as a documented, not-folded exception -- getFileIpnsKeyFn fallback confirmed LIVE via apps/web/src/hooks/useSharedWriteOps.ts resolveFileIpnsKey
+- [Phase ?]: 72-09: only the shared TEE-wrap sequence (hexToBytes -> wrapKey -> bytesToHex) extracted into wrapIpnsKeyForTee; each site's own fail-closed validation throws (per-site error messages) left in place at call sites
+- [Phase ?]: 72-09: vault/index.ts's two root-key wraps (wrapKey(rootReadKey/rootWriteKey, userPublicKey)) left untouched — only the TEE ipns-key wrap was extracted
+- [Phase ?]: runFileVersionOp is not wrapped in withOperation itself -- each public method keeps its own withOperation(name) call for correct per-op telemetry attribution
+- [Phase ?]: write-body-params.ts standardizes the IPNS-resolve path on inline resolveIpnsRecord+fetchFromIpfs+JSON.parse (bin's pre-existing style) rather than client.ts's resolvePublishedNode wrapper, since the extra signatureVerified field was never consumed by getWriteBodyParams
 
 ## Operator Next Steps
 
@@ -560,13 +587,12 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-08T13:40:40.831Z
-**Stopped at:** Phase 70.1 context gathered
+**Last session:** 2026-07-10T15:32:28.115Z
+**Stopped at:** Completed 72-10-PLAN.md
 **Resume file:** 
 
-.planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-CONTEXT.md
+None
 
-- GAP-1 (68.1-13): resolveFileMetadata AEAD Decryption-failed for CTR/streaming video preview and post-upload batch-download -- needs dedicated crypto debugging
 - GAP-2 (68.1-13): full-workflow.spec.ts 3.8 cold-reload multi-level IPNS DFS resolve times out -- needs retry-budget tuning or propagation investigation
 - 68.2-06 gap: FileList.tsx/FileBrowser.tsx/SelectionActionBar.tsx/ContextMenu.tsx/SharedFileBrowser.tsx are not owned by any of the 12 phase-68.2 plans, yet consume the SealedChildRef-vs-ResolvedChild data this phase's D-02/SC#1/#2 goals govern -- assign ownership (Plan 09 or a fast-follow) before Plan 11's kind-cache.ts deletion / allowlist-free grep gate
 - SC#5 desync (partially closed by 68.2-13): CipherBoxClient.ensureFolderLoaded/listFolder now support a gated `{forceResolve:true}` re-resolve for an already-loaded folder, proven by folder-reresolve.test.ts -- but apps/web's two D-03 freshness call sites (useFolderNavigation.ts nav re-resolve, useSyncPolling.ts poll invalidation) do not yet pass forceResolve, so shared-folder-desync.spec.ts step 3.1 is still expected red until Plan 14 wires the web + proves the e2e

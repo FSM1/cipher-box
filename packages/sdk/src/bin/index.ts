@@ -21,15 +21,17 @@ import {
   decryptBinMetadata,
   deriveBinIpnsKeypair,
   sealChildReadKey,
+  sealChildWriteKey,
   unsealChildReadKey,
-  unsealNode,
+  unsealChildWriteKey,
   type BinEntry,
   type RecycleBinMetadata,
 } from '@cipherbox/core';
-import type { SealedChildRef, Node, PublishedNode, WriteChildRef } from '@cipherbox/core';
+import type { SealedChildRef, Node, WriteChildRef } from '@cipherbox/core';
 import { bytesToHex, hexToBytes, wrapKey } from '@cipherbox/crypto';
 import type { FolderTree } from '../state/folder-tree';
 import type { FolderState } from '../types';
+import { getWriteBodyParams, adoptPublishedFolderState } from '../write-body-params';
 
 /** Current bin metadata version. */
 const BIN_METADATA_VERSION = 'v1' as const;
@@ -53,81 +55,6 @@ export type BinState = {
   sequenceNumber: number;
   ipnsName: string;
 };
-
-// ---------------------------------------------------------------------------
-// Internal helpers: write-body preservation (D-03)
-// ---------------------------------------------------------------------------
-
-/**
- * Resolve the write-body params (`writeKey` + current `writeChildren`) the bin
- * publish sites must thread into `updateFolderMetadataAndPublish` so the
- * republished owned folder PRESERVES its existing write chain (D-03).
- *
- * Mirrors CipherBoxClient.getWriteBodyParams (client.ts): a legacy zero-fallback
- * writeKey returns `{}` (write-body-less publish, pre-D-03 behavior); an
- * in-memory `folder.metadata.writeBody` is preferred; otherwise the CURRENT
- * on-wire node is unsealed once. A present-but-unopenable write-body throws
- * fail-closed (T-68.1-01-03). Never zeroes folder keys (caller-owned, D-09).
- */
-async function getWriteBodyParams(
-  folder: FolderState,
-  ctx: SdkContext
-): Promise<{ writeKey?: Uint8Array; writeChildren?: WriteChildRef[] }> {
-  const wk = folder.writeKey;
-  if (!wk || wk.length !== 32 || wk.every((b) => b === 0)) {
-    return {};
-  }
-  if (folder.metadata?.writeBody) {
-    return { writeKey: wk, writeChildren: folder.metadata.writeBody.writeChildren };
-  }
-  const resolved = await sdkCore.resolveIpnsRecord(folder.ipnsName, ctx);
-  if (!resolved) return { writeKey: wk, writeChildren: [] };
-  const raw = await sdkCore.fetchFromIpfs(ctx, resolved.cid);
-  const published = JSON.parse(new TextDecoder().decode(raw)) as PublishedNode;
-  if (!published.writeSealed) return { writeKey: wk, writeChildren: [] };
-  const node = await unsealNode(published, folder.folderKey, wk);
-  return { writeKey: wk, writeChildren: node.writeBody?.writeChildren ?? [] };
-}
-
-/**
- * Adopt a successful `updateFolderMetadataAndPublish` result into the
- * in-memory FolderState, INCLUDING the unsealed `metadata` Node mirror
- * (68.1-22 — mirrors CipherBoxClient.adoptPublishedFolderState).
- *
- * The bin publish sites previously discarded the publish result entirely,
- * leaving `folderState.sequenceNumber` one step behind the wire — so the very
- * next publish against the same folder (e.g. restoreFromBin right after
- * deleteToBin) hit the server's anti-rollback gate with a 409 Conflict.
- */
-function adoptPublishedFolderState(
-  folderTree: FolderTree,
-  folder: FolderState,
-  publishedChildren: SealedChildRef[],
-  newSequenceNumber: bigint,
-  publishedWriteChildren?: WriteChildRef[]
-): void {
-  folder.children = publishedChildren;
-  folder.sequenceNumber = newSequenceNumber;
-  folder.lastLoadedAt = Date.now();
-  if (folder.metadata) {
-    folder.metadata.children = publishedChildren;
-    if (publishedWriteChildren) {
-      if (folder.metadata.writeBody) {
-        folder.metadata.writeBody.writeChildren = publishedWriteChildren;
-      } else {
-        // 68.1-29: create the write-body mirror when the folder was loaded with a
-        // read-only metadata mirror but this publish sealed a real write chain, so
-        // the next getWriteBodyParams/DFS read sees the new WriteChildRefs (mirrors
-        // CipherBoxClient.adoptPublishedFolderState).
-        folder.metadata.writeBody = {
-          ipnsPrivateKey: new Uint8Array(folder.ipnsKeypair.privateKey),
-          writeChildren: publishedWriteChildren,
-        };
-      }
-    }
-  }
-  folderTree.set(folder.ipnsName, folder);
-}
 
 // ---------------------------------------------------------------------------
 // Internal helpers: load / save bin metadata
@@ -455,7 +382,12 @@ export async function addToBin(params: {
   // durable — a throw once the bin entry is persisted (but the folder delete has
   // not happened) leaves the item in BOTH the bin and the folder and, on retry,
   // accumulates a duplicate bin entry. Preserve the existing write-body verbatim
-  // (D-03) — the removed child's WriteChildRef removal is owned by 68.1-02.
+  // (D-03) — the WriteChildRef is intentionally RETAINED here (soft-delete),
+  // not dropped, so a later restoreFromBin can re-home it to a different
+  // parent (SC#3, 72-05). The symmetric release point that DROPS it is
+  // permanentDeleteFromBin (72-05, Open Question 1) — a soft-deleted item
+  // that is never restored and is later permanently deleted has its
+  // lingering ref dropped there instead.
   const writeBodyParams = await getWriteBodyParams(folderState, binCtx.ctx);
 
   // 9. Persist bin metadata BEFORE the destructive source-folder publish.
@@ -523,8 +455,18 @@ export async function restoreFromBin(params: {
   folderTree: FolderTree;
   binState: BinState;
   binCtx: BinOperationContext;
+  /**
+   * The bin entry's original parent FolderState, when resolvable — SC#3
+   * (72-05). Enables cross-folder WriteChildRef re-homing when restoring to
+   * a DIFFERENT parent than the original. Omitted (or the original parent
+   * could not be resolved upstream, e.g. it was itself deleted/moved since
+   * the soft-delete) => the restore proceeds read-plane-only exactly as
+   * before this plan (fail-open, T-72-05-03) — it never throws or blocks
+   * the restore.
+   */
+  sourceFolder?: FolderState;
 }): Promise<{ restoredItem: SealedChildRef; updatedBinState: BinState }> {
-  const { entryId, targetFolderIpnsName, folderTree, binState, binCtx } = params;
+  const { entryId, targetFolderIpnsName, folderTree, binState, binCtx, sourceFolder } = params;
 
   // 1. Find the bin entry
   const entry = binState.entries.find((e) => e.id === entryId);
@@ -579,14 +521,114 @@ export async function restoreFromBin(params: {
   const childrenForPublish = alreadyInFolder
     ? targetFolder.children
     : [...targetFolder.children, restoredItem];
-  // Preserve the target folder's existing write-body verbatim (D-03) — the
-  // restored child's WriteChildRef insertion is owned by 68.1-02, not this plan.
-  const writeBodyParams = await getWriteBodyParams(targetFolder, binCtx.ctx);
+  const targetWriteBodyParams = await getWriteBodyParams(targetFolder, binCtx.ctx);
+  const baseTargetWriteChildren = targetWriteBodyParams.writeChildren;
+  let rehomedTargetWriteChildren = targetWriteBodyParams.writeChildren;
+
+  // SC#3 (72-05): re-home the WriteChildRef when restoring to a DIFFERENT
+  // parent than the original. Reuses moveItem's (68.1-31) dest-before-source
+  // unseal/reseal/drop pattern (client.ts ~L2753-2818), keyed strictly by the
+  // node's own UUID (nodeId, captured on BinEntry.nodeRef.id at addToBin
+  // time — never entry.nodeIpnsName / targetFolderIpnsName, which are
+  // ipnsName-keyed). Pitfall 4: `generation` here is `restoredItem.generation`
+  // (== nodeRef.generation) — the SAME value already used for the read-plane
+  // reseal above — never a second, independently-derived generation.
+  let sourceWriteBodyParams: { writeKey?: Uint8Array; writeChildren?: WriteChildRef[] } = {};
+  let baseSourceWriteChildren: WriteChildRef[] | undefined;
+  let rehomedSourceWriteChildren: WriteChildRef[] | undefined;
+  let didRehome = false;
+
+  if (sourceFolder && sourceFolder.ipnsName !== targetFolderIpnsName) {
+    // The RESOLVE step (getWriteBodyParams) is fail-OPEN (T-72-05-03): a
+    // genuine resolve MISS (record present but momentarily unresolvable,
+    // SC#2) must never block the restore — it degrades to read-plane-only
+    // re-linking, exactly as if sourceFolder had not been supplied at all.
+    // This catch is scoped to ONLY the resolve step — it must NOT also
+    // swallow AEAD unseal/reseal failures below, which fail CLOSED.
+    let sourceResolveFailed = false;
+    try {
+      sourceWriteBodyParams = await getWriteBodyParams(sourceFolder, binCtx.ctx);
+      baseSourceWriteChildren = sourceWriteBodyParams.writeChildren;
+      rehomedSourceWriteChildren = sourceWriteBodyParams.writeChildren;
+    } catch (err) {
+      console.warn(
+        `[CipherBox] restoreFromBin: source folder ${sourceFolder.ipnsName} write-body resolve ` +
+          'failed — restoring read-plane only (no re-homing):',
+        err
+      );
+      rehomedSourceWriteChildren = undefined;
+      baseSourceWriteChildren = undefined;
+      sourceResolveFailed = true;
+    }
+
+    if (!sourceResolveFailed) {
+      if (!targetWriteBodyParams.writeKey || !sourceWriteBodyParams.writeKey) {
+        console.warn(
+          `[CipherBox] restoreFromBin: source or destination folder ${sourceFolder.ipnsName} -> ` +
+            `${targetFolderIpnsName} is read-only — the restored item will not be write-capable ` +
+            'in its new location'
+        );
+      } else {
+        // Write plane is keyed by node UUID (nodeId) — NEVER the ipnsName-based
+        // entry.nodeIpnsName / targetFolderIpnsName handles.
+        const movedWriteRef = sourceWriteBodyParams.writeChildren?.find(
+          (wc) => wc.childId === nodeId
+        );
+        if (movedWriteRef) {
+          // NOTE: deliberately uncaught here — a wrong-key / tampered write
+          // body AEAD failure (unsealChildWriteKey / sealChildWriteKey) must
+          // FAIL CLOSED and propagate out of restoreFromBin, mirroring
+          // walkChildWriteKey (72-08): only a MISSING ref is nullable /
+          // fail-open, an unseal FAILURE never silently downgrades to a
+          // read-plane-only restore.
+          let movedWriteKey: Uint8Array | null = null;
+          try {
+            movedWriteKey = await unsealChildWriteKey(
+              movedWriteRef.writeKeySealed,
+              sourceWriteBodyParams.writeKey,
+              nodeId,
+              nodeKind,
+              generation
+            );
+            const writeKeySealed = await sealChildWriteKey(
+              movedWriteKey,
+              targetWriteBodyParams.writeKey,
+              nodeId,
+              nodeKind,
+              generation
+            );
+            rehomedTargetWriteChildren = [
+              ...(targetWriteBodyParams.writeChildren ?? []).filter((wc) => wc.childId !== nodeId),
+              { childId: nodeId, writeKeySealed },
+            ];
+            rehomedSourceWriteChildren = (sourceWriteBodyParams.writeChildren ?? []).filter(
+              (wc) => wc.childId !== nodeId
+            );
+            didRehome = true;
+          } finally {
+            // Zero the recovered child writeKey on every exit path —
+            // engine-derived, terminal-owned (D-09). Never zero
+            // sourceWriteBodyParams.writeKey / targetWriteBodyParams.writeKey
+            // (tree/caller-owned).
+            movedWriteKey?.fill(0);
+          }
+        }
+        // else: no source WriteChildRef for this node (pre-write-plane or
+        // already read-only) — nothing to re-home, lists stay verbatim.
+      }
+    }
+  }
+
+  // Publish TARGET (restore destination) before SOURCE (original parent) —
+  // dest-before-source (D-12) — so a crash between publishes never orphans
+  // the node's write capability entirely.
   const { newSequenceNumber, publishedChildren, publishedWriteChildren } =
     await sdkCore.updateFolderMetadataAndPublish({
       children: childrenForPublish,
       folderKey: targetFolder.folderKey,
-      ...writeBodyParams,
+      writeKey: targetWriteBodyParams.writeKey,
+      writeChildren: rehomedTargetWriteChildren,
+      baseWriteChildren: baseTargetWriteChildren,
       ipnsPrivateKey: targetFolder.ipnsKeypair.privateKey,
       ipnsPublicKey: targetFolder.ipnsKeypair.publicKey,
       ipnsName: targetFolderIpnsName,
@@ -603,8 +645,52 @@ export async function restoreFromBin(params: {
     targetFolder,
     publishedChildren,
     newSequenceNumber,
-    publishedWriteChildren ?? writeBodyParams.writeChildren
+    publishedWriteChildren ?? rehomedTargetWriteChildren
   );
+
+  if (didRehome && sourceFolder) {
+    // Best-effort (mirrors permanentDeleteFromBin's fail-open lingering-ref
+    // drop / dropLingeringWriteChildRef): the TARGET publish above already
+    // durably restored the item. A failure here (network blip, CAS
+    // exhaustion) must never propagate out of restoreFromBin — that would
+    // skip the bin-entry removal below even though the restore already
+    // succeeded. The stale source WriteChildRef left behind is harmless dead
+    // weight, reconciled later by dropLingeringWriteChildRef.
+    try {
+      const {
+        newSequenceNumber: sourceSeq,
+        publishedChildren: sourcePublishedChildren,
+        publishedWriteChildren: sourcePublishedWriteChildren,
+      } = await sdkCore.updateFolderMetadataAndPublish({
+        children: sourceFolder.children,
+        folderKey: sourceFolder.folderKey,
+        writeKey: sourceWriteBodyParams.writeKey,
+        writeChildren: rehomedSourceWriteChildren,
+        baseWriteChildren: baseSourceWriteChildren,
+        ipnsPrivateKey: sourceFolder.ipnsKeypair.privateKey,
+        ipnsPublicKey: sourceFolder.ipnsKeypair.publicKey,
+        ipnsName: sourceFolder.ipnsName,
+        sequenceNumber: sourceFolder.sequenceNumber,
+        ctx: binCtx.ctx,
+        nodeId: sourceFolder.nodeId,
+        nodeGeneration: sourceFolder.nodeGeneration,
+      });
+
+      adoptPublishedFolderState(
+        folderTree,
+        sourceFolder,
+        sourcePublishedChildren,
+        sourceSeq,
+        sourcePublishedWriteChildren ?? rehomedSourceWriteChildren
+      );
+    } catch (err) {
+      console.warn(
+        `[CipherBox] restoreFromBin: source-side cleanup publish for ${sourceFolder.ipnsName} ` +
+          'failed — stale WriteChildRef will linger there until reconciled:',
+        err
+      );
+    }
+  }
 
   // 7. Remove entry from bin and publish updated bin metadata
   const remainingEntries = binState.entries.filter((e) => e.id !== entryId);
@@ -654,6 +740,91 @@ export async function restoreFromBin(params: {
 }
 
 /**
+ * Drop a bin entry's lingering `WriteChildRef` from its original parent's
+ * write-body (SC#1/SC#3 symmetry, 72-05 Open Question 1). `addToBin` RETAINS
+ * the removed child's `WriteChildRef` in the original parent's write-body (so
+ * a later `restoreFromBin` can re-home it) -- every bin-clearing path
+ * (permanent-delete, empty, purge) is a symmetric release point that must
+ * drop it, or the ref lingers forever (unbounded write-body growth) and a
+ * same-UUID node created later could resurrect a write link to it.
+ *
+ * Shared by `permanentDeleteFromBin`, `emptyBin`, and `purgeExpiredEntries`
+ * so the three bin-clearing paths cannot silently drift apart on this
+ * hygiene behavior (CodeRabbit F3: `emptyBin`/`purgeExpiredEntries` had no
+ * equivalent of this cleanup before this extraction).
+ *
+ * Fail-open (matches `deleteItem`'s hygiene posture, Pitfall 2): any
+ * resolve/publish failure here is logged and swallowed -- it must never
+ * block the caller's CID cleanup + bin-entry removal.
+ */
+async function dropLingeringWriteChildRef(params: {
+  originalParent: FolderState;
+  nodeId: string;
+  binCtx: BinOperationContext;
+  folderTree?: FolderTree;
+}): Promise<void> {
+  const { originalParent, nodeId, binCtx, folderTree } = params;
+  try {
+    const writeBodyParams = await getWriteBodyParams(originalParent, binCtx.ctx);
+    const hasLingeringRef = writeBodyParams.writeChildren?.some((wc) => wc.childId === nodeId);
+    if (!writeBodyParams.writeKey || !hasLingeringRef) return;
+
+    const baseWriteChildren = writeBodyParams.writeChildren;
+    const trimmedWriteChildren = (writeBodyParams.writeChildren ?? []).filter(
+      (wc) => wc.childId !== nodeId
+    );
+    const { newSequenceNumber, publishedChildren, publishedWriteChildren } =
+      await sdkCore.updateFolderMetadataAndPublish({
+        children: originalParent.children,
+        folderKey: originalParent.folderKey,
+        writeKey: writeBodyParams.writeKey,
+        writeChildren: trimmedWriteChildren,
+        baseWriteChildren,
+        ipnsPrivateKey: originalParent.ipnsKeypair.privateKey,
+        ipnsPublicKey: originalParent.ipnsKeypair.publicKey,
+        ipnsName: originalParent.ipnsName,
+        sequenceNumber: originalParent.sequenceNumber,
+        ctx: binCtx.ctx,
+        nodeId: originalParent.nodeId,
+        nodeGeneration: originalParent.nodeGeneration,
+      });
+
+    const finalWriteChildren = publishedWriteChildren ?? trimmedWriteChildren;
+    if (folderTree) {
+      adoptPublishedFolderState(
+        folderTree,
+        originalParent,
+        publishedChildren,
+        newSequenceNumber,
+        finalWriteChildren
+      );
+    } else {
+      originalParent.children = publishedChildren;
+      originalParent.sequenceNumber = newSequenceNumber;
+      // 72-follow-up F4: without a folderTree to route through
+      // adoptPublishedFolderState, the in-memory metadata mirror (consulted
+      // FIRST by getWriteBodyParams and walked directly by dfsFindFolder)
+      // was left stale here -- the NEXT getWriteBodyParams call would see
+      // the pre-trim writeChildren and re-seal the dropped ref right back
+      // in, silently undoing this cleanup (the GAP-2 class this phase
+      // fixed elsewhere). Sync it explicitly.
+      if (originalParent.metadata) {
+        originalParent.metadata.children = publishedChildren;
+        if (originalParent.metadata.writeBody) {
+          originalParent.metadata.writeBody.writeChildren = finalWriteChildren;
+        }
+      }
+    }
+  } catch (err) {
+    console.warn(
+      `[CipherBox] dropLingeringWriteChildRef: failed to drop lingering WriteChildRef from ` +
+        `original parent ${originalParent.ipnsName}:`,
+      err
+    );
+  }
+}
+
+/**
  * Permanently delete a bin entry (unpin CIDs, remove from bin metadata).
  *
  * For files: unpins the content CID if available.
@@ -663,12 +834,38 @@ export async function permanentDeleteFromBin(params: {
   entryId: string;
   binState: BinState;
   binCtx: BinOperationContext;
+  /**
+   * The bin entry's original parent FolderState, when resolvable (SC#1
+   * symmetry / Open Question 1, 72-05). `addToBin` RETAINS the removed
+   * child's WriteChildRef in the original parent's write-body (so a later
+   * `restoreFromBin` can re-home it) — permanent removal is the symmetric
+   * release point that drops it. Omitted (or the original parent could not
+   * be resolved upstream) => permanent-delete proceeds exactly as before
+   * this plan (fail-open — never blocks CID cleanup + entry removal).
+   */
+  originalParent?: FolderState;
+  folderTree?: FolderTree;
 }): Promise<{ updatedBinState: BinState }> {
   const entry = params.binState.entries.find((e) => e.id === params.entryId);
   if (!entry) throw new Error('Bin entry not found');
 
   // Unpin content + version + descendant CIDs (best-effort, shared helper).
   await unpinEntryCids(params.binCtx.ctx, entry);
+
+  // SC#1 symmetry (Open Question 1): drop the lingering WriteChildRef from
+  // the original parent's write-body, by the node UUID captured on
+  // BinEntry.nodeRef.id at addToBin time (Pitfall 4 — use the captured
+  // witness, not a fresh resolve). Fail OPEN on any failure: a resolve miss
+  // or publish failure here must never block the CID cleanup + entry
+  // removal below (matches deleteItem's hygiene posture, Pitfall 2).
+  if (params.originalParent && entry.nodeRef?.id) {
+    await dropLingeringWriteChildRef({
+      originalParent: params.originalParent,
+      nodeId: entry.nodeRef.id,
+      binCtx: params.binCtx,
+      folderTree: params.folderTree,
+    });
+  }
 
   // Remove from bin metadata and publish
   const remainingEntries = params.binState.entries.filter((e) => e.id !== params.entryId);
@@ -699,7 +896,35 @@ export async function permanentDeleteFromBin(params: {
 export async function emptyBin(params: {
   binState: BinState;
   binCtx: BinOperationContext;
+  /**
+   * Each entry's original parent FolderState, keyed by
+   * `BinEntry.originalParentIpnsName`, for entries whose original parent was
+   * resolvable upstream (F3 fix: `emptyBin` is a bin-clearing path and must
+   * drop lingering `WriteChildRef`s the same as `permanentDeleteFromBin` —
+   * see {@link dropLingeringWriteChildRef}). Entries with no map entry (parent
+   * unresolvable, or entry predates originalParentIpnsName) are skipped —
+   * fail-open, never blocks CID cleanup + bin clearing.
+   */
+  originalParents?: Map<string, FolderState>;
+  folderTree?: FolderTree;
 }): Promise<{ updatedBinState: BinState }> {
+  // SC#1/SC#3 symmetry (F3): drop each entry's lingering WriteChildRef from
+  // its original parent's write-body before clearing the bin, matching
+  // permanentDeleteFromBin. Best-effort per entry (fail-open).
+  if (params.originalParents) {
+    for (const entry of params.binState.entries) {
+      const originalParent = params.originalParents.get(entry.originalParentIpnsName);
+      if (originalParent && entry.nodeRef?.id) {
+        await dropLingeringWriteChildRef({
+          originalParent,
+          nodeId: entry.nodeRef.id,
+          binCtx: params.binCtx,
+          folderTree: params.folderTree,
+        });
+      }
+    }
+  }
+
   // Best-effort CID cleanup for each entry — content + versions + descendant
   // subtree (shared helper; previously only entry.contentCid was unpinned).
   for (const entry of params.binState.entries) {
@@ -737,6 +962,16 @@ export async function purgeExpiredEntries(params: {
   binState: BinState;
   retentionDays: number;
   binCtx: BinOperationContext;
+  /**
+   * Original parent FolderStates for the EXPIRING entries, keyed by
+   * `BinEntry.originalParentIpnsName` (F3 fix: `purgeExpiredEntries` is a
+   * bin-clearing path and must drop lingering `WriteChildRef`s the same as
+   * `permanentDeleteFromBin` — see {@link dropLingeringWriteChildRef}).
+   * Entries with no map entry are skipped -- fail-open, never blocks CID
+   * cleanup + purge.
+   */
+  originalParents?: Map<string, FolderState>;
+  folderTree?: FolderTree;
 }): Promise<{ purgedCount: number; updatedState: BinState }> {
   const retentionMs = params.retentionDays * 24 * 60 * 60 * 1000;
   const now = Date.now();
@@ -759,6 +994,23 @@ export async function purgeExpiredEntries(params: {
   };
 
   await saveBinMetadata({ metadata, binCtx: params.binCtx });
+
+  // SC#1/SC#3 symmetry (F3): drop each expiring entry's lingering
+  // WriteChildRef from its original parent's write-body, matching
+  // permanentDeleteFromBin. Best-effort per entry (fail-open).
+  if (params.originalParents) {
+    for (const entry of expired) {
+      const originalParent = params.originalParents.get(entry.originalParentIpnsName);
+      if (originalParent && entry.nodeRef?.id) {
+        await dropLingeringWriteChildRef({
+          originalParent,
+          nodeId: entry.nodeRef.id,
+          binCtx: params.binCtx,
+          folderTree: params.folderTree,
+        });
+      }
+    }
+  }
 
   // Best-effort CID cleanup for expired entries (after metadata is saved):
   // content + versions + descendant subtree via the shared helper.

@@ -256,6 +256,26 @@ describe('CipherBoxClient.updateSharedSingleFile', () => {
     expect(shareOps.updateSharedFile).not.toHaveBeenCalled();
   });
 
+  it('zeroes the first unwrapped key when the SECOND unwrapKey call throws (72-06 zeroize fix)', async () => {
+    const args = await buildArgs();
+    // Tracked buffer returned by the FIRST unwrapKey call (fileReadKey) — the
+    // real fix moves both unwrapKey calls inside the try/finally that owns
+    // this buffer's zeroing, so a throw on the SECOND call must still zero it.
+    const trackedFirstKey = new Uint8Array(32).fill(0xaa);
+    vi.mocked(cryptoMod.unwrapKey)
+      .mockImplementationOnce(async () => trackedFirstKey)
+      .mockImplementationOnce(async () => {
+        throw new Error('simulated second unwrap failure');
+      });
+
+    await expect(client.updateSharedSingleFile(args)).rejects.toThrow(
+      'simulated second unwrap failure'
+    );
+
+    expect(trackedFirstKey).toEqual(new Uint8Array(32));
+    expect(shareOps.updateSharedFile).not.toHaveBeenCalled();
+  });
+
   it('never zeroes the caller-owned recipientPrivateKey (D-09)', async () => {
     const { filePublished } = await buildFixture();
     mockResolution(filePublished);

@@ -15,6 +15,7 @@
   "scripts": {
     "dev": "tsup --watch",
     "build": "tsup && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
     "generate": "orval",
     "lint": "eslint src/**/*.ts",
     "test": "vitest run",

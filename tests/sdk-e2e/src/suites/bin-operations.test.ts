@@ -8,9 +8,10 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { BinEntry } from '@cipherbox/core';
 import { BinNotLoadedError } from '@cipherbox/sdk';
+import { generateFileKey, generateIv, encryptAesGcm } from '@cipherbox/crypto';
 import { createTestContext, deleteTestAccount, type TestContext } from '../fixtures/test-harness';
 import { expectChildNamed, expectNoChildNamed, getChild } from '../helpers/assertions';
-import { generateTextContent } from '../helpers/data-generators';
+import { generateTextContent, decodeText } from '../helpers/data-generators';
 
 /** Internal bin state shape exposed via `(client as unknown as HasBinState).binState` */
 interface HasBinState {
@@ -97,6 +98,84 @@ describe('Bin Operations', () => {
     const updatedBin = (ctx.client as unknown as HasBinState).binState;
     const stillInBin = updatedBin.entries.find((e: BinEntry) => e.name === 'bin-file.txt');
     expect(stillInBin).toBeUndefined();
+  });
+
+  it('should restore to a DIFFERENT parent and stay editable-and-savable there (SC#3 re-homing, 72-05)', async () => {
+    // Mirrors move-restore-content.spec.ts test 2b's structure for the
+    // RESTORE direction: upload(A) -> deleteToBin -> restore(B, B != A) ->
+    // edit+save in B -> content round-trips. Restore-to-different-parent is
+    // not a shipped web UI flow (MoveDialog/restore always target the
+    // original parent), so this lives here rather than in web-e2e.
+    //
+    // Before SC#3, restoreFromBin only ever loaded the TARGET folder — the
+    // moved node's WriteChildRef stayed orphaned under the ORIGINAL
+    // parent's write-body, so the save step below would fail closed with
+    // "File ... is not write-capable (no WriteChildRef)".
+    const folderB = await ctx.client.createFolder(ctx.rootIpnsName, 'RestoreDestFolder');
+
+    const originalText = 'restore-rehome content ' + Date.now();
+    await ctx.client.uploadFile(
+      ctx.rootIpnsName,
+      generateTextContent(originalText),
+      'rehome-test.txt',
+      'text/plain'
+    );
+    const uploadedChild = getChild(ctx.client, ctx.rootIpnsName, 'rehome-test.txt');
+
+    // Delete to bin — original parent is root (folder A).
+    await ctx.client.deleteToBin(ctx.rootIpnsName, uploadedChild.ipnsName, 'My Vault');
+    expectNoChildNamed(ctx.client, ctx.rootIpnsName, 'rehome-test.txt');
+
+    const binState = (ctx.client as unknown as HasBinState).binState;
+    const entry = binState.entries.find((e: BinEntry) => e.name === 'rehome-test.txt');
+    expect(entry).toBeTruthy();
+
+    // Restore into folderB — a DIFFERENT parent than the original (root).
+    await ctx.client.restoreFromBin(entry!.id, folderB.ipnsName);
+    expectChildNamed(ctx.client, folderB.ipnsName, 'rehome-test.txt');
+    expectNoChildNamed(ctx.client, ctx.rootIpnsName, 'rehome-test.txt');
+
+    const restoredChild = getChild(ctx.client, folderB.ipnsName, 'rehome-test.txt');
+    const { metadata: currentMetadata } = await ctx.client.resolveFileMetadata(
+      restoredChild,
+      folderB.folderKey
+    );
+
+    // Edit and SAVE the restored file in its new parent — an owned in-place
+    // write. This is the genuine repro: before SC#3's re-homing, this throws.
+    const editedText = `${originalText} — edited in new parent ${Date.now()}`;
+    const encoded = generateTextContent(editedText);
+    let newFileKey: Uint8Array | null = generateFileKey();
+    const iv = generateIv();
+    try {
+      const ciphertext = await encryptAesGcm(encoded, newFileKey, iv);
+      const { cid } = await ctx.client.uploadBytes(ciphertext);
+      const fileIpnsPrivateKey = await ctx.client.resolveFileIpnsPrivateKey(
+        folderB.ipnsName,
+        restoredChild.ipnsName
+      );
+
+      await ctx.client.replaceFile(folderB.ipnsName, restoredChild.ipnsName, {
+        fileIpnsPrivateKey,
+        currentMetadata,
+        updates: {
+          cid,
+          fileKey: newFileKey,
+          fileIv: iv,
+          size: encoded.length,
+          mimeType: currentMetadata.mimeType,
+          encryptionMode: 'GCM',
+        },
+        createVersion: false,
+      });
+    } finally {
+      newFileKey?.fill(0);
+      newFileKey = null;
+    }
+
+    // Assert the decrypted content round-trips after the save.
+    const downloaded = await ctx.client.downloadFromIpns(restoredChild, folderB.folderKey);
+    expect(decodeText(downloaded)).toBe(editedText);
   });
 
   it('should permanently delete a bin entry', async () => {
