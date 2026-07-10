@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CipherBoxClient, BinNotLoadedError } from '../client';
 import type { SdkEvent } from '../events';
 import { createTestConfig, setupFolder } from './helpers';
+import type { NodeContent, SealedChildRef } from '@cipherbox/core';
 
 // Mock crypto (clearBytes used in uploadFile; unwrapKey/hexToBytes used in moveItem re-encryption)
 vi.mock('@cipherbox/crypto', () => ({
@@ -54,6 +55,10 @@ vi.mock('@cipherbox/sdk-core', async (importOriginal) => {
     fetchFromIpfs: vi.fn(),
     resolveIpnsRecord: vi.fn(),
     unpinFromIpfs: vi.fn(),
+    // downloadFromIpns's final content fetch+decrypt step (real implementation
+    // calls @cipherbox/crypto's decryptAesGcm/decryptAesCtr directly, which the
+    // full-replacement @cipherbox/crypto mock below does not provide).
+    downloadFileContent: vi.fn(),
   };
 });
 
@@ -317,40 +322,109 @@ describe('CipherBoxClient - extended', () => {
     });
   });
 
-  describe.skip('downloadFromIpns — TODO(phase 65)', () => {
+  describe('downloadFromIpns', () => {
+    // Current downloadFromIpns (68.1-22) first resolves the file's own
+    // PublishedNode (resolvePublishedNode -> resolveIpnsRecord + fetchFromIpfs)
+    // to learn its plaintext id (the AAD input for unsealChildReadKey), then
+    // recovers the file readKey, resolves NodeContent via
+    // sdkCore.resolveFileMetadata, and finally fetches+decrypts via
+    // sdkCore.downloadFileContent (NOT downloadAndDecrypt -- that's the
+    // separate ECIES-wrapped downloadFile() path). It emits no SDK event
+    // (unlike the sibling downloadFile(), which emits 'file:downloaded').
+    const fileRef: SealedChildRef = {
+      name: 'x.txt',
+      ipnsName: 'k51filemeta',
+      generation: 0,
+      versionFloor: 0n,
+      readKeySealed: 'sealed-key-hex',
+    };
+    const folderKey = new Uint8Array(32).fill(7);
+
     it('resolves file metadata and downloads content', async () => {
       const events: SdkEvent[] = [];
       client.on((e) => events.push(e));
 
-      vi.mocked(sdkCore.resolveFileMetadata).mockResolvedValue({
-        metadata: {
-          cid: 'bafycontent',
-          fileIv: 'def',
-          size: 1024,
-          mimeType: 'application/octet-stream',
-          encryptionMode: 'GCM',
-          fileKey: new Uint8Array(32),
-          versions: [],
-        },
-        metadataCid: 'bafymetacid',
+      vi.mocked(sdkCore.resolveIpnsRecord).mockResolvedValue({
+        cid: 'bafyfilenode',
+        sequenceNumber: 1n,
+        signatureVerified: true,
       });
-      vi.mocked(sdkCore.downloadAndDecrypt).mockResolvedValue(
+      vi.mocked(sdkCore.fetchFromIpfs).mockResolvedValue(
+        new TextEncoder().encode(
+          JSON.stringify({
+            schema: 'node/v3',
+            kind: 'file',
+            id: 'file-node-id',
+            generation: 0,
+            aeadVersion: 1,
+            readSealed: 'unused-unsealChildReadKey-is-mocked',
+          })
+        )
+      );
+
+      const fileKey = new Uint8Array(32).fill(0x99);
+      const metadata: NodeContent = {
+        cid: 'bafycontent',
+        fileIv: 'def',
+        size: 1024,
+        mimeType: 'application/octet-stream',
+        encryptionMode: 'GCM',
+        fileKey,
+        versions: [],
+      };
+      // The mocked unsealChildReadKey returns one SHARED Uint8Array instance
+      // across every test in this file (module-level mockResolvedValue) that
+      // earlier tests' finally-block cleanup may have already zeroed, so this
+      // asserts identity/shape (a distinct Uint8Array from the parent
+      // folderKey) rather than depending on its exact byte content.
+      let capturedReadKeyRef: Uint8Array | null = null;
+      vi.mocked(sdkCore.resolveFileMetadata).mockImplementationOnce(
+        async (_ipnsName, fileReadKey) => {
+          capturedReadKeyRef = fileReadKey;
+          return { metadata, metadataCid: 'bafymetacid' };
+        }
+      );
+      vi.mocked(sdkCore.downloadFileContent).mockResolvedValue(
         new Uint8Array([72, 101, 108, 108, 111])
       );
 
-      const result = await client.downloadFromIpns(
-        {
-          name: 'x.txt',
-          ipnsName: 'k51filemeta',
-          generation: 0,
-          versionFloor: 0n,
-          readKeySealed: 'sealed-key-hex',
-        },
-        new Uint8Array(32)
-      );
+      const result = await client.downloadFromIpns(fileRef, folderKey);
 
       expect(result).toEqual(new Uint8Array([72, 101, 108, 108, 111]));
-      expect(events.some((e) => e.type === 'file:downloaded')).toBe(true);
+      // resolveFileMetadata is called with the file's OWN recovered readKey
+      // (unsealChildReadKey's output) -- a distinct 32-byte buffer, NOT the
+      // caller-supplied parent folderKey reference.
+      expect(sdkCore.resolveFileMetadata).toHaveBeenCalledWith(
+        'k51filemeta',
+        expect.any(Uint8Array),
+        expect.anything()
+      );
+      expect(capturedReadKeyRef).not.toBeNull();
+      expect(capturedReadKeyRef).not.toBe(folderKey);
+      expect(capturedReadKeyRef!.length).toBe(32);
+      expect(sdkCore.downloadFileContent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cid: 'bafycontent',
+          fileIv: 'def',
+          encryptionMode: 'GCM',
+        })
+      );
+      // D-09: the resolved NodeContent's fileKey is zeroed by this call's
+      // finally block (terminal owner of the freshly-recovered raw key).
+      expect(fileKey.every((b) => b === 0)).toBe(true);
+      // Current downloadFromIpns emits only the generic withOperation
+      // lifecycle events -- no 'file:downloaded' (unlike the sibling
+      // downloadFile(), which does emit it).
+      expect(events.map((e) => e.type)).toEqual(['operation:start', 'operation:end']);
+    });
+
+    it('throws when the file IPNS record cannot be resolved', async () => {
+      vi.mocked(sdkCore.resolveIpnsRecord).mockResolvedValue(null);
+
+      await expect(client.downloadFromIpns(fileRef, folderKey)).rejects.toThrow(
+        'IPNS record not found'
+      );
+      expect(sdkCore.resolveFileMetadata).not.toHaveBeenCalled();
     });
   });
 
@@ -679,7 +753,11 @@ describe('CipherBoxClient - extended', () => {
       expect(shareOps.createShareKey).toHaveBeenCalled();
     });
 
-    it.skip('shareFolder throws when folder not loaded — TODO(phase 63)', async () => {
+    it('shareFolder throws when folder not loaded', async () => {
+      // requireFolder -> ensureFolderLoaded -> ensureRootFolderState returns
+      // null (createTestConfig() has no rootIpnsKeypair/rootWriteKey), so
+      // self-bootstrap is unavailable and the "Folder not loaded" error
+      // surfaces exactly as it did pre-Phase-63 self-heal.
       await expect(client.shareFolder('nonexistent', new Uint8Array(33))).rejects.toThrow(
         'Folder not loaded'
       );
