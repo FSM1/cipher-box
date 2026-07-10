@@ -107,7 +107,6 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
     moveItems,
     deleteItem,
     deleteItems,
-    // downloadFromIpns: TODO(phase 65) - unused until file read-chain implemented
     handleFileDrop,
     contextMenu,
     rootIpnsName,
@@ -264,7 +263,6 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const lastSelectedIdRef = useRef<string | null>(null);
 
-  // TODO(phase 63): SealedChildRef uses ipnsName as identifier (no .id)
   const childIds = useMemo(() => new Set(children.map((c) => c.ipnsName)), [children]);
   useEffect(() => {
     setSelectedIds((prev) => {
@@ -368,7 +366,6 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
       setSelectedIds(new Set());
       lastSelectedIdRef.current = null;
     } else {
-      // TODO(phase 63): SealedChildRef uses ipnsName as identifier
       setSelectedIds(new Set(children.map((c) => c.ipnsName)));
     }
   }, [children, selectedIds.size]);
@@ -380,7 +377,6 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
 
   const handleContextMenu = useCallback(
     (event: MouseEvent, item: SealedChildRef) => {
-      // TODO(phase 63): SealedChildRef uses ipnsName as identifier (no .id)
       if (!selectedIds.has(item.ipnsName)) {
         setSelectedIds(new Set([item.ipnsName]));
         lastSelectedIdRef.current = item.ipnsName;
@@ -456,7 +452,6 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
   const handlePreviewClick = useCallback(() => {
     const item = contextMenu.item;
     if (!item) return;
-    // TODO(phase 63): SealedChildRef has no .type; open preview by name extension only
     const name = item.name;
     if (isImageFile(name)) openImagePreviewDialog(item);
     else if (isPdfFile(name)) openPdfPreviewDialog(item);

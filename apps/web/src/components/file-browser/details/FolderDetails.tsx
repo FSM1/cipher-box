@@ -90,7 +90,6 @@ export function FolderDetails({
       <div className="details-section-header">{'// encryption'}</div>
 
       <DetailRow label="Read Key Sealed">
-        {/* TODO(phase 63): readKeySealed is an AES-GCM sealed blob inside the parent's read-body */}
         <span className="details-value details-value--redacted">
           {readKeySealed.slice(0, 16)}...{readKeySealed.slice(-8)} (sealed under parent read-key)
         </span>

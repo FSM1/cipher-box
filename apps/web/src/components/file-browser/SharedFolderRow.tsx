@@ -192,7 +192,6 @@ export function SharedFolderRow({
 
       // Guard: never drop a folder onto itself (one of the dragged items) — that
       // would move it into itself and cycle the tree (mirrors FileListItem).
-      // TODO(phase 63): SealedChildRef uses ipnsName as identifier
       if (parsed.items.some((i) => i.id === item.ipnsName)) return;
 
       // Route through the parent's handleDropOnFolder-equivalent, forwarding the

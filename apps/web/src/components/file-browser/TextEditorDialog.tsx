@@ -81,7 +81,6 @@ export function TextEditorDialog({
       return;
     }
 
-    // TODO(phase 63): SealedChildRef.ipnsName is used where FilePointer.fileMetaIpnsName was
     if (!item.ipnsName) {
       setLoading(false);
       setError('File IPNS name not available');
@@ -119,7 +118,6 @@ export function TextEditorDialog({
           });
         } else if (hasSdkClient()) {
           // Owner path via SDK: resolves IPNS, decrypts metadata, downloads + decrypts content
-          // TODO(phase 63): SealedChildRef.ipnsName replaces FilePointer.fileMetaIpnsName
           const client = getSdkClient();
           plaintext = await client.downloadFromIpns(item, folderKey!);
         } else {

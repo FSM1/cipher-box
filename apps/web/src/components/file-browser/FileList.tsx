@@ -176,7 +176,6 @@ export function FileList({
   });
 
   // Create virtual entries for sorting alongside real items
-  // TODO(phase 63): SealedChildRef has no .id; use upload id as ipnsName placeholder
   const uploadVirtualEntries: UploadVirtualEntry[] = uploadEntries.map((f) => ({
     name: f.filename,
     ipnsName: f.id, // placeholder: real ipnsName assigned on completion
@@ -188,7 +187,6 @@ export function FileList({
 
   // Prevent duplicate rows: when a real file already exists, hide the completing
   // upload row instead of the real file row. (Pitfall 5)
-  // TODO(phase 63): SealedChildRef has no .type; use all items' names as real file names
   const realFileNames = new Set(items.map((item) => item.name));
   const completeUploadIds = new Set(
     uploadEntries
@@ -244,7 +242,6 @@ export function FileList({
         {showParentRow && onNavigateUp && <ParentDirRow onActivate={onNavigateUp} />}
         {sortedItems.map((item) =>
           '_uploading' in item ? (
-            // TODO(phase 63): ipnsName is used as id placeholder for upload virtual entries
             <UploadListItem key={item.ipnsName} fileId={item.ipnsName} onRetry={onRetryUpload} />
           ) : (
             <FileListItem

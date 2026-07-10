@@ -128,7 +128,6 @@ function checkNameCollisions(
   items: SealedChildRef[]
 ): string | null {
   if (!destFolder) return null;
-  // TODO(phase 63): SealedChildRef uses ipnsName as identifier (no .id)
   const itemIds = new Set(items.map((i) => i.ipnsName));
   for (const item of items) {
     const collision = destFolder.children.some(

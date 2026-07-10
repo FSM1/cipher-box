@@ -19,7 +19,6 @@ import {
   type MouseEvent,
   type DragEvent,
 } from 'react';
-// TODO(phase 63): FolderChild/FilePointer removed; SealedChildRef from core
 import type { SealedChildRef } from '@cipherbox/core';
 import { useSharedNavigation } from '../../hooks/useSharedNavigation';
 import { useContextMenu } from '../../hooks/useContextMenu';
@@ -146,7 +145,6 @@ export function SharedFileBrowser() {
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
-  // TODO(phase 63): SealedChildRef uses ipnsName as identifier (no .id)
   const selectedItems = useMemo(
     () => folderChildren.filter((c) => selectedIds.has(c.ipnsName)),
     [folderChildren, selectedIds]
@@ -190,7 +188,6 @@ export function SharedFileBrowser() {
   );
 
   // Prune selected IDs when folder children change (navigation)
-  // TODO(phase 63): SealedChildRef uses ipnsName as identifier (no .id)
   useEffect(() => {
     setSelectedIds((prev) => {
       if (prev.size === 0) return prev;
@@ -248,7 +245,6 @@ export function SharedFileBrowser() {
   const handleDownload = useCallback(async () => {
     const item = contextMenu.item;
     if (!item) return;
-    // TODO(phase 63): SealedChildRef has no .type; download deferred to phase 65 (file read-chain)
     // In list view, context menu download navigates to share first
     if (currentView === 'list' && contextShareId) {
       await navigateToShare(contextShareId);
@@ -272,7 +268,6 @@ export function SharedFileBrowser() {
   const handlePreviewClick = useCallback(() => {
     const item = contextMenu.item;
     if (!item) return;
-    // TODO(phase 63): SealedChildRef has no .type; preview by name extension only
     const name = item.name;
     if (isTextFile(name)) {
       setEditorDialog({ open: true, item });
@@ -432,7 +427,6 @@ export function SharedFileBrowser() {
   );
 
   // Auto-open text editor when entering a writable file share view
-  // TODO(phase 63): synthetic SealedChildRef replaces the former FilePointer construction
   useEffect(() => {
     if (currentView === 'file' && currentShareId) {
       const shareItem = sharedItems.find((s) => s.share.shareId === currentShareId);
@@ -538,7 +532,6 @@ export function SharedFileBrowser() {
                   sharedItem={sharedItem}
                   onOpen={() => navigateToShare(sharedItem.share.shareId)}
                   onContextMenu={(e) => {
-                    // TODO(phase 63): Synthetic SealedChildRef replaces FolderChild construction
                     const fakeChildRef: SealedChildRef = {
                       name: sharedItem.share.itemName,
                       ipnsName: sharedItem.share.ipnsName,
@@ -754,7 +747,6 @@ export function SharedFileBrowser() {
 
             {hasChildren ? (
               /* File/folder rows */
-              /* TODO(phase 63): SealedChildRef uses ipnsName as identifier; .type replaced by phase-63 stubs */
               sortedChildren.map((item) => (
                 <SharedFolderRow
                   key={item.ipnsName}
@@ -783,7 +775,6 @@ export function SharedFileBrowser() {
                     isWritable
                       ? (destFolderId, destIpnsName, draggedItems) => {
                           // Route by what was actually dragged. Resolve by ipnsName.
-                          // TODO(phase 63): DragItem.id maps to SealedChildRef.ipnsName
                           const draggedIds = new Set(draggedItems.map((d) => d.id));
                           const movedItems = sortedChildren.filter((c) =>
                             draggedIds.has(c.ipnsName)
@@ -904,7 +895,6 @@ export function SharedFileBrowser() {
             navigateToRoot();
           }
         }}
-        // TODO(phase 63): isFilePointer removed; SealedChildRef passed directly
         item={editorDialog.item ?? null}
         parentFolderId=""
         folderKey={folderKey}
@@ -920,7 +910,6 @@ export function SharedFileBrowser() {
       <ImagePreviewDialog
         open={imagePreviewDialog.open}
         onClose={() => setImagePreviewDialog({ open: false, item: null })}
-        // TODO(phase 63): isFilePointer removed
         item={imagePreviewDialog.item ?? null}
         folderKey={folderKey}
       />
@@ -929,7 +918,6 @@ export function SharedFileBrowser() {
       <PdfPreviewDialog
         open={pdfPreviewDialog.open}
         onClose={() => setPdfPreviewDialog({ open: false, item: null })}
-        // TODO(phase 63): isFilePointer removed
         item={pdfPreviewDialog.item ?? null}
         folderKey={folderKey}
       />
@@ -938,7 +926,6 @@ export function SharedFileBrowser() {
       <AudioPlayerDialog
         open={audioPlayerDialog.open}
         onClose={() => setAudioPlayerDialog({ open: false, item: null })}
-        // TODO(phase 63): isFilePointer removed
         item={audioPlayerDialog.item ?? null}
         folderKey={folderKey}
       />
@@ -947,7 +934,6 @@ export function SharedFileBrowser() {
       <VideoPlayerDialog
         open={videoPlayerDialog.open}
         onClose={() => setVideoPlayerDialog({ open: false, item: null })}
-        // TODO(phase 63): isFilePointer removed
         item={videoPlayerDialog.item ?? null}
         folderKey={folderKey}
       />
