@@ -163,6 +163,18 @@ export async function updateFolderMetadataAndPublish(params: {
   children: SealedChildRef[];
   baseChildren?: SealedChildRef[];
   /**
+   * Base write-body snapshot (pre-mutation `writeChildren`), keyed by
+   * `childId` (UUID) — the write-plane analog of `baseChildren`. When
+   * supplied, the CAS-409 write-body merge becomes base-aware: a childId
+   * present in `baseWriteChildren` but ABSENT from `writeChildren` (this
+   * call's own local state) is treated as an intentional delete this
+   * transaction already committed to, and is pruned even if a racing
+   * writer's stale remote snapshot still carries it (SC#1 Critical Finding
+   * 2 / T-72-03-01). When omitted, the merge falls back to the legacy naive
+   * union (back-compat for callers that have not threaded this through yet).
+   */
+  baseWriteChildren?: WriteChildRef[];
+  /**
    * Optional injectable conflict-resolution policy for the CAS-409 merge
    * closure below. Defaults to `mergeChildren` (remote-wins) — every
    * non-rotation caller (add/move/rename) is byte-unchanged. The rotation
@@ -235,10 +247,14 @@ export async function updateFolderMetadataAndPublish(params: {
   // childId) must be merged separately on a 409 or the retry reseals a STALE
   // write chain and DROPS any WriteChildRef a concurrent writer added — the
   // exact write-plane clobber phase 68.1 exists to prevent. `currentWriteChildren`
-  // is what encodeAndUpload seals; decodeRemote captures the remote write-body and
-  // merge() unions it in (write plane is add-only here — deletes are preserved
-  // verbatim per D-03/68.1-02 — so a union never resurrects an intentionally
-  // dropped entry). Only meaningful when a real writeKey is supplied.
+  // is what encodeAndUpload seals; decodeRemote captures the remote write-body.
+  // merge() applies a BASE-AWARE prune (SC#1 Critical Finding 2 / T-72-03-01):
+  // a childId present in `baseWriteChildren` but absent from the caller's local
+  // `writeChildren` is an intentional delete this transaction already committed
+  // to, and is pruned even when a racing writer's stale remote snapshot still
+  // carries it — a plain union would silently resurrect it. A childId absent
+  // from base but present in remote is a genuine concurrent add and is always
+  // kept. Only meaningful when a real writeKey is supplied.
   let currentWriteChildren: WriteChildRef[] = params.writeChildren ?? [];
   let remoteWriteChildren: WriteChildRef[] = [];
 
@@ -326,15 +342,36 @@ export async function updateFolderMetadataAndPublish(params: {
       local: SealedChildRef[],
       remote: SealedChildRef[]
     ) => {
-      // Union the remote writer's write-body entries into the local chain
-      // (keyed by childId, remote wins on conflict) so the resealed write-body
-      // preserves BOTH writers' WriteChildRefs. Only when a real writeKey is in
-      // play — otherwise no write-body is sealed at all.
+      // Merge the remote writer's write-body entries into the local chain,
+      // keyed by childId. Only when a real writeKey is in play — otherwise no
+      // write-body is sealed at all.
       if (params.writeKey) {
-        const byChildId = new Map<string, WriteChildRef>();
-        for (const wc of currentWriteChildren) byChildId.set(wc.childId, wc);
-        for (const wc of remoteWriteChildren) byChildId.set(wc.childId, wc);
-        currentWriteChildren = Array.from(byChildId.values());
+        if (params.baseWriteChildren) {
+          // Base-aware prune (SC#1 Critical Finding 2): start from local
+          // (already reflects this transaction's own intentional deletes by
+          // omission), then fold in ONLY genuinely concurrent remote entries —
+          // a childId absent from base (a real concurrent add) or a childId
+          // already present in local (remote wins on a conflicting value for
+          // an existing entry). A childId present in base but absent from
+          // local is never resurrected, regardless of whether the racing
+          // writer's stale remote snapshot still carries it.
+          const baseIds = new Set(params.baseWriteChildren.map((wc) => wc.childId));
+          const mergedMap = new Map<string, WriteChildRef>();
+          for (const wc of currentWriteChildren) mergedMap.set(wc.childId, wc);
+          for (const wc of remoteWriteChildren) {
+            if (!baseIds.has(wc.childId) || mergedMap.has(wc.childId)) {
+              mergedMap.set(wc.childId, wc);
+            }
+          }
+          currentWriteChildren = Array.from(mergedMap.values());
+        } else {
+          // No base snapshot supplied — legacy naive union (back-compat for
+          // callers that have not threaded baseWriteChildren through yet).
+          const byChildId = new Map<string, WriteChildRef>();
+          for (const wc of currentWriteChildren) byChildId.set(wc.childId, wc);
+          for (const wc of remoteWriteChildren) byChildId.set(wc.childId, wc);
+          currentWriteChildren = Array.from(byChildId.values());
+        }
       }
       // SC#1 site B / T-70-01: defaults to the generic remote-wins mergeChildren
       // for every non-rotation caller; the rotation engine opts in explicitly
