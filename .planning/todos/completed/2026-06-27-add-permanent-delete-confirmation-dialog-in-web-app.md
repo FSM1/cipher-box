@@ -39,3 +39,19 @@ Add a confirmation dialog on the permanent-delete path, gated on
 - Wire it through `deleteWithBehavior` (or its callers) so the prompt is consistent
   across file-browser context menu, toolbar, and keyboard shortcut delete paths.
 - Match the existing terminal-aesthetic dialog component used elsewhere in the web app.
+
+## Resolution
+
+RESOLVED (destructive-action safety gap closed). `FileBrowser.tsx` renders a
+`ConfirmDialog` with "This cannot be undone." before both single-item
+(`:272-277`) and batch (`:356-361`) deletes, and `useFileBrowserActions.ts`
+gates deletion on that confirmation (`:498-512`, `:557-567`). The todo's "single
+click, no warning" premise no longer holds.
+
+Caveat (intentionally not pursued): the prompt is shown unconditionally rather
+than gated on `deleteBehavior === 'permanent'`, so the literal D-02
+wording-differentiation between soft-delete and permanent-delete is not
+implemented. Reopen only if per-mode wording is desired — the safety gap itself
+is closed.
+
+Retired 2026-07-11 via pending-todo triage.

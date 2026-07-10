@@ -7,6 +7,7 @@ files:
   - apps/tee-worker/src/routes/republish.ts
   - apps/api/src/tee/tee.service.ts
   - apps/api/src/republish/republish.service.ts
+resolves_phase: 77
 ---
 
 > Deferred from the Phase 67 ship (CodeRabbit, MAJOR). This is a cross-layer rename of

@@ -8,6 +8,7 @@ files:
   - apps/web/src/services/share.service.ts
   - apps/web/src/hooks/useSharedNavigation.ts
   - apps/web/src/services/owner-reconcile.service.ts
+resolves_phase: 77
 ---
 
 ## Problem

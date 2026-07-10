@@ -6,6 +6,7 @@ files:
   - packages/core/src/node/seal.ts
   - packages/core/src/node/encode.ts
   - packages/core/src/node/decode.ts
+resolves_phase: 77
 ---
 
 ## Problem

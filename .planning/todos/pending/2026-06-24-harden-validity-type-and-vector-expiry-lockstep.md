@@ -9,6 +9,7 @@ files:
   - crates/fuse/tests/ipns_verify_vectors.rs
   - scripts/gen-ipns-verify-vectors.ts
   - tests/vectors/ipns/verify.json
+resolves_phase: 75
 ---
 
 ## Problem

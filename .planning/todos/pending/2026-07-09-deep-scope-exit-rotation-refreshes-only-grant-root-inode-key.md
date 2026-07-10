@@ -9,6 +9,7 @@ files:
   - crates/sdk/src/rotation/engine.rs
   - packages/sdk-core/src/rotation/engine.ts
   - crates/fuse/src/write_ops/implementation/delete.rs
+resolves_phase: 74
 ---
 
 ## Problem

@@ -9,6 +9,7 @@ files:
   - tests/vectors/crypto/node-aad.json
   - crates/core/tests/node_codec_vectors.rs
   - packages/core (TS KAT generator/consumer)
+resolves_phase: 75
 ---
 
 ## Problem

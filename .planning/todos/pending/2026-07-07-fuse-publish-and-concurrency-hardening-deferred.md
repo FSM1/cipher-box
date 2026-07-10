@@ -10,6 +10,7 @@ files:
   - crates/fuse/src/platform/windows/write_ops.rs
   - crates/fuse/src/journal_helpers.rs
   - crates/fuse/src/content_ops.rs
+resolves_phase: 76
 ---
 
 ## Deferred items (verified genuine, but risky/large or CI-gated — not fixed in the ship PR)

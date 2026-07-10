@@ -5,6 +5,7 @@ area: api
 files:
   - apps/api/src/shares/share-invite.service.ts
   - apps/api/src/shares/shares.service.ts
+resolves_phase: 77
 ---
 
 ## Problem

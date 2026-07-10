@@ -5,6 +5,7 @@ area: crypto
 files:
   - packages/sdk-core/src/folder/registration.ts
 source: Phase 72 ship-loop CodeRabbit review (major finding on registration.ts:92-94)
+resolves_phase: 77
 ---
 
 ## Problem

@@ -5,7 +5,7 @@ area: web
 files:
   - apps/web/.eslintrc.cjs
   - scripts/check-web-sdk-boundary.sh
-resolves_phase: null
+resolves_phase: 78
 ---
 
 ## Problem

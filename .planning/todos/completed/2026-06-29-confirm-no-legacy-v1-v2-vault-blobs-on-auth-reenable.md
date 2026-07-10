@@ -38,3 +38,13 @@ When the auth/vault-load path is re-enabled (phase 63):
 Deferred from phase 62 (`/ship-phase`): the auth paths are stubbed mid-milestone,
 so the assumption can only be validated at the phase 63 re-wire. Related:
 [[2026-06-29-recovery-html-vault-v3-migration]].
+
+## Resolution
+
+NOT APPLICABLE / WON'T DO — retired 2026-07-11 (user decision).
+
+The greenfield assumption is confirmed: there is no v1/v2 → v3 vault migration, and
+all legacy v1/v2 vaults have been deprecated. The `deserializeVaultBlobV3` hard-cut
+(throw on any non-`0x03` blob) stands intentionally as the D-05 guard — no legacy
+blobs exist in any environment that will be carried forward, so neither a migration
+nor a special-case fallback is needed. No code change required.

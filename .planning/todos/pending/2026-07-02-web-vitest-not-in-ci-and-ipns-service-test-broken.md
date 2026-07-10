@@ -5,6 +5,7 @@ area: testing
 files:
   - apps/web/src/services/__tests__/ipns.service.test.ts
   - .github/workflows/ci.yml
+resolves_phase: 78
 ---
 
 ## Problem

@@ -150,3 +150,16 @@ mutations with stale remote state (the reason the gate exists — see
 A timeout bump is NOT a fix (the failure is a suppressed spawn, not slowness). The sibling
 folder-rename leg is already "optional/warn on macOS"; making the content-sync leg the same
 is only a test-hygiene stopgap, not the real fix.
+
+## Resolution
+
+RESOLVED. PR #593 (`chore(ci): parallelize web-e2e across files`, commit
+a130ea5dd) moved Playwright to file-level parallelism (`workers=3` on CI, was 1)
+with each spec file isolated by its own wallet identity — a flake in one file no
+longer skips later files, and no `maxFailures` cap is set, so there is no
+truncating cascade-abort. This delivers the todo's Solution option 3 (decouple
+ordering / shard independent specs). The desktop Test 5 leg was already
+self-marked resolved (macOS-optional stopgap, tracked separately under the
+FUSE-T cross-client-sync todo).
+
+Retired 2026-07-11 via pending-todo triage.

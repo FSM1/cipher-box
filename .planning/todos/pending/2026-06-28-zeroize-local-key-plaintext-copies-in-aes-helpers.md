@@ -5,6 +5,7 @@ area: crypto
 files:
   - packages/crypto/src/aes/encrypt.ts
   - packages/crypto/src/aes/decrypt.ts
+resolves_phase: 77
 ---
 
 ## Problem

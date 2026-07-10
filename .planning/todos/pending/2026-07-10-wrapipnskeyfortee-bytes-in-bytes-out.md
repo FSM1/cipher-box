@@ -8,6 +8,7 @@ files:
   - packages/sdk-core/src/file/index.ts
   - packages/sdk-core/src/vault/index.ts
 source: Phase 72 ship-loop CodeRabbit review (major finding on tee/wrap.ts)
+resolves_phase: 77
 ---
 
 ## Problem

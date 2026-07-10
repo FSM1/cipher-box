@@ -8,7 +8,15 @@ files:
   - packages/core/src/vault/blob.ts:87
   - packages/core/src/node/seal.ts
 source: 68.1-VERIFICATION.md (human-approved deferral, override 1 of 2)
+supersedes: 2026-06-29-recovery-html-vault-v3-migration.md
+resolves_phase: 78
 ---
+
+> **Merged 2026-07-11:** absorbs the earlier `2026-06-29-recovery-html-vault-v3-migration`
+> todo, which described the same recovery.html v2→v3 port at the blob-header level.
+> When implementing, also validate the v3 blob parser against
+> `tests/vectors/vault-v3-blob.json` (the cross-language vault-blob-v3 vectors) as
+> that todo called out.
 
 ## Problem
 

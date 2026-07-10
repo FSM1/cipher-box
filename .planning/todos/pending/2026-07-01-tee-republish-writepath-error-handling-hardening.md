@@ -7,6 +7,7 @@ files:
   - apps/api/src/republish/republish.service.ts
   - apps/tee-worker/src/services/key-manager.ts
   - apps/tee-worker/src/routes/republish.ts
+resolves_phase: 76
 ---
 
 > Deferred from the Phase 67 ship (CodeRabbit). These touch the republish write path and
