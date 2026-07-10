@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "32fd6015b8ec",
+  "strategy": "manual-commit",
+  "branch": "feat/sdk-write-plane-durability-and-correctness",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/todos/pending/2026-07-10-reconcile-phase71-planning-docs-d01-greenfield.md",
+    ".planning/todos/pending/2026-07-10-restore-tee-key-state-for-sdk-e2e-tee-republish.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/32/fd6015b8ec/0/metadata.json",
+      "transcript": "/32/fd6015b8ec/0/full.jsonl",
+      "content_hash": "/32/fd6015b8ec/0/content_hash.txt",
+      "prompt": "/32/fd6015b8ec/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 82934,
+    "cache_creation_tokens": 2389842,
+    "cache_read_tokens": 85939894,
+    "output_tokens": 449961,
+    "api_call_count": 353
+  }
+}
