@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "8af0f065dd08",
+  "strategy": "manual-commit",
+  "branch": "feat/sdk-write-plane-durability-and-correctness",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/ROADMAP.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/8a/f0f065dd08/0/metadata.json",
+      "transcript": "/8a/f0f065dd08/0/full.jsonl",
+      "content_hash": "/8a/f0f065dd08/0/content_hash.txt",
+      "prompt": "/8a/f0f065dd08/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 75805,
+    "cache_creation_tokens": 2195999,
+    "cache_read_tokens": 48689362,
+    "output_tokens": 312796,
+    "api_call_count": 264
+  }
+}
