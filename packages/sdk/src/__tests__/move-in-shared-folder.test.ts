@@ -1,571 +1,312 @@
 /**
- * TDD test (49-01 RED): moveInSharedFolder op + CipherBoxClient.moveInSharedFolder
+ * CipherBoxClient.moveInSharedFolder -- reachable-branch regression test
+ * (72-01, SC#5).
  *
- * Covers:
- * - Publish ordering: DEST published before SOURCE (add-before-remove crash safety)
- * - File re-key: reencryptFileMetadataForFolderChange called with correct src/dest folderKeys
- * - Folder item: no re-key call
- * - Missing folder-ipns key on dest: throws before any publish (T-49-01 write-cap guard)
- * - Missing folder key on dest: throws (no read key)
- * - Name collision: propagated
- * - adoptSharedFolderResult for SOURCE only (never dest)
- * - finally: fileIpnsPrivateKey.fill(0), destIpnsPrivateKey.fill(0), destFolderKey.fill(0)
- *   all run even when the op throws
+ * `moveInSharedFolder` has two branches keyed off `getShareKeysFn`'s result:
+ *   - `shareKeys.length > 0` -- the LEGACY per-child share_keys fan-out path.
+ *     Every current web caller's `fetchShareKeys` always returns `[]`
+ *     (68.1-20 Task 1 -- no live share_keys endpoint exists), so this branch
+ *     is DEAD in production and is removed by a later plan in this phase
+ *     (Plan 07). It is intentionally NOT covered here.
+ *   - `shareKeys.length === 0` (the `else` branch) -- the REACHABLE
+ *     write-chain path: unseals the SOURCE folder's own write-body, walks
+ *     one hop to the destination's `WriteChildRef` (keyed by the
+ *     destination's node UUID, NEVER its ipnsName), and derives
+ *     `destFolderKey`/`destWriteKey`/`destIpnsPrivateKey` from real AES-GCM
+ *     AAD-bound seals -- exactly as production does.
+ *
+ * Per 72-RESEARCH.md Critical Finding 3, this file was previously 100%
+ * skipped at the describe level (13 tests, all exercising the now-dead
+ * legacy branch) and imported retired core types that no longer exist in
+ * `@cipherbox/core` today. Those tests are not worth modernizing (they test
+ * code Plan 07 deletes); this file replaces them with ONE live test of the
+ * reachable branch so Plan 07's dead-branch removal is refactor-under-test,
+ * not refactor-blind.
+ *
+ * Crypto stays fully real: `sealNode`/`unsealNode`/`sealChildReadKey`/
+ * `sealChildWriteKey` from `@cipherbox/core` build genuine AAD-bound
+ * envelopes (mirrors `update-shared-single-file.test.ts`). No `wrapKey`/
+ * `unwrapKey` mock is needed -- the reachable branch never calls ECIES
+ * wrap/unwrap (that's legacy-branch-only). Only the network-touching
+ * `@cipherbox/sdk-core` seams (`resolveIpnsRecord`/`fetchFromIpfs` for
+ * reads, `addToIpfs`/`createAndPublishIpnsRecord` for the publish
+ * transport) are mocked.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CipherBoxClient } from '../client';
-import type { SdkEvent } from '../events';
 import type { SharedFolderState } from '../types';
-import type { FolderChild, FilePointer, FolderEntry } from '@cipherbox/core';
 import { createTestConfig } from './helpers';
+import {
+  sealNode,
+  unsealNode,
+  sealChildReadKey,
+  sealChildWriteKey,
+  type Node,
+  type PublishedNode,
+  type SealedChildRef,
+} from '@cipherbox/core';
 
-// ── crypto mock ────────────────────────────────────────────────────────────────
-vi.mock('@cipherbox/crypto', () => ({
-  clearBytes: vi.fn((arr: Uint8Array) => arr.fill(0)),
-  unwrapKey: vi.fn().mockResolvedValue(new Uint8Array(32).fill(0xab)),
-  hexToBytes: vi.fn((hex: string) => new Uint8Array(Math.max(hex.length / 2, 1)).fill(0x01)),
-}));
-
-// ── sdk-core mock ─────────────────────────────────────────────────────────────
+// ── sdk-core mock -- override only the network-touching seams reached
+//    through resolvePublishedNode (reads) and the publish transport
+//    (buildWriteTransportSeams -- addToIpfs + createAndPublishIpnsRecord).
 vi.mock('@cipherbox/sdk-core', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@cipherbox/sdk-core')>();
   return {
     ...actual,
-    loadFolderMetadata: vi.fn(),
-    updateFolderMetadataAndPublish: vi.fn(),
-    moveItem: vi.fn(),
-    // keep real implementations silent for unused ops
-    createSubfolder: vi.fn(),
-    renameInFolder: vi.fn(),
-    deleteFromFolder: vi.fn(),
-    addFilePointerToFolder: vi.fn(),
-    uploadFile: vi.fn(),
-    downloadAndDecrypt: vi.fn(),
-    resolveFileMetadata: vi.fn(),
-    updateFileMetadata: vi.fn(),
-    batchPublishIpnsRecords: vi.fn(),
-    createAndPublishIpnsRecord: vi.fn(),
-    addToIpfs: vi.fn(),
+    resolveIpnsRecord: vi.fn(),
     fetchFromIpfs: vi.fn(),
-    unpinFromIpfs: vi.fn(),
+    addToIpfs: vi.fn(),
+    createAndPublishIpnsRecord: vi.fn(),
   };
 });
-
-// ── bin / share mocks (not under test) ───────────────────────────────────────
-vi.mock('../bin', () => ({
-  loadBin: vi.fn(),
-  addToBin: vi.fn(),
-  restoreFromBin: vi.fn(),
-  permanentDeleteFromBin: vi.fn(),
-  emptyBin: vi.fn(),
-  purgeExpiredEntries: vi.fn(),
-}));
-
-vi.mock('../share', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../share')>();
-  return {
-    ...actual,
-    // Keep real shared-write exports so the stateless op is exercised;
-    // stub only the ops we don't want to call in network.
-    uploadToSharedFolder: vi.fn(),
-  };
-});
-
-// ── reencrypt mock ────────────────────────────────────────────────────────────
-vi.mock('../reencrypt', () => ({
-  reencryptFileMetadataForFolderChange: vi.fn().mockResolvedValue(undefined),
-}));
 
 import * as sdkCore from '@cipherbox/sdk-core';
-import * as reencryptModule from '../reencrypt';
-import { unwrapKey } from '@cipherbox/crypto';
 
-// ── constants ─────────────────────────────────────────────────────────────────
-const SHARE_ID = 'share-abc';
+// ── fixture ids ──────────────────────────────────────────────────────────────
+const SHARE_ID = 'share-move-reachable';
 const SRC_IPNS = 'k51src-shared';
 const DEST_IPNS = 'k51dest-shared';
-const DEST_FOLDER_ID = 'dest-folder-uuid';
-const FILE_ID = 'file-uuid-shared';
-const FOLDER_ITEM_ID = 'folder-item-uuid';
-const FILE_META_IPNS = 'k51filemeta-shared';
-const FILE_IPNS_KEY_ENC = 'deadbeef0102';
-const DEST_FOLDER_KEY_ENC = 'cafecafe0102';
-const DEST_IPNS_KEY_ENC = 'beefdead0102';
+const ITEM_IPNS = 'k51item-shared';
 
-const SRC_FOLDER_KEY = new Uint8Array(32).fill(0x11);
-const SRC_IPNS_KEY = new Uint8Array(64).fill(0x22);
-const DEST_FOLDER_KEY_BYTES = new Uint8Array(32).fill(0x33);
-const DEST_IPNS_KEY_BYTES = new Uint8Array(64).fill(0x44);
+const SRC_NODE_ID = '11111111-1111-4111-8111-111111111111';
+const DEST_NODE_ID = '22222222-2222-4222-8222-222222222222';
+// Deliberately DIFFERENT from ITEM_IPNS (T-72-01-01 mitigation): a
+// UUID-vs-ipnsName confusion in the write-chain filter must not silently
+// pass this fixture.
+const ITEM_NODE_ID = '33333333-3333-4333-8333-333333333333';
 
-const now = Date.now();
+const DEST_GENERATION = 0;
+const ITEM_GENERATION = 0;
 
-const fileItem: FilePointer = {
-  type: 'file',
-  id: FILE_ID,
-  name: 'document.txt',
-  fileMetaIpnsName: FILE_META_IPNS,
-  ipnsPrivateKeyEncrypted: FILE_IPNS_KEY_ENC,
-  createdAt: now,
-  modifiedAt: now,
+// ── key material (all real 32-byte AES keys -- one-hop unseal must
+//    genuinely validate, not just typecheck) ─────────────────────────────────
+const srcFolderKey = new Uint8Array(32).fill(0x11); // srcState.folderKey (readKey)
+const srcWriteKey = new Uint8Array(32).fill(0x12); // srcState.writeKey
+const srcIpnsPrivateKey = new Uint8Array(32).fill(0x13);
+
+const destFolderKey = new Uint8Array(32).fill(0x21); // dest folder's OWN readKey
+const destWriteKey = new Uint8Array(32).fill(0x22); // dest folder's OWN writeKey
+const destIpnsPrivateKey = new Uint8Array(32).fill(0x23);
+
+const itemReadKey = new Uint8Array(32).fill(0x31); // moved file's OWN readKey
+const itemWriteKey = new Uint8Array(32).fill(0x32); // moved file's OWN writeKey
+
+type Fixture = {
+  destPublished: PublishedNode;
+  itemPublished: PublishedNode;
+  srcState: SharedFolderState;
 };
 
-const folderItem: FolderEntry = {
-  type: 'folder',
-  id: FOLDER_ITEM_ID,
-  name: 'subfolder',
-  ipnsName: 'k51subfolder-item',
-  folderKeyEncrypted: 'ff0011',
-  ipnsPrivateKeyEncrypted: 'ff0022',
-  createdAt: now,
-  modifiedAt: now,
-};
+/**
+ * Builds a genuine node/v3 write-chain fixture: a source shared folder whose
+ * write-body links to a destination subfolder (by UUID) and whose read-body
+ * lists both the destination subfolder and the item to be moved.
+ */
+async function buildFixture(): Promise<Fixture> {
+  // Destination folder's own node -- sealed under ITS OWN read/write keys,
+  // later recovered by the client via the source's one-hop write chain.
+  const destNode: Node = {
+    schema: 'node/v3',
+    kind: 'folder',
+    id: DEST_NODE_ID,
+    generation: DEST_GENERATION,
+    createdAt: 1000,
+    modifiedAt: 1000,
+    children: [],
+    writeBody: { ipnsPrivateKey: destIpnsPrivateKey, writeChildren: [] },
+  };
+  const destPublished = await sealNode(destNode, destFolderKey, destWriteKey);
 
-// share_keys factory: generates entries for the given opts
-type ShareKeyEntry = { keyType: string; itemId: string; encryptedKey: string };
+  // Moved item's own envelope. moveInSharedFolder never unseals the moved
+  // item's own body (only its plaintext id/kind off the envelope) -- sealed
+  // anyway for a realistic fixture.
+  const itemNode: Node = {
+    schema: 'node/v3',
+    kind: 'file',
+    id: ITEM_NODE_ID,
+    generation: ITEM_GENERATION,
+    createdAt: 1000,
+    modifiedAt: 1000,
+    content: {
+      cid: 'bafyitemcontent',
+      fileIv: 'aXY=',
+      size: 4,
+      mimeType: 'text/plain',
+      encryptionMode: 'GCM',
+      fileKey: new Uint8Array(32).fill(0x44),
+      versions: [],
+    },
+    writeBody: { ipnsPrivateKey: new Uint8Array(32).fill(0x55), writeChildren: [] },
+  };
+  const itemPublished = await sealNode(itemNode, itemReadKey, itemWriteKey);
 
-function makeShareKeys(opts: {
-  destFolder?: boolean;
-  destFolderIpns?: boolean;
-  fileIpns?: boolean;
-}): ShareKeyEntry[] {
-  const keys: ShareKeyEntry[] = [];
-  if (opts.destFolder) {
-    keys.push({ keyType: 'folder', itemId: DEST_FOLDER_ID, encryptedKey: DEST_FOLDER_KEY_ENC });
-  }
-  if (opts.destFolderIpns) {
-    keys.push({
-      keyType: 'folder-ipns',
-      itemId: DEST_FOLDER_ID,
-      encryptedKey: DEST_IPNS_KEY_ENC,
-    });
-  }
-  if (opts.fileIpns) {
-    keys.push({
-      keyType: 'file-ipns',
-      itemId: FILE_ID,
-      encryptedKey: FILE_IPNS_KEY_ENC,
-    });
-  }
-  return keys;
-}
+  // Source folder read-body children: the destination subfolder (its own
+  // readKey sealed under srcFolderKey) + the item being moved (its own
+  // readKey also sealed under srcFolderKey).
+  const destReadKeySealed = await sealChildReadKey(
+    destFolderKey,
+    srcFolderKey,
+    DEST_NODE_ID,
+    'folder',
+    DEST_GENERATION
+  );
+  const itemReadKeySealed = await sealChildReadKey(
+    itemReadKey,
+    srcFolderKey,
+    ITEM_NODE_ID,
+    'file',
+    ITEM_GENERATION
+  );
 
-function seedSharedFolder(
-  client: CipherBoxClient,
-  children: FolderChild[],
-  overrides?: Partial<SharedFolderState>
-): SharedFolderState {
-  const state: SharedFolderState = {
+  const destReadRef: SealedChildRef = {
+    name: 'dest-folder',
+    ipnsName: DEST_IPNS,
+    generation: DEST_GENERATION,
+    versionFloor: 0n,
+    readKeySealed: destReadKeySealed,
+  };
+  const itemReadRef: SealedChildRef = {
+    name: 'moved.txt',
+    ipnsName: ITEM_IPNS,
+    generation: ITEM_GENERATION,
+    versionFloor: 0n,
+    readKeySealed: itemReadKeySealed,
+  };
+
+  // Source folder write-body: WriteChildRef entries keyed by node UUID
+  // (childId), NEVER by ipnsName -- for both the destination subfolder and
+  // the moved item.
+  const destWriteKeySealed = await sealChildWriteKey(
+    destWriteKey,
+    srcWriteKey,
+    DEST_NODE_ID,
+    'folder',
+    DEST_GENERATION
+  );
+  const itemWriteKeySealed = await sealChildWriteKey(
+    itemWriteKey,
+    srcWriteKey,
+    ITEM_NODE_ID,
+    'file',
+    ITEM_GENERATION
+  );
+
+  const srcNode: Node = {
+    schema: 'node/v3',
+    kind: 'folder',
+    id: SRC_NODE_ID,
+    generation: 0,
+    createdAt: 1000,
+    modifiedAt: 1000,
+    children: [itemReadRef, destReadRef],
+    writeBody: {
+      ipnsPrivateKey: srcIpnsPrivateKey,
+      writeChildren: [
+        { childId: DEST_NODE_ID, writeKeySealed: destWriteKeySealed },
+        { childId: ITEM_NODE_ID, writeKeySealed: itemWriteKeySealed },
+      ],
+    },
+  };
+  const srcPublished = await sealNode(srcNode, srcFolderKey, srcWriteKey);
+
+  const srcState: SharedFolderState = {
     shareId: SHARE_ID,
     ipnsName: SRC_IPNS,
-    folderKey: new Uint8Array(SRC_FOLDER_KEY),
-    ipnsPrivateKey: new Uint8Array(SRC_IPNS_KEY),
+    folderKey: new Uint8Array(srcFolderKey),
+    ipnsPrivateKey: new Uint8Array(srcIpnsPrivateKey),
+    writeKey: new Uint8Array(srcWriteKey),
+    publishedNode: srcPublished,
     sequenceNumber: 5n,
-    children,
+    children: [itemReadRef, destReadRef],
     ownerPublicKey: new Uint8Array(33).fill(0x03),
     recipientPublicKey: new Uint8Array(33).fill(0x04),
     addShareKeysFn: vi.fn().mockResolvedValue(undefined),
-    ...overrides,
   };
-  client.loadSharedFolder(state.shareId, state);
-  return state;
+
+  return { destPublished, itemPublished, srcState };
 }
 
-// ── tests ─────────────────────────────────────────────────────────────────────
+function mockResolution(destPublished: PublishedNode, itemPublished: PublishedNode): void {
+  vi.mocked(sdkCore.resolveIpnsRecord).mockImplementation(async (ipnsName: string) => {
+    if (ipnsName === DEST_IPNS) {
+      return { cid: 'bafydestenv', sequenceNumber: 9n, signatureVerified: true };
+    }
+    if (ipnsName === ITEM_IPNS) {
+      return { cid: 'bafyitemenv', sequenceNumber: 3n, signatureVerified: true };
+    }
+    return null;
+  });
+  vi.mocked(sdkCore.fetchFromIpfs).mockImplementation(async (_ctx: unknown, cid: string) => {
+    if (cid === 'bafydestenv') return new TextEncoder().encode(JSON.stringify(destPublished));
+    if (cid === 'bafyitemenv') return new TextEncoder().encode(JSON.stringify(itemPublished));
+    throw new Error(`unexpected fetchFromIpfs cid: ${cid}`);
+  });
+}
 
-describe.skip('CipherBoxClient.moveInSharedFolder — TODO(phase 63)', () => {
+describe('CipherBoxClient.moveInSharedFolder -- reachable write-chain branch (68.1-20)', () => {
   let client: CipherBoxClient;
 
   beforeEach(() => {
     vi.clearAllMocks();
     client = new CipherBoxClient(createTestConfig());
-
-    // Default: unwrapKey returns distinct buffers for dest folder key vs dest ipns key
-    // (first call → dest folderKey, second → dest ipnsPrivateKey, third → file-ipns key)
-    vi.mocked(unwrapKey)
-      .mockResolvedValueOnce(new Uint8Array(DEST_FOLDER_KEY_BYTES))
-      .mockResolvedValueOnce(new Uint8Array(DEST_IPNS_KEY_BYTES))
-      .mockResolvedValue(new Uint8Array(32).fill(0x55)); // file-ipns key
-
-    // loadFolderMetadata returns fresh dest state
-    vi.mocked(sdkCore.loadFolderMetadata).mockResolvedValue({
-      metadata: { children: [] } as never,
-      sequenceNumber: 10n,
-      cid: 'bafydest',
-    });
-
-    // moveItem returns successful mutation
-    vi.mocked(sdkCore.moveItem).mockReturnValue({
-      updatedSourceChildren: [],
-      updatedDestChildren: [fileItem],
-      movedItem: fileItem,
-    });
-
-    // updateFolderMetadataAndPublish returns new sequences
-    vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
-      cid: 'bafynew',
-      newSequenceNumber: 11n,
-      publishedChildren: [],
-    });
   });
 
-  // ── publish ordering ───────────────────────────────────────────────────────
+  it('moves an item into a direct-child destination via the write chain, keying the destination write link by node UUID (childId), never by ipnsName', async () => {
+    const { destPublished, itemPublished, srcState } = await buildFixture();
+    mockResolution(destPublished, itemPublished);
+    client.loadSharedFolder(SHARE_ID, srcState);
 
-  it('publishes DEST before SOURCE (add-before-remove crash safety)', async () => {
-    seedSharedFolder(client, [fileItem]);
-    const order: string[] = [];
-    vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockImplementation(async (p) => {
-      order.push(p.ipnsName === DEST_IPNS ? 'dest' : 'source');
-      return { cid: 'bafynew', newSequenceNumber: 11n, publishedChildren: [] };
+    vi.mocked(sdkCore.addToIpfs).mockResolvedValue({
+      cid: 'bafynewblob',
+      size: 100,
+      recorded: true,
+    });
+    let seq = 100n;
+    vi.mocked(sdkCore.createAndPublishIpnsRecord).mockImplementation(async () => {
+      seq += 1n;
+      return { success: true, sequenceNumber: seq };
     });
 
     await client.moveInSharedFolder(SHARE_ID, {
-      itemId: FILE_ID,
-      destFolderId: DEST_FOLDER_ID,
+      itemId: ITEM_IPNS,
+      destFolderId: 'unused-by-the-write-chain-branch',
       destIpnsName: DEST_IPNS,
       vaultPrivateKey: new Uint8Array(32).fill(0x99),
-      getShareKeysFn: async () =>
-        makeShareKeys({ destFolder: true, destFolderIpns: true, fileIpns: true }),
+      // Empty -> routes to the reachable write-chain (`else`) branch, exactly
+      // like every current web caller's fetchShareKeys (68.1-20 Task 1).
+      getShareKeysFn: async () => [],
     });
 
-    expect(order).toEqual(['dest', 'source']);
-  });
+    // Publishes DEST before SOURCE (dup-not-orphan, T-68.1-08-04).
+    expect(sdkCore.createAndPublishIpnsRecord).toHaveBeenCalledTimes(2);
+    const publishCalls = vi.mocked(sdkCore.createAndPublishIpnsRecord).mock.calls;
+    expect(publishCalls[0]?.[0]?.ipnsName).toBe(DEST_IPNS);
+    expect(publishCalls[1]?.[0]?.ipnsName).toBe(SRC_IPNS);
 
-  // ── file re-key ────────────────────────────────────────────────────────────
+    // Decode what was actually published for DEST and assert the new write
+    // link is keyed by the item's node UUID (childId), never its ipnsName --
+    // the two are genuinely different values in this fixture (T-72-01-01).
+    const destBytes = vi.mocked(sdkCore.addToIpfs).mock.calls[0]?.[1] as Uint8Array;
+    const destEnvelope = JSON.parse(new TextDecoder().decode(destBytes)) as PublishedNode;
+    const destNodeAfterMove = await unsealNode(destEnvelope, destFolderKey, destWriteKey);
+    expect(destNodeAfterMove.writeBody?.writeChildren).toHaveLength(1);
+    expect(destNodeAfterMove.writeBody?.writeChildren[0]?.childId).toBe(ITEM_NODE_ID);
+    expect(destNodeAfterMove.writeBody?.writeChildren[0]?.childId).not.toBe(ITEM_IPNS);
+    expect(destNodeAfterMove.children).toHaveLength(1);
+    expect(destNodeAfterMove.children?.[0]?.ipnsName).toBe(ITEM_IPNS);
 
-  it('calls reencryptFileMetadataForFolderChange with src and dest folderKeys for file item', async () => {
-    seedSharedFolder(client, [fileItem]);
-
-    // Capture snapshots at call time — the buffers are zeroed in finally
-    let capturedSourceFolderKey: Uint8Array | undefined;
-    let capturedDestFolderKey: Uint8Array | undefined;
-    let capturedFileMetaIpnsName: string | undefined;
-    vi.mocked(reencryptModule.reencryptFileMetadataForFolderChange).mockImplementation(
-      async (p) => {
-        capturedSourceFolderKey = new Uint8Array(p.sourceFolderKey);
-        capturedDestFolderKey = new Uint8Array(p.destFolderKey);
-        capturedFileMetaIpnsName = p.fileMetaIpnsName;
-      }
-    );
-
-    await client.moveInSharedFolder(SHARE_ID, {
-      itemId: FILE_ID,
-      destFolderId: DEST_FOLDER_ID,
-      destIpnsName: DEST_IPNS,
-      vaultPrivateKey: new Uint8Array(32).fill(0x99),
-      getShareKeysFn: async () =>
-        makeShareKeys({ destFolder: true, destFolderIpns: true, fileIpns: true }),
-    });
-
-    expect(reencryptModule.reencryptFileMetadataForFolderChange).toHaveBeenCalledTimes(1);
-    expect(capturedFileMetaIpnsName).toBe(FILE_META_IPNS);
-    // sourceFolderKey must be the SOURCE folder key (from sharedFolderTree)
-    expect(capturedSourceFolderKey).toEqual(SRC_FOLDER_KEY);
-    // destFolderKey must be what was unwrapped from share_keys for destFolderId
-    expect(capturedDestFolderKey).toEqual(DEST_FOLDER_KEY_BYTES);
-  });
-
-  it('file IPNS key is resolved from share_keys keyType:file-ipns (NEVER FilePointer.ipnsPrivateKeyEncrypted)', async () => {
-    seedSharedFolder(client, [fileItem]);
-    // Reset unwrapKey to provide exactly 3 calls in sequence (no interference from beforeEach queue)
-    const fileIpnsBytes = new Uint8Array(32).fill(0x77);
-    vi.mocked(unwrapKey).mockReset();
-    vi.mocked(unwrapKey)
-      .mockResolvedValueOnce(new Uint8Array(DEST_FOLDER_KEY_BYTES)) // 1st: dest folder key
-      .mockResolvedValueOnce(new Uint8Array(DEST_IPNS_KEY_BYTES)) // 2nd: dest ipns key
-      .mockResolvedValueOnce(new Uint8Array(fileIpnsBytes)); // 3rd: file-ipns key from share_keys
-
-    // Capture the fileIpnsPrivateKey snapshot before finally zeroes it
-    let capturedFileIpnsKey: Uint8Array | undefined;
-    vi.mocked(reencryptModule.reencryptFileMetadataForFolderChange).mockImplementation(
-      async (p) => {
-        capturedFileIpnsKey = new Uint8Array(p.fileIpnsPrivateKey);
-      }
-    );
-
-    await client.moveInSharedFolder(SHARE_ID, {
-      itemId: FILE_ID,
-      destFolderId: DEST_FOLDER_ID,
-      destIpnsName: DEST_IPNS,
-      vaultPrivateKey: new Uint8Array(32).fill(0x99),
-      getShareKeysFn: async () =>
-        makeShareKeys({ destFolder: true, destFolderIpns: true, fileIpns: true }),
-    });
-
-    // fileIpnsPrivateKey must be from share_keys (value 0x77), not FilePointer (0x01)
-    expect(capturedFileIpnsKey).toEqual(fileIpnsBytes);
-    // Must have called unwrapKey exactly 3 times: destFolderKey, destIpnsKey, fileIpnsKey
-    expect(vi.mocked(unwrapKey)).toHaveBeenCalledTimes(3);
-  });
-
-  it('does NOT call reencryptFileMetadataForFolderChange for folder item', async () => {
-    seedSharedFolder(client, [folderItem]);
-    vi.mocked(sdkCore.moveItem).mockReturnValue({
-      updatedSourceChildren: [],
-      updatedDestChildren: [folderItem],
-      movedItem: folderItem,
-    });
-
-    await client.moveInSharedFolder(SHARE_ID, {
-      itemId: FOLDER_ITEM_ID,
-      destFolderId: DEST_FOLDER_ID,
-      destIpnsName: DEST_IPNS,
-      vaultPrivateKey: new Uint8Array(32).fill(0x99),
-      getShareKeysFn: async () => makeShareKeys({ destFolder: true, destFolderIpns: true }),
-    });
-
-    expect(reencryptModule.reencryptFileMetadataForFolderChange).not.toHaveBeenCalled();
-  });
-
-  // ── cycle guard ─────────────────────────────────────────────────────────────
-
-  it('throws (no publish) when a folder is moved into itself (destFolderId === itemId)', async () => {
-    seedSharedFolder(client, [folderItem]);
-
-    await expect(
-      client.moveInSharedFolder(SHARE_ID, {
-        itemId: FOLDER_ITEM_ID,
-        destFolderId: FOLDER_ITEM_ID,
-        destIpnsName: DEST_IPNS,
-        vaultPrivateKey: new Uint8Array(32).fill(0x99),
-        getShareKeysFn: async () => makeShareKeys({ destFolder: true, destFolderIpns: true }),
-      })
-    ).rejects.toThrow(/Cannot move a folder into itself/);
-
-    expect(sdkCore.updateFolderMetadataAndPublish).not.toHaveBeenCalled();
-  });
-
-  // ── write-capability guard (T-49-01) ───────────────────────────────────────
-
-  it('throws before any publish when dest is missing keyType:folder-ipns (no write key)', async () => {
-    seedSharedFolder(client, [fileItem]);
-
-    await expect(
-      client.moveInSharedFolder(SHARE_ID, {
-        itemId: FILE_ID,
-        destFolderId: DEST_FOLDER_ID,
-        destIpnsName: DEST_IPNS,
-        vaultPrivateKey: new Uint8Array(32).fill(0x99),
-        // Missing folder-ipns key
-        getShareKeysFn: async () => makeShareKeys({ destFolder: true, fileIpns: true }),
-      })
-    ).rejects.toThrow(/No write key for destination folder/);
-
-    expect(sdkCore.updateFolderMetadataAndPublish).not.toHaveBeenCalled();
-  });
-
-  it('throws before any publish when dest is missing keyType:folder (no read key)', async () => {
-    seedSharedFolder(client, [fileItem]);
-
-    await expect(
-      client.moveInSharedFolder(SHARE_ID, {
-        itemId: FILE_ID,
-        destFolderId: DEST_FOLDER_ID,
-        destIpnsName: DEST_IPNS,
-        vaultPrivateKey: new Uint8Array(32).fill(0x99),
-        // Missing folder key
-        getShareKeysFn: async () => makeShareKeys({ destFolderIpns: true, fileIpns: true }),
-      })
-    ).rejects.toThrow(/No read key for destination folder/);
-
-    expect(sdkCore.updateFolderMetadataAndPublish).not.toHaveBeenCalled();
-  });
-
-  // ── name collision ─────────────────────────────────────────────────────────
-
-  it('propagates name collision error from moveItem without publishing', async () => {
-    seedSharedFolder(client, [fileItem]);
-    vi.mocked(sdkCore.moveItem).mockImplementation(() => {
-      throw new Error('An item with this name already exists in destination');
-    });
-
-    await expect(
-      client.moveInSharedFolder(SHARE_ID, {
-        itemId: FILE_ID,
-        destFolderId: DEST_FOLDER_ID,
-        destIpnsName: DEST_IPNS,
-        vaultPrivateKey: new Uint8Array(32).fill(0x99),
-        getShareKeysFn: async () =>
-          makeShareKeys({ destFolder: true, destFolderIpns: true, fileIpns: true }),
-      })
-    ).rejects.toThrow('An item with this name already exists in destination');
-
-    expect(sdkCore.updateFolderMetadataAndPublish).not.toHaveBeenCalled();
-  });
-
-  // ── adoptSharedFolderResult for SOURCE only ────────────────────────────────
-
-  it('calls adoptSharedFolderResult for SOURCE result only, not dest', async () => {
-    seedSharedFolder(client, [fileItem]);
-
-    const srcPublishedChildren: FolderChild[] = [];
-    const destPublishedChildren: FolderChild[] = [fileItem];
-
-    let callIdx = 0;
-    vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockImplementation(async (p) => {
-      callIdx++;
-      const seq = callIdx === 1 ? 20n : 21n; // dest=20n, source=21n
-      const children = p.ipnsName === DEST_IPNS ? destPublishedChildren : srcPublishedChildren;
-      return { cid: 'bafynew', newSequenceNumber: seq, publishedChildren: children };
-    });
-
-    const events: SdkEvent[] = [];
-    client.on((e) => events.push(e));
-
-    await client.moveInSharedFolder(SHARE_ID, {
-      itemId: FILE_ID,
-      destFolderId: DEST_FOLDER_ID,
-      destIpnsName: DEST_IPNS,
-      vaultPrivateKey: new Uint8Array(32).fill(0x99),
-      getShareKeysFn: async () =>
-        makeShareKeys({ destFolder: true, destFolderIpns: true, fileIpns: true }),
-    });
-
-    // Should emit exactly one sharedFolder:updated event for the SOURCE
-    const updates = events.filter((e) => e.type === 'sharedFolder:updated');
-    expect(updates).toHaveLength(1);
-    const update = updates[0] as Extract<SdkEvent, { type: 'sharedFolder:updated' }>;
-    // Source result: sequence=21n, children=[]
-    expect(update.sequenceNumber).toBe(21n);
-    expect(update.children).toEqual(srcPublishedChildren);
-    // Must emit with the SOURCE ipnsName, not dest
-    expect(update.ipnsName).toBe(SRC_IPNS);
-  });
-
-  // ── finally zeroing ────────────────────────────────────────────────────────
-
-  it('zeroes destFolderKey, destIpnsPrivateKey, and fileIpnsPrivateKey in finally even on op failure', async () => {
-    seedSharedFolder(client, [fileItem]);
-
-    // Capture the actual key buffers returned by unwrapKey
-    const destFolderKeyBuf = new Uint8Array(32).fill(0x33);
-    const destIpnsKeyBuf = new Uint8Array(64).fill(0x44);
-    const fileIpnsKeyBuf = new Uint8Array(32).fill(0x55);
-
-    // Reset to provide exactly 3 calls in order (no interference from beforeEach queue)
-    vi.mocked(unwrapKey).mockReset();
-    vi.mocked(unwrapKey)
-      .mockResolvedValueOnce(destFolderKeyBuf)
-      .mockResolvedValueOnce(destIpnsKeyBuf)
-      .mockResolvedValueOnce(fileIpnsKeyBuf);
-
-    // Make the op fail after key resolution
-    vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockRejectedValue(
-      new Error('publish failed')
-    );
-
-    await expect(
-      client.moveInSharedFolder(SHARE_ID, {
-        itemId: FILE_ID,
-        destFolderId: DEST_FOLDER_ID,
-        destIpnsName: DEST_IPNS,
-        vaultPrivateKey: new Uint8Array(32).fill(0x99),
-        getShareKeysFn: async () =>
-          makeShareKeys({ destFolder: true, destFolderIpns: true, fileIpns: true }),
-      })
-    ).rejects.toThrow('publish failed');
-
-    // All three temp keys must be zeroed in the finally block
-    expect(destFolderKeyBuf.every((b) => b === 0)).toBe(true);
-    expect(destIpnsKeyBuf.every((b) => b === 0)).toBe(true);
-    expect(fileIpnsKeyBuf.every((b) => b === 0)).toBe(true);
-  });
-
-  it('zeroes keys in finally when unwrapKey throws after partial resolution', async () => {
-    seedSharedFolder(client, [fileItem]);
-    // destFolderKey resolves but destIpnsPrivateKey unwrap fails
-    const destFolderKeyBuf = new Uint8Array(32).fill(0x33);
-    vi.mocked(unwrapKey).mockReset();
-    vi.mocked(unwrapKey)
-      .mockResolvedValueOnce(destFolderKeyBuf)
-      .mockRejectedValueOnce(new Error('unwrap failed'));
-
-    await expect(
-      client.moveInSharedFolder(SHARE_ID, {
-        itemId: FILE_ID,
-        destFolderId: DEST_FOLDER_ID,
-        destIpnsName: DEST_IPNS,
-        vaultPrivateKey: new Uint8Array(32).fill(0x99),
-        // Both keys exist so record lookup succeeds, but 2nd unwrap throws
-        getShareKeysFn: async () => makeShareKeys({ destFolder: true, destFolderIpns: true }),
-      })
-    ).rejects.toThrow('unwrap failed');
-
-    // destFolderKey was resolved before the throw — must be zeroed in finally
-    expect(destFolderKeyBuf.every((b) => b === 0)).toBe(true);
-  });
-
-  // ── shared folder not loaded ───────────────────────────────────────────────
-
-  it('throws "Shared folder not loaded" when share is not seeded', async () => {
-    await expect(
-      client.moveInSharedFolder('nonexistent-share', {
-        itemId: FILE_ID,
-        destFolderId: DEST_FOLDER_ID,
-        destIpnsName: DEST_IPNS,
-        vaultPrivateKey: new Uint8Array(32).fill(0x99),
-        getShareKeysFn: async () => makeShareKeys({ destFolder: true, destFolderIpns: true }),
-      })
-    ).rejects.toThrow('Shared folder not loaded');
-  });
-});
-
-// ── stateless op tests ────────────────────────────────────────────────────────
-
-describe.skip('moveInSharedFolder stateless op — TODO(phase 63)', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-
-    vi.mocked(sdkCore.moveItem).mockReturnValue({
-      updatedSourceChildren: [],
-      updatedDestChildren: [fileItem],
-      movedItem: fileItem,
-    });
-
-    vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
-      cid: 'bafynew',
-      newSequenceNumber: 11n,
-      publishedChildren: [],
-    });
-  });
-
-  it('does NOT zero any keys (caller owns zeroing)', async () => {
-    // The stateless op must not zero the passed-in keys.
-    // We verify that the src/dest folderKey/ipnsPrivateKey values are unchanged after the call.
-    const { moveInSharedFolder: opFn } = await import('../share/shared-write');
-
-    const srcFolderKey = new Uint8Array(32).fill(0x11);
-    const srcIpnsPrivateKey = new Uint8Array(64).fill(0x22);
-    const destFolderKey = new Uint8Array(32).fill(0x33);
-    const destIpnsPrivateKey = new Uint8Array(64).fill(0x44);
-    const fileIpnsPrivateKey = new Uint8Array(32).fill(0x55);
-
-    const srcFolderKeySnapshot = new Uint8Array(srcFolderKey);
-    const destFolderKeySnapshot = new Uint8Array(destFolderKey);
-
-    await opFn({
-      ctx: {} as never,
-      srcCtx: {
-        folderKey: srcFolderKey,
-        ipnsPrivateKey: srcIpnsPrivateKey,
-        ipnsName: SRC_IPNS,
-        sequenceNumber: 1n,
-        children: [fileItem],
-      },
-      destCtx: {
-        folderKey: destFolderKey,
-        ipnsPrivateKey: destIpnsPrivateKey,
-        ipnsName: DEST_IPNS,
-        sequenceNumber: 2n,
-        children: [],
-      },
-      itemId: FILE_ID,
-      fileIpnsPrivateKey,
-    });
-
-    // Keys must NOT be zeroed by the stateless op
-    expect(srcFolderKey).toEqual(srcFolderKeySnapshot);
-    expect(destFolderKey).toEqual(destFolderKeySnapshot);
-    // fileIpnsPrivateKey also must NOT be zeroed by the op
-    expect(fileIpnsPrivateKey.every((b) => b === 0x55)).toBe(true);
+    // Decode what was actually published for SOURCE and assert the item's
+    // write link and read-body entry are both gone; the destination-folder
+    // reference (still a legitimate child of source) remains untouched.
+    const srcBytes = vi.mocked(sdkCore.addToIpfs).mock.calls[1]?.[1] as Uint8Array;
+    const srcEnvelope = JSON.parse(new TextDecoder().decode(srcBytes)) as PublishedNode;
+    const srcNodeAfterMove = await unsealNode(srcEnvelope, srcFolderKey, srcWriteKey);
+    expect(
+      srcNodeAfterMove.writeBody?.writeChildren.some((wc) => wc.childId === ITEM_NODE_ID)
+    ).toBe(false);
+    expect(srcNodeAfterMove.writeBody?.writeChildren).toHaveLength(1);
+    expect(srcNodeAfterMove.writeBody?.writeChildren[0]?.childId).toBe(DEST_NODE_ID);
+    expect(srcNodeAfterMove.children).toHaveLength(1);
+    expect(srcNodeAfterMove.children?.[0]?.ipnsName).toBe(DEST_IPNS);
   });
 });
