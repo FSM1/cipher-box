@@ -144,5 +144,15 @@ None - no external service configuration required.
 - No blockers for 73-07/73-08/73-09.
 
 ---
+
 *Phase: 73-shared-write-navigation-correctness-web*
 *Completed: 2026-07-10*
+
+## Self-Check: PASSED
+
+- FOUND: apps/web/src/hooks/useSharedNavigationActions.ts
+- FOUND: apps/web/src/hooks/useSharedNavigation.ts
+- FOUND: .planning/phases/73-shared-write-navigation-correctness-web/73-06-SUMMARY.md
+- FOUND commit: e50044fe1
+- FOUND commit: 6cb963e03
+- FOUND commit: f9a64d240
