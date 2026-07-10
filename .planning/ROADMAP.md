@@ -874,16 +874,16 @@ Plans:
 6. Duplicated shared-navigation logic in `useSharedNavigationActions` (navigateUp / navigateToBreadcrumb restore + resolve-kinds-before-project) is consolidated to a single source of truth — the writeKey/snapshot fixes (SC1/SC2) live in one place, not copy-pasted across nav entrypoints
 7. The dead `resolveFolderIpnsPrivateKey` / `getShareKeys` folder-IPNS write-share key path is removed from `useSharedNavigationActions.ts` (no remaining references), leaving the derived-writeKey path (SC1) as the sole write-key source
 
-**Plans**: 9 plans
+**Plans**: 5/9 plans executed
 
 Plans:
 
-- [ ] 73-01-PLAN.md — Wave 0 e2e scaffolds (writable-shares SC1, shared-folder-desync SC2, rotation-ux SC4 as fixme stubs)
-- [ ] 73-02-PLAN.md — SC4(a): sdk-core createAndPublishIpnsRecord 410→tombstoned (TDD)
-- [ ] 73-03-PLAN.md — SC5: SharedFolderRow drag-payload kind from resolved listing
-- [ ] 73-04-PLAN.md — SC3: floor-gate resolveFileMetadata/downloadFromIpns/resolveNodeIdentity through ROT-07 (TDD)
+- [x] 73-01-PLAN.md — Wave 0 e2e scaffolds (writable-shares SC1, shared-folder-desync SC2, rotation-ux SC4 as fixme stubs)
+- [x] 73-02-PLAN.md — SC4(a): sdk-core createAndPublishIpnsRecord 410→tombstoned (TDD)
+- [x] 73-03-PLAN.md — SC5: SharedFolderRow drag-payload kind from resolved listing
+- [x] 73-04-PLAN.md — SC3: floor-gate resolveFileMetadata/downloadFromIpns/resolveNodeIdentity through ROT-07 (TDD)
 - [ ] 73-05-PLAN.md — SC4(b) publishNodeFn tombstone mapping + SC2 item-4 refreshSharedFolder write-envelope
-- [ ] 73-06-PLAN.md — SC7 dead getShareKeys/folder-IPNS path removal + SC6 restore-helper consolidation
+- [x] 73-06-PLAN.md — SC7 dead getShareKeys/folder-IPNS path removal + SC6 restore-helper consolidation
 - [ ] 73-07-PLAN.md — SC1: navStack writeKey retention + D-09 zeroization audit
 - [ ] 73-08-PLAN.md — SC4(c/d): useSharedWriteOps runWithFailureUx wiring + refreshWriteAccess supplier + rotation-ux e2e
 - [ ] 73-09-PLAN.md — SC2: refresh-after-restore stale-snapshot invalidation
