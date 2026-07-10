@@ -121,9 +121,13 @@ describe('CipherBoxClient.getWriteBodyParams fail-closed on transient resolve mi
 
   it('THROWS when a real writeKey is present and the resolve returns null (transient miss)', async () => {
     seedRenameFixture(client, realWriteKey());
-    // Every resolveIpnsRecord call (reconcile pre-check + getWriteBodyParams'
-    // own resolve) returns null -- a genuine transient IPNS resolve miss.
-    vi.mocked(sdkCore.resolveIpnsRecord).mockResolvedValue(null);
+    // 1st call: reconcileFolderSequence pre-check -- matching sequence, no-op,
+    // so the test isolates the getWriteBodyParams resolve path rather than a
+    // reconcile-triggered failure.
+    // 2nd call: getWriteBodyParams' own resolve -- genuine transient miss.
+    vi.mocked(sdkCore.resolveIpnsRecord)
+      .mockResolvedValueOnce({ cid: 'bafyseq', sequenceNumber: 1n, signatureVerified: true })
+      .mockResolvedValueOnce(null);
 
     await expect(client.renameItem(FOLDER_IPNS, CHILD_IPNS, 'new.txt')).rejects.toThrow();
     expect(sdkCore.updateFolderMetadataAndPublish).not.toHaveBeenCalled();
@@ -135,9 +139,10 @@ describe('CipherBoxClient.getWriteBodyParams fail-closed on transient resolve mi
 
     await expect(client.renameItem(FOLDER_IPNS, CHILD_IPNS, 'new.txt')).resolves.toBeUndefined();
 
-    const call = vi.mocked(sdkCore.updateFolderMetadataAndPublish).mock.calls[0]?.[0];
-    expect(call?.writeKey).toBeUndefined();
-    expect(call?.writeChildren).toBeUndefined();
+    expect(sdkCore.updateFolderMetadataAndPublish).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(sdkCore.updateFolderMetadataAndPublish).mock.calls[0]![0];
+    expect(call.writeKey).toBeUndefined();
+    expect(call.writeChildren).toBeUndefined();
   });
 
   it('does NOT throw when a real writeKey resolves to a record without writeSealed (never-write-capable, unchanged)', async () => {
@@ -163,9 +168,10 @@ describe('CipherBoxClient.getWriteBodyParams fail-closed on transient resolve mi
 
     await expect(client.renameItem(FOLDER_IPNS, CHILD_IPNS, 'new.txt')).resolves.toBeUndefined();
 
-    const call = vi.mocked(sdkCore.updateFolderMetadataAndPublish).mock.calls[0]?.[0];
-    expect(call?.writeKey).toEqual(realWriteKey());
-    expect(call?.writeChildren).toEqual([]);
+    expect(sdkCore.updateFolderMetadataAndPublish).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(sdkCore.updateFolderMetadataAndPublish).mock.calls[0]![0];
+    expect(call.writeKey).toEqual(realWriteKey());
+    expect(call.writeChildren).toEqual([]);
   });
 
   // The zero-key early return branch is unchanged -- resolveIpnsRecord is
@@ -312,8 +318,9 @@ describe('bin addToBin getWriteBodyParams twin fail-closed on transient resolve 
       })
     ).resolves.toBeDefined();
 
-    const call = vi.mocked(sdkCore.updateFolderMetadataAndPublish).mock.calls[0]?.[0];
-    expect(call?.writeKey).toEqual(realWriteKey());
-    expect(call?.writeChildren).toEqual([]);
+    expect(sdkCore.updateFolderMetadataAndPublish).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(sdkCore.updateFolderMetadataAndPublish).mock.calls[0]![0];
+    expect(call.writeKey).toEqual(realWriteKey());
+    expect(call.writeChildren).toEqual([]);
   });
 });
