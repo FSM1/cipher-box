@@ -4703,12 +4703,36 @@ export class CipherBoxClient {
       // republish the parent (fixes 'Target folder not loaded').
       await this.requireFolder(targetFolderIpnsName, 'Target folder');
 
+      // SC#3 (72-05): also self-bootstrap the ORIGINAL parent so a restore to
+      // a DIFFERENT parent can re-home the WriteChildRef (reuses moveItem's
+      // 68.1-31 dest-before-source pattern). Fail OPEN on a resolve miss —
+      // the original parent may itself have been deleted/moved since the
+      // soft-delete; the restore must still succeed read-plane-only with a
+      // warning, never throw and block the restore (T-72-05-03).
+      const entry = this.binState.entries.find((e) => e.id === entryId);
+      let sourceFolder: FolderState | undefined;
+      if (entry?.originalParentIpnsName) {
+        try {
+          sourceFolder = await this.requireFolder(
+            entry.originalParentIpnsName,
+            'Original parent folder'
+          );
+        } catch (err) {
+          console.warn(
+            `[CipherBox] restoreFromBin: original parent ${entry.originalParentIpnsName} could ` +
+              'not be resolved — restoring read-plane only (no re-homing):',
+            err
+          );
+        }
+      }
+
       const { updatedBinState } = await binOps.restoreFromBin({
         entryId,
         targetFolderIpnsName,
         folderTree: this.folderTree,
         binState: this.binState,
         binCtx: this.getBinContext(),
+        sourceFolder,
       });
 
       this.binState = updatedBinState;

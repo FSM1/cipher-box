@@ -21,7 +21,9 @@ import {
   decryptBinMetadata,
   deriveBinIpnsKeypair,
   sealChildReadKey,
+  sealChildWriteKey,
   unsealChildReadKey,
+  unsealChildWriteKey,
   unsealNode,
   type BinEntry,
   type RecycleBinMetadata,
@@ -535,8 +537,18 @@ export async function restoreFromBin(params: {
   folderTree: FolderTree;
   binState: BinState;
   binCtx: BinOperationContext;
+  /**
+   * The bin entry's original parent FolderState, when resolvable — SC#3
+   * (72-05). Enables cross-folder WriteChildRef re-homing when restoring to
+   * a DIFFERENT parent than the original. Omitted (or the original parent
+   * could not be resolved upstream, e.g. it was itself deleted/moved since
+   * the soft-delete) => the restore proceeds read-plane-only exactly as
+   * before this plan (fail-open, T-72-05-03) — it never throws or blocks
+   * the restore.
+   */
+  sourceFolder?: FolderState;
 }): Promise<{ restoredItem: SealedChildRef; updatedBinState: BinState }> {
-  const { entryId, targetFolderIpnsName, folderTree, binState, binCtx } = params;
+  const { entryId, targetFolderIpnsName, folderTree, binState, binCtx, sourceFolder } = params;
 
   // 1. Find the bin entry
   const entry = binState.entries.find((e) => e.id === entryId);
@@ -591,14 +603,103 @@ export async function restoreFromBin(params: {
   const childrenForPublish = alreadyInFolder
     ? targetFolder.children
     : [...targetFolder.children, restoredItem];
-  // Preserve the target folder's existing write-body verbatim (D-03) — the
-  // restored child's WriteChildRef insertion is owned by 68.1-02, not this plan.
-  const writeBodyParams = await getWriteBodyParams(targetFolder, binCtx.ctx);
+  const targetWriteBodyParams = await getWriteBodyParams(targetFolder, binCtx.ctx);
+  const baseTargetWriteChildren = targetWriteBodyParams.writeChildren;
+  let rehomedTargetWriteChildren = targetWriteBodyParams.writeChildren;
+
+  // SC#3 (72-05): re-home the WriteChildRef when restoring to a DIFFERENT
+  // parent than the original. Reuses moveItem's (68.1-31) dest-before-source
+  // unseal/reseal/drop pattern (client.ts ~L2753-2818), keyed strictly by the
+  // node's own UUID (nodeId, captured on BinEntry.nodeRef.id at addToBin
+  // time — never entry.nodeIpnsName / targetFolderIpnsName, which are
+  // ipnsName-keyed). Pitfall 4: `generation` here is `restoredItem.generation`
+  // (== nodeRef.generation) — the SAME value already used for the read-plane
+  // reseal above — never a second, independently-derived generation.
+  let sourceWriteBodyParams: { writeKey?: Uint8Array; writeChildren?: WriteChildRef[] } = {};
+  let baseSourceWriteChildren: WriteChildRef[] | undefined;
+  let rehomedSourceWriteChildren: WriteChildRef[] | undefined;
+  let didRehome = false;
+
+  if (sourceFolder && sourceFolder.ipnsName !== targetFolderIpnsName) {
+    try {
+      sourceWriteBodyParams = await getWriteBodyParams(sourceFolder, binCtx.ctx);
+      baseSourceWriteChildren = sourceWriteBodyParams.writeChildren;
+      rehomedSourceWriteChildren = sourceWriteBodyParams.writeChildren;
+
+      if (!targetWriteBodyParams.writeKey || !sourceWriteBodyParams.writeKey) {
+        console.warn(
+          `[CipherBox] restoreFromBin: source or destination folder ${sourceFolder.ipnsName} -> ` +
+            `${targetFolderIpnsName} is read-only — the restored item will not be write-capable ` +
+            'in its new location'
+        );
+      } else {
+        // Write plane is keyed by node UUID (nodeId) — NEVER the ipnsName-based
+        // entry.nodeIpnsName / targetFolderIpnsName handles.
+        const movedWriteRef = sourceWriteBodyParams.writeChildren?.find(
+          (wc) => wc.childId === nodeId
+        );
+        if (movedWriteRef) {
+          let movedWriteKey: Uint8Array | null = null;
+          try {
+            movedWriteKey = await unsealChildWriteKey(
+              movedWriteRef.writeKeySealed,
+              sourceWriteBodyParams.writeKey,
+              nodeId,
+              nodeKind,
+              generation
+            );
+            const writeKeySealed = await sealChildWriteKey(
+              movedWriteKey,
+              targetWriteBodyParams.writeKey,
+              nodeId,
+              nodeKind,
+              generation
+            );
+            rehomedTargetWriteChildren = [
+              ...(targetWriteBodyParams.writeChildren ?? []).filter((wc) => wc.childId !== nodeId),
+              { childId: nodeId, writeKeySealed },
+            ];
+            rehomedSourceWriteChildren = (sourceWriteBodyParams.writeChildren ?? []).filter(
+              (wc) => wc.childId !== nodeId
+            );
+            didRehome = true;
+          } finally {
+            // Zero the recovered child writeKey on every exit path —
+            // engine-derived, terminal-owned (D-09). Never zero
+            // sourceWriteBodyParams.writeKey / targetWriteBodyParams.writeKey
+            // (tree/caller-owned).
+            movedWriteKey?.fill(0);
+          }
+        }
+        // else: no source WriteChildRef for this node (pre-write-plane or
+        // already read-only) — nothing to re-home, lists stay verbatim.
+      }
+    } catch (err) {
+      // Fail OPEN (T-72-05-03): a failure resolving the SOURCE side's
+      // write-body must never block the restore — it degrades to
+      // read-plane-only re-linking, exactly as if sourceFolder had not been
+      // supplied at all.
+      console.warn(
+        `[CipherBox] restoreFromBin: source folder ${sourceFolder.ipnsName} write-body resolve ` +
+          'failed — restoring read-plane only (no re-homing):',
+        err
+      );
+      rehomedSourceWriteChildren = undefined;
+      baseSourceWriteChildren = undefined;
+      didRehome = false;
+    }
+  }
+
+  // Publish TARGET (restore destination) before SOURCE (original parent) —
+  // dest-before-source (D-12) — so a crash between publishes never orphans
+  // the node's write capability entirely.
   const { newSequenceNumber, publishedChildren, publishedWriteChildren } =
     await sdkCore.updateFolderMetadataAndPublish({
       children: childrenForPublish,
       folderKey: targetFolder.folderKey,
-      ...writeBodyParams,
+      writeKey: targetWriteBodyParams.writeKey,
+      writeChildren: rehomedTargetWriteChildren,
+      baseWriteChildren: baseTargetWriteChildren,
       ipnsPrivateKey: targetFolder.ipnsKeypair.privateKey,
       ipnsPublicKey: targetFolder.ipnsKeypair.publicKey,
       ipnsName: targetFolderIpnsName,
@@ -615,8 +716,37 @@ export async function restoreFromBin(params: {
     targetFolder,
     publishedChildren,
     newSequenceNumber,
-    publishedWriteChildren ?? writeBodyParams.writeChildren
+    publishedWriteChildren ?? rehomedTargetWriteChildren
   );
+
+  if (didRehome && sourceFolder) {
+    const {
+      newSequenceNumber: sourceSeq,
+      publishedChildren: sourcePublishedChildren,
+      publishedWriteChildren: sourcePublishedWriteChildren,
+    } = await sdkCore.updateFolderMetadataAndPublish({
+      children: sourceFolder.children,
+      folderKey: sourceFolder.folderKey,
+      writeKey: sourceWriteBodyParams.writeKey,
+      writeChildren: rehomedSourceWriteChildren,
+      baseWriteChildren: baseSourceWriteChildren,
+      ipnsPrivateKey: sourceFolder.ipnsKeypair.privateKey,
+      ipnsPublicKey: sourceFolder.ipnsKeypair.publicKey,
+      ipnsName: sourceFolder.ipnsName,
+      sequenceNumber: sourceFolder.sequenceNumber,
+      ctx: binCtx.ctx,
+      nodeId: sourceFolder.nodeId,
+      nodeGeneration: sourceFolder.nodeGeneration,
+    });
+
+    adoptPublishedFolderState(
+      folderTree,
+      sourceFolder,
+      sourcePublishedChildren,
+      sourceSeq,
+      sourcePublishedWriteChildren ?? rehomedSourceWriteChildren
+    );
+  }
 
   // 7. Remove entry from bin and publish updated bin metadata
   const remainingEntries = binState.entries.filter((e) => e.id !== entryId);
