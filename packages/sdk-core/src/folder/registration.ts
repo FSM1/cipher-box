@@ -14,19 +14,13 @@
 
 import { sealNode, unsealNode } from '@cipherbox/core';
 import type { Node, PublishedNode, SealedChildRef, WriteChildRef } from '@cipherbox/core';
-import {
-  generateEd25519Keypair,
-  generateRandomBytes,
-  deriveIpnsName,
-  wrapKey,
-  bytesToHex,
-  hexToBytes,
-} from '@cipherbox/crypto';
+import { generateEd25519Keypair, generateRandomBytes, deriveIpnsName } from '@cipherbox/crypto';
 import type { SdkContext, TeeKeys } from '../types';
 import { addToIpfs, fetchFromIpfs } from '../ipfs';
 import { createAndPublishIpnsRecord } from '../ipns';
 import { publishWithCas } from '../cas';
 import { mergeChildren } from './merge';
+import { wrapIpnsKeyForTee } from '../tee/wrap';
 
 /**
  * Create a new subfolder with generated keys.
@@ -95,11 +89,9 @@ export async function createSubfolder(params: {
       );
     }
     // ECIES-wrap the generated IPNS private key under the TEE public key.
-    // Do NOT zero ipnsPrivateKey here — wrapKey reads but does not consume the buffer;
-    // the caller is the terminal owner (D-09).
-    const teePublicKeyBytes = hexToBytes(currentPublicKey);
-    const wrappedBytes = await wrapKey(ipnsPrivateKey, teePublicKeyBytes);
-    encryptedIpnsPrivateKey = bytesToHex(wrappedBytes);
+    // Do NOT zero ipnsPrivateKey here — wrapIpnsKeyForTee borrows the buffer, it
+    // does not consume it; the caller is the terminal owner (D-09).
+    encryptedIpnsPrivateKey = await wrapIpnsKeyForTee(ipnsPrivateKey, currentPublicKey);
     keyEpoch = currentEpoch;
   }
 

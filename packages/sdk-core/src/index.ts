@@ -101,6 +101,9 @@ export {
   type ScopeExitDeps,
 } from './rotation';
 
+// TEE fail-closed enrollment wrap (SC#6)
+export { wrapIpnsKeyForTee } from './tee/wrap';
+
 // Pinning providers (BYO-IPFS)
 export {
   type PinningProvider,

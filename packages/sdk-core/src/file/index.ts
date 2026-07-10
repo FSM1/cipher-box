@@ -38,9 +38,6 @@ import {
   generateRandomBytes,
   generateEd25519Keypair,
   deriveIpnsName,
-  wrapKey,
-  bytesToHex,
-  hexToBytes,
   decryptAesGcm,
   decryptAesCtr,
   AES_KEY_SIZE,
@@ -50,6 +47,7 @@ import {
 import type { SdkContext, TeeKeys, DownloadProgressCallback } from '../types';
 import { addToIpfs, fetchFromIpfs } from '../ipfs';
 import { resolveIpnsRecord, createAndPublishIpnsRecord } from '../ipns';
+import { wrapIpnsKeyForTee } from '../tee/wrap';
 
 /** IPNS record lifetime: 24 hours in milliseconds */
 const IPNS_LIFETIME_MS = 24 * 60 * 60 * 1000;
@@ -309,9 +307,10 @@ export async function createFileMetadata(params: {
           'createFileMetadata: teeKeys.currentEpoch must be a positive integer (>= 1) — refusing to publish un-enrolled file'
         );
       }
-      const teePublicKeyBytes = hexToBytes(currentPublicKey);
-      const wrappedBytes = await wrapKey(fileIpnsPrivateKey, teePublicKeyBytes);
-      encryptedIpnsPrivateKey = bytesToHex(wrappedBytes);
+      // ECIES-wrap the file IPNS private key under the TEE public key. Do NOT zero
+      // fileIpnsPrivateKey here — wrapIpnsKeyForTee borrows the buffer, it does not
+      // consume it; the caller is the terminal owner (D-09).
+      encryptedIpnsPrivateKey = await wrapIpnsKeyForTee(fileIpnsPrivateKey, currentPublicKey);
       keyEpoch = currentEpoch;
     }
 
