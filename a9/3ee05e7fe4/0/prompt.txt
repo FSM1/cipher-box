@@ -1,0 +1,5 @@
+are there any open discussion points in phase 73 or should I proceed straight to planning?
+
+---
+
+kick planning off - make sure the planning lands on the correct branch name and not the default /gsd-plan-phase branch. please also ensure any tangential todos/pending are included in this phase (even if not originally scoped).
