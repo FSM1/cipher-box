@@ -1,0 +1,412 @@
+is phase 72 worth discussing or cam we jump straight in to planning?
+
+---
+
+are there any @.planning/todos/pending/ that have either already been addressed in phase 70/70.1/71 or recently added in those same phases that should be folded in to phase 72/73
+
+---
+
+<task-notification>
+<task-id>a1b40627b35bedd4b</task-id>
+<tool-use-id>toolu_0121UUSEQ4uSrvFei1P2cnmg</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/4d78f8a5-6112-418c-85c3-c6241359b1fb/tasks/a1b40627b35bedd4b.output</output-file>
+<status>completed</status>
+<summary>Agent "Classify recently-added todos for 72/73 fit" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have read all 12 todo bodies. Here is the classification.
+
+## Classification table
+
+| Todo | Scope bucket | Fold into 72/73? | Reason (grounded in body) |
+|---|---|---|---|
+| deep-scope-exit-rotation-refreshes-only-grant-root-inode-key | rotation read-plane + fuse | Neither | `area: desktop-fuse-rotation`; fixes rotation engine subtree re-key + FUSE InodeTable in-memory read keys — rotation read-plane, not SDK write plane, not web. |
+| 68.2-coderabbit-hardening-backlog | mixed SDK-read + web | Neither (mostly) | Item 4 (`refreshSharedFolder` stale write envelope, `client.ts:5229`) touches the shared write-body but the todo is a bundled 10-item read/freshness/a11y backlog; the write-envelope concern already lives inside Phase 73's `write03-refresh-access` / `child-ref-...-mirror-stale` framing and this multi-area bundle can't be folded whole. Not a clean 72/73 fit. |
+| d07-boundary-eslint-rule | web/CI tooling | Neither | Promotes a web/SDK import boundary grep to an ESLint/CI rule (`apps/web/.eslintrc.cjs`, `ci.yml`) — tooling/CI hardening, not nav/write correctness in 73's scope. |
+| node-codec-kat-pin-file-iv-encoding | crypto KAT parity | Neither | `area: crypto-kat-parity`; pins Rust↔TS cross-language node-codec KAT vector encoding — crypto/test-vector, not SDK write plane or web. |
+| fuse-publish-and-concurrency-hardening-deferred | fuse/desktop | Neither | `area: desktop-fuse`; FUSE publish retry helper, FP-resolve cap, Windows write-plane keying, Rust zeroization — all crates/fuse, CI-gated. |
+| desktop-query-grants-rooted-at-remint-noop | rotation read-plane + fuse | Neither | `area: desktop-fuse-rotation`; implements `query_grants_rooted_at` re-mint in the FUSE RotationDeps adapter — rotation read-plane, desktop. |
+| winfsp-d15d-gate-ordering-parity | fuse/rotation (Windows) | Neither | `area: desktop-fuse-rotation`; WinFsp rename dest-gating + coalescing parity in `platform/windows` — fuse rotation, CI-gated. |
+| macos-fuse-t-cross-client-sync-invalidation | fuse/desktop | Neither | `area: desktop-fuse`; FUSE-T SMB read-cache invalidation, flip soft-skipped desktop-e2e Tests 5/7 — read-side fuse limitation. |
+| restore-tee-key-state-for-sdk-e2e-tee-republish | testing infra / TEE | Neither | `area: testing`; environmental `tee_key_state` repopulation for sdk-e2e — infra chore, explicitly "does not gate Phase 71 correctness," not a code change. |
+| zeroize-file-keys-on-unwrap-error-path | crypto / SDK client | **Borderline → Neither** | `area: crypto`, in `packages/sdk/src/client.ts` `updateSharedSingleFile` — it's the SHARED single-file write path (a write-plane hygiene fix), but it's zeroization hygiene on the share write path, not the write-chain/WriteChildRef work Phase 72 scopes. See verdict. |
+| extract-assert-root-ownership-helper | API | Neither | `area: api`; dedup `assertRootOwnership` across two `apps/api/src/shares` services — API layer, explicitly "not tied to a specific phase." |
+| reconcile-phase71-planning-docs-d01-greenfield | docs | Neither | `area: docs`; docs-only reconciliation of Phase 71 planning artifacts — no code change. |
+
+## Verdict
+
+Missing-but-belongs list: effectively **empty**. No todo cleanly belongs in Phase 72 or Phase 73 that isn't already in their source-todo lists.
+
+Two items warrant an explicit note rather than a fold:
+
+- **zeroize-file-keys-on-unwrap-error-path** is the closest call. It lives in `packages/sdk/src/client.ts` and touches a shared-file *write* path (`updateSharedSingleFile`), which is nominally Phase 72's package territory. But its `area` is `crypto` and it is a key-zeroization hygiene fix, not part of Phase 72's write-chain correctness surface (WriteChildRef / getWriteBodyParams / deleteItem / re-homing / mirror refresh / helper dedup). Strict scope reading: leave standalone. If you want to opportunistically batch a same-file hygiene fix into Phase 72, this is the only defensible candidate — but it is not a scope requirement and the todo itself frames it as pre-existing, low-severity, deliberately deferred.
+
+- **68.2-coderabbit-hardening-backlog item 4** (`refreshSharedFolder` stale write envelope) and **item 9** (shared-nav seed race) overlap thematically with Phase 73's `write03-refresh-access` and `shared-nav-stack-stale-children-snapshot`, but this todo is a bundled 10-item multi-area backlog (SDK cache, web a11y, parallelization). It should not be folded wholesale; if anything, individual items could be cherry-picked, but that's a re-scoping decision, not a missing-source-todo.
+
+All remaining 10 todos are correctly outside 72/73: rotation read-plane (deep-scope-exit, query-grants-remint), fuse/desktop (fuse-publish-hardening, winfsp-d15d, macos-fuse-t), crypto (node-codec-kat), API (assert-root-ownership), testing infra (restore-tee-key-state), CI tooling (d07-boundary-eslint), and docs (reconcile-phase71).</result>
+<usage><subagent_tokens>52263</subagent_tokens><tool_uses>12</tool_uses><duration_ms>46523</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aea8c2c9dab23eaed</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/4d78f8a5-6112-418c-85c3-c6241359b1fb/tasks/aea8c2c9dab23eaed.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify phase 71 source todos addressed" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All 8 items verified against shipped code. NIT3 fixtures were also hardened (contract-valid keys, no placeholders).
+
+## Audit results
+
+| Todo file | Addressed | Evidence |
+|---|---|---|
+| `share-invite-validate-root-ownership.md` | yes | `createInvite` now does `ipnsRecordRepo.findOne({ipnsName, userId})` and throws `ForbiddenException` on miss (share-invite.service.ts:37-48). rootNodeId pair-consistency deliberately dropped per D-02 (crypto boundary is authoritative) — documented decision, not open residue. |
+| `share-invite-reclaim-apply-later-grant.md` | yes | Upgrade-merge (option 1) shipped as D-07/SC#2: read→write and generation-bump re-claims widen the existing share, presence-gated on invite write authority; non-widening re-claim is a true no-op (share-invite.service.ts:195-238). Unit-covered. |
+| `share-invites-claim-count-check-constraint.md` | yes | `CONSTRAINT CHK_share_invites_claim_count CHECK (claim_count &gt;= 0 AND claim_count &lt;= max_claims)` folded into the greenfield cutover CREATE TABLE (ApiSchemaCutover.ts:115) + `@Check` on entity (share-invite.entity.ts:14). |
+| `ipns-records-root-uniqueness-index.md` | dropped | Intentionally dropped (D-03) — redundant with vault-level root uniqueness. No `UQ_ipns_records_user_root` index exists; confirmed absent from migrations + entity. |
+| `ipns-first-publish-insert-race.md` | yes | First-publish `save` wrapped; Postgres 23505 (via `err.code`/`err.driverError.code`) translated to `ConflictException` 409 (ipns.service.ts:503-506). |
+| `ipns-idempotent-same-seq-cid-equivocation.md` | yes | D-05 hard-guard: same-sequence republish with a different CID → `BadRequestException` (ipns.service.ts:342-346); same-CID idempotent TEE re-sign still succeeds. Stale "Pitfall 4" test rewritten. |
+| `shares-bulk-revoke-direct-delete.md` | yes | `revokeForItems` now uses `createQueryBuilder().delete()` and `shareResult.affected` — no more find+remove of bytea blobs (shares.service.ts:184-204). |
+| `restore-shares-module-unit-coverage.md` | yes | `share-invite.service.spec.ts` now covers createInvite ownership gate + mechanics, expiry transitions, `getInvitesForItem` auto-clean (37 tests). NIT3 fixtures also hardened to contract-valid keys (`'0x04'+'aa'.repeat(64)`). |
+
+## Verdict
+
+**Safe to retire (delete from pending) — all 8:**
+1. `2026-06-30-share-invite-validate-root-ownership.md`
+2. `2026-06-30-share-invite-reclaim-apply-later-grant.md`
+3. `2026-06-30-share-invites-claim-count-check-constraint.md`
+4. `2026-06-30-ipns-records-root-uniqueness-index.md` (dropped, not implemented — but decision is final, so retire it)
+5. `2026-06-30-ipns-first-publish-insert-race.md`
+6. `2026-06-30-ipns-idempotent-same-seq-cid-equivocation.md`
+7. `2026-06-30-shares-bulk-revoke-direct-delete.md`
+8. `2026-06-30-restore-shares-module-unit-coverage.md`
+
+**Open residue that should NOT be closed:** none.
+
+One thing worth surfacing (not a reason to keep any todo open): todo #1's original ask included `rootNodeId` pair-consistency, which Phase 71 deliberately did **not** implement (D-02 kept rootNodeId client-asserted, relying on the cryptographic wrapping boundary as the true gate). This is an accepted design decision documented in the shipped code comment, so the todo is correctly retired — but if you ever want defense-in-depth on the node/name pair, that would be net-new scope, not a Phase 71 regression.</result>
+<usage><subagent_tokens>53790</subagent_tokens><tool_uses>18</tool_uses><duration_ms>68280</duration_ms></usage>
+</task-notification>
+
+---
+
+ok you can move the 8 over to @.planning/todos/completed/ and add the zeroize to 72, with the 68.2 coderabbit-hardening being included in 73. do not commit yet, this will all be committed with the phase 72 planning.
+
+---
+
+also wanted to ask whether phases 72 and 73 have any mutual dependencies - if not, these can be worked on in parallel
+
+---
+
+ok lets get phase 72 planned + executed + shipped, then repeat the flow for 73 once 72 is all merged.
+
+---
+
+sorry to interrupt - just noticed that all the desktop and web e2e tests are failing - https://github.com/FSM1/cipher-box/actions/runs/28941806263/job/85865671229 only the web e2e failed
+https://github.com/FSM1/cipher-box/actions/runs/29059796208 - all desktop e2e also failing.
+
+---
+
+sdk e2e is failing on #600 and there's a coderabbit comment
+
+---
+
+#601 desktop e2e run is failing on windows and linux (still waiting on macos) https://github.com/FSM1/cipher-box/actions/runs/29061951903/job/86265521723
+
+---
+
+theres a greptile comment on PR #601
+
+---
+
+<task-notification>
+<task-id>b3e8vk2au</task-id>
+<tool-use-id>toolu_0119urbSAAZSxxrVstoufrmS</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/4d78f8a5-6112-418c-85c3-c6241359b1fb/tasks/b3e8vk2au.output</output-file>
+<status>completed</status>
+<summary>Background command "Monitor both re-dispatched e2e runs" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+please diagnose and resolve the web-e2e flakiness as a top prio on PR #600
+
+---
+
+<task-notification>
+<task-id>a4ef6ea8ae8d93a81</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/4d78f8a5-6112-418c-85c3-c6241359b1fb/tasks/a4ef6ea8ae8d93a81.output</output-file>
+<status>completed</status>
+<summary>Agent "Root-cause web-e2e flaky tests" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have everything needed. Here is the diagnosis.
+
+---
+
+## Summary
+
+Three independent flakes, all on the shared 2‑vCPU live CI stack under `workers:3`. **None is Web3Auth jitter; all three are diagnosable and fixable at source.** Two are timeout-calibration misses, one is a genuinely-missing wait.
+
+---
+
+## Test 1 — `full-workflow.spec.ts:1314 › 6.6.2 Restore a past version` (run 29061952925)
+
+**Exact failure** (job 86265524185 log line 35035):
+```
+Error: expect(received).toBe(expected)   // line 1355
+Expected: "Updated content after edit - version 2"
+Received: "Edited in-browser via text editor modal - version 3"
+```
+The trace shows: restore-confirm clicked → details closed → editor opened → textarea read immediately. The editor showed the **pre-restore** current content (version 3).
+
+**Root cause — missing synchronization (not stale cache).** The only "wait" between confirming the restore and reading the editor is (lines 1476-1478):
+```ts
+await expect(async () =&gt; {
+  expect(await detailsDialog.getVersionCount()).toBe(1);
+}).toPass({ timeout: 30000 });
+```
+Restore **swaps** current↔v1, so the past-version count is `1` **both before and after** restore. This gate passes instantly and provides **zero** wait for the restore's IPNS republish to land. I confirmed via a sub-agent that the text editor re-resolves the file **fresh from the live API on every open** (`downloadFromIpns` → `resolveIpnsRecord` → `resolveFileMetadata` → `downloadFileContent`, none cached — `packages/sdk/src/client.ts:4169`, `packages/sdk-core/src/ipns/index.ts:196`, `.../file/index.ts:373`). So there is no in-memory current-CID for restore to invalidate; the editor simply raced the just-committed/in-flight restore publish and read the old record. Given more time it reads version 2.
+
+**Classification: (A) fixable test-timing race.**
+
+**Fix** — full-workflow.spec.ts tail of 6.6.2 (~lines 1483-1495). The trivial `getVersionCount()===1` gate is a no-op; replace the single open→read→assert with a poll of the real end-state:
+```ts
+await expect
+  .poll(async () =&gt; {
+    await fileList.rightClickItem(editableFileName);
+    await contextMenu.waitForOpen();
+    await contextMenu.clickEdit();
+    await textEditorDialog.waitForOpen({ timeout: 10000 });
+    await textEditorDialog.waitForContentLoaded({ timeout: 30000 });
+    const c = await textEditorDialog.getContent();
+    await textEditorDialog.clickCancel();
+    await textEditorDialog.waitForClose();
+    return c;
+  }, { timeout: 30000 })
+  .toBe(editableFileUpdatedContent);
+```
+Note `textEditorDialog.waitForContentLoaded` (`text-editor-dialog.page.ts:100`) only waits for the textarea to be *visible*, not for correct content — so a single read is inherently racy.
+
+**Latent product gap to flag separately (not what broke this test):** `useFileVersions.handleRestoreVersion` (`apps/web/src/hooks/useFileVersions.ts:58`) never refreshes the open folder listing after restore — only quota + the details dialog's own version list (`DetailsDialog.tsx:178` just bumps `metadataRefresh`). The file list won't show restored size/mtime until the 30s sync poll. Worth a ticket, but orthogonal to this flake.
+
+---
+
+## Test 2 — `writable-shares.spec.ts:533 › 8.1 Owner can navigate into subfolder created by recipient` (run 29061952925)
+
+**Exact failure** (log line 35065):
+```
+TimeoutError: locator.waitFor: Timeout 30000ms exceeded.   // line 544
+&gt; 544 | await bobSharedBrowser.getFolderItem(securitySubfolder).waitFor({ state: 'visible', timeout: 30000 })
+```
+Bob (recipient) does an `--mkdir` in a **writable shared folder**, then waits ≤30s for the folder to render in his own view. Immediately preceded by 7.2 (Bob deletes a subfolder) — so back-to-back shared-writes on the same folder IPNS.
+
+**Root cause — tighter timeout on the highest-latency path.** A recipient mkdir in a shared folder is a full shared-write → IPNS publish → re-resolve/refresh round-trip; under 3-worker load on the shared Kubo it can exceed 30s (it *does* eventually render — slow, not broken). Critically, the whole `writable-shares` spec and the `SharedFileBrowser` page object use **bare `waitFor({timeout:30000})` with no CI floor**, while `FileListPage` waiters apply `ciFloor` → 60s on CI (`page-objects/file-browser/file-list.page.ts:10-16, 120, 130`). So the shared path — where write latency is *highest* — is held to *half* the budget of the equivalent owner path.
+
+**Classification: (A) with a (C) tail** — a timeout-calibration miss layered on genuinely slow-but-correct shared-write IPNS latency (the exact reason the 60s floor exists).
+
+**Fix** — bump the shared appear-waits to the 60s floor. Minimal: change the two shared-mkdir waits in `writable-shares.spec.ts` (line 544 for `securitySubfolder`, and the 8.2 `deepSubfolder` at line 597) from `timeout: 30000` → `60000`. Systemic (preferred): add a floored `waitForFolderItem(name, opts)` to `shared-file-browser.page.ts` mirroring `FileListPage`'s `ciFloor`+`waitForItemToAppear`, and route the spec's shared appear-waits (lines 65, 87, 214, 233, 544, 597 …) through it so every shared-write wait gets the same 60s CI floor.
+
+---
+
+## Test 3 — `full-workflow.spec.ts:1456 › 8.2 Delete remaining root files` (run 29062823570)
+
+**Exact failure** (job 86268131289 log line 38444):
+```
+Test timeout of 90000ms exceeded.
+```
+Error-context DOM = **empty directory** (all files deleted). Trace confirms all 3 delete cycles ran to completion (renamed → config → editable: rightClick → Delete → confirm → wait-gone).
+
+**Root cause — cumulative budget overflow.** 8.2 deletes 3 files sequentially via `deleteItem` (full-workflow.spec.ts:295), each doing `confirmDialog.waitForClose(15s)` + `waitForItemToDisappear({timeout:15000})` — and `ciFloor` raises that disappearance wait to a **60s cap on CI**. Each delete is a separate IPNS publish→refresh round-trip. **8.2 has no `test.setTimeout`, so it runs under the default 90s CI budget.** Three serial IPNS-gated deletes under 3-worker load cumulatively blew past 90s even though each individually succeeded. The per-item waiters are correct; the *test budget* is too small. (The config comment at `playwright.config.ts:31-36` already names "multi-mutation deletes" as the load-sensitive path that forced workers 4→3.)
+
+**Classification: (A/C boundary) — cumulative-timeout flake.** Underlying per-delete latency is irreducible live-stack (C); the fix is test-level (A).
+
+**Fix** — pick one:
+- **Minimal:** add `test.setTimeout(150000)` to 8.2 (mirrors 6.6.2 and writable 8.1 which already raise their budgets).
+- **Better (philosophy-aligned):** collapse 3 round-trips into 1 — select-all then bulk-delete via the selection bar. Page objects already support it: the header "Select all" checkbox (used in test 4.4) + `selectionBar.clickDelete()` (`selection-action-bar.page.ts:105`) → one confirm → one IPNS round-trip, comfortably under 90s.
+
+---
+
+## Suite-level: should CI add `retries: 1`?
+
+**Primary recommendation: fix all three at source first — do not reach for retries.** All three are fully diagnosable; none is Web3Auth/irreducible jitter. Two are pure timeout calibration (add the missing CI floor / raise the budget or bulk the operation), one is a genuinely absent wait. Papering these with retries would hide exactly the kind of fixable timing bug the `retries:0` philosophy is meant to surface.
+
+**Secondary (defensible backstop, optional):** the substrate *is* a shared 2-vCPU stack whose IPNS publish/resolve latency has a fat tail under 3-worker load — that tail will keep producing occasional cumulative/timeout blips on other multi-mutation paths. A **CI-only `retries: 1`** (not 2) is a reasonable safety net *because Playwright reports retried tests as "flaky" in the run summary* — visible, not hidden. A genuinely-broken test still fails both attempts and reds the build; a transient live-stack blip passes on retry and lands in the flaky list for triage. That preserves the fix-at-source signal while cutting spurious red builds. If you adopt it: `retries: process.env.CI ? 1 : 0`, keep local at 0, and make "any test in the flaky report is a must-fix" a standing rule. I'd gate this on fixing the current three first and only add it if residual flakiness remains.
+
+**Recommended order:** (1) land the three source fixes above; (2) re-run the dispatched suite twice; (3) add `retries:1` CI-only *only if* still flaky, with the flaky-report-triage rule.</result>
+<usage><subagent_tokens>108082</subagent_tokens><tool_uses>42</tool_uses><duration_ms>511804</duration_ms></usage>
+</task-notification>
+
+---
+
+if the local web-e2e run passes, push everything up to remote, rerun web-e2e against #600 head and merge it. you can then resume phase 62 planning and execution.
+
+---
+
+<task-notification>
+<task-id>b4tgwkvle</task-id>
+<tool-use-id>toolu_01QFebbm5yDYqYuypvAtgFSq</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/4d78f8a5-6112-418c-85c3-c6241359b1fb/tasks/b4tgwkvle.output</output-file>
+<status>completed</status>
+<summary>Background command "Verify full-workflow fixes locally" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bhi6qduf9</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/4d78f8a5-6112-418c-85c3-c6241359b1fb/tasks/bhi6qduf9.output</output-file>
+<status>completed</status>
+<summary>Background command "Re-run full-workflow on warm stack" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bm02031es</task-id>
+<tool-use-id>toolu_01C3etK4ezm1HvnxeX3upEEF</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/4d78f8a5-6112-418c-85c3-c6241359b1fb/tasks/bm02031es.output</output-file>
+<status>completed</status>
+<summary>Background command "Re-run full-workflow after 4.10 timeout bump" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bm0t4idf2</task-id>
+<tool-use-id>toolu_01XQUMfmNoN4aoWCJ5GaaRLz</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/4d78f8a5-6112-418c-85c3-c6241359b1fb/tasks/bm0t4idf2.output</output-file>
+<status>completed</status>
+<summary>Background command "Re-run full-workflow after 4.11 bump" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bddzl9f8f</task-id>
+<tool-use-id>toolu_01JsbHG62w6FZcGW81W56YgK</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/4d78f8a5-6112-418c-85c3-c6241359b1fb/tasks/bddzl9f8f.output</output-file>
+<status>completed</status>
+<summary>Background command "Run full-workflow under CI-equivalent timeout regime" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b7ehuzb16</task-id>
+<tool-use-id>toolu_01LqWPre37mKLJADBcrDo7ey</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/4d78f8a5-6112-418c-85c3-c6241359b1fb/tasks/b7ehuzb16.output</output-file>
+<status>completed</status>
+<summary>Background command "Re-run full-workflow local regime with 4.10/4.11 fixes" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bib1sv5da</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/4d78f8a5-6112-418c-85c3-c6241359b1fb/tasks/bib1sv5da.output</output-file>
+<status>completed</status>
+<summary>Background command "Run full-workflow CI regime with temp reuse patch" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b39pff5sy</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/4d78f8a5-6112-418c-85c3-c6241359b1fb/tasks/b39pff5sy.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll dispatched ci-e2e run until complete" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+is there anything that needs to be clarified and discussed in the phase scope?
+
+---
+
+<task-notification>
+<task-id>af52b41f1490318bc</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/4d78f8a5-6112-418c-85c3-c6241359b1fb/tasks/af52b41f1490318bc.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 72-04 of phase 72" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All success criteria met. Plan 72-04 complete.
+
+## PLAN COMPLETE
+
+**Plan:** 72-04
+**Tasks:** 2/2
+**SUMMARY:** `/Users/myankelev/Code/random/cipher-box/.planning/phases/72-sdk-write-plane-durability-and-correctness/72-04-SUMMARY.md`
+
+**Commits:**
+- `82b76a8f7`: test(72-04): add failing fail-closed test for getWriteBodyParams transient miss (RED, Task 1)
+- `b83afe125`: feat(72-04): fail closed on transient IPNS resolve miss in getWriteBodyParams (GREEN, Task 1)
+- `4196c315a`: test(72-04): add failing fail-closed test for bin/index.ts getWriteBodyParams twin (RED, Task 2)
+- `63187fef4`: feat(72-04): mirror fail-closed transient-miss handling into bin/index.ts twin (GREEN, Task 2)
+- `bac96d85f`: docs(72-04): complete getWriteBodyParams fail-closed plan (metadata)
+
+**Duration:** ~15 min
+
+Both `getWriteBodyParams` copies (`packages/sdk/src/client.ts`, `packages/sdk/src/bin/index.ts`) now throw a descriptive error naming the folder's `ipnsName` when a real (non-zero, 32-byte) writeKey is present and the IPNS resolve genuinely returns null — preventing a transient network miss from sealing an empty write-body and silently discarding the folder's entire write chain. The two pre-existing fail-open paths (zero/absent writeKey read-only fallback; a resolved record structurally lacking `writeSealed`) are unchanged and covered by regression tests.
+
+New test file: `packages/sdk/src/__tests__/get-write-body-params-fail-closed.test.ts` (6 tests, all passing). Full `@cipherbox/sdk` suite: 372 passed, 36 skipped, 0 failed.
+
+One documentation-accuracy note captured in the SUMMARY's Deviations section for Plan 08 (dedupe): the two copies are behaviorally/branch-identical but not literally identical source — `client.ts` calls the private `resolvePublishedNode` helper while `bin/index.ts` inlines the same three steps (pre-existing, not introduced by this plan).
+
+Pre-existing, out-of-scope vitest-v3/TypeScript typecheck drift in unrelated test files (already tracked in `.planning/todos/pending/2026-07-10-typecheck-all-tests-in-ci-and-fix-vitest-v3-mock-drift.md`) was left untouched per the scope boundary rule — it does not affect the files this plan modified.</result>
+<usage><subagent_tokens>200236</subagent_tokens><tool_uses>82</tool_uses><duration_ms>704938</duration_ms></usage>
+</task-notification>
+
+---
+
+typecheck should be performed before the build
+
+---
+
+I hadn't taken in to account the build dependency - if it is easier to build first and then typecheck, then happy to go with that
+
+---
+
+<task-notification>
+<task-id>a48488f4e2f9ef85f</task-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/4d78f8a5-6112-418c-85c3-c6241359b1fb/tasks/a48488f4e2f9ef85f.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix sdk package test TS drift" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Both commits landed cleanly. Working tree clean except the pre-existing untracked `.planning/` todo (left alone per scope).
+
+## Done
+
+Fixed all 62 pre-existing TypeScript errors across 12 test files in `packages/sdk/src/__tests__/`. All verification passes:
+
+- `tsc --noEmit` → **0 errors**
+- `pnpm --filter @cipherbox/sdk test` → **389 passed / 36 skipped / 0 failed** (exact baseline match)
+- `pnpm --filter @cipherbox/sdk build` → clean
+- Only the 12 test files changed — zero production `src/**` edits (verified via `git diff --stat`)
+
+No `as any` / `as unknown as` / `@ts-ignore` / `@ts-expect-error` used anywhere. No assertions weakened.
+
+### Per-file changes
+- **client-extended.test.ts** — dropped retired `type`/`id`/legacy fields from `SealedChildRef` literals; fixed `addFilePointerToFolder` mock to async `{updatedChildren, newRef}`; rebuilt `resolveFileMetadata` mock as `NodeContent`; passed a `SealedChildRef` (not bare string) to `downloadFromIpns`.
+- **client-pinning.test.ts** — converted all 7 `addFilePointerToFolder` mocks from `mockReturnValue({...filePointer})` to `mockResolvedValue({updatedChildren, newRef})`.
+- **client-upload-concurrency.test.ts** — same `addFilePointerToFolder` mock-shape fix in `setupUploadMocks`.
+- **client.test.ts** — added required `writeKey` to FolderState fixtures; rebuilt `version:` Node mocks and legacy child arrays as `Node`/`SealedChildRef`; `deleteItem` child keyed by `ipnsName`.
+- **client-load-reconcile.test.ts** — `Node` literal for `mockResolve`; `SealedChildRef[]` rebuild; added `writeKey`.
+- **ensure-folder-loaded.test.ts** — imports `FolderEntry`/`FolderMetadata`→`Node`/`SealedChildRef`; helper rebuilds; added `writeKey`.
+- **collect-subtree-ipns-names.test.ts** — same import/helper migration; fixed `metadata()` `nodeId` arg; `writeKey` on 4 fixtures.
+- **client-move-reencrypt.test.ts** — retired `FileMetadata`→`NodeContent`; `moveItem` mocks to `updatedSource/updatedDest/movedRef`; `writeKey` added. **See flag below.**
+- **client-shared-write.test.ts** — `FolderChild`→`SealedChildRef`; added required `publishedParent: PublishedNode` to `uploadToSharedFolder` mock.
+- **context.test.ts** — `FolderChild`/`FolderEntry`→`SealedChildRef`; helper rebuild.
+- **integration.test.ts** — `VaultInit.rootFolderKey`→`rootReadKey`/`rootWriteKey` split; `EncryptedVaultKeys` two-key fields; `.type` resolved via `client.resolveChildIdentity(...).kind`; `.id` child-identifiers→`.ipnsName`; new `downloadFromIpns(fileRef, folderKey)` signature.
+- **shared-folder-tree.test.ts** — `makeState()` now sets concrete `writeKey` + `publishedNode` in the base literal (were optional via override spread).
+
+### One item worth noting
+`client-move-reencrypt.test.ts` had a `describe.skip` block asserting `params.folderKey` on `updateFileMetadata` — that param no longer carries any folder-scoped key (per-file Node model, Phase 68.1-07; `moveItem` is now a zero-re-encryption link rewrite). Since the block is retired/skipped and never executes, the assertion was mapped onto the closest surviving field (`fileWriteKey`) purely to satisfy the type checker, with an explanatory comment documenting that the re-encrypt-on-move premise is superseded pending a phase-65 rewrite. No runtime behavior changed (block is skipped).
+
+Commit SHAs: `d5eb07780`, `19a4095c3`.</result>
+<usage><subagent_tokens>95661</subagent_tokens><tool_uses>36</tool_uses><duration_ms>940360</duration_ms></usage>
+</task-notification>
