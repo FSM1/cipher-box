@@ -6,14 +6,14 @@ current_phase: 72
 current_phase_name: sdk-write-plane-durability-and-correctness
 status: executing
 stopped_at: Completed 72-06-PLAN.md
-last_updated: "2026-07-10T14:46:09.066Z"
+last_updated: "2026-07-10T14:59:03.354Z"
 last_activity: 2026-07-10
 last_activity_desc: Phase 72 execution started
 progress:
   total_phases: 16
   completed_phases: 13
   total_plans: 180
-  completed_plans: 175
+  completed_plans: 176
   percent: 81
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 ## Current Position
 
 Phase: 72 (sdk-write-plane-durability-and-correctness) — EXECUTING
-Plan: 7 of 10
+Plan: 8 of 10
 Status: Ready to execute
 Last activity: 2026-07-10 — Phase 72 execution started
 
@@ -262,6 +262,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 72 P04 | 15min | 2 tasks | 3 files |
 | Phase 72 P05 | 25min | 3 tasks | 5 files |
 | Phase 72 P06 | 20min | 2 tasks | 3 files |
+| Phase 72 P07 | 8min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -569,6 +570,7 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase 72-05]: permanentDeleteFromBin drops the lingering original-parent WriteChildRef by BinEntry.nodeRef.id (captured UUID witness), never a fresh resolve
 - [Phase 72]: [Phase 72-06]: SC#4 reframed per Critical Finding 1 -- fix is listingCache.delete(folderIpnsName) gated on a caller-computed fileContentChanged boolean (size/cid comparison), not a SealedChildRef schema change
 - [Phase 72]: [Phase 72-06]: updateSharedSingleFile's two unwrapKey calls moved inside the existing try/finally so a throw on the second unwrap still zeroes the already-unwrapped first key
+- [Phase 72]: Removed the unreachable moveInSharedFolder legacy share-keys branch and getShareKeysFn param; updated the Plan 01 regression test call site to match (Rule 3 blocking fix, not in plan file list)
 
 ## Operator Next Steps
 
@@ -576,11 +578,12 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-10T14:46:09.059Z
+**Last session:** 2026-07-10T14:58:24.757Z
 **Stopped at:** Completed 72-06-PLAN.md
 **Resume file:** 
 
-- GAP-1 (68.1-13): resolveFileMetadata AEAD Decryption-failed for CTR/streaming video preview and post-upload batch-download -- needs dedicated crypto debugging
+None
+
 - GAP-2 (68.1-13): full-workflow.spec.ts 3.8 cold-reload multi-level IPNS DFS resolve times out -- needs retry-budget tuning or propagation investigation
 - 68.2-06 gap: FileList.tsx/FileBrowser.tsx/SelectionActionBar.tsx/ContextMenu.tsx/SharedFileBrowser.tsx are not owned by any of the 12 phase-68.2 plans, yet consume the SealedChildRef-vs-ResolvedChild data this phase's D-02/SC#1/#2 goals govern -- assign ownership (Plan 09 or a fast-follow) before Plan 11's kind-cache.ts deletion / allowlist-free grep gate
 - SC#5 desync (partially closed by 68.2-13): CipherBoxClient.ensureFolderLoaded/listFolder now support a gated `{forceResolve:true}` re-resolve for an already-loaded folder, proven by folder-reresolve.test.ts -- but apps/web's two D-03 freshness call sites (useFolderNavigation.ts nav re-resolve, useSyncPolling.ts poll invalidation) do not yet pass forceResolve, so shared-folder-desync.spec.ts step 3.1 is still expected red until Plan 14 wires the web + proves the e2e
