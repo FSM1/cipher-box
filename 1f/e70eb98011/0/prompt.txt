@@ -300,3 +300,13 @@ if the local web-e2e run passes, push everything up to remote, rerun web-e2e aga
 <status>completed</status>
 <summary>Background command "Re-run full-workflow local regime with 4.10/4.11 fixes" completed (exit code 0)</summary>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>bib1sv5da</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/4d78f8a5-6112-418c-85c3-c6241359b1fb/tasks/bib1sv5da.output</output-file>
+<status>completed</status>
+<summary>Background command "Run full-workflow CI regime with temp reuse patch" completed (exit code 0)</summary>
+</task-notification>
