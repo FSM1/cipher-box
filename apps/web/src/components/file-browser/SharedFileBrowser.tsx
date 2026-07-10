@@ -760,6 +760,7 @@ export function SharedFileBrowser() {
                   key={item.ipnsName}
                   item={item}
                   resolved={resolvedByIpnsName.get(item.ipnsName)}
+                  resolvedByIpnsName={resolvedByIpnsName}
                   permission={permission}
                   isRenaming={renamingItem?.ipnsName === item.ipnsName}
                   renameValue={renameValue}
