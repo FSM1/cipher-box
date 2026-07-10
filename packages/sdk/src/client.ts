@@ -5673,10 +5673,22 @@ export class CipherBoxClient {
       // signs against the freshly-refreshed envelope, not a stale one.
       const parentResolved = await this.resolvePublishedNode(state.ipnsName);
 
+      // `result` and `parentResolved` are two independent resolves of the same
+      // ipnsName; if they race and diverge, `parentResolved` could carry an
+      // envelope OLDER than the children/sequence just adopted from `result`,
+      // reintroducing the "stale envelope drops WriteChildRefs" bug this seed
+      // targets. Only adopt `publishedParent` when its sequence is at least as
+      // fresh as the adopted result (mirrors doReresolveFolderInPlace's
+      // owned-folder guard); otherwise omit it and let the next refresh reseed.
+      const freshParent =
+        parentResolved && parentResolved.sequenceNumber >= result.sequenceNumber
+          ? parentResolved
+          : undefined;
+
       await this.adoptSharedFolderResult(shareId, {
         publishedChildren: result.metadata.children ?? [],
         newSequenceNumber: result.sequenceNumber,
-        ...(parentResolved ? { publishedParent: parentResolved.published } : {}),
+        ...(freshParent ? { publishedParent: freshParent.published } : {}),
       });
     });
   }
