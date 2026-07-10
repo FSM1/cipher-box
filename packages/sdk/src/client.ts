@@ -5181,6 +5181,9 @@ export class CipherBoxClient {
           sequenceNumber,
           ctx: this.ctx,
         });
+        if (pubResult.tombstoned === true) {
+          return { tombstoned: true };
+        }
         if (!pubResult.success) {
           throw new Error(
             `publishNodeFn: IPNS publish rejected for ${ipnsName} (seq=${pubResult.sequenceNumber})`
