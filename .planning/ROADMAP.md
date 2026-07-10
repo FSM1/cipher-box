@@ -830,7 +830,7 @@ Plans:
 5. The unreachable `moveInSharedFolder` `shareKeys.length > 0` branch (and its `getShareKeysFn` param) is removed, eliminating the latent wrong-key bug
 6. The near-identical write-plane helpers (`client.ts` ↔ `bin/index.ts` `getWriteBodyParams`, `replaceFile`/`restoreFileVersion`) share one primitive; `write-chain-rotation.test.ts` identifies rotated seeds by provenance (not fixed `capturedKeys` offsets); `upload-batch.test.ts` mocks use the current `SealedChildRef` shape
 
-**Plans**: 8/10 plans executed
+**Plans**: 9/10 plans executed
 
 Plans:
 
@@ -842,7 +842,7 @@ Plans:
 - [x] 72-06-PLAN.md — SC#4 listingCache invalidation after in-place edit + updateSharedSingleFile zeroize [Wave 4]
 - [x] 72-07-PLAN.md — SC#5 remove dead moveInSharedFolder branch + getShareKeysFn param + web callers [Wave 5]
 - [x] 72-08-PLAN.md — SC#6 walkChildWriteKey 3-mode primitive + hasRealWriteKey predicate [Wave 6]
-- [ ] 72-09-PLAN.md — SC#6 wrapIpnsKeyForTee extraction (sdk-core, 3 TEE sites) [Wave 6]
+- [x] 72-09-PLAN.md — SC#6 wrapIpnsKeyForTee extraction (sdk-core, 3 TEE sites) [Wave 6]
 - [ ] 72-10-PLAN.md — SC#6 version-op core extraction + bin getWriteBodyParams/adopt re-point [Wave 7]
 
 ---

@@ -117,3 +117,10 @@ None - no external service configuration required.
 ---
 *Phase: 72-sdk-write-plane-durability-and-correctness*
 *Completed: 2026-07-10*
+
+## Self-Check: PASSED
+
+- FOUND: packages/sdk-core/src/tee/wrap.ts
+- FOUND: .planning/phases/72-sdk-write-plane-durability-and-correctness/72-09-SUMMARY.md
+- FOUND commit: 6a7dad409 (refactor sdk-core: extract wrapIpnsKeyForTee shared TEE-wrap helper)
+- FOUND commit: 1a25748ac (docs: add 72-09 plan summary for TEE-wrap dedup)
