@@ -15,7 +15,7 @@
  * Analog: packages/core/src/folder/metadata.ts lines 38-96 + 135-150.
  */
 
-import { CryptoError } from '@cipherbox/crypto';
+import { CryptoError, base64ToBytes } from '@cipherbox/crypto';
 import type { Node, NodeContent, NodeWriteBody, SealedChildRef, VersionEntry } from './types';
 
 // ---------------------------------------------------------------------------
@@ -25,13 +25,12 @@ import type { Node, NodeContent, NodeWriteBody, SealedChildRef, VersionEntry } f
 /**
  * Decodes a base64 string to a Uint8Array.
  * Asserts decoded length if `expectedLength` is provided.
+ *
+ * Thin wrapper over the shared @cipherbox/crypto base64ToBytes helper —
+ * preserves the decode-specific expectedLength length-check (superset signature).
  */
 function base64ToUint8Array(b64: string, expectedLength?: number): Uint8Array {
-  const bin = atob(b64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) {
-    bytes[i] = bin.charCodeAt(i);
-  }
+  const bytes = base64ToBytes(b64);
   if (expectedLength !== undefined && bytes.length !== expectedLength) {
     throw new CryptoError(
       `Invalid node format: expected ${expectedLength}-byte key, got ${bytes.length}`,
