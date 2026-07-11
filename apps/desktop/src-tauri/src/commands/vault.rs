@@ -504,14 +504,21 @@ pub(crate) async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Res
                 private_key.as_slice(),
             )
             .await?;
-            let root_read_key: [u8; 32] = root_read_vec
-                .as_slice()
-                .try_into()
-                .map_err(|_| "recovery: recovered root read key wrong length".to_string())?;
-            let root_write_key: [u8; 32] = root_write_vec
-                .as_slice()
-                .try_into()
-                .map_err(|_| "recovery: recovered root write key wrong length".to_string())?;
+            // Hold the recovered root keys in `Zeroizing` (mirroring the FreshInit
+            // arm above) so these transient copies are scrubbed on drop — never
+            // left as bare, un-zeroized key material on the stack.
+            let root_read_key: Zeroizing<[u8; 32]> = Zeroizing::new(
+                root_read_vec
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| "recovery: recovered root read key wrong length".to_string())?,
+            );
+            let root_write_key: Zeroizing<[u8; 32]> = Zeroizing::new(
+                root_write_vec
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| "recovery: recovered root write key wrong length".to_string())?,
+            );
 
             let folder_cid = publish_root_folder(
                 &state.sdk.api,
