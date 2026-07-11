@@ -1025,6 +1025,7 @@ Plans:
 **Plans:** 10 plans
 
 Plans:
+**Wave 1**
 
 - [ ] 77-01-PLAN.md — Hoist canonical base64 codec into @cipherbox/crypto + golden-vector test (todo #5) [wave 1]
 - [ ] 77-02-PLAN.md — Zeroize AES key-buffer copies via extracted importAesKey helper (todo #3) [wave 1]
@@ -1032,6 +1033,9 @@ Plans:
 - [ ] 77-04-PLAN.md — Extract shared assertRootOwnership API helper (todo #12) [wave 1]
 - [ ] 77-05-PLAN.md — wrapIpnsKeyForTee bytes-in/bytes-out + teePublicKey param (todo #1) [wave 1]
 - [ ] 77-06-PLAN.md — Retire dead share scaffolding + verify discarded wrapKey gone (todos #10, #11) [wave 1]
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 77-07-PLAN.md — Consolidate packages/core node-codec base64 duplicates (todo #7) [wave 2]
 - [ ] 77-08-PLAN.md — Dedup sdk-core rotation/share base64 helpers (todo #6 part) [wave 2]
 - [ ] 77-09-PLAN.md — Dedup file/index.ts base64 + rename ipnsPrivateKeyEncrypted→canonical (todos #6, #8) [wave 2]
