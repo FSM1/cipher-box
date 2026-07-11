@@ -914,7 +914,15 @@ Plans:
 
 Plans:
 
-- [ ] TBD (run /gsd-plan-phase 74 to break down)
+- [x] 74-01-PLAN.md
+- [ ] 74-02-PLAN.md
+- [ ] 74-03-PLAN.md
+- [ ] 74-04-PLAN.md
+- [ ] 74-05-PLAN.md
+- [ ] 74-06-PLAN.md
+- [ ] 74-07-PLAN.md
+
+1/7 plans executed
 
 ### Phase 75: Cross-Language IPNS and Node-Codec Verification Parity
 

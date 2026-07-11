@@ -5,15 +5,15 @@ milestone_name: Metadata and Sharing Refactor
 current_phase: 74
 current_phase_name: Rust and FUSE Rotation-Revocation Soundness
 status: executing
-stopped_at: Completed 72-10-PLAN.md
-last_updated: "2026-07-11T03:26:46.491Z"
+stopped_at: Completed 74-01-PLAN.md
+last_updated: "2026-07-11T03:36:34.620Z"
 last_activity: 2026-07-11
 last_activity_desc: Phase 74 execution started
 progress:
   total_phases: 22
   completed_phases: 16
   total_plans: 195
-  completed_plans: 188
+  completed_plans: 189
   percent: 73
 ---
 
@@ -29,8 +29,8 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 ## Current Position
 
 Phase: 74 (Rust and FUSE Rotation-Revocation Soundness) — EXECUTING
-Plan: 1 of 7
-Status: Executing Phase 74
+Plan: 2 of 7
+Status: Ready to execute
 Last activity: 2026-07-11 — Phase 74 execution started
 
 Progress: `██████████` 79 / 79 plans (100%)
@@ -266,6 +266,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 72 P08 | 15min | 2 tasks | 1 files |
 | Phase 72 P09 | 8min | 1 tasks | 5 files |
 | Phase 72 P10 | 10min | 2 tasks | 3 files |
+| Phase 74 P01 | 20min | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -586,6 +587,7 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: 72-09: vault/index.ts's two root-key wraps (wrapKey(rootReadKey/rootWriteKey, userPublicKey)) left untouched — only the TEE ipns-key wrap was extracted
 - [Phase ?]: runFileVersionOp is not wrapped in withOperation itself -- each public method keeps its own withOperation(name) call for correct per-op telemetry attribution
 - [Phase ?]: write-body-params.ts standardizes the IPNS-resolve path on inline resolveIpnsRecord+fetchFromIpfs+JSON.parse (bin's pre-existing style) rather than client.ts's resolvePublishedNode wrapper, since the extra signatureVerified field was never consumed by getWriteBodyParams
+- [Phase ?]: 74-01: RotateReadResult.rotated_nodes (HashMap<String, RotatedNodeKey> keyed by ipns_name) surfaces every rotated node's post-rotation read key, populated at root/BFS-child/repair_dirty_node hooks; CommittedRotation stays host-agnostic
 
 ## Operator Next Steps
 
@@ -593,8 +595,8 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-10T15:32:28.115Z
-**Stopped at:** Completed 72-10-PLAN.md
+**Last session:** 2026-07-11T03:36:34.612Z
+**Stopped at:** Completed 74-01-PLAN.md
 **Resume file:** 
 
 None
