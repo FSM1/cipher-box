@@ -839,4 +839,106 @@ mod tests {
         assert!(parse_rfc3339_to_unix_secs("2026-01-01T00:00:00:99.000000000Z").is_none());
         assert!(parse_rfc3339_to_unix_secs("2026-01-01T00:00:00.abcZ").is_none());
     }
+
+    // ---- Task 2 (Phase 75): ValidityType == 0 EOL gate tests ----
+
+    /// Build CBOR data with an explicit ValidityType (or its absence) for gate tests.
+    fn make_cbor_data_with_validity_type(
+        value: &str,
+        seq: u64,
+        validity: &str,
+        validity_type: Option<i64>,
+    ) -> Vec<u8> {
+        let mut entries = vec![
+            (CborValue::Text("TTL".to_string()), CborValue::Integer((300_000_000_000u64).into())),
+            (CborValue::Text("Value".to_string()), CborValue::Bytes(value.as_bytes().to_vec())),
+            (CborValue::Text("Sequence".to_string()), CborValue::Integer(seq.into())),
+            (CborValue::Text("Validity".to_string()), CborValue::Bytes(validity.as_bytes().to_vec())),
+        ];
+        if let Some(vt) = validity_type {
+            entries.push((CborValue::Text("ValidityType".to_string()), CborValue::Integer(vt.into())));
+        }
+        let mut buf = Vec::new();
+        ciborium::into_writer(&CborValue::Map(entries), &mut buf).unwrap();
+        buf
+    }
+
+    fn make_resp_with_validity_type(
+        cid: &str,
+        seq: u64,
+        validity: &str,
+        validity_type: Option<i64>,
+    ) -> IpnsResolveResponse {
+        let cbor = make_cbor_data_with_validity_type(&format!("/ipfs/{}", cid), seq, validity, validity_type);
+        let data_b64 = STANDARD.encode(&cbor);
+        IpnsResolveResponse {
+            success: true,
+            cid: cid.to_string(),
+            sequence_number: seq.to_string(),
+            signature_v2: Some("fakesig".to_string()),
+            data: Some(data_b64),
+            pub_key: Some("fakepubkey".to_string()),
+        }
+    }
+
+    /// A record whose ValidityType is absent (None) must be rejected — fail closed.
+    #[test]
+    fn bind_verified_missing_validity_type_returns_invalid() {
+        let resp = make_resp_with_validity_type(
+            "bafyNOTYPE",
+            1,
+            "2099-01-01T00:00:00.000000000Z",
+            None,
+        );
+        let err = bind_verified(&resp, Some(true)).unwrap_err();
+        assert!(
+            matches!(err, VerifyError::Invalid(_)),
+            "expected VerifyError::Invalid for missing ValidityType, got: {:?}", err
+        );
+    }
+
+    /// A record whose ValidityType is a non-zero integer must be rejected.
+    #[test]
+    fn bind_verified_non_zero_validity_type_returns_invalid() {
+        let resp = make_resp_with_validity_type(
+            "bafyNONEOL",
+            1,
+            "2099-01-01T00:00:00.000000000Z",
+            Some(1),
+        );
+        let err = bind_verified(&resp, Some(true)).unwrap_err();
+        assert!(
+            matches!(err, VerifyError::Invalid(_)),
+            "expected VerifyError::Invalid for non-zero ValidityType, got: {:?}", err
+        );
+    }
+
+    /// A valid, in-date record with ValidityType 0 still returns Ok(VerifiedResolve).
+    #[test]
+    fn bind_verified_validity_type_zero_in_date_returns_ok() {
+        let resp = make_resp_with_validity_type(
+            "bafyEOL0",
+            1,
+            "2099-01-01T00:00:00.000000000Z",
+            Some(0),
+        );
+        let result = bind_verified(&resp, Some(true)).unwrap();
+        assert_eq!(result.cid, "bafyEOL0");
+    }
+
+    /// An expired record with ValidityType 0 is still rejected (existing D-07 leg unchanged).
+    #[test]
+    fn bind_verified_validity_type_zero_expired_returns_invalid() {
+        let resp = make_resp_with_validity_type(
+            "bafyEOL0EXPIRED",
+            1,
+            "2020-01-01T00:00:00.000000000Z",
+            Some(0),
+        );
+        let err = bind_verified(&resp, Some(true)).unwrap_err();
+        assert!(
+            matches!(err, VerifyError::Invalid(ref msg) if msg.contains("expired")),
+            "expected 'expired' error, got: {:?}", err
+        );
+    }
 }
