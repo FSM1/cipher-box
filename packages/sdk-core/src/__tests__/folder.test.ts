@@ -35,6 +35,7 @@ const mockFns = vi.hoisted(() => ({
   generateEd25519Keypair: vi.fn(),
   deriveIpnsName: vi.fn(),
   generateRandomBytes: vi.fn(),
+  wrapIpnsKeyForTee: vi.fn(),
 }));
 
 vi.mock('@cipherbox/crypto', () => ({
@@ -42,6 +43,14 @@ vi.mock('@cipherbox/crypto', () => ({
   deriveIpnsName: mockFns.deriveIpnsName,
   deriveEd25519PublicKey: vi.fn().mockReturnValue(new Uint8Array(32).fill(7)),
   generateRandomBytes: mockFns.generateRandomBytes,
+  // Trivial passthroughs so the TEE-wrap branch in createSubfolder runs without
+  // the real codec; the wrap itself is stubbed via ../tee/wrap below.
+  hexToBytes: (hex: string) => new Uint8Array(hex.length / 2),
+  bytesToHex: (bytes: Uint8Array) => Buffer.from(bytes).toString('hex'),
+}));
+
+vi.mock('../tee/wrap', () => ({
+  wrapIpnsKeyForTee: mockFns.wrapIpnsKeyForTee,
 }));
 
 vi.mock('@cipherbox/core', () => ({
@@ -397,6 +406,41 @@ describe('createSubfolder (phase 63 — first-publish seq 1n)', () => {
     expect(mintedIpnsPrivateKey.every((b) => b === 0)).toBe(true);
     expect(mintedReadKey.every((b) => b === 0)).toBe(true);
     expect(mintedWriteKey.every((b) => b === 0)).toBe(true);
+  });
+
+  it('zeroes the minted keys when the TEE-wrap step throws (error path precedes seal/upload)', async () => {
+    const ctx = createMockContext();
+
+    const mintedIpnsPrivateKey = new Uint8Array(64).fill(9);
+    const mintedReadKey = new Uint8Array(32).fill(10);
+    const mintedWriteKey = new Uint8Array(32).fill(11);
+    mockFns.generateEd25519Keypair.mockResolvedValue({
+      publicKey: new Uint8Array(32).fill(1),
+      privateKey: mintedIpnsPrivateKey,
+    });
+    mockFns.generateRandomBytes.mockReset();
+    mockFns.generateRandomBytes
+      .mockReturnValueOnce(mintedReadKey)
+      .mockReturnValueOnce(mintedWriteKey);
+    // Wrap sits inside the try before any IPFS side effect — a throw here must
+    // still zero the minted keys (they never reached the caller).
+    mockFns.wrapIpnsKeyForTee.mockRejectedValue(new Error('wrap failed'));
+
+    await expect(
+      createSubfolder({
+        name: 'WrapThrowFolder',
+        ctx,
+        teeKeys: { currentPublicKey: 'ab'.repeat(32), currentEpoch: 1 },
+      })
+    ).rejects.toThrow('wrap failed');
+
+    expect(mintedIpnsPrivateKey.every((b) => b === 0)).toBe(true);
+    expect(mintedReadKey.every((b) => b === 0)).toBe(true);
+    expect(mintedWriteKey.every((b) => b === 0)).toBe(true);
+    // The seal/upload/publish side effects must never have run.
+    expect(mockFns.sealNode).not.toHaveBeenCalled();
+    expect(mockFns.addToIpfs).not.toHaveBeenCalled();
+    expect(mockFns.createAndPublishIpnsRecord).not.toHaveBeenCalled();
   });
 });
 

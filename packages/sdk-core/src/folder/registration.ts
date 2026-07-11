@@ -77,33 +77,36 @@ export async function createSubfolder(params: {
     children: [],
   };
 
-  // 5. Compute TEE enrollment fields (if teeKeys supplied) BEFORE any IPFS upload —
-  //    fail closed on incomplete config so a malformed teeKeys short-circuits before
-  //    the seal/upload side effects and never leaves an orphaned blob behind.
   let encryptedIpnsPrivateKey: string | undefined;
   let keyEpoch: number | undefined;
-  if (params.teeKeys) {
-    const { currentPublicKey, currentEpoch } = params.teeKeys;
-    if (!currentPublicKey) {
-      throw new Error(
-        'createSubfolder: teeKeys.currentPublicKey is missing or empty — refusing to publish un-enrolled subfolder'
-      );
-    }
-    if (!Number.isInteger(currentEpoch) || currentEpoch < 1) {
-      throw new Error(
-        'createSubfolder: teeKeys.currentEpoch must be a positive integer (>= 1) — refusing to publish un-enrolled subfolder'
-      );
-    }
-    // ECIES-wrap the generated IPNS private key under the TEE public key.
-    // Do NOT zero ipnsPrivateKey here — wrapIpnsKeyForTee borrows the buffer, it
-    // does not consume it; the caller is the terminal owner (D-09).
-    const teePublicKeyBytes = hexToBytes(currentPublicKey);
-    const wrappedBytes = await wrapIpnsKeyForTee(ipnsPrivateKey, teePublicKeyBytes);
-    encryptedIpnsPrivateKey = bytesToHex(wrappedBytes);
-    keyEpoch = currentEpoch;
-  }
 
   try {
+    // 5. Compute TEE enrollment fields (if teeKeys supplied) BEFORE any IPFS upload —
+    //    fail closed on incomplete config so a malformed teeKeys short-circuits before
+    //    the seal/upload side effects and never leaves an orphaned blob behind. This
+    //    sits inside the try so any throw here (validation or malformed-hex wrap) still
+    //    zeroes the minted keys on the catch path (they never reached the caller).
+    if (params.teeKeys) {
+      const { currentPublicKey, currentEpoch } = params.teeKeys;
+      if (!currentPublicKey) {
+        throw new Error(
+          'createSubfolder: teeKeys.currentPublicKey is missing or empty — refusing to publish un-enrolled subfolder'
+        );
+      }
+      if (!Number.isInteger(currentEpoch) || currentEpoch < 1) {
+        throw new Error(
+          'createSubfolder: teeKeys.currentEpoch must be a positive integer (>= 1) — refusing to publish un-enrolled subfolder'
+        );
+      }
+      // ECIES-wrap the generated IPNS private key under the TEE public key.
+      // Do NOT zero ipnsPrivateKey here — wrapIpnsKeyForTee borrows the buffer, it
+      // does not consume it; the caller is the terminal owner (D-09).
+      const teePublicKeyBytes = hexToBytes(currentPublicKey);
+      const wrappedBytes = await wrapIpnsKeyForTee(ipnsPrivateKey, teePublicKeyBytes);
+      encryptedIpnsPrivateKey = bytesToHex(wrappedBytes);
+      keyEpoch = currentEpoch;
+    }
+
     // 6. Seal the Node with the generated keys
     const publishedNode = await sealNode(node, readKey, writeKey);
 
