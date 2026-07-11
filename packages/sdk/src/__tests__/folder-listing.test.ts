@@ -242,6 +242,7 @@ describe('CipherBoxClient — listFolder / listSharedFolder ResolvedChild[] (fol
       name: 'report.pdf',
       kind: 'file',
       size: 12345,
+      createdAt: now,
       modifiedAt: now,
       sequence: 3,
     });
@@ -249,10 +250,15 @@ describe('CipherBoxClient — listFolder / listSharedFolder ResolvedChild[] (fol
       ipnsName: FOLDER_CHILD_IPNS,
       name: 'Photos',
       kind: 'folder',
+      createdAt: now,
       modifiedAt: now,
       sequence: 7,
     });
     expect(folderEntry?.size).toBeUndefined();
+    // SC2 wiring proof: createdAt is threaded from the fixture Node through
+    // resolveChildren() onto the ResolvedChild -- not just present but
+    // equal to the source-of-truth Node.createdAt used to build the fixture.
+    expect(fileEntry?.createdAt).toBe(now);
   });
 
   it('listSharedFolder(shareId, path) returns ResolvedChild[] for an INTERMEDIATE folder, not forced to a file leaf', async () => {
@@ -297,6 +303,7 @@ describe('CipherBoxClient — listFolder / listSharedFolder ResolvedChild[] (fol
         name: 'notes.txt',
         kind: 'file',
         size: 42,
+        createdAt: now,
         modifiedAt: now,
         sequence: 9,
       },
@@ -380,6 +387,7 @@ describe('CipherBoxClient — listFolder / listSharedFolder ResolvedChild[] (fol
         name: 'report.pdf',
         kind: 'file',
         size: 12345,
+        createdAt: now,
         modifiedAt: now,
         sequence: 3,
       },
