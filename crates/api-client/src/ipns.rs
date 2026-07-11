@@ -63,7 +63,7 @@ pub struct VerifiedResolve {
 ///     site), so this arm is unreachable from the production resolve path. It is retained
 ///     for exhaustive `Option<bool>` matching, is exercised directly by unit tests, and
 ///     also fails closed.
-pub(crate) fn bind_verified(
+pub fn bind_verified(
     resp: &IpnsResolveResponse,
     sig_verdict: Option<bool>,
 ) -> Result<VerifiedResolve, VerifyError> {
@@ -117,11 +117,30 @@ pub(crate) fn bind_verified(
 
             // D-07: resolve-side EOL/expiry enforcement with 5-minute clock-skew buffer.
             // Fail-closed: missing or unparseable Validity is treated as expired.
-            let (validity_bytes, _validity_type) =
+            let (validity_bytes, validity_type) =
                 cipherbox_core::ipns::decode_ipns_cbor_validity(&data_bytes)
                     .map_err(|e| VerifyError::Invalid(format!("CBOR Validity decode failed: {}", e)))?;
             let validity_bytes = validity_bytes
                 .ok_or_else(|| VerifyError::Invalid("IPNS record has no Validity field — fail closed".to_string()))?;
+
+            // Phase 75 (gap #7): bind ValidityType == 0 (EOL) before treating Validity as an
+            // expiry timestamp. Fail closed on absent or non-zero ValidityType — a conformant
+            // signer always emits ValidityType 0 today, so this is defense-in-depth, not a
+            // behavior change for well-formed records.
+            match validity_type {
+                Some(0) => {}
+                Some(other) => {
+                    return Err(VerifyError::Invalid(format!(
+                        "IPNS record has non-EOL ValidityType: {}",
+                        other
+                    )));
+                }
+                None => {
+                    return Err(VerifyError::Invalid(
+                        "IPNS record has no ValidityType field — fail closed".to_string(),
+                    ));
+                }
+            }
 
             let validity_str = std::str::from_utf8(&validity_bytes)
                 .map_err(|_| VerifyError::Invalid("IPNS Validity is not valid UTF-8".to_string()))?;
