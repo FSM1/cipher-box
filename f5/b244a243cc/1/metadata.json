@@ -76,6 +76,37 @@
         "label": "Skill: gsd-secure-phase",
         "default_collapsed": true
       }
+    },
+    {
+      "id": "claude-skill-toolu_0112T1RP6DpTthWyvYid9JNu",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-validate-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "22c7e69a20b3",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 289,
+        "end": 290,
+        "entry_ids": [
+          "01f6ee02-6f81-41a6-ba95-99d1cbbf68a9"
+        ],
+        "tool_use_id": "toolu_0112T1RP6DpTthWyvYid9JNu"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_0112T1RP6DpTthWyvYid9JNu"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-validate-phase",
+        "default_collapsed": true
+      }
     }
   ],
   "summary": {
