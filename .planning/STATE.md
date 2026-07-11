@@ -6,14 +6,14 @@ current_phase: 74
 current_phase_name: Rust and FUSE Rotation-Revocation Soundness
 status: executing
 stopped_at: Completed 74-06-PLAN.md
-last_updated: "2026-07-11T04:08:07.492Z"
+last_updated: "2026-07-11T04:14:29.439Z"
 last_activity: 2026-07-11
 last_activity_desc: Phase 74 execution started
 progress:
   total_phases: 22
   completed_phases: 16
   total_plans: 195
-  completed_plans: 191
+  completed_plans: 192
   percent: 73
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 ## Current Position
 
 Phase: 74 (Rust and FUSE Rotation-Revocation Soundness) — EXECUTING
-Plan: 4 of 7
+Plan: 5 of 7
 Status: Ready to execute
 Last activity: 2026-07-11 — Phase 74 execution started
 
@@ -269,6 +269,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 74 P01 | 20min | 2 tasks | 1 files |
 | Phase 74 P04 | 15min | 2 tasks | 2 files |
 | Phase 74 P06 | 45min | 2 tasks | 3 files |
+| Phase 74 P74-03 | 20min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -595,6 +596,8 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: [Phase 74-06]: WinFsp handle_rename reordered to fuser D-15d pipeline (validate -> source-gate -> dest-gate -> mutate); new dest scope-exit gate closes T-74-09 overwrite-rename revocation bypass
 - [Phase ?]: [Phase 74-06]: crate::test_support cfg widened to any(feature=fuse, feature=winfsp) so WinFsp #[cfg(test)] can reuse make_test_fs_with_keypair; fuser-specific CaptureSender/reply_error_code stay fuse-gated
 - [Phase ?]: [Phase 74-06]: Did not add self-replace/kind-mismatch validation to WinFsp handle_rename (RESEARCH.md Todo 3 point 4 scoped it out-of-scope for SC3)
+- [Phase ?]: RotatedNodeKey exported from cipherbox_sdk::rotation (mod.rs re-export) — was engine.rs-internal, needed by grant_scope.rs's test (74-03)
+- [Phase ?]: grant_scope.rs refresh function extended to InodeKind::Root | Folder | File (was Root | Folder only) — files rotate too via mint_file_key_on_rotate/CRIT-1 (74-03)
 
 ## Operator Next Steps
 
@@ -602,7 +605,7 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-11T04:08:07.485Z
+**Last session:** 2026-07-11T04:14:05.094Z
 **Stopped at:** Completed 74-06-PLAN.md
 **Resume file:** 
 
