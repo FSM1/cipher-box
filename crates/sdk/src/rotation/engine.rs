@@ -614,7 +614,10 @@ async fn re_mint_grants_rooted_at<D: RotationDeps>(
                         grant.share_id
                     ))
                 })?;
-            let encrypted_read_key = base64_encode(&wrapped);
+            // Share-grant `encryptedReadKey` is validated as even-length HEX by
+            // the API (`/^(?:[0-9a-fA-F]{2})+$/`, `update-grant.dto.ts`) and
+            // decoded via `Buffer.from(.., 'hex')` — must be hex, NOT base64.
+            let encrypted_read_key = hex::encode(&wrapped);
             deps.update_grant(&grant.share_id, &encrypted_read_key, new_generation)
                 .await?;
         }
@@ -4061,7 +4064,18 @@ mod rotate_read_from_node {
         )
         .unwrap();
 
-        let wrapped_bytes = decode_b64(encrypted_read_key).unwrap();
+        // The share-grant `encryptedReadKey` is wire-encoded as HEX (the API
+        // validates `/^(?:[0-9a-fA-F]{2})+$/` and decodes via
+        // `Buffer.from(.., 'hex')`), NOT base64.
+        assert!(
+            !encrypted_read_key.is_empty()
+                && encrypted_read_key.len() % 2 == 0
+                && encrypted_read_key
+                    .bytes()
+                    .all(|b| b.is_ascii_hexdigit()),
+            "re-minted encryptedReadKey must be valid even-length hex, got: {encrypted_read_key}"
+        );
+        let wrapped_bytes = hex::decode(encrypted_read_key).unwrap();
         let unwrapped =
             cipherbox_crypto::unwrap_key(&wrapped_bytes, &active_sk.serialize()).unwrap();
         assert_eq!(
