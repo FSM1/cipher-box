@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "fb3d6fa6053e",
+  "strategy": "manual-commit",
+  "branch": "chore/verify-70.1-and-fix-69-scan",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/ROADMAP.md",
+    ".planning/STATE.md",
+    ".planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-WRITE-PLANE-RESEARCH.md",
+    ".planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-WRITE-SIDE-RESEARCH.md",
+    ".planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-UAT.md",
+    ".planning/phases/70.1-rotation-read-plane-durability-and-deep-crash-resume-soundne/70.1-VERIFICATION.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/fb/3d6fa6053e/0/metadata.json",
+      "transcript": "/fb/3d6fa6053e/0/full.jsonl",
+      "content_hash": "/fb/3d6fa6053e/0/content_hash.txt",
+      "prompt": "/fb/3d6fa6053e/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  }
+}
