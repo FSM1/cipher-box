@@ -6,14 +6,14 @@ current_phase: 77
 current_phase_name: crypto-hygiene-and-terminology-canonicalization
 status: executing
 stopped_at: Completed 77-05-PLAN.md
-last_updated: "2026-07-11T08:55:40.464Z"
+last_updated: "2026-07-11T09:17:39.689Z"
 last_activity: 2026-07-11
 last_activity_desc: Phase 77 execution started
 progress:
   total_phases: 22
   completed_phases: 16
   total_plans: 198
-  completed_plans: 193
+  completed_plans: 194
   percent: 73
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 ## Current Position
 
 Phase: 77 (crypto-hygiene-and-terminology-canonicalization) — EXECUTING
-Plan: 6 of 10
+Plan: 7 of 10
 Status: Ready to execute
 Last activity: 2026-07-11 — Phase 77 execution started
 
@@ -271,6 +271,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 77 P03 | 5min | 2 tasks | 7 files |
 | Phase 77 P04 | 6min | 2 tasks | 3 files |
 | Phase 77 P05 | 20min | 2 tasks | 5 files |
+| Phase 77 P06 | 20min | 3 tasks | 21 files |
 
 ## Accumulated Context
 
@@ -596,6 +597,8 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase 77-03]: decryptWithFallback's param renamed alongside decryptIpnsKey's in key-manager.ts, since Task 1 acceptance grep-scoped the whole file for zero occurrences of encryptedIpnsKey
 - [Phase 77]: 77-05: Used secp256k1 (not Ed25519) for the wrapIpnsKeyForTee round-trip test — TEE public keys are secp256k1/ECIES, matching apps/tee-worker's real key type — Ed25519 keypair would not round-trip through wrapKey/unwrapKey (ECIES)
 - [Phase 77]: 77-05: wrapIpnsKeyForTee is now bytes-in/bytes-out with canonical teePublicKey param; hex lives only at the 3 call sites — Aligns TEE-wrap seam with the codebase-wide bytes-internal/hex-at-boundary convention (SC3)
+- [Phase 77]: [Phase 77-06]: SharedFolderState.addShareKeysFn removed alongside SharedWriteContext.addShareKeysFn to satisfy the plan's zero-occurrence grep acceptance criteria
+- [Phase 77]: [Phase 77-06]: Task 3 wrapKey audit required no code change -- the discarded per-upload ECIES wrapKey (todo #11) was already retired under READ-03
 
 ## Operator Next Steps
 
@@ -603,7 +606,7 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-11T08:55:40.457Z
+**Last session:** 2026-07-11T09:16:42.755Z
 **Stopped at:** Completed 77-05-PLAN.md
 **Resume file:** 
 
