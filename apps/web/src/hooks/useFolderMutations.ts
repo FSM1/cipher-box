@@ -71,6 +71,32 @@ function getParentFolder(parentId: string): FolderNode | null {
 }
 
 /**
+ * Collect every already-loaded descendant FolderNode id whose parentId chain
+ * reaches `rootId` (breadth-first over the store's parentId links).
+ *
+ * Used to purge a deleted folder's subtree from the store so no orphaned/stale
+ * descendant entry survives to be hit by useFolderNavigation's `isLoaded` fast
+ * path. Identity stays ipnsName-keyed: this walks the store tree by `parentId`
+ * only and never re-keys to Node.id (the read-plane is intentionally
+ * ipnsName-keyed). Returns descendant ids only — not `rootId` itself.
+ */
+function collectDescendantFolderIds(folders: Record<string, FolderNode>, rootId: string): string[] {
+  const descendants: string[] = [];
+  const queue: string[] = [rootId];
+  const allFolders = Object.values(folders);
+  while (queue.length > 0) {
+    const currentId = queue.shift() as string;
+    for (const folder of allFolders) {
+      if (folder.parentId === currentId && !descendants.includes(folder.id)) {
+        descendants.push(folder.id);
+        queue.push(folder.id);
+      }
+    }
+  }
+  return descendants;
+}
+
+/**
  * React hook for folder CRUD operations (create, rename, move, delete).
  *
  * Operations delegate to CipherBoxClient SDK methods. The SDK handles
@@ -359,11 +385,15 @@ export function useFolderMutations() {
 
         await deleteWithBehavior(client, parentFolder.ipnsName, itemId, parentPath);
 
-        // SDK emits folder:updated -> store subscription updates children
-        // Remove folder subtree from store if deleting a folder
+        // SDK emits folder:updated -> store subscription updates children.
+        // Remove the deleted folder AND every already-loaded descendant
+        // FolderNode (walk parentId links) so no orphaned/stale entry survives
+        // to be hit by useFolderNavigation's isLoaded fast path.
         if (itemType === 'folder') {
           const store = useFolderStore.getState();
-          // TODO(phase 63): recurse into sub-folders using Node.kind discrimination
+          for (const descendantId of collectDescendantFolderIds(store.folders, itemId)) {
+            store.removeFolder(descendantId);
+          }
           store.removeFolder(itemId);
         }
 
@@ -393,11 +423,21 @@ export function useFolderMutations() {
         const parentFolder = getParentFolder(parentId);
         if (!parentFolder) throw new Error('Parent folder not found');
 
-        // Collect nested folder IDs to remove from store
-        // TODO(phase 63): recurse into sub-folders using Node.kind discrimination
-        const folderIdsToRemove: string[] = items
-          .filter((item) => item.type === 'folder')
-          .map((item) => item.id);
+        // Collect folder IDs to remove from the store — each deleted folder AND
+        // every already-loaded descendant FolderNode (walk parentId links) so no
+        // orphaned/stale entry survives to be hit by useFolderNavigation's
+        // isLoaded fast path. Snapshot the tree before the SDK deletes so the
+        // parentId walk sees the full loaded subtree.
+        const preDeleteFolders = useFolderStore.getState().folders;
+        const folderIdsToRemove = new Set<string>();
+        for (const item of items) {
+          if (item.type === 'folder') {
+            folderIdsToRemove.add(item.id);
+            for (const descendantId of collectDescendantFolderIds(preDeleteFolders, item.id)) {
+              folderIdsToRemove.add(descendantId);
+            }
+          }
+        }
 
         // Delete each item via SDK (sequentially to maintain consistency)
         const client = getSdkClient();
