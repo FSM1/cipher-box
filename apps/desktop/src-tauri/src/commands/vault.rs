@@ -950,3 +950,143 @@ mod vault_init_route_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod vault_init_recovery_tests {
+    use super::*;
+    use base64::Engine as _;
+
+    /// A present-record resolve response (only Ok-vs-Err matters for preflight).
+    fn present_response() -> cipherbox_api_client::IpnsResolveResponse {
+        cipherbox_api_client::IpnsResolveResponse {
+            success: true,
+            cid: "bafyfakecidrecoverytest".to_string(),
+            sequence_number: "1".to_string(),
+            signature_v2: None,
+            data: None,
+            pub_key: None,
+        }
+    }
+
+    // End-to-end fail-closed chain: a transient (non-404) resolve outcome on the
+    // key-blob name flows classify -> route -> Err, aborting BEFORE any publish is
+    // reached (route returns before the publish branch in initialize_vault).
+    #[test]
+    fn vault_init_transient_resolve_aborts_before_publish() {
+        let key_blob = classify_preflight_outcome(
+            Err(cipherbox_api_client::ApiError::ApiResponse {
+                status: 500,
+                message: "backend on fire".to_string(),
+            }),
+            "vault-key-name",
+        );
+        let root = classify_preflight_outcome(Ok(present_response()), "root-name");
+
+        let route = route_vault_init(key_blob, root);
+        assert!(
+            route.is_err(),
+            "a transient resolve must abort before any publishable route is chosen"
+        );
+        assert_ne!(route, Ok(VaultInitRoute::FreshInit));
+        assert_ne!(route, Ok(VaultInitRoute::RecoverResume));
+    }
+
+    // Unrecoverable state (root present, key blob absent) surfaced through the full
+    // classify -> route chain -> Err.
+    #[test]
+    fn vault_init_unrecoverable_state_aborts() {
+        let key_blob = classify_preflight_outcome(
+            Err(cipherbox_api_client::ApiError::IpnsNotFound("vault-key".to_string())),
+            "vault-key",
+        );
+        let root = classify_preflight_outcome(Ok(present_response()), "root");
+        let route = route_vault_init(key_blob, root);
+        assert!(route.is_err(), "root-present/key-blob-absent must abort");
+        assert!(route.unwrap_err().contains("unrecoverable"));
+    }
+
+    // Decrypt-and-resume recovery round-trip (pure, no live IO): mirror the
+    // FIRST attempt's mint+wrap+serialize, then the RecoverResume branch's
+    // deserialize+unwrap (recover_root_keys_from_key_blob), asserting the recovered
+    // root keys equal the first attempt's minted keys BYTE-FOR-BYTE (proving no
+    // re-mint). Then mirror publish_root_folder + coherency_check_root_unseal under
+    // the recovered keys and assert the coherency unseal succeeds.
+    #[test]
+    fn vault_init_recovery_recovers_original_keys_and_coherency_unseals() {
+        // Fixed secp256k1 keypair: private key = 1, public key = generator point G.
+        let private_key = {
+            let mut k = [0u8; 32];
+            k[31] = 1;
+            k
+        };
+        let public_key = hex::decode(
+            "0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f8179\
+8483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8",
+        )
+        .expect("valid uncompressed secp256k1 pubkey hex");
+
+        // FIRST ATTEMPT twin (FreshInit): two INDEPENDENT minted root keys wrapped
+        // into the v3 blob (as publish_vault_key_blob would persist).
+        let minted_read = [0xA1u8; 32];
+        let minted_write = [0xB2u8; 32];
+        assert_ne!(minted_read, minted_write);
+        let enc_read = cipherbox_crypto::ecies::wrap_key(&minted_read, &public_key)
+            .expect("wrap minted root read key");
+        let enc_write = cipherbox_crypto::ecies::wrap_key(&minted_write, &public_key)
+            .expect("wrap minted root write key");
+        let blob = cipherbox_core::vault_blob::serialize_vault_blob_v3(&enc_read, &enc_write)
+            .expect("serialize v3 blob");
+
+        // RECOVERY twin (recover_root_keys_from_key_blob): deserialize + unwrap.
+        let (denc_read, denc_write) =
+            cipherbox_core::vault_blob::deserialize_vault_blob_v3(&blob)
+                .expect("deserialize v3 blob");
+        let rec_read = cipherbox_crypto::ecies::unwrap_key(&denc_read, &private_key)
+            .expect("recover root read key");
+        let rec_write = cipherbox_crypto::ecies::unwrap_key(&denc_write, &private_key)
+            .expect("recover root write key");
+
+        // Recovered keys equal the first attempt's MINTED keys byte-for-byte — the
+        // core no-re-mint guarantee.
+        assert_eq!(
+            rec_read.as_slice(),
+            &minted_read,
+            "recovered root_read_key must equal the originally minted key"
+        );
+        assert_eq!(
+            rec_write.as_slice(),
+            &minted_write,
+            "recovered root_write_key must equal the originally minted key"
+        );
+
+        // publish_root_folder twin: seal an empty root under the RECOVERED keys.
+        let rec_read_arr: [u8; 32] = rec_read.as_slice().try_into().expect("32-byte read key");
+        let rec_write_arr: [u8; 32] = rec_write.as_slice().try_into().expect("32-byte write key");
+        let root_ipns_seed = [0x33u8; 32];
+        let node_bytes =
+            build_empty_root_published_node(&rec_read_arr, &rec_write_arr, &root_ipns_seed)
+                .expect("build empty root under recovered keys");
+
+        // coherency_check_root_unseal twin: decode + unseal read body under the
+        // recovered read key must succeed (the coherency gate).
+        let published =
+            cipherbox_core::node::decode_published_node(&node_bytes).expect("decode published root");
+        let read_sealed = base64::engine::general_purpose::STANDARD
+            .decode(&published.read_sealed)
+            .expect("valid base64 read_sealed");
+        let read_body = cipherbox_core::node::seal::unseal_node(
+            &read_sealed,
+            &rec_read_arr,
+            &published.id,
+            cipherbox_core::node::NodeKind::Root,
+            published.generation,
+        )
+        .expect("coherency unseal under recovered root_read_key must succeed");
+        match cipherbox_core::node::decode_node(&read_body).expect("decode read-body node") {
+            cipherbox_core::node::Node::Root { children, .. } => {
+                assert!(children.is_empty(), "recovered root has no children");
+            }
+            other => panic!("expected Node::Root, got {:?}", other),
+        }
+    }
+}
