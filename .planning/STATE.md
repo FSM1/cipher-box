@@ -5,10 +5,10 @@ milestone_name: Metadata and Sharing Refactor
 current_phase: 76
 current_phase_name: FUSE Durability and TEE Write-Path Hardening
 status: verifying
-stopped_at: Completed 75-04-PLAN.md
-last_updated: "2026-07-11T07:00:20.944Z"
+stopped_at: Phase 75 complete (75-05-PLAN.md), shipping PR
+last_updated: "2026-07-11T20:30:00.000Z"
 last_activity: 2026-07-11
-last_activity_desc: Phase 75 complete, transitioned to Phase 76
+last_activity_desc: Phase 75 complete and shipping, Phase 76 pending
 progress:
   total_phases: 22
   completed_phases: 17
@@ -24,7 +24,7 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-27)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 75 — Cross-Language IPNS and Node-Codec Verification Parity
+**Current focus:** Phase 76 — FUSE Durability and TEE Write-Path Hardening (Phase 75 shipping)
 
 ## Current Position
 

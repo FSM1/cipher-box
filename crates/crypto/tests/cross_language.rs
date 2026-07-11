@@ -414,10 +414,11 @@ fn uuid_acceptance_cross_language() {
                 result
             ),
             "reject" => assert!(
-                result.is_err(),
-                "expected reject for: {} ({:?}), got Ok",
+                matches!(&result, Err(cipherbox_crypto::CryptoError::InvalidAadInput)),
+                "expected reject (InvalidAadInput) for: {} ({:?}), got {:?}",
                 c.description,
-                c.node_id
+                c.node_id,
+                result
             ),
             other => panic!("unknown expected value '{}' in case: {}", other, c.description),
         }

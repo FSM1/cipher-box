@@ -1,5 +1,14 @@
 # Crypto/Privacy Review — Phase 75 (cross-language IPNS + node-codec verification parity)
 
+> **Status: PRE-FIX ASSESSMENT.** This report captures the review findings as first
+> surfaced. The two MEDIUM divergences (duplicate CBOR map keys, leading-sign /
+> fixed-width RFC3339) and the LOW UUID trailing-newline gap were **fixed** in
+> commit `fix(75): close cross-language IPNS verification parity divergences` and a
+> follow-up CodeRabbit-triage commit, each locked with tests on both languages. The
+> remaining LOW float-`ValidityType` divergence is deferred to
+> `.planning/todos/pending/2026-07-11-ts-validitytype-float-vs-integer-cbor-parity.md`.
+> See `75-SECURITY.md` for the authoritative disposition table and the SECURED verdict.
+
 Date: 2026-07-11
 Scope: static analysis of `git diff main...HEAD` for the listed files only. No tests run.
 Focus: Rust/TS validity/EOL/ValidityType parity, adversarial-input safety, false-reject vs false-accept, hex/base64 domain confusion.

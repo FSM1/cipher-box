@@ -122,7 +122,7 @@ describe('UUID acceptance-domain oracle (uuid-acceptance.json, SC3)', () => {
           () => buildNodeAad(c.node_id, kind, generation, role),
           `expected accept for: ${c.description} (${JSON.stringify(c.node_id)})`
         ).not.toThrow();
-      } else {
+      } else if (c.expected === 'reject') {
         try {
           buildNodeAad(c.node_id, kind, generation, role);
           expect.fail(`expected reject for: ${c.description} (${JSON.stringify(c.node_id)})`);
@@ -130,6 +130,9 @@ describe('UUID acceptance-domain oracle (uuid-acceptance.json, SC3)', () => {
           expect(e).toBeInstanceOf(CryptoError);
           expect((e as CryptoError).code).toBe('INVALID_AAD_INPUT');
         }
+      } else {
+        // Guard against a typo'd verdict silently passing as a reject case.
+        expect.fail(`unknown expected verdict "${c.expected}" for: ${c.description}`);
       }
     }
   });

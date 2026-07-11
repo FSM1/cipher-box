@@ -45,6 +45,23 @@ test vectors — no injection, authz, secret-handling, or deserialization-of-
 untrusted-object surface beyond the IPNS record parsing already covered in depth
 by the crypto/privacy review above. No general-vulnerability findings apply.
 
+## CodeRabbit CLI review (Step 6)
+
+Five findings, all triaged and fixed:
+
+- **Finding (SC3 soundness) — `uuidToBytes` trailing-newline:** JS `$` (no `m` flag)
+  also matches before a trailing `\n`, so `CANONICAL_UUID_RE` alone accepted a UUID
+  with a trailing newline that Rust's `is_canonical_uuid_form` (`bytes.len() != 36`)
+  rejects — a real cross-language divergence. **Fixed** with a `uuid.length === 36`
+  guard, plus a `\n` regression case added to the shared `uuid-acceptance.json` oracle
+  (now exercised by both the TS and Rust oracle tests).
+- **Test rigor (both languages):** the UUID-oracle reject arms now require the
+  specific `INVALID_AAD_INPUT` / `CryptoError::InvalidAadInput` verdict, and the TS
+  loop fails loudly on an unknown `expected` value instead of silently treating it as
+  a reject. **Fixed.**
+- **Bookkeeping:** STATE.md metadata reconciled; this report banner-marked as the
+  pre-fix assessment so the SECURED verdict is unambiguous. **Fixed.**
+
 ## Verdict
 
 **SECURED.** The two MEDIUM parity divergences are fixed and locked with tests on

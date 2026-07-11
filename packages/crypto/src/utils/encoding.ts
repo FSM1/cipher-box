@@ -68,7 +68,12 @@ const CANONICAL_UUID_RE =
  * @throws CryptoError with code 'INVALID_AAD_INPUT' if the UUID is not canonical form
  */
 export function uuidToBytes(uuid: string): Uint8Array {
-  if (!CANONICAL_UUID_RE.test(uuid)) {
+  // The length === 36 guard is load-bearing, not redundant: JS `$` (without the `m` flag)
+  // also matches immediately before a trailing "\n", so CANONICAL_UUID_RE alone would ACCEPT
+  // "550e8400-e29b-41d4-a716-446655440000\n". Rust's is_canonical_uuid_form rejects it up
+  // front (bytes.len() != 36), so without this guard the two languages diverge on a
+  // trailing-newline UUID — a cross-language parity + soundness gap (SC3).
+  if (uuid.length !== 36 || !CANONICAL_UUID_RE.test(uuid)) {
     throw new CryptoError('Malformed UUID', 'INVALID_AAD_INPUT');
   }
   return hexToBytes(uuid.replace(/-/g, ''));
