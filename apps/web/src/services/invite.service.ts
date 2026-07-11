@@ -54,12 +54,19 @@ export function resolveParentIpnsName(parentFolderId: string): string {
 // Types
 // ---------------------------------------------------------------------------
 
-/** Info about an active invite link */
+/**
+ * Info about an active invite link.
+ *
+ * 79-02: no `itemType` field -- there is no `ResolvedChild`/parent listing
+ * in scope at `fetchInvitesForItem`'s call site (the API's `ShareInvite`
+ * response carries no kind), and the sole consumer (`InviteLinkTab.tsx`)
+ * never read `itemType` (grep-verified). Dropped rather than carrying a
+ * hardcoded best-effort default with no data source.
+ */
 export type InviteInfo = {
   id: string;
   token: string;
   status: string;
-  itemType: string;
   ipnsName: string;
   itemName: string;
   expiresAt: string;
@@ -281,8 +288,6 @@ export async function fetchInvitesForItem(ipnsName: string): Promise<InviteInfo[
     id: invite.id,
     token: invite.token,
     status: invite.status,
-    // TODO(phase 63): SealedChildRef has no .type; itemType has no source at the invite layer.
-    itemType: 'folder',
     ipnsName: invite.shareRootIpnsName,
     // itemNameEncrypted (if present) is wrapped for the EPHEMERAL public key, which the
     // sharer never retains after creation (T-68.1-11-01) -- there is no plaintext name
