@@ -1303,4 +1303,282 @@ pub mod implementation {
 
         Ok(())
     }
+
+    /// D-15d dest-gate tests (74-06), mirroring the fuser twins at
+    /// `crates/fuse/src/write_ops/implementation/rename.rs`. This module only
+    /// compiles under `feature = "winfsp"`, which does not build on
+    /// macOS/Linux (no WinFsp SDK) — these tests are authored test-first and
+    /// verified by the `Cargo Check & Test (Windows)` CI job, not locally.
+    #[cfg(all(test, feature = "winfsp"))]
+    mod tests {
+        use super::*;
+        use crate::inode::ROOT_INO;
+        use std::sync::{Arc, Mutex};
+        use std::time::{Duration, UNIX_EPOCH};
+        use widestring::U16CString;
+        use zeroize::Zeroizing;
+
+        /// Real secp256k1 keypair — mirrors the fuser `rename.rs` test
+        /// harness (`real_keypair`) so `wrap_key`'s ECIES calls succeed.
+        fn real_keypair() -> (Zeroizing<Vec<u8>>, Zeroizing<Vec<u8>>) {
+            let (sk, pk) = ecies::utils::generate_keypair();
+            (
+                Zeroizing::new(sk.serialize().to_vec()),
+                Zeroizing::new(pk.serialize().to_vec()),
+            )
+        }
+
+        /// Build a `WinFspContext` wrapping a fully-populated `CipherBoxFS`
+        /// (via the shared, feature-agnostic `crate::test_support` harness)
+        /// inside a live tokio runtime, so `run_scope_exit_gate`'s
+        /// `rt.block_on` is valid when invoked from the TEST thread — mirrors
+        /// the fuser `rename.rs` `fs_on_runtime` helper. The harness's
+        /// `ApiClient` points at an unroutable host (127.0.0.1:1), so any
+        /// GATED rotation attempt surfaces an error — the tests below use
+        /// that as a positive proof the gate fired, not a live rotation
+        /// success (matches the fuser twin's own documented proof strategy).
+        fn ctx_on_runtime() -> (tokio::runtime::Runtime, WinFspContext) {
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
+                .enable_all()
+                .build()
+                .unwrap();
+            let _guard = rt.enter();
+            let (private_key, public_key) = real_keypair();
+            let fs = crate::test_support::make_test_fs_with_keypair(private_key, public_key);
+            let ctx = WinFspContext {
+                inner: Arc::new(Mutex::new(fs)),
+                rt: rt.handle().clone(),
+            };
+            (rt, ctx)
+        }
+
+        /// Seed the local sent-shares cache with a single AUTHORITATIVE grant
+        /// rooted at `root_ipns_name` so a mutation whose ancestry contains
+        /// that name is a SHARED-scope exit (covering grant present).
+        fn seed_sent_share(ctx: &WinFspContext, root_ipns_name: &str) {
+            use cipherbox_api_client::shares::SentShareResponse;
+            let share = SentShareResponse {
+                share_id: "s1".to_string(),
+                recipient_public_key: "0x04".to_string(),
+                encrypted_read_key: "ref".to_string(),
+                encrypted_write_key: None,
+                root_node_id: "n1".to_string(),
+                share_root_ipns_name: root_ipns_name.to_string(),
+                root_generation: "1".to_string(),
+                item_name_encrypted: None,
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+            };
+            let fs = ctx.inner.lock().unwrap();
+            *fs.sent_shares.write().expect("sent_shares lock poisoned") =
+                crate::write_ops::grant_scope::SentSharesCache::from_sent_shares(&[share]);
+        }
+
+        /// Insert an EMPTY Folder child of `parent`.
+        fn insert_empty_folder(
+            ctx: &WinFspContext,
+            parent: u64,
+            name: &str,
+            ipns_name: &str,
+        ) -> u64 {
+            let mut fs = ctx.inner.lock().unwrap();
+            let ino = fs.inodes.allocate_ino();
+            let t = UNIX_EPOCH + Duration::from_millis(1_700_000_000_000);
+            fs.inodes.insert(InodeData {
+                ino,
+                node_id: crate::fs::uuid_from_ino(ino),
+                parent_ino: parent,
+                name: name.to_string(),
+                kind: InodeKind::Folder {
+                    ipns_name: ipns_name.to_string(),
+                    read_key: Zeroizing::new([1u8; 32]),
+                    write_key: Zeroizing::new([6u8; 32]),
+                    ipns_private_key: Zeroizing::new(vec![5u8; 32]),
+                    children_loaded: true,
+                },
+                attr: FileAttrs {
+                    ino,
+                    size: 0,
+                    blocks: 0,
+                    atime: t,
+                    mtime: t,
+                    ctime: t,
+                    crtime: t,
+                    is_dir: true,
+                    perm: 0o755,
+                    nlink: 2,
+                },
+                children: Some(Vec::new()),
+                write_generation: 0,
+            });
+            if let Some(p) = fs.inodes.get_mut(parent) {
+                p.children.get_or_insert_with(Vec::new).push(ino);
+            }
+            ino
+        }
+
+        /// Insert a NON-empty Folder child (carries one dangling child ino so
+        /// the STATUS_DIRECTORY_NOT_EMPTY-on-replace check fires; the
+        /// dangling ino is never dereferenced by that check).
+        fn insert_non_empty_folder(
+            ctx: &WinFspContext,
+            parent: u64,
+            name: &str,
+            ipns_name: &str,
+        ) -> u64 {
+            let ino = insert_empty_folder(ctx, parent, name, ipns_name);
+            let mut fs = ctx.inner.lock().unwrap();
+            if let Some(f) = fs.inodes.get_mut(ino) {
+                f.children = Some(vec![999_999]);
+            }
+            ino
+        }
+
+        /// Insert a File child of `parent`.
+        fn insert_file(ctx: &WinFspContext, parent: u64, name: &str, ipns_name: &str) -> u64 {
+            let mut fs = ctx.inner.lock().unwrap();
+            let ino = fs.inodes.allocate_ino();
+            let t = UNIX_EPOCH + Duration::from_millis(1_700_000_000_000);
+            fs.inodes.insert(InodeData {
+                ino,
+                node_id: crate::fs::uuid_from_ino(ino),
+                parent_ino: parent,
+                name: name.to_string(),
+                kind: InodeKind::File {
+                    ipns_name: ipns_name.to_string(),
+                    cid: String::new(),
+                    size: 0,
+                    encryption_mode: "GCM".to_string(),
+                    iv: String::new(),
+                    read_key: Zeroizing::new([2u8; 32]),
+                    write_key: Zeroizing::new([4u8; 32]),
+                    ipns_private_key: Zeroizing::new(vec![3u8; 32]),
+                },
+                attr: FileAttrs {
+                    ino,
+                    size: 0,
+                    blocks: 0,
+                    atime: t,
+                    mtime: t,
+                    ctime: t,
+                    crtime: t,
+                    is_dir: false,
+                    perm: 0o644,
+                    nlink: 1,
+                },
+                children: None,
+                write_generation: 0,
+            });
+            if let Some(p) = fs.inodes.get_mut(parent) {
+                p.children.get_or_insert_with(Vec::new).push(ino);
+            }
+            ino
+        }
+
+        /// Build a WinFsp-style absolute path (`\seg1\seg2`) from segments.
+        fn winfsp_path(segments: &[&str]) -> U16CString {
+            let joined = format!("\\{}", segments.join("\\"));
+            U16CString::from_str(&joined).expect("test path must not contain NUL")
+        }
+
+        /// Assert `result` is `Err(FspError::NTSTATUS(expected))`, panicking
+        /// with `msg` (and the actual result) otherwise. `FspError` has no
+        /// `PartialEq` (upstream `winfsp` crate, `#[non_exhaustive]`), so this
+        /// matches the wrapped NTSTATUS value directly instead.
+        fn assert_ntstatus(result: &Result<(), FspError>, expected: i32, msg: &str) {
+            match result {
+                Err(FspError::NTSTATUS(code)) if *code == expected => {}
+                other => panic!("{msg}; got {other:?}"),
+            }
+        }
+
+        /// D-15d: a cross-folder rename whose SOURCE has an active covering
+        /// grant (would trigger a rotation attempt if the gate ran) but whose
+        /// destination replacement is POSIX-invalid (a non-empty folder,
+        /// STATUS_DIRECTORY_NOT_EMPTY) must reject with
+        /// STATUS_DIRECTORY_NOT_EMPTY WITHOUT ever invoking the scope-exit
+        /// gate. Pre-fix, the gate ran BEFORE this validation, so a covered
+        /// source surfaced STATUS_IO_DEVICE_ERROR (the rotation attempt
+        /// failing against the harness's unroutable API) instead of the
+        /// correct STATUS_DIRECTORY_NOT_EMPTY — a doomed rename must never
+        /// attempt a rotation.
+        #[test]
+        fn rename_enotempty_destination_rejects_before_gate_with_no_rotation_attempt() {
+            let (_rt, ctx) = ctx_on_runtime();
+
+            // Source folder under the vault root, which IS a grant root: a
+            // cross-folder move of this source is a covered scope-exit if
+            // the gate is ever reached.
+            let source = insert_empty_folder(&ctx, ROOT_INO, "shared-src", "k51shared-src");
+            seed_sent_share(&ctx, "k51test-root");
+
+            // A second folder to move INTO, containing a non-empty
+            // destination folder occupying the target name
+            // (STATUS_DIRECTORY_NOT_EMPTY on replace).
+            let other_parent = insert_empty_folder(&ctx, ROOT_INO, "other", "k51other");
+            insert_non_empty_folder(&ctx, other_parent, "dest", "k51dest");
+
+            let old_path = winfsp_path(&["shared-src"]);
+            let new_path = winfsp_path(&["other", "dest"]);
+            let result = handle_rename(&ctx, old_path.as_ucstr(), new_path.as_ucstr(), true);
+
+            assert_ntstatus(
+                &result,
+                0xC0000101_u32 as i32, // STATUS_DIRECTORY_NOT_EMPTY
+                "POSIX destination validation must run BEFORE the scope-exit gate (D-15d) — a \
+                 covered source must never attempt rotation on a doomed rename",
+            );
+
+            let fs = ctx.inner.lock().unwrap();
+            assert!(
+                fs.inodes.get(source).is_some(),
+                "the source must remain untouched when the rename is rejected pre-gate"
+            );
+        }
+
+        /// D-15d: renaming a private (uncovered) source OVER an existing
+        /// destination that IS itself covered by a grant must gate the
+        /// destination's OWN scope-exit before removing it — an ungated
+        /// removal would be a silent revocation bypass. The harness's API
+        /// points at an unroutable host, so a GATED (attempted) rotation
+        /// surfaces STATUS_ACCESS_DENIED, proving the gate fired for
+        /// `dest_ino` rather than silently succeeding.
+        #[test]
+        fn rename_overwriting_a_covered_destination_gates_dest_ino_scope_exit() {
+            let (_rt, ctx) = ctx_on_runtime();
+
+            // Source: a private file with no covering grant.
+            let source_parent = insert_empty_folder(&ctx, ROOT_INO, "srcdir", "k51srcdir");
+            let source = insert_file(&ctx, source_parent, "a.txt", "k51a");
+
+            // Destination: an existing file under a DIFFERENT folder that IS
+            // a grant root — replacing it is itself a covered scope-exit.
+            let dest_parent = insert_empty_folder(&ctx, ROOT_INO, "destdir", "k51destdir-shared");
+            let dest = insert_file(&ctx, dest_parent, "b.txt", "k51b");
+            seed_sent_share(&ctx, "k51destdir-shared");
+
+            let old_path = winfsp_path(&["srcdir", "a.txt"]);
+            let new_path = winfsp_path(&["destdir", "b.txt"]);
+            let result = handle_rename(&ctx, old_path.as_ucstr(), new_path.as_ucstr(), true);
+
+            assert_ntstatus(
+                &result,
+                0xC0000022_u32 as i32, // STATUS_ACCESS_DENIED
+                "overwriting a covered destination must gate dest_ino's own scope-exit (D-15d) \
+                 — the attempted rotation fails closed (STATUS_ACCESS_DENIED) against the \
+                 unroutable test API, proving the gate fired rather than silently dropping \
+                 dest_ino ungated",
+            );
+
+            let fs = ctx.inner.lock().unwrap();
+            assert!(
+                fs.inodes.get(dest).is_some(),
+                "the covered destination must remain when its scope-exit rotation cannot complete"
+            );
+            assert!(
+                fs.inodes.get(source).is_some(),
+                "the source must remain untouched when the rename aborts on the dest gate"
+            );
+        }
+    }
 }

@@ -17,11 +17,14 @@
 //! real EC keypair so `wrap_key` ECIES-wraps key material (Threat T-46-02).
 
 use std::collections::{HashMap, HashSet};
+#[cfg(feature = "fuse")]
 use std::io::IoSlice;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::channel;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+#[cfg(feature = "fuse")]
+use std::sync::Mutex;
 
 use zeroize::Zeroizing;
 
@@ -139,9 +142,15 @@ pub(crate) fn make_test_fs_with_keypair(
 
 /// A [`fuser::ReplySender`] that captures the raw reply bytes into a shared
 /// buffer so handler replies can be inspected in tests.
+///
+/// `fuser`-specific — only reachable under `feature = "fuse"` (WinFsp's own
+/// `#[cfg(test)]` module uses `handle_rename`'s `Result<(), FspError>` return
+/// value directly instead, no reply-capture shim needed).
+#[cfg(feature = "fuse")]
 #[derive(Clone)]
 pub(crate) struct CaptureSender(pub Arc<Mutex<Vec<u8>>>);
 
+#[cfg(feature = "fuse")]
 impl fuser::ReplySender for CaptureSender {
     fn send(&self, data: &[IoSlice<'_>]) -> std::io::Result<()> {
         let mut buf = self.0.lock().unwrap();
@@ -157,6 +166,7 @@ impl fuser::ReplySender for CaptureSender {
 /// Wire format (vendor/fuser ll/fuse_abi.rs:932-936):
 ///   `fuse_out_header = { len: u32 LE, error: i32 LE, unique: u64 LE }` (16 bytes).
 /// `error == 0` means success; `error == -errno` means failure.
+#[cfg(feature = "fuse")]
 pub(crate) fn reply_error_code(captured: &Arc<Mutex<Vec<u8>>>) -> i32 {
     let buf = captured.lock().unwrap();
     assert!(buf.len() >= 16, "fuse_out_header is 16 bytes");
