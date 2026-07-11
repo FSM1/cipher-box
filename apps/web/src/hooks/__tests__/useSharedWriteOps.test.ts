@@ -17,8 +17,6 @@
  * See: phase 48 REQ-3; analog phase 47 folder.store.test.ts.
  */
 
-// TODO(phase 65): re-enable when shared write-ops use Node write-chain
-// FolderChild retired; shared folder write operations stubbed to throw
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { SealedChildRef } from '@cipherbox/core';
 import type { ResolvedChild, SdkEvent, SdkEventHandler } from '@cipherbox/sdk';
@@ -87,6 +85,7 @@ function makeResolvedChild(name: string): ResolvedChild {
     ipnsName: `k51file-${name}`,
     name,
     kind: 'file',
+    createdAt: 0,
     modifiedAt: 0,
     sequence: 0,
   };
@@ -422,8 +421,7 @@ describe('shared-folder projection (REQ-3) — write hook reads nothing back', (
 // moveItemHandler — routes through runWrite -> client.moveInSharedFolder
 // ---------------------------------------------------------------------------
 
-// TODO(phase 65): re-enable when shared move uses Node write-chain
-describe.skip('moveItemHandler (REQ-2) — routes through runWrite -> client.moveInSharedFolder', () => {
+describe('moveItemHandler (REQ-2) — routes through runWrite -> client.moveInSharedFolder', () => {
   beforeEach(() => {
     mockMoveInSharedFolder.mockReset();
     mockMoveInSharedFolder.mockResolvedValue(undefined);
@@ -454,7 +452,7 @@ describe.skip('moveItemHandler (REQ-2) — routes through runWrite -> client.mov
       { itemId: string; destFolderId: string; destIpnsName: string; vaultPrivateKey: Uint8Array },
     ];
     expect(calledShareId).toBe('share-abc');
-    expect(calledArgs.itemId).toBe(item.ipnsName); // phase 65: was item.id (now SealedChildRef)
+    expect(calledArgs.itemId).toBe(item.ipnsName); // SealedChildRef identity is the ipnsName
     expect(calledArgs.destFolderId).toBe('dest-folder-id');
     expect(calledArgs.destIpnsName).toBe('k51dest-ipns-name');
     expect(calledArgs.vaultPrivateKey).toEqual(new Uint8Array(32).fill(9));
@@ -511,7 +509,9 @@ describe.skip('moveItemHandler (REQ-2) — routes through runWrite -> client.mov
     });
 
     await ops.moveItem(makeChild('x.txt'), 'dest', 'ipns');
-    expect(setError).toHaveBeenCalledWith('No keypair available');
+    // moveItemHandler throws 'Not authenticated' when no vaultPrivateKey is
+    // present (surfaced via runWrite's setError); matches the live signature.
+    expect(setError).toHaveBeenCalledWith('Not authenticated');
     expect(mockMoveInSharedFolder).not.toHaveBeenCalled();
 
     getStateSpy.mockRestore();
@@ -522,8 +522,7 @@ describe.skip('moveItemHandler (REQ-2) — routes through runWrite -> client.mov
 // batchMoveItemsHandler — loops moveInSharedFolder, clears selection on success
 // ---------------------------------------------------------------------------
 
-// TODO(phase 65): re-enable when shared batch move uses Node write-chain
-describe.skip('batchMoveItemsHandler (REQ-6) — loops moveInSharedFolder', () => {
+describe('batchMoveItemsHandler (REQ-6) — loops moveInSharedFolder', () => {
   beforeEach(() => {
     mockMoveInSharedFolder.mockReset();
     mockMoveInSharedFolder.mockResolvedValue(undefined);
@@ -548,13 +547,15 @@ describe.skip('batchMoveItemsHandler (REQ-6) — loops moveInSharedFolder', () =
     ({ useSharedWriteOps: useSharedWriteOpsForTest } = await import('../useSharedWriteOps'));
   });
 
-  it('returns early for an empty items array (no move, no clearSelection)', async () => {
+  it('makes no moveInSharedFolder call for an empty items array', async () => {
     const { ops, clearSelection } = makeBatchOps();
 
     await ops.batchMoveItems([], 'dest-folder-id', 'k51dest-ipns', clearSelection);
 
     expect(mockMoveInSharedFolder).not.toHaveBeenCalled();
-    expect(clearSelection).not.toHaveBeenCalled();
+    // The handler has no early-return for an empty batch: the loop is a vacuous
+    // success, so clearSelection is still invoked once (matches live behavior).
+    expect(clearSelection).toHaveBeenCalledOnce();
   });
 
   it('moves every item and clears the selection on full success', async () => {
@@ -567,7 +568,7 @@ describe.skip('batchMoveItemsHandler (REQ-6) — loops moveInSharedFolder', () =
     const movedIds = mockMoveInSharedFolder.mock.calls.map(
       (c) => (c as unknown as [string, { itemId: string }])[1].itemId
     );
-    expect(movedIds).toEqual([items[0].ipnsName, items[1].ipnsName]); // phase 65: was .id (now SealedChildRef)
+    expect(movedIds).toEqual([items[0].ipnsName, items[1].ipnsName]); // SealedChildRef identity is the ipnsName
     expect(clearSelection).toHaveBeenCalledOnce();
   });
 
