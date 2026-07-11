@@ -6,14 +6,14 @@ current_phase: 75
 current_phase_name: Cross-Language IPNS and Node-Codec Verification Parity
 status: executing
 stopped_at: Completed 75-04-PLAN.md
-last_updated: "2026-07-11T06:06:14.171Z"
+last_updated: "2026-07-11T06:17:48.645Z"
 last_activity: 2026-07-11
 last_activity_desc: Phase 75 execution started
 progress:
   total_phases: 22
   completed_phases: 16
   total_plans: 193
-  completed_plans: 190
+  completed_plans: 191
   percent: 73
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 ## Current Position
 
 Phase: 75 (Cross-Language IPNS and Node-Codec Verification Parity) — EXECUTING
-Plan: 3 of 5
+Plan: 4 of 5
 Status: Ready to execute
 Last activity: 2026-07-11 — Phase 75 execution started
 
@@ -268,6 +268,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 72 P10 | 10min | 2 tasks | 3 files |
 | Phase 75 P01 | 3min | 1 tasks | 2 files |
 | Phase 75 P04 | 12min | 3 tasks | 3 files |
+| Phase 75 P05 | 8min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -591,6 +592,8 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: buildCborData parameterized with validity/validityType trailing optional args (defaults = prior hardcoded values) so the 8 pre-existing vector cases stay byte-identical by construction
 - [Phase ?]: 4 new IPNS verify vectors per 75-RESEARCH RESOLVED Q2: expired-valid-sig, wrong-validity-type, malformed-rfc3339-trailing-component, malformed-rfc3339-impossible-date (total 12)
 - [Phase ?]: expected_file_iv_len_bytes made Option<usize>/typeof-detected — only file-kind body vectors carry fileIv (folder/root have none)
+- [Phase 75]: Option A (canonical-only) chosen over syncing looser UUID acceptance domains — closes the AAD-transplant surface entirely rather than aligning two looser domains
+- [Phase 75]: Rust UUID canonical-form check implemented as a dependency-free byte-position scan (no regex/once_cell added to crates/crypto)
 
 ## Operator Next Steps
 
@@ -598,7 +601,7 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-11T06:06:14.164Z
+**Last session:** 2026-07-11T06:17:25.791Z
 **Stopped at:** Completed 75-04-PLAN.md
 **Resume file:** 
 
