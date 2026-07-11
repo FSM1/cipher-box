@@ -28,9 +28,15 @@ vi.mock('@cipherbox/core', () => ({
   unsealChildReadKey: mockFns.unsealChildReadKey,
 }));
 
-vi.mock('@cipherbox/crypto', () => ({
-  unwrapKey: mockFns.unwrapKey,
-}));
+// bytesToBase64/base64ToBytes are kept as the real implementation (importOriginal)
+// since navigate.ts now imports the shared codec from here too (Plan 77-08).
+vi.mock('@cipherbox/crypto', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@cipherbox/crypto')>();
+  return {
+    ...actual,
+    unwrapKey: mockFns.unwrapKey,
+  };
+});
 
 // Paths are relative to the TEST FILE location (__tests__/share/navigate.test.ts),
 // matching what navigate.ts resolves (../ipns → ../../ipns; ../ipfs → ../../ipfs).

@@ -39,6 +39,8 @@ import {
   unwrapKey,
   generateEd25519Keypair,
   deriveIpnsName,
+  bytesToBase64,
+  base64ToBytes,
 } from '@cipherbox/crypto';
 import { publishWithCas } from '../cas';
 import { resolveIpnsRecord, createAndPublishIpnsRecord } from '../ipns';
@@ -488,34 +490,6 @@ export type RotationParams = {
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
-
-/**
- * Encode a Uint8Array to a base64 string.
- * Processes in chunks to avoid call-stack overflow on large ECIES ciphertexts.
- * Local copy — dedup with share/grant.ts is deferred per CONTEXT.md.
- */
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = '';
-  const chunkSize = 8192;
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(i, Math.min(i + chunkSize, bytes.length)));
-  }
-  return btoa(binary);
-}
-
-/**
- * Decode a base64 string back to a Uint8Array — the inverse of `bytesToBase64`.
- * Used to recover the ECIES-wrapped ciphertext bytes from a checkpointed
- * `keyCheckpointCallbacks.getWrappedKey` result (Plan 70.1-05 / SC#3).
- */
-function base64ToBytes(b64: string): Uint8Array {
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
-}
 
 /** Fetch a PublishedNode envelope from IPFS by CID. */
 async function fetchPublishedNode(cid: string, ctx: SdkContext): Promise<PublishedNode> {
