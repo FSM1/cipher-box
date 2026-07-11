@@ -10,7 +10,7 @@ import { create } from 'zustand';
  * back-compat since nothing in the web app reads it anymore — the
  * encrypted-key path replaces the per-mutation key fan-out entirely (SC#2).
  * The legacy `encryptedIpnsKey` field (paired with the now-removed
- * `updateSharePermission` orphaned wrapper) was dropped entirely (77-06).
+ * permission-update SDK wrapper) was dropped entirely (77-06).
  * `itemType` has no source in the v2.0 DTO (the Node model no longer exposes
  * a file/folder discriminant at the grant layer) and is left optional/
  * undefined until a real data path exists.
