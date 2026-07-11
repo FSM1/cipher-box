@@ -1088,11 +1088,18 @@ Plans:
 2. The details panes show a real Created date (or the field is intentionally dropped), sourced from the Node envelope rather than the "unavailable (phase 63)" stub
 3. The four `describe.skip` suites are revived and passing (or explicitly retired with rationale); zero `TODO(phase 63)`/`TODO(phase 65)` markers remain in the codebase
 
-**Plans:** 0 plans
+**Plans:** 8 plans
 
 Plans:
 
-- [ ] TBD (run /gsd-plan-phase 79 to break down)
+- [ ] 79-01-PLAN.md — SDK ResolvedChild.createdAt foundation (mandatory field + resolveChildren + sdk suite green)
+- [ ] 79-02-PLAN.md — Web hook/service foundation: expose resolvedByIpnsName, real itemType, ipnsName-keying non-change, invite decision
+- [ ] 79-03-PLAN.md — Package test revival: bin.test.ts fixture, load.test.ts + file.test.ts revive-or-retire
+- [ ] 79-04-PLAN.md — Private listing: folders-first sort, folder-only drag-drop, multi-select drag kind
+- [ ] 79-05-PLAN.md — Shared listing: folders-first sort + SharedMoveDialog cycle-guard kind filter
+- [ ] 79-06-PLAN.md — Private dialogs: kind-aware rename/delete/share labels + MoveDialog cycle guard
+- [ ] 79-07-PLAN.md — Details Created-date + DetailsDialog fallback + folder-delete subtree store cleanup
+- [ ] 79-08-PLAN.md — Web hook test revival (useSharedWriteOps un-skip) + createdAt fixture fixes
 
 ---
 
