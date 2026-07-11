@@ -5,15 +5,15 @@ milestone_name: Metadata and Sharing Refactor
 current_phase: 77
 current_phase_name: crypto-hygiene-and-terminology-canonicalization
 status: executing
-stopped_at: Completed 77-08-PLAN.md
-last_updated: "2026-07-11T09:32:07.134Z"
+stopped_at: Completed 77-09-PLAN.md
+last_updated: "2026-07-11T09:42:19.767Z"
 last_activity: 2026-07-11
 last_activity_desc: Phase 77 execution started
 progress:
   total_phases: 22
   completed_phases: 16
   total_plans: 198
-  completed_plans: 196
+  completed_plans: 197
   percent: 73
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 ## Current Position
 
 Phase: 77 (crypto-hygiene-and-terminology-canonicalization) — EXECUTING
-Plan: 9 of 10
+Plan: 10 of 10
 Status: Ready to execute
 Last activity: 2026-07-11 — Phase 77 execution started
 
@@ -274,6 +274,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 77 P06 | 20min | 3 tasks | 21 files |
 | Phase 77 P07 | 10min | 1 tasks | 3 files |
 | Phase 77 P08 | 10min | 1 tasks | 7 files |
+| Phase 77 P09 | 12min | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -605,6 +606,8 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: [Phase 77-07]: seal.ts's base64 imports were joined into its existing single @cipherbox/crypto import statement rather than a second import line
 - [Phase 77-08]: Imported bytesToBase64/base64ToBytes directly from @cipherbox/crypto in rotation/engine.ts, share/grant.ts, share/navigate.ts (no intermediate share/codec.ts re-export)
 - [Phase 77-08]: 4 vitest full-replacement mocks of @cipherbox/crypto switched to importOriginal + spread so the real base64 codec runs under mocked wrapKey/unwrapKey/reWrapKey
+- [Phase 77]: Retained ipnsPrivateKeyEncrypted only in client.ts doc comments and landing/demo-data.ts per plan's out-of-scope list — 77-09 plan explicitly excluded these historical/marketing references from the rename
+- [Phase 77]: Fixed owner-reconcile.test.ts crypto mock missing bytesToBase64 (pre-existing gap from sibling plan 77-08) — Blocked this plan's own sdk test verification gate; test-infra-only fix, no production code touched
 
 ## Operator Next Steps
 
@@ -612,8 +615,8 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-11T09:32:07.126Z
-**Stopped at:** Completed 77-08-PLAN.md
+**Last session:** 2026-07-11T09:42:19.760Z
+**Stopped at:** Completed 77-09-PLAN.md
 **Resume file:** 
 
 None
