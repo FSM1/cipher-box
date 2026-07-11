@@ -939,8 +939,20 @@ async function main(): Promise<void> {
         hexToBytes(carolRemint.encryptedReadKey),
         carol.privateKey
       );
+      // Reload folderB's CURRENT SealedChildRef from the grant root under the
+      // NEW grant-root key: the pre-rotation `folderBRef.readKeySealed` was
+      // sealed under Carol's OLD grant-root key, but the scope-exit rotation
+      // re-sealed folderB under the NEW grant-root key and republished. Deriving
+      // from the stale ref would fail to unwrap; mirror the reload pattern used
+      // elsewhere in this file so SC2 genuinely proves retained-vs-revoked.
+      const refreshedFolderBRef = await pollFindChild(
+        deepGrantIpnsName,
+        carolNewGrantRootKey,
+        folderBName,
+        carol.ctx
+      );
       const { childReadKey: carolNewFolderBKey } = await deriveChildReadKey(
-        folderBRef,
+        refreshedFolderBRef,
         carolNewGrantRootKey,
         carol.ctx
       );
