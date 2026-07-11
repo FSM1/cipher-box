@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createIPNSRecord, marshalIPNSRecord } from 'ipns';
+import { createIPNSRecord, marshalIPNSRecord, unmarshalIPNSRecord } from 'ipns';
 import { privateKeyFromRaw } from '@libp2p/crypto/keys';
 import { generateEd25519Keypair } from '../ed25519';
 import { deriveIpnsName, publicKeyFromIpnsName } from '../ipns/derive-name';
@@ -105,5 +105,19 @@ describe('parseIpnsRecord', () => {
     expect(parsed.signatureV2!.length).toBeGreaterThan(0);
     expect(parsed.data).toBeInstanceOf(Uint8Array);
     expect(parsed.data!.length).toBeGreaterThan(0);
+  });
+
+  it('surfaces validity: Date matching the source record EOL (additive field)', async () => {
+    const keypair = generateEd25519Keypair();
+    const marshalled = await makeRecord(keypair, TEST_VALUE, 7n);
+
+    const parsed = await parseIpnsRecord(marshalled);
+    // The additive validity is the RFC3339 EOL from unmarshalIPNSRecord, as a Date.
+    const source = unmarshalIPNSRecord(marshalled);
+
+    expect(parsed.validity).toBeInstanceOf(Date);
+    expect(parsed.validity.getTime()).toBe(new Date(source.validity).getTime());
+    // A 24h-lifetime record's EOL is in the future relative to creation.
+    expect(parsed.validity.getTime()).toBeGreaterThan(Date.now());
   });
 });
