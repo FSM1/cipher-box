@@ -156,10 +156,10 @@ pub trait RotationTransport {
 /// the D-01/D-03 read-key checkpoint under the owner's OWN keypair, storing
 /// only ciphertext in the combined `JsonSidecarFloorStore` (Plan 70.1-03).
 ///
-/// `query_grants_rooted_at`/`update_grant`/`delete_grant` are left at the
-/// trait's DEFAULT no-op — the ROT-04 desktop-grant-remint deferral this
-/// plan's `<verification>` block explicitly sanctions (see
-/// `70.1-09-SUMMARY.md`).
+/// `query_grants_rooted_at`/`update_grant`/`delete_grant` (Plan 74-05, T-74-07)
+/// delegate to the same injected [`RotationTransport`] seam via
+/// `collect_sent_shares`/`update_grant`/`revoke_share`, closing the ROT-04
+/// desktop-grant-remint deferral `70.1-09-SUMMARY.md` documented.
 pub struct FuseRotationDeps<T: RotationTransport> {
     transport: T,
     /// Owner's ECIES public key (secp256k1, compressed) — wraps a freshly
@@ -252,10 +252,62 @@ impl<T: RotationTransport> RotationDeps for FuseRotationDeps<T> {
         );
     }
 
-    // `query_grants_rooted_at`/`update_grant`/`delete_grant` are left at the
-    // trait's DEFAULT no-op — the ROT-04 desktop-grant-remint deferral this
-    // plan's <verification> block explicitly sanctions (see
-    // 70.1-09-SUMMARY.md "ROT-04 deferral").
+    /// T-74-07 (Todo 2): re-mints retained sharees instead of the ROT-04
+    /// no-op default de-authorizing every recipient. Client-side-filters
+    /// `self.transport.collect_sent_shares()` by `root_node_id == node_id`
+    /// (mirrors `owner-reconcile.ts::buildGrantRemintCallbacks`'s
+    /// `queryGrantsFn`) and hex-decodes each `recipient_public_key` (0x
+    /// stripped, 04 prefix kept — T-74-08). `is_revoked` is always `false`
+    /// from this source: revoked shares are hard-deleted server-side, so
+    /// they never appear in this query result (Pitfall 2 / T-74-14 — a
+    /// revoked recipient is cut by ABSENCE, not a flag).
+    async fn query_grants_rooted_at(&self, node_id: &str) -> Result<Vec<GrantRow>, RotationError> {
+        let shares = self.transport.collect_sent_shares().await?;
+        shares
+            .into_iter()
+            .filter(|s| s.root_node_id == node_id)
+            .map(|s| {
+                let recipient_public_key = cipherbox_crypto::utils::hex_to_bytes(
+                    s.recipient_public_key.trim_start_matches("0x"),
+                )
+                .map_err(|e| {
+                    RotationError::RotateFailed(format!(
+                        "query_grants_rooted_at: bad recipient_public_key for {}: {e}",
+                        s.share_id
+                    ))
+                })?;
+                Ok(GrantRow {
+                    share_id: s.share_id,
+                    recipient_public_key,
+                    is_revoked: false,
+                })
+            })
+            .collect()
+    }
+
+    /// T-74-07 (Todo 2): forwards the ALREADY-ECIES-wrapped read key through
+    /// the transport seam — no re-wrapping here (the caller,
+    /// `re_mint_grants_rooted_at`, performs `cipherbox_crypto::wrap_key`
+    /// itself before invoking this method).
+    async fn update_grant(
+        &self,
+        share_id: &str,
+        encrypted_read_key: &str,
+        new_generation: u32,
+    ) -> Result<(), RotationError> {
+        self.transport
+            .update_grant(share_id, encrypted_read_key, new_generation)
+            .await
+    }
+
+    /// T-74-07 (Todo 2): forwards through the transport seam's
+    /// `revoke_share`. Reachable only in principle (Pitfall 2: this source's
+    /// `is_revoked` is always `false`, so the engine never actually calls
+    /// this for a grant returned by `query_grants_rooted_at` above) — kept
+    /// for engine-contract completeness.
+    async fn delete_grant(&self, share_id: &str) -> Result<(), RotationError> {
+        self.transport.revoke_share(share_id).await
+    }
 
     /// D-01/D-03: ECIES-wraps `wrapped_b64`'s raw key material under the
     /// owner's OWN public key before persisting ciphertext-only to the
@@ -441,6 +493,44 @@ impl RotationTransport for ApiClientTransport<'_> {
                 })
             }
         }
+    }
+
+    async fn collect_sent_shares(&self) -> Result<Vec<SentShareResponse>, RotationError> {
+        cipherbox_api_client::shares::collect_sent_shares(self.api)
+            .await
+            .map_err(|e| {
+                RotationError::RotateFailed(format!(
+                    "collect_sent_shares: GET /shares/sent failed: {e}"
+                ))
+            })
+    }
+
+    async fn update_grant(
+        &self,
+        share_id: &str,
+        encrypted_read_key: &str,
+        new_generation: u32,
+    ) -> Result<(), RotationError> {
+        cipherbox_api_client::shares::update_grant(
+            self.api,
+            share_id,
+            encrypted_read_key,
+            u64::from(new_generation),
+        )
+        .await
+        .map_err(|e| {
+            RotationError::RotateFailed(format!("update_grant: PATCH failed for {share_id}: {e}"))
+        })
+    }
+
+    async fn revoke_share(&self, share_id: &str) -> Result<(), RotationError> {
+        cipherbox_api_client::shares::revoke_share(self.api, share_id)
+            .await
+            .map_err(|e| {
+                RotationError::RotateFailed(format!(
+                    "revoke_share: DELETE failed for {share_id}: {e}"
+                ))
+            })
     }
 }
 
@@ -1066,7 +1156,7 @@ mod tests {
             sent_share_fixture(
                 "share-in-scope",
                 ROOT_ID,
-                "0x04aabbccdd00112233445566778899aabbccddeeff0011223344556677889900",
+                "0x04aabbccdd00112233445566778899aabbccddeeff001122334455667788990011",
             ),
             sent_share_fixture("share-other-root", OTHER_NODE_ID, "0x04ff"),
         ]);
