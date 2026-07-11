@@ -1,9 +1,9 @@
 ---
 phase: 77
 slug: crypto-hygiene-and-terminology-canonicalization
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: verified
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-07-11
 ---
 
@@ -38,13 +38,14 @@ created: 2026-07-11
 
 | Criterion | Behavior | Wave | Test Type | Automated Command | File Exists | Status |
 |-----------|----------|------|-----------|-------------------|-------------|--------|
-| SC1 — createSubfolder | Forcing `sealNode`/`addToIpfs`/`createAndPublishIpnsRecord` to throw zeroes `ipnsPrivateKey`/`readKey`/`writeKey` (owned buffers only) | 1 | unit | `pnpm --filter @cipherbox/sdk-core test -- folder.test.ts` | ❌ W0 | ⬜ pending |
-| SC1 — AES key-buffer zeroization | Internal `keyBuffer`/`keyView` copy `.fill(0)`'d after `crypto.subtle.importKey` on both success and throw paths (GCM + CTR, 7 fns / 4 files) | 1 | unit | `pnpm --filter @cipherbox/crypto test -- aes.test.ts aes-ctr.test.ts` | ❌ W0 (extract `importAesKey()` to make the copy observable) | ⬜ pending |
-| SC1 — verify-filepointer.mts | `userPrivateKey` / derived read keys cleared before process exit | 1 | manual/smoke | run script vs local dev stack (script family has no unit harness — matches sibling scripts) | ❌ N/A (manual, documented) | ⬜ pending |
-| SC2 — base64 dedup parity | `@cipherbox/crypto` `base64ToBytes`/`bytesToBase64` round-trip golden vectors | 1 | unit (golden vector) | `pnpm --filter @cipherbox/crypto test -- encoding.test.ts` | ❌ W0 | ⬜ pending |
-| SC2 — node/ codec parity | `sealNode`/`unsealNode` golden vectors still pass byte-for-byte after consolidation | 1 | unit (golden vector) | `pnpm --filter @cipherbox/core test -- node-codec-vectors.test.ts node-codec.test.ts` | ✅ exists (re-run as parity gate) | ⬜ pending |
-| SC3 — canonical names + dead code gone | `encryptedIpnsPrivateKey` everywhere; `ShareCallbacks`/`addShareKeysFn` fully removed, no orphaned refs | all | typecheck + unit | root `pnpm typecheck && pnpm test` | N/A (existing infra, final gate) | ⬜ pending |
-| SC12 — assertRootOwnership helper | Extracted helper throws `ForbiddenException` when caller doesn't own the node, in both `createShare` and `createInvite` | 2 | unit | `pnpm --filter cipherbox-api test -- shares.service.spec.ts share-invite.service.spec.ts` | ✅ exists (behavioral, passes unmodified) | ⬜ pending |
+| SC1 — createSubfolder | Forcing `sealNode`/`addToIpfs`/`createAndPublishIpnsRecord` — and the TEE-wrap step — to throw zeroes `ipnsPrivateKey`/`readKey`/`writeKey` (owned buffers only) | 1 | unit | `pnpm --filter @cipherbox/sdk-core test -- folder.test.ts` | ✅ exists (16 tests incl. 2 forced-throw zeroization tests) | ✅ green |
+| SC1 — AES key-buffer zeroization | Internal `keyView` copy `.fill(0)`'d after `crypto.subtle.importKey` (GCM + CTR, 7 fns route through `importAesKey`) | 1 | unit | `pnpm --filter @cipherbox/crypto test -- aes.test.ts aes-ctr.test.ts` | ✅ exists (`importAesKey` extracted; 210 crypto tests pass) | ✅ green |
+| SC1 — verify-filepointer.mts | `userPrivateKey` / derived read keys cleared before process exit | 1 | manual/smoke | run script vs local dev stack (script family has no unit harness — matches sibling scripts) | N/A (manual, documented below) | ✅ source-reviewed |
+| SC2 — base64 dedup parity | `@cipherbox/crypto` `base64ToBytes`/`bytesToBase64` round-trip golden vectors | 1 | unit (golden vector) | `pnpm --filter @cipherbox/crypto test -- encoding.test.ts` | ✅ exists (8 golden-vector tests) | ✅ green |
+| SC2 — node/ codec parity | `sealNode`/`unsealNode` golden vectors still pass byte-for-byte after consolidation | 1 | unit (golden vector) | `pnpm --filter @cipherbox/core test -- node-codec-vectors.test.ts node-codec.test.ts` | ✅ exists (re-run as parity gate) | ✅ green |
+| SC3 — canonical names + dead code gone | `encryptedIpnsPrivateKey` everywhere; `ShareCallbacks`/`addShareKeysFn` fully removed, no orphaned refs | all | typecheck + unit | root `pnpm typecheck && pnpm test` | N/A (existing infra, final gate) | ✅ green |
+| SC3 — TEE wire round-trip | Renamed `encryptedIpnsPrivateKey` field survives a real relay→TEE→DB republish round-trip (rebuilt worker) | all | live e2e | `pnpm --filter @cipherbox/sdk-e2e test -- tee-republish.test.ts` (TEE stack) | ✅ exists | ✅ green |
+| SC12 — assertRootOwnership helper | Extracted helper throws `ForbiddenException` when caller doesn't own the node, in both `createShare` and `createInvite` | 2 | unit | `pnpm --filter cipherbox-api test -- shares.service.spec.ts share-invite.service.spec.ts` | ✅ exists (behavioral, 57 pass) | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -52,10 +53,10 @@ created: 2026-07-11
 
 ## Wave 0 Requirements
 
-- [ ] `packages/crypto/src/__tests__/encoding.test.ts` — new file, base64 round-trip golden vectors (SC2)
-- [ ] New forced-throw zeroization assertion for `createSubfolder` in `packages/sdk-core/src/__tests__/folder.test.ts` (SC1)
-- [ ] New AES key-buffer zeroization test(s) — extract `importAesKey()` first so the owned copy is independently testable (SC1)
-- [ ] Framework install: none — vitest + jest already present and configured
+- [x] `packages/crypto/src/__tests__/encoding.test.ts` — new file, base64 round-trip golden vectors (SC2)
+- [x] New forced-throw zeroization assertion for `createSubfolder` in `packages/sdk-core/src/__tests__/folder.test.ts` (SC1) — extended in ship-phase with a second test covering the TEE-wrap throw path
+- [x] New AES key-buffer zeroization test(s) — `importAesKey()` extracted so the owned copy is independently testable (SC1)
+- [x] Framework install: none — vitest + jest already present and configured
 
 ---
 
@@ -69,11 +70,23 @@ created: 2026-07-11
 
 ## Validation Sign-Off
 
-- [ ] All tasks have an `<automated>` verify or a Wave 0 dependency (except the one documented manual-only smoke)
-- [ ] Sampling continuity: no 3 consecutive tasks without an automated verify
-- [ ] Wave 0 covers all MISSING references (3 new test files above)
-- [ ] No watch-mode flags in any test command
-- [ ] Feedback latency < 30s per-task
-- [ ] `nyquist_compliant: true` set in frontmatter once the planner maps every task to a row above
+- [x] All tasks have an `<automated>` verify or a Wave 0 dependency (except the one documented manual-only smoke)
+- [x] Sampling continuity: no 3 consecutive tasks without an automated verify
+- [x] Wave 0 covers all MISSING references (3 new test files above)
+- [x] No watch-mode flags in any test command
+- [x] Feedback latency < 30s per-task
+- [x] `nyquist_compliant: true` set in frontmatter — every criterion maps to a green automated verify (one documented manual-only smoke)
 
-**Approval:** pending
+**Approval:** verified 2026-07-11
+
+---
+
+## Validation Audit 2026-07-11
+
+| Metric | Count |
+|--------|-------|
+| Gaps found | 0 |
+| Resolved | 7 (all criteria COVERED by existing/passing tests) |
+| Escalated | 1 (`verify-filepointer.mts` — documented manual-only smoke, no unit harness in the `.mts` script family) |
+
+State-A audit at ship time: the pre-execution draft's three Wave-0 MISSING tests were all created and pass (`encoding.test.ts` 8, `folder.test.ts` 16, AES via `importAesKey` 210 crypto). Criteria verified directly (crypto 210 pass, sdk-core 392 pass, api shares 57 pass) and by `77-VERIFICATION.md`. The TEE wire round-trip (SC3) was confirmed live via the rebuilt tee-worker sdk-e2e round-trip during ship-phase.
