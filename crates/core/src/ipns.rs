@@ -164,8 +164,17 @@ pub fn decode_ipns_cbor_validity(
                 CborValue::Bytes(b) => Some(b),
                 _ => return Err(IpnsError::CborEncodingFailed),
             };
+        } else if key == "ValidityType" {
+            if validity_type.is_some() {
+                return Err(IpnsError::CborEncodingFailed);
+            }
+            let raw: i128 = match v {
+                CborValue::Integer(i) => i.into(),
+                _ => return Err(IpnsError::CborEncodingFailed),
+            };
+            validity_type =
+                Some(i64::try_from(raw).map_err(|_| IpnsError::CborEncodingFailed)?);
         }
-        // TODO(RED): ValidityType extraction not yet implemented — GREEN step follows.
     }
     // "Validity"/"ValidityType" keys absent — caller treats as fail-closed.
     Ok((validity_bytes, validity_type))
