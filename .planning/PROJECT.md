@@ -35,6 +35,8 @@ CipherBox is a production-grade, privacy-first encrypted cloud storage platform 
 
 **Phase 75 (Cross-Language IPNS and Node-Codec Verification Parity) complete 2026-07-11 — verification 3/3.** M4-closeout hardening that eliminates Rust↔TS verification blind spots, each locked by a shared cross-language vector/KAT. SC1: TS ports the Rust strict RFC3339 Validity parser (`parseRfc3339ToUnixSecs`) and binds `ValidityType==0` (EOL) before treating Validity as expiry — Rust `bind_verified` (now `pub`) and TS `resolveIpnsRecord` reject the same 12-case `tests/vectors/ipns/verify.json` (4 new invalid cases) identically; the hand-duplicated binding in `classify_vector` (root cause of gap #9) is deleted. SC2: the node-codec KAT now base64-decode-and-length-asserts `fileIv` on both sides so a hex-encoded IV fails (`tests/vectors/node-codec.json`). SC3: `uuidToBytes` (TS) and `build_node_aad` (Rust) collapse to a single canonical-only UUID acceptance domain, locked by `tests/vectors/crypto/uuid-acceptance.json`.
 
+**Phase 77 (Crypto Hygiene and Terminology Canonicalization) complete 2026-07-11 — verification 3/3.** Mechanical, no-behavior-change cleanup (12 todos): error-path key-buffer zeroization (extracted AES `importAesKey` helper, `createSubfolder` throw path, `verify-filepointer.mts`); base64 codec consolidated into `@cipherbox/crypto` with a golden-vector parity oracle and all seven duplicate sites rewired; TEE wire field and in-memory field canonicalized to `encryptedIpnsPrivateKey`, and `wrapIpnsKeyForTee` made bytes-in/bytes-out with an explicit `teePublicKey` parameter; dead SDK share scaffolding (`ShareCallbacks`/`addShareKeysFn`/`updateSharePermission`/`UpdatePermissionDto`) retired; and the duplicated Phase 71 root-ownership gate extracted to a shared `assertRootOwnership` helper. Full workspace typecheck and all affected unit suites green.
+
 ## Requirements
 
 ### Validated (Milestone 1 — Staging MVP)
@@ -194,4 +196,4 @@ This document evolves at phase transitions and milestone boundaries.
 
 ---
 
-Last updated: 2026-07-11 (Phase 75 complete — cross-language IPNS and node-codec verification parity)
+Last updated: 2026-07-11 (Phase 77 complete — crypto hygiene and terminology canonicalization; mechanical, no behavior change)
