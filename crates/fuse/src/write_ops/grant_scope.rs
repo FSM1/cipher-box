@@ -528,6 +528,44 @@ pub async fn rotate_read_on_scope_exit(
             // refresh in that case.
             if let Some(result) = maybe_result {
                 refresh_rotated_inode_read_keys(&mut fs.inodes, &result);
+                // Mark every rotated FOLDER inode as locally mutated. A
+                // scope-exit rotation republishes these folders out-of-band
+                // (via the engine, not the mount's publish queue), so without
+                // this they were never recorded as locally-changed — and a
+                // STALE in-flight metadata refresh (one that resolved a
+                // pre-rotation snapshot but completes AFTER this rotation) would
+                // clobber the freshly-refreshed inode keys via
+                // `apply_owned_children`, resetting them to their pre-rotation
+                // values. That reset then makes a later parent republish revert
+                // the grant-root's child-refs, so the parent's child-ref key and
+                // the child's own record diverge and every subsequent
+                // scope-exit rotation fails `rotate_one`/`verify_subtree_clean`
+                // (macOS FUSE-T overwrite-rename repro). `drain_refresh_completions`
+                // ALREADY guards `mutated_folders`/`publish_queue` against this
+                // exact folder-state desync (fs.rs) — a rotation IS a local
+                // mutation of these folders, so it belongs in that set too.
+                let now = std::time::Instant::now();
+                let rotated_folder_inos: Vec<u64> = fs
+                    .inodes
+                    .inodes
+                    .iter()
+                    .filter_map(|(ino, inode)| {
+                        let ipns = match &inode.kind {
+                            InodeKind::Root { ipns_name, .. }
+                            | InodeKind::Folder { ipns_name, .. } => ipns_name.as_str(),
+                            InodeKind::File { .. } => return None,
+                        };
+                        let rotated = ipns == grant_root_ipns_name
+                            || result
+                                .rotated_nodes
+                                .values()
+                                .any(|r| r.ipns_name.as_str() == ipns);
+                        rotated.then_some(*ino)
+                    })
+                    .collect();
+                for ino in rotated_folder_inos {
+                    fs.mutated_folders.insert(ino, now);
+                }
             }
             log::info!(
                 "shared-scope-exit read-key rotation completed \
