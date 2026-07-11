@@ -1,1 +1,63 @@
 /gsd-manager
+
+---
+
+I suspect that I will run out of quota before all the planners are done - please resume all tasks at 4:45 if things get interrupted, and continue with execution of all the plans.
+
+---
+
+<task-notification>
+<task-id>a41b148a91c1c8d90</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/483e60b7-fc2f-4754-bb13-36a935f407c4/tasks/a41b148a91c1c8d90.output</output-file>
+<status>failed</status>
+<summary>Agent "Plan Phase 77 in worktree" failed: Agent terminated early due to an API error: You've hit your session limit · resets 4:40am (Europe/Berlin)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Confirmed inputs: RESEARCH + PATTERNS + VALIDATION present; REQUIREMENTS.md exists; no SPEC/AI-SPEC/UI-SPEC; no spike/sketch; API-SURFACE empty (omit). Now spawning the planner (§8) with schema-gate + tdd contributions injected verbatim, plus autonomous-mode guardrails to keep the "no behavior change" scope tight.</result>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a41b148a91c1c8d90</worktreePath><worktreeBranch>worktree-agent-a41b148a91c1c8d90</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>adf987fdef248c95e</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/483e60b7-fc2f-4754-bb13-36a935f407c4/tasks/adf987fdef248c95e.output</output-file>
+<status>failed</status>
+<summary>Agent "Plan Phase 74 in worktree" failed: Agent terminated early due to an API error: You've hit your session limit · resets 4:40am (Europe/Berlin)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All inputs confirmed: granularity `fine`, no SPEC/UI/AI/spike/sketch artifacts, context_window 200000 (no cross-phase enrichment), and API-SURFACE is empty (I'll omit that empty hint). Now spawning the planner (opus) with the full planning context, tdd contribution injected (schema-gate skipped — no ORM files).</result>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-adf987fdef248c95e</worktreePath><worktreeBranch>worktree-agent-adf987fdef248c95e</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+RESUME the CipherBox GSD manager work (autonomous — do NOT wait for user input; make sensible decisions and proceed; this is a scheduled resume because the prior session likely hit a quota limit).
+
+## What was in flight
+At ~02:48 on 2026-07-11 I spawned 3 background planners, each in an isolated git worktree on its OWN reused feat branch (same branch is meant for BOTH planning and execution):
+- Phase 74 → branch feat/rust-and-fuse-rotation-revocation-soundness
+- Phase 75 → branch feat/cross-language-ipns-and-node-codec-verification-parity
+- Phase 77 → branch feat/crypto-hygiene-and-terminology-canonicalization
+Milestone v2.0 was at 16/22 complete. Phases 76, 78, 79 remain unplanned. All are well-scoped M4 closeout phases (concrete todos + testable SCs) that do NOT need discuss-phase.
+
+## Step 1 — assess planner outcomes (disk-based, do not rely on agent handles)
+- `git worktree list` to find the three worktrees + branches.
+- For each phase, inspect its worktree branch: `git -C <worktree> log --oneline -20` and `ls <worktree>/.planning/phases/<N>-*/<N>-*-PLAN.md`. Confirm plans exist and are committed on the correct feat branch. Check each phase dir for a plan-checker PASSED verdict and read .planning/STATE.md for any Blockers a planner wrote.
+- If a planner did NOT finish (no plans committed, or still-running/locked worktree), re-run planning for that phase inline via Skill(gsd-plan-phase <N> --auto) IN that worktree (EnterWorktree path=<worktree>) before executing.
+
+## Step 2 — execute all completed plans (SEQUENTIALLY: 74, then 75, then 77)
+For each phase whose plans are complete + plan-checker PASSED:
+- Enter its EXISTING worktree (EnterWorktree with path=<worktree>) and run Skill(gsd-execute-phase <N>) there. REUSE the same feat branch — do NOT create a new branch and do NOT switch the main checkout.
+- Execution needs the live stack: verify API on :3000 is from CURRENT source (if it is a stale `node dist/main.js`, restart via `pnpm --filter api dev`); redis :6380 and kubo :5001 should be up. sdk-e2e/verification test-login secret must be exported: SDK_E2E_SECRET=e2e-test-secret-ci-only (matches API TEST_LOGIN_SECRET). Leave the shared docker stack running; only manage the :3000 API process.
+- Run sequentially to avoid shared-DB / resource contention between phases.
+- After each phase executes and self-verifies, do NOT auto-merge to main. Never use --no-verify.
+
+## Step 3 — continue the milestone as quota allows
+- Then plan + execute the remaining phases 76, 78, 79 using the SAME worktree-isolation + reused-feat-branch discipline (branch names: feat/fuse-durability-and-tee-write-path-hardening, plus the canonical slugs for 78 and 79 from their phase dir names). Assess each briefly first; none is expected to need discuss-phase, but if a genuine design gray area surfaces, STOP that phase and leave a note rather than guessing.
+
+## Rules (hard)
+- NEVER commit/push directly to main; each phase stays on its feat branch. Open PRs only if explicitly appropriate; otherwise leave branches ready for review.
+- gsd-plan-phase can create a stray docs/plan-phase-<N> branch and leave <N>-PATTERNS.md untracked — reconcile onto the feat branch and commit PATTERNS explicitly.
+- Verify outcomes honestly (report test failures with output; don't claim done unless verified).
+- Give a concise status summary at the end: which phases planned, which executed + verification result, which branches are ready, and any blockers.
