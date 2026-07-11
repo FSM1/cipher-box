@@ -4512,4 +4512,127 @@ mod rotate_read_from_node {
             1
         );
     }
+
+    // -------------------------------------------------------------------
+    // Todo 1 (74-01, SC1): RotateReadResult must surface EVERY rotated
+    // node's post-rotation read key, keyed by ipns_name -- not just the
+    // grant root's. A >=2-level tree (grant-root -> folderB -> fileC) must
+    // yield a `rotated_nodes` map containing all three levels.
+    // -------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn rotate_read_surfaces_every_rotated_node_key_for_a_deep_tree() {
+        let deps = FakeDeps::new();
+        let root_read_key = [30u8; 32];
+        let folder_b_id = child_uuid(200);
+        let folder_b_key = [31u8; 32];
+        let file_c_id = child_uuid(201);
+        let file_c_key = [32u8; 32];
+
+        // depth-2 leaf: fileC, child of folderB.
+        let file_c_node = Node::File {
+            id: file_c_id.clone(),
+            generation: 0,
+            created_at: 3_000,
+            modified_at: 3_000,
+            content: cipherbox_core::node::NodeContent {
+                cid: "cid-file-c-content".to_string(),
+                file_iv: "bbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+                size: 10,
+                mime_type: "text/plain".to_string(),
+                encryption_mode: "GCM".to_string(),
+                file_key: vec![99u8; 32],
+                versions: vec![],
+            },
+        };
+        deps.seed(
+            "k51/file-c",
+            "cid-file-c-0",
+            0,
+            seal_for_seed(&file_c_node, &file_c_key),
+        );
+
+        let c_sealed_key =
+            seal_child_read_key(&file_c_key, &folder_b_key, &file_c_id, NodeKind::File, 0)
+                .unwrap();
+        let c_ref = SealedChildRef {
+            name: "file-c".to_string(),
+            ipns_name: "k51/file-c".to_string(),
+            generation: 0,
+            version_floor: 0,
+            read_key_sealed: base64_encode(&c_sealed_key),
+        };
+
+        // depth-1: folderB, child of root, itself parenting fileC.
+        let folder_b_node = folder(&folder_b_id, 0, vec![c_ref]);
+        deps.seed(
+            "k51/folder-b",
+            "cid-folder-b-0",
+            0,
+            seal_for_seed(&folder_b_node, &folder_b_key),
+        );
+
+        let b_sealed_key = seal_child_read_key(
+            &folder_b_key,
+            &root_read_key,
+            &folder_b_id,
+            NodeKind::Folder,
+            0,
+        )
+        .unwrap();
+        let b_ref = SealedChildRef {
+            name: "folder-b".to_string(),
+            ipns_name: "k51/folder-b".to_string(),
+            generation: 0,
+            version_floor: 0,
+            read_key_sealed: base64_encode(&b_sealed_key),
+        };
+
+        let root_node = folder(ROOT_ID, 0, vec![b_ref]);
+        deps.seed(
+            "k51/root",
+            "cid-root-0",
+            0,
+            seal_for_seed(&root_node, &root_read_key),
+        );
+
+        let mut job = RotationJobRecord::new(ROOT_ID);
+        let result = rotate_read_from_node(&deps, ROOT_ID, "k51/root", &root_read_key, &mut job)
+            .await
+            .unwrap()
+            .expect("a fresh root rotation must return Some(RotateReadResult)");
+
+        // Every rotated node's ipns_name must be present in the map -- root,
+        // folderB, AND fileC -- not just the grant root (this is the exact
+        // deep-scope-exit gap this plan closes).
+        for ipns_name in ["k51/root", "k51/folder-b", "k51/file-c"] {
+            let entry = result
+                .rotated_nodes
+                .get(ipns_name)
+                .unwrap_or_else(|| panic!("rotated_nodes missing entry for {ipns_name}"));
+            assert_eq!(entry.ipns_name, ipns_name);
+            assert_eq!(entry.read_key.len(), 32);
+            assert_ne!(entry.read_key.as_slice(), [0u8; 32].as_slice());
+        }
+
+        let root_entry = &result.rotated_nodes["k51/root"];
+        assert_ne!(root_entry.read_key.as_slice(), root_read_key.as_slice());
+        let folder_b_entry = &result.rotated_nodes["k51/folder-b"];
+        assert_ne!(folder_b_entry.read_key.as_slice(), folder_b_key.as_slice());
+        let file_c_entry = &result.rotated_nodes["k51/file-c"];
+        assert_ne!(file_c_entry.read_key.as_slice(), file_c_key.as_slice());
+
+        // Root-convenience top-level fields must still equal the grant
+        // root's own map entry (existing behavior unchanged).
+        assert_eq!(result.read_key.as_slice(), root_entry.read_key.as_slice());
+        assert_eq!(result.generation, root_entry.generation);
+        assert_eq!(result.sequence_number, root_entry.sequence_number);
+
+        assert_eq!(
+            result.rotated_nodes.len(),
+            3,
+            "expected exactly root+folderB+fileC, got: {:?}",
+            result.rotated_nodes.keys().collect::<Vec<_>>()
+        );
+    }
 }
