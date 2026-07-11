@@ -1,0 +1,79 @@
+---
+phase: 77
+slug: crypto-hygiene-and-terminology-canonicalization
+status: draft
+nyquist_compliant: false
+wave_0_complete: false
+created: 2026-07-11
+---
+
+# Phase 77 — Validation Strategy
+
+> Per-phase validation contract for feedback sampling during execution. Derived from `77-RESEARCH.md` § Validation Architecture. Task IDs (`77-NN-MM`) are assigned by the planner; the rows below are keyed to success criteria and are refined into per-task rows during planning.
+
+---
+
+## Test Infrastructure
+
+| Property | Value |
+|----------|-------|
+| **Framework** | Vitest (`packages/crypto`, `packages/core`, `packages/sdk-core`, `packages/sdk`, `apps/tee-worker`) + Jest (`apps/api`) |
+| **Config file** | per-package `vitest.config.ts`; `apps/api/jest.config.js` |
+| **Quick run command** | `pnpm --filter <pkg> test` (e.g. `pnpm --filter @cipherbox/crypto test`) |
+| **Full suite command** | root `pnpm typecheck && pnpm test` |
+| **Estimated runtime** | quick per-package ~5–30s; full suite (CI `Test` job = api/crypto/core/sdk-core/sdk/api-client) a few minutes |
+
+---
+
+## Sampling Rate
+
+- **After every task commit:** Run the touched package's quick command, `pnpm --filter <pkg> test`.
+- **After every plan wave:** Run the quick commands for the whole dependency chain in order — crypto → core → sdk-core → sdk (rebuild dist between each, per RESEARCH Pitfall 5) — plus `apps/api` + `apps/tee-worker` tests for the independent API/TEE wave.
+- **Before `/gsd-verify-work`:** root `pnpm typecheck && pnpm test` must be green (cross-package blast radius makes a partial local run insufficient proof).
+- **Max feedback latency:** < 30s per-task quick run.
+
+---
+
+## Per-Task Verification Map
+
+| Criterion | Behavior | Wave | Test Type | Automated Command | File Exists | Status |
+|-----------|----------|------|-----------|-------------------|-------------|--------|
+| SC1 — createSubfolder | Forcing `sealNode`/`addToIpfs`/`createAndPublishIpnsRecord` to throw zeroes `ipnsPrivateKey`/`readKey`/`writeKey` (owned buffers only) | 1 | unit | `pnpm --filter @cipherbox/sdk-core test -- folder.test.ts` | ❌ W0 | ⬜ pending |
+| SC1 — AES key-buffer zeroization | Internal `keyBuffer`/`keyView` copy `.fill(0)`'d after `crypto.subtle.importKey` on both success and throw paths (GCM + CTR, 7 fns / 4 files) | 1 | unit | `pnpm --filter @cipherbox/crypto test -- aes.test.ts aes-ctr.test.ts` | ❌ W0 (extract `importAesKey()` to make the copy observable) | ⬜ pending |
+| SC1 — verify-filepointer.mts | `userPrivateKey` / derived read keys cleared before process exit | 1 | manual/smoke | run script vs local dev stack (script family has no unit harness — matches sibling scripts) | ❌ N/A (manual, documented) | ⬜ pending |
+| SC2 — base64 dedup parity | `@cipherbox/crypto` `base64ToBytes`/`bytesToBase64` round-trip golden vectors | 1 | unit (golden vector) | `pnpm --filter @cipherbox/crypto test -- encoding.test.ts` | ❌ W0 | ⬜ pending |
+| SC2 — node/ codec parity | `sealNode`/`unsealNode` golden vectors still pass byte-for-byte after consolidation | 1 | unit (golden vector) | `pnpm --filter @cipherbox/core test -- node-codec-vectors.test.ts node-codec.test.ts` | ✅ exists (re-run as parity gate) | ⬜ pending |
+| SC3 — canonical names + dead code gone | `encryptedIpnsPrivateKey` everywhere; `ShareCallbacks`/`addShareKeysFn` fully removed, no orphaned refs | all | typecheck + unit | root `pnpm typecheck && pnpm test` | N/A (existing infra, final gate) | ⬜ pending |
+| SC12 — assertRootOwnership helper | Extracted helper throws `ForbiddenException` when caller doesn't own the node, in both `createShare` and `createInvite` | 2 | unit | `pnpm --filter cipherbox-api test -- shares.service.spec.ts share-invite.service.spec.ts` | ✅ exists (behavioral, passes unmodified) | ⬜ pending |
+
+*Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
+
+---
+
+## Wave 0 Requirements
+
+- [ ] `packages/crypto/src/__tests__/encoding.test.ts` — new file, base64 round-trip golden vectors (SC2)
+- [ ] New forced-throw zeroization assertion for `createSubfolder` in `packages/sdk-core/src/__tests__/folder.test.ts` (SC1)
+- [ ] New AES key-buffer zeroization test(s) — extract `importAesKey()` first so the owned copy is independently testable (SC1)
+- [ ] Framework install: none — vitest + jest already present and configured
+
+---
+
+## Manual-Only Verifications
+
+| Behavior | Criterion | Why Manual | Test Instructions |
+|----------|-----------|------------|-------------------|
+| `verify-filepointer.mts` key zeroization | SC1 | The `.mts` e2e helper-script family has no unit harness (siblings `edit-filepointer.mts` / `rename-folder.mts` have none either); adding one is out of scope | Run the script against a local dev stack, confirm it completes without crash and keys are `.fill(0)`'d before exit (source review + smoke run) |
+
+---
+
+## Validation Sign-Off
+
+- [ ] All tasks have an `<automated>` verify or a Wave 0 dependency (except the one documented manual-only smoke)
+- [ ] Sampling continuity: no 3 consecutive tasks without an automated verify
+- [ ] Wave 0 covers all MISSING references (3 new test files above)
+- [ ] No watch-mode flags in any test command
+- [ ] Feedback latency < 30s per-task
+- [ ] `nyquist_compliant: true` set in frontmatter once the planner maps every task to a row above
+
+**Approval:** pending
