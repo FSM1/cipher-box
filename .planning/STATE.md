@@ -6,14 +6,14 @@ current_phase: 74
 current_phase_name: Rust and FUSE Rotation-Revocation Soundness
 status: executing
 stopped_at: Completed 74-04-PLAN.md
-last_updated: "2026-07-11T03:46:13.526Z"
+last_updated: "2026-07-11T04:07:12.778Z"
 last_activity: 2026-07-11
 last_activity_desc: Phase 74 execution started
 progress:
   total_phases: 22
   completed_phases: 16
   total_plans: 195
-  completed_plans: 190
+  completed_plans: 191
   percent: 73
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 ## Current Position
 
 Phase: 74 (Rust and FUSE Rotation-Revocation Soundness) — EXECUTING
-Plan: 3 of 7
+Plan: 4 of 7
 Status: Ready to execute
 Last activity: 2026-07-11 — Phase 74 execution started
 
@@ -268,6 +268,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 72 P10 | 10min | 2 tasks | 3 files |
 | Phase 74 P01 | 20min | 2 tasks | 1 files |
 | Phase 74 P04 | 15min | 2 tasks | 2 files |
+| Phase 74 P06 | 45min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -591,6 +592,9 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: 74-01: RotateReadResult.rotated_nodes (HashMap<String, RotatedNodeKey> keyed by ipns_name) surfaces every rotated node's post-rotation read key, populated at root/BFS-child/repair_dirty_node hooks; CommittedRotation stays host-agnostic
 - [Phase ?]: [Phase 74-04] No mock-HTTP crate exists in api-client dev-deps; added a minimal raw TcpListener capturing mock server in shares.rs test mod (mirrors fuse/delete.rs's spawn_mock_rotation_server) instead of pulling in wiremock/mockito
 - [Phase ?]: [Phase 74-04] update_grant accepts root_generation as u64 and formats to decimal string at the wire boundary, matching UpdateGrantDto's numeric-string contract
+- [Phase ?]: [Phase 74-06]: WinFsp handle_rename reordered to fuser D-15d pipeline (validate -> source-gate -> dest-gate -> mutate); new dest scope-exit gate closes T-74-09 overwrite-rename revocation bypass
+- [Phase ?]: [Phase 74-06]: crate::test_support cfg widened to any(feature=fuse, feature=winfsp) so WinFsp #[cfg(test)] can reuse make_test_fs_with_keypair; fuser-specific CaptureSender/reply_error_code stay fuse-gated
+- [Phase ?]: [Phase 74-06]: Did not add self-replace/kind-mismatch validation to WinFsp handle_rename (RESEARCH.md Todo 3 point 4 scoped it out-of-scope for SC3)
 
 ## Operator Next Steps
 
@@ -598,7 +602,7 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-11T03:46:13.518Z
+**Last session:** 2026-07-11T04:04:39.360Z
 **Stopped at:** Completed 74-04-PLAN.md
 **Resume file:** 
 
