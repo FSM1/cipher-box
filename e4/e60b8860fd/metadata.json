@@ -3,7 +3,7 @@
   "checkpoint_id": "e4e60b8860fd",
   "strategy": "manual-commit",
   "branch": "feat/cross-language-ipns-and-node-codec-verification-parity",
-  "checkpoints_count": 1,
+  "checkpoints_count": 3,
   "files_touched": [
     ".planning/STATE.md",
     ".planning/phases/75-cross-language-ipns-and-node-codec-verification-parity/75-SECURITY.md",
@@ -19,13 +19,19 @@
       "transcript": "/e4/e60b8860fd/0/full.jsonl",
       "content_hash": "/e4/e60b8860fd/0/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/e4/e60b8860fd/1/metadata.json",
+      "transcript": "/e4/e60b8860fd/1/full.jsonl",
+      "content_hash": "/e4/e60b8860fd/1/content_hash.txt",
+      "prompt": "/e4/e60b8860fd/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 0,
-    "cache_creation_tokens": 0,
-    "cache_read_tokens": 0,
-    "output_tokens": 0,
-    "api_call_count": 0
+    "input_tokens": 162361,
+    "cache_creation_tokens": 3234933,
+    "cache_read_tokens": 200538490,
+    "output_tokens": 836899,
+    "api_call_count": 652
   }
 }
