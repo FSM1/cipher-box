@@ -1,0 +1,132 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "f5b244a243cc",
+  "session_id": "ef60a1b1-a4fc-441e-ae97-6c920db58f3b",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-11T19:38:15.348792Z",
+  "branch": "feat/crypto-hygiene-and-terminology-canonicalization",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/sdk-core/src/folder/registration.ts",
+    "packages/sdk-core/src/__tests__/folder.test.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "22c7e69a20b3",
+  "checkpoint_transcript_start": 141,
+  "transcript_lines_at_start": 141,
+  "token_usage": {
+    "input_tokens": 5465,
+    "cache_creation_tokens": 32183,
+    "cache_read_tokens": 2475998,
+    "output_tokens": 16108,
+    "api_call_count": 21
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-ship-phase-2026-07-11T19:28:59.903797Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "22c7e69a20b3",
+      "timestamp": "2026-07-11T19:28:59.903797Z",
+      "native": {
+        "command": "/ship-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/ship-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01HVgv8cABxyxWtwU5LMG187",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-secure-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "22c7e69a20b3",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 72,
+        "end": 73,
+        "entry_ids": [
+          "a4bb9db0-5bd9-4f02-a52c-4a06d4f4246a"
+        ],
+        "tool_use_id": "toolu_01HVgv8cABxyxWtwU5LMG187"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01HVgv8cABxyxWtwU5LMG187"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-secure-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "summary": {
+    "intent": "Triage and fix findings from a crypto-focused code review of a CipherBox SDK phase (folder createSubfolder error-path zeroization), applying only in-domain, safe fixes and discarding out-of-scope or design-judgment findings.",
+    "outcome": "Fixed a LOW finding by widening the try block in registration.ts so TEE-wrap key generation throws also trigger key zeroization, fixed a stale provenance comment in encoding.ts, added a focused regression test locking the new zeroization path, verified with typecheck and full sdk-core test suite (392 passing), and committed the changes.",
+    "learnings": {
+      "repo": [
+        "sdk-core error-path key zeroization pattern (established in file/index.ts): the try block should start immediately after key generation/minting, not after early validation, so every post-mint throw path zeroes the keys.",
+        "packages/sdk/src/client.ts's sharedFile* codecs are pre-existing from phase 68.2-08 and handle a distinct web↔sdk hex/base64 boundary — deduping them into crypto's codecs is legitimate cleanup but out of scope for a phase-77 diff.",
+        "wrap.ts's 1:1 passthrough is a deliberate D-09 seam with an existing test, not dead code — do not 'simplify' it away."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/folder/registration.ts",
+          "line": 88,
+          "end_line": 93,
+          "finding": "Early validation throws (lines ~88/93) and the TEE-wrap block originally sat outside the try, so a malformed TEE pubkey throwing in hexToBytes leaked the 3 minted keys; try boundary moved to start right after key generation."
+        },
+        {
+          "path": "packages/sdk-core/src/__tests__/folder.test.ts",
+          "finding": "The @cipherbox/crypto mock omitted hexToBytes/bytesToHex/wrapIpnsKeyForTee, so a naive teeKeys-throw test would fail for the wrong reason (undefined fn); had to add these to the mock to faithfully test the TEE-wrap-throw zeroization path."
+        },
+        {
+          "path": "packages/crypto/src/utils/encoding.ts",
+          "finding": "Contained a stale provenance comment left over from the phase's new file; removed/updated it as it was in the phase's own diff."
+        }
+      ],
+      "workflow": [
+        "When triaging code-review output, findings squarely in the phase's stated domain (even if not explicitly called out) are worth fixing proactively (e.g. the early-validation throw paths alongside the reported TEE-wrap leak).",
+        "Verify agent-reported review findings against the actual code (grep import/call sites) before trusting their framing — an agent can be right about the underlying issue while wrong about a supporting detail (e.g. claiming client.ts already imports codecs it doesn't).",
+        "After a review-driven fix that changes behavior (even strictly-additive), typecheck + run the specific affected test file before considering it safe, then add a targeted regression test to lock the fix rather than relying on existing coverage alone."
+      ]
+    },
+    "friction": [
+      "Simplify-agent finding on client.ts dedup was partially inaccurate (claimed existing imports that didn't exist), requiring manual grep verification before deciding to discard it.",
+      "Test mocks for @cipherbox/crypto were incomplete (missing hexToBytes/bytesToHex/wrapIpnsKeyForTee), adding extra investigation overhead to write a correct regression test for the zeroization fix."
+    ],
+    "open_items": [
+      "client.ts sharedFile* codec dedup with crypto package's codecs was identified as valid low-value cleanup but deliberately deferred as out-of-scope (pre-existing, untouched file, phase 68.2-08 code)."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-11T19:37:48.95138Z",
+    "agent_lines": 70,
+    "agent_removed": 23,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 70,
+    "total_lines_changed": 93,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
