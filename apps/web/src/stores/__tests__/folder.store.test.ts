@@ -60,6 +60,7 @@ function makeChild(name: string, modifiedAt = 1000): ResolvedChild {
     ipnsName: `k51file-${name}`,
     name,
     kind: 'file',
+    createdAt: 0,
     modifiedAt,
     sequence: 0,
   };
