@@ -74,7 +74,7 @@ function makeUploadResult(index: number): sdkCore.UploadResult {
       recordBase64: `base64record${index}`,
       metadataCid: `bafymeta${index}`,
     },
-    ipnsPrivateKeyEncrypted: `enc-key-${index}`,
+    encryptedIpnsPrivateKey: `enc-key-${index}`,
     fileKey: new Uint8Array(32).fill(0x42 + index),
     // node/v3 contract (68.1-07/09): fileReadKey/fileWriteKey are independent,
     // freshly-minted keys distinct from the content-encryption fileKey. The
@@ -514,25 +514,6 @@ describe('CipherBoxClient.uploadFiles - batch upload orchestration', () => {
     const failEvent = events.find((e) => e.type === 'ipns:batchPublishFailed');
     expect(failEvent).toBeDefined();
     expect(failEvent!.error!.message).toBe('string error');
-  });
-
-  it('completes upload even when shareCallbacks configured (no re-wrapping)', async () => {
-    const getCoveringShares = vi.fn().mockRejectedValue(new Error('share lookup failed'));
-    const addShareKeys = vi.fn();
-    const shareClient = new CipherBoxClient(
-      createTestConfig({
-        shareCallbacks: { getCoveringShares, addShareKeys },
-      })
-    );
-    setupFolder(shareClient);
-    setupBatchMocks(1);
-    vi.mocked(sdkCore.loadFolderMetadata).mockResolvedValue(null);
-
-    const files = makeTestFiles(1);
-    // Should succeed — D-03 removed per-recipient fan-out, so getCoveringShares is never called
-    const result = await shareClient.uploadFiles('folder-ipns', files);
-    expect(result.successes).toHaveLength(1);
-    expect(getCoveringShares).not.toHaveBeenCalled();
   });
 
   it('emits folder:updated event after successful batch publish', async () => {

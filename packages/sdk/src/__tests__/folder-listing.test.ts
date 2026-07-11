@@ -193,7 +193,6 @@ function seedSharedFolder(
     children,
     ownerPublicKey: new Uint8Array(33).fill(0x33),
     recipientPublicKey: new Uint8Array(33).fill(0x34),
-    addShareKeysFn: async () => {},
   });
 }
 

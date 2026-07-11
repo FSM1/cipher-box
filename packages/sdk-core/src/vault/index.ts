@@ -12,7 +12,14 @@
  * u16_BE(writeLen) | ECIES(rootWriteKey)). v2 / v1 paths are retired.
  */
 
-import { deriveVaultKeyIpnsKeypair, deriveIpnsName, wrapKey, unwrapKey } from '@cipherbox/crypto';
+import {
+  deriveVaultKeyIpnsKeypair,
+  deriveIpnsName,
+  wrapKey,
+  unwrapKey,
+  hexToBytes,
+  bytesToHex,
+} from '@cipherbox/crypto';
 import { serializeVaultBlobV3, deserializeVaultBlobV3, sealNode } from '@cipherbox/core';
 import type { Node } from '@cipherbox/core';
 import type { SdkContext, TeeKeys } from '../types';
@@ -139,10 +146,12 @@ export async function publishEmptyRootNode(params: {
     // ECIES-wrap the root IPNS private key under the TEE public key. Do NOT zero
     // rootIpnsKeypair.privateKey here — wrapIpnsKeyForTee borrows the buffer, it
     // does not consume it; the caller is the terminal owner (D-09).
-    encryptedIpnsPrivateKey = await wrapIpnsKeyForTee(
+    const teePublicKeyBytes = hexToBytes(currentPublicKey);
+    const wrappedBytes = await wrapIpnsKeyForTee(
       params.rootIpnsKeypair.privateKey,
-      currentPublicKey
+      teePublicKeyBytes
     );
+    encryptedIpnsPrivateKey = bytesToHex(wrappedBytes);
     keyEpoch = currentEpoch;
   }
 

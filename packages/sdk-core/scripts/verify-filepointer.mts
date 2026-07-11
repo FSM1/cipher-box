@@ -28,6 +28,7 @@ import {
   type SdkContext,
 } from '@cipherbox/sdk-core';
 import { unsealChildReadKey, type PublishedNode, type SealedChildRef } from '@cipherbox/core';
+import { clearBytes } from '@cipherbox/crypto';
 import { authenticate, buildSdkContext, parseCliArgs } from '../../../tests/e2e-helpers/auth';
 
 interface VerifyFilePointerArgs {
@@ -106,112 +107,130 @@ async function main(): Promise<void> {
   const accessToken = auth.accessToken;
   const userPrivateKey = Uint8Array.from(Buffer.from(auth.privateKeyHex, 'hex'));
 
-  const ctx: SdkContext = buildSdkContext(args.apiUrl, accessToken);
-  const axiosInstance = ctx.axiosInstance;
-  if (!axiosInstance) {
-    throw new Error('SdkContext missing axiosInstance');
-  }
+  // Declared before the try so the finally can zero them regardless of where a
+  // failure occurs. The try opens immediately after userPrivateKey is allocated
+  // — so a throw during vault load (GET /vault or loadVaultKeyBlob) still reaches
+  // the finally and clears the private key. vaultKeyBlob may still be undefined
+  // there, so the finally guards it. fileReadKey/subReadKey are minted (via
+  // deriveChildReadKey) inside the try and cleared alongside the vault root keys.
+  let vaultKeyBlob: Awaited<ReturnType<typeof loadVaultKeyBlob>> | undefined;
+  let fileReadKey: Uint8Array | undefined;
+  let subReadKey: Uint8Array | undefined;
 
-  const vaultResponse = await axiosInstance.get('/vault');
-  const rootIpnsName = vaultResponse.data.rootIpnsName;
-  if (!rootIpnsName) {
-    throw new Error('Vault response missing rootIpnsName');
-  }
-
-  const vaultKeyBlob = await loadVaultKeyBlob({ userPrivateKey, ctx });
-  if (!vaultKeyBlob) {
-    throw new Error('Vault key blob not found');
-  }
-
-  const folder = await loadFolderMetadata({
-    ipnsName: rootIpnsName,
-    folderKey: vaultKeyBlob.rootReadKey,
-    ctx,
-  });
-  if (!folder) {
-    throw new Error(`Root folder metadata not found for ${rootIpnsName}`);
-  }
-
-  // Resolve which folder to search in, and the parent read key the file's child
-  // ref is sealed under. Default: root. With --folder-name, descend one level
-  // into that subfolder — the subfolder's read key is derived from the root's
-  // SealedChildRef via unsealChildReadKey, so a file moved into a subfolder can
-  // be verified under the destination read key (which is exactly what the
-  // move/restore re-link must preserve).
-  let searchChildren = folder.metadata.children ?? [];
-  let parentReadKey = vaultKeyBlob.rootReadKey;
-
-  if (args.folderName) {
-    const subRef = searchChildren.find((child) => child.name === args.folderName);
-    if (!subRef) {
-      throw new Error(`Subfolder not found at root: ${args.folderName}`);
+  try {
+    const ctx: SdkContext = buildSdkContext(args.apiUrl, accessToken);
+    const axiosInstance = ctx.axiosInstance;
+    if (!axiosInstance) {
+      throw new Error('SdkContext missing axiosInstance');
     }
-    const { childReadKey: subReadKey, childPublished } = await deriveChildReadKey(
-      subRef,
+
+    const vaultResponse = await axiosInstance.get('/vault');
+    const rootIpnsName = vaultResponse.data.rootIpnsName;
+    if (!rootIpnsName) {
+      throw new Error('Vault response missing rootIpnsName');
+    }
+
+    vaultKeyBlob = await loadVaultKeyBlob({ userPrivateKey, ctx });
+    if (!vaultKeyBlob) {
+      throw new Error('Vault key blob not found');
+    }
+
+    const folder = await loadFolderMetadata({
+      ipnsName: rootIpnsName,
+      folderKey: vaultKeyBlob.rootReadKey,
+      ctx,
+    });
+    if (!folder) {
+      throw new Error(`Root folder metadata not found for ${rootIpnsName}`);
+    }
+
+    // Resolve which folder to search in, and the parent read key the file's
+    // child ref is sealed under. Default: root. With --folder-name, descend
+    // one level into that subfolder — the subfolder's read key is derived
+    // from the root's SealedChildRef via unsealChildReadKey, so a file moved
+    // into a subfolder can be verified under the destination read key (which
+    // is exactly what the move/restore re-link must preserve).
+    let searchChildren = folder.metadata.children ?? [];
+    let parentReadKey = vaultKeyBlob.rootReadKey;
+
+    if (args.folderName) {
+      const subRef = searchChildren.find((child) => child.name === args.folderName);
+      if (!subRef) {
+        throw new Error(`Subfolder not found at root: ${args.folderName}`);
+      }
+      const { childReadKey, childPublished } = await deriveChildReadKey(subRef, parentReadKey, ctx);
+      subReadKey = childReadKey;
+      if (childPublished.kind !== 'folder') {
+        throw new Error(`Child ${args.folderName} at root is not a folder`);
+      }
+      const subFolder = await loadFolderMetadata({
+        ipnsName: subRef.ipnsName,
+        folderKey: subReadKey,
+        ctx,
+      });
+      if (!subFolder) {
+        throw new Error(`Subfolder metadata not found for ${args.folderName}`);
+      }
+      searchChildren = subFolder.metadata.children ?? [];
+      parentReadKey = subReadKey;
+    }
+
+    const fileRef = searchChildren.find((child) => child.name === args.fileName);
+    if (!fileRef) {
+      throw new Error(`SealedChildRef not found for ${args.fileName}`);
+    }
+
+    const { childReadKey, childPublished: filePublished } = await deriveChildReadKey(
+      fileRef,
       parentReadKey,
       ctx
     );
-    if (childPublished.kind !== 'folder') {
-      throw new Error(`Child ${args.folderName} at root is not a folder`);
+    fileReadKey = childReadKey;
+    if (filePublished.kind !== 'file') {
+      throw new Error(`Child ${args.fileName} is not a file node`);
     }
-    const subFolder = await loadFolderMetadata({
-      ipnsName: subRef.ipnsName,
-      folderKey: subReadKey,
-      ctx,
-    });
-    if (!subFolder) {
-      throw new Error(`Subfolder metadata not found for ${args.folderName}`);
+
+    const { metadata, metadataCid } = await resolveFileMetadata(fileRef.ipnsName, fileReadKey, ctx);
+
+    let contentVerified = false;
+    if (args.expectedContent !== undefined) {
+      const plaintext = await downloadFileContent({
+        cid: metadata.cid,
+        fileKey: metadata.fileKey,
+        fileIv: metadata.fileIv,
+        encryptionMode: metadata.encryptionMode,
+        ctx,
+      });
+
+      const decoded = new TextDecoder().decode(plaintext);
+      if (decoded !== args.expectedContent) {
+        throw new Error(
+          `Downloaded content mismatch for ${args.fileName}: expected ${JSON.stringify(args.expectedContent)}, got ${JSON.stringify(decoded)}`
+        );
+      }
+      contentVerified = true;
     }
-    searchChildren = subFolder.metadata.children ?? [];
-    parentReadKey = subReadKey;
-  }
 
-  const fileRef = searchChildren.find((child) => child.name === args.fileName);
-  if (!fileRef) {
-    throw new Error(`SealedChildRef not found for ${args.fileName}`);
-  }
-
-  const { childReadKey: fileReadKey, childPublished: filePublished } = await deriveChildReadKey(
-    fileRef,
-    parentReadKey,
-    ctx
-  );
-  if (filePublished.kind !== 'file') {
-    throw new Error(`Child ${args.fileName} is not a file node`);
-  }
-
-  const { metadata, metadataCid } = await resolveFileMetadata(fileRef.ipnsName, fileReadKey, ctx);
-
-  let contentVerified = false;
-  if (args.expectedContent !== undefined) {
-    const plaintext = await downloadFileContent({
-      cid: metadata.cid,
-      fileKey: metadata.fileKey,
-      fileIv: metadata.fileIv,
-      encryptionMode: metadata.encryptionMode,
-      ctx,
-    });
-
-    const decoded = new TextDecoder().decode(plaintext);
-    if (decoded !== args.expectedContent) {
-      throw new Error(
-        `Downloaded content mismatch for ${args.fileName}: expected ${JSON.stringify(args.expectedContent)}, got ${JSON.stringify(decoded)}`
-      );
+    console.log(
+      JSON.stringify({
+        rootIpnsName,
+        rootMetadataCid: folder.cid,
+        fileName: args.fileName,
+        fileIpnsName: fileRef.ipnsName,
+        fileMetadataCid: metadataCid,
+        fileCid: metadata.cid,
+        contentVerified,
+      })
+    );
+  } finally {
+    clearBytes(userPrivateKey);
+    if (vaultKeyBlob) {
+      clearBytes(vaultKeyBlob.rootReadKey);
+      clearBytes(vaultKeyBlob.rootWriteKey);
     }
-    contentVerified = true;
+    if (fileReadKey) clearBytes(fileReadKey);
+    if (subReadKey) clearBytes(subReadKey);
   }
-
-  console.log(
-    JSON.stringify({
-      rootIpnsName,
-      rootMetadataCid: folder.cid,
-      fileName: args.fileName,
-      fileIpnsName: fileRef.ipnsName,
-      fileMetadataCid: metadataCid,
-      fileCid: metadata.cid,
-      contentVerified,
-    })
-  );
 }
 
 main().catch((error) => {

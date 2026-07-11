@@ -40,7 +40,7 @@ export function setupFolder(client: CipherBoxClient, ipnsName = 'folder-ipns', n
     type: 'file' as const,
     id: 'file1',
     fileMetaIpnsName: 'k51file',
-    ipnsPrivateKeyEncrypted: 'abc',
+    encryptedIpnsPrivateKey: 'abc',
     createdAt: now,
     modifiedAt: now,
   };

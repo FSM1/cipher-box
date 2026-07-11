@@ -7,6 +7,7 @@
 
 import { CryptoError } from '../types';
 import { AES_KEY_SIZE, AES_IV_SIZE, AES_GCM_ALGORITHM } from '../constants';
+import { importAesKey } from './import-key';
 
 /**
  * Encrypt data using AES-256-GCM.
@@ -37,18 +38,11 @@ export async function encryptAesGcm(
 
   try {
     // Copy to ensure proper ArrayBuffer (not SharedArrayBuffer)
-    const keyBuffer = new Uint8Array(key).buffer as ArrayBuffer;
     const ivBuffer = new Uint8Array(iv).buffer as ArrayBuffer;
     const plaintextBuffer = new Uint8Array(plaintext).buffer as ArrayBuffer;
 
     // Import key for encryption
-    const cryptoKey = await crypto.subtle.importKey(
-      'raw',
-      keyBuffer,
-      { name: AES_GCM_ALGORITHM },
-      false,
-      ['encrypt']
-    );
+    const cryptoKey = await importAesKey(key, { name: AES_GCM_ALGORITHM }, ['encrypt']);
 
     // Encrypt - Web Crypto appends 16-byte auth tag to ciphertext
     const ciphertext = await crypto.subtle.encrypt(
@@ -98,19 +92,12 @@ export async function encryptAesGcmAad(
 
   try {
     // Copy to ensure proper ArrayBuffer (not SharedArrayBuffer)
-    const keyBuffer = new Uint8Array(key).buffer as ArrayBuffer;
     const ivBuffer = new Uint8Array(iv).buffer as ArrayBuffer;
     const plaintextBuffer = new Uint8Array(plaintext).buffer as ArrayBuffer;
     const aadBuffer = new Uint8Array(aad).buffer as ArrayBuffer;
 
     // Import key for encryption
-    const cryptoKey = await crypto.subtle.importKey(
-      'raw',
-      keyBuffer,
-      { name: AES_GCM_ALGORITHM },
-      false,
-      ['encrypt']
-    );
+    const cryptoKey = await importAesKey(key, { name: AES_GCM_ALGORITHM }, ['encrypt']);
 
     // Encrypt — AAD is bound into the GCM authentication tag via additionalData
     const ciphertext = await crypto.subtle.encrypt(

@@ -14,6 +14,7 @@
 
 import { CryptoError } from '../types';
 import { AES_KEY_SIZE, AES_CTR_IV_SIZE, AES_CTR_ALGORITHM, AES_CTR_LENGTH } from '../constants';
+import { importAesKey } from './import-key';
 
 /**
  * Encrypt data using AES-256-CTR.
@@ -46,18 +47,11 @@ export async function encryptAesCtr(
 
   try {
     // Copy to ensure proper ArrayBuffer (not SharedArrayBuffer)
-    const keyBuffer = new Uint8Array(key).buffer as ArrayBuffer;
     const ivBuffer = new Uint8Array(iv);
     const plaintextBuffer = new Uint8Array(plaintext).buffer as ArrayBuffer;
 
     // Import key for encryption
-    const cryptoKey = await crypto.subtle.importKey(
-      'raw',
-      keyBuffer,
-      { name: AES_CTR_ALGORITHM },
-      false,
-      ['encrypt']
-    );
+    const cryptoKey = await importAesKey(key, { name: AES_CTR_ALGORITHM }, ['encrypt']);
 
     // Encrypt - CTR output is same size as input (XOR-based stream cipher)
     const ciphertext = await crypto.subtle.encrypt(

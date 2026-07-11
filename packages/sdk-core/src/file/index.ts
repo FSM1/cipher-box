@@ -43,6 +43,10 @@ import {
   AES_KEY_SIZE,
   AES_IV_SIZE,
   AES_CTR_IV_SIZE,
+  hexToBytes,
+  bytesToHex,
+  bytesToBase64,
+  base64ToBytes,
 } from '@cipherbox/crypto';
 import type { SdkContext, TeeKeys, DownloadProgressCallback } from '../types';
 import { addToIpfs, fetchFromIpfs } from '../ipfs';
@@ -54,29 +58,6 @@ const IPNS_LIFETIME_MS = 24 * 60 * 60 * 1000;
 
 /** Maximum number of past versions retained per file (VER-04) */
 const MAX_VERSIONS_PER_FILE = 10;
-
-// ---------------------------------------------------------------------------
-// Base64 helpers (safe — avoid call-stack overflow from spread operator, MEDIUM-08)
-// ---------------------------------------------------------------------------
-
-function bytesToBase64(bytes: Uint8Array): string {
-  const CHUNK_SIZE = 32768;
-  let result = '';
-  for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
-    const chunk = bytes.subarray(i, Math.min(i + CHUNK_SIZE, bytes.length));
-    result += String.fromCharCode(...chunk);
-  }
-  return btoa(result);
-}
-
-function base64ToBytes(b64: string): Uint8Array {
-  const bin = atob(b64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) {
-    bytes[i] = bin.charCodeAt(i);
-  }
-  return bytes;
-}
 
 /** Record payload ready for batch publish */
 export type FileIpnsRecordPayload = {
@@ -227,7 +208,7 @@ export async function createFileMetadata(params: {
   fileReadKey: Uint8Array;
   fileWriteKey: Uint8Array;
   ipnsRecord: FileIpnsRecordPayload;
-  ipnsPrivateKeyEncrypted?: string;
+  encryptedIpnsPrivateKey?: string;
 }> {
   const mode: EncryptionMode = params.encryptionMode ?? 'GCM';
 
@@ -310,7 +291,9 @@ export async function createFileMetadata(params: {
       // ECIES-wrap the file IPNS private key under the TEE public key. Do NOT zero
       // fileIpnsPrivateKey here — wrapIpnsKeyForTee borrows the buffer, it does not
       // consume it; the caller is the terminal owner (D-09).
-      encryptedIpnsPrivateKey = await wrapIpnsKeyForTee(fileIpnsPrivateKey, currentPublicKey);
+      const teePublicKeyBytes = hexToBytes(currentPublicKey);
+      const wrappedBytes = await wrapIpnsKeyForTee(fileIpnsPrivateKey, teePublicKeyBytes);
+      encryptedIpnsPrivateKey = bytesToHex(wrappedBytes);
       keyEpoch = currentEpoch;
     }
 
@@ -348,7 +331,7 @@ export async function createFileMetadata(params: {
       fileReadKey,
       fileWriteKey,
       ipnsRecord,
-      ipnsPrivateKeyEncrypted: encryptedIpnsPrivateKey,
+      encryptedIpnsPrivateKey,
     };
   } catch (err) {
     // fileReadKey/fileWriteKey never reached the caller on this path — zero them.

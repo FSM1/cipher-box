@@ -139,7 +139,7 @@ export class RepublishService {
       // D-02 / TEE-03: ALL signing inputs come from the canonical ipns_records row —
       // no schedule snapshot fields, no relay-supplied epoch scalars (removed per D-03).
       const teeEntries: RepublishEntry[] = batch.map(({ schedule, record }) => ({
-        encryptedIpnsKey: record.encryptedIpnsPrivateKey!.toString('base64'),
+        encryptedIpnsPrivateKey: record.encryptedIpnsPrivateKey!.toString('base64'),
         keyEpoch: record.keyEpoch!,
         ipnsName: schedule.ipnsName,
         signedRecord: record.signedRecord!.toString('base64'),

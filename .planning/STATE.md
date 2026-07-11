@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
-current_phase: 76
-current_phase_name: FUSE Durability and TEE Write-Path Hardening
+current_phase: 78
+current_phase_name: Recovery Tool v3, Vault-Load Guards, Web UX and CI Guards
 status: verifying
-stopped_at: Phase 75 complete (75-05-PLAN.md), shipping PR
-last_updated: "2026-07-11T20:30:00.000Z"
+stopped_at: Completed 77-09-PLAN.md
+last_updated: "2026-07-11T10:03:19.194Z"
 last_activity: 2026-07-11
-last_activity_desc: Phase 75 complete and shipping, Phase 76 pending
+last_activity_desc: Phase 77 complete, transitioned to Phase 78
 progress:
   total_phases: 22
   completed_phases: 17
-  total_plans: 193
-  completed_plans: 193
+  total_plans: 198
+  completed_plans: 198
   percent: 77
 ---
 
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-27)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 76 — FUSE Durability and TEE Write-Path Hardening (Phase 75 shipping)
+**Current focus:** Phase 77 — crypto-hygiene-and-terminology-canonicalization
 
 ## Current Position
 
-Phase: 76 — FUSE Durability and TEE Write-Path Hardening
+Phase: 78 — Recovery Tool v3, Vault-Load Guards, Web UX and CI Guards
 Plan: Not started
 Status: Phase complete — ready for verification
-Last activity: 2026-07-11 — Phase 75 complete, transitioned to Phase 76
+Last activity: 2026-07-11 — Phase 77 complete, transitioned to Phase 78
 
 Progress: `██████████` 79 / 79 plans (100%)
 
@@ -266,11 +266,16 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 72 P08 | 15min | 2 tasks | 1 files |
 | Phase 72 P09 | 8min | 1 tasks | 5 files |
 | Phase 72 P10 | 10min | 2 tasks | 3 files |
-| Phase 75 P01 | 3min | 1 tasks | 2 files |
-| Phase 75 P04 | 12min | 3 tasks | 3 files |
-| Phase 75 P05 | 8min | 3 tasks | 5 files |
-| Phase 75 P02 | 7min | 3 tasks | 3 files |
-| Phase 75 P03 | 15min | 2 tasks | 2 files |
+| Phase 77 P01 | 15min | 2 tasks | 4 files |
+| Phase 77 P02 | 5min | 2 tasks | 6 files |
+| Phase 77 P03 | 5min | 2 tasks | 7 files |
+| Phase 77 P04 | 6min | 2 tasks | 3 files |
+| Phase 77 P05 | 20min | 2 tasks | 5 files |
+| Phase 77 P06 | 20min | 3 tasks | 21 files |
+| Phase 77 P07 | 10min | 1 tasks | 3 files |
+| Phase 77 P08 | 10min | 1 tasks | 7 files |
+| Phase 77 P09 | 12min | 2 tasks | 11 files |
+| Phase 77 P10 | 20min | - tasks | - files |
 
 ## Accumulated Context
 
@@ -591,14 +596,21 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: 72-09: vault/index.ts's two root-key wraps (wrapKey(rootReadKey/rootWriteKey, userPublicKey)) left untouched — only the TEE ipns-key wrap was extracted
 - [Phase ?]: runFileVersionOp is not wrapped in withOperation itself -- each public method keeps its own withOperation(name) call for correct per-op telemetry attribution
 - [Phase ?]: write-body-params.ts standardizes the IPNS-resolve path on inline resolveIpnsRecord+fetchFromIpfs+JSON.parse (bin's pre-existing style) rather than client.ts's resolvePublishedNode wrapper, since the extra signatureVerified field was never consumed by getWriteBodyParams
-- [Phase ?]: buildCborData parameterized with validity/validityType trailing optional args (defaults = prior hardcoded values) so the 8 pre-existing vector cases stay byte-identical by construction
-- [Phase ?]: 4 new IPNS verify vectors per 75-RESEARCH RESOLVED Q2: expired-valid-sig, wrong-validity-type, malformed-rfc3339-trailing-component, malformed-rfc3339-impossible-date (total 12)
-- [Phase ?]: expected_file_iv_len_bytes made Option<usize>/typeof-detected — only file-kind body vectors carry fileIv (folder/root have none)
-- [Phase 75]: Option A (canonical-only) chosen over syncing looser UUID acceptance domains — closes the AAD-transplant surface entirely rather than aligning two looser domains
-- [Phase 75]: Rust UUID canonical-form check implemented as a dependency-free byte-position scan (no regex/once_cell added to crates/crypto)
-- [Phase ?]: bind_verified widened pub(crate)->pub and classify_vector delegated to it, deleting duplicated cid/sequence/ValidityType binding logic (Phase 75 gap #9 fix)
-- [Phase ?]: ValidityType==0 EOL gate implemented in bind_verified, not in decode_ipns_cbor_validity -- decoder only reports the raw value
-- [Phase 75]: Ported the Rust strict RFC3339 parser to TS branch-for-branch (no date-library dependency) to guarantee byte-for-byte parity with the audited Rust verifier
+- [Phase ?]: Copied the CHUNK_SIZE=32768 chunked-btoa loop verbatim from packages/core/src/node/encode.ts into @cipherbox/crypto to guarantee byte-identical base64 output before any consumer swap (77-01)
+- [Phase ?]: importAesKey algorithm param typed as AlgorithmIdentifier (not AesKeyAlgorithm) to match existing name-only call sites at every AES call site
+- [Phase 77-03]: decryptWithFallback's param renamed alongside decryptIpnsKey's in key-manager.ts, since Task 1 acceptance grep-scoped the whole file for zero occurrences of encryptedIpnsKey
+- [Phase 77]: 77-05: Used secp256k1 (not Ed25519) for the wrapIpnsKeyForTee round-trip test — TEE public keys are secp256k1/ECIES, matching apps/tee-worker's real key type — Ed25519 keypair would not round-trip through wrapKey/unwrapKey (ECIES)
+- [Phase 77]: 77-05: wrapIpnsKeyForTee is now bytes-in/bytes-out with canonical teePublicKey param; hex lives only at the 3 call sites — Aligns TEE-wrap seam with the codebase-wide bytes-internal/hex-at-boundary convention (SC3)
+- [Phase 77]: [Phase 77-06]: SharedFolderState.addShareKeysFn removed alongside SharedWriteContext.addShareKeysFn to satisfy the plan's zero-occurrence grep acceptance criteria
+- [Phase 77]: [Phase 77-06]: Task 3 wrapKey audit required no code change -- the discarded per-upload ECIES wrapKey (todo #11) was already retired under READ-03
+- [Phase ?]: [Phase 77-07]: decode.ts's base64ToUint8Array kept its expectedLength superset signature but now delegates its body to the shared @cipherbox/crypto base64ToBytes
+- [Phase ?]: [Phase 77-07]: seal.ts's base64 imports were joined into its existing single @cipherbox/crypto import statement rather than a second import line
+- [Phase 77-08]: Imported bytesToBase64/base64ToBytes directly from @cipherbox/crypto in rotation/engine.ts, share/grant.ts, share/navigate.ts (no intermediate share/codec.ts re-export)
+- [Phase 77-08]: 4 vitest full-replacement mocks of @cipherbox/crypto switched to importOriginal + spread so the real base64 codec runs under mocked wrapKey/unwrapKey/reWrapKey
+- [Phase 77]: Retained ipnsPrivateKeyEncrypted only in client.ts doc comments and landing/demo-data.ts per plan's out-of-scope list — 77-09 plan explicitly excluded these historical/marketing references from the rename
+- [Phase 77]: Fixed owner-reconcile.test.ts crypto mock missing bytesToBase64 (pre-existing gap from sibling plan 77-08) — Blocked this plan's own sdk test verification gate; test-infra-only fix, no production code touched
+- [Phase ?]: Error-path try/catch in createSubfolder scoped to sealNode/addToIpfs/createAndPublishIpnsRecord only, matching plan must_haves scope exactly
+- [Phase ?]: verify-filepointer.mts clears vaultKeyBlob.rootWriteKey defensively even though unused in this script's read-only flow
 
 ## Operator Next Steps
 
@@ -606,8 +618,8 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-11T06:49:04.674Z
-**Stopped at:** Completed 75-04-PLAN.md
+**Last session:** 2026-07-11T09:51:08.444Z
+**Stopped at:** Completed 77-09-PLAN.md
 **Resume file:** 
 
 None

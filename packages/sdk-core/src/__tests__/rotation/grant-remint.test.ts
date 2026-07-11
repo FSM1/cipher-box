@@ -22,12 +22,18 @@ const mockFns = vi.hoisted(() => ({
 
 // Mock @cipherbox/crypto to intercept wrapKey (ECIES encrypted-key minting).
 // engine.ts imports wrapKey from this package in the GREEN phase.
-vi.mock('@cipherbox/crypto', () => ({
-  wrapKey: mockFns.wrapKey,
-  generateRandomBytes: vi.fn(),
-  unwrapKey: vi.fn(),
-  reWrapKey: vi.fn(),
-}));
+// bytesToBase64/base64ToBytes are kept as the real implementation (importOriginal)
+// since engine.ts now imports the shared codec from here too (Plan 77-08).
+vi.mock('@cipherbox/crypto', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@cipherbox/crypto')>();
+  return {
+    ...actual,
+    wrapKey: mockFns.wrapKey,
+    generateRandomBytes: vi.fn(),
+    unwrapKey: vi.fn(),
+    reWrapKey: vi.fn(),
+  };
+});
 
 // ---------------------------------------------------------------------------
 // Test fixtures

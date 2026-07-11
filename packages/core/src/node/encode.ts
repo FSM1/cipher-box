@@ -10,27 +10,8 @@
  * Analog: packages/core/src/folder/metadata.ts lines 23-31 + 105-124.
  */
 
-import { CryptoError } from '@cipherbox/crypto';
+import { CryptoError, bytesToBase64 } from '@cipherbox/crypto';
 import type { Node, NodeContent, NodeWriteBody, SealedChildRef } from './types';
-
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-/**
- * [SECURITY: MEDIUM-08] Chunk-based base64 encoding to avoid call stack issues
- * with large Uint8Arrays (spread operator has argument limits ~65536).
- * Copied verbatim from packages/core/src/folder/metadata.ts lines 23-31.
- */
-function uint8ArrayToBase64(bytes: Uint8Array): string {
-  const CHUNK_SIZE = 32768;
-  let result = '';
-  for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
-    const chunk = bytes.subarray(i, Math.min(i + CHUNK_SIZE, bytes.length));
-    result += String.fromCharCode(...chunk);
-  }
-  return btoa(result);
-}
 
 // ---------------------------------------------------------------------------
 // Content serialization (Uint8Array → base64 string for JSON safety)
@@ -59,7 +40,7 @@ export function serializeContentForWire(content: NodeContent): Record<string, un
     mimeType: content.mimeType,
     encryptionMode: content.encryptionMode,
     // Convert raw 32-byte AES key to base64 (reversible; not ECIES hex — D-07/NODE-02)
-    fileKey: uint8ArrayToBase64(content.fileKey),
+    fileKey: bytesToBase64(content.fileKey),
     versions: content.versions.map((v) => ({
       versionId: v.versionId,
       cid: v.cid,
@@ -68,7 +49,7 @@ export function serializeContentForWire(content: NodeContent): Record<string, un
       createdAt: v.createdAt,
       encryptionMode: v.encryptionMode,
       // Each version's raw 32-byte AES key also base64-encoded
-      fileKey: uint8ArrayToBase64(v.fileKey),
+      fileKey: bytesToBase64(v.fileKey),
     })),
   };
 }
@@ -163,7 +144,7 @@ export function encodeWriteBody(node: Node): Uint8Array {
 
   const wb: NodeWriteBody = node.writeBody;
   const wireBody = {
-    ipnsPrivateKey: uint8ArrayToBase64(wb.ipnsPrivateKey),
+    ipnsPrivateKey: bytesToBase64(wb.ipnsPrivateKey),
     writeChildren: wb.writeChildren.map((wc) => ({
       childId: wc.childId,
       writeKeySealed: wc.writeKeySealed,

@@ -6,7 +6,7 @@
 
 import type { SealedChildRef, PublishedNode } from '@cipherbox/core';
 import type { SdkContext } from '@cipherbox/sdk-core';
-import type { SharedWriteContext, ShareKeyType, PublishNodeResult } from './shared-write';
+import type { SharedWriteContext, PublishNodeResult } from './shared-write';
 
 /**
  * Parameters for building a SharedWriteContext.
@@ -33,10 +33,6 @@ export type SharedWriteContextParams = {
     sequenceNumber: bigint;
   }) => Promise<PublishNodeResult>;
   addToIpfsFn: (data: Uint8Array) => Promise<{ cid: string }>;
-  addShareKeysFn: (
-    shareId: string,
-    keys: Array<{ keyType: ShareKeyType; itemId: string; encryptedKey: string }>
-  ) => Promise<void>;
 };
 
 /**
@@ -62,6 +58,5 @@ export function buildSharedWriteContext(params: SharedWriteContextParams): Share
     shareId: params.shareId,
     publishNodeFn: params.publishNodeFn,
     addToIpfsFn: params.addToIpfsFn,
-    addShareKeysFn: params.addShareKeysFn,
   };
 }

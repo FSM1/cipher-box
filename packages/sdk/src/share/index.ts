@@ -158,7 +158,6 @@ export {
   renameInSharedFolder,
   deleteFromSharedFolder,
   updateSharedFile,
-  updateSharePermission,
   moveInSharedFolder,
   CannotWriteUntilRefetchError,
   type SharedWriteContext,

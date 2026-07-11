@@ -81,14 +81,20 @@ vi.mock('@cipherbox/core', () => ({
   },
 }));
 
-vi.mock('@cipherbox/crypto', () => ({
-  generateEd25519Keypair: mockFns.generateEd25519Keypair,
-  deriveIpnsName: mockFns.deriveIpnsName,
-  generateRandomBytes: mockFns.generateRandomBytes,
-  wrapKey: mockFns.wrapKey,
-  unwrapKey: vi.fn(),
-  reWrapKey: vi.fn(),
-}));
+// bytesToBase64/base64ToBytes are kept as the real implementation (importOriginal)
+// since engine.ts now imports the shared codec from here too (Plan 77-08).
+vi.mock('@cipherbox/crypto', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@cipherbox/crypto')>();
+  return {
+    ...actual,
+    generateEd25519Keypair: mockFns.generateEd25519Keypair,
+    deriveIpnsName: mockFns.deriveIpnsName,
+    generateRandomBytes: mockFns.generateRandomBytes,
+    wrapKey: mockFns.wrapKey,
+    unwrapKey: vi.fn(),
+    reWrapKey: vi.fn(),
+  };
+});
 
 // ---------------------------------------------------------------------------
 // Test fixtures

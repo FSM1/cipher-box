@@ -5,9 +5,9 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { encryptAesGcm, decryptAesGcm, sealAesGcm, unsealAesGcm } from '../aes';
+import { encryptAesGcm, decryptAesGcm, sealAesGcm, unsealAesGcm, importAesKey } from '../aes';
 import { generateFileKey, generateIv, generateRandomBytes } from '../utils';
-import { AES_KEY_SIZE, AES_IV_SIZE, AES_TAG_SIZE } from '../constants';
+import { AES_KEY_SIZE, AES_IV_SIZE, AES_TAG_SIZE, AES_GCM_ALGORITHM } from '../constants';
 
 describe('AES-256-GCM', () => {
   describe('encryptAesGcm / decryptAesGcm round-trip', () => {
@@ -268,6 +268,37 @@ describe('AES-256-GCM', () => {
       const decrypted = await decryptAesGcm(ciphertext, key, iv);
       expect(decrypted.length).toBe(0);
     });
+  });
+});
+
+describe('importAesKey', () => {
+  it('leaves the caller-supplied key argument byte-for-byte unchanged (D-09)', async () => {
+    const key = generateFileKey();
+    const keyClone = new Uint8Array(key);
+
+    await importAesKey(key, { name: AES_GCM_ALGORITHM }, ['encrypt']);
+
+    expect(key).toEqual(keyClone);
+  });
+
+  it('imports a key usable for a full encrypt/decrypt round-trip (no behavior change)', async () => {
+    const key = generateFileKey();
+    const iv = generateIv();
+    const plaintext = new TextEncoder().encode('Hello, CipherBox!');
+
+    const cryptoKey = await importAesKey(key, { name: AES_GCM_ALGORITHM }, ['encrypt']);
+    const ciphertext = new Uint8Array(
+      await crypto.subtle.encrypt(
+        { name: AES_GCM_ALGORITHM, iv: new Uint8Array(iv).buffer as ArrayBuffer },
+        cryptoKey,
+        new Uint8Array(plaintext).buffer as ArrayBuffer
+      )
+    );
+
+    // Round-trip via the existing public decrypt function proves functional parity
+    // with the previous inline importKey call.
+    const decrypted = await decryptAesGcm(ciphertext, key, iv);
+    expect(new TextDecoder().decode(decrypted)).toBe('Hello, CipherBox!');
   });
 });
 

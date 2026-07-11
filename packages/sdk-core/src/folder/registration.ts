@@ -14,7 +14,13 @@
 
 import { sealNode, unsealNode } from '@cipherbox/core';
 import type { Node, PublishedNode, SealedChildRef, WriteChildRef } from '@cipherbox/core';
-import { generateEd25519Keypair, generateRandomBytes, deriveIpnsName } from '@cipherbox/crypto';
+import {
+  generateEd25519Keypair,
+  generateRandomBytes,
+  deriveIpnsName,
+  hexToBytes,
+  bytesToHex,
+} from '@cipherbox/crypto';
 import type { SdkContext, TeeKeys } from '../types';
 import { addToIpfs, fetchFromIpfs } from '../ipfs';
 import { createAndPublishIpnsRecord } from '../ipns';
@@ -71,59 +77,73 @@ export async function createSubfolder(params: {
     children: [],
   };
 
-  // 5. Compute TEE enrollment fields (if teeKeys supplied) BEFORE any IPFS upload —
-  //    fail closed on incomplete config so a malformed teeKeys short-circuits before
-  //    the seal/upload side effects and never leaves an orphaned blob behind.
   let encryptedIpnsPrivateKey: string | undefined;
   let keyEpoch: number | undefined;
-  if (params.teeKeys) {
-    const { currentPublicKey, currentEpoch } = params.teeKeys;
-    if (!currentPublicKey) {
-      throw new Error(
-        'createSubfolder: teeKeys.currentPublicKey is missing or empty — refusing to publish un-enrolled subfolder'
-      );
+
+  try {
+    // 5. Compute TEE enrollment fields (if teeKeys supplied) BEFORE any IPFS upload —
+    //    fail closed on incomplete config so a malformed teeKeys short-circuits before
+    //    the seal/upload side effects and never leaves an orphaned blob behind. This
+    //    sits inside the try so any throw here (validation or malformed-hex wrap) still
+    //    zeroes the minted keys on the catch path (they never reached the caller).
+    if (params.teeKeys) {
+      const { currentPublicKey, currentEpoch } = params.teeKeys;
+      if (!currentPublicKey) {
+        throw new Error(
+          'createSubfolder: teeKeys.currentPublicKey is missing or empty — refusing to publish un-enrolled subfolder'
+        );
+      }
+      if (!Number.isInteger(currentEpoch) || currentEpoch < 1) {
+        throw new Error(
+          'createSubfolder: teeKeys.currentEpoch must be a positive integer (>= 1) — refusing to publish un-enrolled subfolder'
+        );
+      }
+      // ECIES-wrap the generated IPNS private key under the TEE public key.
+      // Do NOT zero ipnsPrivateKey here — wrapIpnsKeyForTee borrows the buffer, it
+      // does not consume it; the caller is the terminal owner (D-09).
+      const teePublicKeyBytes = hexToBytes(currentPublicKey);
+      const wrappedBytes = await wrapIpnsKeyForTee(ipnsPrivateKey, teePublicKeyBytes);
+      encryptedIpnsPrivateKey = bytesToHex(wrappedBytes);
+      keyEpoch = currentEpoch;
     }
-    if (!Number.isInteger(currentEpoch) || currentEpoch < 1) {
-      throw new Error(
-        'createSubfolder: teeKeys.currentEpoch must be a positive integer (>= 1) — refusing to publish un-enrolled subfolder'
-      );
-    }
-    // ECIES-wrap the generated IPNS private key under the TEE public key.
-    // Do NOT zero ipnsPrivateKey here — wrapIpnsKeyForTee borrows the buffer, it
-    // does not consume it; the caller is the terminal owner (D-09).
-    encryptedIpnsPrivateKey = await wrapIpnsKeyForTee(ipnsPrivateKey, currentPublicKey);
-    keyEpoch = currentEpoch;
+
+    // 6. Seal the Node with the generated keys
+    const publishedNode = await sealNode(node, readKey, writeKey);
+
+    // 7. Upload sealed Node to IPFS
+    const { cid } = await addToIpfs(
+      params.ctx,
+      new TextEncoder().encode(JSON.stringify(publishedNode))
+    );
+
+    // 8. Publish first IPNS record — sequenceNumber MUST be 1n (Phase-60 strict gate)
+    await createAndPublishIpnsRecord({
+      ipnsPrivateKey,
+      ipnsName,
+      metadataCid: cid,
+      sequenceNumber: 1n,
+      ctx: params.ctx,
+      encryptedIpnsPrivateKey,
+      keyEpoch,
+    });
+
+    // 9. Return keys to caller — do NOT zero (caller is terminal owner, D-09)
+    return {
+      node,
+      ipnsPrivateKey,
+      rootReadKey: readKey,
+      rootWriteKey: writeKey,
+      encryptedIpnsPrivateKey,
+      keyEpoch,
+    };
+  } catch (err) {
+    // The minted keys never reached the caller on this path — zero them
+    // (they are not the caller's responsibility until the success return above).
+    ipnsPrivateKey.fill(0);
+    readKey.fill(0);
+    writeKey.fill(0);
+    throw err;
   }
-
-  // 6. Seal the Node with the generated keys
-  const publishedNode = await sealNode(node, readKey, writeKey);
-
-  // 7. Upload sealed Node to IPFS
-  const { cid } = await addToIpfs(
-    params.ctx,
-    new TextEncoder().encode(JSON.stringify(publishedNode))
-  );
-
-  // 8. Publish first IPNS record — sequenceNumber MUST be 1n (Phase-60 strict gate)
-  await createAndPublishIpnsRecord({
-    ipnsPrivateKey,
-    ipnsName,
-    metadataCid: cid,
-    sequenceNumber: 1n,
-    ctx: params.ctx,
-    encryptedIpnsPrivateKey,
-    keyEpoch,
-  });
-
-  // 9. Return keys to caller — do NOT zero (caller is terminal owner, D-09)
-  return {
-    node,
-    ipnsPrivateKey,
-    rootReadKey: readKey,
-    rootWriteKey: writeKey,
-    encryptedIpnsPrivateKey,
-    keyEpoch,
-  };
 }
 
 /**

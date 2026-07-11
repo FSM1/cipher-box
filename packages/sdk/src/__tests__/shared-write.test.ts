@@ -53,7 +53,6 @@ import {
   deleteFromSharedFolder,
   updateSharedFile,
   moveInSharedFolder,
-  updateSharePermission,
   CannotWriteUntilRefetchError,
   type SharedWriteContext,
   type PublishNodeResult,
@@ -122,7 +121,6 @@ async function makeSWCtx(overrides?: Partial<SharedWriteContext>): Promise<Share
     shareId: 'share-123',
     publishNodeFn: makePublishNodeFn(),
     addToIpfsFn: makeAddToIpfsFn(),
-    addShareKeysFn: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }
@@ -279,12 +277,6 @@ describe('createSharedSubfolder', () => {
     expect(result.newSequenceNumber).toBe(2n);
   });
 
-  it('never calls addShareKeysFn', async () => {
-    const swCtx = await makeSWCtx();
-    await createSharedSubfolder(swCtx, { name: 'Sub' });
-    expect(swCtx.addShareKeysFn).not.toHaveBeenCalled();
-  });
-
   it('folderEntry SealedChildRef has no writeKeySealed (NODE-03)', async () => {
     const swCtx = await makeSWCtx();
     const { folderEntry } = await createSharedSubfolder(swCtx, { name: 'Sub' });
@@ -316,12 +308,6 @@ describe('uploadToSharedFolder', () => {
     expect(result.publishedChildren).toHaveLength(1);
     expect(result.filePointer.name).toBe('test.txt');
     expect(result.newSequenceNumber).toBe(2n);
-  });
-
-  it('never calls addShareKeysFn', async () => {
-    const swCtx = await makeSWCtx();
-    await uploadToSharedFolder(swCtx, { data: new Uint8Array([1]), fileName: 'f.txt' });
-    expect(swCtx.addShareKeysFn).not.toHaveBeenCalled();
   });
 
   it('filePointer SealedChildRef has no writeKeySealed (NODE-03)', async () => {
@@ -382,31 +368,6 @@ describe('renameInSharedFolder', () => {
     expect(result.publishedChildren).toHaveLength(1);
     expect(result.publishedChildren[0].name).toBe('new.txt');
     expect(result.newSequenceNumber).toBe(2n);
-  });
-
-  it('never calls addShareKeysFn', async () => {
-    const existingChild: SealedChildRef = {
-      name: 'old.txt',
-      ipnsName: 'k51child',
-      generation: 0,
-      versionFloor: 1n,
-      readKeySealed: 'fakebase64sealed',
-    };
-    const {
-      publishedNode: pn,
-      readKey,
-      writeKey,
-    } = await buildSealedParent({
-      extraChildren: [existingChild],
-    });
-    const swCtx = await makeSWCtx({
-      publishedNode: pn,
-      readKey,
-      writeKey,
-      children: [existingChild],
-    });
-    await renameInSharedFolder(swCtx, { itemId: 'k51child', newName: 'new.txt' });
-    expect(swCtx.addShareKeysFn).not.toHaveBeenCalled();
   });
 });
 
@@ -497,26 +458,6 @@ describe('deleteFromSharedFolder', () => {
     expect(unsealed.writeBody).toBeDefined();
     expect(unsealed.writeBody!.writeChildren).toHaveLength(0);
   });
-
-  it('never calls addShareKeysFn', async () => {
-    const child: SealedChildRef = {
-      name: 'doomed.txt',
-      ipnsName: 'k51child',
-      generation: 0,
-      versionFloor: 1n,
-      readKeySealed: 'fakebase64sealed',
-    };
-    const {
-      publishedNode: pn,
-      readKey,
-      writeKey,
-    } = await buildSealedParent({
-      extraChildren: [child],
-    });
-    const swCtx = await makeSWCtx({ publishedNode: pn, readKey, writeKey, children: [child] });
-    await deleteFromSharedFolder(swCtx, { itemId: 'k51child', childNodeId: CHILD_UUID });
-    expect(swCtx.addShareKeysFn).not.toHaveBeenCalled();
-  });
 });
 
 describe('updateSharedFile', () => {
@@ -553,27 +494,6 @@ describe('updateSharedFile', () => {
 
     // Should have published the file node
     expect(publishFn).toHaveBeenCalledWith(expect.objectContaining({ ipnsName: 'k51file' }));
-  });
-
-  it('never calls addShareKeysFn', async () => {
-    const swCtx = await makeSWCtx();
-    const fileRef: SealedChildRef = {
-      name: 'file.txt',
-      ipnsName: 'k51file',
-      generation: 0,
-      versionFloor: 1n,
-      readKeySealed: 'fakebase64sealed',
-    };
-    await updateSharedFile(swCtx, {
-      fileRef,
-      fileNodeId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
-      fileReadKey: new Uint8Array(32).fill(0xaa),
-      fileWriteKey: new Uint8Array(32).fill(0xbb),
-      fileIpnsPrivateKey: new Uint8Array(32).fill(0xcc),
-      fileSequenceNumber: 1n,
-      newData: new Uint8Array([1]),
-    });
-    expect(swCtx.addShareKeysFn).not.toHaveBeenCalled();
   });
 });
 
@@ -776,42 +696,5 @@ describe('CannotWriteUntilRefetchError (WRITE-03 / D-03)', () => {
       (k) => !['name', 'message', 'code', 'stack'].includes(k)
     );
     expect(extraKeys).toHaveLength(0);
-  });
-});
-
-// ===========================================================================
-// Section 5: updateSharePermission (unchanged from Phase 62)
-// ===========================================================================
-
-describe('updateSharePermission', () => {
-  it('calls the provided updatePermissionFn with correct params', async () => {
-    const updateFn = vi.fn().mockResolvedValue(undefined);
-
-    await updateSharePermission({
-      shareId: 'share-456',
-      permission: 'write',
-      encryptedIpnsKey: 'wrapped-key',
-      updatePermissionFn: updateFn,
-    });
-
-    expect(updateFn).toHaveBeenCalledWith('share-456', {
-      permission: 'write',
-      encryptedIpnsKey: 'wrapped-key',
-    });
-  });
-
-  it('calls without encryptedIpnsKey when not provided', async () => {
-    const updateFn = vi.fn().mockResolvedValue(undefined);
-
-    await updateSharePermission({
-      shareId: 'share-456',
-      permission: 'read',
-      updatePermissionFn: updateFn,
-    });
-
-    expect(updateFn).toHaveBeenCalledWith('share-456', {
-      permission: 'read',
-      encryptedIpnsKey: undefined,
-    });
   });
 });

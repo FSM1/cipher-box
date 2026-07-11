@@ -10,3 +10,6 @@ export { decryptAesGcm, decryptAesGcmAad } from './decrypt';
 export { sealAesGcm, unsealAesGcm, sealAesGcmAad, unsealAesGcmAad, buildNodeAad } from './seal';
 export { encryptAesCtr } from './encrypt-ctr';
 export { decryptAesCtr, decryptAesCtrRange } from './decrypt-ctr';
+// Internal helper, exported from the aes barrel for test access only —
+// intentionally NOT re-exported from the top-level package index.
+export { importAesKey } from './import-key';

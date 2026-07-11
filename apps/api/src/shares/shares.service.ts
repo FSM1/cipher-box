@@ -12,6 +12,7 @@ import { ShareInvite } from './entities/share-invite.entity';
 import { User } from '../auth/entities/user.entity';
 import { IpnsRecord } from '../ipns/entities/ipns-record.entity';
 import { CreateShareDto } from './dto/create-share.dto';
+import { assertRootOwnership } from './root-ownership.util';
 
 @Injectable()
 export class SharesService {
@@ -31,18 +32,9 @@ export class SharesService {
    * Prevents duplicate grants for the same root node / recipient pair.
    */
   async createShare(sharerId: string, dto: CreateShareDto): Promise<Share> {
-    // D-01/SC#1 root-ownership gate (defense-in-depth, non-authoritative): reads the
-    // ipns_records creator marker to reject callers who never registered this node.
-    // The true access boundary is cryptographic (the sharer can only wrap keys they
-    // hold) — this is a cheap anti-spoof check atop that boundary. Per D-02, only
-    // shareRootIpnsName ownership is verified here; rootNodeId stays client-asserted.
-    // Runs fail-fast, before the recipient lookup.
-    const owned = await this.ipnsRecordRepo.findOne({
-      where: { ipnsName: dto.shareRootIpnsName, userId: sharerId },
-    });
-    if (!owned) {
-      throw new ForbiddenException('You are not the registered owner of this node');
-    }
+    // D-01/SC#1 root-ownership gate (defense-in-depth, non-authoritative) — see
+    // assertRootOwnership for details. Runs fail-fast, before the recipient lookup.
+    await assertRootOwnership(this.ipnsRecordRepo, dto.shareRootIpnsName, sharerId);
 
     // Look up recipient by publicKey
     // Strip 0x prefix if present — DB stores bare hex

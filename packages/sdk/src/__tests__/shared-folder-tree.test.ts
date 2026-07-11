@@ -5,7 +5,7 @@
  * that collide on the same ipnsName stay independent and never bleed key
  * material or write context into each other (D REQ-3, A4; T-48-06 / T-48-07).
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { SharedFolderTree } from '../state/shared-folder-tree';
 import type { SharedFolderState } from '../types';
 import type { PublishedNode } from '@cipherbox/core';
@@ -31,7 +31,6 @@ function makeState(overrides?: Partial<SharedFolderState>): SharedFolderState {
     children: [],
     ownerPublicKey: new Uint8Array(33).fill(3),
     recipientPublicKey: new Uint8Array(33).fill(4),
-    addShareKeysFn: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }

@@ -23,7 +23,7 @@ vi.mock('../file', () => ({
       recordBase64: 'base64record',
       metadataCid: 'QmFileMeta',
     },
-    ipnsPrivateKeyEncrypted: 'wrapped-ipns-key',
+    encryptedIpnsPrivateKey: 'wrapped-ipns-key',
   }),
 }));
 
@@ -65,7 +65,7 @@ describe('Upload operations', () => {
       expect(result.cid).toBe('QmUploadedCid');
       expect(result.encryptedSize).toBe(100);
       expect(result.fileMetaIpnsName).toBe('k51-file-meta');
-      expect(result.ipnsPrivateKeyEncrypted).toBe('wrapped-ipns-key');
+      expect(result.encryptedIpnsPrivateKey).toBe('wrapped-ipns-key');
 
       // Verify crypto functions were called
       const { generateFileKey, generateIv, encryptAesGcm } = await import('@cipherbox/crypto');

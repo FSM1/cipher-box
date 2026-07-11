@@ -312,7 +312,6 @@ async function buildFixture(
     children: [subARef, subBRef, subCRef, subFileRef],
     ownerPublicKey: new Uint8Array(33).fill(0x03),
     recipientPublicKey: new Uint8Array(33).fill(0x04),
-    addShareKeysFn: vi.fn().mockResolvedValue(undefined),
   };
 
   return { state, registerNetwork };

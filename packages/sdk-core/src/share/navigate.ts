@@ -27,7 +27,7 @@
 
 import { unsealNode, unsealChildReadKey } from '@cipherbox/core';
 import type { NodeContent, PublishedNode } from '@cipherbox/core';
-import { unwrapKey } from '@cipherbox/crypto';
+import { unwrapKey, base64ToBytes } from '@cipherbox/crypto';
 import { resolveIpnsRecord } from '../ipns';
 import { fetchFromIpfs } from '../ipfs';
 import type { SdkContext } from '../types';
@@ -54,16 +54,6 @@ export type NavigateResult =
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
-
-/** Decodes a base64 string to a Uint8Array. */
-function base64ToBytes(b64: string): Uint8Array {
-  const bin = atob(b64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) {
-    bytes[i] = bin.charCodeAt(i);
-  }
-  return bytes;
-}
 
 /**
  * Resolve an IPNS name and return the raw PublishedNode envelope.

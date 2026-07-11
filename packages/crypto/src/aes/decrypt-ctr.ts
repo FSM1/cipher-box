@@ -13,6 +13,7 @@
 
 import { CryptoError } from '../types';
 import { AES_KEY_SIZE, AES_CTR_IV_SIZE, AES_CTR_ALGORITHM, AES_CTR_LENGTH } from '../constants';
+import { importAesKey } from './import-key';
 
 /**
  * Decrypt data encrypted with AES-256-CTR.
@@ -40,18 +41,11 @@ export async function decryptAesCtr(
 
   try {
     // Copy to ensure proper ArrayBuffer (not SharedArrayBuffer)
-    const keyBuffer = new Uint8Array(key).buffer as ArrayBuffer;
     const ivBuffer = new Uint8Array(iv);
     const ciphertextBuffer = new Uint8Array(ciphertext).buffer as ArrayBuffer;
 
     // Import key for decryption
-    const cryptoKey = await crypto.subtle.importKey(
-      'raw',
-      keyBuffer,
-      { name: AES_CTR_ALGORITHM },
-      false,
-      ['decrypt']
-    );
+    const cryptoKey = await importAesKey(key, { name: AES_CTR_ALGORITHM }, ['decrypt']);
 
     // Decrypt - CTR mode decrypt is identical to encrypt (XOR is symmetric)
     const plaintext = await crypto.subtle.decrypt(
@@ -139,17 +133,8 @@ export async function decryptAesCtrRange(
     ).getBigUint64(8, false);
     new DataView(counter.buffer).setBigUint64(8, baseCounter + BigInt(startBlock), false);
 
-    // Copy to ensure proper ArrayBuffer (not SharedArrayBuffer)
-    const keyBuffer = new Uint8Array(key).buffer as ArrayBuffer;
-
     // Import key for decryption
-    const cryptoKey = await crypto.subtle.importKey(
-      'raw',
-      keyBuffer,
-      { name: AES_CTR_ALGORITHM },
-      false,
-      ['decrypt']
-    );
+    const cryptoKey = await importAesKey(key, { name: AES_CTR_ALGORITHM }, ['decrypt']);
 
     // Slice ciphertext to block-aligned range
     const slicedCiphertext = new Uint8Array(ciphertext.slice(blockAlignedStart, blockAlignedEnd))

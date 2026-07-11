@@ -142,7 +142,7 @@ describe('createFileMetadata', () => {
     expect(mockFns.createAndPublishIpnsRecord).not.toHaveBeenCalled();
   });
 
-  it('returns ipnsPrivateKeyEncrypted undefined when teeKeys is absent (never wraps under a missing TEE key)', async () => {
+  it('returns encryptedIpnsPrivateKey undefined when teeKeys is absent (never wraps under a missing TEE key)', async () => {
     const ctx = createMockContext();
 
     const result = await createFileMetadata({
@@ -154,7 +154,7 @@ describe('createFileMetadata', () => {
       ctx,
     });
 
-    expect(result.ipnsPrivateKeyEncrypted).toBeUndefined();
+    expect(result.encryptedIpnsPrivateKey).toBeUndefined();
     expect(result.ipnsRecord.encryptedIpnsPrivateKey).toBeUndefined();
     expect(mockFns.wrapKey).not.toHaveBeenCalled();
   });
@@ -173,8 +173,8 @@ describe('createFileMetadata', () => {
     });
 
     expect(mockFns.wrapKey).toHaveBeenCalledTimes(1);
-    expect(result.ipnsPrivateKeyEncrypted).toBeDefined();
-    expect(result.ipnsRecord.encryptedIpnsPrivateKey).toBe(result.ipnsPrivateKeyEncrypted);
+    expect(result.encryptedIpnsPrivateKey).toBeDefined();
+    expect(result.ipnsRecord.encryptedIpnsPrivateKey).toBe(result.encryptedIpnsPrivateKey);
     expect(result.ipnsRecord.keyEpoch).toBe(3);
   });
 

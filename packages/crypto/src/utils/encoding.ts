@@ -80,6 +80,43 @@ export function uuidToBytes(uuid: string): Uint8Array {
 }
 
 /**
+ * Convert a Uint8Array to a base64 string.
+ *
+ * [SECURITY: MEDIUM-08] Chunk-based encoding to avoid call stack issues with
+ * large Uint8Arrays (spread operator has argument limits ~65536). Lifted
+ * verbatim from the former per-package encoders (e.g. core's node encoder) that
+ * this phase consolidated here — this is now the canonical base64 encoder every
+ * package boundary re-exports from @cipherbox/crypto.
+ *
+ * @param bytes - Byte array
+ * @returns Base64-encoded string
+ */
+export function bytesToBase64(bytes: Uint8Array): string {
+  const CHUNK_SIZE = 32768;
+  let result = '';
+  for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
+    const chunk = bytes.subarray(i, Math.min(i + CHUNK_SIZE, bytes.length));
+    result += String.fromCharCode(...chunk);
+  }
+  return btoa(result);
+}
+
+/**
+ * Convert a base64 string to a Uint8Array.
+ *
+ * @param b64 - Base64-encoded string
+ * @returns Byte array
+ */
+export function base64ToBytes(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+/**
  * Concatenate multiple Uint8Arrays into one.
  *
  * @param arrays - Arrays to concatenate

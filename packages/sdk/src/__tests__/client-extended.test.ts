@@ -221,7 +221,7 @@ describe('CipherBoxClient - extended', () => {
           recordBase64: 'mock-record',
           metadataCid: 'bafymeta',
         },
-        ipnsPrivateKeyEncrypted: 'enc',
+        encryptedIpnsPrivateKey: 'enc',
         fileKey: new Uint8Array(32).fill(0x42),
         // v3 file Node fields (68.1-07/09) — read by the parent read/write-body
         // seal path; the finally block also zeroes them.
@@ -288,7 +288,7 @@ describe('CipherBoxClient - extended', () => {
           recordBase64: 'mock-record',
           metadataCid: 'bafymeta',
         },
-        ipnsPrivateKeyEncrypted: 'enc',
+        encryptedIpnsPrivateKey: 'enc',
         fileKey,
         // v3 file Node fields (68.1-07/09) — read by the parent read/write-body
         // seal path; the finally block also zeroes them (asserted below).

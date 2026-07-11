@@ -38,7 +38,6 @@ const makeParams = (overrides?: Partial<SharedWriteContextParams>): SharedWriteC
   shareId: 'share-abc-123',
   publishNodeFn: vi.fn().mockResolvedValue({ tombstoned: false, newSequenceNumber: 2n }),
   addToIpfsFn: vi.fn().mockResolvedValue({ cid: 'QmMock' }),
-  addShareKeysFn: vi.fn().mockResolvedValue(undefined),
   ...overrides,
 });
 
@@ -59,7 +58,6 @@ describe('buildSharedWriteContext', () => {
     expect(ctx.shareId).toBe('share-abc-123');
     expect(ctx.publishNodeFn).toBe(params.publishNodeFn);
     expect(ctx.addToIpfsFn).toBe(params.addToIpfsFn);
-    expect(ctx.addShareKeysFn).toBe(params.addShareKeysFn);
   });
 
   it('preserves reference identity (no deep clone)', () => {
@@ -90,18 +88,6 @@ describe('buildSharedWriteContext', () => {
     const params = makeParams({ sequenceNumber: bigNum });
     const ctx = buildSharedWriteContext(params);
     expect(ctx.sequenceNumber).toBe(bigNum);
-  });
-
-  it('preserves addShareKeysFn as callable', async () => {
-    const addFn = vi.fn().mockResolvedValue(undefined);
-    const params = makeParams({ addShareKeysFn: addFn });
-    const ctx = buildSharedWriteContext(params);
-
-    await ctx.addShareKeysFn('share-1', [{ keyType: 'file', itemId: 'f1', encryptedKey: 'abc' }]);
-
-    expect(addFn).toHaveBeenCalledWith('share-1', [
-      { keyType: 'file', itemId: 'f1', encryptedKey: 'abc' },
-    ]);
   });
 
   it('preserves publishNodeFn and addToIpfsFn as callable', async () => {

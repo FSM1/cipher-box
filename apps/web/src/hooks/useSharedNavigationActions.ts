@@ -116,7 +116,7 @@ export type SharedNavigationActionsParams = {
   /**
    * Seed (or re-seed) the SDK's sharedFolderTree for the active depth.
    */
-  seedActiveSharedFolder: (args: Omit<SeedSharedFolderArgs, 'addShareKeysFn'>) => void;
+  seedActiveSharedFolder: (args: SeedSharedFolderArgs) => void;
 };
 
 /**

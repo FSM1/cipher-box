@@ -35,6 +35,7 @@ vi.mock('@cipherbox/crypto', () => ({
   generateRandomBytes: vi.fn(),
   unwrapKey: vi.fn(),
   reWrapKey: vi.fn(),
+  bytesToBase64: vi.fn((bytes: Uint8Array) => btoa(String.fromCharCode(...bytes))),
 }));
 
 // ---------------------------------------------------------------------------

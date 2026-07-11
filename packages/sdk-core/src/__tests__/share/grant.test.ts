@@ -30,10 +30,16 @@ const mockFns = vi.hoisted(() => ({
   createAndPublishIpnsRecord: vi.fn(),
 }));
 
-vi.mock('@cipherbox/crypto', () => ({
-  wrapKey: mockFns.wrapKey,
-  reWrapKey: mockFns.reWrapKey,
-}));
+// bytesToBase64/base64ToBytes are kept as the real implementation (importOriginal)
+// since grant.ts now imports the shared codec from here too (Plan 77-08).
+vi.mock('@cipherbox/crypto', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@cipherbox/crypto')>();
+  return {
+    ...actual,
+    wrapKey: mockFns.wrapKey,
+    reWrapKey: mockFns.reWrapKey,
+  };
+});
 
 // These are mocked to prove issueReadGrant never touches the node codec or IPNS.
 vi.mock('@cipherbox/core', () => ({

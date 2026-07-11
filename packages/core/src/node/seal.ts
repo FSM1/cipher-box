@@ -24,7 +24,14 @@
  * Analog: packages/crypto/src/aes/seal.ts + packages/core/src/folder/metadata.ts
  */
 
-import { sealAesGcmAad, unsealAesGcmAad, buildNodeAad, CryptoError } from '@cipherbox/crypto';
+import {
+  sealAesGcmAad,
+  unsealAesGcmAad,
+  buildNodeAad,
+  CryptoError,
+  bytesToBase64,
+  base64ToBytes,
+} from '@cipherbox/crypto';
 import { encodeReadBody, encodeWriteBody, serializeContentForWire } from './encode';
 import { decodeReadBody, decodeWriteBody, deserializeContentFromWire } from './decode';
 import type { Node, NodeContent, NodeKind, PublishedNode } from './types';
@@ -32,31 +39,6 @@ import type { Node, NodeContent, NodeKind, PublishedNode } from './types';
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
-
-/**
- * [SECURITY: MEDIUM-08] Chunk-based base64 encoding to avoid call stack issues
- * with large Uint8Arrays (spread operator has argument limits ~65536).
- * Copied verbatim from packages/core/src/folder/metadata.ts lines 23-31.
- */
-function uint8ArrayToBase64(bytes: Uint8Array): string {
-  const CHUNK_SIZE = 32768;
-  let result = '';
-  for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
-    const chunk = bytes.subarray(i, Math.min(i + CHUNK_SIZE, bytes.length));
-    result += String.fromCharCode(...chunk);
-  }
-  return btoa(result);
-}
-
-/** Decodes a base64 string to a Uint8Array (inverse of uint8ArrayToBase64). */
-function base64ToUint8Array(b64: string): Uint8Array {
-  const bin = atob(b64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) {
-    bytes[i] = bin.charCodeAt(i);
-  }
-  return bytes;
-}
 
 /**
  * Returns the kind byte for a NodeKind value.
@@ -111,7 +93,7 @@ export async function sealNode(
     id: node.id,
     generation: node.generation,
     aeadVersion: 1,
-    readSealed: uint8ArrayToBase64(readSealedBytes),
+    readSealed: bytesToBase64(readSealedBytes),
   };
 
   // Seal write-body if present (role 0x01 — same role byte, different key: D-00 ADR 0003 §2.5)
@@ -119,7 +101,7 @@ export async function sealNode(
     const writeBodyBytes = encodeWriteBody(node);
     const writeAad = buildNodeAad(node.id, kb, node.generation, 0x01);
     const writeSealedBytes = await sealAesGcmAad(writeBodyBytes, writeKey, writeAad);
-    published.writeSealed = uint8ArrayToBase64(writeSealedBytes);
+    published.writeSealed = bytesToBase64(writeSealedBytes);
   }
 
   return published;
@@ -151,14 +133,14 @@ export async function unsealNode(
   const kb = kindByte(published.kind);
 
   // Unseal read-body (role 0x01)
-  const readSealedBytes = base64ToUint8Array(published.readSealed);
+  const readSealedBytes = base64ToBytes(published.readSealed);
   const readAad = buildNodeAad(published.id, kb, published.generation, 0x01);
   const readBodyBytes = await unsealAesGcmAad(readSealedBytes, readKey, readAad);
   const node = decodeReadBody(readBodyBytes);
 
   // Unseal write-body if envelope has it and caller supplied writeKey
   if (published.writeSealed && writeKey) {
-    const writeSealedBytes = base64ToUint8Array(published.writeSealed);
+    const writeSealedBytes = base64ToBytes(published.writeSealed);
     const writeAad = buildNodeAad(published.id, kb, published.generation, 0x01);
     const writeBodyBytes = await unsealAesGcmAad(writeSealedBytes, writeKey, writeAad);
     const writeBody = decodeWriteBody(writeBodyBytes);
@@ -195,7 +177,7 @@ export async function sealChildReadKey(
   const aad = buildNodeAad(childId, kb, childGeneration, 0x02 /* child-readkey */);
   const sealed = await sealAesGcmAad(childReadKey, parentReadKey, aad);
   // Do NOT zero childReadKey: caller is terminal owner (D-09)
-  return uint8ArrayToBase64(sealed);
+  return bytesToBase64(sealed);
 }
 
 /**
@@ -219,7 +201,7 @@ export async function unsealChildReadKey(
 ): Promise<Uint8Array> {
   const kb = kindByte(childKind);
   const aad = buildNodeAad(childId, kb, childGeneration, 0x02 /* child-readkey */);
-  const sealedBytes = base64ToUint8Array(sealedBase64);
+  const sealedBytes = base64ToBytes(sealedBase64);
   return unsealAesGcmAad(sealedBytes, parentReadKey, aad);
 }
 
@@ -250,7 +232,7 @@ export async function sealChildWriteKey(
   const aad = buildNodeAad(childId, kb, childGeneration, 0x04 /* child-writekey */);
   const sealed = await sealAesGcmAad(childWriteKey, parentWriteKey, aad);
   // Do NOT zero childWriteKey: caller is terminal owner (D-09)
-  return uint8ArrayToBase64(sealed);
+  return bytesToBase64(sealed);
 }
 
 /**
@@ -274,7 +256,7 @@ export async function unsealChildWriteKey(
 ): Promise<Uint8Array> {
   const kb = kindByte(childKind);
   const aad = buildNodeAad(childId, kb, childGeneration, 0x04 /* child-writekey */);
-  const sealedBytes = base64ToUint8Array(sealedBase64);
+  const sealedBytes = base64ToBytes(sealedBase64);
   return unsealAesGcmAad(sealedBytes, parentWriteKey, aad);
 }
 
@@ -303,7 +285,7 @@ export async function sealContent(
   const contentBytes = new TextEncoder().encode(JSON.stringify(wire));
   const aad = buildNodeAad(nodeId, 0x02 /* file */, generation, 0x03 /* content */);
   const sealed = await sealAesGcmAad(contentBytes, fileNodeReadKey, aad);
-  return uint8ArrayToBase64(sealed);
+  return bytesToBase64(sealed);
 }
 
 /**
@@ -324,7 +306,7 @@ export async function unsealContent(
   generation: number
 ): Promise<NodeContent> {
   const aad = buildNodeAad(nodeId, 0x02 /* file */, generation, 0x03 /* content */);
-  const sealedBytes = base64ToUint8Array(sealedBase64);
+  const sealedBytes = base64ToBytes(sealedBase64);
   const contentBytes = await unsealAesGcmAad(sealedBytes, fileNodeReadKey, aad);
   const raw = JSON.parse(new TextDecoder().decode(contentBytes)) as Record<string, unknown>;
   return deserializeContentFromWire(raw);

@@ -5097,9 +5097,9 @@ export class CipherBoxClient {
   /**
    * Build a SharedWriteContext for an ARBITRARY folder (readKey/writeKey/
    * publishedNode/ipnsName/sequenceNumber/children explicitly supplied),
-   * reusing `owningState`'s per-share owner/recipient pubkeys, shareId, and
-   * `addShareKeysFn` callback (share-scoped, not folder-scoped — no
-   * cross-share bleed, T-48-07). Used by {@link buildSharedWriteContextFromState}
+   * reusing `owningState`'s per-share owner/recipient pubkeys and shareId
+   * (share-scoped, not folder-scoped — no cross-share bleed, T-48-07). Used
+   * by {@link buildSharedWriteContextFromState}
    * for the currently-loaded folder AND by `moveInSharedFolder` to build a
    * one-off destination context from a freshly-resolved (never cached, A1)
    * destination folder that is NOT itself tracked in `sharedFolderTree`.
@@ -5132,7 +5132,6 @@ export class CipherBoxClient {
       shareId: owningState.shareId,
       addToIpfsFn,
       publishNodeFn,
-      addShareKeysFn: owningState.addShareKeysFn,
     });
   }
 
@@ -5330,7 +5329,7 @@ export class CipherBoxClient {
    *
    * The caller pre-resolves `filePointer` and supplies `getFileIpnsKeyFn`
    * (share-key lookup with FilePointer fallback). `ctx`, `folderKey`,
-   * owner/recipient pubkeys, `shareId`, and `addShareKeysFn` come from state.
+   * owner/recipient pubkeys, and `shareId` come from state.
    */
   async updateSharedFile(
     shareId: string,
@@ -5575,8 +5574,6 @@ export class CipherBoxClient {
           shareId: args.shareId,
           addToIpfsFn,
           publishNodeFn,
-          // D-02: never invoked in the write-body model.
-          addShareKeysFn: async () => {},
         });
 
         await shareOps.updateSharedFile(swCtx, {

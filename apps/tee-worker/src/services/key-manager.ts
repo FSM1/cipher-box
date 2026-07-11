@@ -40,18 +40,18 @@ export class ReEnrollRequiredError extends Error {
 /**
  * Decrypt an ECIES-encrypted IPNS private key using the specified epoch's private key.
  *
- * @param encryptedIpnsKey - ECIES ciphertext containing the IPNS Ed25519 private key
+ * @param encryptedIpnsPrivateKey - ECIES ciphertext containing the IPNS Ed25519 private key
  * @param epoch - The key epoch to use for decryption
  * @returns 32-byte Ed25519 IPNS private key
  * @throws Error if decryption fails (wrong epoch or corrupted data)
  */
 export async function decryptIpnsKey(
-  encryptedIpnsKey: Uint8Array,
+  encryptedIpnsPrivateKey: Uint8Array,
   epoch: number
 ): Promise<Uint8Array> {
   const keypair = await getKeypair(epoch);
   try {
-    return await unwrapKey(encryptedIpnsKey, keypair.privateKey);
+    return await unwrapKey(encryptedIpnsPrivateKey, keypair.privateKey);
   } finally {
     keypair.privateKey.fill(0);
   }
@@ -68,14 +68,14 @@ export async function decryptIpnsKey(
  *  1. keyEpoch (the epoch the key is encrypted for, from ipns_records.key_epoch)
  *  2. internalCurrentEpoch (mid-rotation fallback: key may have been re-encrypted)
  *
- * @param encryptedIpnsKey - ECIES ciphertext
+ * @param encryptedIpnsPrivateKey - ECIES ciphertext
  * @param keyEpoch - Epoch hint from ipns_records.key_epoch (never relay's currentEpoch)
  * @returns Object with decrypted key and which epoch succeeded
  * @throws ReEnrollRequiredError if keyEpoch < internalCurrentEpoch − 1 (stale)
  * @throws Error if all decryption trials fail (corrupted or unknown key)
  */
 export async function decryptWithFallback(
-  encryptedIpnsKey: Uint8Array,
+  encryptedIpnsPrivateKey: Uint8Array,
   keyEpoch: number
 ): Promise<{ ipnsPrivateKey: Uint8Array; usedEpoch: number }> {
   const internalCurrentEpoch = getInternalCurrentEpoch();
@@ -89,7 +89,7 @@ export async function decryptWithFallback(
 
   // Trial 1: keyEpoch (the epoch the key is recorded as encrypted for)
   try {
-    const ipnsPrivateKey = await decryptIpnsKey(encryptedIpnsKey, keyEpoch);
+    const ipnsPrivateKey = await decryptIpnsKey(encryptedIpnsPrivateKey, keyEpoch);
     return { ipnsPrivateKey, usedEpoch: keyEpoch };
   } catch {
     // keyEpoch trial failed — try the internal-current epoch next
@@ -99,7 +99,7 @@ export async function decryptWithFallback(
   // to current epoch while keyEpoch still reflects the old DB value)
   if (keyEpoch !== internalCurrentEpoch) {
     try {
-      const ipnsPrivateKey = await decryptIpnsKey(encryptedIpnsKey, internalCurrentEpoch);
+      const ipnsPrivateKey = await decryptIpnsKey(encryptedIpnsPrivateKey, internalCurrentEpoch);
       return { ipnsPrivateKey, usedEpoch: internalCurrentEpoch };
     } catch {
       // internal-current epoch also failed

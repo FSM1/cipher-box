@@ -219,7 +219,6 @@ async function buildFixture(): Promise<Fixture> {
     children: [itemReadRef, destReadRef],
     ownerPublicKey: new Uint8Array(33).fill(0x03),
     recipientPublicKey: new Uint8Array(33).fill(0x04),
-    addShareKeysFn: vi.fn().mockResolvedValue(undefined),
   };
 
   return { destPublished, itemPublished, srcState };

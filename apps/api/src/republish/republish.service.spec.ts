@@ -291,7 +291,7 @@ describe('RepublishService', () => {
       expect(teeService.republish).not.toHaveBeenCalled();
     });
 
-    it('should build teeEntries from the joined record (signedRecord + encryptedIpnsKey + keyEpoch + ipnsName only)', async () => {
+    it('should build teeEntries from the joined record (signedRecord + encryptedIpnsPrivateKey + keyEpoch + ipnsName only)', async () => {
       const schedule = createMockSchedule();
       const record = createMockRecord({
         encryptedIpnsPrivateKey: Buffer.from('enc-key'),
@@ -316,7 +316,7 @@ describe('RepublishService', () => {
       // teeEntries must source ALL signing inputs from the joined record — NOT the schedule
       expect(teeService.republish).toHaveBeenCalledWith([
         expect.objectContaining({
-          encryptedIpnsKey: Buffer.from('enc-key').toString('base64'),
+          encryptedIpnsPrivateKey: Buffer.from('enc-key').toString('base64'),
           keyEpoch: 3,
           ipnsName: 'k51test123',
           signedRecord: Buffer.from('canonical-signed-record').toString('base64'),
@@ -349,7 +349,7 @@ describe('RepublishService', () => {
 
       expect(result).toEqual({ processed: 1, succeeded: 1, failed: 0 });
 
-      // Schedule updated with ONLY scheduling fields (no sequenceNumber/encryptedIpnsKey)
+      // Schedule updated with ONLY scheduling fields (no sequenceNumber/encryptedIpnsPrivateKey)
       expect(scheduleRepository.save).toHaveBeenCalledWith(
         expect.objectContaining({
           consecutiveFailures: 0,
@@ -361,7 +361,7 @@ describe('RepublishService', () => {
       );
       const savedSchedule = scheduleRepository.save.mock.calls[0][0] as Record<string, unknown>;
       expect(savedSchedule).not.toHaveProperty('sequenceNumber');
-      expect(savedSchedule).not.toHaveProperty('encryptedIpnsKey');
+      expect(savedSchedule).not.toHaveProperty('encryptedIpnsPrivateKey');
 
       // renewIpnsRecordEol QB update called: signed_record updated via equality CAS
       expect(ipnsRecordRepository.createQueryBuilder)
@@ -510,7 +510,7 @@ describe('RepublishService', () => {
         (c) => !(c[0] as Record<string, unknown>).consecutiveFailures
       )?.[0] as Record<string, unknown> | undefined;
       if (savedSchedule) {
-        expect(savedSchedule).not.toHaveProperty('encryptedIpnsKey');
+        expect(savedSchedule).not.toHaveProperty('encryptedIpnsPrivateKey');
         expect(savedSchedule).not.toHaveProperty('keyEpoch');
       }
     });
@@ -786,7 +786,7 @@ describe('RepublishService', () => {
       );
       // Must NOT set any crypto column
       const createArg = scheduleRepository.create.mock.calls[0][0] as Record<string, unknown>;
-      expect(createArg).not.toHaveProperty('encryptedIpnsKey');
+      expect(createArg).not.toHaveProperty('encryptedIpnsPrivateKey');
       expect(createArg).not.toHaveProperty('keyEpoch');
       expect(createArg).not.toHaveProperty('latestCid');
       expect(createArg).not.toHaveProperty('sequenceNumber');
@@ -804,7 +804,7 @@ describe('RepublishService', () => {
       const saved = scheduleRepository.save.mock.calls[0][0] as Record<string, unknown>;
       expect(saved).toHaveProperty('nextRepublishAt');
       // Must NOT overwrite crypto columns (they live in ipns_records)
-      expect(saved).not.toHaveProperty('encryptedIpnsKey');
+      expect(saved).not.toHaveProperty('encryptedIpnsPrivateKey');
       expect(saved).not.toHaveProperty('keyEpoch');
     });
   });

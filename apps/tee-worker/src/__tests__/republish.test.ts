@@ -135,7 +135,7 @@ async function makeEntry(opts: {
   sequenceNumber?: bigint;
   keyEpoch?: number;
 }): Promise<{
-  encryptedIpnsKey: string;
+  encryptedIpnsPrivateKey: string;
   keyEpoch: number;
   ipnsName: string;
   signedRecord: string;
@@ -166,9 +166,15 @@ async function makeEntry(opts: {
   const keyToEncrypt = opts.encryptKeyOverride ?? privateKey;
   const kp = await getKeypair(epoch);
   const encrypted = await wrapKey(keyToEncrypt, kp.publicKey);
-  const encryptedIpnsKey = Buffer.from(encrypted).toString('base64');
+  const encryptedIpnsPrivateKey = Buffer.from(encrypted).toString('base64');
 
-  return { encryptedIpnsKey, keyEpoch: epoch, ipnsName, signedRecord, expectedSequence: seq };
+  return {
+    encryptedIpnsPrivateKey,
+    keyEpoch: epoch,
+    ipnsName,
+    signedRecord,
+    expectedSequence: seq,
+  };
 }
 
 describe('republish route', () => {
@@ -189,14 +195,14 @@ describe('republish route', () => {
   // ─────────────────────────────────────────────────────────────────────────
 
   it('newSequenceNumber equals the parsed input sequence — never incremented (§7.3 test 12)', async () => {
-    const { encryptedIpnsKey, keyEpoch, ipnsName, signedRecord, expectedSequence } =
+    const { encryptedIpnsPrivateKey, keyEpoch, ipnsName, signedRecord, expectedSequence } =
       await makeEntry({
         sequenceNumber: 5n,
       });
 
     const app = await createTestApp();
     const res = await postJson(app, '/republish', {
-      entries: [{ encryptedIpnsKey, keyEpoch, ipnsName, signedRecord }],
+      entries: [{ encryptedIpnsPrivateKey, keyEpoch, ipnsName, signedRecord }],
     });
 
     expect(res.status).toBe(200);
@@ -213,11 +219,11 @@ describe('republish route', () => {
   });
 
   it('processes a single entry successfully and returns valid base64 signedRecord', async () => {
-    const { encryptedIpnsKey, keyEpoch, ipnsName, signedRecord } = await makeEntry({});
+    const { encryptedIpnsPrivateKey, keyEpoch, ipnsName, signedRecord } = await makeEntry({});
 
     const app = await createTestApp();
     const res = await postJson(app, '/republish', {
-      entries: [{ encryptedIpnsKey, keyEpoch, ipnsName, signedRecord }],
+      entries: [{ encryptedIpnsPrivateKey, keyEpoch, ipnsName, signedRecord }],
     });
 
     expect(res.status).toBe(200);
@@ -235,14 +241,14 @@ describe('republish route', () => {
   it('verify-fail: rejects before decryption, decrypt spy uncalled, no signedRecord (§7.3 test 18)', async () => {
     // Create a valid IPNS record for keyA, but supply a WRONG ipnsName in the entry.
     // verifyIpnsRecordSignature(wrongName, recordFromKeyA) → false → reject before decrypt.
-    const { encryptedIpnsKey, keyEpoch, signedRecord } = await makeEntry({});
+    const { encryptedIpnsPrivateKey, keyEpoch, signedRecord } = await makeEntry({});
     const wrongIpnsName = 'k51qzi5uqu5wrongnamexyzabc123'; // valid-looking but wrong name
 
     const { decryptWithFallback } = await import('../services/key-manager.js');
 
     const app = await createTestApp();
     const res = await postJson(app, '/republish', {
-      entries: [{ encryptedIpnsKey, keyEpoch, ipnsName: wrongIpnsName, signedRecord }],
+      entries: [{ encryptedIpnsPrivateKey, keyEpoch, ipnsName: wrongIpnsName, signedRecord }],
     });
 
     expect(res.status).toBe(200);
@@ -259,21 +265,21 @@ describe('republish route', () => {
 
   it('binding-mismatch: rejects when decrypted key does not derive to ipnsName (§7.3 test 18)', async () => {
     // keyA: signs the IPNS record and provides the ipnsNameA
-    // keyB: the key inside encryptedIpnsKey (different from keyA)
+    // keyB: the key inside encryptedIpnsPrivateKey (different from keyA)
     // After decrypt: deriveEd25519PublicKey(keyB) ≠ publicKeyFromIpnsName(ipnsNameA) → reject
     const keyA = generateEd25519Keypair().privateKey;
     const keyB = generateEd25519Keypair().privateKey;
 
     // Record signed by keyA → verifyIpnsRecordSignature(ipnsNameA, bytes) passes
-    // encryptedIpnsKey contains keyB → binding check fails
-    const { encryptedIpnsKey, keyEpoch, ipnsName, signedRecord } = await makeEntry({
+    // encryptedIpnsPrivateKey contains keyB → binding check fails
+    const { encryptedIpnsPrivateKey, keyEpoch, ipnsName, signedRecord } = await makeEntry({
       privateKey: keyA,
       encryptKeyOverride: keyB, // encrypt keyB instead of keyA
     });
 
     const app = await createTestApp();
     const res = await postJson(app, '/republish', {
-      entries: [{ encryptedIpnsKey, keyEpoch, ipnsName, signedRecord }],
+      entries: [{ encryptedIpnsPrivateKey, keyEpoch, ipnsName, signedRecord }],
     });
 
     expect(res.status).toBe(200);
@@ -290,7 +296,7 @@ describe('republish route', () => {
   // ─────────────────────────────────────────────────────────────────────────
 
   it('ReEnrollRequiredError surfaces as requiresReEnroll: true with no key material (§7.3 test 19)', async () => {
-    const { encryptedIpnsKey, keyEpoch, ipnsName, signedRecord } = await makeEntry({});
+    const { encryptedIpnsPrivateKey, keyEpoch, ipnsName, signedRecord } = await makeEntry({});
 
     // Override the passthrough to throw ReEnrollRequiredError for this test
     const { decryptWithFallback } = await import('../services/key-manager.js');
@@ -298,7 +304,7 @@ describe('republish route', () => {
 
     const app = await createTestApp();
     const res = await postJson(app, '/republish', {
-      entries: [{ encryptedIpnsKey, keyEpoch, ipnsName, signedRecord }],
+      entries: [{ encryptedIpnsPrivateKey, keyEpoch, ipnsName, signedRecord }],
     });
 
     expect(res.status).toBe(200);
@@ -323,13 +329,13 @@ describe('republish route', () => {
     // Encrypt the key with epoch 1 (previous epoch); internalCurrentEpoch = 2
     // decryptWithFallback(encrypted, keyEpoch=1) → tries epoch 1 → succeeds → usedEpoch=1
     // usedEpoch (1) !== getInternalCurrentEpoch() (2) → upgrade fires
-    const { encryptedIpnsKey, keyEpoch, ipnsName, signedRecord } = await makeEntry({
+    const { encryptedIpnsPrivateKey, keyEpoch, ipnsName, signedRecord } = await makeEntry({
       keyEpoch: 1,
     });
 
     const app = await createTestApp();
     const res = await postJson(app, '/republish', {
-      entries: [{ encryptedIpnsKey, keyEpoch, ipnsName, signedRecord }],
+      entries: [{ encryptedIpnsPrivateKey, keyEpoch, ipnsName, signedRecord }],
     });
 
     expect(res.status).toBe(200);
@@ -352,7 +358,7 @@ describe('republish route', () => {
 
     // An entry whose signedRecord cannot be parsed as a valid IPNS record
     const invalidEntry = {
-      encryptedIpnsKey: valid1.encryptedIpnsKey,
+      encryptedIpnsPrivateKey: valid1.encryptedIpnsPrivateKey,
       keyEpoch: 1,
       ipnsName: valid1.ipnsName,
       signedRecord: Buffer.from('not-valid-ipns-protobuf-bytes').toString('base64'),
@@ -362,14 +368,14 @@ describe('republish route', () => {
     const res = await postJson(app, '/republish', {
       entries: [
         {
-          encryptedIpnsKey: valid1.encryptedIpnsKey,
+          encryptedIpnsPrivateKey: valid1.encryptedIpnsPrivateKey,
           keyEpoch: valid1.keyEpoch,
           ipnsName: valid1.ipnsName,
           signedRecord: valid1.signedRecord,
         },
         invalidEntry,
         {
-          encryptedIpnsKey: valid2.encryptedIpnsKey,
+          encryptedIpnsPrivateKey: valid2.encryptedIpnsPrivateKey,
           keyEpoch: valid2.keyEpoch,
           ipnsName: valid2.ipnsName,
           signedRecord: valid2.signedRecord,
@@ -412,7 +418,7 @@ describe('republish route', () => {
     const app = await createTestApp();
     // Build 101 minimal entries (we do not need valid crypto here — 400 fires before processing)
     const entries = Array.from({ length: 101 }, (_, i) => ({
-      encryptedIpnsKey: 'dGVzdA==',
+      encryptedIpnsPrivateKey: 'dGVzdA==',
       keyEpoch: 1,
       ipnsName: `k51fake${i}`,
       signedRecord: 'dGVzdA==',
@@ -428,12 +434,12 @@ describe('republish route', () => {
   // ─────────────────────────────────────────────────────────────────────────
 
   it('succeeds with new-contract entry shape (no latestCid/sequenceNumber/currentEpoch/previousEpoch)', async () => {
-    const { encryptedIpnsKey, keyEpoch, ipnsName, signedRecord } = await makeEntry({});
+    const { encryptedIpnsPrivateKey, keyEpoch, ipnsName, signedRecord } = await makeEntry({});
 
     const app = await createTestApp();
     // Deliberately omit all old relay scalars — the route must not read them
     const res = await postJson(app, '/republish', {
-      entries: [{ encryptedIpnsKey, keyEpoch, ipnsName, signedRecord }],
+      entries: [{ encryptedIpnsPrivateKey, keyEpoch, ipnsName, signedRecord }],
     });
 
     expect(res.status).toBe(200);

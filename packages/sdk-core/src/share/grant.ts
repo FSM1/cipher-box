@@ -21,7 +21,7 @@
  *   - ONE re-wrapped root readKey per claimer — no per-child key fan-out (D-06).
  */
 
-import { wrapKey, reWrapKey } from '@cipherbox/crypto';
+import { wrapKey, reWrapKey, bytesToBase64, base64ToBytes } from '@cipherbox/crypto';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -46,33 +46,6 @@ export type ReadGrantPayload = {
   /** Base64-encoded ECIES-wrapped share-root readKey (the grant encrypted key). */
   encryptedReadKey: string;
 };
-
-// ---------------------------------------------------------------------------
-// Internal encoding helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Encodes a Uint8Array to a base64 string.
- * Processes in chunks to avoid call-stack overflow on large ECIES ciphertexts.
- */
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = '';
-  const chunkSize = 8192;
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(i, Math.min(i + chunkSize, bytes.length)));
-  }
-  return btoa(binary);
-}
-
-/** Decodes a base64 string to a Uint8Array. */
-function base64ToBytes(b64: string): Uint8Array {
-  const bin = atob(b64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) {
-    bytes[i] = bin.charCodeAt(i);
-  }
-  return bytes;
-}
 
 // ---------------------------------------------------------------------------
 // issueReadGrant — READ-01 / §3.2
