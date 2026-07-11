@@ -1,0 +1,172 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "f04f9add91a2",
+  "session_id": "ef60a1b1-a4fc-441e-ae97-6c920db58f3b",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-11T20:01:31.620279Z",
+  "branch": "feat/crypto-hygiene-and-terminology-canonicalization",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/sdk-core/scripts/verify-filepointer.mts"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "804006daa2e5",
+  "checkpoint_transcript_start": 532,
+  "transcript_lines_at_start": 532,
+  "token_usage": {
+    "input_tokens": 3049,
+    "cache_creation_tokens": 226854,
+    "cache_read_tokens": 4645303,
+    "output_tokens": 25380,
+    "api_call_count": 21
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-ship-phase-2026-07-11T19:28:59.903797Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "22c7e69a20b3",
+      "timestamp": "2026-07-11T19:28:59.903797Z",
+      "native": {
+        "command": "/ship-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/ship-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01HVgv8cABxyxWtwU5LMG187",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-secure-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "804006daa2e5",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 72,
+        "end": 73,
+        "entry_ids": [
+          "a4bb9db0-5bd9-4f02-a52c-4a06d4f4246a"
+        ],
+        "tool_use_id": "toolu_01HVgv8cABxyxWtwU5LMG187"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01HVgv8cABxyxWtwU5LMG187"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-secure-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_0112T1RP6DpTthWyvYid9JNu",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-validate-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "804006daa2e5",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 289,
+        "end": 290,
+        "entry_ids": [
+          "01f6ee02-6f81-41a6-ba95-99d1cbbf68a9"
+        ],
+        "tool_use_id": "toolu_0112T1RP6DpTthWyvYid9JNu"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_0112T1RP6DpTthWyvYid9JNu"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-validate-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Triage CodeRabbit CLI findings on a crypto-hygiene/zeroization phase (Plan 77-10) and validate the phase's terminology-canonicalization rename by running e2e/unit tests.",
+    "outcome": "Fixed a real private-key zeroization leak in verify-filepointer.mts (same pattern previously fixed in registration.ts), confirmed the renamed wire field is fully exercised by the tee-worker unit suite, proved a failing TEE e2e test is an unrelated local scheduling issue, corrected an over-claim in 77-VALIDATION.md, and committed both changes.",
+    "learnings": {
+      "repo": [
+        "sdk-core's tsconfig excludes scripts/; .mts scripts under packages/sdk-core/scripts are typechecked separately via a root tsconfig.scripts.json.",
+        "A local @types/node flake can mask real typecheck errors; must filter/re-run cleanly to trust the result.",
+        "TypeORM upsert duplicate-key log lines are routine noise present in every TEE e2e run, not a signal of a real bug.",
+        "verify-filepointer.mts had the same zeroization-gap pattern as registration.ts: sensitive key material allocated before code that can throw prior to the try/finally guarding its cleanup."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/scripts/verify-filepointer.mts",
+          "line": 108,
+          "end_line": 134,
+          "finding": "userPrivateKey was allocated at line 108, but the vault GET and loadVaultKeyBlob calls (lines 116-125) ran before the try block at line 134 — an exception there would skip the finally block and leak the private key. Fixed by moving the try to open immediately after allocation and making the finally tolerate an absent vault blob."
+        }
+      ],
+      "workflow": [
+        "When a local test failure could implicate your change, trace concrete counters (jobs run, processed=0, worker calls received) to prove the failure path never touches the changed code before dismissing it as orthogonal.",
+        "Background process output pipes can buffer until completion, showing 0 lines even when the process is actively running — check the process list or an unbuffered log file instead of trusting the pipe.",
+        "When validation docs contain an unsupported claim (e.g. 'confirmed live'), correct them to match actual evidence rather than leaving an overstatement."
+      ]
+    },
+    "friction": [
+      "Piped output for a background TEE e2e run showed 0 lines due to buffering, making it look stalled when it was actually still executing.",
+      "Significant time spent distinguishing a genuine phase-77 regression from a pre-existing local TEE republish scheduling race (Test A, 105/106) before concluding it was unrelated.",
+      "A known local @types/node flake required a second, filtered typecheck run to get a trustworthy result."
+    ],
+    "open_items": [
+      "TEE e2e Test A republish job intermittently finds zero due rows (processed=0) and never calls the worker — a scheduling/eligibility race between makeScheduleDue and enrollment commit, still unfixed and unrelated to phase 77.",
+      "Other 7 CodeRabbit findings were triaged as test-only zeroization nits or false positives and left unaddressed — not itemized in detail."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-11T20:01:05.353501Z",
+    "agent_lines": 28,
+    "agent_removed": 23,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 28,
+    "total_lines_changed": 51,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
