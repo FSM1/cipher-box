@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "56f9c434304b",
+  "strategy": "manual-commit",
+  "branch": "feat/crypto-hygiene-and-terminology-canonicalization",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/77-crypto-hygiene-and-terminology-canonicalization/77-VERIFICATION.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/56/f9c434304b/0/metadata.json",
+      "transcript": "/56/f9c434304b/0/full.jsonl",
+      "content_hash": "/56/f9c434304b/0/content_hash.txt",
+      "prompt": "/56/f9c434304b/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 53396,
+    "cache_creation_tokens": 1723271,
+    "cache_read_tokens": 26879515,
+    "output_tokens": 163065,
+    "api_call_count": 141
+  }
+}

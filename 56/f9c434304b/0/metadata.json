@@ -1,0 +1,119 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "56f9c434304b",
+  "session_id": "483e60b7-fc2f-4754-bb13-36a935f407c4",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-11T10:04:54.201994Z",
+  "branch": "feat/crypto-hygiene-and-terminology-canonicalization",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/77-crypto-hygiene-and-terminology-canonicalization/77-VERIFICATION.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "dc17be6f1a55",
+  "token_usage": {
+    "input_tokens": 53396,
+    "cache_creation_tokens": 1723271,
+    "cache_read_tokens": 26879515,
+    "output_tokens": 163065,
+    "api_call_count": 141
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01WBPW7hN8Yx8uac1gK19qBN",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-verify-work"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "dc17be6f1a55",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 58,
+        "end": 59,
+        "entry_ids": [
+          "b1d860e6-dd46-40a7-b43a-af1669e05226"
+        ],
+        "tool_use_id": "toolu_01WBPW7hN8Yx8uac1gK19qBN"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01WBPW7hN8Yx8uac1gK19qBN"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-verify-work",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "summary": {
+    "intent": "Use the GSD manager workflow to dashboard-manage CipherBox milestone v2.0: verify phase 70.1, diagnose dashboard status anomalies, and drive the remaining closeout phases (74-79) through plan+execute, working autonomously across multiple quota-limited sessions.",
+    "outcome": "Phase 70.1 was verified (SC#6 live crash-resume suite passed 6/6 after fixing a stale API process and a missing test-login secret) and marked complete; a GSD plan-scanner bug that falsely showed Phase 69 as 'Executing' was root-caused and fixed (file rename) and both changes shipped via PR #606. Phases 74 and 75 were subsequently planned, executed, and verified (74 code-verified pending CI-gated legs; 75 fully verified/complete) using a corrected sequential main-checkout-per-feat-branch method after worktree-based background planning proved unworkable; Phase 77 planning/execution was still in progress when the session ended.",
+    "learnings": {
+      "repo": [
+        "GSD manager dashboard's `is_active` flag just means 'a file in the phase dir was modified in the last 5 minutes' — not an actual running-agent check; recently-edited but idle phase dirs render as falsely active.",
+        "`phase uat-passed --require-verification` downgrades disk_status to `partial` when implementation is complete and verification passed but no `<N>-UAT.md` exists — phases verified via CI/cargo (not human UAT) need a minimal UAT stub to read as Complete on the dashboard.",
+        "sdk-e2e vitest harness does not load `.env` — `SDK_E2E_SECRET` must be exported into the shell before running, else it falls back to a different default secret than the API's `TEST_LOGIN_SECRET` and every test 401s (looks like a code failure, isn't).",
+        "The local API dev process on :3000 can silently be a stale `node dist/main.js` from hours earlier, serving old compiled code with a mismatched `TEST_LOGIN_SECRET` — always confirm the running process is source-built before trusting live-stack test results.",
+        "`commit.gpgsign=false` in this repo, so autonomous/background commits don't block on 1Password biometric prompts.",
+        "Pre-commit hooks (lint-staged) in this monorepo are slow (~1-2 min); a Bash commit call that appears to hang or time out has usually already landed — verify via `git log` rather than assuming failure or retrying.",
+        "The gsd commit helper occasionally false-negatives `commit_failed` while the commit actually landed on disk."
+      ],
+      "code": [
+        {
+          "path": ".claude/gsd-core/bin/lib/plan-scan.cjs",
+          "line": 28,
+          "finding": "Loose fallback matcher counts any `.md` file whose name merely contains the case-insensitive substring 'PLAN' (not just `*-PLAN.md`) as a plan file — miscounted `69-WRITE-PLANE-RESEARCH.md` ('write-PLANE') as a 26th plan, causing `implementation_complete: false` and a false 'Executing' dashboard status."
+        },
+        {
+          "path": ".claude/gsd-core/bin/lib/init.cjs",
+          "line": 1140,
+          "finding": "`is_active` is computed purely from 'was a file in this phase dir modified in the last 5 minutes', not from any live-process/agent check."
+        }
+      ],
+      "workflow": [
+        "A background sub-agent launched at the repo root cannot `EnterWorktree` into a pre-existing worktree ('repo root, not an isolated worktree') — this breaks the pattern of spawning parallel worktree-isolated planners and later resuming them individually.",
+        "The working alternative for multi-phase autonomous planning/execution: switch the MAIN checkout to each phase's `feat/*` branch sequentially and run one background agent per phase inheriting that cwd/branch, rather than parallel worktrees — avoids the EnterWorktree limitation and shared-DB/stack contention.",
+        "CronCreate one-shot jobs can carry detailed resume instructions (exact working method, current progress, hard rules) to autonomously continue multi-hour agent work across session quota resets; instructions should be corrected/re-issued if the working method changes mid-session.",
+        "Task/agent completion notifications can reflect a stale mid-run checkpoint message rather than true final state (especially on quota-kill) — always verify actual on-disk git state (commits, branches, files) before trusting an agent's self-reported summary."
+      ]
+    },
+    "friction": [
+      "All three background planners (74, 75, 77) died mid-run from hitting the session quota limit before committing plans or finishing, requiring disk-state reassessment and relaunch each time.",
+      "EnterWorktree failed when trying to resume background planning agents in their existing worktrees, wasting an agent invocation and forcing a pivot to sequential main-checkout-per-branch.",
+      "A stale, differently-configured API process caused a false-negative crash-resume test result (401) that initially looked like a Phase 70.1 code defect, requiring multi-step diagnosis (process ID, secrets, restart).",
+      "Even after restarting the API from source, tests still 401'd because vitest doesn't load `.env` — a second, distinct false-negative requiring further diagnosis.",
+      "The dashboard falsely showed Phase 69 as 'Executing' for two unrelated reasons in sequence (missing UAT artifact, then a plan-count scanner bug), requiring iterative root-causing before the real bug was found.",
+      "The Phase 75 planning/execution agent self-stalled in an internal background-wait loop and returned early without finishing, wasting a session-quota window.",
+      "Uncommitted plan drafts were left at risk multiple times when quota cutoffs killed agents before a commit landed (Phase 74's 7 draft plans, Phase 77's 10 draft plans), requiring manual `git add`/commit recovery on resume.",
+      "A harness-reported rustc E0277 compile error for Phase 75 required an extra manual `cargo check --workspace` to confirm it was a stale rust-analyzer artifact rather than a real regression."
+    ],
+    "open_items": [
+      "Phase 74: two CI-gated verification legs remain open (Windows compile of WinFsp code; 3-platform desktop-e2e matrix) — recorded in 74-UAT.md, phase not marked complete pending CI run.",
+      "Phase 77: plan-checker/execution still in progress at transcript end.",
+      "Phases 76, 78, 79 not yet planned or executed.",
+      "Feat branches for 74, 75, 77 (and pending 76/78/79) are not yet merged or opened as PRs — left ready for user review, per no-direct-to-main rule.",
+      "A follow-up safety-net cron resume was scheduled for the next quota reset (~14:45) in case the 77/76/78/79 work gets cut off again.",
+      "Previously-known open gap (from memory): SHARE-WRITE-KEY write-share key threading is still unresolved and wasn't addressed this session."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-11T10:04:00.437807Z",
+    "agent_lines": 133,
+    "agent_removed": 0,
+    "human_added": 7,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 140,
+    "total_lines_changed": 147,
+    "agent_percentage": 90.47619047619048,
+    "metric_version": 2
+  }
+}
