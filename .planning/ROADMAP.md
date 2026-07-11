@@ -1022,11 +1022,20 @@ Plans:
 2. `base64` encode/decode helpers exist once per package boundary; the ~10 copy-pasted copies are removed with golden-vector parity preserved
 3. All IPNS-key fields use the canonical `encryptedIpnsPrivateKey` name across in-memory, wire, and tests; dead share scaffolding and the discarded wrapKey are gone; full typecheck + unit suites green
 
-**Plans:** 0 plans
+**Plans:** 10 plans
 
 Plans:
 
-- [ ] TBD (run /gsd-plan-phase 77 to break down)
+- [ ] 77-01-PLAN.md — Hoist canonical base64 codec into @cipherbox/crypto + golden-vector test (todo #5) [wave 1]
+- [ ] 77-02-PLAN.md — Zeroize AES key-buffer copies via extracted importAesKey helper (todo #3) [wave 1]
+- [ ] 77-03-PLAN.md — Rename TEE wire-contract field encryptedIpnsKey→encryptedIpnsPrivateKey (todo #9) [wave 1]
+- [ ] 77-04-PLAN.md — Extract shared assertRootOwnership API helper (todo #12) [wave 1]
+- [ ] 77-05-PLAN.md — wrapIpnsKeyForTee bytes-in/bytes-out + teePublicKey param (todo #1) [wave 1]
+- [ ] 77-06-PLAN.md — Retire dead share scaffolding + verify discarded wrapKey gone (todos #10, #11) [wave 1]
+- [ ] 77-07-PLAN.md — Consolidate packages/core node-codec base64 duplicates (todo #7) [wave 2]
+- [ ] 77-08-PLAN.md — Dedup sdk-core rotation/share base64 helpers (todo #6 part) [wave 2]
+- [ ] 77-09-PLAN.md — Dedup file/index.ts base64 + rename ipnsPrivateKeyEncrypted→canonical (todos #6, #8) [wave 2]
+- [ ] 77-10-PLAN.md — Error-path zeroize createSubfolder + verify-filepointer.mts (todos #2, #4) [wave 2]
 
 ### Phase 78: Recovery Tool v3, Vault-Load Guards, Web UX and CI Guards
 
