@@ -3,7 +3,7 @@
   "checkpoint_id": "804032a9d7f7",
   "strategy": "manual-commit",
   "branch": "feat/rust-and-fuse-rotation-revocation-soundness",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "crates/fuse/src/platform/windows/operations.rs",
     "crates/fuse/src/platform/windows/write_ops.rs"
@@ -14,13 +14,19 @@
       "transcript": "/80/4032a9d7f7/0/full.jsonl",
       "content_hash": "/80/4032a9d7f7/0/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/80/4032a9d7f7/1/metadata.json",
+      "transcript": "/80/4032a9d7f7/1/full.jsonl",
+      "content_hash": "/80/4032a9d7f7/1/content_hash.txt",
+      "prompt": "/80/4032a9d7f7/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 0,
-    "cache_creation_tokens": 0,
-    "cache_read_tokens": 0,
-    "output_tokens": 0,
-    "api_call_count": 0
+    "input_tokens": 59402,
+    "cache_creation_tokens": 2278404,
+    "cache_read_tokens": 67999505,
+    "output_tokens": 296237,
+    "api_call_count": 232
   }
 }
