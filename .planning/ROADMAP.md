@@ -756,7 +756,7 @@ Plans:
 
 **Wave 7** *(blocked on Wave 6)*
 
-- [ ] 70.1-13-PLAN.md — Desktop-e2e real-mount shared-scope-exit acceptance leg + human sign-off (SC#8/D-16, autonomous: false)
+- [x] 70.1-13-PLAN.md — Desktop-e2e real-mount shared-scope-exit acceptance leg + human sign-off (SC#8/D-16, autonomous: false)
 
 ### Phase 71: Share-Invite Security and IPNS Data-Integrity (API)
 
@@ -912,7 +912,7 @@ Plans:
 2. Desktop `query_grants_rooted_at` returns live grants and retained recipients keep access post-rotation (desktop-e2e distinguishes retained vs revoked)
 3. WinFsp overwrite-rename cannot bypass the scope-exit gate; behavior matches the fuser path (Windows CI green)
 
-**Plans:** 0 plans
+**Plans:** 13/13 plans complete
 
 Plans:
 
