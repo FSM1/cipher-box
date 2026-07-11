@@ -956,11 +956,15 @@ Plans:
 2. A hex-encoded `file_iv` fails the node-codec KAT (base64-only sample values)
 3. TS and Rust accept exactly the same UUID acceptance domain in the AAD builder, locked by a cross-language KAT
 
-**Plans:** 0 plans
+**Plans:** 5 plans
 
 Plans:
 
-- [ ] TBD (run /gsd-plan-phase 75 to break down)
+- [ ] 75-01-PLAN.md — Extend IPNS verify-vector generator + regenerate 12-case verify.json (shared oracle) [wave 1]
+- [ ] 75-02-PLAN.md — Rust ValidityType==0 EOL binding + classify_vector dedup to pub bind_verified [wave 2]
+- [ ] 75-03-PLAN.md — TS strict RFC3339 parse + ValidityType==0 gate in resolveIpnsRecord [wave 2]
+- [ ] 75-04-PLAN.md — node-codec KAT pins file_iv base64 encoding (decode-and-assert, Rust+TS) [wave 1]
+- [ ] 75-05-PLAN.md — Canonical UUID acceptance domain in uuidToBytes + build_node_aad, cross-language KAT [wave 1]
 
 ### Phase 76: FUSE Durability and TEE Write-Path Hardening
 
