@@ -107,31 +107,34 @@ async function main(): Promise<void> {
   const accessToken = auth.accessToken;
   const userPrivateKey = Uint8Array.from(Buffer.from(auth.privateKeyHex, 'hex'));
 
-  const ctx: SdkContext = buildSdkContext(args.apiUrl, accessToken);
-  const axiosInstance = ctx.axiosInstance;
-  if (!axiosInstance) {
-    throw new Error('SdkContext missing axiosInstance');
-  }
-
-  const vaultResponse = await axiosInstance.get('/vault');
-  const rootIpnsName = vaultResponse.data.rootIpnsName;
-  if (!rootIpnsName) {
-    throw new Error('Vault response missing rootIpnsName');
-  }
-
-  const vaultKeyBlob = await loadVaultKeyBlob({ userPrivateKey, ctx });
-  if (!vaultKeyBlob) {
-    throw new Error('Vault key blob not found');
-  }
-
-  // fileReadKey/subReadKey are minted (via deriveChildReadKey) inside the try
-  // below and must be cleared in the finally alongside userPrivateKey and the
-  // vault root keys — declared here so the finally can reach them regardless
-  // of which branch (root-only vs --folder-name) ran.
+  // Declared before the try so the finally can zero them regardless of where a
+  // failure occurs. The try opens immediately after userPrivateKey is allocated
+  // — so a throw during vault load (GET /vault or loadVaultKeyBlob) still reaches
+  // the finally and clears the private key. vaultKeyBlob may still be undefined
+  // there, so the finally guards it. fileReadKey/subReadKey are minted (via
+  // deriveChildReadKey) inside the try and cleared alongside the vault root keys.
+  let vaultKeyBlob: Awaited<ReturnType<typeof loadVaultKeyBlob>> | undefined;
   let fileReadKey: Uint8Array | undefined;
   let subReadKey: Uint8Array | undefined;
 
   try {
+    const ctx: SdkContext = buildSdkContext(args.apiUrl, accessToken);
+    const axiosInstance = ctx.axiosInstance;
+    if (!axiosInstance) {
+      throw new Error('SdkContext missing axiosInstance');
+    }
+
+    const vaultResponse = await axiosInstance.get('/vault');
+    const rootIpnsName = vaultResponse.data.rootIpnsName;
+    if (!rootIpnsName) {
+      throw new Error('Vault response missing rootIpnsName');
+    }
+
+    vaultKeyBlob = await loadVaultKeyBlob({ userPrivateKey, ctx });
+    if (!vaultKeyBlob) {
+      throw new Error('Vault key blob not found');
+    }
+
     const folder = await loadFolderMetadata({
       ipnsName: rootIpnsName,
       folderKey: vaultKeyBlob.rootReadKey,
@@ -221,8 +224,10 @@ async function main(): Promise<void> {
     );
   } finally {
     clearBytes(userPrivateKey);
-    clearBytes(vaultKeyBlob.rootReadKey);
-    clearBytes(vaultKeyBlob.rootWriteKey);
+    if (vaultKeyBlob) {
+      clearBytes(vaultKeyBlob.rootReadKey);
+      clearBytes(vaultKeyBlob.rootWriteKey);
+    }
     if (fileReadKey) clearBytes(fileReadKey);
     if (subReadKey) clearBytes(subReadKey);
   }
