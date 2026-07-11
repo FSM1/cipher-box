@@ -35,7 +35,7 @@ vi.mock('@cipherbox/sdk-core', async () => {
           encryptedSize: pinResult.size,
           fileMetaIpnsName: 'k51fileMeta',
           ipnsRecord: { ipnsName: 'k51fileMeta', data: 'mock-record' },
-          ipnsPrivateKeyEncrypted: 'encrypted-key-hex',
+          encryptedIpnsPrivateKey: 'encrypted-key-hex',
           fileKey: new Uint8Array(32),
         };
       }
@@ -44,7 +44,7 @@ vi.mock('@cipherbox/sdk-core', async () => {
         encryptedSize: 100,
         fileMetaIpnsName: 'k51fileMeta',
         ipnsRecord: { ipnsName: 'k51fileMeta', data: 'mock-record' },
-        ipnsPrivateKeyEncrypted: 'encrypted-key-hex',
+        encryptedIpnsPrivateKey: 'encrypted-key-hex',
         fileKey: new Uint8Array(32),
       };
     }),

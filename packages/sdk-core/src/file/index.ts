@@ -208,7 +208,7 @@ export async function createFileMetadata(params: {
   fileReadKey: Uint8Array;
   fileWriteKey: Uint8Array;
   ipnsRecord: FileIpnsRecordPayload;
-  ipnsPrivateKeyEncrypted?: string;
+  encryptedIpnsPrivateKey?: string;
 }> {
   const mode: EncryptionMode = params.encryptionMode ?? 'GCM';
 
@@ -331,7 +331,7 @@ export async function createFileMetadata(params: {
       fileReadKey,
       fileWriteKey,
       ipnsRecord,
-      ipnsPrivateKeyEncrypted: encryptedIpnsPrivateKey,
+      encryptedIpnsPrivateKey,
     };
   } catch (err) {
     // fileReadKey/fileWriteKey never reached the caller on this path — zero them.

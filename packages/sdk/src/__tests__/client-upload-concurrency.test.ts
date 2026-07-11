@@ -64,7 +64,7 @@ function setupUploadMocks() {
       recordBase64: 'base64record',
       metadataCid: 'bafymeta',
     },
-    ipnsPrivateKeyEncrypted: 'enc-key',
+    encryptedIpnsPrivateKey: 'enc-key',
     fileKey: new Uint8Array(32).fill(0x42),
     // v3 file Node fields (68.1-07/09) — the parent read/write-body seal path
     // reads these off uploadResult; the finally block also zeroes them.

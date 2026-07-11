@@ -57,7 +57,7 @@ export type UploadResult = {
    * Optional — only present when teeKeys was supplied and fully enrolled
    * (mirrors createSubfolder's encryptedIpnsPrivateKey convention).
    */
-  ipnsPrivateKeyEncrypted?: string;
+  encryptedIpnsPrivateKey?: string;
   /**
    * Plaintext file key (AES-256) for post-upload re-wrapping.
    * The caller MUST clear this with clearBytes() after use.
@@ -196,7 +196,7 @@ export async function uploadFile(params: {
         encryptedSize,
         fileMetaIpnsName: fileMetaResult.fileMetaIpnsName,
         ipnsRecord: fileMetaResult.ipnsRecord,
-        ipnsPrivateKeyEncrypted: fileMetaResult.ipnsPrivateKeyEncrypted,
+        encryptedIpnsPrivateKey: fileMetaResult.encryptedIpnsPrivateKey,
         fileKey: fileKeyForResult,
         fileNodeId: fileMetaResult.fileNodeId,
         fileReadKey: fileMetaResult.fileReadKey,

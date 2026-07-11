@@ -74,7 +74,7 @@ function makeUploadResult(index: number): sdkCore.UploadResult {
       recordBase64: `base64record${index}`,
       metadataCid: `bafymeta${index}`,
     },
-    ipnsPrivateKeyEncrypted: `enc-key-${index}`,
+    encryptedIpnsPrivateKey: `enc-key-${index}`,
     fileKey: new Uint8Array(32).fill(0x42 + index),
     // node/v3 contract (68.1-07/09): fileReadKey/fileWriteKey are independent,
     // freshly-minted keys distinct from the content-encryption fileKey. The
