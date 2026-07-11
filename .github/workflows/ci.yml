@@ -344,6 +344,9 @@ jobs:
       - name: Run API Client tests with coverage
         run: pnpm --filter @cipherbox/api-client test:coverage
 
+      - name: Run TEE Worker tests
+        run: pnpm --filter cipherbox-tee-worker test
+
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
