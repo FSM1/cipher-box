@@ -96,7 +96,6 @@ export {
   renameInSharedFolder,
   deleteFromSharedFolder,
   updateSharedFile,
-  updateSharePermission,
   buildSharedWriteContext,
   ShareKeyCache,
   CannotWriteUntilRefetchError,

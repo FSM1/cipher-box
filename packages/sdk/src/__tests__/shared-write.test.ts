@@ -53,7 +53,6 @@ import {
   deleteFromSharedFolder,
   updateSharedFile,
   moveInSharedFolder,
-  updateSharePermission,
   CannotWriteUntilRefetchError,
   type SharedWriteContext,
   type PublishNodeResult,
@@ -697,42 +696,5 @@ describe('CannotWriteUntilRefetchError (WRITE-03 / D-03)', () => {
       (k) => !['name', 'message', 'code', 'stack'].includes(k)
     );
     expect(extraKeys).toHaveLength(0);
-  });
-});
-
-// ===========================================================================
-// Section 5: updateSharePermission (unchanged from Phase 62)
-// ===========================================================================
-
-describe('updateSharePermission', () => {
-  it('calls the provided updatePermissionFn with correct params', async () => {
-    const updateFn = vi.fn().mockResolvedValue(undefined);
-
-    await updateSharePermission({
-      shareId: 'share-456',
-      permission: 'write',
-      encryptedIpnsKey: 'wrapped-key',
-      updatePermissionFn: updateFn,
-    });
-
-    expect(updateFn).toHaveBeenCalledWith('share-456', {
-      permission: 'write',
-      encryptedIpnsKey: 'wrapped-key',
-    });
-  });
-
-  it('calls without encryptedIpnsKey when not provided', async () => {
-    const updateFn = vi.fn().mockResolvedValue(undefined);
-
-    await updateSharePermission({
-      shareId: 'share-456',
-      permission: 'read',
-      updatePermissionFn: updateFn,
-    });
-
-    expect(updateFn).toHaveBeenCalledWith('share-456', {
-      permission: 'read',
-      encryptedIpnsKey: undefined,
-    });
   });
 });

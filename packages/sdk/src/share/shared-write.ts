@@ -889,27 +889,3 @@ export async function moveInSharedFolder(params: {
 
   return { srcResult, destResult };
 }
-
-// ---------------------------------------------------------------------------
-// updateSharePermission — unchanged thin wrapper
-// ---------------------------------------------------------------------------
-
-/**
- * Update a share's permission level.
- *
- * Thin callback wrapper — no key material involved.
- */
-export async function updateSharePermission(params: {
-  shareId: string;
-  permission: string;
-  encryptedIpnsKey?: string;
-  updatePermissionFn: (
-    shareId: string,
-    body: { permission: string; encryptedIpnsKey?: string }
-  ) => Promise<void>;
-}): Promise<void> {
-  await params.updatePermissionFn(params.shareId, {
-    permission: params.permission,
-    encryptedIpnsKey: params.encryptedIpnsKey,
-  });
-}

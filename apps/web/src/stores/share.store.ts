@@ -6,9 +6,11 @@ import { create } from 'zustand';
  * v2.0 grant shape (Phase 68 / ROT-07): the API now returns encrypted-key +
  * generation fields (`encryptedReadKey`, `rootGeneration`, `rootNodeId`)
  * instead of the legacy per-share wrapped key (`encryptedKey`/
- * `encryptedIpnsKey`). Those legacy fields are kept (optional, unpopulated)
- * for back-compat since nothing in the web app reads them anymore — the
+ * `encryptedIpnsKey`). `encryptedKey` is kept (optional, unpopulated) for
+ * back-compat since nothing in the web app reads it anymore — the
  * encrypted-key path replaces the per-mutation key fan-out entirely (SC#2).
+ * The legacy `encryptedIpnsKey` field (paired with the now-removed
+ * `updateSharePermission` orphaned wrapper) was dropped entirely (77-06).
  * `itemType` has no source in the v2.0 DTO (the Node model no longer exposes
  * a file/folder discriminant at the grant layer) and is left optional/
  * undefined until a real data path exists.
@@ -27,8 +29,6 @@ export type ReceivedShare = {
   encryptedKey?: string;
   /** Permission level: read-only or read-write (derived from encryptedWriteKey presence) */
   permission: 'read' | 'write';
-  /** @deprecated legacy per-share wrapped IPNS key; superseded by encryptedWriteKey (SC#2) */
-  encryptedIpnsKey?: string | null;
   createdAt: string;
   /** Hex-encoded ECIES encrypted key for read access (D-07 grant data path) */
   encryptedReadKey: string;

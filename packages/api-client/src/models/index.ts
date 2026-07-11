@@ -128,8 +128,6 @@ export * from './unpinDto';
 export * from './unpinResponseDto';
 export * from './updateEncryptedKeyDto';
 export * from './updateGrantDto';
-export * from './updatePermissionDto';
-export * from './updatePermissionDtoPermission';
 export * from './uploadResponseDto';
 export * from './vaultConfigResponseDto';
 export * from './vaultExportDto';
