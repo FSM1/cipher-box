@@ -5,15 +5,15 @@ milestone_name: Metadata and Sharing Refactor
 current_phase: 74
 current_phase_name: Rust and FUSE Rotation-Revocation Soundness
 status: executing
-stopped_at: Completed 74-05-PLAN.md
-last_updated: "2026-07-11T04:27:37.606Z"
+stopped_at: Completed 74-02-PLAN.md
+last_updated: "2026-07-11T04:42:15.027Z"
 last_activity: 2026-07-11
 last_activity_desc: Phase 74 execution started
 progress:
   total_phases: 22
   completed_phases: 16
   total_plans: 195
-  completed_plans: 193
+  completed_plans: 194
   percent: 73
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 ## Current Position
 
 Phase: 74 (Rust and FUSE Rotation-Revocation Soundness) — EXECUTING
-Plan: 6 of 7
+Plan: 7 of 7
 Status: Ready to execute
 Last activity: 2026-07-11 — Phase 74 execution started
 
@@ -271,6 +271,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 74 P06 | 45min | 2 tasks | 3 files |
 | Phase 74 P74-03 | 20min | 2 tasks | 2 files |
 | Phase 74 P05 | 25min | 2 tasks | 2 files |
+| Phase 74 P02 | 12min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -601,6 +602,8 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: grant_scope.rs refresh function extended to InodeKind::Root | Folder | File (was Root | Folder only) — files rotate too via mint_file_key_on_rotate/CRIT-1 (74-03)
 - [Phase 74]: RotationTransport::update_grant generation param typed u32 (matches RotationDeps::update_grant exactly); ApiClientTransport converts u32->u64 only at the cipherbox_api_client::shares::update_grant call boundary
 - [Phase 74]: delete_grant implemented for engine-contract completeness though is_revoked is structurally always false from collect_sent_shares (revoked shares hard-deleted server-side); no test asserts that branch firing through this path (T-74-14 accepted, not mitigated)
+- [Phase 74]: 74-02: RotatedNodeKey.sequenceNumber typed bigint (not the plan table's literal number) to match this file's existing IPNS sequence-number convention
+- [Phase 74]: 74-02: repairDirtyNode crash-resume path does not populate rotatedNodes (out of scope per plan's task action/acceptance_criteria) — Rust 74-01 folded it in; documented TS/Rust asymmetry for a future follow-up
 
 ## Operator Next Steps
 
@@ -608,8 +611,8 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-11T04:27:37.599Z
-**Stopped at:** Completed 74-05-PLAN.md
+**Last session:** 2026-07-11T04:42:15.020Z
+**Stopped at:** Completed 74-02-PLAN.md
 **Resume file:** 
 
 None
