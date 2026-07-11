@@ -24,7 +24,7 @@
  */
 export async function importAesKey(
   key: Uint8Array,
-  algorithm: AesKeyAlgorithm | string,
+  algorithm: AlgorithmIdentifier,
   usages: KeyUsage[]
 ): Promise<CryptoKey> {
   // Copy to ensure proper ArrayBuffer (not SharedArrayBuffer) and to avoid

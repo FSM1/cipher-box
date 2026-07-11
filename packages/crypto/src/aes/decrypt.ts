@@ -7,6 +7,7 @@
 
 import { CryptoError } from '../types';
 import { AES_KEY_SIZE, AES_IV_SIZE, AES_TAG_SIZE, AES_GCM_ALGORITHM } from '../constants';
+import { importAesKey } from './import-key';
 
 /**
  * Decrypt data encrypted with AES-256-GCM.
@@ -42,18 +43,11 @@ export async function decryptAesGcm(
 
   try {
     // Copy to ensure proper ArrayBuffer (not SharedArrayBuffer)
-    const keyBuffer = new Uint8Array(key).buffer as ArrayBuffer;
     const ivBuffer = new Uint8Array(iv).buffer as ArrayBuffer;
     const ciphertextBuffer = new Uint8Array(ciphertext).buffer as ArrayBuffer;
 
     // Import key for decryption
-    const cryptoKey = await crypto.subtle.importKey(
-      'raw',
-      keyBuffer,
-      { name: AES_GCM_ALGORITHM },
-      false,
-      ['decrypt']
-    );
+    const cryptoKey = await importAesKey(key, { name: AES_GCM_ALGORITHM }, ['decrypt']);
 
     // Decrypt - Web Crypto verifies auth tag and throws on mismatch
     const plaintext = await crypto.subtle.decrypt(
@@ -107,19 +101,12 @@ export async function decryptAesGcmAad(
 
   try {
     // Copy to ensure proper ArrayBuffer (not SharedArrayBuffer)
-    const keyBuffer = new Uint8Array(key).buffer as ArrayBuffer;
     const ivBuffer = new Uint8Array(iv).buffer as ArrayBuffer;
     const ciphertextBuffer = new Uint8Array(ciphertext).buffer as ArrayBuffer;
     const aadBuffer = new Uint8Array(aad).buffer as ArrayBuffer;
 
     // Import key for decryption
-    const cryptoKey = await crypto.subtle.importKey(
-      'raw',
-      keyBuffer,
-      { name: AES_GCM_ALGORITHM },
-      false,
-      ['decrypt']
-    );
+    const cryptoKey = await importAesKey(key, { name: AES_GCM_ALGORITHM }, ['decrypt']);
 
     // Decrypt — Web Crypto verifies auth tag (which covers the AAD) and throws on mismatch
     const plaintext = await crypto.subtle.decrypt(
