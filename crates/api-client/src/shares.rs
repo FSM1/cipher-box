@@ -90,9 +90,10 @@ pub async fn revoke_shares_for_items(
 /// read-key-rotation-only call (see [`UpdateGrantRequest`]) and returns HTTP
 /// 204 No Content on success; there is no response body to deserialize.
 ///
-/// `encrypted_read_key` MUST already be ECIES ciphertext hex — the caller
-/// (the rotation engine's `re_mint_grants_rooted_at`) performs the
-/// `cipherbox_crypto::wrap_key` call itself before invoking this function.
+/// `encrypted_read_key` MUST already be base64-encoded ECIES ciphertext — the
+/// caller (the rotation engine's `re_mint_grants_rooted_at`) performs the
+/// `cipherbox_crypto::wrap_key` + `base64_encode` itself before invoking this
+/// function.
 /// This function does not wrap, unwrap, or otherwise touch key material; it
 /// only forwards the already-encrypted string.
 pub async fn update_grant(
