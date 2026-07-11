@@ -122,3 +122,7 @@ None - no external service configuration required.
 ---
 *Phase: 77-crypto-hygiene-and-terminology-canonicalization*
 *Completed: 2026-07-11*
+
+## Self-Check: PASSED
+
+All 7 modified source files and the SUMMARY.md itself verified present on disk. All 3 commits (`b0ef9c08b`, `e58c604e3`, `f9e85dd0b`) verified present in git log.
