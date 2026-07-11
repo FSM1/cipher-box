@@ -409,6 +409,41 @@ describe('IPNS operations', () => {
         );
       });
 
+      // Phase 75 parity: a signed record with a DUPLICATE CBOR map key must be rejected, not
+      // silently last-wins-decoded. cborg defaults to rejectDuplicateMapKeys=false (last-wins),
+      // which would let `ValidityType:[1,0]` decode to 0 and be accepted — while the Rust decoder
+      // (crates/core/src/ipns.rs) rejects duplicate keys. resolveIpnsRecord now decodes with
+      // { rejectDuplicateMapKeys: true } so both layers reach the same verdict.
+      it('throws on a duplicate CBOR map key (Rust decoder parity)', async () => {
+        const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
+        const { verifyEd25519, deriveIpnsName } = await import('@cipherbox/crypto');
+        vi.mocked(verifyEd25519).mockResolvedValue(true);
+        // Hand-craft CBOR: { "ValidityType": 1, "ValidityType": 0 } — cborg's encoder will not
+        // emit duplicate keys, so build the bytes directly. 0xA2 = map(2); 0x6C = text(12).
+        const key = new TextEncoder().encode('ValidityType');
+        const dupKeyCbor = new Uint8Array([
+          0xa2,
+          0x60 | key.length,
+          ...key,
+          0x01,
+          0x60 | key.length,
+          ...key,
+          0x00,
+        ]);
+        const data = Buffer.from(dupKeyCbor).toString('base64');
+        vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
+          success: true,
+          cid: 'bafyDUPKEY',
+          sequenceNumber: '1',
+          signatureV2: btoa('valid-sig'),
+          data,
+          pubKey: btoa('pubkey'),
+        });
+        vi.mocked(deriveIpnsName).mockResolvedValue('k51dup-key');
+
+        await expect(resolveIpnsRecord('k51dup-key')).rejects.toThrow();
+      });
+
       it('throws on wrong-typed Sequence in CBOR (D-07 type guard)', async () => {
         const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
         const { verifyEd25519, deriveIpnsName } = await import('@cipherbox/crypto');
@@ -834,6 +869,29 @@ describe('parseRfc3339ToUnixSecs (Phase 75 SC1)', () => {
 
   it('rejects a timestamp missing the trailing Z', () => {
     expect(parseRfc3339ToUnixSecs('2026-01-01T00:00:00')).toBeNull();
+  });
+
+  // Phase 75 parity: fixed-width fields. Mirrors the Rust parser
+  // (crates/api-client/src/ipns.rs parse_rfc3339_to_unix_secs) so a leading sign, a
+  // non-4-digit year, and 1-digit fields reach the identical fail-closed verdict.
+  it('rejects a leading + on the year (Rust parity)', () => {
+    expect(parseRfc3339ToUnixSecs('+2099-01-01T00:00:00Z')).toBeNull();
+  });
+
+  it('rejects a leading + on a sub-field (Rust parity)', () => {
+    expect(parseRfc3339ToUnixSecs('2099-+1-01T00:00:00Z')).toBeNull();
+    expect(parseRfc3339ToUnixSecs('2099-01-01T+0:00:00Z')).toBeNull();
+  });
+
+  it('rejects a non-4-digit / overflowing year (Rust parity)', () => {
+    expect(parseRfc3339ToUnixSecs('99999-01-01T00:00:00Z')).toBeNull();
+    expect(parseRfc3339ToUnixSecs('999-01-01T00:00:00Z')).toBeNull();
+  });
+
+  it('rejects 1-digit month/day/hour fields (Rust parity)', () => {
+    expect(parseRfc3339ToUnixSecs('2099-1-01T00:00:00Z')).toBeNull();
+    expect(parseRfc3339ToUnixSecs('2099-01-1T00:00:00Z')).toBeNull();
+    expect(parseRfc3339ToUnixSecs('2099-01-01T0:00:00Z')).toBeNull();
   });
 });
 

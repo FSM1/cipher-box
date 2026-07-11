@@ -212,7 +212,11 @@ export function parseRfc3339ToUnixSecs(s: string): number | null {
     return null;
   }
   const [yearStr, monthStr, dayStr] = dateParts;
-  if (!isAllDigits(yearStr) || !isAllDigits(monthStr) || !isAllDigits(dayStr)) {
+  // Fixed-width RFC3339 date fields: YYYY (4) - MM (2) - DD (2). Fixed lengths reject a
+  // leading sign ("+2099"), non-4-digit / i64-overflowing years, and 1-digit months —
+  // matching the Rust parser (crates/api-client/src/ipns.rs) exactly. Real records from
+  // format_validity_timestamp are always zero-padded, so this never false-rejects.
+  if (!isFixedDigits(yearStr, 4) || !isFixedDigits(monthStr, 2) || !isFixedDigits(dayStr, 2)) {
     return null;
   }
   const year = Number(yearStr);
@@ -236,7 +240,8 @@ export function parseRfc3339ToUnixSecs(s: string): number | null {
     return null;
   }
   const [hourStr, minuteStr, secondStr] = timeParts;
-  if (!isAllDigits(hourStr) || !isAllDigits(minuteStr) || !isAllDigits(secondStr)) {
+  // Fixed-width RFC3339 time fields: HH (2) : MM (2) : SS (2). Mirrors the Rust parser.
+  if (!isFixedDigits(hourStr, 2) || !isFixedDigits(minuteStr, 2) || !isFixedDigits(secondStr, 2)) {
     return null;
   }
   const hour = Number(hourStr);
@@ -288,6 +293,11 @@ export function parseRfc3339ToUnixSecs(s: string): number | null {
 
 function isAllDigits(s: string): boolean {
   return s.length > 0 && /^[0-9]+$/.test(s);
+}
+
+/** Exactly `len` ASCII digits — enforces fixed-width RFC3339 fields for cross-language parity. */
+function isFixedDigits(s: string, len: number): boolean {
+  return s.length === len && isAllDigits(s);
 }
 
 /**
@@ -374,7 +384,13 @@ export async function resolveIpnsRecord(
         // Decode the signed CBOR and require that its embedded Value matches the response cid
         // and its embedded Sequence matches the response sequenceNumber.
         const dataBytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
-        const cborFields = cborDecode(dataBytes) as Record<string, unknown>;
+        // Phase 75 parity hardening: reject duplicate CBOR map keys. cborg defaults to
+        // last-wins, which would let a signed record with e.g. `ValidityType:[1,0]` decode
+        // to 0 (accepted) while the Rust decoder (decode_ipns_cbor_validity/_data) rejects
+        // duplicate keys outright — a verdict split-brain. Reject on both sides identically.
+        const cborFields = cborDecode(dataBytes, {
+          rejectDuplicateMapKeys: true,
+        }) as Record<string, unknown>;
 
         // D-08: embedded value must be "/ipfs/<response.cid>"
         const embeddedValue =

@@ -200,6 +200,17 @@ pub async fn resolve_ipns_verified(
     bind_verified(&resp, verdict)
 }
 
+/// Parse exactly `len` ASCII digits to a `u64`. Rejects any leading sign, wrong length, or
+/// non-digit byte — enforces fixed-width RFC3339 fields for cross-language parity with the
+/// TS parser (`packages/sdk-core/src/ipns/index.ts` `isFixedDigits`). `parse::<T>()` alone
+/// would accept a leading `+`/`-` and overflow-length years.
+fn parse_fixed_digits(s: &str, len: usize) -> Option<u64> {
+    if s.len() != len || !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    s.parse().ok()
+}
+
 /// Parse a fixed-format RFC3339 timestamp string to Unix seconds.
 ///
 /// The IPNS Validity field uses the format produced by `format_validity_timestamp` in
@@ -214,13 +225,20 @@ fn parse_rfc3339_to_unix_secs(s: &str) -> Option<u64> {
     let (date_part, time_part) = s.split_once('T')?;
 
     let mut date_parts = date_part.split('-');
-    let year: i64 = date_parts.next()?.parse().ok()?;
-    let month: u32 = date_parts.next()?.parse().ok()?;
-    let day: u32 = date_parts.next()?.parse().ok()?;
+    let year_str = date_parts.next()?;
+    let month_str = date_parts.next()?;
+    let day_str = date_parts.next()?;
     // Reject trailing date components (e.g. "2026-01-01-99").
     if date_parts.next().is_some() {
         return None;
     }
+    // Fixed-width RFC3339 date fields: YYYY (4) - MM (2) - DD (2). Fixed lengths reject a
+    // leading sign ("+2099", which `parse::<i64>()` would otherwise accept) and non-4-digit /
+    // i64-overflowing years — matching the TS parser
+    // (packages/sdk-core/src/ipns/index.ts `isFixedDigits`) exactly.
+    let year = parse_fixed_digits(year_str, 4)? as i64;
+    let month = parse_fixed_digits(month_str, 2)? as u32;
+    let day = parse_fixed_digits(day_str, 2)? as u32;
 
     // Split off nanoseconds if present; a present fractional part must be non-empty and
     // all ASCII digits (reject junk like "00:00:00." or extra separators).
@@ -232,13 +250,17 @@ fn parse_rfc3339_to_unix_secs(s: &str) -> Option<u64> {
         }
     }
     let mut time_parts = time_no_nanos.split(':');
-    let hour: u64 = time_parts.next()?.parse().ok()?;
-    let minute: u64 = time_parts.next()?.parse().ok()?;
-    let second: u64 = time_parts.next()?.parse().ok()?;
+    let hour_str = time_parts.next()?;
+    let minute_str = time_parts.next()?;
+    let second_str = time_parts.next()?;
     // Reject trailing time components (e.g. "00:00:00:99").
     if time_parts.next().is_some() {
         return None;
     }
+    // Fixed-width RFC3339 time fields: HH (2) : MM (2) : SS (2). Mirrors the TS parser.
+    let hour = parse_fixed_digits(hour_str, 2)?;
+    let minute = parse_fixed_digits(minute_str, 2)?;
+    let second = parse_fixed_digits(second_str, 2)?;
 
     // Range + leap-aware day-of-month validation. The Hinnant civil_from_days algorithm
     // silently rolls an impossible date (e.g. 2026-02-31) into the following month, which
@@ -857,6 +879,18 @@ mod tests {
         assert!(parse_rfc3339_to_unix_secs("2026-01-01-99T00:00:00.000000000Z").is_none());
         assert!(parse_rfc3339_to_unix_secs("2026-01-01T00:00:00:99.000000000Z").is_none());
         assert!(parse_rfc3339_to_unix_secs("2026-01-01T00:00:00.abcZ").is_none());
+
+        // Phase 75 parity: fixed-width fields. A leading '+'/'-' (which `parse::<T>()` would
+        // otherwise accept), a non-4-digit / overflowing year, and 1-digit fields all fail
+        // closed — identical to the TS parser (packages/sdk-core/src/ipns/index.ts).
+        assert!(parse_rfc3339_to_unix_secs("+2099-01-01T00:00:00Z").is_none()); // leading + on year
+        assert!(parse_rfc3339_to_unix_secs("2099-+1-01T00:00:00Z").is_none()); // leading + on month
+        assert!(parse_rfc3339_to_unix_secs("2099-01-01T+0:00:00Z").is_none()); // leading + on hour
+        assert!(parse_rfc3339_to_unix_secs("99999-01-01T00:00:00Z").is_none()); // 5-digit year
+        assert!(parse_rfc3339_to_unix_secs("999-01-01T00:00:00Z").is_none()); // 3-digit year
+        assert!(parse_rfc3339_to_unix_secs("2099-1-01T00:00:00Z").is_none()); // 1-digit month
+        assert!(parse_rfc3339_to_unix_secs("2099-01-1T00:00:00Z").is_none()); // 1-digit day
+        assert!(parse_rfc3339_to_unix_secs("2099-01-01T0:00:00Z").is_none()); // 1-digit hour
     }
 
     // ---- Task 2 (Phase 75): ValidityType == 0 EOL gate tests ----
