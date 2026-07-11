@@ -234,8 +234,13 @@ pub mod implementation {
                         // verbatim (the new child is already spliced into BOTH
                         // planes by build_mkdir_journal_entry / build_folder_metadata).
                         let parent_meta_cid = cipherbox_api_client::ipfs::upload_content(&api, &parent_published_node).await.map_err(|e| e.to_string())?;
-                        let parent_key_arr: [u8; 32] = parent_ipns_private_key.try_into()
-                            .map_err(|_| "Invalid parent IPNS key length".to_string())?;
+                        // SC2 item 4: MkdirJournalResult.parent_ipns_private_key is now
+                        // a locally-owned Zeroizing seed; narrow into Zeroizing<[u8;32]>
+                        // (scrubbed on drop) with no transient plaintext Vec.
+                        let parent_key_arr: zeroize::Zeroizing<[u8; 32]> = zeroize::Zeroizing::new(
+                            <[u8; 32]>::try_from(parent_ipns_private_key.as_slice())
+                                .map_err(|_| "Invalid parent IPNS key length".to_string())?,
+                        );
                         let new_seq = seq + 1;
                         let parent_value = format!("/ipfs/{}", parent_meta_cid);
                         let parent_record = cipherbox_core::ipns::create_ipns_record(

@@ -169,7 +169,7 @@ impl CipherBoxFS {
     pub fn build_folder_metadata(
         &self,
         folder_ino: u64,
-    ) -> Result<(Vec<u8>, Vec<u8>, String, Option<String>), String> {
+    ) -> Result<(Vec<u8>, Zeroizing<Vec<u8>>, String, Option<String>), String> {
         use cipherbox_core::node::{
             encode_published_node, seal::seal_published_node, Node, NodeKind, NodeWriteBody,
             SealedChildRef, WriteChildRef,
@@ -204,7 +204,7 @@ impl CipherBoxFS {
                 } => (
                     **read_key,
                     **write_key,
-                    ipns_private_key.to_vec(),
+                    Zeroizing::new(ipns_private_key.to_vec()),
                     ipns_name.clone(),
                     true,
                     folder_node_id,
@@ -219,7 +219,7 @@ impl CipherBoxFS {
                 } => (
                     **read_key,
                     **write_key,
-                    ipns_private_key.to_vec(),
+                    Zeroizing::new(ipns_private_key.to_vec()),
                     ipns_name.clone(),
                     false,
                     folder_node_id,
@@ -304,7 +304,7 @@ impl CipherBoxFS {
             }
         };
         let write_body = NodeWriteBody {
-            ipns_private_key: ipns_private_key.clone(),
+            ipns_private_key: ipns_private_key.to_vec(),
             write_children,
         };
         let published = seal_published_node(
@@ -437,16 +437,16 @@ impl CipherBoxFS {
             .insert(folder_ino, std::time::Instant::now());
         let (published_node, ipns_private_key, ipns_name, old_cid) =
             self.build_folder_metadata(folder_ino)?;
-        // D-12: wrap the owned signing-seed clone in Zeroizing before passing to
-        // spawn_metadata_publish. build_folder_metadata returns owned copies — the
-        // inode's own Zeroizing fields are NOT consumed. node/v3: the sealed
-        // `published_node` bytes are uploaded verbatim (no folder_key needed by the
-        // publisher; sealing already happened in build_folder_metadata).
+        // D-12: build_folder_metadata already returns the owned signing-seed clone
+        // as Zeroizing<Vec<u8>> (SC2 item 4) — pass it through directly. The inode's
+        // own Zeroizing fields are NOT consumed. node/v3: the sealed `published_node`
+        // bytes are uploaded verbatim (no folder_key needed by the publisher; sealing
+        // already happened in build_folder_metadata).
         spawn_metadata_publish(
             self.api.clone(),
             self.rt.clone(),
             published_node,
-            Zeroizing::new(ipns_private_key),
+            ipns_private_key,
             ipns_name,
             old_cid,
             self.publish_coordinator.clone(),
@@ -535,7 +535,7 @@ impl CipherBoxFS {
                     self.api.clone(),
                     self.rt.clone(),
                     published_node,
-                    Zeroizing::new(ipk), // D-12: wrap owned signing-seed clone in Zeroizing
+                    ipk, // D-12: build_folder_metadata already returns Zeroizing<Vec<u8>>
                     in_,
                     oc,
                     self.publish_coordinator.clone(),
