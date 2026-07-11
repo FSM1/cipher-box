@@ -147,8 +147,9 @@ export function useFolderMutations() {
         };
         useFolderStore.getState().setFolder(newFolderNode);
 
-        // Post-create re-wrapping is handled by the SDK's shareCallbacks.
-        // The CipherBoxClient.createFolder() calls reWrapNewItems() internally.
+        // Post-create re-wrapping is handled by CipherBoxClient.createFolder()
+        // internally (the legacy share-callback re-wrap config was removed —
+        // encrypted-key grant refs replace the per-recipient key fan-out).
 
         setState({ isLoading: false, error: null });
         return { ipnsName: result.ipnsName };

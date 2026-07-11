@@ -8,7 +8,6 @@
  * Security invariants:
  *   - ipnsPrivateKey is NEVER a top-level parameter — it lives inside the sealed
  *     write-body and is derived by unsealing with writeKey (WRITE-01).
- *   - addShareKeysFn is NEVER invoked (D-02); the field is retained for Phase 68.
  *   - No write field is ever placed on SealedChildRef (NODE-03 / §2.2).
  *   - Zero only minted keys on failure paths; never zero caller-supplied keys (D-09).
  *   - An offline co-writer whose target was rotated out gets a typed
@@ -106,18 +105,6 @@ export type SharedWriteContext = {
    * Returns the IPFS CID of the uploaded bytes.
    */
   addToIpfsFn: (data: Uint8Array) => Promise<{ cid: string }>;
-  /**
-   * addShareKeysFn: typed but NEVER invoked in the write-body model (D-02).
-   * The field is retained here for Phase 68 which deletes the type.
-   */
-  addShareKeysFn: (
-    shareId: string,
-    keys: Array<{
-      keyType: ShareKeyType;
-      itemId: string;
-      encryptedKey: string;
-    }>
-  ) => Promise<void>;
 };
 
 // ---------------------------------------------------------------------------
@@ -296,7 +283,7 @@ async function resealAndPublishParent(
  * with write-body (ipnsPrivateKey inside sealed writeBody), sealNode under
  * child readKey/writeKey, publish via seam (seq=1n), then insert SealedChildRef
  * into parent read-body AND WriteChildRef into parent write-body, re-seal+publish
- * the parent. addShareKeysFn is NEVER called (D-02).
+ * the parent.
  */
 export async function createSharedSubfolder(
   swCtx: SharedWriteContext,
@@ -418,7 +405,7 @@ export async function createSharedSubfolder(
  * Mints fileKey + fileReadKey + fileWriteKey + file Ed25519 keypair. Encrypts
  * content with fileKey (AES-256-GCM), uploads to IPFS, builds a file node with
  * write-body, seals, publishes (seq=1n), then inserts SealedChildRef + WriteChildRef
- * into the parent and re-publishes. addShareKeysFn is NEVER called (D-02).
+ * into the parent and re-publishes.
  */
 export async function uploadToSharedFolder(
   swCtx: SharedWriteContext,
@@ -562,7 +549,7 @@ export async function uploadToSharedFolder(
  *
  * Updates the item's display name in the parent's read-body children and
  * re-publishes the parent. Write-body writeChildren are preserved unchanged
- * (rename does not affect the write link). addShareKeysFn is NEVER called (D-02).
+ * (rename does not affect the write link).
  *
  * @param params.itemId - IPNS name of the item to rename (unique key in SealedChildRef)
  * @param params.newName - New display name
@@ -605,7 +592,7 @@ export async function renameInSharedFolder(
  *
  * Removes the item from the parent's read-body children (matched by IPNS name)
  * AND the corresponding WriteChildRef from the write-body (matched by child UUID).
- * Re-publishes the parent. addShareKeysFn is NEVER called (D-02).
+ * Re-publishes the parent.
  *
  * @param params.itemId - IPNS name of the item to remove from the read-body children.
  * @param params.childNodeId - UUID of the child node (WriteChildRef.childId, minted at
@@ -650,7 +637,7 @@ export async function deleteFromSharedFolder(
  * The caller must supply the file's readKey, writeKey, and ipnsPrivateKey
  * (derived from the parent's write chain via walkChildWriteKey). Re-encrypts
  * the content, uploads to IPFS, builds a new file node sealed under the
- * existing keys, and publishes. addShareKeysFn is NEVER called (D-02).
+ * existing keys, and publishes.
  */
 export async function updateSharedFile(
   swCtx: SharedWriteContext,
@@ -773,7 +760,7 @@ export async function updateSharedFile(
  * Move an item between two subfolders within a shared write context.
  *
  * Re-seals the child's readKey under the destination parent's readKey and
- * moves WriteChildRef from src to dest write-body. No addShareKeysFn (D-02).
+ * moves WriteChildRef from src to dest write-body.
  *
  * @param params.srcCtx - Source parent write context
  * @param params.destCtx - Destination parent write context

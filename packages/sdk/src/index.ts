@@ -41,7 +41,6 @@ export type {
   CipherBoxClientConfig,
   FolderState,
   SharedFolderState,
-  ShareCallbacks,
   PinningConfig,
   RotationClientCallbacks,
   LocalGrantRecord,

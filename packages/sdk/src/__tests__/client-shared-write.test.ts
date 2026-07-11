@@ -89,7 +89,6 @@ function seedSharedFolder(
     children: [],
     ownerPublicKey: new Uint8Array(33).fill(3),
     recipientPublicKey: new Uint8Array(33).fill(4),
-    addShareKeysFn: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
   client.loadSharedFolder(state.shareId, state);

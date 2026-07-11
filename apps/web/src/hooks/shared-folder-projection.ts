@@ -16,7 +16,7 @@
 
 import type { SealedChildRef, PublishedNode } from '@cipherbox/core';
 import { hexToBytes } from '@cipherbox/crypto';
-import type { CipherBoxClient, SharedFolderState, ShareKeyType } from '@cipherbox/sdk';
+import type { CipherBoxClient, SharedFolderState } from '@cipherbox/sdk';
 
 /** Parse a 0x-prefixed or bare hex public key string into bytes. */
 export function parsePublicKey(keyHex: string): Uint8Array {
@@ -65,10 +65,6 @@ export type SeedSharedFolderArgs = {
   children: SealedChildRef[];
   ownerPublicKey: Uint8Array;
   recipientPublicKey: Uint8Array;
-  addShareKeysFn: (
-    shareId: string,
-    keys: Array<{ keyType: ShareKeyType; itemId: string; encryptedKey: string }>
-  ) => Promise<void>;
   /**
    * 32-byte AES key for unsealing the write-body (Phase 65 write-body model).
    * Supplied by Phase-68 wiring; defaults to a zero key placeholder until then.
@@ -105,7 +101,6 @@ export function seedSharedFolder(client: SharedFolderClient, args: SeedSharedFol
     children: args.children,
     ownerPublicKey: args.ownerPublicKey,
     recipientPublicKey: args.recipientPublicKey,
-    addShareKeysFn: args.addShareKeysFn,
   };
   client.loadSharedFolder(args.shareId, state);
 }

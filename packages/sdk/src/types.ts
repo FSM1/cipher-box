@@ -14,7 +14,6 @@ import type {
 } from '@cipherbox/sdk-core';
 import type { AxiosInstance } from '@cipherbox/api-client';
 import type { SealedChildRef, Node, PublishedNode } from '@cipherbox/core';
-import type { SentShareInfo, ShareKeyType } from './share';
 import type { RotationHighWater } from './state/rotation-high-water';
 
 /**
@@ -24,22 +23,6 @@ import type { RotationHighWater } from './state/rotation-high-water';
 export type PinningConfig = {
   mode: PinningMode;
   externalProvider?: ExternalProviderConfig;
-};
-
-/**
- * Callbacks for share-aware key re-wrapping.
- *
- * The SDK uses these to discover active shares and store re-wrapped keys
- * without taking a direct dependency on the shares API or stores.
- */
-export type ShareCallbacks = {
-  /** Find active shares covering a folder (including ancestor shares). */
-  getCoveringShares: (folderIpnsName: string) => Promise<SentShareInfo[]>;
-  /** Store re-wrapped keys for a share via the API. */
-  addShareKeys: (
-    shareId: string,
-    keys: Array<{ keyType: 'file' | 'folder'; itemId: string; encryptedKey: string }>
-  ) => Promise<void>;
 };
 
 /**
@@ -126,17 +109,6 @@ export type CipherBoxClientConfig = {
   rootIpnsKeypair?: { publicKey: Uint8Array; privateKey: Uint8Array };
   /** TEE keys for IPNS key wrapping */
   teeKeys?: TeeKeys;
-  /**
-   * Callbacks for share-aware operations (re-wrapping).
-   *
-   * When provided, the SDK will automatically re-wrap file and folder keys
-   * for share recipients after uploadFile() and createFolder(). This ensures
-   * recipients can decrypt items added to shared folders after the share
-   * was created.
-   *
-   * If not provided, re-wrapping is skipped (consumer must handle it).
-   */
-  shareCallbacks?: ShareCallbacks;
   /** Callback when an operation starts */
   onOperationStart?: (operation: string) => void;
   /** Callback when an operation completes */
@@ -224,11 +196,11 @@ export type FolderState = {
  *
  * Unlike {@link FolderState}, a shared folder carries the full
  * `SharedWriteContext` surface: distinct owner + recipient secp256k1 public
- * keys, the share's IPNS private key, the `shareId`, and the `addShareKeysFn`
- * callback. Shared folders are tracked in a SIBLING `SharedFolderTree` (NOT in
- * `folderTree`) because two shares can collide on `ipnsName` and each carries a
- * distinct write context — keying by `shareId` keeps them isolated (D REQ-3,
- * decision A4; research Pattern 2).
+ * keys, the share's IPNS private key, and the `shareId`. Shared folders are
+ * tracked in a SIBLING `SharedFolderTree` (NOT in `folderTree`) because two
+ * shares can collide on `ipnsName` and each carries a distinct write context
+ * — keying by `shareId` keeps them isolated (D REQ-3, decision A4; research
+ * Pattern 2).
  */
 export type SharedFolderState = {
   /** Share ID — the key under which this state lives in SharedFolderTree */
@@ -251,9 +223,4 @@ export type SharedFolderState = {
   ownerPublicKey: Uint8Array;
   /** Current user's secp256k1 public key (share_keys entries wrap for recipient) */
   recipientPublicKey: Uint8Array;
-  /** Callback to add share keys for the recipient (same signature as SharedWriteContext) */
-  addShareKeysFn: (
-    shareId: string,
-    keys: Array<{ keyType: ShareKeyType; itemId: string; encryptedKey: string }>
-  ) => Promise<void>;
 };

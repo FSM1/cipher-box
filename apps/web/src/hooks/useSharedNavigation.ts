@@ -222,20 +222,10 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
    * `seedSharedFolder` clones key buffers internally so the caller's keys stay
    * owned by the web hook (zeroed on cleanup).
    */
-  const seedActiveSharedFolder = useCallback(
-    (args: Omit<SeedSharedFolderArgs, 'addShareKeysFn'>) => {
-      if (!hasSdkClient()) return;
-      seedSharedFolder(getSdkClient(), {
-        ...args,
-        // No-op: the web `addShareKeys` fan-out this called into is deleted
-        // (SC#2 / D-12) — it never worked (always threw the Phase-68-deferred
-        // stub), so this preserves the same effective behavior without the
-        // dead per-mutation key-wrap loop.
-        addShareKeysFn: async () => {},
-      });
-    },
-    []
-  );
+  const seedActiveSharedFolder = useCallback((args: SeedSharedFolderArgs) => {
+    if (!hasSdkClient()) return;
+    seedSharedFolder(getSdkClient(), args);
+  }, []);
 
   // ---------------------------------------------------------------------------
   // Share loading effect

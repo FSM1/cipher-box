@@ -165,7 +165,6 @@ describe('shared-folder projection (REQ-3) — write hook reads nothing back', (
     const ipnsPrivateKey = new Uint8Array(32).fill(2);
     const recipientPublicKey = new Uint8Array(33).fill(3);
     const ownerPublicKey = parsePublicKey('0x' + 'ab'.repeat(33));
-    const addShareKeysFn = vi.fn(async () => {});
 
     seedSharedFolder(fake.client, {
       shareId: 'share-1',
@@ -176,7 +175,6 @@ describe('shared-folder projection (REQ-3) — write hook reads nothing back', (
       children: [makeChild('a')],
       ownerPublicKey,
       recipientPublicKey,
-      addShareKeysFn,
     });
 
     expect(fake.loaded).toHaveLength(1);
