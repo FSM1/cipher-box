@@ -1088,14 +1088,14 @@ Plans:
 2. The details panes show a real Created date (or the field is intentionally dropped), sourced from the Node envelope rather than the "unavailable (phase 63)" stub
 3. The four `describe.skip` suites are revived and passing (or explicitly retired with rationale); zero `TODO(phase 63)`/`TODO(phase 65)` markers remain in the codebase
 
-**Plans:** 8 plans
+**Plans:** 3/8 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 79-01-PLAN.md — SDK ResolvedChild.createdAt foundation (mandatory field + resolveChildren + sdk suite green)
-- [ ] 79-02-PLAN.md — Web hook/service foundation: expose resolvedByIpnsName, real itemType, ipnsName-keying non-change, invite decision
-- [ ] 79-03-PLAN.md — Package test revival: bin.test.ts fixture, load.test.ts + file.test.ts revive-or-retire
+- [x] 79-01-PLAN.md — SDK ResolvedChild.createdAt foundation (mandatory field + resolveChildren + sdk suite green)
+- [x] 79-02-PLAN.md — Web hook/service foundation: expose resolvedByIpnsName, real itemType, ipnsName-keying non-change, invite decision
+- [x] 79-03-PLAN.md — Package test revival: bin.test.ts fixture, load.test.ts + file.test.ts revive-or-retire
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
