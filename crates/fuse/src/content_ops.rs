@@ -363,6 +363,7 @@ pub async fn publish_file_node(
             },
             &[],
             None, // D-01a: no JournalOp::FilePublish variant; exhaustion → Err → EIO
+            2,    // preserve today's single-retry (2-attempt) per-file behavior
         )
         .await?;
     }
