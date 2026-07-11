@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "a0afed81a2f9",
+  "strategy": "manual-commit",
+  "branch": "feat/crypto-hygiene-and-terminology-canonicalization",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/ROADMAP.md",
+    ".planning/phases/77-crypto-hygiene-and-terminology-canonicalization/77-01-PLAN.md",
+    ".planning/phases/77-crypto-hygiene-and-terminology-canonicalization/77-02-PLAN.md",
+    ".planning/phases/77-crypto-hygiene-and-terminology-canonicalization/77-03-PLAN.md",
+    ".planning/phases/77-crypto-hygiene-and-terminology-canonicalization/77-04-PLAN.md",
+    ".planning/phases/77-crypto-hygiene-and-terminology-canonicalization/77-05-PLAN.md",
+    ".planning/phases/77-crypto-hygiene-and-terminology-canonicalization/77-06-PLAN.md",
+    ".planning/phases/77-crypto-hygiene-and-terminology-canonicalization/77-07-PLAN.md",
+    ".planning/phases/77-crypto-hygiene-and-terminology-canonicalization/77-08-PLAN.md",
+    ".planning/phases/77-crypto-hygiene-and-terminology-canonicalization/77-09-PLAN.md",
+    ".planning/phases/77-crypto-hygiene-and-terminology-canonicalization/77-10-PLAN.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/a0/afed81a2f9/0/metadata.json",
+      "transcript": "/a0/afed81a2f9/0/full.jsonl",
+      "content_hash": "/a0/afed81a2f9/0/content_hash.txt",
+      "prompt": "/a0/afed81a2f9/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 53190,
+    "cache_creation_tokens": 1715965,
+    "cache_read_tokens": 25814432,
+    "output_tokens": 158640,
+    "api_call_count": 138
+  }
+}

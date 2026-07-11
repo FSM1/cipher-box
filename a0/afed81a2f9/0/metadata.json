@@ -1,0 +1,143 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "a0afed81a2f9",
+  "session_id": "483e60b7-fc2f-4754-bb13-36a935f407c4",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-11T07:51:24.358703Z",
+  "branch": "feat/crypto-hygiene-and-terminology-canonicalization",
+  "checkpoints_count": 2,
+  "save_step_count": 1,
+  "files_touched": [
+    ".planning/ROADMAP.md",
+    ".planning/phases/77-crypto-hygiene-and-terminology-canonicalization/77-01-PLAN.md",
+    ".planning/phases/77-crypto-hygiene-and-terminology-canonicalization/77-02-PLAN.md",
+    ".planning/phases/77-crypto-hygiene-and-terminology-canonicalization/77-03-PLAN.md",
+    ".planning/phases/77-crypto-hygiene-and-terminology-canonicalization/77-04-PLAN.md",
+    ".planning/phases/77-crypto-hygiene-and-terminology-canonicalization/77-05-PLAN.md",
+    ".planning/phases/77-crypto-hygiene-and-terminology-canonicalization/77-06-PLAN.md",
+    ".planning/phases/77-crypto-hygiene-and-terminology-canonicalization/77-07-PLAN.md",
+    ".planning/phases/77-crypto-hygiene-and-terminology-canonicalization/77-08-PLAN.md",
+    ".planning/phases/77-crypto-hygiene-and-terminology-canonicalization/77-09-PLAN.md",
+    ".planning/phases/77-crypto-hygiene-and-terminology-canonicalization/77-10-PLAN.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "4cb8109f67ef",
+  "token_usage": {
+    "input_tokens": 53190,
+    "cache_creation_tokens": 1715965,
+    "cache_read_tokens": 25814432,
+    "output_tokens": 158640,
+    "api_call_count": 138
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01WBPW7hN8Yx8uac1gK19qBN",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-verify-work"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "4cb8109f67ef",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 58,
+        "end": 59,
+        "entry_ids": [
+          "b1d860e6-dd46-40a7-b43a-af1669e05226"
+        ],
+        "tool_use_id": "toolu_01WBPW7hN8Yx8uac1gK19qBN"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01WBPW7hN8Yx8uac1gK19qBN"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-verify-work",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Use the GSD manager workflow to drive milestone v2.0 closeout across cipher-box: refresh the phase dashboard, verify Phase 70.1 via UAT, fix a mis-flagged Phase 69 status, then discuss/plan/execute the remaining unblocked phases (74-79), continuing autonomously across quota resets via scheduled cron resumes.",
+    "outcome": "Phase 70.1 was verified (SC#6 crash-resume suite passed 6/6 after restarting the API from source), Phase 69's false 'partial' status was root-caused to a plan-file scanner bug and fixed, both were merged to main via PR #606. Phases 74 and 75 were fully planned, executed, and verified (74 code-verified with only CI-gated legs remaining; 75 fully verified and marked complete) on their own feat branches; Phase 77 was mid-execution (plans committed, plan-checker not yet run) when the transcript ends, with 76/78/79 still queued.",
+    "learnings": {
+      "repo": [
+        "gsd-core's plan-file scanner (`plan-scan.cjs:28`) has a loose `/PLAN/i` substring fallback that miscounts any `.md` file merely containing 'PLAN' (e.g. `69-WRITE-PLANE-RESEARCH.md`) as an extra plan, causing false `partial`/'Executing' dashboard status even when a phase is 100% done.",
+        "The manager dashboard's `is_active` flag just means 'a file in the phase dir was modified in the last 5 minutes' — not that an agent is actually running.",
+        "`phase uat-passed --require-verification` treats 'implementation complete + verification passed but no UAT file' as not-fully-done, downgrading disk_status to `partial` (relevant for phases verified only via CI/cargo, not conversational UAT).",
+        "vitest does not load `.env` files — sdk-e2e test harness falls back to a default test secret unless `SDK_E2E_SECRET` is explicitly exported, causing 401s against the API's `TEST_LOGIN_SECRET` even when `.env` files are aligned.",
+        "The live API on :3000 can silently be a stale `node dist/main.js` process (detached, PPID 1) serving old compiled code instead of current source — must verify PID/start-time before trusting test results against it.",
+        "Claude Code sub-agents launched at the repo root cannot `EnterWorktree` into a pre-existing worktree ('repo root, not an isolated worktree' error) — parallel worktree-isolated background planning across multiple agents is a dead end in this environment.",
+        "`commit.gpgsign=false` in this repo means commits don't block on 1Password biometric prompts, which matters for autonomous/unattended runs.",
+        "Pre-commit hooks in this monorepo (lint-staged) are slow (~1-2 min) and can make commits look hung when they actually landed; the gsd commit helper sometimes false-negatives `commit_failed` even though the commit succeeded."
+      ],
+      "code": [
+        {
+          "path": ".claude/gsd-core/bin/lib/plan-scan.cjs",
+          "line": 28,
+          "finding": "Loose fallback matcher counts any .md filename containing substring 'PLAN' (case-insensitive) as a plan file if it's not a -SUMMARY.md, causing false positives like 'WRITE-PLANE-RESEARCH.md'."
+        },
+        {
+          "path": ".claude/gsd-core/bin/lib/init.cjs",
+          "line": 1140,
+          "finding": "is_active is computed purely from 'file modified in phase dir within last 5 minutes', not from actual agent liveness."
+        }
+      ],
+      "workflow": [
+        "When a background agent dies mid-task from a session/quota limit, check disk state directly (git log, ls PLAN files, VERIFICATION status) rather than trusting the agent's last reported message — actual progress is often further along than the failure notification implies.",
+        "Sequential processing on the main checkout (switching branches per phase) is more robust than parallel worktree-isolated background agents for phases whose commands (pnpm/cargo) require the installed workspace.",
+        "When scheduling autonomous resume-after-quota-reset work via cron, the resume prompt must be corrected/updated if the working method changes mid-session (stale instructions pointing at removed worktrees caused a wasted cycle) — always delete and recreate the cron with current state.",
+        "For infra-gated verification legs (e.g. Windows-only compile, multi-platform e2e matrix) that can't run on the current host, record them in the phase's UAT.md/STATE.md as infra-gated rather than treating the phase as blocked on human verification."
+      ]
+    },
+    "friction": [
+      "Three background planners (74, 75, 77) died simultaneously mid-run due to hitting the session/quota limit, requiring disk-state reassessment and relaunch.",
+      "EnterWorktree failed for sub-agents launched from repo root trying to pin into an existing worktree, wasting a launch cycle before pivoting to sequential main-checkout-on-feat-branch approach.",
+      "A Phase 75 sub-agent stopped itself early (~21 min) due to a flawed self-made background-wait loop, not an actual quota limit, requiring detection and relaunch with explicit 'no background-wait' instructions.",
+      "Phase 77's planner produced 10 plans but the commit didn't land before the 09:40 quota cutoff, leaving them uncommitted and requiring manual recovery/commit on resume.",
+      "A misleading rustc E0277 diagnostic (anchored to stdlib, not actual repo code) needed a manual `cargo check --workspace` to rule out as a real regression before trusting Phase 75 as complete.",
+      "`.env` grep was denied by the user/permission system as a secret file, requiring a workaround of reading only package.json scripts instead."
+    ],
+    "open_items": [
+      "Phase 77 (crypto hygiene/terminology cleanup): 10 plans committed but plan-checker had not yet run and execution had not started when the transcript ends.",
+      "Phases 76, 78, 79 still need discuss/plan/execute — none is expected to need discuss-phase but that's unconfirmed.",
+      "Phase 74's two CI-gated verification legs (Windows compile of WinFsp code, 3-platform desktop-e2e matrix) remain unverified locally — need CI confirmation before `/gsd-verify-work 74` can close it out.",
+      "None of the feat branches (74, 75, 77+) have been pushed/opened as PRs yet per user's no-auto-merge/no-auto-PR instruction — all awaiting user review.",
+      "A safety-net cron resume was scheduled for ~09:50 (and possibly needs another one for the next ~5h quota window) to keep autonomous closeout going for 76/78/79."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-11T07:50:55.497663Z",
+    "agent_lines": 1452,
+    "agent_removed": 13,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 1452,
+    "total_lines_changed": 1465,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 1449,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
