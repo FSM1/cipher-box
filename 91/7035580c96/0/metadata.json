@@ -1,0 +1,198 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "917035580c96",
+  "session_id": "483e60b7-fc2f-4754-bb13-36a935f407c4",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-11T16:51:38.338152Z",
+  "branch": "feat/rust-and-fuse-rotation-revocation-soundness",
+  "checkpoints_count": 4,
+  "save_step_count": 2,
+  "files_touched": [
+    ".planning/todos/pending/2026-07-11-rotation-republish-drops-write-sealed-body.md",
+    "crates/fuse/src/write_ops/grant_scope.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "b7b12c52ce89",
+  "token_usage": {
+    "input_tokens": 135841,
+    "cache_creation_tokens": 2961460,
+    "cache_read_tokens": 171543747,
+    "output_tokens": 701795,
+    "api_call_count": 509
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01WBPW7hN8Yx8uac1gK19qBN",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-verify-work"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "b7b12c52ce89",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 58,
+        "end": 59,
+        "entry_ids": [
+          "b1d860e6-dd46-40a7-b43a-af1669e05226"
+        ],
+        "tool_use_id": "toolu_01WBPW7hN8Yx8uac1gK19qBN"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01WBPW7hN8Yx8uac1gK19qBN"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-verify-work",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01CNZJ7MnPyjeXNg3DARrzzC",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "b7b12c52ce89",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 1080,
+        "end": 1081,
+        "entry_ids": [
+          "8e2a50b0-39cf-4521-b2da-61cdeee51a34"
+        ],
+        "tool_use_id": "toolu_01CNZJ7MnPyjeXNg3DARrzzC"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01CNZJ7MnPyjeXNg3DARrzzC"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ship-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "summary": {
+    "intent": "Manage and ship the CipherBox v2.0 milestone via /gsd-manager across multiple sessions: verify Phase 70.1, fix a false 'Executing' status on Phase 69, plan and execute Phases 74/75/77 in the background (with quota-interruption resumption), and run /ship-phase 74 through PR #607, including a deep investigation into a macOS-only desktop-e2e overwrite-rename failure that the user insisted be root-caused and fixed before merge rather than deferred.",
+    "outcome": "Phases 70.1, 75, and 77 were fully verified/completed; Phase 74 was executed, shipped to PR #607, and — after the user pushed back on an initial 'infra flake' misdiagnosis — a genuine Phase-74 regression (scope-exit rotation not marking rotated folders as locally mutated, letting a stale metadata refresh clobber refreshed keys) was found via 10 local FUSE-T reproductions and fixed in grant_scope.rs, verified deterministic across 3 clean runs, and pushed to the PR; several related defects (SC#2 hex/base64 encoding bug, dirty-resume key surfacing, a Greptile P1 WinFsp guard) were also fixed, and a systemic hex/base64 hardening todo was logged.",
+    "learnings": {
+      "repo": [
+        "Two encoding domains coexist by convention with no type enforcement: internal node-codec/stored sealed refs use base64, share API wire fields (encryptedReadKey/encryptedWriteKey/itemNameEncrypted) use hex — this has caused repeated recurring bugs (captured as a high-severity hardening todo).",
+        "GSD's plan-file scanner (plan-scan.cjs:28) has a loose `/PLAN/i` substring fallback that miscounts any .md file containing 'PLAN' (e.g. '...WRITE-PLANE-RESEARCH.md') as a real plan file, causing false 'partial/executing' phase status.",
+        "Sub-agents launched at the repo root cannot EnterWorktree into a pre-existing worktree — the working pattern for background phase work is sequential processing on the main checkout switched per feat branch, not parallel worktrees.",
+        "macOS FUSE-T/SMB's overwrite-rename issues an `open()` on the *source* file before renaming; Linux's kernel rename never opens either file. This asymmetry is why rotation races only surface on macOS desktop-e2e and never on Linux CI.",
+        "`drain_refresh_completions` (fs.rs) already guards `mutated_folders`/`publish_queue` against a stale metadata refresh clobbering keys via `apply_owned_children`, but scope-exit rotations previously didn't mark their folders as mutated, so they weren't covered by this existing guard.",
+        "`write_sealed` AEAD binds `node.generation()` in its AAD (crates/core/src/node/seal.rs ~188-192), so any republish after a generation bump must re-seal the write body at the new generation, not carry the old one forward.",
+        "The API's IPNS resolve is read-after-write consistent for normal DB rows (confirmed via instrumentation: 596 `normal`, 0 `seqFloor` in one run) — shared-folder nodes are NOT served from lagging DHT/network state, ruling out API-side eventual consistency as a rotation-race cause.",
+        "`apply_owned_children` (crates/fuse/src/inode.rs) re-materializes every File child with `cid: String::new()` on a background metadata refresh, forcing a re-resolve from IPNS even if the file was already locally resolved — a real (separate, filed) durability gap.",
+        "All 4 share DTOs (create-share, create-invite, claim-invite, update-grant) validate encryptedReadKey/encryptedWriteKey/itemNameEncrypted as hex via `@Matches(/^(?:[0-9a-fA-F]{2})+$/)` — any client code touching these fields must hex-encode, not base64-encode."
+      ],
+      "code": [
+        {
+          "path": "crates/sdk/src/rotation/engine.rs",
+          "line": 617,
+          "finding": "Grant re-mint (`re_mint_grants_rooted_at`) was base64-encoding `encrypted_read_key` for the share-grant wire field, but the API requires hex — caused a runtime 400 that broke SC#2 grant re-mint end-to-end; fixed to hex::encode. Internal node-codec fields (read_sealed, read_key_sealed) correctly remain base64."
+        },
+        {
+          "path": "crates/fuse/src/write_ops/grant_scope.rs",
+          "line": 534,
+          "finding": "Root cause of the macOS-only Part D overwrite-rename failure: scope-exit rotation republishes folders via the rotation engine 'out of band' without marking them as `mutated_folders`, so a stale in-flight metadata refresh (resolved pre-rotation, completes post-rotation) can clobber the freshly-refreshed inode keys via apply_owned_children, causing parent/child key divergence and cascading AES-GCM failures on retry. Fix: mark rotated folders as mutated after key refresh so the existing drain_refresh_completions guard protects them."
+        },
+        {
+          "path": "crates/fuse/src/write_ops/rotation_deps.rs",
+          "line": 53,
+          "finding": "Rotation republishes rotated nodes with `write_sealed: None` (write-plane preservation explicitly deferred to a Phase-72 follow-up per comment) — causes 'no write_sealed body' errors on subsequent owned-walks and would prevent replay.rs from recovering the signing seed after rotation; real durability bug, prototyped a fix but reverted to keep the Part-D fix minimal, filed as a separate todo instead."
+        },
+        {
+          "path": "crates/fuse/src/fs.rs",
+          "line": 639,
+          "finding": "Async FilePointer resolution captures the file's read_key at spawn time; if a rotation republishes the file with a new key before the in-flight resolution completes, the resolution unseals with the stale key and fails. A read-path self-heal (re-resolve with current key) was attempted but proven insufficient since the underlying published data itself could be inconsistent (not just the captured key)."
+        },
+        {
+          "path": "crates/fuse/src/write_ops/implementation/rename.rs",
+          "line": 105,
+          "finding": "fuser rename path guards source/dest kind compatibility (ENOTDIR/EISDIR) before the non-empty-folder check; the WinFsp handle_rename path lacked this guard, letting file↔directory overwrite-renames slip through (Greptile P1) — ported the guard using new STATUS_NOT_A_DIRECTORY/STATUS_FILE_IS_A_DIRECTORY NTSTATUS helpers in operations.rs."
+        }
+      ],
+      "workflow": [
+        "When a user challenges a hasty 'infra flake' diagnosis with concrete log evidence, stop and re-investigate empirically rather than defending the initial read — local reproduction on the same OS/filesystem stack is far faster and more conclusive than reasoning from CI logs alone.",
+        "Reproducing a flaky platform-specific e2e failure locally requires exactly matching the CI toolchain (e.g. building against FUSE-T's fuse.pc via PKG_CONFIG_PATH override, not the system's macFUSE pkgconfig) or the repro won't trigger the real bug.",
+        "Key-fingerprint instrumentation (logging short hashes of keys at publish/unseal/child-ref points) was the technique that finally pinned an intermittent crypto-mismatch race after several plausible-but-wrong fixes failed — cheap temporary debug logging plus multiple full e2e run cycles (~10 min each) was necessary to converge.",
+        "Deterministic confirmation (3 consecutive clean runs) was required before trusting a fix for an intermittent-looking failure that had actually been consistent (7/7 prior fails) — a single pass isn't sufficient evidence for a race-condition fix.",
+        "Revert exploratory/instrumentation code promptly once it's served its diagnostic purpose, and keep the final fix diff minimal — several plausible fixes (write_sealed preservation, coalesced dest-gate, naive self-heal) were tried, verified insufficient, and cleanly reverted rather than left in as speculative hardening.",
+        "Ship-phase pipelines benefit from delegating independent audit gates (secure, crypto-privacy review, security-review, simplify) to a single sub-agent run in parallel with the orchestrator holding the SDK-E2E gate for exclusive stack access, avoiding build/stack contention.",
+        "When background agents may hit an API quota/session limit, verify actual on-disk state (git log, plan files, branch names) rather than trusting agent-reported status — notifications can undersell real progress (e.g. planners reported as 'failed' had actually committed research/patterns) or overstate it."
+      ]
+    },
+    "friction": [
+      "GSD's plan-scanner false-positive (substring match on 'PLAN') caused a real phase to show as falsely 'Executing', requiring multi-step investigation before the true root cause (not the initial UAT-stub guess) was found.",
+      "Sub-agents cannot EnterWorktree into a pre-existing worktree, which broke the initial background-planning parallelization strategy and forced a pivot to sequential main-checkout-per-branch processing mid-session.",
+      "Hit the session/API quota limit three separate times mid-autonomous-run, requiring CronCreate-based scheduled resumes and manual state reassessment each time.",
+      "One resume agent used a flawed self-made background-wait loop and stalled for ~21 minutes without making progress, requiring a relaunch with explicit 'no background-wait' instructions.",
+      "The gsd commit helper intermittently false-negatives `commit_failed` while the commit actually lands, requiring manual `git log` verification instead of blind retries.",
+      "Root-causing the macOS overwrite-rename bug required 10 full local reproduction cycles (~10 min each, full docker stack reset + rebuild + mount) after three earlier hypothesis-driven fixes (write_sealed preservation, read-path self-heal, coalesced dest-gate) each proved insufficient or misdirected.",
+      "CodeRabbit's PR-level web review surfaced significantly more findings (12 unresolved threads, including a Greptile P1 security issue) than its local CLI review (8, all doc-only), requiring a second triage pass after the PR was already believed ready."
+    ],
+    "open_items": [
+      "PR #607 (Phase 74) remains unmerged pending final CI confirmation and the user's merge decision.",
+      "Hex/base64 wire-encoding hardening (authoritative doc, named boundary codecs, branded types, contract test) captured as a high-severity todo for a future dedicated phase, not yet started.",
+      "`write_sealed: None` durability gap in rotation republish (owned-walk failures, replay.rs signing-seed recovery risk) filed as a separate todo, not fixed in this session.",
+      "`ts-rotatednodes-defensive-copy-parity` todo remains open — the TS engine's root/child commit branches (engine.ts:2064/:2235) still lack the defensive Uint8Array copy that Rust's `.clone()` provides.",
+      "Phases 76, 78, and 79 remain unplanned/unstarted (76's branch was created then deleted after the user paused mid-flight).",
+      "Server-side DTO doc-comment mislabels ('Hex-encoded' on base64 fields in apps/api/src/shares/dto/share-response.dto.ts) still need fixing but require OpenAPI codegen + regenerated client commit, deferred as out-of-phase-scope.",
+      "A MEDIUM crypto-review finding (grant re-mint trusts server-supplied recipient public key binding without independent verification) logged as a todo, not fixed.",
+      "macOS desktop-e2e 401/JWT-expiry flake on the slower ~22-min runner noted as a secondary infra issue distinct from the resolved rotation race, not yet addressed."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-11T16:50:49.102704Z",
+    "agent_lines": 88,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 88,
+    "total_lines_changed": 88,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 88,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}

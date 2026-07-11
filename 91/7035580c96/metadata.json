@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "917035580c96",
+  "strategy": "manual-commit",
+  "branch": "feat/rust-and-fuse-rotation-revocation-soundness",
+  "checkpoints_count": 4,
+  "files_touched": [
+    ".planning/todos/pending/2026-07-11-rotation-republish-drops-write-sealed-body.md",
+    "crates/fuse/src/write_ops/grant_scope.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/91/7035580c96/0/metadata.json",
+      "transcript": "/91/7035580c96/0/full.jsonl",
+      "content_hash": "/91/7035580c96/0/content_hash.txt",
+      "prompt": "/91/7035580c96/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 135841,
+    "cache_creation_tokens": 2961460,
+    "cache_read_tokens": 171543747,
+    "output_tokens": 701795,
+    "api_call_count": 509
+  }
+}
