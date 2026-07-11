@@ -86,11 +86,18 @@ pub fn decode_ipns_cbor_data(data: &[u8]) -> Result<(String, u64), IpnsError> {
     };
     let mut value_bytes: Option<Vec<u8>> = None;
     let mut sequence: Option<u64> = None;
+    let mut seen_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (k, v) in entries {
         let key = match k {
             CborValue::Text(s) => s,
             _ => continue,
         };
+        // Reject ANY duplicate text map key (not only the security-relevant fields), matching
+        // the TS decoder's `rejectDuplicateMapKeys: true` — so a duplicate ignored key such as
+        // "TTL" reaches the same reject verdict on both sides (parser-differential parity).
+        if !seen_keys.insert(key.clone()) {
+            return Err(IpnsError::CborEncodingFailed);
+        }
         match key.as_str() {
             "Value" => {
                 if value_bytes.is_some() {
@@ -151,11 +158,17 @@ pub fn decode_ipns_cbor_validity(
     // last-wins hardening), mirroring decode_ipns_cbor_data's duplicate-key rejection.
     let mut validity_bytes: Option<Vec<u8>> = None;
     let mut validity_type: Option<i64> = None;
+    let mut seen_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (k, v) in entries {
         let key = match k {
             CborValue::Text(s) => s,
             _ => continue,
         };
+        // Reject ANY duplicate text map key, matching the TS decoder's
+        // `rejectDuplicateMapKeys: true` (parser-differential parity — see decode_ipns_cbor_data).
+        if !seen_keys.insert(key.clone()) {
+            return Err(IpnsError::CborEncodingFailed);
+        }
         if key == "Validity" {
             if validity_bytes.is_some() {
                 return Err(IpnsError::CborEncodingFailed);
@@ -591,6 +604,23 @@ mod tests {
         let cbor_map = CborValue::Map(vec![
             (CborValue::Text("Value".to_string()), CborValue::Bytes(b"/ipfs/bafy1".to_vec())),
             (CborValue::Text("Value".to_string()), CborValue::Bytes(b"/ipfs/bafy2".to_vec())),
+            (CborValue::Text("Sequence".to_string()), CborValue::Integer(1u64.into())),
+        ]);
+        let mut buf = Vec::new();
+        ciborium::into_writer(&cbor_map, &mut buf).unwrap();
+        let err = decode_ipns_cbor_data(&buf).unwrap_err();
+        assert!(matches!(err, IpnsError::CborEncodingFailed));
+    }
+
+    #[test]
+    fn decode_ipns_cbor_data_rejects_duplicate_ignored_key() {
+        // Parity with the TS decoder's rejectDuplicateMapKeys: true — a duplicate of an
+        // IGNORED key such as "TTL" (not just Value/Sequence) must also fail closed, so a
+        // signed record does not decode on Rust while being rejected on TS (or vice versa).
+        let cbor_map = CborValue::Map(vec![
+            (CborValue::Text("TTL".to_string()), CborValue::Integer(1u64.into())),
+            (CborValue::Text("TTL".to_string()), CborValue::Integer(2u64.into())),
+            (CborValue::Text("Value".to_string()), CborValue::Bytes(b"/ipfs/bafy1".to_vec())),
             (CborValue::Text("Sequence".to_string()), CborValue::Integer(1u64.into())),
         ]);
         let mut buf = Vec::new();
