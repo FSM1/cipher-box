@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "124fda63eb1d",
+  "strategy": "manual-commit",
+  "branch": "feat/rust-and-fuse-rotation-revocation-soundness",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/ROADMAP.md",
+    ".planning/STATE.md",
+    ".planning/phases/74-rust-and-fuse-rotation-revocation-soundness/74-06-SUMMARY.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/12/4fda63eb1d/0/metadata.json",
+      "transcript": "/12/4fda63eb1d/0/full.jsonl",
+      "content_hash": "/12/4fda63eb1d/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  }
+}
