@@ -5,15 +5,15 @@ milestone_name: Metadata and Sharing Refactor
 current_phase: 77
 current_phase_name: crypto-hygiene-and-terminology-canonicalization
 status: executing
-stopped_at: Completed 77-05-PLAN.md
-last_updated: "2026-07-11T09:17:39.689Z"
+stopped_at: Completed 77-07-PLAN.md
+last_updated: "2026-07-11T09:25:12.453Z"
 last_activity: 2026-07-11
 last_activity_desc: Phase 77 execution started
 progress:
   total_phases: 22
   completed_phases: 16
   total_plans: 198
-  completed_plans: 194
+  completed_plans: 195
   percent: 73
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 ## Current Position
 
 Phase: 77 (crypto-hygiene-and-terminology-canonicalization) — EXECUTING
-Plan: 7 of 10
+Plan: 8 of 10
 Status: Ready to execute
 Last activity: 2026-07-11 — Phase 77 execution started
 
@@ -272,6 +272,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 77 P04 | 6min | 2 tasks | 3 files |
 | Phase 77 P05 | 20min | 2 tasks | 5 files |
 | Phase 77 P06 | 20min | 3 tasks | 21 files |
+| Phase 77 P07 | 10min | 1 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -599,6 +600,8 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase 77]: 77-05: wrapIpnsKeyForTee is now bytes-in/bytes-out with canonical teePublicKey param; hex lives only at the 3 call sites — Aligns TEE-wrap seam with the codebase-wide bytes-internal/hex-at-boundary convention (SC3)
 - [Phase 77]: [Phase 77-06]: SharedFolderState.addShareKeysFn removed alongside SharedWriteContext.addShareKeysFn to satisfy the plan's zero-occurrence grep acceptance criteria
 - [Phase 77]: [Phase 77-06]: Task 3 wrapKey audit required no code change -- the discarded per-upload ECIES wrapKey (todo #11) was already retired under READ-03
+- [Phase ?]: [Phase 77-07]: decode.ts's base64ToUint8Array kept its expectedLength superset signature but now delegates its body to the shared @cipherbox/crypto base64ToBytes
+- [Phase ?]: [Phase 77-07]: seal.ts's base64 imports were joined into its existing single @cipherbox/crypto import statement rather than a second import line
 
 ## Operator Next Steps
 
@@ -606,8 +609,8 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-11T09:16:42.755Z
-**Stopped at:** Completed 77-05-PLAN.md
+**Last session:** 2026-07-11T09:25:07.785Z
+**Stopped at:** Completed 77-07-PLAN.md
 **Resume file:** 
 
 None

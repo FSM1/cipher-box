@@ -123,3 +123,12 @@ None - no external service configuration required.
 ---
 *Phase: 77-crypto-hygiene-and-terminology-canonicalization*
 *Completed: 2026-07-11*
+
+## Self-Check: PASSED
+
+- FOUND: packages/core/src/node/encode.ts
+- FOUND: packages/core/src/node/decode.ts
+- FOUND: packages/core/src/node/seal.ts
+- FOUND: .planning/phases/77-crypto-hygiene-and-terminology-canonicalization/77-07-SUMMARY.md
+- FOUND commit: cfc444a1c (refactor(77-07): consolidate node-codec base64 onto shared crypto codec)
+- FOUND commit: aee08cb7b (docs(77-07): add plan summary for node-codec base64 dedup)
