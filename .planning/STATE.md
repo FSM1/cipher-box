@@ -6,14 +6,14 @@ current_phase: 77
 current_phase_name: crypto-hygiene-and-terminology-canonicalization
 status: executing
 stopped_at: Completed 72-10-PLAN.md
-last_updated: "2026-07-11T08:25:19.211Z"
+last_updated: "2026-07-11T08:39:07.798Z"
 last_activity: 2026-07-11
 last_activity_desc: Phase 77 execution started
 progress:
   total_phases: 22
   completed_phases: 16
   total_plans: 198
-  completed_plans: 190
+  completed_plans: 191
   percent: 73
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 ## Current Position
 
 Phase: 77 (crypto-hygiene-and-terminology-canonicalization) — EXECUTING
-Plan: 3 of 10
+Plan: 4 of 10
 Status: Ready to execute
 Last activity: 2026-07-11 — Phase 77 execution started
 
@@ -268,6 +268,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 72 P10 | 10min | 2 tasks | 3 files |
 | Phase 77 P01 | 15min | 2 tasks | 4 files |
 | Phase 77 P02 | 5min | 2 tasks | 6 files |
+| Phase 77 P03 | 5min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -590,6 +591,7 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: write-body-params.ts standardizes the IPNS-resolve path on inline resolveIpnsRecord+fetchFromIpfs+JSON.parse (bin's pre-existing style) rather than client.ts's resolvePublishedNode wrapper, since the extra signatureVerified field was never consumed by getWriteBodyParams
 - [Phase ?]: Copied the CHUNK_SIZE=32768 chunked-btoa loop verbatim from packages/core/src/node/encode.ts into @cipherbox/crypto to guarantee byte-identical base64 output before any consumer swap (77-01)
 - [Phase ?]: importAesKey algorithm param typed as AlgorithmIdentifier (not AesKeyAlgorithm) to match existing name-only call sites at every AES call site
+- [Phase 77-03]: decryptWithFallback's param renamed alongside decryptIpnsKey's in key-manager.ts, since Task 1 acceptance grep-scoped the whole file for zero occurrences of encryptedIpnsKey
 
 ## Operator Next Steps
 
@@ -597,7 +599,7 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-11T08:24:39.996Z
+**Last session:** 2026-07-11T08:39:07.790Z
 **Stopped at:** Completed 72-10-PLAN.md
 **Resume file:** 
 
