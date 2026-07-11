@@ -4,17 +4,17 @@ milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
 current_phase: 77
 current_phase_name: crypto-hygiene-and-terminology-canonicalization
-status: executing
+status: verifying
 stopped_at: Completed 77-09-PLAN.md
-last_updated: "2026-07-11T09:42:19.767Z"
+last_updated: "2026-07-11T09:53:55.587Z"
 last_activity: 2026-07-11
 last_activity_desc: Phase 77 execution started
 progress:
   total_phases: 22
-  completed_phases: 16
+  completed_phases: 17
   total_plans: 198
-  completed_plans: 197
-  percent: 73
+  completed_plans: 198
+  percent: 77
 ---
 
 # Project State
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 
 Phase: 77 (crypto-hygiene-and-terminology-canonicalization) — EXECUTING
 Plan: 10 of 10
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-07-11 — Phase 77 execution started
 
 Progress: `██████████` 79 / 79 plans (100%)
@@ -275,6 +275,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 77 P07 | 10min | 1 tasks | 3 files |
 | Phase 77 P08 | 10min | 1 tasks | 7 files |
 | Phase 77 P09 | 12min | 2 tasks | 11 files |
+| Phase 77 P10 | 20min | - tasks | - files |
 
 ## Accumulated Context
 
@@ -608,6 +609,8 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase 77-08]: 4 vitest full-replacement mocks of @cipherbox/crypto switched to importOriginal + spread so the real base64 codec runs under mocked wrapKey/unwrapKey/reWrapKey
 - [Phase 77]: Retained ipnsPrivateKeyEncrypted only in client.ts doc comments and landing/demo-data.ts per plan's out-of-scope list — 77-09 plan explicitly excluded these historical/marketing references from the rename
 - [Phase 77]: Fixed owner-reconcile.test.ts crypto mock missing bytesToBase64 (pre-existing gap from sibling plan 77-08) — Blocked this plan's own sdk test verification gate; test-infra-only fix, no production code touched
+- [Phase ?]: Error-path try/catch in createSubfolder scoped to sealNode/addToIpfs/createAndPublishIpnsRecord only, matching plan must_haves scope exactly
+- [Phase ?]: verify-filepointer.mts clears vaultKeyBlob.rootWriteKey defensively even though unused in this script's read-only flow
 
 ## Operator Next Steps
 
@@ -615,7 +618,7 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-11T09:42:19.760Z
+**Last session:** 2026-07-11T09:51:08.444Z
 **Stopped at:** Completed 77-09-PLAN.md
 **Resume file:** 
 

@@ -76,7 +76,7 @@
 - [ ] **Phase 74: Rust and FUSE Rotation-Revocation Soundness** — Deep scope-exit key refresh across all intermediate inodes, desktop grant re-mint seam, WinFsp dest-gating parity (3 todos; closes remaining Rust-side revocation bypasses)
 - [x] **Phase 75: Cross-Language IPNS and Node-Codec Verification Parity** — Strict RFC3339 + ValidityType==0 enforcement, KAT IV-encoding pin, UUID AAD acceptance parity, all Rust↔TS vector-locked (4 todos) (completed 2026-07-11)
 - [ ] **Phase 76: FUSE Durability and TEE Write-Path Hardening** — Vault-init publish preflight, deferred Phase 69 publish/concurrency items, TEE republish/renew error handling + later-EOL invariant (4 todos)
-- [ ] **Phase 77: Crypto Hygiene and Terminology Canonicalization** — Error-path zeroization, base64 helper dedup, `encryptedIpnsPrivateKey` field renames, dead share-scaffolding retirement, root-ownership helper extract (12 todos; mechanical, no behavior change)
+- [x] **Phase 77: Crypto Hygiene and Terminology Canonicalization** — Error-path zeroization, base64 helper dedup, `encryptedIpnsPrivateKey` field renames, dead share-scaffolding retirement, root-ownership helper extract (12 todos; mechanical, no behavior change) (completed 2026-07-11)
 - [ ] **Phase 78: Recovery Tool v3, Vault-Load Guards, Web UX and CI Guards** — Port recovery.html to node/v3 (un-fixme recovery.spec), download-progress UX resolution, D-07 CI rule, web vitest CI, remaining 68.2/73 hardening incl. two data-integrity races (5 todos)
 - [ ] **Phase 79: Web Kind-Discrimination Completion and Deferred Test Revival** — Route the listing UI through `ResolvedChild.kind` (folders-first sort, drag-and-drop, kind-aware dialogs), wire Created date, revive 4 `describe.skip` suites, drive `TODO(phase 63/65)` markers to zero (from marker triage; ~40 still-valid markers)
 
@@ -1022,7 +1022,7 @@ Plans:
 2. `base64` encode/decode helpers exist once per package boundary; the ~10 copy-pasted copies are removed with golden-vector parity preserved
 3. All IPNS-key fields use the canonical `encryptedIpnsPrivateKey` name across in-memory, wire, and tests; dead share scaffolding and the discarded wrapKey are gone; full typecheck + unit suites green
 
-**Plans:** 9/10 plans executed
+**Plans:** 10/10 plans complete
 
 Plans:
 **Wave 1**
@@ -1039,7 +1039,7 @@ Plans:
 - [x] 77-07-PLAN.md — Consolidate packages/core node-codec base64 duplicates (todo #7) [wave 2]
 - [x] 77-08-PLAN.md — Dedup sdk-core rotation/share base64 helpers (todo #6 part) [wave 2]
 - [x] 77-09-PLAN.md — Dedup file/index.ts base64 + rename ipnsPrivateKeyEncrypted→canonical (todos #6, #8) [wave 2]
-- [ ] 77-10-PLAN.md — Error-path zeroize createSubfolder + verify-filepointer.mts (todos #2, #4) [wave 2]
+- [x] 77-10-PLAN.md — Error-path zeroize createSubfolder + verify-filepointer.mts (todos #2, #4) [wave 2]
 
 ### Phase 78: Recovery Tool v3, Vault-Load Guards, Web UX and CI Guards
 
