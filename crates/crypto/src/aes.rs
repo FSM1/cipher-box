@@ -148,6 +148,30 @@ pub fn unseal_aes_gcm_aad(sealed: &[u8], key: &[u8; 32], aad: &[u8]) -> Result<V
     decrypt_aes_gcm_aad(ciphertext, key, &iv, aad)
 }
 
+/// Returns true iff `s` is exactly the canonical 8-4-4-4-12 hyphenated UUID shape
+/// (hex digits case-insensitive, hyphens only at byte indices 8, 13, 18, 23).
+/// Dependency-free byte-position check — does NOT delegate to `Uuid::parse_str`,
+/// which also accepts simple-32-hex, braced `{...}`, and `urn:uuid:...` forms.
+/// Applied BEFORE `Uuid::parse_str` in `build_node_aad` to narrow the acceptance
+/// domain to canonical-only (SC3, Option A), matching TS `uuidToBytes`.
+fn is_canonical_uuid_form(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    if bytes.len() != 36 {
+        return false;
+    }
+    for (i, &b) in bytes.iter().enumerate() {
+        let is_hyphen_pos = matches!(i, 8 | 13 | 18 | 23);
+        if is_hyphen_pos {
+            if b != b'-' {
+                return false;
+            }
+        } else if !b.is_ascii_hexdigit() {
+            return false;
+        }
+    }
+    true
+}
+
 /// Build the canonical 45-byte AAD for a node seal operation.
 ///
 /// Encoding (D-00, frozen — never re-litigated):
@@ -155,6 +179,7 @@ pub fn unseal_aes_gcm_aad(sealed: &[u8], key: &[u8; 32], aad: &[u8]) -> Result<V
 ///
 /// Fail-closed (D-03): returns `Err(CryptoError::InvalidAadInput)` for:
 /// - malformed / non-16-byte UUID
+/// - non-canonical UUID form (simple-32-hex, braced, urn:uuid:, loose-hyphen — SC3, Option A)
 /// - kind ∉ {0x01, 0x02, 0x03}
 /// - role ∉ {0x01, 0x02, 0x03, 0x04}
 pub fn build_node_aad(
@@ -167,6 +192,9 @@ pub fn build_node_aad(
         return Err(CryptoError::InvalidAadInput);
     }
     if !matches!(role, 0x01..=0x04) {
+        return Err(CryptoError::InvalidAadInput);
+    }
+    if !is_canonical_uuid_form(node_id) {
         return Err(CryptoError::InvalidAadInput);
     }
     let uuid = Uuid::parse_str(node_id).map_err(|_| CryptoError::InvalidAadInput)?;

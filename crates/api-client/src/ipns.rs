@@ -63,7 +63,7 @@ pub struct VerifiedResolve {
 ///     site), so this arm is unreachable from the production resolve path. It is retained
 ///     for exhaustive `Option<bool>` matching, is exercised directly by unit tests, and
 ///     also fails closed.
-pub(crate) fn bind_verified(
+pub fn bind_verified(
     resp: &IpnsResolveResponse,
     sig_verdict: Option<bool>,
 ) -> Result<VerifiedResolve, VerifyError> {
@@ -117,10 +117,30 @@ pub(crate) fn bind_verified(
 
             // D-07: resolve-side EOL/expiry enforcement with 5-minute clock-skew buffer.
             // Fail-closed: missing or unparseable Validity is treated as expired.
-            let validity_bytes =
+            let (validity_bytes, validity_type) =
                 cipherbox_core::ipns::decode_ipns_cbor_validity(&data_bytes)
-                    .map_err(|e| VerifyError::Invalid(format!("CBOR Validity decode failed: {}", e)))?
-                    .ok_or_else(|| VerifyError::Invalid("IPNS record has no Validity field — fail closed".to_string()))?;
+                    .map_err(|e| VerifyError::Invalid(format!("CBOR Validity decode failed: {}", e)))?;
+            let validity_bytes = validity_bytes
+                .ok_or_else(|| VerifyError::Invalid("IPNS record has no Validity field — fail closed".to_string()))?;
+
+            // Phase 75 (gap #7): bind ValidityType == 0 (EOL) before treating Validity as an
+            // expiry timestamp. Fail closed on absent or non-zero ValidityType — a conformant
+            // signer always emits ValidityType 0 today, so this is defense-in-depth, not a
+            // behavior change for well-formed records.
+            match validity_type {
+                Some(0) => {}
+                Some(other) => {
+                    return Err(VerifyError::Invalid(format!(
+                        "IPNS record has non-EOL ValidityType: {}",
+                        other
+                    )));
+                }
+                None => {
+                    return Err(VerifyError::Invalid(
+                        "IPNS record has no ValidityType field — fail closed".to_string(),
+                    ));
+                }
+            }
 
             let validity_str = std::str::from_utf8(&validity_bytes)
                 .map_err(|_| VerifyError::Invalid("IPNS Validity is not valid UTF-8".to_string()))?;
@@ -180,6 +200,17 @@ pub async fn resolve_ipns_verified(
     bind_verified(&resp, verdict)
 }
 
+/// Parse exactly `len` ASCII digits to a `u64`. Rejects any leading sign, wrong length, or
+/// non-digit byte — enforces fixed-width RFC3339 fields for cross-language parity with the
+/// TS parser (`packages/sdk-core/src/ipns/index.ts` `isFixedDigits`). `parse::<T>()` alone
+/// would accept a leading `+`/`-` and overflow-length years.
+fn parse_fixed_digits(s: &str, len: usize) -> Option<u64> {
+    if s.len() != len || !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    s.parse().ok()
+}
+
 /// Parse a fixed-format RFC3339 timestamp string to Unix seconds.
 ///
 /// The IPNS Validity field uses the format produced by `format_validity_timestamp` in
@@ -194,13 +225,20 @@ fn parse_rfc3339_to_unix_secs(s: &str) -> Option<u64> {
     let (date_part, time_part) = s.split_once('T')?;
 
     let mut date_parts = date_part.split('-');
-    let year: i64 = date_parts.next()?.parse().ok()?;
-    let month: u32 = date_parts.next()?.parse().ok()?;
-    let day: u32 = date_parts.next()?.parse().ok()?;
+    let year_str = date_parts.next()?;
+    let month_str = date_parts.next()?;
+    let day_str = date_parts.next()?;
     // Reject trailing date components (e.g. "2026-01-01-99").
     if date_parts.next().is_some() {
         return None;
     }
+    // Fixed-width RFC3339 date fields: YYYY (4) - MM (2) - DD (2). Fixed lengths reject a
+    // leading sign ("+2099", which `parse::<i64>()` would otherwise accept) and non-4-digit /
+    // i64-overflowing years — matching the TS parser
+    // (packages/sdk-core/src/ipns/index.ts `isFixedDigits`) exactly.
+    let year = parse_fixed_digits(year_str, 4)? as i64;
+    let month = parse_fixed_digits(month_str, 2)? as u32;
+    let day = parse_fixed_digits(day_str, 2)? as u32;
 
     // Split off nanoseconds if present; a present fractional part must be non-empty and
     // all ASCII digits (reject junk like "00:00:00." or extra separators).
@@ -212,13 +250,17 @@ fn parse_rfc3339_to_unix_secs(s: &str) -> Option<u64> {
         }
     }
     let mut time_parts = time_no_nanos.split(':');
-    let hour: u64 = time_parts.next()?.parse().ok()?;
-    let minute: u64 = time_parts.next()?.parse().ok()?;
-    let second: u64 = time_parts.next()?.parse().ok()?;
+    let hour_str = time_parts.next()?;
+    let minute_str = time_parts.next()?;
+    let second_str = time_parts.next()?;
     // Reject trailing time components (e.g. "00:00:00:99").
     if time_parts.next().is_some() {
         return None;
     }
+    // Fixed-width RFC3339 time fields: HH (2) : MM (2) : SS (2). Mirrors the TS parser.
+    let hour = parse_fixed_digits(hour_str, 2)?;
+    let minute = parse_fixed_digits(minute_str, 2)?;
+    let second = parse_fixed_digits(second_str, 2)?;
 
     // Range + leap-aware day-of-month validation. The Hinnant civil_from_days algorithm
     // silently rolls an impossible date (e.g. 2026-02-31) into the following month, which
@@ -837,5 +879,119 @@ mod tests {
         assert!(parse_rfc3339_to_unix_secs("2026-01-01-99T00:00:00.000000000Z").is_none());
         assert!(parse_rfc3339_to_unix_secs("2026-01-01T00:00:00:99.000000000Z").is_none());
         assert!(parse_rfc3339_to_unix_secs("2026-01-01T00:00:00.abcZ").is_none());
+
+        // Phase 75 parity: fixed-width fields. A leading '+'/'-' (which `parse::<T>()` would
+        // otherwise accept), a non-4-digit / overflowing year, and 1-digit fields all fail
+        // closed — identical to the TS parser (packages/sdk-core/src/ipns/index.ts).
+        assert!(parse_rfc3339_to_unix_secs("+2099-01-01T00:00:00Z").is_none()); // leading + on year
+        assert!(parse_rfc3339_to_unix_secs("2099-+1-01T00:00:00Z").is_none()); // leading + on month
+        assert!(parse_rfc3339_to_unix_secs("2099-01-01T+0:00:00Z").is_none()); // leading + on hour
+        assert!(parse_rfc3339_to_unix_secs("99999-01-01T00:00:00Z").is_none()); // 5-digit year
+        assert!(parse_rfc3339_to_unix_secs("999-01-01T00:00:00Z").is_none()); // 3-digit year
+        assert!(parse_rfc3339_to_unix_secs("2099-1-01T00:00:00Z").is_none()); // 1-digit month
+        assert!(parse_rfc3339_to_unix_secs("2099-01-1T00:00:00Z").is_none()); // 1-digit day
+        assert!(parse_rfc3339_to_unix_secs("2099-01-01T0:00:00Z").is_none()); // 1-digit hour
+    }
+
+    // ---- Task 2 (Phase 75): ValidityType == 0 EOL gate tests ----
+
+    /// Build CBOR data with an explicit ValidityType (or its absence) for gate tests.
+    fn make_cbor_data_with_validity_type(
+        value: &str,
+        seq: u64,
+        validity: &str,
+        validity_type: Option<i64>,
+    ) -> Vec<u8> {
+        let mut entries = vec![
+            (CborValue::Text("TTL".to_string()), CborValue::Integer((300_000_000_000u64).into())),
+            (CborValue::Text("Value".to_string()), CborValue::Bytes(value.as_bytes().to_vec())),
+            (CborValue::Text("Sequence".to_string()), CborValue::Integer(seq.into())),
+            (CborValue::Text("Validity".to_string()), CborValue::Bytes(validity.as_bytes().to_vec())),
+        ];
+        if let Some(vt) = validity_type {
+            entries.push((CborValue::Text("ValidityType".to_string()), CborValue::Integer(vt.into())));
+        }
+        let mut buf = Vec::new();
+        ciborium::into_writer(&CborValue::Map(entries), &mut buf).unwrap();
+        buf
+    }
+
+    fn make_resp_with_validity_type(
+        cid: &str,
+        seq: u64,
+        validity: &str,
+        validity_type: Option<i64>,
+    ) -> IpnsResolveResponse {
+        let cbor = make_cbor_data_with_validity_type(&format!("/ipfs/{}", cid), seq, validity, validity_type);
+        let data_b64 = STANDARD.encode(&cbor);
+        IpnsResolveResponse {
+            success: true,
+            cid: cid.to_string(),
+            sequence_number: seq.to_string(),
+            signature_v2: Some("fakesig".to_string()),
+            data: Some(data_b64),
+            pub_key: Some("fakepubkey".to_string()),
+        }
+    }
+
+    /// A record whose ValidityType is absent (None) must be rejected — fail closed.
+    #[test]
+    fn bind_verified_missing_validity_type_returns_invalid() {
+        let resp = make_resp_with_validity_type(
+            "bafyNOTYPE",
+            1,
+            "2099-01-01T00:00:00.000000000Z",
+            None,
+        );
+        let err = bind_verified(&resp, Some(true)).unwrap_err();
+        assert!(
+            matches!(err, VerifyError::Invalid(_)),
+            "expected VerifyError::Invalid for missing ValidityType, got: {:?}", err
+        );
+    }
+
+    /// A record whose ValidityType is a non-zero integer must be rejected.
+    #[test]
+    fn bind_verified_non_zero_validity_type_returns_invalid() {
+        let resp = make_resp_with_validity_type(
+            "bafyNONEOL",
+            1,
+            "2099-01-01T00:00:00.000000000Z",
+            Some(1),
+        );
+        let err = bind_verified(&resp, Some(true)).unwrap_err();
+        assert!(
+            matches!(err, VerifyError::Invalid(_)),
+            "expected VerifyError::Invalid for non-zero ValidityType, got: {:?}", err
+        );
+    }
+
+    /// A valid, in-date record with ValidityType 0 still returns Ok(VerifiedResolve).
+    #[test]
+    fn bind_verified_validity_type_zero_in_date_returns_ok() {
+        let resp = make_resp_with_validity_type(
+            "bafyEOL0",
+            1,
+            "2099-01-01T00:00:00.000000000Z",
+            Some(0),
+        );
+        let result = bind_verified(&resp, Some(true)).unwrap();
+        assert_eq!(result.cid, "bafyEOL0");
+    }
+
+    /// An expired record with ValidityType 0 is still rejected (existing D-07 leg unchanged).
+    #[test]
+    fn bind_verified_validity_type_zero_expired_returns_invalid() {
+        let resp = make_resp_with_validity_type(
+            "bafyEOL0EXPIRED",
+            1,
+            "2020-01-01T00:00:00.000000000Z",
+            Some(0),
+        );
+        let err = bind_verified(&resp, Some(true)).unwrap_err();
+        assert!(
+            matches!(err, VerifyError::Invalid(ref msg) if msg.contains("expired")),
+            "expected 'expired' error, got: {:?}", err
+        );
     }
 }

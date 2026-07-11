@@ -45,22 +45,38 @@ export function bytesToHex(bytes: Uint8Array): string {
 }
 
 /**
- * Convert a hyphenated UUID string to a 16-byte Uint8Array (raw RFC-4122 bytes).
+ * Canonical 8-4-4-4-12 hyphenated UUID shape (upper or lower hex). Checked against
+ * the RAW input before any hyphen-stripping so simple-32-hex and loose-hyphen forms
+ * are rejected (SC3, Option A: canonical-only acceptance domain, cross-language
+ * parity with Rust's build_node_aad canonical pre-check).
+ */
+const CANONICAL_UUID_RE =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+/**
+ * Convert a canonical hyphenated UUID string to a 16-byte Uint8Array (raw RFC-4122 bytes).
  *
- * Strips hyphens and delegates to hexToBytes. The conversion is a hex-field
- * parse — never TextEncoder — producing 16 raw bytes in RFC-4122 field order.
- * This is the canonical UUID→bytes path on the TypeScript side (D-04).
+ * Validates the exact canonical 8-4-4-4-12 hyphenated shape (hex digits case-insensitive,
+ * hyphens only at the canonical positions) BEFORE stripping hyphens, then delegates to
+ * hexToBytes. The conversion is a hex-field parse — never TextEncoder — producing 16 raw
+ * bytes in RFC-4122 field order. This is the canonical UUID→bytes path on the TypeScript
+ * side (D-04). Non-canonical forms (simple-32-hex, loose-hyphen, braced, urn:uuid:, etc.)
+ * are rejected — this collapses the acceptance domain to match Rust's build_node_aad (SC3).
  *
- * @param uuid - Hyphenated UUID string (e.g. "550e8400-e29b-41d4-a716-446655440000")
+ * @param uuid - Canonical hyphenated UUID string (e.g. "550e8400-e29b-41d4-a716-446655440000")
  * @returns 16-byte Uint8Array in RFC-4122 field order
- * @throws CryptoError with code 'INVALID_AAD_INPUT' if the UUID is malformed
+ * @throws CryptoError with code 'INVALID_AAD_INPUT' if the UUID is not canonical form
  */
 export function uuidToBytes(uuid: string): Uint8Array {
-  const clean = uuid.replace(/-/g, '');
-  if (!/^[0-9a-fA-F]{32}$/.test(clean)) {
+  // The length === 36 guard is load-bearing, not redundant: JS `$` (without the `m` flag)
+  // also matches immediately before a trailing "\n", so CANONICAL_UUID_RE alone would ACCEPT
+  // "550e8400-e29b-41d4-a716-446655440000\n". Rust's is_canonical_uuid_form rejects it up
+  // front (bytes.len() != 36), so without this guard the two languages diverge on a
+  // trailing-newline UUID — a cross-language parity + soundness gap (SC3).
+  if (uuid.length !== 36 || !CANONICAL_UUID_RE.test(uuid)) {
     throw new CryptoError('Malformed UUID', 'INVALID_AAD_INPUT');
   }
-  return hexToBytes(clean);
+  return hexToBytes(uuid.replace(/-/g, ''));
 }
 
 /**

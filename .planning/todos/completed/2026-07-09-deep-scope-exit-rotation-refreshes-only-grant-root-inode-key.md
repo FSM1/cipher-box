@@ -59,3 +59,15 @@ now, was only documented in the D-16 debug note (not tracked as a forward item).
 - A desktop-e2e leg asserts a revoked recipient cannot decrypt any rotated
   intermediate node after the deep scope-exit (not just the grant-root).
 - Shallow-path behavior and the D-16 acceptance leg remain unchanged/green.
+
+## Resolved (phase 74, merged PR #607)
+
+Closed by phase 74's rotation-soundness work. `RotateReadResult.rotated_nodes`
+now carries the full re-keyed subtree, and `refresh_rotated_inode_read_keys`
+(`crates/fuse/src/write_ops/grant_scope.rs:613`) loops over EVERY
+`result.rotated_nodes.values()` — refreshing intermediate parent + file inodes
+in the `InodeTable`, not just the grant-root. Covered by the unit test
+`refresh_rotated_inode_read_keys_refreshes_intermediate_and_file_inodes`
+(same file, ~line 1433) and the desktop-e2e D-16 Part C deep scope-exit leg
+(Eve-revoked / Carol-retained at depth). Stranded in pending by the known
+auto-close under-close; moved manually 2026-07-11.

@@ -60,6 +60,22 @@ function uint8ArrayToBase64(bytes: Uint8Array): string {
 }
 
 /**
+ * Mirrors packages/core/src/node/decode.ts's private base64ToUint8Array — the
+ * production decode path this KAT protects (SC2, T-75-09/T-75-10). Deliberately
+ * NOT the fromHex() helper above: substituting a hex decode here for a fileIv
+ * sample from tests/vectors/node-codec.json would throw or produce the wrong
+ * length, which is exactly the encoding-lock this test asserts.
+ */
+function base64ToUint8Array(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) {
+    bytes[i] = bin.charCodeAt(i);
+  }
+  return bytes;
+}
+
+/**
  * Reconstructs an in-memory Node from a JSON fixture object.
  * For file nodes: converts `file_key_hex` fields → Uint8Array (JSON cannot carry Uint8Array).
  * For folder/root: returned as-is (no Uint8Array fields).
@@ -127,6 +143,48 @@ describe('Node Codec — Body Bytes PRIMARY LOCK (D-04, NODE-05)', () => {
     const node = nodeFromFixture(vector.node as Record<string, unknown>);
     expect(toHex(encodeReadBody(node))).toBe(vector.expected_read_body_hex);
   });
+});
+
+// ---------------------------------------------------------------------------
+// 1b. fileIv ENCODING LOCK (SC2, T-75-09/T-75-10) — base64-decode-and-assert
+//
+// The PRIMARY LOCK block above only round-trips fileIv as an opaque string —
+// it never decodes it, so a hex-vs-base64 implementation divergence (the
+// Phase 69 desktop-e2e "Decryption failed" root cause) would still pass
+// silently. This block closes that gap: base64-decode content.fileIv and
+// every versions[].fileIv, and assert the decoded length matches the pinned
+// expected_file_iv_len_bytes. A hex decode substituted here would throw or
+// disagree with the pinned length, given the non-hex/padded samples chosen
+// in tests/vectors/node-codec.json.
+// ---------------------------------------------------------------------------
+
+describe('Node Codec — fileIv Encoding Lock (SC2, T-75-09/T-75-10)', () => {
+  const fileVectorsWithExpectedLen = VECTORS.body_vectors.filter(
+    (v): v is typeof v & { expected_file_iv_len_bytes: number } =>
+      typeof (v as { expected_file_iv_len_bytes?: number }).expected_file_iv_len_bytes === 'number'
+  );
+
+  it('has at least the GCM and CTR file body vectors carrying expected_file_iv_len_bytes', () => {
+    // Non-vacuous guard — folder/root vectors carry no content.fileIv at all.
+    expect(fileVectorsWithExpectedLen.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it.each(fileVectorsWithExpectedLen.map((v) => [v.description, v] as const))(
+    'fileIv (base64, not hex) decodes to expected_file_iv_len_bytes for: %s',
+    (_description, vector) => {
+      const content = (vector.node as Record<string, unknown>).content as Record<string, unknown>;
+      const expectedLen = vector.expected_file_iv_len_bytes;
+
+      const decodedFileIv = base64ToUint8Array(content.fileIv as string);
+      expect(decodedFileIv.length).toBe(expectedLen);
+
+      const versions = content.versions as Record<string, unknown>[];
+      for (const version of versions) {
+        const decodedVersionFileIv = base64ToUint8Array(version.fileIv as string);
+        expect(decodedVersionFileIv.length).toBe(expectedLen);
+      }
+    }
+  );
 });
 
 // ---------------------------------------------------------------------------

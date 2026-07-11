@@ -1,19 +1,17 @@
 //! Cross-language IPNS verify test vectors.
 //!
 //! Loads the shared fixture from tests/vectors/ipns/verify.json and validates
-//! each case against the real `verify_ipns_resolve_signature` (from
-//! `cipherbox-api-client`) and `decode_ipns_cbor_data` (from `cipherbox-core`),
-//! matching the binding logic in `crates/fuse/src/verify.rs` `bind_verified`.
+//! each case against the real, production `cipherbox_api_client::ipns::bind_verified`
+//! (which itself calls `verify_ipns_resolve_signature` and `cipherbox-core`'s CBOR
+//! decoders) — no binding logic is re-implemented here (Phase 75 dedup, gap #9).
 //!
 //! Located in `crates/fuse` to avoid a dependency cycle: both
 //! `cipherbox-api-client` and `cipherbox-core` depend on `cipherbox-crypto`, so
 //! `cipherbox-crypto` cannot dev-depend on either without a cycle. `cipherbox-fuse`
 //! already depends on both, making it the cycle-free home for this test (D-12).
 //!
-//! See: tests/vectors/ipns/verify.json for the 8 cases (D-11).
+//! See: tests/vectors/ipns/verify.json for the 12 cases (D-11, extended Phase 75).
 
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD;
 use serde::Deserialize;
 use std::path::PathBuf;
 
@@ -57,15 +55,14 @@ struct IpnsVerifyVector {
     expected_result: String, // "valid" | "invalid"
 }
 
-/// Run the same two-step binding logic as `crates/fuse/src/verify.rs` `bind_verified`:
+/// Classify a vector using the real, production binding logic — no hand-spelled
+/// cid/sequence/ValidityType logic here (Phase 75 dedup, gap #9).
 ///
-/// 1. Call `verify_ipns_resolve_signature` → `Option<bool>`.
-/// 2. For `Some(true)`: base64-decode `data`, call `decode_ipns_cbor_data`, compare
-///    embedded value to `/ipfs/{resp.cid}` and embedded seq to `resp.sequence_number`.
-/// 3. Map to "valid" | "invalid" (under the strict regime, absent fields → "invalid").
-///
-/// This is equivalent to `bind_verified(&resp, verdict)` but spelled out explicitly so
-/// the test pins both the api-client signature check and the core CBOR decode path.
+/// 1. Call `verify_ipns_resolve_signature` → `Option<bool>` signature verdict.
+/// 2. Call the now-`pub` `cipherbox_api_client::ipns::bind_verified` with that verdict,
+///    which owns ALL binding: base64 decode, CBOR cid/sequence binding (D-07/D-08), and
+///    the ValidityType == 0 EOL gate + expiry check (Phase 75 gap #7).
+/// 3. Map `Ok` → "valid", `Err` → "invalid".
 fn classify_vector(v: &IpnsVerifyVector) -> String {
     let resp = cipherbox_api_client::types::IpnsResolveResponse {
         success: true,
@@ -85,75 +82,24 @@ fn classify_vector(v: &IpnsVerifyVector) -> String {
             Ok(v) => v,
         };
 
-    match verdict {
-        None => "invalid".to_string(),
-        Some(false) => "invalid".to_string(),
-        Some(true) => {
-            // Signature is valid. Perform the CBOR binding check (D-07/D-08).
-            // This is the same path as bind_verified in fuse/src/verify.rs.
-            let data_b64 = match resp.data.as_deref() {
-                Some(s) => s,
-                None => return "invalid".to_string(),
-            };
-            let data_bytes = match STANDARD.decode(data_b64) {
-                Ok(b) => b,
-                Err(e) => {
-                    eprintln!("[{}] base64 decode failed: {}", v.description, e);
-                    return "invalid".to_string();
-                }
-            };
-
-            let (embedded_value, embedded_seq) =
-                match cipherbox_core::ipns::decode_ipns_cbor_data(&data_bytes) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        eprintln!("[{}] CBOR decode failed: {}", v.description, e);
-                        return "invalid".to_string();
-                    }
-                };
-
-            // D-08: embedded CBOR value must be "/ipfs/<response.cid>"
-            let expected_value = format!("/ipfs/{}", resp.cid);
-            if embedded_value != expected_value {
-                eprintln!(
-                    "[{}] cid binding mismatch: embedded={}, response={}",
-                    v.description, embedded_value, resp.cid
-                );
-                return "invalid".to_string();
-            }
-
-            // D-07/D-05: embedded seq must strictly equal response sequence_number.
-            // The first-publish skew allowance (resp_seq==1 && embedded==0) was removed
-            // under the strict regime (D-04/D-05) — mirrors bind_verified in api-client.
-            let resp_seq = match resp.sequence_number.parse::<u64>() {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("[{}] parse sequence_number failed: {}", v.description, e);
-                    return "invalid".to_string();
-                }
-            };
-            let seq_ok = embedded_seq == resp_seq;
-            if !seq_ok {
-                eprintln!(
-                    "[{}] seq binding mismatch: embedded={}, response={}",
-                    v.description, embedded_seq, resp_seq
-                );
-                return "invalid".to_string();
-            }
-
-            "valid".to_string()
+    match cipherbox_api_client::ipns::bind_verified(&resp, verdict) {
+        Ok(_) => "valid".to_string(),
+        Err(e) => {
+            eprintln!("[{}] bind_verified rejected: {}", v.description, e);
+            "invalid".to_string()
         }
     }
 }
 
 /// Cross-language IPNS verify parity test.
 ///
-/// Loads the 8-case shared fixture and asserts that Rust produces the same
+/// Loads the 12-case shared fixture and asserts that Rust produces the same
 /// verdict as the expected_result field. This pins:
 ///
 /// - `cipherbox_api_client::ipns::verify_ipns_resolve_signature` (the signed-bytes
 ///   construction: "ipns-signature:" prefix || CBOR data)
-/// - `cipherbox_core::ipns::decode_ipns_cbor_data` (the CBOR field extraction)
+/// - `cipherbox_api_client::ipns::bind_verified` (CBOR cid/sequence binding, D-07/D-08,
+///   and the Phase 75 ValidityType == 0 EOL gate + expiry check)
 ///
 /// Both are exercised against vectors whose bytes were produced by the JS
 /// generator (`scripts/gen-ipns-verify-vectors.ts`), so any Rust↔JS drift
@@ -162,7 +108,7 @@ fn classify_vector(v: &IpnsVerifyVector) -> String {
 fn ipns_verify_cross_language() {
     let vectors: Vec<IpnsVerifyVector> = load_vectors("ipns/verify.json");
     assert!(!vectors.is_empty(), "No IPNS verify vectors loaded");
-    assert_eq!(vectors.len(), 8, "Expected exactly 8 IPNS verify vectors");
+    assert_eq!(vectors.len(), 12, "Expected exactly 12 IPNS verify vectors");
 
     for v in &vectors {
         let actual = classify_vector(v);

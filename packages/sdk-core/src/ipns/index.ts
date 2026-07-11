@@ -176,6 +176,131 @@ export async function batchPublishIpnsRecords(
 }
 
 /**
+ * Parse a fixed-format RFC3339 timestamp string to Unix seconds.
+ *
+ * The IPNS Validity field uses the format produced by the Rust `format_validity_timestamp`
+ * helper (`crates/core/src/ipns.rs`): `"YYYY-MM-DDTHH:MM:SS.nnnnnnnnnZ"` (nanoseconds, UTC).
+ * Nanoseconds are optional: `"YYYY-MM-DDTHH:MM:SSZ"` also parses.
+ *
+ * This is a manual, strict parser that mirrors `parse_rfc3339_to_unix_secs` in
+ * `crates/api-client/src/ipns.rs` branch-for-branch — it intentionally does NOT delegate to
+ * `new Date(s)`, which tolerates a wide superset of non-canonical formats (timezone offsets,
+ * two-digit years, whitespace-separated date/time, rolling an impossible calendar date like
+ * February 30 forward into March) that the Rust verifier rejects. Any divergence here is a
+ * cross-language verification differential (T-75-06).
+ *
+ * Returns `null` for any malformed/out-of-range input; callers must treat this as fail-closed
+ * (do not add a date-library dependency — see the port PATTERNS note).
+ */
+export function parseRfc3339ToUnixSecs(s: string): number | null {
+  // Expected format: "2026-01-01T00:00:00.000000000Z" (nanoseconds optional, must end with Z).
+  if (!s.endsWith('Z')) {
+    return null;
+  }
+  const withoutZ = s.slice(0, -1);
+
+  const tIndex = withoutZ.indexOf('T');
+  if (tIndex === -1) {
+    return null;
+  }
+  const datePart = withoutZ.slice(0, tIndex);
+  const timePart = withoutZ.slice(tIndex + 1);
+
+  const dateParts = datePart.split('-');
+  // Reject trailing date components (e.g. "2026-01-01-99"). Exactly 3 parts required.
+  if (dateParts.length !== 3) {
+    return null;
+  }
+  const [yearStr, monthStr, dayStr] = dateParts;
+  // Fixed-width RFC3339 date fields: YYYY (4) - MM (2) - DD (2). Fixed lengths reject a
+  // leading sign ("+2099"), non-4-digit / i64-overflowing years, and 1-digit months —
+  // matching the Rust parser (crates/api-client/src/ipns.rs) exactly. Real records from
+  // format_validity_timestamp are always zero-padded, so this never false-rejects.
+  if (!isFixedDigits(yearStr, 4) || !isFixedDigits(monthStr, 2) || !isFixedDigits(dayStr, 2)) {
+    return null;
+  }
+  const year = Number(yearStr);
+  const month = Number(monthStr);
+  const day = Number(dayStr);
+
+  // Split off nanoseconds if present; a present fractional part must be non-empty and
+  // all ASCII digits (reject junk like "00:00:00." or extra separators).
+  const dotIndex = timePart.indexOf('.');
+  const timeNoNanos = dotIndex === -1 ? timePart : timePart.slice(0, dotIndex);
+  if (dotIndex !== -1) {
+    const frac = timePart.slice(dotIndex + 1);
+    if (frac.length === 0 || !isAllDigits(frac)) {
+      return null;
+    }
+  }
+
+  const timeParts = timeNoNanos.split(':');
+  // Reject trailing time components (e.g. "00:00:00:99"). Exactly 3 parts required.
+  if (timeParts.length !== 3) {
+    return null;
+  }
+  const [hourStr, minuteStr, secondStr] = timeParts;
+  // Fixed-width RFC3339 time fields: HH (2) : MM (2) : SS (2). Mirrors the Rust parser.
+  if (!isFixedDigits(hourStr, 2) || !isFixedDigits(minuteStr, 2) || !isFixedDigits(secondStr, 2)) {
+    return null;
+  }
+  const hour = Number(hourStr);
+  const minute = Number(minuteStr);
+  const second = Number(secondStr);
+
+  // Range + leap-aware day-of-month validation. Reject impossible dates (e.g. 2026-02-31)
+  // rather than silently rolling them into the next month, which would EXTEND the record's
+  // apparent validity — the opposite of fail-closed.
+  if (month < 1 || month > 12 || day < 1 || hour > 23 || minute > 59 || second > 59) {
+    return null;
+  }
+  const isLeap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+  const daysInMonthByMonth: Record<number, number> = {
+    1: 31,
+    2: isLeap ? 29 : 28,
+    3: 31,
+    4: 30,
+    5: 31,
+    6: 30,
+    7: 31,
+    8: 31,
+    9: 30,
+    10: 31,
+    11: 30,
+    12: 31,
+  };
+  const daysInMonth = daysInMonthByMonth[month];
+  if (day > daysInMonth) {
+    return null;
+  }
+
+  // Compute days since Unix epoch using the Hinnant civil_from_days algorithm (inverted),
+  // matching the Rust implementation exactly (crates/api-client/src/ipns.rs).
+  const y = month <= 2 ? year - 1 : year;
+  const m = month <= 2 ? month + 9 : month - 3;
+  const era = Math.floor((y >= 0 ? y : y - 399) / 400);
+  const yoe = y - era * 400;
+  const doy = Math.floor((153 * m + 2) / 5) + day - 1;
+  const doe = yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy;
+  const daysSinceEpoch = era * 146097 + doe - 719468;
+
+  if (daysSinceEpoch < 0) {
+    return null; // Pre-epoch timestamp — treat as expired.
+  }
+
+  return daysSinceEpoch * 86400 + hour * 3600 + minute * 60 + second;
+}
+
+function isAllDigits(s: string): boolean {
+  return s.length > 0 && /^[0-9]+$/.test(s);
+}
+
+/** Exactly `len` ASCII digits — enforces fixed-width RFC3339 fields for cross-language parity. */
+function isFixedDigits(s: string, len: number): boolean {
+  return s.length === len && isAllDigits(s);
+}
+
+/**
  * Verify the Ed25519 signature on an IPNS record.
  * Per IPFS spec, the signature is over "ipns-signature:" + cborData.
  *
@@ -259,7 +384,13 @@ export async function resolveIpnsRecord(
         // Decode the signed CBOR and require that its embedded Value matches the response cid
         // and its embedded Sequence matches the response sequenceNumber.
         const dataBytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
-        const cborFields = cborDecode(dataBytes) as Record<string, unknown>;
+        // Phase 75 parity hardening: reject duplicate CBOR map keys. cborg defaults to
+        // last-wins, which would let a signed record with e.g. `ValidityType:[1,0]` decode
+        // to 0 (accepted) while the Rust decoder (decode_ipns_cbor_validity/_data) rejects
+        // duplicate keys outright — a verdict split-brain. Reject on both sides identically.
+        const cborFields = cborDecode(dataBytes, {
+          rejectDuplicateMapKeys: true,
+        }) as Record<string, unknown>;
 
         // D-08: embedded value must be "/ipfs/<response.cid>"
         const embeddedValue =
@@ -308,11 +439,32 @@ export async function resolveIpnsRecord(
         if (!(validityBytes instanceof Uint8Array)) {
           throw new Error('IPNS record has no Validity field — fail closed');
         }
+
+        // Phase 75 (SC1 / T-75-07): bind ValidityType == 0 (EOL) before treating Validity as an
+        // expiry timestamp. Fail closed on absent or non-zero ValidityType — a conformant
+        // signer always emits ValidityType 0 today, so this is defense-in-depth, not a
+        // behavior change for well-formed records. Mirrors the Rust bind_verified gate
+        // (crates/api-client/src/ipns.rs) so both layers reject the same non-EOL records.
+        const validityType = cborFields['ValidityType'];
+        if (validityType === undefined || validityType === null) {
+          throw new Error('IPNS record has no ValidityType field — fail closed');
+        }
+        const validityTypeNum =
+          typeof validityType === 'bigint' ? Number(validityType) : validityType;
+        if (validityTypeNum !== 0) {
+          throw new Error(`IPNS record has non-EOL ValidityType: ${String(validityType)}`);
+        }
+
         const validityStr = new TextDecoder().decode(validityBytes);
-        const expiryMs = new Date(validityStr).getTime();
-        if (isNaN(expiryMs)) {
+        // Phase 75 (SC1 / T-75-06): strict RFC3339 parse mirroring the Rust verifier's
+        // parse_rfc3339_to_unix_secs branch-for-branch. Replaces the previous
+        // new Date(validityStr).getTime() loose parse, which accepted a wide superset of
+        // non-canonical formats Rust rejects.
+        const expirySecs = parseRfc3339ToUnixSecs(validityStr);
+        if (expirySecs === null) {
           throw new Error(`IPNS record has unparseable Validity field: ${validityStr}`);
         }
+        const expiryMs = expirySecs * 1000;
         const skewBufferMs = 5 * 60 * 1000; // 5 minutes
         if (expiryMs < Date.now() - skewBufferMs) {
           throw new Error(`IPNS record expired: validity=${validityStr}`);

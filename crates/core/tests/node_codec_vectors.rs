@@ -7,6 +7,8 @@
 //! the `seal_vectors` (full AEAD seal) are exercised once a later Phase-69 plan
 //! wires `cipherbox_core::node` to `cipherbox-crypto`'s seal primitives.
 
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
 use cipherbox_core::node::{decode_node, encode_node, Node, SealedChildRef};
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -23,6 +25,10 @@ struct BodyVector {
     description: String,
     node: serde_json::Value,
     expected_read_body_hex: String,
+    // Only present on file-kind body vectors (folder/root nodes carry no
+    // content.fileIv at all) — see Task 1's SC2 sample-value rework.
+    #[serde(default)]
+    expected_file_iv_len_bytes: Option<usize>,
 }
 
 #[derive(Deserialize)]
@@ -81,6 +87,90 @@ fn node_codec_round_trips_and_byte_matches_kat() {
             v.description
         );
     }
+}
+
+/// SC2 (T-75-09/T-75-10): NodeContent.file_iv is base64 on the wire, never hex
+/// (Phase 69 desktop-e2e "Decryption failed" root cause). The PRIMARY LOCK test
+/// above only round-trips fileIv as an opaque string — it never decodes it, so a
+/// hex-vs-base64 implementation divergence would still pass silently. This test
+/// closes that gap: for every body vector carrying `expected_file_iv_len_bytes`
+/// (file-kind vectors only — folder/root nodes have no content.fileIv), base64-
+/// decode content.fileIv and each versions[].fileIv, and assert the decoded
+/// length matches the pinned expectation. A hex decode substituted here would
+/// either fail outright (the samples contain non-hex characters / '=' padding)
+/// or, if it happened to parse, silently disagree with the pinned byte length.
+#[test]
+fn node_codec_kat_file_iv_is_base64_not_hex() {
+    let vectors = load_vectors();
+    assert!(
+        !vectors.body_vectors.is_empty(),
+        "node-codec.json body_vectors must not be empty"
+    );
+
+    let mut file_iv_vectors_checked = 0usize;
+
+    for v in &vectors.body_vectors {
+        let Some(expected_len) = v.expected_file_iv_len_bytes else {
+            // folder/root vectors carry no content.fileIv — nothing to decode.
+            continue;
+        };
+        file_iv_vectors_checked += 1;
+
+        let content = v
+            .node
+            .get("content")
+            .unwrap_or_else(|| panic!("vector {} missing node.content", v.description));
+
+        let file_iv_b64 = content
+            .get("fileIv")
+            .and_then(|f| f.as_str())
+            .unwrap_or_else(|| panic!("vector {} missing content.fileIv", v.description));
+        let file_iv_bytes = STANDARD.decode(file_iv_b64).unwrap_or_else(|e| {
+            panic!(
+                "fileIv base64 decode failed for {}: {}",
+                v.description, e
+            )
+        });
+        assert_eq!(
+            file_iv_bytes.len(),
+            expected_len,
+            "content.fileIv byte length mismatch for {}",
+            v.description
+        );
+
+        let versions = content
+            .get("versions")
+            .and_then(|v| v.as_array())
+            .unwrap_or_else(|| panic!("vector {} missing content.versions array", v.description));
+        for version in versions {
+            let version_file_iv_b64 = version
+                .get("fileIv")
+                .and_then(|f| f.as_str())
+                .unwrap_or_else(|| {
+                    panic!("vector {} has a version missing fileIv", v.description)
+                });
+            let version_file_iv_bytes = STANDARD.decode(version_file_iv_b64).unwrap_or_else(|e| {
+                panic!(
+                    "versions[].fileIv base64 decode failed for {}: {}",
+                    v.description, e
+                )
+            });
+            assert_eq!(
+                version_file_iv_bytes.len(),
+                expected_len,
+                "versions[].fileIv byte length mismatch for {}",
+                v.description
+            );
+        }
+    }
+
+    // Non-vacuous guard: at least the GCM and CTR file vectors must have been
+    // exercised, or this test would trivially pass on an all-folder/root fixture.
+    assert!(
+        file_iv_vectors_checked >= 2,
+        "expected at least 2 body vectors carrying expected_file_iv_len_bytes, found {}",
+        file_iv_vectors_checked
+    );
 }
 
 #[test]

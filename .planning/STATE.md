@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
-current_phase: 74
-current_phase_name: Rust and FUSE Rotation-Revocation Soundness
+current_phase: 76
+current_phase_name: FUSE Durability and TEE Write-Path Hardening
 status: verifying
-stopped_at: Phase 74 verified human_needed (2 CI-gated legs pending)
-last_updated: "2026-07-11T11:28:37.406Z"
+stopped_at: Phase 75 complete (75-05-PLAN.md), shipping PR
+last_updated: "2026-07-11T20:30:00.000Z"
 last_activity: 2026-07-11
-last_activity_desc: Phase 74 learnings extracted (74-LEARNINGS.md)
+last_activity_desc: Phase 75 complete and shipping, Phase 76 pending
 progress:
   total_phases: 22
   completed_phases: 17
-  total_plans: 195
-  completed_plans: 195
+  total_plans: 193
+  completed_plans: 193
   percent: 77
 ---
 
@@ -24,21 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-27)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 74 — Rust and FUSE Rotation-Revocation Soundness
+**Current focus:** Phase 76 — FUSE Durability and TEE Write-Path Hardening (Phase 75 shipping)
 
 ## Current Position
 
-Phase: 74 (Rust and FUSE Rotation-Revocation Soundness) — VERIFIED human_needed (NOT marked complete)
-Plan: 7 of 7 executed + committed
-Status: All 7 plans done; verification = human_needed. 21/21 must-haves code-verified; all local test suites pass (SC1 27/27+370/370+17/17, SC2 15/15+10/10 / fuse 117/117). SC3 code source-verified (D-15d parity). Two CI-gated legs pending (see Blockers).
-Last activity: 2026-07-11 — Phase 74 learnings extracted (74-LEARNINGS.md)
-
-## Phase 74 Blockers (CI-gated verification, not code gaps)
-
-Recorded per GSD human_needed handling. Both are infra limitations that cannot run on this macOS host — routed to `74-UAT.md`, not treated as gaps. Phase 74 stays open pending these; run `/gsd-verify-work 74` after CI confirms.
-
-1. Windows CI (`Cargo Check & Test (Windows)`) must compile 74-06's `#[cfg(windows)]` WinFsp rename dest-gate and pass its two new tests — cannot build winfsp on macOS.
-2. Desktop-e2e 3-platform matrix (`desktop-e2e` workflow) must run 74-07's live-mount Part C (SC1+SC2 deep decryptability / retained-vs-revoked) and Part D (SC3 WinFsp overwrite-rename) — needs a built desktop binary + real FUSE/WinFsp mount. Also confirms Part A's pre-existing Bob assertion still holds (static analysis: likely a false alarm).
+Phase: 76 — FUSE Durability and TEE Write-Path Hardening
+Plan: Not started
+Status: Phase complete — ready for verification
+Last activity: 2026-07-11 — Phase 75 complete, transitioned to Phase 76
 
 Progress: `██████████` 79 / 79 plans (100%)
 
@@ -273,13 +266,11 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 72 P08 | 15min | 2 tasks | 1 files |
 | Phase 72 P09 | 8min | 1 tasks | 5 files |
 | Phase 72 P10 | 10min | 2 tasks | 3 files |
-| Phase 74 P01 | 20min | 2 tasks | 1 files |
-| Phase 74 P04 | 15min | 2 tasks | 2 files |
-| Phase 74 P06 | 45min | 2 tasks | 3 files |
-| Phase 74 P74-03 | 20min | 2 tasks | 2 files |
-| Phase 74 P05 | 25min | 2 tasks | 2 files |
-| Phase 74 P02 | 12min | 2 tasks | 4 files |
-| Phase 74 P07 | 40min | 2 tasks | 5 files |
+| Phase 75 P01 | 3min | 1 tasks | 2 files |
+| Phase 75 P04 | 12min | 3 tasks | 3 files |
+| Phase 75 P05 | 8min | 3 tasks | 5 files |
+| Phase 75 P02 | 7min | 3 tasks | 3 files |
+| Phase 75 P03 | 15min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -600,20 +591,14 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: 72-09: vault/index.ts's two root-key wraps (wrapKey(rootReadKey/rootWriteKey, userPublicKey)) left untouched — only the TEE ipns-key wrap was extracted
 - [Phase ?]: runFileVersionOp is not wrapped in withOperation itself -- each public method keeps its own withOperation(name) call for correct per-op telemetry attribution
 - [Phase ?]: write-body-params.ts standardizes the IPNS-resolve path on inline resolveIpnsRecord+fetchFromIpfs+JSON.parse (bin's pre-existing style) rather than client.ts's resolvePublishedNode wrapper, since the extra signatureVerified field was never consumed by getWriteBodyParams
-- [Phase ?]: 74-01: RotateReadResult.rotated_nodes (HashMap<String, RotatedNodeKey> keyed by ipns_name) surfaces every rotated node's post-rotation read key, populated at root/BFS-child/repair_dirty_node hooks; CommittedRotation stays host-agnostic
-- [Phase ?]: [Phase 74-04] No mock-HTTP crate exists in api-client dev-deps; added a minimal raw TcpListener capturing mock server in shares.rs test mod (mirrors fuse/delete.rs's spawn_mock_rotation_server) instead of pulling in wiremock/mockito
-- [Phase ?]: [Phase 74-04] update_grant accepts root_generation as u64 and formats to decimal string at the wire boundary, matching UpdateGrantDto's numeric-string contract
-- [Phase ?]: [Phase 74-06]: WinFsp handle_rename reordered to fuser D-15d pipeline (validate -> source-gate -> dest-gate -> mutate); new dest scope-exit gate closes T-74-09 overwrite-rename revocation bypass
-- [Phase ?]: [Phase 74-06]: crate::test_support cfg widened to any(feature=fuse, feature=winfsp) so WinFsp #[cfg(test)] can reuse make_test_fs_with_keypair; fuser-specific CaptureSender/reply_error_code stay fuse-gated
-- [Phase ?]: [Phase 74-06]: Did not add self-replace/kind-mismatch validation to WinFsp handle_rename (RESEARCH.md Todo 3 point 4 scoped it out-of-scope for SC3)
-- [Phase ?]: RotatedNodeKey exported from cipherbox_sdk::rotation (mod.rs re-export) — was engine.rs-internal, needed by grant_scope.rs's test (74-03)
-- [Phase ?]: grant_scope.rs refresh function extended to InodeKind::Root | Folder | File (was Root | Folder only) — files rotate too via mint_file_key_on_rotate/CRIT-1 (74-03)
-- [Phase 74]: RotationTransport::update_grant generation param typed u32 (matches RotationDeps::update_grant exactly); ApiClientTransport converts u32->u64 only at the cipherbox_api_client::shares::update_grant call boundary
-- [Phase 74]: delete_grant implemented for engine-contract completeness though is_revoked is structurally always false from collect_sent_shares (revoked shares hard-deleted server-side); no test asserts that branch firing through this path (T-74-14 accepted, not mitigated)
-- [Phase 74]: 74-02: RotatedNodeKey.sequenceNumber typed bigint (not the plan table's literal number) to match this file's existing IPNS sequence-number convention
-- [Phase 74]: 74-02: repairDirtyNode crash-resume path does not populate rotatedNodes (out of scope per plan's task action/acceptance_criteria) — Rust 74-01 folded it in; documented TS/Rust asymmetry for a future follow-up
-- [Phase ?]: [Phase 74-07] Combined the plan's deep leg and second-recipient leg into one Part C scenario (Eve revoked, Carol retained on the same grant root) -- the only construction matching 74-05's real re-mint semantics; revoked recipients in Parts C/D are explicitly DELETE'd pre-mutation since an active-but-untouched grantee is now correctly re-minted, not cut off
-- [Phase ?]: [Phase 74-07] Flagged (not fixed) that Part A's existing Bob assertion in shared-scope-exit-rotation.mts may no longer hold post-74-05 (an active never-revoked grantee is now re-minted rather than cut off) -- left untouched per the plan's explicit instruction; needs a live CI run to confirm
+- [Phase ?]: buildCborData parameterized with validity/validityType trailing optional args (defaults = prior hardcoded values) so the 8 pre-existing vector cases stay byte-identical by construction
+- [Phase ?]: 4 new IPNS verify vectors per 75-RESEARCH RESOLVED Q2: expired-valid-sig, wrong-validity-type, malformed-rfc3339-trailing-component, malformed-rfc3339-impossible-date (total 12)
+- [Phase ?]: expected_file_iv_len_bytes made Option<usize>/typeof-detected — only file-kind body vectors carry fileIv (folder/root have none)
+- [Phase 75]: Option A (canonical-only) chosen over syncing looser UUID acceptance domains — closes the AAD-transplant surface entirely rather than aligning two looser domains
+- [Phase 75]: Rust UUID canonical-form check implemented as a dependency-free byte-position scan (no regex/once_cell added to crates/crypto)
+- [Phase ?]: bind_verified widened pub(crate)->pub and classify_vector delegated to it, deleting duplicated cid/sequence/ValidityType binding logic (Phase 75 gap #9 fix)
+- [Phase ?]: ValidityType==0 EOL gate implemented in bind_verified, not in decode_ipns_cbor_validity -- decoder only reports the raw value
+- [Phase 75]: Ported the Rust strict RFC3339 parser to TS branch-for-branch (no date-library dependency) to guarantee byte-for-byte parity with the audited Rust verifier
 
 ## Operator Next Steps
 
@@ -621,8 +606,8 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-11T04:58:48.845Z
-**Stopped at:** Completed 74-02-PLAN.md
+**Last session:** 2026-07-11T06:49:04.674Z
+**Stopped at:** Completed 75-04-PLAN.md
 **Resume file:** 
 
 None

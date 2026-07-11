@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createAndPublishIpnsRecord, resolveIpnsRecord } from '../ipns';
+import { createAndPublishIpnsRecord, resolveIpnsRecord, parseRfc3339ToUnixSecs } from '../ipns';
 
 // Mock the api-client functions
 vi.mock('@cipherbox/api-client', () => ({
@@ -409,6 +409,41 @@ describe('IPNS operations', () => {
         );
       });
 
+      // Phase 75 parity: a signed record with a DUPLICATE CBOR map key must be rejected, not
+      // silently last-wins-decoded. cborg defaults to rejectDuplicateMapKeys=false (last-wins),
+      // which would let `ValidityType:[1,0]` decode to 0 and be accepted — while the Rust decoder
+      // (crates/core/src/ipns.rs) rejects duplicate keys. resolveIpnsRecord now decodes with
+      // { rejectDuplicateMapKeys: true } so both layers reach the same verdict.
+      it('throws on a duplicate CBOR map key (Rust decoder parity)', async () => {
+        const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
+        const { verifyEd25519, deriveIpnsName } = await import('@cipherbox/crypto');
+        vi.mocked(verifyEd25519).mockResolvedValue(true);
+        // Hand-craft CBOR: { "ValidityType": 1, "ValidityType": 0 } — cborg's encoder will not
+        // emit duplicate keys, so build the bytes directly. 0xA2 = map(2); 0x6C = text(12).
+        const key = new TextEncoder().encode('ValidityType');
+        const dupKeyCbor = new Uint8Array([
+          0xa2,
+          0x60 | key.length,
+          ...key,
+          0x01,
+          0x60 | key.length,
+          ...key,
+          0x00,
+        ]);
+        const data = Buffer.from(dupKeyCbor).toString('base64');
+        vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
+          success: true,
+          cid: 'bafyDUPKEY',
+          sequenceNumber: '1',
+          signatureV2: btoa('valid-sig'),
+          data,
+          pubKey: btoa('pubkey'),
+        });
+        vi.mocked(deriveIpnsName).mockResolvedValue('k51dup-key');
+
+        await expect(resolveIpnsRecord('k51dup-key')).rejects.toThrow();
+      });
+
       it('throws on wrong-typed Sequence in CBOR (D-07 type guard)', async () => {
         const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
         const { verifyEd25519, deriveIpnsName } = await import('@cipherbox/crypto');
@@ -524,8 +559,8 @@ describe('D-11/D-12 cross-language IPNS verify vectors', () => {
     vi.clearAllMocks();
   });
 
-  it('fixture has exactly 8 cases', () => {
-    expect(vectors).toHaveLength(8);
+  it('fixture has exactly 12 cases', () => {
+    expect(vectors).toHaveLength(12);
   });
 
   it('valid — resolves with signatureVerified=true', async () => {
@@ -710,6 +745,154 @@ describe('D-11/D-12 cross-language IPNS verify vectors', () => {
       /fail closed|signature fields/i
     );
   });
+
+  // ---- Phase 75 (Plan 03): 4 new invalid cases added to the shared 12-case fixture. ----
+  // Rust (Plan 02) already rejects these via bind_verified's ValidityType gate +
+  // parse_rfc3339_to_unix_secs; the TS side is currently RED (loose new Date() parse,
+  // ValidityType unread) until Task 2 lands parseRfc3339ToUnixSecs + the ValidityType==0 gate.
+
+  it('expired-valid-sig — throws on expired Validity (real data bytes)', async () => {
+    const v = vectors.find((x) => x.description.startsWith('expired-valid-sig'));
+    if (!v) throw new Error('expired-valid-sig vector not found');
+    const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
+    const { verifyEd25519, deriveIpnsName } = await import('@cipherbox/crypto');
+    vi.mocked(verifyEd25519).mockResolvedValue(true);
+    vi.mocked(deriveIpnsName).mockResolvedValue(v.ipns_name);
+    vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
+      success: true,
+      cid: v.cid,
+      sequenceNumber: v.sequence_number,
+      signatureV2: v.signature_v2 ?? undefined,
+      data: v.data ?? undefined,
+      pubKey: v.pub_key ?? undefined,
+    });
+
+    await expect(resolveIpnsRecord(v.ipns_name), `${v.description}`).rejects.toThrow(/expired/i);
+  });
+
+  it('wrong-validity-type — throws when ValidityType is non-zero (real data bytes)', async () => {
+    const v = vectors.find((x) => x.description.startsWith('wrong-validity-type'));
+    if (!v) throw new Error('wrong-validity-type vector not found');
+    const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
+    const { verifyEd25519, deriveIpnsName } = await import('@cipherbox/crypto');
+    vi.mocked(verifyEd25519).mockResolvedValue(true);
+    vi.mocked(deriveIpnsName).mockResolvedValue(v.ipns_name);
+    vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
+      success: true,
+      cid: v.cid,
+      sequenceNumber: v.sequence_number,
+      signatureV2: v.signature_v2 ?? undefined,
+      data: v.data ?? undefined,
+      pubKey: v.pub_key ?? undefined,
+    });
+
+    // RED: ValidityType is currently unread by resolveIpnsRecord — this vector's Validity
+    // is a canonical future timestamp, so the loose new Date() parse would accept it.
+    await expect(resolveIpnsRecord(v.ipns_name), `${v.description}`).rejects.toThrow(
+      /ValidityType/i
+    );
+  });
+
+  it('malformed-rfc3339-trailing-component — throws on malformed Validity (real data bytes)', async () => {
+    const v = vectors.find((x) => x.description.startsWith('malformed-rfc3339-trailing-component'));
+    if (!v) throw new Error('malformed-rfc3339-trailing-component vector not found');
+    const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
+    const { verifyEd25519, deriveIpnsName } = await import('@cipherbox/crypto');
+    vi.mocked(verifyEd25519).mockResolvedValue(true);
+    vi.mocked(deriveIpnsName).mockResolvedValue(v.ipns_name);
+    vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
+      success: true,
+      cid: v.cid,
+      sequenceNumber: v.sequence_number,
+      signatureV2: v.signature_v2 ?? undefined,
+      data: v.data ?? undefined,
+      pubKey: v.pub_key ?? undefined,
+    });
+
+    // RED: new Date() tolerates the trailing date component ("2099-01-01-99T...") and
+    // silently coerces it to a parseable (wrong) date instead of rejecting it.
+    await expect(resolveIpnsRecord(v.ipns_name), `${v.description}`).rejects.toThrow(/Validity/i);
+  });
+
+  it('malformed-rfc3339-impossible-date — throws on malformed Validity (real data bytes)', async () => {
+    const v = vectors.find((x) => x.description.startsWith('malformed-rfc3339-impossible-date'));
+    if (!v) throw new Error('malformed-rfc3339-impossible-date vector not found');
+    const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
+    const { verifyEd25519, deriveIpnsName } = await import('@cipherbox/crypto');
+    vi.mocked(verifyEd25519).mockResolvedValue(true);
+    vi.mocked(deriveIpnsName).mockResolvedValue(v.ipns_name);
+    vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
+      success: true,
+      cid: v.cid,
+      sequenceNumber: v.sequence_number,
+      signatureV2: v.signature_v2 ?? undefined,
+      data: v.data ?? undefined,
+      pubKey: v.pub_key ?? undefined,
+    });
+
+    // RED: new Date() rolls "2099-02-30" forward into March instead of rejecting it, which
+    // would EXTEND the record's apparent validity — the opposite of fail-closed.
+    await expect(resolveIpnsRecord(v.ipns_name), `${v.description}`).rejects.toThrow(/Validity/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 75 (Plan 03): parseRfc3339ToUnixSecs unit tests — RED until Task 2 ports
+// the Rust strict RFC3339 parser (crates/api-client/src/ipns.rs) to TS.
+// ---------------------------------------------------------------------------
+
+describe('parseRfc3339ToUnixSecs (Phase 75 SC1)', () => {
+  it('accepts a canonical future timestamp', () => {
+    expect(parseRfc3339ToUnixSecs('2099-01-01T00:00:00.000000000Z')).not.toBeNull();
+    expect(typeof parseRfc3339ToUnixSecs('2099-01-01T00:00:00.000000000Z')).toBe('number');
+  });
+
+  it('accepts a canonical timestamp without nanoseconds', () => {
+    expect(parseRfc3339ToUnixSecs('2099-01-01T00:00:00Z')).not.toBeNull();
+  });
+
+  it('rejects a trailing date component', () => {
+    expect(parseRfc3339ToUnixSecs('2026-01-01-99T00:00:00Z')).toBeNull();
+  });
+
+  it('rejects an impossible calendar date', () => {
+    expect(parseRfc3339ToUnixSecs('2026-02-30T00:00:00.000000000Z')).toBeNull();
+  });
+
+  it('rejects a trailing time component', () => {
+    expect(parseRfc3339ToUnixSecs('2026-01-01T00:00:00:99Z')).toBeNull();
+  });
+
+  it('rejects a non-digit fractional-seconds part', () => {
+    expect(parseRfc3339ToUnixSecs('2026-01-01T00:00:00.abcZ')).toBeNull();
+  });
+
+  it('rejects a timestamp missing the trailing Z', () => {
+    expect(parseRfc3339ToUnixSecs('2026-01-01T00:00:00')).toBeNull();
+  });
+
+  // Phase 75 parity: fixed-width fields. Mirrors the Rust parser
+  // (crates/api-client/src/ipns.rs parse_rfc3339_to_unix_secs) so a leading sign, a
+  // non-4-digit year, and 1-digit fields reach the identical fail-closed verdict.
+  it('rejects a leading + on the year (Rust parity)', () => {
+    expect(parseRfc3339ToUnixSecs('+2099-01-01T00:00:00Z')).toBeNull();
+  });
+
+  it('rejects a leading + on a sub-field (Rust parity)', () => {
+    expect(parseRfc3339ToUnixSecs('2099-+1-01T00:00:00Z')).toBeNull();
+    expect(parseRfc3339ToUnixSecs('2099-01-01T+0:00:00Z')).toBeNull();
+  });
+
+  it('rejects a non-4-digit / overflowing year (Rust parity)', () => {
+    expect(parseRfc3339ToUnixSecs('99999-01-01T00:00:00Z')).toBeNull();
+    expect(parseRfc3339ToUnixSecs('999-01-01T00:00:00Z')).toBeNull();
+  });
+
+  it('rejects 1-digit month/day/hour fields (Rust parity)', () => {
+    expect(parseRfc3339ToUnixSecs('2099-1-01T00:00:00Z')).toBeNull();
+    expect(parseRfc3339ToUnixSecs('2099-01-1T00:00:00Z')).toBeNull();
+    expect(parseRfc3339ToUnixSecs('2099-01-01T0:00:00Z')).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -859,6 +1042,63 @@ describe('D-05/D-07: strict throw-path (Plan 60-03)', () => {
     await expect(resolveIpnsRecord('k51no-validity')).rejects.toThrow(
       /no Validity field|fail closed/i
     );
+  });
+
+  // (f) Phase 75 SC1: ValidityType absent → throws (fail closed), mirroring the Rust
+  // verifier's ValidityType == 0 gate (crates/api-client/src/ipns.rs bind_verified).
+  // RED: ValidityType is currently unread by resolveIpnsRecord, so a canonical future
+  // Validity with no ValidityType field resolves successfully today.
+  it('D-07-f: throws when ValidityType is absent from the CBOR data', async () => {
+    const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
+    const { verifyEd25519, deriveIpnsName } = await import('@cipherbox/crypto');
+    vi.mocked(verifyEd25519).mockResolvedValue(true);
+    vi.mocked(deriveIpnsName).mockResolvedValue('k51no-validity-type');
+    const { encode } = await import('cborg');
+    const cbor = encode({
+      TTL: 300000000000,
+      Value: new TextEncoder().encode('/ipfs/bafyNOVTYPE'),
+      Sequence: 5,
+      Validity: new TextEncoder().encode('2099-01-01T00:00:00.000000000Z'),
+      // ValidityType intentionally omitted
+    });
+    const data = Buffer.from(cbor).toString('base64');
+    vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
+      success: true,
+      cid: 'bafyNOVTYPE',
+      sequenceNumber: '5',
+      signatureV2: btoa('sig'),
+      data,
+      pubKey: btoa('pubkey'),
+    });
+
+    await expect(resolveIpnsRecord('k51no-validity-type')).rejects.toThrow(/ValidityType/i);
+  });
+
+  // (g) Phase 75 SC1: ValidityType != 0 → throws, even with a canonical future Validity.
+  it('D-07-g: throws when ValidityType is non-zero (canonical future Validity)', async () => {
+    const { ipnsControllerResolveRecord } = await import('@cipherbox/api-client');
+    const { verifyEd25519, deriveIpnsName } = await import('@cipherbox/crypto');
+    vi.mocked(verifyEd25519).mockResolvedValue(true);
+    vi.mocked(deriveIpnsName).mockResolvedValue('k51nonzero-validity-type');
+    const { encode } = await import('cborg');
+    const cbor = encode({
+      TTL: 300000000000,
+      Value: new TextEncoder().encode('/ipfs/bafyNONZEROVT'),
+      Sequence: 5,
+      Validity: new TextEncoder().encode('2099-01-01T00:00:00.000000000Z'),
+      ValidityType: 1,
+    });
+    const data = Buffer.from(cbor).toString('base64');
+    vi.mocked(ipnsControllerResolveRecord).mockResolvedValue({
+      success: true,
+      cid: 'bafyNONZEROVT',
+      sequenceNumber: '5',
+      signatureV2: btoa('sig'),
+      data,
+      pubKey: btoa('pubkey'),
+    });
+
+    await expect(resolveIpnsRecord('k51nonzero-validity-type')).rejects.toThrow(/ValidityType/i);
   });
 });
 

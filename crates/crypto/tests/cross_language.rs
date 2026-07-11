@@ -355,6 +355,77 @@ fn node_aad_cross_language() {
 }
 
 // ============================================================
+// UUID Acceptance-Domain Cross-Language Oracle (SC3)
+// ============================================================
+
+#[derive(Deserialize)]
+struct UuidAcceptanceFixedParams {
+    kind: u8,
+    generation: u32,
+    role: u8,
+}
+
+#[derive(Deserialize)]
+struct UuidAcceptanceCase {
+    description: String,
+    node_id: String,
+    expected: String,
+}
+
+#[derive(Deserialize)]
+struct UuidAcceptanceOracle {
+    #[allow(dead_code)]
+    description: String,
+    fixed_params: UuidAcceptanceFixedParams,
+    cases: Vec<UuidAcceptanceCase>,
+}
+
+/// Drives build_node_aad over every case in uuid-acceptance.json and asserts Rust
+/// agrees with the shared accept/reject verdict. The TS side
+/// (packages/crypto/src/__tests__/build-node-aad.test.ts) drives the identical
+/// oracle so a divergent UUID acceptance domain between languages fails on both
+/// sides (SC3, Option A: canonical-only).
+#[test]
+fn uuid_acceptance_cross_language() {
+    let path = vectors_path("crypto/uuid-acceptance.json");
+    let data = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("Failed to load {}: {}", path.display(), e));
+    let oracle: UuidAcceptanceOracle = serde_json::from_str(&data).unwrap();
+
+    // Non-vacuous guard: at least 2 accept and 6 reject cases must be present.
+    assert!(
+        oracle.cases.len() >= 8,
+        "Expected at least 8 uuid-acceptance.json cases"
+    );
+    let accept_count = oracle.cases.iter().filter(|c| c.expected == "accept").count();
+    let reject_count = oracle.cases.iter().filter(|c| c.expected == "reject").count();
+    assert!(accept_count >= 2, "Expected at least 2 accept cases");
+    assert!(reject_count >= 6, "Expected at least 6 reject cases");
+
+    let params = &oracle.fixed_params;
+    for c in &oracle.cases {
+        let result = cipherbox_crypto::build_node_aad(&c.node_id, params.kind, params.generation, params.role);
+        match c.expected.as_str() {
+            "accept" => assert!(
+                result.is_ok(),
+                "expected accept for: {} ({:?}), got {:?}",
+                c.description,
+                c.node_id,
+                result
+            ),
+            "reject" => assert!(
+                matches!(&result, Err(cipherbox_crypto::CryptoError::InvalidAadInput)),
+                "expected reject (InvalidAadInput) for: {} ({:?}), got {:?}",
+                c.description,
+                c.node_id,
+                result
+            ),
+            other => panic!("unknown expected value '{}' in case: {}", other, c.description),
+        }
+    }
+}
+
+// ============================================================
 // IPNS Name Derivation Cross-Language Vectors
 // ============================================================
 

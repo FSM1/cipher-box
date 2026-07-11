@@ -55,3 +55,15 @@ On WinFsp `handle_rename`: the overwritten destination of a rename is gated
 (rotates when it roots a covering grant); a rename that fails replacement
 validation publishes zero rotations. Verify via the `Cargo Check & Test
 (Windows)` CI job. The DELETE-path coalescing + D-15d ordering is already done.
+
+## Resolved (phase 74, merged PR #607)
+
+The remaining WinFsp RENAME gap is closed by plan 74-06. `handle_rename`
+(`crates/fuse/src/platform/windows/write_ops.rs`) now gates BOTH the source
+scope-exit (`run_scope_exit_gate(&mut fs, source_ino)`, ~line 1176) AND the
+OVERWRITTEN destination's own scope-exit (`run_scope_exit_gate(&mut fs,
+dest_ino)`, ~line 1181-1191), explicitly labeled "D-15d (74-06)", plus the
+D-15d POSIX kind-compatibility validation. Verified by the Windows CI leg
+(`Cargo Check & Test (Windows)`) which compiled the `#[cfg(windows)]` gate and
+passed its new tests. Stranded in pending by the known auto-close under-close;
+moved manually 2026-07-11.

@@ -59,6 +59,83 @@ describe('uuidToBytes', () => {
       expect((e as CryptoError).code).toBe('INVALID_AAD_INPUT');
     }
   });
+
+  it('rejects simple-32-hex (no hyphens) — canonical-only (Option A, SC3)', () => {
+    // Previously accepted by the strip-then-check implementation; canonical-only
+    // tightening must reject any non-canonical form, even a well-formed 32-hex string.
+    try {
+      uuidToBytes('550e8400e29b41d4a716446655440000');
+      expect.fail('should have thrown');
+    } catch (e) {
+      expect(e).toBeInstanceOf(CryptoError);
+      expect((e as CryptoError).code).toBe('INVALID_AAD_INPUT');
+    }
+  });
+
+  it('rejects loose-hyphen forms (hyphens at non-canonical positions) — canonical-only (Option A, SC3)', () => {
+    for (const loose of [
+      '55-0e8400e29b41d4a716446655440000',
+      '550e-8400-e29b-41d4-a716-446655440000',
+    ]) {
+      try {
+        uuidToBytes(loose);
+        expect.fail(`should have thrown for ${loose}`);
+      } catch (e) {
+        expect(e).toBeInstanceOf(CryptoError);
+        expect((e as CryptoError).code).toBe('INVALID_AAD_INPUT');
+      }
+    }
+  });
+});
+
+// ============================================================
+// UUID acceptance-domain cross-language oracle (SC3)
+// ============================================================
+//
+// Drives buildNodeAad over every case in tests/vectors/crypto/uuid-acceptance.json
+// and asserts the TS side agrees with the shared accept/reject verdict. The Rust
+// side (crates/crypto/tests/cross_language.rs) drives the identical oracle so a
+// divergent acceptance domain between languages fails on both sides.
+describe('UUID acceptance-domain oracle (uuid-acceptance.json, SC3)', () => {
+  it('accepts/rejects every case exactly as the shared oracle expects', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const oracle = (await import('../../../../tests/vectors/crypto/uuid-acceptance.json')) as any;
+    const cases = oracle.cases as Array<{
+      description: string;
+      node_id: string;
+      expected: 'accept' | 'reject';
+    }>;
+    const { kind, generation, role } = oracle.fixed_params as {
+      kind: number;
+      generation: number;
+      role: number;
+    };
+
+    // Non-vacuous guard: at least 2 accept and 6 reject cases must be present.
+    expect(cases.length).toBeGreaterThanOrEqual(8);
+    expect(cases.filter((c) => c.expected === 'accept').length).toBeGreaterThanOrEqual(2);
+    expect(cases.filter((c) => c.expected === 'reject').length).toBeGreaterThanOrEqual(6);
+
+    for (const c of cases) {
+      if (c.expected === 'accept') {
+        expect(
+          () => buildNodeAad(c.node_id, kind, generation, role),
+          `expected accept for: ${c.description} (${JSON.stringify(c.node_id)})`
+        ).not.toThrow();
+      } else if (c.expected === 'reject') {
+        try {
+          buildNodeAad(c.node_id, kind, generation, role);
+          expect.fail(`expected reject for: ${c.description} (${JSON.stringify(c.node_id)})`);
+        } catch (e) {
+          expect(e).toBeInstanceOf(CryptoError);
+          expect((e as CryptoError).code).toBe('INVALID_AAD_INPUT');
+        }
+      } else {
+        // Guard against a typo'd verdict silently passing as a reject case.
+        expect.fail(`unknown expected verdict "${c.expected}" for: ${c.description}`);
+      }
+    }
+  });
 });
 
 describe('buildNodeAad', () => {

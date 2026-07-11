@@ -78,5 +78,45 @@
     "data": "pWNUVEwbAAAARdlkuABlVmFsdWVYQS9pcGZzL2JhZnliZWlnZHlyenQ1c2ZwN3VkbTdodTc2dWg3eTI2bmYzZWZ1eWxxYWJmM29jbGd0cXk1NWZiemRpaFNlcXVlbmNlAGhWYWxpZGl0eVgeMjA5OS0wMS0wMVQwMDowMDowMC4wMDAwMDAwMDBabFZhbGlkaXR5VHlwZQA=",
     "pub_key": "iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=",
     "expected_result": "invalid"
+  },
+  {
+    "description": "expired-valid-sig — valid sig, but embedded Validity is a past RFC3339 timestamp",
+    "ipns_name": "k51qzi5uqu5djmw2yvf8kk5cdjc1ddc00o4d5sjwi6f79xzcay9j3gkddw5uu4",
+    "cid": "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
+    "sequence_number": "5",
+    "signature_v2": "mULiNNpXmjGKYWDIEirIqk0tKc4j4oWjL8VvlmAPqM1N1b0WGA2Imb4wSiP1VRtQhhsdBDse/2Xy9S85OkGBBA==",
+    "data": "pWNUVEwbAAAARdlkuABlVmFsdWVYQS9pcGZzL2JhZnliZWlnZHlyenQ1c2ZwN3VkbTdodTc2dWg3eTI2bmYzZWZ1eWxxYWJmM29jbGd0cXk1NWZiemRpaFNlcXVlbmNlBWhWYWxpZGl0eVgeMjAyMC0wMS0wMVQwMDowMDowMC4wMDAwMDAwMDBabFZhbGlkaXR5VHlwZQA=",
+    "pub_key": "iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=",
+    "expected_result": "invalid"
+  },
+  {
+    "description": "wrong-validity-type — valid sig, canonical future Validity, but ValidityType is 1 (non-EOL)",
+    "ipns_name": "k51qzi5uqu5djmw2yvf8kk5cdjc1ddc00o4d5sjwi6f79xzcay9j3gkddw5uu4",
+    "cid": "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
+    "sequence_number": "5",
+    "signature_v2": "jz0hrNwKiRmkbExm83qjKohG6bKQCh2K8DoWIQb/TpFzi9T6sQktHxlqqZBfLi0zYyHsvXT5LORjqQ3nK6s+Dw==",
+    "data": "pWNUVEwbAAAARdlkuABlVmFsdWVYQS9pcGZzL2JhZnliZWlnZHlyenQ1c2ZwN3VkbTdodTc2dWg3eTI2bmYzZWZ1eWxxYWJmM29jbGd0cXk1NWZiemRpaFNlcXVlbmNlBWhWYWxpZGl0eVgeMjA5OS0wMS0wMVQwMDowMDowMC4wMDAwMDAwMDBabFZhbGlkaXR5VHlwZQE=",
+    "pub_key": "iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=",
+    "expected_result": "invalid"
+  },
+  {
+    "description": "malformed-rfc3339-trailing-component — valid sig, but Validity has a trailing date component",
+    "ipns_name": "k51qzi5uqu5djmw2yvf8kk5cdjc1ddc00o4d5sjwi6f79xzcay9j3gkddw5uu4",
+    "cid": "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
+    "sequence_number": "5",
+    "signature_v2": "UG7m8SLnVd73MfKpl/Rh7Nt31x0GNrIXtFkFZPysCpT5Vx4qjkSilLyt0qRVVB6V05U8t3UnMNmqVqCEBkPtAQ==",
+    "data": "pWNUVEwbAAAARdlkuABlVmFsdWVYQS9pcGZzL2JhZnliZWlnZHlyenQ1c2ZwN3VkbTdodTc2dWg3eTI2bmYzZWZ1eWxxYWJmM29jbGd0cXk1NWZiemRpaFNlcXVlbmNlBWhWYWxpZGl0eVghMjA5OS0wMS0wMS05OVQwMDowMDowMC4wMDAwMDAwMDBabFZhbGlkaXR5VHlwZQA=",
+    "pub_key": "iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=",
+    "expected_result": "invalid"
+  },
+  {
+    "description": "malformed-rfc3339-impossible-date — valid sig, but Validity encodes an impossible calendar date",
+    "ipns_name": "k51qzi5uqu5djmw2yvf8kk5cdjc1ddc00o4d5sjwi6f79xzcay9j3gkddw5uu4",
+    "cid": "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
+    "sequence_number": "5",
+    "signature_v2": "tBacDPTQcAsTY3sjLxuuTUtEHgWSF2r5xg9C1JRVZJcbsh0ZM2Exn4JPBUIRM4QCNmujljYj47ewzMb68xLNBA==",
+    "data": "pWNUVEwbAAAARdlkuABlVmFsdWVYQS9pcGZzL2JhZnliZWlnZHlyenQ1c2ZwN3VkbTdodTc2dWg3eTI2bmYzZWZ1eWxxYWJmM29jbGd0cXk1NWZiemRpaFNlcXVlbmNlBWhWYWxpZGl0eVgeMjA5OS0wMi0zMFQwMDowMDowMC4wMDAwMDAwMDBabFZhbGlkaXR5VHlwZQA=",
+    "pub_key": "iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=",
+    "expected_result": "invalid"
   }
 ]
