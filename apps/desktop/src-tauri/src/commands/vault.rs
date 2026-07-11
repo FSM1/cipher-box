@@ -46,6 +46,48 @@ fn build_empty_root_published_node(
         .map_err(|e| format!("root node encode failed: {}", e))
 }
 
+/// Classify a raw IPNS resolve outcome into a fail-closed preflight verdict.
+///
+/// Pure / no-IO decision seam for vault-init preflight. The network resolve call
+/// is performed by `preflight_ipns_absent`; this helper only maps its `Result`,
+/// so the mapping is unit-testable without a live API — mirroring the
+/// closure/seam testability pattern of `crates/fuse/src/metadata.rs`'s
+/// `run_publish_retry_seam`.
+///
+/// - `Ok(true)`  — confirmed ABSENT (`ApiError::IpnsNotFound`, a real 404): safe
+///   to mint fresh keys and publish.
+/// - `Ok(false)` — confirmed PRESENT (`Ok(_)`): route to the recovery branch.
+/// - `Err(_)`    — any OTHER `ApiError` (transient / 5xx / auth / timeout): the
+///   caller MUST abort. A resolve that cannot confirm absence is NEVER coerced to
+///   absent (fail closed). This arm can never return `Ok(true)`.
+fn classify_preflight_outcome(
+    outcome: Result<cipherbox_api_client::IpnsResolveResponse, cipherbox_api_client::ApiError>,
+    ipns_name: &str,
+) -> Result<bool, String> {
+    match outcome {
+        Ok(_) => Ok(false),
+        Err(cipherbox_api_client::ApiError::IpnsNotFound(_)) => Ok(true),
+        Err(e) => Err(format!("preflight resolve failed for {}: {}", ipns_name, e)),
+    }
+}
+
+/// Fail-closed preflight: is `ipns_name` confirmed absent?
+///
+/// Resolves `ipns_name` via `cipherbox_api_client::ipns::resolve_ipns` and
+/// classifies the outcome through `classify_preflight_outcome`. Returns
+/// `Ok(true)` ONLY on a confirmed 404, `Ok(false)` when a record already exists,
+/// and `Err` on any other outcome — in which case the caller MUST abort and
+/// never publish.
+async fn preflight_ipns_absent(
+    api: &cipherbox_api_client::ApiClient,
+    ipns_name: &str,
+) -> Result<bool, String> {
+    classify_preflight_outcome(
+        cipherbox_api_client::ipns::resolve_ipns(api, ipns_name).await,
+        ipns_name,
+    )
+}
+
 /// Load user-configurable vault settings from encrypted IPNS entry.
 ///
 /// Pattern: derive IPNS keypair -> resolve IPNS -> fetch IPFS -> ECIES unwrap -> parse JSON -> validate.
@@ -564,5 +606,69 @@ mod root_emit_tests {
             opened_with_read.is_err(),
             "the write-body must not open under the recovered read key (AAD/key separation)"
         );
+    }
+}
+
+#[cfg(test)]
+mod preflight_tests {
+    use super::*;
+
+    /// A present-record resolve response (fields irrelevant to the preflight
+    /// existence check — only Ok-vs-Err matters).
+    fn present_response() -> cipherbox_api_client::IpnsResolveResponse {
+        cipherbox_api_client::IpnsResolveResponse {
+            success: true,
+            cid: "bafyfakecidforpreflighttest".to_string(),
+            sequence_number: "1".to_string(),
+            signature_v2: None,
+            data: None,
+            pub_key: None,
+        }
+    }
+
+    // A confirmed 404 (IpnsNotFound) is the ONLY outcome that reports "absent".
+    #[test]
+    fn preflight_ipns_absent_maps_not_found_to_absent() {
+        let out = classify_preflight_outcome(
+            Err(cipherbox_api_client::ApiError::IpnsNotFound("k51-name".to_string())),
+            "k51-name",
+        );
+        assert_eq!(out, Ok(true), "IpnsNotFound must map to confirmed-absent");
+    }
+
+    // A successful resolve means the record exists -> recovery path (Ok(false)).
+    #[test]
+    fn preflight_ipns_absent_maps_ok_to_present() {
+        let out = classify_preflight_outcome(Ok(present_response()), "k51-name");
+        assert_eq!(out, Ok(false), "an existing record must map to present");
+    }
+
+    // A non-404 API error (5xx) must fail closed: Err, and NEVER Ok(true).
+    #[test]
+    fn preflight_ipns_absent_fails_closed_on_transient_error() {
+        let out = classify_preflight_outcome(
+            Err(cipherbox_api_client::ApiError::ApiResponse {
+                status: 503,
+                message: "upstream unavailable".to_string(),
+            }),
+            "k51-name",
+        );
+        assert!(out.is_err(), "a non-404 resolve must abort, not proceed");
+        assert_ne!(
+            out,
+            Ok(true),
+            "a transient error must NEVER be coerced to confirmed-absent (fail closed)"
+        );
+    }
+
+    // An auth error is likewise transient/unknown -> abort, never absent.
+    #[test]
+    fn preflight_ipns_absent_fails_closed_on_auth_error() {
+        let out = classify_preflight_outcome(
+            Err(cipherbox_api_client::ApiError::AuthFailed("token expired".to_string())),
+            "k51-name",
+        );
+        assert!(out.is_err(), "an auth error must abort the preflight");
+        assert_ne!(out, Ok(true));
     }
 }
