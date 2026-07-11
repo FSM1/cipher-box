@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
-current_phase: 74
-current_phase_name: Rust and FUSE Rotation-Revocation Soundness
-status: verifying
-stopped_at: Phase 74 verified human_needed (2 CI-gated legs pending)
-last_updated: "2026-07-11T11:28:37.406Z"
-last_activity: 2026-07-11
-last_activity_desc: Phase 74 learnings extracted (74-LEARNINGS.md)
+current_phase: 71
+current_phase_name: API
+status: executing
+stopped_at: Completed 72-10-PLAN.md
+last_updated: "2026-07-11T05:43:34.685Z"
+last_activity: 2026-07-10
+last_activity_desc: Phase 70.1 complete, transitioned to Phase 71
 progress:
   total_phases: 22
   completed_phases: 17
@@ -28,17 +28,10 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 
 ## Current Position
 
-Phase: 74 (Rust and FUSE Rotation-Revocation Soundness) — VERIFIED human_needed (NOT marked complete)
-Plan: 7 of 7 executed + committed
-Status: All 7 plans done; verification = human_needed. 21/21 must-haves code-verified; all local test suites pass (SC1 27/27+370/370+17/17, SC2 15/15+10/10 / fuse 117/117). SC3 code source-verified (D-15d parity). Two CI-gated legs pending (see Blockers).
-Last activity: 2026-07-11 — Phase 74 learnings extracted (74-LEARNINGS.md)
-
-## Phase 74 Blockers (CI-gated verification, not code gaps)
-
-Recorded per GSD human_needed handling. Both are infra limitations that cannot run on this macOS host — routed to `74-UAT.md`, not treated as gaps. Phase 74 stays open pending these; run `/gsd-verify-work 74` after CI confirms.
-
-1. Windows CI (`Cargo Check & Test (Windows)`) must compile 74-06's `#[cfg(windows)]` WinFsp rename dest-gate and pass its two new tests — cannot build winfsp on macOS.
-2. Desktop-e2e 3-platform matrix (`desktop-e2e` workflow) must run 74-07's live-mount Part C (SC1+SC2 deep decryptability / retained-vs-revoked) and Part D (SC3 WinFsp overwrite-rename) — needs a built desktop binary + real FUSE/WinFsp mount. Also confirms Part A's pre-existing Bob assertion still holds (static analysis: likely a false alarm).
+Phase: 71 — Share-Invite Security and IPNS Data-Integrity (API)
+Plan: Not started
+Status: Ready to execute
+Last activity: 2026-07-10 — Phase 70.1 complete, transitioned to Phase 71
 
 Progress: `██████████` 79 / 79 plans (100%)
 

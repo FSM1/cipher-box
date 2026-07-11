@@ -328,17 +328,19 @@ let uuid = Uuid::parse_str(node_id).map_err(|_| CryptoError::InvalidAadInput)?;
 
 **Confirmation:** A1–A3 are LOW-risk framework/platform-behavior assumptions, not project-specific decisions — they do not require user confirmation before planning proceeds, but are logged per protocol. All four TODO-sourced technical claims (current code behavior, current test structure, current CI wiring) are `[VERIFIED]` via direct file reads this session, not `[ASSUMED]`.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Should `bind_verified` be widened to `pub` and `classify_vector`'s duplicate binding logic deleted, or should the duplicate be kept and manually extended?**
    - What we know: the todo prefers the dedup ("ideally by exporting a single binding helper ... and reusing it, rather than duplicating"); `bind_verified` is currently `pub(crate)`, blocking this from another crate's test target.
    - What's unclear: whether `crates/fuse`'s test target can depend on `cipherbox-api-client`'s test-only surface cleanly, or whether widening a production function's visibility for test reuse is acceptable per this repo's conventions (the doc comment on `classify_vector` suggests the duplication was a deliberate choice at the time, for reasons not stated).
    - Recommendation: widen to `pub` and delete the duplicate (Pattern 2) — the planner should confirm this is acceptable in the discuss/plan step, but it is the technically superior option since duplication is how gap #9 was created.
+   - RESOLVED: Plan 75-02 adopts the recommendation — `bind_verified` is widened to `pub` and `classify_vector` delegates to it with the duplicate binding deleted (75-02-02 / 75-02-03).
 
 2. **Exact new vector count for `tests/vectors/ipns/verify.json` after adding expired/wrong-validity-type/malformed-RFC3339 cases.**
    - What we know: currently exactly 8 cases, hard-guarded by count assertions in two places (Pitfall 2).
    - What's unclear: how many NEW cases the plan wants — the todos ask for at minimum "expired" and "wrong-validity-type" (todo 2) plus "malformed-timestamp cases" (todo 1) — could be as few as 2 new cases or as many as 5+ if multiple malformed-RFC3339 sub-cases (trailing component, impossible date, non-digit fraction) are each given their own vector.
    - Recommendation: the planner should enumerate the exact case list per the two todos' wording before sizing tasks; suggest at minimum: `expired-valid-sig`, `wrong-validity-type` (ValidityType=1 or absent), `malformed-rfc3339-trailing-component`, `malformed-rfc3339-impossible-date` — 4 new cases, bringing the total to 12.
+   - RESOLVED: Plan 75-01 adopts the recommendation — the generator adds the 4 new invalid cases (expired, wrong-validity-type, and two malformed-RFC3339 sub-cases) for a total of 12 cases, and the hard-coded count assertions are updated to 12.
 
 ## Environment Availability
 
