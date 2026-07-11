@@ -6,6 +6,7 @@ import type { PerFileUpload } from '../../stores/upload.store';
 import { FileListItem, type DragItem } from './FileListItem';
 import { UploadListItem } from './UploadListItem';
 import { ParentDirRow } from './ParentDirRow';
+import { isFileRefResolved } from '../../utils/fileTypes';
 
 /**
  * 68.2-11: builds the `ResolvedChild` display projection `FileListItem`
@@ -31,6 +32,7 @@ function toResolvedChildView(
     kind: 'folder',
     size: undefined,
     modifiedAt: 0,
+    createdAt: 0,
     sequence: 0,
   };
 }
@@ -39,7 +41,6 @@ function toResolvedChildView(
  * Virtual entry representing an in-progress upload in the sorted file list.
  * The `_uploading` flag discriminates it from real SealedChildRef items.
  * Shape mirrors SealedChildRef for type-compatibility; ipnsName is empty during upload.
- * TODO(phase 63): align with SealedChildRef semantics when upload produces a Node.
  */
 type UploadVirtualEntry = {
   name: string;
@@ -92,14 +93,21 @@ type FileListProps = {
 };
 
 /**
- * Sort items alphabetically by name.
- * TODO(phase 63): restore folders-first sort once Node.kind discrimination is available.
+ * Sort items folders-first, then alphabetically by name.
+ * `UploadVirtualEntry` rows (empty ipnsName) short-circuit to "file" before the
+ * `resolvedByIpnsName` lookup, so in-progress uploads never get mis-sorted as
+ * folders by the map-miss default.
  */
-function sortItems(items: SealedChildRef[]): SealedChildRef[] {
-  return [...items].sort((a, b) =>
-    // TODO(phase 63): SealedChildRef has no .type; sort alphabetically only until phase 63
-    a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
-  );
+function sortItems(
+  items: SealedChildRef[],
+  resolvedByIpnsName: Map<string, ResolvedChild>
+): SealedChildRef[] {
+  return [...items].sort((a, b) => {
+    const aIsFolder = '_uploading' in a ? false : !isFileRefResolved(a, resolvedByIpnsName);
+    const bIsFolder = '_uploading' in b ? false : !isFileRefResolved(b, resolvedByIpnsName);
+    if (aIsFolder !== bIsFolder) return aIsFolder ? -1 : 1;
+    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+  });
 }
 
 /**
@@ -141,8 +149,8 @@ export function FileList({
   onNavigate,
   onContextMenu,
   onDragStart,
-  onDropOnFolder: _onDropOnFolder, // TODO(phase 63): drop disabled until Node.kind discrimination
-  onExternalFileDrop: _onExternalFileDrop, // TODO(phase 63): drop disabled until Node.kind discrimination
+  onDropOnFolder,
+  onExternalFileDrop,
   onRetryUpload,
 }: FileListProps) {
   // 68.2-11: per-ipnsName lookup into the SDK-resolved display projection
@@ -199,7 +207,7 @@ export function FileList({
 
   // Merge and sort all items together
   const allItems = [...items, ...filteredUploadEntries];
-  const sortedItems = sortItems(allItems as SealedChildRef[]);
+  const sortedItems = sortItems(allItems as SealedChildRef[], resolvedByIpnsName);
 
   // Select-all uses real item count only (upload rows are not selectable)
   const allSelected = items.length > 0 && selectedIds.size === items.length;
@@ -248,6 +256,7 @@ export function FileList({
               key={item.ipnsName}
               item={item}
               resolved={toResolvedChildView(item, resolvedByIpnsName.get(item.ipnsName))}
+              resolvedByIpnsName={resolvedByIpnsName}
               isSelected={selectedIds.has(item.ipnsName)}
               parentId={parentId}
               selectedIds={selectedIds}
@@ -258,12 +267,16 @@ export function FileList({
               onContextMenu={onContextMenu}
               onDragStart={onDragStart}
               onDrop={
-                // TODO(phase 63): SealedChildRef has no .type; drop targets disabled until phase 63
-                undefined
+                isFileRefResolved(item, resolvedByIpnsName)
+                  ? undefined
+                  : onDropOnFolder &&
+                    ((dragItems, sourceParentId) =>
+                      onDropOnFolder(dragItems, sourceParentId, item.ipnsName))
               }
               onExternalFileDrop={
-                // TODO(phase 63): SealedChildRef has no .type; external drop disabled until phase 63
-                undefined
+                isFileRefResolved(item, resolvedByIpnsName)
+                  ? undefined
+                  : onExternalFileDrop && ((files) => onExternalFileDrop(files, item.ipnsName))
               }
             />
           )
