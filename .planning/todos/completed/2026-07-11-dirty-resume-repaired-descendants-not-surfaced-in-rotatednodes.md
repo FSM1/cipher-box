@@ -75,3 +75,35 @@ regression test in each engine.
 - TS and Rust engines agree (parity) on the dirty-resume return contents.
 - New dirty-resume regression test in each engine asserting the FUSE caller
   can refresh every repaired inode's cached read key after crash recovery.
+
+## Resolution
+
+RESOLVED 2026-07-11 (commit 1cdb5946f, Phase 74 PR #607).
+
+Both engines now surface every repaired descendant on the dirty-resume path,
+achieving Rust/TS parity:
+
+- Rust (`crates/sdk/src/rotation/engine.rs`): `repair_dirty_node` already
+  inserted each recovered key into `rotated_nodes`; the terminal return
+  discarded the whole map when `fresh_root` was `None`. The dirty-resume branch
+  now captures the root's already-committed post-rotation convenience values
+  (its current published key/generation/sequence — `root_read_key_owned`,
+  `root_pub.generation`, `root_resolved.sequence_number`), and the terminal
+  return hands back a `RotateReadResult` carrying the map whenever any
+  descendant was repaired (root's own key intentionally absent since it did not
+  freshly rotate this run).
+- TS (`packages/sdk-core/src/rotation/engine.ts`): `repairDirtyNode` now inserts
+  the recovered `readKeyPrime` (defensive copy) into the shared `rotatedNodes`
+  map keyed by `item.childRef.ipnsName`, mirroring the Rust hook; the
+  dirty-resume return already carried the same map instance.
+
+Regression coverage: strengthened the existing Rust dirty-resume tests
+(`d13_depth3_...`, `d13_multi_dirty_edge_...`) to assert each repaired
+descendant IS present in the returned `rotated_nodes` map, and added TS
+`Test 6 (Plan 74-02 SC1 dirty-resume parity)` in
+`packages/sdk-core/src/__tests__/rotation/engine.test.ts`. `cargo test -p
+cipherbox-sdk` (153) and sdk-core rotation vitest (58) green.
+
+NOTE: the separate low-severity
+`2026-07-11-ts-rotatednodes-defensive-copy-parity` todo (root/child commit
+branches at engine.ts:2064/2235) is NOT covered by this fix and stays open.

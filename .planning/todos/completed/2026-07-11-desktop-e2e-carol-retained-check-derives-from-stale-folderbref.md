@@ -63,3 +63,19 @@ The SC2 retained-recipient check derives Carol's folderB key from the
 POST-rotation SealedChildRef and passes on a real desktop-e2e run, genuinely
 proving retained-vs-revoked distinction (retained recipient still decrypts the
 freshly-rotated folderB).
+
+## Resolution
+
+RESOLVED 2026-07-11 (commit 1ca39a41a, Phase 74 PR #607).
+
+`tests/desktop-e2e/scripts/shared-scope-exit-rotation.mts` now reloads
+folderB's CURRENT `SealedChildRef` from the grant root under the NEW grant-root
+key via `pollFindChild(deepGrantIpnsName, carolNewGrantRootKey, folderBName,
+carol.ctx)` before `deriveChildReadKey`, mirroring the reload pattern used
+elsewhere in the file. The stale pre-rotation `folderBRef` (sealed under the
+OLD grant-root key) is no longer used for Carol's SC#2 derivation.
+
+Verified: the desktop-e2e project typechecks clean (`tsc --noEmit -p
+tests/desktop-e2e/tsconfig.json`, exit 0). desktop-e2e is CI/dispatch-gated, so
+the assertion itself must still be confirmed against a green desktop-e2e run —
+acceptance remains pending that run, but the stale-ref defect is fixed.
