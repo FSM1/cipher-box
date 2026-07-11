@@ -107,7 +107,7 @@ The node/v3 + legacy-type-deletion cutover (69-09/69-10) reshaped shared APIs th
 ### Gate a cold child's resolve on the PARENT's mirrored generation, never the relay-served envelope
 For M1 generation-downgrade defense, the anti-rollback gate on a not-yet-cached child during a folder-listing walk must be fed the PARENT's `SealedChildRef.generation` mirror (locally trusted) — never the child's own relay-served envelope generation. Only when reconciling the SAME already-loaded node (a write-path check) does the in-memory node's own tracked generation apply. Getting this backwards silently defeats M1.
 **Impact:** Thread `SealedChildRef` context into every per-child gate call; a `list_folder` gate signature that only takes an IPNS name with no parent-mirror generation cannot correctly gate a cold child. Rollback stays covered because the (seq,CID) IPNS signature binding + AEAD generation-AAD binding both bind the record.
-**Source:** 69-RESEARCH.md (Pitfall 3 / 68.2 parent-mirror source), 69-WRITE-PLANE-RESEARCH.md
+**Source:** 69-RESEARCH.md (Pitfall 3 / 68.2 parent-mirror source), 69-WRITE-SIDE-RESEARCH.md
 
 ---
 
