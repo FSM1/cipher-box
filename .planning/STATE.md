@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
-current_phase: 73
+current_phase: 71
+current_phase_name: API
 status: executing
 stopped_at: Completed 72-10-PLAN.md
-last_updated: "2026-07-10T23:36:09.597Z"
+last_updated: "2026-07-10T23:56:41.923Z"
 last_activity: 2026-07-10
-last_activity_desc: Phase 73 complete
+last_activity_desc: Phase 70.1 complete, transitioned to Phase 71
 progress:
   total_phases: 22
   completed_phases: 15
   total_plans: 189
   completed_plans: 188
   percent: 68
-current_phase_name: shared-write-navigation-correctness-web
 ---
 
 # Project State
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 
 ## Current Position
 
-Phase: 73
+Phase: 71 — Share-Invite Security and IPNS Data-Integrity (API)
 Plan: Not started
 Status: Executing Phase 73
-Last activity: 2026-07-10 — Phase 73 complete
+Last activity: 2026-07-10 — Phase 70.1 complete, transitioned to Phase 71
 
 Progress: `██████████` 79 / 79 plans (100%)
 
