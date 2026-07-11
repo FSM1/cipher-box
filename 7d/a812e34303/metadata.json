@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "7da812e34303",
+  "strategy": "manual-commit",
+  "branch": "feat/crypto-hygiene-and-terminology-canonicalization",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/crypto/src/aes/decrypt-ctr.ts",
+    "packages/crypto/src/aes/decrypt.ts",
+    "packages/crypto/src/aes/encrypt-ctr.ts",
+    "packages/crypto/src/aes/encrypt.ts",
+    "packages/crypto/src/aes/import-key.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7d/a812e34303/0/metadata.json",
+      "transcript": "/7d/a812e34303/0/full.jsonl",
+      "content_hash": "/7d/a812e34303/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  }
+}
