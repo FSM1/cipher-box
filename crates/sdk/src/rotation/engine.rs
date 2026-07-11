@@ -793,9 +793,29 @@ async fn seal_and_publish<D: RotationDeps>(
 // rotate_read_from_node — scope-root-first BFS walk (ROT-01, engine.ts §4.2)
 // ---------------------------------------------------------------------------
 
+/// A single rotated node's post-rotation read key/generation/sequence
+/// number, keyed by `ipns_name` inside [`RotateReadResult::rotated_nodes`]
+/// (74-01, SC1 — deep scope-exit key refresh).
+///
+/// Rust twin of TS `RotatedNodeKey` (`packages/sdk-core/src/rotation/engine.ts`,
+/// plan 74-02) — the LOCKED cross-language field contract keeps these two
+/// shapes field-for-field identical (camelCase on the TS side).
+///
+/// @security `read_key` is NOT zeroed here — same terminal-owner rule as
+/// [`RotateReadResult::read_key`] (D-09): the caller (FUSE/WinFsp inode
+/// refresh) becomes the terminal owner.
+#[derive(Debug, Clone)]
+pub struct RotatedNodeKey {
+    pub ipns_name: String,
+    pub read_key: Zeroizing<[u8; 32]>,
+    pub generation: u32,
+    pub sequence_number: u64,
+}
+
 /// Return shape for a successful (fresh, non-resume-skip) `rotate_read_from_node`
 /// run: the ROOT node's post-rotation read key/generation/sequence number
-/// (ROT-07 Gap 2 parity).
+/// (ROT-07 Gap 2 parity), PLUS every rotated node's post-rotation key
+/// (74-01, SC1 — deep scope-exit key refresh).
 ///
 /// Callers (69-11 FUSE / 69-14 WinFsp) use this to refresh their own
 /// in-memory folder-tree entry so a same-session retry does not operate on
@@ -810,6 +830,17 @@ pub struct RotateReadResult {
     pub read_key: Zeroizing<[u8; 32]>,
     pub generation: u32,
     pub sequence_number: u64,
+    /// EVERY rotated node's post-rotation read key, keyed by `ipns_name` —
+    /// not just the grant root's (additive; `read_key`/`generation`/
+    /// `sequence_number` above remain the root-convenience accessors, kept
+    /// to avoid churn to existing call sites). Populated at both the root
+    /// commit hook and the BFS child commit hook inside
+    /// `rotate_read_from_node_inner`, plus the `repair_dirty_node`
+    /// crash-resume repair hook (which recovers an already-rotated node's
+    /// CURRENT key via its ECIES checkpoint rather than minting a fresh
+    /// one — still the node's valid post-rotation key from the caller's
+    /// perspective, so it belongs in this same map).
+    pub rotated_nodes: HashMap<String, RotatedNodeKey>,
 }
 
 /// Per-parent bookkeeping for the out-of-band re-seal + batched republish
@@ -1530,6 +1561,13 @@ async fn rotate_read_from_node_inner<D: RotationDeps>(
     // (matches the TS reference: `rootResult.skipped` always means `undefined`).
     let mut fresh_root: Option<CommittedRotation> = None;
 
+    // 74-01 (SC1): every rotated node's post-rotation key, keyed by
+    // ipns_name — populated at the root commit hook below, the BFS child
+    // commit hook, and the repair_dirty_node crash-resume hook. Additive to
+    // `fresh_root`/the top-level `read_key` convenience field, not a
+    // replacement for either.
+    let mut rotated_nodes: HashMap<String, RotatedNodeKey> = HashMap::new();
+
     // An owned, defensive copy of root's CURRENTLY-valid read key — needed
     // by `seed_or_find_parent_tracking_state`'s walk-from-root primitive on
     // BOTH branches below (root did not rotate on the Skip branch; on the
@@ -1586,6 +1624,20 @@ async fn rotate_read_from_node_inner<D: RotationDeps>(
             for entry in pre_rotation_frontier {
                 enqueue_dirty_frontier_entry(entry, &mut queue);
             }
+
+            // 74-01 (SC1): surface the root's own post-rotation key into the
+            // per-node map (keyed by ipns_name, threaded in here at the call
+            // site — CommittedRotation itself stays host-agnostic and never
+            // gains an ipns_name field, per RESEARCH Pitfall 1).
+            rotated_nodes.insert(
+                root_ipns_name.to_string(),
+                RotatedNodeKey {
+                    ipns_name: root_ipns_name.to_string(),
+                    read_key: root_committed.read_key_prime.clone(),
+                    generation: root_committed.new_generation,
+                    sequence_number: root_committed.new_sequence_number,
+                },
+            );
 
             fresh_root = Some(root_committed);
         }
@@ -1767,6 +1819,7 @@ async fn rotate_read_from_node_inner<D: RotationDeps>(
                 &root_read_key_owned,
                 &mut parent_tracking,
                 &mut queue,
+                &mut rotated_nodes,
             )
             .await?;
             complete_pending_child(deps, &mut parent_tracking, &item.parent_ipns_name).await?;
@@ -1817,6 +1870,21 @@ async fn rotate_read_from_node_inner<D: RotationDeps>(
             RotateOneOutcome::Committed(child) => {
                 // Advisory checkpoint after every per-node commit (D-10).
                 deps.persist_job(job_record).await;
+
+                // 74-01 (SC1): surface this child's post-rotation key into
+                // the per-node map, keyed by its ipns_name (item.child_ref
+                // is the same QueueItem that carries CommittedRotation's
+                // otherwise-missing ipns_name — threaded in here at the call
+                // site, per RESEARCH Pitfall 1).
+                rotated_nodes.insert(
+                    item.child_ref.ipns_name.clone(),
+                    RotatedNodeKey {
+                        ipns_name: item.child_ref.ipns_name.clone(),
+                        read_key: child.read_key_prime.clone(),
+                        generation: child.new_generation,
+                        sequence_number: child.new_sequence_number,
+                    },
+                );
 
                 // SC#2 (Bug B fix, D-11): the requeue guard above handles the
                 // COMMON ordering race; as a defensive fallback (e.g. an
@@ -1935,6 +2003,7 @@ async fn rotate_read_from_node_inner<D: RotationDeps>(
         read_key: root_committed.read_key_prime,
         generation: root_committed.new_generation,
         sequence_number: root_committed.new_sequence_number,
+        rotated_nodes,
     }))
 }
 
@@ -1979,6 +2048,7 @@ async fn repair_dirty_node<D: RotationDeps>(
     root_read_key: &Zeroizing<[u8; 32]>,
     parent_tracking: &mut HashMap<String, ParentTrackingState>,
     queue: &mut VecDeque<QueueItem>,
+    rotated_nodes: &mut HashMap<String, RotatedNodeKey>,
 ) -> Result<(), RotationError> {
     let raw_bytes = decode_b64(raw_b64)?;
     let recovered_key = zeroizing_32_from_slice(&raw_bytes)?;
@@ -2016,6 +2086,22 @@ async fn repair_dirty_node<D: RotationDeps>(
     })?;
     let children = node_children(&node);
     let (created_at, modified_at) = node_timestamps(&node);
+
+    // 74-01 (SC1, RESEARCH Open Question 1): a repaired dirty node's
+    // recovered key IS its current, valid post-rotation key (recovered from
+    // the ECIES checkpoint of a rotation that already committed in a prior,
+    // crashed run) — surface it into the same per-node map the normal
+    // Committed branches populate, so a FUSE/WinFsp inode refresh sees this
+    // node too after a crash-resume repair.
+    rotated_nodes.insert(
+        item.child_ref.ipns_name.clone(),
+        RotatedNodeKey {
+            ipns_name: item.child_ref.ipns_name.clone(),
+            read_key: recovered_key.clone(),
+            generation: published.generation,
+            sequence_number: resolved.sequence_number,
+        },
+    );
 
     // SC#2-style defensive fallback (D-11 precedent): the ordering guard in
     // the BFS loop handles the common case, but a repair item's real parent
@@ -4553,8 +4639,7 @@ mod rotate_read_from_node {
         );
 
         let c_sealed_key =
-            seal_child_read_key(&file_c_key, &folder_b_key, &file_c_id, NodeKind::File, 0)
-                .unwrap();
+            seal_child_read_key(&file_c_key, &folder_b_key, &file_c_id, NodeKind::File, 0).unwrap();
         let c_ref = SealedChildRef {
             name: "file-c".to_string(),
             ipns_name: "k51/file-c".to_string(),
