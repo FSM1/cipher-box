@@ -1,11 +1,17 @@
 ---
 phase: 76
 slug: fuse-durability-and-tee-write-path-hardening
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: complete
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-07-11
+audited: 2026-07-12
 ---
+
+> **Retroactive Nyquist audit (2026-07-12):** All Wave 0 requirements confirmed
+> covered by committed behavioral tests (static inspection of the delivered test
+> files, cited below). 0 genuine gaps. The Windows D-07 test is `#[cfg(feature =
+> "winfsp")]` CI-only — an accepted async/CI-deferred verification, not a Nyquist gap.
 
 # Phase 76 — Validation Strategy
 
@@ -51,18 +57,18 @@ created: 2026-07-11
 
 ---
 
-## Wave 0 Requirements
+## Wave 0 Requirements — audited coverage (all delivered)
 
-- [ ] `vault.rs` `#[cfg(test)]` — preflight abort-on-transient-error, preflight abort-on-unrecoverable-conflict, and recovery-path (decrypt-and-resume) round-trip tests (extend the `init_recover_v3_round_trips` pattern)
-- [ ] `metadata.rs` `run_publish_retry_seam` — extend with a `max_attempts` param and a 5-attempt-succeeds-on-attempt-5 case (no 5→2 regression); existing `publish_with_cas_retry_*` tests stay green with the updated signature
-- [ ] `fs.rs` — cross-cycle global FP-resolve cap test (2+ consecutive refresh cycles asserting `resolving_file_pointers.len() <= MAX_CONCURRENT_FP_RESOLVES`)
-- [ ] Windows-only `write_ops.rs` test for `node_id`-keyed `child_id` on cleanup/delete — CI-only, cannot be authored/verified locally (Plan D, `autonomous: false`)
-- [ ] `apps/api` — `renewIpnsRecordEol` real-DB-error-vs-CAS-miss log-level test
-- [ ] `apps/tee-worker` — `decryptWithFallback` config/infra-error-rethrow test (introduces a typed error, e.g. `TeeKeyUnavailableError`)
-- [ ] `apps/tee-worker` — republish route null-entry defense-in-depth test
-- [ ] `apps/tee-worker` — `ipns-signer.test.ts` later-EOL invariant test + longer-than-default original-lifetime edge case
-- [ ] `apps/tee-worker` — `key-manager.test.ts` genuine-ciphertext-corruption test (currently only exercises the epoch-mismatch branch)
-- [ ] Framework install: none — `cargo test` and `vitest` are already configured
+- [x] `vault.rs` `#[cfg(test)]` — abort-on-transient/auth, route aborts, decrypt-and-resume round-trip. Confirmed: `preflight_ipns_absent_fails_closed_on_transient_error` (vault.rs:864), `_on_auth_error` (:882), `vault_init_route_transient_key_blob_error_aborts_before_publish` (:929), `vault_init_route_both_present_aborts` (:912), `vault_init_recovery_recovers_original_keys_and_coherency_unseals` (:1014, asserts recovered==minted byte-for-byte).
+- [x] `metadata.rs` retry seam `max_attempts` — `publish_with_cas_retry_fifth_attempt_succeeds_under_budget_5` (metadata.rs:702) + `_exhausts_budget_2` (:738); no 5→2 regression (paths pass 5/2/2 at metadata.rs:347,522 & content_ops.rs:388).
+- [x] `fs.rs` cross-cycle global FP cap — `fp_resolve_global_cap_holds_across_two_cycles` (fs.rs:1028), asserts `resolving_file_pointers.len() <= 10` across 2 refresh cycles (budget = CAP − in-flight).
+- [x] Windows `write_ops.rs` `node_id`-keyed `child_id` — `bin_child_id_keys_by_stored_node_id_not_local_ino_d07` in `#[cfg(all(test, feature = "winfsp"))]` (write_ops.rs:1671); prod arm `let child_id = inode.node_id.clone()` (:677). CI-only (accepted async verification, see Manual-Only).
+- [x] `apps/api` real-DB-error-vs-CAS-miss log-level — `a real DB error logs at error level (distinct from the CAS-miss debug line) but the batch still reports success` (republish.service.spec.ts:1038; asserts "DB write-back failed" error line, no "CAS miss" debug line).
+- [x] `apps/tee-worker` `decryptWithFallback` typed-error rethrow — `rethrows TeeKeyUnavailableError from getKeypair ... instead of masking it as a corrupted key` (key-manager.test.ts:260; instanceof + cause preserved).
+- [x] `apps/tee-worker` republish route null-entry defense — `null / non-object entries yield per-entry failures and never 500 the batch (T-76-08)` (republish.test.ts:401).
+- [x] `apps/tee-worker` later-EOL invariant + long-lifetime edge — `advances the EOL: renewed.validity is strictly later` (ipns-signer.test.ts:98), rejects EQUAL (:122)/EARLIER (:134), `rejects when the original lifetime is LONGER than the default renewal window` (:145). Additive `validity: Date` covered in ipns-record.test.ts:110.
+- [x] `apps/tee-worker` genuine-ciphertext-corruption — `genuine ciphertext corruption (byte-flipped wrapKey output) throws a non-ReEnrollRequiredError, non-TeeKeyUnavailableError generic error` (key-manager.test.ts:232).
+- [x] Framework install: none — `cargo test` and `vitest` already configured.
 
 ---
 
@@ -83,11 +89,11 @@ created: 2026-07-11
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 30s (local); Windows CI gate acknowledged as async
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references (every item confirmed present in committed tests above)
+- [x] No watch-mode flags
+- [x] Feedback latency < 30s (local); Windows CI gate acknowledged as async
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** approved (retroactive Nyquist audit 2026-07-12) — 0 genuine gaps; Windows D-07 CI-deferred by design.
