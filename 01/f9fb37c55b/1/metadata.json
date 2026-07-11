@@ -1,0 +1,203 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "01f9fb37c55b",
+  "session_id": "483e60b7-fc2f-4754-bb13-36a935f407c4",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-11T18:40:24.015473Z",
+  "branch": "feat/cross-language-ipns-and-node-codec-verification-parity",
+  "checkpoints_count": 2,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8",
+  "turn_id": "2d9a769a415c",
+  "token_usage": {
+    "input_tokens": 162881,
+    "cache_creation_tokens": 3248290,
+    "cache_read_tokens": 204134123,
+    "output_tokens": 844473,
+    "api_call_count": 664
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01WBPW7hN8Yx8uac1gK19qBN",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-verify-work"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "2d9a769a415c",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 58,
+        "end": 59,
+        "entry_ids": [
+          "b1d860e6-dd46-40a7-b43a-af1669e05226"
+        ],
+        "tool_use_id": "toolu_01WBPW7hN8Yx8uac1gK19qBN"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01WBPW7hN8Yx8uac1gK19qBN"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-verify-work",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01CNZJ7MnPyjeXNg3DARrzzC",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "2d9a769a415c",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 1080,
+        "end": 1081,
+        "entry_ids": [
+          "8e2a50b0-39cf-4521-b2da-61cdeee51a34"
+        ],
+        "tool_use_id": "toolu_01CNZJ7MnPyjeXNg3DARrzzC"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01CNZJ7MnPyjeXNg3DARrzzC"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ship-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01SiSYDTwGHqYCvppgcAUkGV",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "2d9a769a415c",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 4095,
+        "end": 4096,
+        "entry_ids": [
+          "fb74597f-de65-438a-bf1f-f0a91c5841c9"
+        ],
+        "tool_use_id": "toolu_01SiSYDTwGHqYCvppgcAUkGV"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01SiSYDTwGHqYCvppgcAUkGV"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: ship-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 18
+  },
+  "summary": {
+    "intent": "Use the GSD manager workflow to drive CipherBox milestone v2.0 to completion: verify/plan/execute the remaining closeout phases (69–79), ship completed phases through PR review, and specifically get PR #607 (Phase 74) past a real macOS-only Desktop-E2E failure before merging.",
+    "outcome": "Phases 69, 70.1, 74, 75, and 77 were completed and shipped (69/70.1 merged via PR #606; 74 merged via PR #607 after root-causing and fixing a genuine rotation/FUSE-T concurrency bug plus a token-TTL issue; 75 driven through the full ship-phase pipeline including a real SC3 crypto parity fix, with PR #608 opened and learnings commit in progress). Phases 76, 78, 79 remain unplanned and paused per user request.",
+    "learnings": {
+      "repo": [
+        "GSD's plan-file scanner (plan-scan.cjs:28) has a loose /PLAN/i substring fallback that miscounts any .md file containing 'PLAN' (e.g. '...WRITE-PLANE-RESEARCH.md') as an extra plan, causing false 'partial/Executing' status even when a phase is 100% complete.",
+        "GSD's phase-completion predicate downgrades disk_status to 'partial' whenever plan_count > summary_count, and separately 'is_active' just means a file in the phase dir was touched in the last 5 minutes — not that an agent is actually running.",
+        "CipherBox has two incompatible wire-encoding domains that look identical at the type level: internal node-codec/stored sealed refs use base64, but ALL share-API wire fields (encryptedReadKey, encryptedWriteKey, itemNameEncrypted) are validated as hex via @Matches regex in every share DTO — nothing forces a call-site to pick the right one, so it recurs (bit CipherBox at least twice in this session alone).",
+        "write_sealed AAD binds node.generation() (crates/core/src/node/seal.rs), so any republish after a generation bump must re-seal the write body at the new generation using the stable write key — the rotation engine's write_sealed:None on rotated nodes silently broke this until fixed.",
+        "macOS FUSE-T/SMB's overwrite-rename issues an open() on the SOURCE file being moved; Linux's kernel rename never opens the source. This is why identical rotation/e2e tests pass on Linux/Windows and fail deterministically on macOS.",
+        "drain_refresh_completions in crates/fuse/src/fs.rs already guards mutated_folders/publish_queue folders from being clobbered by stale metadata refreshes (uses mark_remotely_edited_files_unresolved which preserves keys instead of apply_owned_children which resets them) — but scope-exit rotation never marked its republished folders as mutated, so this existing guard didn't protect rotated inodes.",
+        "Building the desktop FUSE binary on this macOS host by default links macFUSE (/usr/local/lib/libfuse.2.dylib) instead of FUSE-T; must PKG_CONFIG_PATH-override with a FUSE-T-aliased fuse.pc placed first to reproduce CI's real macOS mount behavior.",
+        "API access-token TTL is hardcoded 15m (token.service.ts); headless desktop-e2e test binaries authenticate once at startup with no auto-refresh-on-401 and no Keychain refresh-token storage in test-login mode, so any E2E run exceeding 15m wall-clock 401-locks mid-suite — production's webview mitigates this with a UI refresh timer that the headless binary lacks.",
+        "CodeRabbit's macOS-only, JS `$` regex quirk: `/^[0-9a-f-]{36}$/` without the `m` flag also matches a string with a trailing `\\n`, causing CANONICAL_UUID_RE in packages/crypto/src/utils/encoding.ts to accept a 37-char 'uuid\\n' that Rust's byte-length check correctly rejects — a real TS/Rust parity/soundness gap."
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/write_ops/grant_scope.rs",
+          "line": 534,
+          "finding": "rotate_read_on_scope_exit must mark all rotated folders (grant root + result.rotated_nodes) as fs.mutated_folders after refresh_rotated_inode_read_keys, so the existing drain_refresh_completions guard preserves freshly-rotated keys against stale in-flight metadata refreshes; without this, a concurrent refresh resets the file's inode read_key via apply_owned_children, causing parent/child key divergence and AES-GCM decrypt failures on retry."
+        },
+        {
+          "path": "crates/sdk/src/rotation/engine.rs",
+          "line": 617,
+          "finding": "re_mint_grants_rooted_at must hex::encode (not base64_encode) the share-grant encryptedReadKey field — the API validates it as hex via update-grant.dto.ts while internal node-codec fields (read_sealed, read_key_sealed) correctly remain base64; sending base64 here caused a 400 that fails rotation closed."
+        },
+        {
+          "path": "apps/api/src/auth/services/token.service.ts",
+          "line": 42,
+          "finding": "ACCESS_TOKEN_TTL made env-configurable (default unchanged at 15m in production) to allow desktop-e2e's long headless macOS runs (which include 120s+300s sync waits) to avoid mid-suite 401 lockout."
+        },
+        {
+          "path": "crates/fuse/src/platform/windows/write_ops.rs",
+          "line": 1120,
+          "finding": "WinFsp handle_rename's overwrite-destination validation only checked non-empty-folder before this fix; ported fuser's kind-compatibility guard (ENOTDIR/EISDIR equivalents via new status_not_a_directory/status_file_is_a_directory NTSTATUS helpers) to reject file↔directory overwrite-renames, closing a Greptile-flagged P1 parity gap with the fuser rename path."
+        },
+        {
+          "path": "packages/crypto/src/utils/encoding.ts",
+          "line": 1,
+          "finding": "CANONICAL_UUID_RE regex check needed an explicit length guard (36 chars) because JS regex $ without the m flag matches before a trailing newline, allowing a 37-char 'uuid\\n' string to pass where Rust's is_canonical_uuid_form (aes.rs:159) correctly rejects via bytes.len() != 36."
+        }
+      ],
+      "workflow": [
+        "When a background/scheduled agent claims success ('all cargo/typecheck green'), independently reproduce or spot-check before trusting the claim — CI's Typecheck job caught a real gap (mock fixtures not updated for a widened type) that vitest's non-type-checking transpilation missed entirely.",
+        "For a suspicious CI-only failure, replicate locally first rather than theorizing — building the actual FUSE-T binary, resetting the full 3-layer stack (Kubo+DB+journal together, since partial resets desync), and instrumenting with targeted debug logs (rather than guessing) took ~10 runs but converged on the exact root cause where three prior 'fixes' (write_sealed preservation, FilePointer self-heal, coalesced dest-gate) all failed.",
+        "Sub-agents launched at the repo root cannot EnterWorktree into a pre-existing worktree ('repo root, not an isolated worktree' error) — the working pattern for parallel background phase work is sequential processing on the main checkout switched per feat branch, not worktree isolation for sub-agents.",
+        "Before dismissing a CI failure as 'infra flake,' extract the actual failure signature from the log (not just adjacent warning noise like 401s) — the user's pushback correctly identified that the real failure was 'no write_sealed body' + EACCES + an explicit 'dest-gate rejecting a legitimate overwrite (regression)' message from the test harness itself.",
+        "Instrumenting with targeted debug print/log statements at 3-4 specific decision points (key fingerprints, gate decisions) is far more effective for pinning nondeterministic-looking cascading failures than re-running and re-theorizing; each hypothesis (API resolve lag, stale captured key, coalesced exclusion) was individually falsified by one instrumented run before landing on the true cause.",
+        "When a GSD todo auto-close mechanism under-closes (leaves resolved todos in pending/), cross-check `resolves_phase` tags against the actually-shipped code/tests rather than trusting the pending/completed split — 3 stranded phase-74 todos were found and moved during phase-75 shipping."
+      ]
+    },
+    "friction": [
+      "Repeated hex-vs-base64 encoding confusion across the codebase caused the SC#2 grant re-mint 400 error — a systemic issue acknowledged by the user as recurring ('this has happened before'), leading to a dedicated high-severity hardening todo rather than a quick fix.",
+      "Multiple session/quota limit interruptions (at least 3: ~02:48, ~07:35-09:40, ~09:50-13:xx) required scheduling cron-based autonomous resumes with increasingly corrected instructions after the first resume strategy (EnterWorktree into existing worktrees) proved fundamentally broken.",
+      "Initial crypto-privacy sub-agent review got the hex/base64 encoding backwards for shares.rs (called correct hex doc-comments 'base64'), showing the encoding domain confusion affects careful reviewers too, not just implementers.",
+      "The macOS Desktop-E2E root-cause investigation required ~10 full local reproduction cycles (~10 min each) across multiple false leads (write_sealed preservation, FilePointer self-heal, coalesced dest-gate, API resolve lag) before landing on the correct fix (marking rotated folders as mutated_folders).",
+      "Fixing the Part D rotation bug immediately surfaced a second, unrelated latent bug (15-min access-token TTL causing 401 lockout) because the fix let the macOS suite run long enough to cross the token-expiry boundary — required a second full CI cycle to isolate and fix.",
+      "Response stalled mid-stream twice during long agentic tool-call sequences, requiring the user to nudge continuation ('please continue with the /ship-phase 75 flow')."
+    ],
+    "open_items": [
+      "hex/base64 wire-encoding domain hardening (todo: 2026-07-11-hex-base64-wire-encoding-domain-hardening.md) — authoritative doc, named boundary codecs, branded types, contract test, comment reconciliation; scoped as its own future hardening phase.",
+      "rotation republish drops write_sealed body (todo: 2026-07-11-rotation-republish-drops-write-sealed-body.md) — real durability bug found and reverted during Part D investigation; owned-walks fail and replay can't recover the signing seed after a rotation.",
+      "desktop Rust client has no auto-refresh-on-401 (todo: 2026-07-11-desktop-rust-client-no-token-refresh-on-401.md) — production webview mitigates via UI refresh timer, but a real long-running headless/background desktop session could 401-lock.",
+      "ts-rotatednodes-defensive-copy-parity todo still open — TS engine.ts root/child commit branches (lines ~2064/2235) don't defensively copy readKey the way repairDirtyNode now does.",
+      "remint-trusts-server-recipient-pubkey-binding (MEDIUM, todo) and remint-refetches-sent-shares-per-rotated-node — deferred crypto/perf hardening items from Phase 74's crypto-privacy review.",
+      "ts-validitytype-float-vs-integer-cbor-parity todo — benign-direction CBOR float ValidityType 0.0 divergence found during Phase 75 CodeRabbit triage, needs CBOR-type introspection to fix cleanly.",
+      "Phases 76, 78, 79 remain fully unplanned — paused mid-autonomous-run per explicit user request ('Pause — I'll review 74/75/77'); branches/worktrees for 76 were cleaned up.",
+      "PR #608 (Phase 75) not yet fully shipped at transcript end — learnings commit was in progress, CI checks and PR-level CodeRabbit review resolution (Steps 9-10 of ship-phase) still pending.",
+      "PR #607 (Phase 74) merge decision was left to the user throughout — final merge shown to have happened via direct git pull, but no explicit confirmation captured of the user's review process."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
