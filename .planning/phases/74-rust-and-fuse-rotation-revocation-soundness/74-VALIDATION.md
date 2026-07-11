@@ -1,8 +1,8 @@
 ---
 phase: 74
 slug: rust-and-fuse-rotation-revocation-soundness
-status: draft
-nyquist_compliant: false
+status: ready
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-07-11
 ---
@@ -41,9 +41,14 @@ created: 2026-07-11
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 74-XX-XX | XX | 1 | SC1 | Stale key reseal (EoP/Info-Disc) | Every rotated node's read key refreshed before any relink reseals under a stale key | unit (Rust FakeTransport) + desktop-e2e | `cargo test -p cipherbox-sdk rotation::engine::` / `cargo test -p cipherbox-fuse write_ops::rotation_deps::` | ❌ W0 | ⬜ pending |
-| 74-XX-XX | XX | 1 | SC2 | Over-broad revocation (DoS) | `query_grants_rooted_at` returns live grants; retained recipients re-minted, revoked cut | unit (Rust FakeTransport) + desktop-e2e (2 recipients) | `cargo test -p cipherbox-fuse write_ops::rotation_deps::` | ❌ W0 | ⬜ pending |
-| 74-XX-XX | XX | 1 | SC3 | Ungated destructive mutation (EoP) | WinFsp rename-overwrite dest gated through `run_scope_exit_gate`, validation-before-gating parity with fuser | unit (Rust) + Windows CI | `cargo test -p cipherbox-fuse --features winfsp` (build local; full test CI-only) | ❌ W0 | ⬜ pending |
+| 74-01-02 | 01 | 1 | SC1 | T-74-01 (Info-Disc) | Engine `RotateReadResult.rotated_nodes` surfaces every rotated node's read key keyed by ipns_name, not just the root | unit (Rust FakeDeps) | `cargo test -p cipherbox-sdk rotation::engine::` | ❌ W0 (test authored in 74-01 Task 1) | ⬜ pending |
+| 74-02-02 | 02 | 2 | SC1 | T-74-03 (Tampering/parity) | TS `RotateReadResult.rotatedNodes` at field-for-field parity with the Rust twin | unit (Vitest) | `pnpm --filter @cipherbox/sdk-core test -- rotation/engine` | ❌ W0 (test authored in 74-02 Task 1) | ⬜ pending |
+| 74-03-02 | 03 | 2 | SC1 | T-74-04 (EoP/Info-Disc) | Every rotated node's FUSE inode read_key refreshed (Root/Folder/File) before any relink reseals under a stale key | unit (Rust) | `cargo test -p cipherbox-fuse write_ops::grant_scope::` | ❌ W0 (test authored in 74-03 Task 1) | ⬜ pending |
+| 74-04-02 | 04 | 1 | SC2 | T-74-05 (Tampering) | `update_grant` (PATCH) / `revoke_share` (DELETE) wire fns forward ciphertext-only bodies, map non-2xx to ApiError | unit (Rust mock-HTTP) | `cargo test -p cipherbox-api-client shares::` | ❌ W0 (test authored in 74-04 Task 1) | ⬜ pending |
+| 74-05-02 | 05 | 2 | SC2 | T-74-07 (DoS/over-broad revocation) | `query_grants_rooted_at` returns live grants via the RotationTransport seam filtered by root_node_id; retained recipients re-minted, revoked cut by absence | unit (Rust FakeTransport) | `cargo test -p cipherbox-fuse write_ops::rotation_deps::` | ❌ W0 (test authored in 74-05 Task 1) | ⬜ pending |
+| 74-06-02 | 06 | 1 | SC3 | T-74-09 (EoP) | WinFsp rename-overwrite dest gated through the scope-exit gate, validation-before-gating parity with fuser | unit (Rust) + Windows CI | `cargo test -p cipherbox-fuse --features winfsp` (build local; full test CI-only) | ❌ W0 (test authored in 74-06 Task 1) | ⬜ pending |
+| 74-07-01 | 07 | 3 | SC1, SC2 | T-74-10, T-74-15 | Real-mount: revoked recipient cannot decrypt any node at depth; retained recipient keeps access post-rotation | desktop-e2e (macOS/Linux CI) | `tests/desktop-e2e/scripts/run-all.sh` (CI) | ❌ W0 (leg authored in 74-07 Task 1) | ⬜ pending |
+| 74-07-02 | 07 | 3 | SC3 | T-74-09v (EoP) | Real-mount: WinFsp overwrite-rename against a covered destination rotates (dest gate) | desktop-e2e (Windows CI) | `tests/desktop-e2e/scripts/run-all.ps1` (Windows CI) | ❌ W0 (leg authored in 74-07 Task 2) | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -71,11 +76,11 @@ created: 2026-07-11
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 120s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references
+- [x] No watch-mode flags
+- [x] Feedback latency < 120s
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** ready
