@@ -14,6 +14,7 @@ export {
   type RotationStatus,
   type RotationParams,
   type RotateReadResult,
+  type RotatedNodeKey,
   type WriteRevocationCallbacks,
   type GrantRemintCallbacks,
   type KeyCheckpointCallbacks,

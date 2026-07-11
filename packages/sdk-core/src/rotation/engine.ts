@@ -324,8 +324,34 @@ type RotateOneParams = {
 };
 
 /**
+ * A single rotated node's post-rotation read key/generation/sequence number,
+ * keyed by `ipnsName` inside {@link RotateReadResult.rotatedNodes} (Plan
+ * 74-02, SC1 — deep scope-exit key refresh).
+ *
+ * TS twin of Rust `RotatedNodeKey` (`crates/sdk/src/rotation/engine.rs`,
+ * plan 74-01) — the LOCKED cross-language field contract keeps these two
+ * shapes field-for-field identical (camelCase here, snake_case there).
+ * `sequenceNumber` is `bigint` (not `number`) to match this file's existing
+ * IPNS sequence-number convention (`RotateReadResult.sequenceNumber`,
+ * `CommittedRotation.newSequenceNumber`) — Rust's `u64` maps to TS `bigint`
+ * throughout this module, not `number`.
+ *
+ * @security `readKey` is NOT zeroed here — same terminal-owner rule as
+ * {@link RotateReadResult.readKey} (D-09): the caller becomes the terminal
+ * owner.
+ */
+export type RotatedNodeKey = {
+  ipnsName: string;
+  readKey: Uint8Array;
+  generation: number;
+  sequenceNumber: bigint;
+};
+
+/**
  * Return shape for a successful (fresh, non-resume-skip) `rotateReadFromNode` run:
- * the ROOT node's post-rotation readKey/generation/sequenceNumber (ROT-07 Gap 2).
+ * the ROOT node's post-rotation readKey/generation/sequenceNumber (ROT-07 Gap 2),
+ * PLUS every rotated node's post-rotation key (Plan 74-02, SC1 — deep scope-exit
+ * key refresh).
  *
  * Callers (e.g. `performScopeExitRotation`) use this to refresh their own
  * in-memory folder cache after a rotation so a same-session retry does not
@@ -341,6 +367,15 @@ export type RotateReadResult = {
   generation: number;
   /** The root's new IPNS sequence number after its rotation publish. */
   sequenceNumber: bigint;
+  /**
+   * EVERY rotated node's post-rotation read key, keyed by `ipnsName` — not
+   * just the root's (additive; `readKey`/`generation`/`sequenceNumber` above
+   * remain the root-convenience accessors, kept to avoid churn to existing
+   * call sites). Populated at both the root commit branch and the BFS child
+   * commit branch inside `rotateReadFromNode`. LOCKED cross-language parity
+   * with Rust `RotateReadResult.rotated_nodes` (74-01/74-02, SC1).
+   */
+  rotatedNodes: Map<string, RotatedNodeKey>;
 };
 
 /**
@@ -1395,6 +1430,13 @@ export async function rotateReadFromNode(
   // keyed by parent IPNS name (the IPNS name of the node that just rotated)
   const parentTracking = new Map<string, ParentTrackingState>();
 
+  // Plan 74-02 (SC1): every rotated node's post-rotation key, keyed by
+  // ipnsName — populated at the root commit branch below and the BFS child
+  // commit branch. Additive to the top-level readKey/generation/sequenceNumber
+  // convenience fields, not a replacement for either. Shared (live) reference
+  // threaded into both `rotateReadFromNode` return sites below.
+  const rotatedNodes = new Map<string, RotatedNodeKey>();
+
   // BFS frontier: each entry carries the NODE's own pre-rotation readKey plus
   // the child's stable id/kind (needed for the D-02 AAD binding).
   //
@@ -2002,6 +2044,11 @@ export async function rotateReadFromNode(
         readKey: new Uint8Array(rootReadKey),
         generation: rootNode.generation,
         sequenceNumber: rootResolved.sequenceNumber,
+        // Plan 74-02 (SC1): the SAME shared map instance — the BFS loop below
+        // (which this dirty-resume path falls through into) continues to
+        // populate it for every dirty-tail node repaired this run, so by the
+        // time this object is actually returned it reflects the final state.
+        rotatedNodes,
       };
     }
     // Fall through to BFS loop.
@@ -2010,6 +2057,16 @@ export async function rotateReadFromNode(
 
     // Persist after root commit (the high-value early checkpoint).
     if (jobRecord.persistCallback) await jobRecord.persistCallback(jobRecord);
+
+    // Plan 74-02 (SC1): surface the root's own post-rotation key into the
+    // per-node map, keyed by ipnsName — mirrors the Rust root commit branch
+    // (crates/sdk/src/rotation/engine.rs, 74-01).
+    rotatedNodes.set(rootNodeIpnsName, {
+      ipnsName: rootNodeIpnsName,
+      readKey: rootResult.childReadKey,
+      generation: rootResult.newGeneration,
+      sequenceNumber: rootResult.newSequenceNumber,
+    });
 
     // Set up parent tracking for root's children (D-02/D-09).
     let rootParentState: ParentTrackingState | undefined;
@@ -2171,6 +2228,16 @@ export async function rotateReadFromNode(
       if (!result.skipped) {
         // Advisory checkpoint after per-node commit.
         if (jobRecord.persistCallback) await jobRecord.persistCallback(jobRecord);
+
+        // Plan 74-02 (SC1): surface this child's post-rotation key into the
+        // per-node map, keyed by its ipnsName — mirrors the Rust BFS child
+        // commit branch (crates/sdk/src/rotation/engine.rs, 74-01).
+        rotatedNodes.set(item.childRef.ipnsName, {
+          ipnsName: item.childRef.ipnsName,
+          readKey: result.childReadKey,
+          generation: result.newGeneration,
+          sequenceNumber: result.newSequenceNumber,
+        });
 
         // D-02: re-seal the child's new readKey' under the PARENT's new readKey'.
         // The legacy sealChildReadKey call inside rotateOne seals under the child's own
@@ -2335,6 +2402,7 @@ export async function rotateReadFromNode(
     readKey: rootResult.childReadKey,
     generation: rootResult.newGeneration,
     sequenceNumber: rootResult.newSequenceNumber,
+    rotatedNodes,
   };
 }
 
