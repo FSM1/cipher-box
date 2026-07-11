@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "75c8f6688692",
+  "strategy": "manual-commit",
+  "branch": "feat/crypto-hygiene-and-terminology-canonicalization",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/sdk-core/src/file/index.ts",
+    "packages/sdk-core/src/folder/registration.ts",
+    "packages/sdk-core/src/tee/wrap.ts",
+    "packages/sdk-core/src/vault/index.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/75/c8f6688692/0/metadata.json",
+      "transcript": "/75/c8f6688692/0/full.jsonl",
+      "content_hash": "/75/c8f6688692/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  }
+}
