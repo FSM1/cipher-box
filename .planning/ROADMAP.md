@@ -1091,10 +1091,14 @@ Plans:
 **Plans:** 8 plans
 
 Plans:
+**Wave 1**
 
 - [ ] 79-01-PLAN.md — SDK ResolvedChild.createdAt foundation (mandatory field + resolveChildren + sdk suite green)
 - [ ] 79-02-PLAN.md — Web hook/service foundation: expose resolvedByIpnsName, real itemType, ipnsName-keying non-change, invite decision
 - [ ] 79-03-PLAN.md — Package test revival: bin.test.ts fixture, load.test.ts + file.test.ts revive-or-retire
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 79-04-PLAN.md — Private listing: folders-first sort, folder-only drag-drop, multi-select drag kind
 - [ ] 79-05-PLAN.md — Shared listing: folders-first sort + SharedMoveDialog cycle-guard kind filter
 - [ ] 79-06-PLAN.md — Private dialogs: kind-aware rename/delete/share labels + MoveDialog cycle guard
