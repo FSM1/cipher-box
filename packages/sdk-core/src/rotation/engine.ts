@@ -1828,6 +1828,23 @@ export async function rotateReadFromNode(
     // (never the stale mirror-derived item.nodeReadKey).
     const node = await unsealNode(childPub, readKeyPrime);
 
+    // Plan 74-02 (SC1, dirty-resume parity): a repaired dirty node's RECOVERED
+    // key IS its current, valid post-rotation key (recovered from the ECIES
+    // checkpoint of a rotation that already committed in a prior, crashed run).
+    // Surface it into the same per-node map the normal commit branches populate
+    // so a FUSE/WinFsp inode refresh sees this node too after a crash-resume
+    // repair — previously omitted entirely, leaving repaired descendants with
+    // stale cached read keys. Mirrors the Rust `repair_dirty_node` insert.
+    // `readKey` is a defensive COPY: `readKeyPrime` is retained below as this
+    // node's own `ParentTrackingState.parentNewReadKey` and would otherwise be
+    // zeroed at that tracking state's teardown, corrupting the map entry.
+    rotatedNodes.set(item.childRef.ipnsName, {
+      ipnsName: item.childRef.ipnsName,
+      readKey: new Uint8Array(readKeyPrime),
+      generation: childPub.generation,
+      sequenceNumber: resolved.sequenceNumber,
+    });
+
     // D-02: re-seal ONLY the parent's SealedChildRef mirror.
     let parentState = parentTracking.get(item.parentIpnsName);
     if (!parentState) {

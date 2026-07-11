@@ -2664,6 +2664,99 @@ describe('rotateReadFromNode — fresh-record resume via safe double-rotation (P
     // But byte-equal (a faithful copy of the root's current valid key).
     expect(result?.readKey).toEqual(rootReadKeyParam);
   });
+
+  it('Test 6 (Plan 74-02 SC1 dirty-resume parity): a crash-resumed rotation surfaces every REPAIRED descendant in rotatedNodes so the FUSE caller can refresh its cached inode key', async () => {
+    // Same dirty-resume fixture as Test 5: root already completed (resume),
+    // one dirty child below it, repaired via the ECIES checkpoint plane.
+    // RED before the fix: repairDirtyNode never inserted the recovered key into
+    // the shared rotatedNodes map, so the returned map omits the repaired child.
+    // GREEN after: the map carries the child's recovered post-rotation key.
+    const rootNode = makeFolderNode({
+      id: NODE_ID,
+      generation: 1,
+      children: [
+        {
+          name: 'child',
+          ipnsName: CHILD_IPNS,
+          generation: 0, // parent mirror stale
+          versionFloor: 0n,
+          readKeySealed: 'childsealed==',
+        },
+      ],
+    });
+    const childNode = makeFolderNode({ id: CHILD_ID, generation: 1, children: [] });
+
+    const owner = generateOwnerKeypair();
+    const REAL_CHILD_READ_KEY_PRIME = new Uint8Array(32).fill(0xbc);
+    const wrappedBytes = await wrapKey(REAL_CHILD_READ_KEY_PRIME, owner.publicKey);
+    const wrappedKeyB64 = Buffer.from(wrappedBytes).toString('base64');
+
+    mockFns.resolveIpnsRecord.mockImplementation(async (ipnsName: string) => ({
+      cid: ipnsName === NODE_IPNS ? 'bafy-root' : 'bafy-child',
+      sequenceNumber: 7n,
+      signatureVerified: true,
+    }));
+    mockFns.fetchFromIpfs.mockImplementation(async (_ctx: unknown, cid: string) => {
+      if (cid === 'bafy-root')
+        return new TextEncoder().encode(JSON.stringify(makePublishedNode(NODE_ID, 1)));
+      return new TextEncoder().encode(JSON.stringify(makePublishedNode(CHILD_ID, 1)));
+    });
+    mockFns.unsealNode.mockImplementation(
+      async (published: import('@cipherbox/core').PublishedNode) =>
+        published.id === NODE_ID ? rootNode : childNode
+    );
+    mockFns.sealNode.mockImplementation(async (node: import('@cipherbox/core').Node) =>
+      makePublishedNode(node.id, node.generation)
+    );
+    mockFns.sealChildReadKey.mockResolvedValue('resealed==');
+    mockFns.publishWithCas.mockResolvedValue({
+      cid: 'bafy-updated',
+      newSequenceNumber: 8n,
+      publishedData: [],
+      prunedCids: [],
+    });
+
+    const keyCheckpointCallbacks: KeyCheckpointCallbacks = {
+      persistWrappedKey: vi.fn(),
+      getWrappedKey: vi.fn(async () => wrappedKeyB64),
+      deleteWrappedKey: vi.fn(),
+    };
+
+    const jobRecord = makeJobRecord({
+      rootNodeId: NODE_ID,
+      completedNodeIds: new Set([NODE_ID]), // resume: root already committed
+    });
+
+    const rootReadKeyParam = new Uint8Array(32).fill(0x99);
+
+    const result = await rotateReadFromNode({
+      rootNodeId: NODE_ID,
+      rootNodeIpnsName: NODE_IPNS,
+      rootReadKey: rootReadKeyParam,
+      rootIpnsPrivateKey: T07_ROOT_IPNS_KEY,
+      nodeKeySource: () => ({ privateKey: T07_CHILD_IPNS_KEY, publicKey: T07_STUB_PUB_KEY }),
+      ownerPublicKey: owner.publicKey,
+      ownerPrivateKey: owner.privateKey,
+      keyCheckpointCallbacks,
+      jobRecord,
+      ctx: createMockContext(),
+    });
+
+    expect(result).toBeDefined();
+    // The repaired descendant MUST be present in the returned map.
+    const childEntry = result?.rotatedNodes.get(CHILD_IPNS);
+    expect(childEntry).toBeDefined();
+    // Its surfaced key is the RECOVERED (post-rotation) key, defensively copied.
+    expect(childEntry?.readKey).toEqual(REAL_CHILD_READ_KEY_PRIME);
+    expect(childEntry?.readKey).not.toBe(REAL_CHILD_READ_KEY_PRIME);
+    expect(childEntry?.ipnsName).toBe(CHILD_IPNS);
+    // childPub.generation (1) and resolved.sequenceNumber (7n) for the child.
+    expect(childEntry?.generation).toBe(1);
+    expect(childEntry?.sequenceNumber).toBe(7n);
+    // Root did NOT freshly rotate on this resume — its own key is absent from
+    // the per-node map (its current state is carried by the convenience fields).
+    expect(result?.rotatedNodes.has(NODE_IPNS)).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------

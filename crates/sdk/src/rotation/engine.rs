@@ -1579,6 +1579,16 @@ async fn rotate_read_from_node_inner<D: RotationDeps>(
     // parent's own `SealedChildRef` mirror is sealed under).
     let root_read_key_owned = zeroizing_32_from_slice(root_read_key)?;
 
+    // 74-01 (dirty-resume return-contract fix): on the dirty-RESUME branch the
+    // root did NOT freshly rotate this call, so `fresh_root` stays `None` and
+    // the root's own key is never inserted into `rotated_nodes`. Capture the
+    // root's ALREADY-COMMITTED post-rotation convenience values (key/generation/
+    // sequence of the currently-published root envelope, which `root_read_key`
+    // — the post-rotation key on this branch — successfully unseals) so the
+    // terminal return can still hand back a `RotateReadResult` carrying every
+    // repaired descendant, instead of discarding the whole map with `None`.
+    let mut dirty_resume_root: Option<(Zeroizing<[u8; 32]>, u32, u64)> = None;
+
     match root_outcome {
         RotateOneOutcome::Committed(root_committed) => {
             // Persist after the root commit (D-10 — the high-value early checkpoint).
@@ -1698,6 +1708,19 @@ async fn rotate_read_from_node_inner<D: RotationDeps>(
             })?;
             let root_children = node_children(&root_node);
             let (root_created_at, root_modified_at) = node_timestamps(&root_node);
+
+            // Capture the root's already-committed post-rotation convenience
+            // values for the terminal return: `root_read_key_owned` is the
+            // post-rotation key on this dirty-resume branch (it unsealed the
+            // currently-published `root_pub` above), and `root_pub.generation`/
+            // `root_resolved.sequence_number` are that published envelope's
+            // generation and sequence. These are the root's real current state,
+            // not fabricated.
+            dirty_resume_root = Some((
+                root_read_key_owned.clone(),
+                root_pub.generation,
+                root_resolved.sequence_number,
+            ));
 
             // SC#1 (Bug A fix, D-11): seed a `ParentTrackingState` per
             // DISTINCT REAL parent in the frontier — generalizes the
@@ -1997,17 +2020,43 @@ async fn rotate_read_from_node_inner<D: RotationDeps>(
     job_record.status = RotationStatus::Complete;
     deps.persist_job(job_record).await;
 
-    // ROT-07 Gap 2: surface the root's post-rotation state to the caller so
-    // it can refresh its own folder cache. `fresh_root` is `None` on BOTH the
-    // resume-skip-with-empty-frontier path (already returned above) and the
-    // resume-skip-with-dirty-frontier path (the root itself did not freshly
-    // rotate THIS call — no fresh key exists to hand back either way).
-    Ok(fresh_root.map(|root_committed| RotateReadResult {
-        read_key: root_committed.read_key_prime,
-        generation: root_committed.new_generation,
-        sequence_number: root_committed.new_sequence_number,
-        rotated_nodes,
-    }))
+    // ROT-07 Gap 2 + 74-01: surface the root's post-rotation state AND every
+    // rotated/repaired node's key to the caller so it can refresh its own
+    // folder cache and every affected inode.
+    if let Some(root_committed) = fresh_root {
+        // Fresh root rotation this call — the root's own key is already in
+        // `rotated_nodes` (root commit hook), plus all BFS/repaired descendants.
+        Ok(Some(RotateReadResult {
+            read_key: root_committed.read_key_prime,
+            generation: root_committed.new_generation,
+            sequence_number: root_committed.new_sequence_number,
+            rotated_nodes,
+        }))
+    } else if !rotated_nodes.is_empty() {
+        // Dirty-RESUME branch: the root itself did NOT freshly rotate this call
+        // (so `fresh_root` is `None` and the root key is intentionally absent
+        // from `rotated_nodes`), but the crash-recovery walk repaired at least
+        // one descendant (`repair_dirty_node` inserted its recovered key). The
+        // previous `fresh_root.map(..)` discarded this whole map, leaving the
+        // FUSE/WinFsp caller with stale cached keys for every repaired inode.
+        // Hand the map back using the root's already-committed post-rotation
+        // convenience values captured on the dirty-resume branch above.
+        let (root_key, root_generation, root_sequence_number) =
+            dirty_resume_root.ok_or_else(|| {
+                RotationError::RotateFailed(
+                    "rotate_read_from_node: repaired descendants present but root resume state was not captured".to_string(),
+                )
+            })?;
+        Ok(Some(RotateReadResult {
+            read_key: root_key,
+            generation: root_generation,
+            sequence_number: root_sequence_number,
+            rotated_nodes,
+        }))
+    } else {
+        // No fresh root rotation and nothing repaired — nothing to refresh.
+        Ok(None)
+    }
 }
 
 /// D-05 (T-70.1-20, 70.1-08): repairs an already-rotated dirty node —
@@ -4315,9 +4364,36 @@ mod rotate_read_from_node {
         let result = rotate_read_from_node(&deps, ROOT_ID, "k51/root", &root_read_key, &mut job)
             .await
             .unwrap();
+        // 74-01 (dirty-resume return-contract): the root itself was a pure
+        // resume-skip (it did not freshly rotate this run), but the crash-
+        // recovery walk REPAIRED the depth-3 dirty node C from its ECIES
+        // checkpoint. That repaired descendant's CURRENT key MUST be surfaced
+        // in the returned rotated_nodes map so a FUSE/WinFsp caller can refresh
+        // C's cached inode key after crash recovery. Regression guard for the
+        // previous `fresh_root.map(..)` that discarded the whole map when the
+        // root was a resume-skip.
+        let result = result.expect(
+            "dirty-resume with a repaired descendant must surface a RotateReadResult",
+        );
+        let c_entry = result
+            .rotated_nodes
+            .get("k51/deep-c")
+            .expect("repaired descendant C must appear in the returned rotated_nodes map");
+        assert_eq!(
+            &*c_entry.read_key, &*c_key_new,
+            "C's surfaced key must be its RECOVERED post-rotation key, not a stale one"
+        );
+        assert_eq!(
+            c_entry.generation, 1,
+            "C's surfaced generation must reflect its (prior-run) rotation"
+        );
+        assert_eq!(c_entry.ipns_name, "k51/deep-c");
+        // Root did NOT freshly rotate this run -- its own key is intentionally
+        // absent from the per-node map (its already-committed current state is
+        // carried only by the root-convenience fields).
         assert!(
-            result.is_none(),
-            "root was a pure resume-skip -- no fresh root key"
+            !result.rotated_nodes.contains_key("k51/root"),
+            "root did not freshly rotate on this resume -- it must not be in rotated_nodes"
         );
 
         // --- Assertion 1: owner navigability -- a normal owner who only
@@ -4543,7 +4619,7 @@ mod rotate_read_from_node {
         // concurrent-add race against `republish_parent`'s own CAS-409
         // fail-closed path, which stays untouched by this plan).
         let mut prior_job1 = RotationJobRecord::new(c1_id.clone());
-        rotate_one(
+        let c1_key_new = match rotate_one(
             &deps,
             Some(&c1_id),
             "k51/multi-c1",
@@ -4551,9 +4627,13 @@ mod rotate_read_from_node {
             &mut prior_job1,
         )
         .await
-        .unwrap();
+        .unwrap()
+        {
+            RotateOneOutcome::Committed(c) => c.read_key_prime.clone(),
+            RotateOneOutcome::Skipped { .. } => panic!("expected c1's prior run to commit"),
+        };
         let mut prior_job2 = RotationJobRecord::new(c2_id.clone());
-        rotate_one(
+        let c2_key_new = match rotate_one(
             &deps,
             Some(&c2_id),
             "k51/multi-c2",
@@ -4561,14 +4641,39 @@ mod rotate_read_from_node {
             &mut prior_job2,
         )
         .await
-        .unwrap();
+        .unwrap()
+        {
+            RotateOneOutcome::Committed(c) => c.read_key_prime.clone(),
+            RotateOneOutcome::Skipped { .. } => panic!("expected c2's prior run to commit"),
+        };
 
         let mut job = RotationJobRecord::new(ROOT_ID);
         job.completed_node_ids.insert(ROOT_ID.to_string());
         let result = rotate_read_from_node(&deps, ROOT_ID, "k51/root", &root_read_key, &mut job)
             .await
             .unwrap();
-        assert!(result.is_none());
+
+        // 74-01 (dirty-resume return-contract): a resume-skip root whose walk
+        // repaired BOTH dirty children must surface EACH repaired descendant's
+        // recovered key in the returned map (parity with the depth-3 case).
+        let result = result
+            .expect("dirty-resume repairing both children must surface a RotateReadResult");
+        let c1_entry = result
+            .rotated_nodes
+            .get("k51/multi-c1")
+            .expect("repaired child c1 must appear in rotated_nodes");
+        assert_eq!(&*c1_entry.read_key, &*c1_key_new, "c1's recovered key");
+        assert_eq!(c1_entry.generation, 1);
+        let c2_entry = result
+            .rotated_nodes
+            .get("k51/multi-c2")
+            .expect("repaired child c2 must appear in rotated_nodes");
+        assert_eq!(&*c2_entry.read_key, &*c2_key_new, "c2's recovered key");
+        assert_eq!(c2_entry.generation, 1);
+        assert!(
+            !result.rotated_nodes.contains_key("k51/root"),
+            "root did not freshly rotate on this resume -- it must not be in rotated_nodes"
+        );
 
         assert_eq!(deps.publish_count_for("k51/root"), 0);
         assert_eq!(
