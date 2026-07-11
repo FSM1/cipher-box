@@ -1,0 +1,133 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "0198826aa4cd",
+  "session_id": "483e60b7-fc2f-4754-bb13-36a935f407c4",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-11T05:44:37.596359Z",
+  "branch": "feat/cross-language-ipns-and-node-codec-verification-parity",
+  "checkpoints_count": 3,
+  "save_step_count": 1,
+  "files_touched": [
+    ".planning/phases/75-cross-language-ipns-and-node-codec-verification-parity/75-RESEARCH.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "6086691a790f",
+  "token_usage": {
+    "input_tokens": 52774,
+    "cache_creation_tokens": 1363585,
+    "cache_read_tokens": 22399930,
+    "output_tokens": 143608,
+    "api_call_count": 126
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01WBPW7hN8Yx8uac1gK19qBN",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-verify-work"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "6086691a790f",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 58,
+        "end": 59,
+        "entry_ids": [
+          "b1d860e6-dd46-40a7-b43a-af1669e05226"
+        ],
+        "tool_use_id": "toolu_01WBPW7hN8Yx8uac1gK19qBN"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01WBPW7hN8Yx8uac1gK19qBN"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-verify-work",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Use the GSD manager workflow to drive milestone v2.0 of the cipher-box repo to completion — dashboard-review phase statuses, verify Phase 70.1's SC#6 crash-safety test, fix a false 'partial' status on Phase 69, then plan and execute follow-on phases (74, 75, 77) in parallel worktrees, resuming autonomously across quota resets.",
+    "outcome": "Phase 70.1 was fully verified (SC#6 live-stack test passed 6/6 after fixing a stale API process and an unexported test secret) and Phase 69's false 'Executing' status was traced to a plan-scanner substring bug and fixed; both landed via PR #606 merged to main. A scheduled autonomous resume then re-planned and executed Phase 74 to completion (code-verified, CI-gated legs pending) while Phase 75 was left mid-flight (5 plans committed, validation blocker resolved, execution not yet run) when the transcript ends.",
+    "learnings": {
+      "repo": [
+        "gsd-core's plan-file scanner (`plan-scan.cjs:28`) has a loose `/PLAN/i` substring fallback that miscounts any `.md` file containing 'PLAN' (e.g. `*-WRITE-PLANE-RESEARCH.md`) as an extra plan, causing `implementation_complete:false` and a false 'partial'/'Executing' dashboard status.",
+        "The manager dashboard's `is_active` flag just means 'a file in the phase dir was modified in the last 5 minutes' (init.cjs:1140) — not that an agent is actually running; editing any file in a completed phase's dir will flip it to 'active' misleadingly.",
+        "`gsd_run phase uat-passed <N> --require-verification` treats implementation-complete + verification-passed but no UAT.md as not-fully-done, downgrading disk_status to 'partial' — phases verified via CI/cargo (not conversational UAT) need a manually-authored UAT stub to read as complete.",
+        "The live API dev process on :3000 can silently be a stale `node dist/main.js` build (detached, PPID 1) serving old code/secrets instead of the current source — must verify process identity/start-time before trusting local test results against it.",
+        "vitest does not load `.env` files, so `sdk-e2e` test harness silently falls back to a default test secret unless `SDK_E2E_SECRET` is explicitly exported in the shell before running the suite.",
+        "EnterWorktree cannot pin a sub-agent launched from the repo root into a pre-existing worktree — the sub-agent ends up operating on the main checkout instead, silently defeating worktree isolation.",
+        "git commits in this repo are unsigned (`commit.gpgsign=false`), so autonomous/background commits don't block on 1Password biometric prompts; slow commits are usually just lint-staged pre-commit hooks (~1-2 min in this monorepo), not a signing hang."
+      ],
+      "code": [
+        {
+          "path": ".claude/gsd-core/bin/lib/plan-scan.cjs",
+          "line": 28,
+          "finding": "Loose fallback regex matches any .md filename containing 'PLAN' (case-insensitive) as a plan file if it's not a *-SUMMARY.md, causing false positives like *-WRITE-PLANE-RESEARCH.md"
+        },
+        {
+          "path": ".claude/gsd-core/bin/lib/init.cjs",
+          "line": 1140,
+          "finding": "is_active is computed purely from 'file modified in last 5 minutes' in the phase dir, not from any real process/agent liveness check"
+        }
+      ],
+      "workflow": [
+        "When a live docker stack + API is required for a test suite, verify both the API process's source freshness (dist vs live source) and the test harness's actual loaded env vars before trusting a red/skip result as a real code failure.",
+        "Before recommending a fix for a mysterious dashboard/status discrepancy, trace the root cause through the actual resolver code rather than iterating on guesses (UAT stub didn't fix Phase 69; the real cause was a scanner regex bug found only by reading plan-scan.cjs directly).",
+        "When background/worktree-isolated planning agents die mid-run (e.g. from a session quota limit), their worktree may still have committed partial progress (branch renamed, research/patterns committed) — inspect disk state directly rather than assuming a total loss and replanning from scratch.",
+        "Scheduling a one-shot cron resume plus a secondary 'safety-net' cron resume (for the next quota reset) is a reasonable hedge for long autonomous runs expected to outlast one quota window."
+      ]
+    },
+    "friction": [
+      "A background planner agent (Phase 74/75) attempted `EnterWorktree` from the repo root into a pre-existing worktree and failed identically twice, wasting a cycle before pivoting to switching the main checkout per feat branch sequentially.",
+      "Diagnosing the Phase 69 'partial' status required multiple wrong turns (UAT stub, is_active investigation, plan_count investigation) before finding the real root cause in plan-scan.cjs.",
+      "Session hit the Claude usage quota mid-task (session limit resets 4:40am Europe/Berlin) while three background planners were mid-flight, killing all three without producing plans, requiring a full autonomous resume and reassessment.",
+      "Phase 75's resumed agent stopped early after ~21 minutes citing a 'flawed background-wait' internal issue (not quota-related), requiring a manual relaunch to actually finish planning + execution.",
+      "A shell glob for staging Phase 74's draft plan commit expanded against the wrong (empty) cwd instead of the worktree, requiring a quoted git pathspec workaround.",
+      "`.env` grep for inspecting the API's secret config was denied (blocked as reading a secret file), requiring a workaround of reading only package scripts instead."
+    ],
+    "open_items": [
+      "Phase 75 execution had not yet run at end of transcript — 5 plans committed and validation blocker resolved, but plan-checker pass + execution still pending.",
+      "Phase 77 planning was interrupted by quota exhaustion before any plans were committed (worktree only had research/patterns) — status not confirmed resumed in the visible transcript.",
+      "Phases 76, 78, 79 remain entirely unplanned per the autonomous-resume instructions.",
+      "Phase 74's verification is code-complete (21/21 code-verified) but blocked on two CI-gated legs (Windows compile, desktop-e2e 3-platform matrix) that can't run on the macOS dev host — pending `/gsd-verify-work 74` after CI confirms.",
+      "None of the feat branches (74, 75, 77) have been merged or had PRs opened yet — they're sitting ready for review per the 'never commit/push directly to main' rule.",
+      "The manager/verify-work `phase uat-passed` CLI gap (already tracked in memory as feedback-gsd-phase-uat-passed-unimplemented) resurfaced conceptually via the Phase 69 UAT-stub workaround."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-11T05:44:08.12121Z",
+    "agent_lines": 457,
+    "agent_removed": 0,
+    "human_added": 8,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 465,
+    "total_lines_changed": 469,
+    "agent_percentage": 97.44136460554371,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
