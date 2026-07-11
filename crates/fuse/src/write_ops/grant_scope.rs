@@ -32,7 +32,6 @@ use cipherbox_sdk::rotation::scope::{
     has_covering_grant, CoverageParams, LocalGrantRecord, ScopeExitResult,
 };
 use cipherbox_sdk::rotation::RotationError;
-use cipherbox_sdk::rotation::RotatedNodeKey;
 use cipherbox_sdk::RotateReadResult;
 
 use crate::inode::{InodeKind, InodeTable, ROOT_INO};
@@ -528,7 +527,7 @@ pub async fn rotate_read_on_scope_exit(
             // the NEW key. `fresh_root` is `None` on a resume-skip; nothing to
             // refresh in that case.
             if let Some(result) = maybe_result {
-                refresh_grant_root_read_key(&mut fs.inodes, grant_root_ipns_name, &result);
+                refresh_rotated_inode_read_keys(&mut fs.inodes, &result);
             }
             log::info!(
                 "shared-scope-exit read-key rotation completed \
@@ -551,33 +550,51 @@ pub async fn rotate_read_on_scope_exit(
     }
 }
 
-/// 70.1-13a (revocation-bypass fix): overwrite the grant-root inode's in-memory
-/// `read_key` with the freshly-minted post-rotation key. D-09 terminal-owner:
-/// the inode owns its `Zeroizing` buffer; the 32 bytes are overwritten in place
-/// (the old key is thereby discarded). `result.read_key` is NOT zeroed here —
-/// `RotateReadResult` owns it and self-zeroes on drop. Key bytes are NEVER
-/// logged.
-fn refresh_grant_root_read_key(
-    inodes: &mut InodeTable,
-    grant_root_ipns_name: &str,
-    result: &RotateReadResult,
-) {
-    for inode in inodes.inodes.values_mut() {
-        match &mut inode.kind {
-            InodeKind::Root {
-                ipns_name,
-                read_key,
-                ..
+/// 74-03 (SC1, deep scope-exit key refresh): overwrite EVERY rotated node's
+/// matching FUSE inode `read_key` with its freshly-minted post-rotation key,
+/// not only the grant root's. Generalized from the prior
+/// `refresh_grant_root_read_key` (70.1-13a), which only refreshed the ONE
+/// grant-root inode — leaving any intermediate `Folder`/`File` inode below
+/// the root with a STALE pre-rotation key, so a subsequent local relink of
+/// that intermediate reseals it under the old key (the deep-path
+/// revocation-bypass class this generalization closes, T-74-04).
+///
+/// Loops over `result.rotated_nodes` (populated at the root commit hook, the
+/// BFS child commit hook, and the crash-resume repair hook — 74-01) and, for
+/// each `(ipns_name, rotated)` entry, scans every inode in the table for a
+/// `Root | Folder | File` whose own `ipns_name` matches. NO early `return` —
+/// every rotated node must be refreshed, not just the first match. The
+/// `File` arm is new: files are rotated too via `mint_file_key_on_rotate`
+/// (CRIT-1) and were previously silently skipped here.
+///
+/// D-09 terminal-owner: each inode owns its own `Zeroizing` buffer; the 32
+/// bytes are overwritten in place via `copy_from_slice` (the old key is
+/// thereby discarded). `rotated.read_key` (and `result.rotated_nodes` as a
+/// whole) is NOT zeroed here — `RotateReadResult` owns it and self-zeroes on
+/// drop. Key bytes are NEVER logged.
+fn refresh_rotated_inode_read_keys(inodes: &mut InodeTable, result: &RotateReadResult) {
+    for rotated in result.rotated_nodes.values() {
+        for inode in inodes.inodes.values_mut() {
+            match &mut inode.kind {
+                InodeKind::Root {
+                    ipns_name,
+                    read_key,
+                    ..
+                }
+                | InodeKind::Folder {
+                    ipns_name,
+                    read_key,
+                    ..
+                }
+                | InodeKind::File {
+                    ipns_name,
+                    read_key,
+                    ..
+                } if ipns_name.as_str() == rotated.ipns_name.as_str() => {
+                    read_key.copy_from_slice(rotated.read_key.as_slice());
+                }
+                _ => {}
             }
-            | InodeKind::Folder {
-                ipns_name,
-                read_key,
-                ..
-            } if ipns_name.as_str() == grant_root_ipns_name => {
-                read_key.copy_from_slice(result.read_key.as_slice());
-                return;
-            }
-            _ => {}
         }
     }
 }
@@ -769,6 +786,7 @@ pub fn run_scope_exit_gate_coalesced(
 mod tests {
     use super::*;
     use crate::inode::{FileAttrs, InodeData};
+    use cipherbox_sdk::rotation::RotatedNodeKey;
     use std::time::SystemTime;
     use zeroize::Zeroizing;
 
