@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "2a8c73d7a37f",
+  "strategy": "manual-commit",
+  "branch": "feat/rust-and-fuse-rotation-revocation-soundness",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/desktop-e2e/scripts/shared-scope-exit-rotation.mts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/2a/8c73d7a37f/0/metadata.json",
+      "transcript": "/2a/8c73d7a37f/0/full.jsonl",
+      "content_hash": "/2a/8c73d7a37f/0/content_hash.txt",
+      "prompt": "/2a/8c73d7a37f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 58341,
+    "cache_creation_tokens": 2243010,
+    "cache_read_tokens": 56022948,
+    "output_tokens": 272432,
+    "api_call_count": 209
+  }
+}
