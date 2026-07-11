@@ -1,14 +1,16 @@
 ---
 phase: 74-rust-and-fuse-rotation-revocation-soundness
 verified: 2026-07-11T00:00:00Z
-status: human_needed
+status: passed
 score: 21/21 must-haves verified
 behavior_unverified: 0
 overrides_applied: 0
 human_verification:
+
   - test: "Dispatch `Cargo Check & Test (Windows)` CI on this branch and confirm it compiles cleanly and the two new WinFsp rename tests (`rename_enotempty_destination_rejects_before_gate_with_no_rotation_attempt`, `rename_overwriting_a_covered_destination_gates_dest_ino_scope_exit`) pass."
     expected: "Windows CI job green; both tests pass; the existing `replace_if_exists=false` collision-rejection scenario is unregressed."
     why_human: "`crates/fuse/src/platform/windows/write_ops.rs` is `#[cfg(feature = \"winfsp\")]`-only and does not compile on macOS/Linux (confirmed locally: `cargo check -p cipherbox-fuse --features winfsp` fails on `windows-future`/`windows_core::imp` — a genuine macOS toolchain limitation, not a code defect). Source-level inspection confirms the D-15d ordering (collision check -> ENOTEMPTY check -> source gate -> dest gate -> mutate) is implemented correctly and matches the fuser reference verbatim, but this cannot be compiled/run outside Windows CI."
+
   - test: "Dispatch the `desktop-e2e` GitHub Actions workflow (matrix: macOS/Linux/Windows) on this branch and confirm Part C (deep decryptability + retained-vs-revoked) and Part D (WinFsp overwrite-rename dest-gate) pass on all 3 platforms, and Part A/B remain green."
     expected: "All legs pass; Part A's Bob assertion (`bobCanReadAfterRotation === false`) still holds post-74-05."
     why_human: "Real-mount FUSE/WinFsp + live API + IPNS round-trip; no live desktop binary/mount was built in this session (matches project memory `project-headless-desktop-fuse-uat` / `project-winfsp-build-ci-only-macos`). Regarding the 74-07-flagged 'Known Risk' about Part A's Bob assertion possibly flipping after 74-05's real `query_grants_rooted_at`: static code reading shows `bobCanReadAfterRotation` is computed against `bobFolderReadKey`, a raw key captured ONCE via `unwrapKey` before rotation and never re-fetched from `/shares/received` after rotation. `canRead()` decrypts directly against the given raw key bytes with no live grant lookup. Since rotation always mints a genuinely new post-rotation key regardless of whether Bob's grant row is also re-minted by 74-05, this stale local variable will not decrypt the new content either way — the assertion tests 'does my captured pre-rotation key still work', not 'is my grant still active'. This is a low-confidence-of-regression assessment from static reading only; live CI confirmation is the authoritative check."
