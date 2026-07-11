@@ -132,3 +132,8 @@ Re-grepped the current 156-line file. Its only `[u8;32]` key handling is direct 
 
 - Windows D-07 `node_id` write-plane keying (SC2 item 3) remains plan 76-05 (`autonomous:false`, CI-gated). The Windows consumer edit here is compile-only, not that fix.
 - The Windows narrow change cannot be locally verified on macOS — confirm the `Cargo Check & Test (Windows)` CI leg is green before merge.
+
+## Self-Check: PASSED
+
+- SUMMARY file present on disk.
+- All four commits (b48bcbd27, a0033490a, e3840cd81, 7aeda063f) present in git history.
