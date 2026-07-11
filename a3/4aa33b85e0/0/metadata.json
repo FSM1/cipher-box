@@ -1,0 +1,171 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "a34aa33b85e0",
+  "session_id": "ef60a1b1-a4fc-441e-ae97-6c920db58f3b",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-11T20:02:03.154928Z",
+  "branch": "feat/crypto-hygiene-and-terminology-canonicalization",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    ".planning/phases/77-crypto-hygiene-and-terminology-canonicalization/77-VALIDATION.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "804006daa2e5",
+  "token_usage": {
+    "input_tokens": 26467,
+    "cache_creation_tokens": 411147,
+    "cache_read_tokens": 16133665,
+    "output_tokens": 90300,
+    "api_call_count": 103
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-ship-phase-2026-07-11T19:28:59.903797Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "22c7e69a20b3",
+      "timestamp": "2026-07-11T19:28:59.903797Z",
+      "native": {
+        "command": "/ship-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/ship-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01HVgv8cABxyxWtwU5LMG187",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-secure-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "804006daa2e5",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 72,
+        "end": 73,
+        "entry_ids": [
+          "a4bb9db0-5bd9-4f02-a52c-4a06d4f4246a"
+        ],
+        "tool_use_id": "toolu_01HVgv8cABxyxWtwU5LMG187"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01HVgv8cABxyxWtwU5LMG187"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-secure-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_0112T1RP6DpTthWyvYid9JNu",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-validate-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "804006daa2e5",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 289,
+        "end": 290,
+        "entry_ids": [
+          "01f6ee02-6f81-41a6-ba95-99d1cbbf68a9"
+        ],
+        "tool_use_id": "toolu_0112T1RP6DpTthWyvYid9JNu"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_0112T1RP6DpTthWyvYid9JNu"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-validate-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Autonomously run the full post-execute-phase ship loop (verify, secure, crypto/privacy review, security review, validate, simplify, SDK E2E gate, CodeRabbit, ship, resolve PR reviews) for GSD phase 77, a crypto-hygiene/terminology-canonicalization phase touching TEE/IPNS key lifecycle code.",
+    "outcome": "Reached partway through the pipeline: SECURITY.md written (threats_open:0), VALIDATION.md updated to compliant, two real zeroization gaps fixed (registration.ts try-boundary and verify-filepointer.mts) with a new locking test, CodeRabbit findings triaged (one more fix applied), and a TEE republish e2e failure was root-caused as an environmental scheduling/eligibility issue unrelated to the phase's field rename (proven instead via the tee-worker unit suite). Ship (step 8) and PR review resolution (step 9) had not yet run when the transcript ends.",
+    "learnings": {
+      "repo": [
+        "The sdk-e2e Postgres DB (`cipherbox`) is persistent across local E2E runs, not reset between them — reusing fixture accounts like `alice` can collide on the `ipns_name` unique constraint and cause false failures unrelated to the code under test.",
+        "tee-worker containers can be stale relative to source; when a phase renames a TEE wire field, the local tee-worker container must be rebuilt from current source or old/new field-name skew (e.g. encryptedIpnsKey vs encryptedIpnsPrivateKey) will falsely look like a regression.",
+        "The republish e2e suite's `processed=0` with zero `/republish` calls to the TEE worker indicates a scheduling/eligibility failure at test setup, not a wire-contract break — distinguishable by checking whether the worker was ever called.",
+        "sdk-core's tsconfig excludes `scripts/`; `.mts` scripts are typechecked separately via a root `tsconfig.scripts.json` (confirms prior memory note about a local @types/node flake needing a clean run to trust the result).",
+        "The `@cipherbox/crypto` test mock in folder.test.ts omits `hexToBytes`/`bytesToHex`/`wrapIpnsKeyForTee`, so tests exercising the TEE-wrap path must explicitly wire those mocks or they fail for the wrong reason (undefined function, not the intended throw)."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/folder/registration.ts",
+          "finding": "TEE-wrap block and early validation sat outside the try/finally zeroization block; a malformed TEE pubkey (or early validation throw) leaked 3 minted keys. Fixed by starting the try immediately after key generation, matching the pattern already used in file/index.ts."
+        },
+        {
+          "path": "packages/sdk-core/scripts/verify-filepointer.mts",
+          "line": 108,
+          "end_line": 134,
+          "finding": "userPrivateKey allocated at line 108, but vault GET + loadVaultKeyBlob (lines 116-125) ran before the try at line 134 — a throw there skipped the finally and leaked the private key. Restructured so try opens right after allocation; finally now tolerates an absent vault blob."
+        },
+        {
+          "path": "packages/crypto/src/utils/encoding.ts",
+          "finding": "Stale provenance comment (referencing an outdated origin) fixed as part of simplify pass since it was in the phase's own new file."
+        }
+      ],
+      "workflow": [
+        "When a background E2E result looks ambiguous, trace whether the downstream dependency (TEE worker) was actually invoked at all before concluding a code-level regression — grep API logs for the specific call rather than trusting pass/fail counts alone.",
+        "Prefer running independent review passes (crypto/privacy, general security, simplify) as parallel background agents while running GSD's own inline gates (secure, validate), then reconcile findings serially.",
+        "When a claim is written into a verification artifact (e.g. VALIDATION.md marking TEE round-trip as 'confirmed live') but later evidence shows it wasn't actually proven, go back and correct the artifact rather than leaving an over-claim in place.",
+        "Use Monitor/ScheduleWakeup to wait on long-running background jobs (E2E suite, CodeRabbit CLI) instead of polling repeatedly."
+      ]
+    },
+    "friction": [
+      "TEE e2e republish suite failed twice for environmental reasons (stale tee-worker build, then dirty/persistent DB from prior runs) before a clean run could even be attempted, consuming significant time to distinguish real regression from local-infra noise.",
+      "Truncating the DB and re-running still didn't reproduce a clean pass — the republish job processed=0 both times, requiring deep log tracing (job enqueue, worker call count) to conclusively rule out a phase-77 regression.",
+      "A background Bash `tail`'s exit code 0 was misread as the E2E run succeeding, when the underlying suite had actually still failed (105/106) — required re-reading full output to catch the discrepancy.",
+      "A simplify-scan sub-agent's claim (that client.ts already imported certain codecs) was slightly wrong and had to be independently re-verified via grep before acting on it."
+    ],
+    "open_items": [
+      "Ship step (gsd-ship, PR creation, CI polling) and PR review resolution (step 9) not yet executed as of transcript end.",
+      "TEE republish e2e (tee-republish.test.ts) local scheduling/eligibility issue (processed=0, job never calls worker) remains unresolved as a local-infra gap — worth a future todo if it recurs, though it was judged orthogonal to phase 77 and not blocking.",
+      "CodeRabbit CLI's remaining findings (7 of 8) still need final triage confirmation/disposition beyond the one fixed (#7)."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-11T20:01:36.366876Z",
+    "agent_lines": 4,
+    "agent_removed": 2,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 4,
+    "total_lines_changed": 6,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
