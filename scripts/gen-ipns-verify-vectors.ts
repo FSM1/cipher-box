@@ -5,9 +5,11 @@
  * fixture consumed by both the Rust (crates/fuse/tests/ipns_verify_vectors.rs)
  * and the sdk-core (packages/sdk-core/src/__tests__/ipns.test.ts) test suites.
  *
- * 8 cases (D-11):
+ * 12 cases (D-11 + Phase 75):
  *   valid, tampered-sig, name-mismatch, cid-swapped, seq-mismatch,
- *   partial-fields, legacy-absent, first-publish-skew
+ *   partial-fields, legacy-absent, first-publish-skew,
+ *   expired-valid-sig, wrong-validity-type,
+ *   malformed-rfc3339-trailing-component, malformed-rfc3339-impossible-date
  *
  * Run from the repo root (packages/core must be built first):
  *   npx tsx scripts/gen-ipns-verify-vectors.ts
@@ -113,6 +115,8 @@ function bytesToBase64(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString('base64');
 }
 
+const DEFAULT_VALIDITY = '2099-01-01T00:00:00.000000000Z';
+
 /**
  * Build CBOR data matching the Rust build_cbor_data / cipherbox-core layout.
  *
@@ -122,14 +126,23 @@ function bytesToBase64(bytes: Uint8Array): string {
  *
  * IMPORTANT: Uses cborg directly so we can build CBOR for "wrong" cid/seq values
  * (cid-swapped and seq-mismatch cases) without going through createIpnsRecord.
+ *
+ * `validity` and `validityType` are parameterized (Phase 75) so callers can emit
+ * expired/malformed Validity strings and non-EOL ValidityType values while still
+ * producing a real Ed25519 signature over the resulting bytes.
  */
-function buildCborData(cid: string, sequenceNumber: number): Uint8Array {
+function buildCborData(
+  cid: string,
+  sequenceNumber: number,
+  validity: string = DEFAULT_VALIDITY,
+  validityType: number = 0
+): Uint8Array {
   return cborEncode({
     TTL: 300000000000,
     Value: new TextEncoder().encode(`/ipfs/${cid}`),
     Sequence: sequenceNumber,
-    Validity: new TextEncoder().encode('2099-01-01T00:00:00.000000000Z'),
-    ValidityType: 0,
+    Validity: new TextEncoder().encode(validity),
+    ValidityType: validityType,
   }) as Uint8Array;
 }
 
@@ -367,14 +380,120 @@ async function main(): Promise<void> {
   }
 
   // ------------------------------------------------------------------
+  // Case 9: expired-valid-sig — real sig over CBOR data whose embedded
+  // Validity is a past RFC3339 timestamp, ValidityType 0 (EOL). Exercises
+  // the resolve-side expiry/EOL binding both languages must apply on top
+  // of a passing Ed25519 signature check.
+  // Expected result: "invalid".
+  // ------------------------------------------------------------------
+  {
+    const cborData = buildCborData(CID_A, SEQ, '2020-01-01T00:00:00.000000000Z', 0);
+    const signedBytes = buildSignedBytes(cborData);
+    const sig = (await ed.signAsync(signedBytes, primaryPriv)) as Uint8Array;
+
+    vectors.push({
+      description:
+        'expired-valid-sig — valid sig, but embedded Validity is a past RFC3339 timestamp',
+      ipns_name: primaryIpnsName,
+      cid: CID_A,
+      sequence_number: String(SEQ),
+      signature_v2: bytesToBase64(sig),
+      data: bytesToBase64(cborData),
+      pub_key: bytesToBase64(primaryPub),
+      expected_result: 'invalid',
+    });
+    console.log('Case 9 (expired-valid-sig): done');
+  }
+
+  // ------------------------------------------------------------------
+  // Case 10: wrong-validity-type — real sig over CBOR data with a
+  // canonical (future) Validity but ValidityType encoded as CBOR integer
+  // 1 (non-EOL) instead of 0. Exercises the ValidityType==0 gate both
+  // languages must apply.
+  // Expected result: "invalid".
+  // ------------------------------------------------------------------
+  {
+    const cborData = buildCborData(CID_A, SEQ, DEFAULT_VALIDITY, 1);
+    const signedBytes = buildSignedBytes(cborData);
+    const sig = (await ed.signAsync(signedBytes, primaryPriv)) as Uint8Array;
+
+    vectors.push({
+      description:
+        'wrong-validity-type — valid sig, canonical future Validity, but ValidityType is 1 (non-EOL)',
+      ipns_name: primaryIpnsName,
+      cid: CID_A,
+      sequence_number: String(SEQ),
+      signature_v2: bytesToBase64(sig),
+      data: bytesToBase64(cborData),
+      pub_key: bytesToBase64(primaryPub),
+      expected_result: 'invalid',
+    });
+    console.log('Case 10 (wrong-validity-type): done');
+  }
+
+  // ------------------------------------------------------------------
+  // Case 11: malformed-rfc3339-trailing-component — real sig over CBOR
+  // data whose Validity string has a trailing date component the strict
+  // parser must reject (e.g. an extra dash-number after the day).
+  // Expected result: "invalid".
+  // ------------------------------------------------------------------
+  {
+    const cborData = buildCborData(CID_A, SEQ, '2099-01-01-99T00:00:00.000000000Z', 0);
+    const signedBytes = buildSignedBytes(cborData);
+    const sig = (await ed.signAsync(signedBytes, primaryPriv)) as Uint8Array;
+
+    vectors.push({
+      description:
+        'malformed-rfc3339-trailing-component — valid sig, but Validity has a trailing date component',
+      ipns_name: primaryIpnsName,
+      cid: CID_A,
+      sequence_number: String(SEQ),
+      signature_v2: bytesToBase64(sig),
+      data: bytesToBase64(cborData),
+      pub_key: bytesToBase64(primaryPub),
+      expected_result: 'invalid',
+    });
+    console.log('Case 11 (malformed-rfc3339-trailing-component): done');
+  }
+
+  // ------------------------------------------------------------------
+  // Case 12: malformed-rfc3339-impossible-date — real sig over CBOR data
+  // whose Validity string encodes an impossible calendar date (Feb 30)
+  // that leap-year-aware validation must reject.
+  // Expected result: "invalid".
+  // ------------------------------------------------------------------
+  {
+    const cborData = buildCborData(CID_A, SEQ, '2099-02-30T00:00:00.000000000Z', 0);
+    const signedBytes = buildSignedBytes(cborData);
+    const sig = (await ed.signAsync(signedBytes, primaryPriv)) as Uint8Array;
+
+    vectors.push({
+      description:
+        'malformed-rfc3339-impossible-date — valid sig, but Validity encodes an impossible calendar date',
+      ipns_name: primaryIpnsName,
+      cid: CID_A,
+      sequence_number: String(SEQ),
+      signature_v2: bytesToBase64(sig),
+      data: bytesToBase64(cborData),
+      pub_key: bytesToBase64(primaryPub),
+      expected_result: 'invalid',
+    });
+    console.log('Case 12 (malformed-rfc3339-impossible-date): done');
+  }
+
+  // ------------------------------------------------------------------
   // Sanity checks
   // ------------------------------------------------------------------
-  if (vectors.length !== 8) {
-    throw new Error(`Expected 8 vectors, got ${vectors.length}`);
+  if (vectors.length !== 12) {
+    throw new Error(`Expected 12 vectors, got ${vectors.length}`);
   }
 
   const expectedResults = [
     'valid',
+    'invalid',
+    'invalid',
+    'invalid',
+    'invalid',
     'invalid',
     'invalid',
     'invalid',
@@ -392,6 +511,10 @@ async function main(): Promise<void> {
     'partial-fields',
     'legacy-absent',
     'first-publish-skew',
+    'expired-valid-sig',
+    'wrong-validity-type',
+    'malformed-rfc3339-trailing-component',
+    'malformed-rfc3339-impossible-date',
   ];
   for (let i = 0; i < vectors.length; i++) {
     if (vectors[i].expected_result !== expectedResults[i]) {
