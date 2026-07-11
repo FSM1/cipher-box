@@ -91,6 +91,45 @@ impl ApiClient {
         Ok(builder.send().await?)
     }
 
+    /// Send an authenticated PATCH request with a JSON body to a relative API path.
+    pub async fn authenticated_patch<T: Serialize>(
+        &self,
+        path: &str,
+        body: &T,
+    ) -> Result<Response, ApiError> {
+        let url = format!("{}{}", self.base_url, path);
+        let token = self.access_token.read().await;
+
+        let mut builder = self
+            .client
+            .patch(&url)
+            .header("X-Client-Type", "desktop")
+            .json(body);
+
+        if let Some(ref t) = *token {
+            builder = builder.bearer_auth(t);
+        }
+
+        Ok(builder.send().await?)
+    }
+
+    /// Send an authenticated DELETE request to a relative API path.
+    pub async fn authenticated_delete(&self, path: &str) -> Result<Response, ApiError> {
+        let url = format!("{}{}", self.base_url, path);
+        let token = self.access_token.read().await;
+
+        let mut builder = self
+            .client
+            .delete(&url)
+            .header("X-Client-Type", "desktop");
+
+        if let Some(ref t) = *token {
+            builder = builder.bearer_auth(t);
+        }
+
+        Ok(builder.send().await?)
+    }
+
     /// Send an unauthenticated POST request with a JSON body to a relative API path.
     /// Used for login and refresh where no access token is available yet.
     pub async fn post<T: Serialize>(

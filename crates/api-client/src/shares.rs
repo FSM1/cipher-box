@@ -83,6 +83,84 @@ pub async fn revoke_shares_for_items(
     Ok(())
 }
 
+/// Re-mint a retained recipient's read-key grant to a new generation.
+///
+/// `PATCH /shares/{shareId}/grant` — mirrors `revoke_shares_for_items`'s
+/// POST-then-check-status shape. The server treats this as a
+/// read-key-rotation-only call (see [`UpdateGrantRequest`]) and returns HTTP
+/// 204 No Content on success; there is no response body to deserialize.
+///
+/// `encrypted_read_key` MUST already be ECIES ciphertext hex — the caller
+/// (the rotation engine's `re_mint_grants_rooted_at`) performs the
+/// `cipherbox_crypto::wrap_key` call itself before invoking this function.
+/// This function does not wrap, unwrap, or otherwise touch key material; it
+/// only forwards the already-encrypted string.
+pub async fn update_grant(
+    client: &ApiClient,
+    share_id: &str,
+    encrypted_read_key: &str,
+    root_generation: u64,
+) -> Result<(), ApiError> {
+    let request = UpdateGrantRequest {
+        encrypted_read_key: encrypted_read_key.to_string(),
+        root_generation: root_generation.to_string(),
+    };
+
+    let resp = client
+        .authenticated_patch(&format!("/shares/{}/grant", share_id), &request)
+        .await?;
+
+    if !resp.status().is_success() {
+        let status = resp.status().as_u16();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(ApiError::ApiResponse {
+            status,
+            message: format!("update_grant failed: {}", body),
+        });
+    }
+
+    Ok(())
+}
+
+/// Hard-revoke a single share/invite grant by ID.
+///
+/// `DELETE /shares/{shareId}` — mirrors `revoke_shares_for_items`'s
+/// POST-then-check-status shape, using `authenticated_delete` instead of
+/// `authenticated_post`. The server returns HTTP 204 No Content on success.
+pub async fn revoke_share(client: &ApiClient, share_id: &str) -> Result<(), ApiError> {
+    let resp = client
+        .authenticated_delete(&format!("/shares/{}", share_id))
+        .await?;
+
+    if !resp.status().is_success() {
+        let status = resp.status().as_u16();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(ApiError::ApiResponse {
+            status,
+            message: format!("revoke_share failed: {}", body),
+        });
+    }
+
+    Ok(())
+}
+
+/// Request body for `PATCH /shares/{shareId}/grant`.
+///
+/// Mirrors the server's `UpdateGrantDto`
+/// (`apps/api/src/shares/dto/update-grant.dto.ts`). Only the read-key-
+/// rotation-only fields are represented here — `encryptedWriteKey` and
+/// `clearEncryptedWriteKey` are intentionally OMITTED so this call never
+/// touches the write key (per the DTO's own doc comment: omitting both
+/// leaves any existing `encryptedWriteKey` unchanged).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateGrantRequest {
+    encrypted_read_key: String,
+    /// The DTO validates this as a numeric STRING (`@IsNumberString`), not a
+    /// JSON number, so the caller's `u64` is formatted to a decimal string.
+    root_generation: String,
+}
+
 /// A single row from `GET /shares/sent` — mirrors the server's
 /// `SentShareResponseDto` (`apps/api/src/shares/dto/share-response.dto.ts`)
 /// field-for-field. `share_root_ipns_name` is the value consumed downstream
