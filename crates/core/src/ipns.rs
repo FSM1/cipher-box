@@ -120,28 +120,37 @@ pub fn decode_ipns_cbor_data(data: &[u8]) -> Result<(String, u64), IpnsError> {
     Ok((value, seq))
 }
 
-/// Decode the `"Validity"` bytes from a signed IPNS CBOR data field.
+/// Decode the `"Validity"` bytes and `"ValidityType"` from a signed IPNS CBOR data field.
 ///
-/// Companion to `decode_ipns_cbor_data` that extracts only the `Validity` field (the RFC3339
-/// expiry timestamp stored as UTF-8 bytes) from the CBOR map. Used by `bind_verified` in
-/// `cipherbox-api-client` for resolve-side EOL/expiry enforcement (D-07, Plan 60-01).
+/// Companion to `decode_ipns_cbor_data` that extracts the `Validity` field (the RFC3339
+/// expiry timestamp stored as UTF-8 bytes) and the `ValidityType` field (an integer; `0`
+/// means EOL/expiry per the IPNS spec) from the CBOR map. Used by `bind_verified` in
+/// `cipherbox-api-client` for resolve-side EOL/expiry enforcement (D-07, Plan 60-01) and
+/// ValidityType binding (Phase 75, gap #7 — this decoder only reports the value, the
+/// `== 0` gate lives in `bind_verified`).
 ///
-/// Returns `Some(validity_bytes)` if the "Validity" key is present and contains bytes,
-/// `None` if the key is absent (caller must treat absent Validity as fail-closed invalid).
+/// Returns `(Some(validity_bytes), validity_type)` if the "Validity" key is present and
+/// contains bytes; `(None, validity_type)` if the "Validity" key is absent (caller must
+/// treat absent Validity as fail-closed invalid). `validity_type` is `Some(n)` if the
+/// "ValidityType" key is present and is an integer, `None` if the key is absent.
 ///
 /// # Errors
 ///
-/// Returns `Err(IpnsError::CborEncodingFailed)` if the buffer is not valid CBOR,
-/// the top-level value is not a map, or the "Validity" entry is not bytes.
-pub fn decode_ipns_cbor_validity(data: &[u8]) -> Result<Option<Vec<u8>>, IpnsError> {
+/// Returns `Err(IpnsError::CborEncodingFailed)` if the buffer is not valid CBOR, the
+/// top-level value is not a map, the "Validity" entry is present but not bytes, the
+/// "ValidityType" entry is present but not an integer, or either key appears twice.
+pub fn decode_ipns_cbor_validity(
+    data: &[u8],
+) -> Result<(Option<Vec<u8>>, Option<i64>), IpnsError> {
     let map: CborValue = ciborium::from_reader(data).map_err(|_| IpnsError::CborEncodingFailed)?;
     let entries = match map {
         CborValue::Map(m) => m,
         _ => return Err(IpnsError::CborEncodingFailed),
     };
-    // Reject duplicate "Validity" keys (parser-differential / first-wins-vs-last-wins
-    // hardening), mirroring decode_ipns_cbor_data's duplicate-key rejection.
+    // Reject duplicate "Validity"/"ValidityType" keys (parser-differential / first-wins-vs-
+    // last-wins hardening), mirroring decode_ipns_cbor_data's duplicate-key rejection.
     let mut validity_bytes: Option<Vec<u8>> = None;
+    let mut validity_type: Option<i64> = None;
     for (k, v) in entries {
         let key = match k {
             CborValue::Text(s) => s,
@@ -156,9 +165,10 @@ pub fn decode_ipns_cbor_validity(data: &[u8]) -> Result<Option<Vec<u8>>, IpnsErr
                 _ => return Err(IpnsError::CborEncodingFailed),
             };
         }
+        // TODO(RED): ValidityType extraction not yet implemented — GREEN step follows.
     }
-    // "Validity" key absent — caller treats as fail-closed.
-    Ok(validity_bytes)
+    // "Validity"/"ValidityType" keys absent — caller treats as fail-closed.
+    Ok((validity_bytes, validity_type))
 }
 
 /// Build the CBOR-encoded data field for an IPNS record.
@@ -593,6 +603,87 @@ mod tests {
             (
                 CborValue::Text("Validity".to_string()),
                 CborValue::Bytes(b"2000-01-01T00:00:00.000000000Z".to_vec()),
+            ),
+        ]);
+        let mut buf = Vec::new();
+        ciborium::into_writer(&cbor_map, &mut buf).unwrap();
+        let err = decode_ipns_cbor_validity(&buf).unwrap_err();
+        assert!(matches!(err, IpnsError::CborEncodingFailed));
+    }
+
+    #[test]
+    fn decode_ipns_cbor_validity_returns_validity_type_zero() {
+        // A map with Validity bytes and ValidityType integer 0 returns both the
+        // Validity bytes and Some(0).
+        let cbor_map = CborValue::Map(vec![
+            (
+                CborValue::Text("Validity".to_string()),
+                CborValue::Bytes(b"2099-01-01T00:00:00.000000000Z".to_vec()),
+            ),
+            (
+                CborValue::Text("ValidityType".to_string()),
+                CborValue::Integer(0.into()),
+            ),
+        ]);
+        let mut buf = Vec::new();
+        ciborium::into_writer(&cbor_map, &mut buf).unwrap();
+        let (validity, validity_type) = decode_ipns_cbor_validity(&buf).unwrap();
+        assert_eq!(validity, Some(b"2099-01-01T00:00:00.000000000Z".to_vec()));
+        assert_eq!(validity_type, Some(0));
+    }
+
+    #[test]
+    fn decode_ipns_cbor_validity_returns_validity_type_one() {
+        // A map with ValidityType integer 1 returns the Validity bytes and Some(1) — the
+        // caller (bind_verified), not this decoder, decides the == 0 gate.
+        let cbor_map = CborValue::Map(vec![
+            (
+                CborValue::Text("Validity".to_string()),
+                CborValue::Bytes(b"2099-01-01T00:00:00.000000000Z".to_vec()),
+            ),
+            (
+                CborValue::Text("ValidityType".to_string()),
+                CborValue::Integer(1.into()),
+            ),
+        ]);
+        let mut buf = Vec::new();
+        ciborium::into_writer(&cbor_map, &mut buf).unwrap();
+        let (validity, validity_type) = decode_ipns_cbor_validity(&buf).unwrap();
+        assert_eq!(validity, Some(b"2099-01-01T00:00:00.000000000Z".to_vec()));
+        assert_eq!(validity_type, Some(1));
+    }
+
+    #[test]
+    fn decode_ipns_cbor_validity_no_validity_type_key_returns_none() {
+        // A map with no ValidityType key returns the Validity bytes and None.
+        let cbor_map = CborValue::Map(vec![(
+            CborValue::Text("Validity".to_string()),
+            CborValue::Bytes(b"2099-01-01T00:00:00.000000000Z".to_vec()),
+        )]);
+        let mut buf = Vec::new();
+        ciborium::into_writer(&cbor_map, &mut buf).unwrap();
+        let (validity, validity_type) = decode_ipns_cbor_validity(&buf).unwrap();
+        assert_eq!(validity, Some(b"2099-01-01T00:00:00.000000000Z".to_vec()));
+        assert_eq!(validity_type, None);
+    }
+
+    #[test]
+    fn decode_ipns_cbor_validity_rejects_duplicate_validity_type_key() {
+        // Mirror of the duplicate-Validity-key guard: two "ValidityType" entries must
+        // return Err(CborEncodingFailed) so a parser-differential record cannot decode
+        // ambiguously across languages.
+        let cbor_map = CborValue::Map(vec![
+            (
+                CborValue::Text("Validity".to_string()),
+                CborValue::Bytes(b"2099-01-01T00:00:00.000000000Z".to_vec()),
+            ),
+            (
+                CborValue::Text("ValidityType".to_string()),
+                CborValue::Integer(0.into()),
+            ),
+            (
+                CborValue::Text("ValidityType".to_string()),
+                CborValue::Integer(1.into()),
             ),
         ]);
         let mut buf = Vec::new();
