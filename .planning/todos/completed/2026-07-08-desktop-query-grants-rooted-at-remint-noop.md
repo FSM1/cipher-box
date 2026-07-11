@@ -42,3 +42,18 @@ to the remaining subtree (their grant is re-minted to the new generation), and
 only a genuinely-revoked recipient loses access. Update the Phase 70.1
 desktop-e2e leg's "recipient cut off" assertion to distinguish retained vs
 revoked recipients.
+
+## Resolved (phase 74, merged PR #607)
+
+Closed by plan 74-07 (T-74-07). The FUSE `RotationDeps` adapter's
+`query_grants_rooted_at` (`crates/fuse/src/write_ops/rotation_deps.rs:264`) is
+no longer a no-op: it fetches `collect_sent_shares()` (GET /shares/sent),
+client-side-filters by `root_node_id == node_id`, hex-decodes each
+`recipient_public_key`, and returns real `GrantRow`s so `re_mint_grants_rooted_at`
+re-wraps the NEW read key for each RETAINED recipient (revoked shares are
+hard-deleted server-side, so they are cut by absence). Covered by
+`query_grants_rooted_at_filters_by_root_node_id_and_hex_decodes_recipient_key`
+(same file, ~line 1152). Two hardening follow-ups remain as their own pending
+todos (remint-refetches-per-node, remint-trusts-server-recipient-pubkey-binding).
+Stranded in pending by the known auto-close under-close; moved manually
+2026-07-11.
