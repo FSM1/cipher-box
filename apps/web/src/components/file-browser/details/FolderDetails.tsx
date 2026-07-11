@@ -5,7 +5,9 @@ import { CopyableValue, DetailRow } from './DetailsPrimitives';
 
 /**
  * Folder details content (node/v3: ResolvedChild display).
- * TODO(phase 63): wire read-chain navigation to load Node for full metadata.
+ *
+ * The ResolvedChild is already resolved via the SDK read chain, so its display
+ * metadata (name/kind/createdAt/modifiedAt) is available directly.
  */
 /**
  * Render a NON-reversible fingerprint of a key: a short prefix of its SHA-256
@@ -117,8 +119,11 @@ export function FolderDetails({
       <div className="details-section-header">{'// timestamps'}</div>
 
       <DetailRow label="Created">
-        {/* TODO(phase 63): SealedChildRef has no createdAt; resolve from Node envelope */}
-        <span className="details-value details-value--dim">unavailable (phase 63)</span>
+        {typeof item.createdAt === 'number' && Number.isFinite(item.createdAt) ? (
+          <span className="details-value">{formatDate(item.createdAt)}</span>
+        ) : (
+          <span className="details-value details-value--dim">—</span>
+        )}
       </DetailRow>
 
       <DetailRow label="Modified">
