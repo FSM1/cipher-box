@@ -73,8 +73,8 @@
 - [x] **Phase 71: Share-Invite Security and IPNS Data-Integrity (API)** — Validate sharer root ownership via `ipns_records` creator marker, apply-or-reject later invite grants, `claim_count` CHECK folded into the greenfield cutover, first-publish INSERT-race 409, same-seq CID equivocation hard-guard, direct bulk-revoke DELETE, `ShareInviteService` lifecycle unit coverage, plus a full share-plane rename purging "descriptor" (D-10). Root-uniqueness index dropped (D-03; already covered by vault uniqueness). (completed 2026-07-09)
 - [x] **Phase 72: SDK Write-Plane Durability and Correctness** — Delete drops the removed child's `WriteChildRef`, fail-closed `getWriteBodyParams` on transient resolve miss, restore-to-different-parent re-homing, `SealedChildRef` size/modifiedAt mirror refresh, legacy `moveInSharedFolder` branch removal, write-plane helper dedup, and two write-chain test-fidelity fixes (8 todos) (completed 2026-07-10)
 - [x] **Phase 73: Shared Write/Navigation Correctness (Web)** — Preserve nested write capability across navigate-up/breadcrumb restore, invalidate stale nav-stack child snapshots, gate the non-listing read facades with the ROT-07 floor, give WRITE-03 refresh-access a live production trigger, and route drag-payload kind through the resolved listing, plus fold in the tangential nav-hook dedup and dead getShareKeys/folder-IPNS path cleanup in the same subsystem (7 todos) (completed 2026-07-10)
-- [x] **Phase 74: Rust and FUSE Rotation-Revocation Soundness** — Deep scope-exit key refresh across all intermediate inodes, desktop grant re-mint seam, WinFsp dest-gating parity (3 todos; closes remaining Rust-side revocation bypasses) (completed 2026-07-11)
-- [ ] **Phase 75: Cross-Language IPNS and Node-Codec Verification Parity** — Strict RFC3339 + ValidityType==0 enforcement, KAT IV-encoding pin, UUID AAD acceptance parity, all Rust↔TS vector-locked (4 todos)
+- [ ] **Phase 74: Rust and FUSE Rotation-Revocation Soundness** — Deep scope-exit key refresh across all intermediate inodes, desktop grant re-mint seam, WinFsp dest-gating parity (3 todos; closes remaining Rust-side revocation bypasses)
+- [x] **Phase 75: Cross-Language IPNS and Node-Codec Verification Parity** — Strict RFC3339 + ValidityType==0 enforcement, KAT IV-encoding pin, UUID AAD acceptance parity, all Rust↔TS vector-locked (4 todos) (completed 2026-07-11)
 - [ ] **Phase 76: FUSE Durability and TEE Write-Path Hardening** — Vault-init publish preflight, deferred Phase 69 publish/concurrency items, TEE republish/renew error handling + later-EOL invariant (4 todos)
 - [ ] **Phase 77: Crypto Hygiene and Terminology Canonicalization** — Error-path zeroization, base64 helper dedup, `encryptedIpnsPrivateKey` field renames, dead share-scaffolding retirement, root-ownership helper extract (12 todos; mechanical, no behavior change)
 - [ ] **Phase 78: Recovery Tool v3, Vault-Load Guards, Web UX and CI Guards** — Port recovery.html to node/v3 (un-fixme recovery.spec), download-progress UX resolution, D-07 CI rule, web vitest CI, remaining 68.2/73 hardening incl. two data-integrity races (5 todos)
@@ -956,7 +956,7 @@ Plans:
 2. A hex-encoded `file_iv` fails the node-codec KAT (base64-only sample values)
 3. TS and Rust accept exactly the same UUID acceptance domain in the AAD builder, locked by a cross-language KAT
 
-**Plans:** 4/5 plans executed
+**Plans:** 5/5 plans complete
 
 Plans:
 **Wave 1**
@@ -968,7 +968,7 @@ Plans:
 **Wave 2** *(blocked on Wave 1 completion)*
 
 - [x] 75-02-PLAN.md — Rust ValidityType==0 EOL binding + classify_vector dedup to pub bind_verified [wave 2]
-- [ ] 75-03-PLAN.md — TS strict RFC3339 parse + ValidityType==0 gate in resolveIpnsRecord [wave 2]
+- [x] 75-03-PLAN.md — TS strict RFC3339 parse + ValidityType==0 gate in resolveIpnsRecord [wave 2]
 
 ### Phase 76: FUSE Durability and TEE Write-Path Hardening
 
