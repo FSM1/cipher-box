@@ -1022,7 +1022,7 @@ Plans:
 2. `base64` encode/decode helpers exist once per package boundary; the ~10 copy-pasted copies are removed with golden-vector parity preserved
 3. All IPNS-key fields use the canonical `encryptedIpnsPrivateKey` name across in-memory, wire, and tests; dead share scaffolding and the discarded wrapKey are gone; full typecheck + unit suites green
 
-**Plans:** 4/10 plans executed
+**Plans:** 5/10 plans executed
 
 Plans:
 **Wave 1**
@@ -1031,7 +1031,7 @@ Plans:
 - [x] 77-02-PLAN.md — Zeroize AES key-buffer copies via extracted importAesKey helper (todo #3) [wave 1]
 - [x] 77-03-PLAN.md — Rename TEE wire-contract field encryptedIpnsKey→encryptedIpnsPrivateKey (todo #9) [wave 1]
 - [x] 77-04-PLAN.md — Extract shared assertRootOwnership API helper (todo #12) [wave 1]
-- [ ] 77-05-PLAN.md — wrapIpnsKeyForTee bytes-in/bytes-out + teePublicKey param (todo #1) [wave 1]
+- [x] 77-05-PLAN.md — wrapIpnsKeyForTee bytes-in/bytes-out + teePublicKey param (todo #1) [wave 1]
 - [ ] 77-06-PLAN.md — Retire dead share scaffolding + verify discarded wrapKey gone (todos #10, #11) [wave 1]
 
 **Wave 2** *(blocked on Wave 1 completion)*
