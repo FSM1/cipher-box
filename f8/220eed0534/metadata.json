@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "f8220eed0534",
+  "strategy": "manual-commit",
+  "branch": "feat/rust-and-fuse-rotation-revocation-soundness",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/74-rust-and-fuse-rotation-revocation-soundness/74-01-PLAN.md",
+    ".planning/phases/74-rust-and-fuse-rotation-revocation-soundness/74-02-PLAN.md",
+    ".planning/phases/74-rust-and-fuse-rotation-revocation-soundness/74-03-PLAN.md",
+    ".planning/phases/74-rust-and-fuse-rotation-revocation-soundness/74-04-PLAN.md",
+    ".planning/phases/74-rust-and-fuse-rotation-revocation-soundness/74-05-PLAN.md",
+    ".planning/phases/74-rust-and-fuse-rotation-revocation-soundness/74-VALIDATION.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f8/220eed0534/0/metadata.json",
+      "transcript": "/f8/220eed0534/0/full.jsonl",
+      "content_hash": "/f8/220eed0534/0/content_hash.txt",
+      "prompt": "/f8/220eed0534/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 78,
+    "cache_creation_tokens": 8072,
+    "cache_read_tokens": 927976,
+    "output_tokens": 6407,
+    "api_call_count": 3
+  }
+}
