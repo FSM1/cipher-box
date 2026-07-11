@@ -4,17 +4,17 @@ milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
 current_phase: 74
 current_phase_name: Rust and FUSE Rotation-Revocation Soundness
-status: executing
+status: verifying
 stopped_at: Completed 74-02-PLAN.md
-last_updated: "2026-07-11T04:42:15.027Z"
+last_updated: "2026-07-11T04:58:55.921Z"
 last_activity: 2026-07-11
 last_activity_desc: Phase 74 execution started
 progress:
   total_phases: 22
-  completed_phases: 16
+  completed_phases: 17
   total_plans: 195
-  completed_plans: 194
-  percent: 73
+  completed_plans: 195
+  percent: 77
 ---
 
 # Project State
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 
 Phase: 74 (Rust and FUSE Rotation-Revocation Soundness) — EXECUTING
 Plan: 7 of 7
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-07-11 — Phase 74 execution started
 
 Progress: `██████████` 79 / 79 plans (100%)
@@ -272,6 +272,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 74 P74-03 | 20min | 2 tasks | 2 files |
 | Phase 74 P05 | 25min | 2 tasks | 2 files |
 | Phase 74 P02 | 12min | 2 tasks | 4 files |
+| Phase 74 P07 | 40min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -604,6 +605,8 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase 74]: delete_grant implemented for engine-contract completeness though is_revoked is structurally always false from collect_sent_shares (revoked shares hard-deleted server-side); no test asserts that branch firing through this path (T-74-14 accepted, not mitigated)
 - [Phase 74]: 74-02: RotatedNodeKey.sequenceNumber typed bigint (not the plan table's literal number) to match this file's existing IPNS sequence-number convention
 - [Phase 74]: 74-02: repairDirtyNode crash-resume path does not populate rotatedNodes (out of scope per plan's task action/acceptance_criteria) — Rust 74-01 folded it in; documented TS/Rust asymmetry for a future follow-up
+- [Phase ?]: [Phase 74-07] Combined the plan's deep leg and second-recipient leg into one Part C scenario (Eve revoked, Carol retained on the same grant root) -- the only construction matching 74-05's real re-mint semantics; revoked recipients in Parts C/D are explicitly DELETE'd pre-mutation since an active-but-untouched grantee is now correctly re-minted, not cut off
+- [Phase ?]: [Phase 74-07] Flagged (not fixed) that Part A's existing Bob assertion in shared-scope-exit-rotation.mts may no longer hold post-74-05 (an active never-revoked grantee is now re-minted rather than cut off) -- left untouched per the plan's explicit instruction; needs a live CI run to confirm
 
 ## Operator Next Steps
 
@@ -611,7 +614,7 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-11T04:42:15.020Z
+**Last session:** 2026-07-11T04:58:48.845Z
 **Stopped at:** Completed 74-02-PLAN.md
 **Resume file:** 
 
