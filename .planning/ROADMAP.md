@@ -956,12 +956,12 @@ Plans:
 2. A hex-encoded `file_iv` fails the node-codec KAT (base64-only sample values)
 3. TS and Rust accept exactly the same UUID acceptance domain in the AAD builder, locked by a cross-language KAT
 
-**Plans:** 5 plans
+**Plans:** 1/5 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 75-01-PLAN.md — Extend IPNS verify-vector generator + regenerate 12-case verify.json (shared oracle) [wave 1]
+- [x] 75-01-PLAN.md — Extend IPNS verify-vector generator + regenerate 12-case verify.json (shared oracle) [wave 1]
 - [ ] 75-04-PLAN.md — node-codec KAT pins file_iv base64 encoding (decode-and-assert, Rust+TS) [wave 1]
 - [ ] 75-05-PLAN.md — Canonical UUID acceptance domain in uuidToBytes + build_node_aad, cross-language KAT [wave 1]
 
