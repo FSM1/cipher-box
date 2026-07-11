@@ -1022,7 +1022,7 @@ Plans:
 2. `base64` encode/decode helpers exist once per package boundary; the ~10 copy-pasted copies are removed with golden-vector parity preserved
 3. All IPNS-key fields use the canonical `encryptedIpnsPrivateKey` name across in-memory, wire, and tests; dead share scaffolding and the discarded wrapKey are gone; full typecheck + unit suites green
 
-**Plans:** 7/10 plans executed
+**Plans:** 8/10 plans executed
 
 Plans:
 **Wave 1**
@@ -1037,7 +1037,7 @@ Plans:
 **Wave 2** *(blocked on Wave 1 completion)*
 
 - [x] 77-07-PLAN.md — Consolidate packages/core node-codec base64 duplicates (todo #7) [wave 2]
-- [ ] 77-08-PLAN.md — Dedup sdk-core rotation/share base64 helpers (todo #6 part) [wave 2]
+- [x] 77-08-PLAN.md — Dedup sdk-core rotation/share base64 helpers (todo #6 part) [wave 2]
 - [ ] 77-09-PLAN.md — Dedup file/index.ts base64 + rename ipnsPrivateKeyEncrypted→canonical (todos #6, #8) [wave 2]
 - [ ] 77-10-PLAN.md — Error-path zeroize createSubfolder + verify-filepointer.mts (todos #2, #4) [wave 2]
 
