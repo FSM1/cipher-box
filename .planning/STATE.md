@@ -6,9 +6,9 @@ current_phase: 74
 current_phase_name: Rust and FUSE Rotation-Revocation Soundness
 status: verifying
 stopped_at: Phase 74 verified human_needed (2 CI-gated legs pending)
-last_updated: "2026-07-11T05:30:00.000Z"
+last_updated: "2026-07-11T11:28:37.406Z"
 last_activity: 2026-07-11
-last_activity_desc: Phase 74 executed (7/7 plans) — verification human_needed
+last_activity_desc: Phase 74 learnings extracted (74-LEARNINGS.md)
 progress:
   total_phases: 22
   completed_phases: 17
@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 Phase: 74 (Rust and FUSE Rotation-Revocation Soundness) — VERIFIED human_needed (NOT marked complete)
 Plan: 7 of 7 executed + committed
 Status: All 7 plans done; verification = human_needed. 21/21 must-haves code-verified; all local test suites pass (SC1 27/27+370/370+17/17, SC2 15/15+10/10 / fuse 117/117). SC3 code source-verified (D-15d parity). Two CI-gated legs pending (see Blockers).
-Last activity: 2026-07-11 — Phase 74 executed; verification human_needed
+Last activity: 2026-07-11 — Phase 74 learnings extracted (74-LEARNINGS.md)
 
 ## Phase 74 Blockers (CI-gated verification, not code gaps)
 
