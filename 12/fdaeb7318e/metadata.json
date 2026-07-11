@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "12fdaeb7318e",
+  "strategy": "manual-commit",
+  "branch": "feat/cross-language-ipns-and-node-codec-verification-parity",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/ROADMAP.md",
+    ".planning/STATE.md",
+    ".planning/phases/75-cross-language-ipns-and-node-codec-verification-parity/75-05-SUMMARY.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/12/fdaeb7318e/0/metadata.json",
+      "transcript": "/12/fdaeb7318e/0/full.jsonl",
+      "content_hash": "/12/fdaeb7318e/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  }
+}
