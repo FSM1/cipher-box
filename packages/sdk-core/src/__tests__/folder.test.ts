@@ -372,6 +372,32 @@ describe('createSubfolder (phase 63 — first-publish seq 1n)', () => {
     expect(result.rootReadKey.some((b) => b !== 0)).toBe(true);
     expect(result.rootWriteKey.some((b) => b !== 0)).toBe(true);
   });
+
+  it('zeroes the minted ipnsPrivateKey/readKey/writeKey when createAndPublishIpnsRecord throws (error path)', async () => {
+    const ctx = createMockContext();
+
+    // Override the shared beforeEach mocks with buffers we hold direct
+    // references to, so we can assert on them after the rejection (the
+    // rejected call never returns them to us).
+    const mintedIpnsPrivateKey = new Uint8Array(64).fill(9);
+    const mintedReadKey = new Uint8Array(32).fill(10);
+    const mintedWriteKey = new Uint8Array(32).fill(11);
+    mockFns.generateEd25519Keypair.mockResolvedValue({
+      publicKey: new Uint8Array(32).fill(1),
+      privateKey: mintedIpnsPrivateKey,
+    });
+    mockFns.generateRandomBytes.mockReset();
+    mockFns.generateRandomBytes
+      .mockReturnValueOnce(mintedReadKey) // readKey (first call)
+      .mockReturnValueOnce(mintedWriteKey); // writeKey (second call)
+    mockFns.createAndPublishIpnsRecord.mockRejectedValue(new Error('publish failed'));
+
+    await expect(createSubfolder({ name: 'ThrowFolder', ctx })).rejects.toThrow('publish failed');
+
+    expect(mintedIpnsPrivateKey.every((b) => b === 0)).toBe(true);
+    expect(mintedReadKey.every((b) => b === 0)).toBe(true);
+    expect(mintedWriteKey.every((b) => b === 0)).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
