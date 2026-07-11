@@ -310,4 +310,216 @@ mod tests {
         let result = list_sent_shares(&client, 50, 0).await;
         assert!(result.is_err());
     }
+
+    // -- update_grant / revoke_share wire-function tests -------------------
+    //
+    // No mock-HTTP crate (wiremock/mockito) is a dependency of this crate, so
+    // these tests use a minimal raw-TCP one-shot mock server mirroring the
+    // established project pattern in
+    // `crates/fuse/src/write_ops/implementation/delete.rs`
+    // (`spawn_mock_rotation_server`), adapted to CAPTURE the inbound
+    // method/path/body (via an `mpsc` channel back to the async test) rather
+    // than dispatch a fixture response by path — these tests assert on the
+    // exact request CipherBox's real `ApiClient` sends, not just on a canned
+    // response.
+
+    /// One HTTP/1.1 request captured by [`spawn_capturing_mock_server`].
+    struct CapturedRequest {
+        method: String,
+        path: String,
+        body: String,
+    }
+
+    /// Spawn a background thread that accepts exactly one HTTP/1.1
+    /// connection, captures its method/path/body, replies with
+    /// `status_line`/`response_body`, and sends the captured request back
+    /// over the returned channel. Returns the mock server's base URL
+    /// (`http://127.0.0.1:<port>`) suitable for `ApiClient::new`.
+    fn spawn_capturing_mock_server(
+        status_line: &'static str,
+        response_body: &'static str,
+    ) -> (String, std::sync::mpsc::Receiver<CapturedRequest>) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
+        let addr = listener.local_addr().expect("mock server local_addr");
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            let headers_end = loop {
+                let n = stream.read(&mut chunk).unwrap_or(0);
+                if n == 0 {
+                    return; // peer closed before a full request arrived
+                }
+                buf.extend_from_slice(&chunk[..n]);
+                if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break pos + 4;
+                }
+                if buf.len() > 1_000_000 {
+                    return; // safety cap against a malformed/oversized request
+                }
+            };
+
+            let content_length = {
+                let headers = String::from_utf8_lossy(&buf[..headers_end]);
+                headers
+                    .split("\r\n")
+                    .find_map(|line| {
+                        let (k, v) = line.split_once(':')?;
+                        k.trim()
+                            .eq_ignore_ascii_case("content-length")
+                            .then(|| v.trim().to_string())
+                    })
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .unwrap_or(0)
+            };
+            let have = buf.len() - headers_end;
+            if have < content_length {
+                let mut remaining = vec![0u8; content_length - have];
+                if stream.read_exact(&mut remaining).is_err() {
+                    return;
+                }
+                buf.extend_from_slice(&remaining);
+            }
+
+            let request_line = buf
+                .split(|&b| b == b'\n')
+                .next()
+                .map(|l| String::from_utf8_lossy(l).trim().to_string())
+                .unwrap_or_default();
+            let mut parts = request_line.split_whitespace();
+            let method = parts.next().unwrap_or("").to_string();
+            let path = parts.next().unwrap_or("").to_string();
+            let body = String::from_utf8_lossy(&buf[headers_end..]).to_string();
+
+            let header = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                status_line,
+                response_body.len()
+            );
+            let _ = stream.write_all(header.as_bytes());
+            let _ = stream.write_all(response_body.as_bytes());
+            let _ = stream.flush();
+
+            let _ = tx.send(CapturedRequest { method, path, body });
+        });
+
+        (format!("http://{}", addr), rx)
+    }
+
+    /// `update_grant` PATCHes `/shares/{shareId}/grant` with a body carrying
+    /// ONLY `encryptedReadKey` + `rootGeneration` (write-key fields absent),
+    /// and treats 204 as success.
+    #[tokio::test]
+    async fn update_grant_patches_grant_path_with_read_key_only_body() {
+        let (base_url, rx) = spawn_capturing_mock_server("204 No Content", "");
+        let client = ApiClient::new(&base_url);
+
+        let result = update_grant(&client, "share-1", "deadbeef", 3).await;
+        assert!(result.is_ok(), "expected Ok, got {:?}", result);
+
+        let captured = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("mock server captured a request");
+        assert_eq!(captured.method, "PATCH");
+        assert_eq!(captured.path, "/shares/share-1/grant");
+
+        let value: serde_json::Value =
+            serde_json::from_str(&captured.body).expect("body is valid JSON");
+        assert_eq!(value["encryptedReadKey"], "deadbeef");
+        assert_eq!(value["rootGeneration"], "3");
+        assert!(
+            value.get("encryptedWriteKey").is_none(),
+            "encryptedWriteKey must be absent from a read-key-rotation-only body"
+        );
+        assert!(
+            value.get("clearEncryptedWriteKey").is_none(),
+            "clearEncryptedWriteKey must be absent from a read-key-rotation-only body"
+        );
+    }
+
+    /// `update_grant` maps a non-2xx response (400) to
+    /// `ApiError::ApiResponse` with a message mentioning the operation.
+    #[tokio::test]
+    async fn update_grant_non_2xx_maps_to_api_response_error() {
+        let (base_url, _rx) = spawn_capturing_mock_server("400 Bad Request", "bad request");
+        let client = ApiClient::new(&base_url);
+
+        let err = update_grant(&client, "share-1", "deadbeef", 3)
+            .await
+            .expect_err("non-2xx must be an error");
+        match err {
+            ApiError::ApiResponse { status, message } => {
+                assert_eq!(status, 400);
+                assert!(
+                    message.contains("update_grant"),
+                    "message should mention update_grant: {}",
+                    message
+                );
+            }
+            other => panic!("expected ApiResponse, got {:?}", other),
+        }
+    }
+
+    /// `revoke_share` DELETEs `/shares/{shareId}` and treats 204 as success.
+    #[tokio::test]
+    async fn revoke_share_deletes_share_path() {
+        let (base_url, rx) = spawn_capturing_mock_server("204 No Content", "");
+        let client = ApiClient::new(&base_url);
+
+        let result = revoke_share(&client, "share-1").await;
+        assert!(result.is_ok(), "expected Ok, got {:?}", result);
+
+        let captured = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("mock server captured a request");
+        assert_eq!(captured.method, "DELETE");
+        assert_eq!(captured.path, "/shares/share-1");
+    }
+
+    /// `revoke_share` maps a non-2xx response (404) to
+    /// `ApiError::ApiResponse` with a message mentioning the operation.
+    #[tokio::test]
+    async fn revoke_share_non_2xx_maps_to_api_response_error() {
+        let (base_url, _rx) = spawn_capturing_mock_server("404 Not Found", "not found");
+        let client = ApiClient::new(&base_url);
+
+        let err = revoke_share(&client, "share-1")
+            .await
+            .expect_err("non-2xx must be an error");
+        match err {
+            ApiError::ApiResponse { status, message } => {
+                assert_eq!(status, 404);
+                assert!(
+                    message.contains("revoke_share"),
+                    "message should mention revoke_share: {}",
+                    message
+                );
+            }
+            other => panic!("expected ApiResponse, got {:?}", other),
+        }
+    }
+
+    /// `revoke_share` also maps a 500 to `ApiError::ApiResponse` (not just
+    /// 404) — mirrors the plan's "404/500 -> Err" behavior requirement.
+    #[tokio::test]
+    async fn revoke_share_500_maps_to_api_response_error() {
+        let (base_url, _rx) = spawn_capturing_mock_server("500 Internal Server Error", "boom");
+        let client = ApiClient::new(&base_url);
+
+        let err = revoke_share(&client, "share-1")
+            .await
+            .expect_err("non-2xx must be an error");
+        match err {
+            ApiError::ApiResponse { status, .. } => assert_eq!(status, 500),
+            other => panic!("expected ApiResponse, got {:?}", other),
+        }
+    }
 }
