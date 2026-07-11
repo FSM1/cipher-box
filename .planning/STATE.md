@@ -5,15 +5,15 @@ milestone_name: Metadata and Sharing Refactor
 current_phase: 75
 current_phase_name: Cross-Language IPNS and Node-Codec Verification Parity
 status: executing
-stopped_at: Completed 72-10-PLAN.md
-last_updated: "2026-07-11T05:53:38.637Z"
+stopped_at: Completed 75-04-PLAN.md
+last_updated: "2026-07-11T06:06:14.171Z"
 last_activity: 2026-07-11
 last_activity_desc: Phase 75 execution started
 progress:
   total_phases: 22
   completed_phases: 16
   total_plans: 193
-  completed_plans: 189
+  completed_plans: 190
   percent: 73
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 ## Current Position
 
 Phase: 75 (Cross-Language IPNS and Node-Codec Verification Parity) — EXECUTING
-Plan: 2 of 5
+Plan: 3 of 5
 Status: Ready to execute
 Last activity: 2026-07-11 — Phase 75 execution started
 
@@ -267,6 +267,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 72 P09 | 8min | 1 tasks | 5 files |
 | Phase 72 P10 | 10min | 2 tasks | 3 files |
 | Phase 75 P01 | 3min | 1 tasks | 2 files |
+| Phase 75 P04 | 12min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -589,6 +590,7 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: write-body-params.ts standardizes the IPNS-resolve path on inline resolveIpnsRecord+fetchFromIpfs+JSON.parse (bin's pre-existing style) rather than client.ts's resolvePublishedNode wrapper, since the extra signatureVerified field was never consumed by getWriteBodyParams
 - [Phase ?]: buildCborData parameterized with validity/validityType trailing optional args (defaults = prior hardcoded values) so the 8 pre-existing vector cases stay byte-identical by construction
 - [Phase ?]: 4 new IPNS verify vectors per 75-RESEARCH RESOLVED Q2: expired-valid-sig, wrong-validity-type, malformed-rfc3339-trailing-component, malformed-rfc3339-impossible-date (total 12)
+- [Phase ?]: expected_file_iv_len_bytes made Option<usize>/typeof-detected — only file-kind body vectors carry fileIv (folder/root have none)
 
 ## Operator Next Steps
 
@@ -596,8 +598,8 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-11T05:53:08.114Z
-**Stopped at:** Completed 72-10-PLAN.md
+**Last session:** 2026-07-11T06:06:14.164Z
+**Stopped at:** Completed 75-04-PLAN.md
 **Resume file:** 
 
 None
