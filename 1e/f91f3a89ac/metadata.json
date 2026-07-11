@@ -3,7 +3,7 @@
   "checkpoint_id": "1ef91f3a89ac",
   "strategy": "manual-commit",
   "branch": "feat/cross-language-ipns-and-node-codec-verification-parity",
-  "checkpoints_count": 1,
+  "checkpoints_count": 3,
   "files_touched": [
     "crates/core/src/ipns.rs"
   ],
@@ -13,13 +13,19 @@
       "transcript": "/1e/f91f3a89ac/0/full.jsonl",
       "content_hash": "/1e/f91f3a89ac/0/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/1e/f91f3a89ac/1/metadata.json",
+      "transcript": "/1e/f91f3a89ac/1/full.jsonl",
+      "content_hash": "/1e/f91f3a89ac/1/content_hash.txt",
+      "prompt": "/1e/f91f3a89ac/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 0,
-    "cache_creation_tokens": 0,
-    "cache_read_tokens": 0,
-    "output_tokens": 0,
-    "api_call_count": 0
+    "input_tokens": 164428,
+    "cache_creation_tokens": 3269523,
+    "cache_read_tokens": 210167566,
+    "output_tokens": 857211,
+    "api_call_count": 683
   }
 }
