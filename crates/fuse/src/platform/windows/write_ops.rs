@@ -17,8 +17,9 @@ pub mod implementation {
     use super::super::operations::implementation::{
         filetime_to_systemtime, fill_file_info, is_windows_special, publish_file_node,
         resolve_path, split_path, status_access_denied, status_directory_not_empty,
-        status_invalid_handle, status_invalid_parameter, status_io_device_error,
-        status_object_name_collision, status_object_name_not_found, WinFspContext,
+        status_file_is_a_directory, status_invalid_handle, status_invalid_parameter,
+        status_io_device_error, status_not_a_directory, status_object_name_collision,
+        status_object_name_not_found, WinFspContext,
         WinFspFileContext,
     };
     use crate::file_handle::OpenFileHandle;
@@ -1120,6 +1121,29 @@ pub mod implementation {
         // first, gate second, mutate third.
         if let Some(dest_ino) = dest_ino {
             if let Some(dest_inode) = fs.inodes.get(dest_ino) {
+                // D-15d kind-compatibility (POSIX: a rename cannot replace a
+                // file with a directory or vice versa). Mirrors the fuser
+                // reference (write_ops/implementation/rename.rs ENOTDIR/EISDIR
+                // guard) and must run BEFORE the non-empty check and BEFORE the
+                // scope-exit gate — a kind-mismatched replace is a doomed
+                // rename that must never trigger a rotation. Without this,
+                // replace_if_exists could overwrite a file with a directory (or
+                // an empty dir with a file), corrupting the namespace.
+                let source_is_dir = fs
+                    .inodes
+                    .get(source_ino)
+                    .map(|i| matches!(i.kind, InodeKind::Root { .. } | InodeKind::Folder { .. }))
+                    .unwrap_or(false);
+                let dest_is_dir = matches!(
+                    dest_inode.kind,
+                    InodeKind::Root { .. } | InodeKind::Folder { .. }
+                );
+                if source_is_dir && !dest_is_dir {
+                    return Err(status_not_a_directory());
+                }
+                if !source_is_dir && dest_is_dir {
+                    return Err(status_file_is_a_directory());
+                }
                 if let InodeKind::Folder { .. } = &dest_inode.kind {
                     if let Some(ref children) = dest_inode.children {
                         if !children.is_empty() {

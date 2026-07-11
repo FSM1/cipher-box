@@ -44,6 +44,12 @@ pub mod implementation {
     pub fn status_directory_not_empty() -> FspError {
         FspError::NTSTATUS(0xC0000101_u32 as i32)
     }
+    pub fn status_not_a_directory() -> FspError {
+        FspError::NTSTATUS(0xC0000103_u32 as i32)
+    }
+    pub fn status_file_is_a_directory() -> FspError {
+        FspError::NTSTATUS(0xC00000BA_u32 as i32)
+    }
     pub fn status_invalid_handle() -> FspError {
         FspError::NTSTATUS(0xC0000008_u32 as i32)
     }
