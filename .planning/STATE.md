@@ -5,15 +5,15 @@ milestone_name: Metadata and Sharing Refactor
 current_phase: 74
 current_phase_name: Rust and FUSE Rotation-Revocation Soundness
 status: executing
-stopped_at: Completed 74-01-PLAN.md
-last_updated: "2026-07-11T03:36:34.620Z"
+stopped_at: Completed 74-04-PLAN.md
+last_updated: "2026-07-11T03:46:13.526Z"
 last_activity: 2026-07-11
 last_activity_desc: Phase 74 execution started
 progress:
   total_phases: 22
   completed_phases: 16
   total_plans: 195
-  completed_plans: 189
+  completed_plans: 190
   percent: 73
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 ## Current Position
 
 Phase: 74 (Rust and FUSE Rotation-Revocation Soundness) — EXECUTING
-Plan: 2 of 7
+Plan: 3 of 7
 Status: Ready to execute
 Last activity: 2026-07-11 — Phase 74 execution started
 
@@ -267,6 +267,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 72 P09 | 8min | 1 tasks | 5 files |
 | Phase 72 P10 | 10min | 2 tasks | 3 files |
 | Phase 74 P01 | 20min | 2 tasks | 1 files |
+| Phase 74 P04 | 15min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -588,6 +589,8 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: runFileVersionOp is not wrapped in withOperation itself -- each public method keeps its own withOperation(name) call for correct per-op telemetry attribution
 - [Phase ?]: write-body-params.ts standardizes the IPNS-resolve path on inline resolveIpnsRecord+fetchFromIpfs+JSON.parse (bin's pre-existing style) rather than client.ts's resolvePublishedNode wrapper, since the extra signatureVerified field was never consumed by getWriteBodyParams
 - [Phase ?]: 74-01: RotateReadResult.rotated_nodes (HashMap<String, RotatedNodeKey> keyed by ipns_name) surfaces every rotated node's post-rotation read key, populated at root/BFS-child/repair_dirty_node hooks; CommittedRotation stays host-agnostic
+- [Phase ?]: [Phase 74-04] No mock-HTTP crate exists in api-client dev-deps; added a minimal raw TcpListener capturing mock server in shares.rs test mod (mirrors fuse/delete.rs's spawn_mock_rotation_server) instead of pulling in wiremock/mockito
+- [Phase ?]: [Phase 74-04] update_grant accepts root_generation as u64 and formats to decimal string at the wire boundary, matching UpdateGrantDto's numeric-string contract
 
 ## Operator Next Steps
 
@@ -595,8 +598,8 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-11T03:36:34.612Z
-**Stopped at:** Completed 74-01-PLAN.md
+**Last session:** 2026-07-11T03:46:13.518Z
+**Stopped at:** Completed 74-04-PLAN.md
 **Resume file:** 
 
 None
