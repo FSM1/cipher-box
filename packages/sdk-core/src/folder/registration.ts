@@ -103,35 +103,44 @@ export async function createSubfolder(params: {
     keyEpoch = currentEpoch;
   }
 
-  // 6. Seal the Node with the generated keys
-  const publishedNode = await sealNode(node, readKey, writeKey);
+  try {
+    // 6. Seal the Node with the generated keys
+    const publishedNode = await sealNode(node, readKey, writeKey);
 
-  // 7. Upload sealed Node to IPFS
-  const { cid } = await addToIpfs(
-    params.ctx,
-    new TextEncoder().encode(JSON.stringify(publishedNode))
-  );
+    // 7. Upload sealed Node to IPFS
+    const { cid } = await addToIpfs(
+      params.ctx,
+      new TextEncoder().encode(JSON.stringify(publishedNode))
+    );
 
-  // 8. Publish first IPNS record — sequenceNumber MUST be 1n (Phase-60 strict gate)
-  await createAndPublishIpnsRecord({
-    ipnsPrivateKey,
-    ipnsName,
-    metadataCid: cid,
-    sequenceNumber: 1n,
-    ctx: params.ctx,
-    encryptedIpnsPrivateKey,
-    keyEpoch,
-  });
+    // 8. Publish first IPNS record — sequenceNumber MUST be 1n (Phase-60 strict gate)
+    await createAndPublishIpnsRecord({
+      ipnsPrivateKey,
+      ipnsName,
+      metadataCid: cid,
+      sequenceNumber: 1n,
+      ctx: params.ctx,
+      encryptedIpnsPrivateKey,
+      keyEpoch,
+    });
 
-  // 9. Return keys to caller — do NOT zero (caller is terminal owner, D-09)
-  return {
-    node,
-    ipnsPrivateKey,
-    rootReadKey: readKey,
-    rootWriteKey: writeKey,
-    encryptedIpnsPrivateKey,
-    keyEpoch,
-  };
+    // 9. Return keys to caller — do NOT zero (caller is terminal owner, D-09)
+    return {
+      node,
+      ipnsPrivateKey,
+      rootReadKey: readKey,
+      rootWriteKey: writeKey,
+      encryptedIpnsPrivateKey,
+      keyEpoch,
+    };
+  } catch (err) {
+    // The minted keys never reached the caller on this path — zero them
+    // (they are not the caller's responsibility until the success return above).
+    ipnsPrivateKey.fill(0);
+    readKey.fill(0);
+    writeKey.fill(0);
+    throw err;
+  }
 }
 
 /**
