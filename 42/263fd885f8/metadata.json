@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "42263fd885f8",
+  "strategy": "manual-commit",
+  "branch": "feat/cross-language-ipns-and-node-codec-verification-parity",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/75-cross-language-ipns-and-node-codec-verification-parity/75-SECURITY.md",
+    ".planning/security/REVIEW-2026-07-11-phase75-parity.md",
+    ".planning/todos/pending/2026-07-11-ts-validitytype-float-vs-integer-cbor-parity.md",
+    "crates/api-client/src/ipns.rs",
+    "packages/sdk-core/src/__tests__/ipns.test.ts",
+    "packages/sdk-core/src/ipns/index.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/42/263fd885f8/0/metadata.json",
+      "transcript": "/42/263fd885f8/0/full.jsonl",
+      "content_hash": "/42/263fd885f8/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  }
+}
