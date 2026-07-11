@@ -172,13 +172,13 @@ describe('TeeService', () => {
   describe('republish', () => {
     const sampleEntries: RepublishEntry[] = [
       {
-        encryptedIpnsKey: 'base64-encrypted-key-1',
+        encryptedIpnsPrivateKey: 'base64-encrypted-key-1',
         keyEpoch: 1,
         ipnsName: 'k51qzi5uqu5abc',
         signedRecord: 'base64-signed-record-input-1',
       },
       {
-        encryptedIpnsKey: 'base64-encrypted-key-2',
+        encryptedIpnsPrivateKey: 'base64-encrypted-key-2',
         keyEpoch: 1,
         ipnsName: 'k51qzi5uqu5def',
         signedRecord: 'base64-signed-record-input-2',
