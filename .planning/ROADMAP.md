@@ -912,8 +912,6 @@ Plans:
 2. Desktop `query_grants_rooted_at` returns live grants and retained recipients keep access post-rotation (desktop-e2e distinguishes retained vs revoked)
 3. WinFsp overwrite-rename cannot bypass the scope-exit gate; behavior matches the fuser path (Windows CI green)
 
-**Plans:** 13/13 plans complete
-
 Plans:
 
 - [ ] TBD (run /gsd-plan-phase 74 to break down)
