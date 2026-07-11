@@ -12,7 +12,12 @@
  */
 
 import { unwrapKey, wrapKey } from '@cipherbox/crypto';
-import { getKeypair, getInternalCurrentEpoch, getPublicKey } from './tee-keys.js';
+import {
+  getKeypair,
+  getInternalCurrentEpoch,
+  getPublicKey,
+  TeeKeyUnavailableError,
+} from './tee-keys.js';
 
 /**
  * Structured error emitted when a relay-supplied IPNS key is too old to renew.
@@ -91,7 +96,15 @@ export async function decryptWithFallback(
   try {
     const ipnsPrivateKey = await decryptIpnsKey(encryptedIpnsPrivateKey, keyEpoch);
     return { ipnsPrivateKey, usedEpoch: keyEpoch };
-  } catch {
+  } catch (err) {
+    // A config/infra failure from getKeypair (deployment misconfig, unexpected
+    // SDK return shape) must NOT be masked as a corrupted user key — rethrow the
+    // typed error via instanceof (mirrors the ReEnrollRequiredError convention,
+    // never string-matching error.message). Any other error (e.g. an epoch
+    // mismatch) falls through to the internal-current epoch trial.
+    if (err instanceof TeeKeyUnavailableError) {
+      throw new TeeKeyUnavailableError(err.message, { cause: err });
+    }
     // keyEpoch trial failed — try the internal-current epoch next
   }
 
@@ -101,7 +114,11 @@ export async function decryptWithFallback(
     try {
       const ipnsPrivateKey = await decryptIpnsKey(encryptedIpnsPrivateKey, internalCurrentEpoch);
       return { ipnsPrivateKey, usedEpoch: internalCurrentEpoch };
-    } catch {
+    } catch (err) {
+      // Same typed-error rethrow: a config/infra failure is not a decrypt failure.
+      if (err instanceof TeeKeyUnavailableError) {
+        throw new TeeKeyUnavailableError(err.message, { cause: err });
+      }
       // internal-current epoch also failed
     }
   }
