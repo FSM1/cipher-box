@@ -85,6 +85,8 @@ export { generateDeviceKeypair, deriveDeviceId, type DeviceKeypair } from './dev
 export {
   hexToBytes,
   bytesToHex,
+  bytesToBase64,
+  base64ToBytes,
   concatBytes,
   uuidToBytes,
   clearBytes,
