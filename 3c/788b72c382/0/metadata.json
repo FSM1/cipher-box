@@ -1,0 +1,136 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "3c788b72c382",
+  "session_id": "2b291057-9ece-4152-bb3e-94cc8f022c70",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-11T09:06:20.955033Z",
+  "branch": "feat/crypto-hygiene-and-terminology-canonicalization",
+  "checkpoints_count": 3,
+  "save_step_count": 1,
+  "files_touched": [
+    "apps/web/src/hooks/useSharedNavigationActions.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "009fff39dad6",
+  "token_usage": {
+    "input_tokens": 31468,
+    "cache_creation_tokens": 365057,
+    "cache_read_tokens": 16931418,
+    "output_tokens": 116506,
+    "api_call_count": 104
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-ship-phase-2026-07-10T21:51:44.372452Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "7154f28d72f3",
+      "timestamp": "2026-07-10T21:51:44.372452Z",
+      "native": {
+        "command": "/ship-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/ship-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "summary": {
+    "intent": "Ship GSD phase 73 (shared-write navigation correctness) fully autonomously through the standard post-execute-phase pipeline: verify, secure, crypto/privacy review, security review, validate, simplify, SDK E2E gate, CodeRabbit CLI review, PR creation, and PR review resolution.",
+    "outcome": "Phase 73 shipped as PR #603 with all gates green (verify, secure 17/17, crypto/privacy, security-review, Nyquist validation, 106/106 SDK E2E), three real bugs fixed (stale write-access refresh, stale WRITE-04 test contract, seq-consistency guard on refreshSharedFolder), 2 todos logged and 2 false positives correctly rebutted during PR review triage; PR was merged into main and fast-forwarded successfully.",
+    "learnings": {
+      "repo": [
+        "The local dev stack has a TEE-worker host-port collision: `TEE_WORKER_URL` defaults to `http://localhost:3001`, but `cipherbox-mock-ipns-routing` already claims host :3001, pushing the real tee-worker container to host :3002 — causes silent 404s and an empty `tee_key_state` table.",
+        "tee-worker `/public-key` endpoint is gated by `Authorization: Bearer $TEE_WORKER_SECRET` (apps/tee-worker/src/middleware/auth.ts) — the host-run API must also be given a matching TEE_WORKER_SECRET or pubkey fetch 401s and tee_key_state never seeds.",
+        "`tee_key_state` is populated by the API's TeeKeyStateService fetching the worker's pubkey at boot, not by the worker itself.",
+        "Phase 73 commit subjects were already conventional (`fix(73-08):`, `test(73-01):`) — the filter-branch reword step in the ship-phase runbook isn't always necessary; only non-versioned chore/docs commits had parens.",
+        "`.planning/todos/pending/2026-07-06-68.2-coderabbit-hardening-backlog.md` is the running hardening backlog for shared-nav/write-key issues — dedupe new findings into it rather than creating new todo files.",
+        "CodeRabbit's PR-level review commonly includes hallucinated cross-references to nonexistent phase numbers in `.planning/` doc nits — treat as noise, discard."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useSharedNavigationActions.ts",
+          "line": 268,
+          "finding": "refreshCurrentDepthWriteKey originally reseeded publishedNode from cached getSharedFolderState() instead of re-resolving via IPNS, so 'Refresh access' could never recover a co-writer stuck on stale-not-revoked state; fixed by mirroring the restoreToBreadcrumbIndex pattern (seed then refreshSharedFolder)."
+        },
+        {
+          "path": "apps/web/src/hooks/useSharedNavigationActions.ts",
+          "line": 552,
+          "finding": "restoreToBreadcrumbIndex's slice(0, crumbIndex) removes the target entry from the write-key stack before its buffer is transferred to currentWriteKeyRef at line 564, giving sole ownership — Greptile's writeKey-aliasing claim (twice) was a false positive; navigateToSubfolder also nulls the source buffer immediately after pushing (transfer-and-null), preventing use-after-free/aliasing."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 5674,
+          "finding": "publishedParent resolve added in phase 73 uses raw resolvePublishedNode without the ROT-07 gate applied to sibling reads; mitigated by seq-monotonicity guard + server CAS, judged non-blocking LOW and logged as a defense-in-depth todo rather than fixed."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 5680,
+          "finding": "refreshSharedFolder adopted children/seq from one resolve but publishedNode from another with no consistency check, risking seeding an older envelope than the adopted children; fixed with a seq-consistency guard mirroring doReresolveFolderInPlace (commit 6c1d6817b)."
+        },
+        {
+          "path": "tests/sdk-e2e/src/suites/ipns-publish-gate.test.ts",
+          "line": 20,
+          "finding": "Test 20 (WRITE-04) asserted the old throw-on-410 contract for createAndPublishIpnsRecord, but phase 73 changed it to catch 410 and return {success:false, tombstoned:true}; updated the test to the new return-value contract after confirming no production caller relied on the old throw."
+        }
+      ],
+      "workflow": [
+        "Running independent gate checks (secure/crypto/security/validate agents, SDK E2E, CodeRabbit CLI) as parallel background tasks let the ship-phase pipeline proceed without idle waiting.",
+        "Piping a long-running test command's exit code through another command can mask the real exit status (`exit code 0` reported but actual run had failures) — check actual output, not just the piped exit code.",
+        "When an E2E suite fails, isolate whether failures are infra-config issues vs code regressions by cross-checking against what the phase diff actually touched before spending fix effort.",
+        "For PR review threads flagging the same code area across CLI and PR-level passes (or re-raised after a fix), tracing the actual buffer/object lifecycle in code beats trusting the reviewer's suggested fix — a suggested clone-without-zero fix was shown to introduce a real security regression (unzeroed key leak).",
+        "Dedupe new review findings into an existing todo backlog file (by appending/editing an item) rather than creating new todo files, to keep the pending todos directory from sprawling."
+      ]
+    },
+    "friction": [
+      "SDK E2E gate initially failed 3/106 due to local-only TEE-worker stack misconfiguration (port collision + missing auth secret) unrelated to the phase, requiring a lengthy root-cause detour (container status, DB inspection, auth header tracing) before confirming it wasn't a regression.",
+      "A backgrounded bash command reported exit code 0 in the task-notification summary while the actual run had exit code 1 with 3 failing tests — the notification/exit-code surfacing was misleading and required manually re-checking output.",
+      "`gh pr checks`/API calls hit a transient network timeout requiring a retry.",
+      "CodeRabbit's PR-level review included hallucinated references to nonexistent phase numbers in doc nits, adding noise to triage."
+    ],
+    "open_items": [
+      "Ungated publishedParent write-base resolve at packages/sdk/src/client.ts:5674 logged as defense-in-depth todo (appended to 68.2 hardening backlog) — not fixed, judged mitigated but worth future hardening.",
+      "Greptile P1 in-flight descent-vs-restore race (useSharedNavigationActions.ts:419) logged as backlog item 11 — needs a generation/cancellation token; judged too risky to rush at ship time.",
+      "User asked whether to watch the main-push-gated web-e2e run (writable-shares, shared-folder-desync, rotation-ux specs) that will execute for the first time against the merged main — awaiting user response.",
+      "API left running locally on :3000 with corrected TEE_WORKER_URL=:3002 as a byproduct of the debugging session; docker infra otherwise untouched.",
+      "Phase 73 PR #603 has been merged to main; merge decision itself was explicitly left to the user throughout, now resolved by the user's own git pull."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-11T09:05:50.495255Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 26,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 26,
+    "total_lines_changed": 231,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
