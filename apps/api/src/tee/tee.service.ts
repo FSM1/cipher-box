@@ -12,7 +12,7 @@ import type { ConnectionTestResponseDto } from './dto/connection-test.dto';
  */
 export interface RepublishEntry {
   /** Base64-encoded ECIES-encrypted IPNS Ed25519 private key (from ipns_records) */
-  encryptedIpnsKey: string;
+  encryptedIpnsPrivateKey: string;
   /** TEE key epoch the IPNS key was encrypted for (from ipns_records) */
   keyEpoch: number;
   /** IPNS name (k51... or bafzaa...) */

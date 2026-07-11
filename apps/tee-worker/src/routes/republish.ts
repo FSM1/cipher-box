@@ -55,7 +55,7 @@ const router = Router();
  * All signing inputs come from the marshaled signedRecord; epoch is self-derived.
  */
 interface RepublishEntry {
-  encryptedIpnsKey: string; // base64-encoded ECIES ciphertext of the IPNS Ed25519 private key
+  encryptedIpnsPrivateKey: string; // base64-encoded ECIES ciphertext of the IPNS Ed25519 private key
   keyEpoch: number; // epoch the key is recorded as encrypted for (from ipns_records.key_epoch)
   ipnsName: string; // IPNS name (CIDv1 base36)
   signedRecord: string; // base64-encoded marshaled existing IPNS record
@@ -118,9 +118,11 @@ router.post('/republish', async (req: Request, res: Response) => {
       }
 
       // ── Step 4: Decrypt IPNS key using internal-epoch authority (D-03 / 67-02) ─
-      const encryptedIpnsKey = new Uint8Array(Buffer.from(entry.encryptedIpnsKey, 'base64'));
+      const encryptedIpnsPrivateKey = new Uint8Array(
+        Buffer.from(entry.encryptedIpnsPrivateKey, 'base64')
+      );
       const { ipnsPrivateKey: decryptedKey, usedEpoch } = await decryptWithFallback(
-        encryptedIpnsKey,
+        encryptedIpnsPrivateKey,
         entry.keyEpoch
       );
       ipnsPrivateKey = decryptedKey;
