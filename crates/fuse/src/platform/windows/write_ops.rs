@@ -1096,21 +1096,47 @@ pub mod implementation {
         let (new_parent_ino, _) =
             resolve_path(&fs, new_parent_path).ok_or(status_object_name_not_found())?;
 
+        // D-15d (74-06, mirrors write_ops/implementation/rename.rs): the
+        // replace_if_exists==false collision check is UNCONDITIONAL and stays
+        // first — it can never be affected by scope-exit gating either way.
+        let dest_ino = fs.inodes.find_child(new_parent_ino, new_name);
+        if dest_ino.is_some() && !replace_if_exists {
+            return Err(status_object_name_collision());
+        }
+
+        // D-15d: destination-REPLACEMENT POSIX-equivalent validation runs
+        // BEFORE any scope-exit gate. A rename that will fail
+        // STATUS_DIRECTORY_NOT_EMPTY must never trigger a rotation — validate
+        // first, gate second, mutate third.
+        if let Some(dest_ino) = dest_ino {
+            if let Some(dest_inode) = fs.inodes.get(dest_ino) {
+                if let InodeKind::Folder { .. } = &dest_inode.kind {
+                    if let Some(ref children) = dest_inode.children {
+                        if !children.is_empty() {
+                            return Err(status_directory_not_empty());
+                        }
+                    }
+                }
+            }
+        }
+
         // SC#3 grant-scope gate (69-14, mirrors write_ops/implementation/rename.rs)
         // for a cross-folder move (a scope-exit for the source subtree). A
         // same-folder rename is NOT a scope exit — the node stays in place, so
-        // no rotation. Computed on the SOURCE ancestry BEFORE any inode mutation
-        // so a fail-closed rotation aborts the move cleanly (item stays put).
-        // Private move -> pure SealedChildRef relink of both parents (ZERO
-        // rotation, D-08 unlink+bin-equivalent with no cross-principal revoke);
-        // shared-scope exit -> rotate the read key from the matched grant-root
-        // ancestor EXACTLY ONCE. D-07 dual-keying is threaded inside the driver.
+        // no rotation. Computed on the SOURCE ancestry AFTER the
+        // destination-replacement POSIX validation above (D-15d) but BEFORE
+        // any inode mutation, so a fail-closed rotation aborts the move
+        // cleanly (item stays put). Private move -> pure SealedChildRef relink
+        // of both parents (ZERO rotation, D-08 unlink+bin-equivalent with no
+        // cross-principal revoke); shared-scope exit -> rotate the read key
+        // from the matched grant-root ancestor EXACTLY ONCE. D-07 dual-keying
+        // is threaded inside the driver.
         //
         // SC#2: a cross-folder move is now a PURE SealedChildRef relink — each
         // node self-seals under its OWN readKey, so there is no per-file
         // metadata to re-encrypt on move (the legacy re-encrypt-on-move path is
         // dead by construction and deleted). The read-scope cut for a shared
-        // move is handled by the grant-scope gate below (rotation), not by
+        // move is handled by the grant-scope gates below (rotation), not by
         // re-keying the moved file.
         if old_parent_ino != new_parent_ino
             && crate::write_ops::grant_scope::run_scope_exit_gate(&mut fs, source_ino).is_err()
@@ -1118,30 +1144,34 @@ pub mod implementation {
             return Err(status_io_device_error());
         }
 
-        if let Some(dest_ino) = fs.inodes.find_child(new_parent_ino, new_name) {
-            if !replace_if_exists {
-                return Err(status_object_name_collision());
+        // D-15d: gate the OVERWRITTEN destination's OWN scope-exit too.
+        // Replacing a destination removes dest_ino outright — that is itself a
+        // scope-exit for dest_ino's subtree whenever dest_ino is (or roots) a
+        // shared node, regardless of whether the move is same-folder or
+        // cross-folder. Runs AFTER the POSIX validation above (a doomed
+        // rename never reaches here) and independently of the source gate
+        // (two independent scope-exits). Uses the PLAIN (non-coalesced) gate
+        // — matches the fuser rename.rs reference, which does not coalesce
+        // either gate for rename.
+        if let Some(dest_ino) = dest_ino {
+            if crate::write_ops::grant_scope::run_scope_exit_gate(&mut fs, dest_ino).is_err() {
+                return Err(status_access_denied());
             }
+        }
+
+        // Destination replacement mutation (validated + gated above): unpin
+        // the replaced file's content (fire-and-forget) and remove its inode.
+        if let Some(dest_ino) = dest_ino {
             if let Some(dest_inode) = fs.inodes.get(dest_ino) {
-                match &dest_inode.kind {
-                    InodeKind::Folder { .. } => {
-                        if let Some(ref children) = dest_inode.children {
-                            if !children.is_empty() {
-                                return Err(status_directory_not_empty());
-                            }
-                        }
+                if let InodeKind::File { cid, .. } = &dest_inode.kind {
+                    if !cid.is_empty() {
+                        let cid_clone = cid.clone();
+                        let api = fs.api.clone();
+                        fs.rt.spawn(async move {
+                            let _ =
+                                cipherbox_api_client::ipfs::unpin_content(&api, &cid_clone).await;
+                        });
                     }
-                    InodeKind::File { cid, .. } => {
-                        if !cid.is_empty() {
-                            let cid_clone = cid.clone();
-                            let api = fs.api.clone();
-                            fs.rt.spawn(async move {
-                                let _ = cipherbox_api_client::ipfs::unpin_content(&api, &cid_clone)
-                                    .await;
-                            });
-                        }
-                    }
-                    _ => {}
                 }
             }
             fs.publish_queue.remove(&dest_ino);
