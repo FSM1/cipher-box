@@ -1,0 +1,184 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "d9e2d7aa46c2",
+  "session_id": "ef60a1b1-a4fc-441e-ae97-6c920db58f3b",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-11T20:07:51.557448Z",
+  "branch": "feat/crypto-hygiene-and-terminology-canonicalization",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "65fff7d56b1f",
+  "checkpoint_transcript_start": 693,
+  "transcript_lines_at_start": 693,
+  "token_usage": {
+    "input_tokens": 724,
+    "cache_creation_tokens": 37370,
+    "cache_read_tokens": 3650463,
+    "output_tokens": 12639,
+    "api_call_count": 14
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-ship-phase-2026-07-11T19:28:59.903797Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "22c7e69a20b3",
+      "timestamp": "2026-07-11T19:28:59.903797Z",
+      "native": {
+        "command": "/ship-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/ship-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01HVgv8cABxyxWtwU5LMG187",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-secure-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "65fff7d56b1f",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 72,
+        "end": 73,
+        "entry_ids": [
+          "a4bb9db0-5bd9-4f02-a52c-4a06d4f4246a"
+        ],
+        "tool_use_id": "toolu_01HVgv8cABxyxWtwU5LMG187"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01HVgv8cABxyxWtwU5LMG187"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-secure-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_0112T1RP6DpTthWyvYid9JNu",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-validate-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "65fff7d56b1f",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 289,
+        "end": 290,
+        "entry_ids": [
+          "01f6ee02-6f81-41a6-ba95-99d1cbbf68a9"
+        ],
+        "tool_use_id": "toolu_0112T1RP6DpTthWyvYid9JNu"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_0112T1RP6DpTthWyvYid9JNu"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-validate-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01K7Xt7qARxFo5Ph1C8GfQia",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-extract-learnings"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "65fff7d56b1f",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 742,
+        "end": 743,
+        "entry_ids": [
+          "0455371a-db53-48c1-8ac7-478c5b0ff6a2"
+        ],
+        "tool_use_id": "toolu_01K7Xt7qARxFo5Ph1C8GfQia"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01K7Xt7qARxFo5Ph1C8GfQia"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-extract-learnings",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Ship phase 77 (crypto-hygiene-and-terminology-canonicalization) of the CipherBox project by triaging CodeRabbit feedback, opening the PR, and running the GSD extract-learnings workflow to capture institutional knowledge from the completed phase.",
+    "outcome": "PR #609 was created and pushed with a full body (56 commits), CI began running (lint-pr-title and Verify E2E passed; Release Preview/Greptile/CodeRabbit pending), and a delegated sub-agent extracted phase 77 learnings (5 decisions / 6 lessons / 5 patterns / 4 surprises) into 77-LEARNINGS.md. The learnings commit + rebase to reconcile any bot `chore(release)` commit was in progress when the transcript ends.",
+    "learnings": {
+      "repo": [
+        "PR title must be conventional-commit style and paren-free for the lint-pr-title CI check to pass.",
+        "gh pr create's body arg isn't reliable for full PR descriptions in this repo's workflow — the body is set afterward via `gh api` PATCH on the PR.",
+        "CodeRabbit nitpicks on this repo frequently include false positives worth discarding: test-only zeroization suggestions, a canonical-codec micro-opt that would risk byte parity, a false positive on a hex-string field, and a premature STATE.md cursor bump."
+      ],
+      "code": [],
+      "workflow": [
+        "extract-learnings (GSD workflow) requires PLAN.md + SUMMARY.md and optionally reads VERIFICATION.md/UAT.md/STATE.md, then writes {phase}-LEARNINGS.md with YAML frontmatter counting decisions/lessons/patterns/surprises; re-running it overwrites rather than appends.",
+        "Delegating learnings synthesis to a sub-agent keeps the orchestrator's context lean while large phase artifacts are digested.",
+        "Background CI/PR-review polling and learnings extraction can be run concurrently — kick off the slow review step, then do extract-learnings while waiting, and use ScheduleWakeup to resume once both progress.",
+        "Before committing a post-CI artifact (like LEARNINGS.md), fetch+rebase first in case a bot has landed a `chore(release)` commit in the interim, to avoid a divergent push."
+      ]
+    },
+    "friction": [
+      "Sandbox had to be disabled to push the phase branch.",
+      "CI checks (Release Preview, Greptile, CodeRabbit PR-level review) took minutes to complete, requiring background polling and a scheduled wakeup rather than a synchronous wait.",
+      "Uncertainty around whether a bot `chore(release)` commit would land before the learnings commit, requiring a defensive rebase step."
+    ],
+    "open_items": [
+      "CodeRabbit/Greptile PR-level review resolution on PR #609 was not yet handled — deferred until CI finishes.",
+      "Learnings commit (77-LEARNINGS.md) had not been pushed yet at transcript end; rebase-and-push step was in progress.",
+      "SHARE-WRITE-KEY gap (write-share key threading) remains open per existing project memory, unrelated to this session's direct work but still outstanding in the codebase."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 180,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/phases/77-crypto-hygiene-and-terminology-canonicalization/77-LEARNINGS.md": 179
+      }
+    }
+  ]
+}
