@@ -597,6 +597,13 @@ impl CipherBoxFS {
                 // VecDeque) instead of being silently dropped. The queue is drained first
                 // on each refresh cycle so nothing is lost between cycles.
                 const MAX_CONCURRENT_FP_RESOLVES: usize = 10;
+                // SC2 item 2: the cap is GLOBAL (cross-cycle), not per-cycle. Prior
+                // cycles may still have in-flight resolves tracked in
+                // resolving_file_pointers; this cycle may only spawn up to what keeps
+                // the total in-flight count at or under the cap. Without this, each
+                // fresh cycle would seed `spawned = 0` and overshoot the global cap.
+                let cycle_budget =
+                    MAX_CONCURRENT_FP_RESOLVES.saturating_sub(self.resolving_file_pointers.len());
                 let mut spawned = 0;
                 // Inodes staged or re-queued THIS cycle. resolving_file_pointers is only
                 // updated in the spawn loop below (after both passes), so without this a
@@ -614,7 +621,7 @@ impl CipherBoxFS {
                     {
                         continue; // Already in-flight, or already drained this cycle
                     }
-                    if spawned >= MAX_CONCURRENT_FP_RESOLVES {
+                    if spawned >= cycle_budget {
                         // Still over cap — put it back at the front and stop draining
                         scheduled_this_cycle.remove(&entry.0);
                         self.pending_fp_resolves.push_front(entry);
@@ -640,7 +647,7 @@ impl CipherBoxFS {
                         Some(crate::inode::InodeKind::File { read_key, .. }) => **read_key,
                         _ => continue,
                     };
-                    if spawned >= MAX_CONCURRENT_FP_RESOLVES {
+                    if spawned >= cycle_budget {
                         // D-09: push to continuation queue instead of silent drop.
                         scheduled_this_cycle.insert(fp_ino);
                         self.pending_fp_resolves
@@ -859,6 +866,69 @@ mod drain_refresh_completions_tests {
         }]
     }
 
+    /// Insert a distinctly-named resolved file child of root (for the global-cap
+    /// test — each needs a unique display name + ipns identity so
+    /// mark_remotely_edited_files_unresolved matches them 1:1).
+    fn insert_named_resolved_file(fs: &mut crate::CipherBoxFS, idx: usize, mtime_ms: u64) -> u64 {
+        let ino = fs.inodes.allocate_ino();
+        let mtime = UNIX_EPOCH + Duration::from_millis(mtime_ms);
+        fs.inodes.insert(InodeData {
+            ino,
+            node_id: crate::fs::uuid_from_ino(ino),
+            parent_ino: ROOT_INO,
+            name: format!("file-{idx}.txt"),
+            kind: InodeKind::File {
+                ipns_name: format!("k51file-{idx}"),
+                cid: "bafyOLDcid".to_string(),
+                size: 42,
+                encryption_mode: "GCM".to_string(),
+                iv: "aabbccdd".to_string(),
+                read_key: Zeroizing::new([7u8; 32]),
+                write_key: Zeroizing::new([8u8; 32]),
+                ipns_private_key: Zeroizing::new(vec![3u8; 32]),
+            },
+            attr: FileAttrs {
+                ino,
+                size: 42,
+                blocks: 1,
+                atime: mtime,
+                mtime,
+                ctime: mtime,
+                crtime: mtime,
+                is_dir: false,
+                perm: 0o644,
+                nlink: 1,
+            },
+            children: None,
+            write_generation: 0,
+        });
+        if let Some(root) = fs.inodes.get_mut(ROOT_INO) {
+            root.children.get_or_insert_with(Vec::new).push(ino);
+        }
+        ino
+    }
+
+    /// A node/v3 owned listing carrying `count` files at the matching identities/names
+    /// produced by `insert_named_resolved_file`, each with remote `modified_at`.
+    fn refresh_children_many(count: usize, file_mtime_ms: u64) -> Vec<ResolvedOwnedChild> {
+        (0..count)
+            .map(|idx| ResolvedOwnedChild {
+                child: ResolvedChild {
+                    ipns_name: format!("k51file-{idx}"),
+                    name: format!("file-{idx}.txt"),
+                    kind: NodeKind::File,
+                    size: Some(42),
+                    modified_at: file_mtime_ms,
+                    sequence: 1,
+                },
+                node_id: format!("nodeid-{idx}"),
+                read_key: Zeroizing::new([7u8; 32]),
+                write_key: Zeroizing::new([8u8; 32]),
+                ipns_private_key: Zeroizing::new(vec![3u8; 32]),
+            })
+            .collect()
+    }
+
     fn is_unresolved(fs: &crate::CipherBoxFS, ino: u64) -> bool {
         matches!(
             &fs.inodes.get(ino).unwrap().kind,
@@ -944,6 +1014,59 @@ mod drain_refresh_completions_tests {
         );
         assert!(fs.resolving_file_pointers.contains(&file_ino));
         assert!(fs.metadata_cache.get(ROOT_IPNS).is_some());
+    }
+
+    /// SC2 item 2: the FP-resolve cap is GLOBAL across refresh cycles, not
+    /// per-cycle. With 15 resolved children all flipped unresolved by a newer
+    /// remote edit (gated path), cycle 1 spawns at most the cap (10) and queues the
+    /// rest. A second consecutive cycle — with the cycle-1 resolves still in-flight
+    /// (the fire-and-forget tasks target an unroutable API and are never awaited or
+    /// drained here) — must spawn ZERO more, so the global in-flight count never
+    /// overshoots the cap. Before the fix, each cycle seeded `spawned = 0` and could
+    /// spawn 10 MORE on top of the prior cycle's in-flight set.
+    #[tokio::test]
+    async fn fp_resolve_global_cap_holds_across_two_cycles() {
+        const CAP: usize = 10;
+        let total = 15;
+        let mut fs = make_test_fs();
+        for i in 0..total {
+            insert_named_resolved_file(&mut fs, i, 1_700_000_000_000);
+        }
+
+        // Cycle 1 — gated path: all 15 remote edits are newer -> unresolved -> enqueue.
+        fs.mutated_folders
+            .insert(ROOT_INO, std::time::Instant::now());
+        send_refresh(&fs, refresh_children_many(total, 1_700_001_000_000));
+        fs.drain_refresh_completions();
+        assert!(
+            fs.resolving_file_pointers.len() <= CAP,
+            "cycle 1 in-flight {} must not exceed cap {}",
+            fs.resolving_file_pointers.len(),
+            CAP
+        );
+        assert_eq!(
+            fs.resolving_file_pointers.len(),
+            CAP,
+            "cycle 1 should fill the cap (15 unresolved, cap 10)"
+        );
+        let after_cycle1 = fs.resolving_file_pointers.len();
+
+        // Cycle 2 — prior resolves still in-flight. Budget = CAP - CAP = 0.
+        fs.mutated_folders
+            .insert(ROOT_INO, std::time::Instant::now());
+        send_refresh(&fs, refresh_children_many(total, 1_700_002_000_000));
+        fs.drain_refresh_completions();
+        assert!(
+            fs.resolving_file_pointers.len() <= CAP,
+            "cycle 2 in-flight {} must not exceed the GLOBAL cap {}",
+            fs.resolving_file_pointers.len(),
+            CAP
+        );
+        assert_eq!(
+            fs.resolving_file_pointers.len(),
+            after_cycle1,
+            "cycle 2 must not spawn beyond the global cap (no cross-cycle overshoot)"
+        );
     }
 
     /// A `PendingRefresh::Failure` clears the in-flight `refreshing_metadata`
