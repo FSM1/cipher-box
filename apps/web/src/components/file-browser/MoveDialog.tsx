@@ -3,6 +3,8 @@ import type { SealedChildRef } from '@cipherbox/core';
 import { Modal } from '../ui/Modal';
 import { useFolderStore, type FolderNode } from '../../stores/folder.store';
 import { getDepth, isDescendantOf } from '@cipherbox/sdk';
+import type { ResolvedChild } from '@cipherbox/sdk';
+import { isFileRefResolved } from '../../utils/fileTypes';
 import '../../styles/dialogs.css';
 
 /** Maximum folder nesting depth per FOLD-03 */
@@ -21,6 +23,13 @@ type MoveDialogProps = {
   items?: SealedChildRef[];
   /** Current parent folder ID of the item(s) */
   currentFolderId: string;
+  /**
+   * SDK-resolved listing keyed by `ipnsName` (79-06). Used to classify each
+   * moved item's real kind so the cannot-move-into-own-subtree cycle guard
+   * only treats actual folder-kind items as folders — a file cannot create a
+   * folder cycle.
+   */
+  resolvedByIpnsName: Map<string, ResolvedChild>;
   /** Loading state - disables buttons */
   isLoading?: boolean;
 };
@@ -41,12 +50,17 @@ type FolderListItem = {
 function buildFolderList(
   folders: Record<string, FolderNode>,
   items: SealedChildRef[],
-  currentFolderId: string
+  currentFolderId: string,
+  resolvedByIpnsName: Map<string, ResolvedChild>
 ): FolderListItem[] {
   const result: FolderListItem[] = [];
-  // TODO(phase 63): SealedChildRef has no .type or .id; use ipnsName as identifier
-  // phase-63 stub: treat all items as folders (conservative: all cycle-guard paths active)
-  const folderItemIds = new Set(items.map((i) => i.ipnsName));
+  // Only actual folder-kind items can create a move-into-own-subtree cycle, so
+  // the cycle-guard set is restricted to folders (a file being moved must not
+  // disable any destination). Kind is resolved against the SDK listing keyed by
+  // ipnsName; a miss stays folder-safe (isFileRefResolved returns false).
+  const folderItemIds = new Set(
+    items.filter((i) => !isFileRefResolved(i, resolvedByIpnsName)).map((i) => i.ipnsName)
+  );
   const hasFolders = folderItemIds.size > 0;
 
   // Add root folder
@@ -168,6 +182,7 @@ export function MoveDialog({
   item,
   items: itemsProp,
   currentFolderId,
+  resolvedByIpnsName,
   isLoading = false,
 }: MoveDialogProps) {
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
@@ -188,8 +203,8 @@ export function MoveDialog({
   // Build folder list
   const folderList = useMemo(() => {
     if (resolvedItems.length === 0) return [];
-    return buildFolderList(folders, resolvedItems, currentFolderId);
-  }, [folders, resolvedItems, currentFolderId]);
+    return buildFolderList(folders, resolvedItems, currentFolderId, resolvedByIpnsName);
+  }, [folders, resolvedItems, currentFolderId, resolvedByIpnsName]);
 
   // Reset selection when dialog opens
   useEffect(() => {
@@ -266,8 +281,8 @@ export function MoveDialog({
     [handleSelectFolder]
   );
 
-  // TODO(phase 63): SealedChildRef has no .type; default to 'Move Item'
-  const title = isBatch ? `Move ${resolvedItems.length} Items` : 'Move Item'; // phase-63 stub: kind unknown until Node.kind discrimination
+  // Kind-neutral title: valid for both file and folder single-item moves.
+  const title = isBatch ? `Move ${resolvedItems.length} Items` : 'Move Item';
   const label = isBatch
     ? `Move ${resolvedItems.length} selected items to:`
     : `Move "${resolvedItems[0]?.name}" to:`;
