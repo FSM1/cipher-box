@@ -956,7 +956,7 @@ Plans:
 2. A hex-encoded `file_iv` fails the node-codec KAT (base64-only sample values)
 3. TS and Rust accept exactly the same UUID acceptance domain in the AAD builder, locked by a cross-language KAT
 
-**Plans:** 3/5 plans executed
+**Plans:** 4/5 plans executed
 
 Plans:
 **Wave 1**
@@ -967,7 +967,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 75-02-PLAN.md — Rust ValidityType==0 EOL binding + classify_vector dedup to pub bind_verified [wave 2]
+- [x] 75-02-PLAN.md — Rust ValidityType==0 EOL binding + classify_vector dedup to pub bind_verified [wave 2]
 - [ ] 75-03-PLAN.md — TS strict RFC3339 parse + ValidityType==0 gate in resolveIpnsRecord [wave 2]
 
 ### Phase 76: FUSE Durability and TEE Write-Path Hardening
