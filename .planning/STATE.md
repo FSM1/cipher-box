@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
-current_phase: 75
-current_phase_name: Cross-Language IPNS and Node-Codec Verification Parity
+current_phase: 76
+current_phase_name: FUSE Durability and TEE Write-Path Hardening
 status: verifying
 stopped_at: Completed 75-04-PLAN.md
-last_updated: "2026-07-11T06:49:38.863Z"
+last_updated: "2026-07-11T07:00:20.944Z"
 last_activity: 2026-07-11
-last_activity_desc: Phase 75 execution started
+last_activity_desc: Phase 75 complete, transitioned to Phase 76
 progress:
   total_phases: 22
   completed_phases: 17
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-06-27)
 
 ## Current Position
 
-Phase: 75 (Cross-Language IPNS and Node-Codec Verification Parity) — EXECUTING
-Plan: 5 of 5
+Phase: 76 — FUSE Durability and TEE Write-Path Hardening
+Plan: Not started
 Status: Phase complete — ready for verification
-Last activity: 2026-07-11 — Phase 75 execution started
+Last activity: 2026-07-11 — Phase 75 complete, transitioned to Phase 76
 
 Progress: `██████████` 79 / 79 plans (100%)
 
