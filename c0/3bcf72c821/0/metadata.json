@@ -1,0 +1,131 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "c03bcf72c821",
+  "session_id": "ef60a1b1-a4fc-441e-ae97-6c920db58f3b",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-11T19:38:48.266156Z",
+  "branch": "feat/crypto-hygiene-and-terminology-canonicalization",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "packages/crypto/src/utils/encoding.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "22c7e69a20b3",
+  "token_usage": {
+    "input_tokens": 20312,
+    "cache_creation_tokens": 110324,
+    "cache_read_tokens": 3691952,
+    "output_tokens": 32656,
+    "api_call_count": 38
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-ship-phase-2026-07-11T19:28:59.903797Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "22c7e69a20b3",
+      "timestamp": "2026-07-11T19:28:59.903797Z",
+      "native": {
+        "command": "/ship-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/ship-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01HVgv8cABxyxWtwU5LMG187",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-secure-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "22c7e69a20b3",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 72,
+        "end": 73,
+        "entry_ids": [
+          "a4bb9db0-5bd9-4f02-a52c-4a06d4f4246a"
+        ],
+        "tool_use_id": "toolu_01HVgv8cABxyxWtwU5LMG187"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01HVgv8cABxyxWtwU5LMG187"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-secure-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "summary": {
+    "intent": "Run GSD's ship-phase loop for phase 77 (crypto-hygiene-and-terminology-canonicalization) autonomously: verify, secure, validate, simplify, SDK E2E gate, CodeRabbit, ship, and resolve PR reviews, triaging every finding per a strict fix/todo/discard rule.",
+    "outcome": "Completed verify (already passed), secure (State B short-circuit, SECURITY.md authored), and the parallel crypto/privacy + security + simplify review passes; fixed a real key-zeroization gap in registration.ts, a stale comment in encoding.ts, added a locking test, and committed the fixes. Validate, SDK E2E gate, CodeRabbit, ship, and PR-review resolution steps were still pending at transcript end.",
+    "learnings": {
+      "repo": [
+        "gsd-secure-phase's Step 3 short-circuit rule: if threats_open=0 AND register_authored_at_plan_time=true AND ASVS level==1, skip spawning the gsd-security-auditor entirely and go straight to writing SECURITY.md from the template — only spot-check the highest-severity mitigations manually.",
+        "packages/sdk/src/client.ts's sharedFile* codecs are pre-existing from phase 68.2-08 and serve a distinct web↔sdk hex/base64 boundary — folding them into a phase's dedup cleanup is out-of-scope creep even when a simplify pass flags them.",
+        "wrap.ts's 1:1 passthrough is a deliberate D-09 seam with test coverage, not dead code — discard simplify findings targeting it.",
+        "The zeroization pattern (start `try` immediately after key generation so every post-mint throw path — including early validation throws — zeroes minted keys) lives canonically in file/index.ts; other folder/file registration code should mirror it."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/folder/registration.ts",
+          "finding": "TEE-wrap block sat outside the try block; a malformed TEE pubkey throwing in hexToBytes leaked the 3 minted keys. Fixed by moving the try to start right after key generation, matching file/index.ts's pattern, so early validation throws (previously at lines ~88/93) also zero out."
+        },
+        {
+          "path": "packages/sdk-core/src/__tests__/folder.test.ts",
+          "finding": "The @cipherbox/crypto test mock omits hexToBytes, bytesToHex, and wrapIpnsKeyForTee — a naive TEE-wrap-throw test fails with an unrelated 'undefined function' error unless those are explicitly mocked."
+        },
+        {
+          "path": "packages/crypto/src/utils/encoding.ts",
+          "finding": "Contained a stale provenance comment in phase 77's own new file; corrected as part of the simplify pass."
+        }
+      ],
+      "workflow": [
+        "Launching independent review passes (crypto/privacy review, general security sweep, simplify scan) as parallel background agents while running the GSD write-artifact gates (secure, validate) inline avoids idle wall-clock time.",
+        "Don't trust a subagent's specific code claims (e.g. 'client.ts already imports X') at face value — grep/read to verify before acting, since the underlying dedup finding can still be valid even if the agent's supporting detail is wrong.",
+        "Behavioral fixes found during security triage (e.g. widening a try block) warrant a purpose-built regression test, not just relying on existing forced-throw tests — check what the mocks actually cover before assuming an existing test would catch a regression."
+      ]
+    },
+    "friction": [
+      "Simplify-scan subagent asserted client.ts already imported the sharedFile* codecs, which was false per grep — required manual verification before deciding disposition.",
+      "folder.test.ts's crypto mock silently omits several functions (hexToBytes, bytesToHex, wrapIpnsKeyForTee) needed for the new zeroization test, requiring extra investigation of imports and mock wiring before the test could be written correctly."
+    ],
+    "open_items": [
+      "Validate (Nyquist) gate, SDK E2E gate, CodeRabbit CLI review, ship, and PR-review resolution steps (3 through 11 of ship-phase) had not yet run as of transcript end.",
+      "Simplify finding on pre-existing inline atob/btoa usage in untouched files was discarded as out-of-scope for phase 77.",
+      "ForbiddenException 'possibly unused' flag from the security sweep was checked and confirmed a false positive — no action needed."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-11T19:38:20.176337Z",
+    "agent_lines": 4,
+    "agent_removed": 4,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 4,
+    "total_lines_changed": 8,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
