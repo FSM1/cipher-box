@@ -642,3 +642,7 @@ FAIL: overwrite-rename of sourceFile.txt onto destFile.txt did not succeed after
 ---
 
 I think that this, being macos deserves to be addressed now on this PR and not later. The investigation should start with replicating the failure locally since that will be the quickest way to get a root cause and making sure the macos desktop e2e passes after root cause is identified and a fix is applied.
+
+---
+
+yeah please push this up to the #607 branch and kick off a full ci-e2e run against the branch
