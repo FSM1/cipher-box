@@ -3,7 +3,7 @@
   "checkpoint_id": "4f7e2b3523c0",
   "strategy": "manual-commit",
   "branch": "feat/rust-and-fuse-rotation-revocation-soundness",
-  "checkpoints_count": 1,
+  "checkpoints_count": 3,
   "files_touched": [
     ".github/workflows/desktop-e2e.yml",
     ".planning/todos/pending/2026-07-11-desktop-rust-client-no-token-refresh-on-401.md",
@@ -15,13 +15,19 @@
       "transcript": "/4f/7e2b3523c0/0/full.jsonl",
       "content_hash": "/4f/7e2b3523c0/0/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/4f/7e2b3523c0/1/metadata.json",
+      "transcript": "/4f/7e2b3523c0/1/full.jsonl",
+      "content_hash": "/4f/7e2b3523c0/1/content_hash.txt",
+      "prompt": "/4f/7e2b3523c0/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 0,
-    "cache_creation_tokens": 0,
-    "cache_read_tokens": 0,
-    "output_tokens": 0,
-    "api_call_count": 0
+    "input_tokens": 153237,
+    "cache_creation_tokens": 3064434,
+    "cache_read_tokens": 179582665,
+    "output_tokens": 731986,
+    "api_call_count": 552
   }
 }
