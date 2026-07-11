@@ -80,6 +80,11 @@ export function DetailsDialog({
         name: item.name,
         kind: isFolderHeuristic ? 'folder' : 'file',
         size: undefined,
+        // 0 sentinels for the still-loading/listing-miss fallback, matching the
+        // existing modifiedAt: 0 precedent. When a real ResolvedChild is present
+        // in the listing it flows through unchanged with its true
+        // createdAt/modifiedAt; this literal is only the miss branch.
+        createdAt: 0,
         modifiedAt: 0,
         sequence: 0,
       })
