@@ -32,6 +32,7 @@ use cipherbox_sdk::rotation::scope::{
     has_covering_grant, CoverageParams, LocalGrantRecord, ScopeExitResult,
 };
 use cipherbox_sdk::rotation::RotationError;
+use cipherbox_sdk::rotation::RotatedNodeKey;
 use cipherbox_sdk::RotateReadResult;
 
 use crate::inode::{InodeKind, InodeTable, ROOT_INO};
@@ -1348,5 +1349,84 @@ mod tests {
             root.children.get_or_insert_with(Vec::new).push(ino);
         }
         ino
+    }
+
+    // -----------------------------------------------------------------
+    // refresh_rotated_inode_read_keys — 74-03 generalized multi-node refresh
+    // -----------------------------------------------------------------
+
+    /// Build a `RotatedNodeKey` with a distinct, deterministic 32-byte key
+    /// derived from `seed` (all bytes equal to `seed`) so tests can assert
+    /// exact byte equality without pulling in real crypto.
+    fn make_rotated_node_key(ipns_name: &str, seed: u8) -> RotatedNodeKey {
+        RotatedNodeKey {
+            ipns_name: ipns_name.to_string(),
+            read_key: Zeroizing::new([seed; 32]),
+            generation: 1,
+            sequence_number: 1,
+        }
+    }
+
+    /// 74-03 (SC1): after a deep scope-exit rotation, EVERY rotated node's
+    /// matching FUSE inode must have its in-memory `read_key` refreshed —
+    /// not only the grant root. Seeds a grant-root Folder, an intermediate
+    /// Folder, and a File, each with a distinct `ipns_name` and a known
+    /// pre-rotation `read_key` (all zeros), then asserts all three now equal
+    /// their NEW post-rotation keys from `RotateReadResult.rotated_nodes`.
+    #[test]
+    fn refresh_rotated_inode_read_keys_refreshes_intermediate_and_file_inodes() {
+        let (mut table, folder_a, folder_b, file_c) = build_nested_tree();
+
+        let mut rotated_nodes = std::collections::HashMap::new();
+        rotated_nodes.insert(
+            "k51folderA".to_string(),
+            make_rotated_node_key("k51folderA", 0xAA),
+        );
+        rotated_nodes.insert(
+            "k51folderB".to_string(),
+            make_rotated_node_key("k51folderB", 0xBB),
+        );
+        rotated_nodes.insert(
+            "k51fileC".to_string(),
+            make_rotated_node_key("k51fileC", 0xCC),
+        );
+        let result = RotateReadResult {
+            read_key: Zeroizing::new([0xAA; 32]),
+            generation: 1,
+            sequence_number: 1,
+            rotated_nodes,
+        };
+
+        refresh_rotated_inode_read_keys(&mut table, &result);
+
+        let folder_a_key = match &table.get(folder_a).unwrap().kind {
+            InodeKind::Folder { read_key, .. } => read_key.clone(),
+            _ => panic!("expected Folder"),
+        };
+        assert_eq!(
+            folder_a_key.as_slice(),
+            &[0xAAu8; 32][..],
+            "grant-root Folder must be refreshed to its new key"
+        );
+
+        let folder_b_key = match &table.get(folder_b).unwrap().kind {
+            InodeKind::Folder { read_key, .. } => read_key.clone(),
+            _ => panic!("expected Folder"),
+        };
+        assert_eq!(
+            folder_b_key.as_slice(),
+            &[0xBBu8; 32][..],
+            "intermediate Folder must ALSO be refreshed — not only the grant root"
+        );
+
+        let file_c_key = match &table.get(file_c).unwrap().kind {
+            InodeKind::File { read_key, .. } => read_key.clone(),
+            _ => panic!("expected File"),
+        };
+        assert_eq!(
+            file_c_key.as_slice(),
+            &[0xCCu8; 32][..],
+            "File inode must ALSO be refreshed — files are rotated too via CRIT-1"
+        );
     }
 }
