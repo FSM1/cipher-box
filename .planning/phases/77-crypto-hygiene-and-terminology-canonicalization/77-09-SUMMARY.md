@@ -145,3 +145,11 @@ None - no external service configuration required.
 ---
 *Phase: 77-crypto-hygiene-and-terminology-canonicalization*
 *Completed: 2026-07-11*
+
+## Self-Check: PASSED
+
+- FOUND: packages/sdk-core/src/file/index.ts
+- FOUND: packages/sdk-core/src/upload/index.ts
+- FOUND: commit 9883c2aae (Task 1)
+- FOUND: commit afb038a7d (Task 2)
+- FOUND: commit 90f0a53ab (SUMMARY.md)
