@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
-current_phase: 76
-current_phase_name: FUSE Durability and TEE Write-Path Hardening
-status: verifying
-stopped_at: Phase 75 complete (75-05-PLAN.md), shipping PR
-last_updated: "2026-07-11T20:30:00.000Z"
+current_phase: 77
+current_phase_name: crypto-hygiene-and-terminology-canonicalization
+status: executing
+stopped_at: Completed 72-10-PLAN.md
+last_updated: "2026-07-11T08:13:58.926Z"
 last_activity: 2026-07-11
-last_activity_desc: Phase 75 complete and shipping, Phase 76 pending
+last_activity_desc: Phase 77 execution started
 progress:
   total_phases: 22
-  completed_phases: 17
-  total_plans: 193
-  completed_plans: 193
-  percent: 77
+  completed_phases: 16
+  total_plans: 198
+  completed_plans: 189
+  percent: 73
 ---
 
 # Project State
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-27)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 76 — FUSE Durability and TEE Write-Path Hardening (Phase 75 shipping)
+**Current focus:** Phase 77 — crypto-hygiene-and-terminology-canonicalization
 
 ## Current Position
 
-Phase: 76 — FUSE Durability and TEE Write-Path Hardening
-Plan: Not started
-Status: Phase complete — ready for verification
-Last activity: 2026-07-11 — Phase 75 complete, transitioned to Phase 76
+Phase: 77 (crypto-hygiene-and-terminology-canonicalization) — EXECUTING
+Plan: 2 of 10
+Status: Ready to execute
+Last activity: 2026-07-11 — Phase 77 execution started
 
 Progress: `██████████` 79 / 79 plans (100%)
 
@@ -266,11 +266,7 @@ Items acknowledged and deferred at v1.1 milestone close on 2026-06-27. None are 
 | Phase 72 P08 | 15min | 2 tasks | 1 files |
 | Phase 72 P09 | 8min | 1 tasks | 5 files |
 | Phase 72 P10 | 10min | 2 tasks | 3 files |
-| Phase 75 P01 | 3min | 1 tasks | 2 files |
-| Phase 75 P04 | 12min | 3 tasks | 3 files |
-| Phase 75 P05 | 8min | 3 tasks | 5 files |
-| Phase 75 P02 | 7min | 3 tasks | 3 files |
-| Phase 75 P03 | 15min | 2 tasks | 2 files |
+| Phase 77 P01 | 15min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -591,14 +587,7 @@ Last session: 2026-06-28T18:09:45.156Z
 - [Phase ?]: 72-09: vault/index.ts's two root-key wraps (wrapKey(rootReadKey/rootWriteKey, userPublicKey)) left untouched — only the TEE ipns-key wrap was extracted
 - [Phase ?]: runFileVersionOp is not wrapped in withOperation itself -- each public method keeps its own withOperation(name) call for correct per-op telemetry attribution
 - [Phase ?]: write-body-params.ts standardizes the IPNS-resolve path on inline resolveIpnsRecord+fetchFromIpfs+JSON.parse (bin's pre-existing style) rather than client.ts's resolvePublishedNode wrapper, since the extra signatureVerified field was never consumed by getWriteBodyParams
-- [Phase ?]: buildCborData parameterized with validity/validityType trailing optional args (defaults = prior hardcoded values) so the 8 pre-existing vector cases stay byte-identical by construction
-- [Phase ?]: 4 new IPNS verify vectors per 75-RESEARCH RESOLVED Q2: expired-valid-sig, wrong-validity-type, malformed-rfc3339-trailing-component, malformed-rfc3339-impossible-date (total 12)
-- [Phase ?]: expected_file_iv_len_bytes made Option<usize>/typeof-detected — only file-kind body vectors carry fileIv (folder/root have none)
-- [Phase 75]: Option A (canonical-only) chosen over syncing looser UUID acceptance domains — closes the AAD-transplant surface entirely rather than aligning two looser domains
-- [Phase 75]: Rust UUID canonical-form check implemented as a dependency-free byte-position scan (no regex/once_cell added to crates/crypto)
-- [Phase ?]: bind_verified widened pub(crate)->pub and classify_vector delegated to it, deleting duplicated cid/sequence/ValidityType binding logic (Phase 75 gap #9 fix)
-- [Phase ?]: ValidityType==0 EOL gate implemented in bind_verified, not in decode_ipns_cbor_validity -- decoder only reports the raw value
-- [Phase 75]: Ported the Rust strict RFC3339 parser to TS branch-for-branch (no date-library dependency) to guarantee byte-for-byte parity with the audited Rust verifier
+- [Phase ?]: Copied the CHUNK_SIZE=32768 chunked-btoa loop verbatim from packages/core/src/node/encode.ts into @cipherbox/crypto to guarantee byte-identical base64 output before any consumer swap (77-01)
 
 ## Operator Next Steps
 
@@ -606,8 +595,8 @@ Last session: 2026-06-28T18:09:45.156Z
 
 ## Session
 
-**Last session:** 2026-07-11T06:49:04.674Z
-**Stopped at:** Completed 75-04-PLAN.md
+**Last session:** 2026-07-11T08:11:24.173Z
+**Stopped at:** Completed 72-10-PLAN.md
 **Resume file:** 
 
 None
