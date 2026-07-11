@@ -1099,7 +1099,17 @@ pub mod implementation {
         // D-15d (74-06, mirrors write_ops/implementation/rename.rs): the
         // replace_if_exists==false collision check is UNCONDITIONAL and stays
         // first — it can never be affected by scope-exit gating either way.
-        let dest_ino = fs.inodes.find_child(new_parent_ino, new_name);
+        //
+        // Normalize a self-referential destination to `None`: for a same-path
+        // or case-only rename `find_child` can return `source_ino`. Mirrors the
+        // fuser reference (implementation/rename.rs, the `dest_ino ==
+        // source_ino` self-replace guard). Without this the destination gate
+        // and removal below would delete the source inode before its new name
+        // mapping is created, leaving a dangling mapping / lost inode.
+        let dest_ino = match fs.inodes.find_child(new_parent_ino, new_name) {
+            Some(ino) if ino == source_ino => None,
+            destination => destination,
+        };
         if dest_ino.is_some() && !replace_if_exists {
             return Err(status_object_name_collision());
         }
