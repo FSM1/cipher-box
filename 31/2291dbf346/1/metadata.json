@@ -1,0 +1,147 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "312291dbf346",
+  "session_id": "ef60a1b1-a4fc-441e-ae97-6c920db58f3b",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-11T19:47:20.694579Z",
+  "branch": "feat/crypto-hygiene-and-terminology-canonicalization",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/77-crypto-hygiene-and-terminology-canonicalization/77-VALIDATION.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "22c7e69a20b3",
+  "checkpoint_transcript_start": 273,
+  "transcript_lines_at_start": 273,
+  "token_usage": {
+    "input_tokens": 1407,
+    "cache_creation_tokens": 30703,
+    "cache_read_tokens": 2545618,
+    "output_tokens": 15132,
+    "api_call_count": 17
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-ship-phase-2026-07-11T19:28:59.903797Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "ship-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "22c7e69a20b3",
+      "timestamp": "2026-07-11T19:28:59.903797Z",
+      "native": {
+        "command": "/ship-phase"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/ship-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01HVgv8cABxyxWtwU5LMG187",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-secure-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "22c7e69a20b3",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 72,
+        "end": 73,
+        "entry_ids": [
+          "a4bb9db0-5bd9-4f02-a52c-4a06d4f4246a"
+        ],
+        "tool_use_id": "toolu_01HVgv8cABxyxWtwU5LMG187"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01HVgv8cABxyxWtwU5LMG187"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-secure-phase",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_0112T1RP6DpTthWyvYid9JNu",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-validate-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "22c7e69a20b3",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 289,
+        "end": 290,
+        "entry_ids": [
+          "01f6ee02-6f81-41a6-ba95-99d1cbbf68a9"
+        ],
+        "tool_use_id": "toolu_0112T1RP6DpTthWyvYid9JNu"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_0112T1RP6DpTthWyvYid9JNu"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-validate-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "summary": {
+    "intent": "Run the Validate (Nyquist) gate for Phase 77 (crypto hygiene and terminology canonicalization) to audit validation coverage and update VALIDATION.md, while a background SDK E2E gate re-verified the phase's IPNS/key-lifecycle and TEE wire-field renames.",
+    "outcome": "VALIDATION.md was updated to compliant based on the passing crypto suite (210 tests) and committed; the E2E gate's 2 tee-republish failures were traced to a stale, pre-rename tee-worker container and a misconfigured API, so the worker was rebuilt from current source and the API restarted correctly wired to it, with the TEE round-trip suite re-run to confirm the renamed wire field didn't break the API/worker contract.",
+    "learnings": {
+      "repo": [
+        "If the API isn't started with TEE_WORKER_URL pointing at :3002 (with matching TEE_WORKER_SECRET), initializeFromTee() silently falls back to mock-ipns-routing on :3001 and leaves tee_key_state empty, causing tee-republish tests to fail at the precondition rather than on real logic.",
+        "A long-running tee-worker container being 'healthy' doesn't mean it's current — after a phase renames a wire field on both API and worker (e.g. encryptedIpnsKey -> encryptedIpnsPrivateKey), the worker container must be rebuilt from current source or the round-trip test won't actually exercise the new contract.",
+        "THROTTLE_BYPASS_SECRET can be left empty in .env for local E2E runs since throttling is typically off in dev."
+      ],
+      "code": [],
+      "workflow": [
+        "gsd-validate-phase's State A path (VALIDATION.md already exists) audits the existing draft against SUMMARY.md/VERIFICATION.md and updates statuses to green rather than regenerating from scratch.",
+        "Running the Validate (Nyquist) gate inline while the SDK E2E gate executes in the background lets both proceed without blocking each other."
+      ]
+    },
+    "friction": [
+      "SDK E2E gate initially failed (104/106) due to local TEE infra being misconfigured/stale, not due to actual regressions — required manual diagnosis (container uptime check, secret check) before the real validation could proceed.",
+      "Had to rebuild the tee-worker container mid-session because it was running pre-rename source, adding a wait step before the TEE suites could be trusted."
+    ],
+    "open_items": [
+      "TEE republish suite re-run against the rebuilt worker and correctly-wired API was still in progress at the end of the transcript — final pass/fail result not yet confirmed.",
+      "CodeRabbit CLI review (step 6) was queued to run on the committed VALIDATION.md changes but not yet executed."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-11T19:46:59.360765Z",
+    "agent_lines": 34,
+    "agent_removed": 21,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 34,
+    "total_lines_changed": 55,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}

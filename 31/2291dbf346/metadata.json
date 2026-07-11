@@ -3,7 +3,7 @@
   "checkpoint_id": "312291dbf346",
   "strategy": "manual-commit",
   "branch": "feat/crypto-hygiene-and-terminology-canonicalization",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     ".planning/phases/77-crypto-hygiene-and-terminology-canonicalization/77-VALIDATION.md"
   ],
@@ -13,13 +13,19 @@
       "transcript": "/31/2291dbf346/0/full.jsonl",
       "content_hash": "/31/2291dbf346/0/content_hash.txt",
       "prompt": ""
+    },
+    {
+      "metadata": "/31/2291dbf346/1/metadata.json",
+      "transcript": "/31/2291dbf346/1/full.jsonl",
+      "content_hash": "/31/2291dbf346/1/content_hash.txt",
+      "prompt": ""
     }
   ],
   "token_usage": {
-    "input_tokens": 0,
-    "cache_creation_tokens": 0,
-    "cache_read_tokens": 0,
-    "output_tokens": 0,
-    "api_call_count": 0
+    "input_tokens": 1407,
+    "cache_creation_tokens": 30703,
+    "cache_read_tokens": 2545618,
+    "output_tokens": 15132,
+    "api_call_count": 17
   }
 }
