@@ -1,0 +1,65 @@
+{
+  "description": "Cross-language UUID acceptance-domain oracle for the AAD builder (TS uuidToBytes via buildNodeAad / Rust build_node_aad). Locks canonical-only (Option A): both languages must accept exactly the canonical 8-4-4-12 hyphenated form and reject every other shape. AAD byte identity is already pinned separately by node-aad.json — this oracle covers the accept/reject DOMAIN only.",
+  "fixed_params": {
+    "kind": 1,
+    "generation": 42,
+    "role": 1
+  },
+  "cases": [
+    {
+      "description": "canonical lowercase-hyphenated UUID",
+      "node_id": "550e8400-e29b-41d4-a716-446655440000",
+      "expected": "accept"
+    },
+    {
+      "description": "canonical UPPERCASE-hyphenated UUID",
+      "node_id": "550E8400-E29B-41D4-A716-446655440000",
+      "expected": "accept"
+    },
+    {
+      "description": "simple 32-hex with no hyphens (TS currently over-accepts this)",
+      "node_id": "550e8400e29b41d4a716446655440000",
+      "expected": "reject"
+    },
+    {
+      "description": "loose-hyphen form: hyphens at non-canonical positions",
+      "node_id": "55-0e8400e29b41d4a716446655440000",
+      "expected": "reject"
+    },
+    {
+      "description": "loose-hyphen form: extra hyphen segments not at 8-4-4-4-12",
+      "node_id": "550e-8400-e29b-41d4-a716-446655440000",
+      "expected": "reject"
+    },
+    {
+      "description": "braced form (Rust's uuid crate currently over-accepts this)",
+      "node_id": "{550e8400-e29b-41d4-a716-446655440000}",
+      "expected": "reject"
+    },
+    {
+      "description": "urn:uuid: prefixed form (Rust's uuid crate currently over-accepts this)",
+      "node_id": "urn:uuid:550e8400-e29b-41d4-a716-446655440000",
+      "expected": "reject"
+    },
+    {
+      "description": "non-hex character in place of a hex digit",
+      "node_id": "550e8400-e29b-41d4-a716-44665544000g",
+      "expected": "reject"
+    },
+    {
+      "description": "too short (missing trailing group)",
+      "node_id": "550e8400-e29b-41d4-a716",
+      "expected": "reject"
+    },
+    {
+      "description": "too long (trailing extra hex digit)",
+      "node_id": "550e8400-e29b-41d4-a716-4466554400000",
+      "expected": "reject"
+    },
+    {
+      "description": "empty string",
+      "node_id": "",
+      "expected": "reject"
+    }
+  ]
+}
