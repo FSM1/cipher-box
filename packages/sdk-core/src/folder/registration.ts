@@ -14,7 +14,13 @@
 
 import { sealNode, unsealNode } from '@cipherbox/core';
 import type { Node, PublishedNode, SealedChildRef, WriteChildRef } from '@cipherbox/core';
-import { generateEd25519Keypair, generateRandomBytes, deriveIpnsName } from '@cipherbox/crypto';
+import {
+  generateEd25519Keypair,
+  generateRandomBytes,
+  deriveIpnsName,
+  hexToBytes,
+  bytesToHex,
+} from '@cipherbox/crypto';
 import type { SdkContext, TeeKeys } from '../types';
 import { addToIpfs, fetchFromIpfs } from '../ipfs';
 import { createAndPublishIpnsRecord } from '../ipns';
@@ -91,7 +97,9 @@ export async function createSubfolder(params: {
     // ECIES-wrap the generated IPNS private key under the TEE public key.
     // Do NOT zero ipnsPrivateKey here — wrapIpnsKeyForTee borrows the buffer, it
     // does not consume it; the caller is the terminal owner (D-09).
-    encryptedIpnsPrivateKey = await wrapIpnsKeyForTee(ipnsPrivateKey, currentPublicKey);
+    const teePublicKeyBytes = hexToBytes(currentPublicKey);
+    const wrappedBytes = await wrapIpnsKeyForTee(ipnsPrivateKey, teePublicKeyBytes);
+    encryptedIpnsPrivateKey = bytesToHex(wrappedBytes);
     keyEpoch = currentEpoch;
   }
 

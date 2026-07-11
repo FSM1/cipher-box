@@ -43,6 +43,8 @@ import {
   AES_KEY_SIZE,
   AES_IV_SIZE,
   AES_CTR_IV_SIZE,
+  hexToBytes,
+  bytesToHex,
 } from '@cipherbox/crypto';
 import type { SdkContext, TeeKeys, DownloadProgressCallback } from '../types';
 import { addToIpfs, fetchFromIpfs } from '../ipfs';
@@ -310,7 +312,9 @@ export async function createFileMetadata(params: {
       // ECIES-wrap the file IPNS private key under the TEE public key. Do NOT zero
       // fileIpnsPrivateKey here — wrapIpnsKeyForTee borrows the buffer, it does not
       // consume it; the caller is the terminal owner (D-09).
-      encryptedIpnsPrivateKey = await wrapIpnsKeyForTee(fileIpnsPrivateKey, currentPublicKey);
+      const teePublicKeyBytes = hexToBytes(currentPublicKey);
+      const wrappedBytes = await wrapIpnsKeyForTee(fileIpnsPrivateKey, teePublicKeyBytes);
+      encryptedIpnsPrivateKey = bytesToHex(wrappedBytes);
       keyEpoch = currentEpoch;
     }
 

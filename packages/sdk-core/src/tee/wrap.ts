@@ -15,8 +15,8 @@
  * Each call site retains its own fail-closed enrollment gate (validating
  * `teeKeys.currentPublicKey` is non-empty and `teeKeys.currentEpoch` is a positive
  * integer) BEFORE calling this helper — only the shared wrap sequence itself is
- * extracted here. The caller's `hexToBytes` still throws on a malformed public
- * key, so the fail-closed contract holds end-to-end.
+ * extracted here. The caller's hex-decode step still throws on a malformed
+ * public key, so the fail-closed contract holds end-to-end.
  */
 
 import { wrapKey } from '@cipherbox/crypto';
