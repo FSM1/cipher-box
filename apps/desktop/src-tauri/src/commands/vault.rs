@@ -88,6 +88,127 @@ async fn preflight_ipns_absent(
     )
 }
 
+/// The vault-init route selected by the fail-closed preflight of both IPNS names.
+#[derive(Debug, PartialEq, Eq)]
+enum VaultInitRoute {
+    /// Both names absent (fresh user): mint keys, publish blob + root, register.
+    FreshInit,
+    /// Key blob present, root absent (publish failed after a clean preflight):
+    /// decrypt-and-resume from the existing key blob WITHOUT re-minting keys.
+    RecoverResume,
+}
+
+/// Route a vault init from the two `preflight_ipns_absent` verdicts, failing closed.
+///
+/// Consumes the raw preflight `Result`s so a transient `Err` on EITHER name aborts
+/// (via `?`) BEFORE a route is chosen — i.e. before any publish is attempted. The
+/// four (key_blob_absent, root_absent) presence states map as:
+///
+/// - (true, true)   -> `FreshInit`
+/// - (false, true)  -> `RecoverResume` (decrypt-and-resume; key-blob-first order)
+/// - (false, false) -> `Err`: a fully-published vault is not an init — route
+///   through the normal load path (`fetch_and_decrypt_vault`) instead.
+/// - (true, false)  -> `Err`: unrecoverable/unexpected under key-blob-first
+///   publish order (root present but key blob absent).
+///
+/// This is the unit-testable decision seam for `initialize_vault` (mirrors the
+/// `run_publish_retry_seam` testability pattern in `crates/fuse/src/metadata.rs`).
+fn route_vault_init(
+    key_blob_absent: Result<bool, String>,
+    root_absent: Result<bool, String>,
+) -> Result<VaultInitRoute, String> {
+    let key_blob_absent = key_blob_absent?;
+    let root_absent = root_absent?;
+    match (key_blob_absent, root_absent) {
+        (true, true) => Ok(VaultInitRoute::FreshInit),
+        (false, true) => Ok(VaultInitRoute::RecoverResume),
+        (false, false) => Err(
+            "vault already fully initialized (both IPNS records present) — route \
+             through the vault load path, not initialize_vault"
+                .to_string(),
+        ),
+        (true, false) => Err(
+            "unrecoverable vault state: root folder IPNS record present but vault \
+             key blob absent (unexpected under key-blob-first publish order)"
+                .to_string(),
+        ),
+    }
+}
+
+/// Recover the ORIGINAL root read/write keys from an already-published vault key
+/// blob (decrypt-and-resume). Mirrors `fetch_and_decrypt_vault`'s ECIES unwrap:
+/// resolve the vault key IPNS name through the verified chokepoint (D-09), fetch
+/// the blob, deserialize the two ECIES-wrapped keys, and unwrap each under the
+/// user's private key. NEVER mints new keys — a second random pair could never
+/// match the already-published blob (research §Critical Finding). Returned buffers
+/// zero on drop.
+async fn recover_root_keys_from_key_blob(
+    api: &cipherbox_api_client::ApiClient,
+    vault_key_ipns_name: &str,
+    private_key: &[u8],
+) -> Result<(Zeroizing<Vec<u8>>, Zeroizing<Vec<u8>>), String> {
+    let resolved =
+        match cipherbox_api_client::ipns::resolve_ipns_verified(api, vault_key_ipns_name).await {
+            Ok(v) => v,
+            Err(cipherbox_api_client::ipns::VerifyError::Api(e)) => {
+                return Err(format!("recovery: vault key IPNS resolve failed: {}", e));
+            }
+            Err(cipherbox_api_client::ipns::VerifyError::Invalid(msg)) => {
+                return Err(format!(
+                    "recovery: vault key IPNS verification failed: {}",
+                    msg
+                ));
+            }
+        };
+    let blob_bytes = cipherbox_api_client::ipfs::fetch_content(api, &resolved.cid)
+        .await
+        .map_err(|e| format!("recovery: IPFS fetch failed for vault key blob: {}", e))?;
+
+    // node/v3: two ECIES-wrapped root keys (read then write), unwrapped under the
+    // user's private key — identical to fetch_and_decrypt_vault, never re-minted.
+    let (enc_read, enc_write) = cipherbox_core::vault_blob::deserialize_vault_blob_v3(&blob_bytes)
+        .map_err(|e| format!("recovery: v3 blob parse failed: {}", e))?;
+    let root_read_key = cipherbox_crypto::ecies::unwrap_key(&enc_read, private_key)
+        .map_err(|e| format!("recovery: failed to decrypt root read key from v3 blob: {}", e))?;
+    let root_write_key = cipherbox_crypto::ecies::unwrap_key(&enc_write, private_key)
+        .map_err(|e| format!("recovery: failed to decrypt root write key from v3 blob: {}", e))?;
+    Ok((root_read_key, root_write_key))
+}
+
+/// Coherency gate (Open Question 1 recommendation): fetch the published root node
+/// back and confirm its read body unseals under the recovered `root_read_key`
+/// before completing `/vault/init`. Binds the recovered keys to the root record so
+/// a decrypt-and-resume never registers a vault whose root cannot be opened.
+async fn coherency_check_root_unseal(
+    api: &cipherbox_api_client::ApiClient,
+    folder_cid: &str,
+    root_read_key: &[u8; 32],
+) -> Result<(), String> {
+    use base64::Engine as _;
+    let node_bytes = cipherbox_api_client::ipfs::fetch_content(api, folder_cid)
+        .await
+        .map_err(|e| format!("recovery coherency: root fetch failed: {}", e))?;
+    let published = cipherbox_core::node::decode_published_node(&node_bytes)
+        .map_err(|e| format!("recovery coherency: decode published root failed: {}", e))?;
+    let read_sealed = base64::engine::general_purpose::STANDARD
+        .decode(&published.read_sealed)
+        .map_err(|e| format!("recovery coherency: read_sealed base64 decode failed: {}", e))?;
+    cipherbox_core::node::seal::unseal_node(
+        &read_sealed,
+        root_read_key,
+        &published.id,
+        cipherbox_core::node::NodeKind::Root,
+        published.generation,
+    )
+    .map_err(|e| {
+        format!(
+            "recovery coherency: root read body did not unseal under recovered root_read_key: {}",
+            e
+        )
+    })?;
+    Ok(())
+}
+
 /// Load user-configurable vault settings from encrypted IPNS entry.
 ///
 /// Pattern: derive IPNS keypair -> resolve IPNS -> fetch IPFS -> ECIES unwrap -> parse JSON -> validate.
@@ -154,24 +275,149 @@ pub(crate) async fn load_vault_settings(
     }
 }
 
+/// Publish the vault-key blob (both ECIES-wrapped root keys) to the vault key
+/// IPNS name at sequence 1. An unexpected CAS conflict aborts with a
+/// distinguishable error so a subsequent attempt's preflight routes correctly.
+async fn publish_vault_key_blob(
+    api: &cipherbox_api_client::ApiClient,
+    vault_key_ipns_private: &[u8],
+    vault_key_ipns_name: &str,
+    encrypted_root_read_key: &[u8],
+    encrypted_root_write_key: &[u8],
+) -> Result<(), String> {
+    use base64::Engine as _;
+    let blob_bytes = cipherbox_core::vault_blob::serialize_vault_blob_v3(
+        encrypted_root_read_key,
+        encrypted_root_write_key,
+    )?;
+    let key_blob_cid = cipherbox_api_client::ipfs::upload_content(api, &blob_bytes)
+        .await
+        .map_err(|e| format!("vault key blob upload failed: {}", e))?;
+
+    let vault_key_ipns_arr: [u8; 32] = vault_key_ipns_private
+        .try_into()
+        .map_err(|_| "Invalid vault key IPNS private key length".to_string())?;
+    let key_value = format!("/ipfs/{}", key_blob_cid);
+    let key_record =
+        cipherbox_core::ipns::create_ipns_record(&vault_key_ipns_arr, &key_value, 1, 86_400_000)
+            .map_err(|e| format!("IPNS record creation failed: {}", e))?;
+    let key_marshaled = cipherbox_core::ipns::marshal_ipns_record(&key_record)
+        .map_err(|e| format!("IPNS record marshaling failed: {}", e))?;
+    let key_record_base64 = base64::engine::general_purpose::STANDARD.encode(&key_marshaled);
+
+    let key_publish_req = cipherbox_api_client::IpnsPublishRequest {
+        ipns_name: vault_key_ipns_name.to_string(),
+        record: key_record_base64,
+        metadata_cid: key_blob_cid,
+        encrypted_ipns_private_key: None,
+        key_epoch: None,
+        expected_sequence_number: None,
+    };
+    match cipherbox_api_client::ipns::publish_ipns(api, &key_publish_req)
+        .await
+        .map_err(|e| format!("vault key blob publish failed after clean preflight: {}", e))?
+    {
+        cipherbox_api_client::PublishResult::Success => Ok(()),
+        cipherbox_api_client::PublishResult::Conflict { .. } => {
+            log::warn!("Unexpected conflict on vault key blob publish (sequence 1); aborting vault initialization to avoid mismatched root keys");
+            Err("Vault initialization aborted due to existing vault key IPNS record".to_string())
+        }
+    }
+}
+
+/// Seal an empty root node/v3 under the given root keys and publish it to the
+/// root folder IPNS name at sequence 1, returning the published node's CID.
+/// Shared by the fresh-init and decrypt-and-resume recovery branches.
+async fn publish_root_folder(
+    api: &cipherbox_api_client::ApiClient,
+    root_read_key: &[u8; 32],
+    root_write_key: &[u8; 32],
+    root_ipns_private_key: &[u8],
+    root_ipns_name: &str,
+) -> Result<String, String> {
+    use base64::Engine as _;
+    let root_node_bytes =
+        build_empty_root_published_node(root_read_key, root_write_key, root_ipns_private_key)?;
+    let folder_cid = cipherbox_api_client::ipfs::upload_content(api, &root_node_bytes)
+        .await
+        .map_err(|e| format!("root folder upload failed: {}", e))?;
+
+    let root_ipns_arr: [u8; 32] = root_ipns_private_key
+        .try_into()
+        .map_err(|_| "Invalid root IPNS private key length".to_string())?;
+    let folder_value = format!("/ipfs/{}", folder_cid);
+    let folder_record =
+        cipherbox_core::ipns::create_ipns_record(&root_ipns_arr, &folder_value, 1, 86_400_000)
+            .map_err(|e| format!("IPNS record creation failed: {}", e))?;
+    let folder_marshaled = cipherbox_core::ipns::marshal_ipns_record(&folder_record)
+        .map_err(|e| format!("IPNS record marshaling failed: {}", e))?;
+    let folder_record_base64 = base64::engine::general_purpose::STANDARD.encode(&folder_marshaled);
+
+    let folder_publish_req = cipherbox_api_client::IpnsPublishRequest {
+        ipns_name: root_ipns_name.to_string(),
+        record: folder_record_base64,
+        metadata_cid: folder_cid.clone(),
+        encrypted_ipns_private_key: None,
+        key_epoch: None,
+        expected_sequence_number: None,
+    };
+    match cipherbox_api_client::ipns::publish_ipns(api, &folder_publish_req)
+        .await
+        .map_err(|e| format!("root folder publish failed after clean preflight: {}", e))?
+    {
+        cipherbox_api_client::PublishResult::Success => Ok(folder_cid),
+        cipherbox_api_client::PublishResult::Conflict { .. } => {
+            log::warn!("Unexpected conflict on root folder publish (sequence 1); aborting vault initialization to avoid inconsistent state");
+            Err("Vault initialization aborted due to existing root folder IPNS record".to_string())
+        }
+    }
+}
+
+/// POST `{ owner_public_key, root_ipns_name }` to `/vault/init` to register the
+/// vault after its IPNS records are durable. Idempotent completion shared by both
+/// init routes.
+async fn register_vault(
+    state: &AppState,
+    public_key: &[u8],
+    root_ipns_name: &str,
+) -> Result<(), String> {
+    let init_req = cipherbox_api_client::InitVaultRequest {
+        owner_public_key: hex::encode(public_key),
+        root_ipns_name: root_ipns_name.to_string(),
+    };
+    let resp = state
+        .sdk
+        .api
+        .authenticated_post("/vault/init", &init_req)
+        .await
+        .map_err(|e| format!("Vault init request failed: {}", e))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Vault init failed ({}): {}", status, body));
+    }
+    Ok(())
+}
+
 /// Initialize a new vault for a first-time user (node/v3).
 ///
-/// Mints TWO independent random 32-byte root keys (`root_read_key`,
-/// `root_write_key`) — never derived from one another — and a deterministic
-/// Ed25519 IPNS keypair via HKDF from the user's private key. ECIES-wraps both
-/// root keys with the user's secp256k1 public key into a vault-blob-v3, seals
-/// the empty root Node under those same two keys, publishes both to IPNS, and
-/// POSTs only `{ owner_public_key, root_ipns_name }` to `/vault/init`.
+/// Fail-closed preflight of BOTH IPNS names precedes any write. On a fresh user
+/// (both absent) this mints TWO independent random 32-byte root keys
+/// (`root_read_key`, `root_write_key`) — never derived from one another — plus a
+/// deterministic Ed25519 IPNS keypair via HKDF, ECIES-wraps both root keys into a
+/// vault-blob-v3, seals the empty root Node under those keys, publishes both to
+/// IPNS, and POSTs `/vault/init`.
+///
+/// If a prior attempt already published the key blob but not the root folder
+/// (`RecoverResume`), it decrypt-and-resumes: the ORIGINAL root keys are recovered
+/// via ECIES-unwrap of the existing key blob (NEVER re-minted — a second random
+/// pair could never match the published blob), the missing root folder is sealed
+/// and published under the recovered keys, a coherency unseal binds the recovered
+/// keys to the published root, and `/vault/init` completes. Any transient resolve
+/// error or unexpected presence state aborts before any write (fail closed).
 pub(crate) async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Result<(), String> {
-    // Mint two INDEPENDENT random 32-byte root keys (node/v3): read-plane and
-    // write-plane seal keys. Two separate calls — never derived from each other
-    // (research §Q1); a web-created v3 vault must be cross-openable.
-    let root_read_key: Zeroizing<[u8; 32]> =
-        Zeroizing::new(cipherbox_crypto::utils::generate_file_key());
-    let root_write_key: Zeroizing<[u8; 32]> =
-        Zeroizing::new(cipherbox_crypto::utils::generate_file_key());
-
-    // Derive IPNS keypairs from user's private key
+    // Derive the user's private key + BOTH IPNS keypairs first (needed for the
+    // preflight, before any key mint or publish).
     let private_key = state
         .sdk
         .private_key
@@ -195,127 +441,97 @@ pub(crate) async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Res
         cipherbox_crypto::hkdf::derive_vault_key_ipns_keypair(&private_key_arr)
             .map_err(|e| format!("Vault key IPNS derivation failed: {:?}", e))?;
 
-    // ECIES-wrap BOTH root keys under the user's secp256k1 pubkey (CLAUDE.md #4 /
-    // NODE-06 — the ONLY ECIES on this path). Order: read then write, mirroring
-    // the web oracle (packages/core init.ts + sdk-core publishVaultKeyBlob).
-    let encrypted_root_read_key = cipherbox_crypto::ecies::wrap_key(&*root_read_key, public_key)
-        .map_err(|e| format!("Failed to wrap root read key: {}", e))?;
-    let encrypted_root_write_key = cipherbox_crypto::ecies::wrap_key(&*root_write_key, public_key)
-        .map_err(|e| format!("Failed to wrap root write key: {}", e))?;
+    // Fail-closed preflight of BOTH names BEFORE any write. A transient error on
+    // either name aborts here (via `?`) with no publish attempted.
+    let key_blob_absent = preflight_ipns_absent(&state.sdk.api, &vault_key_ipns_name).await;
+    let root_absent = preflight_ipns_absent(&state.sdk.api, &root_ipns_name).await;
 
-    log::info!("Publishing vault key blob and root folder metadata");
+    match route_vault_init(key_blob_absent, root_absent)? {
+        VaultInitRoute::FreshInit => {
+            // Mint two INDEPENDENT random 32-byte root keys (node/v3): read-plane
+            // and write-plane seal keys. Two separate calls — never derived from
+            // each other (research §Q1); a web-created v3 vault must be cross-openable.
+            let root_read_key: Zeroizing<[u8; 32]> =
+                Zeroizing::new(cipherbox_crypto::utils::generate_file_key());
+            let root_write_key: Zeroizing<[u8; 32]> =
+                Zeroizing::new(cipherbox_crypto::utils::generate_file_key());
 
-    use base64::Engine;
+            // ECIES-wrap BOTH root keys under the user's secp256k1 pubkey (CLAUDE.md
+            // #4 / NODE-06 — the ONLY ECIES on this path). Order: read then write,
+            // mirroring the web oracle (packages/core init.ts + publishVaultKeyBlob).
+            let encrypted_root_read_key =
+                cipherbox_crypto::ecies::wrap_key(&*root_read_key, public_key)
+                    .map_err(|e| format!("Failed to wrap root read key: {}", e))?;
+            let encrypted_root_write_key =
+                cipherbox_crypto::ecies::wrap_key(&*root_write_key, public_key)
+                    .map_err(|e| format!("Failed to wrap root write key: {}", e))?;
 
-    // 1. Publish v3 key blob to vault key IPNS (both ECIES-wrapped keys, no metadata)
-    let blob_bytes = cipherbox_core::vault_blob::serialize_vault_blob_v3(
-        &encrypted_root_read_key,
-        &encrypted_root_write_key,
-    )?;
-    let key_blob_cid = cipherbox_api_client::ipfs::upload_content(&state.sdk.api, &blob_bytes)
-        .await
-        .map_err(|e| e.to_string())?;
+            log::info!("Publishing vault key blob and root folder metadata (fresh init)");
 
-    let vault_key_ipns_arr: [u8; 32] = vault_key_ipns_private
-        .as_slice()
-        .try_into()
-        .map_err(|_| "Invalid vault key IPNS private key length".to_string())?;
-    let key_value = format!("/ipfs/{}", key_blob_cid);
-    let key_record =
-        cipherbox_core::ipns::create_ipns_record(&vault_key_ipns_arr, &key_value, 1, 86_400_000)
-            .map_err(|e| format!("IPNS record creation failed: {}", e))?;
-    let key_marshaled = cipherbox_core::ipns::marshal_ipns_record(&key_record)
-        .map_err(|e| format!("IPNS record marshaling failed: {}", e))?;
-    let key_record_base64 = base64::engine::general_purpose::STANDARD.encode(&key_marshaled);
+            // 1. Publish v3 key blob to the vault key IPNS name (key-blob-first order).
+            publish_vault_key_blob(
+                &state.sdk.api,
+                vault_key_ipns_private.as_slice(),
+                &vault_key_ipns_name,
+                &encrypted_root_read_key,
+                &encrypted_root_write_key,
+            )
+            .await?;
 
-    let key_publish_req = cipherbox_api_client::IpnsPublishRequest {
-        ipns_name: vault_key_ipns_name,
-        record: key_record_base64,
-        metadata_cid: key_blob_cid,
-        encrypted_ipns_private_key: None,
-        key_epoch: None,
-        expected_sequence_number: None,
-    };
-    match cipherbox_api_client::ipns::publish_ipns(&state.sdk.api, &key_publish_req)
-        .await
-        .map_err(|e| e.to_string())?
-    {
-        cipherbox_api_client::PublishResult::Success => {}
-        cipherbox_api_client::PublishResult::Conflict { .. } => {
-            log::warn!("Unexpected conflict on vault key blob publish (sequence 1); aborting vault initialization to avoid mismatched root_folder_key");
-            return Err(
-                "Vault initialization aborted due to existing vault key IPNS record".to_string(),
+            // 2. Publish the empty root node/v3 under the SAME two random root keys.
+            //    A publish failure here aborts with a distinguishable error; because
+            //    the key blob is already durable, the NEXT attempt's preflight routes
+            //    to the RecoverResume branch.
+            publish_root_folder(
+                &state.sdk.api,
+                &root_read_key,
+                &root_write_key,
+                root_ipns_private_key.as_slice(),
+                &root_ipns_name,
+            )
+            .await?;
+        }
+        VaultInitRoute::RecoverResume => {
+            // Decrypt-and-resume: the key blob is already published but the root
+            // folder is not. Recover the ORIGINAL root keys from the blob — NEVER
+            // re-mint — then publish the missing root under them.
+            log::info!(
+                "Resuming partial vault init: recovering root keys from existing key blob"
             );
+            let (root_read_vec, root_write_vec) = recover_root_keys_from_key_blob(
+                &state.sdk.api,
+                &vault_key_ipns_name,
+                private_key.as_slice(),
+            )
+            .await?;
+            let root_read_key: [u8; 32] = root_read_vec
+                .as_slice()
+                .try_into()
+                .map_err(|_| "recovery: recovered root read key wrong length".to_string())?;
+            let root_write_key: [u8; 32] = root_write_vec
+                .as_slice()
+                .try_into()
+                .map_err(|_| "recovery: recovered root write key wrong length".to_string())?;
+
+            let folder_cid = publish_root_folder(
+                &state.sdk.api,
+                &root_read_key,
+                &root_write_key,
+                root_ipns_private_key.as_slice(),
+                &root_ipns_name,
+            )
+            .await?;
+
+            // Coherency gate: confirm the published root unseals under the recovered
+            // read key before registering (Open Question 1 recommendation).
+            coherency_check_root_unseal(&state.sdk.api, &folder_cid, &root_read_key).await?;
         }
     }
 
-    // 2. Publish the root folder as an empty node/v3 ROOT node (seq 1), sealed
-    //    under the SAME two random root keys wrapped into the v3 blob above so a
-    //    fresh vault opens on recovery. The root IPNS keypair stays HKDF-derived
-    //    (recomputable, not in the blob) so create and recovery agree. This
-    //    replaces the legacy placeholder bridge removed in 69-23.
-    let root_node_bytes = build_empty_root_published_node(
-        &root_read_key,
-        &root_write_key,
-        root_ipns_private_key.as_slice(),
-    )?;
-    let folder_cid = cipherbox_api_client::ipfs::upload_content(&state.sdk.api, &root_node_bytes)
-        .await
-        .map_err(|e| e.to_string())?;
+    // Register vault with backend AFTER both IPNS records are durable.
+    register_vault(state, public_key, &root_ipns_name).await?;
 
-    let root_ipns_arr: [u8; 32] = root_ipns_private_key
-        .as_slice()
-        .try_into()
-        .map_err(|_| "Invalid root IPNS private key length".to_string())?;
-    let folder_value = format!("/ipfs/{}", folder_cid);
-    let folder_record =
-        cipherbox_core::ipns::create_ipns_record(&root_ipns_arr, &folder_value, 1, 86_400_000)
-            .map_err(|e| format!("IPNS record creation failed: {}", e))?;
-    let folder_marshaled = cipherbox_core::ipns::marshal_ipns_record(&folder_record)
-        .map_err(|e| format!("IPNS record marshaling failed: {}", e))?;
-    let folder_record_base64 = base64::engine::general_purpose::STANDARD.encode(&folder_marshaled);
-
-    let folder_publish_req = cipherbox_api_client::IpnsPublishRequest {
-        ipns_name: root_ipns_name.clone(),
-        record: folder_record_base64,
-        metadata_cid: folder_cid,
-        encrypted_ipns_private_key: None,
-        key_epoch: None,
-        expected_sequence_number: None,
-    };
-    match cipherbox_api_client::ipns::publish_ipns(&state.sdk.api, &folder_publish_req)
-        .await
-        .map_err(|e| e.to_string())?
-    {
-        cipherbox_api_client::PublishResult::Success => {}
-        cipherbox_api_client::PublishResult::Conflict { .. } => {
-            log::warn!("Unexpected conflict on root folder publish (sequence 1); aborting vault initialization to avoid inconsistent state");
-            return Err(
-                "Vault initialization aborted due to existing root folder IPNS record".to_string(),
-            );
-        }
-    }
-
-    // 3. Register vault with backend AFTER both IPNS records are durable
-    let init_req = cipherbox_api_client::InitVaultRequest {
-        owner_public_key: hex::encode(public_key),
-        root_ipns_name: root_ipns_name.clone(),
-    };
-
-    let resp = state
-        .sdk
-        .api
-        .authenticated_post("/vault/init", &init_req)
-        .await
-        .map_err(|e| format!("Vault init request failed: {}", e))?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(format!("Vault init failed ({}): {}", status, body));
-    }
-
-    log::info!("Vault initialized: key blob + root metadata published for new user");
+    log::info!("Vault initialized: key blob + root metadata published and registered");
     Ok(())
 }
 
@@ -670,5 +886,67 @@ mod preflight_tests {
         );
         assert!(out.is_err(), "an auth error must abort the preflight");
         assert_ne!(out, Ok(true));
+    }
+}
+
+#[cfg(test)]
+mod vault_init_route_tests {
+    use super::*;
+
+    // Both names absent (fresh user) -> mint+publish+register (FreshInit).
+    #[test]
+    fn vault_init_route_both_absent_is_fresh_init() {
+        let route = route_vault_init(Ok(true), Ok(true));
+        assert_eq!(route, Ok(VaultInitRoute::FreshInit));
+    }
+
+    // Key blob present, root absent (publish failed after clean preflight) ->
+    // decrypt-and-resume recovery.
+    #[test]
+    fn vault_init_route_key_blob_present_root_absent_is_recover_resume() {
+        let route = route_vault_init(Ok(false), Ok(true));
+        assert_eq!(route, Ok(VaultInitRoute::RecoverResume));
+    }
+
+    // Both present -> not an init; abort and route through the load path.
+    #[test]
+    fn vault_init_route_both_present_aborts() {
+        let route = route_vault_init(Ok(false), Ok(false));
+        assert!(route.is_err(), "a fully-published vault is not an init");
+        assert!(route.unwrap_err().contains("already fully initialized"));
+    }
+
+    // Root present but key blob absent -> unrecoverable/unexpected; abort.
+    #[test]
+    fn vault_init_route_root_present_key_blob_absent_aborts() {
+        let route = route_vault_init(Ok(true), Ok(false));
+        assert!(route.is_err(), "root-present/key-blob-absent is unrecoverable");
+        assert!(route.unwrap_err().contains("unrecoverable"));
+    }
+
+    // Transient error on the key-blob preflight -> abort BEFORE routing (no publish).
+    #[test]
+    fn vault_init_route_transient_key_blob_error_aborts_before_publish() {
+        let route = route_vault_init(
+            Err("preflight resolve failed for vault-key: 503".to_string()),
+            Ok(true),
+        );
+        assert!(
+            route.is_err(),
+            "a transient preflight error must abort before any route/publish"
+        );
+    }
+
+    // Transient error on the root preflight -> abort BEFORE routing (no publish).
+    #[test]
+    fn vault_init_route_transient_root_error_aborts_before_publish() {
+        let route = route_vault_init(
+            Ok(true),
+            Err("preflight resolve failed for root: timeout".to_string()),
+        );
+        assert!(
+            route.is_err(),
+            "a transient preflight error must abort before any route/publish"
+        );
     }
 }
