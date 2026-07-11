@@ -42,7 +42,11 @@ pub mod publish;
 pub mod runtime;
 
 // Test-only harness (make_test_fs / CaptureSender / reply_error_code).
-#[cfg(all(test, feature = "fuse"))]
+// `make_test_fs`/`make_test_fs_with_keypair` are feature-agnostic (no fuser
+// dependency) so they are also reachable from WinFsp's own `#[cfg(test)]`
+// module (74-06) — only `CaptureSender`/`reply_error_code` stay gated to
+// `feature = "fuse"` inside test_support.rs itself (they wrap `fuser::Reply*`).
+#[cfg(all(test, any(feature = "fuse", feature = "winfsp")))]
 mod test_support;
 
 // Re-exports (existing)

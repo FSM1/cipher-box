@@ -159,6 +159,15 @@ Write-Host ""
 # SC#8), shared with macOS/Linux (shared-scope-exit-rotation.mts). Invoked via
 # node + tsx's JS CLI entry (NOT the .bin/tsx shim) per project convention for
 # .mts helpers. Exercises the WinFsp rotation path on Windows.
+#
+# Phase 74 (74-07) extended this SAME script with three more legs, all run
+# by this one invocation: Part C proves a depth>=2 scope-exit refreshes
+# every rotated node's key (SC1, 74-03) and distinguishes a retained
+# recipient (re-minted, SC2, 74-05) from a revoked one; Part D proves an
+# overwrite-rename against a covered destination triggers the scope-exit
+# gate -- on Windows this is the authoritative runtime proof for 74-06's
+# WinFsp handle_rename destination scope-exit gate fix (SC3), the runtime
+# counterpart to that plan's Cargo Check & Test (Windows) unit tests.
 Write-Host "--- Step 8: Shared scope-exit rotation acceptance (D-16) ---"
 $RepoRoot = (Resolve-Path "$PSScriptRoot\..\..\..").Path
 $RotationExitCode = 0

@@ -62,9 +62,10 @@ use base64::Engine as _;
 use zeroize::Zeroizing;
 
 use cipherbox_api_client::ipns::{resolve_ipns_verified, VerifyError};
+use cipherbox_api_client::shares::SentShareResponse;
 use cipherbox_api_client::{ApiClient, ApiError, IpnsPublishRequest, PublishResult};
 use cipherbox_core::node::{decode_published_node, encode_published_node, PublishedNode};
-use cipherbox_sdk::rotation::PublishAttempt;
+use cipherbox_sdk::rotation::{GrantRow, PublishAttempt};
 use cipherbox_sdk::{
     JsonSidecarFloorStore, PublishOutcome, ResolvedRecord, RotationDeps, RotationError,
     RotationJobRecord,
@@ -122,6 +123,27 @@ pub trait RotationTransport {
         node: &PublishedNode,
         expected_sequence_number: u64,
     ) -> Result<TransportPublishOutcome, RotationError>;
+
+    /// Fetch every sent-share row for the authenticated owner (the raw wire
+    /// rows, unfiltered) — the source `FuseRotationDeps::query_grants_rooted_at`
+    /// client-side-filters by `root_node_id` (Todo 2, mirrors
+    /// `owner-reconcile.ts::buildGrantRemintCallbacks`'s `queryGrantsFn`).
+    async fn collect_sent_shares(&self) -> Result<Vec<SentShareResponse>, RotationError>;
+
+    /// Re-mint a retained recipient's ALREADY-ECIES-wrapped read key at
+    /// `new_generation` — `PATCH /shares/:shareId/grant`. `new_generation`'s
+    /// type mirrors `RotationDeps::update_grant`'s own generation param
+    /// (`u32`) so `FuseRotationDeps::update_grant` can forward without
+    /// converting.
+    async fn update_grant(
+        &self,
+        share_id: &str,
+        encrypted_read_key: &str,
+        new_generation: u32,
+    ) -> Result<(), RotationError>;
+
+    /// Hard-revoke a single share/invite grant by ID — `DELETE /shares/:shareId`.
+    async fn revoke_share(&self, share_id: &str) -> Result<(), RotationError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -134,10 +156,10 @@ pub trait RotationTransport {
 /// the D-01/D-03 read-key checkpoint under the owner's OWN keypair, storing
 /// only ciphertext in the combined `JsonSidecarFloorStore` (Plan 70.1-03).
 ///
-/// `query_grants_rooted_at`/`update_grant`/`delete_grant` are left at the
-/// trait's DEFAULT no-op — the ROT-04 desktop-grant-remint deferral this
-/// plan's `<verification>` block explicitly sanctions (see
-/// `70.1-09-SUMMARY.md`).
+/// `query_grants_rooted_at`/`update_grant`/`delete_grant` (Plan 74-05, T-74-07)
+/// delegate to the same injected [`RotationTransport`] seam via
+/// `collect_sent_shares`/`update_grant`/`revoke_share`, closing the ROT-04
+/// desktop-grant-remint deferral `70.1-09-SUMMARY.md` documented.
 pub struct FuseRotationDeps<T: RotationTransport> {
     transport: T,
     /// Owner's ECIES public key (secp256k1, compressed) — wraps a freshly
@@ -230,10 +252,62 @@ impl<T: RotationTransport> RotationDeps for FuseRotationDeps<T> {
         );
     }
 
-    // `query_grants_rooted_at`/`update_grant`/`delete_grant` are left at the
-    // trait's DEFAULT no-op — the ROT-04 desktop-grant-remint deferral this
-    // plan's <verification> block explicitly sanctions (see
-    // 70.1-09-SUMMARY.md "ROT-04 deferral").
+    /// T-74-07 (Todo 2): re-mints retained sharees instead of the ROT-04
+    /// no-op default de-authorizing every recipient. Client-side-filters
+    /// `self.transport.collect_sent_shares()` by `root_node_id == node_id`
+    /// (mirrors `owner-reconcile.ts::buildGrantRemintCallbacks`'s
+    /// `queryGrantsFn`) and hex-decodes each `recipient_public_key` (0x
+    /// stripped, 04 prefix kept — T-74-08). `is_revoked` is always `false`
+    /// from this source: revoked shares are hard-deleted server-side, so
+    /// they never appear in this query result (Pitfall 2 / T-74-14 — a
+    /// revoked recipient is cut by ABSENCE, not a flag).
+    async fn query_grants_rooted_at(&self, node_id: &str) -> Result<Vec<GrantRow>, RotationError> {
+        let shares = self.transport.collect_sent_shares().await?;
+        shares
+            .into_iter()
+            .filter(|s| s.root_node_id == node_id)
+            .map(|s| {
+                let recipient_public_key = cipherbox_crypto::utils::hex_to_bytes(
+                    s.recipient_public_key.trim_start_matches("0x"),
+                )
+                .map_err(|e| {
+                    RotationError::RotateFailed(format!(
+                        "query_grants_rooted_at: bad recipient_public_key for {}: {e}",
+                        s.share_id
+                    ))
+                })?;
+                Ok(GrantRow {
+                    share_id: s.share_id,
+                    recipient_public_key,
+                    is_revoked: false,
+                })
+            })
+            .collect()
+    }
+
+    /// T-74-07 (Todo 2): forwards the ALREADY-ECIES-wrapped read key through
+    /// the transport seam — no re-wrapping here (the caller,
+    /// `re_mint_grants_rooted_at`, performs `cipherbox_crypto::wrap_key`
+    /// itself before invoking this method).
+    async fn update_grant(
+        &self,
+        share_id: &str,
+        encrypted_read_key: &str,
+        new_generation: u32,
+    ) -> Result<(), RotationError> {
+        self.transport
+            .update_grant(share_id, encrypted_read_key, new_generation)
+            .await
+    }
+
+    /// T-74-07 (Todo 2): forwards through the transport seam's
+    /// `revoke_share`. Reachable only in principle (Pitfall 2: this source's
+    /// `is_revoked` is always `false`, so the engine never actually calls
+    /// this for a grant returned by `query_grants_rooted_at` above) — kept
+    /// for engine-contract completeness.
+    async fn delete_grant(&self, share_id: &str) -> Result<(), RotationError> {
+        self.transport.revoke_share(share_id).await
+    }
 
     /// D-01/D-03: ECIES-wraps `wrapped_b64`'s raw key material under the
     /// owner's OWN public key before persisting ciphertext-only to the
@@ -420,6 +494,44 @@ impl RotationTransport for ApiClientTransport<'_> {
             }
         }
     }
+
+    async fn collect_sent_shares(&self) -> Result<Vec<SentShareResponse>, RotationError> {
+        cipherbox_api_client::shares::collect_sent_shares(self.api)
+            .await
+            .map_err(|e| {
+                RotationError::RotateFailed(format!(
+                    "collect_sent_shares: GET /shares/sent failed: {e}"
+                ))
+            })
+    }
+
+    async fn update_grant(
+        &self,
+        share_id: &str,
+        encrypted_read_key: &str,
+        new_generation: u32,
+    ) -> Result<(), RotationError> {
+        cipherbox_api_client::shares::update_grant(
+            self.api,
+            share_id,
+            encrypted_read_key,
+            u64::from(new_generation),
+        )
+        .await
+        .map_err(|e| {
+            RotationError::RotateFailed(format!("update_grant: PATCH failed for {share_id}: {e}"))
+        })
+    }
+
+    async fn revoke_share(&self, share_id: &str) -> Result<(), RotationError> {
+        cipherbox_api_client::shares::revoke_share(self.api, share_id)
+            .await
+            .map_err(|e| {
+                RotationError::RotateFailed(format!(
+                    "revoke_share: DELETE failed for {share_id}: {e}"
+                ))
+            })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -520,6 +632,20 @@ mod tests {
         blobs: HashMap<String, PublishedNode>,
         publish_log: Vec<String>,
         conflict_once: Option<(String, u64)>,
+        /// In-memory `GET /shares/sent` fixture rows (Task 1: grant-seam
+        /// tests), consumed verbatim by `collect_sent_shares`.
+        sent_shares: Vec<SentShareResponse>,
+        /// Ordered log of every `update_grant` call:
+        /// `(share_id, encrypted_read_key, new_generation)`.
+        updated_grants: Vec<(String, String, u32)>,
+        /// Ordered log of every `revoke_share` call's `share_id`.
+        revoked_shares: Vec<String>,
+        /// If set, the NEXT `update_grant` call returns this error message
+        /// wrapped in `RotationError::RotateFailed`, then clears.
+        fail_next_update_grant: Option<String>,
+        /// If set, the NEXT `revoke_share` call returns this error message
+        /// wrapped in `RotationError::RotateFailed`, then clears.
+        fail_next_revoke_share: Option<String>,
     }
 
     /// In-memory `RotationTransport` fake — no live IPNS/IPFS round trip.
@@ -551,6 +677,32 @@ mod tests {
         fn inject_conflict_once(&self, ipns_name: &str, current_sequence_number: u64) {
             self.0.lock().unwrap().conflict_once =
                 Some((ipns_name.to_string(), current_sequence_number));
+        }
+
+        /// Seeds the in-memory `GET /shares/sent` fixture rows returned by
+        /// the next `collect_sent_shares` call.
+        fn seed_sent_shares(&self, shares: Vec<SentShareResponse>) {
+            self.0.lock().unwrap().sent_shares = shares;
+        }
+
+        /// Every `update_grant` call captured so far, in order.
+        fn updated_grants(&self) -> Vec<(String, String, u32)> {
+            self.0.lock().unwrap().updated_grants.clone()
+        }
+
+        /// Every `revoke_share` call's `share_id`, in order.
+        fn revoked_shares(&self) -> Vec<String> {
+            self.0.lock().unwrap().revoked_shares.clone()
+        }
+
+        /// The NEXT `update_grant` call fails with `RotationError::RotateFailed(message)`.
+        fn fail_next_update_grant(&self, message: &str) {
+            self.0.lock().unwrap().fail_next_update_grant = Some(message.to_string());
+        }
+
+        /// The NEXT `revoke_share` call fails with `RotationError::RotateFailed(message)`.
+        fn fail_next_revoke_share(&self, message: &str) {
+            self.0.lock().unwrap().fail_next_revoke_share = Some(message.to_string());
         }
     }
 
@@ -605,6 +757,37 @@ mod tests {
             Ok(TransportPublishOutcome::Published {
                 new_sequence_number: new_seq,
             })
+        }
+
+        async fn collect_sent_shares(&self) -> Result<Vec<SentShareResponse>, RotationError> {
+            Ok(self.0.lock().unwrap().sent_shares.clone())
+        }
+
+        async fn update_grant(
+            &self,
+            share_id: &str,
+            encrypted_read_key: &str,
+            new_generation: u32,
+        ) -> Result<(), RotationError> {
+            let mut inner = self.0.lock().unwrap();
+            if let Some(message) = inner.fail_next_update_grant.take() {
+                return Err(RotationError::RotateFailed(message));
+            }
+            inner.updated_grants.push((
+                share_id.to_string(),
+                encrypted_read_key.to_string(),
+                new_generation,
+            ));
+            Ok(())
+        }
+
+        async fn revoke_share(&self, share_id: &str) -> Result<(), RotationError> {
+            let mut inner = self.0.lock().unwrap();
+            if let Some(message) = inner.fail_next_revoke_share.take() {
+                return Err(RotationError::RotateFailed(message));
+            }
+            inner.revoked_shares.push(share_id.to_string());
+            Ok(())
         }
     }
 
@@ -938,5 +1121,150 @@ mod tests {
 
         deps.delete_wrapped_key(ROOT_ID).await.unwrap();
         assert!(deps.get_wrapped_key(ROOT_ID).await.unwrap().is_none());
+    }
+
+    /// A `GET /shares/sent` row fixture for the Test D grant-seam suite —
+    /// only the fields these tests actually exercise vary per call.
+    fn sent_share_fixture(
+        share_id: &str,
+        root_node_id: &str,
+        recipient_public_key_hex: &str,
+    ) -> SentShareResponse {
+        SentShareResponse {
+            share_id: share_id.to_string(),
+            recipient_public_key: recipient_public_key_hex.to_string(),
+            encrypted_read_key: "deadbeef".to_string(),
+            encrypted_write_key: None,
+            root_node_id: root_node_id.to_string(),
+            share_root_ipns_name: "k51root".to_string(),
+            root_generation: "1".to_string(),
+            item_name_encrypted: None,
+            created_at: "2026-01-01T00:00:00.000Z".to_string(),
+        }
+    }
+
+    /// Test D (Todo 2, T-74-07): `query_grants_rooted_at` client-side
+    /// filters `collect_sent_shares`'s rows by `root_node_id == node_id`,
+    /// hex-decodes `recipient_public_key` (0x stripped, 04 prefix kept), and
+    /// always reports `is_revoked: false` from this source (Pitfall 2 — a
+    /// revoked recipient's row never appears here at all).
+    #[tokio::test]
+    async fn query_grants_rooted_at_filters_by_root_node_id_and_hex_decodes_recipient_key() {
+        const OTHER_NODE_ID: &str = "33333333-3333-3333-3333-333333333333";
+        let transport = FakeTransport::default();
+        transport.seed_sent_shares(vec![
+            sent_share_fixture(
+                "share-in-scope",
+                ROOT_ID,
+                "0x04aabbccdd00112233445566778899aabbccddeeff001122334455667788990011",
+            ),
+            sent_share_fixture("share-other-root", OTHER_NODE_ID, "0x04ff"),
+        ]);
+
+        let (owner_pub, owner_priv) = owner_keypair();
+        let deps =
+            FuseRotationDeps::new(transport.clone(), owner_pub, owner_priv, temp_floor_store());
+
+        let rows = deps
+            .query_grants_rooted_at(ROOT_ID)
+            .await
+            .expect("query_grants_rooted_at must succeed");
+
+        assert_eq!(
+            rows.len(),
+            1,
+            "only the row whose root_node_id matches the queried node_id is returned"
+        );
+        let row = &rows[0];
+        assert_eq!(row.share_id, "share-in-scope");
+        assert!(
+            row.recipient_public_key.starts_with(&[0x04]),
+            "recipient_public_key must be hex-decoded raw bytes starting with the 0x04 uncompressed-key prefix, got {:?}",
+            row.recipient_public_key
+        );
+        assert_eq!(
+            row.recipient_public_key.len(),
+            33,
+            "the decoded fixture key is 33 bytes (04 prefix + 32-byte body)"
+        );
+        assert!(
+            !row.is_revoked,
+            "is_revoked is always false from this source (revoked shares are hard-deleted server-side)"
+        );
+    }
+
+    /// Test D: `update_grant` forwards `share_id`/`encrypted_read_key`/
+    /// `new_generation` verbatim through the `RotationTransport` seam —
+    /// no re-wrapping (the caller already ECIES-wrapped the key).
+    #[tokio::test]
+    async fn update_grant_forwards_through_the_transport_seam() {
+        let transport = FakeTransport::default();
+        let (owner_pub, owner_priv) = owner_keypair();
+        let deps =
+            FuseRotationDeps::new(transport.clone(), owner_pub, owner_priv, temp_floor_store());
+
+        deps.update_grant("share-1", "already-wrapped-hex-ciphertext", 5)
+            .await
+            .expect("update_grant must succeed");
+
+        assert_eq!(
+            transport.updated_grants(),
+            vec![(
+                "share-1".to_string(),
+                "already-wrapped-hex-ciphertext".to_string(),
+                5
+            )]
+        );
+    }
+
+    /// Test D: a transport-level `update_grant` failure maps to
+    /// `RotationError::RotateFailed`.
+    #[tokio::test]
+    async fn update_grant_transport_error_maps_to_rotate_failed() {
+        let transport = FakeTransport::default();
+        transport.fail_next_update_grant("PATCH /shares/share-1/grant failed: 500");
+        let (owner_pub, owner_priv) = owner_keypair();
+        let deps = FuseRotationDeps::new(transport, owner_pub, owner_priv, temp_floor_store());
+
+        let err = deps
+            .update_grant("share-1", "ciphertext", 5)
+            .await
+            .expect_err("a transport failure must surface as an error");
+        assert!(matches!(err, RotationError::RotateFailed(_)));
+    }
+
+    /// Test D: `delete_grant` forwards `share_id` through the transport
+    /// seam's `revoke_share`.
+    #[tokio::test]
+    async fn delete_grant_forwards_through_the_transport_seam() {
+        let transport = FakeTransport::default();
+        let (owner_pub, owner_priv) = owner_keypair();
+        let deps =
+            FuseRotationDeps::new(transport.clone(), owner_pub, owner_priv, temp_floor_store());
+
+        deps.delete_grant("share-revoked")
+            .await
+            .expect("delete_grant must succeed");
+
+        assert_eq!(
+            transport.revoked_shares(),
+            vec!["share-revoked".to_string()]
+        );
+    }
+
+    /// Test D: a transport-level `revoke_share` failure maps to
+    /// `RotationError::RotateFailed`.
+    #[tokio::test]
+    async fn delete_grant_transport_error_maps_to_rotate_failed() {
+        let transport = FakeTransport::default();
+        transport.fail_next_revoke_share("DELETE /shares/share-1 failed: 404");
+        let (owner_pub, owner_priv) = owner_keypair();
+        let deps = FuseRotationDeps::new(transport, owner_pub, owner_priv, temp_floor_store());
+
+        let err = deps
+            .delete_grant("share-1")
+            .await
+            .expect_err("a transport failure must surface as an error");
+        assert!(matches!(err, RotationError::RotateFailed(_)));
     }
 }

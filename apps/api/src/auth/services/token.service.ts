@@ -1,5 +1,5 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
-import { JwtService } from '@nestjs/jwt';
+import { JwtService, JwtSignOptions } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull } from 'typeorm';
 import * as argon2 from 'argon2';
@@ -23,6 +23,15 @@ interface CreateTokenOptions {
 export class TokenService {
   private readonly REFRESH_TOKEN_EXPIRY_DAYS = 7;
 
+  /**
+   * Access-token lifetime. Defaults to the production-safe 15 minutes, but is
+   * overridable via ACCESS_TOKEN_TTL for long-running headless E2E sessions
+   * (the desktop test-login binary holds a single token for the whole suite
+   * and cannot silently refresh, so a short TTL expires mid-run).
+   */
+  private readonly ACCESS_TOKEN_TTL: JwtSignOptions['expiresIn'] =
+    (process.env.ACCESS_TOKEN_TTL as JwtSignOptions['expiresIn']) || '15m';
+
   constructor(
     private jwtService: JwtService,
     @InjectRepository(RefreshToken)
@@ -39,7 +48,9 @@ export class TokenService {
     if (options?.scope) {
       payload.scope = options.scope;
     }
-    const accessToken = this.jwtService.sign(payload, { expiresIn: '15m' });
+    const accessToken = this.jwtService.sign(payload, {
+      expiresIn: this.ACCESS_TOKEN_TTL,
+    });
 
     // Skip refresh token for temp auth (scoped tokens should not be refreshable)
     if (options?.skipRefreshToken) {

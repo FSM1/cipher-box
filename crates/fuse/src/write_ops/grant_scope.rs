@@ -527,7 +527,45 @@ pub async fn rotate_read_on_scope_exit(
             // the NEW key. `fresh_root` is `None` on a resume-skip; nothing to
             // refresh in that case.
             if let Some(result) = maybe_result {
-                refresh_grant_root_read_key(&mut fs.inodes, grant_root_ipns_name, &result);
+                refresh_rotated_inode_read_keys(&mut fs.inodes, &result);
+                // Mark every rotated FOLDER inode as locally mutated. A
+                // scope-exit rotation republishes these folders out-of-band
+                // (via the engine, not the mount's publish queue), so without
+                // this they were never recorded as locally-changed — and a
+                // STALE in-flight metadata refresh (one that resolved a
+                // pre-rotation snapshot but completes AFTER this rotation) would
+                // clobber the freshly-refreshed inode keys via
+                // `apply_owned_children`, resetting them to their pre-rotation
+                // values. That reset then makes a later parent republish revert
+                // the grant-root's child-refs, so the parent's child-ref key and
+                // the child's own record diverge and every subsequent
+                // scope-exit rotation fails `rotate_one`/`verify_subtree_clean`
+                // (macOS FUSE-T overwrite-rename repro). `drain_refresh_completions`
+                // ALREADY guards `mutated_folders`/`publish_queue` against this
+                // exact folder-state desync (fs.rs) — a rotation IS a local
+                // mutation of these folders, so it belongs in that set too.
+                let now = std::time::Instant::now();
+                let rotated_folder_inos: Vec<u64> = fs
+                    .inodes
+                    .inodes
+                    .iter()
+                    .filter_map(|(ino, inode)| {
+                        let ipns = match &inode.kind {
+                            InodeKind::Root { ipns_name, .. }
+                            | InodeKind::Folder { ipns_name, .. } => ipns_name.as_str(),
+                            InodeKind::File { .. } => return None,
+                        };
+                        let rotated = ipns == grant_root_ipns_name
+                            || result
+                                .rotated_nodes
+                                .values()
+                                .any(|r| r.ipns_name.as_str() == ipns);
+                        rotated.then_some(*ino)
+                    })
+                    .collect();
+                for ino in rotated_folder_inos {
+                    fs.mutated_folders.insert(ino, now);
+                }
             }
             log::info!(
                 "shared-scope-exit read-key rotation completed \
@@ -550,33 +588,51 @@ pub async fn rotate_read_on_scope_exit(
     }
 }
 
-/// 70.1-13a (revocation-bypass fix): overwrite the grant-root inode's in-memory
-/// `read_key` with the freshly-minted post-rotation key. D-09 terminal-owner:
-/// the inode owns its `Zeroizing` buffer; the 32 bytes are overwritten in place
-/// (the old key is thereby discarded). `result.read_key` is NOT zeroed here —
-/// `RotateReadResult` owns it and self-zeroes on drop. Key bytes are NEVER
-/// logged.
-fn refresh_grant_root_read_key(
-    inodes: &mut InodeTable,
-    grant_root_ipns_name: &str,
-    result: &RotateReadResult,
-) {
-    for inode in inodes.inodes.values_mut() {
-        match &mut inode.kind {
-            InodeKind::Root {
-                ipns_name,
-                read_key,
-                ..
+/// 74-03 (SC1, deep scope-exit key refresh): overwrite EVERY rotated node's
+/// matching FUSE inode `read_key` with its freshly-minted post-rotation key,
+/// not only the grant root's. Generalized from the prior
+/// `refresh_grant_root_read_key` (70.1-13a), which only refreshed the ONE
+/// grant-root inode — leaving any intermediate `Folder`/`File` inode below
+/// the root with a STALE pre-rotation key, so a subsequent local relink of
+/// that intermediate reseals it under the old key (the deep-path
+/// revocation-bypass class this generalization closes, T-74-04).
+///
+/// Loops over `result.rotated_nodes` (populated at the root commit hook, the
+/// BFS child commit hook, and the crash-resume repair hook — 74-01) and, for
+/// each `(ipns_name, rotated)` entry, scans every inode in the table for a
+/// `Root | Folder | File` whose own `ipns_name` matches. NO early `return` —
+/// every rotated node must be refreshed, not just the first match. The
+/// `File` arm is new: files are rotated too via `mint_file_key_on_rotate`
+/// (CRIT-1) and were previously silently skipped here.
+///
+/// D-09 terminal-owner: each inode owns its own `Zeroizing` buffer; the 32
+/// bytes are overwritten in place via `copy_from_slice` (the old key is
+/// thereby discarded). `rotated.read_key` (and `result.rotated_nodes` as a
+/// whole) is NOT zeroed here — `RotateReadResult` owns it and self-zeroes on
+/// drop. Key bytes are NEVER logged.
+fn refresh_rotated_inode_read_keys(inodes: &mut InodeTable, result: &RotateReadResult) {
+    for rotated in result.rotated_nodes.values() {
+        for inode in inodes.inodes.values_mut() {
+            match &mut inode.kind {
+                InodeKind::Root {
+                    ipns_name,
+                    read_key,
+                    ..
+                }
+                | InodeKind::Folder {
+                    ipns_name,
+                    read_key,
+                    ..
+                }
+                | InodeKind::File {
+                    ipns_name,
+                    read_key,
+                    ..
+                } if ipns_name.as_str() == rotated.ipns_name.as_str() => {
+                    read_key.copy_from_slice(rotated.read_key.as_slice());
+                }
+                _ => {}
             }
-            | InodeKind::Folder {
-                ipns_name,
-                read_key,
-                ..
-            } if ipns_name.as_str() == grant_root_ipns_name => {
-                read_key.copy_from_slice(result.read_key.as_slice());
-                return;
-            }
-            _ => {}
         }
     }
 }
@@ -768,6 +824,7 @@ pub fn run_scope_exit_gate_coalesced(
 mod tests {
     use super::*;
     use crate::inode::{FileAttrs, InodeData};
+    use cipherbox_sdk::rotation::RotatedNodeKey;
     use std::time::SystemTime;
     use zeroize::Zeroizing;
 
@@ -1348,5 +1405,84 @@ mod tests {
             root.children.get_or_insert_with(Vec::new).push(ino);
         }
         ino
+    }
+
+    // -----------------------------------------------------------------
+    // refresh_rotated_inode_read_keys — 74-03 generalized multi-node refresh
+    // -----------------------------------------------------------------
+
+    /// Build a `RotatedNodeKey` with a distinct, deterministic 32-byte key
+    /// derived from `seed` (all bytes equal to `seed`) so tests can assert
+    /// exact byte equality without pulling in real crypto.
+    fn make_rotated_node_key(ipns_name: &str, seed: u8) -> RotatedNodeKey {
+        RotatedNodeKey {
+            ipns_name: ipns_name.to_string(),
+            read_key: Zeroizing::new([seed; 32]),
+            generation: 1,
+            sequence_number: 1,
+        }
+    }
+
+    /// 74-03 (SC1): after a deep scope-exit rotation, EVERY rotated node's
+    /// matching FUSE inode must have its in-memory `read_key` refreshed —
+    /// not only the grant root. Seeds a grant-root Folder, an intermediate
+    /// Folder, and a File, each with a distinct `ipns_name` and a known
+    /// pre-rotation `read_key` (all zeros), then asserts all three now equal
+    /// their NEW post-rotation keys from `RotateReadResult.rotated_nodes`.
+    #[test]
+    fn refresh_rotated_inode_read_keys_refreshes_intermediate_and_file_inodes() {
+        let (mut table, folder_a, folder_b, file_c) = build_nested_tree();
+
+        let mut rotated_nodes = std::collections::HashMap::new();
+        rotated_nodes.insert(
+            "k51folderA".to_string(),
+            make_rotated_node_key("k51folderA", 0xAA),
+        );
+        rotated_nodes.insert(
+            "k51folderB".to_string(),
+            make_rotated_node_key("k51folderB", 0xBB),
+        );
+        rotated_nodes.insert(
+            "k51fileC".to_string(),
+            make_rotated_node_key("k51fileC", 0xCC),
+        );
+        let result = RotateReadResult {
+            read_key: Zeroizing::new([0xAA; 32]),
+            generation: 1,
+            sequence_number: 1,
+            rotated_nodes,
+        };
+
+        refresh_rotated_inode_read_keys(&mut table, &result);
+
+        let folder_a_key = match &table.get(folder_a).unwrap().kind {
+            InodeKind::Folder { read_key, .. } => read_key.clone(),
+            _ => panic!("expected Folder"),
+        };
+        assert_eq!(
+            folder_a_key.as_slice(),
+            &[0xAAu8; 32][..],
+            "grant-root Folder must be refreshed to its new key"
+        );
+
+        let folder_b_key = match &table.get(folder_b).unwrap().kind {
+            InodeKind::Folder { read_key, .. } => read_key.clone(),
+            _ => panic!("expected Folder"),
+        };
+        assert_eq!(
+            folder_b_key.as_slice(),
+            &[0xBBu8; 32][..],
+            "intermediate Folder must ALSO be refreshed — not only the grant root"
+        );
+
+        let file_c_key = match &table.get(file_c).unwrap().kind {
+            InodeKind::File { read_key, .. } => read_key.clone(),
+            _ => panic!("expected File"),
+        };
+        assert_eq!(
+            file_c_key.as_slice(),
+            &[0xCCu8; 32][..],
+            "File inode must ALSO be refreshed — files are rotated too via CRIT-1"
+        );
     }
 }

@@ -511,6 +511,7 @@ describe('CipherBoxClient — folderTree refresh after scope-exit rotation (Gap 
       readKey: rotatedReadKey,
       generation: 5,
       sequenceNumber: 10n,
+      rotatedNodes: new Map(),
     });
 
     await client.renameItem(FOLDER_IPNS, 'file1', 'new.txt');
@@ -558,6 +559,7 @@ describe('CipherBoxClient — folderTree refresh after scope-exit rotation (Gap 
       readKey: rotationEngineReadKey,
       generation: 3,
       sequenceNumber: 7n,
+      rotatedNodes: new Map(),
     });
 
     await client.renameItem(FOLDER_IPNS, 'file1', 'new.txt');
@@ -600,6 +602,7 @@ describe('CipherBoxClient — folderTree refresh after scope-exit rotation (Gap 
       readKey: new Uint8Array(32).fill(0x99),
       generation: 1,
       sequenceNumber: 3n,
+      rotatedNodes: new Map(),
     });
     mockResolveMatching(1n); // first mutation's reconcile agrees with pre-rotation state
 

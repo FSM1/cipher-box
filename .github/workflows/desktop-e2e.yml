@@ -281,6 +281,7 @@ jobs:
           REDIS_HOST=localhost
           REDIS_PORT=6379
           TEST_LOGIN_SECRET=e2e-test-secret-ci-only
+          ACCESS_TOKEN_TTL=2h
           ENVEOF
           echo "IDENTITY_JWT_PRIVATE_KEY=${{ secrets.IDENTITY_JWT_PRIVATE_KEY }}" >> apps/api/.env
 
@@ -343,6 +344,9 @@ jobs:
           REDIS_HOST: localhost
           REDIS_PORT: 6379
           TEST_LOGIN_SECRET: e2e-test-secret-ci-only
+          # Long TTL: the headless desktop binary holds one token for the whole
+          # suite and cannot silently refresh; 15m expires mid-run on macOS.
+          ACCESS_TOKEN_TTL: 2h
           IDENTITY_JWT_PRIVATE_KEY: ${{ secrets.IDENTITY_JWT_PRIVATE_KEY }}
 
       - name: Start API server (Windows)

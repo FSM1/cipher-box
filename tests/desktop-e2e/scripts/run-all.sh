@@ -135,6 +135,15 @@ echo ""
 # (2026-07-07-fuse-shared-scope-exit-rotation-live-wiring.md / Phase 70.1
 # SC#8). Invoked via node + tsx's JS CLI entry (NOT the node_modules/.bin/tsx
 # shell shim) per project convention for .mts helpers.
+#
+# Phase 74 (74-07) extended this SAME script with three more legs, all run
+# by this one invocation: Part C proves a depth>=2 scope-exit refreshes
+# every rotated node's key (SC1, 74-03) and distinguishes a retained
+# recipient (re-minted, SC2, 74-05) from a revoked one; Part D proves an
+# overwrite-rename against a covered destination triggers the scope-exit
+# gate (SC3) -- on macOS/Linux this exercises fuser's ALREADY-correct dest
+# gate (regression guard); the WinFsp-specific proof for 74-06's dest-gate
+# fix runs via the identical Part D leg under run-all.ps1 on Windows CI.
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 echo "--- Step 8: Shared scope-exit rotation acceptance (D-16) ---"
 set +e

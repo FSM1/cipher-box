@@ -829,6 +829,18 @@ mod tests {
                 ("200 OK", "application/octet-stream", node_body.to_vec())
             } else if method == "POST" && path.starts_with("/ipns/publish") {
                 ("200 OK", "application/json", b"{}".to_vec())
+            } else if method == "GET" && path.starts_with("/shares/sent") {
+                // Plan 74-05: `query_grants_rooted_at` now really calls
+                // `GET /shares/sent` (previously a no-op default that never
+                // hit the network). This fixture user has no sent shares —
+                // an empty page mirrors the ROT-04 no-op's `Vec::new()` so
+                // this pre-existing rotation-plumbing test's behavior is
+                // unchanged by the grant-seam wiring.
+                (
+                    "200 OK",
+                    "application/json",
+                    br#"{"shares":[],"total":0}"#.to_vec(),
+                )
             } else {
                 ("404 Not Found", "text/plain", b"not found".to_vec())
             };
