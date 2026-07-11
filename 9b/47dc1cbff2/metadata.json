@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "9b47dc1cbff2",
+  "strategy": "manual-commit",
+  "branch": "chore/verify-70.1-and-fix-69-scan",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-15-PLAN.md",
+    ".planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-16-PLAN.md",
+    ".planning/phases/69-fuse-and-winfsp-rust-integration-and-grant-root-awareness/69-LEARNINGS.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/9b/47dc1cbff2/0/metadata.json",
+      "transcript": "/9b/47dc1cbff2/0/full.jsonl",
+      "content_hash": "/9b/47dc1cbff2/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  }
+}
