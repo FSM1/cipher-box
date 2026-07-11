@@ -1,0 +1,311 @@
+/gsd-manager
+
+---
+
+I suspect that I will run out of quota before all the planners are done - please resume all tasks at 4:45 if things get interrupted, and continue with execution of all the plans.
+
+---
+
+<task-notification>
+<task-id>a41b148a91c1c8d90</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/483e60b7-fc2f-4754-bb13-36a935f407c4/tasks/a41b148a91c1c8d90.output</output-file>
+<status>failed</status>
+<summary>Agent "Plan Phase 77 in worktree" failed: Agent terminated early due to an API error: You've hit your session limit · resets 4:40am (Europe/Berlin)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Confirmed inputs: RESEARCH + PATTERNS + VALIDATION present; REQUIREMENTS.md exists; no SPEC/AI-SPEC/UI-SPEC; no spike/sketch; API-SURFACE empty (omit). Now spawning the planner (§8) with schema-gate + tdd contributions injected verbatim, plus autonomous-mode guardrails to keep the "no behavior change" scope tight.</result>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a41b148a91c1c8d90</worktreePath><worktreeBranch>worktree-agent-a41b148a91c1c8d90</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>adf987fdef248c95e</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/483e60b7-fc2f-4754-bb13-36a935f407c4/tasks/adf987fdef248c95e.output</output-file>
+<status>failed</status>
+<summary>Agent "Plan Phase 74 in worktree" failed: Agent terminated early due to an API error: You've hit your session limit · resets 4:40am (Europe/Berlin)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All inputs confirmed: granularity `fine`, no SPEC/UI/AI/spike/sketch artifacts, context_window 200000 (no cross-phase enrichment), and API-SURFACE is empty (I'll omit that empty hint). Now spawning the planner (opus) with the full planning context, tdd contribution injected (schema-gate skipped — no ORM files).</result>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-adf987fdef248c95e</worktreePath><worktreeBranch>worktree-agent-adf987fdef248c95e</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+RESUME the CipherBox GSD manager work (autonomous — do NOT wait for user input; make sensible decisions and proceed; this is a scheduled resume because the prior session likely hit a quota limit).
+
+## What was in flight
+At ~02:48 on 2026-07-11 I spawned 3 background planners, each in an isolated git worktree on its OWN reused feat branch (same branch is meant for BOTH planning and execution):
+- Phase 74 → branch feat/rust-and-fuse-rotation-revocation-soundness
+- Phase 75 → branch feat/cross-language-ipns-and-node-codec-verification-parity
+- Phase 77 → branch feat/crypto-hygiene-and-terminology-canonicalization
+Milestone v2.0 was at 16/22 complete. Phases 76, 78, 79 remain unplanned. All are well-scoped M4 closeout phases (concrete todos + testable SCs) that do NOT need discuss-phase.
+
+## Step 1 — assess planner outcomes (disk-based, do not rely on agent handles)
+- `git worktree list` to find the three worktrees + branches.
+- For each phase, inspect its worktree branch: `git -C <worktree> log --oneline -20` and `ls <worktree>/.planning/phases/<N>-*/<N>-*-PLAN.md`. Confirm plans exist and are committed on the correct feat branch. Check each phase dir for a plan-checker PASSED verdict and read .planning/STATE.md for any Blockers a planner wrote.
+- If a planner did NOT finish (no plans committed, or still-running/locked worktree), re-run planning for that phase inline via Skill(gsd-plan-phase <N> --auto) IN that worktree (EnterWorktree path=<worktree>) before executing.
+
+## Step 2 — execute all completed plans (SEQUENTIALLY: 74, then 75, then 77)
+For each phase whose plans are complete + plan-checker PASSED:
+- Enter its EXISTING worktree (EnterWorktree with path=<worktree>) and run Skill(gsd-execute-phase <N>) there. REUSE the same feat branch — do NOT create a new branch and do NOT switch the main checkout.
+- Execution needs the live stack: verify API on :3000 is from CURRENT source (if it is a stale `node dist/main.js`, restart via `pnpm --filter api dev`); redis :6380 and kubo :5001 should be up. sdk-e2e/verification test-login secret must be exported: SDK_E2E_SECRET=e2e-test-secret-ci-only (matches API TEST_LOGIN_SECRET). Leave the shared docker stack running; only manage the :3000 API process.
+- Run sequentially to avoid shared-DB / resource contention between phases.
+- After each phase executes and self-verifies, do NOT auto-merge to main. Never use --no-verify.
+
+## Step 3 — continue the milestone as quota allows
+- Then plan + execute the remaining phases 76, 78, 79 using the SAME worktree-isolation + reused-feat-branch discipline (branch names: feat/fuse-durability-and-tee-write-path-hardening, plus the canonical slugs for 78 and 79 from their phase dir names). Assess each briefly first; none is expected to need discuss-phase, but if a genuine design gray area surfaces, STOP that phase and leave a note rather than guessing.
+
+## Rules (hard)
+- NEVER commit/push directly to main; each phase stays on its feat branch. Open PRs only if explicitly appropriate; otherwise leave branches ready for review.
+- gsd-plan-phase can create a stray docs/plan-phase-<N> branch and leave <N>-PATTERNS.md untracked — reconcile onto the feat branch and commit PATTERNS explicitly.
+- Verify outcomes honestly (report test failures with output; don't claim done unless verified).
+- Give a concise status summary at the end: which phases planned, which executed + verification result, which branches are ready, and any blockers.
+
+---
+
+<task-notification>
+<task-id>a83b779db6fccb09c</task-id>
+<tool-use-id>toolu_01GKUqsGsR7fLUGTWh8Ku9Ey</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/483e60b7-fc2f-4754-bb13-36a935f407c4/tasks/a83b779db6fccb09c.output</output-file>
+<status>completed</status>
+<summary>Agent "Plan-finish and execute Phase 74" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Phase 74 is complete through the human_needed gate. Final state verified: correct branch, clean tree, no leaked worktrees/stashes (the 3 stashes are pre-existing, none from this session).
+
+---
+
+## Phase 74 — Report
+
+**Branch:** stayed on `feat/rust-and-fuse-rotation-revocation-soundness` throughout. `git status` clean; only the main worktree exists; no stashes/branches leaked. No push/PR/merge; no switch to main; no auto-advance to phase 75.
+
+### Part A — Planning: plan-checker PASSED
+- **7 committed `74-0{1..7}-PLAN.md`** (the existing drafts, revised in place — not added to) + `74-PATTERNS.md`.
+- plan-checker **iteration 1**: 1 BLOCKER + 2 WARNINGS. Blocker = 74-05 needed an ungeneric `self.transport.api` reach-around that would have forced an undeclared, colliding edit to `grant_scope.rs`. Planner fixed it by **extending the `RotationTransport` seam** (new `collect_sent_shares`/`update_grant`/`revoke_share` on `ApiClientTransport`+`FakeTransport`, delegated from `FuseRotationDeps`) — zero-touch on `grant_scope.rs`, DAG unchanged. Warnings (tautological RED verify blocks in 74-01/02/03/04; stale `74-VALIDATION.md`) also fixed.
+- plan-checker **iteration 2**: **VERIFICATION PASSED** — SC1/SC2/SC3 all covered, wave DAG acyclic, zero file overlap. Committed `4abd68156`.
+- No stray `docs/plan-phase-74` branch existed.
+
+### Part B — Execution: all 7 plans done; verification = human_needed
+Ran **sequential `gsd-executor` subagents on the main checkout** (deliberately not worktree-parallel: reuses warm cargo/node caches, avoids cold per-worktree rebuilds + the pnpm-i-in-worktree trap + RAM from parallel cargo builds; commits land directly on the feat branch). Every plan did RED→GREEN TDD.
+
+| Plan | SC | Local result |
+|------|----|-----|
+| 74-01 sdk `engine.rs` | SC1 | 27/27 pass (widened `RotateReadResult.rotated_nodes`) |
+| 74-02 sdk-core `engine.ts` | SC1 | 370/370 pass + typecheck (TS parity) |
+| 74-03 fuse `grant_scope.rs` | SC1 | 17/17 pass (refresh every rotated inode) |
+| 74-04 api-client wire fns | SC2 | 15/15 pass (`update_grant`/`revoke_share`) |
+| 74-05 fuse `rotation_deps.rs` | SC2 | 10/10 + full crate 117/117; `grant_scope.rs`/`new()` confirmed untouched |
+| 74-06 WinFsp `write_ops.rs` | SC3 | Code ported (D-15d dest-gate); `#[cfg(windows)]` → **Windows-CI-gated** |
+| 74-07 desktop-e2e scripts | all | Authored + tsc/tsx/bash-n validated; **live run CI-gated** |
+
+Bounded post-wave `cargo check` (sdk+api-client+fuse) clean at each wave boundary.
+
+**Verification (gsd-verifier → `74-VERIFICATION.md`): `human_needed`, score 21/21 must-haves code-verified, behavior_unverified 0.** SC1 and SC2 fully proven locally (code + unit tests). SC3 code source-verified (line-by-line D-15d parity vs fuser). The only two open items are **infra-gated CI legs, not code gaps** (persisted to `74-UAT.md`):
+1. `Cargo Check &amp; Test (Windows)` — 74-06's WinFsp code can't compile on macOS.
+2. `desktop-e2e` 3-platform matrix — 74-07's live FUSE/WinFsp-mount run needs a built desktop binary.
+
+The verifier independently assessed the 74-07-flagged risk (74-05's grant re-mint possibly flipping Part A's "Bob" assertion) as a **likely false alarm** — that assertion decrypts a stale pre-rotation key, so it fails regardless of grant status — but recommends CI confirmation.
+
+**Phase NOT marked complete** (correct for `human_needed`); left pending `/gsd-verify-work 74` after CI. **26 new commits** in Part B (+1 in Part A).
+
+### Blockers
+The 2 CI-gated verification legs above — recorded in `.planning/STATE.md` (commit `1ff67ab67`) and `74-UAT.md`. Neither is a code defect; both are macOS-host infra limitations verifiable only in CI.
+
+### Key files
+- Plans/artifacts: `/Users/myankelev/Code/random/cipher-box/.planning/phases/74-rust-and-fuse-rotation-revocation-soundness/` (`74-0{1..7}-PLAN.md`, `74-0{1..7}-SUMMARY.md`, `74-VERIFICATION.md`, `74-UAT.md`)
+- Code: `crates/sdk/src/rotation/engine.rs` (+`rotation/mod.rs`), `packages/sdk-core/src/rotation/engine.ts`, `crates/fuse/src/write_ops/grant_scope.rs`, `crates/fuse/src/write_ops/rotation_deps.rs`, `crates/fuse/src/platform/windows/write_ops.rs`, `crates/api-client/src/{client,shares}.rs`, `tests/desktop-e2e/scripts/shared-scope-exit-rotation.mts`
+
+**End state:** `git status` clean, on `feat/rust-and-fuse-rotation-revocation-soundness`.</result>
+<usage><subagent_tokens>286162</subagent_tokens><tool_uses>55</tool_uses><duration_ms>7941140</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>abbf22a249efcae58</task-id>
+<tool-use-id>toolu_01VtjC61tBSNeBn2NEpCKsVy</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/483e60b7-fc2f-4754-bb13-36a935f407c4/tasks/abbf22a249efcae58.output</output-file>
+<status>completed</status>
+<summary>Agent "Plan-finish and execute Phase 75" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The wait loop is running in the background. I'll pause for the planner's revision commit notification.</result>
+<usage><subagent_tokens>110231</subagent_tokens><tool_uses>19</tool_uses><duration_ms>1274598</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a364f1515e4a380d9</task-id>
+<tool-use-id>toolu_012xw9reEguYwUzFNZWot2LA</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/483e60b7-fc2f-4754-bb13-36a935f407c4/tasks/a364f1515e4a380d9.output</output-file>
+<status>completed</status>
+<summary>Agent "Plan Phase 75" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>SendMessage isn't available in this environment, so I'll return the response as my final message (the peer reads my text output).
+
+## REVISION COMPLETE
+
+**Commit:** `046ac177f` — `docs(75): populate validation strategy from research and plans`
+**Branch:** `feat/cross-language-ipns-and-node-codec-verification-parity` (unchanged)
+
+BLOCKER resolved (Nyquist Dimension 8 / Check 8e). `75-VALIDATION.md` is now a real validation contract transcribed from `75-RESEARCH.md`'s Validation Architecture + the 5 committed plans. The 5 PLAN.md files were **not** touched.
+
+What changed:
+- **Frontmatter:** `status: draft→ready`, `nyquist_compliant: false→true`, `wave_0_complete: false→true`.
+- **Test Infrastructure:** real Cargo `#[test]` + Vitest frameworks, actual full-suite commands (`cargo test --workspace`; per-package `pnpm --filter … test`), config paths (`Cargo.toml`, `packages/*/vitest.config.ts`), runtime estimates.
+- **Per-Task Verification Map:** 11 real rows across all 5 plans (`75-01-01` … `75-05-03`), each with its actual `&lt;automated&gt;` command, wave, SC (SC1/SC2/SC3), source-todo slug in place of REQ-IDs, and threat ref (T-75-01..14).
+- **Sampling Rate:** per-task quick run → per-wave `cargo test --workspace` + full TS suites → phase gate (`vector-parity` + `cargo-linux` llvm-cov; `sdk-e2e` unaffected). Max latency ~120s.
+- **Wave 0:** explicitly N/A for installs — the vector/KAT fixtures are generated in-plan by Task 1 of 75-01/75-04/75-05; `wave_0_complete: true`.
+- **Manual-Only:** none (all automated).
+- **Sign-Off:** all 6 items checked; **Approval: approved 2026-07-11**.
+
+Verified: `grep` shows **0** template placeholders remaining, working tree clean, pre-commit hooks ran clean (exit 0).
+
+File: `/Users/myankelev/Code/random/cipher-box/.planning/phases/75-cross-language-ipns-and-node-codec-verification-parity/75-VALIDATION.md`
+
+Note: no `SendMessage`/messaging tool exists in my environment, so I could not reply to `general-purpose` via that channel — surfacing this outcome here instead.</result>
+<usage><subagent_tokens>206135</subagent_tokens><tool_uses>7</tool_uses><duration_ms>338358</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a6b50eb5ac63ad993</task-id>
+<tool-use-id>toolu_01Trv8f1JqJMto2iXAXx4D87</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/483e60b7-fc2f-4754-bb13-36a935f407c4/tasks/a6b50eb5ac63ad993.output</output-file>
+<status>completed</status>
+<summary>Agent "Finish and execute Phase 75" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>GSD Phase 75 is complete and verified. Final state: branch `feat/cross-language-ipns-and-node-codec-verification-parity`, working tree clean, HEAD `fafa73334`. No push/PR/merge; docker stack left running.
+
+## Part A — Planning to plan-checker PASSED
+- **Branch stayed** `feat/cross-language-ipns-and-node-codec-verification-parity` throughout. No stray `docs/plan-phase-75` branch existed (nothing to reconcile).
+- **Final committed plans: 5** (`75-01..75-05-PLAN.md`), unchanged from what the prior agent wrote — the plan-checker confirmed the plan *content* was sound.
+- **Plan-checker verdict: VERIFICATION PASSED** (iteration 2). Iteration 1 raised 2 blockers, both process/gating artifacts:
+  1. **False positive** — it described `75-VALIDATION.md` as a blank template, but the file was already fully populated (`status: ready`, sign-off `approved 2026-07-11`). Root cause: the *first plan-checker agent has Bash* and had populated + committed VALIDATION.md itself out-of-band (commit `046ac177f`) mid-run, then reported the pre-fix state.
+  2. **Real, trivial** — RESEARCH.md `## Open Questions` lacked the `(RESOLVED)` convention. I applied a 3-line marker edit (adoption confirmed: 75-01→12 vector cases, 75-02→`bind_verified` widened to `pub`), committed with ROADMAP wave-annotations.
+
+## Part B — Execution
+- **All 5 plans executed** sequentially on the main checkout (RED→GREEN TDD, atomic commits, per-plan SUMMARY.md). I ran sequential-on-main rather than parallel worktrees: `worktree.baseRef: head` suppressed the auto-degrade, but the phase's `pnpm`/`cargo` verify commands require the installed workspace — worktrees would have broken them. All commits landed directly on the feat branch.
+- **All 3 Success Criteria pass, independently re-verified by me** (not just executor claims):
+  - **SC1** (IPNS): Rust `ipns_verify_cross_language` ✓ + TS sdk-core 382 ✓ — both reject the same 12-case `verify.json` (4 new signed-invalid cases); TS ports the Rust strict RFC3339 parser + `ValidityType==0` gate; `classify_vector`'s duplicated binding (gap #9 root cause) deleted.
+  - **SC2** (node-codec): Rust `node_codec_kat_file_iv_is_base64_not_hex` ✓ + TS core 203 ✓ — both base64-decode-and-length-assert `fileIv`; a hex IV now fails.
+  - **SC3** (UUID AAD): Rust `cross_language` ✓ + TS crypto 200 ✓ — `uuidToBytes`/`build_node_aad` collapsed to canonical-only, locked by `uuid-acceptance.json`.
+- **Regression**: modified Rust crates (`crypto`/`core`/`api-client`) green; TS packages green.
+- **Verifier: status `passed`** (3/3 must-haves, `75-VERIFICATION.md`). Phase marked complete in ROADMAP `[x]`, 4 resolved source todos auto-closed, PROJECT.md evolved.
+- **New commits this session: 26** (16 `feat`/`test` impl commits + planning/completion docs).
+
+## Blockers
+None. One cosmetic note (not a blocker): after `phase.complete` advanced STATE.md to phase 76, two GSD-owned fields are mildly stale (`status: verifying`, `stopped_at: 75-04`) while `last_activity_desc` correctly reads "Phase 75 complete, transitioned to Phase 76" — the next phase's workflow resets these, so I left GSD-owned state untouched.
+
+Operational notes: the gsd commit helper false-negatived `commit_failed` on 3 commits that all actually landed (verified via git log, never retried). No test-login was needed (all offline vector tests), so `SDK_E2E_SECRET` was moot. I deliberately did **not** auto-advance into Phase 76 (out of scope). Final `git status`: clean.</result>
+<usage><subagent_tokens>266939</subagent_tokens><tool_uses>56</tool_uses><duration_ms>5550919</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b66hin04a</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/483e60b7-fc2f-4754-bb13-36a935f407c4/tasks/b66hin04a.output</output-file>
+<status>completed</status>
+<summary>Background command "Verify feat/75 compiles" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>adab4b7ac9786b4ec</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/483e60b7-fc2f-4754-bb13-36a935f407c4/tasks/adab4b7ac9786b4ec.output</output-file>
+<status>failed</status>
+<summary>Agent "Plan and execute Phase 77" failed: Agent terminated early due to an API error: You've hit your session limit · resets 9:40am (Europe/Berlin)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The planner cleanly annotated the ROADMAP plan list (0→10 plans, each mapped to its todo # and wave). Plans accepted as PLANNING COMPLETE (step 9a). Now spawning the plan-checker (sonnet) per step 10.
+
+GSD ► VERIFYING PLANS — Spawning plan checker (runs in a subagent).</result>
+</task-notification>
+
+---
+
+RESUME CipherBox GSD milestone-v2.0 closeout (autonomous — do NOT wait for user input). This resumes work that may have been cut off by a quota-window reset.
+
+## Progress so far (verify from disk, don't assume)
+Milestone v2.0. Completed closeout phases this run: 74 DONE (feat/rust-and-fuse-rotation-revocation-soundness, code-verified; only Windows + desktop-e2e CI legs remain, infra-gated), 75 DONE (feat/cross-language-ipns-and-node-codec-verification-parity, verifier passed, marked [x]). REMAINING: 77 (likely in progress on feat/crypto-hygiene-and-terminology-canonicalization), then 76, 78, 79.
+
+## CRITICAL — the working method (a prior approach FAILED; use THIS one)
+Do NOT use worktrees or EnterWorktree — sub-agents launched at the repo root CANNOT EnterWorktree into an existing worktree (it errors "repo root, not an isolated worktree"). The WORKING method is:
+1. In the MAIN checkout, `git switch feat/<slug>` for the phase (feat branches already exist with committed research/patterns; 77's slug = crypto-hygiene-and-terminology-canonicalization). Ensure clean tree first.
+2. Spawn ONE background general-purpose agent per phase that operates in the main checkout (it inherits cwd = repo root, already on the feat branch) and runs Skill(gsd-plan-phase <N> --auto) then, if plan-checker PASSED, Skill(gsd-execute-phase <N>). Tell it to run Skills SYNCHRONOUSLY (no self-made background wait loops — that stalled a prior agent).
+3. Process phases SEQUENTIALLY (one feat branch checked out at a time; shared DB/stack). WAIT for each agent before switching the main checkout to the next feat branch.
+4. For 76/78/79 (no branch yet): `git switch main`, then `git switch -c feat/<phase-dir-slug> main` (slugs: fuse-durability-and-tee-write-path-hardening; and the 78/79 slugs from their .planning/phases/ dir names), then run the plan+execute agent on that branch.
+
+## Assess-first steps
+- `git worktree list` (should be only main), `git branch --list "feat/*"`, and for each phase `git log --oneline` + `ls .planning/phases/<N>-*/<N>-*-PLAN.md` + check for a passed <N>-VERIFICATION.md. Skip phases already verified-complete. Resume partially-planned phases (e.g. plans committed but no plan-checker pass) by re-running gsd-plan-phase --auto on that feat branch.
+
+## Runtime / rules
+- API :3000 should be source-built (restart `pnpm --filter api dev` if it's a stale `node dist/main.js`); redis :6380, kubo :5001 up; export SDK_E2E_SECRET=e2e-test-secret-ci-only for any sdk-e2e/verification. Leave the docker stack running.
+- commit.gpgsign=false (no signing prompts). Pre-commit hooks are SLOW (~1-2 min); never kill commits or use --no-verify; a "hung" commit usually landed (verify with git log). The gsd commit helper sometimes false-negatives commit_failed while the commit lands — verify, never blindly retry.
+- NEVER commit/push/merge to main; each phase stays on its feat branch. No PRs without review. Treat Windows/desktop-e2e/CI-only legs as infra-gated (record in <N>-UAT.md), not code gaps.
+- If you will likely hit the session limit again before finishing all of 76/77/78/79, schedule ANOTHER CronCreate one-shot ~5h out (next reset) with this same corrected instruction so work keeps resuming.
+- End with a concise status: phases planned/executed + verification result, branches ready, blockers. Do NOT auto-merge or open PRs — leave the feat branches ready for the user's review.
+
+---
+
+<task-notification>
+<task-id>aaee633f61896b94c</task-id>
+<tool-use-id>toolu_01BX9jzK6coCsHX5AVCXiZoK</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/483e60b7-fc2f-4754-bb13-36a935f407c4/tasks/aaee633f61896b94c.output</output-file>
+<status>completed</status>
+<summary>Agent "Check and execute Phase 77" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Phase 77 is complete. Final state verified: clean tree, on the feat branch, single worktree. The 2 `worktree-agent-*` branches are stale orphans from a June 26 session (tip `16995221c`, fully merged into HEAD, 0 unique commits, no attached worktree) — pre-existing, out of scope, left untouched. My phase-77 executor commits are all correctly on the feat branch.
+
+---
+
+## Phase 77 — Complete
+
+**Branch:** Stayed on `feat/crypto-hygiene-and-terminology-canonicalization` the entire run. Never touched main; clean working tree.
+
+### Part A — Plan-checker
+`## VERIFICATION PASSED` on the first pass — **no revisions needed**. All 10 committed plans (77-01..77-10) verified against the 12 todos, canonical terminology (`encryptedIpnsPrivateKey`), and the atomic wire-contract rename. No stray `docs/plan-phase-77` branch existed. Committed ROADMAP wave annotations + planning-complete state (`72fd85aec`).
+
+### Part B — Execute
+Ran **sequential on the main checkout** rather than parallel worktrees. Decisive reason: the feat branch is 5 commits ahead of origin/main and carries all the plan artifacts, but the repo's default `fresh` baseRef would have forked executor worktrees from origin/main — they'd never see the PLAN.md files. Sequential-on-main also sidesteps this phase's tight cross-package typecheck coupling. `worktree.base-check` returned `shouldDegrade=false`, but the branch-divergence evidence overrode it.
+
+- **All 10 plans executed**, each a fresh gsd-executor doing RED→GREEN TDD, atomic commits directly on the feat branch.
+- **SCs passed: 3/3** (gsd-verifier, `77-VERIFICATION.md`, `status: passed`). All 12 todos resolved and auto-closed.
+- **Typecheck (both wave boundaries + final):** `pnpm typecheck` (full workspace incl. web + scripts) EXIT 0; `apps/api` and `cipherbox-tee-worker` `tsc --noEmit` EXIT 0 (these aren't in `pnpm typecheck`).
+- **Unit suites — all green:** crypto 207, core 200, sdk-core 371 (+12 skipped), sdk 411 (+3 skipped), tee-worker 76 (+8 todo), api wire/shares specs (tee/republish/shares/share-invite) 129. Base64 no-behavior-change proof: golden-vector oracle + core/sdk-core round-trip suites GREEN.
+- **Verification status: passed** — no gaps, no human-needed. Verifier independently confirmed the 11 residual old-name occurrences are cosmetic (doc comments + 2 out-of-plan-scope local variable names that assign INTO the canonical `encryptedIpnsPrivateKey` field), not functional gaps.
+- **New commits:** 17 phase-77 code commits (test/feat/fix/refactor) plus per-plan SUMMARY/STATE/ROADMAP tracking + completion docs; 50 total ahead of origin/main. `phase.complete` ran (no warnings), advanced STATE to Phase 78.
+
+**Benign documented deviations:** 77-02 typed `importAesKey` as `AlgorithmIdentifier` (avoids tsc errors); 77-03 used equivalent verify commands (plan referenced a wrong package name); 77-05 used a secp256k1 test key (real TEE key type); 77-08/77-09 converted 4 crypto-mocking tests to `importOriginal`+spread so the real codec runs (77-09 also fixed a latent 77-08 test-mock gap). All zeroization respected the terminal-owner rule.
+
+### Blockers
+**None.** All gates green, verification passed.
+
+Two notes (not blockers): (1) `sdk-e2e` (the live client→API IPNS round-trip) was **not run** — the TEE wire-field rename is a pure field rename validated atomically on both sides (tee-worker republish vitest + api republish/tee specs) and end-to-end by the green workspace typecheck; running sdk-e2e meaningfully would require rebuilding+restarting the :3000 API from the new source, beyond the no-behavior-change verification need. Flagging it as an optional deeper check. (2) STATE.md frontmatter shows a cosmetic GSD-tracker lag (`status: verifying`, `stopped_at: 77-09`); the authoritative Current Position and ROADMAP `[x] (completed 2026-07-11)` are correct — I left GSD's own state untouched rather than hand-editing it.
+
+### Final git status
+Clean, on `feat/crypto-hygiene-and-terminology-canonicalization`. Docker stack left running. Not pushed/PR'd/merged, per instructions.</result>
+<usage><subagent_tokens>242519</subagent_tokens><tool_uses>52</tool_uses><duration_ms>8205965</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aaf65cf1b9ddb156c</task-id>
+<tool-use-id>toolu_01F4H2Y89evcfFzi4g3izewc</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/483e60b7-fc2f-4754-bb13-36a935f407c4/tasks/aaf65cf1b9ddb156c.output</output-file>
+<status>killed</status>
+<summary>Agent "Plan and execute Phase 76" was stopped by user</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I now have the full scope. This is a well-defined M4 closeout: 4 todos spanning Rust (vault-init preflight, FUSE publish/concurrency) and TypeScript (TEE republish error-handling, renewIpnsRecord EOL invariant). No CONTEXT.md exists; autonomous mode means I proceed "continue without context" with the source todos serving as locked decisions. Schema-gate will not fire (no TypeORM entity/migration changes). Let me start research.
+
+I'll spawn the researcher synchronously per the task's no-background-wait instruction.</result>
+</task-notification>
+
+---
+
+ok, switch to the phase 74 branch and run /ship-phase 74
