@@ -83,10 +83,10 @@ export function uuidToBytes(uuid: string): Uint8Array {
  * Convert a Uint8Array to a base64 string.
  *
  * [SECURITY: MEDIUM-08] Chunk-based encoding to avoid call stack issues with
- * large Uint8Arrays (spread operator has argument limits ~65536). Copied
- * verbatim from packages/core/src/node/encode.ts (uint8ArrayToBase64) — this
- * is the canonical base64 encoder every package boundary re-exports from
- * @cipherbox/crypto.
+ * large Uint8Arrays (spread operator has argument limits ~65536). Lifted
+ * verbatim from the former per-package encoders (e.g. core's node encoder) that
+ * this phase consolidated here — this is now the canonical base64 encoder every
+ * package boundary re-exports from @cipherbox/crypto.
  *
  * @param bytes - Byte array
  * @returns Base64-encoded string
