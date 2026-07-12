@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback, useMemo, useRef, type KeyboardEvent } from 'react';
 import type { SealedChildRef } from '@cipherbox/core';
+import type { ResolvedChild } from '@cipherbox/sdk';
 import { Modal } from '../ui/Modal';
 import { getSdkClient } from '../../lib/sdk-provider';
+import { isFileRefResolved } from '../../utils/fileTypes';
 import '../../styles/dialogs.css';
 
 type SharedPickerNode = {
@@ -24,6 +26,8 @@ type SharedMoveDialogProps = {
   item: SealedChildRef | null;
   /** Multiple items being moved (batch mode — takes precedence over item when length > 1) */
   items?: SealedChildRef[];
+  /** Resolved-kind lookup for the item(s) being moved, keyed by ipnsName. */
+  resolvedByIpnsName: Map<string, ResolvedChild>;
   /** Current parent folder ID of the item(s) (disabled as a destination) */
   currentFolderId: string;
   /** Active share ID (required to load the subtree) */
@@ -47,6 +51,7 @@ export function SharedMoveDialog({
   onConfirm,
   item,
   items,
+  resolvedByIpnsName,
   currentFolderId,
   shareId,
   isLoading = false,
@@ -95,12 +100,14 @@ export function SharedMoveDialog({
   }, [open, shareId]);
 
   // Folders being moved (only folders can create a cycle); their own subtree
-  // must be excluded as a destination.
+  // must be excluded as a destination. A file cannot create a folder cycle, so
+  // it must not disable any destinations here.
   const movedFolderIds = useMemo(() => {
     const moved = isBatchMode ? (items ?? []) : item ? [item] : [];
-    // TODO(phase 63): SealedChildRef has no .type; kind discrimination deferred to Node.kind
-    return new Set(moved.map((m) => m.ipnsName)); // phase-63 stub: treat all as folders
-  }, [isBatchMode, items, item]);
+    return new Set(
+      moved.filter((m) => !isFileRefResolved(m, resolvedByIpnsName)).map((m) => m.ipnsName)
+    );
+  }, [isBatchMode, items, item, resolvedByIpnsName]);
 
   // A moved folder and every node beneath it cannot be a destination — moving a
   // folder into its own subtree would orphan/cycle the tree.
@@ -158,9 +165,14 @@ export function SharedMoveDialog({
     }
   }, [isLoading, onClose]);
 
-  // Auto-adapt title/label for batch vs single mode (mirrors private MoveDialog :174-179)
-  // TODO(phase 63): SealedChildRef has no .type; treat all as folders until Node.kind available
-  const title = isBatchMode ? `Move ${items!.length} items` : 'Move Folder';
+  // Auto-adapt title/label for batch vs single mode (mirrors private MoveDialog :174-179).
+  // Single-item title reflects the moved item's real kind — a shared file move
+  // must not read "Move Folder".
+  const title = isBatchMode
+    ? `Move ${items!.length} items`
+    : item && isFileRefResolved(item, resolvedByIpnsName)
+      ? 'Move File'
+      : 'Move Folder';
   const label = isBatchMode
     ? `Move ${items!.length} items to:`
     : item

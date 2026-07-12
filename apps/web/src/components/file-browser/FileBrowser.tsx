@@ -6,7 +6,7 @@ import { useContextMenu } from '../../hooks/useContextMenu';
 import { useSyncPolling, invalidateOpenFolder } from '../../hooks/useSyncPolling';
 import { useDeviceRegistrySync } from '../../hooks/useDeviceRegistrySync';
 import { useDropUpload } from '../../hooks/useDropUpload';
-import { isPreviewableFile, isTextFile } from '../../utils/fileTypes';
+import { isPreviewableFile, isTextFile, isFileRefResolved } from '../../utils/fileTypes';
 import { useVaultStore } from '../../stores/vault.store';
 import { useSyncStore } from '../../stores/sync.store';
 import { useUploadStore } from '../../stores/upload.store';
@@ -111,8 +111,26 @@ export function FileBrowser() {
     return false;
   });
 
-  // TODO(phase 63): SealedChildRef has no .type; treat all as folders for delete message
-  const deleteMessage = `Are you sure you want to delete "${actions.confirmDialog.item?.name}"? This will also delete all files and subfolders inside. This cannot be undone.`;
+  // Resolve each dialog subject's real kind against the SDK listing (79-06),
+  // so titles/messages/props label the actual file-vs-folder kind instead of a
+  // hardcoded folder. A miss (still-loading listing) stays folder-safe.
+  const { resolvedByIpnsName } = actions;
+  const renameItemType: 'file' | 'folder' =
+    actions.renameDialog.item && isFileRefResolved(actions.renameDialog.item, resolvedByIpnsName)
+      ? 'file'
+      : 'folder';
+  const deleteIsFolder = actions.confirmDialog.item
+    ? !isFileRefResolved(actions.confirmDialog.item, resolvedByIpnsName)
+    : true;
+  const shareKind: 'file' | 'folder' =
+    actions.shareItem && isFileRefResolved(actions.shareItem, resolvedByIpnsName)
+      ? 'file'
+      : 'folder';
+
+  const deleteName = actions.confirmDialog.item?.name;
+  const deleteMessage = deleteIsFolder
+    ? `Are you sure you want to delete "${deleteName}"? This will also delete all files and subfolders inside. This cannot be undone.`
+    : `Are you sure you want to delete "${deleteName}"? This cannot be undone.`;
 
   const contentClassName = [
     'file-browser-content',
@@ -264,7 +282,7 @@ export function FileBrowser() {
         onClose={actions.closeRenameDialog}
         onConfirm={actions.handleRenameConfirm}
         currentName={actions.renameDialog.item?.name ?? ''}
-        itemType={'folder' /* TODO(phase 63): SealedChildRef has no .type */}
+        itemType={renameItemType}
         isLoading={isOperating}
       />
 
@@ -272,7 +290,7 @@ export function FileBrowser() {
         open={actions.confirmDialog.open}
         onClose={actions.closeConfirmDialog}
         onConfirm={actions.handleDeleteConfirm}
-        title={'Delete Folder?' /* TODO(phase 63): SealedChildRef has no .type */}
+        title={deleteIsFolder ? 'Delete Folder?' : 'Delete File?'}
         message={deleteMessage}
         confirmLabel="Delete"
         isDestructive
@@ -292,6 +310,7 @@ export function FileBrowser() {
         onConfirm={actions.handleMoveConfirm}
         item={actions.moveDialog.item}
         currentFolderId={currentFolderId}
+        resolvedByIpnsName={resolvedByIpnsName}
         isLoading={isOperating}
       />
 
@@ -309,6 +328,7 @@ export function FileBrowser() {
           isOpen={!!actions.shareItem}
           onClose={actions.closeShareDialog}
           item={actions.shareItem}
+          kind={shareKind}
           folderKey={currentFolder.folderKey}
           ipnsName={actions.shareItem.ipnsName}
           parentFolderId={currentFolderId}
@@ -369,6 +389,7 @@ export function FileBrowser() {
         item={null}
         items={actions.batchMoveDialog.items}
         currentFolderId={currentFolderId}
+        resolvedByIpnsName={resolvedByIpnsName}
         isLoading={isOperating}
       />
     </div>

@@ -318,7 +318,11 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
         if (latestNavTarget.current !== targetFolderId) return;
 
         // Map FolderState -> FolderNode.
-        // TODO(phase 63): use Node.id for the folder ID (not ipnsName).
+        // Folder identity is intentionally keyed by ipnsName here (matching
+        // the `c.ipnsName === targetFolderId` lookup above and the route
+        // param convention), NOT re-keyed to Node.id. A prior UUID-keying
+        // attempt caused an orphaned-store-entry bug (68.1/68.2-09) -- do
+        // not "fix" this to `id: node.id`.
         const folderNode: FolderNode = {
           id: targetFolderId,
           name: folderRef.name,
