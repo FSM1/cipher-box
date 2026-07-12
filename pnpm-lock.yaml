@@ -334,6 +334,9 @@ importers:
       '@grafana/faro-web-tracing':
         specifier: ^2.3.1
         version: 2.3.1
+      '@ipld/dag-pb':
+        specifier: ^4.1.7
+        version: 4.1.7
       '@noble/secp256k1':
         specifier: ^3.0.0
         version: 3.0.0
@@ -358,9 +361,15 @@ importers:
       bn.js:
         specifier: ^5.2.1
         version: 5.2.2
+      ipfs-unixfs:
+        specifier: ^11.2.5
+        version: 11.2.5
       minisearch:
         specifier: ^7.2.0
         version: 7.2.0
+      multiformats:
+        specifier: ^13.4.2
+        version: 13.4.2
       pdfjs-dist:
         specifier: ^5.4.624
         version: 5.4.624
@@ -2481,6 +2490,13 @@ packages:
       {
         integrity: sha512-eUgLqrMf8nJkZxT24JvVRrQya1vZkQh8BBeYNwGDqa5I0VUi8ACx7uFvAaLxintokpTenkK6DASvo/bvNbBGow==,
       }
+
+  '@ipld/dag-pb@4.1.7':
+    resolution:
+      {
+        integrity: sha512-/i/13trFihjWfDyXlylRwhuYjtzYjvOFw0vlRjYGnZuv7d7MOgA2lV/vRuL5RfeUajM03aZfFLdq4S7cTbbTRg==,
+      }
+    engines: { node: '>=16.0.0', npm: '>=7.0.0' }
 
   '@isaacs/balanced-match@4.0.1':
     resolution:
@@ -8711,6 +8727,12 @@ packages:
       }
     engines: { node: '>= 0.10' }
 
+  ipfs-unixfs@11.2.5:
+    resolution:
+      {
+        integrity: sha512-uasYJ0GLPbViaTFsOLnL9YPjX5VmhnqtWRriogAHOe4ApmIi9VAOFBzgDHsUW2ub4pEa/EysbtWk126g2vkU/g==,
+      }
+
   ipns@10.1.3:
     resolution:
       {
@@ -10408,6 +10430,12 @@ packages:
     resolution:
       {
         integrity: sha512-eh6eHCrRi1+POZ3dA+Dq1C6jhP1GNtr9CRINMb67OKzqW9I5DUuZM/3jLPlzhgpGeiNUlEGEbkCYChXMCc/8DQ==,
+      }
+
+  multiformats@14.0.4:
+    resolution:
+      {
+        integrity: sha512-+SXItmOUWzT0kjlIfkZ4NawJaC9jW/mPlyn902V9Qgpc7YDwdEiwqbiZxTyvC0XWh1jZguXca3A/WQ+UOPRLUA==,
       }
 
   mute-stream@2.0.0:
@@ -14713,6 +14741,10 @@ snapshots:
       '@types/node': 22.19.7
 
   '@ioredis/commands@1.5.0': {}
+
+  '@ipld/dag-pb@4.1.7':
+    dependencies:
+      multiformats: 14.0.4
 
   '@isaacs/balanced-match@4.0.1': {}
 
@@ -19381,6 +19413,11 @@ snapshots:
 
   ipaddr.js@1.9.1: {}
 
+  ipfs-unixfs@11.2.5:
+    dependencies:
+      protons-runtime: 5.6.0
+      uint8arraylist: 2.4.8
+
   ipns@10.1.3:
     dependencies:
       '@libp2p/crypto': 5.1.13
@@ -20597,6 +20634,8 @@ snapshots:
       xtend: 4.0.2
 
   multiformats@13.4.2: {}
+
+  multiformats@14.0.4: {}
 
   mute-stream@2.0.0: {}
 

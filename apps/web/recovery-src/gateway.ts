@@ -18,9 +18,20 @@
  * value. The HEAD and Kubo fallback rungs carry no verifiable signature, so —
  * matching the v2 tool's graceful-degradation — they are used only when the
  * primary rung yields nothing.
+ *
+ * Content fetches (`fetchFromIpfs`) are content-address-verified: fetched bytes
+ * are re-hashed against the CID's multihash (single raw blocks directly;
+ * multi-block dag-pb files via a verified raw-block walk) so a hostile gateway
+ * cannot silently swap CTR (auth-tag-less) ciphertext for corrupted bytes
+ * (T-78-04). Gateways that cannot serve verifiable raw blocks fall back to the
+ * plain assembled fetch (unverified) to preserve availability.
  */
 
 import { parseIpnsRecord, verifyIpnsRecordSignatureDetailed } from '@cipherbox/crypto';
+import { CID } from 'multiformats/cid';
+import { sha256 } from 'multiformats/hashes/sha2';
+import * as dagPB from '@ipld/dag-pb';
+import { UnixFS } from 'ipfs-unixfs';
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_PRIMARY_RETRIES = 3;
@@ -151,25 +162,187 @@ export async function resolveIpnsVerified(
   throw new Error(`Failed to resolve IPNS name: ${ipnsName}`);
 }
 
+/** IPLD codec / multihash constants (multiformats table). */
+const RAW_CODE = 0x55;
+const DAG_PB_CODE = 0x70;
+const SHA2_256_CODE = 0x12;
+
 /**
- * Fetch content-addressed bytes for a CID over HTTP against a configurable
- * IPFS gateway (D-04). This transport does NOT re-hash the fetched bytes
- * against the CID multihash. GCM-sealed envelopes and GCM file bodies fail
- * closed on tampering via their auth-tag during unseal/decrypt, but CTR
- * (large-file) bodies carry no auth tag — so a hostile gateway can silently
- * tamper a CTR body. Verifying content against the CID here (to fully close the
- * trust-nothing model) is tracked as a recovery-tool hardening follow-up.
- *
- * @param cid - The content CID to fetch.
- * @param ipfsGatewayUrl - IPFS gateway base URL (e.g. "https://ipfs.io").
- * @returns The raw content bytes.
- * @throws if the gateway responds non-2xx.
+ * Signals that the gateway cannot serve a single addressed block as
+ * `application/vnd.ipld.raw` (no trustless-gateway support). Distinct from a
+ * content-hash mismatch so the caller can fall back to an unverified assembled
+ * fetch for availability WITHOUT swallowing genuine tamper errors.
  */
-export async function fetchFromIpfs(cid: string, ipfsGatewayUrl: string): Promise<Uint8Array> {
-  const url = `${ipfsGatewayUrl}/ipfs/${cid}`;
-  const resp = await fetchWithTimeout(url);
+class RawBlockUnsupportedError extends Error {
+  constructor(status: number) {
+    super(`gateway does not serve verifiable raw blocks (status ${status})`);
+    this.name = 'RawBlockUnsupportedError';
+  }
+}
+
+/** Constant-length byte comparison for two equal-length digests. */
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
+  return diff === 0;
+}
+
+/** Concatenate a list of byte arrays into one buffer. */
+function concatBytes(parts: Uint8Array[]): Uint8Array {
+  let total = 0;
+  for (const p of parts) total += p.length;
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const p of parts) {
+    out.set(p, offset);
+    offset += p.length;
+  }
+  return out;
+}
+
+/**
+ * Re-hash `bytes` and assert the digest matches the CID's multihash — the core
+ * content-address integrity check. Only sha2-256 (Kubo's default, the only hash
+ * CipherBox emits) is supported; any other multihash code fails closed rather
+ * than trusting unverifiable bytes.
+ *
+ * @throws if the multihash is unsupported or the digest does not match.
+ */
+async function assertCidDigest(cid: CID, bytes: Uint8Array): Promise<void> {
+  if (cid.multihash.code !== SHA2_256_CODE) {
+    throw new Error(
+      `unsupported multihash 0x${cid.multihash.code.toString(16)} for CID ${cid.toString()}`
+    );
+  }
+  const digest = await sha256.digest(bytes);
+  if (!bytesEqual(digest.digest, cid.multihash.digest)) {
+    throw new Error(
+      `content hash mismatch for CID ${cid.toString()} — gateway returned tampered or wrong bytes`
+    );
+  }
+}
+
+/** Plain assembled `/ipfs/<cid>` fetch (UnixFS-reconstructed bytes; unverified). */
+async function fetchAssembled(cid: string, ipfsGatewayUrl: string): Promise<Uint8Array> {
+  const resp = await fetchWithTimeout(`${ipfsGatewayUrl}/ipfs/${cid}`);
   if (!resp.ok) {
     throw new Error(`IPFS fetch failed for ${cid}: ${resp.status}`);
   }
   return new Uint8Array(await resp.arrayBuffer());
+}
+
+/**
+ * Fetch a single addressed block as `application/vnd.ipld.raw` (trustless
+ * gateway). If the gateway ignored `?format=raw` and served reconstructed
+ * content, the bytes are NOT the block — hashing them would false-reject a valid
+ * file — so that is treated as {@link RawBlockUnsupportedError}, not a mismatch.
+ */
+async function fetchRawBlock(cid: CID, ipfsGatewayUrl: string): Promise<Uint8Array> {
+  const resp = await fetchWithTimeout(`${ipfsGatewayUrl}/ipfs/${cid.toString()}?format=raw`, {
+    headers: { Accept: 'application/vnd.ipld.raw' },
+  });
+  if (!resp.ok) {
+    throw new RawBlockUnsupportedError(resp.status);
+  }
+  const contentType = resp.headers.get('Content-Type') ?? '';
+  if (!contentType.includes('application/vnd.ipld.raw')) {
+    throw new RawBlockUnsupportedError(resp.status);
+  }
+  return new Uint8Array(await resp.arrayBuffer());
+}
+
+/**
+ * Reconstruct a file's bytes from content-address-VERIFIED raw blocks. Each
+ * block (root and every dag-pb child) is fetched via the raw-block API and
+ * re-hashed against its CID before use, so no leaf can be silently tampered.
+ * Handles Kubo's default cidv1 layout (raw leaves under a dag-pb file root) and
+ * any inline UnixFS data carried in a dag-pb node.
+ */
+async function fetchVerifiedDag(cid: CID, ipfsGatewayUrl: string): Promise<Uint8Array> {
+  const block = await fetchRawBlock(cid, ipfsGatewayUrl);
+  await assertCidDigest(cid, block);
+
+  if (cid.code === RAW_CODE) {
+    return block;
+  }
+  if (cid.code === DAG_PB_CODE) {
+    const node = dagPB.decode(block);
+    const parts: Uint8Array[] = [];
+    if (node.Data && node.Data.length > 0) {
+      // Non-raw-leaf layouts carry the chunk bytes inline in the UnixFS Data.
+      const unixfs = UnixFS.unmarshal(node.Data);
+      if (unixfs.data && unixfs.data.length > 0) {
+        parts.push(unixfs.data);
+      }
+    }
+    for (const link of node.Links) {
+      parts.push(await fetchVerifiedDag(link.Hash, ipfsGatewayUrl));
+    }
+    return concatBytes(parts);
+  }
+  throw new Error(`unsupported CID codec 0x${cid.code.toString(16)} for ${cid.toString()}`);
+}
+
+/**
+ * Fetch content-addressed bytes for a CID over HTTP against a configurable IPFS
+ * gateway (D-04), verifying the returned bytes against the CID's multihash so a
+ * hostile/misconfigured gateway cannot silently corrupt recovered plaintext.
+ *
+ * GCM-sealed envelopes and GCM file bodies fail closed on tampering via their
+ * auth-tag, but CTR (large-file) bodies carry no auth tag — this content-address
+ * check closes that gap (T-78-04). Single raw blocks are verified directly;
+ * multi-block dag-pb files are reconstructed from verified raw blocks. A gateway
+ * that cannot serve verifiable raw blocks falls back to a plain assembled fetch
+ * (UNVERIFIED) so recovery still works — but a genuine hash mismatch is a hard
+ * reject and is never downgraded to the fallback.
+ *
+ * @param cid - The content CID to fetch.
+ * @param ipfsGatewayUrl - IPFS gateway base URL (e.g. "https://ipfs.io").
+ * @returns The verified (or, on unsupported gateways, best-effort) content bytes.
+ * @throws if the gateway responds non-2xx or the content fails its hash check.
+ */
+export async function fetchFromIpfs(cid: string, ipfsGatewayUrl: string): Promise<Uint8Array> {
+  let parsed: CID;
+  try {
+    parsed = CID.parse(cid);
+  } catch {
+    // Not a parseable CID — fall back to the raw assembled fetch (unverified).
+    return fetchAssembled(cid, ipfsGatewayUrl);
+  }
+
+  // Raw single block: the plain `/ipfs/<cid>` response bytes ARE the addressed
+  // block, so verify them directly (one request, no raw-block API needed).
+  if (parsed.code === RAW_CODE) {
+    const bytes = await fetchAssembled(cid, ipfsGatewayUrl);
+    await assertCidDigest(parsed, bytes);
+    return bytes;
+  }
+
+  // dag-pb / CIDv0: the assembled response is reconstructed, not the block, so it
+  // cannot be hashed against the root multihash. Rebuild from verified blocks.
+  try {
+    return await fetchVerifiedDag(parsed, ipfsGatewayUrl);
+  } catch (err) {
+    if (err instanceof RawBlockUnsupportedError) {
+      // Availability fallback (D-04): gateway can't serve verifiable raw blocks.
+      return fetchAssembled(cid, ipfsGatewayUrl);
+    }
+    throw err;
+  }
+}
+
+/**
+ * Assert that `bytes` hash to the given single-block (raw-codec) CID. Exposed for
+ * deterministic unit coverage of the content-address integrity check.
+ *
+ * @throws if the CID is not a raw single block, the multihash is unsupported, or
+ *   the digest does not match.
+ */
+export async function verifyRawBlockBytes(cid: string, bytes: Uint8Array): Promise<void> {
+  const parsed = CID.parse(cid);
+  if (parsed.code !== RAW_CODE) {
+    throw new Error(`CID ${cid} is not a raw single block (codec 0x${parsed.code.toString(16)})`);
+  }
+  await assertCidDigest(parsed, bytes);
 }
