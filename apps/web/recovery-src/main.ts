@@ -1,5 +1,5 @@
 /**
- * Recovery-tool entry point (SC1, spike-complete).
+ * Recovery-tool entry point (SC1) — full DOM wiring.
  *
  * Trust-nothing, infra-independent vault recovery (D-01/D-02): given ONLY the
  * user's `privateKey`, this walks the IPNS → IPFS link tree over a configurable
@@ -9,141 +9,222 @@
  * from `@cipherbox/crypto` and `@cipherbox/core` (D-03) — no crypto/codec is
  * hand-rolled here.
  *
- * This module is intentionally spike-complete rather than DOM-complete: it
- * imports and exercises the FULL primitive set the finished tool will use so
- * the esbuild bundle Task 3 measures is representative of real weight (Open
- * Question 1). Full DOM/UI wiring lands in plan 78-02; the exported
- * `bootstrap()` here is the recovery walk those handlers will drive.
+ * The pasted `privateKey` is used in-memory only: it is NEVER written to any
+ * persistent browser storage (CLAUDE.md Rule 1 / T-78-06) and is zeroed after
+ * the recovery walk completes.
+ *
+ * This module is the esbuild bundle entry `recovery-src/build.ts` splices into
+ * `public/recovery.html`'s `<!-- RECOVERY_BUNDLE -->` placeholder.
  */
 
 import {
-  base64ToBytes,
-  decryptAesCtr,
-  decryptAesGcm,
   deriveVaultIpnsKeypair,
   deriveVaultKeyIpnsKeypair,
   hexToBytes,
   unwrapKey,
 } from '@cipherbox/crypto';
-import {
-  deserializeVaultBlobV3,
-  unsealChildReadKey,
-  unsealNode,
-  type Node,
-  type PublishedNode,
-  type SealedChildRef,
-} from '@cipherbox/core';
-import { zipSync } from 'fflate';
+import { deserializeVaultBlobV3, unsealNode } from '@cipherbox/core';
+import { zipSync, type Zippable } from 'fflate';
 
 import { fetchFromIpfs, resolveIpnsVerified } from './gateway';
+import { fetchPublishedNode, recoverTree, type RecoveredFile } from './walk';
+import type { RecoveryGatewayConfig } from './walk';
 
-/** User-supplied recovery inputs (the pasted key + the gateway endpoints, D-04). */
-export interface RecoveryParams {
-  /** The user's secp256k1 private key as a hex string — the sole credential (D-01). */
-  privateKeyHex: string;
-  /** Delegated-routing gateway base URL for IPNS resolution. */
-  ipnsGatewayUrl: string;
-  /** IPFS gateway base URL for content fetch. */
-  ipfsGatewayUrl: string;
+// ---------------------------------------------------------------------------
+// DOM handles (query the stable data-testid selectors the e2e spec depends on)
+// ---------------------------------------------------------------------------
+
+function requireEl<T extends HTMLElement>(selector: string): T {
+  const el = document.querySelector<T>(selector);
+  if (!el) throw new Error(`Recovery UI element not found: ${selector}`);
+  return el;
 }
 
-/** Recovered file bytes keyed by their tree path. */
-export type RecoveredFiles = Record<string, Uint8Array>;
+// ---------------------------------------------------------------------------
+// Progress log + step navigation
+// ---------------------------------------------------------------------------
 
-const decoder = new TextDecoder();
-
-/** Resolve an IPNS name to its PublishedNode envelope over the configured gateway. */
-async function fetchPublishedNode(
-  ipnsName: string,
-  params: RecoveryParams
-): Promise<PublishedNode> {
-  const cid = await resolveIpnsVerified(ipnsName, params.ipnsGatewayUrl, params.ipfsGatewayUrl);
-  const envelopeBytes = await fetchFromIpfs(cid, params.ipfsGatewayUrl);
-  return JSON.parse(decoder.decode(envelopeBytes)) as PublishedNode;
+function makeLogger(logEl: HTMLElement) {
+  return (message: string, level: 'info' | 'success' | 'error' | 'warn' = 'info'): void => {
+    const entry = document.createElement('div');
+    entry.className = `log-entry ${level}`;
+    entry.textContent = message;
+    logEl.appendChild(entry);
+    logEl.scrollTop = logEl.scrollHeight;
+  };
 }
 
-/** Decrypt a file node's content bytes, dispatching on its encryption mode. */
-async function decryptFileContent(node: Node, params: RecoveryParams): Promise<Uint8Array> {
-  const content = node.content;
-  if (!content) {
-    throw new Error(`File node ${node.id} has no content descriptor`);
-  }
-  const ciphertext = await fetchFromIpfs(content.cid, params.ipfsGatewayUrl);
-  const iv = base64ToBytes(content.fileIv);
-  // fileKey is a raw 32-byte AES key already unsealed inside the read-body — no ECIES here.
-  return content.encryptionMode === 'CTR'
-    ? decryptAesCtr(ciphertext, content.fileKey, iv)
-    : decryptAesGcm(ciphertext, content.fileKey, iv);
-}
-
-/**
- * Recursively walk a folder node, decrypting every descendant file.
- *
- * Mirrors `packages/sdk/src/folder-listing.ts::resolveChildren`, swapping the
- * SDK's API-backed resolve for the gateway transport. The generation passed to
- * `unsealChildReadKey` MUST be the parent mirror (`childRef.generation`), never
- * the freshly-fetched child's own `published.generation` (§2.6 rule) — the wrong
- * source produces an AEAD auth-tag failure, not silent corruption.
- */
-async function recoverFolder(
-  node: Node,
-  readKey: Uint8Array,
-  pathPrefix: string,
-  params: RecoveryParams,
-  out: RecoveredFiles
-): Promise<void> {
-  for (const childRef of node.children ?? ([] as SealedChildRef[])) {
-    const published = await fetchPublishedNode(childRef.ipnsName, params);
-
-    const childReadKey = await unsealChildReadKey(
-      childRef.readKeySealed,
-      readKey,
-      published.id,
-      published.kind,
-      childRef.generation // parent mirror — NEVER published.generation (§2.6)
-    );
-    const childNode = await unsealNode(published, childReadKey);
-    const childPath = pathPrefix ? `${pathPrefix}/${childRef.name}` : childRef.name;
-
-    if (childNode.kind === 'file') {
-      out[childPath] = await decryptFileContent(childNode, params);
-    } else {
-      await recoverFolder(childNode, childReadKey, childPath, params, out);
-    }
+function showStep(n: number): void {
+  for (let i = 1; i <= 2; i++) {
+    document.getElementById(`step-${i}`)?.classList.toggle('visible', i === n);
+    const dot = document.getElementById(`dot-${i}`);
+    if (!dot) continue;
+    dot.classList.remove('active', 'complete', 'pending');
+    if (i < n) dot.classList.add('complete');
+    else if (i === n) dot.classList.add('active');
+    else dot.classList.add('pending');
   }
 }
 
-/**
- * Recover the entire vault tree and return a ZIP of every decrypted file.
- *
- * Full read-only walk: derive the vault-key and root IPNS names from the
- * private key, unwrap the root read key from the v3 key blob, unseal the root
- * node, recurse the tree, and pack the result with fflate.
- */
-export async function bootstrap(params: RecoveryParams): Promise<Uint8Array> {
-  const privateKey = hexToBytes(params.privateKeyHex);
+function showError(stepN: number, msg: string): void {
+  const el = document.getElementById(`error-${stepN}`);
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.add('visible');
+}
 
-  // 1. Derive the two vault IPNS names (unchanged from v2 — real crypto, not hand-rolled).
+function clearError(stepN: number): void {
+  const el = document.getElementById(`error-${stepN}`);
+  if (!el) return;
+  el.textContent = '';
+  el.classList.remove('visible');
+}
+
+/** Parse a hex private key, tolerating a 0x prefix; fail closed on bad input. */
+function parsePrivateKey(raw: string): Uint8Array {
+  const clean = raw.startsWith('0x') || raw.startsWith('0X') ? raw.slice(2) : raw;
+  const bytes = hexToBytes(clean);
+  if (bytes.length !== 32) {
+    bytes.fill(0);
+    throw new Error(`Private key must be 32 bytes (got ${bytes.length} bytes).`);
+  }
+  return bytes;
+}
+
+// ---------------------------------------------------------------------------
+// Recovery flow: privateKey → vault-key blob → rootReadKey → root → walk → zip
+// ---------------------------------------------------------------------------
+
+async function runRecovery(
+  privateKey: Uint8Array,
+  gatewayConfig: RecoveryGatewayConfig,
+  log: ReturnType<typeof makeLogger>
+): Promise<RecoveredFile[]> {
+  // 1. Derive the two vault IPNS names from the private key (real crypto, D-03).
   const rootKeypair = await deriveVaultIpnsKeypair(privateKey);
   const vaultKeyKeypair = await deriveVaultKeyIpnsKeypair(privateKey);
+  log(`Derived vault-key IPNS: ${vaultKeyKeypair.ipnsName}`, 'info');
+  log(`Derived root IPNS: ${rootKeypair.ipnsName}`, 'info');
 
-  // 2. Fetch + deserialize the v3 vault key blob, then ECIES-unwrap the root read key.
+  // 2. Fetch + deserialize the v3 vault key blob (a raw serialized blob, NOT a
+  //    PublishedNode envelope), then ECIES-unwrap the root read key.
+  log('Resolving vault key blob...', 'info');
   const blobCid = await resolveIpnsVerified(
     vaultKeyKeypair.ipnsName,
-    params.ipnsGatewayUrl,
-    params.ipfsGatewayUrl
+    gatewayConfig.ipnsGateway,
+    gatewayConfig.ipfsGateway
   );
-  const blobBytes = await fetchFromIpfs(blobCid, params.ipfsGatewayUrl);
+  const blobBytes = await fetchFromIpfs(blobCid, gatewayConfig.ipfsGateway);
   const { encryptedRootReadKey } = deserializeVaultBlobV3(blobBytes);
   const rootReadKey = await unwrapKey(encryptedRootReadKey, privateKey);
+  log('Unwrapped root read key.', 'success');
 
   // 3. Unseal the root node and recurse (read-only — no writeKey argument).
-  const rootPublished = await fetchPublishedNode(rootKeypair.ipnsName, params);
-  const rootNode = await unsealNode(rootPublished, rootReadKey);
+  try {
+    log('Resolving root folder...', 'info');
+    const rootPublished = await fetchPublishedNode(rootKeypair.ipnsName, gatewayConfig);
+    const rootNode = await unsealNode(rootPublished, rootReadKey);
+    log('Unsealed root node. Walking tree...', 'info');
+    return await recoverTree(rootNode, rootReadKey, gatewayConfig, log);
+  } finally {
+    rootReadKey.fill(0);
+  }
+}
 
-  const files: RecoveredFiles = {};
-  await recoverFolder(rootNode, rootReadKey, '', params, files);
+// ---------------------------------------------------------------------------
+// Wiring
+// ---------------------------------------------------------------------------
 
-  // 4. Pack every recovered file into a single ZIP for download.
-  return zipSync(files);
+function wire(): void {
+  const keyInput = requireEl<HTMLTextAreaElement>('[data-testid="recovery-key-input"]');
+  const ipfsGatewayInput = requireEl<HTMLInputElement>('[data-testid="recovery-ipfs-gateway"]');
+  const ipnsGatewayInput = requireEl<HTMLInputElement>('[data-testid="recovery-ipns-gateway"]');
+  const startBtn = requireEl<HTMLButtonElement>('[data-testid="recovery-start-btn"]');
+  const progressLog = requireEl<HTMLElement>('[data-testid="recovery-progress-log"]');
+  const downloadBtn = requireEl<HTMLButtonElement>('[data-testid="recovery-download-btn"]');
+
+  const log = makeLogger(progressLog);
+  let zipBytes: Uint8Array | null = null;
+
+  startBtn.addEventListener('click', async () => {
+    clearError(1);
+    clearError(2);
+
+    let privateKey: Uint8Array;
+    try {
+      privateKey = parsePrivateKey(keyInput.value.trim());
+    } catch (err) {
+      showError(1, err instanceof Error ? err.message : 'Invalid private key.');
+      return;
+    }
+
+    const gatewayConfig: RecoveryGatewayConfig = {
+      ipfsGateway: ipfsGatewayInput.value.trim().replace(/\/+$/, ''),
+      ipnsGateway: ipnsGatewayInput.value.trim().replace(/\/+$/, ''),
+    };
+    if (!gatewayConfig.ipfsGateway || !gatewayConfig.ipnsGateway) {
+      privateKey.fill(0);
+      showError(1, 'Both an IPFS gateway and an IPNS resolution gateway are required.');
+      return;
+    }
+
+    startBtn.disabled = true;
+    startBtn.textContent = '[ Recovering... ]';
+    downloadBtn.classList.remove('visible');
+    progressLog.innerHTML = '';
+    zipBytes = null;
+    showStep(2);
+
+    log('CipherBox v3 vault recovery starting...', 'info');
+    log(`IPFS gateway: ${gatewayConfig.ipfsGateway}`, 'info');
+    log(`IPNS gateway: ${gatewayConfig.ipnsGateway}`, 'info');
+
+    try {
+      const files = await runRecovery(privateKey, gatewayConfig, log);
+
+      if (files.length === 0) {
+        log('Recovery complete. No files found (vault empty).', 'warn');
+      } else {
+        const zippable: Zippable = {};
+        for (const file of files) {
+          zippable[file.path] = file.bytes;
+        }
+        zipBytes = zipSync(zippable);
+        log(`Recovery complete. ${files.length} file(s) packed into a zip.`, 'success');
+        downloadBtn.classList.add('visible');
+      }
+      document.getElementById('post-note')?.classList.add('visible');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log(`FATAL: ${message}`, 'error');
+      showError(2, `Recovery failed: ${message}`);
+      document.getElementById('post-note')?.classList.add('visible');
+    } finally {
+      // The pasted key is used in-memory only — zero it and never persist it.
+      privateKey.fill(0);
+      startBtn.disabled = false;
+      startBtn.textContent = '[ Start Recovery ]';
+    }
+  });
+
+  downloadBtn.addEventListener('click', () => {
+    if (!zipBytes) return;
+    const blob = new Blob([zipBytes as BlobPart], { type: 'application/zip' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const date = new Date().toISOString().slice(0, 10);
+    a.href = url;
+    a.download = `cipherbox-recovery-${date}.zip`;
+    a.click();
+    URL.revokeObjectURL(url);
+    log('Zip download started.', 'success');
+  });
+}
+
+if (typeof document !== 'undefined') {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wire);
+  } else {
+    wire();
+  }
 }
