@@ -320,6 +320,16 @@ an absent field (TS: field stays absent; Rust: `#[serde(default)]` yields an emp
 fail-closed on it — `NodeWriteBody` intentionally carries NO `deny_unknown_fields`. A non-empty-pin
 golden vector (`seal_vectors[1]`) locks the pinned wire path across Rust and TypeScript.
 
+**Folder/root only (file-share carve-out, D-03g):** `recipientPins` is meaningful only for
+**folder and root** nodes. A shared **file** is a leaf whose `NodeWriteBody` (when present) never
+carries pins — pin issuance (`addRecipientPubkeyPin`) is folder-only, since a file leaf is not a
+tracked folder-tree entry. Consequently the D-03d/D-03e re-mint pin enforcement
+(`re_mint_grants_rooted_at` / `reMintGrantsRootedAt`) **exempts file-rooted grants** from the
+"pin absent → hard fail-closed" rule: a file grant is re-minted without a pin check (otherwise a
+scope-exit rotation of any folder that merely contains a separately-shared file would fail-closed
+and abort). Folder/root grants remain fully fail-closed. File-share recipient-substitution
+protection is a known, tracked limitation (`recipient-pin-lifecycle-hardening` todo §5).
+
 ### WriteChildRef
 
 | Field            | Type            | Description                                                                                             |

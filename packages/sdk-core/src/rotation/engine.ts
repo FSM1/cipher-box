@@ -568,6 +568,17 @@ export async function mintFileKeyOnRotate(node: Node, _job: RotationJobRecord): 
  * Invoked ONLY when `innerGrants` is non-empty (conditional — D-01).
  * When `callbacks` is absent the function is a clean no-op (D-04 seam).
  *
+ * FILE-ROOTED GRANTS ARE EXEMPT from the D-03d/D-03e pin check (Plan 80
+ * file-share carve-out, twin of the Rust `re_mint_grants_rooted_at`): a FILE
+ * node structurally cannot carry an owner-sealed recipient pin (the pin lives
+ * in `NodeWriteBody.recipientPins`, and only folder/root shares reseal a
+ * write-body at issuance). Enforcing the "empty pins is a hard fail" rule on a
+ * file would fail-close EVERY rotation of a folder that merely CONTAINS a
+ * separately-shared file — aborting the whole rotation. So `nodeKind === 'file'`
+ * re-mints WITHOUT the pin check (the accepted, pre-existing file-share
+ * recipient-substitution limitation), while folder/root grants stay fully
+ * fail-closed. `nodeKind` is optional and defaults to the enforced path.
+ *
  * @security
  *   Uses ECIES `wrapKey` (from `@cipherbox/crypto`) — never hand-roll key
  *   wrapping. Does NOT zero `newReadKey` — caller is terminal owner (D-09).
@@ -578,7 +589,8 @@ export async function reMintGrantsRootedAt(
   newGeneration: number,
   _job: RotationJobRecord,
   _ctx: SdkContext,
-  callbacks?: GrantRemintCallbacks
+  callbacks?: GrantRemintCallbacks,
+  nodeKind?: NodeKind
 ): Promise<void> {
   // D-04 transport seam: when no callbacks are supplied the function is a clean
   // no-op. This preserves the D-01 conditional-invocation contract — the clean
@@ -592,8 +604,13 @@ export async function reMintGrantsRootedAt(
   // not the relay-fed `grant.recipientPublicKey` — authorizes the wrap. Only the
   // enforced (surviving-grant) path needs pins; an all-revoked node performs no
   // wrap, so it does not require the seam.
+  // File-share carve-out (see the doc comment): a file node can never carry an
+  // owner-sealed pin, so its re-mint is exempt from the pin check entirely — do
+  // not fetch pins for it (the seam would resolve a folder write-body and error
+  // on a leaf) and do not enforce below.
+  const isFile = nodeKind === 'file';
   let recipientPins: string[] = [];
-  if (grants.some((grant) => !grant.isRevoked)) {
+  if (!isFile && grants.some((grant) => !grant.isRevoked)) {
     if (!callbacks.getPinsFn) {
       // Fail-closed (D-03e no-legacy): the enforced path requires a real pin
       // source. A missing seam is a hard invariant violation, never a TOFU pass.
@@ -618,8 +635,11 @@ export async function reMintGrantsRootedAt(
       // absent/empty pin list throws — aborting the node's re-mint (D-03e). This
       // is a HARD fail, deliberately NOT a per-grant skip like the isRevoked
       // branch (Pitfall 5). Reuses the shared sdk-core helper (80-04); the web
-      // consumer (80-08) reuses the same compare.
-      assertRecipientPinned(grant.recipientPublicKey, recipientPins);
+      // consumer (80-08) reuses the same compare. File-rooted grants are exempt
+      // (see the file-share carve-out in the doc comment) — a file has no pin.
+      if (!isFile) {
+        assertRecipientPinned(grant.recipientPublicKey, recipientPins);
+      }
 
       // Non-revoked + pinned recipient: ECIES-wrap the new readKey under their key.
       // T-64-04c: always use wrapKey — never hand-roll key wrapping.
@@ -1225,7 +1245,8 @@ export async function rotateOne(
         generationPrime,
         jobRecord,
         ctx,
-        grantCallbacks
+        grantCallbacks,
+        node.kind
       );
     }
 

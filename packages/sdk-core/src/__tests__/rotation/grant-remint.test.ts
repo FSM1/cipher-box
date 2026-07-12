@@ -274,6 +274,81 @@ describe('reMintGrantsRootedAt', () => {
     expect(mockUpdateGrant).not.toHaveBeenCalled();
   });
 
+  it('Test F (file carve-out): a file-rooted grant re-mints WITHOUT any pin check', async () => {
+    // A shared FILE has no NodeWriteBody, so it can never carry an owner-sealed
+    // pin. Passing nodeKind='file' must EXEMPT it from the D-03e 0-pins fail-
+    // closed check (which would otherwise abort every rotation of a folder that
+    // contains a separately-shared file). No getPinsFn is supplied, and an empty
+    // pin source must NOT throw for a file.
+    const mockQueryGrants = vi
+      .fn()
+      .mockResolvedValue([
+        { shareId: SHARE_ID_A, recipientPublicKey: RECIPIENT_PUB_KEY_A, isRevoked: false },
+      ]);
+    const mockUpdateGrant = vi.fn().mockResolvedValue(undefined);
+    const mockDeleteGrant = vi.fn().mockResolvedValue(undefined);
+    const mockGetPins = vi.fn().mockResolvedValue([]);
+    const ctx = createMockContext();
+    const job = makeJobRecord();
+
+    await reMintGrantsRootedAt(
+      NODE_ID,
+      NEW_READ_KEY,
+      NEW_GENERATION,
+      job,
+      ctx,
+      {
+        queryGrantsFn: mockQueryGrants,
+        updateGrantFn: mockUpdateGrant,
+        deleteGrantFn: mockDeleteGrant,
+        getPinsFn: mockGetPins,
+      },
+      'file'
+    );
+
+    // The pin seam is NOT consulted for a file, and the grant is re-minted.
+    expect(mockGetPins).not.toHaveBeenCalled();
+    expect(mockFns.wrapKey).toHaveBeenCalledWith(NEW_READ_KEY, RECIPIENT_PUB_KEY_A);
+    expect(mockUpdateGrant).toHaveBeenCalledWith(
+      SHARE_ID_A,
+      EXPECTED_ENCRYPTED_KEY,
+      NEW_GENERATION
+    );
+  });
+
+  it('Test F2 (folder still enforced): a folder-rooted grant with empty pins still throws', async () => {
+    // Contrast to Test F: the carve-out is file-only. A FOLDER (nodeKind
+    // defaulted/absent) with an empty pin list stays fully fail-closed.
+    const mockQueryGrants = vi
+      .fn()
+      .mockResolvedValue([
+        { shareId: SHARE_ID_A, recipientPublicKey: RECIPIENT_PUB_KEY_A, isRevoked: false },
+      ]);
+    const mockUpdateGrant = vi.fn().mockResolvedValue(undefined);
+    const mockDeleteGrant = vi.fn().mockResolvedValue(undefined);
+    const mockGetPins = vi.fn().mockResolvedValue([]);
+    const ctx = createMockContext();
+    const job = makeJobRecord();
+
+    await expect(
+      reMintGrantsRootedAt(
+        NODE_ID,
+        NEW_READ_KEY,
+        NEW_GENERATION,
+        job,
+        ctx,
+        {
+          queryGrantsFn: mockQueryGrants,
+          updateGrantFn: mockUpdateGrant,
+          deleteGrantFn: mockDeleteGrant,
+          getPinsFn: mockGetPins,
+        },
+        'folder'
+      )
+    ).rejects.toThrow();
+    expect(mockUpdateGrant).not.toHaveBeenCalled();
+  });
+
   it('Test C (match): proceeds and wraps when getPinsFn includes the grant recipient', async () => {
     const mockQueryGrants = vi
       .fn()

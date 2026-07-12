@@ -543,9 +543,14 @@ async fn rotate_one_inner<D: RotationDeps>(
             // HIGH-3 (T-69-12-02): re-mint grants rooted at THIS node
             // BEFORE marking it completed — D-07 parity: a failure here
             // must not silently skip the node on resume.
-            if let Err(e) =
-                re_mint_grants_rooted_at(deps, &resolved_node_id, &read_key_prime, new_generation)
-                    .await
+            if let Err(e) = re_mint_grants_rooted_at(
+                deps,
+                &resolved_node_id,
+                kind,
+                &read_key_prime,
+                new_generation,
+            )
+            .await
             {
                 read_key_prime.zeroize();
                 return Err(e);
@@ -626,6 +631,7 @@ fn recipient_is_pinned(pins: &[Vec<u8>], recipient_public_key: &[u8]) -> bool {
 async fn re_mint_grants_rooted_at<D: RotationDeps>(
     deps: &D,
     node_id: &str,
+    node_kind: NodeKind,
     new_read_key: &[u8; 32],
     new_generation: u32,
 ) -> Result<(), RotationError> {
@@ -637,7 +643,27 @@ async fn re_mint_grants_rooted_at<D: RotationDeps>(
     // wrap below. A compromised relay could substitute the pubkey and cause
     // the owner to wrap the fresh post-rotation read key TO THE ATTACKER
     // (T-80-15); the pin binding closes that.
-    let recipient_pins = deps.get_recipient_pubkey_pins(node_id).await?;
+    //
+    // FILE-ROOTED GRANTS ARE EXEMPT (Plan 80 file-share carve-out): a FILE node
+    // structurally cannot carry an owner-sealed recipient pin — the pin lives in
+    // `NodeWriteBody.recipientPins`, and only folder/root shares reseal a
+    // write-body at issuance (`addRecipientPubkeyPin` is folder-only). D-03e's
+    // "empty pins is a hard fail" implicitly assumed folder shares. Enforcing it
+    // on a file would fail-close EVERY scope-exit rotation of a folder that
+    // merely CONTAINS a separately-shared file (the walk rotates that file node,
+    // `query_grants_rooted_at` returns its grant, and `get_recipient_pubkey_pins`
+    // is structurally empty → "0 pinned"), aborting the whole rotation. So a
+    // file-rooted grant is re-minted WITHOUT the pin check — the accepted,
+    // pre-existing file-share recipient-substitution limitation (never pinned at
+    // issuance either; see the recipient-pin-lifecycle todo), NOT a downgrade of
+    // the folder-share guard, which stays fully fail-closed below. The pin fetch
+    // itself is skipped for files (some `get_recipient_pubkey_pins` impls resolve
+    // a folder write-body and would error on a leaf).
+    let recipient_pins = if node_kind == NodeKind::File {
+        Vec::new()
+    } else {
+        deps.get_recipient_pubkey_pins(node_id).await?
+    };
     for grant in grants {
         if grant.is_revoked {
             // T-64-04b parity: re-minting a revoked recipient's encrypted
@@ -650,8 +676,12 @@ async fn re_mint_grants_rooted_at<D: RotationDeps>(
             // absent/empty pin list (D-03e no-legacy, T-80-16) aborts the WHOLE
             // node's re-mint — NOT a per-grant skip-and-continue like the
             // `is_revoked` branch (a partial re-mint would silently drop the
-            // surviving recipients while the node's key advanced).
-            if !recipient_is_pinned(&recipient_pins, &grant.recipient_public_key) {
+            // surviving recipients while the node's key advanced). File-rooted
+            // grants are exempt (see the file-share carve-out above): a file has
+            // no pin to verify against, so it is re-minted directly.
+            if node_kind != NodeKind::File
+                && !recipient_is_pinned(&recipient_pins, &grant.recipient_public_key)
+            {
                 return Err(RotationError::RotateFailed(format!(
                     "re_mint_grants_rooted_at: recipient for share {} is not among node {}'s \
                      owner-sealed recipient pins ({} pinned) — refusing to wrap the rotated read \
@@ -4220,6 +4250,79 @@ mod rotate_read_from_node {
             unwrapped.as_slice(),
             child_new_read_key.as_slice(),
             "the re-minted encrypted key must wrap child-0's ACTUAL new readKey"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Plan 80 file-share carve-out: a FILE-rooted grant is EXEMPT from the
+    // D-03e 0-pins fail-closed check (a file has no NodeWriteBody, so it can
+    // NEVER carry an owner-sealed pin). Without the exemption, a scope-exit
+    // rotation of a folder that merely CONTAINS a separately-shared file would
+    // fail-close the file node's re-mint ("0 pinned") and abort the WHOLE
+    // rotation. Folder/root grants stay fully fail-closed.
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn file_rooted_grant_is_re_minted_without_a_pin_while_folder_still_fails_closed() {
+        const FILE_NODE_ID: &str = "ffffffff-1111-2222-3333-444444444444";
+        let new_read_key = [9u8; 32];
+
+        // A single non-revoked file share, and NO pins seeded for the file node
+        // (files are never pinned at issuance — the structural D-03e case).
+        let (recipient_sk, recipient_pk) = ecies::utils::generate_keypair();
+        let seed_file_grant = |deps: &FakeDeps| {
+            deps.seed_grants(
+                FILE_NODE_ID,
+                vec![GrantRow {
+                    share_id: "file-share".to_string(),
+                    recipient_public_key: recipient_pk.serialize().to_vec(),
+                    is_revoked: false,
+                }],
+            );
+        };
+
+        // FILE kind → exempt: the re-mint SUCCEEDS and wraps the new read key to
+        // the (unpinned) recipient, so a shared file inside a rotated folder is
+        // not cut off and the rotation is not aborted.
+        let file_deps = FakeDeps::new();
+        seed_file_grant(&file_deps);
+        re_mint_grants_rooted_at(
+            &file_deps,
+            FILE_NODE_ID,
+            NodeKind::File,
+            &new_read_key,
+            1,
+        )
+        .await
+        .expect("a file-rooted grant must re-mint WITHOUT a pin (file-share carve-out)");
+        let updated = file_deps.updated_grants.lock().unwrap().clone();
+        assert_eq!(updated.len(), 1, "the file share is re-minted, got: {updated:?}");
+        assert_eq!(updated[0].0, "file-share");
+        // Sanity: the wrapped key really is the new read key for this recipient.
+        let wrapped = hex::decode(&updated[0].1).unwrap();
+        let unwrapped =
+            cipherbox_crypto::unwrap_key(&wrapped, &recipient_sk.serialize()).unwrap();
+        assert_eq!(unwrapped.as_slice(), &new_read_key);
+
+        // FOLDER kind, identical unpinned grant → still FAILS CLOSED (the guard
+        // is unchanged for folders; the carve-out is file-only).
+        let folder_deps = FakeDeps::new();
+        seed_file_grant(&folder_deps); // same rows, but rooted-node treated as a folder
+        let folder_result = re_mint_grants_rooted_at(
+            &folder_deps,
+            FILE_NODE_ID,
+            NodeKind::Folder,
+            &new_read_key,
+            1,
+        )
+        .await;
+        assert!(
+            folder_result.is_err(),
+            "a FOLDER grant with no pin must still fail closed (D-03e) — the carve-out is file-only"
+        );
+        assert!(
+            folder_deps.updated_grants.lock().unwrap().is_empty(),
+            "a fail-closed folder re-mint must not wrap anything"
         );
     }
 
