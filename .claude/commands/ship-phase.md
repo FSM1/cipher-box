@@ -103,8 +103,10 @@ git filter-branch --msg-filter 'sed -E "1 s/^([a-z]+) [0-9][0-9A-Za-z.-]*: /\1: 
 Invoke `/gsd-ship $ARGUMENTS`, but:
 
 - Override the default PR title (GSD's `Phase N: <slug>` is non-conventional) with a conventional, paren-free subject, e.g. `fix: <concise phase summary>`.
+- **Create the PR as a DRAFT** (`env -u GITHUB_TOKEN gh pr create --draft ...`). This is load-bearing: opening a ready-for-review PR triggers CodeRabbit immediately, which then races the `pr-release-preview` bot's `chore(release)` commit — CodeRabbit reviews a stale head and may not re-review the final commit set. Drafting defers the review until the branch is settled.
 - Write the PR body to a temp file (escape `#NN`, end with the Claude Code attribution line) and set it via `gh api -X PATCH` (not `gh pr edit`).
 - Push with the sandbox disabled.
+- **Wait for the release bot, THEN mark ready.** Poll (with the sandbox disabled) until the `pr-release-preview` workflow has pushed its `chore(release): set release targets for PR #N` commit onto the branch — e.g. `git fetch origin <branch>` in a loop and check that the branch tip is a `chore(release)` commit authored by `github-actions[bot]` (cap the wait ~5 min; if the workflow legitimately produced no release target, it may never push — after the cap, proceed). Then `git fetch` + fast-forward your local branch to include that commit (never force-push over it) and flip the PR to ready-for-review: `env -u GITHUB_TOKEN gh pr ready <N>`. Only now does CodeRabbit get triggered — against the final head including the release commit.
 
 ### 9. Resolve PR reviews
 
