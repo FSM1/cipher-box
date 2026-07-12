@@ -428,34 +428,27 @@ export function useFolderMutations() {
         const parentFolder = getParentFolder(parentId);
         if (!parentFolder) throw new Error('Parent folder not found');
 
-        // Collect folder IDs to remove from the store — each deleted folder AND
-        // every already-loaded descendant FolderNode (walk parentId links) so no
-        // orphaned/stale entry survives to be hit by useFolderNavigation's
-        // isLoaded fast path. Snapshot the tree before the SDK deletes so the
-        // parentId walk sees the full loaded subtree.
+        // Snapshot the loaded tree BEFORE any SDK delete so each folder's
+        // parentId walk sees its full loaded subtree (store events during the
+        // deletes could prune descendants first).
         const preDeleteFolders = useFolderStore.getState().folders;
-        const folderIdsToRemove = new Set<string>();
-        for (const item of items) {
-          if (item.type === 'folder') {
-            folderIdsToRemove.add(item.id);
-            for (const descendantId of collectDescendantFolderIds(preDeleteFolders, item.id)) {
-              folderIdsToRemove.add(descendantId);
-            }
-          }
-        }
 
-        // Delete each item via SDK (sequentially to maintain consistency)
+        // Delete each item via SDK (sequentially to maintain consistency) and
+        // purge its subtree from the store IMMEDIATELY after its own success, so
+        // a later item throwing does not strand already-deleted folders as stale
+        // entries (which useFolderNavigation's isLoaded fast path could match).
         const client = getSdkClient();
         const parentPath = buildFolderPath(parentId);
+        const store = useFolderStore.getState();
 
         for (const item of items) {
           await deleteWithBehavior(client, parentFolder.ipnsName, item.id, parentPath);
-        }
-
-        // Remove nested folders from store
-        const store = useFolderStore.getState();
-        for (const folderId of folderIdsToRemove) {
-          store.removeFolder(folderId);
+          if (item.type === 'folder') {
+            for (const descendantId of collectDescendantFolderIds(preDeleteFolders, item.id)) {
+              store.removeFolder(descendantId);
+            }
+            store.removeFolder(item.id);
+          }
         }
 
         setState({ isLoading: false, error: null });

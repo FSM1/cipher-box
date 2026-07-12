@@ -165,8 +165,14 @@ export function SharedMoveDialog({
     }
   }, [isLoading, onClose]);
 
-  // Auto-adapt title/label for batch vs single mode (mirrors private MoveDialog :174-179)
-  const title = isBatchMode ? `Move ${items!.length} items` : 'Move Folder';
+  // Auto-adapt title/label for batch vs single mode (mirrors private MoveDialog :174-179).
+  // Single-item title reflects the moved item's real kind — a shared file move
+  // must not read "Move Folder".
+  const title = isBatchMode
+    ? `Move ${items!.length} items`
+    : item && isFileRefResolved(item, resolvedByIpnsName)
+      ? 'Move File'
+      : 'Move Folder';
   const label = isBatchMode
     ? `Move ${items!.length} items to:`
     : item
