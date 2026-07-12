@@ -64,7 +64,11 @@ use zeroize::Zeroizing;
 use cipherbox_api_client::ipns::{resolve_ipns_verified, VerifyError};
 use cipherbox_api_client::shares::SentShareResponse;
 use cipherbox_api_client::{ApiClient, ApiError, IpnsPublishRequest, PublishResult};
-use cipherbox_core::node::{decode_published_node, encode_published_node, PublishedNode};
+use cipherbox_core::node::seal::{seal_child_write_key, seal_node};
+use cipherbox_core::node::{
+    decode_published_node, encode_published_node, encode_write_body, NodeKind, NodeWriteBody,
+    PublishedNode, WriteChildRef,
+};
 use cipherbox_sdk::rotation::{GrantRow, PublishAttempt};
 use cipherbox_sdk::{
     JsonSidecarFloorStore, PublishOutcome, ResolvedRecord, RotationDeps, RotationError,
@@ -431,6 +435,28 @@ impl RotationTransport for ApiClientTransport<'_> {
         })?;
         let seed_arr = to_key32(&signing_seed, "IPNS signing seed")?;
 
+        // D-01: the read-key rotation engine hands us a node with
+        // `write_sealed: None`. Reconstruct + inject the write-body from the
+        // locally-materialized InodeTable, re-sealed under the node's OWN write
+        // key at its NEW generation (ROLE_BODY 0x01) — restoring owned-walkability
+        // and `replay.rs` signing-seed durability. Fail-open to the unchanged
+        // (None) node for a non-materialized node (D-01b). Never rotates/mutates
+        // the write plane — the child write keys are copied verbatim.
+        let reconstructed_node;
+        let node = if node.write_sealed.is_none() {
+            match reconstruct_write_body(self.inodes, ipns_name, node.generation) {
+                Some(sealed) => {
+                    let mut cloned = node.clone();
+                    cloned.write_sealed = Some(STANDARD.encode(sealed));
+                    reconstructed_node = cloned;
+                    &reconstructed_node
+                }
+                None => node,
+            }
+        } else {
+            node
+        };
+
         let node_bytes = encode_published_node(node).map_err(|e| {
             RotationError::RotateFailed(format!(
                 "publish: encode_published_node failed for {ipns_name}: {e}"
@@ -594,17 +620,108 @@ fn find_ipns_private_key(inodes: &InodeTable, ipns_name: &str) -> Option<Zeroizi
 /// is NOT locally materialized. NEVER rotates or mutates the write plane — the
 /// child write keys are copied verbatim from the child inodes.
 ///
-/// TODO(80-01/GREEN): this stub is replaced with the real reconstruction in the
-/// Task-2 GREEN step. It intentionally returns `None` so the Task-1 RED tests
-/// compile and fail.
+/// Child `WriteChildRef.write_key_sealed` is sealed under THIS node's write key
+/// at AAD generation `0` — the `build_folder_metadata` / `build_child_refs`
+/// write-splice convention (the child write plane is not rotated here; only the
+/// node's OWN write-body ROLE_BODY seal uses `new_generation`). Recipient-pin
+/// preservation is a D-03b concern added in 80-05 once the field is populated on
+/// the inode — this reconstruction handles keys + children only, emitting an
+/// empty pin list.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub(crate) fn reconstruct_write_body(
     inodes: &InodeTable,
     ipns_name: &str,
     new_generation: u32,
 ) -> Option<Vec<u8>> {
-    let _ = (inodes, ipns_name, new_generation);
-    None
+    use zeroize::Zeroize as _;
+
+    // Locate the node by its OWN ipns_name (mirrors `find_ipns_private_key`),
+    // pulling its stable node_id, kind, write key, signing seed, and child inos.
+    let (node_id, node_kind, node_write_key, ipns_private_key, child_inos) =
+        inodes.inodes.values().find_map(|inode| {
+            let (candidate_name, kind, write_key, ipns_priv) = match &inode.kind {
+                InodeKind::Root {
+                    ipns_name,
+                    write_key,
+                    ipns_private_key,
+                    ..
+                } => (ipns_name, NodeKind::Root, write_key, ipns_private_key),
+                InodeKind::Folder {
+                    ipns_name,
+                    write_key,
+                    ipns_private_key,
+                    ..
+                } => (ipns_name, NodeKind::Folder, write_key, ipns_private_key),
+                InodeKind::File {
+                    ipns_name,
+                    write_key,
+                    ipns_private_key,
+                    ..
+                } => (ipns_name, NodeKind::File, write_key, ipns_private_key),
+            };
+            (candidate_name == ipns_name && !ipns_priv.is_empty()).then(|| {
+                (
+                    inode.node_id.clone(),
+                    kind,
+                    Zeroizing::new(**write_key),
+                    Zeroizing::new(ipns_priv.to_vec()),
+                    inode.children.clone().unwrap_or_default(),
+                )
+            })
+        })?;
+
+    // Rebuild the child write-chain from each child inode's OWN write key —
+    // read-key-rotation-independent, copied verbatim (never re-derived/rotated).
+    // Children with no IPNS identity yet (freshly created, never published) are
+    // skipped, mirroring `build_folder_metadata`.
+    let mut write_children: Vec<WriteChildRef> = Vec::new();
+    for child_ino in child_inos {
+        let Some(child) = inodes.inodes.get(&child_ino) else {
+            continue;
+        };
+        let (child_kind, child_ipns, child_write_key) = match &child.kind {
+            InodeKind::Folder {
+                ipns_name,
+                write_key,
+                ..
+            } => (NodeKind::Folder, ipns_name, Zeroizing::new(**write_key)),
+            InodeKind::File {
+                ipns_name,
+                write_key,
+                ..
+            } => (NodeKind::File, ipns_name, Zeroizing::new(**write_key)),
+            InodeKind::Root { .. } => continue,
+        };
+        if child_ipns.is_empty() {
+            continue;
+        }
+        let sealed = seal_child_write_key(
+            &child_write_key,
+            &node_write_key,
+            &child.node_id,
+            child_kind,
+            0,
+        )
+        .ok()?;
+        write_children.push(WriteChildRef {
+            child_id: child.node_id.clone(),
+            write_key_sealed: STANDARD.encode(sealed),
+        });
+    }
+
+    // Assemble + seal the write-body under the node's OWN write key at the NEW
+    // generation (ROLE_BODY 0x01) — the exact AAD `recover_signing_seed` rebuilds.
+    let mut write_body = NodeWriteBody {
+        ipns_private_key: ipns_private_key.to_vec(),
+        write_children,
+        recipient_pins: Vec::new(),
+    };
+    let wb_bytes = encode_write_body(&write_body).ok()?;
+    // Scrub the bare signing-seed copy inside the (non-Zeroizing) write body once
+    // it has been encoded (crypto rule #6; mirrors `build_folder_metadata`).
+    write_body.ipns_private_key.zeroize();
+
+    seal_node(&wb_bytes, &node_write_key, &node_id, node_kind, new_generation).ok()
 }
 
 /// Scans the locally-mounted `InodeTable` for the grant-root inode matching
