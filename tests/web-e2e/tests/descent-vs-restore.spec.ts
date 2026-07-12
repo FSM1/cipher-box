@@ -26,10 +26,11 @@ import { SharedFileBrowserPage } from '../page-objects/file-browser/shared-file-
  * Determinism (NO sleeps / NO poll-timing reliance): the descent's IPNS
  * resolve (`GET /ipns/resolve`, the network hop inside
  * `client.descendSharedChild`) is HELD open via Playwright route interception.
- * While it is held the test issues `navigateUp` (an in-memory nav-stack
- * restore that takes no network round-trip and runs synchronously in the app),
- * then RELEASES the held descent. The ordering is therefore fully controlled:
- * the descent always resolves AFTER the restore has already superseded it.
+ * While it is held the test issues a breadcrumb restore back to the share root
+ * (an in-memory nav-stack replay that takes no network round-trip for its state
+ * change and runs synchronously in the app), then RELEASES the held descent.
+ * The ordering is therefore fully controlled: the descent always resolves
+ * AFTER the restore has already superseded it.
  *
  * Assertions (the write must land at the currently-viewed depth):
  *  - After releasing the descent, the breadcrumb stays at the RESTORED depth
@@ -205,10 +206,18 @@ test.describe.serial('Descent-vs-Restore Race (SC3c / D-08 item 11)', () => {
     // this replaces any timing sleep.
     await expect.poll(() => held.length, { timeout: 30000 }).toBeGreaterThan(0);
 
-    // While the descent is parked, click navigateUp. Restore is a synchronous
-    // in-memory nav-stack replay (no network hop), so it completes and bumps
-    // the shared-folder seed generation before the descent is ever released.
-    await granteeSharedBrowser.navigateUp();
+    // While the descent is parked, restore to the share root by clicking its
+    // breadcrumb (navigateToBreadcrumb -> the restore helper). The descent has
+    // flipped the browser into its loading state, which UNMOUNTS the file list
+    // and the [..] parent-dir row — but the breadcrumb nav stays mounted, so
+    // the breadcrumb click is the reliable in-flight restore trigger. Restore
+    // is a synchronous in-memory nav-stack replay (no network hop for the state
+    // change) that bumps the shared-folder seed generation before the descent
+    // is ever released.
+    await granteeSharedBrowser
+      .breadcrumbs()
+      .locator('button.breadcrumb-item', { hasText: rootFolderName })
+      .click();
     await expect(
       granteeSharedBrowser.breadcrumbs().locator('.breadcrumb-item--current')
     ).toHaveText(rootFolderName, { ignoreCase: true, timeout: 15000 });
