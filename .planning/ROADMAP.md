@@ -77,7 +77,7 @@
 - [x] **Phase 75: Cross-Language IPNS and Node-Codec Verification Parity** — Strict RFC3339 + ValidityType==0 enforcement, KAT IV-encoding pin, UUID AAD acceptance parity, all Rust↔TS vector-locked (4 todos) (completed 2026-07-11)
 - [ ] **Phase 76: FUSE Durability and TEE Write-Path Hardening** — Vault-init publish preflight, deferred Phase 69 publish/concurrency items, TEE republish/renew error handling + later-EOL invariant (4 todos)
 - [x] **Phase 77: Crypto Hygiene and Terminology Canonicalization** — Error-path zeroization, base64 helper dedup, `encryptedIpnsPrivateKey` field renames, dead share-scaffolding retirement, root-ownership helper extract (12 todos; mechanical, no behavior change) (completed 2026-07-11)
-- [ ] **Phase 78: Recovery Tool v3, Vault-Load Guards, Web UX and CI Guards** — Port recovery.html to node/v3 (un-fixme recovery.spec), download-progress UX resolution, D-07 CI rule, web vitest CI, remaining 68.2/73 hardening incl. two data-integrity races (5 todos)
+- [x] **Phase 78: Recovery Tool v3, Vault-Load Guards, Web UX and CI Guards** — Port recovery.html to node/v3 (un-fixme recovery.spec), download-progress UX resolution, D-07 CI rule, web vitest CI, remaining 68.2/73 hardening incl. two data-integrity races (5 todos) (completed 2026-07-12)
 - [ ] **Phase 79: Web Kind-Discrimination Completion and Deferred Test Revival** — Route the listing UI through `ResolvedChild.kind` (folders-first sort, drag-and-drop, kind-aware dialogs), wire Created date, revive 4 `describe.skip` suites, drive `TODO(phase 63/65)` markers to zero (from marker triage; ~40 still-valid markers)
 
 ## Phase Details
@@ -1061,7 +1061,7 @@ Plans:
 2. The download-progress dead code is resolved (wired to restore spinners or deleted)
 3. The D-07 boundary is CI-enforced, the web vitest CI decision is implemented, and the two 68.2 data-integrity races (poll-monotonicity, descent-vs-restore) are fixed with e2e coverage
 
-**Plans:** 6/8 plans executed
+**Plans:** 8/8 plans complete
 
 Plans:
 **Wave 1**
@@ -1075,11 +1075,11 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 78-02-PLAN.md — SC1 v3 recovery walk + full recovery.html UI wiring (Wave 2)
+- [x] 78-02-PLAN.md — SC1 v3 recovery walk + full recovery.html UI wiring (Wave 2)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 78-03-PLAN.md — SC1 un-fixme recovery.spec.ts + e2e exit gate (Wave 3)
+- [x] 78-03-PLAN.md — SC1 un-fixme recovery.spec.ts + e2e exit gate (Wave 3)
 
 ### Phase 79: Web Kind-Discrimination Completion and Deferred Test Revival
 
