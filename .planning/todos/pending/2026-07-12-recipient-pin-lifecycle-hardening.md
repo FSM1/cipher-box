@@ -49,23 +49,15 @@ then iterates it. Not an escalation (a junk pin grants nothing without a matchin
 grant row), but an unbounded-allocation / permanent-bloat vector. Pruning on
 revoke (item 1) largely resolves this; otherwise add a length cap.
 
-## 3. Non-atomic share-create → pin-write (revocation liveness)
+## 3. Non-atomic share-create → pin-write (revocation liveness) — RESOLVED
 
-`ShareDialog.tsx::handleShare` creates the server share row
-(`sharesControllerCreateShare`) and only then commits the pin
-(`addRecipientPubkeyPin`, a separate CAS republish that can 409/network-fail). A
-failed pin-write leaves a persisted server share row that is NOT pinned; on the
-next rotation, re-mint treats an unpinned surviving grant as a whole-node HARD
-fail (deliberately, D-03e), so a single un-pinned share blocks scope-exit
-rotation — and therefore revocation — for the entire node subtree until
-reconciled. Same fail-closed-but-stuck outcome arises cross-client (a pin added
-on web is absent from a FUSE mount's offline `InodeTable` cache until re-resolve).
-
-Fix: make issuance atomic — commit the pin BEFORE (or with) the share row so a
-partial failure leaves at most an extra harmless pin, never an unpinned share
-(pin-first is strictly safer; an orphan pin grants nothing). Reconciliation
-(`owner-reconcile`) should also backfill a missing pin for an existing grant
-rather than only fail-closed.
+RESOLVED during Phase 80 ship (greptile P1 / thread review): `ShareDialog.tsx`
+now commits the pin BEFORE creating the server grant (pin-first), so a partial
+failure leaves at most a harmless orphan pin, never an unpinned share that blocks
+rotation. Residual (still deferred): a cross-client window where a pin added on
+web is absent from a FUSE mount's offline `InodeTable` cache until re-resolve —
+reconciliation (`owner-reconcile`) could backfill a missing pin for an existing
+grant rather than only fail-closed.
 
 ## 4. Crash-replay pin preservation for a journaled shared-node write
 

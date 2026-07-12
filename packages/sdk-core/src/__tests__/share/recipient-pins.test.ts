@@ -305,7 +305,10 @@ describe('updateFolderMetadataAndPublish — recipientPins durability (T-80-11)'
       readKey: READ_KEY,
       writeKey: WRITE_KEY,
       writeChildren: [],
-      // No recipientPins param on this routine update — the remote pin must still survive.
+      // This update adds no pin of its OWN (explicit empty snapshot) — the remote
+      // pin must still survive via the CAS-409 union. (An OMITTED snapshot now
+      // fail-closes; "no pin of my own" is expressed as an explicit [].)
+      recipientPins: [],
       ipnsPrivateKey: IPNS_PRIVATE_KEY,
       ipnsName: 'k51-pins-cas-noninvasive',
       sequenceNumber: 1n,

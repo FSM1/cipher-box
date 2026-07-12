@@ -288,6 +288,18 @@ export async function updateFolderMetadataAndPublish(params: {
   // writeKey is supplied (a write-body exists at all). The empty-list case is
   // omitted from the wire by encodeWriteBody, so it never perturbs the frozen
   // empty-pin KAT.
+  // D-03a fail-closed (thread-80-4): a write-body reseal MUST carry an explicit
+  // recipient-pin snapshot. On a conflict-free (no-409) publish the CAS-409
+  // union below never runs, so sealing `[]` for an OMITTED snapshot would
+  // SILENTLY ERASE the node's existing owner-sealed pins — permanently breaking
+  // fail-closed re-mint for its shares. Reject an omitted snapshot rather than
+  // erasing; an explicit `[]` (a genuinely unpinned node) is fine. Only enforced
+  // when a real write-body is sealed at all (writeKey present).
+  if (params.writeKey && params.recipientPins === undefined) {
+    throw new Error(
+      'updateFolderMetadataAndPublish: recipientPins snapshot is required when sealing a write-body (writeKey present) — omitting it would erase existing owner-sealed pins; pass the current pins (or [] for an unpinned node)'
+    );
+  }
   let currentRecipientPins: string[] = params.recipientPins ?? [];
   let remoteRecipientPins: string[] = [];
 

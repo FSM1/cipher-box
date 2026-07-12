@@ -139,6 +139,9 @@ async function main(): Promise<void> {
       readKey: rootReadKey,
       writeKey: rootWriteKey,
       writeChildren: rootNode.writeBody.writeChildren,
+      // Preserve the root's owner-sealed recipient pins (D-03): an omitted
+      // snapshot fail-closes, and sealing pin-less would erase pins on a shared root.
+      recipientPins: rootNode.writeBody.recipientPins ?? [],
       ipnsPrivateKey: rootNode.writeBody.ipnsPrivateKey,
       ipnsName: rootIpnsName,
       sequenceNumber: rootSequenceNumber,

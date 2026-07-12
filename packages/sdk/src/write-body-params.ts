@@ -77,7 +77,10 @@ export async function getWriteBodyParams(
     return {
       writeKey: wk,
       writeChildren: folder.metadata.writeBody.writeChildren,
-      recipientPins: folder.metadata.writeBody.recipientPins,
+      // Always a concrete array when a writeKey is present: updateFolderMetadataAndPublish
+      // fail-closes on an OMITTED pin snapshot (it would erase existing pins), so
+      // an unpinned folder must thread `[]`, never `undefined`.
+      recipientPins: folder.metadata.writeBody.recipientPins ?? [],
     };
   }
   const resolved = await sdkCore.resolveIpnsRecord(folder.ipnsName, ctx);
@@ -88,13 +91,15 @@ export async function getWriteBodyParams(
   }
   const raw = await sdkCore.fetchFromIpfs(ctx, resolved.cid);
   const published = JSON.parse(new TextDecoder().decode(raw)) as PublishedNode;
-  if (!published.writeSealed) return { writeKey: wk, writeChildren: [] };
+  // writeKey present but no on-wire write-body yet (pre-D-03 record): seal a fresh
+  // write-body going forward with an explicit empty pin list (never `undefined`).
+  if (!published.writeSealed) return { writeKey: wk, writeChildren: [], recipientPins: [] };
   const node = await unsealNode(published, folder.folderKey, wk);
   try {
     return {
       writeKey: wk,
       writeChildren: node.writeBody?.writeChildren ?? [],
-      recipientPins: node.writeBody?.recipientPins,
+      recipientPins: node.writeBody?.recipientPins ?? [],
     };
   } finally {
     // D-09: unsealNode just materialized a transient IPNS private key
