@@ -76,6 +76,9 @@ async function buildChildFixture(opts: {
   parentReadKey: Uint8Array;
   childReadKey: Uint8Array;
   modifiedAt: number;
+  /** Node createdAt; defaults to modifiedAt when omitted. Set distinct to
+   *  prove resolveChildren does not project modifiedAt into createdAt. */
+  createdAt?: number;
   sequenceNumber: bigint;
   size?: number;
   children?: SealedChildRef[];
@@ -86,7 +89,7 @@ async function buildChildFixture(opts: {
     kind: opts.kind,
     id: opts.id,
     generation: opts.generation,
-    createdAt: opts.modifiedAt,
+    createdAt: opts.createdAt ?? opts.modifiedAt,
     modifiedAt: opts.modifiedAt,
     ...(opts.kind === 'folder' || opts.kind === 'root' ? { children: opts.children ?? [] } : {}),
     ...(opts.kind === 'file'
@@ -203,6 +206,9 @@ describe('CipherBoxClient — listFolder / listSharedFolder ResolvedChild[] (fol
 
   it('listFolder returns one ResolvedChild per child (kind/name/ipnsName/sequence resolved); file carries size+modifiedAt, folder has size undefined', async () => {
     const now = Date.now();
+    // Distinct createdAt (earlier than modifiedAt) so a modifiedAt->createdAt
+    // projection swap in resolveChildren would fail this assertion.
+    const fileCreatedAt = now - 10_000;
     const fileFixture = await buildChildFixture({
       id: 'd104a1eb-7822-4e6e-9cef-503cf3d74d77',
       ipnsName: FILE_CHILD_IPNS,
@@ -212,6 +218,7 @@ describe('CipherBoxClient — listFolder / listSharedFolder ResolvedChild[] (fol
       parentReadKey: PARENT_READ_KEY,
       childReadKey: FILE_READ_KEY,
       modifiedAt: now,
+      createdAt: fileCreatedAt,
       sequenceNumber: 3n,
       size: 12345,
     });
@@ -242,7 +249,7 @@ describe('CipherBoxClient — listFolder / listSharedFolder ResolvedChild[] (fol
       name: 'report.pdf',
       kind: 'file',
       size: 12345,
-      createdAt: now,
+      createdAt: fileCreatedAt,
       modifiedAt: now,
       sequence: 3,
     });
@@ -256,9 +263,11 @@ describe('CipherBoxClient — listFolder / listSharedFolder ResolvedChild[] (fol
     });
     expect(folderEntry?.size).toBeUndefined();
     // SC2 wiring proof: createdAt is threaded from the fixture Node through
-    // resolveChildren() onto the ResolvedChild -- not just present but
-    // equal to the source-of-truth Node.createdAt used to build the fixture.
-    expect(fileEntry?.createdAt).toBe(now);
+    // resolveChildren() onto the ResolvedChild -- not just present but equal to
+    // the source-of-truth Node.createdAt (distinct from modifiedAt, so a field
+    // swap is caught) used to build the fixture.
+    expect(fileEntry?.createdAt).toBe(fileCreatedAt);
+    expect(fileEntry?.createdAt).not.toBe(fileEntry?.modifiedAt);
   });
 
   it('listSharedFolder(shareId, path) returns ResolvedChild[] for an INTERMEDIATE folder, not forced to a file leaf', async () => {
