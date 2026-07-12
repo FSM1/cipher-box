@@ -116,6 +116,10 @@ None introduced.
 ## Next Phase Readiness
 - Download and restore progress UX is now live-wired. No blockers. Recommend adding a web-e2e assertion for spinner/affordance visibility when the download-spinner test surface is built.
 
+## Self-Check: PASSED
+
+All created/modified files exist on disk; all three task/doc commits (`f0672a5b7`, `b5622e297`, `8d2111612`) are present in git history.
+
 ---
 *Phase: 78-recovery-tool-v3-vault-load-guards-web-ux-and-ci-guards*
 *Completed: 2026-07-12*
