@@ -106,6 +106,30 @@ closed. Fix: extend pin issuance to load a file node's own write-body and reseal
 its `recipientPins` (or route file-share re-mint to tolerate an absent pin with
 an explicit file-share policy). Add a file-share pin round-trip test.
 
+## 6. Routine mount republish can clobber an out-of-band pin (stale-cache window)
+
+The desktop mount's inode `recipient_pins` cache is materialized lazily (mount
+init / the ~30s periodic metadata refresh). A pin written OUT OF BAND — the
+owner sharing a folder from the web client, which reseals that folder's
+write-body with the new pin — is not reflected on the desktop mount until its
+next refresh. The scope-exit ROTATION path is now safe: `rotate_read_on_scope_exit`
+refreshes the grant root's pins from the published write-body before reading
+them (`refresh_grant_root_recipient_pins`, commit da393f99d). But a ROUTINE
+folder mutation on the desktop mount in that same stale window
+(`fs.rs::build_folder_metadata` reseals the cached — empty — pin list, D-03
+ddb7082e6) would republish the folder PIN-LESS, dropping the web-written pin on
+the wire until the next refresh re-reads it (and if the wire is already empty,
+the refresh reads empty too).
+
+Impact: narrow window, but a web-issued pin can be silently lost by an
+interleaved desktop write before the mount's first post-share refresh — later
+re-mint/upgrade then fails closed. Fix options: (a) refresh the folder's pins
+from the published write-body before a routine reseal too (costly on the hot
+publish path — prefer only when the folder is a known sent-grant root), or
+(b) have the mount eagerly refresh a folder's pins when it first observes a new
+sent-share rooted there (piggyback on the periodic `/shares/sent` refresh).
+Add a share-then-routine-write pin-survival test.
+
 ## Acceptance
 
 - Revoking a share prunes the recipient's pin (or the residual relay-trust is
@@ -113,3 +137,5 @@ an explicit file-share policy). Add a file-share pin round-trip test.
 - Pin-list growth is bounded (via pruning or an explicit cap).
 - Share issuance is atomic (pin committed before/with the share row), so a
   partial failure never strands an unpinned share that blocks rotation.
+- A routine desktop write in the post-share stale-cache window does not drop an
+  out-of-band (web-issued) recipient pin (item 6).
