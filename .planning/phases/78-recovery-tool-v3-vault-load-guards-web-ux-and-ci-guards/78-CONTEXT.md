@@ -34,7 +34,7 @@ This is a closeout/hardening phase — scope is fixed by the five source todos a
 - **D-06:** **Keep apps/web vitest OUT of a blocking CI unit-test job.** The standing architecture holds: reusable logic lives in `packages/sdk` (Vitest, already CI-gated) and UI is covered by Playwright web-e2e. Implement the "decision" by (a) **documenting** the split explicitly, and (b) ensuring the residual `apps/web` `*.test.ts` files either pass or are relocated/removed so nothing rots — do not leave a broken/ignored suite. A green passing web suite exists today (67 tests), but gating CI on it is intentionally declined to avoid inviting UI-coupled unit tests. (See `[[feedback-web-ui-not-unit-tested-logic-in-sdk]]`, `[[project-ci-excludes-web-unit-tests]]`, `[[project-web-vitest-include-test-only]]`.)
 
 ### D-07 boundary enforcement (SC3)
-- **D-07:** Promote the D-07 write-plane(UUID)/read-plane(ipnsName) boundary from the existing grep gate to a proper **ESLint rule wired into CI**, so violations fail lint rather than a bespoke grep script.
+- **D-07:** Promote the D-07 **web/SDK import boundary** from the existing grep gate to a proper **ESLint rule wired into CI**, so violations fail lint rather than a bespoke grep script. (Correction: this D-07 is the web/SDK import boundary per source todo `2026-07-06-d07-boundary-eslint-rule` + `68.2-SECURITY.md` — `apps/web/src` must not import runtime bindings from `@cipherbox/sdk-core`/`@cipherbox/core` or call raw IPFS. It is NOT the Rust/FUSE write-plane(UUID)/read-plane(ipnsName) invariant, which is a separately-enforced, unrelated "D-07".)
 
 ### 68.2/73 hardening backlog scope (SC3)
 - **D-08:** Fix **only the two named data-integrity races** in this phase — **item 3 (poll-monotonicity)** and **item 11 (descent-vs-restore race)** — each with **e2e coverage**. The remaining open items of the 8-open/1-partial 68.2/73 CodeRabbit backlog are **deferred** (out of this phase's SC), not pulled forward.
@@ -84,7 +84,7 @@ This is a closeout/hardening phase — scope is fixed by the five source todos a
 ### Established Patterns
 - Web UI is not unit-tested; logic hoisted to `packages/sdk` (Vitest, CI-gated), UI via web-e2e. Governs D-06.
 - apps/web vitest `include` is `*.test.ts` only (`.spec.ts` silently skipped) — relevant when checking residual web tests under D-06.
-- D-07 = write-plane keyed by UUID, read-plane keyed by `ipnsName`; the boundary being CI-enforced.
+- D-07 (in scope) = the web/SDK import boundary: `apps/web/src` must not import runtime bindings from `@cipherbox/sdk-core`/`@cipherbox/core` or call raw IPFS; currently a grep gate, being promoted to a CI-enforced ESLint rule.
 
 ### Integration Points
 - Recovery tool: standalone single-file HTML bundling low-level libs + an HTTP gateway fetch layer (D-04) — no app/SDK/API imports.
