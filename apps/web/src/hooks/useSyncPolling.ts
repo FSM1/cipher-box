@@ -30,6 +30,12 @@ export async function invalidateOpenFolder(): Promise<void> {
   const openFolder = folders[currentFolderId];
   if (!openFolder || !openFolder.isLoaded) return;
 
+  // D-08 (item 3) monotonicity guard: capture the folder's sequenceNumber
+  // (the IPNS clock) BEFORE the async resolve begins. A newer nav-triggered
+  // re-resolve that lands while we await advances this clock; we must never
+  // clobber it with our stale poll result.
+  const capturedSequence = openFolder.sequenceNumber;
+
   try {
     const client = getSdkClient();
     const [resolved, state] = await Promise.all([
@@ -40,6 +46,17 @@ export async function invalidateOpenFolder(): Promise<void> {
     // Re-check: the open folder may have changed (or been removed) while
     // the above awaited.
     if (store.currentFolderId !== currentFolderId || !store.folders[currentFolderId]) return;
+
+    // D-08 (item 3): drop this poll result if a newer nav-triggered sequence
+    // has landed on the folder while we awaited — mirrors folder.store.ts's
+    // stale-event guard (`matchingFolder.sequenceNumber > event.sequenceNumber`).
+    // The poll resolved a snapshot at `state.sequenceNumber` (or, absent a
+    // resolved state, at the sequence captured before the await); if the
+    // store's current sequence is already newer, our result is stale and must
+    // not overwrite the fresher navigation state. sequenceNumber is the clock.
+    const resolvedSequence = state ? state.sequenceNumber : capturedSequence;
+    if (store.folders[currentFolderId].sequenceNumber > resolvedSequence) return;
+
     store.updateFolderChildren(currentFolderId, resolved);
     if (state) {
       store.updateFolderRawChildren(currentFolderId, state.children);
