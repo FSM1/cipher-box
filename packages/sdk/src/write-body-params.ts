@@ -65,13 +65,20 @@ export function hasRealWriteKey(wk: Uint8Array | null | undefined): boolean {
 export async function getWriteBodyParams(
   folder: FolderState,
   ctx: SdkContext
-): Promise<{ writeKey?: Uint8Array; writeChildren?: WriteChildRef[] }> {
+): Promise<{ writeKey?: Uint8Array; writeChildren?: WriteChildRef[]; recipientPins?: string[] }> {
   const wk = folder.writeKey;
   if (!hasRealWriteKey(wk)) {
     return {};
   }
   if (folder.metadata?.writeBody) {
-    return { writeKey: wk, writeChildren: folder.metadata.writeBody.writeChildren };
+    // Surface the recipient pins alongside the write chain (D-03a) so a folder
+    // republish preserves them and pin issuance can read the current list
+    // without a second resolve.
+    return {
+      writeKey: wk,
+      writeChildren: folder.metadata.writeBody.writeChildren,
+      recipientPins: folder.metadata.writeBody.recipientPins,
+    };
   }
   const resolved = await sdkCore.resolveIpnsRecord(folder.ipnsName, ctx);
   if (!resolved) {
@@ -84,7 +91,11 @@ export async function getWriteBodyParams(
   if (!published.writeSealed) return { writeKey: wk, writeChildren: [] };
   const node = await unsealNode(published, folder.folderKey, wk);
   try {
-    return { writeKey: wk, writeChildren: node.writeBody?.writeChildren ?? [] };
+    return {
+      writeKey: wk,
+      writeChildren: node.writeBody?.writeChildren ?? [],
+      recipientPins: node.writeBody?.recipientPins,
+    };
   } finally {
     // D-09: unsealNode just materialized a transient IPNS private key
     // (node.writeBody.ipnsPrivateKey) purely to let us read writeChildren.

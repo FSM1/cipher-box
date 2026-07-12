@@ -30,6 +30,7 @@ import {
   wrapKey,
   hexToBytes,
   bytesToHex,
+  base64ToBytes,
   deriveEd25519PublicKey,
   generateEd25519Keypair,
   generateRandomBytes,
@@ -1345,7 +1346,7 @@ export class CipherBoxClient {
    */
   private async getWriteBodyParams(
     folder: FolderState
-  ): Promise<{ writeKey?: Uint8Array; writeChildren?: WriteChildRef[] }> {
+  ): Promise<{ writeKey?: Uint8Array; writeChildren?: WriteChildRef[]; recipientPins?: string[] }> {
     return getWriteBodyParamsShared(folder, this.ctx);
   }
 
@@ -3895,6 +3896,98 @@ export class CipherBoxClient {
         itemWriteKey?.fill(0);
         itemWriteKey = null;
       }
+    });
+  }
+
+  /**
+   * Append a recipient's issuance-time pubkey to a shared item's owner-sealed
+   * write-body pin list and republish (D-03a/c).
+   *
+   * The `NodeWriteBody.recipientPins` list is the server-opaque, cross-device
+   * trust anchor that all re-mint enforcement (80-06/07/08) verifies against.
+   * This is the issuance WRITE path — distinct from
+   * {@link resolveShareEncryptedWriteKey}, which only DERIVES a writeKey and
+   * never writes back a write-body (Pitfall 4).
+   *
+   * Reads the item's CURRENT pins (via {@link getWriteBodyParams}), appends the
+   * recipient (dedup by raw bytes), and CAS-republishes via
+   * `updateFolderMetadataAndPublish` — the node's generation is UNCHANGED (the
+   * pin rides inside the existing role-0x01 write-body seal at the current
+   * generation); only the IPNS `sequenceNumber` advances. Read-body content is
+   * untouched.
+   *
+   * `itemIpnsName` must be a folder the client tracks in its folder tree (its
+   * own `FolderState` carries the writeKey + IPNS signing key needed to seal its
+   * write-body). Fails closed if the item has no write-capable writeKey.
+   *
+   * @param itemIpnsName - IPNS name of the shared root item (owned by this client)
+   * @param recipientPublicKey - recipient's raw secp256k1 public key bytes
+   * @security Does NOT zero `recipientPublicKey` — the caller is its terminal owner (D-09).
+   */
+  async addRecipientPubkeyPin(itemIpnsName: string, recipientPublicKey: Uint8Array): Promise<void> {
+    return this.withOperation('addRecipientPubkeyPin', async () => {
+      const folder = await this.requireFolder(itemIpnsName, 'Shared item');
+
+      const writeBodyParams = await this.getWriteBodyParams(folder);
+      if (!writeBodyParams.writeKey) {
+        throw new Error(
+          `addRecipientPubkeyPin: item ${itemIpnsName} has no writeKey — cannot pin a recipient on a non-write-capable node`
+        );
+      }
+
+      const nextPins = sdkCore.appendRecipientPin(
+        writeBodyParams.recipientPins ?? [],
+        recipientPublicKey
+      );
+
+      const baseChildren = [...folder.children];
+      const { newSequenceNumber, publishedChildren, publishedWriteChildren } =
+        await sdkCore.updateFolderMetadataAndPublish({
+          children: folder.children,
+          baseChildren,
+          folderKey: folder.folderKey,
+          ...writeBodyParams,
+          // Override the spread `recipientPins` with the appended union — the
+          // seal + CAS-409 merge preserves/unions these (T-80-11).
+          recipientPins: nextPins,
+          ipnsPrivateKey: folder.ipnsKeypair.privateKey,
+          ipnsName: itemIpnsName,
+          sequenceNumber: folder.sequenceNumber,
+          ctx: this.ctx,
+          nodeId: folder.nodeId,
+          nodeGeneration: folder.nodeGeneration,
+        });
+
+      this.adoptPublishedFolderState(
+        folder,
+        publishedChildren,
+        newSequenceNumber,
+        publishedWriteChildren ?? writeBodyParams.writeChildren
+      );
+      // Keep the in-memory write-body mirror's pin list in sync so a follow-up
+      // getRecipientPubkeyPins in the same session reflects the new pin.
+      if (folder.metadata?.writeBody) {
+        folder.metadata.writeBody.recipientPins = nextPins;
+      }
+    });
+  }
+
+  /**
+   * Read a shared item's owner-sealed recipient-pubkey pin list (D-03a) for
+   * re-mint enforcement.
+   *
+   * Resolves + unseals the item's write-body and returns its `recipientPins` as
+   * raw pubkey bytes. Returns `[]` when the node carries no pins.
+   *
+   * @param itemIpnsName - IPNS name of the shared root item (owned by this client)
+   * @returns the pinned recipient pubkeys as raw byte arrays
+   */
+  async getRecipientPubkeyPins(itemIpnsName: string): Promise<Uint8Array[]> {
+    return this.withOperation('getRecipientPubkeyPins', async () => {
+      const folder = await this.requireFolder(itemIpnsName, 'Shared item');
+      const writeBodyParams = await this.getWriteBodyParams(folder);
+      const pinsB64 = writeBodyParams.recipientPins ?? [];
+      return pinsB64.map((p) => base64ToBytes(p));
     });
   }
 
