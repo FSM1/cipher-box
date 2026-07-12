@@ -53,6 +53,16 @@ export type OwnerReconcileTransport = {
   updateGrant: (shareId: string, encryptedReadKey: string, generation: number) => Promise<void>;
   /** Removes a revoked recipient's grant row. */
   deleteGrant: (shareId: string) => Promise<void>;
+  /**
+   * Resolves the node's owner-sealed `recipientPins` (raw pubkey bytes) via the
+   * client read path (`client.getRecipientPubkeyPins`) so the re-mint can
+   * fail-closed verify each grant's recipient before wrapping (D-03d consumer 2).
+   *
+   * Optional on the transport type so the concrete web wrapper (80-08) can wire
+   * it separately; when absent the re-mint fails CLOSED (the enforced path
+   * throws rather than trusting the relay-fed recipient).
+   */
+  getRecipientPubkeyPins?: (nodeId: string) => Promise<Uint8Array[]>;
 };
 
 /**
@@ -88,6 +98,20 @@ export function buildGrantRemintCallbacks(
     updateGrantFn: (shareId, encryptedReadKey, newGeneration) =>
       transport.updateGrant(shareId, encryptedReadKey, newGeneration),
     deleteGrantFn: (shareId) => transport.deleteGrant(shareId),
+    // D-03d consumer 2 seam: resolve the node's owner-sealed recipientPins via
+    // the client read path so sdk-core's reMintGrantsRootedAt can fail-closed
+    // verify each surviving grant's recipient against the pin list BEFORE
+    // wrapping. Sources the pins from `getRecipientPubkeyPins` (80-04), NOT the
+    // relay-fed `/shares/sent` recipientPublicKey. Absent transport method →
+    // throw (fail-closed): the enforced path never trusts the relay recipient.
+    getPinsFn: (nodeId: string) => {
+      if (!transport.getRecipientPubkeyPins) {
+        throw new Error(
+          'buildGrantRemintCallbacks: transport.getRecipientPubkeyPins is required to verify recipient pins before re-mint — refusing (D-03d/D-03e)'
+        );
+      }
+      return transport.getRecipientPubkeyPins(nodeId);
+    },
   };
 }
 

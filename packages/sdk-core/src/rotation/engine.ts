@@ -48,6 +48,7 @@ import { fetchFromIpfs, addToIpfs } from '../ipfs';
 import type { SdkContext } from '../types';
 import { updateFolderMetadataAndPublish } from '../folder/registration';
 import { mergeRotatedChildren } from './merge';
+import { assertRecipientPinned } from '../share/recipient-pins';
 
 // ---------------------------------------------------------------------------
 // Types — string-literal unions, never TypeScript enums (project convention)
@@ -64,6 +65,16 @@ import { mergeRotatedChildren } from './merge';
  *   - `updateGrantFn(shareId, encryptedReadKey, newGeneration)` — persists the
  *     re-minted ECIES-wrapped encrypted key for a non-revoked recipient.
  *   - `deleteGrantFn(shareId)` — removes a revoked recipient's grant row.
+ *   - `getPinsFn(nodeId)` — resolves the node's owner-sealed `recipientPins`
+ *     (raw pubkey bytes or base64 strings) used to fail-closed verify each
+ *     surviving grant's recipient before wrapping (D-03d consumer 2 / T-80-18).
+ *
+ * @security
+ *   `getPinsFn` is a REQUIRED seam on the enforced re-mint path: the
+ *   `recipientPublicKey` on each grant round-trips through the untrusted relay
+ *   (via `listSentGrants`), so it MUST NOT be trusted as the wrap target. The
+ *   pin list is the owner-sealed authority. A missing `getPinsFn` OR an empty
+ *   pin list is a HARD fail-closed error (D-03e no-legacy) — never a skip.
  */
 export type GrantRemintCallbacks = {
   queryGrantsFn: (
@@ -77,6 +88,7 @@ export type GrantRemintCallbacks = {
     newGeneration: number
   ) => Promise<void>;
   deleteGrantFn: (shareId: string) => Promise<void>;
+  getPinsFn?: (nodeId: string) => Promise<Uint8Array[] | string[]>;
 };
 
 /**
@@ -575,13 +587,41 @@ export async function reMintGrantsRootedAt(
 
   const grants = await callbacks.queryGrantsFn(nodeId);
 
+  // D-03d consumer 2 (T-80-18/T-80-19): fetch the node's owner-sealed pin list
+  // ONCE for the whole node before wrapping any surviving grant. The pin list —
+  // not the relay-fed `grant.recipientPublicKey` — authorizes the wrap. Only the
+  // enforced (surviving-grant) path needs pins; an all-revoked node performs no
+  // wrap, so it does not require the seam.
+  let recipientPins: string[] = [];
+  if (grants.some((grant) => !grant.isRevoked)) {
+    if (!callbacks.getPinsFn) {
+      // Fail-closed (D-03e no-legacy): the enforced path requires a real pin
+      // source. A missing seam is a hard invariant violation, never a TOFU pass.
+      throw new Error(
+        'reMintGrantsRootedAt: getPinsFn seam is required to verify recipient pins before re-mint — refusing (D-03d/D-03e)'
+      );
+    }
+    const rawPins = await callbacks.getPinsFn(nodeId);
+    // Normalize to base64 for `assertRecipientPinned` (its stored-pin encoding).
+    recipientPins = rawPins.map((pin) => (pin instanceof Uint8Array ? bytesToBase64(pin) : pin));
+  }
+
   for (const grant of grants) {
     if (grant.isRevoked) {
       // Revoked recipient: delete the grant row. Do NOT re-mint an encrypted key.
       // T-64-04b: re-minting for a revoked recipient defeats revocation.
       await callbacks.deleteGrantFn(grant.shareId);
     } else {
-      // Non-revoked recipient: ECIES-wrap the new readKey under their public key.
+      // Fail-closed recipient verification (D-03d consumer 2 / T-80-18): the
+      // relay may have substituted `grant.recipientPublicKey`, so assert it is
+      // pinned in the owner-sealed list BEFORE wrapping. A mismatch or an
+      // absent/empty pin list throws — aborting the node's re-mint (D-03e). This
+      // is a HARD fail, deliberately NOT a per-grant skip like the isRevoked
+      // branch (Pitfall 5). Reuses the shared sdk-core helper (80-04); the web
+      // consumer (80-08) reuses the same compare.
+      assertRecipientPinned(grant.recipientPublicKey, recipientPins);
+
+      // Non-revoked + pinned recipient: ECIES-wrap the new readKey under their key.
       // T-64-04c: always use wrapKey — never hand-roll key wrapping.
       // Do NOT zero newReadKey here — caller is terminal owner (D-09).
       const wrappedBytes = await wrapKey(newReadKey, grant.recipientPublicKey);

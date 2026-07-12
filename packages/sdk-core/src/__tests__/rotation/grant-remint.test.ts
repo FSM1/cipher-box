@@ -85,6 +85,7 @@ describe('reMintGrantsRootedAt', () => {
       ]);
     const mockUpdateGrant = vi.fn().mockResolvedValue(undefined);
     const mockDeleteGrant = vi.fn().mockResolvedValue(undefined);
+    const mockGetPins = vi.fn().mockResolvedValue([RECIPIENT_PUB_KEY_A]);
     const ctx = createMockContext();
     const job = makeJobRecord();
 
@@ -92,6 +93,7 @@ describe('reMintGrantsRootedAt', () => {
       queryGrantsFn: mockQueryGrants,
       updateGrantFn: mockUpdateGrant,
       deleteGrantFn: mockDeleteGrant,
+      getPinsFn: mockGetPins,
     });
 
     // queryGrantsFn must be called with the rotated nodeId
@@ -145,6 +147,7 @@ describe('reMintGrantsRootedAt', () => {
     ]);
     const mockUpdateGrant = vi.fn().mockResolvedValue(undefined);
     const mockDeleteGrant = vi.fn().mockResolvedValue(undefined);
+    const mockGetPins = vi.fn().mockResolvedValue([RECIPIENT_PUB_KEY_A]);
     const ctx = createMockContext();
     const job = makeJobRecord();
 
@@ -152,6 +155,7 @@ describe('reMintGrantsRootedAt', () => {
       queryGrantsFn: mockQueryGrants,
       updateGrantFn: mockUpdateGrant,
       deleteGrantFn: mockDeleteGrant,
+      getPinsFn: mockGetPins,
     });
 
     // Exactly one update (non-revoked) and one delete (revoked)
@@ -183,5 +187,119 @@ describe('reMintGrantsRootedAt', () => {
 
     // No crypto operations should have run
     expect(mockFns.wrapKey).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // D-03d consumer 2 (TS re-mint) — fail-closed recipient-pin enforcement.
+  //
+  // reMintGrantsRootedAt must verify grant.recipientPublicKey (which round-trips
+  // through the untrusted relay via listSentGrants) against the node's
+  // owner-sealed recipientPins BEFORE wrapKey. A relay-substituted recipient
+  // (mismatch) or an absent/empty pin list (D-03e no-legacy) is a HARD fail —
+  // it throws and aborts the node's re-mint, unlike the per-grant isRevoked skip.
+  // -------------------------------------------------------------------------
+
+  it('Test A (D-03d mismatch): throws and does NOT wrap when getPinsFn omits the grant recipient', async () => {
+    const mockQueryGrants = vi
+      .fn()
+      .mockResolvedValue([
+        { shareId: SHARE_ID_A, recipientPublicKey: RECIPIENT_PUB_KEY_A, isRevoked: false },
+      ]);
+    const mockUpdateGrant = vi.fn().mockResolvedValue(undefined);
+    const mockDeleteGrant = vi.fn().mockResolvedValue(undefined);
+    // Pins list contains a DIFFERENT recipient (relay substituted the pubkey).
+    const mockGetPins = vi.fn().mockResolvedValue([RECIPIENT_PUB_KEY_B]);
+    const ctx = createMockContext();
+    const job = makeJobRecord();
+
+    await expect(
+      reMintGrantsRootedAt(NODE_ID, NEW_READ_KEY, NEW_GENERATION, job, ctx, {
+        queryGrantsFn: mockQueryGrants,
+        updateGrantFn: mockUpdateGrant,
+        deleteGrantFn: mockDeleteGrant,
+        getPinsFn: mockGetPins,
+      })
+    ).rejects.toThrow(/pinned/i);
+
+    // Fail-closed: the read key was never wrapped to the substituted recipient.
+    expect(mockFns.wrapKey).not.toHaveBeenCalled();
+    expect(mockUpdateGrant).not.toHaveBeenCalled();
+  });
+
+  it('Test B (D-03e absent): throws when getPinsFn returns an empty pin list', async () => {
+    const mockQueryGrants = vi
+      .fn()
+      .mockResolvedValue([
+        { shareId: SHARE_ID_A, recipientPublicKey: RECIPIENT_PUB_KEY_A, isRevoked: false },
+      ]);
+    const mockUpdateGrant = vi.fn().mockResolvedValue(undefined);
+    const mockDeleteGrant = vi.fn().mockResolvedValue(undefined);
+    const mockGetPins = vi.fn().mockResolvedValue([]);
+    const ctx = createMockContext();
+    const job = makeJobRecord();
+
+    await expect(
+      reMintGrantsRootedAt(NODE_ID, NEW_READ_KEY, NEW_GENERATION, job, ctx, {
+        queryGrantsFn: mockQueryGrants,
+        updateGrantFn: mockUpdateGrant,
+        deleteGrantFn: mockDeleteGrant,
+        getPinsFn: mockGetPins,
+      })
+    ).rejects.toThrow();
+
+    expect(mockFns.wrapKey).not.toHaveBeenCalled();
+    expect(mockUpdateGrant).not.toHaveBeenCalled();
+  });
+
+  it('Test B2 (D-03e absent seam): throws when getPinsFn is missing for a surviving grant', async () => {
+    const mockQueryGrants = vi
+      .fn()
+      .mockResolvedValue([
+        { shareId: SHARE_ID_A, recipientPublicKey: RECIPIENT_PUB_KEY_A, isRevoked: false },
+      ]);
+    const mockUpdateGrant = vi.fn().mockResolvedValue(undefined);
+    const mockDeleteGrant = vi.fn().mockResolvedValue(undefined);
+    const ctx = createMockContext();
+    const job = makeJobRecord();
+
+    await expect(
+      reMintGrantsRootedAt(NODE_ID, NEW_READ_KEY, NEW_GENERATION, job, ctx, {
+        queryGrantsFn: mockQueryGrants,
+        updateGrantFn: mockUpdateGrant,
+        deleteGrantFn: mockDeleteGrant,
+      })
+    ).rejects.toThrow();
+
+    expect(mockFns.wrapKey).not.toHaveBeenCalled();
+    expect(mockUpdateGrant).not.toHaveBeenCalled();
+  });
+
+  it('Test C (match): proceeds and wraps when getPinsFn includes the grant recipient', async () => {
+    const mockQueryGrants = vi
+      .fn()
+      .mockResolvedValue([
+        { shareId: SHARE_ID_A, recipientPublicKey: RECIPIENT_PUB_KEY_A, isRevoked: false },
+      ]);
+    const mockUpdateGrant = vi.fn().mockResolvedValue(undefined);
+    const mockDeleteGrant = vi.fn().mockResolvedValue(undefined);
+    const mockGetPins = vi.fn().mockResolvedValue([RECIPIENT_PUB_KEY_A]);
+    const ctx = createMockContext();
+    const job = makeJobRecord();
+
+    await reMintGrantsRootedAt(NODE_ID, NEW_READ_KEY, NEW_GENERATION, job, ctx, {
+      queryGrantsFn: mockQueryGrants,
+      updateGrantFn: mockUpdateGrant,
+      deleteGrantFn: mockDeleteGrant,
+      getPinsFn: mockGetPins,
+    });
+
+    // Pins fetched once for the node, recipient verified, then wrapped as before.
+    expect(mockGetPins).toHaveBeenCalledWith(NODE_ID);
+    expect(mockFns.wrapKey).toHaveBeenCalledWith(NEW_READ_KEY, RECIPIENT_PUB_KEY_A);
+    expect(mockUpdateGrant).toHaveBeenCalledWith(
+      SHARE_ID_A,
+      EXPECTED_ENCRYPTED_KEY,
+      NEW_GENERATION
+    );
   });
 });

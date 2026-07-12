@@ -30,13 +30,22 @@ const mockFns = vi.hoisted(() => ({
   wrapKey: vi.fn(),
 }));
 
-vi.mock('@cipherbox/crypto', () => ({
-  wrapKey: mockFns.wrapKey,
-  generateRandomBytes: vi.fn(),
-  unwrapKey: vi.fn(),
-  reWrapKey: vi.fn(),
-  bytesToBase64: vi.fn((bytes: Uint8Array) => btoa(String.fromCharCode(...bytes))),
-}));
+// Keep the real base64ToBytes/hexToBytes (via importOriginal) — the rebuilt
+// sdk-core's assertRecipientPinned (80-04) decodes the pin list with them when
+// verifying each surviving grant's recipient before wrapKey (D-03d consumer 2).
+// Only the ECIES/randomness surface is stubbed; bytesToBase64 keeps its
+// deterministic btoa form so EXPECTED_ENCRYPTED_KEY stays stable.
+vi.mock('@cipherbox/crypto', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@cipherbox/crypto')>();
+  return {
+    ...actual,
+    wrapKey: mockFns.wrapKey,
+    generateRandomBytes: vi.fn(),
+    unwrapKey: vi.fn(),
+    reWrapKey: vi.fn(),
+    bytesToBase64: vi.fn((bytes: Uint8Array) => btoa(String.fromCharCode(...bytes))),
+  };
+});
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -76,15 +85,24 @@ function makeCtx(): SdkContext {
   };
 }
 
-function makeTransport(grants: GrantRow[]): OwnerReconcileTransport & {
+function makeTransport(
+  grants: GrantRow[],
+  pins?: Uint8Array[]
+): OwnerReconcileTransport & {
   listSentGrants: ReturnType<typeof vi.fn>;
   updateGrant: ReturnType<typeof vi.fn>;
   deleteGrant: ReturnType<typeof vi.fn>;
+  getRecipientPubkeyPins: ReturnType<typeof vi.fn>;
 } {
+  // Default the owner-sealed pin list to the recipients of the supplied grants,
+  // so a surviving grant is pinned unless a test overrides `pins` to force a
+  // relay-substitution mismatch (D-03d) or an absent pin list (D-03e).
+  const defaultPins = pins ?? grants.map((grant) => grant.recipientPublicKey);
   return {
     listSentGrants: vi.fn().mockResolvedValue(grants),
     updateGrant: vi.fn().mockResolvedValue(undefined),
     deleteGrant: vi.fn().mockResolvedValue(undefined),
+    getRecipientPubkeyPins: vi.fn().mockResolvedValue(defaultPins),
   };
 }
 
@@ -247,5 +265,82 @@ describe('runOwnerReconcile', () => {
 
     expect(transport.updateGrant).not.toHaveBeenCalled();
     expect(transport.deleteGrant).not.toHaveBeenCalled();
+  });
+
+  // D-03d consumer 2 (T-80-18): the recipientPublicKey round-trips through the
+  // untrusted relay via listSentGrants. When the node's owner-sealed pin list
+  // (getRecipientPubkeyPins read path) does NOT include that recipient, the
+  // reconcile pass MUST fail closed — throw and never wrap/persist the read key.
+  it('Test 5 (D-03d mismatch): reconcile fails closed when the pin list omits the surviving grant recipient', async () => {
+    const transport = makeTransport(
+      [
+        {
+          shareId: SHARE_ID_SURVIVING,
+          recipientPublicKey: RECIPIENT_PUB_KEY_A,
+          isRevoked: false,
+          rootNodeId: ROOT_NODE_ID,
+        },
+      ],
+      // Pin list contains a DIFFERENT recipient — relay substituted the pubkey.
+      [RECIPIENT_PUB_KEY_B]
+    );
+    const ctx = makeCtx();
+    const job = makeJobRecord();
+
+    await expect(
+      runOwnerReconcile(ROOT_NODE_ID, NEW_READ_KEY, NEW_GENERATION, job, ctx, transport)
+    ).rejects.toThrow(/pinned/i);
+
+    // Fail-closed: no wrap, no persistence of the re-minted key.
+    expect(mockFns.wrapKey).not.toHaveBeenCalled();
+    expect(transport.updateGrant).not.toHaveBeenCalled();
+  });
+
+  // D-03e no-legacy: an empty/absent owner-sealed pin list is a HARD failure,
+  // never a TOFU pass — the reconcile pass throws for a surviving grant.
+  it('Test 6 (D-03e absent): reconcile fails closed when the pin list is empty', async () => {
+    const transport = makeTransport(
+      [
+        {
+          shareId: SHARE_ID_SURVIVING,
+          recipientPublicKey: RECIPIENT_PUB_KEY_A,
+          isRevoked: false,
+          rootNodeId: ROOT_NODE_ID,
+        },
+      ],
+      [] // absent/empty pin list
+    );
+    const ctx = makeCtx();
+    const job = makeJobRecord();
+
+    await expect(
+      runOwnerReconcile(ROOT_NODE_ID, NEW_READ_KEY, NEW_GENERATION, job, ctx, transport)
+    ).rejects.toThrow();
+
+    expect(mockFns.wrapKey).not.toHaveBeenCalled();
+    expect(transport.updateGrant).not.toHaveBeenCalled();
+  });
+
+  it('Test 7 (pin source): getPinsFn resolves via getRecipientPubkeyPins, matching pin wraps as before', async () => {
+    const transport = makeTransport([
+      {
+        shareId: SHARE_ID_SURVIVING,
+        recipientPublicKey: RECIPIENT_PUB_KEY_A,
+        isRevoked: false,
+        rootNodeId: ROOT_NODE_ID,
+      },
+    ]);
+    const ctx = makeCtx();
+    const job = makeJobRecord();
+
+    await runOwnerReconcile(ROOT_NODE_ID, NEW_READ_KEY, NEW_GENERATION, job, ctx, transport);
+
+    // The pin source is the owner-sealed read path, resolved for the node.
+    expect(transport.getRecipientPubkeyPins).toHaveBeenCalledWith(ROOT_NODE_ID);
+    expect(transport.updateGrant).toHaveBeenCalledWith(
+      SHARE_ID_SURVIVING,
+      EXPECTED_ENCRYPTED_KEY,
+      NEW_GENERATION
+    );
   });
 });
