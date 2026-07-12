@@ -1061,11 +1061,18 @@ Plans:
 2. The download-progress dead code is resolved (wired to restore spinners or deleted)
 3. The D-07 boundary is CI-enforced, the web vitest CI decision is implemented, and the two 68.2 data-integrity races (poll-monotonicity, descent-vs-restore) are fixed with e2e coverage
 
-**Plans:** 0 plans
+**Plans:** 8 plans
 
 Plans:
 
-- [ ] TBD (run /gsd-plan-phase 78 to break down)
+- [ ] 78-01-PLAN.md — SC1 recovery bundle spike + esbuild build tooling + gateway transport (Wave 1)
+- [ ] 78-02-PLAN.md — SC1 v3 recovery walk + full recovery.html UI wiring (Wave 2)
+- [ ] 78-03-PLAN.md — SC1 un-fixme recovery.spec.ts + e2e exit gate (Wave 3)
+- [ ] 78-04-PLAN.md — SC2 download + restore progress UX wiring (D-05) (Wave 1)
+- [ ] 78-05-PLAN.md — SC3a D-07 web/SDK boundary ESLint rule in CI (Wave 1)
+- [ ] 78-06-PLAN.md — SC3b web vitest CI decision + DEVELOPMENT.md docs (D-06) (Wave 1)
+- [ ] 78-07-PLAN.md — SC3c item 3 poll-monotonicity fix + e2e (D-08) (Wave 1)
+- [ ] 78-08-PLAN.md — SC3c item 11 descent-vs-restore fix + e2e (D-08) (Wave 1)
 
 ### Phase 79: Web Kind-Discrimination Completion and Deferred Test Revival
 
