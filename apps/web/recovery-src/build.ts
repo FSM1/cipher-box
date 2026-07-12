@@ -22,6 +22,11 @@ import { fileURLToPath } from 'node:url';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const entryPoint = resolve(scriptDir, 'main.ts');
+// Node-global `Buffer` shim injected into every bundled module: eciesjs (used by
+// @cipherbox/crypto ECIES unwrap) references the global `Buffer`, which esbuild's
+// browser platform does not provide. Injecting a pure-JS polyfill keeps the tool
+// self-contained while making in-browser unwrap work.
+const bufferShim = resolve(scriptDir, 'buffer-shim.ts');
 const htmlPath = resolve(scriptDir, '..', 'public', 'recovery.html');
 const placeholder = '<!-- RECOVERY_BUNDLE -->';
 // The spliced bundle is wrapped in these markers so the build stays re-runnable:
@@ -45,6 +50,7 @@ async function main(): Promise<void> {
     minify: true,
     write: false,
     legalComments: 'none',
+    inject: [bufferShim],
   });
 
   const output = result.outputFiles[0];
@@ -91,13 +97,17 @@ async function main(): Promise<void> {
 
   const markedBlock = `${markerStart}\n<script type="module">\n${bundleCode}\n</script>\n${markerEnd}`;
 
+  // Use a replacement FUNCTION, not a string: the minified bundle contains `$`
+  // sequences (e.g. `$'`, `` $` ``, `$&`) that String.prototype.replace would
+  // otherwise interpret as special patterns, duplicating surrounding HTML and
+  // corrupting the output. A function return value is inserted verbatim.
   let splicedHtml: string;
   if (markerRe.test(html)) {
     // Re-splice: replace the previously-inlined bundle block in place.
-    splicedHtml = html.replace(markerRe, markedBlock);
+    splicedHtml = html.replace(markerRe, () => markedBlock);
   } else if (html.includes(placeholder)) {
     // First splice: replace the bare placeholder with the marked bundle block.
-    splicedHtml = html.replace(placeholder, markedBlock);
+    splicedHtml = html.replace(placeholder, () => markedBlock);
   } else {
     console.log(
       `[recovery:build] neither placeholder "${placeholder}" nor bundle markers present in recovery.html — skipping html-splice.`
