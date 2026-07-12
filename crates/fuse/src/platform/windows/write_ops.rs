@@ -1685,8 +1685,12 @@ pub mod implementation {
             // A MATERIALIZED node: its creator-assigned node_id is unrelated to
             // this session's local inode number. `cleanup()` sources child_id
             // from inode.node_id — mirror that here, NOT uuid_from_ino(local_ino).
+            // NOTE: child_id must be a valid UUID — the seal AAD parses it via
+            // `Uuid::parse_str` (crypto/aes.rs), so a non-UUID string fails closed
+            // with `SealFailed(InvalidAadInput)`. Use a fixed remote-assigned UUID
+            // distinct from `uuid_from_ino(local_ino)`.
             let local_ino = 42u64;
-            let materialized_node_id = "remote-creator-node-uuid".to_string();
+            let materialized_node_id = "deadbeef-0000-4000-8000-000000000042".to_string();
             assert_ne!(
                 materialized_node_id,
                 crate::fs::uuid_from_ino(local_ino),
