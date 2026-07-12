@@ -3,7 +3,8 @@
 ## Milestones
 
 - ✅ **v1.1 IPFS Infrastructure** — Phases 18–60 (shipped 2026-06-27) — full detail: `milestones/v1.1-ROADMAP.md`
-- 📋 **v2.0 Metadata and Sharing Refactor** — Phases 61–79 (active; 61–73 shipped, 74–79 closeout)
+- 📋 **v2.0 Metadata and Sharing Refactor** — Phases 61–83 (active; 61–73 shipped, 74–79 closeout, 80–83 straggler closeout)
+- 🗓️ **v2.1 Backlog (deferred)** — web polish/observability (async search index, logger redaction + Faro, 68.2 freshness/a11y/test residue), ops & CI chores (desktop-E2E bin parity, staging Kubo GC, SSH-host doc scrub), Tier-3 large-file refactor, and v2.0+ features (ERC-1271 wallet auth, CRDT IPNS inbox, alternative MFA factors). Tracked in `.planning/todos/pending/`.
 
 ## Phases
 
@@ -75,10 +76,14 @@
 - [x] **Phase 73: Shared Write/Navigation Correctness (Web)** — Preserve nested write capability across navigate-up/breadcrumb restore, invalidate stale nav-stack child snapshots, gate the non-listing read facades with the ROT-07 floor, give WRITE-03 refresh-access a live production trigger, and route drag-payload kind through the resolved listing, plus fold in the tangential nav-hook dedup and dead getShareKeys/folder-IPNS path cleanup in the same subsystem (7 todos) (completed 2026-07-10)
 - [ ] **Phase 74: Rust and FUSE Rotation-Revocation Soundness** — Deep scope-exit key refresh across all intermediate inodes, desktop grant re-mint seam, WinFsp dest-gating parity (3 todos; closes remaining Rust-side revocation bypasses)
 - [x] **Phase 75: Cross-Language IPNS and Node-Codec Verification Parity** — Strict RFC3339 + ValidityType==0 enforcement, KAT IV-encoding pin, UUID AAD acceptance parity, all Rust↔TS vector-locked (4 todos) (completed 2026-07-11)
-- [ ] **Phase 76: FUSE Durability and TEE Write-Path Hardening** — Vault-init publish preflight, deferred Phase 69 publish/concurrency items, TEE republish/renew error handling + later-EOL invariant (4 todos)
+- [x] **Phase 76: FUSE Durability and TEE Write-Path Hardening** — Vault-init publish preflight, deferred Phase 69 publish/concurrency items, TEE republish/renew error handling + later-EOL invariant (4 todos) (completed 2026-07-12, #610)
 - [x] **Phase 77: Crypto Hygiene and Terminology Canonicalization** — Error-path zeroization, base64 helper dedup, `encryptedIpnsPrivateKey` field renames, dead share-scaffolding retirement, root-ownership helper extract (12 todos; mechanical, no behavior change) (completed 2026-07-11)
 - [x] **Phase 78: Recovery Tool v3, Vault-Load Guards, Web UX and CI Guards** — Port recovery.html to node/v3 (un-fixme recovery.spec), download-progress UX resolution, D-07 CI rule, web vitest CI, remaining 68.2/73 hardening incl. two data-integrity races (5 todos) (completed 2026-07-12)
-- [x] **Phase 79: Web Kind-Discrimination Completion and Deferred Test Revival** — Route the listing UI through `ResolvedChild.kind` (folders-first sort, drag-and-drop, kind-aware dialogs), wire Created date, revive 4 `describe.skip` suites, drive `TODO(phase 63/65)` markers to zero (from marker triage; ~40 still-valid markers)
+- [x] **Phase 79: Web Kind-Discrimination Completion and Deferred Test Revival** — Route the listing UI through `ResolvedChild.kind` (folders-first sort, drag-and-drop, kind-aware dialogs), wire Created date, revive 4 `describe.skip` suites, drive `TODO(phase 63/65)` markers to zero (from marker triage; ~40 still-valid markers) (completed 2026-07-12, #611)
+- [ ] **Phase 80: Rotation Write-Plane and Re-Mint Durability** — Restore write-sealed body on rotation republish (owned-walk + replay recovery), verify recipient pubkey binding on re-mint, cache `/shares/sent` per rotation job, defensive-copy readKey for Rust parity (4 todos; straggler closeout, HIGH durability)
+- [ ] **Phase 81: TEE Republish and IPNS-Record Correctness** — Stop over-rejecting still-valid long-lived records, unmask real TEE key-manager config/infra errors, close renewal test residue, integer-only ValidityType CBOR parity (4 todos; straggler closeout)
+- [ ] **Phase 82: Wire-Encoding Domain Hardening (hex/base64)** — Authoritative encoding doc, named boundary codecs, branded types, cross-language contract test, comment reconciliation (1 todo; straggler closeout, HIGH cross-cutting)
+- [ ] **Phase 83: Desktop Resilience — Partial-Failure Recovery and Token Refresh** — Register-only resume for a durably-published-but-unregistered vault, Rust background client access-token auto-refresh (2 todos; straggler closeout)
 
 ## Phase Details
 
@@ -1123,6 +1128,69 @@ Plans:
 - [x] 79-06-PLAN.md — Private dialogs: kind-aware rename/delete/share labels + MoveDialog cycle guard
 - [x] 79-07-PLAN.md — Details Created-date + DetailsDialog fallback + folder-delete subtree store cleanup
 - [x] 79-08-PLAN.md — Web hook test revival (useSharedWriteOps un-skip) + createdAt fixture fixes
+
+---
+
+### Phase 80: Rotation Write-Plane and Re-Mint Durability
+
+**Goal**: Close the remaining scope-exit rotation and re-mint correctness/durability gaps so rotated nodes stay owned-walkable and replay-recoverable, and re-mint stops trusting server-supplied recipient keys or doing O(nodes×shares) work.
+
+**Depends on**: Phase 74, Phase 70.1
+
+**Source todos**: `2026-07-11-rotation-republish-drops-write-sealed-body` (HIGH), `2026-07-11-remint-trusts-server-recipient-pubkey-binding` (MED), `2026-07-11-remint-refetches-sent-shares-per-rotated-node`, `2026-07-11-ts-rotatednodes-defensive-copy-parity`
+
+**Success Criteria**:
+
+1. Rotation republish no longer emits `write_sealed: None` for rotated nodes — owned-walks and replay signing-seed recovery survive a read-key rotation, locked by a regression test.
+2. Scope-exit re-mint binds the new read key to a verified recipient public key (pinned/verified rather than blindly server-supplied), and refetches `/shares/sent` once per rotation job (cached), not once per rotated node.
+3. TS `rotatedNodes` stores a defensive 32-byte copy of `readKey` (no aliasing with `parentNewReadKey`), matching Rust parity.
+
+---
+
+### Phase 81: TEE Republish and IPNS-Record Correctness
+
+**Goal**: Finish the TEE republish/renew write-path correctness pass and the cross-language IPNS-record parity left after Phase 76.
+
+**Depends on**: Phase 76, Phase 75, Phase 67
+
+**Source todos**: `2026-07-12-tee-renewal-over-rejects-longer-lived-records` (residue), `2026-07-01-renew-ipns-record-eol-invariant-and-tests` (residue), `2026-07-01-tee-republish-writepath-error-handling-hardening` (residue), `2026-07-11-ts-validitytype-float-vs-integer-cbor-parity`
+
+**Success Criteria**:
+
+1. `renewIpnsRecord` treats a still-valid, longer-lived record as skip-as-success rather than over-rejecting it as stale (later-EOL invariant refined), with a test asserting the intended branch.
+2. TEE key-manager `decryptWithFallback` distinguishes real config/infra errors from corrupted-key cases (no masking), closing the renewal test-quality residue.
+3. TS IPNS `ValidityType` CBOR encoding rejects the float-`0.0` form the Rust decoder rejects (integer-only parity), vector-locked.
+
+---
+
+### Phase 82: Wire-Encoding Domain Hardening (hex/base64)
+
+**Goal**: End the recurring hex/base64 encoding-domain confusion with an authoritative doc, named boundary codecs, branded types, a cross-language contract test, and comment reconciliation.
+
+**Depends on**: Phase 77, Phase 66
+
+**Source todos**: `2026-07-11-hex-base64-wire-encoding-domain-hardening` (HIGH)
+
+**Success Criteria**:
+
+1. An authoritative wire-encoding doc plus named boundary codecs (explicit hex vs base64 at each API/sdk-core/crypto boundary) exist, and ad-hoc conversions are replaced by them.
+2. Branded types make an encoding-domain mismatch a compile error at the DTO / sdk-core / crypto boundaries.
+3. A cross-language (TS↔Rust) contract test locks the wire encodings; stale/contradictory comments are reconciled.
+
+---
+
+### Phase 83: Desktop Resilience — Partial-Failure Recovery and Token Refresh
+
+**Goal**: Make the desktop long-running session robust to partial-failure vault init and access-token expiry.
+
+**Depends on**: Phase 76, Phase 69
+
+**Source todos**: `2026-07-12-vault-init-register-retry-dead-end` (MED), `2026-07-11-desktop-rust-client-no-token-refresh-on-401` (MED)
+
+**Success Criteria**:
+
+1. A vault whose two IPNS records published durably but whose `register_vault` call failed resumes cleanly via a register-only retry path (no stuck/dead-end state), covered by a test.
+2. The desktop Rust background api-client refreshes its access token so it no longer 401-locks ~15 minutes after login, covered by a test.
 
 ---
 
