@@ -140,12 +140,24 @@ pub async fn fetch_and_decrypt_content_async(
     use base64::Engine as _;
     // Recover the file node's content descriptor by SYMMETRIC unseal of its own
     // read-body (node/v3, SC#1) — never ECIES.
-    let content = unseal_file_content(published, read_key)?;
+    let mut content = unseal_file_content(published, read_key)?;
+
+    // SC2 item 4: `content.file_key` is a locally-owned plaintext copy from the
+    // unseal. Narrow it into the Zeroizing working buffer, then scrub the copy
+    // inside `content` so no later path (fetch/decrypt errors included) holds an
+    // un-zeroed key. On a length error, scrub before surfacing the error too.
+    let file_key_arr = match zeroizing_32_from_slice(&content.file_key, "Invalid file key length") {
+        Ok(k) => k,
+        Err(e) => {
+            cipherbox_crypto::utils::clear_bytes(&mut content.file_key);
+            return Err(e);
+        }
+    };
+    cipherbox_crypto::utils::clear_bytes(&mut content.file_key);
 
     let encrypted_bytes = cipherbox_api_client::ipfs::fetch_content(api, &content.cid)
         .await
         .map_err(|e| e.to_string())?;
-    let file_key_arr = zeroizing_32_from_slice(&content.file_key, "Invalid file key length")?;
 
     // NodeContent.file_iv is BASE64 on the wire (the shipped TS/web read chain —
     // sdk-core downloadFileContent — does base64ToBytes(fileIv)). Decode as base64,
@@ -236,24 +248,34 @@ pub async fn publish_file_node(
         file_key: file_key.to_vec(),
         versions: Vec::new(),
     };
-    let file_node = cipherbox_core::node::Node::File {
+    // D-09: `file_key`/`ipns_private_key` are caller-owned borrows and are NEVER
+    // zeroed here. `node_content.file_key` (via `.to_vec()`) and
+    // `write_body.ipns_private_key` (via `.to_vec()`) are LOCALLY-owned plaintext
+    // copies — those are the buffers scrubbed after sealing (SC2 item 4).
+    let mut file_node = cipherbox_core::node::Node::File {
         id: child_id.to_string(),
         generation: 0,
         created_at: now_ms,
         modified_at: now_ms,
         content: node_content,
     };
-    let write_body = cipherbox_core::node::NodeWriteBody {
+    let mut write_body = cipherbox_core::node::NodeWriteBody {
         ipns_private_key: ipns_private_key.to_vec(),
         write_children: Vec::new(),
     };
-    let published = cipherbox_core::node::seal::seal_published_node(
+    let seal_result = cipherbox_core::node::seal::seal_published_node(
         &file_node,
         read_key,
         write_key,
         Some(&write_body),
-    )
-    .map_err(|e| format!("File node seal failed: {}", e))?;
+    );
+    // Sealing has consumed the borrows — scrub the locally-owned plaintext key
+    // copies now, so success AND every error path below drops zeroed buffers.
+    if let cipherbox_core::node::Node::File { content, .. } = &mut file_node {
+        cipherbox_crypto::utils::clear_bytes(&mut content.file_key);
+    }
+    cipherbox_crypto::utils::clear_bytes(&mut write_body.ipns_private_key);
+    let published = seal_result.map_err(|e| format!("File node seal failed: {}", e))?;
     let published_bytes = cipherbox_core::node::encode_published_node(&published)
         .map_err(|e| format!("File node encode failed: {}", e))?;
 
@@ -363,6 +385,7 @@ pub async fn publish_file_node(
             },
             &[],
             None, // D-01a: no JournalOp::FilePublish variant; exhaustion → Err → EIO
+            2,    // preserve today's single-retry (2-attempt) per-file behavior
         )
         .await?;
     }

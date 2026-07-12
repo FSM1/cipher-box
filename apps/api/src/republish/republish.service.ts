@@ -485,9 +485,14 @@ export class RepublishService {
         );
       }
     } catch (error) {
-      // Non-fatal: log and continue. The IPNS publish already succeeded.
+      // A genuine DB error (connection loss, constraint violation) — NOT the
+      // harmless affected===0 CAS-miss above. Surface at error level with a
+      // message unambiguously distinct from the CAS-miss debug line so a real
+      // write-back failure is observable and never masquerades as a CAS miss.
+      // Still non-fatal: the IPNS publish already succeeded, so we log and
+      // return rather than rethrow (totalSucceeded accounting is unchanged).
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.warn(`renewIpnsRecordEol failed for ${ipnsName}: ${message}`);
+      this.logger.error(`renewIpnsRecordEol DB write-back failed for ${ipnsName}: ${message}`);
     }
   }
 

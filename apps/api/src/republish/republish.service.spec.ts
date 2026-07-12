@@ -1034,6 +1034,85 @@ describe('RepublishService', () => {
       // Still counts as succeeded since the IPNS publish was successful
       expect(result.succeeded).toBe(1);
     });
+
+    it('a real DB error logs at error level (distinct from the CAS-miss debug line) but the batch still reports success', async () => {
+      const schedule = createMockSchedule();
+      const record = createMockRecord({ sequenceNumber: '5' });
+      jest.spyOn(service, 'getDueEntries').mockResolvedValue([{ schedule, record }]);
+
+      teeService.republish.mockResolvedValue([
+        {
+          ipnsName: 'k51test123',
+          success: true,
+          signedRecord: Buffer.from('signed').toString('base64'),
+          newSequenceNumber: '5',
+        },
+      ]);
+      mockDelegatedRoutingClient.publish.mockResolvedValue(undefined);
+      scheduleRepository.save.mockResolvedValue(schedule);
+
+      // Spy on the private logger to assert the log LEVEL of the DB-error path.
+      // A genuine repository throw must surface at error level, NOT warn/debug,
+      // so it is unambiguously distinguishable from the affected===0 CAS-miss.
+      const errorSpy = jest
+        .spyOn((service as unknown as { logger: { error: (msg: string) => void } }).logger, 'error')
+        .mockImplementation(() => undefined);
+      const debugSpy = jest
+        .spyOn((service as unknown as { logger: { debug: (msg: string) => void } }).logger, 'debug')
+        .mockImplementation(() => undefined);
+
+      // Simulate a real DB failure inside the EOL write-back
+      recordUpdateQBMock.execute.mockRejectedValue(new Error('DB connection lost'));
+
+      const result = await service.processRepublishBatch();
+
+      // Batch still reports success — the IPNS publish already succeeded
+      expect(result.succeeded).toBe(1);
+
+      // The DB error surfaced at error level with a message distinct from the CAS-miss line
+      const errorMessages = errorSpy.mock.calls.map((c) => String(c[0]));
+      expect(errorMessages.some((m) => m.includes('DB write-back failed'))).toBe(true);
+      expect(errorMessages.some((m) => m.includes('DB connection lost'))).toBe(true);
+      // The CAS-miss debug line ('CAS miss') must NOT be emitted for a real DB error
+      const debugMessages = debugSpy.mock.calls.map((c) => String(c[0]));
+      expect(debugMessages.some((m) => m.includes('CAS miss'))).toBe(false);
+    });
+
+    it('a CAS miss (affected === 0) logs at debug (not error) and stays non-fatal', async () => {
+      const schedule = createMockSchedule();
+      const record = createMockRecord({ sequenceNumber: '5' });
+      jest.spyOn(service, 'getDueEntries').mockResolvedValue([{ schedule, record }]);
+
+      teeService.republish.mockResolvedValue([
+        {
+          ipnsName: 'k51test123',
+          success: true,
+          signedRecord: Buffer.from('signed').toString('base64'),
+          newSequenceNumber: '5',
+        },
+      ]);
+      mockDelegatedRoutingClient.publish.mockResolvedValue(undefined);
+      scheduleRepository.save.mockResolvedValue(schedule);
+
+      const errorSpy = jest
+        .spyOn((service as unknown as { logger: { error: (msg: string) => void } }).logger, 'error')
+        .mockImplementation(() => undefined);
+      const debugSpy = jest
+        .spyOn((service as unknown as { logger: { debug: (msg: string) => void } }).logger, 'debug')
+        .mockImplementation(() => undefined);
+
+      // Forward publish raced → sequence advanced → CAS misses (affected 0), no throw
+      recordUpdateQBMock.execute.mockResolvedValue({ affected: 0 });
+
+      const result = await service.processRepublishBatch();
+
+      expect(result.succeeded).toBe(1);
+      const debugMessages = debugSpy.mock.calls.map((c) => String(c[0]));
+      expect(debugMessages.some((m) => m.includes('CAS miss'))).toBe(true);
+      // A CAS miss is NOT a DB error — the error-level DB-write-back line must be absent
+      const errorMessages = errorSpy.mock.calls.map((c) => String(c[0]));
+      expect(errorMessages.some((m) => m.includes('DB write-back failed'))).toBe(false);
+    });
   });
 
   // ===========================================================================

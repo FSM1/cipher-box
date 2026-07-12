@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Metadata and Sharing Refactor
-current_phase: 78
-current_phase_name: Recovery Tool v3, Vault-Load Guards, Web UX and CI Guards
-status: verifying
-stopped_at: Completed 77-09-PLAN.md
-last_updated: "2026-07-11T10:03:19.194Z"
-last_activity: 2026-07-11
-last_activity_desc: Phase 77 complete, transitioned to Phase 78
+current_phase: 76
+current_phase_name: fuse-durability-and-tee-write-path-hardening
+status: executing
+stopped_at: "Phase 76: all 5 plans executed (76-01..76-05); 76-05 Windows D-07 checkpoint pending CI"
+last_updated: "2026-07-12T00:00:00.000Z"
+last_activity: 2026-07-12
+last_activity_desc: Phase 76 plans 76-03/76-04/76-05 executed on resume; 76-05 Windows CI checkpoint pending
 progress:
   total_phases: 22
-  completed_phases: 17
-  total_plans: 198
-  completed_plans: 198
-  percent: 77
+  completed_phases: 19
+  total_plans: 215
+  completed_plans: 210
+  percent: 86
 ---
 
 # Project State
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-27)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 77 — crypto-hygiene-and-terminology-canonicalization
+**Current focus:** Phase 76 — fuse-durability-and-tee-write-path-hardening
 
 ## Current Position
 
-Phase: 78 — Recovery Tool v3, Vault-Load Guards, Web UX and CI Guards
-Plan: Not started
-Status: Phase complete — ready for verification
-Last activity: 2026-07-11 — Phase 77 complete, transitioned to Phase 78
+Phase: 76 (fuse-durability-and-tee-write-path-hardening) — EXECUTING
+Plan: 1 of 5
+Status: Executing Phase 76
+Last activity: 2026-07-11 — Phase 76 execution started
 
 Progress: `██████████` 79 / 79 plans (100%)
 
@@ -411,6 +411,10 @@ Recent for v1.1:
   - Q1 (Phase 68): Co-writer offline during write-key rotation -- accept explicit re-fetch requirement or add grace/notification?
   - Q2 (Phase 63): Rotation host for pure-web users -- is a long chunked multi-session web rotation acceptable for large revokes, or is desktop the only host?
   - Q3 (Phases 65, 68, 69): Write-recipient-vs-owner sub-share authority -- when C (write recipient) deletes a node the owner independently sub-shared to D, who controls revocation of D?
+
+### Pending Verification (blocking merge gate)
+
+**2026-07-12 — Phase 76-05 Windows D-07 checkpoint (checkpoint:human-verify, blocking):** The Windows D-07 write-plane keying fix (`crates/fuse/src/platform/windows/write_ops.rs`, commit `36b8d24f5`) plus its ported regression test compile ONLY under `feature = "winfsp"`, which does not build on the macOS execution worktree. This resume ran in BACKGROUND with no human, so the blocking checkpoint was NOT self-approved. Before merging Phase 76: confirm both `Cargo Check & Test (Windows)` (windows-latest) and `Desktop E2E (windows-latest)` are GREEN on the phase PR. If either is red (e.g. a compile error in the ported test unobservable locally), a fix iteration is required — do NOT merge on a red Windows leg. See `76-05-SUMMARY.md` (`open_checkpoints`).
 
 ### Pending Todos
 

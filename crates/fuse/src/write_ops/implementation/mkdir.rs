@@ -165,8 +165,14 @@ pub fn handle_mkdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Repl
                     &api, &child_published_node,
                 ).await.map_err(|e| format!("{}", e))?;
 
-                let ipns_key_arr: [u8; 32] = (*ipns_private_key_zeroized).clone().try_into()
-                    .map_err(|_| "Invalid IPNS key length".to_string())?;
+                // SC2 item 4: the narrowed [u8;32] signing seed is a locally-owned
+                // copy — wrap in Zeroizing so it is scrubbed on drop (incl. error
+                // paths). try_from(as_slice()) copies straight into the array with no
+                // transient plaintext Vec.
+                let ipns_key_arr: zeroize::Zeroizing<[u8; 32]> = zeroize::Zeroizing::new(
+                    <[u8; 32]>::try_from(ipns_private_key_zeroized.as_slice())
+                        .map_err(|_| "Invalid IPNS key length".to_string())?,
+                );
                 let value = format!("/ipfs/{}", initial_cid);
                 let record = cipherbox_core::ipns::create_ipns_record(
                     &ipns_key_arr, &value, 1, 86_400_000,
@@ -209,8 +215,13 @@ pub fn handle_mkdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Repl
                     &api, &parent_published_node,
                 ).await.map_err(|e| format!("{}", e))?;
 
-                let parent_key_arr: [u8; 32] = parent_ipns_private_key.try_into()
-                    .map_err(|_| "Invalid parent IPNS key length".to_string())?;
+                // SC2 item 4: parent_ipns_private_key is a locally-owned Zeroizing
+                // signing seed; narrow into a Zeroizing<[u8;32]> (scrubbed on drop,
+                // incl. error paths) with no transient plaintext Vec.
+                let parent_key_arr: zeroize::Zeroizing<[u8; 32]> = zeroize::Zeroizing::new(
+                    <[u8; 32]>::try_from(parent_ipns_private_key.as_slice())
+                        .map_err(|_| "Invalid parent IPNS key length".to_string())?,
+                );
                 let new_seq = seq + 1;
                 let parent_value = format!("/ipfs/{}", parent_meta_cid);
                 let parent_record = cipherbox_core::ipns::create_ipns_record(

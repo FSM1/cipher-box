@@ -208,20 +208,17 @@ pub async fn mount_filesystem(
     // node/v3 vault now mounts under its own persisted keys. We only narrow the
     // passed 32-byte state keys into fixed `[u8; 32]` locals for InodeKind::Root,
     // prepopulate, and replay — no derivation.
-    let root_read_key: Zeroizing<[u8; 32]> = {
-        let mut k = [0u8; 32];
-        let src = root_read_key.as_slice();
-        let n = src.len().min(32);
-        k[..n].copy_from_slice(&src[..n]);
-        Zeroizing::new(k)
-    };
-    let root_write_key: Zeroizing<[u8; 32]> = {
-        let mut k = [0u8; 32];
-        let src = root_write_key.as_slice();
-        let n = src.len().min(32);
-        k[..n].copy_from_slice(&src[..n]);
-        Zeroizing::new(k)
-    };
+    // SC2 item 4: narrow with strict try_into() — root keys are ALWAYS exactly 32
+    // bytes, so a zero-padding min(32) copy would silently accept (and mount under)
+    // a malformed short key. try_from into the Zeroizing array fails closed instead.
+    let root_read_key: Zeroizing<[u8; 32]> = Zeroizing::new(
+        <[u8; 32]>::try_from(root_read_key.as_slice())
+            .map_err(|_| "root_read_key must be exactly 32 bytes".to_string())?,
+    );
+    let root_write_key: Zeroizing<[u8; 32]> = Zeroizing::new(
+        <[u8; 32]>::try_from(root_write_key.as_slice())
+            .map_err(|_| "root_write_key must be exactly 32 bytes".to_string())?,
+    );
 
     let mut inodes = cipherbox_fuse::inode::InodeTable::new();
     if let Some(root) = inodes.get_mut(cipherbox_fuse::inode::ROOT_INO) {

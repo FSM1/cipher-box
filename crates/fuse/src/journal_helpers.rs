@@ -116,8 +116,10 @@ pub struct MkdirJournalResult {
     /// Re-sealed parent `PublishedNode` bytes (child spliced) for the parent
     /// IPNS publish.
     pub parent_published_node: Vec<u8>,
-    /// Raw Ed25519 signing seed for the parent folder IPNS record.
-    pub parent_ipns_private_key: Vec<u8>,
+    /// Raw Ed25519 signing seed for the parent folder IPNS record. Zeroized on
+    /// drop (SC2 item 4) — this is a locally-owned copy returned by
+    /// `build_folder_metadata`, not a caller-owned/reused buffer.
+    pub parent_ipns_private_key: zeroize::Zeroizing<Vec<u8>>,
     /// IPNS name of the parent folder.
     pub parent_ipns_name: String,
     /// CID of the parent folder's previous metadata blob (for unpin on publish).
@@ -129,12 +131,16 @@ pub struct MkdirJournalResult {
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 impl crate::CipherBoxFS {
     /// Extract a parent folder/root node's symmetric keys + identity from the
-    /// inode table (node/v3). Returns `(read_key, write_key, ipns_private_key,
-    /// ipns_name)`.
+    /// inode table (node/v3). Returns `(read_key, write_key, ipns_name)`.
+    ///
+    /// SC2 item 4: the parent signing seed is deliberately NOT returned — both
+    /// call sites only need the read/write keys and the ipns name for the D-07
+    /// splice; the former `ipns_private_key.to_vec()` clone was dead (bound to
+    /// `_parent_ipns_key`) and needlessly materialized a plaintext key copy.
     fn parent_node_keys(
         &self,
         parent_ino: u64,
-    ) -> Result<([u8; 32], [u8; 32], Vec<u8>, String), String> {
+    ) -> Result<([u8; 32], [u8; 32], String), String> {
         let inode = self
             .inodes
             .get(parent_ino)
@@ -143,12 +149,11 @@ impl crate::CipherBoxFS {
             InodeKind::Root {
                 read_key,
                 write_key,
-                ipns_private_key,
                 ipns_name,
+                ..
             } => Ok((
                 **read_key,
                 **write_key,
-                ipns_private_key.to_vec(),
                 if ipns_name.is_empty() {
                     self.root_ipns_name.clone()
                 } else {
@@ -158,15 +163,9 @@ impl crate::CipherBoxFS {
             InodeKind::Folder {
                 read_key,
                 write_key,
-                ipns_private_key,
                 ipns_name,
                 ..
-            } => Ok((
-                **read_key,
-                **write_key,
-                ipns_private_key.to_vec(),
-                ipns_name.clone(),
-            )),
+            } => Ok((**read_key, **write_key, ipns_name.clone())),
             _ => Err(format!("Parent inode {} is not a folder", parent_ino)),
         }
     }
@@ -350,7 +349,7 @@ impl crate::CipherBoxFS {
         };
 
         // Parent read/write keys for the D-07 dual splice.
-        let (parent_read_key, parent_write_key, _parent_ipns_key, parent_folder_ipns_name) =
+        let (parent_read_key, parent_write_key, parent_folder_ipns_name) =
             self.parent_node_keys(parent_ino)?;
 
         let (parent_child_ref, parent_write_child_ref) = cipherbox_sdk::build_child_refs(
@@ -477,7 +476,7 @@ impl crate::CipherBoxFS {
         };
 
         // Parent read/write keys for the D-07 dual splice.
-        let (parent_read_key, parent_write_key, _parent_ipns_key, _parent_ipns_name) =
+        let (parent_read_key, parent_write_key, _parent_ipns_name) =
             self.parent_node_keys(parent_ino)?;
 
         let (parent_child_ref, parent_write_child_ref) = cipherbox_sdk::build_child_refs(

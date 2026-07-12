@@ -10,6 +10,30 @@ import { hkdf } from '@noble/hashes/hkdf';
 import { sha256 } from '@noble/hashes/sha256';
 import * as secp from '@noble/secp256k1';
 
+/**
+ * Structured error emitted when the TEE cannot produce a keypair because of a
+ * deployment misconfiguration or an infrastructure/SDK failure — NOT because a
+ * user's ciphertext is wrong or corrupted.
+ *
+ * Thrown from getKeypair's two config/infra guard sites:
+ *  1. simulator-in-production guard (TEE_MODE=simulator in a production env)
+ *  2. unexpected DstackClient.getKey() return shape (SDK contract violation)
+ *
+ * Callers (decryptWithFallback) MUST rethrow this via `instanceof` rather than
+ * treating it as a decrypt failure — a misconfiguration must never be masked as
+ * a corrupted user key. Mirrors the ReEnrollRequiredError typed-error convention.
+ *
+ * SECURITY: message names config/infra conditions ONLY — no key bytes or material.
+ */
+export class TeeKeyUnavailableError extends Error {
+  readonly keyUnavailable = true;
+
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'TeeKeyUnavailableError';
+  }
+}
+
 /** Cache public keys per epoch to avoid repeated derivation */
 const publicKeyCache = new Map<number, Uint8Array>();
 const MAX_CACHE_SIZE = 100;
@@ -67,7 +91,7 @@ export async function getKeypair(
     mode === 'simulator' &&
     (env === 'production' || (!env && process.env.NODE_ENV === 'production'))
   ) {
-    throw new Error(
+    throw new TeeKeyUnavailableError(
       'TEE_MODE=simulator is not allowed in production. Set TEE_MODE=cvm for production deployments, or set CIPHERBOX_ENVIRONMENT explicitly.'
     );
   }
@@ -90,7 +114,7 @@ export async function getKeypair(
         : typeof keyAny.asUint8Array === 'function'
           ? (keyAny.asUint8Array as () => Uint8Array)()
           : (() => {
-              throw new Error('Unexpected DstackClient.getKey() return type');
+              throw new TeeKeyUnavailableError('Unexpected DstackClient.getKey() return type');
             })();
     privateKey = new Uint8Array(rawKey.slice(0, 32));
   } else {

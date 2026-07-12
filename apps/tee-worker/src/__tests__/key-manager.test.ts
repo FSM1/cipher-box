@@ -13,7 +13,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { wrapKey, unwrapKey } from '@cipherbox/crypto';
 import * as teeKeysModule from '../services/tee-keys.js';
-import { getKeypair } from '../services/tee-keys.js';
+import { getKeypair, TeeKeyUnavailableError } from '../services/tee-keys.js';
 import {
   decryptIpnsKey,
   decryptWithFallback,
@@ -213,7 +213,7 @@ describe('key-manager', () => {
       await expect(decryptWithFallback(encrypted, 9)).rejects.toThrow('ECIES decryption failed');
     });
 
-    it('throws generic error (not ReEnrollRequiredError) for corrupted key in non-stale range', async () => {
+    it('throws generic error (not ReEnrollRequiredError) for epoch-mismatch in non-stale range', async () => {
       setInternalEpoch(10);
       const testKey = randomTestKey();
       const kp = await getKeypair(5);
@@ -227,6 +227,63 @@ describe('key-manager', () => {
       }
 
       expect(caughtErr).not.toBeInstanceOf(ReEnrollRequiredError);
+    });
+
+    it('genuine ciphertext corruption (byte-flipped wrapKey output) throws a non-ReEnrollRequiredError, non-TeeKeyUnavailableError generic error', async () => {
+      // keyEpoch === internalCurrentEpoch === 10 so both trials use epoch 10's key.
+      // The ciphertext is genuinely corrupt (a flipped byte breaks the GCM auth tag),
+      // so unwrapKey throws a real crypto error — NOT a config/infra error.
+      setInternalEpoch(10);
+      const testKey = randomTestKey();
+      const kp = await getKeypair(10);
+      const encrypted = await wrapKey(testKey, kp.publicKey);
+
+      // Flip a byte in the middle of the ciphertext to genuinely corrupt it
+      const corrupted = new Uint8Array(encrypted);
+      const mid = Math.floor(corrupted.length / 2);
+      corrupted[mid] ^= 0xff;
+
+      let caughtErr: unknown;
+      try {
+        await decryptWithFallback(corrupted, 10);
+        expect.fail('Expected decryptWithFallback to throw for a corrupted ciphertext');
+      } catch (err) {
+        caughtErr = err;
+      }
+
+      expect(caughtErr).toBeInstanceOf(Error);
+      expect(caughtErr).not.toBeInstanceOf(ReEnrollRequiredError);
+      expect(caughtErr).not.toBeInstanceOf(TeeKeyUnavailableError);
+      expect((caughtErr as Error).message).toContain('ECIES decryption failed');
+    });
+
+    it('rethrows TeeKeyUnavailableError from getKeypair (config/infra failure) instead of masking it as a corrupted key', async () => {
+      // A deployment misconfiguration (getKeypair throwing TeeKeyUnavailableError)
+      // must NOT be masked as the generic corrupted-key message — decryptWithFallback
+      // must rethrow the typed error via instanceof.
+      setInternalEpoch(10);
+      const dummy = new Uint8Array(65);
+
+      vi.spyOn(teeKeysModule, 'getKeypair').mockRejectedValue(
+        new TeeKeyUnavailableError('TEE_MODE=simulator is not allowed in production.')
+      );
+
+      let caughtErr: unknown;
+      try {
+        // keyEpoch 10 is non-stale (>= internalCurrentEpoch - 1), so the stale guard
+        // does not fire and Trial 1 invokes getKeypair (stubbed to throw the typed error).
+        await decryptWithFallback(dummy, 10);
+        expect.fail('Expected decryptWithFallback to rethrow TeeKeyUnavailableError');
+      } catch (err) {
+        caughtErr = err;
+      }
+
+      expect(caughtErr).toBeInstanceOf(TeeKeyUnavailableError);
+      expect(caughtErr).not.toBeInstanceOf(ReEnrollRequiredError);
+      // The generic corrupted-key message must NOT be used for a config/infra failure
+      expect((caughtErr as Error).message).not.toContain('ECIES decryption failed');
+      // The original config/infra error is preserved as the cause
+      expect((caughtErr as { cause?: unknown }).cause).toBeInstanceOf(TeeKeyUnavailableError);
     });
   });
 
