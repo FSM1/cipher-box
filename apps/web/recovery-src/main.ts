@@ -105,6 +105,10 @@ async function runRecovery(
   const vaultKeyKeypair = await deriveVaultKeyIpnsKeypair(privateKey);
   log(`Derived vault-key IPNS: ${vaultKeyKeypair.ipnsName}`, 'info');
   log(`Derived root IPNS: ${rootKeypair.ipnsName}`, 'info');
+  // Recovery is read-only: the derived Ed25519 IPNS *signing* keys are never
+  // used (only their ipnsName), so zero them now that both names are consumed.
+  rootKeypair.privateKey.fill(0);
+  vaultKeyKeypair.privateKey.fill(0);
 
   // 2. Fetch + deserialize the v3 vault key blob (a raw serialized blob, NOT a
   //    PublishedNode envelope), then ECIES-unwrap the root read key.

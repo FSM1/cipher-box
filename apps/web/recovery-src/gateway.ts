@@ -146,9 +146,12 @@ export async function resolveIpnsVerified(
 
 /**
  * Fetch content-addressed bytes for a CID over HTTP against a configurable
- * IPFS gateway (D-04). Content integrity is enforced downstream by AES-GCM
- * auth-tag verification during unseal/decrypt, so this transport layer does
- * not itself re-hash the CID.
+ * IPFS gateway (D-04). This transport does NOT re-hash the fetched bytes
+ * against the CID multihash. GCM-sealed envelopes and GCM file bodies fail
+ * closed on tampering via their auth-tag during unseal/decrypt, but CTR
+ * (large-file) bodies carry no auth tag — so a hostile gateway can silently
+ * tamper a CTR body. Verifying content against the CID here (to fully close the
+ * trust-nothing model) is tracked as a recovery-tool hardening follow-up.
  *
  * @param cid - The content CID to fetch.
  * @param ipfsGatewayUrl - IPFS gateway base URL (e.g. "https://ipfs.io").

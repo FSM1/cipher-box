@@ -115,10 +115,15 @@ export class SharedFolderTree {
    * Called during client destroy().
    */
   clear(): void {
-    for (const state of this.shares.values()) {
+    for (const [shareId, state] of this.shares) {
       if (state.folderKey) state.folderKey.fill(0);
       if (state.ipnsPrivateKey) state.ipnsPrivateKey.fill(0);
       if (state.writeKey) state.writeKey.fill(0);
+      // D-08 item 11: bump the seed generation for every cleared share (parity
+      // with delete()) so a descent still in flight when this clear lands
+      // cannot re-create the entry with a now-stale seed and re-insert key
+      // material after teardown.
+      this.seedGenerations.set(shareId, (this.seedGenerations.get(shareId) ?? 0) + 1);
     }
     this.shares.clear();
   }

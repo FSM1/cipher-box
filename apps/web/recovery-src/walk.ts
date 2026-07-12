@@ -73,9 +73,16 @@ export async function fetchPublishedNode(
  * The raw 32-byte `content.fileKey` is already unsealed inline in the node's
  * read-body (NODE-02) — there is NO ECIES unwrap here. `content.fileIv` is
  * base64-encoded under node/v3 (SC2 encoding lock). Mode selects GCM (default)
- * vs CTR (large-file range reads); both are AEAD/keystream passthroughs to
- * `@cipherbox/crypto` (D-03). GCM auth-tag verification fails closed on any
- * tampered IPFS content (T-78-04).
+ * vs CTR (large-file range reads); both are keystream/AEAD passthroughs to
+ * `@cipherbox/crypto` (D-03).
+ *
+ * Integrity note: GCM bodies fail closed on tampered ciphertext via the
+ * auth-tag (T-78-04), but CTR bodies carry NO auth tag, and this transport does
+ * not re-hash the fetched bytes against the CID — so a hostile gateway can
+ * silently tamper a CTR (large-file) body. Closing that gap (verify content
+ * bytes against the CID multihash) is tracked as a recovery-tool hardening
+ * follow-up; the raw `content.fileKey` is zeroed here once consumed (terminal
+ * owner, D-09), mirroring the production read chain.
  */
 async function decryptFileContent(
   node: Node,
@@ -87,9 +94,21 @@ async function decryptFileContent(
   }
   const ciphertext = await fetchFromIpfs(content.cid, gatewayConfig.ipfsGateway);
   const iv = base64ToBytes(content.fileIv);
-  return content.encryptionMode === 'CTR'
-    ? decryptAesCtr(ciphertext, content.fileKey, iv)
-    : decryptAesGcm(ciphertext, content.fileKey, iv);
+  try {
+    // AWAIT the decrypt inside the try so `finally` zeros the key only AFTER
+    // the async decrypt has fully consumed it — a bare `return <promise>` would
+    // zero the key before the decrypt read it.
+    const plaintext =
+      content.encryptionMode === 'CTR'
+        ? await decryptAesCtr(ciphertext, content.fileKey, iv)
+        : await decryptAesGcm(ciphertext, content.fileKey, iv);
+    return plaintext;
+  } finally {
+    // Terminal owner (D-09): the unsealed node is discarded after this decrypt,
+    // so zero its raw file key — parity with the production read chain
+    // (client.ts downloadFromIpns `content.fileKey.fill(0)`).
+    content.fileKey.fill(0);
+  }
 }
 
 /**

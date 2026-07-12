@@ -191,10 +191,11 @@ test.describe.serial('Batch Download', () => {
       holding = false;
       for (const release of heldResolvers.splice(0)) release();
       await page.unroute('**/ipfs/**');
+      // Restore selection state even if an assertion or the download failed, so
+      // the next serial test starts from a clean slate.
+      await selectionBar.clickClear();
+      await selectionBar.waitForHidden();
     }
-
-    await selectionBar.clickClear();
-    await selectionBar.waitForHidden();
   });
 
   test('select three files shows correct count', async () => {

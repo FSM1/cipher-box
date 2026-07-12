@@ -125,5 +125,19 @@ describe('SharedFolderTree', () => {
       // seed that re-creates the entry would be recognised as superseded.
       expect(tree.currentSeedGeneration('share-A')).toBeGreaterThan(genBeforeUnload);
     });
+
+    it('clear() bumps the generation for every share so an in-flight seed racing a teardown is stale', () => {
+      const tree = new SharedFolderTree();
+      tree.set('share-A', makeState({ shareId: 'share-A' }));
+      tree.set('share-B', makeState({ shareId: 'share-B' }));
+      const genABeforeClear = tree.nextSeedGeneration('share-A'); // descents capture these
+      const genBBeforeClear = tree.nextSeedGeneration('share-B');
+      tree.clear();
+      // clear() must invalidate like delete() — a late seed re-creating either
+      // entry after teardown is recognised as superseded, so it cannot re-insert
+      // key material into a cleared tree.
+      expect(tree.currentSeedGeneration('share-A')).toBeGreaterThan(genABeforeClear);
+      expect(tree.currentSeedGeneration('share-B')).toBeGreaterThan(genBBeforeClear);
+    });
   });
 });
