@@ -9,6 +9,7 @@
 import { useState, useCallback, useEffect, useRef, useMemo, type MouseEvent } from 'react';
 import type { BinEntry } from '@cipherbox/core';
 import { useBin } from '../../hooks/useBin';
+import { useRestoreStore } from '../../stores/restore.store';
 import { BinListItem } from './BinListItem';
 import { BinEmptyState } from './BinEmptyState';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -34,6 +35,29 @@ export function BinBrowser() {
     permanentDeleteMultiple,
     isLoading: isOperating,
   } = useBin();
+
+  // Restore status affordance (D-05) — driven by useBin.restore/restoreMultiple,
+  // which write to useRestoreStore. Subscribe here so the in-flight restore is
+  // visible; the store is a metadata-only status machine (no byte stream).
+  const restoreStatus = useRestoreStore((s) => s.status);
+  const restoreItem = useRestoreStore((s) => s.currentItem);
+  const restoreError = useRestoreStore((s) => s.error);
+  const resetRestore = useRestoreStore((s) => s.resetRestore);
+
+  // Clear any stale restore status on mount, and reset again on unmount so a
+  // finished restore never lingers when the bin is reopened.
+  useEffect(() => {
+    resetRestore();
+    return () => resetRestore();
+  }, [resetRestore]);
+
+  // Auto-clear the terminal (success/error) status after a brief flash so the
+  // affordance does not stick around once entries have refreshed.
+  useEffect(() => {
+    if (restoreStatus !== 'success' && restoreStatus !== 'error') return;
+    const timer = setTimeout(() => resetRestore(), 2500);
+    return () => clearTimeout(timer);
+  }, [restoreStatus, resetRestore]);
 
   // Sort state
   const [sortField, setSortField] = useState<SortField>('deletedAt');
@@ -345,6 +369,29 @@ export function BinBrowser() {
             {'// ERROR: '}
             {error}
           </span>
+        </div>
+      )}
+
+      {/* Restore status affordance (D-05) */}
+      {restoreStatus !== 'idle' && (
+        <div
+          className={`bin-restore-status bin-restore-status--${restoreStatus}`}
+          role="status"
+          aria-live="polite"
+          data-testid="restore-status"
+        >
+          {restoreStatus === 'restoring' && (
+            <span className="bin-restore-status-spinner" data-testid="restore-spinner">
+              {`// restoring ${restoreItem ?? 'item'}...`}
+            </span>
+          )}
+          {restoreStatus === 'success' && <span>{'// restore complete'}</span>}
+          {restoreStatus === 'error' && (
+            <span>
+              {'// restore failed: '}
+              {restoreError}
+            </span>
+          )}
         </div>
       )}
 
