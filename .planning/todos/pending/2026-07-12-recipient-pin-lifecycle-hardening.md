@@ -84,6 +84,23 @@ the file inode's pins into the placeholder (it has `self.inodes` access), and
 crash-recovery path that cannot be integration-tested locally and the routine
 paths already cover ordinary usage.
 
+## 5. File-share recipient pinning is not wired (folder-only issuance)
+
+`client.ts::addRecipientPubkeyPin` reseals the shared node's OWN folder
+write-body via `requireFolder` → `ensureFolderLoaded` → `dfsFindFolder`, which
+walks the FOLDER tree only. A shared FILE is a leaf child (not a folder-tree
+entry), so `addRecipientPubkeyPin(fileIpnsName)` throws "Shared item not loaded".
+Consequently file shares are issued WITHOUT an owner-sealed recipient pin (the
+`ShareDialog` issuance now skips the pin for `kind === 'file'` to avoid blocking
+file sharing — greptile P1 regression). This is a pre-existing D-03 limitation
+(the folder-only helper never pinned files), not introduced here.
+
+Impact: if a file share is ever scope-exit re-minted, the D-03e fail-closed pin
+check would reject it (no pin) — file-share revocation-rotation would fail
+closed. Fix: extend pin issuance to load a file node's own write-body and reseal
+its `recipientPins` (or route file-share re-mint to tolerate an absent pin with
+an explicit file-share policy). Add a file-share pin round-trip test.
+
 ## Acceptance
 
 - Revoking a share prunes the recipient's pin (or the residual relay-trust is

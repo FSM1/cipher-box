@@ -208,20 +208,30 @@ export function ShareDialog({
         logger.warn('[Share] Failed to wrap item name, continuing without it:', err);
       }
 
-      // D-03c issuance write (pin-FIRST for atomicity): commit the pasted
-      // recipient pubkey to the shared node's owner-sealed write-body pin list
-      // BEFORE creating the server grant. Ordering is load-bearing — a partial
-      // failure must never strand a server grant with no owner-sealed pin, or the
-      // D-03d fail-closed checks would permanently block re-mint/upgrade for the
-      // whole share root (a revocation-liveness foot-gun). Pin-first inverts the
-      // failure mode: if the grant create below fails, at most a HARMLESS orphan
-      // pin remains — a pin grants nothing without a matching server grant, and
-      // the append is idempotent on retry. This is where the pin is FIRST
-      // written, so the issuance wraps above (:184/:205) stay exempt from a pin
-      // compare; later re-mint/upgrade paths (D-03d) verify the server-fed
-      // recipient against this pin. A failure here throws into the shared catch
-      // below (the error is surfaced to the user).
-      await getSdkClient().addRecipientPubkeyPin(item.ipnsName, recipientPublicKey);
+      // D-03c issuance write (pin-FIRST for atomicity, FOLDER shares only):
+      // commit the pasted recipient pubkey to the shared node's owner-sealed
+      // write-body pin list BEFORE creating the server grant. Ordering is
+      // load-bearing — a partial failure must never strand a server grant with no
+      // owner-sealed pin, or the D-03d fail-closed checks would permanently block
+      // re-mint/upgrade for the whole share root (a revocation-liveness foot-gun).
+      // Pin-first inverts the failure mode: if the grant create below fails, at
+      // most a HARMLESS orphan pin remains — a pin grants nothing without a
+      // matching server grant, and the append is idempotent on retry. This is
+      // where the pin is FIRST written, so the issuance wraps above (:184/:205)
+      // stay exempt from a pin compare; later re-mint/upgrade paths (D-03d) verify
+      // the server-fed recipient against this pin. A failure here throws into the
+      // shared catch below (surfaced to the user) rather than creating an
+      // un-pinnable grant.
+      //
+      // FOLDERS only: addRecipientPubkeyPin reseals the shared node's OWN folder
+      // write-body via requireFolder, so a FILE item (a leaf child, not a
+      // folder-tree entry) would throw "not loaded" and block the share entirely.
+      // File-share recipient pinning is not yet wired (tracked in the
+      // recipient-pin-lifecycle todo); skip the pin for files and create the grant
+      // as before, preserving file sharing without regressing the folder path.
+      if (kind === 'folder') {
+        await getSdkClient().addRecipientPubkeyPin(item.ipnsName, recipientPublicKey);
+      }
 
       const result = await sharesControllerCreateShare({
         recipientPublicKey: trimmed.startsWith('0x') ? trimmed : `0x${trimmed}`,
