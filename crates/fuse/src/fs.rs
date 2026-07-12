@@ -303,7 +303,7 @@ impl CipherBoxFS {
                 children: sealed_children,
             }
         };
-        let write_body = NodeWriteBody {
+        let mut write_body = NodeWriteBody {
             ipns_private_key: ipns_private_key.to_vec(),
             write_children,
         };
@@ -314,6 +314,14 @@ impl CipherBoxFS {
             Some(&write_body),
         )
         .map_err(|e| format!("seal_published_node failed for {}: {}", folder_ino, e))?;
+        // Scrub the bare private-key copy inside the write body once it has been
+        // sealed. The returned `ipns_private_key` seed is `Zeroizing`, but this
+        // `to_vec()` copy lives in a plain `NodeWriteBody` (no ZeroizeOnDrop), so
+        // zero it explicitly. (CodeRabbit PR #610; defense-in-depth, 76-02 theme.)
+        {
+            use zeroize::Zeroize as _;
+            write_body.ipns_private_key.zeroize();
+        }
         let published_bytes = encode_published_node(&published)
             .map_err(|e| format!("encode_published_node failed for {}: {}", folder_ino, e))?;
 

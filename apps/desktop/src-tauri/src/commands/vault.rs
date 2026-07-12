@@ -426,10 +426,16 @@ pub(crate) async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Res
         .as_ref()
         .ok_or("Private key not available for vault IPNS derivation")?
         .clone();
-    let private_key_arr: [u8; 32] = private_key
-        .as_slice()
-        .try_into()
-        .map_err(|_| "Invalid private key length")?;
+    // Hold the user's master private key in `Zeroizing` so this transient [u8;32]
+    // copy is scrubbed on drop — it lives across the preflights, uploads, and
+    // publishes below. Deref coercion keeps the derive_*_ipns_keypair(&..) sites
+    // unchanged. (CodeRabbit PR #610; mirrors the Zeroizing wrap on every sibling key.)
+    let private_key_arr: Zeroizing<[u8; 32]> = Zeroizing::new(
+        private_key
+            .as_slice()
+            .try_into()
+            .map_err(|_| "Invalid private key length")?,
+    );
 
     // Root folder IPNS keypair (for folder metadata)
     let (root_ipns_private_key, _root_ipns_public_key, root_ipns_name) =
@@ -579,10 +585,16 @@ pub(crate) async fn fetch_and_decrypt_vault(state: &AppState) -> Result<(), Stri
         .as_ref()
         .ok_or("Private key not available for vault decryption")?
         .clone();
-    let private_key_arr: [u8; 32] = private_key
-        .as_slice()
-        .try_into()
-        .map_err(|_| "Invalid private key length")?;
+    // Hold the user's master private key in `Zeroizing` so this transient [u8;32]
+    // copy is scrubbed on drop — it lives across the preflights, uploads, and
+    // publishes below. Deref coercion keeps the derive_*_ipns_keypair(&..) sites
+    // unchanged. (CodeRabbit PR #610; mirrors the Zeroizing wrap on every sibling key.)
+    let private_key_arr: Zeroizing<[u8; 32]> = Zeroizing::new(
+        private_key
+            .as_slice()
+            .try_into()
+            .map_err(|_| "Invalid private key length")?,
+    );
 
     // Derive root folder IPNS keypair (for folder operations)
     let (root_ipns_priv, _root_ipns_pub, _root_ipns_name) =
