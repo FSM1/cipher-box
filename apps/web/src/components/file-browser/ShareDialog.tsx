@@ -333,8 +333,19 @@ export function ShareDialog({
         // helper (its stored-pin encoding). A mismatch or absent/empty pin list
         // throws — aborting the upgrade before resolveShareEncryptedWriteKey
         // (D-03e no-legacy hard fail); the compare is NOT reimplemented here.
-        const pins = await getSdkClient().getRecipientPubkeyPins(item.ipnsName);
-        assertRecipientPinned(recipientPublicKey, pins.map(bytesToBase64));
+        //
+        // FOLDERS only (symmetric with the issuance gate at :232): the pin READER
+        // `getRecipientPubkeyPins` -> requireFolder resolves the shared node's OWN
+        // folder write-body, so a FILE item (a leaf child, not a folder-tree entry)
+        // would throw "not loaded" and block the upgrade entirely (greptile P1).
+        // File-share recipient pinning is not yet wired (tracked in the
+        // recipient-pin-lifecycle todo), so a file share carries no owner-sealed
+        // pin to verify against; skip the pin enforce for files, mirroring the
+        // write path, rather than fail-closing an unpinnable file upgrade.
+        if (kind === 'folder') {
+          const pins = await getSdkClient().getRecipientPubkeyPins(item.ipnsName);
+          assertRecipientPinned(recipientPublicKey, pins.map(bytesToBase64));
+        }
 
         const parentIpnsName = resolveParentIpnsName(parentFolderId);
         const encryptedWriteKey = await getSdkClient().resolveShareEncryptedWriteKey(
@@ -364,7 +375,7 @@ export function ShareDialog({
         recipientPublicKey?.fill(0);
       }
     },
-    [item, parentFolderId]
+    [item, parentFolderId, kind]
   );
 
   const handleDowngradeConfirm = useCallback(async (share: SentShare) => {

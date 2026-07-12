@@ -65,6 +65,7 @@ async function buildSealedParent(opts?: {
   extraChildren?: SealedChildRef[];
   writeChildren?: WriteChildRef[];
   ipnsPrivKey?: Uint8Array;
+  recipientPins?: string[];
 }): Promise<{
   publishedNode: PublishedNode;
   readKey: Uint8Array;
@@ -85,6 +86,7 @@ async function buildSealedParent(opts?: {
     writeBody: {
       ipnsPrivateKey: opts?.ipnsPrivKey ?? ipnsPrivateKey,
       writeChildren: opts?.writeChildren ?? [],
+      ...(opts?.recipientPins ? { recipientPins: opts.recipientPins } : {}),
     },
   };
   const publishedNode = await sealNode(parent, readKey, writeKey);
@@ -457,6 +459,62 @@ describe('deleteFromSharedFolder', () => {
     const unsealed = await unsealNode(capturedPublished!, readKey, writeKey);
     expect(unsealed.writeBody).toBeDefined();
     expect(unsealed.writeBody!.writeChildren).toHaveLength(0);
+  });
+
+  // D-03 (Plan 80) regression: a shared-write op MUST preserve the parent's
+  // owner-sealed recipientPins across the resealAndPublishParent chokepoint.
+  // Before the fix, resealAndPublishParent rebuilt writeBody as
+  // { ipnsPrivateKey, writeChildren } — dropping recipientPins — so a recipient
+  // (Bob) writing into a shared folder republished the folder root PIN-LESS,
+  // erasing the owner's pin on the wire. The owner then re-resolves empty pins,
+  // and a later upgrade/re-mint hard fails closed (D-03e), stranding the share
+  // (writable-shares 6.1 "Alice upgrades Bob to write" never reaches [write]).
+  it('preserves the parent recipientPins across a shared-write republish (D-03)', async () => {
+    const CHILD_UUID = 'cccccccc-dddd-eeee-ffff-000000000000';
+    const child: SealedChildRef = {
+      name: 'doomed.txt',
+      ipnsName: 'k51child',
+      generation: 0,
+      versionFloor: 1n,
+      readKeySealed: 'fakebase64sealed',
+    };
+    const writeChild: WriteChildRef = {
+      childId: CHILD_UUID,
+      writeKeySealed: 'fakebase64writesealed',
+    };
+    // Two owner-sealed pins already present on the parent write-body.
+    const recipientPins = ['AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC', 'AwMDAwMDAwMDAw=='];
+
+    const {
+      publishedNode: pn,
+      readKey,
+      writeKey,
+    } = await buildSealedParent({
+      extraChildren: [child],
+      writeChildren: [writeChild],
+      recipientPins,
+    });
+
+    let capturedPublished: PublishedNode | undefined;
+    const publishFn = vi.fn().mockImplementation(async (p: { published: PublishedNode }) => {
+      capturedPublished = p.published;
+      return { tombstoned: false, newSequenceNumber: 2n };
+    });
+
+    const swCtx = await makeSWCtx({
+      publishedNode: pn,
+      readKey,
+      writeKey,
+      children: [child],
+      publishNodeFn: publishFn,
+    });
+
+    await deleteFromSharedFolder(swCtx, { itemId: 'k51child', childNodeId: CHILD_UUID });
+
+    expect(capturedPublished).toBeDefined();
+    const unsealed = await unsealNode(capturedPublished!, readKey, writeKey);
+    expect(unsealed.writeBody).toBeDefined();
+    expect(unsealed.writeBody!.recipientPins).toEqual(recipientPins);
   });
 });
 
