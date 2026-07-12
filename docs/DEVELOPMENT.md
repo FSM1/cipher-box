@@ -140,8 +140,8 @@ Two caveats when working with the residual `apps/web` suite:
     && pnpm --filter @cipherbox/core build \
     && pnpm --filter @cipherbox/api-client build \
     && pnpm --filter @cipherbox/sdk-core build \
-    && pnpm --filter @cipherbox/sdk build
-  cd apps/web && pnpm vitest run
+    && pnpm --filter @cipherbox/sdk build \
+    && cd apps/web && pnpm vitest run
   ```
 
 If a residual `apps/web` test genuinely rots, relocate its logic to `packages/sdk` (Vitest) or remove the dead test — do not add new `apps/web` unit tests, and do not paper over a real failure by skipping it.
