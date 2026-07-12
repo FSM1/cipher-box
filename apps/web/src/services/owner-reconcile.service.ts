@@ -102,11 +102,27 @@ async function deleteGrant(shareId: string): Promise<void> {
   await sharesControllerRevokeShare(shareId);
 }
 
-const webOwnerReconcileTransport: OwnerReconcileTransport = {
-  listSentGrants,
-  updateGrant,
-  deleteGrant,
-};
+/**
+ * Build the concrete web owner-reconcile transport for a SINGLE reconcile pass,
+ * scoped to the root whose `shareRootIpnsName` is closed over here.
+ *
+ * The `getRecipientPubkeyPins` seam (D-03d consumer 3, 80-08) supplies the
+ * node's owner-sealed `recipientPins` so runOwnerReconcile's 80-07 `getPinsFn`
+ * enforcement can fail-closed verify each surviving grant's recipient BEFORE
+ * re-wrapping (never trusting the relay-fed `/shares/sent` recipientPublicKey).
+ * The sdk-core seam threads the `rootNodeId`, but `client.getRecipientPubkeyPins`
+ * is keyed by ipnsName; each reconcile pass is scoped to exactly one root, so
+ * this root's `shareRootIpnsName` is the correct 1:1 lookup key. Returns raw
+ * pubkey bytes; sdk-core normalizes them to base64 for `assertRecipientPinned`.
+ */
+function makeWebOwnerReconcileTransport(shareRootIpnsName: string): OwnerReconcileTransport {
+  return {
+    listSentGrants,
+    updateGrant,
+    deleteGrant,
+    getRecipientPubkeyPins: () => getSdkClient().getRecipientPubkeyPins(shareRootIpnsName),
+  };
+}
 
 /**
  * Reduce a caught error to name+message before logging: raw Axios/SDK errors
@@ -191,7 +207,7 @@ export async function triggerOwnerReconcileOnLogin(): Promise<void> {
         folderState.nodeGeneration,
         makeReconcileJob(rootNodeId),
         buildReconcileCtx(),
-        webOwnerReconcileTransport
+        makeWebOwnerReconcileTransport(shareRootIpnsName)
       );
     } catch (error) {
       logger.error(
@@ -247,7 +263,7 @@ export async function runOwnerReconcileForFolder(shareRootIpnsName: string): Pro
       folderState.nodeGeneration,
       makeReconcileJob(grant.rootNodeId),
       buildReconcileCtx(),
-      webOwnerReconcileTransport
+      makeWebOwnerReconcileTransport(grant.shareRootIpnsName)
     );
   } catch (error) {
     logger.error(

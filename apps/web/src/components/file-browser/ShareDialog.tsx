@@ -7,7 +7,8 @@ import {
   sharesControllerGetSentShares,
   sharesControllerUpdateGrant,
 } from '@cipherbox/api-client';
-import { wrapKey, hexToBytes, bytesToHex } from '@cipherbox/crypto';
+import { wrapKey, hexToBytes, bytesToHex, bytesToBase64 } from '@cipherbox/crypto';
+import { assertRecipientPinned } from '@cipherbox/sdk';
 import { useShareStore } from '../../stores/share.store';
 import type { SentShare } from '../../stores/share.store';
 import { resolveChildNodeIdentity } from '../../lib/crypto/key-wrapping';
@@ -217,6 +218,15 @@ export function ShareDialog({
         itemNameEncrypted,
       });
 
+      // D-03c issuance write: commit the pasted recipient pubkey to the shared
+      // node's owner-sealed write-body pin list (for BOTH read and write
+      // shares). This is where the pin is FIRST written, so the issuance wraps
+      // above (:184/:205) stay exempt from a pin compare; later re-mint/upgrade
+      // paths (D-03d) verify the server-fed recipient against this pin. A
+      // failure here throws into the shared catch below so a share is never
+      // left silently un-pinned (the error is surfaced to the user).
+      await getSdkClient().addRecipientPubkeyPin(item.ipnsName, recipientPublicKey);
+
       const newShare: SentShare = {
         shareId: result.shareId,
         recipientPublicKey: result.recipientPublicKey,
@@ -298,6 +308,17 @@ export function ShareDialog({
           ? share.recipientPublicKey.slice(2)
           : share.recipientPublicKey;
         recipientPublicKey = hexToBytes(bareHex);
+
+        // D-03d consumer 3 (fail-closed): the recipientPublicKey above comes
+        // from the server-fed sent-share store and MUST NOT be trusted for the
+        // re-wrap. Verify it against the node's owner-sealed recipientPins
+        // (D-03c issuance write) BEFORE re-wrapping. `getRecipientPubkeyPins`
+        // returns raw pubkey bytes; normalize to base64 for the shared sdk-core
+        // helper (its stored-pin encoding). A mismatch or absent/empty pin list
+        // throws — aborting the upgrade before resolveShareEncryptedWriteKey
+        // (D-03e no-legacy hard fail); the compare is NOT reimplemented here.
+        const pins = await getSdkClient().getRecipientPubkeyPins(item.ipnsName);
+        assertRecipientPinned(recipientPublicKey, pins.map(bytesToBase64));
 
         const parentIpnsName = resolveParentIpnsName(parentFolderId);
         const encryptedWriteKey = await getSdkClient().resolveShareEncryptedWriteKey(
