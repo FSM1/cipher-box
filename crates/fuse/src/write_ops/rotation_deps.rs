@@ -64,10 +64,10 @@ use zeroize::Zeroizing;
 use cipherbox_api_client::ipns::{resolve_ipns_verified, VerifyError};
 use cipherbox_api_client::shares::SentShareResponse;
 use cipherbox_api_client::{ApiClient, ApiError, IpnsPublishRequest, PublishResult};
-use cipherbox_core::node::seal::{seal_child_write_key, seal_node};
+use cipherbox_core::node::seal::{seal_child_write_key, seal_node, unseal_node};
 use cipherbox_core::node::{
-    decode_published_node, encode_published_node, encode_write_body, NodeKind, NodeWriteBody,
-    PublishedNode, WriteChildRef,
+    decode_published_node, decode_write_body, encode_published_node, encode_write_body, NodeKind,
+    NodeWriteBody, PublishedNode, WriteChildRef,
 };
 use cipherbox_sdk::rotation::{GrantRow, PublishAttempt};
 use cipherbox_sdk::{
@@ -636,6 +636,151 @@ fn find_recipient_pins(inodes: &InodeTable, node_id: &str) -> Vec<Vec<u8>> {
             Some(pins.clone())
         })
         .unwrap_or_default()
+}
+
+/// Refresh a grant root inode's cached `recipient_pins` from its CURRENT
+/// published write-body — the share→rotate race fix (D-03a/D-03d/D-03e).
+///
+/// The scope-exit re-mint (`re_mint_grants_rooted_at` → `get_recipient_pubkey_pins`
+/// → [`find_recipient_pins`]) AND the rotation republish ([`reconstruct_write_body`])
+/// both read the grant root's owner-sealed recipient pins from THIS mount's
+/// in-memory inode cache. That cache is materialized lazily (mount init / the
+/// periodic metadata refresh), so a pin written OUT OF BAND — e.g. the owner
+/// sharing the folder from the web client, which reseals the folder write-body
+/// with the new pin and bumps its IPNS record — may not yet be reflected here
+/// when the owner immediately deletes inside that folder on their desktop mount.
+///
+/// Reading the STALE (empty) cache then does two harmful things: (a) the retained
+/// recipient's re-mint fails closed ("0 pinned", D-03e), and (b) the rotation
+/// republishes the node PIN-LESS (`reconstruct_write_body` reseals the empty
+/// cache), clobbering the real published pin. The rotation then aborts mid-flight
+/// and every later metadata refresh AES-GCM-fails against the new-generation
+/// record (the mount's stale read key cannot open it) — the exact macOS/WinFsp
+/// desktop-e2e cascade this closes.
+///
+/// This resolves + unseals the grant root's OWN write-body ONCE (under its
+/// unchanged write key — write keys never rotate, only the read plane does) and
+/// overwrites the inode's cached pins with the authoritative published list
+/// BEFORE the rotation reads them, closing the race deterministically for BOTH
+/// the product (share-then-rotate) and the desktop e2e. Best-effort: a
+/// resolve/fetch/unseal failure leaves the cache untouched and returns `Ok` (the
+/// rotation then proceeds on the cached pins — this refresh must never itself be
+/// the thing that fails a rotation that would otherwise have had fresh pins).
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+pub(crate) async fn refresh_grant_root_recipient_pins(
+    fs: &mut crate::CipherBoxFS,
+    grant_root_ipns_name: &str,
+) {
+    // Snapshot the grant root's identity + write key from the inode. The
+    // immutable borrow is dropped before the network round trip below.
+    let Some((ino, node_id, node_kind, write_key)) =
+        fs.inodes.inodes.iter().find_map(|(ino, inode)| {
+            let (candidate, kind, write_key) = match &inode.kind {
+                InodeKind::Root {
+                    ipns_name,
+                    write_key,
+                    ..
+                } => (ipns_name, NodeKind::Root, write_key),
+                InodeKind::Folder {
+                    ipns_name,
+                    write_key,
+                    ..
+                } => (ipns_name, NodeKind::Folder, write_key),
+                InodeKind::File {
+                    ipns_name,
+                    write_key,
+                    ..
+                } => (ipns_name, NodeKind::File, write_key),
+            };
+            (candidate == grant_root_ipns_name)
+                .then(|| (*ino, inode.node_id.clone(), kind, Zeroizing::new(**write_key)))
+        })
+    else {
+        return; // not locally materialized — nothing to refresh
+    };
+
+    // Resolve + fetch + unseal the CURRENT published write-body (network; no
+    // inode borrow held). Any failure is swallowed to a warn — see the
+    // best-effort contract in the doc comment.
+    let api = fs.api.clone();
+    let fresh_pins = match refresh_pins_inner(&api, grant_root_ipns_name, &node_id, node_kind, &write_key)
+        .await
+    {
+        Ok(Some(pins)) => pins,
+        Ok(None) => return, // no write-body published — leave the cache as-is
+        Err(e) => {
+            log::warn!(
+                "refresh_grant_root_recipient_pins: could not refresh pins for {grant_root_ipns_name} \
+                 (proceeding with cached pins): {e}"
+            );
+            return;
+        }
+    };
+
+    // Overwrite the cached pins (mut borrow, no network held).
+    if let Some(inode) = fs.inodes.get_mut(ino) {
+        match &mut inode.kind {
+            InodeKind::Root { recipient_pins, .. }
+            | InodeKind::Folder { recipient_pins, .. }
+            | InodeKind::File { recipient_pins, .. } => {
+                *recipient_pins = fresh_pins;
+            }
+        }
+    }
+}
+
+/// Network + crypto half of [`refresh_grant_root_recipient_pins`], split out so
+/// the caller holds NO inode borrow across the `.await`. Returns `Ok(None)` when
+/// the published node carries no write-body (nothing to refresh from).
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+async fn refresh_pins_inner(
+    api: &ApiClient,
+    ipns_name: &str,
+    node_id: &str,
+    node_kind: NodeKind,
+    write_key: &[u8; 32],
+) -> Result<Option<Vec<Vec<u8>>>, RotationError> {
+    // sc6-allow: verified fail-closed resolve chokepoint (D-08), not a read-plane bypass.
+    let resolved = resolve_ipns_verified(api, ipns_name).await.map_err(|e| {
+        RotationError::RotateFailed(format!("refresh_pins_inner: resolve failed for {ipns_name}: {e}"))
+    })?;
+    let bytes = cipherbox_api_client::ipfs::fetch_content(api, &resolved.cid)
+        .await
+        .map_err(|e| {
+            RotationError::RotateFailed(format!(
+                "refresh_pins_inner: fetch_content failed for {ipns_name}: {e}"
+            ))
+        })?;
+    let published = decode_published_node(&bytes).map_err(|e| {
+        RotationError::RotateFailed(format!(
+            "refresh_pins_inner: decode_published_node failed for {ipns_name}: {e}"
+        ))
+    })?;
+    let Some(write_sealed_b64) = published.write_sealed.as_ref() else {
+        return Ok(None);
+    };
+    let write_sealed = STANDARD.decode(write_sealed_b64).map_err(|e| {
+        RotationError::RotateFailed(format!(
+            "refresh_pins_inner: base64 decode failed for {ipns_name}: {e}"
+        ))
+    })?;
+    // The write-body is sealed under the node's OWN write key at its published
+    // generation (ROLE_BODY 0x01) — the exact AAD `list_folder_owned` unseals with.
+    let wb_bytes = Zeroizing::new(
+        unseal_node(&write_sealed, write_key, node_id, node_kind, published.generation).map_err(
+            |e| {
+                RotationError::RotateFailed(format!(
+                    "refresh_pins_inner: unseal_node failed for {ipns_name}: {e}"
+                ))
+            },
+        )?,
+    );
+    let write_body = decode_write_body(&wb_bytes).map_err(|e| {
+        RotationError::RotateFailed(format!(
+            "refresh_pins_inner: decode_write_body failed for {ipns_name}: {e}"
+        ))
+    })?;
+    Ok(Some(write_body.recipient_pins))
 }
 
 // ---------------------------------------------------------------------------
@@ -1949,5 +2094,65 @@ mod tests {
             "exactly the pinned recipient is re-minted, got {updated:?}"
         );
         assert_eq!(updated[0].0, "share-active");
+    }
+
+    /// Best-effort contract of [`refresh_grant_root_recipient_pins`]: when the
+    /// grant root cannot be resolved/fetched (here: `make_test_fs`'s dead
+    /// `127.0.0.1:1` API endpoint), the refresh must NOT panic and must leave
+    /// the inode's cached pins UNTOUCHED — the rotation then proceeds on the
+    /// cached pins rather than the refresh becoming the thing that fails a
+    /// rotation. A missing/unmaterialized grant root is likewise a no-op.
+    #[tokio::test]
+    async fn refresh_grant_root_recipient_pins_is_a_noop_on_resolve_failure() {
+        use crate::inode::{FileAttrs, InodeData, InodeKind, ROOT_INO};
+        use crate::test_support::make_test_fs;
+        use std::time::SystemTime;
+
+        let mut fs = make_test_fs();
+        let folder_ino = fs.inodes.allocate_ino();
+        let cached_pins = vec![vec![0x02u8; 33], vec![0x03u8, 0x11, 0x22]];
+        let now = SystemTime::now();
+        fs.inodes.insert(InodeData {
+            ino: folder_ino,
+            node_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".to_string(),
+            parent_ino: ROOT_INO,
+            name: "shared".to_string(),
+            kind: InodeKind::Folder {
+                ipns_name: "k51-refresh-target".to_string(),
+                read_key: Zeroizing::new([11u8; 32]),
+                write_key: Zeroizing::new([22u8; 32]),
+                ipns_private_key: Zeroizing::new(vec![5u8; 32]),
+                recipient_pins: cached_pins.clone(),
+                children_loaded: true,
+            },
+            attr: FileAttrs {
+                ino: folder_ino,
+                size: 0,
+                blocks: 0,
+                atime: now,
+                mtime: now,
+                ctime: now,
+                crtime: now,
+                is_dir: true,
+                perm: 0o755,
+                nlink: 2,
+            },
+            children: Some(vec![]),
+            write_generation: 0,
+        });
+
+        // Resolve hits the dead endpoint and fails; the refresh swallows it.
+        refresh_grant_root_recipient_pins(&mut fs, "k51-refresh-target").await;
+        let pins_after = match &fs.inodes.get(folder_ino).unwrap().kind {
+            InodeKind::Folder { recipient_pins, .. } => recipient_pins.clone(),
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            pins_after, cached_pins,
+            "a resolve failure must leave the cached pins untouched (best-effort, never clobbers)"
+        );
+
+        // A grant root not present in the inode table is a silent no-op.
+        refresh_grant_root_recipient_pins(&mut fs, "k51-does-not-exist").await;
     }
 }
