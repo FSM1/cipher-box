@@ -34,6 +34,8 @@ fn build_empty_root_published_node(
     let write_body = cipherbox_core::node::NodeWriteBody {
         ipns_private_key: root_ipns_private_key.to_vec(),
         write_children: Vec::new(),
+        // Fresh empty root at vault init — no shares yet (D-03).
+        recipient_pins: Vec::new(),
     };
     let published = cipherbox_core::node::seal::seal_published_node(
         &root_node,
